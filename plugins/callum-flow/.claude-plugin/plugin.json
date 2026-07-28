@@ -1,0 +1,12 @@
+{
+  "name": "callum-flow",
+  "displayName": "Callum Flow",
+  "version": "0.1.0",
+  "description": "Callum's portable issue-delivery workflow: an orchestrator skill that runs a GitHub ready-issue queue and an implement-issue skill that sub-agents follow to ship one issue through a treehouse worktree and the no-mistakes pipeline.",
+  "author": {
+    "name": "Callum Bundy"
+  },
+  "homepage": "https://github.com/cbundy/dev-system",
+  "repository": "https://github.com/cbundy/dev-system",
+  "keywords": ["orchestration", "github-issues", "workflow", "skills"]
+}

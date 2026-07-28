@@ -22,6 +22,28 @@ dev-system/
 | Environment | devcontainer tooling installs | Dev Container Feature on GHCR | container rebuild pulls latest matching tag |
 | Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
 
+## Plugin
+
+`plugins/callum-flow` is distributed through the `callum` marketplace catalog at
+`.claude-plugin/marketplace.json` in this repo's root. To install it in a consumer repo:
+
+```
+/plugin marketplace add cbundy/dev-system
+```
+
+Then enable `callum-flow@callum` (either interactively via `/plugin`, or by committing it
+under `enabledPlugins` in `.claude/settings.json` - see "Consumer repo wiring" below).
+
+**Version-bump-on-release policy**: the plugin manifest
+(`plugins/callum-flow/.claude-plugin/plugin.json`) carries an explicit `version` field.
+Consumers only receive an update when that field is bumped - `/plugin marketplace update`
+(or an auto-update) pulls the new catalog, but a plugin pinned to an unchanged `version`
+stays exactly as it was. So every release that changes anything under `plugins/callum-flow`
+MUST bump `version` in the same change, following semver: patch for a skill wording fix,
+minor for a new skill or capability, major for a breaking change to an existing skill's
+contract (e.g. a renamed parameter or removed behavior). Skipping the bump ships the change
+to this repo but not to any consumer.
+
 ## Consumer repo wiring
 
 A consumer repo commits only:
@@ -47,4 +69,6 @@ A consumer repo commits only:
 
 ## Status
 
-Repo scaffold only. Extraction from mealplanning is tracked in this repo's issues.
+`plugins/callum-flow` (issue-orchestrator, implement-issue skills) is extracted and
+distributed via the `callum` marketplace. `features/` and `templates/` extraction is
+tracked in this repo's remaining issues.
