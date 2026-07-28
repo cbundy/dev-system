@@ -1,0 +1,13 @@
+{
+  "name": "callum",
+  "owner": {
+    "name": "Callum Bundy"
+  },
+  "plugins": [
+    {
+      "name": "callum-flow",
+      "source": "./plugins/callum-flow",
+      "description": "Issue-orchestrator and implement-issue skills for running a GitHub ready-issue queue end to end."
+    }
+  ]
+}
