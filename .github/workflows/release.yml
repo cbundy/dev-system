@@ -1,0 +1,127 @@
+name: Release
+
+# Manual, on-demand only: never triggers on push/merge to main. Individual PRs
+# never bump versions (see README release policy); this workflow is the single
+# deliberate release step. Pick a semver version and run from the Actions tab
+# or `gh workflow run release.yml -f version=X.Y.Z`.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact semver version to release, e.g. 0.2.0 (no leading 'v')"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history + tags: needed to validate the tag doesn't already
+          # exist and to find the previous release tag for release notes.
+          fetch-depth: 0
+
+      - name: Ensure running from main
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::This workflow must be run from main (got '${{ github.ref }}'). Releases are cut only from main to keep tags/history trunk-based."
+            exit 1
+          fi
+
+      - name: Validate version input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$RELEASE_VERSION' is not a valid semantic version (expected e.g. 1.2.3)"
+            exit 1
+          fi
+          if git rev-parse "refs/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+              echo "::error::v$RELEASE_VERSION has already been fully released (tag and GitHub Release both exist)"
+              exit 1
+            fi
+            echo "Tag v$RELEASE_VERSION already exists but no GitHub Release does - resuming a failed release attempt."
+          fi
+
+      - name: Sync version into every plugin manifest and skill
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        # One version for the whole system, for now: every plugin.json gets
+        # `version`, and every SKILL.md gets a `version:` frontmatter field
+        # (inserted if missing, replaced if present). New plugins/skills are
+        # picked up automatically - no workflow change needed.
+        run: |
+          node - <<'EOF'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const version = process.env.RELEASE_VERSION;
+
+          const globDirs = (dir) =>
+            fs.existsSync(dir)
+              ? fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name))
+              : [];
+
+          for (const pluginDir of globDirs("plugins")) {
+            const manifest = path.join(pluginDir, ".claude-plugin", "plugin.json");
+            if (fs.existsSync(manifest)) {
+              const pkg = JSON.parse(fs.readFileSync(manifest, "utf-8"));
+              pkg.version = version;
+              fs.writeFileSync(manifest, JSON.stringify(pkg, null, 2) + "\n");
+              console.log(`bumped ${manifest}`);
+            }
+            for (const skillDir of globDirs(path.join(pluginDir, "skills"))) {
+              const skill = path.join(skillDir, "SKILL.md");
+              if (!fs.existsSync(skill)) continue;
+              const src = fs.readFileSync(skill, "utf-8");
+              const m = src.match(/^---\n([\s\S]*?)\n---/);
+              if (!m) throw new Error(`${skill}: no frontmatter block found`);
+              const body = /^version:/m.test(m[1])
+                ? m[1].replace(/^version:.*$/m, `version: ${version}`)
+                : m[1] + `\nversion: ${version}`;
+              fs.writeFileSync(skill, src.replace(m[0], `---\n${body}\n---`));
+              console.log(`bumped ${skill}`);
+            }
+          }
+          EOF
+
+      - name: Commit version bump and tag release
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${RELEASE_VERSION} already exists - skipping commit/tag/push (resuming a failed release attempt)."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add plugins
+            if git diff --cached --quiet; then
+              echo "Versions already at v${RELEASE_VERSION} - no version-bump commit needed; tagging current HEAD."
+            else
+              git commit -m "chore(release): v${RELEASE_VERSION}"
+              git push origin HEAD:main
+            fi
+            git tag -a "v${RELEASE_VERSION}" -m "v${RELEASE_VERSION}"
+            git push origin "v${RELEASE_VERSION}"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "Release v${RELEASE_VERSION} already exists - retrying: regenerating notes."
+            gh release edit "v${RELEASE_VERSION}" --title "v${RELEASE_VERSION}"
+          else
+            gh release create "v${RELEASE_VERSION}" \
+              --title "v${RELEASE_VERSION}" \
+              --generate-notes
+          fi
