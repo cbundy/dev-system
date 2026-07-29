@@ -69,6 +69,7 @@ A consumer repo commits only:
 
 ## Status
 
-`plugins/callum-flow` (issue-orchestrator, implement-issue skills) is extracted and
-distributed via the `callum` marketplace. `features/` and `templates/` extraction is
+`plugins/callum-flow` (issue-orchestrator, implement-issue, and update-dev skills) is
+extracted and distributed via the `callum` marketplace. `/update-dev <change request>`
+in any consumer repo proposes a change to this repo as a reviewed PR. `features/` and `templates/` extraction is
 tracked in this repo's remaining issues.
