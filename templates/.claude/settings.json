@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "callum": {
+      "source": {
+        "source": "github",
+        "repo": "cbundy/dev-system"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "callum-flow@callum": true
+  }
+}
