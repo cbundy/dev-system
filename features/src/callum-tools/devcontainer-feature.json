@@ -1,0 +1,29 @@
+{
+  "id": "callum-tools",
+  "version": "0.1.0",
+  "name": "Callum's dev tools (no-mistakes, treehouse, Claude Code CLI)",
+  "description": "Installs the tooling behind Callum's dev flow: the no-mistakes pipeline, the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
+  "documentationURL": "https://github.com/cbundy/dev-system",
+  "options": {
+    "installClaudeCode": {
+      "type": "boolean",
+      "default": true,
+      "description": "Install the Claude Code CLI globally via npm (requires a Node-capable base image)."
+    },
+    "installNoMistakes": {
+      "type": "boolean",
+      "default": true,
+      "description": "Install the no-mistakes pipeline CLI (binary release from kunchenguid/no-mistakes)."
+    },
+    "installTreehouse": {
+      "type": "boolean",
+      "default": true,
+      "description": "Install treehouse, the reusable worktree pool for parallel agents (binary release from kunchenguid/treehouse)."
+    }
+  },
+  "postCreateCommand": "/usr/local/share/callum-tools/setup.sh",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/node",
+    "ghcr.io/devcontainers/features/git"
+  ]
+}
