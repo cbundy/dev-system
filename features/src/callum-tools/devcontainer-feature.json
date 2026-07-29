@@ -1,6 +1,6 @@
 {
   "id": "callum-tools",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "name": "Callum's dev tools (no-mistakes, treehouse, Claude Code CLI)",
   "description": "Installs the tooling behind Callum's dev flow: the no-mistakes pipeline, the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
   "documentationURL": "https://github.com/cbundy/dev-system",
