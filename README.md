@@ -38,11 +38,11 @@ under `enabledPlugins` in `.claude/settings.json` - see "Consumer repo wiring" b
 (`plugins/callum-flow/.claude-plugin/plugin.json`) carries an explicit `version` field.
 Consumers only receive an update when that field is bumped - `/plugin marketplace update`
 (or an auto-update) pulls the new catalog, but a plugin pinned to an unchanged `version`
-stays exactly as it was. So every release that changes anything under `plugins/callum-flow`
-MUST bump `version` in the same change, following semver: patch for a skill wording fix,
-minor for a new skill or capability, major for a breaking change to an existing skill's
-contract (e.g. a renamed parameter or removed behavior). Skipping the bump ships the change
-to this repo but not to any consumer.
+stays exactly as it was. Individual PRs do NOT bump the version: releasing is a separate,
+deliberate step Callum runs when ready (eventually via a release workflow), bumping
+`version` following semver - patch for wording fixes, minor for a new skill or capability,
+major for a breaking change to an existing skill's contract. Until that bump, merged
+changes live in this repo but ship to no consumer.
 
 ## Consumer repo wiring
 
@@ -69,6 +69,7 @@ A consumer repo commits only:
 
 ## Status
 
-`plugins/callum-flow` (issue-orchestrator, implement-issue skills) is extracted and
-distributed via the `callum` marketplace. `features/` and `templates/` extraction is
+`plugins/callum-flow` (issue-orchestrator, implement-issue, and update-dev skills) is
+extracted and distributed via the `callum` marketplace. `/update-dev <change request>`
+in any consumer repo proposes a change to this repo as a reviewed PR. `features/` and `templates/` extraction is
 tracked in this repo's remaining issues.
