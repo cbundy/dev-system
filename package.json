@@ -1,6 +1,6 @@
 {
   "name": "@callum/dev-system",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Callum's portable dev flow: repo config templates plus the callum-dev CLI that scaffolds and syncs them",
   "private": true,
   "bin": {
