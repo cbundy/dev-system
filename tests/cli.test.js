@@ -60,9 +60,11 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
   assert.ok(fs.existsSync(path.join(repo, ".claude/settings.json")));
   assert.ok(fs.existsSync(path.join(repo, "treehouse.toml")));
 
+  assert.ok(fs.existsSync(path.join(repo, ".gitignore")));
+
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
-  assert.equal(stamp.files.length, 5);
+  assert.equal(stamp.files.length, 6);
 
   // Baseline must be the pristine template: the substituted lint/test values
   // are repo-owned edits from the merge's point of view.
@@ -130,6 +132,90 @@ test("replace strategy overwrites settings.json wholesale; init-only leaves tree
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(read(repo, ".claude/settings.json"), read(TEMPLATES, ".claude/settings.json"));
   assert.equal(read(repo, "treehouse.toml"), "max_trees = 99\n");
+});
+
+// Ask git itself what the scaffolded .gitignore does. Reading the patterns is not
+// good enough here: the rules that matter most are directory-vs-file distinctions
+// (.no-mistakes/ ignored, .no-mistakes.yaml tracked), which is exactly what eyeballing
+// a pattern list gets wrong. Exit 0 = ignored, 1 = not ignored.
+function isIgnored(repo, target) {
+  const result = spawnSync("git", ["check-ignore", "-q", "--no-index", target], {
+    cwd: repo,
+    encoding: "utf-8",
+  });
+  assert.ok(result.status === 0 || result.status === 1, `git check-ignore: ${result.stderr}`);
+  return result.status === 0;
+}
+
+test("the scaffolded .gitignore ignores this system's state but keeps its config tracked", (t) => {
+  const repo = initRepo(t);
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo }).status, 0);
+
+  // Generated state - must be ignored. .treehouse/ is the sharpest one: the shipped
+  // treehouse.toml sets root = "./", so worktrees (full copies of the repo) land here.
+  for (const target of [
+    ".treehouse/1/myrepo/package.json",
+    ".no-mistakes/worktrees/abc/run-1/server/index.ts",
+    ".claude/worktrees/some-tree/file.ts",
+    ".claude/settings.local.json",
+    "node_modules/left-pad/index.js",
+    "test-results/failed-1/trace.zip",
+    "playwright-report/index.html",
+    "server/__pycache__/app.cpython-311.pyc",
+    ".env",
+    "debug.log",
+  ]) {
+    assert.equal(isIgnored(repo, target), true, `expected ignored: ${target}`);
+  }
+
+  // Committed on purpose. Ignoring any of these looks tidy and breaks things quietly:
+  // the two .callum-dev paths are what make `update` a 3-way merge, and .no-mistakes.yaml
+  // sits right beside the ignored .no-mistakes/ directory.
+  for (const target of [
+    ".no-mistakes.yaml",
+    ".callum-dev.json",
+    ".callum-dev/baseline/.no-mistakes.yaml",
+    ".callum-dev/baseline/gitignore",
+    ".gitignore",
+    "CLAUDE.md",
+    ".claude/settings.json",
+    ".devcontainer/devcontainer.json",
+    "treehouse.toml",
+    ".env.example",
+  ]) {
+    assert.equal(isIgnored(repo, target), false, `expected tracked: ${target}`);
+  }
+});
+
+test("update carries a new synced ignore rule forward without dropping repo-owned entries", (t) => {
+  const repo = initRepo(t);
+
+  // A repo adds its own path in the repo-owned block at the bottom.
+  fs.writeFileSync(
+    path.join(repo, ".gitignore"),
+    read(repo, ".gitignore").replace(
+      "# --- end repo-owned ---",
+      "/server/data/\n# --- end repo-owned ---",
+    ),
+  );
+
+  // Upstream starts ignoring a newly-generated artefact. Anchor on the rule line, not
+  // a bare substring - `.treehouse/` also appears in the comment above it.
+  const upstream = upstreamCopy(t, (dir) => {
+    const patched = read(dir, "gitignore").replace(
+      /^\.treehouse\/$/m,
+      ".treehouse/\n.brand-new-tool-cache/",
+    );
+    assert.match(patched, /^\.brand-new-tool-cache\/$/m, "test setup should patch the rule line");
+    fs.writeFileSync(path.join(dir, "gitignore"), patched);
+  });
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const merged = read(repo, ".gitignore");
+  assert.match(merged, /^\.brand-new-tool-cache\/$/m, "upstream addition should come forward");
+  assert.match(merged, /^\/server\/data\/$/m, "repo-owned entry should survive");
 });
 
 test("update with unchanged templates is a no-op; check reports drift via the stamp", (t) => {

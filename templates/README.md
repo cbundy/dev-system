@@ -59,6 +59,34 @@ itself, so the split is marked inline like the other templates.
   installs no-mistakes, treehouse, etc.) and `remoteUser`. A nested repo-owned marker
   inside `features` shows where to add extra features without disturbing the synced ones.
 
+## `gitignore` -> `.gitignore`
+
+Ignore rules for the artefacts this system's tooling generates. **Note the source file
+has no leading dot**, unlike every other template here: npm silently drops any file
+named `.gitignore` from a package, so a `templates/.gitignore` would be missing from
+every install (verified with `npm pack --dry-run`). The CLI maps it to `.gitignore` in
+the consumer repo via the manifest's `src` field. Do not rename it back.
+
+- Synced: this system's own generated paths (`.no-mistakes/`, `.treehouse/`,
+  `.claude/worktrees/`, `.claude/settings.local.json`) plus the ecosystem defaults these
+  projects consistently need - Node build output, Playwright reports, Python caches,
+  secrets, logs, OS/editor cruft.
+- Repo-owned: this repo's own paths. Build output under a non-standard name, local
+  databases, fixture data, generated clients, vendored dependencies.
+
+Two things about this file that are easy to get wrong:
+
+- **The block order is reversed** relative to the other templates - repo-owned sits at the
+  bottom. gitignore precedence is last-match-wins, so a repo-owned block placed first
+  would be silently outranked by the synced rules below it, and a `!` un-ignore could
+  never work.
+- **Three of this system's files must stay tracked** and are commented as such in the
+  template: `.no-mistakes.yaml` (the pipeline config, which sits right beside the ignored
+  `.no-mistakes/` state directory - hence the trailing slash on that rule), and
+  `.callum-dev.json` plus `.callum-dev/baseline/`, which are what make `callum-dev update`
+  a 3-way merge rather than an overwrite. Ignoring any of them looks tidy and breaks
+  things quietly.
+
 ## Validating your copy
 
 - JSON files (`.claude/settings.json`) must parse with a strict JSON parser.
@@ -66,3 +94,6 @@ itself, so the split is marked inline like the other templates.
   need to validate it programmatically.
 - `.no-mistakes.yaml` must parse as YAML.
 - No `<REPLACE>` placeholders should remain once a repo is wired up.
+- `.gitignore`: check behaviour with `git check-ignore -v <path>`, not by eye. The rules
+  that matter most are the directory-vs-file ones, and those are exactly the ones reading
+  the patterns does not settle.

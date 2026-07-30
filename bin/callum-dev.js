@@ -35,12 +35,22 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 //   replace    wholesale overwrite; the file is fully synced, never hand-edited
 //   init-only  copied at init as a starting point, then fully repo-owned - update
 //              never touches it
+//
+// `src` is the name under templates/ when it differs from the destination path.
+// Only .gitignore needs it, and for a non-obvious reason: npm silently drops any
+// file named `.gitignore` from a package, so a `templates/.gitignore` would be
+// missing from every install while every other dotfile here survives. Verified
+// with `npm pack --dry-run`. Do not "simplify" this back to a dotfile source.
 const TEMPLATES = [
   { file: ".no-mistakes.yaml", strategy: "merge" },
   { file: "treehouse.toml", strategy: "init-only" },
   { file: "CLAUDE.md", strategy: "merge" },
   { file: ".claude/settings.json", strategy: "replace" },
   { file: ".devcontainer/devcontainer.json", strategy: "merge" },
+  // `merge`, not `init-only`: as this system grows new generated artefacts, their
+  // ignore rules have to reach repos that were scaffolded before those artefacts
+  // existed. A repo's own paths live in the file's repo-owned block and survive.
+  { file: ".gitignore", src: "gitignore", strategy: "merge" },
 ];
 
 function readIfExists(file) {
@@ -135,8 +145,9 @@ async function init() {
   const skipped = [];
   const written = [];
 
-  for (const { file } of TEMPLATES) {
-    const template = fs.readFileSync(path.join(TEMPLATE_ROOT, file), "utf-8");
+  for (const { file, src } of TEMPLATES) {
+    const source = src ?? file;
+    const template = fs.readFileSync(path.join(TEMPLATE_ROOT, source), "utf-8");
     if (fs.existsSync(file)) {
       // Never clobber an existing file; the pristine baseline below still lets
       // a later `update` merge upstream changes into it.
@@ -145,7 +156,7 @@ async function init() {
       writeFile(file, applyAnswers(file, template, answers));
       written.push(file);
     }
-    writeFile(path.join(BASELINE_DIR, file), template);
+    writeFile(path.join(BASELINE_DIR, source), template);
   }
 
   writeStamp({
@@ -211,9 +222,10 @@ function update() {
   const changed = [];
 
   try {
-    for (const { file, strategy } of TEMPLATES) {
-      const newContent = fs.readFileSync(path.join(TEMPLATE_ROOT, file), "utf-8");
-      const baselineFile = path.join(BASELINE_DIR, file);
+    for (const { file, src, strategy } of TEMPLATES) {
+      const source = src ?? file;
+      const newContent = fs.readFileSync(path.join(TEMPLATE_ROOT, source), "utf-8");
+      const baselineFile = path.join(BASELINE_DIR, source);
       const baseline = readIfExists(baselineFile);
       const current = readIfExists(file);
 

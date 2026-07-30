@@ -10,7 +10,8 @@ dev-system/
 ├── features/src/callum-tools/        # Dev Container Feature: installs no-mistakes, treehouse, Claude Code
 ├── features/test/callum-tools/       # feature tests, run in CI by test-features.yml
 ├── templates/                        # repo config templates: .no-mistakes.yaml, treehouse.toml,
-│                                     #   CLAUDE.md skeleton, .claude/settings.json, workflows
+│                                     #   CLAUDE.md skeleton, .claude/settings.json, gitignore,
+│                                     #   workflows
 ├── bin/callum-dev.js                 # CLI: `init` (scaffold a repo), `update` (3-way merge templates)
 ├── tests/                            # CLI end-to-end tests, run in CI by test-cli.yml
 └── package.json                      # installable via github:cbundy/dev-system#semver:0.x
@@ -22,7 +23,7 @@ dev-system/
 |---|---|---|---|
 | Agent behavior | skills, generic agent rules | Claude Code plugin via private marketplace (this repo) | `/plugin marketplace update` or auto-update |
 | Environment | devcontainer tooling installs | Dev Container Feature on GHCR | container rebuild pulls latest matching tag |
-| Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
+| Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, `.gitignore`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
 
 ## Plugin
 

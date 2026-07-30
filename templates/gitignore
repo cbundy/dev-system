@@ -1,0 +1,89 @@
+# Ignore rules for a repo using this dev system.
+# Marker convention (see templates/README.md for the full explanation):
+#   "synced" blocks are owned by dev-system and overwritten by `callum-dev update`.
+#   "repo-owned" blocks are yours - `callum-dev update` merges around them and never clobbers them.
+#
+# Note the block order here is the reverse of the other templates, deliberately:
+# gitignore precedence is last-match-wins, so the repo-owned block sits at the
+# BOTTOM. That is what lets a repo override or un-ignore a synced default with a
+# `!` negation. Putting it first would leave repo rules silently outranked.
+
+# --- synced: do not edit (managed by dev-system) ---
+
+# This system's own tooling.
+
+# no-mistakes pipeline state: its internal per-run worktrees, step logs and evidence.
+# Directory-only pattern on purpose - see the must-not-ignore note below.
+.no-mistakes/
+
+# treehouse worktrees. treehouse.toml ships `root = "./"`, which places them at
+# .treehouse/ inside the repo - each one a full working copy of this repo.
+.treehouse/
+.claude/worktrees/
+
+# Claude Code's per-user local overrides. The shared .claude/settings.json is
+# committed (dev-system syncs it); this file is machine-local and must not be.
+.claude/settings.local.json
+
+# Deliberately NOT ignored - these are committed on purpose, so do not "tidy them
+# up" into the list above:
+#   .callum-dev.json        the applied template version stamp
+#   .callum-dev/baseline/   pristine template copies
+#     Both are what make `callum-dev update` a real 3-way merge rather than an
+#     overwrite. Ignoring them breaks updates for every fresh clone (README.md).
+#   .no-mistakes.yaml       this repo's pipeline config, which lives right next to
+#     the ignored .no-mistakes/ state directory. This is why the rule above ends
+#     in a slash: a bare `.no-mistakes` would be one typo from catching the config.
+
+# Node / TypeScript.
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Playwright.
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Python.
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage/
+htmlcov/
+
+# Secrets and credentials. Keep an `.env.example` tracked as the documented shape.
+.env
+.env.*
+!.env.example
+*.pem
+id_ed25519*
+id_rsa*
+
+# Logs.
+*.log
+npm-debug.log*
+
+# OS and editor cruft. `.vscode/` is deliberately absent - projects using this
+# system ship devcontainers and often commit shared editor settings on purpose.
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+
+# --- end synced ---
+
+# --- repo-owned: edit freely ---
+# This repo's own paths: build output under a non-standard name, local databases,
+# fixture data, generated clients, vendored dependencies. Anything specific to
+# this project rather than to the dev system belongs here, not above.
+#
+# Last-match-wins applies, so this is also where to un-ignore something a synced
+# rule catches, e.g.:
+#   !docs/design/**/*.png
+# --- end repo-owned ---
