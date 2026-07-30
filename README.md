@@ -7,7 +7,8 @@ bootstrap and stay in sync across repositories. One repo, one version history, f
 dev-system/
 ├── .claude-plugin/marketplace.json   # Claude Code plugin marketplace catalog
 ├── plugins/callum-flow/              # plugin: skills (issue-orchestrator, implement-issue), hooks
-├── features/callum-tools/            # Dev Container Feature: installs no-mistakes, treehouse, etc.
+├── features/src/callum-tools/        # Dev Container Feature: installs no-mistakes, treehouse, Claude Code
+├── features/test/callum-tools/       # feature tests, run in CI by test-features.yml
 ├── templates/                        # repo config templates: .no-mistakes.yaml, treehouse.toml,
 │                                     #   CLAUDE.md skeleton, .claude/settings.json, workflows
 ├── bin/callum-dev.js                 # CLI: `init` (scaffold a repo), `update` (3-way merge templates)
@@ -43,6 +44,33 @@ deliberate step Callum runs when ready (eventually via a release workflow), bump
 `version` following semver - patch for wording fixes, minor for a new skill or capability,
 major for a breaking change to an existing skill's contract. Until that bump, merged
 changes live in this repo but ship to no consumer.
+
+## Dev Container Feature
+
+`features/src/callum-tools` installs the flow's tooling - the no-mistakes pipeline CLI,
+treehouse, and the Claude Code CLI (each toggleable via a boolean option). Because these
+are per-user installs (and `~/.no-mistakes` may be a run-time bind mount), the feature
+installs nothing at image build time: it stages a setup script that the feature's
+`postCreateCommand` runs as the remote user, judging each install by whether the tool
+ends up on PATH. Consumers reference it as:
+
+```jsonc
+"features": {
+  "ghcr.io/cbundy/dev-system/callum-tools:1": {}
+}
+```
+
+Publishing is manual (`Publish features` workflow, Actions tab), mirroring the deliberate
+release policy; the devcontainers action only pushes versions that do not already exist,
+so a feature change must bump `version` in its `devcontainer-feature.json` to publish.
+CI (`test-features.yml`) builds a container with the feature applied and verifies the
+tools install, on every PR touching `features/`.
+
+**Visibility decision**: the GHCR package is public while this source repo stays private.
+The package contains only install scripts for tools that are themselves public, and a
+private package would require a `packages:read` PAT docker-login on every machine and CI
+job that builds a consumer container. After the first publish, flip the package to public
+in GHCR package settings (new packages default to private).
 
 ## Consumer repo wiring
 

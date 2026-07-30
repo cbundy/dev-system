@@ -1,0 +1,32 @@
+name: Test features
+
+# Real end-to-end verification: builds a container with each feature applied
+# (lifecycle hooks included) and runs its test/ checks. This is the gate for
+# feature changes - the dev container this repo is edited from cannot run
+# docker-in-docker, so CI is where features actually get exercised.
+on:
+  pull_request:
+    paths:
+      - "features/**"
+      - ".github/workflows/test-features.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: [callum-tools]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Test feature against Node bookworm base
+        run: |
+          devcontainer features test \
+            --project-folder ./features \
+            --features ${{ matrix.feature }} \
+            --base-image mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm
