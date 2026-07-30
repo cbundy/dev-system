@@ -1,0 +1,37 @@
+// This file is JSONC (JSON with comments), matching the devcontainer.json spec itself -
+// comments are allowed and ignored by devcontainer tooling.
+{
+  // --- repo-owned: edit freely ---
+  "name": "<REPLACE: repo name>",
+
+  // Thin example base image - swap for whatever base this repo actually needs, or switch
+  // to a "build": { "dockerfile": ... } block if a custom Dockerfile is required.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-20-bookworm",
+
+  "mounts": [
+    // Example: bind-mount a synced config directory from the host into the container, so
+    // host-level settings (e.g. no-mistakes config) are shared without living in the repo.
+    // ${localEnv:USERPROFILE} is Windows-host-specific (the host user's profile dir, as
+    // seen from Docker Desktop/WSL) - use ${localEnv:HOME} instead on a Linux/macOS host,
+    // or drop this mount entirely if this repo doesn't need it.
+    "source=${localEnv:USERPROFILE}/.no-mistakes,target=/home/node/.no-mistakes,type=bind"
+    // "<REPLACE: add repo-specific mounts here>"
+  ],
+
+  "remoteEnv": {
+    // "<REPLACE: repo-specific env vars, e.g. NM_HOME>": "<REPLACE>"
+  },
+  // --- end repo-owned ---
+
+  // --- synced: do not edit (managed by dev-system) ---
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    // Installs no-mistakes, treehouse, and the rest of Callum's dev tooling.
+    "ghcr.io/cbundy/dev-system/callum-tools:1": {}
+    // --- repo-owned: edit freely --- add extra features here if this repo needs more.
+    // --- end repo-owned ---
+  },
+  "remoteUser": "node"
+  // --- end synced ---
+}

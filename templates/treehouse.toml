@@ -1,0 +1,13 @@
+# treehouse worktree manager config.
+# Both values below are repo-owned: dev-system ships this file as a starting point, but
+# there is no synced structure to preserve here, so tune both freely for this repo.
+# See templates/README.md for guidance on what to change.
+
+# --- repo-owned: edit freely ---
+max_trees = 16
+root = "./"
+
+# Worktree root directory (relative to repo root or absolute path).
+# Worktrees are placed under {root}/.treehouse/. Default: $HOME
+# Example: root = "./"
+# --- end repo-owned ---
