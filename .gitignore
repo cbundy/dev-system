@@ -1,1 +1,28 @@
+# This repo's own ignore rules. `templates/gitignore` is the canonical list shipped to
+# consumer repos - keep the system entries below in step with it. Deliberately not
+# managed by `callum-dev update`: dev-system is the source of the template, not a
+# consumer of it, so there is no stamp or baseline here to merge against.
+
+# This system's own tooling. dev-system is subject to these like any other repo -
+# templates/treehouse.toml ships root = "./", so worktrees land inside the repo.
+.treehouse/
+.no-mistakes/
+.claude/worktrees/
+.claude/settings.local.json
+
+# Node.
 node_modules/
+
+# npm pack output, from verifying that templates/gitignore really is packaged
+# (npm drops any file literally named .gitignore - see the note in bin/callum-dev.js).
+*.tgz
+
+# Logs.
+*.log
+npm-debug.log*
+
+# OS and editor cruft.
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
