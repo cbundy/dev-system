@@ -51,13 +51,14 @@ jobs:
             echo "Tag v$RELEASE_VERSION already exists but no GitHub Release does - resuming a failed release attempt."
           fi
 
-      - name: Sync version into every plugin manifest and skill
+      - name: Sync version into every plugin manifest, skill, and package.json
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         # One version for the whole system, for now: every plugin.json gets
-        # `version`, and every SKILL.md gets a `version:` frontmatter field
-        # (inserted if missing, replaced if present). New plugins/skills are
-        # picked up automatically - no workflow change needed.
+        # `version`, every SKILL.md gets a `version:` frontmatter field
+        # (inserted if missing, replaced if present), and the root package.json
+        # (the npm/CLI layer) gets `version`. New plugins/skills are picked up
+        # automatically - no workflow change needed.
         run: |
           node - <<'EOF'
           const fs = require("node:fs");
@@ -90,6 +91,11 @@ jobs:
               console.log(`bumped ${skill}`);
             }
           }
+
+          const rootPkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
+          rootPkg.version = version;
+          fs.writeFileSync("package.json", JSON.stringify(rootPkg, null, 2) + "\n");
+          console.log("bumped package.json");
           EOF
 
       - name: Commit version bump and tag release
@@ -101,7 +107,7 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add plugins
+            git add plugins package.json
             if git diff --cached --quiet; then
               echo "Versions already at v${RELEASE_VERSION} - no version-bump commit needed; tagging current HEAD."
             else

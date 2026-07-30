@@ -1,0 +1,19 @@
+{
+  "name": "@callum/dev-system",
+  "version": "0.2.0",
+  "description": "Callum's portable dev flow: repo config templates plus the callum-dev CLI that scaffolds and syncs them",
+  "private": true,
+  "bin": {
+    "callum-dev": "bin/callum-dev.js"
+  },
+  "files": [
+    "bin",
+    "templates"
+  ],
+  "scripts": {
+    "test": "node --test tests/"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
