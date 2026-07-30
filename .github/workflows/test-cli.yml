@@ -1,0 +1,29 @@
+name: Test CLI
+
+# Gate for the callum-dev CLI and the templates it scaffolds: the tests run the
+# real bin end-to-end (init, update merges/conflicts, check) in scratch dirs,
+# so template shape changes that break the CLI's assumptions fail here too.
+on:
+  pull_request:
+    paths:
+      - "bin/**"
+      - "tests/**"
+      - "templates/**"
+      - "package.json"
+      - ".github/workflows/test-cli.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run CLI tests
+        run: npm test

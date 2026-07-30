@@ -12,7 +12,8 @@ dev-system/
 ├── templates/                        # repo config templates: .no-mistakes.yaml, treehouse.toml,
 │                                     #   CLAUDE.md skeleton, .claude/settings.json, workflows
 ├── bin/callum-dev.js                 # CLI: `init` (scaffold a repo), `update` (3-way merge templates)
-└── package.json                      # installable via github:cbundy/dev-system#semver:^1
+├── tests/                            # CLI end-to-end tests, run in CI by test-cli.yml
+└── package.json                      # installable via github:cbundy/dev-system#semver:0.x
 ```
 
 ## The three layers and how each one distributes
@@ -72,6 +73,34 @@ private package would require a `packages:read` PAT docker-login on every machin
 job that builds a consumer container. After the first publish, flip the package to public
 in GHCR package settings (new packages default to private).
 
+## Templates and the callum-dev CLI
+
+`templates/` holds the repo config files (see `templates/README.md` for the per-file
+synced/repo-owned split); `bin/callum-dev.js` scaffolds and syncs them. In a consumer repo:
+
+```
+npm i -D github:cbundy/dev-system#semver:0.x
+npx callum-dev init
+```
+
+`init` copies the templates in (never clobbering existing files), prompts for the
+repo-owned values (repo name, lint/test commands), and records two things to commit
+alongside the config: a stamp (`.callum-dev.json`, the applied template version) and a
+pristine baseline copy of each template (`.callum-dev/baseline/`). Those two make
+updates a real 3-way merge instead of an overwrite:
+
+```
+npm update @callum/dev-system
+npx callum-dev update
+```
+
+`update` merges each file with `git merge-file` (your file vs the baseline vs the new
+template): repo-owned edits survive, upstream synced changes come forward, and a genuine
+conflict is left as standard conflict markers with a non-zero exit rather than silently
+resolved. Fully-synced files (`.claude/settings.json`) are replaced wholesale; fully
+repo-owned ones (`treehouse.toml`) are never touched after init. `npx callum-dev check`
+exits non-zero when the stamp lags the installed package - a CI-friendly drift gate.
+
 ## Consumer repo wiring
 
 A consumer repo commits only:
@@ -82,7 +111,8 @@ A consumer repo commits only:
   repo-specific mounts/env.
 - Repo-owned config values (test/lint commands in `.no-mistakes.yaml`, repo section of
   `CLAUDE.md`); the synced structure around them comes from `templates/`.
-- `@callum/dev-system` as a devDependency: `github:cbundy/dev-system#semver:^1`.
+- `@callum/dev-system` as a devDependency (`github:cbundy/dev-system#semver:0.x`), plus
+  the `callum-dev` stamp and baseline that `init` records.
 
 ## Design rules
 
@@ -97,7 +127,11 @@ A consumer repo commits only:
 
 ## Status
 
-`plugins/callum-flow` (issue-orchestrator, implement-issue, and update-dev skills) is
-extracted and distributed via the `callum` marketplace. `/update-dev <change request>`
-in any consumer repo proposes a change to this repo as a reviewed PR. `features/` and `templates/` extraction is
-tracked in this repo's remaining issues.
+All three layers are extracted: `plugins/callum-flow` (issue-orchestrator,
+implement-issue, and update-dev skills) distributes via the `callum` marketplace,
+`features/src/callum-tools` via GHCR, and `templates/` via the `callum-dev` CLI
+(npm git dependency; installable from the first tag that contains `package.json`,
+i.e. v0.3.0 onwards). `/update-dev <change request>` in any consumer repo proposes
+a change to this repo as a reviewed PR. Releasing is documented in `RELEASING.md`.
+Remaining extraction work (migrating mealplanning itself onto these layers) is
+tracked in this repo's issues.
