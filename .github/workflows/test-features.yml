@@ -19,7 +19,7 @@ jobs:
         feature: [callum-tools]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
