@@ -8,7 +8,7 @@ description: >-
   issue linkage, and handoff shape. Use this when you are a sub-agent that has
   been delegated a single issue to implement (as opposed to orchestrating a
   queue of issues).
-version: 0.2.2
+version: 0.2.3
 ---
 
 # Implement issue
