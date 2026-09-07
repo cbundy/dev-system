@@ -14,9 +14,12 @@ no-mistakes pipeline config.
   remember fresh no-mistakes worktrees have no dependencies installed, so install first if
   your package manager needs it), additions to `ignore_patterns`, and the optional
   `document.instructions` block.
-- Synced: `auto_fix`, `agent`, `agent_args_override`, and the commented-out optional
+- Synced: `auto_fix`, `agent`, and the commented-out optional
   sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
   block if you want to opt in, rather than uncommenting the synced copy in place.
+- Not here: the codex model pin. `agent_args_override` / `agent_config` are global-only
+  keys that no-mistakes silently ignores in a repo file; the `callum-tools` feature writes
+  the pin into `~/.no-mistakes/config.yaml` instead (option `codexModel`).
 
 ## `treehouse.toml` -> `treehouse.toml`
 
