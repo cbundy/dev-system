@@ -19,6 +19,11 @@
       "type": "boolean",
       "default": true,
       "description": "Install treehouse, the reusable worktree pool for parallel agents (binary release from kunchenguid/treehouse)."
+    },
+    "codexModel": {
+      "type": "string",
+      "default": "gpt-5.6-sol",
+      "description": "Codex model the no-mistakes pipeline runs on. Written into ~/.no-mistakes/config.yaml as agent_args_override (a global-only key) unless that file already pins one. Empty string skips the pin."
     }
   },
   "postCreateCommand": "/usr/local/share/callum-tools/setup.sh",

@@ -10,5 +10,6 @@ check "no-mistakes on PATH" bash -lc "command -v no-mistakes"
 check "treehouse on PATH" bash -lc "command -v treehouse"
 check "claude CLI on PATH" bash -lc "command -v claude"
 check "setup script staged" test -x /usr/local/share/callum-tools/setup.sh
+check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
 
 reportResults

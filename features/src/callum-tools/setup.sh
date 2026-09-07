@@ -40,6 +40,28 @@ fi
 if [ "${INSTALL_NO_MISTAKES}" = "true" ]; then
   curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh || true
   command -v no-mistakes >/dev/null 2>&1 || FAILED="$FAILED no-mistakes"
+
+  # Pin the codex model. `agent_args_override` is honoured ONLY in the global
+  # ~/.no-mistakes/config.yaml - a copy in a repo's .no-mistakes.yaml is
+  # silently ignored, leaving codex on its (top-end) default. Append the block
+  # once; an existing pin, however it got there, is left alone. The daemon
+  # reads this file at start-up, so a running daemon needs a restart to see it.
+  NM_CONFIG="$HOME/.no-mistakes/config.yaml"
+  if [ -n "${CODEX_MODEL:-}" ] && ! grep -qE '^(agent_args_override|agent_config):' "$NM_CONFIG" 2>/dev/null; then
+    mkdir -p "$(dirname "$NM_CONFIG")"
+    cat >> "$NM_CONFIG" <<EOF
+
+# Codex model pin, written by the callum-tools devcontainer feature (global-only key).
+agent_args_override:
+  codex:
+    - -m
+    - ${CODEX_MODEL}
+    - -c
+    - service_tier="priority"
+    - -c
+    - model_reasoning_effort="medium"
+EOF
+  fi
 fi
 
 # 3. treehouse (reusable worktree pool for parallel agents).
