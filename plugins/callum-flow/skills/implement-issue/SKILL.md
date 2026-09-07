@@ -23,6 +23,13 @@ consumer repo documents its own canonical commands - check its `CLAUDE.md`
 "canonical commands" section (or equivalent config/README) whenever this
 skill says to look one up, rather than assuming any specific command.
 
+Never install toolchains, browsers, or system packages yourself (no
+`playwright install --with-deps`, `apt-get`, runtime installs, and so on) -
+everything a task needs is baked into the consumer repo's devcontainer. A tool
+that looks missing is a container-build bug, not something to fix inline:
+report it in your handoff (and raise a `bug` issue if the consumer repo's
+`CLAUDE.md` asks for one) and carry on with what you can.
+
 ## 1. Worktree bootstrap
 - Run `treehouse help` first, to confirm `treehouse` is installed and to
   understand the tool. Do this before any edit.
@@ -86,11 +93,11 @@ skill says to look one up, rather than assuming any specific command.
   `CLAUDE.md`'s canonical commands section rather than assuming a specific
   one; it should be the same command CI runs, so nothing you verify locally
   can drift from the gate.
-- If the change touches UI or another end-to-end-sensitive surface, ALSO run
-  the repo's e2e suite locally. Confirm from `CLAUDE.md`/config whether the
-  fast "check" command already includes e2e or excludes it - a fast unit-only
-  command that silently excludes e2e is a common trap, and running only that
-  one can look green while an e2e regression ships.
+- Do NOT run the repo's e2e suite locally. The `/no-mistakes` pipeline runs
+  the full suite (e2e included) and resolves small failures itself, so a local
+  run only duplicates cost and context. The one exception is a bug fix whose
+  reported failure can only be reproduced end to end - run the single relevant
+  spec, not the suite.
 - For bug fixes, confirm the regression test reproduces the reported failure
   against the BROKEN code before applying your fix. A test that only ever
   passed proves nothing.
@@ -162,6 +169,8 @@ Your final message must be self-contained - the reader has no other context:
 - Exactly what you verified, and how (commands run, what passed).
 - What remains, if anything.
 - Known risks.
+- Any tooling that appeared missing or broken in the container (never
+  installed inline - see the note at the top of this skill).
 
 ## 9. Efficiency
 - Do not narrate each step to yourself. Think, act, and summarise only at the
