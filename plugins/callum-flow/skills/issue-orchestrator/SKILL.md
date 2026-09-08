@@ -63,13 +63,17 @@ signal that a run is now in flight and worth checking. Do not `sleep`, `tail -f`
 `ps`/`pgrep` wait loop for a pipeline to move - there is nothing to watch for in real time,
 and a wait loop is exactly the no-action-turn cost this model exists to cut.
 
-- For each in-flight run, do exactly **one** authoritative read per tick:
-  `no-mistakes status` (scoped to that run/worktree). That single call is the
-  source of truth for the run's state - a one-shot status read, not a poll loop,
-  is how you check a run. Do not layer `pgrep`/`ps` process-liveness checks on top
-  of it; they are unreliable anyway (a `pgrep -f` invocation matches its own
-  command line - see the memory file for the exact trap).
-- Act on exactly two outcomes from that read:
+- Start one background watcher for all in-flight branches using the harness's
+  `run_in_background` Bash: `/usr/local/share/callum-tools/pipeline-watch.sh
+  --branches <branch-a,branch-b>`. The watcher calls `no-mistakes runs --limit
+  0` every 25 seconds and exits after printing the first watched run that
+  becomes actionable. The harness wakes this session only when it exits.
+  Restart a watcher immediately after each wake, and keep the `/loop` tick as
+  a long fallback if a watcher dies. Do not use `no-mistakes status` to watch
+  a run: it reports the currently active run and can silently switch to
+  another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
+  the watcher.
+- Act on the watcher output:
   - **`awaiting_agent` or failed** - the gate parked, or a step failed. Spawn a
     fresh, single-purpose **fixer** agent, handed the failing step's log excerpt
     (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) plus the original design brief.
@@ -78,14 +82,12 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
     it works.
   - **`checks-passed`** - run the four correctness guards below, then merge it
     yourself.
-  - Anything else (e.g. `running`, mid-pipeline) - take no action this tick.
-    `running` also covers the completed-run CI-monitoring tail (up to 168h after
-    all steps pass, waiting to be merged), so a quiet "running" status by itself is
-    not a stall signal.
+  - Anything else cannot wake the watcher. `running` also covers the
+    completed-run CI-monitoring tail (up to 168h after all steps pass, waiting
+    to be merged), so it is not a stall signal.
 
-Option A changes only **when** this fires (on the termination event, once per
-in-flight run per tick) - it does not change **that** the following guards fire,
-and none of them is weakened:
+The watcher changes only **when** this fires - it does not change **that** the
+following guards fire, and none of them is weakened:
 
 1. **Phantom-gating guard.** Before trusting any green, confirm the run's `head:`
    SHA equals the branch/PR's real HEAD SHA
