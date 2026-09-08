@@ -88,11 +88,9 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   look there first.
 
 ## 3. Verification discipline
-- Run this repo's canonical "check" command (lint + typecheck + unit tests)
-  from the repo root before considering the change done - look it up in
-  `CLAUDE.md`'s canonical commands section rather than assuming a specific
-  one; it should be the same command CI runs, so nothing you verify locally
-  can drift from the gate.
+- Run targeted tests for the files you touched, using the repo's documented
+  commands. The `/no-mistakes` pipeline is the full gate, so do not run the
+  canonical full check locally just to duplicate it.
 - Do NOT run the repo's e2e suite locally. The `/no-mistakes` pipeline runs
   the full suite (e2e included) and resolves small failures itself, so a local
   run only duplicates cost and context. The one exception is a bug fix whose
@@ -138,11 +136,14 @@ tests would otherwise have missed:
 ## 6. The /no-mistakes pipeline - fire-and-forget contract
 - Run `/no-mistakes` end to end: rebase -> review -> test -> document -> lint
   -> push -> PR -> CI.
-- Then: ensure your commits are pushed, reconcile with the remote
-  (`git fetch && git rebase origin/<branch>`), confirm `no-mistakes status`
-  head equals your real commit SHA, write a self-contained handoff (see
-  section 8), and TERMINATE. Do NOT babysit the pipeline - it is detached and
-  self-driving while its steps keep passing.
+- Launch it detached from the first command, never through `tail`: `nohup
+  no-mistakes axi run --yes --intent "<goal>" > /tmp/no-mistakes-<branch>.log
+  2>&1 &`. Then make exactly one `no-mistakes status` read to capture the run
+  id and confirm its `head` equals your commit SHA. Write a self-contained
+  handoff (see section 8), and TERMINATE.
+- Waiting for the run to progress, polling status, tailing logs, or `sleep` of
+  any duration is out of scope. The orchestrator's watcher observes pipeline
+  events after your handoff.
 - If a step FAILS and parks the run awaiting a driver, you may re-attach from
   the branch worktree with `no-mistakes axi run --yes --intent "<goal>"`.
 - Do NOT merge. Merging is the delegator's decision, not yours, unless your
@@ -165,7 +166,8 @@ Your final message must be self-contained - the reader has no other context:
 - Worktree path and branch name.
 - Latest commit SHA.
 - `/no-mistakes` run id.
-- PR number and URL.
+- PR number and URL if the pipeline has already created one; otherwise the run
+  id is the handoff identifier. Never wait for a PR to exist.
 - Exactly what you verified, and how (commands run, what passed).
 - What remains, if anything.
 - Known risks.
