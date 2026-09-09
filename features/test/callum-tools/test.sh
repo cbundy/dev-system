@@ -58,6 +58,27 @@ EOF
     /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/quiet --deadline 1 |
     grep -qx "timeout"
 '
+check "queue watcher fires only on a ready-set delta" bash -lc '
+  set -e
+  test -x /usr/local/share/callum-tools/queue-watch.sh
+  tmpdir=$(mktemp -d)
+  trap "rm -rf \"$tmpdir\"" EXIT
+  cat > "$tmpdir/gh" <<'\''EOF'\''
+#!/bin/sh
+cat "$(dirname "$0")/queue.txt"
+EOF
+  chmod +x "$tmpdir/gh"
+  # queue matches the baseline: no fire (killed by timeout, no output)
+  printf "305" > "$tmpdir/queue.txt"
+  out=$(PATH="$tmpdir:$PATH" QUEUE_WATCH_INTERVAL=1 timeout 3 \
+    /usr/local/share/callum-tools/queue-watch.sh --repo o/r --label ready --known 305 || true)
+  [ -z "$out" ]
+  # a new issue enters the set: fires with the delta
+  printf "305,307" > "$tmpdir/queue.txt"
+  PATH="$tmpdir:$PATH" QUEUE_WATCH_INTERVAL=1 timeout 10 \
+    /usr/local/share/callum-tools/queue-watch.sh --repo o/r --label ready --known 305 |
+    grep -qx "queue-changed known=305 now=305,307"
+'
 check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
 
 reportResults
