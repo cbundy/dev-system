@@ -53,6 +53,10 @@ EOF
   mkdir -p "$tmpdir/nm/logs/RUNPARK"
   touch -d "2026-01-01 00:02" "$tmpdir/nm/logs/RUNPARK"
   watch | grep -qx "parked feat/watched RUNPARK"
+  # nothing actionable + --deadline elapses = deadman heartbeat
+  PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" PIPELINE_WATCH_INTERVAL=1 timeout 10 \
+    /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/quiet --deadline 1 |
+    grep -qx "timeout"
 '
 check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
 

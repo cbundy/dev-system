@@ -73,8 +73,13 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
   through its CI-monitoring tail (up to 168h, waiting to be merged), and a
   parked gate also reports `running` - which is why the watcher reads
   per-step state instead. The harness wakes this session only when it exits.
-  Restart a watcher immediately after each wake, and keep the `/loop` tick as
-  a long fallback if a watcher dies. Do not use `no-mistakes status` to watch
+  Restart a watcher immediately after each wake, and pass `--deadline
+  <seconds>` (an hour is a sound default) so a quiet watcher exits printing
+  `timeout` - that wake is the fallback heartbeat: verify the watched runs
+  are still healthy, then restart it. With the deadline in place, in-flight
+  runs need no `/loop` tick to babysit them; a cadence tick remains useful
+  only if nothing else (like a queue watcher) triggers work discovery. Do
+  not use `no-mistakes status` to watch
   a run: it reports the currently active run and can silently switch to
   another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
   the watcher.

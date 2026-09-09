@@ -8,6 +8,10 @@
 #   parked       a gate is awaiting an agent/approval and needs driving
 #   failed       a step failed
 #   cancelled    the run was cancelled
+#   timeout      --deadline seconds elapsed with nothing actionable
+#                (printed alone, no branch/run-id) - a deadman heartbeat
+#                so the caller can verify run health and restart, instead
+#                of needing a separate periodic tick
 #
 # Run-level status alone cannot detect the first two: a cleanly passing
 # run stays `running` through its CI-monitoring tail (up to 168h, until
@@ -19,16 +23,24 @@
 set -eu
 
 usage() {
-  echo "usage: pipeline-watch.sh --branches branch[,branch...]" >&2
+  echo "usage: pipeline-watch.sh --branches branch[,branch...] [--deadline seconds]" >&2
   exit 2
 }
 
-[ "$#" -eq 2 ] && [ "$1" = "--branches" ] || usage
-branches=$2
+branches=
+deadline=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --branches) branches=${2-}; shift 2 || usage ;;
+    --deadline) deadline=${2-}; shift 2 || usage ;;
+    *) usage ;;
+  esac
+done
 [ -n "$branches" ] || usage
 
 logs_dir="${NO_MISTAKES_HOME:-$HOME/.no-mistakes}/logs"
 n_watched=$(printf '%s\n' "$branches" | awk -F, '{print NF}')
+started=$(date +%s)
 
 while :; do
   seen=","
@@ -63,5 +75,9 @@ while :; do
     fi
     [ "$n_seen" -eq "$n_watched" ] && break
   done
+  if [ "$deadline" -gt 0 ] && [ $(($(date +%s) - started)) -ge "$deadline" ]; then
+    echo timeout
+    exit 0
+  fi
   sleep "${PIPELINE_WATCH_INTERVAL:-25}"
 done
