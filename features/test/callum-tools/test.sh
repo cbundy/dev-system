@@ -10,22 +10,49 @@ check "no-mistakes on PATH" bash -lc "command -v no-mistakes"
 check "treehouse on PATH" bash -lc "command -v treehouse"
 check "claude CLI on PATH" bash -lc "command -v claude"
 check "setup script staged" test -x /usr/local/share/callum-tools/setup.sh
-check "pipeline watcher detects watched terminal runs" bash -lc '
+check "pipeline watcher detects actionable runs" bash -lc '
   set -e
   test -x /usr/local/share/callum-tools/pipeline-watch.sh
   tmpdir=$(mktemp -d)
   trap "rm -rf \"$tmpdir\"" EXIT
+  mkdir -p "$tmpdir/nm/logs/RUNMERGE" "$tmpdir/nm/logs/RUNOTHER"
+  echo "all CI checks passed - still monitoring until merged or closed" > "$tmpdir/nm/logs/RUNMERGE/ci.log"
+  touch -d "2026-01-01 00:00" "$tmpdir/nm/logs/RUNMERGE"
+  touch -d "2026-01-01 00:01" "$tmpdir/nm/logs/RUNOTHER"
   cat > "$tmpdir/no-mistakes" <<'\''EOF'\''
 #!/bin/sh
-printf "%s\n" \
-  "  running        feat/unrelated       deadbeef  2026-09-08 15:00" \
-  "  running        feat/watched         deadbeef  2026-09-08 15:00" \
-  "  checks-passed  feat/other           deadbeef  2026-09-08 15:00" \
-  "  failed         feat/watched         deadbeef  2026-09-08 15:00"
+[ "$1" = "axi" ] && [ "$2" = "status" ] && [ "$3" = "--run" ] || exit 1
+case "$4" in
+RUNOTHER)
+  printf "%s\n" "current_branch: master" "other_branch_run:" \
+    "  id: \"RUNOTHER\"" "  branch: feat/unrelated" "  status: running"
+  ;;
+RUNMERGE)
+  printf "%s\n" "current_branch: master" "other_branch_run:" \
+    "  id: \"RUNMERGE\"" "  branch: feat/watched" "  status: running" \
+    "  steps[9]{step,status,findings,duration_ms}:" \
+    "    push,completed,0,1" "    ci,running,0,1"
+  ;;
+RUNPARK)
+  printf "%s\n" "current_branch: master" "other_branch_run:" \
+    "  id: \"RUNPARK\"" "  branch: feat/watched" "  status: running" \
+    "  steps[9]{step,status,findings,duration_ms}:" \
+    "    test,awaiting_approval,1,1" "    document,pending,0,0"
+  ;;
+*) exit 1 ;;
+esac
 EOF
   chmod +x "$tmpdir/no-mistakes"
-  PATH="$tmpdir:$PATH" /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other |
-    grep -qx "  failed         feat/watched         deadbeef  2026-09-08 15:00"
+  watch() {
+    PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 10 \
+      /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other
+  }
+  # a run in its CI-monitoring tail (status still `running`) fires merge-ready
+  watch | grep -qx "merge-ready feat/watched RUNMERGE"
+  # a newer parked rerun on the same branch outranks the older green run
+  mkdir -p "$tmpdir/nm/logs/RUNPARK"
+  touch -d "2026-01-01 00:02" "$tmpdir/nm/logs/RUNPARK"
+  watch | grep -qx "parked feat/watched RUNPARK"
 '
 check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
 

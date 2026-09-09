@@ -65,26 +65,32 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
 
 - Start one background watcher for all in-flight branches using the harness's
   `run_in_background` Bash: `/usr/local/share/callum-tools/pipeline-watch.sh
-  --branches <branch-a,branch-b>`. The watcher calls `no-mistakes runs --limit
-  0` every 25 seconds and exits after printing the first watched run that
-  becomes actionable. The harness wakes this session only when it exits.
+  --branches <branch-a,branch-b>`. Every 25 seconds the watcher probes the
+  newest run per watched branch (`no-mistakes axi status --run <id>`, plus the
+  run's ci.log for the CI-green marker) and exits after printing the first
+  that becomes actionable, as one line: `<state> <branch> <run-id>`. Run-level
+  status cannot drive this watch - a cleanly passing run stays `running`
+  through its CI-monitoring tail (up to 168h, waiting to be merged), and a
+  parked gate also reports `running` - which is why the watcher reads
+  per-step state instead. The harness wakes this session only when it exits.
   Restart a watcher immediately after each wake, and keep the `/loop` tick as
   a long fallback if a watcher dies. Do not use `no-mistakes status` to watch
   a run: it reports the currently active run and can silently switch to
   another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
   the watcher.
 - Act on the watcher output:
-  - **`awaiting_agent` or failed** - the gate parked, or a step failed. Spawn a
+  - **`parked` or `failed`** - a gate is awaiting an agent/approval, or a step
+    failed. Spawn a
     fresh, single-purpose **fixer** agent, handed the failing step's log excerpt
     (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) plus the original design brief.
     Never resume the old agent - resumption is unreliable ("No transcript found"
     once an agent has ended its turn) and re-reads its whole transcript even when
     it works.
-  - **`checks-passed`** - run the four correctness guards below, then merge it
-    yourself.
-  - Anything else cannot wake the watcher. `running` also covers the
-    completed-run CI-monitoring tail (up to 168h after all steps pass, waiting
-    to be merged), so it is not a stall signal.
+  - **`merge-ready`** - all local steps passed and the run's own CI monitor
+    reports GitHub CI green; run the four correctness guards below, then merge
+    it yourself.
+  - **`cancelled`** - the run was cancelled; decide whether to re-drive or
+    drop it.
 
 The watcher changes only **when** this fires - it does not change **that** the
 following guards fire, and none of them is weakened:
@@ -99,11 +105,12 @@ following guards fire, and none of them is weakened:
    `gh pr view <pr> --json closingIssuesReferences --jq '[.closingIssuesReferences[]|.number]'`
    - before merging, and again after any body rewrite (rewrites can silently drop
    or introduce a closing keyword).
-3. **Real GitHub CI, not just `checks-passed`.** `no-mistakes`'s `checks-passed`
-   reflects the local pipeline's own gates, a separate system from GitHub Actions
+3. **Real GitHub CI, not just `merge-ready`.** A `merge-ready` wake (like
+   `no-mistakes`'s own `checks-passed` outcome) reflects the local pipeline's
+   view of its gates and of CI, a separate system from GitHub Actions
    CI that can disagree with it (environment, flakiness, config drift). Confirm the
    real result with `gh pr checks <pr>` / `statusCheckRollup` before merging, not
-   just `checks-passed`.
+   just the watcher's word.
 4. **Drive a genuinely parked or failed gate correctly.** Re-attach from the
    branch's own worktree with `no-mistakes axi run --yes --intent "<goal>"` (or
    `axi respond`, as appropriate) rather than waiting on it or re-delegating a
