@@ -30,6 +30,19 @@ devcontainer tooling), and it keeps no repo-specific state of its own - see
 - `EXPLORE_MODEL` - cheaper model for read-only exploration.
 
 ## Each tick
+
+Ticks can be event-driven instead of cadence-driven: keep one background
+queue watcher running at all times via the harness's `run_in_background`
+Bash - `/usr/local/share/callum-tools/queue-watch.sh --repo <REPO> --label
+<READY_LABEL> --known <numbers currently in the queue>`. It polls the label
+set (token-free) and exits printing `queue-changed known=... now=...` only
+when the set differs from the baseline you started it with - that wake IS
+the tick trigger for new work. Restart it with the updated baseline after
+every tick, and pass the current set as `--known` so deliberately-parked
+issues (blocked, awaiting the owner) never re-fire. With this plus the
+pipeline watcher's `--deadline` heartbeat, a `/loop` cadence is optional
+rather than load-bearing.
+
 1. Scan `REPO` for open issues with `READY_LABEL`. Also list `IN_DEV_LABEL`
    issues and open PRs.
 2. Check every in-flight sub-agent for progress or being stuck (see Monitoring).
