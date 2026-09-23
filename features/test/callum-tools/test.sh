@@ -30,6 +30,7 @@ RUNOTHER)
 RUNMERGE)
   printf "%s\n" "current_branch: master" "other_branch_run:" \
     "  id: \"RUNMERGE\"" "  branch: feat/watched" "  status: running" \
+    "  head_sha: $(cat "$(dirname "$0")/run-head.txt")" \
     "  steps[9]{step,status,findings,duration_ms}:" \
     "    push,completed,0,1" "    ci,running,0,1"
   ;;
@@ -43,12 +44,35 @@ RUNPARK)
 esac
 EOF
   chmod +x "$tmpdir/no-mistakes"
+  # the watcher runs inside the gated repo: a clone whose origin has the branch
+  g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
+  g init -q --bare "$tmpdir/origin.git"
+  g clone -q "$tmpdir/origin.git" "$tmpdir/repo" 2>/dev/null
+  g -C "$tmpdir/repo" checkout -q -b feat/watched
+  g -C "$tmpdir/repo" commit -q --allow-empty -m gated
+  g -C "$tmpdir/repo" push -q origin feat/watched
+  g -C "$tmpdir/repo" rev-parse HEAD > "$tmpdir/run-head.txt"
+  run_head=$(cat "$tmpdir/run-head.txt")
   watch() {
-    PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 10 \
-      /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other
+    (cd "$tmpdir/repo" && PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 10 \
+      /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other "$@")
   }
-  # a run in its CI-monitoring tail (status still `running`) fires merge-ready
+  # a run in its CI-monitoring tail (status still `running`) whose head is
+  # the branch head fires merge-ready
   watch | grep -qx "merge-ready feat/watched RUNMERGE"
+  # a worktree mapped to the branch with a local commit the run never gated
+  # (the stale-base fixer shape): origin still matches, the worktree does not
+  g clone -q "$tmpdir/origin.git" "$tmpdir/wt" 2>/dev/null
+  g -C "$tmpdir/wt" checkout -q feat/watched
+  watch --worktree "feat/watched=$tmpdir/wt" | grep -qx "merge-ready feat/watched RUNMERGE"
+  g -C "$tmpdir/wt" commit -q --allow-empty -m fix
+  wt_head=$(g -C "$tmpdir/wt" rev-parse HEAD)
+  watch --worktree "feat/watched=$tmpdir/wt" |
+    grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$run_head worktree=$wt_head"
+  # origin moved past the run head: fetched fresh, so reported even though
+  # the local remote-tracking ref is stale
+  g -C "$tmpdir/wt" push -q origin feat/watched
+  watch | grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$wt_head"
   # a newer parked rerun on the same branch outranks the older green run
   mkdir -p "$tmpdir/nm/logs/RUNPARK"
   touch -d "2026-01-01 00:02" "$tmpdir/nm/logs/RUNPARK"

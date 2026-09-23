@@ -78,7 +78,9 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
 
 - Start one background watcher for all in-flight branches using the harness's
   `run_in_background` Bash: `/usr/local/share/callum-tools/pipeline-watch.sh
-  --branches <branch-a,branch-b>`. Every 25 seconds the watcher probes the
+  --branches <branch-a,branch-b> --worktree <branch-a>=<worktree-path>
+  --worktree <branch-b>=<worktree-path>`, mapping each branch to the worktree
+  its agent works in. Every 25 seconds the watcher probes the
   newest run per watched branch (`no-mistakes axi status --run <id>`, plus the
   run's ci.log for the CI-green marker) and exits after printing the first
   that becomes actionable, as one line: `<state> <branch> <run-id>`. Run-level
@@ -104,17 +106,29 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
     Never resume the old agent - resumption is unreliable ("No transcript found"
     once an agent has ended its turn) and re-reads its whole transcript even when
     it works.
-  - **`merge-ready`** - all local steps passed and the run's own CI monitor
-    reports GitHub CI green; run the four correctness guards below, then merge
-    it yourself.
+  - **`merge-ready`** - all local steps passed, the run's own CI monitor
+    reports GitHub CI green, and the run's head equals both `origin/<branch>`
+    (fetched fresh) and, when mapped, the worktree's HEAD; run the four correctness
+    guards below, then merge it yourself.
+  - **`head-mismatch`** - printed as `head-mismatch <branch> <run-id>
+    run=<sha> branch=<sha> [worktree=<sha>]`: the run is green, but for a
+    different commit than the branch or its worktree holds (phantom gating;
+    `unknown` means that SHA could not be read). Never merge on it. Get the
+    worktree onto `origin/<branch>` with the intended fix on top (rebase if it
+    diverged), `no-mistakes axi abort` the stale run, start a fresh `axi run`,
+    confirm the new run's head equals the worktree HEAD, and re-arm the
+    watcher.
   - **`cancelled`** - the run was cancelled; decide whether to re-drive or
     drop it.
 
 The watcher changes only **when** this fires - it does not change **that** the
 following guards fire, and none of them is weakened:
 
-1. **Phantom-gating guard.** Before trusting any green, confirm the run's `head:`
-   SHA equals the branch/PR's real HEAD SHA
+1. **Phantom-gating guard.** The watcher checks this mechanically (a
+   `head-mismatch` wake), but only against `origin/<branch>` and the worktree
+   you mapped with `--worktree` - it cannot see a commit made anywhere else.
+   Before trusting any green, confirm the run's `head:` SHA equals the
+   branch/PR's real HEAD SHA
    (`git log --oneline origin/<branch>..HEAD`, `gh pr view <pr> --json commits`).
    `no-mistakes rerun` re-gates the run's *existing* head - it does not pick up a
    commit made after the run started. A green run whose head predates a later fix
