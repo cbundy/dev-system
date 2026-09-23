@@ -99,8 +99,17 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
   another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
   the watcher.
 - Act on the watcher output:
-  - **`parked` or `failed`** - a gate is awaiting an agent/approval, or a step
-    failed. Spawn a
+  - **`parked`** - a gate is awaiting a decision. Read it (`no-mistakes axi
+    status` from the branch worktree) and decide yourself with the issue's
+    requirements in hand: `axi respond --action approve`, `--action fix
+    --findings <ids> --instructions "<what to do>"`, or `--action skip`.
+    Never add `--yes` - it applies every later `ask-user` finding without
+    escalation, which is how reviewer "remove this unrequired component"
+    findings delete in-scope requirements. Newer no-mistakes releases park
+    review for approval even with zero findings; approve those after a
+    look. Spawn a fixer only when the gate needs code the pipeline cannot
+    write from instructions.
+  - **`failed`** - a step failed. Spawn a
     fresh, single-purpose **fixer** agent, handed the failing step's log excerpt
     (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) plus the original design brief.
     Never resume the old agent - resumption is unreliable ("No transcript found"
@@ -144,8 +153,8 @@ following guards fire, and none of them is weakened:
    real result with `gh pr checks <pr>` / `statusCheckRollup` before merging, not
    just the watcher's word.
 4. **Drive a genuinely parked or failed gate correctly.** Re-attach from the
-   branch's own worktree with `no-mistakes axi run --yes --intent "<goal>"` (or
-   `axi respond`, as appropriate) rather than waiting on it or re-delegating a
+   branch's own worktree with `no-mistakes axi run --intent "<goal>"` (or
+   `axi respond`, as appropriate, never with `--yes`) rather than waiting on it or re-delegating a
    duplicate agent.
 
 - Serialize conflict-prone work with native GitHub `blocked_by` dependencies;
@@ -182,6 +191,9 @@ Two distinct failure modes, both seen repeatedly:
 
 ## Merge and close discipline
 - Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
+- Read every `no-mistakes(<step>)` fix commit against the issue's requirements
+  before merging - a green run can have deleted a requirement and rewritten
+  its tests to match.
 - Agents frequently go idle after CI is green without merging ("park-after-green")
   - verify the gates and merge it yourself.
 - Parallel branches predictably collide on append-only shared files (a CI

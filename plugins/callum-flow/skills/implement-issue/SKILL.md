@@ -137,15 +137,24 @@ tests would otherwise have missed:
 - Run `/no-mistakes` end to end: rebase -> review -> test -> document -> lint
   -> push -> PR -> CI.
 - Launch it detached from the first command, never through `tail`: `nohup
-  no-mistakes axi run --yes --intent "<goal>" > /tmp/no-mistakes-<branch>.log
+  no-mistakes axi run --intent "<goal>" > /tmp/no-mistakes-<branch>.log
   2>&1 &`. Then make exactly one `no-mistakes status` read to capture the run
   id and confirm its `head` equals your commit SHA. Write a self-contained
   handoff (see section 8), and TERMINATE.
+- Never pass `--yes` (to `axi run` or `axi respond`). It makes the pipeline
+  apply `ask-user` findings - scope and policy judgement calls, including
+  "remove this component" - with no escalation, which can silently delete
+  requirements the issue asked for. Without it those findings park the run
+  for the delegator to decide; routine auto-fix findings still self-fix.
+- Make `<goal>` the issue's acceptance criteria, stated as requirements
+  (e.g. "OWNER REQUIREMENTS - do not remove or flag for removal: ..."), not
+  a description of the diff. no-mistakes treats an explicit intent as the
+  authoritative acceptance criteria its review checks fixes against.
 - Waiting for the run to progress, polling status, tailing logs, or `sleep` of
   any duration is out of scope. The orchestrator's watcher observes pipeline
   events after your handoff.
 - If a step FAILS and parks the run awaiting a driver, you may re-attach from
-  the branch worktree with `no-mistakes axi run --yes --intent "<goal>"`.
+  the branch worktree with `no-mistakes axi run --intent "<goal>"`.
 - Do NOT merge. Merging is the delegator's decision, not yours, unless your
   brief explicitly says otherwise.
 
