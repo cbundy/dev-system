@@ -31,10 +31,13 @@ const STAMP_FILE = ".callum-dev.json";
 const BASELINE_DIR = path.join(".callum-dev", "baseline");
 
 // How `update` treats each file (templates/README.md documents the split per file):
-//   merge      3-way merge; repo-owned edits survive, synced changes come forward
-//   replace    wholesale overwrite; the file is fully synced, never hand-edited
-//   init-only  copied at init as a starting point, then fully repo-owned - update
-//              never touches it
+//   merge         3-way merge; repo-owned edits survive, synced changes come forward
+//   replace       wholesale overwrite; the file is fully synced, never hand-edited
+//   settings-json wholesale overwrite like `replace`, except `permissions.allow`,
+//                 which is unioned: the fresh synced list plus any entries the repo
+//                 added beyond the old baseline (see `mergeSettingsJson`)
+//   init-only     copied at init as a starting point, then fully repo-owned - update
+//                 never touches it
 //
 // `src` is the name under templates/ when it differs from the destination path.
 // Only .gitignore needs it, and for a non-obvious reason: npm silently drops any
@@ -45,7 +48,7 @@ const TEMPLATES = [
   { file: ".no-mistakes.yaml", strategy: "merge" },
   { file: "treehouse.toml", strategy: "init-only" },
   { file: "CLAUDE.md", strategy: "merge" },
-  { file: ".claude/settings.json", strategy: "replace" },
+  { file: ".claude/settings.json", strategy: "settings-json" },
   { file: ".devcontainer/devcontainer.json", strategy: "merge" },
   // `merge`, not `init-only`: as this system grows new generated artefacts, their
   // ignore rules have to reach repos that were scaffolded before those artefacts
@@ -184,6 +187,39 @@ async function init() {
   );
 }
 
+// `.claude/settings.json` is synced wholesale except for one repo-owned surface:
+// `permissions.allow`. A worktree sub-agent only ever sees the committed
+// `.claude/settings.json` - never the gitignored, main-checkout-only
+// `.claude/settings.local.json` - so a repo-specific allow entry (e.g. a local
+// script the pipeline runs) has to live in the committed file to reach sub-agents,
+// alongside the generic allow list this system ships. This does a value-level 3-way
+// merge of that one array - the fresh synced list, unioned with whatever entries the
+// repo added beyond the old baseline - and replaces everything else in the file with
+// the new template, matching the plain "replace" strategy used before this array
+// needed repo-owned content. See templates/README.md for the split this preserves.
+function mergeSettingsJson(currentContent, baselineContent, newContent) {
+  const current = JSON.parse(currentContent);
+  const baseline = baselineContent ? JSON.parse(baselineContent) : {};
+  const next = JSON.parse(newContent);
+
+  const baselineAllow = new Set((baseline.permissions && baseline.permissions.allow) || []);
+  const currentAllow = (current.permissions && current.permissions.allow) || [];
+  const nextAllow = (next.permissions && next.permissions.allow) || [];
+
+  // Entries the repo added itself: present now but not in the old baseline.
+  const repoOwned = currentAllow.filter((entry) => !baselineAllow.has(entry));
+
+  const merged = { ...next };
+  const allow = [...nextAllow];
+  for (const entry of repoOwned) {
+    if (!allow.includes(entry)) allow.push(entry);
+  }
+  if (allow.length > 0) {
+    merged.permissions = { ...next.permissions, allow };
+  }
+  return JSON.stringify(merged, null, 2) + "\n";
+}
+
 function mergeFile(repoFile, baseFile, newFile, oldVersion) {
   const result = spawnSync(
     "git",
@@ -239,6 +275,17 @@ function update() {
         if (current !== newContent) {
           writeFile(file, newContent);
           changed.push(`${current === null ? "restored" : "replaced"}  ${file}`);
+        }
+      } else if (strategy === "settings-json") {
+        if (current === null) {
+          writeFile(file, newContent);
+          changed.push(`restored  ${file}`);
+        } else {
+          const merged = mergeSettingsJson(current, baseline, newContent);
+          if (merged !== current) {
+            writeFile(file, merged);
+            changed.push(`merged    ${file}`);
+          }
         }
       } else if (current === null) {
         writeFile(file, newContent);
