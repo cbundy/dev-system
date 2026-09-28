@@ -33,4 +33,34 @@ CODEX_MODEL=${CODEXMODEL-gpt-5.6-sol}
 EOF
 chmod 644 "$DEST/options.env"
 
+# Defensive fix for cbundy/dev-system#21: the Claude Code npm install now
+# happens in setup.sh as the remote user, which is enough on the base
+# images/features we have observed (they chown the npm global prefix to the
+# remote user, setgid, at image-build time). But that ownership is set by
+# the base image or the node feature, not by us - a different base image, an
+# apt-installed Node, or any other build step that writes into the npm
+# prefix as root would leave the remote user unable to install or update
+# Claude Code there. So make it robust ourselves: while we are still root,
+# make sure the npm global prefix tree is owned by (and writable by) the
+# remote user, so whatever setup.sh does later as that user can create and
+# replace every file under it. Best-effort and idempotent - skip cleanly
+# when there is nothing to do.
+if [ "${INSTALLCLAUDECODE:-true}" != "false" ] \
+  && [ -n "${_REMOTE_USER:-}" ] && [ "${_REMOTE_USER}" != "root" ] \
+  && command -v npm >/dev/null 2>&1; then
+  NPM_GLOBAL_PREFIX=$(npm prefix -g 2>/dev/null || true)
+  if [ -n "$NPM_GLOBAL_PREFIX" ] && [ -d "$NPM_GLOBAL_PREFIX" ]; then
+    if getent group npm >/dev/null 2>&1; then
+      NPM_PREFIX_GROUP=npm
+    else
+      NPM_PREFIX_GROUP=$(id -gn "$_REMOTE_USER" 2>/dev/null || echo "$_REMOTE_USER")
+    fi
+    if chown -R "$_REMOTE_USER:$NPM_PREFIX_GROUP" "$NPM_GLOBAL_PREFIX" 2>/dev/null; then
+      echo "callum-tools: npm global prefix ($NPM_GLOBAL_PREFIX) owned by $_REMOTE_USER:$NPM_PREFIX_GROUP so Claude Code can install/update without root."
+    else
+      echo "callum-tools: could not chown npm global prefix ($NPM_GLOBAL_PREFIX) to $_REMOTE_USER - Claude Code install/update at post-create may fail if it is not already writable by that user." >&2
+    fi
+  fi
+fi
+
 echo "callum-tools staged; tools install at post-create as the remote user."
