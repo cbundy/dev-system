@@ -281,6 +281,18 @@ Two distinct failure modes, both seen repeatedly:
    followed by an issue number unless you mean it** - say "PR 2 finishes this"
    instead. Tell delegated agents this explicitly: the guard rail causes the bug.
 
+Both modes share one cause: the pipeline regenerates the PR body from the run's
+`--intent` text on every run, so anything a brief says about the keyword arrives
+as an instruction a model must reproduce - and it may emit it, paraphrase it
+("closes issue #N", which GitHub does not parse), or drop it. So do not put
+keyword instructions in a delegation brief, and never treat generated prose as
+the source of truth. Own linkage yourself at merge, deriving the issue number
+mechanically from the branch, which the worktree bootstrap names
+`<type>/issue-<N>-<slug>`. In a repo that merges often, make that derivation a
+script the merge step runs rather than a check to remember. The durable fix is
+upstream - the gate tool could derive the number from the branch itself instead
+of asking a model for a token - so raise it there if you have that channel.
+
 ## Merge and close discipline
 - Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
 - Read every `no-mistakes(<step>)` fix commit against the issue's requirements
