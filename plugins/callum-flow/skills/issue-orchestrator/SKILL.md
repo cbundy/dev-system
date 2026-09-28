@@ -74,7 +74,13 @@ as its `/no-mistakes` run starts (the fire-and-forget contract - see "Fire-and-f
 delegation" in the memory file described below); that termination notification is the
 signal that a run is now in flight and worth checking. Do not `sleep`, `tail -f`, or run a
 `ps`/`pgrep` wait loop for a pipeline to move - there is nothing to watch for in real time,
-and a wait loop is exactly the no-action-turn cost this model exists to cut.
+and a wait loop is exactly the no-action-turn cost this model exists to cut. Never
+foreground-poll or sleep-loop a stuck run from the session, even a single one: the
+session is single-threaded per turn, so polling one branch blocks noticing an
+actionable event on every other branch. If the watcher cannot express the condition
+you need ("wake me when this specific known state changes"), write a small
+background one-shot script that exits the moment the condition changes and start it
+with `run_in_background` - never fall back to polling inline.
 
 - Start one background watcher for all in-flight branches using the harness's
   `run_in_background` Bash: `/usr/local/share/callum-tools/pipeline-watch.sh
@@ -83,11 +89,12 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
   its agent works in. Every 25 seconds the watcher probes the
   newest run per watched branch (`no-mistakes axi status --run <id>`, plus the
   run's ci.log for the CI-green marker) and exits after printing the first
-  that becomes actionable, as one line: `<state> <branch> <run-id>`. Run-level
-  status cannot drive this watch - a cleanly passing run stays `running`
-  through its CI-monitoring tail (up to 168h, waiting to be merged), and a
-  parked gate also reports `running` - which is why the watcher reads
-  per-step state instead. The harness wakes this session only when it exits.
+  that becomes actionable, as one line: `<state> <branch> <run-id>[
+  <detail>] head=<sha>`. Run-level status cannot drive this watch - a cleanly
+  passing run stays `running` through its CI-monitoring tail (up to 168h,
+  waiting to be merged), and a parked gate also reports `running` - which is
+  why the watcher reads per-step state instead. The harness wakes this
+  session only when it exits.
   Restart a watcher immediately after each wake, and pass `--deadline
   <seconds>` (an hour is a sound default) so a quiet watcher exits printing
   `timeout` - that wake is the fallback heartbeat: verify the watched runs
@@ -98,6 +105,16 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
   a run: it reports the currently active run and can silently switch to
   another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
   the watcher.
+  - On every restart, pass back `--known <branch>=<state>:<sha>` for each
+    branch using the `<state>` and trailing `head=<sha>` from the line you
+    just handled (repeatable, one per branch). This is a fingerprint
+    baseline: a branch whose current state+head still matches its `--known`
+    entry does not re-fire, so restarting right after handling an event is
+    always safe. Branches with no `--known` entry fire the first time they
+    become actionable, same as before. Never respond to a re-fire risk by
+    leaving the watcher disarmed - that silently drops coverage for every
+    OTHER in-flight branch, which is worse than one redundant wake; always
+    re-arm it, with an updated `--known` baseline if needed.
 - Act on the watcher output:
   - **`parked`** - a gate is awaiting a decision. Read it (`no-mistakes axi
     status` from the branch worktree) and decide yourself with the issue's
@@ -116,9 +133,10 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
     once an agent has ended its turn) and re-reads its whole transcript even when
     it works.
   - **`merge-ready`** - all local steps passed, the run's own CI monitor
-    reports GitHub CI green, and the run's head equals both `origin/<branch>`
-    (fetched fresh) and, when mapped, the worktree's HEAD; run the four correctness
-    guards below, then merge it yourself.
+    reports GitHub CI green, the run's head equals both `origin/<branch>`
+    (fetched fresh) and, when mapped, the worktree's HEAD, and GitHub itself
+    reports the PR mergeable (not just the run's own view); run the four
+    correctness guards below, then merge it yourself.
   - **`head-mismatch`** - printed as `head-mismatch <branch> <run-id>
     run=<sha> branch=<sha> [worktree=<sha>]`: the run is green, but for a
     different commit than the branch or its worktree holds (phantom gating;
@@ -127,6 +145,16 @@ and a wait loop is exactly the no-action-turn cost this model exists to cut.
     diverged), `no-mistakes axi abort` the stale run, start a fresh `axi run`,
     confirm the new run's head equals the worktree HEAD, and re-arm the
     watcher.
+  - **`conflict`** - the run's own steps and checks are green and its head
+    matches the branch, but GitHub reports the PR is not mergeable (a merge
+    to the base since the run went green introduced a real conflict). Do
+    not treat this as merge-ready. From the branch's worktree, rebase onto
+    the current base branch keeping BOTH sides' changes where they collide
+    (see "Parallel branches predictably collide" under Merge and close
+    discipline), push, and let a fresh run re-gate the rebased commit; if
+    the conflict is non-trivial (not just an append-only collision), spawn a
+    fixer agent instead of resolving it yourself inline. Re-arm the watcher
+    afterward.
   - **`cancelled`** - the run was cancelled; decide whether to re-drive or
     drop it.
 

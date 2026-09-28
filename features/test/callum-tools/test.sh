@@ -44,6 +44,17 @@ RUNPARK)
 esac
 EOF
   chmod +x "$tmpdir/no-mistakes"
+  # fake gh: reports the PR mergeability from a controllable marker file, so
+  # tests can flip a branch between mergeable and conflicting without a real
+  # PR; a "gh-fail" marker simulates gh being unreachable/erroring
+  cat > "$tmpdir/gh" <<'\''EOF'\''
+#!/bin/sh
+[ ! -e "$(dirname "$0")/gh-fail" ] || exit 1
+[ "$1" = pr ] && [ "$2" = view ] || exit 1
+cat "$(dirname "$0")/pr-status.txt" 2>/dev/null || echo "MERGEABLE CLEAN"
+EOF
+  chmod +x "$tmpdir/gh"
+  echo "MERGEABLE CLEAN" > "$tmpdir/pr-status.txt"
   # the watcher runs inside the gated repo: a clone whose origin has the branch
   g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
   g init -q --bare "$tmpdir/origin.git"
@@ -58,25 +69,47 @@ EOF
       /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other "$@")
   }
   # a run in its CI-monitoring tail (status still `running`) whose head is
-  # the branch head fires merge-ready
-  watch | grep -qx "merge-ready feat/watched RUNMERGE"
+  # the branch head, with GitHub reporting the PR mergeable, fires merge-ready
+  watch | grep -qx "merge-ready feat/watched RUNMERGE head=$run_head"
+  # same run, but GitHub now reports the PR conflicting: green local steps
+  # and checks are not enough, this fires the distinct conflict event
+  echo "CONFLICTING DIRTY" > "$tmpdir/pr-status.txt"
+  watch | grep -qx "conflict feat/watched RUNMERGE head=$run_head"
+  echo "MERGEABLE CLEAN" > "$tmpdir/pr-status.txt"
+  # gh erroring (rate limit, offline, no PR yet) is treated as not-yet-known:
+  # no crash, and merge-ready/conflict does not fire until gh answers again
+  touch "$tmpdir/gh-fail"
+  out=$( (cd "$tmpdir/repo" && PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 3 \
+    /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other) || true)
+  [ -z "$out" ]
+  rm -f "$tmpdir/gh-fail"
   # a worktree mapped to the branch with a local commit the run never gated
   # (the stale-base fixer shape): origin still matches, the worktree does not
   g clone -q "$tmpdir/origin.git" "$tmpdir/wt" 2>/dev/null
   g -C "$tmpdir/wt" checkout -q feat/watched
-  watch --worktree "feat/watched=$tmpdir/wt" | grep -qx "merge-ready feat/watched RUNMERGE"
+  watch --worktree "feat/watched=$tmpdir/wt" | grep -qx "merge-ready feat/watched RUNMERGE head=$run_head"
   g -C "$tmpdir/wt" commit -q --allow-empty -m fix
   wt_head=$(g -C "$tmpdir/wt" rev-parse HEAD)
   watch --worktree "feat/watched=$tmpdir/wt" |
-    grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$run_head worktree=$wt_head"
+    grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$run_head worktree=$wt_head head=$run_head"
   # origin moved past the run head: fetched fresh, so reported even though
   # the local remote-tracking ref is stale
   g -C "$tmpdir/wt" push -q origin feat/watched
-  watch | grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$wt_head"
+  watch | grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$wt_head head=$run_head"
   # a newer parked rerun on the same branch outranks the older green run
   mkdir -p "$tmpdir/nm/logs/RUNPARK"
   touch -d "2026-01-01 00:02" "$tmpdir/nm/logs/RUNPARK"
-  watch | grep -qx "parked feat/watched RUNPARK"
+  watch | grep -qx "parked feat/watched RUNPARK head=unknown"
+  # --known baseline: a fingerprint matching what was already reported
+  # suppresses the re-fire (safe to restart the watcher after handling it)
+  out=$( (cd "$tmpdir/repo" && PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 3 \
+    /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other \
+    --known "feat/watched=parked:unknown") || true)
+  [ -z "$out" ]
+  # a baseline for a different head, or a different state, still fires -
+  # only an exact fingerprint match is suppressed
+  watch --known "feat/watched=parked:deadbeef" | grep -qx "parked feat/watched RUNPARK head=unknown"
+  watch --known "feat/watched=merge-ready:$run_head" | grep -qx "parked feat/watched RUNPARK head=unknown"
   # nothing actionable + --deadline elapses = deadman heartbeat
   PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" PIPELINE_WATCH_INTERVAL=1 timeout 10 \
     /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/quiet --deadline 1 |
