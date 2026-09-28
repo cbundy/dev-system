@@ -246,6 +246,9 @@ following guards fire, and none of them is weakened:
    precisely so you don't have to; aborting there discards the pipeline's
    in-flight work and forces a full re-validation for nothing.
 
+- Never use `git stash` from the main checkout either - it shares the same
+  `refs/stash` as every worktree, so it collides with delegated agents the
+  same way; a plugin-shipped hook refuses it everywhere.
 - Serialize conflict-prone work with native GitHub `blocked_by` dependencies;
   only parallelize genuinely independent work.
 - Keep the worktree pool healthy. Leases from long-merged work accumulate and will

@@ -61,6 +61,14 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   - never fall back to plain `git worktree`.
 - Do ALL work inside the worktree. Never use plain `git worktree` - always go
   through `treehouse` (directly, or via a repo's wrapper script).
+- Never use `git stash`, including `list`/`show`. `refs/stash` is ONE ref
+  shared by every worktree of the repo, so another agent's `git stash pop`
+  can land on top of your changes, or yours can land on top of theirs - a
+  plugin-shipped hook refuses the command for exactly this reason. To shelve
+  work-in-progress instead: commit it on your own branch (amend or squash it
+  away later), or save it with `git diff > <file>` (or
+  `git diff --cached > <file>` for staged changes) and restore it later with
+  `git apply <file>`.
 
 ## 2. Booting the app (only if you need it for evidence or manual checks)
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
