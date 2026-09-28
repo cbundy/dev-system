@@ -22,12 +22,25 @@ export PATH="$HOME/.local/bin:$PATH"
 # missing at the end still fails the whole setup.
 FAILED=""
 
-# 1. Claude Code CLI (global npm install; devcontainer Node images give the
-#    remote user write access to the npm global prefix).
+# 1. Claude Code CLI (global npm install; devcontainer Node images/features
+#    normally give the remote user write access to the npm global prefix,
+#    and install.sh also chowns it defensively at build time - see
+#    cbundy/dev-system#21). Check writability up front so a permissions
+#    problem produces a clear, actionable error instead of a swallowed
+#    `npm install -g` failure that just leaves `claude` missing.
 if [ "${INSTALL_CLAUDE_CODE}" = "true" ]; then
   if command -v npm >/dev/null 2>&1; then
+    NPM_GLOBAL_PREFIX=$(npm prefix -g 2>/dev/null || true)
+    if [ -n "$NPM_GLOBAL_PREFIX" ] && [ -d "$NPM_GLOBAL_PREFIX" ] && [ ! -w "$NPM_GLOBAL_PREFIX" ]; then
+      echo "callum-tools: npm global prefix '$NPM_GLOBAL_PREFIX' is not writable by $(id -un) - Claude Code cannot be installed or auto-updated here. This is a base-image/feature setup issue (the prefix should be chowned to the remote user); see cbundy/dev-system#21." >&2
+    fi
     npm install -g @anthropic-ai/claude-code || true
-    command -v claude >/dev/null 2>&1 || FAILED="$FAILED claude"
+    if ! command -v claude >/dev/null 2>&1; then
+      FAILED="$FAILED claude"
+    elif [ -n "$NPM_GLOBAL_PREFIX" ] && [ -d "$NPM_GLOBAL_PREFIX/lib/node_modules/@anthropic-ai" ] \
+      && [ ! -w "$NPM_GLOBAL_PREFIX/lib/node_modules/@anthropic-ai" ]; then
+      echo "callum-tools: claude installed but '$NPM_GLOBAL_PREFIX/lib/node_modules/@anthropic-ai' is not writable by $(id -un) - 'claude update' will fail later even though install succeeded now; see cbundy/dev-system#21." >&2
+    fi
   else
     echo "callum-tools: npm not found - skipping Claude Code CLI install (use a Node base image or the node feature)" >&2
   fi
