@@ -68,6 +68,22 @@ so a feature change must bump `version` in its `devcontainer-feature.json` to pu
 CI (`test-features.yml`) builds a container with the feature applied and verifies the
 tools install, on every PR touching `features/`.
 
+**Auto-recovery of no-mistakes runtime state**: the binaries survive a container
+rebuild, but two pieces of no-mistakes runtime state do not - the daemon (a process)
+and the repo's registration under `~/.no-mistakes/repos/`, which is machine-local even
+where `~/.no-mistakes` is itself a host bind mount (issue #18). After the no-mistakes
+install step, `setup.sh` runs `recover-no-mistakes.sh`: if the workspace has a
+checked-in `.no-mistakes.yaml` and `no-mistakes status` reports the repo unregistered,
+it runs `no-mistakes daemon start` then `no-mistakes init` (init needs the daemon up
+first, and re-reads the checked-in config to reinstall the gate). This is best-effort
+and idempotent, like the rest of setup.sh: an already-registered repo, a repo with no
+`.no-mistakes.yaml`, or a container with `installNoMistakes: false` are all no-ops, and
+a failure here (auth or mounts not ready yet) logs to stderr without failing setup.
+`recover-no-mistakes.sh` resolves the workspace via `git rev-parse --show-toplevel`
+from `$PWD` - the containers.dev spec already guarantees `postCreateCommand` runs with
+`$PWD` set to the workspace folder, and the toplevel walk additionally covers a
+workspaceFolder pointed below the repo root (e.g. a monorepo).
+
 **Visibility decision**: the GHCR package is public while this source repo stays private.
 The package contains only install scripts for tools that are themselves public, and a
 private package would require a `packages:read` PAT docker-login on every machine and CI

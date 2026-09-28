@@ -20,6 +20,8 @@ cp "$(dirname "$0")/pipeline-watch.sh" "$DEST/pipeline-watch.sh"
 chmod 755 "$DEST/pipeline-watch.sh"
 cp "$(dirname "$0")/queue-watch.sh" "$DEST/queue-watch.sh"
 chmod 755 "$DEST/queue-watch.sh"
+cp "$(dirname "$0")/recover-no-mistakes.sh" "$DEST/recover-no-mistakes.sh"
+chmod 755 "$DEST/recover-no-mistakes.sh"
 
 # Feature options arrive as uppercased env vars at build time only; persist
 # them for setup.sh to read at post-create time.
