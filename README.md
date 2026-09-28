@@ -106,8 +106,15 @@ exits non-zero when the stamp lags the installed package - a CI-friendly drift g
 
 A consumer repo commits only:
 
-- `.claude/settings.json` with `extraKnownMarketplaces` pointing at `cbundy/dev-system` and
-  `enabledPlugins` for `callum-flow@callum` - skills install themselves on folder trust.
+- `.claude/settings.json` with `extraKnownMarketplaces` pointing at `cbundy/dev-system`,
+  `enabledPlugins` for `callum-flow@callum` - skills install themselves on folder trust -
+  and a synced `permissions.allow` list the flow's sub-agents and orchestrator need
+  (`no-mistakes`/`treehouse`/`gh` read commands; see `templates/README.md` for the exact
+  list and why it ships here rather than from the plugin). A repo appends its own
+  `permissions.allow` entries (e.g. a local script) directly to this committed file;
+  `callum-dev update` unions that array instead of overwriting it. Orchestrator-only
+  powers (`gh pr merge`, `gh pr edit`, `no-mistakes axi respond`, watchers) stay out of
+  this file entirely, in the main checkout's gitignored `.claude/settings.local.json`.
 - A thin `.devcontainer/devcontainer.json` referencing the `callum-tools` feature plus
   repo-specific mounts/env.
 - Repo-owned config values (test/lint commands in `.no-mistakes.yaml`, repo section of

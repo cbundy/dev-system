@@ -9,5 +9,24 @@
   },
   "enabledPlugins": {
     "callum-flow@callum": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(no-mistakes axi run *)",
+      "Bash(no-mistakes rerun *)",
+      "Bash(no-mistakes axi abort *)",
+      "Bash(no-mistakes axi sync *)",
+      "Bash(no-mistakes axi status *)",
+      "Bash(no-mistakes runs *)",
+      "Bash(no-mistakes axi logs *)",
+      "Bash(treehouse get *)",
+      "Bash(treehouse return *)",
+      "Bash(treehouse status *)",
+      "Bash(gh issue *)",
+      "Bash(gh api *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr list *)"
+    ]
   }
 }

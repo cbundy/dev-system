@@ -117,7 +117,7 @@ test("update surfaces a genuine conflict with markers and a non-zero exit", (t) 
   assert.match(result.stderr, /conflict resolution/);
 });
 
-test("replace strategy overwrites settings.json wholesale; init-only leaves treehouse.toml alone", (t) => {
+test("settings.json replaces synced content wholesale outside permissions.allow; init-only leaves treehouse.toml alone", (t) => {
   const repo = initRepo(t);
   fs.writeFileSync(path.join(repo, ".claude/settings.json"), "{\n  \"hand\": \"edited\"\n}\n");
   fs.writeFileSync(path.join(repo, "treehouse.toml"), "max_trees = 99\n");
@@ -130,8 +130,62 @@ test("replace strategy overwrites settings.json wholesale; init-only leaves tree
 
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 0, result.stderr + result.stdout);
+  // No permissions.allow anywhere in play here, so this is a plain wholesale replace.
   assert.equal(read(repo, ".claude/settings.json"), read(TEMPLATES, ".claude/settings.json"));
   assert.equal(read(repo, "treehouse.toml"), "max_trees = 99\n");
+});
+
+// permissions.allow is the one repo-owned surface inside the otherwise fully-synced
+// .claude/settings.json (issue dev-system#44): a worktree sub-agent only ever sees the
+// committed file (never the gitignored, main-checkout-only settings.local.json), so a
+// repo-specific allow entry (e.g. a local script) has to live here to reach sub-agents,
+// and it must survive `callum-dev update` alongside the synced generic allow list.
+test("update unions a repo-added permissions.allow entry with the synced list, and folds in a new upstream entry", (t) => {
+  const repo = initRepo(t);
+
+  const settingsPath = path.join(repo, ".claude/settings.json");
+  const settings = JSON.parse(read(repo, ".claude/settings.json"));
+  const repoEntry = "Bash(scripts/evidence-upload.sh *)";
+  settings.permissions.allow.push(repoEntry);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  const upstreamEntry = "Bash(no-mistakes axi watch *)";
+  const upstream = upstreamCopy(t, (dir) => {
+    const file = path.join(dir, ".claude/settings.json");
+    const template = JSON.parse(read(dir, ".claude/settings.json"));
+    template.permissions.allow.push(upstreamEntry);
+    fs.writeFileSync(file, JSON.stringify(template, null, 2) + "\n");
+  });
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  const allow = merged.permissions.allow;
+  assert.ok(allow.includes(repoEntry), "repo-owned entry survived the update");
+  assert.ok(allow.includes(upstreamEntry), "new upstream entry landed");
+  // Every original synced entry is still present too.
+  for (const entry of JSON.parse(read(TEMPLATES, ".claude/settings.json")).permissions.allow) {
+    assert.ok(allow.includes(entry), `original synced entry survived: ${entry}`);
+  }
+  assert.equal(allow.length, new Set(allow).size, "no duplicate entries");
+});
+
+test("a repo-added permissions.allow entry survives even when the synced list itself is unchanged", (t) => {
+  const repo = initRepo(t);
+
+  const settingsPath = path.join(repo, ".claude/settings.json");
+  const settings = JSON.parse(read(repo, ".claude/settings.json"));
+  const repoEntry = "Bash(scripts/dev-server.sh *)";
+  settings.permissions.allow.push(repoEntry);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  // Upstream templates are untouched - this is a no-op update from the synced side.
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.ok(merged.permissions.allow.includes(repoEntry), "repo-owned entry survived");
 });
 
 // Ask git itself what the scaffolded .gitignore does. Reading the patterns is not

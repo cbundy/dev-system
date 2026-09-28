@@ -44,10 +44,41 @@ Global agent instructions.
 
 ## `.claude/settings.json` -> `.claude/settings.json`
 
-Wires up the `callum` plugin marketplace and enables `callum-flow`. JSON has no comment
-syntax, so the split is documented here instead of inline: the whole file is synced -
-there is no repo-owned content in it. Do not hand-edit; a future `callum-dev update`
-replaces it wholesale.
+Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
+generic `permissions.allow` list the implement-issue/orchestrator flow needs
+(`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
+`treehouse get/return/status`, `gh issue/api/pr view/pr checks/pr list`) - see
+dev-system#44. This list exists here, not as plugin-shipped permissions, because a
+Claude Code plugin's own `settings.json` only applies its `agent` and
+`subagentStatusLine` keys; every other key, including `permissions`, is dropped at
+load ([plugin manifest reference](https://code.claude.com/docs/en/plugins-reference):
+"Settings Claude Code applies while the plugin is enabled. Only `agent` and
+`subagentStatusLine` take effect; other keys are dropped at load."). Shipping the
+allow list from this synced template is the only mechanism that reaches every
+consumer repo.
+
+JSON has no comment syntax, so the split is documented here instead of inline:
+
+- **Synced, do not hand-edit**: everything in the file except `permissions.allow`
+  (`extraKnownMarketplaces`, `enabledPlugins`, and any future top-level key). A future
+  `callum-dev update` replaces these wholesale, the same as before this file carried
+  permissions.
+- **Repo-owned**: entries you append to `permissions.allow` beyond the synced list
+  above - e.g. this repo's own `Bash(scripts/evidence-upload.sh *)` or
+  `Bash(scripts/worktree-bootstrap.sh *)` (see mealplanning#442 for the pattern).
+  `callum-dev update` unions the array: the fresh synced list plus whatever entries
+  you added beyond the old baseline, deduplicated. Add your own by editing this
+  committed file directly - it is the only settings file a treehouse worktree
+  sub-agent ever sees.
+- **Never here**: powers that must stay orchestrator-only in the main checkout -
+  `gh pr merge`, `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
+  watcher script. Keep those as `allow` entries in the gitignored, uncommitted
+  `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
+  rule for them here: committed settings apply in the main checkout too, so a `deny`
+  would also block the orchestrator, not just worktree sub-agents. The split that
+  keeps a worktree sub-agent from merging is that `settings.local.json` never leaves
+  the main checkout - worktrees start with none of it - not a rule that blocks the
+  command everywhere.
 
 ## `.devcontainer/devcontainer.json` -> `.devcontainer/devcontainer.json`
 
