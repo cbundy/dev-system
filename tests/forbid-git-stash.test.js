@@ -124,8 +124,11 @@ test("ignores non-Bash tool calls even if their command field says git stash", (
 test("hooks.json is valid JSON and wires a PreToolUse Bash matcher to the script via CLAUDE_PLUGIN_ROOT", () => {
   const raw = fs.readFileSync(HOOKS_JSON, "utf-8");
   const parsed = JSON.parse(raw);
-  assert.ok(Array.isArray(parsed.PreToolUse), "hooks.json must declare PreToolUse");
-  const entry = parsed.PreToolUse.find((e) => e.matcher === "Bash");
+  // Plugin hook files wrap events in a top-level "hooks" object; a bare
+  // top-level PreToolUse is rejected by `claude plugin validate` and never loads.
+  assert.ok(parsed.hooks && typeof parsed.hooks === "object", "hooks.json must wrap events in a top-level \"hooks\" object");
+  assert.ok(Array.isArray(parsed.hooks.PreToolUse), "hooks.json must declare PreToolUse");
+  const entry = parsed.hooks.PreToolUse.find((e) => e.matcher === "Bash");
   assert.ok(entry, "expected a Bash-matcher PreToolUse entry");
   const commands = entry.hooks.map((h) => h.command).join(" ");
   assert.match(commands, /\$\{CLAUDE_PLUGIN_ROOT\}/, "hook command should reference CLAUDE_PLUGIN_ROOT");
