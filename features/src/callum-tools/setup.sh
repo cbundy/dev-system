@@ -62,6 +62,13 @@ agent_args_override:
     - model_reasoning_effort="medium"
 EOF
   fi
+
+  # Auto-recover runtime state that a container rebuild wipes even when the
+  # binaries survive: the daemon (a process) and repo registration under
+  # ~/.no-mistakes/repos/ (machine-local, even under a host bind mount - see
+  # issue #18). Best-effort and idempotent: no-op unless the workspace has a
+  # checked-in .no-mistakes.yaml and is currently unregistered.
+  /usr/local/share/callum-tools/recover-no-mistakes.sh || true
 fi
 
 # 3. treehouse (reusable worktree pool for parallel agents).

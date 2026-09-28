@@ -21,6 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Plain-shell tests that need no container build - runs directly on the
+      # runner, so it fails fast and stays runnable with no Docker at all
+      # (unlike the devcontainer-based step below, which is the only way this
+      # repo's own dev container - no docker-in-docker - can exercise this).
+      - name: Unit test no-mistakes auto-recovery script
+        run: sh features/test/callum-tools/recover-no-mistakes.test.sh
+
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
 
