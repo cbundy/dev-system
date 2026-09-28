@@ -153,23 +153,36 @@ tests would otherwise have missed:
 - Waiting for the run to progress, polling status, tailing logs, or `sleep` of
   any duration is out of scope. The orchestrator's watcher observes pipeline
   events after your handoff.
-- If you are committing on a branch that already has a run or PR (e.g. you are
-  a fixer re-entering a worktree), `git fetch` and rebase your commit onto
-  `origin/<branch>` first. The pipeline pushes its own review/document/lint
-  commits while a run is in progress, so a worktree that was correct at
-  bootstrap can be stale by the time you commit - a fix committed on that
-  stale base is not on the PR's history. Resolve conflicts keeping both sides
-  (your fix and the pipeline's commits); never force-push in a way that
-  discards the pipeline's commits.
+- If you are re-entering a branch that already has a run on it (e.g. you were
+  delegated to fix something a review flagged) and the fix is something you
+  can describe rather than something you must write yourself, drive the
+  existing run instead of committing around it: `no-mistakes axi respond
+  --action fix --findings <ids>`, `--add-finding '<json finding>'`, and/or
+  `--instructions "<what to do>"` - never `--yes`. This commits on the run's
+  own head in the run's own worktree, so there is no second writer on the
+  branch and none of the rebase/abort rules below apply.
+- Only when the fix needs your own commit - code the pipeline cannot write
+  from instructions alone, or the run has already completed - do the rebase
+  and abort steps apply. If you are committing on a branch that already has a
+  run or PR (e.g. you are a fixer re-entering a worktree), `git fetch` and
+  rebase your commit onto `origin/<branch>` first. The pipeline pushes its
+  own review/document/lint commits while a run is in progress, so a worktree
+  that was correct at bootstrap can be stale by the time you commit - a fix
+  committed on that stale base is not on the PR's history. Resolve conflicts
+  keeping both sides (your fix and the pipeline's commits); never force-push
+  in a way that discards the pipeline's commits.
 - Before running `axi run` on that branch, check whether a run is already
   live on it - including a completed run's CI-monitoring tail, which still
   reports `running` for up to 168h. If one is live, run `no-mistakes axi
-  abort` first. `axi run` on a branch with a live run attaches to that same
-  run instead of starting a new one, so it gates nothing for your new commit -
-  it will report the old run's id and head. Re-attaching with `axi run
-  --intent "<goal>"` without aborting is only correct for a gate that is
-  PARKED awaiting a decision; it does not gate a new commit against a run
-  that is still live.
+  abort` first - never abort a live run just to fix a finding yourself when
+  `axi respond` could have done it; that discards the pipeline's in-flight
+  work and forces a full re-validation for nothing. `axi run` on a branch
+  with a live run attaches to that same run instead of starting a new one, so
+  it gates nothing for your new commit - it will report the old run's id and
+  head. Re-attaching with `axi run --intent "<goal>"` without aborting is
+  only correct for a gate that is PARKED awaiting a decision and needs no new
+  commit of yours; it does not gate a new commit against a run that is still
+  live.
 - Do NOT merge. Merging is the delegator's decision, not yours, unless your
   brief explicitly says otherwise.
 
@@ -189,12 +202,18 @@ tests would otherwise have missed:
 Your final message must be self-contained - the reader has no other context:
 - Worktree path and branch name.
 - Latest commit SHA.
-- `/no-mistakes` run id, together with the run's `head` SHA read from
-  `no-mistakes status` - and state plainly whether `head` equals the commit
-  SHA above. A head that differs from your commit SHA means your commit was
-  not gated: write "NOT GATED" in plain words and explain why (e.g. a run was
-  already live and `axi run` attached to it instead of starting a new one).
-  Never rationalise a mismatch away as expected.
+- If you drove the run with `axi respond` instead of committing your own fix,
+  say so instead of comparing heads: name the action and step you responded
+  to (e.g. "responded --action fix --findings F1,F2 to the review step") and
+  its outcome - there is no separate commit of yours to check against the
+  run's head.
+- Whenever you added your own commit: the `/no-mistakes` run id, together
+  with the run's `head` SHA read from `no-mistakes status` - and state
+  plainly whether `head` equals the commit SHA above. A head that differs
+  from your commit SHA means your commit was not gated: write "NOT GATED" in
+  plain words and explain why (e.g. a run was already live and `axi run`
+  attached to it instead of starting a new one). Never rationalise a
+  mismatch away as expected.
 - PR number and URL if the pipeline has already created one; otherwise the run
   id is the handoff identifier. Never wait for a PR to exist.
 - Exactly what you verified, and how (commands run, what passed).
