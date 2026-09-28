@@ -116,23 +116,47 @@ with `run_in_background` - never fall back to polling inline.
     OTHER in-flight branch, which is worse than one redundant wake; always
     re-arm it, with an updated `--known` baseline if needed.
 - Act on the watcher output:
-  - **`parked`** - a gate is awaiting a decision. Read it (`no-mistakes axi
-    status` from the branch worktree) and decide yourself with the issue's
-    requirements in hand: `axi respond --action approve`, `--action fix
-    --findings <ids> --instructions "<what to do>"`, or `--action skip`.
+  - **`parked`** - a gate is awaiting a decision, and the default route is to
+    drive it through the pipeline, not around it: fixing through `axi
+    respond` commits on the run's own head in the run's own worktree, so the
+    head cannot drift and there is no second writer on the branch - none of
+    the phantom-gating shapes below can occur this way. Read it (`no-mistakes
+    axi status` from the branch worktree) and decide yourself with the
+    issue's requirements in hand: `axi respond --action approve`, `--action
+    fix --findings <ids> --instructions "<what to do>"` to fix listed
+    findings, `--action fix --add-finding '<json finding>'` to add something
+    the reviewer missed and have the pipeline fix it, or `--action skip`.
     Never add `--yes` - it applies every later `ask-user` finding without
     escalation, which is how reviewer "remove this unrequired component"
-    findings delete in-scope requirements. Newer no-mistakes releases park
-    review for approval even with zero findings; approve those after a
-    look. Spawn a fixer only when the gate needs code the pipeline cannot
-    write from instructions.
-  - **`failed`** - a step failed. Spawn a
-    fresh, single-purpose **fixer** agent, handed the failing step's log excerpt
-    (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) plus the original design brief.
-    The fixer's brief must require: rebase onto `origin/<branch>` before
-    committing (the pipeline pushes its own commits there, so the worktree's
-    old base is stale), `no-mistakes axi abort` the old run before starting a
-    new one, and a handoff stating that the new run's head equals the fixer's
+    findings delete in-scope requirements.
+
+    Newer no-mistakes releases park the review step for approval every run,
+    even with zero findings - that is your cheapest moment to catch a gap,
+    not a rubber stamp. Before approving, read the review against the
+    issue's actual requirements: fix anything real the reviewer flagged
+    (`--findings`), and add anything it missed with `--add-finding`. Once a
+    run has passed its gates there is nothing left to `respond` to - a
+    problem noticed after merge-ready needs the fixer-agent path below, not
+    a `respond` call against a finished run.
+
+    Spawn a fixer agent instead only as the fallback: when the fix needs
+    code the pipeline cannot write from instructions, or the run has already
+    completed. Only then do the fixer-brief rules apply - see guard 4.
+  - **`failed`** - a step failed, which also parks the run at an approval
+    gate (`axi status` shows e.g. `test,awaiting_approval`), so the default
+    route is the same as `parked`: read the failing step's log
+    (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) and drive it with `axi
+    respond --action fix --findings <ids>`, `--add-finding '<json
+    finding>'`, and/or `--instructions "<what to do>"` - never `--yes`. This
+    keeps the fix on the run's own head in the run's own worktree, so
+    nothing about the branch's commit history changes underneath you.
+
+    Fall back to a fresh, single-purpose **fixer** agent only when the
+    pipeline cannot write the fix from instructions alone. The fixer's brief
+    must require: rebase onto `origin/<branch>` before committing (the
+    pipeline pushes its own commits there, so the worktree's old base is
+    stale), `no-mistakes axi abort` the old run before starting a new one,
+    and a handoff stating that the new run's head equals the fixer's
     commit SHA - or says "NOT GATED" if it does not.
     Never resume the old agent - resumption is unreliable ("No transcript found"
     once an agent has ended its turn) and re-reads its whole transcript even when
@@ -172,13 +196,28 @@ following guards fire, and none of them is weakened:
    Before trusting any green, confirm the run's `head:` SHA equals the
    branch/PR's real HEAD SHA
    (`git log --oneline origin/<branch>..HEAD`, `gh pr view <pr> --json commits`).
-   Three shapes produce the same phantom: `no-mistakes rerun` re-gates the
-   run's *existing* head rather than a commit made after the run started;
-   `axi run` against a still-live run attaches to it instead of starting a new
-   one (see guard 4); and a fixer commits on a worktree the pipeline has since
-   pushed its own commits past, so the fix sits on a stale base the run never
-   sees. A green run whose head predates a later fix proves nothing about that
-   fix.
+   One question decides every case: am I adding a commit from outside the
+   pipeline?
+   - **No new commit, run parked at a gate** -> `axi respond` (or re-attach
+     with `axi run`) drives the pipeline's own head. Never abort just to
+     bypass a gate you could respond to.
+   - **New code needed while parked, and the pipeline cannot write it from
+     instructions** -> prefer `respond --action fix` first; only if that
+     genuinely cannot produce the fix, `axi abort`, commit on top of
+     `origin/<branch>` (keeping every pipeline fix commit already on the
+     branch), fresh `axi run`, and accept the full re-validation that
+     follows.
+   - **New commit after a run completed or failed** (including the
+     CI-monitoring tail, which reports `running` for up to 168h) -> rebase
+     onto `origin/<branch>` keeping the pipeline's commits, `axi abort`,
+     fresh `axi run`, and prove the new run's head equals the new commit
+     SHA. `axi run` against a live run just attaches to it and gates
+     nothing.
+
+   `no-mistakes rerun` re-gates a run's *existing* head rather than a commit
+   made after the run started - that only ever belongs to the first case,
+   never the second or third. A green run whose head predates a later fix
+   proves nothing about that fix.
 2. **Issue<->PR linkage.** Verify the closing keyword matches intent -
    `gh pr view <pr> --json closingIssuesReferences --jq '[.closingIssuesReferences[]|.number]'`
    - before merging, and again after any body rewrite (rewrites can silently drop
@@ -189,17 +228,23 @@ following guards fire, and none of them is weakened:
    CI that can disagree with it (environment, flakiness, config drift). Confirm the
    real result with `gh pr checks <pr>` / `statusCheckRollup` before merging, not
    just the watcher's word.
-4. **Drive a genuinely parked or failed gate correctly.** `axi run` re-attaches
-   to whatever run already exists on the branch; it only starts a fresh run
-   when there is no live one. Re-attaching this way is correct when the gate
-   is genuinely parked (`awaiting_agent`) or failed. Against a run that is
-   still *live* - including the completed run's own CI-monitoring tail, which
-   reports `running` for up to 168h - `axi run` attaches to that live run and
-   gates nothing; it does not pick up a commit made after the run started. To
-   gate a new commit on a branch that still has a live run: `no-mistakes axi
-   abort` it, then `axi run` (or `axi respond`, as appropriate, never with
-   `--yes`), then confirm the new run's `head:` equals the branch HEAD before
-   trusting it - the same sequence the `head-mismatch` handling above uses.
+4. **Drive a genuinely parked or failed gate correctly.** The three cases in
+   guard 1 are the full decision procedure - repeated here because this is
+   where the mistake actually happens. `axi run` (or `axi respond`)
+   re-attaches to whatever run already exists on the branch; it only starts
+   a fresh run when there is no live one. Re-attaching (or, better,
+   `respond`ing) is correct exactly in the first case: no new commit of your
+   own, gate genuinely parked (`awaiting_agent`) or failed. Against a run
+   that is still *live* - including the completed run's own CI-monitoring
+   tail, which reports `running` for up to 168h - `axi run` attaches to that
+   live run and gates nothing; it does not pick up a commit made after the
+   run started. That is the third case: `no-mistakes axi abort` it first,
+   then a fresh `axi run` (never with `--yes`), then confirm the new run's
+   `head:` equals the branch HEAD before trusting it - the same sequence the
+   `head-mismatch` handling above uses. Never abort a *live*, still-gating
+   run just to go fix a finding yourself - `respond --action fix` exists
+   precisely so you don't have to; aborting there discards the pipeline's
+   in-flight work and forces a full re-validation for nothing.
 
 - Serialize conflict-prone work with native GitHub `blocked_by` dependencies;
   only parallelize genuinely independent work.
