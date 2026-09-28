@@ -3,12 +3,15 @@ name: Test CLI
 # Gate for the callum-dev CLI and the templates it scaffolds: the tests run the
 # real bin end-to-end (init, update merges/conflicts, check) in scratch dirs,
 # so template shape changes that break the CLI's assumptions fail here too.
+# `npm test` (node --test tests/) also picks up plugins/callum-flow's hook
+# tests (dev-system#52), so a plugin change needs this gate too.
 on:
   pull_request:
     paths:
       - "bin/**"
       - "tests/**"
       - "templates/**"
+      - "plugins/**"
       - "package.json"
       - ".github/workflows/test-cli.yml"
   workflow_dispatch:
