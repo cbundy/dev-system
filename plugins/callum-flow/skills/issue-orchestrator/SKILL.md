@@ -187,6 +187,24 @@ with `run_in_background` - never fall back to polling inline.
     (a `gate:` to respond to, or an `outcome:`), handle it, and keep the
     pipeline watcher armed.
 
+    A finding that asserts how a tool behaves is a claim to reproduce, not a
+    fact. Responding `--action fix` to a false one has the pipeline rewrite
+    correct code to satisfy it, which is worse than approving it - so build
+    the smallest repro first and approve with the evidence when it does not
+    hold up.
+
+    Record every adjudication as one line led by a verdict - `CORRECT:`
+    `WRONG:` `NIT:` `ENV:` or `DUP:` - and then why. Without it the record
+    shows only that a human overrode a finding, never whether it was wrong or
+    merely not actionable, and those call for opposite responses; the prefix
+    makes the reviewer's good-vs-bad rate a query rather than someone's
+    recollection. Where the run can store it, pass it as `--reason` on
+    `--action approve`, which persists with the approval - check `axi respond
+    --help` for the gates that accept it (currently only the Test step). The
+    other approvals, and `--action fix` (whose `--instructions` text is not
+    persisted), have no such field, so write the same line where it will
+    last, such as a comment on the PR.
+
     Newer no-mistakes releases park the review step for approval every run,
     even with zero findings - that is your cheapest moment to catch a gap,
     not a rubber stamp. Before approving, read the review against the
