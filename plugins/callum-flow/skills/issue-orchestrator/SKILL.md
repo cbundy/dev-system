@@ -130,6 +130,21 @@ with `run_in_background` - never fall back to polling inline.
     escalation, which is how reviewer "remove this unrequired component"
     findings delete in-scope requirements.
 
+    A finding that asserts how a tool behaves is a claim to reproduce, not a
+    fact. Responding `--action fix` to a false one has the pipeline rewrite
+    correct code to satisfy it, which is worse than approving it - so build
+    the smallest repro first and approve with the evidence when it does not
+    hold up.
+
+    Record every adjudication: pass `--reason` on `--action approve`, led by
+    one of `CORRECT:` `WRONG:` `NIT:` `ENV:` `DUP:` and then why. Without it
+    the run database shows only that a human overrode a finding, never
+    whether it was wrong or merely not actionable - and those call for
+    opposite responses. The verdict prefix makes the reviewer's good-vs-bad
+    rate a query rather than someone's recollection. Note that `--action fix`
+    takes no `--reason` and its `--instructions` text is not persisted, so
+    the reasoning behind a send-back survives only where you write it down.
+
     Newer no-mistakes releases park the review step for approval every run,
     even with zero findings - that is your cheapest moment to catch a gap,
     not a rubber stamp. Before approving, read the review against the
