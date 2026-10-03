@@ -42,7 +42,9 @@ check() {
 }
 
 # in_image <bash script> [docker run args...]: runs a script as the image's
-# default user in a throwaway container
+# default user in a throwaway container. Like any `docker run IMAGE bash`, it
+# goes through the image ENTRYPOINT, so dev-init runs first (its report on
+# stderr); tests that need the image's untouched state pass --entrypoint "".
 in_image() {
   local script="$1"
   shift
@@ -83,7 +85,8 @@ check "every /persist dir exists, is owned 1000:1000 with mode 0700 and is writa
     touch "$d/.probe" && rm "$d/.probe" || exit 1
   done'
 check "the image ships /persist empty (no build-time state baked in)" in_image '
-  [ -z "$(find /persist -mindepth 2 | head -n 1)" ] || { find /persist -mindepth 2; exit 1; }'
+  [ -z "$(find /persist -mindepth 2 | head -n 1)" ] || { find /persist -mindepth 2; exit 1; }' \
+  --entrypoint ""
 check "no tool binary lives under /persist" in_image '
   for b in claude codex gh git no-mistakes treehouse node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
@@ -132,7 +135,7 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   grep -qx "agent_args_override:" /persist/no-mistakes/config.yaml
   [ "$(grep -c "^agent_args_override:" /persist/no-mistakes/config.yaml)" = 1 ]
   grep -qF -- "- $(cat /usr/local/share/dev-system/codex-model.default)" /persist/no-mistakes/config.yaml' \
-  -v "$vol:/persist"
+  -v "$vol:/persist" --entrypoint ""
 check "dev-init on an empty volume mounted at /persist leaves node-owned subdirs" in_image '
   for d in claude codex gh no-mistakes; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
   -v "$vol:/persist"
@@ -158,7 +161,8 @@ check "DEV_CODEX_MODEL overrides the pin, and empty skips it" in_image '
   grep -qF -- "- my-model" /persist/no-mistakes/config.yaml
   rm /persist/no-mistakes/config.yaml
   DEV_CODEX_MODEL= dev-init >/dev/null 2>&1
-  ! grep -q agent_args_override /persist/no-mistakes/config.yaml 2>/dev/null'
+  ! grep -q agent_args_override /persist/no-mistakes/config.yaml 2>/dev/null' \
+  --entrypoint ""
 rootvol=$(docker volume create --label "$RUN_ID")
 # The volume must not be empty, or Docker copies the image's node-owned
 # directory into it again on the next mount.
@@ -216,10 +220,12 @@ else
   # Fresh volume names per run so the test never touches a developer's real
   # dev-system-* login volumes; the metadata's default names are checked
   # separately against the label below.
-  check "devcontainer metadata label declares the default named volumes and dev-init" bash -c "
+  check "devcontainer metadata label declares the default named volumes, dev-init and Remote Control off" bash -c "
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
-      | \$m.remoteUser == \"node\" and \$m.postStartCommand == \"dev-init\"
+      | \$m.remoteUser == \"node\"
+      and \$m.postStartCommand == \"dev-init && dev-remote-control --post-start\"
+      and \$m.containerEnv.DEV_REMOTE_CONTROL == \"0\"
       and \$m.updateRemoteUserUID == false
       and ([\$m.mounts[] | \"\(.source)=\(.target)\"] | sort) == [
         \"dev-system-claude=/persist/claude\", \"dev-system-codex=/persist/codex\",

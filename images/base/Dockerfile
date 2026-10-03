@@ -21,7 +21,8 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG CACHE_BUST=static
 
 # OS packages: security updates on top of the base image, the GitHub CLI from
-# its official apt repo, and the few utilities the agent flow uses.
+# its official apt repo, the few utilities the agent flow uses, and tini as
+# PID 1 (signal forwarding and zombie reaping for dev-entrypoint).
 RUN echo "cache bust: ${CACHE_BUST}" \
   && install -d -m 0755 /etc/apt/keyrings \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -31,7 +32,7 @@ RUN echo "cache bust: ${CACHE_BUST}" \
     > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update \
   && apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends gh jq less openssh-client ripgrep tmux \
+  && apt-get install -y --no-install-recommends gh jq less openssh-client ripgrep tini tmux \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
@@ -98,7 +99,12 @@ RUN install -d -m 0755 /usr/local/share/dev-system \
     > /usr/local/share/dev-system/codex-model.default \
   && rm /tmp/callum-tools-feature.json
 
-COPY --chmod=0755 images/base/dev-init images/base/dev-doctor /usr/local/bin/
+COPY --chmod=0755 \
+  images/base/dev-init \
+  images/base/dev-doctor \
+  images/base/dev-entrypoint \
+  images/base/dev-remote-control \
+  /usr/local/bin/
 
 USER node
 
@@ -111,6 +117,20 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   NM_HOME=/persist/no-mistakes \
   NO_MISTAKES_HOME=/persist/no-mistakes
 
+# Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
+# Control by default: dev-entrypoint runs dev-init, then the command, which
+# defaults to dev-remote-control. tini is PID 1, so docker stop / pod deletion
+# reaches the running command at once and orphans are reaped. A command
+# (docker run IMAGE bash, k8s args:) replaces only the CMD.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/dev-entrypoint"]
+CMD ["dev-remote-control"]
+
+# Desktop dev containers never run that entrypoint: the devcontainer CLI and
+# VS Code replace it (overrideCommand). The metadata's postStartCommand runs
+# dev-init, then starts Remote Control only if the consumer sets
+# DEV_REMOTE_CONTROL=1 in containerEnv; the default 0 here also keeps it off
+# for a consumer that sets overrideCommand false.
+#
 # devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
 # the host UID, and node could no longer write the 1000-owned /persist volumes.
@@ -124,4 +144,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.title="dev-system base" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_REMOTE_CONTROL\":\"0\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
