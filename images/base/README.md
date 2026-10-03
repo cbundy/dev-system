@@ -26,14 +26,16 @@ that use features keep using it, and the image reuses the feature's scripts
    | gh | official GitHub CLI apt repo | image rebuild |
    | git | base image | image rebuild |
 
-   Also `jq`, `ripgrep`, `tmux` (for a long-running `claude remote-control`), `less` and
-   `openssh-client`. Every tool binary lives outside `/persist`, so a new image always
+   Also `jq`, `ripgrep`, `tmux` (Claude's Remote Control session runs in it), `tini`
+   (PID 1), `less` and `openssh-client`. Every tool binary lives outside `/persist`, so a new image always
    brings fresh binaries.
 3. The persistence contract (below).
 4. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
 5. `dev-doctor`, a health check that reports missing auth or broken state loudly.
 6. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
    gets the persistence volumes and `dev-init` automatically.
+7. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
+   with Remote Control (below).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
@@ -97,10 +99,11 @@ fails that check.
 ## `dev-init`
 
 `/usr/local/bin/dev-init` runs as `node` on every container start. On the desktop the
-image metadata runs it as `postStartCommand`. On other runtimes, run it from the start-up
-hook after the workspace is cloned (for example a Coder `startup_script`). It is idempotent
-and best-effort: it logs problems but always exits 0, so a container never fails to start
-because of it.
+image metadata runs it as `postStartCommand`; everywhere else the image entrypoint runs it
+(see below). If the workspace is cloned only after the container starts, run it again
+once the clone is there (for example at the end of a Coder `startup_script`), so the
+no-mistakes recovery sees the repo. It is idempotent and best-effort: it logs problems but
+always exits 0, so a container never fails to start because of it.
 
 1. Checks that each `/persist` directory exists and is writable, creating missing ones and
    printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones.
@@ -138,10 +141,144 @@ on every failure:
 It exits 1 if any check fails. `dev-doctor --warn-only` prints the same report and always
 exits 0.
 
+## Entrypoint: Claude Code with Remote Control
+
+The image `ENTRYPOINT` is `tini -- dev-entrypoint`, and the default `CMD` is
+`dev-remote-control`. A container started without a command comes up with Claude Code
+running and Remote Control enabled, so you can drive it from claude.ai or the Claude app
+without exec-ing in.
+
+What starts where:
+
+| Runtime | Default | Opt in / out |
+|---|---|---|
+| `docker run IMAGE`, a Kubernetes pod, a Coder workspace | Claude with Remote Control | `DEV_REMOTE_CONTROL=0` to keep the container up without it |
+| Desktop dev container (VS Code, devcontainer CLI) | nothing | `"containerEnv": { "DEV_REMOTE_CONTROL": "1" }` |
+| `docker run IMAGE <command>`, a pod with `args:` | `dev-init`, then the command | - |
+
+**`dev-entrypoint`** runs `dev-init` (best-effort, limited to 120s, report on stderr) in
+the workspace, then `exec`s the command. With a command, that command runs instead of
+Claude, in its own working directory, with its stdout untouched and its exit status
+passed through, so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
+root (`--user root`), it skips `dev-init`, so nothing root-owned lands in `/persist`.
+`tini` as PID 1 forwards `docker stop` / pod deletion to the command at once and reaps
+orphaned processes, so containers stop in well under a second instead of hitting the
+10s kill timeout.
+
+**`dev-remote-control`** is the supervisor:
+
+1. **Waits for a login.** Remote Control needs a claude.ai subscription login, so while
+   `claude auth status` reports none, it logs
+   `Claude is not logged in - run: docker exec -it <container> claude auth login` (the
+   `kubectl exec` form on Kubernetes) once, then every 10 checks (5 minutes), checking
+   every 30s. It starts Claude as soon as the login appears; no restart needed. An API
+   key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote Control
+   rejects both.
+2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
+   (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`) and
+   onboarding as done. An unattended interactive Claude otherwise sits at the folder trust
+   dialog, which comes before anything else.
+3. **Runs `claude --remote-control <name>`** in the tmux session `claude`, in the
+   workspace. This is the interactive Claude with Remote Control, not the server mode
+   (`claude remote-control`): the session you attach to locally is the same one claude.ai
+   shows.
+4. **Restarts Claude when it exits** (a crash, `/exit`, a restart after an update) with a
+   backoff of 5s, doubling to at most 5 minutes, reset once Claude has run for 10 minutes.
+   Each start runs `claude` from `PATH`, so a version Claude's auto-updater installed is
+   picked up on the next restart.
+5. **Stops Claude on SIGTERM**, giving it a few seconds to end its session, then exits 0.
+
+Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs`).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DEV_REMOTE_CONTROL` | `1` headless, `0` on the desktop | `0`: start nothing; the container stays up for `docker exec` / `kubectl exec`. On the desktop, `1` starts it. |
+| `DEV_REMOTE_CONTROL_NAME` | the hostname | The session name in claude.ai. Docker's hostname is the container ID unless you pass `--hostname`; on Kubernetes it is the pod name. |
+| `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog). Only for a container you are happy to let act unsupervised. |
+| `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
+| `DEV_WORKSPACE` | the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run. Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
+
+**Permissions.** Claude runs in its normal permission mode, so an unattended session
+**waits for you to approve** each tool use that needs approval; approve from claude.ai or
+the Claude app (or attach locally). Set `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1` only if
+you accept Claude acting without approvals in that container.
+
+**Attaching locally.** The same session runs in tmux:
+
+```bash
+docker exec -it <container> tmux attach -t claude    # detach again with Ctrl-b d
+kubectl exec -it <pod> -- tmux attach -t claude
+```
+
+Exec as the default user (`node`), not root, or tmux will not find the session. `/exit`
+inside the session ends that Claude, and the supervisor starts a new one after the backoff.
+
+**First start, headless:**
+
+```bash
+docker run -d --name dev --hostname dev \
+  -v dev-system-claude:/persist/claude -v dev-system-codex:/persist/codex \
+  -v dev-system-gh:/persist/gh -v dev-system-no-mistakes:/persist/no-mistakes \
+  ghcr.io/cbundy/dev-system/base:1
+docker logs dev                        # shows the login hint until you log in
+docker exec -it dev claude auth login  # Claude starts within 30s, no restart needed
+```
+
+**Kubernetes pod spec shape.** Leave `command:` unset: it would replace the entrypoint,
+and with it `dev-init`, tini and the default Claude session. Use `args:` for a one-off
+command instead, which replaces only the `CMD`:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dev-my-repo                # also the Remote Control session name
+spec:
+  securityContext:
+    fsGroup: 1000                  # node can write the PVC
+  containers:
+    - name: dev
+      image: ghcr.io/cbundy/dev-system/base:1
+      # no command: - the entrypoint runs dev-init and Claude with Remote Control
+      # args: ["dev-doctor"]       # a one-off run instead of Claude
+      env:
+        - name: DEV_WORKSPACE
+          value: /workspace/my-repo
+      volumeMounts:
+        - { name: persist, mountPath: /persist }
+        - { name: workspace, mountPath: /workspace }
+  volumes:
+    - name: persist
+      persistentVolumeClaim: { claimName: dev-persist }
+    - name: workspace
+      persistentVolumeClaim: { claimName: dev-workspace }
+```
+
+Log in once with `kubectl exec -it dev-my-repo -- claude auth login`.
+
+**Desktop dev containers are unaffected by default.** The devcontainer CLI and VS Code
+replace the image entrypoint with their own (`overrideCommand`, the default for image and
+Dockerfile configs), so `dev-entrypoint` never runs there. The metadata's
+`postStartCommand` is `dev-init && dev-remote-control --post-start`: `dev-init` runs
+exactly as before, and `--post-start` does nothing unless `DEV_REMOTE_CONTROL` is `1`. The
+metadata sets it to `0`, and a consumer's `containerEnv` overrides that:
+
+```jsonc
+{
+  "image": "ghcr.io/cbundy/dev-system/base:1",
+  "containerEnv": { "DEV_REMOTE_CONTROL": "1" }
+}
+```
+
+With it, the supervisor starts in the background at every container start, in the
+workspace folder, logging to `/tmp/dev-remote-control.log`. Only one supervisor runs per
+container.
+
 ## First login
 
 Run these once per machine (or per PVC). The logins land in `/persist`, so they survive
-container rebuilds and image updates.
+container rebuilds and image updates. On a headless container, run them through
+`docker exec -it <container> ...` or `kubectl exec -it <pod> -- ...`.
 
 ```bash
 claude auth login
@@ -168,7 +305,8 @@ USER node
 ```
 
 Switch back to `USER node` at the end, keep tool binaries out of `/persist`, and don't add a
-`VOLUME` for it.
+`VOLUME` for it. Leave `ENTRYPOINT` alone (or keep `tini -- dev-entrypoint` in front of your
+own) so `dev-init` and Remote Control keep working.
 
 On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 
@@ -181,8 +319,9 @@ On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 ```
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
-`containerEnv` with the `/persist` variables, `postStartCommand: dev-init` and these
-mounts, which the devcontainer CLI and VS Code merge into your config:
+`containerEnv` with the `/persist` variables and `DEV_REMOTE_CONTROL: "0"`,
+`postStartCommand: dev-init && dev-remote-control --post-start` and these mounts, which the
+devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target |
 |---|---|
