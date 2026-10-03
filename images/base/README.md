@@ -247,6 +247,6 @@ images/base/test/test.sh dev-system-base:local
   by itself. A failed check fails the run rather than skipping the week.
 - The image is built once and tested; the push sends that same tested image.
 
-**First publish:** new GHCR packages are private. After the first dispatch, open the
-`dev-system/base` package settings on GitHub and change its visibility to public, as for
-the `callum-tools` feature.
+**Visibility:** the package is public, so consumers pull it with no login. It took the
+visibility of this public repo when the first dispatch created it (1.0.0, 2026-10-03), so
+there is no manual step; see "Visibility decision" in the root README.
