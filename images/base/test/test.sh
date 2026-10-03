@@ -2,14 +2,15 @@
 # Container scripts are single-quoted on purpose: they expand inside the image.
 # shellcheck disable=SC2016
 #
-# Container tests for the dev-system base image (cbundy/dev-system#59, and #64
-# for the entrypoint and Remote Control).
+# Container tests for the dev-system base image (cbundy/dev-system#59, #64 for
+# the entrypoint and Remote Control, and #65 for the /shared mount point).
 #
 # Usage: images/base/test/test.sh <image>
 #
 # Runs on a Docker host against an already-built image - locally and in
 # publish-base-image.yml. Sections 1-7 match the tests in #59, section 8 the
-# entrypoint tests in #64. Test 7 needs the devcontainer CLI (`devcontainer`
+# entrypoint tests in #64, section 9 the /shared tests in #65 (Docker volumes
+# stand in for the NAS). Test 7 needs the devcontainer CLI (`devcontainer`
 # on PATH, or set DEVCONTAINER="npx -y @devcontainers/cli");
 # SKIP_DEVCONTAINER=1 skips it. No test needs real credentials: the logged-in
 # path runs against a stub `claude`.
@@ -221,21 +222,22 @@ else
   # Fresh volume names per run so the test never touches a developer's real
   # dev-system-* login volumes; the metadata's default names are checked
   # separately against the label below.
-  check "devcontainer metadata label declares the default named volumes, dev-init and Remote Control off" bash -c "
+  check "devcontainer metadata label declares the default named volumes, dev-init, Remote Control off and DEV_SHARED_DIR" bash -c "
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
       | \$m.remoteUser == \"node\"
       and \$m.postStartCommand == \"dev-init && dev-remote-control --post-start\"
       and \$m.containerEnv.DEV_REMOTE_CONTROL == \"0\"
+      and \$m.containerEnv.DEV_SHARED_DIR == \"/shared\"
       and \$m.updateRemoteUserUID == false
       and ([\$m.mounts[] | \"\(.source)=\(.target)\"] | sort) == [
         \"dev-system-claude=/persist/claude\", \"dev-system-codex=/persist/codex\",
         \"dev-system-gh=/persist/gh\", \"dev-system-no-mistakes=/persist/no-mistakes\"]'"
 
-  # dc_up <name> [extra devcontainer.json lines]: `devcontainer up` on a
-  # minimal image config in its own workspace folder; sets $cid. The default
-  # volume names are overridden (same targets), which also proves a consumer
-  # can override them.
+  # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
+  # up` on a minimal image config in its own workspace folder; sets $cid. The
+  # default volume names are overridden (same targets), which also proves a
+  # consumer can override them.
   dc_up() {
     local ws="$WORKDIR/$1" up
     mkdir -p "$ws/.devcontainer"
@@ -247,7 +249,8 @@ else
     { "type": "volume", "source": "$RUN_ID-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "$RUN_ID-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" },
-    { "type": "volume", "source": "$RUN_ID-nm", "target": "/persist/no-mistakes" }
+    { "type": "volume", "source": "$RUN_ID-nm", "target": "/persist/no-mistakes" }${3:+,
+    $3}
   ],
   ${2:-}
   "runArgs": ["--label", "$RUN_ID"]
@@ -294,6 +297,8 @@ EOF
         ! pgrep -af \"^/bin/bash /usr/local/bin/dev-(entrypoint|remote-control)\" &&
         ! pgrep -ax claude && ! tmux has-session -t claude 2>/dev/null &&
         ! test -e /tmp/dev-remote-control.log'"
+    check "DEV_SHARED_DIR is set and nothing is mounted at /shared by default" bash -c "
+      docker exec '$cid' bash -c '[ \"\$DEV_SHARED_DIR\" = /shared ] && ! mountpoint -q /shared'"
     dc_down
   else
     fail "devcontainer up succeeds"
@@ -315,6 +320,24 @@ EOF
     dc_down
   else
     fail "devcontainer up succeeds with DEV_REMOTE_CONTROL=1"
+  fi
+
+  # The README's consumer mount for /shared, with a local volume standing in
+  # for the NFS-backed one. volume-nocopy leaves the volume's own ownership
+  # alone, so it is made node-writable first, as the NAS export would be.
+  docker volume create --label "$RUN_ID" "$RUN_ID-shared" >/dev/null
+  docker run --rm --user root --entrypoint "" --mount "type=volume,source=$RUN_ID-shared,target=/shared,volume-nocopy" \
+    "$IMAGE" chown 1000:1000 /shared
+  if dc_up shared "" "\"source=$RUN_ID-shared,target=/shared,type=volume,volume-nocopy\""; then
+    pass "devcontainer up succeeds with a volume at /shared"
+    # shellcheck disable=SC2086
+    check "a consumer's /shared volume is mounted, writable by node and reported OK by dev-doctor" \
+      $DEVCONTAINER exec --workspace-folder "$WORKDIR/shared" bash -c '
+        mountpoint -q "$DEV_SHARED_DIR" && touch "$DEV_SHARED_DIR/.probe" && rm "$DEV_SHARED_DIR/.probe" &&
+        dev-doctor --warn-only | grep -q "OK   /shared mounted and writable"'
+    dc_down
+  else
+    fail "devcontainer up succeeds with a volume at /shared"
   fi
 fi
 
@@ -468,6 +491,42 @@ check "real Claude starts in tmux past the trust and onboarding dialogs" bash -c
   echo \"\$pane\"
   echo \"\$pane\" | grep -q 'for shortcuts' && ! echo \"\$pane\" | grep -qiE 'trust this folder|text style'"
 check "real Claude: docker stop completes in under 10s with exit 0" stops_within "$c" 10
+
+echo "== 9. shared files (/shared)"
+check "/shared exists, is owned 1000:1000 with mode 0755 and ships empty" in_image '
+  [ "$(stat -c %u:%g:%a /shared)" = 1000:1000:755 ] || { stat -c %u:%g:%a /shared; exit 1; }
+  [ -z "$(find /shared -mindepth 1 | head -n 1)" ] || { find /shared -mindepth 1; exit 1; }' \
+  --entrypoint ""
+check "DEV_SHARED_DIR is /shared" in_image '[ "$DEV_SHARED_DIR" = /shared ]'
+check "shared label is /shared" bash -c "
+  [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.shared\"}}' '$IMAGE')\" = /shared ]"
+check "not mounted: dev-init stays quiet and dev-doctor reports it as optional, not failed" in_image '
+  out=$( { dev-init; dev-doctor; } 2>&1 ); echo "$out"
+  echo "$out" | grep -q "^dev-doctor: OK   /shared not mounted (optional)$" &&
+  ! echo "$out" | grep -E "WARNING|FAIL" | grep -q /shared' \
+  --entrypoint ""
+vol=$(docker volume create --label "$RUN_ID")
+check "a writable volume at /shared: node can write and dev-doctor reports OK" in_image '
+  out=$( { touch /shared/.probe && rm /shared/.probe && echo wrote; dev-init; dev-doctor; } 2>&1 ); echo "$out"
+  echo "$out" | grep -qx wrote &&
+  echo "$out" | grep -q "^dev-doctor: OK   /shared mounted and writable$" &&
+  ! echo "$out" | grep -E "WARNING|FAIL" | grep -q /shared' \
+  -v "$vol:/shared" --entrypoint ""
+rootvol=$(docker volume create --label "$RUN_ID")
+# Not empty, or Docker copies the image's node-owned /shared into it again.
+docker run --rm --user root -v "$rootvol:/shared" "$IMAGE" \
+  bash -c 'touch /shared/.root-owned && chown -R root:root /shared'
+check "a root-owned volume at /shared: dev-init warns with the fix but exits 0" in_image '
+  out=$(dev-init 2>&1); rc=$?; echo "$out"
+  [ $rc = 0 ] &&
+  echo "$out" | grep -q "dev-init: WARNING: /shared is mounted but not writable by node (1000:1000)" &&
+  echo "$out" | grep -q "all_squash,anonuid=1000,anongid=1000"' \
+  -v "$rootvol:/shared" --entrypoint ""
+check "a root-owned volume at /shared: dev-doctor fails that check with the fix" in_image '
+  out=$(dev-doctor 2>&1); rc=$?; echo "$out"
+  [ $rc = 1 ] &&
+  echo "$out" | grep -A1 "^dev-doctor: FAIL /shared mounted but not writable by node (1000:1000)$" | grep -q "fix: .*all_squash,anonuid=1000,anongid=1000"' \
+  -v "$rootvol:/shared" --entrypoint ""
 
 echo
 echo "$PASSES passed, $FAILURES failed"
