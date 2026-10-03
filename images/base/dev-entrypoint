@@ -1,0 +1,52 @@
+#!/bin/bash
+#
+# dev-entrypoint: the dev-system base image's ENTRYPOINT (under tini).
+#
+# Runs dev-init, then the container's command. The default command (the
+# image CMD) is dev-remote-control, which keeps Claude Code running with
+# Remote Control; any other command (`docker run IMAGE bash`, a k8s `args:`, a
+# CI step) runs instead, with its exit status passed through.
+#
+# dev-init runs in the workspace, so its no-mistakes recovery finds the repo:
+# $DEV_WORKSPACE, else the start directory (the image WORKDIR or the runtime's
+# working directory) unless that is /, else $HOME. The command itself still
+# starts in the original directory. dev-init is best-effort and time-limited,
+# so it never blocks start-up, and its report goes to stderr so it never mixes
+# with the command's own output.
+#
+# Desktop dev containers do not use this: the devcontainer CLI and VS Code
+# replace the entrypoint (overrideCommand), and the image metadata's
+# postStartCommand runs dev-init instead.
+set -u
+
+log() {
+  echo "dev-entrypoint: $*" >&2
+}
+
+workspace() {
+  if [ -n "${DEV_WORKSPACE:-}" ] && [ -d "$DEV_WORKSPACE" ]; then
+    echo "$DEV_WORKSPACE"
+  elif [ "$PWD" != / ]; then
+    echo "$PWD"
+  else
+    echo "$HOME"
+  fi
+}
+
+if [ "$(id -u)" = 0 ]; then
+  # Run as root (docker run --user root), dev-init would leave root-owned
+  # files in the /persist volumes that node then cannot write.
+  log "running as root - dev-init skipped (it runs as node)"
+else
+  ws=$(workspace)
+  ( cd "$ws" && timeout -k 10 120 dev-init ) >&2
+  case $? in
+    0) ;;
+    124 | 137) log "WARNING: dev-init did not finish within 120s - continuing without it" ;;
+    *) log "WARNING: dev-init failed - continuing without it" ;;
+  esac
+fi
+
+# An empty command (a runtime that clears the image CMD) means the default.
+[ "$#" -gt 0 ] || set -- dev-remote-control
+exec "$@"
