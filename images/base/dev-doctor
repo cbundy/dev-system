@@ -1,0 +1,112 @@
+#!/bin/bash
+#
+# dev-doctor: health check for the dev-system base image.
+#
+# One line per check, OK or FAIL, with a recovery hint on every FAIL, so
+# missing auth or broken persistence shows up at start-up instead of halfway
+# through an agent run (cbundy/dev-system#19).
+#
+# Usage: dev-doctor [--warn-only]
+#   Exits 1 if any check fails. --warn-only (used by dev-init) prints the same
+#   report but always exits 0.
+set -u
+
+WARN_ONLY=false
+case "${1:-}" in
+  --warn-only) WARN_ONLY=true ;;
+  "") ;;
+  *)
+    echo "usage: dev-doctor [--warn-only]" >&2
+    exit 2
+    ;;
+esac
+
+FAILURES=0
+
+ok() {
+  printf 'dev-doctor: OK   %s\n' "$1"
+}
+
+fail() {
+  printf 'dev-doctor: FAIL %s\n' "$1"
+  printf 'dev-doctor:        fix: %s\n' "$2"
+  FAILURES=$((FAILURES + 1))
+}
+
+check_persist_dir() {
+  local name="$1" dir="$2"
+  if [ -d "$dir" ] && [ -w "$dir" ]; then
+    ok "$name state dir $dir is writable"
+  else
+    fail "$name state dir $dir is missing or not writable by $(id -un) ($(id -u):$(id -g))" \
+      "mount a volume at $dir owned by 1000:1000 (k8s: securityContext.fsGroup: 1000)"
+  fi
+}
+
+check_persist_dir claude "${CLAUDE_CONFIG_DIR:-/persist/claude}"
+check_persist_dir codex "${CODEX_HOME:-/persist/codex}"
+check_persist_dir gh "${GH_CONFIG_DIR:-/persist/gh}"
+check_persist_dir no-mistakes "${NM_HOME:-/persist/no-mistakes}"
+
+if ! command -v claude >/dev/null 2>&1; then
+  fail "claude is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+elif claude auth status >/dev/null 2>&1; then
+  ok "claude is logged in"
+else
+  fail "claude is not logged in" "run: claude auth login"
+fi
+
+if ! command -v codex >/dev/null 2>&1; then
+  fail "codex is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+elif codex login status >/dev/null 2>&1; then
+  ok "codex is logged in"
+else
+  fail "codex is not logged in" "run: codex login --device-auth"
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  fail "gh is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+elif gh auth status >/dev/null 2>&1; then
+  ok "gh is logged in"
+else
+  fail "gh is not logged in" "run: gh auth login, then dev-init (wires git to gh's credentials)"
+fi
+
+if ! command -v no-mistakes >/dev/null 2>&1; then
+  fail "no-mistakes is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+else
+  ok "no-mistakes is installed"
+  workspace="${DEV_WORKSPACE:-$PWD}"
+  if top=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null); then
+    if [ -f "$top/.no-mistakes.yaml" ]; then
+      # Registered means a clean exit AND the repo line; anything else (not
+      # initialized, unwritable NM_HOME, a broken database) is a failure.
+      if status=$(cd "$top" && no-mistakes status 2>&1) \
+        && ! printf '%s\n' "$status" | grep -q "repo not initialized" \
+        && printf '%s\n' "$status" | grep -qE '^[[:space:]]*repo:'; then
+        ok "no-mistakes: $top is registered"
+      else
+        fail "no-mistakes: $top is not registered or no-mistakes is broken ($(printf '%s\n' "$status" | head -n 1))" \
+          "run: dev-init (or no-mistakes daemon start && no-mistakes init) in $top"
+      fi
+    fi
+  elif [ -e "$workspace/.git" ]; then
+    # git refuses repos owned by another user ("dubious ownership"), which
+    # hides the workspace from every git-based tool, no-mistakes included.
+    fail "git cannot read the repo at $workspace (owned by $(stat -c %U "$workspace" 2>/dev/null), not $(id -un))" \
+      "chown -R 1000:1000 the checkout, or run: git config --global --add safe.directory $workspace"
+  fi
+fi
+
+if command -v treehouse >/dev/null 2>&1; then
+  ok "treehouse is on PATH"
+else
+  fail "treehouse is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  printf 'dev-doctor: %d check(s) failed\n' "$FAILURES"
+  [ "$WARN_ONLY" = true ] && exit 0
+  exit 1
+fi
+exit 0

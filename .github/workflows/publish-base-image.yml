@@ -1,0 +1,159 @@
+name: Publish base image
+
+# Builds and tests ghcr.io/cbundy/dev-system/base (images/base/), and pushes it
+# on a deliberate release or the weekly refresh:
+#
+# - pull_request: build + test only, never pushes.
+# - workflow_dispatch: the deliberate release, from main only - build, test,
+#   push the tags for the version in images/base/VERSION (matching
+#   publish-features.yml).
+# - schedule (weekly): rebuild with fresh OS packages and the latest tools and
+#   re-push the current VERSION's tags. Tags are mutable by design (see
+#   images/base/README.md). Only a version that has already been released by
+#   hand is refreshed, so a merged VERSION bump never publishes itself.
+on:
+  pull_request:
+    paths:
+      - "images/base/**"
+      - "features/src/callum-tools/**"
+      - ".github/workflows/publish-base-image.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-base-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/cbundy/dev-system/base
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Compute version and tags
+        id: meta
+        run: |
+          version=$(tr -d '[:space:]' < images/base/VERSION)
+          if ! [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "images/base/VERSION must be MAJOR.MINOR.PATCH, got '$version'" >&2
+            exit 1
+          fi
+          major=${BASH_REMATCH[1]}
+          minor=${BASH_REMATCH[2]}
+          today=$(date -u +%Y%m%d)
+          short_sha=${GITHUB_SHA::7}
+          {
+            echo "version=$version"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # One cache key per day: same-day rebuilds reuse layers, the weekly
+            # run always reinstalls the tools and OS packages.
+            echo "cache_bust=$today"
+            echo "tags<<EOF"
+            for tag in "$major" "$major.$minor" "$version" "$version-$today" "sha-$short_sha"; do
+              echo "$IMAGE:$tag"
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Before the push decision, so the schedule's "already released?" check
+      # also works while the package is still private.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether to push
+        id: push
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          case "$EVENT" in
+            workflow_dispatch)
+              # The tags are mutable, so a release from an unreviewed branch
+              # would overwrite what every consumer pulls.
+              if [ "$REF" != refs/heads/main ]; then
+                echo "::error::Publish only from main (this run is on $REF)."
+                exit 1
+              fi
+              push=true
+              ;;
+            schedule)
+              # Refresh only a version that was already published deliberately.
+              # Anything other than "not found" is an error, so a broken
+              # refresh fails the run instead of silently skipping a week.
+              if out=$(docker manifest inspect "$IMAGE:$VERSION" 2>&1); then
+                push=true
+              elif printf '%s\n' "$out" | grep -qiE 'manifest unknown|not found'; then
+                echo "::warning::$IMAGE:$VERSION is not published yet - run this workflow by hand on main to release it."
+                push=false
+              else
+                echo "::error::Could not check $IMAGE:$VERSION: $out"
+                exit 1
+              fi
+              ;;
+            *) push=false ;;
+          esac
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built once with the final tags and loaded into the local daemon: the
+      # tests run against this image and the push step pushes this same image,
+      # so nothing untested is ever published.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/base/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            CACHE_BUST=${{ steps.meta.outputs.cache_bust }}
+            VERSION=${{ steps.meta.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.meta.outputs.created }}
+          cache-from: type=gha,scope=base-image
+          cache-to: type=gha,scope=base-image,mode=max
+
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Test image
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: images/base/test/test.sh "$IMAGE:$VERSION"
+
+      - name: Push image
+        if: steps.push.outputs.push == 'true'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while read -r tag; do
+            docker push "$tag"
+          done <<< "$TAGS"
+          {
+            echo "### Pushed"
+            echo '```'
+            echo "$TAGS"
+            echo "digest: $(docker image inspect -f '{{index .RepoDigests 0}}' "$(head -n 1 <<< "$TAGS")")"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

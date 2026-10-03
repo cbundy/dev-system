@@ -1,7 +1,7 @@
 # dev-system
 
 Callum's portable end-to-end development flow, extracted from the mealplanning repo so it can
-bootstrap and stay in sync across repositories. One repo, one version history, four surfaces:
+bootstrap and stay in sync across repositories. One repo, one version history, five surfaces:
 
 ```
 dev-system/
@@ -9,6 +9,8 @@ dev-system/
 ├── plugins/callum-flow/              # plugin: skills (issue-orchestrator, implement-issue), hooks
 ├── features/src/callum-tools/        # Dev Container Feature: installs no-mistakes, treehouse, Claude Code
 ├── features/test/callum-tools/       # feature tests, run in CI by test-features.yml
+├── images/base/                      # base image ghcr.io/cbundy/dev-system/base: Dockerfile,
+│                                     #   dev-init, dev-doctor, tests (publish-base-image.yml)
 ├── templates/                        # repo config templates: .no-mistakes.yaml, treehouse.toml,
 │                                     #   CLAUDE.md skeleton, .claude/settings.json, gitignore,
 │                                     #   workflows
@@ -23,6 +25,7 @@ dev-system/
 |---|---|---|---|
 | Agent behavior | skills, generic agent rules | Claude Code plugin via private marketplace (this repo) | `/plugin marketplace update` or auto-update |
 | Environment | devcontainer tooling installs | Dev Container Feature on GHCR | container rebuild pulls latest matching tag |
+| Environment | prebuilt agent image: Node, Claude Code, codex, no-mistakes, treehouse, gh, plus the `/persist` state contract | base image `ghcr.io/cbundy/dev-system/base` on GHCR, extended by a per-repo Dockerfile | rebuild/re-pull; tags are mutable and refreshed weekly |
 | Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, `.gitignore`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
 
 ## Plugin
@@ -89,6 +92,18 @@ The package contains only install scripts for tools that are themselves public, 
 private package would require a `packages:read` PAT docker-login on every machine and CI
 job that builds a consumer container. After the first publish, flip the package to public
 in GHCR package settings (new packages default to private).
+
+## Base image
+
+`images/base/` builds `ghcr.io/cbundy/dev-system/base`, a prebuilt agent dev environment
+for places that never run the devcontainer lifecycle (Kubernetes pods, Coder workspaces,
+plain `docker run`) as well as the desktop. Tools are baked in at build time, and tool
+state (Claude, codex, gh and no-mistakes logins and config) lives under `/persist`, so it
+survives rebuilds when a volume is mounted there. Consumer repos start their own
+Dockerfile `FROM ghcr.io/cbundy/dev-system/base:1`. The image reuses the `callum-tools`
+scripts rather than forking them, and the feature stays supported for repos that use
+features. See [`images/base/README.md`](images/base/README.md) for the persistence
+contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to extend it.
 
 ## Templates and the callum-dev CLI
 
