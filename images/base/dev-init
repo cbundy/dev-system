@@ -1,0 +1,133 @@
+#!/bin/bash
+#
+# dev-init: start-up setup for the dev-system base image.
+#
+# Wires up the state that cannot be baked into the image: it checks the
+# /persist volumes, seeds tool config that must exist before first use,
+# re-points git at gh's credentials and recovers no-mistakes runtime state.
+# Runs as node on every container start (postStartCommand from the image's
+# devcontainer metadata, or the runtime's own start hook).
+#
+# Idempotent and best-effort: every problem is logged, and the exit status is
+# always 0, so a container never fails to start because of this script. Run
+# `dev-doctor` for a strict pass/fail health check.
+set -u
+
+log() {
+  echo "dev-init: $*" >&2
+}
+
+PERSIST_DIRS="${CLAUDE_CONFIG_DIR:-/persist/claude} ${CODEX_HOME:-/persist/codex} ${GH_CONFIG_DIR:-/persist/gh} ${NM_HOME:-/persist/no-mistakes}"
+CALLUM_TOOLS=/usr/local/share/callum-tools
+
+# 1. Every persistence directory exists and is writable. A missing directory
+#    under a writable mount (one volume for all of /persist) is created; an
+#    unwritable one gets a loud message naming the fix.
+check_persist_dirs() {
+  local dir
+  for dir in $PERSIST_DIRS; do
+    if [ ! -d "$dir" ] && ! mkdir -m 0700 "$dir" 2>/dev/null; then
+      log "WARNING: $dir is missing and cannot be created by $(id -un) ($(id -u):$(id -g))."
+      log "  Fix: mount a volume there owned by 1000:1000 (k8s: securityContext.fsGroup: 1000; Docker: chown 1000:1000 on the volume)."
+      continue
+    fi
+    if [ ! -w "$dir" ]; then
+      log "WARNING: $dir is not writable by $(id -un) ($(id -u):$(id -g)) - state for this tool will NOT persist and logins will fail."
+      log "  Fix: chown 1000:1000 the volume behind $dir (k8s: securityContext.fsGroup: 1000)."
+    fi
+  done
+}
+
+# 2. Claude records how it was installed in .claude.json, which lives in the
+#    (initially empty) CLAUDE_CONFIG_DIR rather than the image. Without it,
+#    `claude doctor` warns that the native install's method is "not set".
+#    Only a missing key is filled in; the rest of the file is left as is.
+seed_claude_config() {
+  local cfg="${CLAUDE_CONFIG_DIR:-/persist/claude}/.claude.json" tmp
+  [ -w "$(dirname "$cfg")" ] || return 0
+  if [ ! -s "$cfg" ]; then
+    (umask 077 && echo '{"installMethod":"native"}' > "$cfg") && log "seeded installMethod native in $cfg"
+    return 0
+  fi
+  jq -e 'has("installMethod")' "$cfg" >/dev/null 2>&1 && return 0
+  tmp=$(mktemp "$cfg.XXXXXX") || return 0
+  if jq '.installMethod = "native"' "$cfg" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$cfg" && log "seeded installMethod native in $cfg"
+  else
+    log "WARNING: $cfg is not valid JSON - left untouched"
+  fi
+  rm -f "$tmp"
+}
+
+# 3. codex cannot use its bwrap sandbox inside these containers (it needs
+#    namespaces the container does not grant - dev-system#19), so default it to
+#    full access. Only a top-level sandbox_mode counts; one inside a [table]
+#    (e.g. a profile) is a different setting. Top-level keys must come before
+#    any table in TOML, so the default is prepended.
+seed_codex_config() {
+  local cfg="${CODEX_HOME:-/persist/codex}/config.toml"
+  [ -w "$(dirname "$cfg")" ] || return 0
+  if [ -f "$cfg" ] && awk '/^[[:space:]]*\[/ { exit 1 } /^[[:space:]]*sandbox_mode[[:space:]]*=/ { found = 1; exit } END { exit !found }' "$cfg"; then
+    return 0
+  fi
+  local tmp
+  tmp=$(mktemp "$cfg.XXXXXX") || return 0
+  {
+    echo '# Seeded by dev-init: bwrap cannot run inside this container (cbundy/dev-system#19).'
+    echo 'sandbox_mode = "danger-full-access"'
+    if [ -f "$cfg" ]; then
+      echo
+      cat "$cfg"
+    fi
+  } > "$tmp" && mv "$tmp" "$cfg" && log "seeded sandbox_mode = \"danger-full-access\" in $cfg"
+  rm -f "$tmp"
+}
+
+# 4. The no-mistakes codex model pin, with the callum-tools `codexModel`
+#    semantics: DEV_CODEX_MODEL overrides the feature's default, and an empty
+#    value skips the pin. An existing pin is never touched.
+seed_no_mistakes_model() {
+  local nm_home="${NM_HOME:-/persist/no-mistakes}" model
+  [ -w "$nm_home" ] || return 0
+  if [ "${DEV_CODEX_MODEL+set}" = set ]; then
+    model="$DEV_CODEX_MODEL"
+  else
+    model=$(cat /usr/local/share/dev-system/codex-model.default 2>/dev/null || true)
+  fi
+  "$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$model" \
+    || log "WARNING: could not write the codex model pin to $nm_home/config.yaml"
+}
+
+# 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
+#    is redone on every start.
+setup_git_credentials() {
+  command -v gh >/dev/null 2>&1 || return 0
+  gh auth status >/dev/null 2>&1 || return 0
+  gh auth setup-git >/dev/null 2>&1 || log "WARNING: gh auth setup-git failed - git may not authenticate to GitHub over HTTPS"
+}
+
+# 6. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
+#    the daemon is a process and is gone after every restart, so it is started
+#    whenever the workspace opts in. Then the callum-tools recovery re-registers
+#    a repo the daemon has lost (e.g. a fresh volume).
+recover_no_mistakes() {
+  local ws="${DEV_WORKSPACE:-$PWD}" top
+  command -v no-mistakes >/dev/null 2>&1 || return 0
+  [ -d "$ws" ] || return 0
+  top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null) || return 0
+  [ -f "$top/.no-mistakes.yaml" ] || return 0
+  [ -w "${NM_HOME:-/persist/no-mistakes}" ] || return 0
+  ( cd "$top" && no-mistakes daemon start >/dev/null 2>&1 ) || true
+  ( cd "$top" && "$CALLUM_TOOLS/recover-no-mistakes.sh" ) || true
+}
+
+check_persist_dirs
+seed_claude_config
+seed_codex_config
+seed_no_mistakes_model
+setup_git_credentials
+recover_no_mistakes
+
+# 7. Report anything still broken, without failing the start.
+dev-doctor --warn-only || true
+exit 0
