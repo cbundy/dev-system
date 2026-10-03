@@ -49,6 +49,17 @@ check_persist_dir gh "${GH_CONFIG_DIR:-/persist/gh}"
 check_persist_dir no-mistakes "${NM_HOME:-/persist/no-mistakes}"
 check_persist_dir agentsview "${AGENTSVIEW_DATA_DIR:-/persist/agentsview}"
 
+# The shared files mount is optional: not mounted is fine, mounted must work.
+shared="${DEV_SHARED_DIR:-/shared}"
+if ! mountpoint -q "$shared" 2>/dev/null; then
+  ok "$shared not mounted (optional)"
+elif [ -w "$shared" ]; then
+  ok "$shared mounted and writable"
+else
+  fail "$shared mounted but not writable by $(id -un) ($(id -u):$(id -g))" \
+    "squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)"
+fi
+
 if ! command -v claude >/dev/null 2>&1; then
   fail "claude is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
 elif claude auth status >/dev/null 2>&1; then

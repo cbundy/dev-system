@@ -4,7 +4,7 @@
 #
 # A prebuilt agent dev environment - Node LTS, Claude Code, codex, no-mistakes,
 # treehouse, agentsview, gh and git - plus a fixed persistence contract under
-# /persist.
+# /persist and a /shared mount point for NAS file sharing.
 # See images/base/README.md for the contract, the tag policy and how to extend
 # this image. Build context is the repo root, so the image can reuse the
 # callum-tools feature scripts instead of forking them:
@@ -44,6 +44,13 @@ RUN echo "cache bust: ${CACHE_BUST}" \
 RUN install -d -m 0755 /persist \
   && install -d -o 1000 -g 1000 -m 0700 \
     /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview
+
+# Shared files: an empty mount point for a NAS share (NFS) beside the code -
+# build artifacts and exchange files, never repo checkouts or tool state. The
+# image has no default mount (the NAS is site-specific; the runtime supplies
+# it) and, as for /persist, no VOLUME. Owned by node, so a plain Docker volume
+# mounted here is writable too.
+RUN install -d -o 1000 -g 1000 -m 0755 /shared
 
 # Agent toolchain, installed as node so every tool can update itself without
 # root. Binaries live under /home/node and /usr/local/share/npm-global, never
@@ -138,6 +145,8 @@ USER node
 # NO_MISTAKES_HOME is the name the callum-tools pipeline watcher reads.
 # agentsview's anonymous telemetry ping and update check are off: the image
 # pins its version, and these containers report nothing they were not asked to.
+# DEV_SHARED_DIR names the shared files mount point, so scripts and agents
+# never hard-code /shared.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
@@ -145,7 +154,8 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   NO_MISTAKES_HOME=/persist/no-mistakes \
   AGENTSVIEW_DATA_DIR=/persist/agentsview \
   AGENTSVIEW_TELEMETRY_ENABLED=0 \
-  AGENTSVIEW_DISABLE_UPDATE_CHECK=1
+  AGENTSVIEW_DISABLE_UPDATE_CHECK=1 \
+  DEV_SHARED_DIR=/shared
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which
@@ -174,4 +184,5 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.title="dev-system base" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_REMOTE_CONTROL\":\"0\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"},{\"type\":\"volume\",\"source\":\"dev-system-agentsview\",\"target\":\"/persist/agentsview\"}]}]"
+  dev.cbundy.shared="/shared" \
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"},{\"type\":\"volume\",\"source\":\"dev-system-agentsview\",\"target\":\"/persist/agentsview\"}]}]"
