@@ -8,7 +8,7 @@
 #
 # Runs on a Docker host against an already-built image - locally and in
 # publish-base-image.yml. Each numbered section matches a test in the issue.
-# Test 7 needs the devcontainer CLI (`devcontainer` on PATH, or set
+# Test 8 starts a postgres:17 container. Test 7 needs the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 set -euo pipefail
 
@@ -53,6 +53,7 @@ cleanup() {
   docker ps -aq --filter "label=$RUN_ID" | xargs -r docker rm -f >/dev/null 2>&1 || true
   docker volume ls -q --filter "label=$RUN_ID" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
   docker volume ls -q --filter "name=^$RUN_ID-" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
+  docker network ls -q --filter "label=$RUN_ID" | xargs -r docker network rm >/dev/null 2>&1 || true
   [ -n "${WORKDIR:-}" ] && rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -63,7 +64,7 @@ check "default user is node with uid 1000 / gid 1000" in_image '
   [ "$(id -u node)" = 1000 ] && [ "$(id -g node)" = 1000 ]'
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse; do
+for tool in node npm claude codex gh git no-mistakes treehouse agentsview; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '
@@ -76,21 +77,22 @@ check "callum-tools scripts staged where the callum-flow skills call them" in_im
 echo "== 3. persistence contract"
 check "env vars point at /persist/*" in_image '
   [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ "$CODEX_HOME" = /persist/codex ] &&
-  [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ]'
+  [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ] &&
+  [ "$AGENTSVIEW_DATA_DIR" = /persist/agentsview ]'
 check "every /persist dir exists, is owned 1000:1000 with mode 0700 and is writable by node" in_image '
-  for d in /persist/claude /persist/codex /persist/gh /persist/no-mistakes; do
+  for d in /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview; do
     [ "$(stat -c %u:%g:%a "$d")" = 1000:1000:700 ] || { echo "$d: $(stat -c %u:%g:%a "$d")"; exit 1; }
     touch "$d/.probe" && rm "$d/.probe" || exit 1
   done'
 check "the image ships /persist empty (no build-time state baked in)" in_image '
   [ -z "$(find /persist -mindepth 2 | head -n 1)" ] || { find /persist -mindepth 2; exit 1; }'
 check "no tool binary lives under /persist" in_image '
-  for b in claude codex gh git no-mistakes treehouse node; do
+  for b in claude codex gh git no-mistakes treehouse agentsview node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
   done'
-check "persistence contract label lists the four dirs" bash -c "
+check "persistence contract label lists the five dirs" bash -c "
   [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \
-    /persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes ]"
+    /persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview ]"
 check "image declares no VOLUME" bash -c "
   [ \"\$(docker image inspect -f '{{json .Config.Volumes}}' '$IMAGE')\" = null ]"
 check "OCI labels carry source, revision, version, created and the mutability note" bash -c "
@@ -134,7 +136,7 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   grep -qF -- "- $(cat /usr/local/share/dev-system/codex-model.default)" /persist/no-mistakes/config.yaml' \
   -v "$vol:/persist"
 check "dev-init on an empty volume mounted at /persist leaves node-owned subdirs" in_image '
-  for d in claude codex gh no-mistakes; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
+  for d in claude codex gh no-mistakes agentsview; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
   -v "$vol:/persist"
 check "dev-init seeds installMethod into an existing .claude.json without touching other keys" in_image '
   set -e
@@ -222,6 +224,7 @@ else
       | \$m.remoteUser == \"node\" and \$m.postStartCommand == \"dev-init\"
       and \$m.updateRemoteUserUID == false
       and ([\$m.mounts[] | \"\(.source)=\(.target)\"] | sort) == [
+        \"dev-system-agentsview=/persist/agentsview\",
         \"dev-system-claude=/persist/claude\", \"dev-system-codex=/persist/codex\",
         \"dev-system-gh=/persist/gh\", \"dev-system-no-mistakes=/persist/no-mistakes\"]'"
   # Override the default volume names in the consumer config (same targets),
@@ -233,7 +236,8 @@ else
     { "type": "volume", "source": "$RUN_ID-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "$RUN_ID-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" },
-    { "type": "volume", "source": "$RUN_ID-nm", "target": "/persist/no-mistakes" }
+    { "type": "volume", "source": "$RUN_ID-nm", "target": "/persist/no-mistakes" },
+    { "type": "volume", "source": "$RUN_ID-av", "target": "/persist/agentsview" }
   ],
   "runArgs": ["--label", "$RUN_ID"]
 }
@@ -244,7 +248,7 @@ EOF
     cid=$(echo "$up" | tail -n 1 | jq -r .containerId)
     check "volumes are mounted at every /persist dir (consumer overrides win over image defaults)" bash -c "
       mounts=\$(docker inspect -f '{{json .Mounts}}' '$cid')
-      for t in claude codex gh no-mistakes; do
+      for t in claude codex gh no-mistakes agentsview; do
         echo \"\$mounts\" | jq -e --arg t \"/persist/\$t\" 'map(select(.Destination == \$t and .Type == \"volume\" and (.Name | startswith(\"$RUN_ID-\")))) | length == 1' >/dev/null || { echo \"no volume at /persist/\$t: \$mounts\"; exit 1; }
       done"
     # DEVCONTAINER may be a multi-word command (npx ...), so it is split on purpose.
@@ -263,6 +267,91 @@ EOF
     printf '%s\n' "$up" | tail -n 30 | sed 's/^/    /'
   fi
 fi
+
+echo "== 8. agentsview session push"
+check "agentsview telemetry and update check are off" in_image '
+  [ "$AGENTSVIEW_TELEMETRY_ENABLED" = 0 ] && [ "$AGENTSVIEW_DISABLE_UPDATE_CHECK" = 1 ]'
+check "without AGENTSVIEW_PG_URL, dev-init starts no push and dev-doctor reports it off" in_image '
+  out=$(dev-init 2>&1; dev-doctor --warn-only); echo "$out"
+  ! pgrep -x agentsview-push >/dev/null &&
+  [ ! -e /persist/agentsview/config.toml ] &&
+  echo "$out" | grep -q "OK   agentsview is installed (session push off"'
+
+# A TLS PostgreSQL (agentsview refuses plaintext to a non-local host) on a
+# private network, plus one shared data volume and one shared Claude volume:
+# the shape of several containers on one Docker host.
+net=$(docker network create --label "$RUN_ID" "$RUN_ID-net")
+docker run -d --label "$RUN_ID" --name "$RUN_ID-pg" --network "$net" \
+  -e POSTGRES_USER=av -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=agentsview \
+  --entrypoint bash postgres:17 -c '
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=pg \
+      -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
+    chown postgres /tmp/k.pem /tmp/c.pem && chmod 600 /tmp/k.pem
+    exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/c.pem -c ssl_key_file=/tmp/k.pem' >/dev/null
+psql_av() {
+  docker exec "$RUN_ID-pg" psql -U av -d agentsview -tAc "$1" 2>/dev/null
+}
+for _ in $(seq 1 60); do
+  docker exec "$RUN_ID-pg" pg_isready -U av -d agentsview -h 127.0.0.1 >/dev/null 2>&1 && break
+  sleep 1
+done
+avdata=$(docker volume create --label "$RUN_ID")
+avclaude=$(docker volume create --label "$RUN_ID")
+# write_session <volume> <session id>: a minimal Claude Code transcript
+write_session() {
+  docker run --rm -v "$1:/persist/claude" -e SID="$2" "$IMAGE" bash -c '
+    mkdir -p /persist/claude/projects/-ws && f=/persist/claude/projects/-ws/$SID.jsonl
+    printf "%s\n" \
+      "{\"type\":\"user\",\"sessionId\":\"$SID\",\"uuid\":\"$SID-u\",\"parentUuid\":null,\"timestamp\":\"2026-01-01T00:00:00Z\",\"cwd\":\"/ws\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}" \
+      "{\"type\":\"assistant\",\"sessionId\":\"$SID\",\"uuid\":\"$SID-a\",\"parentUuid\":\"$SID-u\",\"timestamp\":\"2026-01-01T00:00:01Z\",\"cwd\":\"/ws\",\"message\":{\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}" \
+      > "$f.tmp" && mv "$f.tmp" "$f"'
+}
+# wait_for_session <session id>: up to 90s for it to reach PostgreSQL
+wait_for_session() {
+  for _ in $(seq 1 90); do
+    [ "$(psql_av "select count(*) from agentsview.sessions where id like '%$1%'")" -ge 1 ] 2>/dev/null && return 0
+    sleep 1
+  done
+  return 1
+}
+write_session "$avclaude" 11111111-1111-4111-8111-111111111111
+pusher() {
+  docker run -d --label "$RUN_ID" --name "$RUN_ID-$1" --network "$net" \
+    -e "AGENTSVIEW_PG_URL=postgres://av:pw@$RUN_ID-pg:5432/agentsview?sslmode=require" \
+    -e DEV_MACHINE_NAME='test "host"' -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
+    -v "$avdata:/persist/agentsview" -v "$avclaude:/persist/claude" \
+    "$IMAGE" bash -c 'dev-init; exec sleep infinity' >/dev/null
+}
+pusher a
+check "dev-init starts the push and a session reaches PostgreSQL" wait_for_session 11111111-1111-4111-8111-111111111111
+check "the machine label comes from DEV_MACHINE_NAME (quotes escaped)" bash -c "
+  [ \"\$(docker exec '$RUN_ID-pg' psql -U av -d agentsview -tAc \"select value from agentsview.sync_metadata where key like 'machine_label:%'\")\" = 'test \"host\"' ]"
+check "dev-init seeds a non-8080 daemon port and keeps config.toml at 0600" docker exec "$RUN_ID-a" bash -c '
+  grep -qx "port = 47180" /persist/agentsview/config.toml &&
+  [ "$(stat -c %a /persist/agentsview/config.toml)" = 600 ] &&
+  ! grep -q "127.0.0.1:8080" /persist/agentsview/daemon.*.json'
+check "dev-doctor reports the database reachable and the push running" docker exec "$RUN_ID-a" bash -c '
+  out=$(dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -q "OK   agentsview: central PostgreSQL is reachable" &&
+  echo "$out" | grep -q "OK   agentsview session push is running"'
+check "a second dev-init in the same container starts no second push loop" docker exec "$RUN_ID-a" bash -c '
+  dev-init >/dev/null 2>&1; [ "$(pgrep -xc agentsview-push)" = 1 ]'
+pusher b
+sleep 6
+check "a second container on the same data volume waits on the lock and reports the push running" docker exec "$RUN_ID-b" bash -c '
+  out=$(dev-doctor --warn-only); echo "$out"; cat /tmp/dev-agentsview-push.log
+  grep -q "already locked" /tmp/dev-agentsview-push.log &&
+  echo "$out" | grep -q "OK   agentsview session push is running"'
+docker stop -t 10 "$RUN_ID-a" >/dev/null
+write_session "$avclaude" 22222222-2222-4222-8222-222222222222
+check "the second container takes over when the first stops" wait_for_session 22222222-2222-4222-8222-222222222222
+check "both containers pushed as one machine" bash -c "
+  [ \"\$(docker exec '$RUN_ID-pg' psql -U av -d agentsview -tAc 'select count(distinct machine) from agentsview.sessions')\" = 1 ]"
+check "dev-doctor fails with a hint when the database is unreachable" bash -c "
+  out=\$(docker run --rm -e AGENTSVIEW_PG_URL='postgres://av:pw@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -q 'FAIL agentsview cannot reach the central PostgreSQL' &&
+  echo \"\$out\" | grep -q 'FAIL agentsview session push is not running'"
 
 echo
 echo "$PASSES passed, $FAILURES failed"

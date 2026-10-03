@@ -3,7 +3,8 @@
 # dev-system base image: ghcr.io/cbundy/dev-system/base
 #
 # A prebuilt agent dev environment - Node LTS, Claude Code, codex, no-mistakes,
-# treehouse, gh and git - plus a fixed persistence contract under /persist.
+# treehouse, agentsview, gh and git - plus a fixed persistence contract under
+# /persist.
 # See images/base/README.md for the contract, the tag policy and how to extend
 # this image. Build context is the repo root, so the image can reuse the
 # callum-tools feature scripts instead of forking them:
@@ -41,7 +42,7 @@ RUN echo "cache bust: ${CACHE_BUST}" \
 # under /persist and leave anonymous volumes behind.
 RUN install -d -m 0755 /persist \
   && install -d -o 1000 -g 1000 -m 0700 \
-    /persist/claude /persist/codex /persist/gh /persist/no-mistakes
+    /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview
 
 # Agent toolchain, installed as node so every tool can update itself without
 # root. Binaries live under /home/node and /usr/local/share/npm-global, never
@@ -82,6 +83,29 @@ RUN curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh \
 # feature version) does not re-download every tool on the next build.
 USER root
 
+# agentsview: pushes this machine's Claude and codex sessions to a central
+# PostgreSQL that one `agentsview pg serve` reads (see images/base/README.md).
+# Pinned by version and checksum rather than tracking latest: the pushers and
+# the central server share a database schema, so an upgrade is a deliberate
+# bump here, made together with the server.
+ARG AGENTSVIEW_VERSION=0.44.0
+ARG AGENTSVIEW_SHA256_AMD64=037ea7a46d52e06b20363b4aa7cd7f28e32f31d8215803d6e9a0c96bac5818e3
+ARG AGENTSVIEW_SHA256_ARM64=6f3c76ebe119826a2def1ae226c3573b214d396a3ed7c477ef282b1063345b87
+RUN arch=$(dpkg --print-architecture) \
+  && case "$arch" in \
+    amd64) sha256="$AGENTSVIEW_SHA256_AMD64" ;; \
+    arm64) sha256="$AGENTSVIEW_SHA256_ARM64" ;; \
+    *) echo "agentsview: unsupported architecture $arch" >&2; exit 1 ;; \
+  esac \
+  && tmp=$(mktemp -d) \
+  && curl -fsSL -o "$tmp/agentsview.tar.gz" \
+    "https://github.com/kenn-io/agentsview/releases/download/v${AGENTSVIEW_VERSION}/agentsview_${AGENTSVIEW_VERSION}_linux_${arch}.tar.gz" \
+  && echo "$sha256  $tmp/agentsview.tar.gz" | sha256sum -c - \
+  && tar -xzf "$tmp/agentsview.tar.gz" -C "$tmp" agentsview \
+  && install -m 0755 "$tmp/agentsview" /usr/local/bin/agentsview \
+  && rm -rf "$tmp" \
+  && agentsview --version
+
 # Shared scripts from the callum-tools feature, staged at the same path the
 # feature uses (the callum-flow skills call the watchers there). The codex
 # model default is read from the feature's own option default, so the feature
@@ -99,17 +123,23 @@ RUN install -d -m 0755 /usr/local/share/dev-system \
   && rm /tmp/callum-tools-feature.json
 
 COPY --chmod=0755 images/base/dev-init images/base/dev-doctor /usr/local/bin/
+COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 
 USER node
 
 # Point each tool at its /persist directory. Set after the installs so no
 # installer writes into /persist at build time - the directories ship empty.
 # NO_MISTAKES_HOME is the name the callum-tools pipeline watcher reads.
+# agentsview's anonymous telemetry ping and update check are off: the image
+# pins its version, and these containers report nothing they were not asked to.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
   NM_HOME=/persist/no-mistakes \
-  NO_MISTAKES_HOME=/persist/no-mistakes
+  NO_MISTAKES_HOME=/persist/no-mistakes \
+  AGENTSVIEW_DATA_DIR=/persist/agentsview \
+  AGENTSVIEW_TELEMETRY_ENABLED=0 \
+  AGENTSVIEW_DISABLE_UPDATE_CHECK=1
 
 # devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
@@ -122,6 +152,6 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.version="${VERSION}" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.title="dev-system base" \
-  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
-  dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
+  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
+  dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"},{\"type\":\"volume\",\"source\":\"dev-system-agentsview\",\"target\":\"/persist/agentsview\"}]}]"
