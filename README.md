@@ -103,7 +103,10 @@ survives rebuilds when a volume is mounted there. Consumer repos start their own
 Dockerfile `FROM ghcr.io/cbundy/dev-system/base:1`. The image reuses the `callum-tools`
 scripts rather than forking them, and the feature stays supported for repos that use
 features. See [`images/base/README.md`](images/base/README.md) for the persistence
-contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to extend it.
+contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to extend it. The image
+can also export OpenTelemetry from Claude Code and codex, switched on only when the runtime
+sets `OTEL_EXPORTER_OTLP_ENDPOINT`; the env contract is in the same README under
+"Telemetry" (feature users set the variables in their `devcontainer.json` instead).
 
 ## Templates and the callum-dev CLI
 

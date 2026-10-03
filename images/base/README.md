@@ -34,6 +34,8 @@ that use features keep using it, and the image reuses the feature's scripts
 5. `dev-doctor`, a health check that reports missing auth or broken state loudly.
 6. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
    gets the persistence volumes and `dev-init` automatically.
+7. An opt-in OpenTelemetry switch for Claude Code and codex that stays off unless the
+   runtime supplies a collector endpoint (see [Telemetry](#telemetry)).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
@@ -46,6 +48,8 @@ These belong to the consumer image or the runtime:
 - Repo-specific tools (Terraform, Python stacks, Docker CLI and so on). Add them in the
   consumer's Dockerfile.
 - Secrets or credentials of any kind. The image is public.
+- Telemetry endpoints and resource attributes. The runtime supplies them; the image only
+  knows how to turn export on when it does.
 - Where volumes come from (Docker named volume, k8s PVC, host bind). The image only defines
   the mount points.
 - The workspace checkout location and the git clone.
@@ -109,17 +113,19 @@ because of it.
 3. Seeds `$CODEX_HOME/config.toml` with a top-level `sandbox_mode = "danger-full-access"`
    only if no top-level `sandbox_mode` is set. codex's bwrap sandbox cannot run inside
    these containers (cbundy/dev-system#19).
-4. Pins the codex model no-mistakes uses in `$NM_HOME/config.yaml`, only if no pin exists,
+4. Writes or removes codex's OTel export config, `/etc/codex/config.toml`, depending on
+   whether `OTEL_EXPORTER_OTLP_ENDPOINT` is set (see [Telemetry](#telemetry)).
+5. Pins the codex model no-mistakes uses in `$NM_HOME/config.yaml`, only if no pin exists,
    with the same rules as the callum-tools `codexModel` option. `DEV_CODEX_MODEL` overrides
    the default (the feature's `codexModel` default); `DEV_CODEX_MODEL=""` skips the pin.
-5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
+6. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
-6. If `$DEV_WORKSPACE` (default: the current directory) is in a git repo with
+7. If `$DEV_WORKSPACE` (default: the current directory) is in a git repo with
    `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone after every
    restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register the repo if
    needed. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently.
-7. Runs `dev-doctor --warn-only`.
+8. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
 
@@ -135,8 +141,197 @@ on every failure:
 - git can read the workspace repo (not blocked by "dubious ownership");
 - treehouse is on `PATH`.
 
+It also prints `INFO` lines for telemetry: off (no endpoint), or the endpoint, protocol and
+resource attributes, whether Claude Code and codex export is switched on, and whether the
+collector accepts a TCP connection. Telemetry is opt-in, so these lines never count as a
+failure, an unreachable collector included.
+
 It exits 1 if any check fails. `dev-doctor --warn-only` prints the same report and always
 exits 0.
+
+## Telemetry
+
+Containers built from this image can export OpenTelemetry metrics and events from Claude
+Code and codex, for example into Grafana through an OTLP gateway (the homelab side is
+cbundy/network#137). It is **opt-in by presence of `OTEL_EXPORTER_OTLP_ENDPOINT`**: when the
+runtime sets it, export switches on; when it is unset (a desktop container with no
+collector, say), nothing is exported, no telemetry variable is set and nothing errors.
+
+### The env contract
+
+The runtime (Coder template, k8s pod spec, `devcontainer.json`) supplies:
+
+| Variable | Required | Example | Notes |
+|---|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | yes - the switch | `http://<gateway>:4318` | base URL, no `/v1/...` path |
+| `OTEL_RESOURCE_ATTRIBUTES` | recommended | `host=<name>,repo=<repo>,env=homelab` | comma-separated `key=value`, no spaces, quotes, commas or backslashes in values (percent-encode them) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | no | `grpc` | default `http/protobuf`; set `grpc` for a `:4317` endpoint |
+
+`host`, `repo` and `env` are the label names the gateway keeps (cbundy/network#137); use
+exactly these keys. Any standard `OTEL_*` variable the runtime sets (headers, per-signal
+endpoints, export intervals, `OTEL_METRICS_INCLUDE_*`) passes straight through to Claude Code.
+
+When the endpoint is set, the image fills in only what is still unset:
+
+```
+CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_METRICS_EXPORTER=otlp
+OTEL_LOGS_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+A value the runtime sets wins, so `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` or
+`CLAUDE_CODE_ENABLE_TELEMETRY=0` (keep the endpoint for other tools, but not Claude) work as
+expected. `http/protobuf` is the default because it is also the OpenTelemetry spec default,
+so other OTel-instrumented programs in the container see no change. Claude Code itself has
+no default protocol, so one is always set.
+
+### Where the switch lives, and why
+
+The issue (cbundy/dev-system#68) was that `dev-init` exporting variables reaches only its
+own process, not the shells, tmux sessions, `claude remote-control` or Coder scripts started
+later. The endpoint itself is container environment, so every process inherits it; only
+the derived switches need computing. They are computed by one POSIX snippet,
+`/etc/profile.d/dev-system-otel.sh` (source: `images/base/otel-env.sh`), hooked into every
+shell entry point:
+
+| Started as | Hook | Covers |
+|---|---|---|
+| login shell (`bash -l`, `sh -l`) | `/etc/profile.d/` | VS Code and Coder terminals, tmux windows, `docker exec ... bash -l`, the no-mistakes daemon, which resolves its agents' environment from a login shell |
+| interactive non-login bash | `/etc/bash.bashrc` | `docker exec -it ... bash` |
+| non-interactive bash | `BASH_ENV` (image `ENV`) | scripts, `bash -c`, Coder `startup_script`, `dev-init` |
+| zsh (any) | `/etc/zsh/zshenv` | a user whose shell is zsh |
+
+`claude` inherits from whichever of these started it, as do `claude remote-control` in tmux
+and the agents no-mistakes spawns. The snippet is idempotent and only exports, because
+`BASH_ENV` sources it into every bash script.
+
+Alternatives considered:
+
+- **Managed Claude Code settings** (`/etc/claude-code/managed-settings.d/*.json` with an
+  `env` block, written by `dev-init`). It would also reach a `claude` exec'd with no shell,
+  but managed `OTEL_EXPORTER_OTLP_*` values override and remove ones the runtime sets, it
+  needs a root write at start-up, it would make every container report a managed policy
+  source, and a malformed managed file stops Claude Code from starting at all. Not worth it
+  for the one case it adds.
+- **Static image `ENV`** for the Claude switches. With no endpoint, Claude Code would still
+  have its exporters switched on with nowhere to send to. The docs do not define that case
+  (it is not verified quiet), and it breaks the "unset means nothing is enabled" rule.
+- **User settings** (`$CLAUDE_CONFIG_DIR/settings.json` `env`). That file is persisted and
+  shared by every container on the volume, so a switch written there would outlive the
+  runtime that set the endpoint.
+
+**Not covered:** a `claude` exec'd directly with no shell in between (for example a pod
+`command: ["claude", ...]`, or `docker exec <ctr> claude ...`). Wrap it in `bash -c` (or
+`bash -lc`) so `BASH_ENV` applies, or set the Claude variables above in the runtime too. A
+consumer image that sets its own `BASH_ENV` replaces this one and should source
+`/etc/profile.d/dev-system-otel.sh` from its file. `sh -c` (dash) reads no start-up file.
+
+Claude Code ignores OTel exporter variables in a repository's `.claude/settings.json`, so a
+repo cannot redirect or enable telemetry. Telemetry variables in your own
+`$CLAUDE_CONFIG_DIR/settings.json` `env` block, or in managed settings, are honoured as usual.
+
+### codex
+
+codex reads its exporters from `config.toml` only. When the endpoint is set, `dev-init`
+writes codex's **system** config, `/etc/codex/config.toml` (the directory is `node`-owned in
+the image), with an `[otel]` table: logs and metrics exporters derived from the endpoint and
+protocol (`otlp-http` gets the per-signal `/v1/logs` and `/v1/metrics` URLs codex needs, or
+the `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` / `_METRICS_ENDPOINT` values when set; `otlp-grpc`
+gets the endpoint as is), `environment` copied from the `env=` resource attribute (codex
+otherwise stamps its own `env=dev` over `OTEL_RESOURCE_ATTRIBUTES`) and
+`log_user_prompt = false`. codex still picks up `OTEL_RESOURCE_ATTRIBUTES` for `host` and
+`repo`. Traces stay off.
+
+- **Your config is never touched, and wins.** The system layer ranks below
+  `$CODEX_HOME/config.toml`. codex merges layers table by table, so rather than mix two
+  `[otel]` tables (an `otlp-grpc` exporter of yours over an `otlp-http` one of dev-init's
+  would not parse), `dev-init` writes nothing while your `config.toml` has an `[otel]`
+  table or `otel.` keys, and your settings apply alone.
+- **Nothing outlives the runtime.** The file is in the container filesystem, not `/persist`,
+  and `dev-init` removes it on a start without the endpoint.
+- Only a file carrying `dev-init`'s marker line is rewritten or removed; a consumer image's
+  own `/etc/codex/config.toml` is left alone (and then codex is not configured by `dev-init`).
+- codex reads the file when it starts, so a codex started before `dev-init` ran does not
+  export. Run `dev-init` from the start-up hook before starting agents.
+
+### no-mistakes
+
+no-mistakes has no OTLP export of its own, and the image does not add one. The contract:
+
+- **Agent activity is covered.** The no-mistakes daemon resolves its environment from a
+  login shell, so the Claude Code and codex agents it runs export like any other, with the
+  same resource attributes.
+- **Run outcomes stay on the volume** at the documented paths: one directory per run under
+  `$NM_HOME/logs/<run-id>/` (`/persist/no-mistakes/logs`, also reachable as
+  `~/.no-mistakes/logs`) and the run database `$NM_HOME/state.sqlite`, which
+  `no-mistakes runs` and `no-mistakes stats` read. Shipping them to Loki is the collector
+  side's job (cbundy/network#137): a log tailer with access to the `/persist` volume.
+
+no-mistakes' own anonymous usage telemetry is a separate upstream feature, controlled by
+`NO_MISTAKES_TELEMETRY`; the image does not change it.
+
+### What is collected, and privacy defaults
+
+- **Claude Code** metrics (`claude_code.session.count`, `.token.usage`, `.cost.usage`,
+  `.lines_of_code.count`, `.commit.count`, `.pull_request.count`,
+  `.code_edit_tool.decision`, `.active_time.total`) and events (`claude_code.api_request`,
+  `.api_error`, `.tool_result`, `.tool_decision`, `.user_prompt` and others), per the
+  [Claude Code monitoring docs](https://code.claude.com/docs/en/monitoring-usage). Each
+  carries `session.id`, `user.id`, `user.email` and similar standard attributes; dropping
+  per-session ids from metric labels is the gateway's job.
+- **codex** metrics (`codex.api_request`, `codex.tool.call`, ...) and log events
+  (`codex.conversation_starts`, `codex.api_request`, `codex.tool_decision`, ...).
+- **Prompt text is off.** `OTEL_LOG_USER_PROMPTS` is never set by the image, so the
+  `claude_code.user_prompt` event carries the prompt length with the prompt redacted, and codex gets
+  `log_user_prompt = false`. Setting `OTEL_LOG_USER_PROMPTS=1` in the runtime turns prompt
+  text on for both. Tool parameters (`OTEL_LOG_TOOL_DETAILS`), assistant responses and raw
+  API bodies stay at Claude Code's defaults (off).
+
+### Enabling it
+
+Coder template (Terraform), on the agent or container:
+
+```hcl
+env = {
+  OTEL_EXPORTER_OTLP_ENDPOINT = "http://<gateway>:4318"
+  OTEL_RESOURCE_ATTRIBUTES    = "host=${data.coder_workspace.me.name},repo=<repo>,env=homelab"
+}
+```
+
+Kubernetes pod spec:
+
+```yaml
+env:
+  - name: OTEL_EXPORTER_OTLP_ENDPOINT
+    value: http://<gateway>:4318
+  - name: OTEL_RESOURCE_ATTRIBUTES
+    value: host=<name>,repo=<repo>,env=homelab
+```
+
+`devcontainer.json` (desktop): use `containerEnv`, so the variables are in the container's
+own environment for every process, not just VS Code's terminals:
+
+```jsonc
+"containerEnv": {
+  "OTEL_EXPORTER_OTLP_ENDPOINT": "http://<gateway>:4318",
+  "OTEL_RESOURCE_ATTRIBUTES": "host=<name>,repo=<repo>,env=desktop"
+}
+```
+
+Then start the agents after `dev-init` has run (it already runs first on the desktop and
+should run first in a Coder `startup_script`), and check with `dev-doctor`.
+
+### callum-tools feature users
+
+The `callum-tools` feature does not ship this switch. A feature consumer owns its
+`devcontainer.json`, which is already per-repo, static configuration, so the simplest
+equivalent is to set the full Claude Code variables there (in `containerEnv`):
+`CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp`, `OTEL_LOGS_EXPORTER=otlp`,
+`OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_ENDPOINT` and
+`OTEL_RESOURCE_ATTRIBUTES`, and the `[otel]` table above in `~/.codex/config.toml` for codex.
+Shipping the conditional through the feature would need a feature version bump and a
+runtime hook that the feature does not otherwise have.
 
 ## First login
 

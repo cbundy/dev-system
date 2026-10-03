@@ -100,16 +100,36 @@ RUN install -d -m 0755 /usr/local/share/dev-system \
 
 COPY --chmod=0755 images/base/dev-init images/base/dev-doctor /usr/local/bin/
 
+# Opt-in telemetry (cbundy/dev-system#68). The snippet exports the Claude Code
+# OTel switches only when the runtime sets OTEL_EXPORTER_OTLP_ENDPOINT, so the
+# image itself knows no endpoint. /etc/profile.d covers login shells (sh, bash,
+# tmux windows, the no-mistakes daemon's env probe); bash.bashrc covers
+# interactive non-login bash; BASH_ENV (below) covers non-interactive bash;
+# zshenv covers every zsh. /etc/codex is node-owned so dev-init can write
+# codex's system-level config.toml (a layer below the user's, so a user's
+# own $CODEX_HOME/config.toml always wins) without root at start-up.
+COPY --chmod=0644 images/base/otel-env.sh /etc/profile.d/dev-system-otel.sh
+RUN printf '\n# dev-system opt-in telemetry (cbundy/dev-system#68)\n. /etc/profile.d/dev-system-otel.sh\n' \
+    >> /etc/bash.bashrc \
+  && if [ -d /etc/zsh ]; then \
+    printf '\n# dev-system opt-in telemetry (cbundy/dev-system#68)\n. /etc/profile.d/dev-system-otel.sh\n' \
+      >> /etc/zsh/zshenv; \
+  fi \
+  && install -d -o 1000 -g 1000 -m 0755 /etc/codex
+
 USER node
 
 # Point each tool at its /persist directory. Set after the installs so no
 # installer writes into /persist at build time - the directories ship empty.
 # NO_MISTAKES_HOME is the name the callum-tools pipeline watcher reads.
+# BASH_ENV makes non-interactive bash (scripts, `bash -c`, Coder startup
+# scripts) source the telemetry snippet too; it is a no-op without an endpoint.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
   NM_HOME=/persist/no-mistakes \
-  NO_MISTAKES_HOME=/persist/no-mistakes
+  NO_MISTAKES_HOME=/persist/no-mistakes \
+  BASH_ENV=/etc/profile.d/dev-system-otel.sh
 
 # devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to

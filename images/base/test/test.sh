@@ -7,7 +7,8 @@
 # Usage: images/base/test/test.sh <image>
 #
 # Runs on a Docker host against an already-built image - locally and in
-# publish-base-image.yml. Each numbered section matches a test in the issue.
+# publish-base-image.yml. Sections 1-7 match the tests in that issue; section
+# 8 covers opt-in telemetry (cbundy/dev-system#68).
 # Test 7 needs the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 set -euo pipefail
@@ -263,6 +264,99 @@ EOF
     printf '%s\n' "$up" | tail -n 30 | sed 's/^/    /'
   fi
 fi
+
+echo "== 8. opt-in telemetry (cbundy/dev-system#68)"
+# The endpoint never needs to exist: these tests check what is switched on,
+# not that anything is received. collector.invalid can never resolve.
+OTEL_EP=http://collector.invalid:4318
+TELEMETRY_VARS='^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_METRICS_EXPORTER|OTEL_LOGS_EXPORTER|OTEL_EXPORTER_OTLP_PROTOCOL|OTEL_LOG_USER_PROMPTS)='
+check "without OTEL_EXPORTER_OTLP_ENDPOINT no telemetry var is set in any shell, tmux or after dev-init" in_image '
+  dev-init >/dev/null 2>&1
+  tmux new-session -d -s t "env > /tmp/tmux.env"
+  for _ in $(seq 50); do [ -s /tmp/tmux.env ] && break; sleep 0.1; done
+  { env; bash -c env; bash -lc env; bash -ic env 2>/dev/null; sh -lc env; cat /tmp/tmux.env; } > /tmp/all.env
+  if grep -E "'"$TELEMETRY_VARS"'" /tmp/all.env; then exit 1; fi
+  [ -s /tmp/tmux.env ] && ! test -e /etc/codex/config.toml'
+# Each probe starts from a clean environment (env -i) holding only the
+# endpoint, so it proves that one hook - profile.d, bash.bashrc, BASH_ENV,
+# zshenv or a tmux window's login shell - sets the variables by itself.
+check "with the endpoint set, each shell hook (login, interactive, non-interactive bash, sh -l, zsh, tmux) turns Claude Code export on" in_image '
+  clean() { env -i HOME="$HOME" PATH="$PATH" TERM=xterm OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EXPORTER_OTLP_ENDPOINT" "$@"; }
+  clean tmux new-session -d -s t
+  clean tmux send-keys -t t "env > /tmp/tmux.env" Enter
+  for _ in $(seq 50); do [ -s /tmp/tmux.env ] && break; sleep 0.1; done
+  probes="bash-login bash-interactive bash-env sh-login tmux"
+  command -v zsh >/dev/null && probes="$probes zsh"
+  for probe in $probes; do
+    case $probe in
+      bash-login) out=$(clean bash -lc env) ;;
+      bash-interactive) out=$(clean bash -ic env 2>/dev/null) ;;
+      bash-env) out=$(clean BASH_ENV="$BASH_ENV" bash -c env) ;;
+      sh-login) out=$(clean sh -lc env) ;;
+      zsh) out=$(clean zsh -c env) ;;
+      tmux) out=$(cat /tmp/tmux.env) ;;
+    esac
+    { echo "$out" | grep -qx CLAUDE_CODE_ENABLE_TELEMETRY=1 &&
+      echo "$out" | grep -qx OTEL_METRICS_EXPORTER=otlp &&
+      echo "$out" | grep -qx OTEL_LOGS_EXPORTER=otlp &&
+      echo "$out" | grep -qx OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf &&
+      ! echo "$out" | grep -q "^OTEL_LOG_USER_PROMPTS="; } || { echo "$probe:"; echo "$out" | grep -E "^(CLAUDE|OTEL)"; exit 1; }
+  done' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "runtime-set values win over the image defaults" in_image '
+  [ "$(bash -lc "echo \$OTEL_EXPORTER_OTLP_PROTOCOL \$CLAUDE_CODE_ENABLE_TELEMETRY")" = "grpc 0" ]' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4317 -e OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+  -e CLAUDE_CODE_ENABLE_TELEMETRY=0
+check "codex reads the system config layer at /etc/codex/config.toml (negative control)" in_image '
+  echo "this is not toml [" > /etc/codex/config.toml
+  codex login status 2>&1 | grep -q "Error loading configuration"'
+check "dev-init writes a codex [otel] config that codex parses, with env= from the resource attributes and prompts off" in_image '
+  set -e
+  dev-init >/dev/null 2>&1; dev-init >/dev/null 2>&1
+  cat /etc/codex/config.toml
+  grep -qx "\[otel\]" /etc/codex/config.toml
+  grep -qx "environment = \"test\"" /etc/codex/config.toml
+  grep -qx "log_user_prompt = false" /etc/codex/config.toml
+  grep -qF "exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/logs\", protocol = \"binary\" } }" /etc/codex/config.toml
+  grep -qF "metrics_exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/metrics\", protocol = \"binary\" } }" /etc/codex/config.toml
+  ! grep -q otel "$CODEX_HOME/config.toml"
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP" -e OTEL_RESOURCE_ATTRIBUTES=host=ci,repo=dev-system,env=test
+check "dev-init writes an otlp-grpc codex config for OTEL_EXPORTER_OTLP_PROTOCOL=grpc" in_image '
+  dev-init >/dev/null 2>&1
+  grep -qF "exporter = { otlp-grpc = { endpoint = \"http://collector.invalid:4317\" } }" /etc/codex/config.toml &&
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4317 -e OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+check "dev-init removes its codex config once the endpoint is gone, and never touches a foreign one" in_image '
+  set -e
+  dev-init >/dev/null 2>&1
+  test -f /etc/codex/config.toml
+  env -u OTEL_EXPORTER_OTLP_ENDPOINT dev-init >/dev/null 2>&1
+  ! test -e /etc/codex/config.toml
+  printf "model = \"x\"\n" > /etc/codex/config.toml
+  dev-init >/dev/null 2>&1; env -u OTEL_EXPORTER_OTLP_ENDPOINT dev-init >/dev/null 2>&1
+  [ "$(cat /etc/codex/config.toml)" = "model = \"x\"" ]' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "dev-init steps aside (and removes its file) when the user's own config.toml has an [otel] table" in_image '
+  set -e
+  dev-init >/dev/null 2>&1
+  test -f /etc/codex/config.toml
+  printf "[otel]\nexporter = { otlp-grpc = { endpoint = \"http://mine:4317\" } }\n" >> "$CODEX_HOME/config.toml"
+  dev-init 2>&1 | grep -q "configures \[otel\] itself"
+  ! test -e /etc/codex/config.toml
+  grep -q "http://mine:4317" "$CODEX_HOME/config.toml"
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "dev-doctor reports telemetry as INFO only: off without an endpoint, unreachable collector never FAILs" bash -c "
+  off=\$(docker run --rm '$IMAGE' dev-doctor --warn-only 2>&1)
+  on=\$(docker run --rm -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:9 '$IMAGE' bash -c 'dev-init >/dev/null 2>&1; dev-doctor --warn-only' 2>&1)
+  echo \"\$off\"; echo \"\$on\"
+  echo \"\$off\" | grep -q 'INFO telemetry: off' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: on - endpoint http://127.0.0.1:9' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: claude exports metrics (otlp) and events (otlp); prompt text logging off' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: codex exports via /etc/codex/config.toml' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: collector 127.0.0.1:9 is NOT reachable' &&
+  ! echo \"\$off\$on\" | grep -q 'FAIL.*telemetry'"
 
 echo
 echo "$PASSES passed, $FAILURES failed"

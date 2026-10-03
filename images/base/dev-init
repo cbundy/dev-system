@@ -19,6 +19,15 @@ log() {
 
 PERSIST_DIRS="${CLAUDE_CONFIG_DIR:-/persist/claude} ${CODEX_HOME:-/persist/codex} ${GH_CONFIG_DIR:-/persist/gh} ${NM_HOME:-/persist/no-mistakes}"
 CALLUM_TOOLS=/usr/local/share/callum-tools
+OTEL_SNIPPET=/etc/profile.d/dev-system-otel.sh
+CODEX_SYSTEM_CONFIG=/etc/codex/config.toml
+CODEX_OTEL_MARKER='# Managed by dev-init: codex OTel export (cbundy/dev-system#68). Rewritten on every start; do not edit.'
+
+# The telemetry defaults live in one place, the profile snippet. BASH_ENV has
+# normally sourced it already; sourcing it again is a no-op, and makes the
+# daemon and dev-doctor started below see the same values when it has not.
+# shellcheck source=SCRIPTDIR/otel-env.sh
+[ -r "$OTEL_SNIPPET" ] && . "$OTEL_SNIPPET"
 
 # 1. Every persistence directory exists and is writable. A missing directory
 #    under a writable mount (one volume for all of /persist) is created; an
@@ -83,7 +92,102 @@ seed_codex_config() {
   rm -f "$tmp"
 }
 
-# 4. The no-mistakes codex model pin, with the callum-tools `codexModel`
+# 4. codex OTel export, under the same switch as Claude Code: codex reads its
+#    exporters only from config.toml (no OTEL_* enable variables), so dev-init
+#    writes codex's system-level config, /etc/codex/config.toml, a layer that
+#    ranks below the user's $CODEX_HOME/config.toml. The user's file is never
+#    touched, and a user [otel] table there makes dev-init step aside. The
+#    system file lives in the container filesystem, not /persist, so it never
+#    outlives the runtime that supplied the endpoint. Only a file carrying
+#    dev-init's marker is ever rewritten or removed; a consumer image's own
+#    /etc/codex/config.toml is left alone.
+configure_codex_otel() {
+  local cfg="$CODEX_SYSTEM_CONFIG" ep="${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  local proto="${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}"
+  local user_cfg="${CODEX_HOME:-/persist/codex}/config.toml"
+  local logs_ep metrics_ep kind env_name prompts=false tmp
+  local ours=false
+  [ -f "$cfg" ] && [ "$(head -n 1 "$cfg" 2>/dev/null)" = "$CODEX_OTEL_MARKER" ] && ours=true
+
+  if [ -z "$ep" ]; then
+    if [ "$ours" = true ]; then
+      rm -f "$cfg" && log "telemetry off (no OTEL_EXPORTER_OTLP_ENDPOINT): removed $cfg"
+    fi
+    return 0
+  fi
+  # codex merges layers table by table, so a user exporter of another kind
+  # (otlp-grpc over our otlp-http) would merge into an invalid two-variant
+  # table. A user who configures [otel] themselves gets exactly their config.
+  if [ -f "$user_cfg" ] && grep -qE '^[[:space:]]*(\[[[:space:]]*otel[[:space:]]*[].]|otel[[:space:]]*[.=])' "$user_cfg"; then
+    log "NOTE: $user_cfg configures [otel] itself - dev-init leaves codex OTel export to it"
+    [ "$ours" = true ] && rm -f "$cfg"
+    return 0
+  fi
+  if [ -e "$cfg" ] && [ "$ours" = false ]; then
+    log "NOTE: $cfg was not written by dev-init - left as is, so codex OTel export is not configured by dev-init"
+    return 0
+  fi
+  if [ ! -w "$(dirname "$cfg")" ]; then
+    log "WARNING: $(dirname "$cfg") is not writable by $(id -un) - codex will not export telemetry"
+    return 0
+  fi
+
+  # codex's OTLP/HTTP endpoints are per signal (it does not append /v1/...),
+  # and an endpoint it is given overrides the OTEL_* environment, so the
+  # per-signal variables are honoured here the way the OTel spec defines them.
+  ep="${ep%/}"
+  case "$proto" in
+    grpc)
+      kind=otlp-grpc
+      logs_ep="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-$ep}"
+      metrics_ep="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-$ep}"
+      ;;
+    http/protobuf | http/json)
+      kind=otlp-http
+      logs_ep="${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-$ep/v1/logs}"
+      metrics_ep="${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-$ep/v1/metrics}"
+      ;;
+    *)
+      log "WARNING: OTEL_EXPORTER_OTLP_PROTOCOL=$proto is not grpc, http/protobuf or http/json - codex will not export telemetry"
+      [ "$ours" = true ] && rm -f "$cfg"
+      return 0
+      ;;
+  esac
+  # codex sets its own `env` resource attribute from [otel].environment
+  # (default "dev"), overriding OTEL_RESOURCE_ATTRIBUTES, so pass env= through.
+  env_name=$(printf '%s\n' "${OTEL_RESOURCE_ATTRIBUTES:-}" | tr ',' '\n' | sed -n 's/^[[:space:]]*env=//p' | head -n 1)
+  [ "${OTEL_LOG_USER_PROMPTS:-}" = 1 ] && prompts=true
+
+  # Everything below goes into TOML basic strings: refuse anything that would
+  # need escaping rather than write a file codex cannot parse.
+  case "$logs_ep$metrics_ep$env_name" in
+    *[\"\\[:space:][:cntrl:]]*)
+      log "WARNING: the OTLP endpoint or env= resource attribute contains quotes, backslashes or whitespace - codex will not export telemetry"
+      [ "$ours" = true ] && rm -f "$cfg"
+      return 0
+      ;;
+  esac
+
+  tmp=$(mktemp "$cfg.XXXXXX") || return 0
+  {
+    echo "$CODEX_OTEL_MARKER"
+    echo '[otel]'
+    [ -n "$env_name" ] && echo "environment = \"$env_name\""
+    echo "log_user_prompt = $prompts"
+    if [ "$kind" = otlp-grpc ]; then
+      echo "exporter = { otlp-grpc = { endpoint = \"$logs_ep\" } }"
+      echo "metrics_exporter = { otlp-grpc = { endpoint = \"$metrics_ep\" } }"
+    else
+      local enc=binary
+      [ "$proto" = http/json ] && enc=json
+      echo "exporter = { otlp-http = { endpoint = \"$logs_ep\", protocol = \"$enc\" } }"
+      echo "metrics_exporter = { otlp-http = { endpoint = \"$metrics_ep\", protocol = \"$enc\" } }"
+    fi
+  } > "$tmp" && chmod 0644 "$tmp" && mv "$tmp" "$cfg" && log "telemetry on: codex exports to $ep ($proto) via $cfg"
+  rm -f "$tmp"
+}
+
+# 5. The no-mistakes codex model pin, with the callum-tools `codexModel`
 #    semantics: DEV_CODEX_MODEL overrides the feature's default, and an empty
 #    value skips the pin. An existing pin is never touched.
 seed_no_mistakes_model() {
@@ -98,7 +202,7 @@ seed_no_mistakes_model() {
     || log "WARNING: could not write the codex model pin to $nm_home/config.yaml"
 }
 
-# 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
+# 6. ~/.gitconfig is not persisted, so git's link to gh's credential helper
 #    is redone on every start.
 setup_git_credentials() {
   command -v gh >/dev/null 2>&1 || return 0
@@ -106,7 +210,7 @@ setup_git_credentials() {
   gh auth setup-git >/dev/null 2>&1 || log "WARNING: gh auth setup-git failed - git may not authenticate to GitHub over HTTPS"
 }
 
-# 6. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
+# 7. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
 #    the daemon is a process and is gone after every restart, so it is started
 #    whenever the workspace opts in. Then the callum-tools recovery re-registers
 #    a repo the daemon has lost (e.g. a fresh volume).
@@ -130,10 +234,11 @@ recover_no_mistakes() {
 check_persist_dirs
 seed_claude_config
 seed_codex_config
+configure_codex_otel
 seed_no_mistakes_model
 setup_git_credentials
 recover_no_mistakes
 
-# 7. Report anything still broken, without failing the start.
+# 8. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true
 exit 0
