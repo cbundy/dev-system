@@ -111,6 +111,9 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   NM_HOME=/persist/no-mistakes \
   NO_MISTAKES_HOME=/persist/no-mistakes
 
+# devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
+# user is not UID 1000, the devcontainer CLI would otherwise renumber node to
+# the host UID, and node could no longer write the 1000-owned /persist volumes.
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
 ARG CREATED=unknown
@@ -121,4 +124,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.title="dev-system base" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"

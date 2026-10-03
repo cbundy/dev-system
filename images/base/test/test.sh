@@ -220,6 +220,7 @@ else
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
       | \$m.remoteUser == \"node\" and \$m.postStartCommand == \"dev-init\"
+      and \$m.updateRemoteUserUID == false
       and ([\$m.mounts[] | \"\(.source)=\(.target)\"] | sort) == [
         \"dev-system-claude=/persist/claude\", \"dev-system-codex=/persist/codex\",
         \"dev-system-gh=/persist/gh\", \"dev-system-no-mistakes=/persist/no-mistakes\"]'"
@@ -248,9 +249,11 @@ EOF
       done"
     # DEVCONTAINER may be a multi-word command (npx ...), so it is split on purpose.
     # shellcheck disable=SC2086
-    check "dev-init ran as node at post-start (codex sandbox default seeded)" \
+    # node must stay UID 1000 even when the host user is not (CI runners are
+    # 1001), or the 1000-owned /persist volumes are not writable
+    check "dev-init ran as node (UID 1000) at post-start (codex sandbox default seeded)" \
       $DEVCONTAINER exec --workspace-folder "$WORKDIR" bash -c '
-        [ "$(id -un)" = node ] && grep -q "^sandbox_mode" /persist/codex/config.toml'
+        [ "$(id -un)" = node ] && [ "$(id -u)" = 1000 ] && grep -q "^sandbox_mode" /persist/codex/config.toml'
     # the devcontainer CLI derives a vsc-*-uid image per workspace; drop it too
     derived=$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)
     docker rm -f "$cid" >/dev/null 2>&1 || true

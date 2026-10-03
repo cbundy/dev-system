@@ -176,8 +176,8 @@ On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 }
 ```
 
-The image's metadata label supplies `remoteUser: node`, `containerEnv` with the `/persist`
-variables, `postStartCommand: dev-init` and these mounts, which the devcontainer CLI and VS Code merge into your config:
+The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
+`containerEnv` with the `/persist` variables, `postStartCommand: dev-init` and these mounts, which the devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target |
 |---|---|
@@ -185,6 +185,11 @@ variables, `postStartCommand: dev-init` and these mounts, which the devcontainer
 | `dev-system-codex` | `/persist/codex` |
 | `dev-system-gh` | `/persist/gh` |
 | `dev-system-no-mistakes` | `/persist/no-mistakes` |
+
+`updateRemoteUserUID: false` keeps `node` at UID 1000 even on a Linux host whose user has
+another UID. Otherwise the devcontainer CLI renumbers `node` to the host UID and it can no
+longer write the 1000-owned volumes. On such a host, files `node` creates in a bind-mounted
+workspace are owned by UID 1000 on the host.
 
 The volumes are shared by every repo on the same Docker host, so you log in once per
 machine. To isolate a repo, list a mount with the same `target` in its `devcontainer.json`;
