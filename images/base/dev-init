@@ -4,7 +4,8 @@
 #
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
-# re-points git at gh's credentials and recovers no-mistakes runtime state.
+# re-points git at gh's credentials, recovers no-mistakes runtime state and
+# checks the optional /shared mount.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
 #
@@ -127,13 +128,24 @@ recover_no_mistakes() {
   ( cd "$top" && "$CALLUM_TOOLS/recover-no-mistakes.sh" ) || true
 }
 
+# 7. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
+#    is left alone. A mount node cannot write gets a warning naming the fix.
+check_shared_dir() {
+  local dir="${DEV_SHARED_DIR:-/shared}"
+  mountpoint -q "$dir" 2>/dev/null || return 0
+  [ -w "$dir" ] && return 0
+  log "WARNING: $dir is mounted but not writable by $(id -un) ($(id -u):$(id -g)) - files cannot be shared through it."
+  log "  Fix: squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)."
+}
+
 check_persist_dirs
 seed_claude_config
 seed_codex_config
 seed_no_mistakes_model
 setup_git_credentials
 recover_no_mistakes
+check_shared_dir
 
-# 7. Report anything still broken, without failing the start.
+# 8. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true
 exit 0
