@@ -188,6 +188,24 @@ check "dev-doctor --warn-only exits 0 with the same failures" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "FAIL "'
 
+check "dev-doctor fails (not 'registered') when no-mistakes is broken in a gated repo" bash -c "
+  vol=\$(docker volume create --label '$RUN_ID')
+  docker run --rm --user root -v \"\$vol:/persist/no-mistakes\" '$IMAGE' \
+    bash -c 'touch /persist/no-mistakes/.root-owned && chown -R root:root /persist/no-mistakes'
+  out=\$(docker run --rm -v \"\$vol:/persist/no-mistakes\" '$IMAGE' bash -c '
+    git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r && dev-doctor' 2>&1); rc=\$?
+  echo \"\$out\"
+  [ \$rc -ne 0 ] && echo \"\$out\" | grep -q 'FAIL no-mistakes: /tmp/r is not registered or no-mistakes is broken' &&
+  ! echo \"\$out\" | grep -q 'is registered'"
+check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash -c "
+  out=\$(docker run --rm --user root '$IMAGE' bash -c '
+    git init -q /ws && touch /ws/.no-mistakes.yaml
+    su node -c \"cd /ws && dev-init; dev-doctor\"' 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -q 'dev-init: WARNING: git cannot read the repo at /ws' &&
+  echo \"\$out\" | grep -q 'FAIL git cannot read the repo at /ws' &&
+  echo \"\$out\" | grep -q 'safe.directory /ws'"
+
 echo "== 7. devcontainer CLI smoke test"
 if [ "${SKIP_DEVCONTAINER:-}" = 1 ]; then
   echo "SKIP: devcontainer smoke test (SKIP_DEVCONTAINER=1)"

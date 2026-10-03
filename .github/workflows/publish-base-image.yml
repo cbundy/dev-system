@@ -4,8 +4,9 @@ name: Publish base image
 # on a deliberate release or the weekly refresh:
 #
 # - pull_request: build + test only, never pushes.
-# - workflow_dispatch: the deliberate release - build, test, push the tags for
-#   the version in images/base/VERSION (matching publish-features.yml).
+# - workflow_dispatch: the deliberate release, from main only - build, test,
+#   push the tags for the version in images/base/VERSION (matching
+#   publish-features.yml).
 # - schedule (weekly): rebuild with fresh OS packages and the latest tools and
 #   re-push the current VERSION's tags. Tags are mutable by design (see
 #   images/base/README.md). Only a version that has already been released by
@@ -65,21 +66,45 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # Before the push decision, so the schedule's "already released?" check
+      # also works while the package is still private.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Decide whether to push
         id: push
         env:
           EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           case "$EVENT" in
-            workflow_dispatch) push=true ;;
+            workflow_dispatch)
+              # The tags are mutable, so a release from an unreviewed branch
+              # would overwrite what every consumer pulls.
+              if [ "$REF" != refs/heads/main ]; then
+                echo "::error::Publish only from main (this run is on $REF)."
+                exit 1
+              fi
+              push=true
+              ;;
             schedule)
               # Refresh only a version that was already published deliberately.
-              if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+              # Anything other than "not found" is an error, so a broken
+              # refresh fails the run instead of silently skipping a week.
+              if out=$(docker manifest inspect "$IMAGE:$VERSION" 2>&1); then
                 push=true
-              else
-                echo "$IMAGE:$VERSION is not published yet - run this workflow by hand to release it." >> "$GITHUB_STEP_SUMMARY"
+              elif printf '%s\n' "$out" | grep -qiE 'manifest unknown|not found'; then
+                echo "::warning::$IMAGE:$VERSION is not published yet - run this workflow by hand on main to release it."
                 push=false
+              else
+                echo "::error::Could not check $IMAGE:$VERSION: $out"
+                exit 1
               fi
               ;;
             *) push=false ;;
@@ -89,7 +114,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build image for testing
+      # Built once with the final tags and loaded into the local daemon: the
+      # tests run against this image and the push step pushes this same image,
+      # so nothing untested is ever published.
+      - name: Build image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -97,7 +125,7 @@ jobs:
           platforms: linux/amd64
           pull: true
           load: true
-          tags: dev-system-base:test
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             CACHE_BUST=${{ steps.meta.outputs.cache_bust }}
             VERSION=${{ steps.meta.outputs.version }}
@@ -110,42 +138,22 @@ jobs:
         run: npm install -g @devcontainers/cli
 
       - name: Test image
-        run: images/base/test/test.sh dev-system-base:test
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: images/base/test/test.sh "$IMAGE:$VERSION"
 
-      - name: Log in to GHCR
-        if: steps.push.outputs.push == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Same inputs as the tested build, so every layer comes from the cache
-      # and the pushed image is the one the tests ran against.
       - name: Push image
-        if: steps.push.outputs.push == 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: images/base/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          build-args: |
-            CACHE_BUST=${{ steps.meta.outputs.cache_bust }}
-            VERSION=${{ steps.meta.outputs.version }}
-            REVISION=${{ github.sha }}
-            CREATED=${{ steps.meta.outputs.created }}
-          cache-from: type=gha,scope=base-image
-
-      - name: Summary
         if: steps.push.outputs.push == 'true'
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          while read -r tag; do
+            docker push "$tag"
+          done <<< "$TAGS"
           {
             echo "### Pushed"
             echo '```'
             echo "$TAGS"
+            echo "digest: $(docker image inspect -f '{{index .RepoDigests 0}}' "$(head -n 1 <<< "$TAGS")")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

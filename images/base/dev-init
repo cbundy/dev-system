@@ -114,7 +114,13 @@ recover_no_mistakes() {
   local ws="${DEV_WORKSPACE:-$PWD}" top
   command -v no-mistakes >/dev/null 2>&1 || return 0
   [ -d "$ws" ] || return 0
-  top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null) || return 0
+  if ! top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null); then
+    if [ -e "$ws/.git" ]; then
+      log "WARNING: git cannot read the repo at $ws (owned by $(stat -c %U "$ws" 2>/dev/null), not $(id -un)) - no-mistakes recovery skipped."
+      log "  Fix: chown -R 1000:1000 the checkout, or: git config --global --add safe.directory $ws"
+    fi
+    return 0
+  fi
   [ -f "$top/.no-mistakes.yaml" ] || return 0
   [ -w "${NM_HOME:-/persist/no-mistakes}" ] || return 0
   ( cd "$top" && no-mistakes daemon start >/dev/null 2>&1 ) || true

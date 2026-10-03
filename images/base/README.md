@@ -113,7 +113,8 @@ because of it.
 6. If `$DEV_WORKSPACE` (default: the current directory) is in a git repo with
    `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone after every
    restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register the repo if
-   needed.
+   needed. If git refuses the checkout because another user owns it ("dubious
+   ownership"), it warns with the fix instead of skipping silently.
 7. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
@@ -125,7 +126,9 @@ on every failure:
 - Claude is logged in (`claude auth status`);
 - codex is logged in (`codex login status`);
 - gh is logged in (`gh auth status`);
-- no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered;
+- no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
+  working (any `no-mistakes status` error fails the check);
+- git can read the workspace repo (not blocked by "dubious ownership");
 - treehouse is on `PATH`.
 
 It exits 1 if any check fails. `dev-doctor --warn-only` prints the same report and always
@@ -173,8 +176,8 @@ On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 }
 ```
 
-The image's metadata label supplies `remoteUser: node`, `postStartCommand: dev-init` and
-these mounts, which the devcontainer CLI and VS Code merge into your config:
+The image's metadata label supplies `remoteUser: node`, `containerEnv` with the `/persist`
+variables, `postStartCommand: dev-init` and these mounts, which the devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target |
 |---|---|
@@ -197,8 +200,11 @@ Each publish pushes `1`, `1.0`, `1.0.0`, a dated `1.0.0-YYYYMMDD` and `sha-<shor
 
 **Tags are mutable.** A weekly scheduled rebuild re-pushes the current version's tags with
 fresh OS packages and the latest tools, so `base:1` today is not byte-identical to `base:1`
-last week. Pin by digest (`base@sha256:...`) or by a dated tag if you need
-reproducibility. The same note is in the image's `org.opencontainers.image.description`
+last week. The dated tag names the day an image was built, and `sha-` names the commit it
+was built from; both help find a rollback point, but a rebuild on the same day (dated) or
+from the same commit (`sha-`) overwrites them too. **Pin by digest**
+(`base@sha256:...`) if you need reproducibility; the publish run's summary lists the
+digest it pushed. The same note is in the image's `org.opencontainers.image.description`
 label.
 
 `linux/amd64` only for now; arm64 is tracked in cbundy/dev-system#61.
@@ -223,11 +229,13 @@ images/base/test/test.sh dev-system-base:local
 
 - **Pull requests** touching `images/base/`, `features/src/callum-tools/` or the workflow
   build and test the image. Nothing is pushed.
-- **Manual dispatch** (Actions tab, or `gh workflow run publish-base-image.yml`) is the
-  deliberate release: build, test, push the tags for the current `VERSION`.
+- **Manual dispatch** on `main` (Actions tab, or `gh workflow run publish-base-image.yml`)
+  is the deliberate release: build, test, push the tags for the current `VERSION`. A
+  dispatch from any other branch fails, since it would overwrite the mutable tags.
 - **Weekly schedule** rebuilds and re-pushes the current `VERSION`'s tags, but only once
   that version has been released by hand, so merging a `VERSION` bump never publishes it
-  by itself.
+  by itself. A failed check fails the run rather than skipping the week.
+- The image is built once and tested; the push sends that same tested image.
 
 **First publish:** new GHCR packages are private. After the first dispatch, open the
 `dev-system/base` package settings on GitHub and change its visibility to public, as for

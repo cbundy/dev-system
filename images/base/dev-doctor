@@ -77,16 +77,24 @@ if ! command -v no-mistakes >/dev/null 2>&1; then
 else
   ok "no-mistakes is installed"
   workspace="${DEV_WORKSPACE:-$PWD}"
-  top=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$top" ] && [ -f "$top/.no-mistakes.yaml" ]; then
-    case "$(cd "$top" && no-mistakes status 2>&1)" in
-      *"repo not initialized"*)
-        fail "no-mistakes: $top is not registered" "run: dev-init (or no-mistakes daemon start && no-mistakes init) in $top"
-        ;;
-      *)
+  if top=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null); then
+    if [ -f "$top/.no-mistakes.yaml" ]; then
+      # Registered means a clean exit AND the repo line; anything else (not
+      # initialized, unwritable NM_HOME, a broken database) is a failure.
+      if status=$(cd "$top" && no-mistakes status 2>&1) \
+        && ! printf '%s\n' "$status" | grep -q "repo not initialized" \
+        && printf '%s\n' "$status" | grep -qE '^[[:space:]]*repo:'; then
         ok "no-mistakes: $top is registered"
-        ;;
-    esac
+      else
+        fail "no-mistakes: $top is not registered or no-mistakes is broken ($(printf '%s\n' "$status" | head -n 1))" \
+          "run: dev-init (or no-mistakes daemon start && no-mistakes init) in $top"
+      fi
+    fi
+  elif [ -e "$workspace/.git" ]; then
+    # git refuses repos owned by another user ("dubious ownership"), which
+    # hides the workspace from every git-based tool, no-mistakes included.
+    fail "git cannot read the repo at $workspace (owned by $(stat -c %U "$workspace" 2>/dev/null), not $(id -un))" \
+      "chown -R 1000:1000 the checkout, or run: git config --global --add safe.directory $workspace"
   fi
 fi
 

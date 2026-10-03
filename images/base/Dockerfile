@@ -43,24 +43,6 @@ RUN install -d -m 0755 /persist \
   && install -d -o 1000 -g 1000 -m 0700 \
     /persist/claude /persist/codex /persist/gh /persist/no-mistakes
 
-# Shared scripts from the callum-tools feature, staged at the same path the
-# feature uses (the callum-flow skills call the watchers there). The codex
-# model default is read from the feature's own option default, so the feature
-# and the image cannot drift apart.
-COPY --chmod=0755 \
-  features/src/callum-tools/recover-no-mistakes.sh \
-  features/src/callum-tools/pin-codex-model.sh \
-  features/src/callum-tools/pipeline-watch.sh \
-  features/src/callum-tools/queue-watch.sh \
-  /usr/local/share/callum-tools/
-COPY features/src/callum-tools/devcontainer-feature.json /tmp/callum-tools-feature.json
-RUN install -d -m 0755 /usr/local/share/dev-system \
-  && jq -er '.options.codexModel.default' /tmp/callum-tools-feature.json \
-    > /usr/local/share/dev-system/codex-model.default \
-  && rm /tmp/callum-tools-feature.json
-
-COPY --chmod=0755 images/base/dev-init images/base/dev-doctor /usr/local/bin/
-
 # Agent toolchain, installed as node so every tool can update itself without
 # root. Binaries live under /home/node and /usr/local/share/npm-global, never
 # under /persist, so pulling a new image always brings fresh binaries.
@@ -96,6 +78,30 @@ RUN curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/do
 RUN curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh \
   && treehouse --version
 
+# Scripts come after the tool installs, so editing one (or bumping the
+# feature version) does not re-download every tool on the next build.
+USER root
+
+# Shared scripts from the callum-tools feature, staged at the same path the
+# feature uses (the callum-flow skills call the watchers there). The codex
+# model default is read from the feature's own option default, so the feature
+# and the image cannot drift apart.
+COPY --chmod=0755 \
+  features/src/callum-tools/recover-no-mistakes.sh \
+  features/src/callum-tools/pin-codex-model.sh \
+  features/src/callum-tools/pipeline-watch.sh \
+  features/src/callum-tools/queue-watch.sh \
+  /usr/local/share/callum-tools/
+COPY features/src/callum-tools/devcontainer-feature.json /tmp/callum-tools-feature.json
+RUN install -d -m 0755 /usr/local/share/dev-system \
+  && jq -er '.options.codexModel.default' /tmp/callum-tools-feature.json \
+    > /usr/local/share/dev-system/codex-model.default \
+  && rm /tmp/callum-tools-feature.json
+
+COPY --chmod=0755 images/base/dev-init images/base/dev-doctor /usr/local/bin/
+
+USER node
+
 # Point each tool at its /persist directory. Set after the installs so no
 # installer writes into /persist at build time - the directories ship empty.
 # NO_MISTAKES_HOME is the name the callum-tools pipeline watcher reads.
@@ -113,6 +119,6 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.version="${VERSION}" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.title="dev-system base" \
-  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest or by a dated tag if you need reproducibility." \
+  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\"},\"postStartCommand\":\"dev-init\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"}]}]"
