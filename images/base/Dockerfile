@@ -140,6 +140,24 @@ COPY --chmod=0755 \
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 COPY --chmod=0644 images/base/dev-login-page.js /usr/local/share/dev-system/
 
+# Opt-in telemetry (cbundy/dev-system#68). The snippet exports the Claude Code
+# OTel switches only when the runtime sets OTEL_EXPORTER_OTLP_ENDPOINT, so the
+# image itself knows no endpoint. dev-entrypoint and dev-remote-control source
+# it explicitly (the default path, down to Claude's tmux session);
+# /etc/profile.d covers login shells (sh, bash, tmux windows, the no-mistakes
+# daemon's env probe); bash.bashrc covers interactive non-login bash; BASH_ENV
+# (below) covers non-interactive bash; zshenv covers every zsh. /etc/codex is node-owned so dev-init can write
+# codex's system-level config.toml (a layer below the user's, so a user's
+# own $CODEX_HOME/config.toml always wins) without root at start-up.
+COPY --chmod=0644 images/base/otel-env.sh /etc/profile.d/dev-system-otel.sh
+RUN printf '\n# dev-system opt-in telemetry (cbundy/dev-system#68)\n. /etc/profile.d/dev-system-otel.sh\n' \
+    >> /etc/bash.bashrc \
+  && if [ -d /etc/zsh ]; then \
+    printf '\n# dev-system opt-in telemetry (cbundy/dev-system#68)\n. /etc/profile.d/dev-system-otel.sh\n' \
+      >> /etc/zsh/zshenv; \
+  fi \
+  && install -d -o 1000 -g 1000 -m 0755 /etc/codex
+
 USER node
 
 # Point each tool at its /persist directory. Set after the installs so no
@@ -149,6 +167,8 @@ USER node
 # pins its version, and these containers report nothing they were not asked to.
 # DEV_SHARED_DIR names the shared files mount point, so scripts and agents
 # never hard-code /shared.
+# BASH_ENV makes non-interactive bash (scripts, `bash -c`, Coder startup
+# scripts) source the telemetry snippet too; it is a no-op without an endpoint.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
@@ -157,7 +177,8 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   AGENTSVIEW_DATA_DIR=/persist/agentsview \
   AGENTSVIEW_TELEMETRY_ENABLED=0 \
   AGENTSVIEW_DISABLE_UPDATE_CHECK=1 \
-  DEV_SHARED_DIR=/shared
+  DEV_SHARED_DIR=/shared \
+  BASH_ENV=/etc/profile.d/dev-system-otel.sh
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which

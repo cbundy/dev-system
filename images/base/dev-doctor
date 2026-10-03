@@ -11,6 +11,8 @@
 #   report but always exits 0. A WARN line (with its own hint) does not fail:
 #   it flags something that works now but will be lost, such as tool state
 #   with no volume behind it.
+#   An INFO line reports state that is neither right nor wrong, such as
+#   whether opt-in telemetry is on, and never fails.
 set -u
 
 WARN_ONLY=false
@@ -38,6 +40,10 @@ fail() {
   printf 'dev-doctor: FAIL %s\n' "$1"
   printf 'dev-doctor:        fix: %s\n' "$2"
   FAILURES=$((FAILURES + 1))
+}
+
+info() {
+  printf 'dev-doctor: INFO %s\n' "$1"
 }
 
 # A writable directory still loses its state with the container unless a
@@ -163,6 +169,54 @@ else
     fail "agentsview session push is not running" "run: dev-init (log: /tmp/dev-agentsview-push.log)"
   fi
 fi
+
+# Telemetry is opt-in (cbundy/dev-system#68), so this is informational only:
+# it reports the state as a `claude` started like this process would see it,
+# and never counts as a failure.
+check_telemetry() {
+  local ep="${OTEL_EXPORTER_OTLP_ENDPOINT:-}" hostport host port
+  if [ -z "$ep" ]; then
+    info "telemetry: off (OTEL_EXPORTER_OTLP_ENDPOINT is not set by the runtime)"
+    return 0
+  fi
+  info "telemetry: on - endpoint $ep, protocol ${OTEL_EXPORTER_OTLP_PROTOCOL:-unset}, resource attributes ${OTEL_RESOURCE_ATTRIBUTES:-none}"
+  if [ "${CLAUDE_CODE_ENABLE_TELEMETRY:-}" = 1 ] && [ -n "${OTEL_EXPORTER_OTLP_PROTOCOL:-}" ]; then
+    local prompts=off
+    [ "${OTEL_LOG_USER_PROMPTS:-}" = 1 ] && prompts=ON
+    info "telemetry: claude exports metrics (${OTEL_METRICS_EXPORTER:-none}) and events (${OTEL_LOGS_EXPORTER:-none}); prompt text logging $prompts"
+  else
+    info "telemetry: claude export is NOT enabled in this environment (is /etc/profile.d/dev-system-otel.sh sourced, or BASH_ENV overridden?)"
+  fi
+  local user_codex="${CODEX_HOME:-/persist/codex}/config.toml"
+  if [ -f /etc/codex/config.toml ] && grep -q '^\[otel\]' /etc/codex/config.toml; then
+    info "telemetry: codex exports via /etc/codex/config.toml"
+  elif [ -f "$user_codex" ] && grep -qE '^[[:space:]]*(\[[[:space:]]*otel[[:space:]]*[].]|otel[[:space:]]*[.=])' "$user_codex"; then
+    info "telemetry: codex OTel export is configured by $user_codex itself"
+  else
+    info "telemetry: codex export is not configured (run dev-init)"
+  fi
+
+  # Reachability: a plain TCP connect to the endpoint's host and port.
+  hostport="${ep#*://}"
+  hostport="${hostport%%/*}"
+  case "$hostport" in
+    \[*\]:*) host="${hostport%%]*}"; host="${host#[}"; port="${hostport##*]:}" ;;
+    \[*\]) host="${hostport#[}"; host="${host%]}"; port= ;;
+    *:*) host="${hostport%:*}"; port="${hostport##*:}" ;;
+    *) host="$hostport"; port= ;;
+  esac
+  if [ -z "$port" ]; then
+    case "$ep" in https://*) port=443 ;; *) port=80 ;; esac
+  fi
+  # shellcheck disable=SC2016 # expanded by the inner bash, from its arguments
+  if timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$port" 2>/dev/null; then
+    info "telemetry: collector $host:$port is reachable"
+  else
+    info "telemetry: collector $host:$port is NOT reachable - exports will be dropped until it is"
+  fi
+}
+
+check_telemetry
 
 if [ "$FAILURES" -gt 0 ]; then
   printf 'dev-doctor: %d check(s) failed\n' "$FAILURES"

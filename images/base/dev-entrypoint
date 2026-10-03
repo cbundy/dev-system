@@ -23,6 +23,14 @@ log() {
   echo "dev-entrypoint: $*" >&2
 }
 
+# Opt-in telemetry (cbundy/dev-system#68): the Claude Code OTel switches are
+# exported here explicitly, not left to BASH_ENV, so dev-init and the command
+# inherit them - dev-remote-control and every Claude it starts, or a bare
+# `docker run IMAGE claude` with no shell in between. A no-op without
+# OTEL_EXPORTER_OTLP_ENDPOINT.
+# shellcheck source=SCRIPTDIR/otel-env.sh
+[ -r /etc/profile.d/dev-system-otel.sh ] && . /etc/profile.d/dev-system-otel.sh
+
 workspace() {
   if [ -n "${DEV_WORKSPACE:-}" ] && [ -d "$DEV_WORKSPACE" ]; then
     echo "$DEV_WORKSPACE"

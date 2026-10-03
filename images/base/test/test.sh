@@ -4,7 +4,8 @@
 #
 # Container tests for the dev-system base image (cbundy/dev-system#59, #64 for
 # the entrypoint and Remote Control, #65 for the /shared mount point, #73
-# for per-repo /persist volumes and #74 for first-run logins).
+# for per-repo /persist volumes, #74 for first-run logins and #68 for opt-in
+# telemetry).
 #
 # Usage: images/base/test/test.sh <image>
 #
@@ -12,8 +13,9 @@
 # publish-base-image.yml. Sections 1-7 match the tests in #59, section 8 the
 # entrypoint tests in #64, section 9 the agentsview push in #69, section 10
 # the /shared tests in #65 (Docker volumes stand in for the NAS), section 11
-# the first-run logins in #74 (against stub CLIs). Test 7 needs
-# the devcontainer CLI (`devcontainer` on PATH, or set
+# the first-run logins in #74 (against stub CLIs) and section 12 the
+# telemetry tests in #68. Test 7 needs the devcontainer CLI (`devcontainer`
+# on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
 # credentials: the logged-in path runs against a stub `claude`.
@@ -902,6 +904,165 @@ check "DEV_NOTIFY_URL gets one POST naming the logins, with the sign-in links" b
   [ \"\$(docker exec '$c' grep -c . /tmp/notify.log)\" = 1 ] &&
   docker exec '$c' jq -e '.title == \"Log in to claude, codex (notify-test)\" and (.click | startswith(\"https://claude.com/cai/oauth/authorize\"))
     and (.body | contains(\"enter the code CDX1-ABCDE\"))' /tmp/notify.log"
+docker rm -f "$c" >/dev/null
+
+echo "== 12. opt-in telemetry"
+# The endpoint never needs to exist: these tests check what is switched on,
+# not that anything is received. collector.invalid can never resolve.
+OTEL_EP=http://collector.invalid:4318
+TELEMETRY_VARS='^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_METRICS_EXPORTER|OTEL_LOGS_EXPORTER|OTEL_EXPORTER_OTLP_PROTOCOL|OTEL_LOG_USER_PROMPTS)='
+check "without OTEL_EXPORTER_OTLP_ENDPOINT no telemetry var is set in any shell, tmux or after dev-init" in_image '
+  dev-init >/dev/null 2>&1
+  tmux new-session -d -s t "env > /tmp/tmux.env"
+  for _ in $(seq 50); do [ -s /tmp/tmux.env ] && break; sleep 0.1; done
+  { env; bash -c env; bash -lc env; bash -ic env 2>/dev/null; sh -lc env; cat /tmp/tmux.env; } > /tmp/all.env
+  if grep -E "'"$TELEMETRY_VARS"'" /tmp/all.env; then exit 1; fi
+  [ -s /tmp/tmux.env ] && ! test -e /etc/codex/config.toml'
+# Each probe starts from a clean environment (env -i) holding only the
+# endpoint, so it proves that one hook - profile.d, bash.bashrc, BASH_ENV,
+# zshenv or a tmux window's login shell - sets the variables by itself.
+check "with the endpoint set, each shell hook (login, interactive, non-interactive bash, sh -l, zsh, tmux) turns Claude Code export on" in_image '
+  clean() { env -i HOME="$HOME" PATH="$PATH" TERM=xterm OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EXPORTER_OTLP_ENDPOINT" "$@"; }
+  clean tmux new-session -d -s t
+  clean tmux send-keys -t t "env > /tmp/tmux.env" Enter
+  for _ in $(seq 50); do [ -s /tmp/tmux.env ] && break; sleep 0.1; done
+  probes="bash-login bash-interactive bash-env sh-login tmux"
+  command -v zsh >/dev/null && probes="$probes zsh"
+  for probe in $probes; do
+    case $probe in
+      bash-login) out=$(clean bash -lc env) ;;
+      bash-interactive) out=$(clean bash -ic env 2>/dev/null) ;;
+      bash-env) out=$(clean BASH_ENV="$BASH_ENV" bash -c env) ;;
+      sh-login) out=$(clean sh -lc env) ;;
+      zsh) out=$(clean zsh -c env) ;;
+      tmux) out=$(cat /tmp/tmux.env) ;;
+    esac
+    { echo "$out" | grep -qx CLAUDE_CODE_ENABLE_TELEMETRY=1 &&
+      echo "$out" | grep -qx OTEL_METRICS_EXPORTER=otlp &&
+      echo "$out" | grep -qx OTEL_LOGS_EXPORTER=otlp &&
+      echo "$out" | grep -qx OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf &&
+      ! echo "$out" | grep -q "^OTEL_LOG_USER_PROMPTS="; } || { echo "$probe:"; echo "$out" | grep -E "^(CLAUDE|OTEL)"; exit 1; }
+  done' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "runtime-set values win over the image defaults" in_image '
+  [ "$(bash -lc "echo \$OTEL_EXPORTER_OTLP_PROTOCOL \$CLAUDE_CODE_ENABLE_TELEMETRY")" = "grpc 0" ]' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4317 -e OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+  -e CLAUDE_CODE_ENABLE_TELEMETRY=0
+check "codex reads the system config layer at /etc/codex/config.toml (negative control)" in_image '
+  echo "this is not toml [" > /etc/codex/config.toml
+  codex login status 2>&1 | grep -q "Error loading configuration"'
+check "dev-init writes a codex [otel] config that codex parses, with env= from the resource attributes and prompts off" in_image '
+  set -e
+  dev-init >/dev/null 2>&1; dev-init >/dev/null 2>&1
+  cat /etc/codex/config.toml
+  grep -qx "\[otel\]" /etc/codex/config.toml
+  grep -qx "environment = \"test\"" /etc/codex/config.toml
+  grep -qx "log_user_prompt = false" /etc/codex/config.toml
+  grep -qF "exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/logs\", protocol = \"binary\" } }" /etc/codex/config.toml
+  grep -qF "metrics_exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/metrics\", protocol = \"binary\" } }" /etc/codex/config.toml
+  ! grep -q otel "$CODEX_HOME/config.toml"
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP" -e OTEL_RESOURCE_ATTRIBUTES=host=ci,repo=dev-system,env=test
+check "dev-init writes an otlp-grpc codex config for OTEL_EXPORTER_OTLP_PROTOCOL=grpc" in_image '
+  dev-init >/dev/null 2>&1
+  grep -qF "exporter = { otlp-grpc = { endpoint = \"http://collector.invalid:4317\" } }" /etc/codex/config.toml &&
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4317 -e OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+check "dev-init removes its codex config once the endpoint is gone, and never touches a foreign one" in_image '
+  set -e
+  dev-init >/dev/null 2>&1
+  test -f /etc/codex/config.toml
+  env -u OTEL_EXPORTER_OTLP_ENDPOINT dev-init >/dev/null 2>&1
+  ! test -e /etc/codex/config.toml
+  printf "model = \"x\"\n" > /etc/codex/config.toml
+  dev-init >/dev/null 2>&1; env -u OTEL_EXPORTER_OTLP_ENDPOINT dev-init >/dev/null 2>&1
+  [ "$(cat /etc/codex/config.toml)" = "model = \"x\"" ]' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "dev-init steps aside (and removes its file) when the user's own config.toml has an [otel] table" in_image '
+  set -e
+  dev-init >/dev/null 2>&1
+  test -f /etc/codex/config.toml
+  printf "[otel]\nexporter = { otlp-grpc = { endpoint = \"http://mine:4317\" } }\n" >> "$CODEX_HOME/config.toml"
+  dev-init 2>&1 | grep -q "configures \[otel\] itself"
+  ! test -e /etc/codex/config.toml
+  grep -q "http://mine:4317" "$CODEX_HOME/config.toml"
+  codex login status 2>&1 | grep -qx "Not logged in"' \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP"
+check "dev-doctor reports telemetry as INFO only: off without an endpoint, unreachable collector never FAILs" bash -c "
+  off=\$(docker run --rm '$IMAGE' dev-doctor --warn-only 2>&1)
+  on=\$(docker run --rm -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:9 '$IMAGE' bash -c 'dev-init >/dev/null 2>&1; dev-doctor --warn-only' 2>&1)
+  echo \"\$off\"; echo \"\$on\"
+  echo \"\$off\" | grep -q 'INFO telemetry: off' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: on - endpoint http://127.0.0.1:9' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: claude exports metrics (otlp) and events (otlp); prompt text logging off' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: codex exports via /etc/codex/config.toml' &&
+  echo \"\$on\" | grep -q 'INFO telemetry: collector 127.0.0.1:9 is NOT reachable' &&
+  ! echo \"\$off\$on\" | grep -q 'FAIL.*telemetry'"
+
+# The default runtime path: tini -> dev-entrypoint -> dev-init -> exec
+# dev-remote-control -> tmux -> claude. BASH_ENV is emptied, so only the
+# explicit sourcing in dev-entrypoint and dev-remote-control can switch export
+# on. A tmux server started first from an empty environment stands in for one
+# a `docker exec <ctr> tmux` started: its global environment has no telemetry
+# variables, which Claude's session would otherwise inherit. The stub claude
+# records its environment on every start, so a restart is checked too.
+ENV_STUB='#!/bin/bash
+[ "$1" = auth ] && { echo "{\"loggedIn\":true,\"authMethod\":\"claude.ai\"}"; exit 0; }
+n=$(find /tmp -maxdepth 1 -name "claude-env.*" | wc -l)
+env > /tmp/claude-env.tmp && mv /tmp/claude-env.tmp "/tmp/claude-env.$((n + 1))"
+until [ -e /tmp/claude-exit ]; do sleep 0.2; done
+rm -f /tmp/claude-exit
+exit 3'
+FOREIGN_TMUX='env -i HOME="$HOME" PATH=/usr/bin:/bin tmux new-session -d -s other sleep infinity'
+# has_telemetry <container> <env file>: the switches and the runtime's
+# resource attributes are all in that recorded environment
+has_telemetry() {
+  docker exec "$1" cat "$2" | grep -E '^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_)' || true
+  docker exec "$1" bash -c "grep -qx CLAUDE_CODE_ENABLE_TELEMETRY=1 '$2' &&
+    grep -qx OTEL_METRICS_EXPORTER=otlp '$2' && grep -qx OTEL_LOGS_EXPORTER=otlp '$2' &&
+    grep -qx OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf '$2' &&
+    grep -qx OTEL_EXPORTER_OTLP_ENDPOINT='$OTEL_EP' '$2' &&
+    grep -qx OTEL_RESOURCE_ATTRIBUTES=host=ci,repo=dev-system,env=test '$2' &&
+    ! grep -q ^OTEL_LOG_USER_PROMPTS= '$2'"
+}
+for mode in session server; do
+  c=$(run_bg -w /tmp -e BASH_ENV= -e STUB="$ENV_STUB" -e DEV_REMOTE_CONTROL_MODE="$mode" \
+    -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP" -e OTEL_RESOURCE_ATTRIBUTES=host=ci,repo=dev-system,env=test \
+    "$IMAGE" bash -c "$FOREIGN_TMUX && $WITH_STUB exec dev-remote-control")
+  check "$mode mode, endpoint set: the tmux server was started without the telemetry variables" bash -c "
+    for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-env.1 && break; sleep 1; done
+    ! docker exec '$c' tmux show-environment -g | grep -E '^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_)'"
+  check "$mode mode, endpoint set: Claude in tmux still gets the switches and resource attributes" \
+    has_telemetry "$c" /tmp/claude-env.1
+  if [ "$mode" = session ]; then
+    docker exec "$c" touch /tmp/claude-exit
+    wait_until 20 docker exec "$c" test -s /tmp/claude-env.2 >/dev/null 2>&1 || true
+    check "session mode: Claude restarted by the supervisor gets them again" \
+      has_telemetry "$c" /tmp/claude-env.2
+  fi
+  docker rm -f "$c" >/dev/null
+done
+c=$(run_bg -w /tmp -e STUB="$ENV_STUB" "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
+check "endpoint unset: Claude in tmux sees no telemetry variable at all" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-env.1 && break; sleep 1; done
+  docker exec '$c' test -s /tmp/claude-env.1 &&
+  ! docker exec '$c' grep -E '^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_)' /tmp/claude-env.1"
+docker rm -f "$c" >/dev/null
+check "a command the entrypoint execs with no shell in between (docker run IMAGE env) gets the switches" bash -c "
+  out=\$(docker run --rm -e BASH_ENV= -e OTEL_EXPORTER_OTLP_ENDPOINT='$OTEL_EP' '$IMAGE' env 2>/dev/null)
+  echo \"\$out\" | grep -E '^(CLAUDE|OTEL)'
+  echo \"\$out\" | grep -qx CLAUDE_CODE_ENABLE_TELEMETRY=1 &&
+  echo \"\$out\" | grep -qx OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf"
+check "without the endpoint, that command sees no telemetry variable" bash -c "
+  ! docker run --rm '$IMAGE' env 2>/dev/null | grep -E '^(CLAUDE_CODE_ENABLE_TELEMETRY|OTEL_)'"
+# The desktop path: no entrypoint, the image metadata's postStartCommand run
+# by sh, and the supervisor started in the background by --post-start.
+c=$(run_bg --entrypoint "" -w /tmp -e BASH_ENV= -e STUB="$ENV_STUB" -e DEV_REMOTE_CONTROL=1 \
+  -e OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_EP" -e OTEL_RESOURCE_ATTRIBUTES=host=ci,repo=dev-system,env=test \
+  "$IMAGE" sh -c "$WITH_STUB; export PATH; dev-init >/dev/null 2>&1 && dev-remote-control --post-start && exec sleep infinity")
+wait_until 20 docker exec "$c" test -s /tmp/claude-env.1 >/dev/null 2>&1 || true
+check "desktop postStartCommand path: Claude started by --post-start gets the switches" \
+  has_telemetry "$c" /tmp/claude-env.1
 docker rm -f "$c" >/dev/null
 
 echo

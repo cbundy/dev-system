@@ -48,6 +48,10 @@
 #                            claude,codex,gh; empty: none), see dev-login
 #   DEV_WORKSPACE            Claude's working directory (default: the start
 #                            directory unless it is /, else $HOME)
+#   OTEL_EXPORTER_OTLP_ENDPOINT
+#                            turns on Claude's OTel export (cbundy/dev-system#68);
+#                            all OTEL_* variables are passed into Claude's
+#                            tmux session
 set -u
 
 SESSION=claude
@@ -62,6 +66,27 @@ STABLE_AFTER=600 # a Claude that ran this long resets the backoff
 
 log() {
   echo "dev-remote-control: $*" >&2
+}
+
+# Opt-in telemetry (cbundy/dev-system#68). dev-entrypoint has normally
+# exported the switches already; sourcing again is a no-op there, and covers
+# the desktop hook and a shell that bypassed the snippet.
+# shellcheck source=SCRIPTDIR/otel-env.sh
+[ -r /etc/profile.d/dev-system-otel.sh ] && . /etc/profile.d/dev-system-otel.sh
+
+# The telemetry variables, as `tmux new-session -e` arguments. A tmux session
+# starts from the tmux server's global environment, captured when the server
+# started - possibly by a plain `docker exec <ctr> tmux` that never sourced
+# the snippet - not from this process. So they are handed to Claude's session
+# explicitly, on every (re)start. Empty without telemetry.
+telemetry_env_args() {
+  local v
+  TMUX_ENV=()
+  for v in $(compgen -e); do
+    case "$v" in
+      OTEL_* | CLAUDE_CODE_ENABLE_TELEMETRY) TMUX_ENV+=(-e "$v=${!v}") ;;
+    esac
+  done
 }
 
 workspace() {
@@ -214,6 +239,7 @@ supervise() {
   local status_file=/tmp/dev-remote-control.status
   local -a args
   trap on_signal TERM INT HUP
+  telemetry_env_args
 
   # A session left over from an earlier supervisor that was killed outright
   # is replaced, so exactly one Claude runs.
@@ -259,7 +285,7 @@ supervise() {
     started=$(date +%s)
     # The pane's shell records Claude's exit status for the log line below.
     # shellcheck disable=SC2016
-    if tmux new-session -d -s "$SESSION" -c "$ws" \
+    if tmux new-session -d -s "$SESSION" -c "$ws" "${TMUX_ENV[@]}" \
       bash -c 'f=$1; shift; claude "$@"; echo $? > "$f"' bash "$status_file" "${args[@]}" 9>&-; then
       log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
       while tmux has-session -t "$SESSION" 2>/dev/null; do
