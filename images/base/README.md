@@ -66,6 +66,10 @@ environment variable set in the image.
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 
+no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
+`no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
+`/persist/no-mistakes/logs`, because the callum-flow skills read run logs at that path.
+
 The same list is published as the image label
 `dev.cbundy.persist=/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes`, so
 runtimes and templates can read it.
@@ -177,7 +181,8 @@ On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 ```
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
-`containerEnv` with the `/persist` variables, `postStartCommand: dev-init` and these mounts, which the devcontainer CLI and VS Code merge into your config:
+`containerEnv` with the `/persist` variables, `postStartCommand: dev-init` and these
+mounts, which the devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target |
 |---|---|
