@@ -33,6 +33,15 @@ already exist, so the PR that changes a feature bumps its version, and after mer
 you run the `Publish features` workflow (Actions tab). Consumers pick it up on the
 next container rebuild via their `callum-tools:1` pin.
 
+## The base image (separate cadence)
+
+The image version lives in `images/base/VERSION` and is NOT synced by the release
+workflow. A PR that changes the image in a way consumers should be able to pin bumps
+it; after merge, run the `Publish base image` workflow (Actions tab, or
+`gh workflow run publish-base-image.yml`) to push the new tags. The workflow also
+re-pushes the current version's tags weekly with fresh OS packages and tools, so tags
+are mutable - see `images/base/README.md`.
+
 ## Drift check
 
 `npx callum-dev check` exits non-zero when a repo's applied template version
