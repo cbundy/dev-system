@@ -24,6 +24,7 @@ that use features keep using it, and the image reuses the feature's scripts
    | no-mistakes | its install script, as `node` | `no-mistakes update`, or image rebuild |
    | treehouse | its install script, as `node` | image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
+   | agentsview | pinned release tarball, checksum-verified | bump `AGENTSVIEW_VERSION` in the Dockerfile |
    | git | base image | image rebuild |
 
    Also `jq`, `ripgrep`, `tmux` (Claude's Remote Control session runs in it), `tini`
@@ -67,13 +68,14 @@ environment variable set in the image.
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
+| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
 `no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
 `/persist/no-mistakes/logs`, because the callum-flow skills read run logs at that path.
 
 The same list is published as the image label
-`dev.cbundy.persist=/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes`, so
+`dev.cbundy.persist=/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview`, so
 runtimes and templates can read it.
 
 There is deliberately **no `VOLUME` instruction**: it would silently discard a child
@@ -122,7 +124,9 @@ always exits 0, so a container never fails to start because of it.
    restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register the repo if
    needed. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently.
-7. Runs `dev-doctor --warn-only`.
+7. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
+   [Central session history](#central-session-history-agentsview)).
+8. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
 
@@ -136,7 +140,9 @@ on every failure:
 - no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
   working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
-- treehouse is on `PATH`.
+- treehouse is on `PATH`;
+- agentsview is on `PATH` and, when `AGENTSVIEW_PG_URL` is set, the central database is
+  reachable and a push is running (in this container or another one sharing the volume).
 
 It exits 1 if any check fails. `dev-doctor --warn-only` prints the same report and always
 exits 0.
@@ -329,6 +335,7 @@ devcontainer CLI and VS Code merge into your config:
 | `dev-system-codex` | `/persist/codex` |
 | `dev-system-gh` | `/persist/gh` |
 | `dev-system-no-mistakes` | `/persist/no-mistakes` |
+| `dev-system-agentsview` | `/persist/agentsview` |
 
 `updateRemoteUserUID: false` keeps `node` at UID 1000 even on a Linux host whose user has
 another UID. Otherwise the devcontainer CLI renumbers `node` to the host UID and it can no
@@ -339,6 +346,77 @@ The volumes are shared by every repo on the same Docker host, so you log in once
 machine. To isolate a repo, list a mount with the same `target` in its `devcontainer.json`;
 the consumer's mount replaces the image default. If a consumer Dockerfile sets its own
 `devcontainer.metadata` label, it replaces this one, so copy these entries into it.
+
+## Central session history (agentsview)
+
+The image ships [agentsview](https://github.com/kenn-io/agentsview), so every container
+can push its Claude and codex sessions to one central place you browse and search. The
+transport is agentsview's PostgreSQL sync: each container runs
+`agentsview pg push --watch`, which indexes the session files into a local SQLite archive
+under `/persist/agentsview` and pushes changes to a shared PostgreSQL; one central
+`agentsview pg serve` reads that database. Agents always write to local disk, so a
+central outage never blocks them - the push catches up when the database is back.
+
+It is off until you set `AGENTSVIEW_PG_URL`. The image's anonymous telemetry ping and
+update check are disabled (`AGENTSVIEW_TELEMETRY_ENABLED=0`,
+`AGENTSVIEW_DISABLE_UPDATE_CHECK=1`).
+
+### Central server (once)
+
+Run PostgreSQL with TLS on (`ssl=on` - agentsview refuses a plaintext connection to a
+non-local host) and the official viewer image in read-only mode next to it:
+
+```yaml
+services:
+  agentsview:
+    image: ghcr.io/kenn-io/agentsview:0.44.0   # keep in step with AGENTSVIEW_VERSION
+    environment:
+      PG_SERVE: "1"
+      AGENTSVIEW_PG_URL: postgres://agentsview:${PG_PASSWORD}@postgres:5432/agentsview?sslmode=require
+    command: ["--host", "0.0.0.0"]
+    volumes:
+      - agentsview-data:/data   # config.toml with require_auth = true
+```
+
+Set `require_auth = true` in the viewer's `config.toml` before exposing it beyond
+loopback, and put it behind your reverse proxy or VPN: transcripts carry prompts, tool
+output and source excerpts. `pg serve` applies schema migrations itself on start-up.
+
+### Each container
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `AGENTSVIEW_PG_URL` | yes | `postgres://user:pass@host:5432/agentsview?sslmode=require`. A secret: inject it at run time (k8s Secret, Coder parameter, or `"remoteEnv": { "AGENTSVIEW_PG_URL": "${localEnv:AGENTSVIEW_PG_URL}" }` on the desktop), never in an image. |
+| `DEV_MACHINE_NAME` | recommended | Display label for this machine in the viewer, e.g. `desktop` or the workspace name. Without it the label is the container's hostname, which on Docker is a random container ID. |
+| `AGENTSVIEW_PG_SCHEMA` | no | Schema name (default `agentsview`). |
+
+`dev-init` then starts the push in the background (log: `/tmp/dev-agentsview-push.log`,
+plus agentsview's own `/persist/agentsview/pg-watch.log`), and `dev-doctor` reports
+whether the database is reachable and the push is running. `dev-init` also pins the
+local agentsview daemon to port 47180 (it falls through to the next free port), so it
+never takes 8080 from a repo's own dev server. Edit `/persist/agentsview/config.toml`
+for anything else, e.g. `[pg] allow_insecure = true` for a trusted LAN without TLS.
+
+### One machine per volume
+
+A machine in the viewer is an agentsview installation, identified by the installation ID
+in `/persist/agentsview`; that is why the directory persists. On a Docker host every
+container shares the `dev-system-claude` and `dev-system-agentsview` volumes, so the
+host's sessions are one set of files and the host is one machine: agentsview's lock in
+the data directory lets one container push at a time, and the push loop in the others
+takes over when that container stops. On Kubernetes or Coder, each workspace's PVC is
+its own machine. Do not give containers that share a Claude volume separate agentsview
+volumes - each would claim the same sessions as a different machine, and the database
+keeps only the first claim.
+
+### Upgrading agentsview
+
+The pushers and the server share a database schema, so agentsview is pinned
+(`AGENTSVIEW_VERSION` and its checksums in the Dockerfile) rather than refreshed by the
+weekly rebuild. To upgrade, bump the version and checksums (from the release's
+`SHA256SUMS`), update the central server's image tag to match, and release the image.
+Sessions deleted with `agentsview prune` are not removed from PostgreSQL, and
+`pg serve` has no live auto-refresh: reload to see new activity.
 
 ## Tags and versioning
 
@@ -368,7 +446,8 @@ docker build -f images/base/Dockerfile -t dev-system-base:local .
 
 Run the container test suite against it. Test 7 needs the devcontainer CLI; set
 `DEVCONTAINER="npx -y @devcontainers/cli"` if it is not installed, or `SKIP_DEVCONTAINER=1`
-to skip it:
+to skip it. Test 8 starts a throwaway `postgres:17` container to exercise the agentsview
+push end to end:
 
 ```bash
 images/base/test/test.sh dev-system-base:local

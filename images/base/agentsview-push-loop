@@ -1,0 +1,20 @@
+#!/bin/bash
+#
+# agentsview-push-loop: keeps `agentsview pg push --watch` running.
+#
+# dev-init starts this in the background (under a container-local flock, so
+# once per container) when AGENTSVIEW_PG_URL is set. The watcher itself exits
+# when it cannot run - most often because another container sharing the same
+# AGENTSVIEW_DATA_DIR volume already holds its pg-watch.lock - so this loop
+# retries, and a container takes over pushing when the one holding the lock
+# stops. A transiently unreachable database does not end the watcher; it
+# retries on its own.
+set -u
+
+RETRY_SECONDS="${DEV_AGENTSVIEW_RETRY_SECONDS:-60}"
+
+while :; do
+  agentsview pg push --watch
+  echo "agentsview-push-loop: pg push --watch exited ($?), retrying in ${RETRY_SECONDS}s" >&2
+  sleep "$RETRY_SECONDS"
+done
