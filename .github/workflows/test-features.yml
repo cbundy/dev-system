@@ -28,6 +28,9 @@ jobs:
       - name: Unit test no-mistakes auto-recovery script
         run: sh features/test/callum-tools/recover-no-mistakes.test.sh
 
+      - name: Unit test codex model pin script
+        run: sh features/test/callum-tools/pin-codex-model.test.sh
+
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
 
