@@ -87,11 +87,12 @@ from `$PWD` - the containers.dev spec already guarantees `postCreateCommand` run
 `$PWD` set to the workspace folder, and the toplevel walk additionally covers a
 workspaceFolder pointed below the repo root (e.g. a monorepo).
 
-**Visibility decision**: the GHCR package is public while this source repo stays private.
-The package contains only install scripts for tools that are themselves public, and a
-private package would require a `packages:read` PAT docker-login on every machine and CI
-job that builds a consumer container. After the first publish, flip the package to public
-in GHCR package settings (new packages default to private).
+**Visibility decision**: the GHCR packages (this feature and the base image) are public.
+They contain only install scripts and tools that are themselves public, and a private
+package would require a `packages:read` PAT docker-login on every machine and CI job that
+builds a consumer container. A package first published from this repo's Actions takes the
+repository's visibility, so with this repo public the packages are public with no manual
+step; if the repo is ever made private, set each package's visibility in its GHCR settings.
 
 ## Base image
 
