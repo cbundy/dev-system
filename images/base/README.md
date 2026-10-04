@@ -4,7 +4,8 @@
 CLIs and Callum's flow tooling baked in, plus a fixed contract for where tool state
 persists. The same image runs on the desktop (through a thin `devcontainer.json`) and on
 the homelab (as a Kubernetes pod, a Coder workspace or a plain `docker run`), with no
-devcontainer tooling needed at run time.
+devcontainer tooling needed at run time. A fixed mount point, `/shared`, takes an optional
+NAS share for files exchanged with the PC.
 
 It complements the `callum-tools` Dev Container Feature rather than replacing it. Repos
 that use features keep using it, and the image reuses the feature's scripts
@@ -31,11 +32,13 @@ that use features keep using it, and the image reuses the feature's scripts
    (PID 1), `less` and `openssh-client`. Every tool binary lives outside `/persist`, so a new image always
    brings fresh binaries.
 3. The persistence contract (below).
-4. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
-5. `dev-doctor`, a health check that reports missing auth or broken state loudly.
-6. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
+4. The `/shared` mount point for NAS file sharing (below). The image defines it but
+   mounts nothing there.
+5. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
+6. `dev-doctor`, a health check that reports missing auth or broken state loudly.
+7. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
    gets the persistence volumes and `dev-init` automatically.
-7. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
+8. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
    with Remote Control (below).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
@@ -49,8 +52,8 @@ These belong to the consumer image or the runtime:
 - Repo-specific tools (Terraform, Python stacks, Docker CLI and so on). Add them in the
   consumer's Dockerfile.
 - Secrets or credentials of any kind. The image is public.
-- Where volumes come from (Docker named volume, k8s PVC, host bind). The image only defines
-  the mount points.
+- Where volumes come from (Docker named volume, k8s PVC, host bind, the NAS share). The
+  image only defines the mount points.
 - The workspace checkout location and the git clone.
 - Repo config (`.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md` and so on). It is
   committed in each repo by `callum-dev`.
@@ -98,6 +101,134 @@ declared by this contract and the devcontainer metadata instead.
 If a directory is not writable, `dev-init` prints a warning naming the fix and `dev-doctor`
 fails that check.
 
+## Shared files (`/shared`)
+
+`/shared` is the place for files that sit **beside** the code and should be reachable from
+both the PC and the container: build artifacts, exported data, screenshots, handoff docs.
+The image sets `DEV_SHARED_DIR=/shared` (also in the devcontainer metadata's
+`containerEnv`), so scripts and agents use `$DEV_SHARED_DIR` instead of hard-coding the
+path, and publishes it as the image label `dev.cbundy.shared=/shared` for runtimes and
+templates. The directory exists in the image, owned `1000:1000` with mode `0755`, and
+ships empty. As with `/persist`, there is no `VOLUME` instruction.
+
+It is **not** for:
+
+- **Repo checkouts.** git on SMB or NFS is slow, its locking is unreliable, and a repo
+  reached over SMB and NFS at once can be corrupted. Keep the checkout on a local disk or
+  volume.
+- **Tool state.** That is `/persist`. no-mistakes keeps a SQLite database and a Unix
+  socket there, and neither works reliably over NFS.
+
+**Nothing is mounted by default.** The NAS address and export are site-specific, so the
+consumer's config or the runtime supplies the mount. Unmounted, `/shared` is an empty
+local directory, `dev-init` says nothing and `dev-doctor` reports
+`/shared not mounted (optional)`. Mounted, `dev-doctor` reports
+`/shared mounted and writable`; if `node` cannot write it, `dev-init` warns and
+`dev-doctor` fails, both with the fix.
+
+### NAS side
+
+One dataset, exported over SMB for the PC and over NFS for containers. On the homelab
+(cbundy/network#136) that is `ssd1/dev` on `nas2.buddycloud.net` (192.168.1.114):
+
+- **SMB:** `\\nas2.buddycloud.net\dev`, mapped as a drive on the PC as the user `dev`.
+- **NFS:** `/mnt/ssd1/dev`. Each repo has a plain directory, `/mnt/ssd1/dev/<repo-name>`,
+  and its containers mount only that. Create the directory (from the mapped drive, say)
+  before the first mount; an NFS mount of a missing path fails.
+
+Ownership must work for UID 1000 in the container. nas2 squashes every NFS client to the
+`dev` user and the `docker_users` group (TrueNAS: Mapall User / Mapall Group), so the
+container's UID does not matter: every write lands as `dev:docker_users`, and the NAS does
+the permission check. The alternative is a dataset owned by UID/GID 1000 (Linux exports:
+`all_squash,anonuid=1000,anongid=1000`). Use the NAS's mixed permission mode for the
+dataset (TrueNAS: NFSv4 ACLs and a Multi-protocol SMB share), so Windows ACLs and Unix
+modes do not conflict and the PC does not cache a file a container is changing.
+
+### Docker (desktop)
+
+One NFS-backed named volume per repo:
+
+```bash
+docker volume create --driver local \
+  --opt type=nfs --opt o=addr=192.168.1.114,rw,nfsvers=4 \
+  --opt device=:/mnt/ssd1/dev/my-repo \
+  nas-my-repo
+```
+
+Docker mounts the share when a container starts, not when the volume is created, so a
+wrong address or path shows up only then. Mount it in the consumer's `devcontainer.json`:
+
+```jsonc
+{
+  "image": "ghcr.io/cbundy/dev-system/base:1",
+  "mounts": ["source=nas-my-repo,target=/shared,type=volume,volume-nocopy"]
+}
+```
+
+or with `docker run --mount type=volume,source=nas-my-repo,target=/shared,volume-nocopy`.
+Keep `volume-nocopy`, which needs the string form of a `devcontainer.json` mount. Without
+it, the first time Docker mounts an empty volume it copies the image's `/shared` into it,
+ownership included, and on an export squashed to another user that `chown` is refused,
+so the container does not start.
+
+Docker Desktop on WSL mounts the share from its own VM, not from Windows or your WSL
+distro, so the NAS must be reachable from there.
+
+### Kubernetes / Coder
+
+An NFS PersistentVolume (or a claim from the NFS CSI driver) with `ReadWriteMany`, mounted
+at `/shared` with `subPath: <repo-name>`:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nas-dev
+spec:
+  capacity: { storage: 200Gi }
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  mountOptions: [nfsvers=4]
+  nfs: { server: 192.168.1.114, path: /mnt/ssd1/dev }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nas-dev
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: nas-dev
+  resources: { requests: { storage: 200Gi } }
+```
+
+and in the pod spec (see the shape under "Entrypoint" below):
+
+```yaml
+      volumeMounts:
+        - { name: shared, mountPath: /shared, subPath: my-repo }
+  volumes:
+    - name: shared
+      persistentVolumeClaim: { claimName: nas-dev }
+```
+
+`fsGroup` does not change ownership on NFS; the NAS's squashing is what makes it writable.
+
+### Usage
+
+- Treat it as an exchange area: one side writes a file, the other reads it. Don't edit the
+  same file from the PC and a container at the same time.
+- Copy build artifacts in under a per-build directory, so builds never overwrite each
+  other:
+
+  ```bash
+  dest="$DEV_SHARED_DIR/artifacts/$(git branch --show-current | tr / -)-$(git rev-parse --short HEAD)"
+  mkdir -p "$dest" && cp -r dist/. "$dest/"
+  ```
+
+- File watchers do not fire on NFS for changes made elsewhere (the PC, another container).
+  Poll, or re-run by hand.
+
 ## `dev-init`
 
 `/usr/local/bin/dev-init` runs as `node` on every container start. On the desktop the
@@ -126,7 +257,9 @@ always exits 0, so a container never fails to start because of it.
    ownership"), it warns with the fix instead of skipping silently.
 7. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
    [Central session history](#central-session-history-agentsview)).
-8. Runs `dev-doctor --warn-only`.
+8. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
+   mounted is fine; it is optional.
+9. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
 
@@ -134,6 +267,8 @@ always exits 0, so a container never fails to start because of it.
 on every failure:
 
 - each `/persist` directory is writable;
+- `/shared`: `mounted and writable`, `not mounted (optional)` (both OK), or a failure when
+  it is mounted but not writable;
 - Claude is logged in (`claude auth status`);
 - codex is logged in (`codex login status`);
 - gh is logged in (`gh auth status`);
@@ -325,7 +460,7 @@ On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
 ```
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
-`containerEnv` with the `/persist` variables and `DEV_REMOTE_CONTROL: "0"`,
+`containerEnv` with the `/persist` variables, `DEV_SHARED_DIR` and `DEV_REMOTE_CONTROL: "0"`,
 `postStartCommand: dev-init && dev-remote-control --post-start` and these mounts, which the
 devcontainer CLI and VS Code merge into your config:
 
