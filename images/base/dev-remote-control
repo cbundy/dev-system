@@ -2,10 +2,16 @@
 #
 # dev-remote-control: keeps Claude Code running with Remote Control enabled.
 #
-# The image's default command (see dev-entrypoint). Claude runs interactively
-# (`claude --remote-control <name>`) in the tmux session `claude`, so the same
-# session is reachable from claude.ai / the Claude app and locally with
-# `tmux attach -t claude` (via docker exec / kubectl exec).
+# The image's default command (see dev-entrypoint). Claude runs in the tmux
+# session `claude`, in one of two modes (DEV_REMOTE_CONTROL_MODE):
+#   session  (default) interactive Claude (`claude --remote-control <name>`):
+#            one session, reachable from claude.ai / the Claude app and
+#            locally with `tmux attach -t claude` (via docker exec / kubectl exec)
+#   server   `claude remote-control --name <name> --spawn worktree`: the
+#            container shows up as an environment in claude.ai / the Claude
+#            app, and each session started there gets its own Claude in its
+#            own git worktree (outside a git repo: all in the workspace,
+#            --spawn same-dir). tmux shows only the server.
 #
 # Usage:
 #   dev-remote-control              supervise Claude in the foreground
@@ -26,9 +32,15 @@
 #
 # Environment:
 #   DEV_REMOTE_CONTROL       0 disables it: the container stays up, nothing starts
-#   DEV_REMOTE_CONTROL_NAME  session name in claude.ai (default: the hostname)
+#   DEV_REMOTE_CONTROL_MODE  session (default) or server, see above
+#   DEV_REMOTE_CONTROL_NAME  session (or environment) name in claude.ai
+#                            (default: the workspace's repo name, else the
+#                            hostname)
 #   DEV_REMOTE_CONTROL_SKIP_PERMISSIONS
 #                            1 runs Claude with --dangerously-skip-permissions
+#                            (server mode: --permission-mode bypassPermissions
+#                            for the sessions it spawns, with the disclaimer
+#                            accepted in .claude.json)
 #   DEV_REMOTE_CONTROL_POLL  seconds between login checks (default 30)
 #   DEV_WORKSPACE            Claude's working directory (default: the start
 #                            directory unless it is /, else $HOME)
@@ -38,6 +50,7 @@ SESSION=claude
 LOCK=/tmp/dev-remote-control.lock
 DESKTOP_LOG=/tmp/dev-remote-control.log
 POLL="${DEV_REMOTE_CONTROL_POLL:-30}"
+MODE="${DEV_REMOTE_CONTROL_MODE:-session}"
 REMIND_EVERY=10 # polls between repeated login reminders (5 min at the default)
 BACKOFF_MIN=5
 BACKOFF_MAX=300
@@ -54,6 +67,25 @@ workspace() {
     echo "$START_DIR"
   else
     echo "$HOME"
+  fi
+}
+
+# The default session name: the workspace's repo name - the last part of its
+# origin URL, else the name of its git top-level directory - or, outside a git
+# repo, the hostname.
+default_name() {
+  local ws="$1" url top
+  url=$(git -C "$ws" remote get-url origin 2>/dev/null) || url=""
+  url="${url%/}"
+  url="${url%.git}"
+  url="${url##*/}"
+  url="${url##*:}"
+  if [ -n "$url" ]; then
+    echo "$url"
+  elif top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
+    basename "$top"
+  else
+    echo "${HOSTNAME:-$(cat /etc/hostname)}"
   fi
 }
 
@@ -106,15 +138,22 @@ wait_for_login() {
 }
 
 # Pre-answers the start-up dialogs nobody is there to answer: workspace trust
-# and, if somehow still pending, onboarding. Only missing values are set.
+# and, if somehow still pending, onboarding. With a second argument of 1 it
+# also accepts the bypass-permissions disclaimer, as answering it interactively
+# would: server mode has no --settings flag to skip it per run, and a spawned
+# session would otherwise fall back to the default permission mode. Only
+# missing values are set.
+# shellcheck disable=SC2016 # $ws and $bypass are jq variables
 prepare_claude_config() {
-  local ws="$1" cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" tmp
+  local ws="$1" bypass="${2:-0}" cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" tmp
+  local want='.hasCompletedOnboarding == true and .projects[$ws].hasTrustDialogAccepted == true
+    and ($bypass != "1" or .bypassPermissionsModeAccepted == true)'
+  local set='.hasCompletedOnboarding = true | .projects[$ws].hasTrustDialogAccepted = true
+    | if $bypass == "1" then .bypassPermissionsModeAccepted = true else . end'
   [ -s "$cfg" ] || (umask 077 && echo '{}' > "$cfg") || return 0
-  jq -e --arg ws "$ws" '.hasCompletedOnboarding == true and .projects[$ws].hasTrustDialogAccepted == true' \
-    "$cfg" >/dev/null 2>&1 && return 0
+  jq -e --arg ws "$ws" --arg bypass "$bypass" "$want" "$cfg" >/dev/null 2>&1 && return 0
   tmp=$(mktemp "$cfg.XXXXXX") || return 0
-  if jq --arg ws "$ws" '.hasCompletedOnboarding = true | .projects[$ws].hasTrustDialogAccepted = true' \
-    "$cfg" > "$tmp" 2>/dev/null; then
+  if jq --arg ws "$ws" --arg bypass "$bypass" "$set" "$cfg" > "$tmp" 2>/dev/null; then
     mv "$tmp" "$cfg" && log "marked $ws as trusted in $cfg"
   else
     log "WARNING: $cfg is not valid JSON - Claude may wait on its trust dialog (attach to answer it)"
@@ -143,10 +182,9 @@ on_signal() {
 }
 
 supervise() {
-  local ws name started ran status backoff=$BACKOFF_MIN
+  local ws name spawn started ran status backoff=$BACKOFF_MIN
   local status_file=/tmp/dev-remote-control.status
   local -a args
-  name="${DEV_REMOTE_CONTROL_NAME:-${HOSTNAME:-$(cat /etc/hostname)}}"
   trap on_signal TERM INT HUP
 
   # A session left over from an earlier supervisor that was killed outright
@@ -156,12 +194,31 @@ supervise() {
   while :; do
     wait_for_login
     ws=$(cd "$(workspace)" && pwd -P)
-    prepare_claude_config "$ws"
-    args=(--remote-control "$name")
-    if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
-      # The flag-level setting skips the one-time bypass consent dialog
-      # without changing the persisted settings.
-      args+=(--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}')
+    if [ "$MODE" = server ] && [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
+      prepare_claude_config "$ws" 1
+    else
+      prepare_claude_config "$ws"
+    fi
+    name="${DEV_REMOTE_CONTROL_NAME:-$(default_name "$ws")}"
+    if [ "$MODE" = server ]; then
+      # An explicit --spawn worktree outside a git repo is an error, which
+      # would only restart in a loop until a repo is cloned there.
+      spawn=worktree
+      if ! git -C "$ws" rev-parse --git-dir >/dev/null 2>&1; then
+        spawn=same-dir
+        log "WARNING: $ws is not a git repository - sessions share it (--spawn same-dir) instead of getting a worktree each"
+      fi
+      args=(remote-control --name "$name" --spawn "$spawn")
+      if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
+        args+=(--permission-mode bypassPermissions)
+      fi
+    else
+      args=(--remote-control "$name")
+      if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
+        # The flag-level setting skips the one-time bypass consent dialog
+        # without changing the persisted settings.
+        args+=(--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}')
+      fi
     fi
 
     rm -f "$status_file"
@@ -170,7 +227,7 @@ supervise() {
     # shellcheck disable=SC2016
     if tmux new-session -d -s "$SESSION" -c "$ws" \
       bash -c 'f=$1; shift; claude "$@"; echo $? > "$f"' bash "$status_file" "${args[@]}" 9>&-; then
-      log "started Claude with Remote Control as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
+      log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
       while tmux has-session -t "$SESSION" 2>/dev/null; do
         pause 2
       done
@@ -200,6 +257,14 @@ case "${1:-}" in
     ;;
   *)
     echo "usage: dev-remote-control [--post-start]" >&2
+    exit 2
+    ;;
+esac
+
+case "$MODE" in
+  session | server) ;;
+  *)
+    log "ERROR: DEV_REMOTE_CONTROL_MODE must be session or server, not \"$MODE\""
     exit 2
     ;;
 esac

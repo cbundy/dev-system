@@ -319,10 +319,17 @@ orphaned processes, so containers stop in well under a second instead of hitting
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`) and
    onboarding as done. An unattended interactive Claude otherwise sits at the folder trust
    dialog, which comes before anything else.
-3. **Runs `claude --remote-control <name>`** in the tmux session `claude`, in the
-   workspace. This is the interactive Claude with Remote Control, not the server mode
-   (`claude remote-control`): the session you attach to locally is the same one claude.ai
-   shows.
+3. **Runs Claude with Remote Control** in the tmux session `claude`, in the workspace,
+   in one of two modes (`DEV_REMOTE_CONTROL_MODE`):
+   - `session` (default): `claude --remote-control <name>`, the interactive Claude. The
+     session you attach to locally is the same one claude.ai shows.
+   - `server`: `claude remote-control --name <name> --spawn worktree`. The container
+     shows up as an environment in claude.ai / the Claude app; each session you start
+     there runs its own Claude in its own git worktree of the workspace. Attaching to
+     tmux shows only the server, not a conversation. Worktree mode needs the workspace
+     to be a git repository; if it is not, the sessions share the workspace instead
+     (`--spawn same-dir`, with a warning in the log). Claude pre-creates one session in
+     the workspace itself; only the sessions started after it get a worktree.
 4. **Restarts Claude when it exits** (a crash, `/exit`, a restart after an update) with a
    backoff of 5s, doubling to at most 5 minutes, reset once Claude has run for 10 minutes.
    Each start runs `claude` from `PATH`, so a version Claude's auto-updater installed is
@@ -334,8 +341,9 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | Variable | Default | Effect |
 |---|---|---|
 | `DEV_REMOTE_CONTROL` | `1` headless, `0` on the desktop | `0`: start nothing; the container stays up for `docker exec` / `kubectl exec`. On the desktop, `1` starts it. |
-| `DEV_REMOTE_CONTROL_NAME` | the hostname | The session name in claude.ai. Docker's hostname is the container ID unless you pass `--hostname`; on Kubernetes it is the pod name. |
-| `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog). Only for a container you are happy to let act unsupervised. |
+| `DEV_REMOTE_CONTROL_MODE` | `session` | `server` runs `claude remote-control` (many sessions, one worktree each) instead of one interactive session. See step 3 above. |
+| `DEV_REMOTE_CONTROL_NAME` | the workspace's repo name | The session name in claude.ai (the environment name in `server` mode). By default the repo name from the workspace's `origin` URL (`dev-system` for `github.com/cbundy/dev-system`), else the name of its git top-level directory, else (no git repo) the hostname: the container ID under Docker unless you pass `--hostname`, the pod name on Kubernetes. Worked out at every Claude start. |
+| `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
 | `DEV_WORKSPACE` | the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run. Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
 
@@ -373,7 +381,7 @@ command instead, which replaces only the `CMD`:
 apiVersion: v1
 kind: Pod
 metadata:
-  name: dev-my-repo                # also the Remote Control session name
+  name: dev-my-repo                # the Remote Control name is the repo name, my-repo
 spec:
   securityContext:
     fsGroup: 1000                  # node can write the PVC
