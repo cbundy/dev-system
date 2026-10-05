@@ -478,6 +478,58 @@ check "DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 adds --dangerously-skip-permissions
   docker exec '$c' grep -qF -- '--remote-control ${c:0:12} --dangerously-skip-permissions --settings {\"skipDangerousModePermissionPrompt\":true}' /tmp/claude-starts"
 docker rm -f "$c" >/dev/null
 
+# The default name is the workspace's repo name: from the origin URL (the
+# checkout directory is named differently on purpose), else the git top-level
+# directory. The SKIP_PERMISSIONS check above covers the hostname fallback.
+c=$(run_bg -e STUB="$STUB" -e DEV_WORKSPACE=/tmp/ws/checkout "$IMAGE" bash -c "
+  git init -q /tmp/ws/checkout && git -C /tmp/ws/checkout remote add origin git@github.com:example/my-repo.git &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "the session name defaults to the repo name from the workspace's origin URL" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp/ws/checkout --remote-control my-repo' ]"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e STUB="$STUB" -e DEV_WORKSPACE=/tmp/ws/no-origin "$IMAGE" bash -c "
+  git init -q /tmp/ws/no-origin && touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "without an origin, the session name is the git top-level directory name" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp/ws/no-origin --remote-control no-origin' ]"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=server -e DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 \
+  -e DEV_WORKSPACE=/tmp/ws/checkout "$IMAGE" bash -c "
+  git init -q /tmp/ws/checkout && git -C /tmp/ws/checkout remote add origin https://github.com/example/my-repo.git &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "DEV_REMOTE_CONTROL_MODE=server runs claude remote-control, a worktree per session, in a git workspace" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  docker exec '$c' grep -qxF -- '/tmp/ws/checkout remote-control --name my-repo --spawn worktree --permission-mode bypassPermissions' /tmp/claude-starts &&
+  docker logs '$c' 2>&1 | grep -q '(server mode) as \"my-repo\"'"
+check "server mode with SKIP_PERMISSIONS=1 accepts the bypass disclaimer and trusts the workspace" docker exec "$c" \
+  jq -e '.bypassPermissionsModeAccepted == true and .projects["/tmp/ws/checkout"].hasTrustDialogAccepted == true' /persist/claude/.claude.json
+check "server mode: docker stop completes in under 10s with exit 0" stops_within "$c" 10
+
+c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=server -e DEV_REMOTE_CONTROL_NAME=rc-server \
+  "$IMAGE" bash -c "touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "server mode outside a git repo falls back to --spawn same-dir with a warning" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp remote-control --name rc-server --spawn same-dir' ] &&
+  docker logs '$c' 2>&1 | grep -q 'not a git repository - sessions share it'"
+check "server mode without SKIP_PERMISSIONS leaves the bypass disclaimer alone" docker exec "$c" \
+  jq -e '.bypassPermissionsModeAccepted == null' /persist/claude/.claude.json
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e DEV_REMOTE_CONTROL_MODE=bogus "$IMAGE")
+check "an unknown DEV_REMOTE_CONTROL_MODE is rejected: logged, exit status 2" bash -c "
+  for _ in \$(seq 30); do [ \"\$(docker inspect -f '{{.State.Running}}' '$c')\" = false ] && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep 'dev-remote-control'
+  docker logs '$c' 2>&1 | grep -q 'DEV_REMOTE_CONTROL_MODE must be session or server, not \"bogus\"' &&
+  [ \"\$(docker inspect -f '{{.State.ExitCode}}' '$c')\" = 2 ]"
+docker rm -f "$c" >/dev/null
+
 # The real Claude, with only `auth status` faked: it must reach its prompt in
 # the tmux session without stopping at the trust or onboarding dialogs, and
 # stop promptly. Remote Control itself needs a real claude.ai login, so it
