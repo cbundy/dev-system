@@ -25,6 +25,12 @@ How each layer reaches consumers after the tag exists:
   pulls the new tag, then `npx callum-dev update` merges template changes into the
   repo. Tags earlier than v0.3.0 predate `package.json` and cannot be npm-installed.
 
+Last step, after the tag exists: bring this repo's own stamp up to date. dev-system is a
+consumer of its own templates, and `node bin/callum-dev.js check` fails here while
+`.callum-dev.json` lags the released version. On a branch from the updated main, run
+`node bin/callum-dev.js update`, resolve any conflicts it reports, and land the result
+(`.callum-dev.json`, `.callum-dev/baseline/` and any merged config files) via a PR.
+
 ## The Dev Container Feature (deprecated, separate cadence)
 
 The feature is deprecated (cbundy/dev-system#89) and gets no new capabilities. A script
