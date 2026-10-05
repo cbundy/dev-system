@@ -3,7 +3,8 @@
 # shellcheck disable=SC2016
 #
 # Container tests for the dev-system base image (cbundy/dev-system#59, #64 for
-# the entrypoint and Remote Control, and #65 for the /shared mount point).
+# the entrypoint and Remote Control, #65 for the /shared mount point and #73
+# for per-repo /persist volumes).
 #
 # Usage: images/base/test/test.sh <image>
 #
@@ -190,11 +191,25 @@ check "dev-doctor exits non-zero with no auth and prints a hint per failure" bas
   echo \"\$out\"
   [ \$rc -ne 0 ] || exit 1
   fails=\$(echo \"\$out\" | grep -c 'FAIL ' || true)
+  warns=\$(echo \"\$out\" | grep -c 'WARN ' || true)
   hints=\$(echo \"\$out\" | grep -c 'fix: ' || true)
-  [ \"\$fails\" -ge 3 ] && [ \"\$fails\" = \"\$hints\" ] &&
+  [ \"\$fails\" -ge 3 ] && [ \"\$((fails + warns))\" = \"\$hints\" ] &&
   echo \"\$out\" | grep -q 'claude auth login' &&
   echo \"\$out\" | grep -q 'codex login' &&
   echo \"\$out\" | grep -q 'gh auth login'"
+check "dev-doctor warns, without failing, for each /persist dir with no volume behind it" bash -c "
+  vol=\$(docker volume create --label '$RUN_ID')
+  out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
+  echo \"\$out\"
+  for t in codex gh no-mistakes agentsview; do
+    echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
+  done
+  echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
+  [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
+check "dev-doctor: no persistence WARN with one volume for all of /persist (the k8s / Coder shape)" in_image '
+  out=$(dev-doctor --warn-only); echo "$out"
+  ! echo "$out" | grep -q "WARN .*state dir"' \
+  -v "$vol:/persist"
 check "dev-doctor --warn-only exits 0 with the same failures" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "FAIL "'
@@ -223,9 +238,9 @@ if [ "${SKIP_DEVCONTAINER:-}" = 1 ]; then
 else
   WORKDIR=$(mktemp -d)
   # Fresh volume names per run so the test never touches a developer's real
-  # dev-system-* login volumes; the metadata's default names are checked
-  # separately against the label below.
-  check "devcontainer metadata label declares the default named volumes, dev-init, Remote Control off and DEV_SHARED_DIR" bash -c "
+  # dev-system-* login volumes; the metadata's default (only the shared gh
+  # volume) is checked separately against the label below.
+  check "devcontainer metadata label declares only the shared gh volume, dev-init, Remote Control off and DEV_SHARED_DIR" bash -c "
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
       | \$m.remoteUser == \"node\"
@@ -233,15 +248,13 @@ else
       and \$m.containerEnv.DEV_REMOTE_CONTROL == \"0\"
       and \$m.containerEnv.DEV_SHARED_DIR == \"/shared\"
       and \$m.updateRemoteUserUID == false
-      and ([\$m.mounts[] | \"\(.source)=\(.target)\"] | sort) == [
-        \"dev-system-agentsview=/persist/agentsview\",
-        \"dev-system-claude=/persist/claude\", \"dev-system-codex=/persist/codex\",
-        \"dev-system-gh=/persist/gh\", \"dev-system-no-mistakes=/persist/no-mistakes\"]'"
+      and ([\$m.mounts[] | \"\(.source)=\(.target)\"]) == [\"dev-system-gh=/persist/gh\"]'"
 
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
-  # default volume names are overridden (same targets), which also proves a
-  # consumer can override them.
+  # four per-repo mounts are the README's, with $RUN_ID in place of the
+  # dev-system prefix. The shared gh volume is overridden (same target) with
+  # a per-run one, which also proves a consumer can override it.
   dc_up() {
     local ws="$WORKDIR/$1" up
     mkdir -p "$ws/.devcontainer"
@@ -250,11 +263,11 @@ else
 {
   "image": "$IMAGE",
   "mounts": [
-    { "type": "volume", "source": "$RUN_ID-claude", "target": "/persist/claude" },
-    { "type": "volume", "source": "$RUN_ID-codex", "target": "/persist/codex" },
-    { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" },
-    { "type": "volume", "source": "$RUN_ID-nm", "target": "/persist/no-mistakes" },
-    { "type": "volume", "source": "$RUN_ID-av", "target": "/persist/agentsview" }${3:+,
+    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-claude", "target": "/persist/claude" },
+    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-codex", "target": "/persist/codex" },
+    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
+    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-agentsview", "target": "/persist/agentsview" },
+    { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" }${3:+,
     $3}
   ],
   ${2:-}
@@ -270,6 +283,13 @@ EOF
       printf '%s\n' "$up" | tail -n 30 | sed 's/^/    /'
       return 1
     fi
+  }
+
+  # persist_volumes: the volume behind each /persist dir of $cid, one
+  # "<target>=<volume>" line each, sorted
+  persist_volumes() {
+    docker inspect -f '{{json .Mounts}}' "$cid" \
+      | jq -r '.[] | select(.Destination | startswith("/persist/")) | "\(.Destination)=\(.Name)"' | sort
   }
 
   # dc_down: removes the container, and the vsc-* image the devcontainer CLI
@@ -304,6 +324,7 @@ EOF
         ! test -e /tmp/dev-remote-control.log'"
     check "DEV_SHARED_DIR is set and nothing is mounted at /shared by default" bash -c "
       docker exec '$cid' bash -c '[ \"\$DEV_SHARED_DIR\" = /shared ] && ! mountpoint -q /shared'"
+    default_volumes=$(persist_volumes)
     dc_down
   else
     fail "devcontainer up succeeds"
@@ -322,7 +343,19 @@ EOF
         grep -q \"Claude is not logged in - run: docker exec -it\" /tmp/dev-remote-control.log &&
         pid=\$(pgrep -f \"^/bin/bash /usr/local/bin/dev-remote-control\$\") &&
         [ \"\$(readlink /proc/\$pid/cwd)\" = /workspaces/remote-control ]'"
+    rc_volumes=$(persist_volumes)
     dc_down
+    # Two workspace folders stand for two repos on one Docker host.
+    check "two workspaces get their own claude, codex, no-mistakes and agentsview volumes, and share gh" bash -c '
+      echo "workspace 1:"; echo "$1"; echo "workspace 2:"; echo "$2"
+      for t in claude codex no-mistakes agentsview; do
+        a=$(echo "$1" | sed -n "s|^/persist/$t=||p"); b=$(echo "$2" | sed -n "s|^/persist/$t=||p")
+        [[ "$a" =~ ^$3-[a-z0-9]+-$t$ ]] && [[ "$b" =~ ^$3-[a-z0-9]+-$t$ ]] && [ "$a" != "$b" ] ||
+          { echo "$t: \"$a\" vs \"$b\""; exit 1; }
+      done
+      [ "$(echo "$1" | grep "^/persist/gh=")" = "/persist/gh=$3-gh" ] &&
+      [ "$(echo "$2" | grep "^/persist/gh=")" = "/persist/gh=$3-gh" ]' \
+      _ "${default_volumes:-}" "$rc_volumes" "$RUN_ID"
   else
     fail "devcontainer up succeeds with DEV_REMOTE_CONTROL=1"
   fi

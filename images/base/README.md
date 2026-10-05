@@ -85,21 +85,52 @@ There is deliberately **no `VOLUME` instruction**: it would silently discard a c
 image's changes under `/persist` and leave anonymous volumes behind. Mount points are
 declared by this contract and the devcontainer metadata instead.
 
+### What is shared and what is per repo
+
+Only `/persist/gh` is shared between repos. Every other directory is per repo (or per
+workspace): one volume each for a repo's containers, never shared with another repo.
+Sharing those breaks:
+
+| Directory | What breaks when two repos share it |
+|---|---|
+| `/persist/no-mistakes` | It holds the daemon's lock, PID file, socket and SQLite database. One container's daemon would serve every repo, with only its own toolchain and in its own PID namespace, and die when that container stops. `config.yaml` changes would leak between repos. |
+| `/persist/claude` | Session files are named by PID, and every container has its own PID namespace, so two Claudes can collide. Trust, onboarding and all history would be mixed across repos. |
+| `/persist/codex` | Its SQLite state, `sessions/` and `history` would be mixed across repos. |
+| `/persist/agentsview` | Its installation ID is the machine in the viewer, so it must follow the Claude and codex volumes (see [One machine per workspace](#one-machine-per-workspace)). |
+
+The logins cannot be split out and shared on their own. Claude and codex keep them next to
+the rest of their state (`.credentials.json`, `auth.json`), with no separate path setting.
+A symlink to a shared file is replaced on the first token refresh, since Claude writes the
+file atomically. Copies seeded from one login share a refresh token, so the first container
+to refresh can invalidate the others. `CLAUDE_CODE_OAUTH_TOKEN` is shareable, but Remote
+Control refuses it. Several logins on one account are fine: each is its own grant, like
+logging in on several machines. So the cost of per-repo state is one Claude login and one
+codex login per repo (or workspace), kept after that. gh is the exception: `hosts.yml`
+holds a token that is rarely rewritten, and the whole directory is mounted, so sharing it
+is safe.
+
 ### How runtimes should mount it
 
-- **Kubernetes / Coder**: one PVC mounted at `/persist`, with
+- **Docker (desktop)**: one named volume per directory. `dev-system-gh` is shared by every
+  repo and comes from the image's devcontainer metadata; the other four are per repo and
+  come from the consumer's `devcontainer.json`, named after its `${devcontainerId}` (see
+  [Extending the image](#extending-the-image)). A new named volume copies the image
+  directory's ownership on first use, which is why the directories exist in the image
+  owned by 1000.
+- **Docker (headless: `docker run`, compose)**: the same split by hand - per-project volumes
+  for claude, codex, no-mistakes and agentsview, plus the shared `dev-system-gh`. See
+  [First start, headless](#first-start-headless).
+- **Kubernetes / Coder**: one PVC per workspace mounted at `/persist`, with
   `securityContext.fsGroup: 1000` so `node` can write to it. `dev-init` creates any missing
-  subdirectory on first start.
-- **Docker (desktop)**: one named volume per subdirectory, shared across repos, so you log
-  in once per machine. A new named volume copies the image directory's ownership on first
-  use, which is why the directories exist in the image owned by 1000. The devcontainer
-  metadata does this for you (see below).
+  subdirectory on first start. gh is per workspace too, unless the runtime supplies
+  `GH_TOKEN` instead (Coder external auth).
 - **Host bind mounts** work if the host directory is writable by UID 1000. Avoid binding a
   Windows-side directory (`${localEnv:USERPROFILE}`) under WSL: permissions and the
   no-mistakes daemon socket do not behave there (cbundy/dev-system#19). Use named volumes.
 
 If a directory is not writable, `dev-init` prints a warning naming the fix and `dev-doctor`
-fails that check.
+fails that check. If it is writable but has no volume behind it (its state is lost with the
+container), `dev-doctor` warns.
 
 ## Shared files (`/shared`)
 
@@ -160,7 +191,7 @@ wrong address or path shows up only then. Mount it in the consumer's `devcontain
 
 ```jsonc
 {
-  "image": "ghcr.io/cbundy/dev-system/base:1",
+  "image": "ghcr.io/cbundy/dev-system/base:2",
   "mounts": ["source=nas-my-repo,target=/shared,type=volume,volume-nocopy"]
 }
 ```
@@ -266,7 +297,8 @@ always exits 0, so a container never fails to start because of it.
 `/usr/local/bin/dev-doctor` prints one line per check, `OK` or `FAIL`, with a `fix:` hint
 on every failure:
 
-- each `/persist` directory is writable;
+- each `/persist` directory is writable, with a `WARN` (not a failure) when it is not on a
+  volume, so its state is lost with the container;
 - `/shared`: `mounted and writable`, `not mounted (optional)` (both OK), or a failure when
   it is mounted but not writable;
 - Claude is logged in (`claude auth status`);
@@ -279,8 +311,8 @@ on every failure:
 - agentsview is on `PATH` and, when `AGENTSVIEW_PG_URL` is set, the central database is
   reachable and a push is running (in this container or another one sharing the volume).
 
-It exits 1 if any check fails. `dev-doctor --warn-only` prints the same report and always
-exits 0.
+It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
+the same report and always exits 0.
 
 ## Entrypoint: Claude Code with Remote Control
 
@@ -362,15 +394,47 @@ kubectl exec -it <pod> -- tmux attach -t claude
 Exec as the default user (`node`), not root, or tmux will not find the session. `/exit`
 inside the session ends that Claude, and the supervisor starts a new one after the backoff.
 
-**First start, headless:**
+#### First start, headless
+
+Per-project volumes for everything but gh (see
+[What is shared and what is per repo](#what-is-shared-and-what-is-per-repo)), here for a
+project called `my-repo`:
 
 ```bash
-docker run -d --name dev --hostname dev \
-  -v dev-system-claude:/persist/claude -v dev-system-codex:/persist/codex \
-  -v dev-system-gh:/persist/gh -v dev-system-no-mistakes:/persist/no-mistakes \
-  ghcr.io/cbundy/dev-system/base:1
-docker logs dev                        # shows the login hint until you log in
-docker exec -it dev claude auth login  # Claude starts within 30s, no restart needed
+docker run -d --name my-repo \
+  -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
+  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
+  -v dev-system-gh:/persist/gh \
+  ghcr.io/cbundy/dev-system/base:2
+docker logs my-repo                        # shows the login hint until you log in
+docker exec -it my-repo claude auth login  # Claude starts within 30s, no restart needed
+```
+
+The same with docker compose. Compose prefixes volume names with the project name, which
+keeps the four per-project volumes apart from other projects'; `name:` turns that off for
+the shared gh volume, so every project uses the same `dev-system-gh`:
+
+```yaml
+services:
+  dev:
+    image: ghcr.io/cbundy/dev-system/base:2
+    environment:
+      DEV_WORKSPACE: /workspace/my-repo
+    volumes:
+      - claude:/persist/claude
+      - codex:/persist/codex
+      - no-mistakes:/persist/no-mistakes
+      - agentsview:/persist/agentsview
+      - gh:/persist/gh
+      - workspace:/workspace
+volumes:
+  claude:
+  codex:
+  no-mistakes:
+  agentsview:
+  workspace:
+  gh:
+    name: dev-system-gh   # shared by every project on this Docker host
 ```
 
 **Kubernetes pod spec shape.** Leave `command:` unset: it would replace the entrypoint,
@@ -387,7 +451,7 @@ spec:
     fsGroup: 1000                  # node can write the PVC
   containers:
     - name: dev
-      image: ghcr.io/cbundy/dev-system/base:1
+      image: ghcr.io/cbundy/dev-system/base:2
       # no command: - the entrypoint runs dev-init and Claude with Remote Control
       # args: ["dev-doctor"]       # a one-off run instead of Claude
       env:
@@ -414,7 +478,7 @@ metadata sets it to `0`, and a consumer's `containerEnv` overrides that:
 
 ```jsonc
 {
-  "image": "ghcr.io/cbundy/dev-system/base:1",
+  "image": "ghcr.io/cbundy/dev-system/base:2",
   "containerEnv": { "DEV_REMOTE_CONTROL": "1" }
 }
 ```
@@ -425,7 +489,8 @@ container.
 
 ## First login
 
-Run these once per machine (or per PVC). The logins land in `/persist`, so they survive
+Run these once per repo on the desktop (once per PVC on Kubernetes or Coder); gh only once
+per Docker host, since its volume is shared. The logins land in `/persist`, so they survive
 container rebuilds and image updates. On a headless container, run them through
 `docker exec -it <container> ...` or `kubectl exec -it <pod> -- ...`.
 
@@ -444,7 +509,7 @@ start. Run `dev-doctor` to confirm everything is green.
 Each consumer repo has its own Dockerfile that adds repo-specific tools:
 
 ```dockerfile
-FROM ghcr.io/cbundy/dev-system/base:1
+FROM ghcr.io/cbundy/dev-system/base:2
 
 USER root
 RUN apt-get update \
@@ -457,38 +522,69 @@ Switch back to `USER node` at the end, keep tool binaries out of `/persist`, and
 `VOLUME` for it. Leave `ENTRYPOINT` alone (or keep `tini -- dev-entrypoint` in front of your
 own) so `dev-init` and Remote Control keep working.
 
-On the desktop, a thin `.devcontainer/devcontainer.json` is enough:
+On the desktop, a thin `.devcontainer/devcontainer.json` with the per-repo state volumes is
+enough:
 
 ```jsonc
 {
   "name": "my-repo",
-  "build": { "dockerfile": "Dockerfile" }
-  // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:1"
+  "build": { "dockerfile": "Dockerfile" },
+  // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:2"
+  "mounts": [
+    // Per-repo tool state. Keep these four as they are: ${devcontainerId} is
+    // stable for this workspace folder and unique to it.
+    { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-agentsview", "target": "/persist/agentsview" }
+  ]
 }
 ```
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
 `containerEnv` with the `/persist` variables, `DEV_SHARED_DIR` and `DEV_REMOTE_CONTROL: "0"`,
-`postStartCommand: dev-init && dev-remote-control --post-start` and these mounts, which the
-devcontainer CLI and VS Code merge into your config:
+`postStartCommand: dev-init && dev-remote-control --post-start` and the shared gh volume,
+which the devcontainer CLI and VS Code merge into your config:
 
-| Named volume | Target |
-|---|---|
-| `dev-system-claude` | `/persist/claude` |
-| `dev-system-codex` | `/persist/codex` |
-| `dev-system-gh` | `/persist/gh` |
-| `dev-system-no-mistakes` | `/persist/no-mistakes` |
-| `dev-system-agentsview` | `/persist/agentsview` |
+| Named volume | Target | Scope |
+|---|---|---|
+| `dev-system-gh` | `/persist/gh` | every repo on the Docker host (image metadata) |
+| `dev-system-<devcontainerId>-claude` | `/persist/claude` | this repo (your `devcontainer.json`) |
+| `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
+| `dev-system-<devcontainerId>-no-mistakes` | `/persist/no-mistakes` | this repo (your `devcontainer.json`) |
+| `dev-system-<devcontainerId>-agentsview` | `/persist/agentsview` | this repo (your `devcontainer.json`) |
+
+The per-repo mounts cannot come from the image: the devcontainer CLI expands no variables
+in image metadata (`${devcontainerId}` comes out empty), so every repo would get the same
+volumes. Leave them out and that state lives in the container itself, lost on every
+rebuild; `dev-doctor` warns about it. `${devcontainerId}` is derived from the workspace
+folder, so a second clone of the same repo gets its own volumes, and a moved or renamed
+clone starts with new, empty ones (one more login).
+
+To list a repo's volumes: `docker volume ls --filter name=dev-system-`. To delete a repo's
+state, remove its four volumes once its container is gone.
 
 `updateRemoteUserUID: false` keeps `node` at UID 1000 even on a Linux host whose user has
 another UID. Otherwise the devcontainer CLI renumbers `node` to the host UID and it can no
 longer write the 1000-owned volumes. On such a host, files `node` creates in a bind-mounted
 workspace are owned by UID 1000 on the host.
 
-The volumes are shared by every repo on the same Docker host, so you log in once per
-machine. To isolate a repo, list a mount with the same `target` in its `devcontainer.json`;
-the consumer's mount replaces the image default. If a consumer Dockerfile sets its own
-`devcontainer.metadata` label, it replaces this one, so copy these entries into it.
+To give a repo its own gh login too, list a mount with the target `/persist/gh` in its
+`devcontainer.json`; the consumer's mount replaces the image default. If a consumer
+Dockerfile sets its own `devcontainer.metadata` label, it replaces this one, so copy these
+entries into it.
+
+### Moving from 1.x
+
+Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mistakes` and
+`-agentsview` volumes into every repo. 2.0 drops them:
+
+1. Add the four per-repo mounts above to each repo's `devcontainer.json` and move it to
+   `base:2`.
+2. Rebuild. The new volumes start empty, so log Claude and codex in once in each repo.
+   gh keeps its login (`dev-system-gh` is unchanged).
+3. The old volumes are left in place. Delete them by hand once you no longer need them:
+   `docker volume rm dev-system-claude dev-system-codex dev-system-no-mistakes dev-system-agentsview`.
 
 ## Central session history (agentsview)
 
@@ -540,17 +636,18 @@ local agentsview daemon to port 47180 (it falls through to the next free port), 
 never takes 8080 from a repo's own dev server. Edit `/persist/agentsview/config.toml`
 for anything else, e.g. `[pg] allow_insecure = true` for a trusted LAN without TLS.
 
-### One machine per volume
+### One machine per workspace
 
 A machine in the viewer is an agentsview installation, identified by the installation ID
-in `/persist/agentsview`; that is why the directory persists. On a Docker host every
-container shares the `dev-system-claude` and `dev-system-agentsview` volumes, so the
-host's sessions are one set of files and the host is one machine: agentsview's lock in
-the data directory lets one container push at a time, and the push loop in the others
-takes over when that container stops. On Kubernetes or Coder, each workspace's PVC is
-its own machine. Do not give containers that share a Claude volume separate agentsview
-volumes - each would claim the same sessions as a different machine, and the database
-keeps only the first claim.
+in `/persist/agentsview`; that is why the directory persists. The agentsview volume
+follows the Claude and codex volumes, so each repo on the desktop (each `devcontainerId`)
+and each Kubernetes or Coder workspace is its own machine. Set `DEV_MACHINE_NAME` to tell
+them apart in the viewer - the repo or workspace name, say. Containers that do share a
+Claude volume (several containers of one compose project, for example) must share its
+agentsview volume too: they are then one machine, agentsview's lock in the data directory
+lets one container push at a time, and the push loop in the others takes over when that
+container stops. Separate agentsview volumes there would each claim the same sessions as a
+different machine, and the database keeps only the first claim.
 
 ### Upgrading agentsview
 

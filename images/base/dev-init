@@ -169,12 +169,13 @@ set_toml_top_key() {
 #    `agentsview pg push --watch` running so this machine's Claude and codex
 #    sessions reach the central PostgreSQL that `agentsview pg serve` reads.
 #    The data dir holds the installation ID that identifies this machine in
-#    the shared database, so it must persist. On a Docker host every container
-#    shares one dev-system-agentsview volume (and one dev-system-claude volume),
-#    which makes the host one machine: agentsview's own lock in the data dir
-#    lets one container push at a time, and the loop in the others takes over
-#    when that container stops. The container-local lock below only stops a
-#    second dev-init in the same container from starting a second loop.
+#    the shared database, so it must persist, and it follows the Claude and
+#    codex volumes: by default each repo (or workspace) has its own, so each is
+#    one machine. Containers that do share these volumes are one machine too:
+#    agentsview's own lock in the data dir lets one container push at a time,
+#    and the loop in the others takes over when that container stops. The
+#    container-local lock below only stops a second dev-init in the same
+#    container from starting a second loop.
 start_agentsview_push() {
   local data="${AGENTSVIEW_DATA_DIR:-/persist/agentsview}" name
   [ -n "${AGENTSVIEW_PG_URL:-}" ] || return 0
