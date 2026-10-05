@@ -40,6 +40,41 @@ telemetry. Pass the same variables on every push.
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
+| `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
+| `registry_auth_address` | `ghcr.io` | Registry the credentials are for. Only used with `registry_auth_config`. |
+
+## Private images
+
+A per-repo image built `FROM` the base image is often private. The template resolves the
+image's digest and pulls it from the Coder server (the provisioner), anonymously by default,
+so a private image fails with 401 or 403. To give it credentials without putting a secret in
+Terraform state, template variables or workspace parameters:
+
+1. Create a GitHub classic personal access token with only the `read:packages` scope.
+2. On the machine where `coder server` runs (or inside its container), log in with a
+   separate config directory, so only that registry's credential is in the file:
+
+   ```bash
+   DOCKER_CONFIG=/etc/coder/registry docker login ghcr.io -u <github user>
+   ```
+
+   Paste the token as the password. This writes `/etc/coder/registry/config.json`. It must
+   be readable by the provisioner process, which may run as the `coder` user or inside
+   Coder's container: make it owned by that user, mode 0600, and mount it into the
+   container if needed.
+3. Push with the path of that file:
+
+   ```bash
+   coder templates push dev-system --directory coder/dev-system \
+     --variable docker_host=ssh://coder@<docker-host> \
+     --variable registry_auth_config=/etc/coder/registry/config.json
+   ```
+
+   Pass every variable again on every push, or the others fall back to their defaults.
+
+Only the path is stored in the template; the file is read on each build. It covers the
+digest lookup and the image pull. The Docker host itself needs no login. For a registry
+other than ghcr.io, also set `registry_auth_address`.
 
 ## Create a workspace
 
