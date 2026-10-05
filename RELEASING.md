@@ -52,6 +52,16 @@ it; after merge, run the `Publish base image` workflow (Actions tab, or
 re-pushes the current version's tags weekly with fresh OS packages and tools, so tags
 are mutable - see `images/base/README.md`.
 
+## The dev image (no release step)
+
+`ghcr.io/cbundy/dev-system/dev`, this repo's own dev environment
+(`.devcontainer/Dockerfile`), has no version and is never released by hand. The
+`Publish dev image` workflow rebuilds and pushes `latest` and `sha-<short>` on every
+change to `.devcontainer/` merged to main, and weekly a few hours after the base image's
+weekly rebuild. To pick up a base image release sooner, run it by hand on main
+(`gh workflow run publish-dev-image.yml`). Its first push creates the package with this
+repo's visibility (public).
+
 ## Drift check
 
 `npx callum-dev check` exits non-zero when a repo's applied template version

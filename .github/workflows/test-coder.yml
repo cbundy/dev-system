@@ -1,0 +1,51 @@
+name: Test Coder template
+
+# Gate for coder/dev-system (cbundy/dev-system#117): `npm run lint`, which runs
+# terraform fmt -check, init and validate on the template when terraform is on
+# PATH. LINT_REQUIRE_TERRAFORM=1 makes a missing terraform fail instead of
+# skipping. terraform here is the version the dev image pins
+# (.devcontainer/Dockerfile), read from there so the two never drift.
+on:
+  pull_request:
+    paths:
+      - "coder/**"
+      - "scripts/lint.sh"
+      - ".devcontainer/Dockerfile"
+      - ".github/workflows/test-coder.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read the dev image's terraform version
+        id: tf
+        run: |
+          version=$(sed -n 's/^ARG TERRAFORM_VERSION=//p' .devcontainer/Dockerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::No ARG TERRAFORM_VERSION=X.Y.Z in .devcontainer/Dockerfile (got '$version')."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.tf.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Lint
+        env:
+          LINT_REQUIRE_TERRAFORM: "1"
+        run: npm run lint

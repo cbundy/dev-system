@@ -9,7 +9,8 @@
 # shell it declares, so a new script is covered without touching this file. Everything
 # else (Dockerfile, README, .js, .json, .awk) is skipped.
 #
-# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`).
+# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
+# and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -74,6 +75,41 @@ done < "$list"
 checked=$((checked + 1))
 if ! node scripts/build-skills.js --check; then
   fail "generated skills out of date (run npm run build:skills)"
+fi
+
+# The Coder template (cbundy/dev-system#117): terraform fmt and validate. terraform is in
+# this repo's dev image (.devcontainer/Dockerfile) and in CI (test-coder.yml), not on every
+# host, so without it this is skipped with a note - unless LINT_REQUIRE_TERRAFORM=1 (CI),
+# where a missing terraform must fail rather than pass unchecked.
+TF_DIR=coder/dev-system
+if command -v terraform >/dev/null 2>&1; then
+  checked=$((checked + 1))
+  if ! terraform -chdir="$TF_DIR" fmt -check -diff; then
+    fail "$TF_DIR (terraform fmt -check; fix with terraform -chdir=$TF_DIR fmt)"
+  fi
+  # init and validate in a scratch copy, so lint writes nothing into the checkout (no
+  # .terraform/ to ignore, works on a read-only mount). -lockfile=readonly fails when
+  # main.tf's provider versions no longer match the committed lock file. init needs the
+  # network once for the providers; the plugin cache saves the download on later runs.
+  checked=$((checked + 1))
+  tf_tmp=$(mktemp -d) || exit 1
+  trap 'rm -f "$list"; rm -rf "$tf_tmp"' EXIT
+  cp "$TF_DIR"/*.tf "$TF_DIR"/.terraform.lock.hcl "$tf_tmp"/
+  TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
+  export TF_PLUGIN_CACHE_DIR
+  mkdir -p "$TF_PLUGIN_CACHE_DIR"
+  if ! out=$(terraform -chdir="$tf_tmp" init -backend=false -input=false -lockfile=readonly -no-color 2>&1); then
+    fail "$TF_DIR (terraform init)"
+    printf '%s\n' "$out" >&2
+  elif ! out=$(terraform -chdir="$tf_tmp" validate -no-color 2>&1); then
+    fail "$TF_DIR (terraform validate)"
+    printf '%s\n' "$out" >&2
+  fi
+elif [ "${LINT_REQUIRE_TERRAFORM:-0}" = 1 ]; then
+  checked=$((checked + 1))
+  fail "terraform not on PATH, and LINT_REQUIRE_TERRAFORM=1"
+else
+  echo "lint: terraform not on PATH - skipped coder/ checks (CI runs them)"
 fi
 
 if [ "$failures" -gt 0 ]; then

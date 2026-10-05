@@ -10,10 +10,9 @@
   // --- repo-owned: edit freely ---
   "name": "dev-system",
 
-  // The dev-system base image as is. For repo-specific tools, switch to a
-  // "build": { "dockerfile": "Dockerfile" } block with a Dockerfile that starts
-  // FROM ghcr.io/cbundy/dev-system/base:2 (images/base/README.md, "Extending the image").
-  "image": "ghcr.io/cbundy/dev-system/base:2",
+  // The base image plus terraform (Dockerfile beside this file, cbundy/dev-system#117):
+  // the same image CI publishes as ghcr.io/cbundy/dev-system/dev.
+  "build": { "dockerfile": "Dockerfile" },
 
   "remoteEnv": {
     // None yet: this repo needs no env vars beyond the image's defaults.

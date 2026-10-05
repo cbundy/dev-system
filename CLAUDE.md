@@ -60,14 +60,25 @@ and adding a new test file should require no extra wiring.
   `features/src/callum-tools/`, `features/test/` and `plugins/callum-flow/hooks/`, and
   runs `node --check` on the JavaScript under `bin/`, `plugins/` and `scripts/`, and
   fails if a generated skill is out of date (`scripts/build-skills.js --check`)
-  (`scripts/lint.sh`).
+  (`scripts/lint.sh`). When `terraform` is on PATH (the dev image has it) it also runs
+  `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it, it
+  prints a skip line and CI's `test-coder.yml` runs them.
   Interim until shellcheck replaces the `-n` checks (see #116).
 - `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
   script tests (`pin-codex-model`, `recover-no-mistakes`).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
-and CI's `test-cli.yml` runs `npm test`. A new test or script check belongs inside one of
-these entrypoints, not in a bespoke CI step.
+and CI's `test-cli.yml` runs `npm test` and `test-coder.yml` runs `npm run lint` (with
+terraform). A new test or script check belongs inside one of these entrypoints, not in a
+bespoke CI step.
+
+## Dev environment image
+
+This repo's dev environment is `ghcr.io/cbundy/dev-system/dev`: the base image plus
+terraform, built from `.devcontainer/Dockerfile` (the per-repo image pattern every
+consumer uses). The desktop dev container builds it locally; `publish-dev-image.yml`
+publishes it on changes to `.devcontainer/`, on main, and weekly. Tools only this repo
+needs go there, never into `images/base/`.
 
 ## This repo
 
@@ -101,9 +112,10 @@ npm dependency on this package. After each release, bring the stamp up to date
 ## No Docker in the dev environment (for now)
 
 The dev environment has no Docker access yet (tracked under #114). Changes under
-`images/base/`, `features/` and `coder/` are verified by PR CI: `publish-base-image.yml`
-builds the image and runs `images/base/test/test.sh`, and `test-features.yml` runs the
-feature tests. Never claim an image, devcontainer or feature-in-container test ran
+`images/base/`, `.devcontainer/`, `features/` and `coder/` are verified by PR CI:
+`publish-base-image.yml` builds the image and runs `images/base/test/test.sh`,
+`publish-dev-image.yml` builds and smoke-tests the dev image, `test-coder.yml` lints the
+Coder template, and `test-features.yml` runs the feature tests. Never claim an image, devcontainer or feature-in-container test ran
 locally - point to the PR's CI run instead.
 
 ## Trying skill changes

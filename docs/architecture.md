@@ -15,6 +15,11 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 
 Two more surfaces build on the layers:
 
+- `.devcontainer/`: dev-system's own dev environment, a per-repo image like any
+  consumer's. `.devcontainer/Dockerfile` adds terraform to the base image;
+  `publish-dev-image.yml` publishes it as `ghcr.io/cbundy/dev-system/dev` (`latest` and
+  `sha-<short>`) on every change on main and weekly, after the base image's rebuild. No
+  consumer pulls it.
 - `coder/dev-system/`: a Coder template that runs the base image. You push it to a Coder
   server; consumer repos never pull it.
 - `features/src/callum-tools/`: the deprecated Dev Container Feature (see
@@ -28,13 +33,15 @@ Two more surfaces build on the layers:
 plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), hooks
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
+.devcontainer/                    this repo's dev container and dev image (base + terraform)
 templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (test-cli.yml)
 scripts/lint.sh                   lint entrypoint (npm run lint)
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
-.github/workflows/                release.yml, publish-base-image.yml, publish-features.yml, tests
+.github/workflows/                release.yml, publish-base-image.yml, publish-dev-image.yml,
+                                  publish-features.yml, tests
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs
 ```
@@ -48,6 +55,7 @@ PRs never bump versions. Releasing is a separate, deliberate step. See
 |---|---|---|---|
 | Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all synced by the workflow) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | Plugin: the marketplace update sees the new `version`. CLI and templates: npm resolves `semver:0.x` against git tags. |
 | Base image | `images/base/VERSION` | `Publish base image` workflow, plus a weekly rebuild of the current version | The next pull of the tag. Pin by digest if you need the exact image. |
+| Dev image (this repo only) | none: follows main | `Publish dev image` workflow, on every change to `.devcontainer/` on main, plus a weekly rebuild | Not a consumer layer. Workspaces for this repo pull `latest`. |
 | Feature (deprecated) | `features/src/callum-tools/devcontainer-feature.json` | `Publish features` workflow | The next rebuild of a container pinned to `callum-tools:1` |
 
 Semver for each: patch for wording fixes, minor for a new skill, template or capability,
@@ -163,7 +171,7 @@ still maintained, because the image builds from them. `test-features.yml` still 
 
 ## GHCR visibility
 
-The image and feature packages are public. They contain only public tools and install
-scripts. A private package would need a `packages:read` token on every machine and CI job
+The image and feature packages are public, the `dev` image included. They contain only
+public tools and install scripts. A private package would need a `packages:read` token on every machine and CI job
 that pulls it. Packages take this repo's visibility on first publish. If the repo is ever
 made private, set each package's visibility by hand.

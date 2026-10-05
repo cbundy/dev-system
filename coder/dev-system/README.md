@@ -106,6 +106,12 @@ to) bypass permissions, and it accepts the bypass disclaimer in `.claude.json`. 
 supervisor reads the variable when it starts, so a change takes effect on the next workspace
 restart.
 
+For a workspace that works on dev-system itself, set `image` to
+`ghcr.io/cbundy/dev-system/dev:latest`: this repo's own per-repo image (the base image plus
+terraform, from `.devcontainer/Dockerfile`), which also carries this repo's
+`DEV_REPO_URL`, so `repo_url` can stay empty. It is public, so it needs no registry
+credentials.
+
 A workspace keeps the parameter values it was created with, so one created before `auto`
 became the default (cbundy/dev-system#108) stays on `session` until you change it.
 
@@ -226,8 +232,10 @@ before a workspace builds.
 
 Keep it generic: no site-specific hosts or addresses in `main.tf`, only in push commands.
 Provider versions are pinned, with `.terraform.lock.hcl` beside the template; after a
-version bump, run `terraform init -upgrade` here and commit the lock file. Check with
-`terraform fmt -check` and `terraform validate` before pushing.
+version bump, run `terraform init -upgrade` here and commit the lock file. `npm run lint`
+from the repo root runs `terraform fmt -check`, `init -lockfile=readonly` and `validate`
+on this directory whenever terraform is on PATH (it is in the `dev` image above), and CI's
+`test-coder.yml` runs the same on every PR that touches `coder/`.
 
 To try a change from inside a workspace before it reaches `dev-system`, push it as
 `dev-system-next` with `coder/dev-system/push-next.sh smoke`; see
