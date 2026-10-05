@@ -230,8 +230,15 @@ sync_repo() {
 #    the daemon is a process and is gone after every restart, so it is started
 #    whenever the workspace opts in. Then the callum-tools recovery re-registers
 #    a repo the daemon has lost (e.g. a fresh volume).
+#    `daemon start` waits up to 135s for a daemon that never answers
+#    (cbundy/dev-system#101), so each call here has its own short limit: a
+#    stuck no-mistakes never holds up the steps after this one (the login page
+#    above all). The recovery script bounds its own calls; the outer limit is
+#    only a backstop.
+NM_START_LIMIT=30
+NM_RECOVER_LIMIT=100
 recover_no_mistakes() {
-  local ws top
+  local ws top out rc nm_home="${NM_HOME:-/persist/no-mistakes}"
   ws=$(workspace)
   command -v no-mistakes >/dev/null 2>&1 || return 0
   [ -d "$ws" ] || return 0
@@ -243,9 +250,27 @@ recover_no_mistakes() {
     return 0
   fi
   [ -f "$top/.no-mistakes.yaml" ] || return 0
-  [ -w "${NM_HOME:-/persist/no-mistakes}" ] || return 0
-  ( cd "$top" && no-mistakes daemon start >/dev/null 2>&1 ) || true
-  ( cd "$top" && "$CALLUM_TOOLS/recover-no-mistakes.sh" ) || true
+  [ -w "$nm_home" ] || return 0
+  out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon start </dev/null 2>&1)
+  rc=$?
+  case "$rc" in
+    0) ;;
+    124 | 137)
+      log "WARNING: no-mistakes daemon start did not finish within ${NM_START_LIMIT}s - the no-mistakes daemon is not running, and the repo recovery is skipped."
+      log "  Fix: see $nm_home/logs (cli.log, daemon-bootstrap.log), then run in $top: no-mistakes daemon start && no-mistakes init"
+      return 0
+      ;;
+    *)
+      # Already running is the normal case on a second dev-init.
+      printf '%s\n' "$out" | grep -qi 'already running' \
+        || log "WARNING: no-mistakes daemon start failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
+      ;;
+  esac
+  ( cd "$top" && timeout -k 5 "$NM_RECOVER_LIMIT" "$CALLUM_TOOLS/recover-no-mistakes.sh" </dev/null )
+  case $? in
+    124 | 137) log "WARNING: the no-mistakes recovery did not finish within ${NM_RECOVER_LIMIT}s - stopped. Fix: run in $top: no-mistakes init" ;;
+  esac
+  return 0
 }
 
 # Sets a top-level key in a TOML file: replaced where it already appears

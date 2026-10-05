@@ -214,6 +214,22 @@ check "dev-init: no volume warning with a volume per /persist dir (the devcontai
   echo \"\$out\"
   ! echo \"\$out\" | grep -q 'no volume behind'"
 
+# The no-mistakes daemon (cbundy/dev-system#101): with no systemd in the
+# container, systemctl must fail, so `daemon start` falls back to running the
+# daemon itself at once instead of waiting 135s on a unit that never starts.
+check "systemctl fails without systemd, and no build-time systemd unit ships" in_image '
+  out=$(systemctl --user daemon-reload 2>&1); rc=$?; echo "$out"
+  [ $rc -ne 0 ] && echo "$out" | grep -q "systemd is not running" && [ ! -e ~/.config/systemd ]' \
+  --entrypoint ""
+check "dev-init starts the no-mistakes daemon and registers a gated repo within 30s" in_image '
+  git init -q --bare /tmp/origin.git && git init -q /tmp/r && git -C /tmp/r remote add origin /tmp/origin.git
+  touch /tmp/r/.no-mistakes.yaml && cd /tmp/r
+  start=$(date +%s); out=$(dev-init 2>&1); took=$(($(date +%s) - start))
+  echo "$out"; echo "dev-init took ${took}s"
+  [ "$took" -lt 30 ] && ! echo "$out" | grep -q "WARNING: no-mistakes" &&
+  echo "$out" | grep -qF "dev-doctor: OK   no-mistakes: /tmp/r is registered" && no-mistakes daemon status </dev/null' \
+  --entrypoint ""
+
 echo "== 6. dev-doctor"
 check "dev-doctor exits non-zero with no auth and prints a hint per failure" bash -c "
   out=\$(docker run --rm '$IMAGE' dev-doctor 2>&1); rc=\$?
@@ -949,6 +965,31 @@ check "a page started anyway is detected (the check above is not vacuous)" in_c 
   (DEV_LOGIN_PORT=8765 DEV_LOGIN_PAGE_EXIT=0 dev-login serve >/dev/null 2>&1 &)
   for _ in $(seq 20); do (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.5; done
   pgrep -fx "node /usr/local/share/dev-system/dev-login-page.js" >/dev/null && (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null'
+docker rm -f "$c" >/dev/null
+
+# A no-mistakes whose `daemon start` never returns (cbundy/dev-system#101):
+# dev-init stops it at its own limit, says why with the fix, skips the
+# recovery (init would only wait the same way) and still starts the page.
+STUB_NM='#!/bin/bash
+echo "$*" >> /tmp/nm-calls
+[ "$*" = "daemon start" ] && exec sleep 1000
+[ "$1" = status ] && echo "repo not initialized (run no-mistakes init first)"
+exit 0'
+c=$(run_bg -e STUB="$STUB" -e STUB_NM="$STUB_NM" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude \
+  --entrypoint /usr/bin/tini "$IMAGE" -- bash -c "$WITH_STUB && printf '%s\n' \"\$STUB_NM\" > /tmp/stub/no-mistakes &&
+    chmod +x /tmp/stub/no-mistakes && git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r &&
+    start=\$(date +%s) && dev-init 2> /tmp/dev-init.log; echo \$((\$(date +%s) - start)) > /tmp/dev-init-took
+    exec sleep infinity")
+check "a no-mistakes daemon start that hangs: dev-init stops it at 30s, names the fix and still starts the page" bash -c "
+  for _ in \$(seq 90); do docker exec '$c' test -s /tmp/dev-init-took && break; sleep 1; done
+  docker exec '$c' cat /tmp/dev-init.log /tmp/nm-calls; took=\$(docker exec '$c' cat /tmp/dev-init-took)
+  echo \"dev-init took \${took}s\"
+  [ \"\$took\" -ge 30 ] && [ \"\$took\" -lt 60 ] &&
+  docker exec '$c' grep -qF 'dev-init: WARNING: no-mistakes daemon start did not finish within 30s' /tmp/dev-init.log &&
+  docker exec '$c' grep -qF 'then run in /tmp/r: no-mistakes daemon start && no-mistakes init' /tmp/dev-init.log &&
+  ! docker exec '$c' grep -qx init /tmp/nm-calls &&
+  docker exec '$c' grep -qF 'dev-init: started the login page on port 8765' /tmp/dev-init.log &&
+  [ \"\$(docker exec '$c' curl -fsS -m 5 localhost:8765/healthz)\" = ok ]"
 docker rm -f "$c" >/dev/null
 
 # The page behind a reverse proxy that serves it under a path prefix (#79):

@@ -14,7 +14,7 @@
 # suite (see that workflow for the wiring).
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 RECOVER_SH="$SCRIPT_DIR/../../src/callum-tools/recover-no-mistakes.sh"
 
 [ -x "$RECOVER_SH" ] || {
@@ -55,6 +55,9 @@ mkdir -p "$fakebin"
 cat > "$fakebin/no-mistakes" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$FAKE_NM_LOG"
+# A call named in FAKE_NM_HANG never returns, as `daemon start` does when its
+# daemon never answers (cbundy/dev-system#101).
+[ "$*" = "${FAKE_NM_HANG:-}" ] && exec sleep 1000
 if [ "${1:-}" = "status" ]; then
   if [ "${FAKE_NM_REGISTERED:-false}" = "true" ]; then
     echo "    repo:  /fake/repo"
@@ -135,5 +138,24 @@ expect_line "$tmpdir/log5" "init"
 mkdir -p "$tmpdir/plainfolder"
 run_recover "$tmpdir/plainfolder" false "$tmpdir/log6"
 expect_empty_log "$tmpdir/log6"
+
+# Scenario 7: `daemon start` hangs -> the script stops it at its time limit,
+# says so with the fix, skips init and still exits 0, well before the hang
+# would end. Scenario 8: so does a hanging `status`, before any recovery.
+for hang in "daemon start" status; do
+  start=$(date +%s)
+  NM_CALL_LIMIT=2 FAKE_NM_HANG="$hang" run_recover "$tmpdir/unreg" false "$tmpdir/log7" 2>/dev/null \
+    || fail "must exit 0 when '$hang' hangs"
+  took=$(($(date +%s) - start))
+  [ "$took" -lt 15 ] || fail "'$hang' hangs: took ${took}s, the limit is 2s"
+  expect_no_line "$tmpdir/log7" "init"
+done
+expect_no_line "$tmpdir/log7" "daemon start"
+NM_CALL_LIMIT=2 FAKE_NM_HANG="daemon start" run_recover "$tmpdir/unreg" false "$tmpdir/log7" 2> "$tmpdir/err7" \
+  || fail "must exit 0 when 'daemon start' hangs"
+grep -qF "callum-tools: daemon start: did not finish within 2s - stopped." "$tmpdir/err7" \
+  || fail "expected a timeout message - stderr was: $(cat "$tmpdir/err7")"
+grep -qF "then run: no-mistakes daemon start" "$tmpdir/err7" \
+  || fail "expected a fix hint - stderr was: $(cat "$tmpdir/err7")"
 
 echo "ok - all no-mistakes auto-recovery scenarios passed"

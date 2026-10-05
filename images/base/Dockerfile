@@ -88,10 +88,13 @@ RUN npm install -g @openai/codex \
 # no-mistakes and treehouse: their install scripts put the binaries under
 # ~/.no-mistakes/bin and ~/.local/bin. The no-mistakes installer also starts a
 # daemon and writes state into its default home; that state belongs in
-# /persist at run time, so everything but the binary is dropped here.
+# /persist at run time, so everything but the binary is dropped here, with
+# the systemd user unit that daemon start leaves behind (for the build-time
+# home, and no systemd runs here anyway).
 RUN curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh \
   && no-mistakes --version \
   && find /home/node/.no-mistakes -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} + \
+  && rm -rf /home/node/.config/systemd \
   && ln -s /persist/no-mistakes/logs /home/node/.no-mistakes/logs
 RUN curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh \
   && treehouse --version
@@ -139,12 +142,15 @@ RUN install -d -m 0755 /usr/local/share/dev-system \
     > /usr/local/share/dev-system/codex-model.default \
   && rm /tmp/callum-tools-feature.json
 
+# systemctl replaces the base image's shim of the same name, which reports
+# success without systemd (see the script, cbundy/dev-system#101).
 COPY --chmod=0755 \
   images/base/dev-init \
   images/base/dev-doctor \
   images/base/dev-entrypoint \
   images/base/dev-remote-control \
   images/base/dev-login \
+  images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh /usr/local/share/dev-system/

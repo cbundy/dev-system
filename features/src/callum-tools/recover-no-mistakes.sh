@@ -19,6 +19,11 @@
 # Idempotent: an already-registered repo, or one with no .no-mistakes.yaml at
 # all, is a no-op.
 #
+# Every no-mistakes call has its own time limit (NM_CALL_LIMIT seconds):
+# `daemon start` alone waits up to 135s for a daemon that never answers
+# (cbundy/dev-system#101), and this runs during container start-up, where a
+# hang holds up everything after it.
+#
 # Called from setup.sh's postCreateCommand. Failures must never abort setup -
 # every exit here is 0, and every message goes to stderr. Safe to run
 # standalone too (e.g. from a shell test): it only touches state guarded by
@@ -26,8 +31,41 @@
 # daemon errors out rather than restarting it.
 set -u
 
+NM_CALL_LIMIT="${NM_CALL_LIMIT:-30}"
+
 log() {
   echo "callum-tools: $*" >&2
+}
+
+# bounded <command...>: runs a command under NM_CALL_LIMIT (when coreutils
+# timeout is there), so a stuck no-mistakes cannot hang the caller. A command
+# that hits the limit exits 124 (137 if it had to be killed).
+bounded() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k 5 "$NM_CALL_LIMIT" "$@" </dev/null
+  else
+    "$@" </dev/null
+  fi
+}
+
+# run_logged <label> <command...>: a bounded call, with its output logged line
+# by line under the label and a timeout named with the fix. Returns the
+# command's exit status.
+run_logged() {
+  label="$1"
+  shift
+  out=$(bounded "$@" 2>&1)
+  rc=$?
+  printf '%s\n' "$out" | while IFS= read -r line; do
+    [ -z "$line" ] || log "$label: $line"
+  done
+  case "$rc" in
+    124 | 137)
+      log "$label: did not finish within ${NM_CALL_LIMIT}s - stopped."
+      log "  Fix: see ${NM_HOME:-$HOME/.no-mistakes}/logs (cli.log, daemon-bootstrap.log), then run: no-mistakes $label"
+      ;;
+  esac
+  return "$rc"
 }
 
 # containers.dev specifies that lifecycle hooks (postCreateCommand included)
@@ -53,15 +91,21 @@ recover_no_mistakes() {
 
   [ -f "$workspace_dir/.no-mistakes.yaml" ] || return 0
 
-  status_output=$(cd "$workspace_dir" && no-mistakes status 2>/dev/null)
+  cd "$workspace_dir" || return 0
+  status_output=$(bounded no-mistakes status 2>/dev/null)
   case "$status_output" in
     *"repo not initialized"*) ;;
-    *) return 0 ;; # already registered (or status shape changed) - no-op
+    *) return 0 ;; # already registered (or status shape changed, or timed out) - no-op
   esac
 
   log ".no-mistakes.yaml present but repo not registered - recovering no-mistakes runtime state in $workspace_dir"
-  ( cd "$workspace_dir" && no-mistakes daemon start ) 2>&1 | while IFS= read -r line; do log "daemon start: $line"; done
-  ( cd "$workspace_dir" && no-mistakes init ) 2>&1 | while IFS= read -r line; do log "init: $line"; done
+  run_logged "daemon start" no-mistakes daemon start
+  # A daemon start that ran out of time leaves no daemon, so init would only
+  # fail the same way.
+  case $? in
+    124 | 137) return 0 ;;
+  esac
+  run_logged init no-mistakes init
   return 0
 }
 
