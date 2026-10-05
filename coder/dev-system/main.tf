@@ -23,6 +23,9 @@
 #   secrets_dir), mounted read-only where the image looks for them, so the
 #   agentsview session push is on in every workspace once the host has its
 #   URL (cbundy/dev-system#103);
+# - an opt-in Template Admin token for push-next.sh (variable
+#   template_tester_secrets_dir, parameter template_testing), mounted only into
+#   workspaces that turn the parameter on (cbundy/dev-system#118);
 # - optional registry credentials (variable registry_auth_config), read from a
 #   file on the Coder server, so private per-repo images can be used.
 
@@ -61,6 +64,17 @@ variable "otlp_endpoint" {
 variable "secrets_dir" {
   default     = "/etc/dev-system/secrets"
   description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url (owned 1000:1000, mode 0600). Empty mounts nothing."
+  type        = string
+}
+
+# push-next.sh (beside this file) pushes the checked-out template as
+# dev-system-next with a Template Admin session token. On Coder OSS that token
+# can change any template, so it is kept out of secrets_dir (mounted into every
+# workspace) and lives in its own host directory, mounted only into workspaces
+# with the template_testing parameter on.
+variable "template_tester_secrets_dir" {
+  default     = ""
+  description = "Directory on the Docker host holding coder-session-token and coder-template-vars for push-next.sh (owned 1000:1000, mode 0700). Mounted read-only at /run/secrets/dev-system-template-tester only into workspaces with the template_testing parameter on. Empty turns the feature off."
   type        = string
 }
 
@@ -177,6 +191,16 @@ data "coder_parameter" "memory_gb" {
     min = 1
     max = 16
   }
+}
+
+data "coder_parameter" "template_testing" {
+  name         = "template_testing"
+  display_name = "Template testing (admin token)"
+  description  = "Mounts a Template Admin session token into this workspace, so agents here can push template changes as dev-system-next with coder/dev-system/push-next.sh. On Coder OSS that token can push, change or delete any template, including dev-system. Only for a workspace developing dev-system. Needs the template's template_tester_secrets_dir variable; takes effect on the next workspace start."
+  type         = "bool"
+  default      = false
+  mutable      = true
+  order        = 7
 }
 
 locals {
@@ -429,6 +453,19 @@ resource "docker_container" "workspace" {
     for_each = var.secrets_dir == "" ? [] : [var.secrets_dir]
     content {
       container_path = "/run/secrets/dev-system"
+      host_path      = volumes.value
+      read_only      = true
+    }
+  }
+  # The Template Admin token for push-next.sh: only with both the variable set
+  # and the workspace opted in (parameter template_testing).
+  dynamic "volumes" {
+    for_each = (var.template_tester_secrets_dir != "" && tobool(data.coder_parameter.template_testing.value)
+      ? [var.template_tester_secrets_dir]
+      : []
+    )
+    content {
+      container_path = "/run/secrets/dev-system-template-tester"
       host_path      = volumes.value
       read_only      = true
     }

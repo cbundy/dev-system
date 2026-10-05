@@ -11,12 +11,14 @@
 # creates or deletes workspaces named next-smoke-* built from it. Promoting a change to the
 # production dev-system template is the owner's step, not this script's.
 #
-# Inputs, all from the secrets mount (see "Testing template changes from a workspace" in
-# README.md beside this script):
-#   $DEV_SECRETS_DIR/coder-session-token  a session token for a Template Admin user
-#   $DEV_SECRETS_DIR/coder-template-vars  name=value per line, passed as --variable
-# DEV_SECRETS_DIR defaults to /run/secrets/dev-system. The deployment URL is CODER_URL, else
-# the agent's CODER_AGENT_URL.
+# Inputs, all from the template-tester mount, which the template mounts only into a
+# workspace with the template_testing parameter on (see "Testing template changes from a
+# workspace" in README.md beside this script):
+#   $DEV_TEMPLATE_TESTER_DIR/coder-session-token  a session token for a Template Admin user
+#   $DEV_TEMPLATE_TESTER_DIR/coder-template-vars  name=value per line, passed as --variable
+# DEV_TEMPLATE_TESTER_DIR defaults to /run/secrets/dev-system-template-tester. The shared
+# secrets mount (/run/secrets/dev-system, in every workspace) is deliberately not read. The
+# deployment URL is CODER_URL, else the agent's CODER_AGENT_URL.
 #
 # The CLI used is CODER_BIN if set, else the workspace agent's own binary (downloaded from
 # the server, so its version always matches: a mismatched CLI silently ignored --parameter
@@ -31,9 +33,10 @@ SMOKE_PREFIX=next-smoke-
 SETUP_HINT='see "Testing template changes from a workspace" in coder/dev-system/README.md'
 
 TEMPLATE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-SECRETS_DIR=${DEV_SECRETS_DIR:-/run/secrets/dev-system}
-TOKEN_FILE=$SECRETS_DIR/coder-session-token
-VARS_FILE=$SECRETS_DIR/coder-template-vars
+TESTER_DIR=${DEV_TEMPLATE_TESTER_DIR:-/run/secrets/dev-system-template-tester}
+TOKEN_FILE=$TESTER_DIR/coder-session-token
+VARS_FILE=$TESTER_DIR/coder-template-vars
+OPT_IN_HINT="enable the template_testing parameter on this workspace (and push the template with its template_tester_secrets_dir variable set) - $SETUP_HINT"
 # How long smoke waits for the new workspace's agent, and how often it looks.
 TIMEOUT=${PUSH_NEXT_TIMEOUT:-600}
 POLL=${PUSH_NEXT_POLL:-10}
@@ -59,7 +62,8 @@ esac
 # point a smoke test anywhere else.
 [ -z "${CODER_TEMPLATE_NAME:-}" ] || die "CODER_TEMPLATE_NAME is set; this script only uses $TEMPLATE - unset it"
 
-[ -r "$TOKEN_FILE" ] || die "no Coder session token at $TOKEN_FILE - $SETUP_HINT"
+[ -d "$TESTER_DIR" ] || die "no template-tester directory at $TESTER_DIR: $OPT_IN_HINT"
+[ -r "$TOKEN_FILE" ] || die "no Coder session token at $TOKEN_FILE: $OPT_IN_HINT"
 token=$(cat "$TOKEN_FILE")
 [ -n "$token" ] || die "$TOKEN_FILE is empty - $SETUP_HINT"
 

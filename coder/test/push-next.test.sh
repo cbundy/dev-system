@@ -3,7 +3,7 @@
 # Plain-shell unit test for coder/dev-system/push-next.sh (cbundy/dev-system#118).
 #
 # Runs the script against a fake `coder` (CODER_BIN) that records every call's argv and the
-# session token it received in its environment, with a scratch secrets directory. No Coder
+# session token it received in its environment, with a scratch template-tester directory. No Coder
 # deployment is needed. Kept outside coder/dev-system so it is not pushed with the template.
 set -eu
 
@@ -63,7 +63,7 @@ EOF
   [ -z "${PREP:-}" ] || eval "$PREP"
   set +e
   env -u CODER_AGENT_URL -u CODER_TEMPLATE_NAME \
-    CODER_BIN="$tmpdir/coder" FAKE_DIR="$case" DEV_SECRETS_DIR="$case/secrets" \
+    CODER_BIN="$tmpdir/coder" FAKE_DIR="$case" DEV_TEMPLATE_TESTER_DIR="$case/secrets" \
     CODER_URL=https://coder.example.test PUSH_NEXT_POLL=0 "$@" > "$case/out" 2>&1
   rc=$?
   set -e
@@ -123,7 +123,18 @@ expect_rc -ne
 PREP='rm "$case/secrets/coder-session-token"' run_case 4 "$PUSH_NEXT"
 expect_rc -ne
 grep -q 'Testing template changes from a workspace' "$case/out" || fail "no setup pointer: $(cat "$case/out")"
+grep -q 'template_testing' "$case/out" || fail "no template_testing pointer: $(cat "$case/out")"
 [ ! -s "$case/calls" ] || fail "called coder without a token: $(cat "$case/calls")"
+
+# 4b. A missing directory (template_testing off) fails with the opt-in pointer, and the
+# shared secrets mount is not used as a fallback.
+PREP='rm -r "$case/secrets"; mkdir "$case/shared"; printf "%s\\n" "$TOKEN" > "$case/shared/coder-session-token"' \
+  run_case 4b env DEV_SECRETS_DIR="$tmpdir/case4b/shared" "$PUSH_NEXT"
+expect_rc -ne
+grep -q 'enable the template_testing parameter' "$case/out" || fail "no template_testing pointer: $(cat "$case/out")"
+grep -q 'template_tester_secrets_dir' "$case/out" || fail "no template_tester_secrets_dir pointer: $(cat "$case/out")"
+grep -q 'Testing template changes from a workspace' "$case/out" || fail "no README pointer: $(cat "$case/out")"
+[ ! -s "$case/calls" ] || fail "called coder without the template-tester directory: $(cat "$case/calls")"
 
 # 5. A malformed vars line fails before pushing.
 PREP='echo "not a variable" >> "$case/secrets/coder-template-vars"' run_case 5 "$PUSH_NEXT"
