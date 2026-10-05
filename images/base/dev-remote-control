@@ -47,6 +47,9 @@
 #   DEV_REMOTE_CONTROL_POLL  seconds between login checks (default 30)
 #   DEV_LOGIN_TOOLS          the logins dev-login starts (default
 #                            claude,codex,gh; empty: none), see dev-login
+#   OTEL_EXPORTER_OTLP_ENDPOINT
+#                            set: Claude exports OpenTelemetry metrics and
+#                            events there (see telemetry.sh)
 #   DEV_WORKSPACE            Claude's working directory, once it exists
 #                            (default: /workspaces/<repo name> with DEV_REPO_URL
 #                            set, see workspace.sh); until then the start
@@ -256,10 +259,15 @@ supervise() {
 
     rm -f "$status_file"
     started=$(date +%s)
-    # The pane's shell records Claude's exit status for the log line below.
+    # The pane's shell turns on the opt-in telemetry export (telemetry.sh,
+    # cbundy/dev-system#68) and records Claude's exit status for the log line
+    # below. The switch is sourced in the pane, not here: a pane gets the tmux
+    # server's environment, and that server may already be running, started
+    # by dev-login from dev-init without it.
     # shellcheck disable=SC2016
     if tmux new-session -d -s "$SESSION" -c "$ws" \
-      bash -c 'f=$1; shift; claude "$@"; echo $? > "$f"' bash "$status_file" "${args[@]}" 9>&-; then
+      bash -c 'f=$1; shift; . /usr/local/share/dev-system/telemetry.sh; claude "$@"; echo $? > "$f"' \
+      bash "$status_file" "${args[@]}" 9>&-; then
       log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
       while tmux has-session -t "$SESSION" 2>/dev/null; do
         pause 2

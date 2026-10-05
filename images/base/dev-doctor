@@ -4,7 +4,8 @@
 #
 # One line per check, OK or FAIL, with a recovery hint on every FAIL, so
 # missing auth or broken persistence shows up at start-up instead of halfway
-# through an agent run (cbundy/dev-system#19).
+# through an agent run (cbundy/dev-system#19). An INFO line reports state
+# that is neither (telemetry export) and never fails.
 #
 # Usage: dev-doctor [--warn-only]
 #   Exits 1 if any check fails. --warn-only (used by dev-init) prints the same
@@ -38,6 +39,10 @@ ok() {
 warn() {
   printf 'dev-doctor: WARN %s\n' "$1"
   printf 'dev-doctor:        fix: %s\n' "$2"
+}
+
+info() {
+  printf 'dev-doctor: INFO %s\n' "$1"
 }
 
 fail() {
@@ -244,6 +249,27 @@ else
   fi
 fi
 unset av_url
+
+# Telemetry export (cbundy/dev-system#68) is opt-in, so this line is only
+# information, never a failure: off without OTEL_EXPORTER_OTLP_ENDPOINT, else
+# the endpoint, the protocol Claude uses (telemetry.sh) and whether a TCP
+# connection to it opens within 2s (curl counts the connection, whatever the
+# protocol then says).
+info "$(
+  # shellcheck source=telemetry.sh
+  . /usr/local/share/dev-system/telemetry.sh
+  ep="${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  if [ -z "$ep" ]; then
+    echo "telemetry export is off (OTEL_EXPORTER_OTLP_ENDPOINT is not set)"
+  else
+    if [ "$(curl -s -o /dev/null --connect-timeout 2 -m 2 -w '%{num_connects}' "$ep" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+      reach=reachable
+    else
+      reach="NOT reachable (no connection within 2s)"
+    fi
+    echo "telemetry export is on: $(printf '%s' "$ep" | mask_secrets) ($OTEL_EXPORTER_OTLP_PROTOCOL), $reach"
+  fi
+)"
 
 if [ "$FAILURES" -gt 0 ]; then
   printf 'dev-doctor: %d check(s) failed\n' "$FAILURES"

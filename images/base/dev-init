@@ -4,11 +4,12 @@
 #
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
-# re-points git at gh's credentials, clones the workspace repo (DEV_REPO_URL)
-# on first start, recovers no-mistakes runtime state, starts the agentsview
-# session push when one is configured, checks the optional /shared mount,
-# starts the login page when DEV_LOGIN_PORT asks for it and, last, installs
-# the Claude plugins the repo enables.
+# points codex's telemetry at OTEL_EXPORTER_OTLP_ENDPOINT when the runtime
+# sets one, re-points git at gh's credentials, clones the workspace repo
+# (DEV_REPO_URL) on first start, recovers no-mistakes runtime state, starts
+# the agentsview session push when one is configured, checks the optional
+# /shared mount, starts the login page when DEV_LOGIN_PORT asks for it and,
+# last, installs the Claude plugins the repo enables.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
 #
@@ -118,6 +119,91 @@ seed_codex_config() {
       cat "$cfg"
     fi
   } > "$tmp" && mv "$tmp" "$cfg" && log "seeded sandbox_mode = \"danger-full-access\" in $cfg"
+  rm -f "$tmp"
+}
+
+# 3b. codex telemetry (cbundy/dev-system#68). codex reads no OTEL_*
+#    environment, so with OTEL_EXPORTER_OTLP_ENDPOINT set, an [otel] table in
+#    config.toml points it there: logs, and metrics (which otherwise go to
+#    codex's default, statsig), over the protocol telemetry.sh settles on -
+#    gRPC to the endpoint as is, HTTP to its /v1/logs and /v1/metrics, since
+#    codex appends no signal path. Prompt text stays redacted
+#    (log_user_prompt = false); no traces. The table sits between marker
+#    comments at the end of the file, so it is rewritten when the endpoint
+#    changes and removed when it is unset. A user's own otel settings (any
+#    otel table or top-level otel key outside the markers) win: nothing is
+#    written then, and the log says so.
+CODEX_OTEL_BEGIN='# BEGIN dev-system telemetry'
+CODEX_OTEL_END='# END dev-system telemetry'
+configure_codex_otel() {
+  local cfg="${CODEX_HOME:-/persist/codex}/config.toml" ep="${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  local had=false want=false rest proto codec exporter metrics tmp
+  [ -w "$(dirname "$cfg")" ] || return 0
+  [ -f "$cfg" ] && grep -qxF -- "$CODEX_OTEL_BEGIN" "$cfg" && had=true
+  # The file without the managed table and the blank lines before it.
+  rest=$(B="$CODEX_OTEL_BEGIN" E="$CODEX_OTEL_END" awk '
+    $0 == ENVIRON["B"] { skip = 1; blanks = ""; next }
+    skip { if ($0 == ENVIRON["E"]) skip = 0; next }
+    /^[[:space:]]*$/ { blanks = blanks $0 "\n"; next }
+    { printf "%s", blanks; blanks = ""; print }' "$cfg" 2>/dev/null)
+  if [ -n "$ep" ]; then
+    if printf '%s\n' "$rest" | awk '
+      /^[[:space:]]*\[/ { in_table = 1 }
+      /^[[:space:]]*\[\[?[[:space:]]*"?otel"?[[:space:]]*[].]/ { found = 1 }
+      !in_table && /^[[:space:]]*"?otel"?[[:space:]]*[.=]/ { found = 1 }
+      END { exit !found }'; then
+      log "left the otel settings already in $cfg alone - codex telemetry follows them, not OTEL_EXPORTER_OTLP_ENDPOINT"
+    else
+      want=true
+    fi
+  fi
+  [ "$had" = true ] || [ "$want" = true ] || return 0
+
+  if [ "$want" = true ]; then
+    # shellcheck source=telemetry.sh
+    proto=$(. /usr/local/share/dev-system/telemetry.sh && echo "$OTEL_EXPORTER_OTLP_PROTOCOL")
+    ep=$(printf '%s' "${ep%/}" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    case "$proto" in
+      grpc)
+        exporter="{ otlp-grpc = { endpoint = \"$ep\" } }"
+        metrics=$exporter
+        ;;
+      *)
+        if [ "$proto" = http/json ]; then codec=json; else codec=binary; fi
+        exporter="{ otlp-http = { endpoint = \"$ep/v1/logs\", protocol = \"$codec\" } }"
+        metrics="{ otlp-http = { endpoint = \"$ep/v1/metrics\", protocol = \"$codec\" } }"
+        ;;
+    esac
+  fi
+  tmp=$(mktemp "$cfg.XXXXXX") || return 0
+  {
+    [ -z "$rest" ] || printf '%s\n' "$rest"
+    if [ "$want" = true ]; then
+      [ -z "$rest" ] || echo
+      echo "$CODEX_OTEL_BEGIN"
+      echo '# Written by dev-init from OTEL_EXPORTER_OTLP_ENDPOINT and removed when that is unset'
+      echo '# (cbundy/dev-system#68). Edits here are lost: for settings of your own, replace this'
+      echo '# whole block, markers included, with your own [otel] table.'
+      echo '[otel]'
+      echo 'log_user_prompt = false'
+      echo "exporter = $exporter"
+      echo "metrics_exporter = $metrics"
+      echo "$CODEX_OTEL_END"
+    fi
+  } > "$tmp"
+  if [ -f "$cfg" ] && cmp -s "$tmp" "$cfg"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if mv "$tmp" "$cfg"; then
+    if [ "$want" = true ]; then
+      log "codex telemetry export on: [otel] in $cfg sends to $OTEL_EXPORTER_OTLP_ENDPOINT ($proto)"
+    elif [ -n "$ep" ]; then
+      log "removed dev-init's [otel] from $cfg: the otel settings of your own win"
+    else
+      log "codex telemetry export off: removed dev-init's [otel] from $cfg (OTEL_EXPORTER_OTLP_ENDPOINT is unset)"
+    fi
+  fi
   rm -f "$tmp"
 }
 
@@ -554,6 +640,7 @@ fi
 check_persist_dirs
 seed_claude_config
 seed_codex_config
+configure_codex_otel
 seed_no_mistakes_model
 setup_git_credentials
 sync_repo

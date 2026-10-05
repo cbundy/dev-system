@@ -31,7 +31,9 @@ coder templates push dev-system --directory coder/dev-system \
 ```
 
 Add `--variable otlp_endpoint=http://<gateway>:4318` to export Claude Code and codex
-telemetry. Pass the same variables on every push.
+telemetry (what is collected and the privacy defaults are in
+[the image's Telemetry section](../../images/base/README.md#telemetry-opentelemetry-export)).
+Pass the same variables on every push.
 
 ### Variables (set at push time)
 
