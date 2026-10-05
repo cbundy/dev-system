@@ -335,9 +335,10 @@ EOF
   if dc_up remote-control '"containerEnv": { "DEV_REMOTE_CONTROL": "1", "DEV_LOGIN_TOOLS": "claude" },'; then
     pass "devcontainer up succeeds with DEV_REMOTE_CONTROL=1"
     # no login in a test volume, so the supervisor waits for one
+    # The sign-in link comes from dev-login watch, after the supervisor's hint.
     check "with DEV_REMOTE_CONTROL=1 the post-start hook starts the supervisor in the workspace, waiting for a login" bash -c "
-      for _ in \$(seq 30); do
-        docker exec '$cid' grep -q 'Claude is not logged in' /tmp/dev-remote-control.log 2>/dev/null && break
+      for _ in \$(seq 60); do
+        docker exec '$cid' grep -q 'dev-login: claude: open' /tmp/dev-remote-control.log 2>/dev/null && break
         sleep 1
       done
       docker exec '$cid' bash -c '
