@@ -21,7 +21,9 @@
 # - runtime secrets from a directory on the Docker host (variable
 #   secrets_dir), mounted read-only where the image looks for them, so the
 #   agentsview session push is on in every workspace once the host has its
-#   URL (cbundy/dev-system#103).
+#   URL (cbundy/dev-system#103);
+# - optional registry credentials (variable registry_auth_config), read from a
+#   file on the Coder server, so private per-repo images can be used.
 
 terraform {
   required_providers {
@@ -61,8 +63,32 @@ variable "secrets_dir" {
   type        = string
 }
 
+# Private images (e.g. a per-repo image built FROM the base image) need
+# registry credentials for both the digest lookup and the pull. They are read
+# from a Docker config.json on the machine running the provisioner, so the
+# secret never enters Terraform state, template variables or parameters.
+variable "registry_auth_config" {
+  default     = ""
+  description = "Path, on the Coder server / provisioner, to a Docker config.json holding registry credentials (docker login), used to resolve and pull private images. Empty uses anonymous access."
+  type        = string
+}
+
+variable "registry_auth_address" {
+  default     = "ghcr.io"
+  description = "Registry host the credentials in registry_auth_config are for. Only used when registry_auth_config is set."
+  type        = string
+}
+
 provider "docker" {
   host = var.docker_host
+
+  dynamic "registry_auth" {
+    for_each = var.registry_auth_config == "" ? [] : [var.registry_auth_config]
+    content {
+      address     = var.registry_auth_address
+      config_file = registry_auth.value
+    }
+  }
 }
 
 data "coder_provisioner" "me" {}
