@@ -7,30 +7,27 @@
 # Remote Control; any other command (`docker run IMAGE bash`, a k8s `args:`, a
 # CI step) runs instead, with its exit status passed through.
 #
-# dev-init runs in the workspace, so its no-mistakes recovery finds the repo:
-# $DEV_WORKSPACE, else the start directory (the image WORKDIR or the runtime's
-# working directory) unless that is /, else $HOME. The command itself still
+# dev-init runs in the workspace (see workspace.sh): $DEV_WORKSPACE once it
+# exists, else the start directory (the image WORKDIR or the runtime's working
+# directory) unless that is /, else $HOME. On a first start with DEV_REPO_URL,
+# dev-init clones the repo into $DEV_WORKSPACE itself. The command still
 # starts in the original directory. dev-init is best-effort and time-limited,
-# so it never blocks start-up, and its report goes to stderr so it never mixes
-# with the command's own output.
+# so it never blocks start-up for long, and its report goes to stderr so it
+# never mixes with the command's own output. The limit leaves room for the
+# clone's own 120s and the checks after it.
 #
 # Desktop dev containers do not use this: the devcontainer CLI and VS Code
 # replace the entrypoint (overrideCommand), and the image metadata's
 # postStartCommand runs dev-init instead.
 set -u
 
+# Also derives (and exports) DEV_WORKSPACE from DEV_REPO_URL, for dev-init and
+# the command alike.
+# shellcheck source=workspace.sh
+. /usr/local/share/dev-system/workspace.sh
+
 log() {
   echo "dev-entrypoint: $*" >&2
-}
-
-workspace() {
-  if [ -n "${DEV_WORKSPACE:-}" ] && [ -d "$DEV_WORKSPACE" ]; then
-    echo "$DEV_WORKSPACE"
-  elif [ "$PWD" != / ]; then
-    echo "$PWD"
-  else
-    echo "$HOME"
-  fi
 }
 
 if [ "$(id -u)" = 0 ]; then
@@ -39,10 +36,10 @@ if [ "$(id -u)" = 0 ]; then
   log "running as root - dev-init skipped (it runs as node)"
 else
   ws=$(workspace)
-  ( cd "$ws" && timeout -k 10 120 dev-init ) >&2
+  ( cd "$ws" && timeout -k 10 300 dev-init ) >&2
   case $? in
     0) ;;
-    124 | 137) log "WARNING: dev-init did not finish within 120s - continuing without it" ;;
+    124 | 137) log "WARNING: dev-init did not finish within 300s - continuing without it" ;;
     *) log "WARNING: dev-init failed - continuing without it" ;;
   esac
 fi

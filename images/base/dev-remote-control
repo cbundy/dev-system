@@ -38,7 +38,7 @@
 #   DEV_REMOTE_CONTROL_MODE  session (default) or server, see above
 #   DEV_REMOTE_CONTROL_NAME  session (or environment) name in claude.ai
 #                            (default: the workspace's repo name, else the
-#                            hostname)
+#                            one in DEV_REPO_URL, else the hostname)
 #   DEV_REMOTE_CONTROL_SKIP_PERMISSIONS
 #                            1 runs Claude with --dangerously-skip-permissions
 #                            (server mode: --permission-mode bypassPermissions
@@ -47,9 +47,14 @@
 #   DEV_REMOTE_CONTROL_POLL  seconds between login checks (default 30)
 #   DEV_LOGIN_TOOLS          the logins dev-login starts (default
 #                            claude,codex,gh; empty: none), see dev-login
-#   DEV_WORKSPACE            Claude's working directory (default: the start
-#                            directory unless it is /, else $HOME)
+#   DEV_WORKSPACE            Claude's working directory, once it exists
+#                            (default: /workspaces/<repo name> with DEV_REPO_URL
+#                            set, see workspace.sh); until then the start
+#                            directory unless it is /, else $HOME
 set -u
+
+# shellcheck source=workspace.sh
+. /usr/local/share/dev-system/workspace.sh
 
 SESSION=claude
 LOCK=/tmp/dev-remote-control.lock
@@ -65,30 +70,18 @@ log() {
   echo "dev-remote-control: $*" >&2
 }
 
-workspace() {
-  if [ -n "${DEV_WORKSPACE:-}" ] && [ -d "$DEV_WORKSPACE" ]; then
-    echo "$DEV_WORKSPACE"
-  elif [ "$START_DIR" != / ]; then
-    echo "$START_DIR"
-  else
-    echo "$HOME"
-  fi
-}
-
 # The default session name: the workspace's repo name - the last part of its
 # origin URL, else the name of its git top-level directory - or, outside a git
-# repo, the hostname.
+# repo, the name in DEV_REPO_URL (a clone still pending), else the hostname.
 default_name() {
-  local ws="$1" url top
-  url=$(git -C "$ws" remote get-url origin 2>/dev/null) || url=""
-  url="${url%/}"
-  url="${url%.git}"
-  url="${url##*/}"
-  url="${url##*:}"
-  if [ -n "$url" ]; then
-    echo "$url"
+  local ws="$1" url name="" top
+  url=$(git -C "$ws" remote get-url origin 2>/dev/null) && name=$(repo_name "$url")
+  if [ -n "$name" ]; then
+    echo "$name"
   elif top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
     basename "$top"
+  elif [ -n "${DEV_REPO_URL:-}" ] && name=$(repo_name "$DEV_REPO_URL") && [ -n "$name" ]; then
+    echo "$name"
   else
     echo "${HOSTNAME:-$(cat /etc/hostname)}"
   fi
@@ -225,14 +218,15 @@ supervise() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
 
   # codex and gh logins are needed whether or not Claude is logged in.
-  ws=$(cd "$(workspace)" && pwd -P)
+  ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
   start_login_watch "${DEV_REMOTE_CONTROL_NAME:-$(default_name "$ws")}"
 
   while :; do
-    ws=$(cd "$(workspace)" && pwd -P)
+    ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
     wait_for_login "${DEV_REMOTE_CONTROL_NAME:-$(default_name "$ws")}"
-    # Again: a workspace cloned while waiting is used straight away.
-    ws=$(cd "$(workspace)" && pwd -P)
+    # Again: a workspace cloned while waiting (dev-login clones it once gh is
+    # logged in) is used straight away; one cloned later, from the next start.
+    ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
     if [ "$MODE" = server ] && [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
       prepare_claude_config "$ws" 1
     else
