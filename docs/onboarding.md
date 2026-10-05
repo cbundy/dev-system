@@ -85,19 +85,69 @@ Check: `npx callum-dev --version` prints a version.
 
 ### Settle the commands first
 
-Agents and the no-mistakes pipeline must run the same gates, so each gate (lint,
-typecheck, test, e2e if there is one) gets **one** command from the repo root:
+Every agent, every sub-agent and the no-mistakes pipeline run these commands, often many
+times per change. Get them right before writing any file. Start from the commands the repo
+really uses (`package.json` scripts, `Makefile`, `pyproject.toml`, CI workflows, the README)
+and run each to confirm it works.
 
-1. Find the commands the repo really uses: `package.json` scripts, `Makefile`,
-   `pyproject.toml`, CI workflows, the README. Run each to confirm it works.
-2. If one gate is scattered across several commands or directories, add a single
-   entrypoint that runs them all (an npm script, a make target or a `scripts/` file), so a
-   new test file needs no extra wiring.
-3. Use exactly these commands in `CLAUDE.md` "Canonical commands" and in
-   `.no-mistakes.yaml` `commands` (with an install step in front there, see 3c). The
-   sub-agent brief and the pipeline then cannot drift.
+**Why it matters.** Everything a gate prints lands in an agent's context, on every run. A
+suite that prints a line per passing test costs thousands of lines a run, multiplied by
+every sub-agent, every pipeline retry and every agent that reads the pipeline log. An
+ambiguous or multi-step gate makes agents improvise their own commands, run gates piecemeal
+and skip some. A gate that passes with warnings scrolling past teaches agents to ignore
+output, and then they miss the real failure.
 
-If a gate has no command yet, say so to the user rather than inventing one.
+**The contract.** Each gate (lint, typecheck, test, e2e if there is one) gets exactly one
+command that:
+
+- runs from the repo root, non-interactively, and gives the same result every time. Its
+  exit code is the verdict: 0 passes, anything else fails.
+- covers the whole gate. If a gate is spread across several commands or directories, add
+  a single entrypoint (an npm script, a make target or a `scripts/` file) that runs them
+  all, so a new test file needs no extra wiring.
+- is quiet on success: one summary line at most. No per-test pass lines, progress bars,
+  banners or coverage tables, and no log lines that tests trigger on purpose.
+- on failure prints only what is needed to act: the failing test names or `file:line`, and
+  the assertion or error.
+- has that behaviour built in, in the command itself or the tool's config file (reporter,
+  `addopts`, ...), never in a flag an agent has to remember, so the agent, the pipeline and
+  CI all see the same output.
+- treats warnings as failures, or turns the rule off. A warning that passes is noise.
+- works in a fresh worktree with no dependencies installed, which is what no-mistakes
+  runs. Either the command installs what it needs, or `.no-mistakes.yaml` puts the install
+  step in front, e.g. `npm ci && npm run test`.
+
+A combined `check` command that runs the fast gates in order and stops at the first
+failure (auto-fixers such as a formatter first) is worth adding: an agent then verifies a
+change in one call before handoff. If e2e is slow, decide which gate runs it (the pipeline
+or CI) and when an agent should run it locally.
+
+Write exactly these commands into `CLAUDE.md` "Canonical commands" and `.no-mistakes.yaml`
+`commands`, with nothing added in the YAML except the install step. The sub-agent brief and
+the pipeline then cannot drift. If a gate has no command yet, say so to the user rather
+than inventing one.
+
+Examples only; adapt them to the repo and check the options against the installed version:
+
+| Tool | Quiet on success, failures only |
+|---|---|
+| Node `node:test` | `node --test --test-reporter=dot` |
+| Vitest | `reporters: ['dot']` and `silent: true` in the config |
+| Bun | `onlyFailures = true` under `[test]` in `bunfig.toml` |
+| Playwright | `reporter: 'dot'` in the config (keep `html` as a second reporter for digging in) |
+| pytest | `addopts = "-q --tb=short"` in `pyproject.toml` |
+| Go | `go test ./...` without `-v`: one `ok` line per package, failures in full |
+| ESLint | `eslint . --max-warnings=0`: nothing when clean, warnings fail |
+| ShellCheck | `shellcheck -f gcc <files>`: one `file:line:col` line per finding, nothing when clean |
+
+**Check it.** Run each command twice and report both results to the user:
+
+1. On the clean tree: exit 0, and at most a few lines of output.
+2. With a deliberately failing test (for the test gate) or lint error (for the lint gate):
+   non-zero exit, and a few lines that name the file, the test and the error. Then revert
+   the breakage.
+
+If either output is long, fix the tool's config before going on.
 
 ### 3a. Run init
 
@@ -136,11 +186,11 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .
 
 | File | Placeholder | Fill with |
 |---|---|---|
-| `.no-mistakes.yaml` | `commands.lint`, `commands.test` | Commands that work in a **fresh worktree with no dependencies installed**: include the install step, e.g. `npm ci && npm run lint`. With no tests yet, use a command that exits 0 and say so to the user. |
+| `.no-mistakes.yaml` | `commands.lint`, `commands.test` | The commands from "Settle the commands first", working in a **fresh worktree with no dependencies installed**: include the install step, e.g. `npm ci && npm run lint`. With no tests yet, use a command that exits 0 and say so to the user. |
 | `.no-mistakes.yaml` | the commented ignore-glob example | Delete the line, or replace it with real globs |
 | `.no-mistakes.yaml` | `document.instructions` | Which paths own which docs. If there is no rule, delete the whole `document:` block. |
 | `CLAUDE.md` | e2e visual verification doc path | The repo's UI screenshot doc. For a repo with no UI, replace it with `n/a - no UI`. |
-| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, and which CI job calls each |
+| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `.no-mistakes.yaml` minus the install step, and which CI job calls each |
 | `CLAUDE.md` | worktree mechanism | `a treehouse worktree` unless the user says otherwise |
 | `CLAUDE.md` | repo-specific variations | Extra build or boot steps before the app can run, or delete the line |
 | `.devcontainer/devcontainer.json` | `remoteEnv` example | Delete the comment line, or add real env vars, e.g. `"DEV_LOGIN_TOOLS": "claude,gh"` for a repo that never uses codex |
@@ -194,6 +244,15 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev . || ec
 git check-ignore -v .no-mistakes.yaml .callum-dev.json .callum-dev/baseline/CLAUDE.md && echo "BAD: tracked file ignored" || echo ok
 ```
 
+Once committed, run the `.no-mistakes.yaml` lint and test commands in a fresh worktree, the
+way the pipeline does, then remove it:
+
+```bash
+git worktree add --detach ../gatecheck-tmp
+(cd ../gatecheck-tmp && <commands.lint> && <commands.test>)
+git worktree remove --force ../gatecheck-tmp
+```
+
 If the agent is running inside a dev-system container, also run `dev-init --repo` and
 then `dev-doctor`. Login failures are expected until the user logs in. Report any other
 `FAIL`.
@@ -225,7 +284,8 @@ to Claude (and codex and gh). Within 30s the workspace shows up in claude.ai. Ch
 Report:
 
 - what was created and what was merged,
-- the commands you chose and any you could not determine,
+- the commands you chose, their clean and deliberately broken output, and any command you
+  could not determine,
 - what the user still has to do, with the commands:
 
 | Next step | How |
