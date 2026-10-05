@@ -3,18 +3,29 @@
 # agentsview-push-loop: keeps `agentsview pg push --watch` running.
 #
 # dev-init starts this in the background (under a container-local flock, so
-# once per container) when AGENTSVIEW_PG_URL is set. The watcher itself exits
-# when it cannot run - most often because another container sharing the same
-# AGENTSVIEW_DATA_DIR volume already holds its pg-watch.lock - so this loop
-# retries, and a container takes over pushing when the one holding the lock
-# stops. A transiently unreachable database does not end the watcher; it
-# retries on its own.
+# once per container) when a PostgreSQL URL is configured (agentsview.sh).
+# The watcher itself exits when it cannot run - most often because another
+# container sharing the same AGENTSVIEW_DATA_DIR volume already holds its
+# pg-watch.lock - so this loop retries, and a container takes over pushing
+# when the one holding the lock stops. A transiently unreachable database does
+# not end the watcher; it retries on its own.
+#
+# The URL is read again before every start, so a changed secret file takes
+# effect at the next restart, and it reaches only the watcher's environment.
+# The watcher's output is masked, in case an error message quotes the URL.
 set -u
+
+# shellcheck source=agentsview.sh
+. /usr/local/share/dev-system/agentsview.sh
 
 RETRY_SECONDS="${DEV_AGENTSVIEW_RETRY_SECONDS:-60}"
 
 while :; do
-  agentsview pg push --watch
-  echo "agentsview-push-loop: pg push --watch exited ($?), retrying in ${RETRY_SECONDS}s" >&2
+  if ! url=$(agentsview_pg_url); then
+    echo "agentsview-push-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
+    exit 0
+  fi
+  AGENTSVIEW_PG_URL="$url" agentsview pg push --watch 2>&1 | sed -u -E "$MASK_SECRETS_SED"
+  echo "agentsview-push-loop: pg push --watch exited (${PIPESTATUS[0]}), retrying in ${RETRY_SECONDS}s" >&2
   sleep "$RETRY_SECONDS"
 done

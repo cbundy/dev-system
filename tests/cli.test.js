@@ -320,6 +320,20 @@ test("init defaults to the base-image devcontainer, with the per-repo /persist m
   assert.equal(read(repo, `.callum-dev/baseline/${DEVCONTAINER}`), read(TEMPLATES, BASE_IMAGE_TEMPLATE));
 });
 
+// The agentsview URL is a secret set once per Docker host (images/base/README.md,
+// "Central session history", cbundy/dev-system#103): the image's metadata mounts the
+// shared dev-system-secrets volume, so no template may wire the URL or that mount.
+test("the base-image devcontainer wires no secret: the image mounts dev-system-secrets", (t) => {
+  const repo = initRepo(t);
+  const content = read(repo, DEVCONTAINER);
+  const config = parseJsonc(content);
+  assert.doesNotMatch(content, /AGENTSVIEW_PG_URL|postgres(ql)?:\/\//);
+  assert.equal(config.containerEnv, undefined);
+  assert.deepEqual(config.remoteEnv, {});
+  assert.ok(config.mounts.every((m) => !m.target.startsWith("/run/secrets")));
+  assert.match(content, /dev-system-secrets/, "the header points at where the secret lives");
+});
+
 test("init picks the feature devcontainer from the prompt or --devcontainer", (t) => {
   for (const how of [
     { input: "myrepo\n\n\nfeature\n" },

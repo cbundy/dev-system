@@ -17,7 +17,11 @@
 # - logins without a shell: a "Log in" app proxies dev-login's page and a
 #   "Logins" metadata row shows each tool's state;
 # - image, CPU, memory, repo and Remote Control mode parameters, OTLP
-#   telemetry env (variable otlp_endpoint) and pinned provider versions.
+#   telemetry env (variable otlp_endpoint) and pinned provider versions;
+# - runtime secrets from a directory on the Docker host (variable
+#   secrets_dir), mounted read-only where the image looks for them, so the
+#   agentsview session push is on in every workspace once the host has its
+#   URL (cbundy/dev-system#103).
 
 terraform {
   required_providers {
@@ -43,6 +47,17 @@ variable "docker_host" {
 variable "otlp_endpoint" {
   default     = ""
   description = "OTLP http/protobuf endpoint for workspace telemetry, e.g. http://otel-gateway:4318. Empty disables export."
+  type        = string
+}
+
+# The image reads runtime secrets (agentsview-pg-url: the agentsview session
+# push) from DEV_SECRETS_DIR, /run/secrets/dev-system. This host directory is
+# mounted there read-only, so a file put on the Docker host once reaches every
+# workspace and never passes through Terraform state or Coder. Docker creates
+# a missing directory (empty, so the push stays off).
+variable "secrets_dir" {
+  default     = "/etc/dev-system/secrets"
+  description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url (owned 1000:1000, mode 0600). Empty mounts nothing."
   type        = string
 }
 
@@ -195,7 +210,8 @@ resource "coder_agent" "main" {
       DEV_LOGIN_PORT      = tostring(local.login_port)
       DEV_LOGIN_PAGE_EXIT = "0"
       DEV_LOGIN_PAGE_URL  = local.login_page_url
-      # The workspace's label in agentsview, when AGENTSVIEW_PG_URL is set.
+      # The workspace's label in agentsview (when the push is on): coder-<name>,
+      # as the image's desktop default is desktop-<checkout folder>.
       DEV_MACHINE_NAME = "coder-${lower(data.coder_workspace.me.name)}"
     },
     # Only when set, so a per-repo image's own DEV_REPO_URL applies otherwise.
@@ -346,6 +362,15 @@ resource "docker_container" "workspace" {
   volumes {
     container_path = "/workspaces"
     volume_name    = docker_volume.workspace.name
+  }
+  # Runtime secrets from the Docker host (variable secrets_dir).
+  dynamic "volumes" {
+    for_each = var.secrets_dir == "" ? [] : [var.secrets_dir]
+    content {
+      container_path = "/run/secrets/dev-system"
+      host_path      = volumes.value
+      read_only      = true
+    }
   }
 
   dynamic "labels" {

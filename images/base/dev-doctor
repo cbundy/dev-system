@@ -185,18 +185,31 @@ else
   fail "treehouse is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
 fi
 
-# agentsview session push is opt-in: only an AGENTSVIEW_PG_URL turns it on,
-# and only then are the database and the push watcher checked.
+# agentsview session push: on when a PostgreSQL URL is configured, the
+# secret file or AGENTSVIEW_PG_URL (agentsview.sh). Off is a WARN with the way
+# to turn it on: every container is meant to push. Only with a URL are the
+# database and the push watcher checked, and anything agentsview prints is
+# masked, since an error can quote the URL.
+# shellcheck source=agentsview.sh
+. /usr/local/share/dev-system/agentsview.sh
+av_file=$(agentsview_pg_url_file)
+av_rc=0
+av_url=$(agentsview_pg_url) || av_rc=$?
 if ! command -v agentsview >/dev/null 2>&1; then
   fail "agentsview is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
-elif [ -z "${AGENTSVIEW_PG_URL:-}" ]; then
-  ok "agentsview is installed (session push off: AGENTSVIEW_PG_URL is not set)"
+elif [ "$av_rc" -eq 1 ]; then
+  warn "agentsview session push is off: no $av_file and no AGENTSVIEW_PG_URL, so this container's sessions do not reach the central agentsview" \
+    "put the PostgreSQL URL in $av_file once per Docker host or cluster (images/base/README.md, \"Central session history\"), then restart the container or run: dev-init"
+elif [ "$av_rc" -ne 0 ]; then
+  fail "agentsview session push is off: $av_file is empty or not readable by $(id -un) ($(id -u):$(id -g))" \
+    "make it a non-empty file readable by UID 1000 (chown 1000:1000, chmod 0600; Kubernetes: defaultMode 0440 with fsGroup 1000), then run: dev-init"
 else
-  if status=$(timeout 30 agentsview pg status 2>&1); then
-    ok "agentsview: central PostgreSQL is reachable ($(printf '%s\n' "$status" | grep -m 1 '^Last push:' | tr -s ' '))"
+  if [ -n "${AGENTSVIEW_PG_URL:-}" ]; then av_from=AGENTSVIEW_PG_URL; else av_from=$av_file; fi
+  if status=$(AGENTSVIEW_PG_URL="$av_url" timeout 30 agentsview pg status 2>&1); then
+    ok "agentsview: central PostgreSQL is reachable (URL from $av_from; $(printf '%s\n' "$status" | grep -m 1 '^Last push:' | tr -s ' ' | mask_secrets))"
   else
-    fail "agentsview cannot reach the central PostgreSQL ($(printf '%s\n' "$status" | grep -v '^[[:space:]]*$' | tail -n 1))" \
-      "check AGENTSVIEW_PG_URL (a non-local host needs sslmode=require) and that the database is up"
+    fail "agentsview cannot reach the central PostgreSQL (URL from $av_from: $(printf '%s\n' "$status" | grep -v '^[[:space:]]*$' | tail -n 1 | mask_secrets))" \
+      "check the URL (a non-local host needs sslmode=require) and that the database is up"
   fi
   # Held by the push loop in this container, or by the watcher of any
   # container sharing the data dir volume - either way this machine pushes.
@@ -208,6 +221,7 @@ else
     fail "agentsview session push is not running" "run: dev-init (log: /tmp/dev-agentsview-push.log)"
   fi
 fi
+unset av_url
 
 if [ "$FAILURES" -gt 0 ]; then
   printf 'dev-doctor: %d check(s) failed\n' "$FAILURES"
