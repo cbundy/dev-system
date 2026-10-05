@@ -93,7 +93,7 @@ container knows whether the image has its own `DEV_REPO_URL`. On an image older 
   directory is reset on each start, like any other container layer.
 - **Start-up.** The Coder agent replaces the image's entrypoint, so the agent's
   `startup_script` does its job, the way the image's devcontainer `postStartCommand` does:
-  `dev-init` (limited to 120s, best effort), then `dev-remote-control --post-start`, which
+  `dev-init` (limited to 300s like the image's own entrypoint, best effort), then `dev-remote-control --post-start`, which
   starts the supervisor in the background (`DEV_REMOTE_CONTROL=1`). Its log is
   `/tmp/dev-remote-control.log`; attach to Claude with `tmux attach -t claude`. The
   startup script's own log is `/tmp/coder-startup-script.log`. Docker's init is PID 1

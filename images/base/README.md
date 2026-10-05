@@ -918,9 +918,13 @@ read without echo, so it is not in your shell history or on screen:
 read -rsp 'agentsview URL: ' url && printf '%s\n' "$url" \
   | docker run --rm -i --user root --entrypoint "" \
       -v dev-system-secrets:/run/secrets/dev-system ghcr.io/cbundy/dev-system/base:2 \
-      sh -c 'umask 077 && cat > "$DEV_SECRETS_DIR/agentsview-pg-url" && chown 1000:1000 "$DEV_SECRETS_DIR/agentsview-pg-url"'
+      sh -c 'umask 077 && cat > /run/secrets/dev-system/agentsview-pg-url && chown 1000:1000 /run/secrets/dev-system/agentsview-pg-url'
 unset url
 ```
+
+The path is spelled out rather than taken from `$DEV_SECRETS_DIR`, so the command works
+with any image version (images before 2.2.0 don't set the variable, and the file would
+land in the throwaway container instead of the volume).
 
 Then rebuild or restart each dev container (or run `dev-init` in it). A volume rather than
 a host directory, because a devcontainer bind mount cannot be optional: a missing source
