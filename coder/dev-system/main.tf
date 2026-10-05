@@ -304,8 +304,20 @@ data "docker_registry_image" "workspace" {
   name = data.coder_parameter.image.value
 }
 
+locals {
+  image_ref = (strcontains(data.coder_parameter.image.value, "@")
+    ? data.coder_parameter.image.value
+    : "${data.docker_registry_image.workspace.name}@${data.docker_registry_image.workspace.sha256_digest}"
+  )
+}
+
 resource "docker_image" "workspace" {
-  name          = data.docker_registry_image.workspace.name
+  # By digest, not tag: the provider reuses an image already present under the
+  # requested name, so a tag that exists locally is never re-pulled when it
+  # moves (cbundy/dev-system#99). A digest reference is only present once that
+  # exact image has been pulled. A parameter that is already digest-pinned is
+  # used as is.
+  name          = local.image_ref
   pull_triggers = [data.docker_registry_image.workspace.sha256_digest]
   keep_locally  = true
 }
