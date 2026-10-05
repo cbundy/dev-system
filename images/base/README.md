@@ -419,8 +419,11 @@ docker exec my-repo dev-login <code>         # the code Claude's sign-in page sh
 ```
 
 Claude starts within 30s of the login, no restart needed. Approving codex's and gh's
-codes is enough for those. Add `-p 8765:8765 -e DEV_LOGIN_PORT=8765` for the login page
-instead (LAN or VPN only: see [Security](#security)).
+codes is enough for those. For the login page instead, add `-e DEV_LOGIN_PORT=8765` and
+reach it through a reverse proxy (see [Several containers: one nginx route](#several-containers-one-nginx-route)).
+For a single container on a LAN, `-p 8765:8765 -e DEV_LOGIN_PORT=8765` also works (LAN or
+VPN only: see [Security](#security)); a second container then needs another host port
+(`-p 8766:8765`), which the proxy avoids.
 
 The same with docker compose. Compose prefixes volume names with the project name, which
 keeps the four per-project volumes apart from other projects'; `name:` turns that off for
@@ -551,6 +554,9 @@ dev-login serve             the login page (dev-init starts it when DEV_LOGIN_PO
 button and a box for the code; codex's and gh's link and code; a tick once a tool is
 logged in. It refreshes itself when a login completes elsewhere, and `GET /healthz`
 returns 200 while it is up, for a health check. Its log is `/tmp/dev-login-page.log`.
+Every link, form and redirect on it is relative, so it works at `/` and under any path
+prefix a proxy strips (a Coder path-based app, the nginx route below), as long as the
+address ends in `/`.
 
 **The notification** (`DEV_NOTIFY_URL`) is a plain POST, sent when logins are first
 needed and then hourly while they still are. Its `Title` header is
@@ -563,6 +569,55 @@ By hand, the CLIs' own logins still work (`claude auth login`, `codex login --de
 `gh auth login`, then `dev-init` to wire git to gh straight away). Run `dev-doctor` to
 confirm everything is green.
 
+### Several containers: one nginx route
+
+Publishing each page to the host (`-p`) clashes on the host port as soon as there are two
+containers. Inside the containers there is no clash: each has its own network namespace,
+so every one listens on 8765. Put the dev containers and one nginx on a shared Docker
+network, publish nothing from the dev containers, and let one rule reach every container
+by name, with no per-container config:
+
+```nginx
+server {
+    listen 443 ssl;
+    # ... certificate, and authentication: see below
+    absolute_redirect off;
+
+    # /login/<name> -> /login/<name>/, so the page's relative links resolve
+    location ~ ^/login/(?<ws>[a-z0-9-]+)$ { return 308 $uri/; }
+
+    location ~ ^/login/(?<ws>[a-z0-9-]+)/(?<rest>.*)$ {
+        resolver 127.0.0.11 valid=10s;   # Docker's embedded DNS: container names
+        proxy_pass http://$ws:8765/$rest$is_args$args;
+    }
+}
+```
+
+```bash
+docker network create dev
+docker run -d --name login-proxy --network dev -p 443:443 \
+  -v "$PWD/login.conf:/etc/nginx/conf.d/default.conf:ro" nginx   # plus the certificate
+docker run -d --name my-repo --network dev \
+  -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_URL=https://<host>/login/my-repo/ \
+  -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
+  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
+  -v dev-system-gh:/persist/gh \
+  ghcr.io/cbundy/dev-system/base:2
+```
+
+Each container sets `DEV_LOGIN_PAGE_URL` to its own `https://<host>/login/<container-name>/`,
+so its log line and notification link to its own page. Container names must match the
+rule's `[a-z0-9-]+`.
+
+The route needs its own access control, in line with [Security](#security): basic auth
+(`auth_basic`) or LAN / VPN only (`allow` / `deny`), and nginx on the dev-container network
+only, so the rule can reach nothing else by name. Without that, anyone who reaches nginx
+reaches every container's page.
+
+**Coder** path-based apps (`/@user/workspace.agent/apps/login/`) need nothing extra:
+Coder strips the prefix and redirects the address without a trailing slash to the one
+with it, so `subdomain = false` is fine.
+
 ### Security
 
 - The page only feeds codes to logins this container started itself. Claude's uses PKCE,
@@ -570,8 +625,8 @@ confirm everything is green.
   **cannot** get your tokens.
 - The worst case is someone who reaches the page logging the container into **their**
   account (or approving a codex or gh code with theirs). So the page is opt-in, and belongs
-  on a LAN, a VPN or behind Coder's authenticated app proxy, never published to the
-  internet.
+  on a LAN, a VPN, behind Coder's authenticated app proxy or behind a reverse proxy with
+  its own authentication, never published to the internet.
 - It accepts nothing but a form POST of the code, limited to 4 KiB, and `dev-login` only
   passes on a code of printable characters, so a code cannot press keys in the login's
   terminal. The page shows no credentials and no status beyond whether each tool is

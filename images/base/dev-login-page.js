@@ -15,6 +15,12 @@
 // the container into their own account, which is why the page is opt-in and
 // belongs on a LAN, a VPN or behind an authenticating proxy (Coder).
 //
+// Every link, form action, fetch and redirect is relative ("." and "status"),
+// so the page works at / and behind a proxy that serves it under a path
+// prefix and strips it (a Coder path-based app, an nginx route such as
+// /login/<container>/), as long as the page URL ends in a slash
+// (cbundy/dev-system#79).
+//
 // Environment: DEV_LOGIN_PORT (required), DEV_LOGIN_PAGE_EXIT (1, the
 // default: exit once every login is done; 0 keeps it up).
 "use strict";
@@ -87,7 +93,7 @@ const card = (tool, t) => {
   if (tool === "claude") {
     return `<section class="card">${head("")}<ol><li>Open the sign-in page and approve.</li><li>Copy the code it shows and paste it here.</li></ol>
 <a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open sign-in page</a>
-<form method="post" action="/"><input name="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste code" required><button>Log in</button></form></section>`;
+<form method="post" action="."><input name="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste code" required><button>Log in</button></form></section>`;
   }
   return `<section class="card">${head("")}<ol><li>Open the sign-in page.</li><li>Enter this code and approve. That is all.</li></ol>
 <code class="otp">${esc(t.code || "")}</code>
@@ -100,7 +106,7 @@ const REFRESH = `<script>
 const shown = document.body.dataset.states;
 setInterval(async () => {
   try {
-    const r = await fetch("/status", { cache: "no-store" });
+    const r = await fetch("status", { cache: "no-store" });
     if (!r.ok) return;
     const now = JSON.stringify(await r.json());
     const typing = [...document.querySelectorAll("input")].some((i) => i.value);
@@ -175,14 +181,14 @@ const server = http.createServer(async (req, res) => {
       if (!code) return send(res, 400, "text/plain", "no code\n");
       const r = await devLogin(["claude", code]);
       if (r.ok) {
-        send(res, 303, "text/plain", "logged in\n", { Location: "/" });
+        send(res, 303, "text/plain", "logged in\n", { Location: "." });
         exitIfDone();
         return;
       }
       // dev-login's own message: why, and what to do next. No credentials.
       const why = r.stderr.trim().split("\n").pop().replace(/^dev-login: /, "");
       return send(res, 200, "text/html; charset=utf-8",
-        page("Logins", `<h1>That did not work</h1><section class="card err"><p>${esc(why || "The login failed.")}</p><a class="btn" href="/">Get a new link</a></section>`));
+        page("Logins", `<h1>That did not work</h1><section class="card err"><p>${esc(why || "The login failed.")}</p><a class="btn" href=".">Get a new link</a></section>`));
     }
     send(res, 404, "text/plain", "not found\n");
   } catch (e) {
