@@ -179,6 +179,28 @@ elif [ "${DEV_DESKTOP:-0}" != 1 ]; then
   fi
 fi
 
+# The Claude plugins the workspace repo enables in its committed
+# .claude/settings.json (cbundy/dev-system#112): dev-init installs them, so
+# one that is still missing is a WARN with the way to retry - Claude runs
+# without it, just without its skills. Checked only when something is
+# enabled, so a repo without plugins never runs the CLI here.
+if command -v claude >/dev/null 2>&1 && settings=$(repo_settings "$workspace"); then
+  if ! wanted=$(enabled_plugins "$settings"); then
+    warn "$settings is not valid JSON, so the Claude plugins it enables cannot be installed" \
+      "correct it, then run: dev-init --repo"
+  elif [ -n "$wanted" ]; then
+    if ! installed=$(installed_plugins); then
+      warn "cannot list Claude's installed plugins (claude plugin list --json failed), so the ones $settings enables are unchecked" \
+        "run: claude plugin list"
+    elif missing=$(printf '%s\n' "$wanted" | grep -vxF -f <(printf '%s\n' "$installed")); then
+      warn "Claude plugins enabled in $settings are not installed: $(printf '%s\n' "$missing" | paste -sd ' ')" \
+        "see dev-init's log for why, then run: dev-init --repo"
+    else
+      ok "Claude plugins enabled in $settings are installed"
+    fi
+  fi
+fi
+
 if command -v treehouse >/dev/null 2>&1; then
   ok "treehouse is on PATH"
 else
