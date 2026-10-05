@@ -1,0 +1,39 @@
+// This file is JSONC (JSON with comments), matching the devcontainer.json spec itself -
+// comments are allowed and ignored by devcontainer tooling.
+//
+// Built on the dev-system base image (images/base/README.md). The image's own metadata
+// supplies remoteUser, the /persist environment, dev-init at post-start and the gh volume
+// shared by every repo on the Docker host.
+{
+  // --- repo-owned: edit freely ---
+  "name": "<REPLACE: repo name>",
+
+  // The dev-system base image as is. For repo-specific tools, switch to a
+  // "build": { "dockerfile": "Dockerfile" } block with a Dockerfile that starts
+  // FROM ghcr.io/cbundy/dev-system/base:2 (images/base/README.md, "Extending the image").
+  "image": "ghcr.io/cbundy/dev-system/base:2",
+
+  "remoteEnv": {
+    // "<REPLACE: repo-specific env vars, e.g. DEV_LOGIN_TOOLS>": "<REPLACE>"
+  },
+  // --- end repo-owned ---
+
+  // --- synced: do not edit (managed by dev-system) ---
+  "mounts": [
+    // --- repo-owned: edit freely --- add repo-specific mounts here, each followed by a
+    // comma, e.g. the /shared NAS volume (images/base/README.md). Don't bind-mount a host
+    // ~/.no-mistakes or other tool state (cbundy/dev-system#19, #73).
+    // --- end repo-owned ---
+
+    // Per-repo tool state (cbundy/dev-system#73). ${devcontainerId} is a hash of the
+    // workspace folder and this config file's path, stable across rebuilds, so each repo
+    // keeps its own logins and state. A second config in .devcontainer/ gets its own
+    // volumes, so its own logins too. These cannot come from the image: the devcontainer
+    // CLI expands no variables in image metadata.
+    { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-agentsview", "target": "/persist/agentsview" }
+  ]
+  // --- end synced ---
+}

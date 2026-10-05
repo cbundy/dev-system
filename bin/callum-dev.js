@@ -5,7 +5,8 @@
 //           and a pristine baseline copy of each template
 //   update  pull upstream template changes forward with a 3-way merge
 //           (baseline vs new template vs repo file, via `git merge-file`),
-//           surfacing conflicts instead of overwriting repo-owned edits
+//           surfacing conflicts instead of overwriting repo-owned edits;
+//           `--devcontainer <kind>` also switches the devcontainer template
 //   check   fail when the applied template version lags the installed package
 //           (suitable as a CI drift gate)
 //
@@ -44,17 +45,60 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // file named `.gitignore` from a package, so a `templates/.gitignore` would be
 // missing from every install while every other dotfile here survives. Verified
 // with `npm pack --dry-run`. Do not "simplify" this back to a dotfile source.
+//
+// `variants` instead picks the source by a per-repo choice recorded in the stamp
+// (see DEVCONTAINER_KINDS). The baseline is kept under the destination name, so a
+// switch merges from the old kind's template to the new one like any update.
 const TEMPLATES = [
   { file: ".no-mistakes.yaml", strategy: "merge" },
   { file: "treehouse.toml", strategy: "init-only" },
   { file: "CLAUDE.md", strategy: "merge" },
   { file: ".claude/settings.json", strategy: "settings-json" },
-  { file: ".devcontainer/devcontainer.json", strategy: "merge" },
+  {
+    file: ".devcontainer/devcontainer.json",
+    strategy: "merge",
+    variants: {
+      "base-image": ".devcontainer/devcontainer.base-image.json",
+      feature: ".devcontainer/devcontainer.json",
+    },
+  },
   // `merge`, not `init-only`: as this system grows new generated artefacts, their
   // ignore rules have to reach repos that were scaffolded before those artefacts
   // existed. A repo's own paths live in the file's repo-owned block and survive.
   { file: ".gitignore", src: "gitignore", strategy: "merge" },
 ];
+
+// The devcontainer template kinds, recorded in the stamp as `devcontainer`:
+//   base-image  the dev-system base image, with the per-repo /persist volumes synced
+//   feature     any image plus the callum-tools feature (no /persist contract)
+// A stamp without the key predates the choice, when `feature` was the only kind.
+const DEVCONTAINER_KINDS = ["base-image", "feature"];
+const DEFAULT_DEVCONTAINER = "base-image";
+const LEGACY_DEVCONTAINER = "feature";
+
+function templateSource(entry, devcontainer) {
+  if (entry.variants) return entry.variants[devcontainer];
+  return entry.src ?? entry.file;
+}
+
+function baselinePath(entry) {
+  return path.join(BASELINE_DIR, entry.variants ? entry.file : (entry.src ?? entry.file));
+}
+
+// Parses `--devcontainer <kind>` (or `--devcontainer=<kind>`), the only option.
+function parseOptions(args) {
+  const options = {};
+  for (let i = 0; i < args.length; i++) {
+    const match = /^--devcontainer(?:=(.*))?$/.exec(args[i]);
+    if (!match) throw new Error(`unknown option: ${args[i]}`);
+    const kind = match[1] ?? args[++i];
+    if (!DEVCONTAINER_KINDS.includes(kind)) {
+      throw new Error(`--devcontainer must be one of: ${DEVCONTAINER_KINDS.join(", ")}`);
+    }
+    options.devcontainer = kind;
+  }
+  return options;
+}
 
 function readIfExists(file) {
   return fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : null;
@@ -101,7 +145,7 @@ function applyAnswers(file, content, answers) {
   return content;
 }
 
-async function promptAnswers() {
+async function promptAnswers(options) {
   const rl = readline.createInterface({ input: process.stdin });
   // Queue lines instead of using rl.question: with piped (non-TTY) input,
   // readline emits buffered lines in the gaps between sequential questions,
@@ -132,11 +176,20 @@ async function promptAnswers() {
     lint: await ask("Lint command (blank to fill in later)", ""),
     test: await ask("Test command (blank to fill in later)", ""),
   };
+  answers.devcontainer = options.devcontainer;
+  while (!answers.devcontainer) {
+    const kind = await ask(
+      "Devcontainer: base-image (dev-system base image) or feature (any image + callum-tools)",
+      DEFAULT_DEVCONTAINER,
+    );
+    if (DEVCONTAINER_KINDS.includes(kind)) answers.devcontainer = kind;
+    else process.stderr.write(`  must be one of: ${DEVCONTAINER_KINDS.join(", ")}\n`);
+  }
   rl.close();
   return answers;
 }
 
-async function init() {
+async function init(options) {
   if (readStamp()) {
     console.error(
       `${STAMP_FILE} already exists - this repo is initialized. Run 'callum-dev update' instead.`,
@@ -144,13 +197,16 @@ async function init() {
     process.exit(1);
   }
 
-  const answers = await promptAnswers();
+  const answers = await promptAnswers(options);
   const skipped = [];
   const written = [];
 
-  for (const { file, src } of TEMPLATES) {
-    const source = src ?? file;
-    const template = fs.readFileSync(path.join(TEMPLATE_ROOT, source), "utf-8");
+  for (const entry of TEMPLATES) {
+    const { file } = entry;
+    const template = fs.readFileSync(
+      path.join(TEMPLATE_ROOT, templateSource(entry, answers.devcontainer)),
+      "utf-8",
+    );
     if (fs.existsSync(file)) {
       // Never clobber an existing file; the pristine baseline below still lets
       // a later `update` merge upstream changes into it.
@@ -159,19 +215,22 @@ async function init() {
       writeFile(file, applyAnswers(file, template, answers));
       written.push(file);
     }
-    writeFile(path.join(BASELINE_DIR, source), template);
+    writeFile(baselinePath(entry), template);
   }
 
   writeStamp({
     version: PKG_VERSION,
     baseline: BASELINE_DIR.split(path.sep).join("/"),
+    devcontainer: answers.devcontainer,
     files: TEMPLATES.map((t) => t.file),
   });
 
   for (const file of written) console.log(`created   ${file}`);
   for (const file of skipped)
     console.log(`skipped   ${file} (already exists - 'callum-dev update' will merge into it)`);
-  console.log(`stamped   ${STAMP_FILE} (template version ${PKG_VERSION})`);
+  console.log(
+    `stamped   ${STAMP_FILE} (template version ${PKG_VERSION}, devcontainer ${answers.devcontainer})`,
+  );
 
   const remaining = TEMPLATES.map((t) => ({
     file: t.file,
@@ -243,13 +302,15 @@ function mergeFile(repoFile, baseFile, newFile, oldVersion) {
   return result.status;
 }
 
-function update() {
+function update(options) {
   const stamp = readStamp();
   if (!stamp) {
     console.error(`${STAMP_FILE} not found - run 'callum-dev init' first.`);
     process.exit(1);
   }
   const oldVersion = stamp.version;
+  const oldDevcontainer = stamp.devcontainer ?? LEGACY_DEVCONTAINER;
+  const devcontainer = options.devcontainer ?? oldDevcontainer;
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "callum-dev-"));
   const emptyBase = path.join(tmpDir, "empty");
   fs.writeFileSync(emptyBase, "");
@@ -258,10 +319,13 @@ function update() {
   const changed = [];
 
   try {
-    for (const { file, src, strategy } of TEMPLATES) {
-      const source = src ?? file;
-      const newContent = fs.readFileSync(path.join(TEMPLATE_ROOT, source), "utf-8");
-      const baselineFile = path.join(BASELINE_DIR, source);
+    for (const entry of TEMPLATES) {
+      const { file, strategy } = entry;
+      const newContent = fs.readFileSync(
+        path.join(TEMPLATE_ROOT, templateSource(entry, devcontainer)),
+        "utf-8",
+      );
+      const baselineFile = baselinePath(entry);
       const baseline = readIfExists(baselineFile);
       const current = readIfExists(file);
 
@@ -315,13 +379,16 @@ function update() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  writeStamp({ ...stamp, version: PKG_VERSION, files: TEMPLATES.map((t) => t.file) });
+  writeStamp({ ...stamp, version: PKG_VERSION, devcontainer, files: TEMPLATES.map((t) => t.file) });
 
+  if (devcontainer !== oldDevcontainer) {
+    changed.push(`switched  devcontainer: ${oldDevcontainer} -> ${devcontainer}`);
+  }
   if (changed.length === 0) {
     console.log(`Already in sync with template version ${PKG_VERSION}.`);
   } else {
     for (const line of changed) console.log(line);
-    console.log(`\nStamp updated: ${oldVersion} -> ${PKG_VERSION}.`);
+    if (oldVersion !== PKG_VERSION) console.log(`\nStamp updated: ${oldVersion} -> ${PKG_VERSION}.`);
   }
   if (conflicts.length > 0) {
     console.error(
@@ -349,7 +416,7 @@ function check() {
 function usage() {
   console.log(`callum-dev ${PKG_VERSION} - scaffold and sync Callum's dev-system templates
 
-Usage: callum-dev <command>
+Usage: callum-dev <command> [--devcontainer base-image|feature]
 
 Commands:
   init     Copy the template files into the current repo, prompting for
@@ -359,13 +426,20 @@ Commands:
            as markers and reported with a non-zero exit.
   check    Exit non-zero when the applied template version lags the
            installed package (use in CI to catch drift).
+
+Options:
+  --devcontainer <kind>  The devcontainer template (init: skips the prompt;
+                         update: switches this repo to it, merging as usual).
+                         base-image: the dev-system base image, with the
+                         per-repo /persist volumes. feature: any image plus
+                         the callum-tools feature.
 `);
 }
 
 async function main() {
   const command = process.argv[2];
-  if (command === "init") await init();
-  else if (command === "update") update();
+  if (command === "init") await init(parseOptions(process.argv.slice(3)));
+  else if (command === "update") update(parseOptions(process.argv.slice(3)));
   else if (command === "check") check();
   else if (command === "--version" || command === "-v") console.log(PKG_VERSION);
   else {

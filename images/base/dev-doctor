@@ -48,7 +48,7 @@ check_persist_dir() {
   if [ -d "$dir" ] && [ -w "$dir" ]; then
     if [ "$(stat -c %m "$dir" 2>/dev/null)" = / ]; then
       warn "$name state dir $dir is writable but not on a volume - it is lost when the container is removed" \
-        "mount a volume at $dir (desktop: the per-repo mounts in images/base/README.md, \"Extending the image\")"
+        "mount a volume at $dir (devcontainer: npx callum-dev update --devcontainer base-image, or the per-repo mounts in images/base/README.md, \"Extending the image\")"
     else
       ok "$name state dir $dir is writable"
     fi

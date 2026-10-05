@@ -133,7 +133,9 @@ is safe.
 
 If a directory is not writable, `dev-init` prints a warning naming the fix and `dev-doctor`
 fails that check. If it is writable but has no volume behind it (its state is lost with the
-container), `dev-doctor` warns.
+container), `dev-init` prints a `WARNING` at start-up naming each such directory and the
+fix, and `dev-doctor` warns. Neither fails the start: a one-off `docker run IMAGE <cmd>`
+has no volumes on purpose.
 
 ## Shared files (`/shared`)
 
@@ -273,7 +275,10 @@ no-mistakes recovery sees the repo. It is idempotent and best-effort: it logs pr
 always exits 0, so a container never fails to start because of it.
 
 1. Checks that each `/persist` directory exists and is writable, creating missing ones and
-   printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones.
+   printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones. One
+   `WARNING` names every directory with no volume behind it, whose state is lost on the
+   next rebuild, with the fix for a devcontainer, `docker run` and Kubernetes. It shows in
+   the post-start output and the container log.
 2. Records Claude's `installMethod: native` in `.claude.json` if missing (`claude doctor`
    warns without it, because the config directory starts empty).
 3. Seeds `$CODEX_HOME/config.toml` with a top-level `sandbox_mode = "danger-full-access"`
@@ -653,7 +658,10 @@ Switch back to `USER node` at the end, keep tool binaries out of `/persist`, and
 own) so `dev-init` and Remote Control keep working.
 
 On the desktop, a thin `.devcontainer/devcontainer.json` with the per-repo state volumes is
-enough:
+enough. `npx callum-dev init` writes one (the `base-image` devcontainer, the default) and
+`callum-dev update` keeps its mounts in step; a repo on the feature-based template moves
+with `npx callum-dev update --devcontainer base-image` (see `templates/README.md`). By hand,
+it is:
 
 ```jsonc
 {
@@ -662,7 +670,7 @@ enough:
   // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:2"
   "mounts": [
     // Per-repo tool state. Keep these four as they are: ${devcontainerId} is
-    // stable for this workspace folder and unique to it.
+    // stable for this workspace folder and config file, and unique to them.
     { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
@@ -687,9 +695,15 @@ which the devcontainer CLI and VS Code merge into your config:
 The per-repo mounts cannot come from the image: the devcontainer CLI expands no variables
 in image metadata (`${devcontainerId}` comes out empty), so every repo would get the same
 volumes. Leave them out and that state lives in the container itself, lost on every
-rebuild; `dev-doctor` warns about it. `${devcontainerId}` is derived from the workspace
-folder, so a second clone of the same repo gets its own volumes, and a moved or renamed
-clone starts with new, empty ones (one more login).
+rebuild; `dev-init` warns about it at start-up, and so does `dev-doctor`. `${devcontainerId}` is a hash of the workspace
+folder and the path of the devcontainer config file, so:
+
+- a second clone of the same repo gets its own volumes, and a moved or renamed clone
+  starts with new, empty ones (one more login);
+- a repo with several configs (say `.devcontainer/devcontainer.json` and
+  `.devcontainer/gpu/devcontainer.json`) gets separate volumes for each, so a separate
+  Claude and codex login for each. gh is the exception: `dev-system-gh` is shared by
+  all of them. Moving or renaming a config file also starts it on new, empty volumes.
 
 To list a repo's volumes: `docker volume ls --filter name=dev-system-`. To delete a repo's
 state, remove its four volumes once its container is gone.
@@ -710,7 +724,8 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 `-agentsview` volumes into every repo. 2.0 drops them:
 
 1. Add the four per-repo mounts above to each repo's `devcontainer.json` and move it to
-   `base:2`.
+   `base:2`. A repo scaffolded by `callum-dev` gets both from
+   `npx callum-dev update --devcontainer base-image`.
 2. Rebuild. The new volumes start empty, so log Claude and codex in once in each repo.
    gh keeps its login (`dev-system-gh` is unchanged).
 3. The old volumes are left in place. Delete them by hand once you no longer need them:

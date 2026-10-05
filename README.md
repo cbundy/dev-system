@@ -118,7 +118,8 @@ npx callum-dev init
 ```
 
 `init` copies the templates in (never clobbering existing files), prompts for the
-repo-owned values (repo name, lint/test commands), and records two things to commit
+repo-owned values (repo name, lint/test commands) and the devcontainer kind (`base-image`,
+the default, or `feature`; `--devcontainer <kind>` skips the prompt), and records two things to commit
 alongside the config: a stamp (`.callum-dev.json`, the applied template version) and a
 pristine baseline copy of each template (`.callum-dev/baseline/`). Those two make
 updates a real 3-way merge instead of an overwrite:
@@ -134,6 +135,8 @@ conflict is left as standard conflict markers with a non-zero exit rather than s
 resolved. Fully-synced files (`.claude/settings.json`) are replaced wholesale; fully
 repo-owned ones (`treehouse.toml`) are never touched after init. `npx callum-dev check`
 exits non-zero when the stamp lags the installed package - a CI-friendly drift gate.
+`npx callum-dev update --devcontainer base-image` moves a repo from the feature-based
+devcontainer to the base image (or back), as an ordinary merge.
 
 ## Consumer repo wiring
 
@@ -148,8 +151,9 @@ A consumer repo commits only:
   `callum-dev update` unions that array instead of overwriting it. Orchestrator-only
   powers (`gh pr merge`, `gh pr edit`, `no-mistakes axi respond`, watchers) stay out of
   this file entirely, in the main checkout's gitignored `.claude/settings.local.json`.
-- A thin `.devcontainer/devcontainer.json` referencing the `callum-tools` feature plus
-  repo-specific mounts/env.
+- A thin `.devcontainer/devcontainer.json`: the dev-system base image with its synced
+  per-repo `/persist` volumes, or any image plus the `callum-tools` feature, either way
+  with repo-specific mounts/env.
 - Repo-owned config values (test/lint commands in `.no-mistakes.yaml`, repo section of
   `CLAUDE.md`); the synced structure around them comes from `templates/`.
 - `@callum/dev-system` as a devDependency (`github:cbundy/dev-system#semver:0.x`), plus
