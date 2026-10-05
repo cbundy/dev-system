@@ -31,17 +31,9 @@ devcontainer tooling), and it keeps no repo-specific state of its own - see
 
 ## Each tick
 
-Ticks can be event-driven instead of cadence-driven: keep one background
-queue watcher running at all times via the harness's `run_in_background`
-Bash - `/usr/local/share/callum-tools/queue-watch.sh --repo <REPO> --label
-<READY_LABEL> --known <numbers currently in the queue>`. It polls the label
-set (token-free) and exits printing `queue-changed known=... now=...` only
-when the set differs from the baseline you started it with - that wake IS
-the tick trigger for new work. Restart it with the updated baseline after
-every tick, and pass the current set as `--known` so deliberately-parked
-issues (blocked, awaiting the owner) never re-fire. With this plus the
-pipeline watcher's `--deadline` heartbeat, a `/loop` cadence is optional
-rather than load-bearing.
+Ticks are event-driven: the two watchers (see Watchers below) wake the
+session on new `ready` work and on in-flight pipeline events, so a `/loop`
+cadence is optional rather than load-bearing.
 
 1. Scan `REPO` for open issues with `READY_LABEL`. Also list `IN_DEV_LABEL`
    issues and open PRs.
@@ -50,6 +42,66 @@ rather than load-bearing.
    run the per-issue pipeline.
 4. If nothing is actionable, report a one-line idle status and stop until next tick.
 5. If you are at over 70k tokens, run a compaction before the regular tasks.
+
+## Watchers
+Watching is the default state: keep both watchers armed for the whole
+session. A session that is not watching stalls silently - nothing tells you.
+
+- **Queue watcher** - `/usr/local/share/callum-tools/queue-watch.sh --repo
+  <REPO> --label <READY_LABEL> --known <numbers currently in the queue>`. It
+  polls the label set (token-free) and prints `queue-changed known=...
+  now=...` when the set differs from the baseline - that line IS the tick
+  trigger for new work. Passing the current set as `--known` keeps
+  deliberately-parked issues (blocked, awaiting the owner) from firing. A
+  change must be seen on two consecutive polls before it fires, which
+  absorbs GitHub's label-list lag right after a claim.
+- **Pipeline watcher** - one for all in-flight branches; its arguments and
+  events are under Monitoring in-flight agents.
+
+**Run them under Monitor.** Where the harness has a **Monitor** tool (a
+long-running command whose every stdout line wakes the session), run each
+watcher with `--stream` and `timeout_ms` at its maximum (30 minutes). A
+streaming watcher never exits on an event: it prints one line per change,
+carries its own baseline forward (the queue watcher's `now=`, the pipeline
+watcher's per-branch `<state>:<sha>`), and covers every watched branch, so
+handling an event never needs a re-arm. Handle each line as this skill
+describes. Two more lines can arrive:
+- **The expiry notice** when `timeout_ms` is reached. Re-arming is the first
+  action of that turn, before anything else: the queue watcher with the
+  current set as `--known`, the pipeline watcher with a `--known` entry for
+  each event already handled (see Monitoring).
+- **`watcher-error <reason>`** - the watcher has exited on a fatal error.
+  Fix the cause if needed and re-arm at once.
+
+To change the pipeline watcher's branch set (a run newly in flight, a branch
+merged), stop its monitor and arm a new one with the new `--branches` and
+the `--known` baseline of what you have handled. Never run two of the same
+watcher - every event would arrive twice.
+
+**Fallback where there is no Monitor tool:** run each watcher single-shot
+(no `--stream`) with the harness's `run_in_background`; it exits printing
+one line, and that exit is the wake. **Re-arm first, before handling the
+event**, with the baseline from the wake line: `now=` as the queue
+watcher's `--known`, and the line's `<state>` and `head=<sha>` added to the
+pipeline watcher's `--known`. If handling is interrupted (a refused action,
+an error, another event), the watcher is still armed; re-arming again after
+handling is harmless. Give the pipeline watcher `--deadline <seconds>` (an
+hour is a sound default) so a quiet watcher exits printing `timeout` - that
+wake is the heartbeat: verify the watched runs are still healthy, then
+re-arm.
+
+**Keep them alive:**
+- Never bundle reading or re-arming a watcher with an action that may be
+  refused (a merge, an edit, a push) in one call - a refusal blocks
+  everything in the call, and the wake goes unhandled. Give the watcher its
+  own call.
+- When the loop starts, also arm a periodic audit with the harness's
+  scheduling tool (e.g. a cron job every 20 minutes) that checks both
+  watchers are alive - the harness's task list, or `pgrep -af
+  'queue-watch|pipeline-watch'` - and re-arms any that is missing. It
+  catches the one gap left: an expiry or wake whose re-arm was dropped.
+- Every tick report shows each watcher in its **Watchers** row (see Update
+  output). A missing watcher is fixed in the same turn, not just reported.
 
 ## Per-issue pipeline
 1. **Claim** - swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
@@ -82,36 +134,32 @@ you need ("wake me when this specific known state changes"), write a small
 background one-shot script that exits the moment the condition changes and start it
 with `run_in_background` - never fall back to polling inline.
 
-- Start one background watcher for all in-flight branches using the harness's
-  `run_in_background` Bash: `/usr/local/share/callum-tools/pipeline-watch.sh
+- Watch all in-flight branches with one pipeline watcher, run as described
+  under Watchers (`--stream` under Monitor, or the single-shot fallback):
+  `/usr/local/share/callum-tools/pipeline-watch.sh
   --branches <branch-a,branch-b> --worktree <branch-a>=<worktree-path>
   --worktree <branch-b>=<worktree-path>`, mapping each branch to the worktree
   its agent works in. Every 25 seconds the watcher probes the
   newest run per watched branch (`no-mistakes axi status --run <id>`, plus the
-  run's ci.log for the CI-green marker) and exits after printing the first
-  that becomes actionable, as one line: `<state> <branch> <run-id>[
-  <detail>] head=<sha>`. Run-level status cannot drive this watch - a cleanly
+  run's ci.log for the CI-green marker) and prints a line when one becomes
+  actionable: `<state> <branch> <run-id>[ <detail>] head=<sha>`. With
+  `--stream` it prints one line per branch each time that branch's state
+  changes and keeps running; single-shot, it exits after the first line.
+  Run-level status cannot drive this watch - a cleanly
   passing run stays `running` through its CI-monitoring tail (up to 168h,
   waiting to be merged), and a parked gate also reports `running` - which is
-  why the watcher reads per-step state instead. The harness wakes this
-  session only when it exits.
-  Restart a watcher immediately after each wake, and pass `--deadline
-  <seconds>` (an hour is a sound default) so a quiet watcher exits printing
-  `timeout` - that wake is the fallback heartbeat: verify the watched runs
-  are still healthy, then restart it. With the deadline in place, in-flight
-  runs need no `/loop` tick to babysit them; a cadence tick remains useful
-  only if nothing else (like a queue watcher) triggers work discovery. Do
+  why the watcher reads per-step state instead. Do
   not use `no-mistakes status` to watch
   a run: it reports the currently active run and can silently switch to
-  another branch. Do not layer `pgrep`/`ps` process-liveness checks on top of
-  the watcher.
-  - On every restart, pass back `--known <branch>=<state>:<sha>` for each
-    branch using the `<state>` and trailing `head=<sha>` from the line you
-    just handled (repeatable, one per branch). This is a fingerprint
-    baseline: a branch whose current state+head still matches its `--known`
-    entry does not re-fire, so restarting right after handling an event is
-    always safe. Branches with no `--known` entry fire the first time they
-    become actionable, same as before. Never respond to a re-fire risk by
+  another branch. Beyond the periodic audit under Watchers, do not layer
+  `pgrep`/`ps` process-liveness checks on top of the watcher.
+  - Whenever you arm it, pass `--known <branch>=<state>:<sha>` for each
+    branch whose last event you have handled, using that line's `<state>`
+    and trailing `head=<sha>` (repeatable, one per branch). This is a
+    fingerprint baseline: a branch whose current state+head still matches
+    its `--known` entry does not re-fire, so arming right after handling an
+    event is always safe. Branches with no `--known` entry fire the first
+    time they become actionable. Never respond to a re-fire risk by
     leaving the watcher disarmed - that silently drops coverage for every
     OTHER in-flight branch, which is worse than one redundant wake; always
     re-arm it, with an updated `--known` baseline if needed.
@@ -181,8 +229,8 @@ with `run_in_background` - never fall back to polling inline.
     `unknown` means that SHA could not be read). Never merge on it. Get the
     worktree onto `origin/<branch>` with the intended fix on top (rebase if it
     diverged), `no-mistakes axi abort` the stale run, start a fresh `axi run`,
-    confirm the new run's head equals the worktree HEAD, and re-arm the
-    watcher.
+    confirm the new run's head equals the worktree HEAD, and make sure the
+    watcher is armed.
   - **`conflict`** - the run's own steps and checks are green and its head
     matches the branch, but GitHub reports the PR is not mergeable (a merge
     to the base since the run went green introduced a real conflict). Do
@@ -191,8 +239,8 @@ with `run_in_background` - never fall back to polling inline.
     (see "Parallel branches predictably collide" under Merge and close
     discipline), push, and let a fresh run re-gate the rebased commit; if
     the conflict is non-trivial (not just an append-only collision), spawn a
-    fixer agent instead of resolving it yourself inline. Re-arm the watcher
-    afterward.
+    fixer agent instead of resolving it yourself inline. Make sure the
+    watcher is armed afterward.
   - **`cancelled`** - the run was cancelled; decide whether to re-drive or
     drop it.
 
@@ -297,6 +345,9 @@ Two distinct failure modes, both seen repeatedly:
   its tests to match.
 - Agents frequently go idle after CI is green without merging ("park-after-green")
   - verify the gates and merge it yourself.
+- If the harness refuses the merge, hand the owner the PR link with the
+  guard results and carry on with the loop - a refused merge does not stop
+  the watchers or the other work.
 - Parallel branches predictably collide on append-only shared files (a CI
   workflow file, a single growing e2e spec, a shared stylesheet, README). The
   second branch to merge rebases onto the base branch keeping BOTH sides'
@@ -380,5 +431,12 @@ On each tick, output a simple report like this before any other questions or com
   │ Open PRs            │ 0     │ -                         │
   ├─────────────────────┼───────┼───────────────────────────┤
   │ In-flight pipelines │ 0     │ no active no-mistakes run │
+  ├─────────────────────┼───────┼───────────────────────────┤
+  │ Watchers            │ 2     │ queue armed, pipeline     │
+  │                     │       │ armed (task ids)          │
   └─────────────────────┴───────┴───────────────────────────┘
   ```
+
+The Watchers row shows each watcher as `armed` (with its task id or PID),
+`idle` (pipeline watcher only, when nothing is in flight) or `MISSING`.
+Check it before ending the turn; re-arm a `MISSING` watcher in that turn.
