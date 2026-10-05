@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "lint": "sh scripts/lint.sh",
+    "build:skills": "node scripts/build-skills.js",
     "test": "node --test tests/ && sh features/test/callum-tools/pin-codex-model.test.sh && sh features/test/callum-tools/recover-no-mistakes.test.sh"
   },
   "engines": {

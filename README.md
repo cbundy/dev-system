@@ -20,7 +20,7 @@ every repo, so no repo carries a fork of the setup.
 | **Logins without a shell** (`dev-login`) | Missing logins start automatically. Sign-in links go to the container log, an optional login page and an optional push notification, so you can approve from a phone. |
 | **Auto-clone** (`DEV_REPO_URL`) | A headless container clones its repo on the first start and fetches on every later start. It never pulls. |
 | **Self-checks** (`dev-init`, `dev-doctor`) | Idempotent start-up setup and a health report. Every failure line comes with a `fix:` hint. |
-| **Issue-delivery workflow** (`callum-flow` plugin) | `issue-orchestrator` works a `ready` issue queue. `implement-issue` takes one issue through a treehouse worktree and the no-mistakes pipeline. `/update-dev` upstreams a change to this repo as a PR. A hook blocks `git stash`. |
+| **Issue-delivery workflow** (`callum-flow` plugin) | `issue-orchestrator` works a `ready` issue queue. `implement-issue` takes one issue through a treehouse worktree and the no-mistakes pipeline. `/update-dev` upstreams a change to this repo as a PR. `/callum-flow:onboard` onboards a repo. A hook blocks `git stash`. |
 | **Synced repo config** (`callum-dev`) | `init` scaffolds the config. `update` merges template changes 3-way, so a repo's own edits survive. `check` fails CI when a repo is behind the installed version. |
 | **Coder template** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. |
 | **Central session history** (agentsview) | Every container pushes its Claude and codex sessions to one PostgreSQL. You browse and search them in one viewer. Set the URL once per host. |
@@ -29,7 +29,8 @@ every repo, so no repo carries a fork of the setup.
 ## Start
 
 New or existing repo: open an agent in the folder and tell it to follow
-[`docs/onboarding.md`](docs/onboarding.md) ("make this a dev-system repo").
+[`docs/onboarding.md`](docs/onboarding.md) ("make this a dev-system repo"), or, with the
+`callum-flow` plugin installed, run `/callum-flow:onboard`.
 
 By hand:
 

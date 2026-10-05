@@ -58,7 +58,9 @@ and adding a new test file should require no extra wiring.
 
 - `npm run lint` - syntax-checks every shell script under `images/base/`,
   `features/src/callum-tools/`, `features/test/` and `plugins/callum-flow/hooks/`, and
-  runs `node --check` on the JavaScript under `bin/` and `plugins/` (`scripts/lint.sh`).
+  runs `node --check` on the JavaScript under `bin/`, `plugins/` and `scripts/`, and
+  fails if a generated skill is out of date (`scripts/build-skills.js --check`)
+  (`scripts/lint.sh`).
   Interim until shellcheck replaces the `-n` checks (see #116).
 - `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
   script tests (`pin-codex-model`, `recover-no-mistakes`).
@@ -84,6 +86,9 @@ architecture). Rules specific to working here:
   image's source, so fixing them is fine.
 - Templates in `templates/` must keep a clear split between synced content and repo-owned
   values so `callum-dev update` can merge cleanly.
+- The `onboard` skill's `SKILL.md` is generated from `docs/onboarding.md` (plus
+  `SKILL.src.md` beside it) by `scripts/build-skills.js`. Edit those, then run
+  `npm run build:skills`; `npm run lint` fails while the generated file is stale.
 
 This repo is also a consumer of its own templates (`.callum-dev.json`,
 `.callum-dev/baseline/`). Run the checkout's own CLI, `node bin/callum-dev.js`, never an
