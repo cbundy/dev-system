@@ -117,7 +117,7 @@ test("update surfaces a genuine conflict with markers and a non-zero exit", (t) 
   assert.match(result.stderr, /conflict resolution/);
 });
 
-test("settings.json replaces synced content wholesale outside permissions.allow; init-only leaves treehouse.toml alone", (t) => {
+test("settings.json restores every synced key and keeps a repo-added one; init-only leaves treehouse.toml alone", (t) => {
   const repo = initRepo(t);
   fs.writeFileSync(path.join(repo, ".claude/settings.json"), "{\n  \"hand\": \"edited\"\n}\n");
   fs.writeFileSync(path.join(repo, "treehouse.toml"), "max_trees = 99\n");
@@ -130,8 +130,11 @@ test("settings.json replaces synced content wholesale outside permissions.allow;
 
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 0, result.stderr + result.stdout);
-  // No permissions.allow anywhere in play here, so this is a plain wholesale replace.
-  assert.equal(read(repo, ".claude/settings.json"), read(TEMPLATES, ".claude/settings.json"));
+  // Every synced key the hand edit deleted comes back; the repo's own key stays.
+  assert.deepEqual(JSON.parse(read(repo, ".claude/settings.json")), {
+    ...JSON.parse(read(TEMPLATES, ".claude/settings.json")),
+    hand: "edited",
+  });
   assert.equal(read(repo, "treehouse.toml"), "max_trees = 99\n");
 });
 
@@ -186,6 +189,81 @@ test("a repo-added permissions.allow entry survives even when the synced list it
 
   const merged = JSON.parse(read(repo, ".claude/settings.json"));
   assert.ok(merged.permissions.allow.includes(repoEntry), "repo-owned entry survived");
+});
+
+function editSettings(dir, mutate) {
+  const file = path.join(dir, ".claude/settings.json");
+  const settings = JSON.parse(fs.readFileSync(file, "utf-8"));
+  mutate(settings);
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+}
+
+// dev-system#57: a repo-owned key nested inside a synced object (mealplanning's
+// deliberate `autoUpdate: false` on the callum marketplace) was dropped on every update.
+test("a repo-added key nested in a synced object survives update (dev-system#57)", (t) => {
+  const repo = initRepo(t);
+  editSettings(repo, (s) => {
+    s.extraKnownMarketplaces.callum.autoUpdate = false;
+  });
+  const upstream = upstreamCopy(t, (dir) =>
+    editSettings(dir, (s) => s.permissions.allow.push("Bash(no-mistakes axi watch *)")),
+  );
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.equal(merged.extraKnownMarketplaces.callum.autoUpdate, false);
+  assert.deepEqual(
+    merged.extraKnownMarketplaces.callum.source,
+    JSON.parse(read(TEMPLATES, ".claude/settings.json")).extraKnownMarketplaces.callum.source,
+  );
+  assert.ok(merged.permissions.allow.includes("Bash(no-mistakes axi watch *)"));
+});
+
+test("settings.json update: template keys win, template removals land, repo additions survive", (t) => {
+  const repo = initRepo(t);
+  const repoEntry = "Bash(scripts/evidence-upload.sh *)";
+  editSettings(repo, (s) => {
+    s.env = { FOO: "bar" }; // repo-added top-level key
+    s.permissions.ask = ["Bash(rm *)"]; // repo-added key nested in a synced object
+    s.extraKnownMarketplaces.callum.source.repo = "someone/fork"; // edit to a synced key
+    s.enabledPlugins["other@market"] = true; // repo-added key under a parent upstream drops
+    s.permissions.allow.push(repoEntry);
+  });
+  const upstream = upstreamCopy(t, (dir) =>
+    editSettings(dir, (s) => {
+      delete s.enabledPlugins;
+    }),
+  );
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const template = JSON.parse(read(upstream, ".claude/settings.json"));
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.deepEqual(merged.env, { FOO: "bar" });
+  assert.deepEqual(merged.permissions.ask, ["Bash(rm *)"]);
+  assert.deepEqual(merged.extraKnownMarketplaces, template.extraKnownMarketplaces, "synced key reset");
+  // The template's own enabledPlugins entry is gone; the repo's survives, parent and all.
+  assert.deepEqual(merged.enabledPlugins, { "other@market": true });
+  assert.deepEqual(merged.permissions.allow, [...template.permissions.allow, repoEntry]);
+});
+
+test("settings.json update with no baseline keeps every key the template does not define", (t) => {
+  const repo = initRepo(t);
+  editSettings(repo, (s) => {
+    s.extraKnownMarketplaces.callum.autoUpdate = false;
+    s.enabledPlugins["callum-flow@callum"] = false;
+  });
+  fs.rmSync(path.join(repo, ".callum-dev/baseline/.claude/settings.json"));
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.equal(merged.extraKnownMarketplaces.callum.autoUpdate, false);
+  assert.equal(merged.enabledPlugins["callum-flow@callum"], true, "template-defined key wins");
 });
 
 // Ask git itself what the scaffolded .gitignore does. Reading the patterns is not
