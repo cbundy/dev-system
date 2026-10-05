@@ -756,8 +756,14 @@ label.
 Build from the repo root, since the image reuses the callum-tools scripts:
 
 ```bash
-docker build -f images/base/Dockerfile -t dev-system-base:local .
+docker build -f images/base/Dockerfile -t "dev-system-base:test-$(git rev-parse --short HEAD)" .
 ```
+
+Tag test builds by commit, as above. Several agents can build and test at once on one Docker
+host, and a shared tag lets one silently replace another's image mid-run.
+`dev-system-base:local` is reserved: it is the image the dev-system-testbed's
+`.devcontainer/local` config opens, so build it only on purpose, with the testbed's
+`scripts/build-local-image.sh`, when you want to open a branch in that config.
 
 Run the container test suite against it. Test 7 needs the devcontainer CLI; set
 `DEVCONTAINER="npx -y @devcontainers/cli"` if it is not installed, or `SKIP_DEVCONTAINER=1`
@@ -765,7 +771,7 @@ to skip it. Test 8 starts a throwaway `postgres:17` container to exercise the ag
 push end to end:
 
 ```bash
-images/base/test/test.sh dev-system-base:local
+images/base/test/test.sh "dev-system-base:test-$(git rev-parse --short HEAD)"
 ```
 
 `.github/workflows/publish-base-image.yml`:
