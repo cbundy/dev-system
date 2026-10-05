@@ -130,6 +130,15 @@ with `run_in_background` - never fall back to polling inline.
     escalation, which is how reviewer "remove this unrequired component"
     findings delete in-scope requirements.
 
+    **`no-mistakes axi respond` is the run's driver and BLOCKS until the next
+    gate or outcome, exactly like `axi run`.** Always launch it with the
+    harness's `run_in_background` (or `nohup ... > <log> 2>&1 &`), never in
+    the foreground: a foreground call is killed at the Bash tool's 120s
+    timeout, the decision still lands but the driver dies, and the run
+    strands at the next gate unwatched. Its exit is a wake: read its output
+    (a `gate:` to respond to, or an `outcome:`), handle it, and keep the
+    pipeline watcher armed.
+
     Newer no-mistakes releases park the review step for approval every run,
     even with zero findings - that is your cheapest moment to catch a gap,
     not a rubber stamp. Before approving, read the review against the
@@ -198,8 +207,8 @@ following guards fire, and none of them is weakened:
    (`git log --oneline origin/<branch>..HEAD`, `gh pr view <pr> --json commits`).
    One question decides every case: am I adding a commit from outside the
    pipeline?
-   - **No new commit, run parked at a gate** -> `axi respond` (or re-attach
-     with `axi run`) drives the pipeline's own head. Never abort just to
+   - **No new commit, run parked at a gate** -> `axi respond` (backgrounded,
+     see `parked` above) or re-attach with `axi run` drives the pipeline's own head. Never abort just to
      bypass a gate you could respond to.
    - **New code needed while parked, and the pipeline cannot write it from
      instructions** -> prefer `respond --action fix` first; only if that
@@ -230,8 +239,8 @@ following guards fire, and none of them is weakened:
    just the watcher's word.
 4. **Drive a genuinely parked or failed gate correctly.** The three cases in
    guard 1 are the full decision procedure - repeated here because this is
-   where the mistake actually happens. `axi run` (or `axi respond`)
-   re-attaches to whatever run already exists on the branch; it only starts
+   where the mistake actually happens. `axi run` (or `axi respond`, always
+   backgrounded) re-attaches to whatever run already exists on the branch; it only starts
    a fresh run when there is no live one. Re-attaching (or, better,
    `respond`ing) is correct exactly in the first case: no new commit of your
    own, gate genuinely parked (`awaiting_agent`) or failed. Against a run
