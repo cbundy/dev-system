@@ -25,7 +25,7 @@ Two more surfaces build on the layers:
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev), hooks
+plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), hooks
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 templates/                        repo config templates synced by callum-dev
@@ -33,6 +33,7 @@ bin/callum-dev.js                 CLI: init, update, check. Node built-ins and g
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (test-cli.yml)
 scripts/lint.sh                   lint entrypoint (npm run lint)
+scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 .github/workflows/                release.yml, publish-base-image.yml, publish-features.yml, tests
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs

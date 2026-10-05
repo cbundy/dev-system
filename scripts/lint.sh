@@ -8,12 +8,14 @@
 # first line is a shell shebang or a `# shellcheck shell=...` directive is checked with the
 # shell it declares, so a new script is covered without touching this file. Everything
 # else (Dockerfile, README, .js, .json, .awk) is skipped.
+#
+# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`).
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
 SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks"
-JS_DIRS="bin plugins"
+JS_DIRS="bin plugins scripts"
 
 failures=0
 checked=0
@@ -67,6 +69,12 @@ while IFS= read -r file; do
     printf '%s\n' "$out" >&2
   fi
 done < "$list"
+
+# Generated skills (scripts/build-skills.js) must match their source doc.
+checked=$((checked + 1))
+if ! node scripts/build-skills.js --check; then
+  fail "generated skills out of date (run npm run build:skills)"
+fi
 
 if [ "$failures" -gt 0 ]; then
   echo "lint: $failures of $checked file(s) failed" >&2
