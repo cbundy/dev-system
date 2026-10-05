@@ -454,8 +454,11 @@ stops_within() {
 # A stub claude: `auth status` reports a claude.ai login once /tmp/logged-in
 # exists; `auth login` behaves like the real one (a sign-in URL, then a
 # prompt for the code; attempt N accepts good-code-N, anything else gets
-# "Invalid code"); a session records its directory and arguments in
-# /tmp/claude-starts, then runs until /tmp/claude-exit exists and exits 3.
+# "Invalid code"); a session first asks for Remote Control consent, as the
+# real CLI does, while remoteDialogSeen is not true in .claude.json (it records
+# /tmp/claude-consent-prompt and waits for an answer, so it never starts
+# unattended), then records its directory and arguments in /tmp/claude-starts
+# and runs until /tmp/claude-exit exists and exits 3.
 STUB='#!/bin/bash
 if [ "$1 ${2:-}" = "auth login" ]; then
   n=$(( $(cat /tmp/claude-logins 2>/dev/null || echo 0) + 1 )); echo $n > /tmp/claude-logins
@@ -471,6 +474,11 @@ if [ "$1" = auth ]; then
   [ -e /tmp/logged-in ] && { echo "{\"loggedIn\":true,\"authMethod\":\"claude.ai\"}"; exit 0; }
   echo "{\"loggedIn\":false,\"authMethod\":\"none\"}"
   exit 1
+fi
+if [ "$(jq -r .remoteDialogSeen "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" 2>/dev/null)" != true ]; then
+  touch /tmp/claude-consent-prompt
+  read -r -p "Enable Remote Control? (y/n) " answer
+  [ "$answer" = y ] || exit 0
 fi
 echo "$PWD $*" >> /tmp/claude-starts
 until [ -e /tmp/claude-exit ]; do sleep 0.2; done
@@ -647,6 +655,22 @@ check "an unknown DEV_REMOTE_CONTROL_MODE is rejected: logged, exit status 2" ba
   docker logs '$c' 2>&1 | grep -q 'DEV_REMOTE_CONTROL_MODE must be session or server, not \"bogus\"' &&
   [ \"\$(docker inspect -f '{{.State.ExitCode}}' '$c')\" = 2 ]"
 docker rm -f "$c" >/dev/null
+
+# Remote Control consent (#88): with a config that is logged in but has never
+# answered the one-time "Enable Remote Control?" prompt, the supervisor
+# pre-answers it in both modes, so the stub starts without prompting, and
+# keeps the config's other values.
+for mode in session server; do
+  c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=$mode "$IMAGE" bash -c "
+    echo '{\"userID\":\"keep-me\",\"hasCompletedOnboarding\":true}' > /persist/claude/.claude.json &&
+    touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+  check "$mode mode: Remote Control consent is pre-answered, so Claude starts unattended" bash -c "
+    for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+    docker exec '$c' cat /tmp/claude-starts
+    docker exec '$c' test -s /tmp/claude-starts && ! docker exec '$c' test -e /tmp/claude-consent-prompt &&
+    docker exec '$c' jq -e '.remoteDialogSeen == true and .userID == \"keep-me\"' /persist/claude/.claude.json"
+  docker rm -f "$c" >/dev/null
+done
 
 # The real Claude, with only `auth status` faked: it must reach its prompt in
 # the tmux session without stopping at the trust or onboarding dialogs, and
