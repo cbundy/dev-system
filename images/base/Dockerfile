@@ -163,7 +163,18 @@ COPY --chmod=0755 \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
-  /usr/local/share/dev-system/
+  images/base/telemetry.sh /usr/local/share/dev-system/
+
+# Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns
+# Claude Code's export on only when the runtime sets
+# OTEL_EXPORTER_OTLP_ENDPOINT. Login shells (coder ssh, tmux windows) read
+# /etc/profile.d and interactive bash (docker exec -it ... bash) reads
+# /etc/bash.bashrc, so a claude started by hand gets it too;
+# dev-remote-control sources it itself.
+RUN printf '%s\n' '# Opt-in OpenTelemetry export (cbundy/dev-system#68), see telemetry.sh.' \
+    '. /usr/local/share/dev-system/telemetry.sh' > /etc/profile.d/dev-system-telemetry.sh \
+  && chmod 0644 /etc/profile.d/dev-system-telemetry.sh \
+  && printf '\n%s\n' '. /etc/profile.d/dev-system-telemetry.sh' >> /etc/bash.bashrc
 
 USER node
 
