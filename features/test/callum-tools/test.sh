@@ -4,6 +4,7 @@
 # postCreate lifecycle hooks have already run by the time this executes.
 set -e
 
+# shellcheck disable=SC1091 # provided by the devcontainer CLI's test harness at run time
 source dev-container-features-test-lib
 
 check "no-mistakes on PATH" bash -lc "command -v no-mistakes"
@@ -15,6 +16,7 @@ check "setup script staged" test -x /usr/local/share/callum-tools/setup.sh
 # If the npm global prefix (or any directory on the way down to those
 # entries) is not writable by the remote user, install.sh's defensive chown
 # did not do its job - assert every path an update touches is writable.
+# shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "npm global prefix is writable by the remote user (claude update path)" bash -lc '
   set -e
   prefix=$(npm prefix -g)
@@ -29,6 +31,7 @@ check "npm global prefix is writable by the remote user (claude update path)" ba
   : > "$prefix/bin/.callum-tools-write-probe"
   rm -f "$prefix/bin/.callum-tools-write-probe"
 '
+# shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "pipeline watcher detects actionable runs" bash -lc '
   set -e
   test -x /usr/local/share/callum-tools/pipeline-watch.sh
@@ -134,6 +137,7 @@ EOF
     /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/quiet --deadline 1 |
     grep -qx "timeout"
 '
+# shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "queue watcher fires only on a ready-set delta" bash -lc '
   set -e
   test -x /usr/local/share/callum-tools/queue-watch.sh
@@ -156,6 +160,7 @@ EOF
     grep -qx "queue-changed known=305 now=305,307"
 '
 check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
+# shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "no-mistakes auto-recovery runs daemon start + init when unregistered" bash -lc '
   set -e
   test -x /usr/local/share/callum-tools/recover-no-mistakes.sh

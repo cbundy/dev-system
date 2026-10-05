@@ -96,7 +96,7 @@ check "default user is node with uid 1000 / gid 1000" in_image '
   [ "$(id -u node)" = 1000 ] && [ "$(id -g node)" = 1000 ]'
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse agentsview; do
+for tool in node npm claude codex gh git no-mistakes treehouse agentsview shellcheck; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '

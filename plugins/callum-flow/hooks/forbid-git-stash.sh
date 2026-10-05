@@ -44,7 +44,7 @@
 
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
 input=$(cat)
 decision=$(printf '%s' "$input" | awk -f "$script_dir/forbid-git-stash.awk")

@@ -35,6 +35,7 @@ if [ "$(id -u)" = 0 ]; then
   # files in the /persist volumes that node then cannot write.
   log "running as root - dev-init skipped (it runs as node)"
 else
+  # shellcheck disable=SC2119 # the argument is optional; none means the default
   ws=$(workspace)
   ( cd "$ws" && timeout -k 10 300 dev-init ) >&2
   case $? in

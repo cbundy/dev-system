@@ -30,6 +30,7 @@ FAILURES=0
 # Sets DEV_WORKSPACE from DEV_REPO_URL, as dev-init and the supervisor do.
 # shellcheck source=workspace.sh
 . /usr/local/share/dev-system/workspace.sh
+# shellcheck disable=SC2119 # the argument is optional; none means the default
 workspace=$(workspace)
 
 ok() {

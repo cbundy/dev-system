@@ -23,6 +23,7 @@ repo_name() {
 # workspace [start dir]: the directory to run in - DEV_WORKSPACE once it
 # exists (a clone may still be pending), else the start directory (default:
 # the current one) unless it is /, else $HOME.
+# shellcheck disable=SC2120 # the start dir is optional; dev-remote-control passes one
 workspace() {
   local start="${1:-$PWD}"
   if [ -n "${DEV_WORKSPACE:-}" ] && [ -d "$DEV_WORKSPACE" ]; then
@@ -39,6 +40,7 @@ workspace() {
 # level. Fails when there is no repo or no such file. A checkout git refuses
 # to read ("dubious ownership") counts when the directory itself holds .git.
 repo_settings() {
+  # shellcheck disable=SC2119 # the argument is optional; none means the default
   local dir="${1:-$(workspace)}" top
   if ! top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
     [ -e "$dir/.git" ] || return 1

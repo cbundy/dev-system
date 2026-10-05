@@ -74,7 +74,11 @@ expect_call() {
 }
 
 expect_rc() {
-  [ "$rc" "$1" 0 ] || fail "exit status $rc, wanted $1 0 - output: $(cat "$case/out")"
+  case "$1" in
+    -eq) [ "$rc" -eq 0 ] ;;
+    -ne) [ "$rc" -ne 0 ] ;;
+    *) false ;;
+  esac || fail "exit status $rc, wanted $1 0 - output: $(cat "$case/out")"
 }
 
 # Invariants for every case: the token is in no argv, and every push is dev-system-next.
@@ -120,6 +124,7 @@ expect_rc -ne
 [ ! -s "$case/calls" ] || fail "called coder with CODER_TEMPLATE_NAME set: $(cat "$case/calls")"
 
 # 4. A missing token file fails with the setup pointer.
+# shellcheck disable=SC2016 # PREP is single-quoted on purpose: run_case evals it once $case is set
 PREP='rm "$case/secrets/coder-session-token"' run_case 4 "$PUSH_NEXT"
 expect_rc -ne
 grep -q 'Testing template changes from a workspace' "$case/out" || fail "no setup pointer: $(cat "$case/out")"
@@ -128,6 +133,7 @@ grep -q 'template_testing' "$case/out" || fail "no template_testing pointer: $(c
 
 # 4b. A missing directory (template_testing off) fails with the opt-in pointer, and the
 # shared secrets mount is not used as a fallback.
+# shellcheck disable=SC2016 # PREP is single-quoted on purpose: run_case evals it once $case is set
 PREP='rm -r "$case/secrets"; mkdir "$case/shared"; printf "%s\\n" "$TOKEN" > "$case/shared/coder-session-token"' \
   run_case 4b env DEV_SECRETS_DIR="$tmpdir/case4b/shared" "$PUSH_NEXT"
 expect_rc -ne
@@ -137,6 +143,7 @@ grep -q 'Testing template changes from a workspace' "$case/out" || fail "no READ
 [ ! -s "$case/calls" ] || fail "called coder without the template-tester directory: $(cat "$case/calls")"
 
 # 5. A malformed vars line fails before pushing.
+# shellcheck disable=SC2016 # PREP is single-quoted on purpose: run_case evals it once $case is set
 PREP='echo "not a variable" >> "$case/secrets/coder-template-vars"' run_case 5 "$PUSH_NEXT"
 expect_rc -ne
 [ ! -s "$case/calls" ] || fail "pushed with a malformed vars file: $(cat "$case/calls")"
@@ -169,6 +176,7 @@ expect_call "delete $ws --yes"
 grep -q 'not ready after' "$case/out" || fail "no timeout message: $(cat "$case/out")"
 
 # 9. cleanup deletes only next-smoke-* from dev-system-next, never the current workspace.
+# shellcheck disable=SC2016 # PREP is single-quoted on purpose: run_case evals it once $case is set
 PREP='cat > "$case/list.json" <<JSON
 [{"name":"next-smoke-aaaaaa","template_name":"dev-system-next"},
  {"name":"next-smoke-bbbbbb","template_name":"dev-system"},
