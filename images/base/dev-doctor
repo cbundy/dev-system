@@ -10,7 +10,8 @@
 #   Exits 1 if any check fails. --warn-only (used by dev-init) prints the same
 #   report but always exits 0. A WARN line (with its own hint) does not fail:
 #   it flags something that works now but will be lost, such as tool state
-#   with no volume behind it.
+#   with no volume behind it, or a workspace that is not the repo it should
+#   be.
 set -u
 
 WARN_ONLY=false
@@ -24,6 +25,11 @@ case "${1:-}" in
 esac
 
 FAILURES=0
+
+# Sets DEV_WORKSPACE from DEV_REPO_URL, as dev-init and the supervisor do.
+# shellcheck source=workspace.sh
+. /usr/local/share/dev-system/workspace.sh
+workspace=$(workspace)
 
 ok() {
   printf 'dev-doctor: OK   %s\n' "$1"
@@ -112,7 +118,6 @@ if ! command -v no-mistakes >/dev/null 2>&1; then
   fail "no-mistakes is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
 else
   ok "no-mistakes is installed"
-  workspace="${DEV_WORKSPACE:-$PWD}"
   if top=$(git -C "$workspace" rev-parse --show-toplevel 2>/dev/null); then
     if [ -f "$top/.no-mistakes.yaml" ]; then
       # Registered means a clean exit AND the repo line; anything else (not
@@ -131,6 +136,46 @@ else
     # hides the workspace from every git-based tool, no-mistakes included.
     fail "git cannot read the repo at $workspace (owned by $(stat -c %U "$workspace" 2>/dev/null), not $(id -un))" \
       "chown -R 1000:1000 the checkout, or run: git config --global --add safe.directory $workspace"
+  fi
+fi
+
+# The workspace repo (cbundy/dev-system#77). With DEV_REPO_URL set, its
+# directory should be a clone of that URL; a .git and a trailing / do not
+# count. Without it, a headless container whose workspace is no repo runs
+# Claude in a bare directory (no worktrees in server mode, no repo name). A
+# desktop dev container (DEV_DESKTOP, from the image metadata) opens the
+# checkout it bind-mounts, so it is left out. A repo git cannot read is
+# reported above already.
+repo_url() {
+  local url="${1%/}"
+  url="${url%.git}"
+  echo "${url%/}"
+}
+
+if [ -n "${DEV_REPO_URL:-}" ]; then
+  repo="${DEV_WORKSPACE:-}"
+  if [ -z "$repo" ]; then
+    warn "DEV_REPO_URL ($DEV_REPO_URL) names no directory to clone into" "set DEV_WORKSPACE"
+  elif [ -e "$repo/.git" ]; then
+    if git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+      origin=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
+      if [ "$(repo_url "$origin")" = "$(repo_url "$DEV_REPO_URL")" ]; then
+        ok "workspace $repo is a clone of $DEV_REPO_URL"
+      else
+        warn "workspace $repo has origin ${origin:-(none)}, not DEV_REPO_URL ($DEV_REPO_URL)" \
+          "point it at the repo (git -C $repo remote set-url origin $DEV_REPO_URL), or set DEV_WORKSPACE to that repo's checkout"
+      fi
+    fi
+  else
+    warn "workspace $repo is not cloned from DEV_REPO_URL ($DEV_REPO_URL) yet" \
+      "see dev-init's log for why (a private repo waits for gh's login: dev-login start), then run: dev-init --repo"
+  fi
+elif [ "${DEV_DESKTOP:-0}" != 1 ]; then
+  if git -C "$workspace" rev-parse --git-dir >/dev/null 2>&1; then
+    ok "workspace $workspace is a git repository"
+  elif [ ! -e "$workspace/.git" ]; then
+    warn "Claude runs in $workspace, which is not a git repository, and DEV_REPO_URL is not set" \
+      "set DEV_REPO_URL to the repo's HTTPS clone URL (dev-init clones it), or DEV_WORKSPACE to a checkout"
   fi
 fi
 
