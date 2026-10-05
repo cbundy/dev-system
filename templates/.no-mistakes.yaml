@@ -37,8 +37,9 @@ auto_fix:
 agent: codex
 
 # The codex model pin (agent_args_override / agent_config) is a GLOBAL-ONLY key: no-mistakes
-# ignores it here without warning. It lives in ~/.no-mistakes/config.yaml, written by the
-# callum-tools devcontainer feature (option `codexModel`).
+# ignores it here without warning. It lives in the global no-mistakes config, written by
+# the dev-system base image's dev-init (env DEV_CODEX_MODEL; images/base/README.md), or by
+# the deprecated callum-tools feature (option `codexModel`).
 
 # Optional sections below are synced defaults, commented out. Uncomment in a repo-owned
 # block (do not uncomment here - dev-system updates will re-comment this synced copy) if

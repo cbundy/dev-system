@@ -21,6 +21,9 @@
   // --- end repo-owned ---
 
   // --- synced: do not edit (managed by dev-system) ---
+  // DEPRECATED: the callum-tools feature is deprecated in favour of the dev-system base
+  // image (cbundy/dev-system#89). Move this repo with:
+  //   npx callum-dev update --devcontainer base-image
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},

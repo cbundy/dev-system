@@ -326,11 +326,24 @@ test("init picks the feature devcontainer from the prompt or --devcontainer", (t
     { input: "myrepo\n\n\n", args: ["--devcontainer", "feature"] },
     { input: "myrepo\n\n\n", args: ["--devcontainer=feature"] },
   ]) {
-    const repo = initRepo(t, how.input, how.args);
+    const repo = scratchRepo(t);
+    const result = run(repo, "init", how);
+    assert.equal(result.status, 0, result.stderr);
     const config = parseJsonc(read(repo, DEVCONTAINER));
     assert.ok(config.features["ghcr.io/cbundy/dev-system/callum-tools:1"], JSON.stringify(how));
     assert.equal(JSON.parse(read(repo, ".callum-dev.json")).devcontainer, "feature");
+    assert.match(result.stderr, /warning: devcontainer 'feature' is deprecated/, JSON.stringify(how));
   }
+});
+
+test("base-image init and update print no deprecation warning", (t) => {
+  const repo = scratchRepo(t);
+  const init = run(repo, "init", { input: "myrepo\n\n\n\n" });
+  assert.equal(init.status, 0, init.stderr);
+  assert.doesNotMatch(init.stderr, /warning:/);
+  const update = run(repo, "update");
+  assert.equal(update.status, 0, update.stderr);
+  assert.doesNotMatch(update.stderr, /warning:/);
 });
 
 test("init re-asks on an unknown devcontainer kind, and --devcontainer rejects one", (t) => {
@@ -388,10 +401,12 @@ test("update --devcontainer switches a feature repo to the base image; a stamp w
   const noop = run(repo, "update");
   assert.equal(noop.status, 0, noop.stderr);
   assert.match(noop.stdout, /Already in sync/, "a legacy stamp stays on the feature template");
+  assert.match(noop.stderr, /warning: devcontainer 'feature' is deprecated/);
 
   const result = run(repo, "update", { args: ["--devcontainer", "base-image"] });
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(result.stdout, /switched {2}devcontainer: feature -> base-image/);
+  assert.doesNotMatch(result.stderr, /warning:/, "no warning once the repo has moved");
 
   const config = parseJsonc(read(repo, DEVCONTAINER));
   assert.equal(config.name, "myrepo", "the repo's name came across");

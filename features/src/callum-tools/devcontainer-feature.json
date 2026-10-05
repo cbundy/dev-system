@@ -1,8 +1,9 @@
 {
   "id": "callum-tools",
-  "version": "1.3.1",
-  "name": "Callum's dev tools (no-mistakes, treehouse, Claude Code CLI)",
-  "description": "Installs the tooling behind Callum's dev flow: the no-mistakes pipeline, the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
+  "version": "1.3.2",
+  "name": "Callum's dev tools (no-mistakes, treehouse, Claude Code CLI) - DEPRECATED",
+  "deprecated": true,
+  "description": "DEPRECATED: use the dev-system base image ghcr.io/cbundy/dev-system/base instead (cbundy/dev-system#89). Installs the tooling behind Callum's dev flow: the no-mistakes pipeline, the treehouse worktree pool, and the Claude Code CLI. Installs run as the remote user at post-create time, so per-user tools land in the user's home exactly as a hand-run install would.",
   "documentationURL": "https://github.com/cbundy/dev-system",
   "options": {
     "installClaudeCode": {
