@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# systemctl for the dev-system base image: replaces the devcontainers base
+# image's /usr/local/bin/systemctl, which prints a note and exits 0 when
+# systemd is not running. That success is a lie tools act on: no-mistakes
+# (`daemon start`) takes it as a working user service manager, installs its
+# daemon as a systemd unit that never runs, and then waits 135s for it before
+# it falls back to starting the daemon itself (cbundy/dev-system#101).
+#
+# This one fails the way the real systemctl does without systemd as PID 1:
+# a message on stderr and exit 1, so a tool that can live without systemd
+# (no-mistakes included) takes its own fallback at once. Where systemd does
+# run (a child image that boots it), the real systemctl takes over.
+if [ -d /run/systemd/system ] && [ -x /bin/systemctl ]; then
+  exec /bin/systemctl "$@"
+fi
+echo "systemctl: systemd is not running in this container, so there are no services to manage - start the program directly instead" >&2
+exit 1

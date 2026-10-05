@@ -30,7 +30,9 @@ them, so those scripts stay maintained.
    | git | base image | image rebuild |
 
    Also `jq`, `ripgrep`, `tmux` (Claude's Remote Control session runs in it), `tini`
-   (PID 1), `less` and `openssh-client`. Every tool binary lives outside `/persist`, so a new image always
+   (PID 1), `less` and `openssh-client`. No systemd runs in the container, and `systemctl`
+   says so and fails (the devcontainers base image's own stub reports success, which sent
+   no-mistakes after a service that never starts - cbundy/dev-system#101). Every tool binary lives outside `/persist`, so a new image always
    brings fresh binaries.
 3. The persistence contract (below).
 4. The `/shared` mount point for NAS file sharing (below). The image defines it but
@@ -365,7 +367,9 @@ container never fails to start because of it.
    git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
    after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
    the repo if needed. If git refuses the checkout because another user owns it ("dubious
-   ownership"), it warns with the fix instead of skipping silently.
+   ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
+   has its own short time limit (30s), so a daemon that never answers is logged with the
+   fix and never holds up the steps after it.
 8. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
    [Central session history](#central-session-history-agentsview)).
 9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
