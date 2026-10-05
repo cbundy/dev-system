@@ -23,7 +23,6 @@
       "Bash(treehouse return *)",
       "Bash(treehouse status *)",
       "Bash(gh issue *)",
-      "Bash(gh api *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
       "Bash(gh pr list *)"
