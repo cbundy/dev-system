@@ -36,9 +36,12 @@ that use features keep using it, and the image reuses the feature's scripts
    mounts nothing there.
 5. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
 6. `dev-doctor`, a health check that reports missing auth or broken state loudly.
-7. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
-   gets the persistence volumes and `dev-init` automatically.
-8. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
+7. `dev-login`, which starts the logins for you and brings the sign-in links to the
+   container log, an optional login page and an optional push notification (see
+   [First-run logins](#first-run-logins)).
+8. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
+   gets the shared gh volume and `dev-init` automatically.
+9. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
    with Remote Control (below).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
@@ -290,7 +293,9 @@ always exits 0, so a container never fails to start because of it.
    [Central session history](#central-session-history-agentsview)).
 8. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
-9. Runs `dev-doctor --warn-only`.
+9. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
+   [First-run logins](#first-run-logins)).
+10. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
 
@@ -301,9 +306,10 @@ on every failure:
   volume, so its state is lost with the container;
 - `/shared`: `mounted and writable`, `not mounted (optional)` (both OK), or a failure when
   it is mounted but not writable;
-- Claude is logged in (`claude auth status`);
-- codex is logged in (`codex login status`);
-- gh is logged in (`gh auth status`);
+- Claude, codex and gh are logged in (`claude auth status`, `codex login status`,
+  `gh auth status`), each with the hint `run: dev-login start` (or the login page, when
+  `DEV_LOGIN_PORT` is set). A tool left out of `DEV_LOGIN_TOOLS` is not required to be;
+  gh with `GH_TOKEN` set counts as logged in;
 - no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
   working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
@@ -340,13 +346,15 @@ orphaned processes, so containers stop in well under a second instead of hitting
 
 **`dev-remote-control`** is the supervisor:
 
-1. **Waits for a login.** Remote Control needs a claude.ai subscription login, so while
-   `claude auth status` reports none, it logs
-   `Claude is not logged in - run: docker exec -it <container> claude auth login` (the
-   `kubectl exec` form on Kubernetes) once, then every 10 checks (5 minutes), checking
-   every 30s. It starts Claude as soon as the login appears; no restart needed. An API
-   key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote Control
-   rejects both.
+1. **Starts the logins and waits for Claude's.** It runs `dev-login watch` in the
+   background, which starts every missing login in `DEV_LOGIN_TOOLS` and logs its sign-in
+   link (see [First-run logins](#first-run-logins)). Remote Control needs a claude.ai
+   subscription login, so while `claude auth status` reports none, it logs
+   `Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it <container> dev-login <code>`
+   (the `kubectl exec` form on Kubernetes) once, then every 10 checks (5 minutes),
+   checking every 30s. It starts Claude as soon as the login appears; no restart needed.
+   An API key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote
+   Control rejects both, and `dev-login` leaves it alone.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`) and
    onboarding as done. An unattended interactive Claude otherwise sits at the folder trust
@@ -406,9 +414,13 @@ docker run -d --name my-repo \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
   -v dev-system-gh:/persist/gh \
   ghcr.io/cbundy/dev-system/base:2
-docker logs my-repo                        # shows the login hint until you log in
-docker exec -it my-repo claude auth login  # Claude starts within 30s, no restart needed
+docker logs my-repo                          # the sign-in links for Claude, codex and gh
+docker exec my-repo dev-login <code>         # the code Claude's sign-in page shows
 ```
+
+Claude starts within 30s of the login, no restart needed. Approving codex's and gh's
+codes is enough for those. Add `-p 8765:8765 -e DEV_LOGIN_PORT=8765` for the login page
+instead (LAN or VPN only: see [Security](#security)).
 
 The same with docker compose. Compose prefixes volume names with the project name, which
 keeps the four per-project volumes apart from other projects'; `name:` turns that off for
@@ -467,7 +479,9 @@ spec:
       persistentVolumeClaim: { claimName: dev-workspace }
 ```
 
-Log in once with `kubectl exec -it dev-my-repo -- claude auth login`.
+The sign-in links are in `kubectl logs dev-my-repo`; finish Claude's with
+`kubectl exec dev-my-repo -- dev-login <code>`, or set `DEV_LOGIN_PORT` and reach the
+page through a Service or `kubectl port-forward`.
 
 **Desktop dev containers are unaffected by default.** The devcontainer CLI and VS Code
 replace the image entrypoint with their own (`overrideCommand`, the default for image and
@@ -487,22 +501,83 @@ With it, the supervisor starts in the background at every container start, in th
 workspace folder, logging to `/tmp/dev-remote-control.log`. Only one supervisor runs per
 container.
 
-## First login
+## First-run logins
 
-Run these once per repo on the desktop (once per PVC on Kubernetes or Coder); gh only once
-per Docker host, since its volume is shared. The logins land in `/persist`, so they survive
-container rebuilds and image updates. On a headless container, run them through
-`docker exec -it <container> ...` or `kubectl exec -it <pod> -- ...`.
+Each repo on the desktop (each PVC on Kubernetes or Coder) needs one Claude login and one
+codex login; gh needs one per Docker host, since its volume is shared. The logins land in
+`/persist`, so they survive container rebuilds and image updates. `dev-login` does them
+without a shell in the container:
 
-```bash
-claude auth login
-codex login --device-auth
-gh auth login
-dev-init
+1. The container starts and sees that Claude, codex or gh is not logged in.
+2. It starts their logins and brings you the sign-in links: in the container log, on the
+   login page (opt-in) and in a push notification (opt-in).
+3. You approve on any device, a phone included. For Claude, paste the code its sign-in page
+   shows into the login page (or `dev-login <code>`). For codex and gh, approving is
+   enough.
+4. The supervisor sees Claude's login and starts Remote Control.
+
+| Tool | Login | What you do |
+|---|---|---|
+| Claude | `claude auth login --claudeai`: a sign-in link. There is no device-code flow for claude.ai logins. | Open the link, approve, paste the code shown back. A wrong code ends that attempt, and the next one has a new link. |
+| codex | `codex login --device-auth`: a link and a one-time code, valid 15 minutes. | Open the link and enter the code. Device-code login may first need turning on in your ChatGPT account's security settings. |
+| gh | `gh auth login --web`: a link and a one-time code; then `gh auth setup-git`. | Open the link and enter the code. On Coder, external auth (`GH_TOKEN`) replaces it. |
+
+Each login runs in its own tmux session (`login-claude`, `login-codex`, `login-gh`), so
+`tmux attach -t login-codex` shows it as it is. An attempt in progress is kept, so a link
+you were given stays valid; one that ended (an expired code, a rejected paste) is
+replaced, so there is always a fresh link. The supervisor (`dev-remote-control`) runs
+`dev-login watch`, which does that every 15 seconds and logs each new link once, until
+every login is done. On the desktop, where the supervisor is off by default, run
+`dev-login start` in a terminal instead.
+
+```text
+dev-login status [--json]   each tool: in, out, other (Claude logged in, but not with
+                            claude.ai), token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS)
+dev-login start [--json]    start the missing logins, print the links
+dev-login <code>            finish Claude's login (also: dev-login claude <code>)
+dev-login watch             what the supervisor runs: keep starting, log, notify
+dev-login serve             the login page (dev-init starts it when DEV_LOGIN_PORT is set)
 ```
 
-`dev-init` afterwards wires git to gh's credentials straight away instead of on the next
-start. Run `dev-doctor` to confirm everything is green.
+| Variable | Default | Effect |
+|---|---|---|
+| `DEV_LOGIN_TOOLS` | `claude,codex,gh` | The tools to log in. A workspace that never uses codex sets `claude,gh`. `dev-doctor` does not require a login for a tool left out. gh is skipped when `GH_TOKEN` or `GITHUB_TOKEN` is set. Empty: `dev-login watch` is not started. |
+| `DEV_LOGIN_PORT` | unset: no page | The port the login page listens on, on all interfaces (`0.0.0.0`). Publish it only where [Security](#security) allows. |
+| `DEV_LOGIN_PAGE_EXIT` | `1` | `1`: the page exits once every login is done (Docker, LAN). `0` keeps it up, showing each tool's state (behind Coder, so the app button always works). |
+| `DEV_LOGIN_PAGE_URL` | unset | The page's address as you reach it (the Coder app URL, say), for the log and the notification. There is no reliable way to work it out from inside. |
+| `DEV_NOTIFY_URL` | unset | Where to POST a notification when logins are needed: an [ntfy](https://ntfy.sh) topic URL, or anything that takes a POST body. |
+
+**The login page** (`DEV_LOGIN_PORT`) has one card per tool: Claude's "Open sign-in page"
+button and a box for the code; codex's and gh's link and code; a tick once a tool is
+logged in. It refreshes itself when a login completes elsewhere, and `GET /healthz`
+returns 200 while it is up, for a health check. Its log is `/tmp/dev-login-page.log`.
+
+**The notification** (`DEV_NOTIFY_URL`) is a plain POST, sent when logins are first
+needed and then hourly while they still are. Its `Title` header is
+`Log in to <tools> (<name>)`, where the name is the Remote Control name; the body is
+`DEV_LOGIN_PAGE_URL` if set, else the links and codes. ntfy opens the `Click` header's
+link (the page, or the first sign-in link) when you tap it. A failed POST only logs a
+warning. The URL is never logged, so it may carry an access token.
+
+By hand, the CLIs' own logins still work (`claude auth login`, `codex login --device-auth`,
+`gh auth login`, then `dev-init` to wire git to gh straight away). Run `dev-doctor` to
+confirm everything is green.
+
+### Security
+
+- The page only feeds codes to logins this container started itself. Claude's uses PKCE,
+  and the verifier never leaves the `claude` process, so someone who reaches the page
+  **cannot** get your tokens.
+- The worst case is someone who reaches the page logging the container into **their**
+  account (or approving a codex or gh code with theirs). So the page is opt-in, and belongs
+  on a LAN, a VPN or behind Coder's authenticated app proxy, never published to the
+  internet.
+- It accepts nothing but a form POST of the code, limited to 4 KiB, and `dev-login` only
+  passes on a code of printable characters, so a code cannot press keys in the login's
+  terminal. The page shows no credentials and no status beyond whether each tool is
+  logged in.
+- The notification carries the sign-in links (unless `DEV_LOGIN_PAGE_URL` is set), so the
+  same applies to it: use a private ntfy topic, or one that needs an access token.
 
 ## Extending the image
 
