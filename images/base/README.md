@@ -57,7 +57,10 @@ them, so those scripts stay maintained.
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
-orchestrator skill works unchanged.
+orchestrator skill works unchanged. By default each prints one event line and exits; with
+`--stream` it keeps running and prints one line per change, for a harness that turns each
+output line into an event (Claude Code's Monitor tool). The scripts' headers document both
+modes.
 
 ## What the image does not own
 

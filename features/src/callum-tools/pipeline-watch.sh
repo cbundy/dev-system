@@ -2,7 +2,8 @@
 #
 # Wait until a watched no-mistakes pipeline reaches an actionable state,
 # print one line - "<state> <branch> <run-id>[ <detail>] head=<sha>" - and
-# exit. States:
+# exit (single-shot, the default). With --stream it never exits on an event:
+# see "Stream mode" below. States:
 #
 #   merge-ready  all local steps passed, the run's ci.log records a
 #                GitHub CI pass, the run's head is the branch's real
@@ -64,22 +65,73 @@
 # so the watcher never needs to be disarmed to dodge a re-fire loop. That
 # disarming is itself the failure mode: it silently drops coverage for
 # every OTHER watched branch, not just the one that was already handled.
+#
+# Stream mode (--stream, cbundy/dev-system#54) is for a harness that turns
+# each stdout line of a long-running command into an event (Claude Code's
+# Monitor tool). It never exits on an event, so handling one can never leave
+# the session unwatched. Each poll evaluates EVERY watched branch and prints
+# one line per branch whose actionable state changed since the last line
+# printed for it - same line format and states as above, so the handling
+# rules carry over. The per-branch "<state>:<sha>" fingerprint is tracked in
+# the script, seeded from --known. A branch seen in a plainly non-actionable
+# state (running with nothing to report, merged or closed) clears its
+# fingerprint, so if it later returns to the same state on the same head -
+# parked again at a later gate, say - that is reported as the new event it
+# is. A not-yet-known mergeability (UNKNOWN, or a `gh` failure) clears
+# nothing. Output is only event lines and, on a fatal error, one final
+# "watcher-error <reason>" line before a non-zero exit, so a crash is never
+# silent. Transient `no-mistakes` and `gh` failures skip that probe for the
+# cycle. Fatal: `no-mistakes` missing from PATH (checked every cycle), `gh`
+# missing or not inside a git repository (checked at start), a usage error,
+# or any unexpected exit. A signal (the harness stopping the monitor) is a
+# normal end and prints nothing. --deadline is rejected in stream mode: the
+# harness's own monitor timeout is the heartbeat there.
+#
+# --interval <seconds> sets the poll interval (default: the
+# PIPELINE_WATCH_INTERVAL environment variable, else 25).
 set -eu
 
+stream=
+case " $* " in *" --stream "*) stream=1 ;; esac
+reported=
+
+# fatal <reason>: exit non-zero; in stream mode first print the one
+# watcher-error line on stdout, the event channel.
+fatal() {
+  [ -z "$stream" ] || echo "watcher-error $*"
+  echo "pipeline-watch.sh: $*" >&2
+  reported=1
+  exit 1
+}
+
+# on_exit (stream mode's EXIT trap): an unexpected non-zero exit still ends
+# with a watcher-error line.
+on_exit() {
+  rc=$?
+  [ "$rc" -eq 0 ] || [ -n "$reported" ] || echo "watcher-error exited with status $rc"
+}
+
 usage() {
-  echo "usage: pipeline-watch.sh --branches branch[,branch...] [--deadline seconds]" \
+  [ -z "$stream" ] || echo "watcher-error usage${1:+: $1}"
+  [ -z "${1-}" ] || echo "pipeline-watch.sh: $1" >&2
+  echo "usage: pipeline-watch.sh --branches branch[,branch...]" \
+    "[--stream | --deadline seconds] [--interval seconds]" \
     "[--worktree branch=path]... [--known branch=state:sha]..." >&2
+  reported=1
   exit 2
 }
 
 branches=
 deadline=0
+interval=${PIPELINE_WATCH_INTERVAL:-25}
 worktrees=
 known=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --branches) branches=${2-}; shift 2 || usage ;;
     --deadline) deadline=${2-}; shift 2 || usage ;;
+    --interval) interval=${2-}; shift 2 || usage ;;
+    --stream) shift ;;
     --worktree)
       case "${2-}" in ?*=?*) ;; *) usage ;; esac
       worktrees="$worktrees$2
@@ -96,6 +148,15 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ -n "$branches" ] || usage
+case "$interval" in '' | *[!0-9]* | 0) usage "--interval must be a positive whole number of seconds" ;; esac
+if [ -n "$stream" ]; then
+  [ "$deadline" = 0 ] ||
+    usage "--deadline is single-shot only; under --stream the monitor's own timeout is the heartbeat"
+  trap 'reported=1; exit 143' HUP INT TERM
+  trap on_exit EXIT
+  command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
+  git rev-parse --git-dir >/dev/null 2>&1 || fatal "not inside a git repository"
+fi
 
 logs_dir="${NO_MISTAKES_HOME:-$HOME/.no-mistakes}/logs"
 
@@ -138,10 +199,22 @@ known_fingerprint() {
   printf '%s' "$known" | awk -v b="$1" 'index($0, b "=") == 1 { print substr($0, length(b) + 2); exit }'
 }
 
+# set_known <branch> <fingerprint>: stream mode's record of the last line
+# printed for a branch, or "none" once the branch is seen non-actionable.
+set_known() {
+  known="$(printf '%s' "$known" | awk -v b="$1" 'index($0, b "=") != 1')
+$1=$2
+"
+}
+
 n_watched=$(printf '%s\n' "$branches" | awk -F, '{print NF}')
 started=$(date +%s)
 
 while :; do
+  if [ -n "$stream" ]; then
+    hash -r # forget cached command paths, so a removed binary is noticed
+    command -v no-mistakes >/dev/null 2>&1 || fatal "no-mistakes not on PATH"
+  fi
   seen=","
   n_seen=0
   # Newest run dirs first: only the most recent run per branch counts -
@@ -159,14 +232,17 @@ while :; do
     run_sha=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*head_sha:[[:space:]]*//p' | sed -n 1p | tr -d '"')
     status=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | sed -n 1p)
     state=
+    quiet= # set when the run is plainly not actionable, as opposed to not yet known
     case "$status" in
       failed | cancelled) state=$status ;;
-      completed) ;; # merged or closed - nothing left for the orchestrator
+      completed) quiet=1 ;; # merged or closed - nothing left for the orchestrator
       *)
         if printf '%s\n' "$out" | grep -q 'awaiting_agent\|,awaiting_approval,'; then
           state=parked
         elif grep -q 'all CI checks passed' "$logs_dir/$id/ci.log" 2>/dev/null; then
           state=merge-ready
+        else
+          quiet=1
         fi
         ;;
     esac
@@ -196,7 +272,10 @@ while :; do
     fi
     if [ -n "$state" ]; then
       printf '%s %s %s%s head=%s\n' "$state" "$branch" "$id" "$detail" "${run_sha:-unknown}"
-      exit 0
+      [ -n "$stream" ] || exit 0
+      set_known "$branch" "$fingerprint"
+    elif [ -n "$stream" ] && [ -n "$quiet" ]; then
+      set_known "$branch" none
     fi
     [ "$n_seen" -eq "$n_watched" ] && break
   done
@@ -204,5 +283,5 @@ while :; do
     echo timeout
     exit 0
   fi
-  sleep "${PIPELINE_WATCH_INTERVAL:-25}"
+  sleep "$interval"
 done
