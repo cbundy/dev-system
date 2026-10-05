@@ -361,9 +361,13 @@ orphaned processes, so containers stop in well under a second instead of hitting
    An API key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote
    Control rejects both, and `dev-login` leaves it alone.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
-   (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`) and
-   onboarding as done. An unattended interactive Claude otherwise sits at the folder trust
-   dialog, which comes before anything else.
+   (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`),
+   Remote Control as accepted (`remoteDialogSeen`), and onboarding as done. An unattended
+   Claude otherwise sits at the folder trust dialog, which comes before anything else, or
+   at the one-time "Enable Remote Control? (y/n)" prompt, which `claude remote-control`
+   shows on a fresh config (cbundy/dev-system#88). Enabling `DEV_REMOTE_CONTROL` (the
+   headless default) is the consent to Remote Control, so the supervisor answers it for
+   you. Only missing values are set.
 3. **Runs Claude with Remote Control** in the tmux session `claude`, in the workspace,
    in one of two modes (`DEV_REMOTE_CONTROL_MODE`):
    - `session` (default): `claude --remote-control <name>`, the interactive Claude. The
