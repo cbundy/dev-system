@@ -63,10 +63,11 @@ claude_plugin_cli() {
 }
 
 # installed_plugins: the ids (<plugin>@<marketplace>) of the plugins Claude
-# has installed, one per line. Fails when the CLI cannot list them.
+# has installed, one per line. Fails when the CLI cannot list them. Limited
+# to CLAUDE_PLUGIN_LIMIT seconds when the caller sets it, else 30.
 installed_plugins() {
   local out
-  out=$(CLAUDE_PLUGIN_LIMIT=30 claude_plugin_cli list --json 2>/dev/null) || return 1
+  out=$(CLAUDE_PLUGIN_LIMIT="${CLAUDE_PLUGIN_LIMIT:-30}" claude_plugin_cli list --json 2>/dev/null) || return 1
   printf '%s\n' "$out" | jq -r '.[].id'
 }
 

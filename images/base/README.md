@@ -289,6 +289,7 @@ work in progress.
 | `DEV_REPO_URL` | empty: no clone | The repo's HTTPS clone URL. A consumer image built by CI gets it as a build argument (`${{ github.server_url }}/${{ github.repository }}.git`), so nobody types it. A runtime value (Coder's `repo_url` parameter, compose `environment:`) overrides the image's. Local and desktop builds leave it empty, since their checkout is bind-mounted. |
 | `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
+| `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the repo's Claude plugins (see "The repo's Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
 
 **Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
 `/workspaces/<repo name>` from `DEV_REPO_URL`. Until that directory exists (a clone still
@@ -336,8 +337,10 @@ Claude plugins (below) and the no-mistakes recovery.
 `.claude/settings.json` (`enabledPlugins`, from marketplaces it declares under
 `extraKnownMarketplaces`). Claude itself installs them only from its interactive
 folder-trust prompt, which a headless session, or any session on a fresh `/persist/claude`
-volume, may never show (cbundy/dev-system#112). So after the clone or fetch, `dev-init`
-installs each plugin set to `true` there that Claude has not installed yet:
+volume, may never show (cbundy/dev-system#112). So `dev-init` installs each plugin set to
+`true` there that Claude has not installed yet. It is the last step of a start, after the
+login page is up, since it needs the network and can be slow while the plugins matter only
+once Claude starts (`dev-init --repo` runs it right after the clone or fetch):
 
 - the marketplace is added first (`claude plugin marketplace add`) if Claude does not know
   it, from its declared source: `github` (`repo`, plus `#ref` when one is set) or `git`
@@ -346,9 +349,14 @@ installs each plugin set to `true` there that Claude has not installed yet:
 - then `claude plugin install <plugin>@<marketplace>`, user scope, so it lands in
   `/persist/claude` and stays across rebuilds. If that fails on a marketplace Claude
   already knew, it updates the marketplace and tries once more;
-- each call is limited to 60s and runs outside the checkout; a failure is one `WARNING`
-  line with the CLI's reason and a `Fix:` line, and the start carries on. No login is
-  needed, only network access (and, for a private marketplace repo, git's credential).
+- each call is limited to 60s and runs outside the checkout, and the whole step to
+  `DEV_PLUGIN_INSTALL_TIMEOUT` (120s): no call starts once that is spent, and no call runs
+  past it, so a slow or unreachable network cannot use up a runtime's time limit for the
+  start (Coder's is 300s). Once it is spent, one `WARNING` names the plugins not yet
+  installed, with the fix `dev-init --repo`;
+- a failure is one `WARNING` line with the CLI's reason and a `Fix:` line, and the start
+  carries on. No login is needed, only network access (and, for a private marketplace
+  repo, git's credential).
 
 Nothing about any particular plugin is built into the image: the repo's settings are the
 only input. A plugin already installed costs one `claude plugin list --json` call.
@@ -388,27 +396,28 @@ container never fails to start because of it.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
    empty, or fetches when it is already a repo (see
    [Workspace and repo](#workspace-and-repo)).
-7. If the workspace repo's `.claude/settings.json` enables Claude plugins that are not
-   installed, installs them, adding their marketplaces from the declared source first (see
-   "The repo's Claude plugins" in [Workspace and repo](#workspace-and-repo)). An invalid
-   settings file, an unsupported marketplace source or a failed install is a `WARNING`
-   with the fix.
-8. If the workspace (`$DEV_WORKSPACE` once it exists, else the current directory) is in a
+7. If the workspace (`$DEV_WORKSPACE` once it exists, else the current directory) is in a
    git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
    after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
    the repo if needed. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
    has its own short time limit (30s), so a daemon that never answers is logged with the
    fix and never holds up the steps after it.
-9. If an agentsview URL is configured (the secret file
+8. If an agentsview URL is configured (the secret file
    `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
    cannot read gets a `WARNING`.
-10. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
-    mounted is fine; it is optional.
-11. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
+9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
+   mounted is fine; it is optional.
+10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
     [First-run logins](#first-run-logins)).
+11. If the workspace repo's `.claude/settings.json` enables Claude plugins that are not
+    installed, installs them, adding their marketplaces from the declared source first (see
+    "The repo's Claude plugins" in [Workspace and repo](#workspace-and-repo)). An invalid
+    settings file, an unsupported marketplace source or a failed install is a `WARNING`
+    with the fix. Last, and within `DEV_PLUGIN_INSTALL_TIMEOUT` (120s) in all, so it can
+    never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`

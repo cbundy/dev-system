@@ -1447,6 +1447,25 @@ plugin_check "dev-init --repo installs them too (a clone that arrives after the 
   [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin one@gh" &&
   echo "$out" | grep -qxF "dev-init: installed Claude plugin two@gitm"'
 
+# A `claude plugin` that never answers (an unreachable network): the step's
+# deadline stops it. Without the deadline this takes minutes (a 30s listing,
+# then 60s per call).
+plugin_check "a claude plugin that hangs: the step stops at DEV_PLUGIN_INSTALL_TIMEOUT with one WARNING naming the plugins not installed" '
+  printf "%s\n" "#!/bin/bash" "[ \"\$1\" = plugin ] && exec sleep 600" "exit 0" > /tmp/stub/claude
+  start=$SECONDS; out=$(dev-init --repo 2>&1); rc=$?; took=$((SECONDS - start)); echo "$out"; echo "took ${took}s"
+  [ $rc = 0 ] && [ $took -lt 15 ] &&
+  [ "$(echo "$out" | grep -c WARNING)" = 1 ] &&
+  echo "$out" | grep -qxF "dev-init: WARNING: the Claude plugin install ran out of its 3s (DEV_PLUGIN_INSTALL_TIMEOUT) - not installed: one@gh two@gitm three@odd" &&
+  echo "$out" | grep -A1 "ran out of its" | grep -qF "dev-init:   Fix: " &&
+  echo "$out" | grep -A1 "ran out of its" | grep -qF "dev-init --repo"' \
+  -e DEV_PLUGIN_INSTALL_TIMEOUT=3
+plugin_check "a full dev-init starts the login page before it installs the plugins" '
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -nE "login page|installed Claude plugin"
+  page=$(echo "$out" | grep -n "dev-init: started the login page on port 8765" | cut -d: -f1)
+  plugin=$(echo "$out" | grep -n "dev-init: installed Claude plugin one@gh" | cut -d: -f1)
+  [ $rc = 0 ] && [ -n "$page" ] && [ -n "$plugin" ] && [ "$page" -lt "$plugin" ]' \
+  -e DEV_LOGIN_PORT=8765
+
 echo
 echo "$PASSES passed, $FAILURES failed"
 [ "$FAILURES" -eq 0 ]
