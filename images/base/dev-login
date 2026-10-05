@@ -1,0 +1,411 @@
+#!/bin/bash
+#
+# dev-login: first-run logins without a shell in the container
+# (cbundy/dev-system#74).
+#
+# Runs each tool's own login in a tmux session (login-claude, login-codex,
+# login-gh) and reads the sign-in link from it, so the link can go to the
+# container log, the login page and a push notification:
+#   claude  `claude auth login --claudeai`: a sign-in URL; the code the
+#           sign-in page then shows is pasted back with `dev-login <code>`
+#   codex   `codex login --device-auth`: a URL and a one-time code (valid 15
+#           minutes); approving it is enough
+#   gh      `gh auth login --web`: the same, then `gh auth setup-git`
+#
+# Usage:
+#   dev-login status [--json]   each tool's login: in, out, other (Claude is
+#                               logged in, but not with claude.ai), token (gh
+#                               uses GH_TOKEN / GITHUB_TOKEN) or off (not in
+#                               DEV_LOGIN_TOOLS), with the link of an attempt
+#                               in progress
+#   dev-login start [--json]    start every missing login and print the links.
+#                               An attempt in progress is kept, not restarted,
+#                               so the link already handed out stays valid; one
+#                               that ended (expired or rejected) is replaced.
+#   dev-login [claude] <code>   finish the Claude login with the code its
+#                               sign-in page shows
+#   dev-login watch [--name N]  keep the missing logins started until all are
+#                               done: log each new link, notify DEV_NOTIFY_URL
+#   dev-login serve             the login page on DEV_LOGIN_PORT
+#                               (dev-login-page.js)
+#
+# Environment:
+#   DEV_LOGIN_TOOLS      tools to log in (default claude,codex,gh)
+#   DEV_LOGIN_PORT       the login page's port; unset means no page
+#   DEV_LOGIN_PAGE_EXIT  1 (default): the page exits once every login is done;
+#                        0 keeps it up (status for a Coder app)
+#   DEV_LOGIN_PAGE_URL   the page's address as you reach it, for messages
+#   DEV_NOTIFY_URL       POST a notification here (an ntfy topic, or anything
+#                        that takes a POST body) when logins are needed
+set -u
+
+RUN_DIR=/tmp/dev-login
+LOCK="$RUN_DIR/lock"
+ALL_TOOLS="claude codex gh"
+WATCH_EVERY=15      # seconds between checks in `watch`
+NOTIFY_EVERY=3600   # seconds between reminder notifications in `watch`
+LINK_WAIT=30        # seconds `start` waits for a new attempt's link
+
+log() {
+  echo "dev-login: $*" >&2
+}
+
+usage() {
+  sed -n '/^# Usage:/,/^# Environment:/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
+  exit 2
+}
+
+# How to run a command in this container from outside, for the hints. The
+# hostname is the container ID under Docker and the pod name on Kubernetes.
+exec_hint() {
+  local host="${HOSTNAME:-$(cat /etc/hostname)}" ns
+  if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+    ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || true)
+    echo "kubectl exec -it${ns:+ -n $ns} $host -- $1"
+  else
+    echo "docker exec -it $host $1"
+  fi
+}
+
+# The tools in DEV_LOGIN_TOOLS, in a fixed order; unknown names are skipped
+# with a warning.
+wanted_tools() {
+  local list=" ${DEV_LOGIN_TOOLS-claude,codex,gh} " t
+  list="${list//,/ }"
+  for t in $list; do
+    case " $ALL_TOOLS " in
+      *" $t "*) ;;
+      *) log "WARNING: DEV_LOGIN_TOOLS: unknown tool \"$t\" (known: $ALL_TOOLS)" ;;
+    esac
+  done
+  for t in $ALL_TOOLS; do
+    case "$list" in *" $t "*) echo "$t" ;; esac
+  done
+}
+
+wanted() {
+  wanted_tools 2>/dev/null | grep -qx "$1"
+}
+
+# in, out, other (claude), token (gh) or off
+tool_state() {
+  local tool="$1"
+  if ! wanted "$tool"; then
+    echo off
+    return
+  fi
+  case "$tool" in
+    claude)
+      claude auth status --json 2>/dev/null \
+        | jq -r 'if .loggedIn != true then "out" elif .authMethod == "claude.ai" then "in" else "other" end' 2>/dev/null \
+        | grep . || echo out
+      ;;
+    codex)
+      if codex login status >/dev/null 2>&1; then echo in; else echo out; fi
+      ;;
+    gh)
+      if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+        echo token
+      elif gh auth status >/dev/null 2>&1; then
+        echo in
+      else
+        echo out
+      fi
+      ;;
+  esac
+}
+
+session() {
+  echo "login-$1"
+}
+
+attempt_running() {
+  tmux has-session -t "$(session "$1")" 2>/dev/null
+}
+
+pane() {
+  tmux capture-pane -p -J -t "$(session "$1")" 2>/dev/null
+}
+
+# The sign-in URL and (codex, gh) one-time code of the attempt in progress,
+# read from its pane; empty until the tool has printed them.
+attempt_url() {
+  case "$1" in
+    claude) pane claude | grep -oE 'https://[^ ]*oauth/authorize[^ ]*' | tail -n 1 ;;
+    codex) pane codex | grep -oE 'https://[^ ]*/device[^ ]*' | tail -n 1 ;;
+    gh) pane gh | grep -oE 'https://[^ ]*/login/device[^ ]*' | tail -n 1 ;;
+  esac
+}
+
+attempt_code() {
+  case "$1" in
+    codex | gh) pane "$1" | grep -oE '\b[A-Z0-9]{4}-[A-Z0-9]{4,6}\b' | tail -n 1 ;;
+  esac
+}
+
+# Starts the tool's login in its tmux session. The panes are wide so a long
+# URL stays on one line. gh gets no terminal on stdin, which makes it skip its
+# questions and just print the code; git is wired to it afterwards. The lock
+# (fd 8) and the supervisor's (fd 9) are closed, so a tmux server started here
+# never holds them.
+start_attempt() {
+  local tool="$1" s
+  s=$(session "$tool")
+  case "$tool" in
+    claude) tmux new-session -d -s "$s" -x 1000 -y 50 claude auth login --claudeai 8>&- 9>&- ;;
+    codex) tmux new-session -d -s "$s" -x 1000 -y 50 codex login --device-auth 8>&- 9>&- ;;
+    gh)
+      tmux new-session -d -s "$s" -x 1000 -y 50 \
+        'gh auth login --hostname github.com --git-protocol https --web </dev/null && gh auth setup-git' 8>&- 9>&-
+      ;;
+  esac
+}
+
+# One line per tool that still needs a login, for logs and notifications.
+describe() {
+  local tool="$1" url="$2" code="$3"
+  if [ -z "$url" ]; then
+    echo "$tool: no sign-in link yet - see: $(exec_hint "tmux attach -t $(session "$tool")")"
+  elif [ "$tool" = claude ]; then
+    echo "claude: open $url and approve, then paste the code it shows into the login page or run: $(exec_hint 'dev-login <code>')"
+  else
+    echo "$tool: open $url and enter the code $code"
+  fi
+}
+
+# report <text|json> <state per tool...>: the tools' states, and each pending
+# attempt's link. Text lists only the tools that still need a login.
+report() {
+  local format="$1" tool state url code json='{}'
+  shift
+  for tool in $ALL_TOOLS; do
+    state="$1"
+    shift
+    url=""
+    code=""
+    if [ "$state" = out ] && attempt_running "$tool"; then
+      url=$(attempt_url "$tool")
+      code=$(attempt_code "$tool")
+    fi
+    if [ "$format" = json ]; then
+      json=$(jq -c --arg t "$tool" --arg s "$state" --arg u "$url" --arg c "$code" \
+        '.[$t] = {state: $s, url: (if $u == "" then null else $u end), code: (if $c == "" then null else $c end)}' <<<"$json")
+    elif [ "$state" = out ]; then
+      describe "$tool" "$url" "$code"
+    fi
+  done
+  [ "$format" = json ] && echo "$json"
+  return 0
+}
+
+all_states() {
+  local tool
+  for tool in $ALL_TOOLS; do
+    tool_state "$tool"
+  done
+}
+
+cmd_status() {
+  local format=text
+  case "${1:-}" in
+    --json) format=json ;;
+    "") ;;
+    *) usage ;;
+  esac
+  local states tool i=0
+  states=$(all_states)
+  if [ "$format" = text ]; then
+    for tool in $ALL_TOOLS; do
+      i=$((i + 1))
+      echo "$tool: $(sed -n "${i}p" <<<"$states")"
+    done
+  fi
+  # shellcheck disable=SC2086 # one word per tool
+  report "$format" $states
+}
+
+# Starts every missing login that is not already in progress, waits for the
+# new attempts' links, and reports. Serialized, so the page and the watcher
+# never start the same login twice.
+cmd_start() {
+  local format=text tool started="" states i _
+  case "${1:-}" in
+    --json) format=json ;;
+    "") ;;
+    *) usage ;;
+  esac
+  install -d -m 0700 "$RUN_DIR"
+  exec 8>"$LOCK"
+  flock 8
+  states=$(all_states)
+  i=0
+  for tool in $ALL_TOOLS; do
+    i=$((i + 1))
+    if [ "$(sed -n "${i}p" <<<"$states")" != out ]; then
+      # Logged in some other way (or no longer wanted): a leftover attempt
+      # would only wait forever.
+      tmux kill-session -t "$(session "$tool")" 2>/dev/null
+      continue
+    fi
+    attempt_running "$tool" && continue
+    if start_attempt "$tool"; then
+      started="$started $tool"
+    else
+      log "WARNING: could not start the $tool login"
+    fi
+  done
+  for tool in $started; do
+    for _ in $(seq "$LINK_WAIT"); do
+      [ -n "$(attempt_url "$tool")" ] && break
+      attempt_running "$tool" || break
+      sleep 1
+    done
+  done
+  flock -u 8
+  # shellcheck disable=SC2086 # one word per tool
+  report "$format" $states
+}
+
+# Sends the code to the waiting `claude auth login`, then waits for the login
+# to appear. A rejected code ends that attempt, so the next start (the page,
+# the watcher) offers a fresh link: Claude's link is good for one sign-in.
+cmd_code() {
+  local code="$1" s _
+  s=$(session claude)
+  # The code goes to a terminal as typed keys: printable characters only, so
+  # nothing can press Enter or a control key on its behalf.
+  if ! [[ "$code" =~ ^[[:graph:]]{1,2048}$ ]]; then
+    log "that is not a sign-in code (expected one word of printable characters)"
+    return 2
+  fi
+  if [ "$(tool_state claude)" = in ]; then
+    log "Claude is already logged in"
+    return 0
+  fi
+  install -d -m 0700 "$RUN_DIR"
+  exec 8>"$LOCK"
+  flock 8
+  if ! attempt_running claude; then
+    log "no Claude login in progress - run: dev-login start (or open the login page) for a sign-in link"
+    return 1
+  fi
+  tmux send-keys -t "$s" -l -- "$code"
+  tmux send-keys -t "$s" Enter
+  for _ in $(seq 30); do
+    if [ "$(tool_state claude)" = in ]; then
+      tmux kill-session -t "$s" 2>/dev/null
+      log "Claude is logged in"
+      return 0
+    fi
+    if pane claude | grep -q 'Invalid code'; then
+      tmux kill-session -t "$s" 2>/dev/null
+      log "Claude rejected the code - copy it whole, from the sign-in page of the current link. Each link works once: get a new one with dev-login start (or reload the login page)."
+      return 1
+    fi
+    attempt_running claude || break
+    sleep 1
+  done
+  tmux kill-session -t "$s" 2>/dev/null
+  log "Claude is still not logged in after the code - try again with a new link: dev-login start (or reload the login page)"
+  return 1
+}
+
+# Best effort: a failed notification is logged, never fatal. The URL may hold
+# a token, so it is never logged.
+notify() {
+  local title="$1" body="$2" click="$3"
+  [ -n "${DEV_NOTIFY_URL:-}" ] || return 0
+  if curl -fsS -m 10 -o /dev/null -H "Title: $title" ${click:+-H "Click: $click"} \
+    --data-binary "$body" "$DEV_NOTIFY_URL" 2>/dev/null; then
+    log "sent a notification to DEV_NOTIFY_URL"
+  else
+    log "WARNING: could not send the notification to DEV_NOTIFY_URL"
+  fi
+}
+
+# Where the page is, for messages: DEV_LOGIN_PAGE_URL, else its port.
+page_hint() {
+  if [ -n "${DEV_LOGIN_PAGE_URL:-}" ]; then
+    echo "$DEV_LOGIN_PAGE_URL"
+  elif [ -n "${DEV_LOGIN_PORT:-}" ]; then
+    echo "port $DEV_LOGIN_PORT of this container"
+  fi
+}
+
+on_signal() {
+  [ -n "${SLEEP_PID:-}" ] && kill "$SLEEP_PID" 2>/dev/null
+  exit 0
+}
+
+# Keeps the missing logins started until every one is done: an attempt that
+# ended (an expired code, a rejected paste) is replaced, each new link is
+# logged once, and DEV_NOTIFY_URL hears when logins are first needed, then
+# hourly while they still are.
+cmd_watch() {
+  local name="" lines last="" last_notify=0 now pending title body click page tool
+  case "${1:-}" in
+    --name) name="${2:-}" ;;
+    "") ;;
+    *) usage ;;
+  esac
+  name="${name:-${HOSTNAME:-$(cat /etc/hostname)}}"
+  page=$(page_hint)
+  trap on_signal TERM INT HUP
+  while :; do
+    lines=$(cmd_start)
+    if [ -z "$lines" ]; then
+      [ -z "$last" ] || log "all logins are done"
+      return 0
+    fi
+    if [ "$lines" != "$last" ]; then
+      while IFS= read -r tool; do log "$tool"; done <<<"$lines"
+      [ -z "$page" ] || log "  or use the login page: $page"
+      last="$lines"
+    fi
+    now=$(date +%s)
+    if [ -n "${DEV_NOTIFY_URL:-}" ] && [ $((now - last_notify)) -ge "$NOTIFY_EVERY" ]; then
+      pending=$(awk -F: '{ printf "%s%s", (NR > 1 ? ", " : ""), $1 }' <<<"$lines")
+      title="Log in to $pending ($name)"
+      if [ -n "${DEV_LOGIN_PAGE_URL:-}" ]; then
+        body="Open the login page: $DEV_LOGIN_PAGE_URL"
+        click="$DEV_LOGIN_PAGE_URL"
+      else
+        body="$lines"
+        click=$(grep -oE 'https://[^ ]+' <<<"$lines" | head -n 1)
+      fi
+      notify "$title" "$body" "$click"
+      last_notify=$now
+    fi
+    sleep "$WATCH_EVERY" 9>&- &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID"
+  done
+}
+
+cmd_serve() {
+  if ! [[ "${DEV_LOGIN_PORT:-}" =~ ^[0-9]+$ ]] || [ "$DEV_LOGIN_PORT" -lt 1 ] || [ "$DEV_LOGIN_PORT" -gt 65535 ]; then
+    log "ERROR: set DEV_LOGIN_PORT to the port for the login page (1-65535), not \"${DEV_LOGIN_PORT:-}\""
+    return 2
+  fi
+  exec node /usr/local/share/dev-system/dev-login-page.js
+}
+
+if [ "$(id -u)" = 0 ]; then
+  # The logins land in /persist, which must stay node-owned.
+  log "ERROR: run as node, not root"
+  exit 1
+fi
+
+# Warn about unknown DEV_LOGIN_TOOLS names once, not once per check.
+wanted_tools >/dev/null
+
+case "${1:-}" in
+  status) cmd_status "${2:-}" ;;
+  start) cmd_start "${2:-}" ;;
+  watch) cmd_watch "${@:2}" ;;
+  serve) cmd_serve ;;
+  claude) [ $# -eq 2 ] || usage; cmd_code "$2" ;;
+  "" | -h | --help | help) usage ;;
+  -*) usage ;;
+  *) [ $# -eq 1 ] || usage; cmd_code "$1" ;;
+esac
