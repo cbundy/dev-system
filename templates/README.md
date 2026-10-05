@@ -47,7 +47,7 @@ Global agent instructions.
 Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
 generic `permissions.allow` list the implement-issue/orchestrator flow needs
 (`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
-`treehouse get/return/status`, `gh issue/api/pr view/pr checks/pr list`) - see
+`treehouse get/return/status`, `gh issue/pr view/pr checks/pr list`) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
 Claude Code plugin's own `settings.json` only applies its `agent` and
 `subagentStatusLine` keys; every other key, including `permissions`, is dropped at
@@ -92,6 +92,14 @@ values are compared whole):
   keeps a worktree sub-agent from merging is that `settings.local.json` never leaves
   the main checkout - worktrees start with none of it - not a rule that blocks the
   command everywhere.
+- **Deliberately absent**: `gh api`. It can merge a PR through the REST API
+  (`gh api -X PUT .../pulls/N/merge`), crossing the orchestrator-only merge boundary,
+  and permission rules match by prefix, so no "read-only" `gh api` pattern can exclude
+  a method flag appended later (dev-system#58). An orchestrator that needs it allows it
+  in `.claude/settings.local.json` in the main checkout, like the powers above.
+
+This allow list saves permission prompts; it is not a hard boundary. An agent running in
+bypass-permissions mode is not stopped by it either way.
 
 ## `.devcontainer/devcontainer.json` -> `.devcontainer/devcontainer.json`
 

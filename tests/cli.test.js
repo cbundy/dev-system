@@ -266,6 +266,35 @@ test("settings.json update with no baseline keeps every key the template does no
   assert.equal(merged.enabledPlugins["callum-flow@callum"], true, "template-defined key wins");
 });
 
+// The other half of the union: an entry the template drops (as dev-system#58 dropped
+// `Bash(gh api *)`) was in the old baseline, so it is synced, not repo-owned, and must
+// disappear from consumers on update rather than linger as if the repo had added it.
+test("update drops a permissions.allow entry the template removed, keeping repo-added ones", (t) => {
+  const repo = initRepo(t);
+
+  const settingsPath = path.join(repo, ".claude/settings.json");
+  const settings = JSON.parse(read(repo, ".claude/settings.json"));
+  const repoEntry = "Bash(scripts/evidence-upload.sh *)";
+  settings.permissions.allow.push(repoEntry);
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  const removedEntry = "Bash(treehouse status *)";
+  assert.ok(settings.permissions.allow.includes(removedEntry), "precondition: entry is synced");
+  const upstream = upstreamCopy(t, (dir) => {
+    const file = path.join(dir, ".claude/settings.json");
+    const template = JSON.parse(read(dir, ".claude/settings.json"));
+    template.permissions.allow = template.permissions.allow.filter((e) => e !== removedEntry);
+    fs.writeFileSync(file, JSON.stringify(template, null, 2) + "\n");
+  });
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const allow = JSON.parse(read(repo, ".claude/settings.json")).permissions.allow;
+  assert.ok(!allow.includes(removedEntry), "entry the template removed is gone");
+  assert.ok(allow.includes(repoEntry), "repo-owned entry survived");
+});
+
 // Ask git itself what the scaffolded .gitignore does. Reading the patterns is not
 // good enough here: the rules that matter most are directory-vs-file distinctions
 // (.no-mistakes/ ignored, .no-mistakes.yaml tracked), which is exactly what eyeballing
