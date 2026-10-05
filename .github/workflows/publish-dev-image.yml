@@ -1,0 +1,138 @@
+name: Publish dev image
+
+# Builds and smoke-tests ghcr.io/cbundy/dev-system/dev, dev-system's own dev
+# environment (.devcontainer/Dockerfile: the base image plus terraform,
+# cbundy/dev-system#117), and pushes it like any consumer's per-repo image:
+#
+# - pull_request: build + smoke test only, never pushes.
+# - push to main, workflow_dispatch (main only), schedule: build, smoke test,
+#   push `latest` and `sha-<short>`. No version and no release step: the image
+#   follows main.
+# - schedule (weekly): a few hours after publish-base-image.yml's weekly
+#   rebuild (Mondays 05:17 UTC), so the image picks up the refreshed base:2.
+#
+# The first push creates the package with this repo's visibility (public); see
+# docs/architecture.md, "GHCR visibility".
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/publish-dev-image.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+      - ".github/workflows/publish-dev-image.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-dev-image-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/cbundy/dev-system/dev
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Compute tags
+        id: meta
+        run: |
+          short_sha=${GITHUB_SHA::7}
+          {
+            echo "short_sha=$short_sha"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "tags<<EOF"
+            echo "$IMAGE:latest"
+            echo "$IMAGE:sha-$short_sha"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to push
+        id: push
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          case "$EVENT" in
+            pull_request) push=false ;;
+            *)
+              # `latest` is what workspaces pull, so only main may publish it.
+              if [ "$REF" != refs/heads/main ]; then
+                echo "::error::Publish only from main (this run is on $REF)."
+                exit 1
+              fi
+              push=true
+              ;;
+          esac
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: steps.push.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Built once with the final tags and loaded into the local daemon: the
+      # smoke test runs against this image and the push step pushes this same
+      # image. pull: true always starts from the current base:2.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .devcontainer
+          file: .devcontainer/Dockerfile
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            DEV_REPO_URL=${{ github.server_url }}/${{ github.repository }}.git
+            VERSION=sha-${{ steps.meta.outputs.short_sha }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ steps.meta.outputs.created }}
+          cache-from: type=gha,scope=dev-image
+          cache-to: type=gha,scope=dev-image,mode=max
+
+      - name: Smoke test
+        env:
+          WANT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          docker run --rm --entrypoint "" "$IMAGE:latest" terraform version
+          got=$(docker run --rm --entrypoint "" "$IMAGE:latest" printenv DEV_REPO_URL)
+          if [ "$got" != "$WANT_REPO_URL" ]; then
+            echo "::error::DEV_REPO_URL is '$got', expected '$WANT_REPO_URL'."
+            exit 1
+          fi
+
+      - name: Push image
+        if: steps.push.outputs.push == 'true'
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          while read -r tag; do
+            docker push "$tag"
+          done <<< "$TAGS"
+          {
+            echo "### Pushed"
+            echo '```'
+            echo "$TAGS"
+            echo "digest: $(docker image inspect -f '{{index .RepoDigests 0}}' "$(head -n 1 <<< "$TAGS")")"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
