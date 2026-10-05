@@ -3,15 +3,16 @@
 # shellcheck disable=SC2016
 #
 # Container tests for the dev-system base image (cbundy/dev-system#59, #64 for
-# the entrypoint and Remote Control, #65 for the /shared mount point and #73
-# for per-repo /persist volumes).
+# the entrypoint and Remote Control, #65 for the /shared mount point, #73
+# for per-repo /persist volumes and #74 for first-run logins).
 #
 # Usage: images/base/test/test.sh <image>
 #
 # Runs on a Docker host against an already-built image - locally and in
 # publish-base-image.yml. Sections 1-7 match the tests in #59, section 8 the
 # entrypoint tests in #64, section 9 the agentsview push in #69, section 10
-# the /shared tests in #65 (Docker volumes stand in for the NAS). Test 7 needs
+# the /shared tests in #65 (Docker volumes stand in for the NAS), section 11
+# the first-run logins in #74 (against stub CLIs). Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
@@ -330,7 +331,8 @@ EOF
     fail "devcontainer up succeeds"
   fi
 
-  if dc_up remote-control '"containerEnv": { "DEV_REMOTE_CONTROL": "1" },'; then
+  # DEV_LOGIN_TOOLS=claude: no real codex or gh device code is requested.
+  if dc_up remote-control '"containerEnv": { "DEV_REMOTE_CONTROL": "1", "DEV_LOGIN_TOOLS": "claude" },'; then
     pass "devcontainer up succeeds with DEV_REMOTE_CONTROL=1"
     # no login in a test volume, so the supervisor waits for one
     check "with DEV_REMOTE_CONTROL=1 the post-start hook starts the supervisor in the workspace, waiting for a login" bash -c "
@@ -340,7 +342,8 @@ EOF
       done
       docker exec '$cid' bash -c '
         cat /tmp/dev-remote-control.log
-        grep -q \"Claude is not logged in - run: docker exec -it\" /tmp/dev-remote-control.log &&
+        grep -q \"Claude is not logged in - open the sign-in link dev-login logs\" /tmp/dev-remote-control.log &&
+        grep -q \"dev-login: claude: open https://claude.com/cai/oauth/authorize\" /tmp/dev-remote-control.log &&
         pid=\$(pgrep -f \"^/bin/bash /usr/local/bin/dev-remote-control\$\") &&
         [ \"\$(readlink /proc/\$pid/cwd)\" = /workspaces/remote-control ]'"
     rc_volumes=$(persist_volumes)
@@ -417,9 +420,21 @@ stops_within() {
 }
 
 # A stub claude: `auth status` reports a claude.ai login once /tmp/logged-in
-# exists; a session records its directory and arguments in /tmp/claude-starts,
-# then runs until /tmp/claude-exit exists and exits 3.
+# exists; `auth login` behaves like the real one (a sign-in URL, then a
+# prompt for the code; attempt N accepts good-code-N, anything else gets
+# "Invalid code"); a session records its directory and arguments in
+# /tmp/claude-starts, then runs until /tmp/claude-exit exists and exits 3.
 STUB='#!/bin/bash
+if [ "$1 ${2:-}" = "auth login" ]; then
+  n=$(( $(cat /tmp/claude-logins 2>/dev/null || echo 0) + 1 )); echo $n > /tmp/claude-logins
+  echo "Opening browser to sign in..."
+  echo "If the browser did not open, visit: https://claude.com/cai/oauth/authorize?code=true&state=attempt$n"
+  while read -r -p "Paste code here if prompted > " code; do
+    [ "$code" = "good-code-$n" ] && { touch /tmp/logged-in; echo "Login successful."; exit 0; }
+    echo "Invalid code. Please make sure the full code was copied."
+  done
+  exit 1
+fi
 if [ "$1" = auth ]; then
   [ -e /tmp/logged-in ] && { echo "{\"loggedIn\":true,\"authMethod\":\"claude.ai\"}"; exit 0; }
   echo "{\"loggedIn\":false,\"authMethod\":\"none\"}"
@@ -428,8 +443,37 @@ fi
 echo "$PWD $*" >> /tmp/claude-starts
 until [ -e /tmp/claude-exit ]; do sleep 0.2; done
 exit 3'
-# Installs $STUB first on PATH, then runs the rest of the command line.
-WITH_STUB='mkdir -p /tmp/stub && printf "%s\n" "$STUB" > /tmp/stub/claude && chmod +x /tmp/stub/claude && PATH=/tmp/stub:$PATH'
+# Stub codex and gh device logins: a URL and a one-time code; approving is
+# touching /tmp/<tool>-approve, which logs the tool in (gh then runs
+# `auth setup-git`, recorded in /tmp/gh-setup-git); /tmp/<tool>-expire ends
+# the attempt without a login, as an expired code does.
+STUB_CODEX='#!/bin/bash
+case "$1 ${2:-}" in
+  "login status") [ -e /tmp/codex-in ]; exit ;;
+  "login --device-auth")
+    n=$(( $(cat /tmp/codex-logins 2>/dev/null || echo 0) + 1 )); echo $n > /tmp/codex-logins
+    printf "1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n"
+    printf "2. Enter this one-time code (expires in 15 minutes)\n   CDX$n-ABCDE\n"
+    until [ -e /tmp/codex-approve ]; do
+      [ -e /tmp/codex-expire ] && { rm -f /tmp/codex-expire; echo "Device code expired"; exit 1; }
+      sleep 0.2
+    done
+    touch /tmp/codex-in ;;
+esac'
+STUB_GH='#!/bin/bash
+case "$1 ${2:-}" in
+  "auth status") [ -e /tmp/gh-in ]; exit ;;
+  "auth setup-git") touch /tmp/gh-setup-git ;;
+  "auth login")
+    echo "! First copy your one-time code: GH12-3456"
+    echo "Open this URL to continue in your web browser: https://github.com/login/device"
+    until [ -e /tmp/gh-approve ]; do sleep 0.2; done
+    touch /tmp/gh-in ;;
+esac'
+# Installs $STUB, $STUB_CODEX and $STUB_GH first on PATH (an empty one is a
+# CLI that is always logged in, so the codex and gh stubs only matter where
+# a test passes them), then runs the rest of the command line.
+WITH_STUB='mkdir -p /tmp/stub && printf "%s\n" "$STUB" > /tmp/stub/claude && printf "%s\n" "${STUB_CODEX:-}" > /tmp/stub/codex && printf "%s\n" "${STUB_GH:-}" > /tmp/stub/gh && chmod +x /tmp/stub/* && PATH=/tmp/stub:$PATH'
 
 check "ENTRYPOINT is tini + dev-entrypoint and CMD is dev-remote-control" bash -c "
   [ \"\$(docker image inspect -f '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' '$IMAGE')\" = \
@@ -448,9 +492,15 @@ check "as root the entrypoint skips dev-init, leaving nothing root-owned in /per
 
 # No login, no command: waits for a login without starting Claude. A 1s poll
 # shows the reminder rate limit (one hint per 10 polls) in a few seconds.
-c=$(run_bg -e DEV_REMOTE_CONTROL_POLL=1 "$IMAGE")
-check "no login, no command: logs the docker exec login hint" \
-  wait_until 30 logs_have "$c" "Claude is not logged in - run: docker exec -it ${c:0:12} claude auth login"
+# Tests on the real CLIs log in only Claude (DEV_LOGIN_TOOLS=claude), whose
+# login prints a link without contacting anyone; real codex and gh logins
+# would request device codes.
+c=$(run_bg -e DEV_REMOTE_CONTROL_POLL=1 -e DEV_LOGIN_TOOLS=claude "$IMAGE")
+check "no login, no command: logs the real Claude sign-in link and the docker exec dev-login hint" bash -c "
+  for _ in \$(seq 60); do docker logs '$c' 2>&1 | grep -q 'dev-login: claude: open' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep 'dev-'
+  docker logs '$c' 2>&1 | grep -q 'Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it ${c:0:12} dev-login <code>' &&
+  docker logs '$c' 2>&1 | grep -qE 'dev-login: claude: open https://claude.com/cai/oauth/authorize\\?\\S*code=true'"
 check "no login: repeats the hint every 10 polls, not every poll" bash -c "
   for _ in \$(seq 40); do
     [ \"\$(docker logs '$c' 2>&1 | grep -c 'Claude is not logged in')\" -ge 2 ] && break
@@ -460,12 +510,15 @@ check "no login: repeats the hint every 10 polls, not every poll" bash -c "
   [ \"\$(docker logs '$c' 2>&1 | grep -c 'Claude is not logged in')\" = 2 ]"
 check "no login: the container stays up without crash-looping or starting Claude" bash -c "
   [ \"\$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' '$c')\" = 'true 0' ] &&
-  docker exec '$c' bash -c '! pgrep -ax claude && ! tmux has-session -t claude 2>/dev/null'"
-check "no login: docker stop completes in under 10s with exit 0" stops_within "$c" 10
+  docker exec '$c' bash -c '! tmux has-session -t claude 2>/dev/null'"
+check "no login: docker stop completes in under 10s with exit 0, with the login pending" stops_within "$c" 10
 
-c=$(run_bg -e ANTHROPIC_API_KEY=sk-ant-test-not-a-real-key "$IMAGE")
+c=$(run_bg -e ANTHROPIC_API_KEY=sk-ant-test-not-a-real-key -e DEV_LOGIN_TOOLS=claude "$IMAGE")
 check "an API-key-only login gets the claude.ai subscription message" \
   wait_until 30 logs_have "$c" "logged in with api_key, but Remote Control needs a claude.ai subscription login"
+check "an API-key login: dev-login leaves it alone (no Claude login started)" bash -c "
+  docker exec '$c' dev-login status
+  docker exec '$c' dev-login status | grep -qx 'claude: other' && ! docker exec '$c' tmux has-session -t login-claude"
 docker rm -f "$c" >/dev/null
 
 c=$(run_bg -e DEV_REMOTE_CONTROL=0 "$IMAGE")
@@ -704,6 +757,151 @@ check "a root-owned volume at /shared: dev-doctor fails that check with the fix"
   [ $rc = 1 ] &&
   echo "$out" | grep -A1 "^dev-doctor: FAIL /shared mounted but not writable by node (1000:1000)$" | grep -q "fix: .*all_squash,anonuid=1000,anongid=1000"' \
   -v "$rootvol:/shared" --entrypoint ""
+
+echo "== 11. first-run logins (dev-login)"
+
+# in_c <container> <script>: runs a script in the container with the stubs
+# first on PATH, as the supervisor sees them
+in_c() {
+  docker exec "$1" bash -c "PATH=/tmp/stub:\$PATH; $2"
+}
+
+# The supervisor with all three logins missing, against the stub CLIs.
+c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
+  -e DEV_REMOTE_CONTROL_POLL=1 -e DEV_REMOTE_CONTROL_NAME=login-test \
+  "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
+check "the supervisor logs each tool's sign-in link and the paste hint" bash -c "
+  for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: gh: open' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep 'dev-'
+  docker logs '$c' 2>&1 | grep -qF 'dev-login: claude: open https://claude.com/cai/oauth/authorize?code=true&state=attempt1 and approve, then paste the code it shows into the login page or run: docker exec -it ${c:0:12} dev-login <code>' &&
+  docker logs '$c' 2>&1 | grep -qF 'dev-login: codex: open https://auth.openai.com/codex/device and enter the code CDX1-ABCDE' &&
+  docker logs '$c' 2>&1 | grep -qF 'dev-login: gh: open https://github.com/login/device and enter the code GH12-3456' &&
+  docker logs '$c' 2>&1 | grep -q 'Claude is not logged in - open the sign-in link dev-login logs'"
+check "dev-login status lists each tool's state and the pending links" in_c "$c" '
+  out=$(dev-login status 2>&1); rc=$?; echo "$out"
+  [ $rc = 0 ] && ! echo "$out" | grep -q "dev-login: .*line" &&
+  echo "$out" | grep -qx "claude: out" && echo "$out" | grep -qx "codex: out" && echo "$out" | grep -qx "gh: out" &&
+  echo "$out" | grep -qF "codex: open https://auth.openai.com/codex/device and enter the code CDX1-ABCDE" &&
+  dev-login status --json | jq -e ".codex == {state: \"out\", url: \"https://auth.openai.com/codex/device\", code: \"CDX1-ABCDE\"}"'
+check "dev-login start is idempotent: the attempts in progress keep their links" in_c "$c" '
+  dev-login start >/dev/null; dev-login start | grep -q "state=attempt1 " && [ "$(cat /tmp/claude-logins)" = 1 ] &&
+  [ "$(cat /tmp/codex-logins)" = 1 ]'
+check "a wrong code fails fast with a clear message and ends that attempt" in_c "$c" '
+  start=$(date +%s); out=$(dev-login wrong-code 2>&1); rc=$?; echo "$out"
+  [ $rc = 1 ] && [ $(( $(date +%s) - start )) -lt 10 ] &&
+  echo "$out" | grep -q "Claude rejected the code" && ! tmux has-session -t login-claude'
+check "a control character in a code is refused before it reaches the login" in_c "$c" '
+  out=$(dev-login "$(printf "x\ny")" 2>&1); rc=$?; echo "$out"; [ $rc = 2 ] && echo "$out" | grep -q "not a sign-in code"'
+check "the next start offers a fresh Claude link" in_c "$c" '
+  dev-login start | grep -q "state=attempt2 "'
+check "an expired codex code is replaced by a fresh one" in_c "$c" '
+  touch /tmp/codex-expire
+  for _ in $(seq 20); do tmux has-session -t login-codex 2>/dev/null || break; sleep 0.5; done
+  dev-login start | grep -q "enter the code CDX2-ABCDE"'
+check "the right code logs Claude in and the supervisor starts Remote Control" bash -c "
+  docker exec '$c' bash -c 'PATH=/tmp/stub:\$PATH dev-login good-code-2' || exit 1
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts && docker logs '$c' 2>&1 | grep -q 'Claude login found'"
+docker exec "$c" touch /tmp/codex-approve /tmp/gh-approve
+check "approving codex and gh completes them; gh wires git (setup-git)" in_c "$c" '
+  for _ in $(seq 20); do dev-login status | grep -qx "gh: in" && dev-login status | grep -qx "codex: in" && break; sleep 0.5; done
+  dev-login status; dev-login status | grep -qx "codex: in" && dev-login status | grep -qx "gh: in" && test -e /tmp/gh-setup-git'
+check "the watcher reports all logins done and exits" bash -c "
+  for _ in \$(seq 40); do docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && ! docker exec '$c' pgrep -f 'dev-login watch'"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e DEV_LOGIN_TOOLS=claude -e GH_TOKEN=x \
+  "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
+check "DEV_LOGIN_TOOLS=claude starts only Claude's login, and dev-doctor does not fail the others" bash -c "
+  for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: claude: open' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep -q 'dev-login: claude: open' && ! docker logs '$c' 2>&1 | grep -qE 'dev-login: (codex|gh):' &&
+  docker exec '$c' bash -c '! tmux has-session -t login-codex 2>/dev/null && ! tmux has-session -t login-gh 2>/dev/null' &&
+  out=\$(docker exec '$c' bash -c 'PATH=/tmp/stub:\$PATH dev-doctor --warn-only') && echo \"\$out\" &&
+  echo \"\$out\" | grep -q 'OK   codex is not logged in (not needed: not in DEV_LOGIN_TOOLS)' &&
+  echo \"\$out\" | grep -q 'FAIL claude is not logged in' && echo \"\$out\" | grep -q 'fix: run: dev-login start (or: claude auth login)'"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e GH_TOKEN=gho_not_a_real_token \
+  "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in && $WITH_STUB exec dev-remote-control")
+check "with GH_TOKEN set, no gh login starts and gh counts as done" in_c "$c" '
+  sleep 3; dev-login status | grep -qx "gh: token" && ! tmux has-session -t login-gh 2>/dev/null'
+docker rm -f "$c" >/dev/null
+
+# The page: dev-init starts it (DEV_LOGIN_PORT), so the stubs go first on PATH
+# before dev-init runs; tini stays PID 1.
+# page_bg <docker run args...>: the supervisor, with dev-init run after the stubs
+page_bg() {
+  run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" "$@" \
+    --entrypoint /usr/bin/tini "$IMAGE" -- bash -c "$WITH_STUB && dev-init 2>/dev/null; exec dev-remote-control"
+}
+# curl_c <container> <curl args...>: curl against the page from inside
+curl_c() {
+  local c="$1"
+  shift
+  docker exec "$c" curl -sS -m 30 "$@"
+}
+c=$(page_bg -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_TOOLS=claude,codex)
+check "with DEV_LOGIN_PORT the page serves /healthz" bash -c "
+  for _ in \$(seq 30); do docker exec '$c' curl -fsS -m 2 localhost:8765/healthz >/dev/null 2>&1 && break; sleep 1; done
+  [ \"\$(docker exec '$c' curl -fsS localhost:8765/healthz)\" = ok ]"
+check "the page shows Claude's sign-in link and codex's code" bash -c "
+  html=\$(docker exec '$c' curl -fsS -m 60 localhost:8765/)
+  echo \"\$html\" | grep -qF 'href=\"https://claude.com/cai/oauth/authorize?code=true&amp;state=attempt1\"' &&
+  echo \"\$html\" | grep -q 'Open sign-in page' && echo \"\$html\" | grep -qF 'CDX1-ABCDE' &&
+  ! echo \"\$html\" | grep -q 'GitHub CLI'"
+check "the page refuses anything but a form POST of a code, and an oversized body" bash -c "
+  [ \"\$(docker exec '$c' curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' localhost:8765/)\" = 415 ] &&
+  [ \"\$(docker exec '$c' curl -s -o /dev/null -w '%{http_code}' -X POST -d 'nocode=1' localhost:8765/)\" = 400 ] &&
+  [ \"\$(docker exec '$c' curl -s -o /dev/null -w '%{http_code}' localhost:8765/nope)\" = 404 ] &&
+  big=\$(head -c 10000 /dev/zero | tr '\\\\0' a) &&
+  ! [ \"\$(docker exec '$c' curl -s -o /dev/null -w '%{http_code}' -X POST --data-raw \"code=\$big\" localhost:8765/)\" = 303 ]"
+check "a wrong code through the page shows why and offers a new link" bash -c "
+  html=\$(docker exec '$c' curl -fsS -m 60 -d code=wrong localhost:8765/)
+  echo \"\$html\" | grep -q 'That did not work' && echo \"\$html\" | grep -q 'Claude rejected the code' &&
+  docker exec '$c' curl -fsS -m 60 localhost:8765/ | grep -qF 'state=attempt2'"
+check "the right code through the page logs Claude in (303 back to the page)" bash -c "
+  [ \"\$(docker exec '$c' curl -s -m 60 -o /dev/null -w '%{http_code}' -d code=good-code-2 localhost:8765/)\" = 303 ] &&
+  docker exec '$c' curl -fsS localhost:8765/status | jq -e '.claude == \"in\" and .codex == \"out\" and .gh == \"off\"'"
+docker exec "$c" touch /tmp/codex-approve
+check "DEV_LOGIN_PAGE_EXIT=1 (default): the page exits once every login is done" bash -c "
+  for _ in \$(seq 40); do docker exec '$c' curl -fsS -m 2 localhost:8765/healthz >/dev/null 2>&1 || break; sleep 1; done
+  ! docker exec '$c' curl -fsS -m 2 localhost:8765/healthz && docker exec '$c' grep -q 'closing the login page' /tmp/dev-login-page.log"
+check "the page: docker stop completes in under 10s with exit 0" stops_within "$c" 10
+
+c=$(page_bg -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude)
+check "DEV_LOGIN_PAGE_EXIT=0: the page stays up after the logins, showing them done" bash -c "
+  for _ in \$(seq 30); do docker exec '$c' curl -fsS -m 2 localhost:8765/healthz >/dev/null 2>&1 && break; sleep 1; done
+  docker exec '$c' curl -fsS -m 60 localhost:8765/ >/dev/null
+  docker exec '$c' bash -c 'PATH=/tmp/stub:\$PATH dev-login good-code-1' && sleep 12 &&
+  docker exec '$c' curl -fsS -m 2 localhost:8765/healthz >/dev/null &&
+  docker exec '$c' curl -fsS -m 60 localhost:8765/ | grep -q 'logged in'"
+docker rm -f "$c" >/dev/null
+
+c=$(page_bg -e DEV_LOGIN_TOOLS=claude)
+check "without DEV_LOGIN_PORT no page runs and nothing listens" in_c "$c" '
+  sleep 3
+  ! pgrep -fx "node /usr/local/share/dev-system/dev-login-page.js" && ! (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null'
+check "a page started anyway is detected (the check above is not vacuous)" in_c "$c" '
+  (DEV_LOGIN_PORT=8765 DEV_LOGIN_PAGE_EXIT=0 dev-login serve >/dev/null 2>&1 &)
+  for _ in $(seq 20); do (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.5; done
+  pgrep -fx "node /usr/local/share/dev-system/dev-login-page.js" >/dev/null && (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null'
+docker rm -f "$c" >/dev/null
+
+# DEV_NOTIFY_URL against a stub listener in the same container, which records
+# each request's title, click header and body.
+LISTENER='require("http").createServer((q, r) => { let b = ""; q.on("data", (d) => (b += d)); q.on("end", () => {
+  require("fs").appendFileSync("/tmp/notify.log", JSON.stringify({ title: q.headers.title, click: q.headers.click, body: b }) + "\n"); r.end("ok"); }); }).listen(9999)'
+c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e LISTENER="$LISTENER" \
+  -e DEV_LOGIN_TOOLS=claude,codex -e DEV_REMOTE_CONTROL_NAME=notify-test -e DEV_NOTIFY_URL=http://127.0.0.1:9999/topic \
+  "$IMAGE" bash -c "(node -e \"\$LISTENER\" &) && sleep 1 && $WITH_STUB exec dev-remote-control")
+check "DEV_NOTIFY_URL gets one POST naming the logins, with the sign-in links" bash -c "
+  for _ in \$(seq 30); do docker exec '$c' test -s /tmp/notify.log && break; sleep 1; done
+  sleep 3; docker exec '$c' cat /tmp/notify.log
+  [ \"\$(docker exec '$c' grep -c . /tmp/notify.log)\" = 1 ] &&
+  docker exec '$c' jq -e '.title == \"Log in to claude, codex (notify-test)\" and (.click | startswith(\"https://claude.com/cai/oauth/authorize\"))
+    and (.body | contains(\"enter the code CDX1-ABCDE\"))' /tmp/notify.log"
+docker rm -f "$c" >/dev/null
 
 echo
 echo "$PASSES passed, $FAILURES failed"

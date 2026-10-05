@@ -75,29 +75,38 @@ else
     "squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)"
 fi
 
-if ! command -v claude >/dev/null 2>&1; then
-  fail "claude is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
-elif claude auth status >/dev/null 2>&1; then
-  ok "claude is logged in"
+# Logins: only the tools in DEV_LOGIN_TOOLS (default all three) must be
+# logged in; a workspace that never uses codex leaves it out.
+login_wanted() {
+  case " ${DEV_LOGIN_TOOLS-claude,codex,gh} " in
+    *[\ ,]"$1"[\ ,]*) return 0 ;;
+  esac
+  return 1
+}
+
+if [ -n "${DEV_LOGIN_PORT:-}" ]; then
+  LOGIN_FIX="open the login page (port $DEV_LOGIN_PORT), or run: dev-login start"
 else
-  fail "claude is not logged in" "run: claude auth login"
+  LOGIN_FIX="run: dev-login start"
 fi
 
-if ! command -v codex >/dev/null 2>&1; then
-  fail "codex is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
-elif codex login status >/dev/null 2>&1; then
-  ok "codex is logged in"
-else
-  fail "codex is not logged in" "run: codex login --device-auth"
-fi
+check_login() {
+  local tool="$1" manual="$2"
+  shift 2
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    fail "$tool is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+  elif "$@" >/dev/null 2>&1; then
+    ok "$tool is logged in"
+  elif ! login_wanted "$tool"; then
+    ok "$tool is not logged in (not needed: not in DEV_LOGIN_TOOLS)"
+  else
+    fail "$tool is not logged in" "$LOGIN_FIX (or: $manual)"
+  fi
+}
 
-if ! command -v gh >/dev/null 2>&1; then
-  fail "gh is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
-elif gh auth status >/dev/null 2>&1; then
-  ok "gh is logged in"
-else
-  fail "gh is not logged in" "run: gh auth login, then dev-init (wires git to gh's credentials)"
-fi
+check_login claude "claude auth login" claude auth status
+check_login codex "codex login --device-auth" codex login status
+check_login gh "gh auth login, then dev-init" gh auth status
 
 if ! command -v no-mistakes >/dev/null 2>&1; then
   fail "no-mistakes is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"

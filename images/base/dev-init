@@ -5,8 +5,9 @@
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
 # re-points git at gh's credentials, recovers no-mistakes runtime state and
-# starts the agentsview session push when one is configured and checks the
-# optional /shared mount.
+# starts the agentsview session push when one is configured, starts the
+# login page when DEV_LOGIN_PORT asks for it and checks the optional /shared
+# mount.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
 #
@@ -25,6 +26,8 @@ CALLUM_TOOLS=/usr/local/share/callum-tools
 # start_agentsview_push). dev-doctor reads the same path.
 AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
 AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
+LOGIN_PAGE_LOCK=/tmp/dev-login-page.lock
+LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 
 # 1. Every persistence directory exists and is writable. A missing directory
 #    under a writable mount (one volume for all of /persist) is created; an
@@ -212,6 +215,19 @@ check_shared_dir() {
   log "  Fix: squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)."
 }
 
+# 9. The login page (dev-login serve), only when DEV_LOGIN_PORT is set: no
+#    port is opened by default. It runs in the background, one per container,
+#    and exits by itself once every login is done (unless
+#    DEV_LOGIN_PAGE_EXIT=0).
+start_login_page() {
+  [ -n "${DEV_LOGIN_PORT:-}" ] || return 0
+  command -v dev-login >/dev/null 2>&1 || return 0
+  flock -n "$LOGIN_PAGE_LOCK" true 2>/dev/null || return 0
+  : > "$LOGIN_PAGE_LOG"
+  setsid nohup flock -n "$LOGIN_PAGE_LOCK" dev-login serve >> "$LOGIN_PAGE_LOG" 2>&1 < /dev/null &
+  log "started the login page on port $DEV_LOGIN_PORT (log: $LOGIN_PAGE_LOG)"
+}
+
 check_persist_dirs
 seed_claude_config
 seed_codex_config
@@ -220,7 +236,8 @@ setup_git_credentials
 recover_no_mistakes
 start_agentsview_push
 check_shared_dir
+start_login_page
 
-# 9. Report anything still broken, without failing the start.
+# 10. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true
 exit 0

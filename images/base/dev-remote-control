@@ -20,9 +20,11 @@
 #                                   DEV_REMOTE_CONTROL=1, otherwise do nothing
 #
 # The supervisor:
+# - starts `dev-login watch` in the background, which starts every missing
+#   login in DEV_LOGIN_TOOLS and logs its sign-in link (cbundy/dev-system#74);
 # - waits for a claude.ai login (Remote Control does not work with an API key
 #   or a CLAUDE_CODE_OAUTH_TOKEN), polling `claude auth status` and logging a
-#   `claude auth login` hint at start and then every few minutes;
+#   hint at start and then every few minutes;
 # - marks the workspace as trusted, since nobody is at the terminal to answer
 #   the folder trust dialog, which Claude shows before anything else;
 # - restarts Claude when it exits (crash, /exit, an update restart), with a
@@ -42,6 +44,8 @@
 #                            for the sessions it spawns, with the disclaimer
 #                            accepted in .claude.json)
 #   DEV_REMOTE_CONTROL_POLL  seconds between login checks (default 30)
+#   DEV_LOGIN_TOOLS          the logins dev-login starts (default
+#                            claude,codex,gh; empty: none), see dev-login
 #   DEV_WORKSPACE            Claude's working directory (default: the start
 #                            directory unless it is /, else $HOME)
 set -u
@@ -117,13 +121,36 @@ login_state() {
     | grep . || echo none
 }
 
+# Is claude one of the tools dev-login logs in (DEV_LOGIN_TOOLS)?
+dev_login_claude() {
+  case " ${DEV_LOGIN_TOOLS-claude,codex,gh} " in
+    *[\ ,]claude[\ ,]*) return 0 ;;
+  esac
+  return 1
+}
+
+# Starts `dev-login watch` unless it is already running. It exits by itself
+# once every login is done, so this is called again whenever Claude is found
+# logged out. Its output is the supervisor's: the container log.
+start_login_watch() {
+  [ -n "${DEV_LOGIN_TOOLS-claude,codex,gh}" ] || return 0
+  [ -n "${WATCH_PID:-}" ] && kill -0 "$WATCH_PID" 2>/dev/null && return 0
+  dev-login watch --name "$1" 9>&- &
+  WATCH_PID=$!
+}
+
 wait_for_login() {
-  local state polls=0 last=""
+  local name="$1" state polls=0 last=""
   while :; do
     state=$(login_state)
     [ "$state" = claude.ai ] && break
+    if [ "$state" = none ] && dev_login_claude; then
+      start_login_watch "$name"
+    fi
     if [ "$state" != "$last" ] || [ $((polls % REMIND_EVERY)) -eq 0 ]; then
-      if [ "$state" = none ]; then
+      if [ "$state" = none ] && dev_login_claude; then
+        log "Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: $(exec_hint 'dev-login <code>')"
+      elif [ "$state" = none ]; then
         log "Claude is not logged in - run: $(exec_hint 'claude auth login')"
       else
         log "Claude is logged in with $state, but Remote Control needs a claude.ai subscription login (API keys and CLAUDE_CODE_OAUTH_TOKEN cannot be used) - run: $(exec_hint 'claude auth login')"
@@ -177,6 +204,7 @@ stop_claude() {
 on_signal() {
   log "stopping"
   [ -n "${SLEEP_PID:-}" ] && kill "$SLEEP_PID" 2>/dev/null
+  [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
   stop_claude
   exit 0
 }
@@ -191,8 +219,14 @@ supervise() {
   # is replaced, so exactly one Claude runs.
   tmux kill-session -t "$SESSION" 2>/dev/null || true
 
+  # codex and gh logins are needed whether or not Claude is logged in.
+  ws=$(cd "$(workspace)" && pwd -P)
+  start_login_watch "${DEV_REMOTE_CONTROL_NAME:-$(default_name "$ws")}"
+
   while :; do
-    wait_for_login
+    ws=$(cd "$(workspace)" && pwd -P)
+    wait_for_login "${DEV_REMOTE_CONTROL_NAME:-$(default_name "$ws")}"
+    # Again: a workspace cloned while waiting is used straight away.
     ws=$(cd "$(workspace)" && pwd -P)
     if [ "$MODE" = server ] && [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
       prepare_claude_config "$ws" 1

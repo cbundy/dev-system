@@ -135,8 +135,10 @@ COPY --chmod=0755 \
   images/base/dev-doctor \
   images/base/dev-entrypoint \
   images/base/dev-remote-control \
+  images/base/dev-login \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
+COPY --chmod=0644 images/base/dev-login-page.js /usr/local/share/dev-system/
 
 USER node
 
