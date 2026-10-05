@@ -192,7 +192,10 @@ resource "coder_agent" "main" {
       exit 0
     fi
     cd /workspaces || exit 0
-    timeout -k 10 120 dev-init || echo "WARNING: dev-init failed or timed out - continuing"
+    # Same limit as the image's own dev-entrypoint: the repo clone alone may
+    # take 120s, and the login page and dev-doctor still have to run after it
+    # (cbundy/dev-system#104).
+    timeout -k 10 300 dev-init || echo "WARNING: dev-init failed or timed out - continuing"
     dev-remote-control --post-start
   EOT
 
