@@ -88,7 +88,7 @@ coder create my-ws --template dev-system   # Enter accepts each default
 |---|---|---|---|
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
-| `remote_control_mode` | `session` | yes | `session`: one interactive Claude. `server`: one Claude per session started in claude.ai, each in its own git worktree; that needs a repo (without one the sessions share the directory). |
+| `remote_control_mode` | `auto` | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
 | `remote_control_skip_permissions` | `false` | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
 | `cpus` | 2 | yes | CPU limit (1-8). |
 | `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
@@ -102,6 +102,14 @@ to) bypass permissions, and it accepts the bypass disclaimer in `.claude.json`. 
 supervisor reads the variable when it starts, so a change takes effect on the next workspace
 restart.
 
+A workspace keeps the parameter values it was created with, so one created before `auto`
+became the default (cbundy/dev-system#108) stays on `session` until you change it.
+
+To change a parameter, use the dashboard (Settings, Parameters) or a `coder` CLI that
+matches the server's version: `coder update/start/restart --parameter
+remote_control_mode=server` silently did not apply with CLI v2.37.1 against server
+v2.36.6.
+
 ### Repo
 
 From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
@@ -110,14 +118,21 @@ From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
 - **With a repo URL** (`repo_url`, or the `DEV_REPO_URL` a per-repo image carries),
   `dev-init` clones it into `/workspaces/<repo name>` on the first start and only fetches
   after that. Claude runs there, and the Remote Control name (the session or environment
-  name in claude.ai) is the repo name. The template sets neither.
+  name in claude.ai) is the repo name. The template sets neither. Remote Control mode
+  `auto` becomes `server`, so the workspace shows up in claude.ai as an environment
+  where each new session gets its own worktree.
   - A private repo needs a GitHub credential: Coder external auth (`GIT_ASKPASS`), or
     else the gh login on the Log in page, after which `dev-login watch` runs the clone.
 - **Without one**, the startup script sets `DEV_WORKSPACE=/workspaces`, so Claude still
-  runs on the volume, and names the session `coder-<workspace>`.
+  runs on the volume, and names the session `coder-<workspace>`. Mode `auto` becomes
+  `session`: one interactive Claude, as `server` mode would put every session in the
+  same directory.
 
 This is decided in the startup script rather than in the agent `env`, because only the
-container knows whether the image has its own `DEV_REPO_URL`. On an image older than
+container knows whether the image has its own `DEV_REPO_URL`. The script exports the
+resolved mode for `dev-init` and `dev-remote-control --post-start`; the agent `env`, and
+so a `coder ssh` shell, still holds `DEV_REMOTE_CONTROL_MODE=auto`, which the image
+rejects, so set the mode explicitly to run `dev-remote-control` by hand there. On an image older than
 2.1.0, nothing is cloned and Claude runs in `/workspaces`.
 
 ## What the template does

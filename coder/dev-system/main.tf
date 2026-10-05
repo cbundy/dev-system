@@ -13,7 +13,7 @@
 #   /workspaces/<repo name>, cbundy/dev-system#77);
 # - the agent replaces the image entrypoint, so its startup_script runs
 #   dev-init and starts Remote Control, as the image's devcontainer
-#   postStartCommand does;
+#   postStartCommand does, in server mode by default when there is a repo;
 # - logins without a shell: a "Log in" app proxies dev-login's page and a
 #   "Logins" metadata row shows each tool's state;
 # - image, CPU, memory, repo, Remote Control mode and skip-permissions
@@ -120,11 +120,17 @@ data "coder_parameter" "repo_url" {
 data "coder_parameter" "remote_control_mode" {
   name         = "remote_control_mode"
   display_name = "Remote Control mode"
-  description  = "session: one interactive Claude session. server: one session per conversation started in claude.ai, each in its own git worktree - needs a git repo, else they share the directory."
+  description  = "auto: server when the workspace has a repo, else session. session: one interactive Claude session. server: one session per conversation started in claude.ai, each in its own git worktree - needs a git repo, else they share the directory."
   type         = "string"
-  default      = "session"
-  mutable      = true
-  order        = 3
+  # auto is resolved by the startup script, which alone knows whether a
+  # per-repo image brings its own DEV_REPO_URL (cbundy/dev-system#108).
+  default = "auto"
+  mutable = true
+  order   = 3
+  option {
+    name  = "auto"
+    value = "auto"
+  }
   option {
     name  = "session"
     value = "session"
@@ -222,6 +228,19 @@ resource "coder_agent" "main" {
     if [ -z "$${DEV_REPO_URL:-}" ]; then
       export DEV_WORKSPACE=/workspaces
       export DEV_REMOTE_CONTROL_NAME="coder-${lower(data.coder_workspace.me.name)}"
+    fi
+
+    # Remote Control mode "auto" (the parameter default): server, one worktree
+    # per claude.ai session, when there is a repo; else session, since server
+    # mode without a repo puts every session in one shared directory. Resolved
+    # here, before dev-init and dev-remote-control read it: the image accepts
+    # only session or server. An explicit session or server passes through.
+    if [ "$${DEV_REMOTE_CONTROL_MODE:-}" = auto ]; then
+      if [ -n "$${DEV_REPO_URL:-}" ]; then
+        export DEV_REMOTE_CONTROL_MODE=server
+      else
+        export DEV_REMOTE_CONTROL_MODE=session
+      fi
     fi
 
     if ! command -v dev-init >/dev/null 2>&1; then
