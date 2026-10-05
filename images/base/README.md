@@ -35,15 +35,17 @@ them, so those scripts stay maintained.
 3. The persistence contract (below).
 4. The `/shared` mount point for NAS file sharing (below). The image defines it but
    mounts nothing there.
-5. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
-6. `dev-doctor`, a health check that reports missing auth or broken state loudly.
-7. `dev-login`, which starts the logins for you and brings the sign-in links to the
+5. The `/workspaces` mount point for repo checkouts, and the first-start clone of the
+   repo named by `DEV_REPO_URL` (see [Workspace and repo](#workspace-and-repo)).
+6. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
+7. `dev-doctor`, a health check that reports missing auth or broken state loudly.
+8. `dev-login`, which starts the logins for you and brings the sign-in links to the
    container log, an optional login page and an optional push notification (see
    [First-run logins](#first-run-logins)).
-8. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
+9. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
    gets the shared gh volume and `dev-init` automatically.
-9. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
-   with Remote Control (below).
+10. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
+    with Remote Control (below).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
@@ -58,7 +60,9 @@ These belong to the consumer image or the runtime:
 - Secrets or credentials of any kind. The image is public.
 - Where volumes come from (Docker named volume, k8s PVC, host bind, the NAS share). The
   image only defines the mount points.
-- The workspace checkout location and the git clone.
+- The checkout itself. The image carries at most the repo's URL (`DEV_REPO_URL`, set by
+  CI in a consumer image) and clones it on first start; the checkout is work in progress
+  and lives on the runtime's workspace volume, never in the image.
 - Repo config (`.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md` and so on). It is
   committed in each repo by `callum-dev`.
 - Docker-in-container, egress firewalling and IDE extensions.
@@ -266,14 +270,78 @@ and in the pod spec (see the shape under "Entrypoint" below):
 - File watchers do not fire on NFS for changes made elsewhere (the PC, another container).
   Poll, or re-run by hand.
 
+## Workspace and repo
+
+A headless container (Coder, compose, Kubernetes) starts with no checkout. The image
+carries a hint instead, the repo's clone URL, and `dev-init` clones the repo into
+persistent storage on the first start (cbundy/dev-system#77). The repo is never in the
+image: the image is the toolchain and is replaced on every rebuild, while the checkout is
+work in progress.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DEV_REPO_URL` | empty: no clone | The repo's HTTPS clone URL. A consumer image built by CI gets it as a build argument (`${{ github.server_url }}/${{ github.repository }}.git`), so nobody types it. A runtime value (Coder's `repo_url` parameter, compose `environment:`) overrides the image's. Local and desktop builds leave it empty, since their checkout is bind-mounted. |
+| `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
+| `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
+
+**Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
+`/workspaces/<repo name>` from `DEV_REPO_URL`. Until that directory exists (a clone still
+pending), and without either variable, it is the start directory, or `$HOME` if that is
+`/`. The supervisor works it out again at every Claude start, so a repo cloned after
+Claude started is used from Claude's next restart.
+
+**What `dev-init` does**, on every start, after wiring git to gh's credentials and before
+the no-mistakes recovery:
+
+- **Workspace missing, or an empty directory:**
+  `git clone [--branch $DEV_REPO_BRANCH] $DEV_REPO_URL $DEV_WORKSPACE`, limited to 120s.
+  git never prompts. A failure is logged with git's reason and the fix, and the container
+  starts anyway.
+- **Already a git repo** (an earlier start's clone, or a bind-mounted checkout):
+  `git fetch --prune` only, best effort.
+- **A non-empty directory that is not a repo:** a warning, and the directory is left alone.
+
+**No automatic pull.** A pull or merge on start would sooner or later collide with
+uncommitted work, local branches, a rebase in progress or agent worktrees. The fetch keeps
+`origin/*` current; integrating it is up to you or the agent.
+
+**Mount the workspace volume at `/workspaces`.** The directory exists in the image, owned
+by `node`, so a new Docker named volume mounted there takes that ownership and `node` can
+clone into it. A volume mounted at a path the image does not have, such as
+`/workspaces/my-repo`, comes up owned by root instead. Each checkout is a directory below
+the mount, so a volume root that is never empty (`lost+found` on ext4) does no harm. On
+Kubernetes, `fsGroup: 1000` makes it writable, as for `/persist`. Desktop dev containers
+bind-mount their checkout at `/workspaces/<folder>` as well.
+
+**Credentials.** Use an HTTPS URL: both credential sources below answer only for HTTPS. An
+`ssh://` or `git@host:path` URL gets a warning that it needs SSH keys in the container, and
+is tried anyway.
+
+| Runtime | Credential for a private repo |
+|---|---|
+| Coder | The agent's `GIT_ASKPASS` answers for github.com (GitHub external auth). `dev-init` runs from the agent's `startup_script` and inherits it, so the first start clones. |
+| Docker with the shared `dev-system-gh` volume | gh's credential helper (`gh auth setup-git`, which `dev-init` redoes on every start). |
+| The first container on a new host (no gh login yet) | None yet. The clone is tried anyway, since a public repo needs no credential. A private one fails with `Waiting for a GitHub login` in the log, and once gh's device login completes, `dev-login watch` (which the supervisor runs) runs `dev-init --repo` to clone it. After a login made any other way, run `dev-init --repo` yourself. |
+
+`dev-init --repo` runs only the repo steps: git credentials, the clone or fetch, and the
+no-mistakes recovery.
+
+`dev-doctor` warns when the workspace's `origin` is not `DEV_REPO_URL` (a `.git` or a
+trailing `/` does not count), when `DEV_REPO_URL` is set but nothing is cloned yet, and
+when a headless container has neither a repo nor `DEV_REPO_URL`. In that last case Claude
+runs in a bare directory: server mode cannot give each session a worktree, and the session
+is not named after the repo. Desktop dev containers (`DEV_DESKTOP=1`, from the image
+metadata) skip that check, since they open the checkout they bind-mount.
+
 ## `dev-init`
 
 `/usr/local/bin/dev-init` runs as `node` on every container start. On the desktop the
 image metadata runs it as `postStartCommand`; everywhere else the image entrypoint runs it
-(see below). If the workspace is cloned only after the container starts, run it again
-once the clone is there (for example at the end of a Coder `startup_script`), so the
-no-mistakes recovery sees the repo. It is idempotent and best-effort: it logs problems but
-always exits 0, so a container never fails to start because of it.
+(see below). With `DEV_REPO_URL` set it clones the repo itself (see
+[Workspace and repo](#workspace-and-repo)). A checkout made some other way after the
+container started needs `dev-init --repo` once it is there, so the no-mistakes recovery
+sees it. It is idempotent and best-effort: it logs problems but always exits 0, so a
+container never fails to start because of it.
 
 1. Checks that each `/persist` directory exists and is writable, creating missing ones and
    printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones. One
@@ -290,18 +358,21 @@ always exits 0, so a container never fails to start because of it.
    the default (the feature's `codexModel` default); `DEV_CODEX_MODEL=""` skips the pin.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
-6. If `$DEV_WORKSPACE` (default: the current directory) is in a git repo with
-   `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone after every
-   restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register the repo if
-   needed. If git refuses the checkout because another user owns it ("dubious
+6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
+   empty, or fetches when it is already a repo (see
+   [Workspace and repo](#workspace-and-repo)).
+7. If the workspace (`$DEV_WORKSPACE` once it exists, else the current directory) is in a
+   git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
+   after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
+   the repo if needed. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently.
-7. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
+8. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
    [Central session history](#central-session-history-agentsview)).
-8. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
+9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
-9. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
-   [First-run logins](#first-run-logins)).
-10. Runs `dev-doctor --warn-only`.
+10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
+    [First-run logins](#first-run-logins)).
+11. Runs `dev-doctor --warn-only`.
 
 ## `dev-doctor`
 
@@ -319,6 +390,9 @@ on every failure:
 - no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
   working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
+- the workspace repo, each a `WARN`: with `DEV_REPO_URL` set, that it is cloned and its
+  `origin` matches; headless without it, that Claude's workspace is a git repo (see
+  [Workspace and repo](#workspace-and-repo));
 - treehouse is on `PATH`;
 - agentsview is on `PATH` and, when `AGENTSVIEW_PG_URL` is set, the central database is
   reachable and a push is running (in this container or another one sharing the volume).
@@ -341,7 +415,7 @@ What starts where:
 | Desktop dev container (VS Code, devcontainer CLI) | nothing | `"containerEnv": { "DEV_REMOTE_CONTROL": "1" }` |
 | `docker run IMAGE <command>`, a pod with `args:` | `dev-init`, then the command | - |
 
-**`dev-entrypoint`** runs `dev-init` (best-effort, limited to 120s, report on stderr) in
+**`dev-entrypoint`** runs `dev-init` (best-effort, limited to 300s, which leaves room for a first clone, report on stderr) in
 the workspace, then `exec`s the command. With a command, that command runs instead of
 Claude, in its own working directory, with its stdout untouched and its exit status
 passed through, so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
@@ -403,10 +477,10 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 |---|---|---|
 | `DEV_REMOTE_CONTROL` | `1` headless, `0` on the desktop | `0`: start nothing; the container stays up for `docker exec` / `kubectl exec`. On the desktop, `1` starts it. |
 | `DEV_REMOTE_CONTROL_MODE` | `session` | `server` runs `claude remote-control` (many sessions, one worktree each) instead of one interactive session. See step 3 above. |
-| `DEV_REMOTE_CONTROL_NAME` | the workspace's repo name | The session name in claude.ai (the environment name in `server` mode). By default the repo name from the workspace's `origin` URL (`dev-system` for `github.com/cbundy/dev-system`), else the name of its git top-level directory, else (no git repo) the hostname: the container ID under Docker unless you pass `--hostname`, the pod name on Kubernetes. Worked out at every Claude start. |
+| `DEV_REMOTE_CONTROL_NAME` | the workspace's repo name | The session name in claude.ai (the environment name in `server` mode). By default the repo name from the workspace's `origin` URL (`dev-system` for `github.com/cbundy/dev-system`), else the name of its git top-level directory, else (no git repo) the repo name in `DEV_REPO_URL`, else the hostname: the container ID under Docker unless you pass `--hostname`, the pod name on Kubernetes. Worked out at every Claude start. |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
-| `DEV_WORKSPACE` | the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run. Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
+| `DEV_WORKSPACE` | `/workspaces/<repo name>` with `DEV_REPO_URL` set, else the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run (see [Workspace and repo](#workspace-and-repo)). Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
 
 **Permissions.** Claude runs in its normal permission mode, so an unattended session
 **waits for you to approve** each tool use that needs approval; approve from claude.ai or
@@ -433,12 +507,16 @@ project called `my-repo`:
 docker run -d --name my-repo \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
-  -v dev-system-gh:/persist/gh \
+  -v dev-system-gh:/persist/gh -v my-repo-workspaces:/workspaces \
+  -e DEV_REPO_URL=https://github.com/me/my-repo.git \
   ghcr.io/cbundy/dev-system/base:2
 docker logs my-repo                          # the sign-in links for Claude, codex and gh
 docker exec my-repo dev-login <code>         # the code Claude's sign-in page shows
 ```
 
+`DEV_REPO_URL` is only needed with the bare base image: a consumer image built by CI
+already carries it. `dev-init` clones the repo into `/workspaces/my-repo` on the volume
+(see [Workspace and repo](#workspace-and-repo)); a private repo waits for gh's login.
 Claude starts within 30s of the login, no restart needed. Approving codex's and gh's
 codes is enough for those. For the login page instead, add `-e DEV_LOGIN_PORT=8765` and
 reach it through a reverse proxy (see [Several containers: one nginx route](#several-containers-one-nginx-route)).
@@ -455,20 +533,20 @@ services:
   dev:
     image: ghcr.io/cbundy/dev-system/base:2
     environment:
-      DEV_WORKSPACE: /workspace/my-repo
+      DEV_REPO_URL: https://github.com/me/my-repo.git   # not needed with a consumer image
     volumes:
       - claude:/persist/claude
       - codex:/persist/codex
       - no-mistakes:/persist/no-mistakes
       - agentsview:/persist/agentsview
       - gh:/persist/gh
-      - workspace:/workspace
+      - workspaces:/workspaces
 volumes:
   claude:
   codex:
   no-mistakes:
   agentsview:
-  workspace:
+  workspaces:
   gh:
     name: dev-system-gh   # shared by every project on this Docker host
 ```
@@ -491,16 +569,16 @@ spec:
       # no command: - the entrypoint runs dev-init and Claude with Remote Control
       # args: ["dev-doctor"]       # a one-off run instead of Claude
       env:
-        - name: DEV_WORKSPACE
-          value: /workspace/my-repo
+        - name: DEV_REPO_URL       # dev-init clones it into /workspaces/my-repo
+          value: https://github.com/me/my-repo.git   # a consumer image carries it already
       volumeMounts:
         - { name: persist, mountPath: /persist }
-        - { name: workspace, mountPath: /workspace }
+        - { name: workspaces, mountPath: /workspaces }
   volumes:
     - name: persist
       persistentVolumeClaim: { claimName: dev-persist }
-    - name: workspace
-      persistentVolumeClaim: { claimName: dev-workspace }
+    - name: workspaces
+      persistentVolumeClaim: { claimName: dev-workspaces }
 ```
 
 The sign-in links are in `kubectl logs dev-my-repo`; finish Claude's with

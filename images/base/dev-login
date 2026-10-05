@@ -25,7 +25,9 @@
 #   dev-login [claude] <code>   finish the Claude login with the code its
 #                               sign-in page shows
 #   dev-login watch [--name N]  keep the missing logins started until all are
-#                               done: log each new link, notify DEV_NOTIFY_URL
+#                               done: log each new link, notify DEV_NOTIFY_URL,
+#                               and once gh is logged in, run the repo clone
+#                               that waited for it (dev-init --repo)
 #   dev-login serve             the login page on DEV_LOGIN_PORT
 #                               (dev-login-page.js)
 #
@@ -337,6 +339,25 @@ on_signal() {
   exit 0
 }
 
+# The gh half of the workspace clone (cbundy/dev-system#77): without a git
+# credential, dev-init's clone of DEV_REPO_URL waits for a GitHub login. Once
+# gh goes from logged out to logged in, the repo steps run again (they redo
+# `gh auth setup-git` first), logging to the watcher's output. Only on that
+# change, so a clone that fails for another reason is not retried every few
+# seconds.
+clone_after_gh_login() {
+  [ -n "${DEV_REPO_URL:-}" ] || return 0
+  case "$(tool_state gh)" in
+    out) GH_WAS_OUT=1 ;;
+    in)
+      [ "${GH_WAS_OUT:-0}" = 1 ] || return 0
+      GH_WAS_OUT=0
+      log "gh is logged in - cloning the workspace repo (dev-init --repo)"
+      dev-init --repo 8>&- 9>&-
+      ;;
+  esac
+}
+
 # Keeps the missing logins started until every one is done: an attempt that
 # ended (an expired code, a rejected paste) is replaced, each new link is
 # logged once, and DEV_NOTIFY_URL hears when logins are first needed, then
@@ -353,6 +374,7 @@ cmd_watch() {
   trap on_signal TERM INT HUP
   while :; do
     lines=$(cmd_start)
+    clone_after_gh_login
     if [ -z "$lines" ]; then
       [ -z "$last" ] || log "all logins are done"
       return 0

@@ -52,6 +52,15 @@ RUN install -d -m 0755 /persist \
 # mounted here is writable too.
 RUN install -d -o 1000 -g 1000 -m 0755 /shared
 
+# Repo checkouts: dev-init clones DEV_REPO_URL into /workspaces/<repo name>
+# (cbundy/dev-system#77). An empty mount point for the runtime's workspace
+# volume (no VOLUME), owned by node so a Docker named volume mounted here
+# copies that ownership and node can clone into it. A checkout lives in a
+# directory of its own below it, so a volume root that is never empty (ext4's
+# lost+found) does not get in the way. Desktop dev containers bind-mount their
+# checkout at /workspaces/<folder> too.
+RUN install -d -o 1000 -g 1000 -m 0755 /workspaces
+
 # Agent toolchain, installed as node so every tool can update itself without
 # root. Binaries live under /home/node and /usr/local/share/npm-global, never
 # under /persist, so pulling a new image always brings fresh binaries.
@@ -138,7 +147,7 @@ COPY --chmod=0755 \
   images/base/dev-login \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
-COPY --chmod=0644 images/base/dev-login-page.js /usr/local/share/dev-system/
+COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh /usr/local/share/dev-system/
 
 USER node
 
@@ -171,7 +180,9 @@ CMD ["dev-remote-control"]
 # VS Code replace it (overrideCommand). The metadata's postStartCommand runs
 # dev-init, then starts Remote Control only if the consumer sets
 # DEV_REMOTE_CONTROL=1 in containerEnv; the default 0 here also keeps it off
-# for a consumer that sets overrideCommand false.
+# for a consumer that sets overrideCommand false. DEV_DESKTOP=1 marks these
+# containers for dev-doctor: they open the bind-mounted checkout, so a
+# missing DEV_REPO_URL is expected there.
 #
 # devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
@@ -193,4 +204,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
   dev.cbundy.shared="/shared" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"}]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"}]}]"

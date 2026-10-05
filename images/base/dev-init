@@ -4,21 +4,37 @@
 #
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
-# re-points git at gh's credentials, recovers no-mistakes runtime state and
-# starts the agentsview session push when one is configured, starts the
-# login page when DEV_LOGIN_PORT asks for it and checks the optional /shared
-# mount.
+# re-points git at gh's credentials, clones the workspace repo (DEV_REPO_URL)
+# on first start, recovers no-mistakes runtime state and starts the agentsview
+# session push when one is configured, starts the login page when
+# DEV_LOGIN_PORT asks for it and checks the optional /shared mount.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
+#
+# Usage: dev-init [--repo]
+#   --repo runs only the repo steps (5-7): git credentials, the clone or
+#   fetch, and the no-mistakes recovery. dev-login runs it once gh's login
+#   is done, for a clone that was waiting for one.
 #
 # Idempotent and best-effort: every problem is logged, and the exit status is
 # always 0, so a container never fails to start because of this script. Run
 # `dev-doctor` for a strict pass/fail health check.
 set -u
 
+# shellcheck source=workspace.sh
+. /usr/local/share/dev-system/workspace.sh
+
 log() {
   echo "dev-init: $*" >&2
 }
+
+case "${1:-}" in
+  "" | --repo) ;;
+  *)
+    echo "usage: dev-init [--repo]" >&2
+    exit 2
+    ;;
+esac
 
 PERSIST_DIRS="${CLAUDE_CONFIG_DIR:-/persist/claude} ${CODEX_HOME:-/persist/codex} ${GH_CONFIG_DIR:-/persist/gh} ${NM_HOME:-/persist/no-mistakes} ${AGENTSVIEW_DATA_DIR:-/persist/agentsview}"
 CALLUM_TOOLS=/usr/local/share/callum-tools
@@ -126,12 +142,97 @@ setup_git_credentials() {
   gh auth setup-git >/dev/null 2>&1 || log "WARNING: gh auth setup-git failed - git may not authenticate to GitHub over HTTPS"
 }
 
-# 6. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
+# Can git authenticate for this URL? Coder's agent sets GIT_ASKPASS (GitHub
+# external auth); `gh auth setup-git` (step 5) configures a credential helper.
+has_git_credential() {
+  [ -n "${GIT_ASKPASS:-}" ] || [ -n "$(git config --get-urlmatch credential.helper "$1" 2>/dev/null)" ]
+}
+
+# Why git failed, from its output: the first error line (the cause; the
+# lines after it are generic advice), else the last line.
+git_reason() {
+  local line
+  line=$(printf '%s\n' "$1" | grep -m 1 -E '^(fatal|error|remote|ssh): ')
+  [ -n "$line" ] || line=$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 1)
+  echo "$line"
+}
+
+# 6. The workspace repo (cbundy/dev-system#77). The image carries only the
+#    repo's URL (DEV_REPO_URL, set by CI in a consumer image); the checkout is
+#    work in progress, so it lives in persistent storage, at DEV_WORKSPACE
+#    (default /workspaces/<repo name>, see workspace.sh):
+#    - missing or an empty directory: clone it (DEV_REPO_BRANCH, if set);
+#    - already a git repo (an earlier start's clone, a bind-mounted
+#      checkout): fetch only. Never a pull or merge, which would sooner or
+#      later collide with uncommitted work, branches or agent worktrees;
+#    - anything else in the way: warn and leave it alone.
+#    After step 5, so gh's credential helper is in place. A clone is tried
+#    even without any credential (a public repo needs none); if that fails
+#    for want of one, it waits for a GitHub login: dev-login runs this step
+#    again (dev-init --repo) once gh's login is done. git never prompts, and
+#    each git call is limited to 120s, so a start never hangs here.
+sync_repo() {
+  local url="${DEV_REPO_URL:-}" ws="${DEV_WORKSPACE:-}" out rc reason ssh
+  local -a clone=(clone --quiet)
+  [ -n "$url" ] || return 0
+  if [ -z "$ws" ]; then
+    log "WARNING: no directory name in DEV_REPO_URL ($url) - nothing cloned."
+    log "  Fix: set DEV_WORKSPACE to the directory to clone into."
+    return 0
+  fi
+  # git must fail, not wait for an answer nobody can give.
+  local ssh_cmd="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
+
+  if [ -e "$ws/.git" ]; then
+    # No remote (or a repo git refuses to read, which step 7 reports): nothing to fetch.
+    [ -n "$(git -C "$ws" remote 2>/dev/null)" ] || return 0
+    out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 git -C "$ws" fetch --prune --quiet 2>&1) \
+      || log "WARNING: git fetch in $ws failed ($(git_reason "$out")) - carrying on with the refs already there"
+    return 0
+  fi
+  if [ -n "$(ls -A "$ws" 2>/dev/null)" ]; then
+    log "WARNING: $ws is not empty and not a git repository - DEV_REPO_URL is not cloned into it."
+    log "  Fix: move its contents away and run: dev-init --repo (or set DEV_WORKSPACE to another directory)"
+    return 0
+  fi
+
+  # GIT_ASKPASS and gh's credential helper answer only for HTTPS. The first
+  # matching pattern wins: an scp-like [user@]host:path is SSH too.
+  case "$url" in
+    ssh://* | *+ssh://* | ssh+*://*) ssh=true ;;
+    *://* | /*) ssh=false ;;
+    *:*) ssh=true ;;
+    *) ssh=false ;;
+  esac
+  [ "$ssh" = false ] || log "WARNING: DEV_REPO_URL is an SSH URL ($url), which needs SSH keys in this container (only HTTPS works with GIT_ASKPASS or gh's login). Trying anyway."
+
+  [ -z "${DEV_REPO_BRANCH:-}" ] || clone+=(--branch "$DEV_REPO_BRANCH")
+  out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 git "${clone[@]}" -- "$url" "$ws" 2>&1)
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    log "cloned $url${DEV_REPO_BRANCH:+ (branch $DEV_REPO_BRANCH)} into $ws"
+    return 0
+  fi
+  case "$rc" in
+    124 | 137) reason="it did not finish within 120s" ;;
+    *) reason=$(git_reason "$out") ;;
+  esac
+  log "WARNING: could not clone $url into $ws: $reason"
+  if ! has_git_credential "$url" \
+    && printf '%s\n' "$out" | grep -qiE 'could not read (username|password)|authentication failed|terminal prompts disabled|repository not found'; then
+    log "  Waiting for a GitHub login: git has no credential for it yet. dev-login clones it once gh is logged in (see its sign-in link); after a login made any other way, run: dev-init --repo"
+  else
+    log "  Fix: check DEV_REPO_URL${DEV_REPO_BRANCH:+ and DEV_REPO_BRANCH} and that git's credential here can read the repo, then run: dev-init --repo"
+  fi
+}
+
+# 7. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
 #    the daemon is a process and is gone after every restart, so it is started
 #    whenever the workspace opts in. Then the callum-tools recovery re-registers
 #    a repo the daemon has lost (e.g. a fresh volume).
 recover_no_mistakes() {
-  local ws="${DEV_WORKSPACE:-$PWD}" top
+  local ws top
+  ws=$(workspace)
   command -v no-mistakes >/dev/null 2>&1 || return 0
   [ -d "$ws" ] || return 0
   if ! top=$(git -C "$ws" rev-parse --show-toplevel 2>/dev/null); then
@@ -179,7 +280,7 @@ set_toml_top_key() {
   return "$rc"
 }
 
-# 7. agentsview session push. With AGENTSVIEW_PG_URL set, keep
+# 8. agentsview session push. With AGENTSVIEW_PG_URL set, keep
 #    `agentsview pg push --watch` running so this machine's Claude and codex
 #    sessions reach the central PostgreSQL that `agentsview pg serve` reads.
 #    The data dir holds the installation ID that identifies this machine in
@@ -216,7 +317,7 @@ start_agentsview_push() {
   log "started agentsview session push (log: $AGENTSVIEW_PUSH_LOG, $data/pg-watch.log)"
 }
 
-# 8. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
+# 9. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
 #    is left alone. A mount node cannot write gets a warning naming the fix.
 check_shared_dir() {
   local dir="${DEV_SHARED_DIR:-/shared}"
@@ -226,7 +327,7 @@ check_shared_dir() {
   log "  Fix: squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)."
 }
 
-# 9. The login page (dev-login serve), only when DEV_LOGIN_PORT is set: no
+# 10. The login page (dev-login serve), only when DEV_LOGIN_PORT is set: no
 #    port is opened by default. It runs in the background, one per container,
 #    and exits by itself once every login is done (unless
 #    DEV_LOGIN_PAGE_EXIT=0).
@@ -239,16 +340,24 @@ start_login_page() {
   log "started the login page on port $DEV_LOGIN_PORT (log: $LOGIN_PAGE_LOG)"
 }
 
+if [ "${1:-}" = --repo ]; then
+  setup_git_credentials
+  sync_repo
+  recover_no_mistakes
+  exit 0
+fi
+
 check_persist_dirs
 seed_claude_config
 seed_codex_config
 seed_no_mistakes_model
 setup_git_credentials
+sync_repo
 recover_no_mistakes
 start_agentsview_push
 check_shared_dir
 start_login_page
 
-# 10. Report anything still broken, without failing the start.
+# 11. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true
 exit 0
