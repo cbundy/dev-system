@@ -12,7 +12,8 @@
 # publish-base-image.yml. Sections 1-7 match the tests in #59, section 8 the
 # entrypoint tests in #64, section 9 the agentsview push in #69, section 10
 # the /shared tests in #65 (Docker volumes stand in for the NAS), section 11
-# the first-run logins in #74 (against stub CLIs). Test 7 needs
+# the first-run logins in #74 (against stub CLIs), including the page behind
+# an nginx path prefix (#79, a throwaway nginx container). Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
@@ -916,6 +917,59 @@ check "a page started anyway is detected (the check above is not vacuous)" in_c 
   for _ in $(seq 20); do (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null && break; sleep 0.5; done
   pgrep -fx "node /usr/local/share/dev-system/dev-login-page.js" >/dev/null && (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null'
 docker rm -f "$c" >/dev/null
+
+# The page behind a reverse proxy that serves it under a path prefix (#79):
+# the README's nginx rule, on a network with two page containers that publish
+# nothing. One rule reaches each container by name, and the page's links,
+# form, refresh and redirect stay under /login/<name>/.
+NGINX_CONF='server {
+  listen 80;
+  absolute_redirect off;
+  location ~ ^/login/(?<ws>[a-z0-9-]+)$ { return 308 $uri/; }
+  location ~ ^/login/(?<ws>[a-z0-9-]+)/(?<rest>.*)$ {
+    resolver 127.0.0.11 valid=10s;
+    proxy_pass http://$ws:8765/$rest$is_args$args;
+  }
+}'
+login_net=$(docker network create --label "$RUN_ID" "$RUN_ID-login")
+pa="$RUN_ID-pa"
+pb="$RUN_ID-pb"
+page_bg --name "$pa" --network "$login_net" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude >/dev/null
+page_bg --name "$pb" --network "$login_net" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_TOOLS=claude,codex >/dev/null
+run_bg --name "$RUN_ID-nginx" --network "$login_net" -e NGINX_CONF="$NGINX_CONF" nginx:alpine \
+  sh -c 'printf "%s\n" "$NGINX_CONF" > /etc/nginx/conf.d/default.conf && exec nginx -g "daemon off;"' >/dev/null
+# via <path> [curl args...]: curl through nginx, from inside $pa (on the network)
+via() {
+  local p="$1"
+  shift
+  docker exec "$pa" curl -sS -m 60 "$@" "http://$RUN_ID-nginx$p"
+}
+export -f via
+export RUN_ID pa
+check "behind nginx: /login/<name>/healthz reaches each container's page" bash -c "
+  for c in '$pa' '$pb'; do
+    for _ in \$(seq 30); do docker exec '$pa' curl -fsS -m 2 \"http://$RUN_ID-nginx/login/\$c/healthz\" >/dev/null 2>&1 && break; sleep 1; done
+    [ \"\$(docker exec '$pa' curl -fsS -m 5 \"http://$RUN_ID-nginx/login/\$c/healthz\")\" = ok ] || exit 1
+  done"
+check "behind nginx: /login/<name>/status is that container's own" bash -c "
+  via '/login/$pa/status' -f | jq -e '.codex == \"off\"' &&
+  via '/login/$pb/status' -f | jq -e '.codex == \"out\"'"
+check "behind nginx: the page shows the links, and its form, refresh and links are relative" bash -c "
+  html=\$(via '/login/$pb/' -f)
+  echo \"\$html\" | grep -qF 'state=attempt1' && echo \"\$html\" | grep -qF 'CDX1-ABCDE' &&
+  echo \"\$html\" | grep -qF '<form method=\"post\" action=\".\">' &&
+  echo \"\$html\" | grep -qF 'fetch(\"status\"' &&
+  ! echo \"\$html\" | grep -qE '(href|action)=\"/|fetch\\(\"/'"
+check "behind nginx: /login/<name> without the slash redirects to /login/<name>/" bash -c "
+  [ \"\$(via '/login/$pb' -o /dev/null -w '%{http_code} %{redirect_url}')\" = '308 http://$RUN_ID-nginx/login/$pb/' ]"
+check "behind nginx: a wrong code offers a new link under the prefix" bash -c "
+  html=\$(via '/login/$pb/' -f -d code=wrong)
+  echo \"\$html\" | grep -q 'That did not work' && echo \"\$html\" | grep -qF 'href=\".\">Get a new link' &&
+  via '/login/$pb/' -f | grep -qF 'state=attempt2'"
+check "behind nginx: the right code logs in and redirects back under the prefix" bash -c "
+  [ \"\$(via '/login/$pb/' -d code=good-code-2 -o /dev/null -w '%{http_code} %{redirect_url}')\" = '303 http://$RUN_ID-nginx/login/$pb/' ] &&
+  via '/login/$pb/status' -f | jq -e '.claude == \"in\" and .codex == \"out\"'"
+docker rm -f "$pa" "$pb" "$RUN_ID-nginx" >/dev/null
 
 # DEV_NOTIFY_URL against a stub listener in the same container, which records
 # each request's title, click header and body.
