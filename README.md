@@ -11,6 +11,7 @@ dev-system/
 ├── features/test/callum-tools/       # feature tests, run in CI by test-features.yml
 ├── images/base/                      # base image ghcr.io/cbundy/dev-system/base: Dockerfile,
 │                                     #   dev-init, dev-doctor, tests (publish-base-image.yml)
+├── coder/dev-system/                 # Coder workspace template on the base image
 ├── templates/                        # repo config templates: .no-mistakes.yaml, treehouse.toml,
 │                                     #   CLAUDE.md skeleton, .claude/settings.json, gitignore,
 │                                     #   workflows
@@ -116,6 +117,16 @@ Dockerfile `FROM ghcr.io/cbundy/dev-system/base:2`. It is the supported environm
 scripts rather than forking them. See [`images/base/README.md`](images/base/README.md)
 for the persistence contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to
 extend it.
+
+## Coder workspace template
+
+`coder/dev-system/` is the Coder template for a dev-system workspace: one container per
+workspace from the base image on a Docker host, with a `/persist` volume per workspace,
+`dev-init` and Claude Code with Remote Control started by the agent, a "Log in" app for
+the first-run logins and a "Logins" row on the workspace page. With every parameter at its
+default, `coder create <name> --template dev-system` gives a working workspace. See
+[`coder/dev-system/README.md`](coder/dev-system/README.md) for the push command,
+parameters and variables.
 
 ## Templates and the callum-dev CLI
 
