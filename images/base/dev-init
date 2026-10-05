@@ -29,11 +29,15 @@ AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
 LOGIN_PAGE_LOCK=/tmp/dev-login-page.lock
 LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 
-# 1. Every persistence directory exists and is writable. A missing directory
-#    under a writable mount (one volume for all of /persist) is created; an
-#    unwritable one gets a loud message naming the fix.
+# 1. Every persistence directory exists, is writable and has a volume behind
+#    it. A missing directory under a writable mount (one volume for all of
+#    /persist) is created; an unwritable one gets a loud message naming the
+#    fix. So does a writable one with no volume at it or above it (its mount
+#    point is /, the container's own layer): its state is lost on every
+#    rebuild. That stays a warning - a one-off `docker run IMAGE <cmd>` has no
+#    volumes on purpose.
 check_persist_dirs() {
-  local dir
+  local dir unmounted=""
   for dir in $PERSIST_DIRS; do
     if [ ! -d "$dir" ] && ! mkdir -m 0700 "$dir" 2>/dev/null; then
       log "WARNING: $dir is missing and cannot be created by $(id -un) ($(id -u):$(id -g))."
@@ -43,8 +47,15 @@ check_persist_dirs() {
     if [ ! -w "$dir" ]; then
       log "WARNING: $dir is not writable by $(id -un) ($(id -u):$(id -g)) - state for this tool will NOT persist and logins will fail."
       log "  Fix: chown 1000:1000 the volume behind $dir (k8s: securityContext.fsGroup: 1000)."
+    elif [ "$(stat -c %m "$dir" 2>/dev/null)" = / ]; then
+      unmounted="$unmounted $dir"
     fi
   done
+  [ -n "$unmounted" ] || return 0
+  log "WARNING: no volume behind$unmounted - logins and tool state there are LOST when this container is rebuilt or removed."
+  log "  Fix (devcontainer): the per-repo mounts from the base-image template - npx callum-dev update --devcontainer base-image, or copy them from images/base/README.md (\"Extending the image\")."
+  log "  Fix (docker run / compose): a named volume per directory (images/base/README.md, \"First start, headless\"). Kubernetes / Coder: one volume at /persist."
+  log "  A throwaway container with no volumes on purpose can ignore this."
 }
 
 # 2. Claude records how it was installed in .claude.json, which lives in the

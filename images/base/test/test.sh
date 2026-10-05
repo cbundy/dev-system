@@ -185,6 +185,28 @@ check "dev-init warns but exits 0 (twice) with a root-owned /persist/claude" in_
   echo "$out" | grep -q "chown 1000:1000" &&
   echo "$out" | grep -q "FAIL claude state dir"' \
   -v "$rootvol:/persist/claude"
+# The start-up warning for /persist dirs with no volume behind them (#78):
+# loud, naming each one, but never failing the start.
+check "dev-init warns (exit 0) naming every /persist dir with no volume, only those" bash -c "
+  out=\$(docker run --rm --entrypoint '' '$IMAGE' bash -c 'dev-init; echo rc=\$?' 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -qx 'rc=0' &&
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - ' &&
+  echo \"\$out\" | grep -qF 'npx callum-dev update --devcontainer base-image' &&
+  out=\$(docker run --rm --entrypoint '' -v \"\$(docker volume create --label '$RUN_ID'):/persist/claude\" '$IMAGE' dev-init 2>&1) &&
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - '"
+check "dev-init: no volume warning with one volume for all of /persist (the k8s / Coder shape)" in_image '
+  out=$(dev-init 2>&1); echo "$out"
+  ! echo "$out" | grep -q "no volume behind"' \
+  -v "$vol:/persist" --entrypoint ""
+check "dev-init: no volume warning with a volume per /persist dir (the devcontainer shape)" bash -c "
+  args=()
+  for t in claude codex gh no-mistakes agentsview; do
+    args+=(-v \"\$(docker volume create --label '$RUN_ID'):/persist/\$t\")
+  done
+  out=\$(docker run --rm --entrypoint '' \"\${args[@]}\" '$IMAGE' dev-init 2>&1)
+  echo \"\$out\"
+  ! echo \"\$out\" | grep -q 'no volume behind'"
 
 echo "== 6. dev-doctor"
 check "dev-doctor exits non-zero with no auth and prints a hint per failure" bash -c "
@@ -251,11 +273,17 @@ else
       and \$m.updateRemoteUserUID == false
       and ([\$m.mounts[] | \"\(.source)=\(.target)\"]) == [\"dev-system-gh=/persist/gh\"]'"
 
+  # The four per-repo mounts exactly as the synced base-image template ships
+  # them (#78), with $RUN_ID in place of the dev-system prefix.
+  template="$(dirname "$0")/../../../templates/.devcontainer/devcontainer.base-image.json"
+  template_mounts=$(grep -F '"target": "/persist/' "$template" | sed "s/\"dev-system-/\"$RUN_ID-/")
+  check "the base-image template's four per-repo mounts are found" \
+    [ "$(printf '%s\n' "$template_mounts" | grep -cF "\"$RUN_ID-\${devcontainerId}-")" = 4 ]
+
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
-  # four per-repo mounts are the README's, with $RUN_ID in place of the
-  # dev-system prefix. The shared gh volume is overridden (same target) with
-  # a per-run one, which also proves a consumer can override it.
+  # shared gh volume is overridden (same target) with a per-run one, which
+  # also proves a consumer can override it.
   dc_up() {
     local ws="$WORKDIR/$1" up
     mkdir -p "$ws/.devcontainer"
@@ -264,10 +292,7 @@ else
 {
   "image": "$IMAGE",
   "mounts": [
-    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-claude", "target": "/persist/claude" },
-    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-codex", "target": "/persist/codex" },
-    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
-    { "type": "volume", "source": "$RUN_ID-\${devcontainerId}-agentsview", "target": "/persist/agentsview" },
+$template_mounts,
     { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" }${3:+,
     $3}
   ],
@@ -315,6 +340,9 @@ EOF
     check "dev-init ran as node (UID 1000) at post-start (codex sandbox default seeded)" \
       $DEVCONTAINER exec --workspace-folder "$WORKDIR/default" bash -c '
         [ "$(id -un)" = node ] && [ "$(id -u)" = 1000 ] && grep -q "^sandbox_mode" /persist/codex/config.toml'
+    check "dev-init: no volume warning with the template's mounts" bash -c "
+      out=\$(docker exec '$cid' dev-init 2>&1); echo \"\$out\"
+      ! echo \"\$out\" | grep -q 'no volume behind'"
     # the image ENTRYPOINT is replaced (overrideCommand), and the metadata's
     # DEV_REMOTE_CONTROL=0 keeps the post-start hook from starting anything
     check "by default no Remote Control supervisor, tmux session or Claude runs" bash -c "

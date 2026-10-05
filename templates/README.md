@@ -82,8 +82,38 @@ JSON has no comment syntax, so the split is documented here instead of inline:
 
 ## `.devcontainer/devcontainer.json` -> `.devcontainer/devcontainer.json`
 
-Thin devcontainer example. devcontainer.json is JSONC (comments allowed) per the spec
-itself, so the split is marked inline like the other templates.
+Thin devcontainer config. devcontainer.json is JSONC (comments allowed) per the spec
+itself, so the split is marked inline like the other templates. There are two kinds, and
+each repo uses one: `callum-dev init` asks (or takes `--devcontainer base-image|feature`)
+and records the choice as `devcontainer` in `.callum-dev.json`. A stamp without the key is
+a `feature` repo, the only kind before the choice existed.
+
+To switch an existing repo, run `callum-dev update --devcontainer <kind>`. It merges from
+the old kind's template to the new one like any update, so the repo's name comes across
+and untouched synced content is swapped. A line both the repo and the switch change (a
+custom `image`, say) is left as a conflict to resolve by hand. The baseline is kept as
+`.callum-dev/baseline/.devcontainer/devcontainer.json` for both kinds.
+
+### `base-image` (default): `.devcontainer/devcontainer.base-image.json`
+
+Built on the dev-system base image (`images/base/README.md`), whose own metadata supplies
+`remoteUser`, the `/persist` environment, `dev-init` at post-start and the gh volume
+shared by every repo on the host.
+
+- Repo-owned: `name`, `image` (`ghcr.io/cbundy/dev-system/base:2`, or swap for a `build`
+  block with a Dockerfile `FROM` it for repo-specific tools), `remoteEnv`, and the nested
+  repo-owned slot at the top of `mounts` (each added mount followed by a comma, so the
+  synced lines below it stay untouched).
+- Synced: `mounts` - the four per-repo volumes (`dev-system-${devcontainerId}-claude`,
+  `-codex`, `-no-mistakes`, `-agentsview`) at `/persist/*`. They live here, not in the
+  image, because the devcontainer CLI expands no variables in image metadata: there
+  `${devcontainerId}` comes out empty and every repo would share one set (cbundy/dev-system#73,
+  #78). Synced, so `callum-dev update` keeps every repo's set correct. Without them that
+  state is lost on every rebuild, and `dev-init` warns at start-up.
+
+### `feature`: `.devcontainer/devcontainer.json`
+
+Any base image plus the `callum-tools` feature. No `/persist` contract.
 
 - Repo-owned: `name`, `image` (swap for whatever base this repo needs, or a `build` block
   for a custom Dockerfile), `mounts` (empty by default; don't bind-mount a host `~/.no-mistakes` - its state is per

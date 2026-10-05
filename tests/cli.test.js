@@ -15,8 +15,8 @@ const PKG_VERSION = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf-8"),
 ).version;
 
-function run(cwd, command, { input, templates } = {}) {
-  return spawnSync("node", [BIN, command], {
+function run(cwd, command, { input, templates, args = [] } = {}) {
+  return spawnSync("node", [BIN, command, ...args], {
     cwd,
     input: input ?? "",
     encoding: "utf-8",
@@ -42,9 +42,9 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
-function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n") {
+function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) {
   const repo = scratchRepo(t);
-  const result = run(repo, "init", { input });
+  const result = run(repo, "init", { input, args });
   assert.equal(result.status, 0, result.stderr);
   return repo;
 }
@@ -291,4 +291,115 @@ test("update with unchanged templates is a no-op; check reports drift via the st
   const update = run(repo, "update");
   assert.equal(update.status, 0, update.stderr);
   assert.equal(run(repo, "check").status, 0);
+});
+
+// devcontainer.json is JSONC; every comment in the templates is a whole line.
+function parseJsonc(content) {
+  return JSON.parse(content.replace(/^\s*\/\/.*$/gm, ""));
+}
+
+const DEVCONTAINER = ".devcontainer/devcontainer.json";
+const BASE_IMAGE_TEMPLATE = ".devcontainer/devcontainer.base-image.json";
+const PER_REPO_MOUNTS = ["claude", "codex", "no-mistakes", "agentsview"].map((tool) => ({
+  type: "volume",
+  source: `dev-system-\${devcontainerId}-${tool}`,
+  target: `/persist/${tool}`,
+}));
+
+test("init defaults to the base-image devcontainer, with the per-repo /persist mounts", (t) => {
+  const repo = initRepo(t);
+
+  const config = parseJsonc(read(repo, DEVCONTAINER));
+  assert.equal(config.name, "myrepo");
+  assert.equal(config.image, "ghcr.io/cbundy/dev-system/base:2");
+  assert.deepEqual(config.mounts, PER_REPO_MOUNTS);
+  assert.equal(config.features, undefined, "the base image needs no callum-tools feature");
+
+  assert.equal(JSON.parse(read(repo, ".callum-dev.json")).devcontainer, "base-image");
+  // The baseline keeps the destination name, whichever template it came from.
+  assert.equal(read(repo, `.callum-dev/baseline/${DEVCONTAINER}`), read(TEMPLATES, BASE_IMAGE_TEMPLATE));
+});
+
+test("init picks the feature devcontainer from the prompt or --devcontainer", (t) => {
+  for (const how of [
+    { input: "myrepo\n\n\nfeature\n" },
+    { input: "myrepo\n\n\n", args: ["--devcontainer", "feature"] },
+    { input: "myrepo\n\n\n", args: ["--devcontainer=feature"] },
+  ]) {
+    const repo = initRepo(t, how.input, how.args);
+    const config = parseJsonc(read(repo, DEVCONTAINER));
+    assert.ok(config.features["ghcr.io/cbundy/dev-system/callum-tools:1"], JSON.stringify(how));
+    assert.equal(JSON.parse(read(repo, ".callum-dev.json")).devcontainer, "feature");
+  }
+});
+
+test("init re-asks on an unknown devcontainer kind, and --devcontainer rejects one", (t) => {
+  const repo = initRepo(t, "myrepo\n\n\nbase\nfeature\n");
+  assert.equal(JSON.parse(read(repo, ".callum-dev.json")).devcontainer, "feature");
+
+  const bad = run(scratchRepo(t), "init", { args: ["--devcontainer", "base"] });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /--devcontainer must be one of: base-image, feature/);
+});
+
+test("base-image devcontainer: repo-owned edits survive an update that changes the synced mounts", (t) => {
+  const repo = initRepo(t);
+  const file = path.join(repo, DEVCONTAINER);
+  const repoMount =
+    '    { "type": "volume", "source": "nas-myrepo", "target": "/shared" },\n';
+  fs.writeFileSync(
+    file,
+    read(repo, DEVCONTAINER)
+      .replace('"image": "ghcr.io/cbundy/dev-system/base:2"', '"build": { "dockerfile": "Dockerfile" }')
+      .replace(
+        '    // "<REPLACE: repo-specific env vars, e.g. DEV_LOGIN_TOOLS>": "<REPLACE>"',
+        '    "DEV_LOGIN_TOOLS": "claude,gh"',
+      )
+      .replace(/( *\/\/ --- end repo-owned ---\n)(\n *\/\/ Per-repo)/, `${repoMount}$1$2`),
+  );
+  assert.equal(parseJsonc(read(repo, DEVCONTAINER)).mounts.length, 5, "test setup should add a mount");
+
+  const upstream = upstreamCopy(t, (dir) => {
+    const f = path.join(dir, BASE_IMAGE_TEMPLATE);
+    fs.writeFileSync(f, read(dir, BASE_IMAGE_TEMPLATE).replaceAll("dev-system-${devcontainerId}", "ds-${devcontainerId}"));
+  });
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const config = parseJsonc(read(repo, DEVCONTAINER));
+  assert.deepEqual(config.build, { dockerfile: "Dockerfile" }, "repo-owned build block survived");
+  assert.equal(config.image, undefined);
+  assert.deepEqual(config.remoteEnv, { DEV_LOGIN_TOOLS: "claude,gh" }, "repo-owned env survived");
+  assert.deepEqual(config.mounts, [
+    { type: "volume", source: "nas-myrepo", target: "/shared" },
+    ...PER_REPO_MOUNTS.map((m) => ({ ...m, source: m.source.replace("dev-system-", "ds-") })),
+  ]);
+});
+
+test("update --devcontainer switches a feature repo to the base image; a stamp without the key is a feature repo", (t) => {
+  const repo = initRepo(t, "myrepo\n\n\n", ["--devcontainer", "feature"]);
+  // A repo scaffolded before the choice existed.
+  const stampFile = path.join(repo, ".callum-dev.json");
+  const { devcontainer, ...legacy } = JSON.parse(read(repo, ".callum-dev.json"));
+  assert.equal(devcontainer, "feature");
+  fs.writeFileSync(stampFile, JSON.stringify(legacy, null, 2) + "\n");
+
+  const noop = run(repo, "update");
+  assert.equal(noop.status, 0, noop.stderr);
+  assert.match(noop.stdout, /Already in sync/, "a legacy stamp stays on the feature template");
+
+  const result = run(repo, "update", { args: ["--devcontainer", "base-image"] });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /switched {2}devcontainer: feature -> base-image/);
+
+  const config = parseJsonc(read(repo, DEVCONTAINER));
+  assert.equal(config.name, "myrepo", "the repo's name came across");
+  assert.equal(config.image, "ghcr.io/cbundy/dev-system/base:2");
+  assert.deepEqual(config.mounts, PER_REPO_MOUNTS);
+  assert.equal(JSON.parse(read(repo, ".callum-dev.json")).devcontainer, "base-image");
+  assert.equal(read(repo, `.callum-dev/baseline/${DEVCONTAINER}`), read(TEMPLATES, BASE_IMAGE_TEMPLATE));
+
+  // The choice sticks: the next plain update stays on the base image.
+  assert.match(run(repo, "update").stdout, /Already in sync/);
 });
