@@ -64,7 +64,9 @@ cleanup() {
   docker volume ls -q --filter "label=$RUN_ID" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
   docker volume ls -q --filter "name=^$RUN_ID-" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
   docker network ls -q --filter "label=$RUN_ID" | xargs -r docker network rm >/dev/null 2>&1 || true
-  [ -n "${WORKDIR:-}" ] && rm -rf "$WORKDIR"
+  # An if, not `[ ... ] && rm`: a false test as the trap's last command would
+  # become the script's exit status, failing a green run that skipped test 7.
+  if [ -n "${WORKDIR:-}" ]; then rm -rf "$WORKDIR"; fi
 }
 trap cleanup EXIT
 
