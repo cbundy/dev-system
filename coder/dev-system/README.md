@@ -51,13 +51,28 @@ coder create my-ws --template dev-system   # Enter accepts each default
 | Parameter | Default | Changeable later | Purpose |
 |---|---|---|---|
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
-| `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. The clone into `/workspace` is done by `dev-init` once cbundy/dev-system#77 is in the image. |
-| `remote_control_mode` | `session` | yes | `session`: one interactive Claude. `server`: one Claude per session started in claude.ai, each in its own git worktree; that needs a git repo in `/workspace` (without one the sessions share the directory). |
+| `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
+| `remote_control_mode` | `session` | yes | `session`: one interactive Claude. `server`: one Claude per session started in claude.ai, each in its own git worktree; that needs a repo (without one the sessions share the directory). |
 | `cpus` | 2 | yes | CPU limit (1-8). |
 | `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
 
-The Remote Control name (the session or environment name in claude.ai) is the repo name
-when there is a repo URL (the parameter or the image's), else `coder-<workspace>`.
+### Repo
+
+From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
+[image README](../../images/base/README.md)), the image does the repo work itself:
+
+- **With a repo URL** (`repo_url`, or the `DEV_REPO_URL` a per-repo image carries),
+  `dev-init` clones it into `/workspaces/<repo name>` on the first start and only fetches
+  after that. Claude runs there, and the Remote Control name (the session or environment
+  name in claude.ai) is the repo name. The template sets neither.
+  - A private repo needs a GitHub credential: Coder external auth (`GIT_ASKPASS`), or
+    else the gh login on the Log in page, after which `dev-login watch` runs the clone.
+- **Without one**, the startup script sets `DEV_WORKSPACE=/workspaces`, so Claude still
+  runs on the volume, and names the session `coder-<workspace>`.
+
+This is decided in the startup script rather than in the agent `env`, because only the
+container knows whether the image has its own `DEV_REPO_URL`. On an image older than
+2.1.0, nothing is cloned and Claude runs in `/workspaces`.
 
 ## What the template does
 
@@ -66,8 +81,10 @@ when there is a repo URL (the parameter or the image's), else `coder-<workspace>
   - `/persist`: tool state and logins, as the image's persistence contract asks for on
     Coder (one volume at `/persist`). Docker copies the image's node-owned directories into
     it on first use.
-  - `/workspace`: the checkout (`DEV_WORKSPACE`), so work in progress and server mode's
-    worktrees survive a stop. The startup script makes its root writable by `node`.
+  - `/workspaces`: the checkout, so work in progress and server mode's worktrees survive
+    a stop. From 2.1.0 the image's `/workspaces` is node-owned and Docker gives the new
+    volume that ownership. An older image has no such directory, so the volume comes up
+    root-owned, and the startup script `chown`s it (with `sudo -n`) only in that case.
 
   There is deliberately **no home volume**. The image's tools (Claude Code, codex,
   no-mistakes, treehouse) live under `/home/node`, and a volume there would keep the
@@ -80,6 +97,8 @@ when there is a repo URL (the parameter or the image's), else `coder-<workspace>
   `/tmp/dev-remote-control.log`; attach to Claude with `tmux attach -t claude`. The
   startup script's own log is `/tmp/coder-startup-script.log`. Docker's init is PID 1
   (the image's tini is bypassed with the entrypoint) and reaps orphaned processes.
+  `DEV_DESKTOP` stays unset: the workspace is headless, so `dev-doctor` runs its headless
+  checks.
 - **Log in app.** `dev-init` serves dev-login's page on port 8765 (`DEV_LOGIN_PORT`),
   kept up as a status page (`DEV_LOGIN_PAGE_EXIT=0`). The app proxies it through Coder's
   path-based app URL, owner only, with a health check on `/healthz`; nothing is published

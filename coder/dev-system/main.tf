@@ -8,8 +8,9 @@
 # - no volume over the home directory: the image's tools live under
 #   /home/node/.local, and a home volume would freeze them at the first
 #   start. State lives where the image README's Kubernetes / Coder contract
-#   puts it, one volume per workspace at /persist, plus a /workspace volume
-#   for the checkout (cbundy/dev-system#77 clones DEV_REPO_URL there);
+#   puts it, one volume per workspace at /persist, plus one at /workspaces
+#   for the checkout (dev-init clones DEV_REPO_URL into
+#   /workspaces/<repo name>, cbundy/dev-system#77);
 # - the agent replaces the image entrypoint, so its startup_script runs
 #   dev-init and starts Remote Control, as the image's devcontainer
 #   postStartCommand does;
@@ -67,7 +68,7 @@ data "coder_parameter" "image" {
 data "coder_parameter" "repo_url" {
   name         = "repo_url"
   display_name = "Git repository (optional)"
-  description  = "HTTPS clone URL, cloned into /workspace on the first start. Empty uses the image's own DEV_REPO_URL (per-repo images), or no repo for the base image."
+  description  = "HTTPS clone URL, cloned into /workspaces/<repo name> on the first start. Empty uses the image's own DEV_REPO_URL (per-repo images), or no repo for the base image."
   type         = "string"
   default      = ""
   mutable      = false
@@ -77,7 +78,7 @@ data "coder_parameter" "repo_url" {
 data "coder_parameter" "remote_control_mode" {
   name         = "remote_control_mode"
   display_name = "Remote Control mode"
-  description  = "session: one interactive Claude session. server: one session per conversation started in claude.ai, each in its own git worktree - needs a git repo in /workspace, else they share the directory."
+  description  = "session: one interactive Claude session. server: one session per conversation started in claude.ai, each in its own git worktree - needs a git repo, else they share the directory."
   type         = "string"
   default      = "session"
   mutable      = true
@@ -155,23 +156,27 @@ resource "coder_agent" "main" {
   # /tmp/dev-remote-control.log, attach: tmux attach -t claude). Both are
   # best effort, so the workspace always becomes ready.
   startup_script = <<-EOT
-    # /workspace is a fresh volume whose root Docker creates root-owned.
-    [ -w /workspace ] || sudo -n chown "$(id -u):$(id -g)" /workspace \
-      || echo "WARNING: /workspace is not writable by $(id -un)"
+    # From base image 2.1.0, /workspaces is node-owned in the image, and Docker
+    # gives a new volume that ownership. Older images lack the directory, so
+    # Docker creates the volume root-owned: fix that once.
+    [ -w /workspaces ] || sudo -n chown "$(id -u):$(id -g)" /workspaces \
+      || echo "WARNING: /workspaces is not writable by $(id -un)"
 
-    # Remote Control name: the repo name when there is a repo (the repo_url
-    # parameter or the image's own DEV_REPO_URL), else coder-<workspace>.
-    repo="$${DEV_REPO_URL:-}"
-    repo="$${repo%/}"
-    repo="$${repo%.git}"
-    repo="$${repo##*/}"
-    export DEV_REMOTE_CONTROL_NAME="$${repo:-coder-${lower(data.coder_workspace.me.name)}}"
+    # With a repo URL (the repo_url parameter or the image's own), the image
+    # works in /workspaces/<repo name> and names the Remote Control session
+    # after the repo. Without one, keep Claude on the volume and name the
+    # session coder-<workspace> rather than the hostname. Done here, not in
+    # env, because only the container knows the image's DEV_REPO_URL.
+    if [ -z "$${DEV_REPO_URL:-}" ]; then
+      export DEV_WORKSPACE=/workspaces
+      export DEV_REMOTE_CONTROL_NAME="coder-${lower(data.coder_workspace.me.name)}"
+    fi
 
     if ! command -v dev-init >/dev/null 2>&1; then
       echo "no dev-init in this image - not a dev-system image, nothing to start"
       exit 0
     fi
-    cd /workspace || exit 0
+    cd /workspaces || exit 0
     timeout -k 10 120 dev-init || echo "WARNING: dev-init failed or timed out - continuing"
     dev-remote-control --post-start
   EOT
@@ -179,13 +184,10 @@ resource "coder_agent" "main" {
   env = merge(
     {
       # Commits work straight away; these take precedence over ~/.gitconfig.
-      GIT_AUTHOR_NAME     = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-      GIT_AUTHOR_EMAIL    = data.coder_workspace_owner.me.email
-      GIT_COMMITTER_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-      GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
-      # Where dev-init, Claude and the #77 clone work. The /workspace volume
-      # keeps the checkout (and server mode's worktrees) across restarts.
-      DEV_WORKSPACE           = "/workspace"
+      GIT_AUTHOR_NAME         = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+      GIT_AUTHOR_EMAIL        = data.coder_workspace_owner.me.email
+      GIT_COMMITTER_NAME      = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+      GIT_COMMITTER_EMAIL     = data.coder_workspace_owner.me.email
       DEV_REMOTE_CONTROL      = "1"
       DEV_REMOTE_CONTROL_MODE = data.coder_parameter.remote_control_mode.value
       # dev-init serves the login page on this port; it stays up as a status
@@ -235,7 +237,7 @@ resource "coder_agent" "main" {
   metadata {
     display_name = "Workspace Disk"
     key          = "3_workspace_disk"
-    script       = "coder stat disk --path /workspace"
+    script       = "coder stat disk --path /workspaces"
     interval     = 60
     timeout      = 1
   }
@@ -328,8 +330,9 @@ resource "docker_container" "workspace" {
     container_path = "/persist"
     volume_name    = docker_volume.persist.name
   }
+  # The checkout, and server mode's worktrees inside it, survive a stop.
   volumes {
-    container_path = "/workspace"
+    container_path = "/workspaces"
     volume_name    = docker_volume.workspace.name
   }
 
