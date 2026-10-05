@@ -1,7 +1,7 @@
 name: Release
 
 # Manual, on-demand only: never triggers on push/merge to main. Individual PRs
-# never bump versions (see README release policy); this workflow is the single
+# never bump versions (see RELEASING.md); this workflow is the single
 # deliberate release step. Pick a semver version and run from the Actions tab
 # or `gh workflow run release.yml -f version=X.Y.Z`.
 on:

@@ -9,7 +9,7 @@
 
 # this repo
 
-This is the source of truth for Callum's portable dev system (see README.md for the
+This is the source of truth for Callum's portable dev system (see docs/architecture.md for the
 architecture). Rules specific to working here:
 
 - Shared skills in `plugins/` must stay generic and stateless - no repo-specific state or
