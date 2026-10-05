@@ -235,7 +235,7 @@ Provider versions are pinned, with `.terraform.lock.hcl` beside the template; af
 version bump, run `terraform init -upgrade` here and commit the lock file. `npm run lint`
 from the repo root runs `terraform fmt -check`, `init -lockfile=readonly` and `validate`
 on this directory whenever terraform is on PATH (it is in the `dev` image above), and CI's
-`test-coder.yml` runs the same on every PR that touches `coder/`.
+`ci.yml` runs the same on every PR.
 
 To try a change from inside a workspace before it reaches `dev-system`, push it as
 `dev-system-next` with `coder/dev-system/push-next.sh smoke`; see

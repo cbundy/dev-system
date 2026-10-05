@@ -64,14 +64,15 @@ and adding a new test file should require no extra wiring.
   ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
   syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
-  it prints a skip line and CI's `test-coder.yml` runs them.
+  it prints a skip line and CI's `ci.yml` runs them.
 - `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
   script tests (`pin-codex-model`, `recover-no-mistakes`).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
-and CI runs both: `test-cli.yml` runs `npm run lint` (with shellcheck) and `npm test`, and
-`test-coder.yml` runs `npm run lint` (with terraform). A new test or script check belongs
-inside one of these entrypoints, not in a bespoke CI step.
+and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
+on every pull request and every push to main. Its `ci` check is the one branch protection
+requires. A new test or script check belongs inside one of these entrypoints, not in a
+bespoke CI step.
 
 ## Dev environment image
 
@@ -115,7 +116,7 @@ npm dependency on this package. After each release, bring the stamp up to date
 The dev environment has no Docker access yet (tracked under #114). Changes under
 `images/base/`, `.devcontainer/`, `features/` and `coder/` are verified by PR CI:
 `publish-base-image.yml` builds the image and runs `images/base/test/test.sh`,
-`publish-dev-image.yml` builds and smoke-tests the dev image, `test-coder.yml` lints the
+`publish-dev-image.yml` builds and smoke-tests the dev image, `ci.yml` lints the
 Coder template, and `test-features.yml` runs the feature tests. Never claim an image, devcontainer or feature-in-container test ran
 locally - point to the PR's CI run instead.
 

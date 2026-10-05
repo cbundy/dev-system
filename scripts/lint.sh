@@ -92,7 +92,7 @@ if ! node scripts/build-skills.js --check; then
 fi
 
 # The Coder template (cbundy/dev-system#117): terraform fmt and validate. terraform is in
-# this repo's dev image (.devcontainer/Dockerfile) and in CI (test-coder.yml), not on every
+# this repo's dev image (.devcontainer/Dockerfile) and in CI (ci.yml), not on every
 # host, so without it this is skipped with a note - unless LINT_REQUIRE_TERRAFORM=1 (CI),
 # where a missing terraform must fail rather than pass unchecked.
 TF_DIR=coder/dev-system
