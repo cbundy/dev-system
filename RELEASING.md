@@ -25,7 +25,11 @@ How each layer reaches consumers after the tag exists:
   pulls the new tag, then `npx callum-dev update` merges template changes into the
   repo. Tags earlier than v0.3.0 predate `package.json` and cannot be npm-installed.
 
-## The Dev Container Feature (separate cadence)
+## The Dev Container Feature (deprecated, separate cadence)
+
+The feature is deprecated (cbundy/dev-system#89) and gets no new capabilities. A script
+fix in `features/src/callum-tools/` reaches consumers through the base image; publish
+the feature as well only when a repo still pinned to `callum-tools:1` needs the fix.
 
 The feature version lives in `features/src/*/devcontainer-feature.json` and is NOT
 synced by the release workflow: GHCR publishing only pushes versions that do not

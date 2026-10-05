@@ -17,5 +17,10 @@ architecture). Rules specific to working here:
   the consumer (e.g. `.claude/orchestrator-memory.md`).
 - Behavior changes ship by tagging a release; consumers pull. Never advise patching a copy
   of a skill or template inside a consumer repo.
+- The `callum-tools` Dev Container Feature is deprecated (#89); the base image in
+  `images/base/` is the supported environment. Never add capabilities to the feature or
+  the `feature` devcontainer template, and never steer a consumer onto them. Put new
+  tooling in `images/base/`. The scripts in `features/src/callum-tools/` are still the
+  image's source, so fixing them is fine.
 - Templates in `templates/` must keep a clear split between synced content and repo-owned
   values so `callum-dev update` can merge cleanly.

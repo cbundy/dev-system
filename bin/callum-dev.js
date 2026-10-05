@@ -70,11 +70,22 @@ const TEMPLATES = [
 
 // The devcontainer template kinds, recorded in the stamp as `devcontainer`:
 //   base-image  the dev-system base image, with the per-repo /persist volumes synced
-//   feature     any image plus the callum-tools feature (no /persist contract)
+//   feature     any image plus the callum-tools feature (no /persist contract);
+//               deprecated (cbundy/dev-system#89), so init and update warn about it
 // A stamp without the key predates the choice, when `feature` was the only kind.
 const DEVCONTAINER_KINDS = ["base-image", "feature"];
 const DEFAULT_DEVCONTAINER = "base-image";
 const LEGACY_DEVCONTAINER = "feature";
+const DEPRECATED_DEVCONTAINERS = {
+  feature:
+    "the callum-tools feature is deprecated in favour of the dev-system base image " +
+    "(cbundy/dev-system#89). Move this repo with: npx callum-dev update --devcontainer base-image",
+};
+
+function warnIfDeprecated(devcontainer) {
+  const reason = DEPRECATED_DEVCONTAINERS[devcontainer];
+  if (reason) process.stderr.write(`warning: devcontainer '${devcontainer}' is deprecated: ${reason}\n`);
+}
 
 function templateSource(entry, devcontainer) {
   if (entry.variants) return entry.variants[devcontainer];
@@ -179,7 +190,7 @@ async function promptAnswers(options) {
   answers.devcontainer = options.devcontainer;
   while (!answers.devcontainer) {
     const kind = await ask(
-      "Devcontainer: base-image (dev-system base image) or feature (any image + callum-tools)",
+      "Devcontainer: base-image (dev-system base image) or feature (deprecated: any image + callum-tools)",
       DEFAULT_DEVCONTAINER,
     );
     if (DEVCONTAINER_KINDS.includes(kind)) answers.devcontainer = kind;
@@ -231,6 +242,7 @@ async function init(options) {
   console.log(
     `stamped   ${STAMP_FILE} (template version ${PKG_VERSION}, devcontainer ${answers.devcontainer})`,
   );
+  warnIfDeprecated(answers.devcontainer);
 
   const remaining = TEMPLATES.map((t) => ({
     file: t.file,
@@ -390,6 +402,7 @@ function update(options) {
     for (const line of changed) console.log(line);
     if (oldVersion !== PKG_VERSION) console.log(`\nStamp updated: ${oldVersion} -> ${PKG_VERSION}.`);
   }
+  warnIfDeprecated(devcontainer);
   if (conflicts.length > 0) {
     console.error(
       `\n${conflicts.length} file(s) need manual conflict resolution: ${conflicts.join(", ")}`,
@@ -431,8 +444,8 @@ Options:
   --devcontainer <kind>  The devcontainer template (init: skips the prompt;
                          update: switches this repo to it, merging as usual).
                          base-image: the dev-system base image, with the
-                         per-repo /persist volumes. feature: any image plus
-                         the callum-tools feature.
+                         per-repo /persist volumes. feature (deprecated):
+                         any image plus the callum-tools feature.
 `);
 }
 

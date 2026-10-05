@@ -94,6 +94,9 @@ and untouched synced content is swapped. A line both the repo and the switch cha
 custom `image`, say) is left as a conflict to resolve by hand. The baseline is kept as
 `.callum-dev/baseline/.devcontainer/devcontainer.json` for both kinds.
 
+`feature` is deprecated (cbundy/dev-system#89): `init` and `update` warn while a repo is on
+it, and the fix is `callum-dev update --devcontainer base-image`.
+
 ### `base-image` (default): `.devcontainer/devcontainer.base-image.json`
 
 Built on the dev-system base image (`images/base/README.md`), whose own metadata supplies

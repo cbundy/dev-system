@@ -7,9 +7,10 @@ the homelab (as a Kubernetes pod, a Coder workspace or a plain `docker run`), wi
 devcontainer tooling needed at run time. A fixed mount point, `/shared`, takes an optional
 NAS share for files exchanged with the PC.
 
-It complements the `callum-tools` Dev Container Feature rather than replacing it. Repos
-that use features keep using it, and the image reuses the feature's scripts
-(`features/src/callum-tools/`) rather than forking them.
+It replaces the `callum-tools` Dev Container Feature, which is deprecated
+(cbundy/dev-system#89): new environment work goes here, not into the feature. The image
+still builds from the feature's scripts (`features/src/callum-tools/`) rather than forking
+them, so those scripts stay maintained.
 
 ## What the image owns
 

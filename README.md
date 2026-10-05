@@ -7,7 +7,7 @@ bootstrap and stay in sync across repositories. One repo, one version history, f
 dev-system/
 ├── .claude-plugin/marketplace.json   # Claude Code plugin marketplace catalog
 ├── plugins/callum-flow/              # plugin: skills (issue-orchestrator, implement-issue), hooks
-├── features/src/callum-tools/        # Dev Container Feature: installs no-mistakes, treehouse, Claude Code
+├── features/src/callum-tools/        # DEPRECATED Dev Container Feature; its scripts still feed images/base
 ├── features/test/callum-tools/       # feature tests, run in CI by test-features.yml
 ├── images/base/                      # base image ghcr.io/cbundy/dev-system/base: Dockerfile,
 │                                     #   dev-init, dev-doctor, tests (publish-base-image.yml)
@@ -24,7 +24,7 @@ dev-system/
 | Layer | Contents | Mechanism | Update path in a consumer repo |
 |---|---|---|---|
 | Agent behavior | skills, generic agent rules | Claude Code plugin via private marketplace (this repo) | `/plugin marketplace update` or auto-update |
-| Environment | devcontainer tooling installs | Dev Container Feature on GHCR | container rebuild pulls latest matching tag |
+| Environment (deprecated) | devcontainer tooling installs | Dev Container Feature on GHCR | move to the base image: `npx callum-dev update --devcontainer base-image` |
 | Environment | prebuilt agent image: Node, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, plus the `/persist` state contract and an opt-in push of session history to a central agentsview | base image `ghcr.io/cbundy/dev-system/base` on GHCR, extended by a per-repo Dockerfile | rebuild/re-pull; tags are mutable and refreshed weekly |
 | Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, `.gitignore`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
 
@@ -50,7 +50,16 @@ deliberate step Callum runs when ready (eventually via a release workflow), bump
 major for a breaking change to an existing skill's contract. Until that bump, merged
 changes live in this repo but ship to no consumer.
 
-## Dev Container Feature
+## Dev Container Feature (deprecated)
+
+> **Deprecated (2026-10-05, cbundy/dev-system#89).** The base image (below) is the supported
+> environment. The published feature `ghcr.io/cbundy/dev-system/callum-tools` and the
+> `feature` devcontainer template get no new capabilities: new environment work goes into
+> `images/base/`. Repos already pinned to `callum-tools:1` keep working. Move them with
+> `npx callum-dev update --devcontainer base-image`. The scripts in
+> `features/src/callum-tools/` are **not** deprecated, since the base image builds from
+> them, so fixes to them still land here and `test-features.yml` keeps testing them.
+> Removing the feature is a separate, later decision.
 
 `features/src/callum-tools` installs the flow's tooling - the no-mistakes pipeline CLI,
 treehouse, and the Claude Code CLI (each toggleable via a boolean option). Because these
@@ -102,10 +111,11 @@ plain `docker run`) as well as the desktop. Tools are baked in at build time, an
 state (Claude, codex, gh and no-mistakes logins and config) lives under `/persist`, so it
 survives rebuilds when a volume is mounted there - one per repo, except gh's, which repos
 share. Consumer repos start their own
-Dockerfile `FROM ghcr.io/cbundy/dev-system/base:2`. The image reuses the `callum-tools`
-scripts rather than forking them, and the feature stays supported for repos that use
-features. See [`images/base/README.md`](images/base/README.md) for the persistence
-contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to extend it.
+Dockerfile `FROM ghcr.io/cbundy/dev-system/base:2`. It is the supported environment: the
+`callum-tools` feature is deprecated (see above), and the image reuses that feature's
+scripts rather than forking them. See [`images/base/README.md`](images/base/README.md)
+for the persistence contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to
+extend it.
 
 ## Templates and the callum-dev CLI
 
@@ -119,7 +129,7 @@ npx callum-dev init
 
 `init` copies the templates in (never clobbering existing files), prompts for the
 repo-owned values (repo name, lint/test commands) and the devcontainer kind (`base-image`,
-the default, or `feature`; `--devcontainer <kind>` skips the prompt), and records two things to commit
+the default, or the deprecated `feature`; `--devcontainer <kind>` skips the prompt), and records two things to commit
 alongside the config: a stamp (`.callum-dev.json`, the applied template version) and a
 pristine baseline copy of each template (`.callum-dev/baseline/`). Those two make
 updates a real 3-way merge instead of an overwrite:
@@ -135,8 +145,9 @@ conflict is left as standard conflict markers with a non-zero exit rather than s
 resolved. Fully-synced files (`.claude/settings.json`) are replaced wholesale; fully
 repo-owned ones (`treehouse.toml`) are never touched after init. `npx callum-dev check`
 exits non-zero when the stamp lags the installed package - a CI-friendly drift gate.
-`npx callum-dev update --devcontainer base-image` moves a repo from the feature-based
-devcontainer to the base image (or back), as an ordinary merge.
+`npx callum-dev update --devcontainer base-image` moves a repo from the deprecated
+feature-based devcontainer to the base image, as an ordinary merge. `init` and `update`
+print a deprecation warning while a repo is on `feature`.
 
 ## Consumer repo wiring
 
@@ -174,7 +185,8 @@ A consumer repo commits only:
 
 All three layers are extracted: `plugins/callum-flow` (issue-orchestrator,
 implement-issue, and update-dev skills) distributes via the `callum` marketplace,
-`features/src/callum-tools` via GHCR, and `templates/` via the `callum-dev` CLI
+`features/src/callum-tools` via GHCR (deprecated in favour of the base image
+`images/base/`, also on GHCR), and `templates/` via the `callum-dev` CLI
 (npm git dependency; installable from the first tag that contains `package.json`,
 i.e. v0.3.0 onwards). `/update-dev <change request>` in any consumer repo proposes
 a change to this repo as a reviewed PR. Releasing is documented in `RELEASING.md`.

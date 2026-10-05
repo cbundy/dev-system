@@ -46,6 +46,12 @@ request may be about something already changed, moved, or fixed there. If the
 request is already satisfied upstream, say so and stop; the user just needs
 the next release.
 
+The `callum-tools` Dev Container Feature is deprecated in favour of the base
+image (cbundy/dev-system#89). Target a request for new environment tooling at
+`images/base/`, never the feature or the `feature` devcontainer template. If the
+consumer repo is still on the feature, say so and suggest
+`npx callum-dev update --devcontainer base-image`.
+
 ## 2. Clarify with the user BEFORE creating anything
 
 Ask clarifying questions (use the AskUserQuestion tool) before creating any
