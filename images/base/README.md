@@ -379,7 +379,18 @@ orphaned processes, so containers stop in well under a second instead of hitting
      tmux shows only the server, not a conversation. Worktree mode needs the workspace
      to be a git repository; if it is not, the sessions share the workspace instead
      (`--spawn same-dir`, with a warning in the log). Claude pre-creates one session in
-     the workspace itself; only the sessions started after it get a worktree.
+     the workspace itself; only the sessions started after it get a worktree. Observed
+     with Claude Code 2.1.289 (cbundy/dev-system#86):
+     - A session's worktree (`.claude/worktrees/bridge-<session id>`, locked while in
+       use) starts from the remote's default branch (`origin/main`), not from the
+       workspace's checked-out `HEAD`. A session does not see commits that exist only
+       in the local checkout; push them first if it needs them.
+     - Ending or deleting a session in claude.ai removes its worktree and branch.
+       Sessions still open when the container stops keep theirs (locked, so they can be
+       resumed), and the next start currently neither reuses nor prunes them, so they
+       can collect under `.claude/worktrees/` (cbundy/dev-system#93).
+     - Besides the open sessions, the server keeps one spare session process running,
+       ready for the next session.
 4. **Restarts Claude when it exits** (a crash, `/exit`, a restart after an update) with a
    backoff of 5s, doubling to at most 5 minutes, reset once Claude has run for 10 minutes.
    Each start runs `claude` from `PATH`, so a version Claude's auto-updater installed is
