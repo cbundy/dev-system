@@ -100,8 +100,13 @@ it, and the fix is `callum-dev update --devcontainer base-image`.
 ### `base-image` (default): `.devcontainer/devcontainer.base-image.json`
 
 Built on the dev-system base image (`images/base/README.md`), whose own metadata supplies
-`remoteUser`, the `/persist` environment, `dev-init` at post-start and the gh volume
-shared by every repo on the host.
+`remoteUser`, the `/persist` environment, `dev-init` at post-start and the volumes shared
+by every repo on the host: gh, and `dev-system-secrets` (read-only at
+`/run/secrets/dev-system`, from image 2.2.0), which carries the agentsview URL. That URL is
+set once per Docker host, not per repo, so nothing in this template (synced or repo-owned)
+wires it, and it must never be added to `remoteEnv` or `containerEnv` here
+(cbundy/dev-system#103). The synced header comment says so; it ships with the next
+`callum-dev` release.
 
 - Repo-owned: `name`, `image` (`ghcr.io/cbundy/dev-system/base:2`, or swap for a `build`
   block with a Dockerfile `FROM` it for repo-specific tools), `remoteEnv`, and the nested

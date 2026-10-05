@@ -52,6 +52,15 @@ RUN install -d -m 0755 /persist \
 # mounted here is writable too.
 RUN install -d -o 1000 -g 1000 -m 0755 /shared
 
+# Runtime secrets (cbundy/dev-system#103): an empty mount point for a
+# read-only secrets directory the runtime supplies - the shared
+# dev-system-secrets volume on Docker, a host directory on Coder, a Secret on
+# Kubernetes. Never anything in the image: it is public. Owned by node with
+# mode 0700, so a new Docker volume mounted here copies that and only node
+# can read it. dev-init reads agentsview-pg-url from it (agentsview.sh).
+RUN install -d -m 0755 /run/secrets \
+  && install -d -o 1000 -g 1000 -m 0700 /run/secrets/dev-system
+
 # Repo checkouts: dev-init clones DEV_REPO_URL into /workspaces/<repo name>
 # (cbundy/dev-system#77). An empty mount point for the runtime's workspace
 # volume (no VOLUME), owned by node so a Docker named volume mounted here
@@ -153,7 +162,8 @@ COPY --chmod=0755 \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
-COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh /usr/local/share/dev-system/
+COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
+  /usr/local/share/dev-system/
 
 USER node
 
@@ -163,7 +173,8 @@ USER node
 # agentsview's anonymous telemetry ping and update check are off: the image
 # pins its version, and these containers report nothing they were not asked to.
 # DEV_SHARED_DIR names the shared files mount point, so scripts and agents
-# never hard-code /shared.
+# never hard-code /shared; DEV_SECRETS_DIR names the runtime secrets mount
+# point the same way.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
@@ -172,7 +183,8 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   AGENTSVIEW_DATA_DIR=/persist/agentsview \
   AGENTSVIEW_TELEMETRY_ENABLED=0 \
   AGENTSVIEW_DISABLE_UPDATE_CHECK=1 \
-  DEV_SHARED_DIR=/shared
+  DEV_SHARED_DIR=/shared \
+  DEV_SECRETS_DIR=/run/secrets/dev-system
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which
@@ -194,7 +206,11 @@ CMD ["dev-remote-control"]
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
 # the host UID, and node could no longer write the 1000-owned /persist volumes.
 #
-# Its only mount is the gh volume, shared by every repo on the host. The other
+# Its mounts are the volumes shared by every repo on the Docker host: gh, and
+# dev-system-secrets read-only at DEV_SECRETS_DIR, so a secret written into it
+# once (the agentsview URL, cbundy/dev-system#103) reaches every repo; an
+# absent volume is created empty, which leaves the push off. The string form
+# is the one that can say readonly. The other
 # /persist volumes must be per repo (cbundy/dev-system#73), and the
 # devcontainer CLI expands no variables such as ${devcontainerId} in image
 # metadata - they come out empty, so every repo would share them - so the
@@ -210,4 +226,5 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
   dev.cbundy.shared="/shared" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"}]}]"
+  dev.cbundy.secrets="/run/secrets/dev-system" \
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"

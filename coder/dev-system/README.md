@@ -39,6 +39,7 @@ telemetry. Pass the same variables on every push.
 |---|---|---|
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
+| `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 
 ## Create a workspace
 
@@ -104,8 +105,29 @@ container knows whether the image has its own `DEV_REPO_URL`. On an image older 
   path-based app URL, owner only, with a health check on `/healthz`; nothing is published
   on the Docker host. `DEV_LOGIN_PAGE_URL` is set to that URL for dev-login's log lines and
   notifications.
+- **Runtime secrets.** The Docker host's `secrets_dir` is bind-mounted read-only at the
+  image's `/run/secrets/dev-system`. No secret passes through Terraform state, template
+  variables or workspace parameters. `DEV_MACHINE_NAME` is `coder-<workspace>`.
 - **Logins metadata.** A row on the workspace page from `dev-login status`, e.g.
   `claude: in, codex: out, gh: out`, refreshed every 30s.
+
+## Central session history (agentsview)
+
+Every workspace pushes its Claude and codex sessions to the central agentsview once the
+Docker host has the database URL in `<secrets_dir>/agentsview-pg-url`. Put it there once,
+as root on the workspace Docker host (or with an Ansible task):
+
+```bash
+install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/secrets
+(umask 077 && read -rsp 'agentsview URL: ' url && printf '%s\n' "$url" > /etc/dev-system/secrets/agentsview-pg-url)
+chown 1000:1000 /etc/dev-system/secrets/agentsview-pg-url
+```
+
+Running workspaces pick it up at their next start (or `coder ssh <ws> -- dev-init`).
+Without the file, Docker creates the directory empty and the push stays off; `dev-doctor`
+in the workspace then says so with the fix. Needs base image 2.2.0 or later; an older
+image ignores the mount. See "Central session history" in the
+[image README](../../images/base/README.md).
 
 ## First-run logins
 

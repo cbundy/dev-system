@@ -45,8 +45,12 @@ them, so those scripts stay maintained.
    container log, an optional login page and an optional push notification (see
    [First-run logins](#first-run-logins)).
 9. Default devcontainer metadata (the `devcontainer.metadata` image label), so desktop use
-   gets the shared gh volume and `dev-init` automatically.
-10. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
+   gets the shared gh and secrets volumes and `dev-init` automatically.
+10. The `/run/secrets/dev-system` mount point (`DEV_SECRETS_DIR`) for secrets the runtime
+    supplies read-only, such as the agentsview URL (see
+    [Central session history](#central-session-history-agentsview)). The image itself
+    never contains one.
+11. An entrypoint that runs `dev-init` and, on headless runtimes, keeps Claude Code running
     with Remote Control (below).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
@@ -370,8 +374,11 @@ container never fails to start because of it.
    ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
    has its own short time limit (30s), so a daemon that never answers is logged with the
    fix and never holds up the steps after it.
-8. If `AGENTSVIEW_PG_URL` is set, starts the agentsview session push (see
-   [Central session history](#central-session-history-agentsview)).
+8. If an agentsview URL is configured (the secret file
+   `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
+   agentsview session push (see
+   [Central session history](#central-session-history-agentsview)). A secret file it
+   cannot read gets a `WARNING`.
 9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
 10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
@@ -398,8 +405,10 @@ on every failure:
   `origin` matches; headless without it, that Claude's workspace is a git repo (see
   [Workspace and repo](#workspace-and-repo));
 - treehouse is on `PATH`;
-- agentsview is on `PATH` and, when `AGENTSVIEW_PG_URL` is set, the central database is
-  reachable and a push is running (in this container or another one sharing the volume).
+- agentsview is on `PATH`; with no URL configured, a `WARN` that the session push is off
+  and how to turn it on; with one, the central database is reachable and a push is running
+  (in this container or another one sharing the volume). A secret file that exists but
+  cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
 
 It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
 the same report and always exits 0.
@@ -512,7 +521,8 @@ docker run -d --name my-repo \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
   -v dev-system-gh:/persist/gh -v my-repo-workspaces:/workspaces \
-  -e DEV_REPO_URL=https://github.com/me/my-repo.git \
+  -v dev-system-secrets:/run/secrets/dev-system:ro \
+  -e DEV_REPO_URL=https://github.com/me/my-repo.git -e DEV_MACHINE_NAME=docker-my-repo \
   ghcr.io/cbundy/dev-system/base:2
 docker logs my-repo                          # the sign-in links for Claude, codex and gh
 docker exec my-repo dev-login <code>         # the code Claude's sign-in page shows
@@ -530,7 +540,8 @@ VPN only: see [Security](#security)); a second container then needs another host
 
 The same with docker compose. Compose prefixes volume names with the project name, which
 keeps the four per-project volumes apart from other projects'; `name:` turns that off for
-the shared gh volume, so every project uses the same `dev-system-gh`:
+the shared gh and secrets volumes, so every project uses the same `dev-system-gh` and
+`dev-system-secrets`:
 
 ```yaml
 services:
@@ -538,6 +549,7 @@ services:
     image: ghcr.io/cbundy/dev-system/base:2
     environment:
       DEV_REPO_URL: https://github.com/me/my-repo.git   # not needed with a consumer image
+      DEV_MACHINE_NAME: compose-my-repo                  # its label in agentsview
     volumes:
       - claude:/persist/claude
       - codex:/persist/codex
@@ -545,6 +557,7 @@ services:
       - agentsview:/persist/agentsview
       - gh:/persist/gh
       - workspaces:/workspaces
+      - secrets:/run/secrets/dev-system:ro
 volumes:
   claude:
   codex:
@@ -553,6 +566,8 @@ volumes:
   workspaces:
   gh:
     name: dev-system-gh   # shared by every project on this Docker host
+  secrets:
+    name: dev-system-secrets   # the agentsview URL, shared likewise
 ```
 
 **Kubernetes pod spec shape.** Leave `command:` unset: it would replace the entrypoint,
@@ -575,14 +590,19 @@ spec:
       env:
         - name: DEV_REPO_URL       # dev-init clones it into /workspaces/my-repo
           value: https://github.com/me/my-repo.git   # a consumer image carries it already
+        - name: DEV_MACHINE_NAME   # its label in agentsview
+          value: k8s-my-repo
       volumeMounts:
         - { name: persist, mountPath: /persist }
         - { name: workspaces, mountPath: /workspaces }
+        - { name: secrets, mountPath: /run/secrets/dev-system, readOnly: true }
   volumes:
     - name: persist
       persistentVolumeClaim: { claimName: dev-persist }
     - name: workspaces
       persistentVolumeClaim: { claimName: dev-workspaces }
+    - name: secrets                # the agentsview URL (Central session history)
+      secret: { secretName: dev-system-secrets, defaultMode: 0440, optional: true }
 ```
 
 The sign-in links are in `kubectl logs dev-my-repo`; finish Claude's with
@@ -704,7 +724,7 @@ docker run -d --name my-repo --network dev \
   -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_URL=https://<host>/login/my-repo/ \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
-  -v dev-system-gh:/persist/gh \
+  -v dev-system-gh:/persist/gh -v dev-system-secrets:/run/secrets/dev-system:ro \
   ghcr.io/cbundy/dev-system/base:2
 ```
 
@@ -779,12 +799,13 @@ it is:
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
 `containerEnv` with the `/persist` variables, `DEV_SHARED_DIR` and `DEV_REMOTE_CONTROL: "0"`,
-`postStartCommand: dev-init && dev-remote-control --post-start` and the shared gh volume,
-which the devcontainer CLI and VS Code merge into your config:
+`postStartCommand: dev-init && dev-remote-control --post-start` and the shared gh and
+secrets volumes, which the devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target | Scope |
 |---|---|---|
 | `dev-system-gh` | `/persist/gh` | every repo on the Docker host (image metadata) |
+| `dev-system-secrets` | `/run/secrets/dev-system`, read-only | every repo on the Docker host (image metadata) |
 | `dev-system-<devcontainerId>-claude` | `/persist/claude` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-no-mistakes` | `/persist/no-mistakes` | this repo (your `devcontainer.json`) |
@@ -839,8 +860,9 @@ under `/persist/agentsview` and pushes changes to a shared PostgreSQL; one centr
 `agentsview pg serve` reads that database. Agents always write to local disk, so a
 central outage never blocks them - the push catches up when the database is back.
 
-It is off until you set `AGENTSVIEW_PG_URL`. The image's anonymous telemetry ping and
-update check are disabled (`AGENTSVIEW_TELEMETRY_ENABLED=0`,
+It is on in every container that has the database URL, which you put in one place per
+Docker host or cluster (below), and off otherwise. The image's anonymous telemetry ping
+and update check are disabled (`AGENTSVIEW_TELEMETRY_ENABLED=0`,
 `AGENTSVIEW_DISABLE_UPDATE_CHECK=1`).
 
 ### Central server (once)
@@ -864,13 +886,80 @@ Set `require_auth = true` in the viewer's `config.toml` before exposing it beyon
 loopback, and put it behind your reverse proxy or VPN: transcripts carry prompts, tool
 output and source excerpts. `pg serve` applies schema migrations itself on start-up.
 
-### Each container
+### Each container: the URL, once per host
 
-| Variable | Required | Purpose |
+The URL (`postgres://user:pass@host:5432/agentsview?sslmode=require`) is a secret, and
+the image is public, so it never goes into an image, a repo or a build. Every container
+reads it at run time from one file, **`/run/secrets/dev-system/agentsview-pg-url`**
+(`$DEV_SECRETS_DIR/agentsview-pg-url`), which the runtime mounts read-only. Each runtime
+gets that directory from a place you fill once, so every container there, from any repo
+and from consumer images built `FROM` this one, pushes with nothing set per repo
+(cbundy/dev-system#103):
+
+| Runtime | Where the file comes from | Set once per |
 |---|---|---|
-| `AGENTSVIEW_PG_URL` | yes | `postgres://user:pass@host:5432/agentsview?sslmode=require`. A secret: inject it at run time (k8s Secret, Coder parameter, or `"remoteEnv": { "AGENTSVIEW_PG_URL": "${localEnv:AGENTSVIEW_PG_URL}" }` on the desktop), never in an image. |
-| `DEV_MACHINE_NAME` | recommended | Display label for this machine in the viewer, e.g. `desktop` or the workspace name. Without it the label is the container's hostname, which on Docker is a random container ID. |
-| `AGENTSVIEW_PG_SCHEMA` | no | Schema name (default `agentsview`). |
+| Desktop dev containers | the `dev-system-secrets` named volume, mounted read-only by the image's devcontainer metadata | Docker host |
+| `docker run`, compose | the same volume (`-v dev-system-secrets:/run/secrets/dev-system:ro`, see [First start, headless](#first-start-headless)) | Docker host |
+| Coder ([`coder/dev-system`](../../coder/dev-system/README.md)) | a directory on the workspace Docker host (template variable `secrets_dir`, default `/etc/dev-system/secrets`), bind-mounted read-only | Docker host |
+| Kubernetes | a Secret `dev-system-secrets` mounted at the directory (pod spec above) | namespace |
+
+The value is never in the container's environment, so it is not in `docker inspect` or in
+the shells agents run: `dev-init` hands it to the push alone and reads it again on every
+restart of the push, so a new value takes effect at the next container start. Anything
+that could echo it, the push log and `dev-doctor`, is masked. Where the file is missing
+(an empty volume or directory, which is what a runtime creates when there is none yet) the
+push is off: the container starts as usual, and `dev-doctor` shows a `WARN` naming the
+file to fill. An unreadable file fails `dev-doctor`.
+
+**Desktop and any Docker host** (WSL with Docker Desktop counts as one host). The value is
+read without echo, so it is not in your shell history or on screen:
+
+```bash
+read -rsp 'agentsview URL: ' url && printf '%s\n' "$url" \
+  | docker run --rm -i --user root --entrypoint "" \
+      -v dev-system-secrets:/run/secrets/dev-system ghcr.io/cbundy/dev-system/base:2 \
+      sh -c 'umask 077 && cat > "$DEV_SECRETS_DIR/agentsview-pg-url" && chown 1000:1000 "$DEV_SECRETS_DIR/agentsview-pg-url"'
+unset url
+```
+
+Then rebuild or restart each dev container (or run `dev-init` in it). A volume rather than
+a host directory, because a devcontainer bind mount cannot be optional: a missing source
+fails the container start on Docker Engine, and Docker Desktop creates it root-owned in
+your home. A volume that does not exist yet is simply created empty. To change the value,
+run the command again; to turn the push off on a host, `docker volume rm dev-system-secrets`
+once no container uses it.
+
+**Coder.** On the workspace Docker host, as root (an Ansible task can do the same):
+
+```bash
+install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/secrets
+(umask 077 && read -rsp 'agentsview URL: ' url && printf '%s\n' "$url" > /etc/dev-system/secrets/agentsview-pg-url)
+chown 1000:1000 /etc/dev-system/secrets/agentsview-pg-url
+```
+
+Workspaces pick it up at their next start. The template mounts the directory whatever is
+in it, and Docker creates a missing one empty, so a host without the file just has the
+push off.
+
+**Kubernetes.** `optional: true` keeps a pod starting without the Secret, and
+`defaultMode: 0440` with the contract's `fsGroup: 1000` lets `node` read it:
+
+```bash
+read -rsp 'agentsview URL: ' url && kubectl create secret generic dev-system-secrets \
+  --from-file=agentsview-pg-url=<(printf '%s\n' "$url"); unset url
+```
+
+**Consumer images** need nothing: they inherit the mount point and the metadata, and get
+the file at run time like the base image. Never pass the URL as a build argument or bake a
+file into one. A consumer Dockerfile that sets its own `devcontainer.metadata` label must
+copy the `dev-system-secrets` mount into it (see [Extending the image](#extending-the-image)).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DEV_MACHINE_NAME` | desktop: `desktop-<checkout folder>`; Coder: `coder-<workspace>`; otherwise the hostname | This machine's label in the viewer. Use `<runtime>-<name>` everywhere (`docker-my-repo`, `compose-my-repo`, `k8s-my-repo`), so the viewer reads the same way for every runtime. Set, it overwrites `local_machine_name` in `config.toml` on every start; the desktop default is only written when none is there. |
+| `AGENTSVIEW_PG_URL` | unset | The URL as an environment variable, which takes precedence over the file. For a one-off; the file keeps it out of `docker inspect`. |
+| `DEV_SECRETS_DIR` | `/run/secrets/dev-system` | Where the secret file is read from. |
+| `AGENTSVIEW_PG_SCHEMA` | `agentsview` | Schema name. |
 
 `dev-init` then starts the push in the background (log: `/tmp/dev-agentsview-push.log`,
 plus agentsview's own `/persist/agentsview/pg-watch.log`), and `dev-doctor` reports
@@ -884,8 +973,8 @@ for anything else, e.g. `[pg] allow_insecure = true` for a trusted LAN without T
 A machine in the viewer is an agentsview installation, identified by the installation ID
 in `/persist/agentsview`; that is why the directory persists. The agentsview volume
 follows the Claude and codex volumes, so each repo on the desktop (each `devcontainerId`)
-and each Kubernetes or Coder workspace is its own machine. Set `DEV_MACHINE_NAME` to tell
-them apart in the viewer - the repo or workspace name, say. Containers that do share a
+and each Kubernetes or Coder workspace is its own machine. `DEV_MACHINE_NAME` tells them
+apart in the viewer (defaults and naming above). Containers that do share a
 Claude volume (several containers of one compose project, for example) must share its
 agentsview volume too: they are then one machine, agentsview's lock in the data directory
 lets one container push at a time, and the push loop in the others takes over when that

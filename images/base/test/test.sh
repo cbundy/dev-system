@@ -5,7 +5,7 @@
 # Container tests for the dev-system base image (cbundy/dev-system#59, #64 for
 # the entrypoint and Remote Control, #65 for the /shared mount point, #73
 # for per-repo /persist volumes, #74 for first-run logins and #77 for the
-# workspace repo clone).
+# workspace repo clone), #103 for the agentsview URL as a secret file.
 #
 # Usage: images/base/test/test.sh <image>
 #
@@ -20,7 +20,8 @@
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
-# credentials: the logged-in path runs against a stub `claude`.
+# credentials: the logged-in path runs against a stub `claude`, and the
+# agentsview URLs point at that throwaway database or at nowhere.
 set -euo pipefail
 
 IMAGE="${1:?usage: test.sh <image>}"
@@ -61,6 +62,19 @@ in_image() {
   shift
   docker run --rm "$@" "$IMAGE" bash -c "$script"
 }
+
+# put_secret <volume> <value>: writes the agentsview URL into a secrets volume
+# the way images/base/README.md tells you to (value on stdin, never in an
+# argument), so the test also proves the documented command.
+put_secret() {
+  printf '%s\n' "$2" | docker run --rm -i --user root --entrypoint "" \
+    -v "$1:/run/secrets/dev-system" "$IMAGE" \
+    sh -c 'umask 077 && cat > "$DEV_SECRETS_DIR/agentsview-pg-url" && chown 1000:1000 "$DEV_SECRETS_DIR/agentsview-pg-url"'
+}
+
+# A recognisable password for every test URL, to prove it never shows up in
+# a log, a report, a process list or docker inspect.
+SECRET="dsb-secret-$$-pw"
 
 cleanup() {
   docker ps -aq --filter "label=$RUN_ID" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -109,6 +123,10 @@ check "no tool binary lives under /persist" in_image '
 check "persistence contract label lists the five dirs" bash -c "
   [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \
     /persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview ]"
+check "the runtime secrets mount point is empty, node-owned, 0700, and named by DEV_SECRETS_DIR" in_image '
+  [ "$DEV_SECRETS_DIR" = /run/secrets/dev-system ] &&
+  [ "$(stat -c %u:%g:%a "$DEV_SECRETS_DIR")" = 1000:1000:700 ] &&
+  [ -z "$(ls -A "$DEV_SECRETS_DIR")" ]' --entrypoint ""
 check "image declares no VOLUME" bash -c "
   [ \"\$(docker image inspect -f '{{json .Config.Volumes}}' '$IMAGE')\" = null ]"
 check "OCI labels carry source, revision, version, created and the mutability note" bash -c "
@@ -285,7 +303,7 @@ else
   # Fresh volume names per run so the test never touches a developer's real
   # dev-system-* login volumes; the metadata's default (only the shared gh
   # volume) is checked separately against the label below.
-  check "devcontainer metadata label declares only the shared gh volume, dev-init, Remote Control off and DEV_SHARED_DIR" bash -c "
+  check "devcontainer metadata label declares only the shared gh and read-only secrets volumes, dev-init, Remote Control off, DEV_SHARED_DIR and DEV_SECRETS_DIR" bash -c "
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
       | \$m.remoteUser == \"node\"
@@ -293,8 +311,11 @@ else
       and \$m.containerEnv.DEV_REMOTE_CONTROL == \"0\"
       and \$m.containerEnv.DEV_DESKTOP == \"1\"
       and \$m.containerEnv.DEV_SHARED_DIR == \"/shared\"
+      and \$m.containerEnv.DEV_SECRETS_DIR == \"/run/secrets/dev-system\"
+      and (\$m.containerEnv | has(\"AGENTSVIEW_PG_URL\") | not)
       and \$m.updateRemoteUserUID == false
-      and ([\$m.mounts[] | \"\(.source)=\(.target)\"]) == [\"dev-system-gh=/persist/gh\"]'"
+      and \$m.mounts == [{\"type\": \"volume\", \"source\": \"dev-system-gh\", \"target\": \"/persist/gh\"},
+        \"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]'"
 
   # The four per-repo mounts exactly as the synced base-image template ships
   # them (#78), with $RUN_ID in place of the dev-system prefix.
@@ -305,8 +326,13 @@ else
 
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
-  # shared gh volume is overridden (same target) with a per-run one, which
-  # also proves a consumer can override it.
+  # shared gh and secrets volumes are overridden (same target) with per-run
+  # ones, which also proves a consumer can override them and keeps the test
+  # away from a developer's real dev-system-secrets. The secrets volume holds
+  # a URL to a host that does not exist, so the push starts but reaches no
+  # database.
+  docker volume create --label "$RUN_ID" "$RUN_ID-secrets" >/dev/null
+  put_secret "$RUN_ID-secrets" "postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require"
   dc_up() {
     local ws="$WORKDIR/$1" up
     mkdir -p "$ws/.devcontainer"
@@ -316,7 +342,8 @@ else
   "image": "$IMAGE",
   "mounts": [
 $template_mounts,
-    { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" }${3:+,
+    { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" },
+    "type=volume,source=$RUN_ID-secrets,target=/run/secrets/dev-system,readonly"${3:+,
     $3}
   ],
   ${2:-}
@@ -376,6 +403,26 @@ EOF
         ! test -e /tmp/dev-remote-control.log'"
     check "DEV_SHARED_DIR is set and nothing is mounted at /shared by default" bash -c "
       docker exec '$cid' bash -c '[ \"\$DEV_SHARED_DIR\" = /shared ] && ! mountpoint -q /shared'"
+    check "the secrets volume is mounted read-only at DEV_SECRETS_DIR" bash -c "
+      docker inspect -f '{{json .Mounts}}' '$cid' | jq -e '
+        map(select(.Destination == \"/run/secrets/dev-system\" and .Name == \"$RUN_ID-secrets\" and .RW == false)) | length == 1' &&
+      docker exec '$cid' bash -c '! touch \"\$DEV_SECRETS_DIR/probe\" 2>/dev/null'"
+    check "with the secret file, post-start starts the push, labelled desktop-<folder>, the URL only in the push's environment" bash -c "
+      docker exec '$cid' bash -c '
+        cat /persist/agentsview/config.toml
+        grep -qx \"local_machine_name = \\\"desktop-default\\\"\" /persist/agentsview/config.toml &&
+        pgrep -x agentsview-push >/dev/null &&
+        [ -z \"\${AGENTSVIEW_PG_URL:-}\" ]'"
+    check "dev-doctor masks the URL in its report" bash -c "
+      out=\$(docker exec '$cid' dev-doctor --warn-only); echo \"\$out\"
+      echo \"\$out\" | grep -q 'FAIL agentsview cannot reach the central PostgreSQL (URL from /run/secrets/dev-system/agentsview-pg-url' &&
+      echo \"\$out\" | grep -q 'OK   agentsview session push is running' &&
+      ! echo \"\$out\" | grep -qF '$SECRET'"
+    check "the URL is in no log, process argument list or docker inspect" bash -c "
+      sleep 3
+      ! docker inspect '$cid' | grep -qF '$SECRET' &&
+      ! docker logs '$cid' 2>&1 | grep -qF '$SECRET' &&
+      ! docker exec '$cid' bash -c 'ps -eo args; cat /tmp/*.log /persist/agentsview/*.log 2>/dev/null' | grep -qF '$SECRET'"
     default_volumes=$(persist_volumes)
     dc_down
   else
@@ -717,18 +764,30 @@ check "real Claude: docker stop completes in under 10s with exit 0" stops_within
 echo "== 9. agentsview session push"
 check "agentsview telemetry and update check are off" in_image '
   [ "$AGENTSVIEW_TELEMETRY_ENABLED" = 0 ] && [ "$AGENTSVIEW_DISABLE_UPDATE_CHECK" = 1 ]'
-check "without AGENTSVIEW_PG_URL, dev-init starts no push and dev-doctor reports it off" in_image '
+check "with no URL (no secret file, no AGENTSVIEW_PG_URL), dev-init starts no push and dev-doctor warns how to turn it on" in_image '
   out=$(dev-init 2>&1; dev-doctor --warn-only); echo "$out"
   ! pgrep -x agentsview-push >/dev/null &&
   [ ! -e /persist/agentsview/config.toml ] &&
-  echo "$out" | grep -q "OK   agentsview is installed (session push off"'
+  echo "$out" | grep -q "WARN agentsview session push is off: no /run/secrets/dev-system/agentsview-pg-url and no AGENTSVIEW_PG_URL" &&
+  echo "$out" | grep -q "fix: put the PostgreSQL URL in /run/secrets/dev-system/agentsview-pg-url once per Docker host or cluster" &&
+  ! echo "$out" | grep -q "FAIL agentsview"'
+unreadable=$(docker volume create --label "$RUN_ID")
+put_secret "$unreadable" "postgres://av:$SECRET@nowhere.invalid/agentsview"
+docker run --rm --user root --entrypoint "" -v "$unreadable:/run/secrets/dev-system" "$IMAGE" \
+  chown 0:0 /run/secrets/dev-system/agentsview-pg-url
+check "an unreadable secret file: dev-init warns, starts no push, and dev-doctor fails with the fix" bash -c "
+  out=\$(docker run --rm --entrypoint '' -v '$unreadable:/run/secrets/dev-system:ro' '$IMAGE' bash -c 'dev-init; pgrep -x agentsview-push && echo PUSHING; dev-doctor --warn-only' 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -q 'dev-init: WARNING: /run/secrets/dev-system/agentsview-pg-url is empty or not readable by node' &&
+  echo \"\$out\" | grep -q 'FAIL agentsview session push is off: /run/secrets/dev-system/agentsview-pg-url is empty or not readable by node' &&
+  ! echo \"\$out\" | grep -q PUSHING"
 
 # A TLS PostgreSQL (agentsview refuses plaintext to a non-local host) on a
 # private network, plus one shared data volume and one shared Claude volume:
 # the shape of several containers on one Docker host.
 net=$(docker network create --label "$RUN_ID" "$RUN_ID-net")
 docker run -d --label "$RUN_ID" --name "$RUN_ID-pg" --network "$net" \
-  -e POSTGRES_USER=av -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=agentsview \
+  -e POSTGRES_USER=av -e POSTGRES_PASSWORD="$SECRET" -e POSTGRES_DB=agentsview \
   --entrypoint bash postgres:17 -c '
     openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=pg \
       -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
@@ -765,7 +824,7 @@ write_session "$avclaude" 11111111-1111-4111-8111-111111111111
 # start) with the push configured
 pusher() {
   docker run -d --label "$RUN_ID" --name "$RUN_ID-$1" --network "$net" \
-    -e "AGENTSVIEW_PG_URL=postgres://av:pw@$RUN_ID-pg:5432/agentsview?sslmode=require" \
+    -e "AGENTSVIEW_PG_URL=postgres://av:$SECRET@$RUN_ID-pg:5432/agentsview?sslmode=require" \
     -e DEV_MACHINE_NAME='test "host"' -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
     -v "$avdata:/persist/agentsview" -v "$avclaude:/persist/claude" \
     "$IMAGE" sleep infinity >/dev/null
@@ -796,10 +855,49 @@ check "the second container takes over when the first stops" wait_for_session 22
 check "both containers pushed as one machine" bash -c "
   [ \"\$(docker exec '$RUN_ID-pg' psql -U av -d agentsview -tAc 'select count(distinct machine) from agentsview.sessions')\" = 1 ]"
 check "dev-doctor fails with a hint when the database is unreachable" bash -c "
-  out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:pw@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
+  out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"
-  echo \"\$out\" | grep -q 'FAIL agentsview cannot reach the central PostgreSQL' &&
-  echo \"\$out\" | grep -q 'FAIL agentsview session push is not running'"
+  echo \"\$out\" | grep -q 'FAIL agentsview cannot reach the central PostgreSQL (URL from AGENTSVIEW_PG_URL' &&
+  echo \"\$out\" | grep -q 'FAIL agentsview session push is not running' &&
+  ! echo \"\$out\" | grep -qF '$SECRET'"
+check "mask_secrets hides URL and keyword passwords" in_image '
+  . /usr/local/share/dev-system/agentsview.sh
+  [ "$(echo "dial postgres://av:p4ss@h:5432/db?sslmode=require failed" | mask_secrets)" = "dial postgres://***@h:5432/db?sslmode=require failed" ] &&
+  [ "$(echo "host=h password=p4ss user=av" | mask_secrets)" = "host=h password=*** user=av" ]' --entrypoint ""
+
+# The secret file, as every runtime delivers it (#103): a volume (Docker) or
+# directory (Coder) mounted read-only at /run/secrets/dev-system, here a named
+# volume written with the README's command. A container that starts before
+# the secret is there is off; once it arrives, dev-init (or a restart) starts
+# the push, with the URL in no env, log, argument list or docker inspect.
+secrets=$(docker volume create --label "$RUN_ID")
+fdata=$(docker volume create --label "$RUN_ID")
+fclaude=$(docker volume create --label "$RUN_ID")
+write_session "$fclaude" 33333333-3333-4333-8333-333333333333
+docker run -d --label "$RUN_ID" --name "$RUN_ID-f" --network "$net" \
+  -e DEV_MACHINE_NAME=file-host -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
+  -v "$secrets:/run/secrets/dev-system:ro" -v "$fdata:/persist/agentsview" -v "$fclaude:/persist/claude" \
+  "$IMAGE" sleep infinity >/dev/null
+sleep 3
+check "before the secret arrives: no push, and dev-doctor warns that it is off" docker exec "$RUN_ID-f" bash -c '
+  out=$(dev-doctor --warn-only); echo "$out"
+  ! pgrep -x agentsview-push >/dev/null &&
+  echo "$out" | grep -q "WARN agentsview session push is off"'
+put_secret "$secrets" "postgres://av:$SECRET@$RUN_ID-pg:5432/agentsview?sslmode=require"
+docker exec "$RUN_ID-f" dev-init >/dev/null 2>&1
+check "once the secret file arrives, dev-init starts the push and a session reaches PostgreSQL" wait_for_session 33333333-3333-4333-8333-333333333333
+check "dev-doctor reports the database reachable (URL from the file) and the push running" docker exec "$RUN_ID-f" bash -c '
+  out=$(dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -q "OK   agentsview: central PostgreSQL is reachable (URL from /run/secrets/dev-system/agentsview-pg-url" &&
+  echo "$out" | grep -q "OK   agentsview session push is running"'
+check "the file's URL is not in the container's env, logs, process arguments, dev-doctor or docker inspect" bash -c "
+  ! docker inspect '$RUN_ID-f' | grep -qF '$SECRET' &&
+  ! docker logs '$RUN_ID-f' 2>&1 | grep -qF '$SECRET' &&
+  ! docker exec '$RUN_ID-f' bash -c 'env; ps -eo args; dev-doctor --warn-only; cat /tmp/*.log /persist/agentsview/*.log 2>/dev/null' | grep -qF '$SECRET'"
+check "AGENTSVIEW_PG_URL overrides the file" bash -c "
+  out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:x@no-such-host.invalid/agentsview' -v '$secrets:/run/secrets/dev-system:ro' '$IMAGE' dev-doctor 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -q 'cannot reach the central PostgreSQL (URL from AGENTSVIEW_PG_URL'"
 
 echo "== 10. shared files (/shared)"
 check "/shared exists, is owned 1000:1000 with mode 0755 and ships empty" in_image '

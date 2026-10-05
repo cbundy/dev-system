@@ -26,7 +26,7 @@ dev-system/
 |---|---|---|---|
 | Agent behavior | skills, generic agent rules | Claude Code plugin via private marketplace (this repo) | `/plugin marketplace update` or auto-update |
 | Environment (deprecated) | devcontainer tooling installs | Dev Container Feature on GHCR | move to the base image: `npx callum-dev update --devcontainer base-image` |
-| Environment | prebuilt agent image: Node, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, plus the `/persist` state contract and an opt-in push of session history to a central agentsview | base image `ghcr.io/cbundy/dev-system/base` on GHCR, extended by a per-repo Dockerfile | rebuild/re-pull; tags are mutable and refreshed weekly |
+| Environment | prebuilt agent image: Node, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, plus the `/persist` state contract and a push of session history to a central agentsview, on wherever the runtime supplies its URL as a secret file | base image `ghcr.io/cbundy/dev-system/base` on GHCR, extended by a per-repo Dockerfile | rebuild/re-pull; tags are mutable and refreshed weekly |
 | Repo config | `.no-mistakes.yaml`, `treehouse.toml`, `CLAUDE.md`, `.gitignore`, CI | templates + `callum-dev` CLI (npm git dependency) | `npm update` + `npx callum-dev update` |
 
 ## Plugin

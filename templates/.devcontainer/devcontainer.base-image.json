@@ -2,8 +2,10 @@
 // comments are allowed and ignored by devcontainer tooling.
 //
 // Built on the dev-system base image (images/base/README.md). The image's own metadata
-// supplies remoteUser, the /persist environment, dev-init at post-start and the gh volume
-// shared by every repo on the Docker host.
+// supplies remoteUser, the /persist environment, dev-init at post-start and the volumes
+// shared by every repo on the Docker host: gh, and dev-system-secrets (read-only), where
+// the agentsview URL is set once per host (images/base/README.md, "Central session
+// history"). Never put that URL in this file.
 {
   // --- repo-owned: edit freely ---
   "name": "<REPLACE: repo name>",
