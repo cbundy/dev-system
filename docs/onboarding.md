@@ -103,8 +103,9 @@ init never overwrites an existing file. For each file reported as `skipped`, typ
    later `update` can find and merge it.
 3. Wrap the repo's existing content in a `--- repo-owned ---` block, in the positions the
    template uses. In `.gitignore` the repo-owned block goes at the **bottom**.
-4. For `.claude/settings.json`, keep the template's keys exactly, and add the repo's own
-   entries to the end of `permissions.allow`.
+4. For `.claude/settings.json`, keep the template's keys exactly, add the repo's own
+   entries to the end of `permissions.allow`, and keep any keys of the repo's own that the
+   template does not have.
 
 ### 3c. Fill every placeholder
 

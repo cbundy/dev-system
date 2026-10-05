@@ -59,10 +59,20 @@ consumer repo.
 
 JSON has no comment syntax, so the split is documented here instead of inline:
 
-- **Synced, do not hand-edit**: everything in the file except `permissions.allow`
-  (`extraKnownMarketplaces`, `enabledPlugins`, and any future top-level key). A future
-  `callum-dev update` replaces these wholesale, the same as before this file carried
-  permissions.
+The split is by key path, compared against the pristine baseline in
+`.callum-dev/baseline/.claude/settings.json` (plain objects key by key; arrays and other
+values are compared whole):
+
+- **Synced, do not hand-edit**: every key the template defines, at any depth
+  (`extraKnownMarketplaces.callum.source`, `enabledPlugins.callum-flow@callum`, the
+  synced entries of `permissions.allow`, and anything a future template adds).
+  `callum-dev update` sets each one to the new template's value, so a hand edit to a
+  synced key is reset, and a key the template drops is dropped from your file too.
+- **Repo-owned**: any key the repo adds that the template does not have, at any depth -
+  a new top-level key, or one nested inside a synced object, such as
+  `"autoUpdate": false` under `extraKnownMarketplaces.callum` (dev-system#57).
+  `callum-dev update` keeps every key present in your file but absent from the old
+  baseline, even if the template later drops its parent object.
 - **Repo-owned**: entries you append to `permissions.allow` beyond the synced list
   above - e.g. this repo's own `Bash(scripts/evidence-upload.sh *)` or
   `Bash(scripts/worktree-bootstrap.sh *)` (see mealplanning#442 for the pattern).
@@ -70,6 +80,9 @@ JSON has no comment syntax, so the split is documented here instead of inline:
   you added beyond the old baseline, deduplicated. Add your own by editing this
   committed file directly - it is the only settings file a treehouse worktree
   sub-agent ever sees.
+- With no baseline (deleted, or never committed), every key the template does not
+  define counts as repo-owned and is kept, and every current `permissions.allow` entry
+  is unioned in.
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
   `gh pr merge`, `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted

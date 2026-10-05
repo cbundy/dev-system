@@ -34,9 +34,9 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // How `update` treats each file (templates/README.md documents the split per file):
 //   merge         3-way merge; repo-owned edits survive, synced changes come forward
 //   replace       wholesale overwrite; the file is fully synced, never hand-edited
-//   settings-json wholesale overwrite like `replace`, except `permissions.allow`,
-//                 which is unioned: the fresh synced list plus any entries the repo
-//                 added beyond the old baseline (see `mergeSettingsJson`)
+//   settings-json synced by key path: everything the template defines comes from
+//                 the template, key paths the repo added beyond the old baseline
+//                 survive, and `permissions.allow` is unioned (see `mergeSettingsJson`)
 //   init-only     copied at init as a starting point, then fully repo-owned - update
 //                 never touches it
 //
@@ -258,20 +258,33 @@ async function init(options) {
   );
 }
 
-// `.claude/settings.json` is synced wholesale except for one repo-owned surface:
-// `permissions.allow`. A worktree sub-agent only ever sees the committed
-// `.claude/settings.json` - never the gitignored, main-checkout-only
-// `.claude/settings.local.json` - so a repo-specific allow entry (e.g. a local
-// script the pipeline runs) has to live in the committed file to reach sub-agents,
-// alongside the generic allow list this system ships. This does a value-level 3-way
-// merge of that one array - the fresh synced list, unioned with whatever entries the
-// repo added beyond the old baseline - and replaces everything else in the file with
-// the new template, matching the plain "replace" strategy used before this array
-// needed repo-owned content. See templates/README.md for the split this preserves.
+// `.claude/settings.json` is synced, except for what the repo itself added. JSON has
+// no comments for the inline synced/repo-owned markers the other templates use, so
+// the split is by key path instead (templates/README.md documents it):
+//
+// - Every key path the template defines comes from the new template (synced wins),
+//   and a key the template dropped since the old baseline is dropped here too.
+// - Every key path the repo ADDED - present in the current file, absent from the old
+//   baseline - is carried over, e.g. a repo's `extraKnownMarketplaces.callum.autoUpdate`
+//   (dev-system#57). Plain objects are compared key by key; arrays and scalars are
+//   leaves. A repo-added key whose parent the template no longer has keeps its parent.
+// - `permissions.allow` is the one array merged by value: the fresh synced list,
+//   unioned with whatever entries the repo added beyond the old baseline. A worktree
+//   sub-agent only ever sees the committed `.claude/settings.json` - never the
+//   gitignored, main-checkout-only `.claude/settings.local.json` - so a repo-specific
+//   allow entry (e.g. a local script the pipeline runs) has to live in the committed
+//   file to reach sub-agents, alongside the generic allow list this system ships.
+//
+// A missing baseline counts as empty: everything the template does not define is
+// treated as repo-added and kept, and every current allow entry is unioned in.
 function mergeSettingsJson(currentContent, baselineContent, newContent) {
   const current = JSON.parse(currentContent);
   const baseline = baselineContent ? JSON.parse(baselineContent) : {};
   const next = JSON.parse(newContent);
+
+  // `next` is a fresh parse, so it is safe to build the result in place.
+  const merged = next;
+  carryRepoAddedKeys(merged, current, baseline, []);
 
   const baselineAllow = new Set((baseline.permissions && baseline.permissions.allow) || []);
   const currentAllow = (current.permissions && current.permissions.allow) || [];
@@ -280,15 +293,55 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   // Entries the repo added itself: present now but not in the old baseline.
   const repoOwned = currentAllow.filter((entry) => !baselineAllow.has(entry));
 
-  const merged = { ...next };
   const allow = [...nextAllow];
   for (const entry of repoOwned) {
     if (!allow.includes(entry)) allow.push(entry);
   }
   if (allow.length > 0) {
-    merged.permissions = { ...next.permissions, allow };
+    merged.permissions = { ...merged.permissions, allow };
   }
   return JSON.stringify(merged, null, 2) + "\n";
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Copies into `target` (the new template, or an object inside it) every key path in
+// `current` that `baseline` lacks, never overwriting anything the template defines.
+// `baseline` is undefined below a key the repo added, so everything under it counts
+// as repo-added. Mutates `target`; returns whether anything was carried.
+function carryRepoAddedKeys(target, current, baseline, keyPath) {
+  let carried = false;
+  for (const [key, value] of Object.entries(current)) {
+    const childPath = [...keyPath, key];
+    // Merged by value in mergeSettingsJson, not as a leaf here.
+    if (childPath.join(".") === "permissions.allow") continue;
+
+    const inBaseline = isPlainObject(baseline) && Object.hasOwn(baseline, key);
+    const baseValue = inBaseline ? baseline[key] : undefined;
+    // A leaf the baseline already had is template-owned: the new template's value,
+    // or its absence, stands.
+    if (inBaseline && !(isPlainObject(value) && isPlainObject(baseValue))) continue;
+
+    if (!Object.hasOwn(target, key)) {
+      if (!inBaseline) {
+        target[key] = value;
+        carried = true;
+      } else {
+        // The template dropped this object: keep it only for what the repo added inside.
+        const child = {};
+        if (carryRepoAddedKeys(child, value, baseValue, childPath)) {
+          target[key] = child;
+          carried = true;
+        }
+      }
+    } else if (isPlainObject(target[key]) && isPlainObject(value)) {
+      if (carryRepoAddedKeys(target[key], value, baseValue, childPath)) carried = true;
+    }
+    // Otherwise the template defines this key as a leaf: synced wins.
+  }
+  return carried;
 }
 
 function mergeFile(repoFile, baseFile, newFile, oldVersion) {
