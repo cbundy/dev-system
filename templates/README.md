@@ -86,9 +86,9 @@ Thin devcontainer example. devcontainer.json is JSONC (comments allowed) per the
 itself, so the split is marked inline like the other templates.
 
 - Repo-owned: `name`, `image` (swap for whatever base this repo needs, or a `build` block
-  for a custom Dockerfile), `mounts` (the example shows the no-mistakes bind-mount pattern
-  - note `${localEnv:USERPROFILE}` is Windows-host-specific, use `${localEnv:HOME}` on
-  Linux/macOS, or drop the mount if unneeded), and `remoteEnv`.
+  for a custom Dockerfile), `mounts` (empty by default; don't bind-mount a host `~/.no-mistakes` - its state is per
+  repo, and a Windows-side bind under WSL breaks it, cbundy/dev-system#19 and #73), and
+  `remoteEnv`.
 - Synced: `features` (git, github-cli, and `callum-tools` - the dev-system feature that
   installs no-mistakes, treehouse, etc.) and `remoteUser`. A nested repo-owned marker
   inside `features` shows where to add extra features without disturbing the synced ones.

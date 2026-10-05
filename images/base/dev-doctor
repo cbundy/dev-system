@@ -8,7 +8,9 @@
 #
 # Usage: dev-doctor [--warn-only]
 #   Exits 1 if any check fails. --warn-only (used by dev-init) prints the same
-#   report but always exits 0.
+#   report but always exits 0. A WARN line (with its own hint) does not fail:
+#   it flags something that works now but will be lost, such as tool state
+#   with no volume behind it.
 set -u
 
 WARN_ONLY=false
@@ -27,16 +29,29 @@ ok() {
   printf 'dev-doctor: OK   %s\n' "$1"
 }
 
+warn() {
+  printf 'dev-doctor: WARN %s\n' "$1"
+  printf 'dev-doctor:        fix: %s\n' "$2"
+}
+
 fail() {
   printf 'dev-doctor: FAIL %s\n' "$1"
   printf 'dev-doctor:        fix: %s\n' "$2"
   FAILURES=$((FAILURES + 1))
 }
 
+# A writable directory still loses its state with the container unless a
+# volume is mounted at it or above it (one volume for all of /persist): one
+# whose mount point is / lives in the container's own writable layer.
 check_persist_dir() {
   local name="$1" dir="$2"
   if [ -d "$dir" ] && [ -w "$dir" ]; then
-    ok "$name state dir $dir is writable"
+    if [ "$(stat -c %m "$dir" 2>/dev/null)" = / ]; then
+      warn "$name state dir $dir is writable but not on a volume - it is lost when the container is removed" \
+        "mount a volume at $dir (desktop: the per-repo mounts in images/base/README.md, \"Extending the image\")"
+    else
+      ok "$name state dir $dir is writable"
+    fi
   else
     fail "$name state dir $dir is missing or not writable by $(id -un) ($(id -u):$(id -g))" \
       "mount a volume at $dir owned by 1000:1000 (k8s: securityContext.fsGroup: 1000)"

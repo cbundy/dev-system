@@ -174,6 +174,12 @@ CMD ["dev-remote-control"]
 # devcontainer.metadata sets updateRemoteUserUID false: on a Linux host whose
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
 # the host UID, and node could no longer write the 1000-owned /persist volumes.
+#
+# Its only mount is the gh volume, shared by every repo on the host. The other
+# /persist volumes must be per repo (cbundy/dev-system#73), and the
+# devcontainer CLI expands no variables such as ${devcontainerId} in image
+# metadata - they come out empty, so every repo would share them - so the
+# consumer's devcontainer.json declares those (see README.md).
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
 ARG CREATED=unknown
@@ -185,4 +191,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
   dev.cbundy.shared="/shared" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-claude\",\"target\":\"/persist/claude\"},{\"type\":\"volume\",\"source\":\"dev-system-codex\",\"target\":\"/persist/codex\"},{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-no-mistakes\",\"target\":\"/persist/no-mistakes\"},{\"type\":\"volume\",\"source\":\"dev-system-agentsview\",\"target\":\"/persist/agentsview\"}]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_REMOTE_CONTROL\":\"0\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"}]}]"

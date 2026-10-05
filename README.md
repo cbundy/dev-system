@@ -100,8 +100,9 @@ step; if the repo is ever made private, set each package's visibility in its GHC
 for places that never run the devcontainer lifecycle (Kubernetes pods, Coder workspaces,
 plain `docker run`) as well as the desktop. Tools are baked in at build time, and tool
 state (Claude, codex, gh and no-mistakes logins and config) lives under `/persist`, so it
-survives rebuilds when a volume is mounted there. Consumer repos start their own
-Dockerfile `FROM ghcr.io/cbundy/dev-system/base:1`. The image reuses the `callum-tools`
+survives rebuilds when a volume is mounted there - one per repo, except gh's, which repos
+share. Consumer repos start their own
+Dockerfile `FROM ghcr.io/cbundy/dev-system/base:2`. The image reuses the `callum-tools`
 scripts rather than forking them, and the feature stays supported for repos that use
 features. See [`images/base/README.md`](images/base/README.md) for the persistence
 contract, `dev-init`/`dev-doctor`, the mutable tag policy and how to extend it.
