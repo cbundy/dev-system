@@ -54,7 +54,10 @@ dependency, the exact confirmed install commands, and how to bake it into
 
 Run these from the repo root. Do not re-derive per-directory commands or run
 test suites file-by-file - use a single entrypoint per gate so nothing is ever skipped,
-and adding a new test file should require no extra wiring.
+and adding a new test file should require no extra wiring. Each command is quiet on
+success and on failure prints only the failing tests or `file:line` errors: run it once
+and act on that output. Do not re-run a gate to grep or filter its output, or after it
+has passed.
 
 - `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script
   under `images/base/`, `features/src/callum-tools/`, `features/test/`,

@@ -55,12 +55,20 @@ dependency, the exact confirmed install commands, and how to bake it into
 
 Run these from the repo root. Do not re-derive per-directory commands or run
 test suites file-by-file - use a single entrypoint per gate so nothing is ever skipped,
-and adding a new test file should require no extra wiring.
+and adding a new test file should require no extra wiring. Each command is quiet on
+success and on failure prints only the failing tests or `file:line` errors: run it once
+and act on that output. Do not re-run a gate to grep or filter its output, or after it
+has passed.
 
-<REPLACE: list this repo's canonical commands here, e.g. lint / typecheck / test / test:all /
-a combined check command. State which command CI calls for each gate, so the local command
-and the CI gate can never drift apart. If you add a new category of tests, extend the single
-entrypoint here rather than adding a bespoke CI step.>
+<REPLACE: list this repo's canonical commands, one per gate, e.g. lint / typecheck / test /
+e2e / a combined check command. Use exactly the commands in `.no-mistakes.yaml` `commands`,
+minus its install step. Each must be non-interactive, exit non-zero on failure, print at
+most a one-line summary on success, and print only failing test names or file:line plus
+the error on failure, with no per-test pass lines, progress bars or coverage tables (the
+dev-system onboarding doc, "Settle the commands first"). State which command CI calls for
+each gate and when to run e2e locally, so the local command and the CI gate can never drift
+apart. If you add a new category of tests, extend the single entrypoint here rather than
+adding a bespoke CI step.>
 
 ## Implementation sub-agents
 
