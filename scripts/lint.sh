@@ -14,7 +14,7 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
-SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks"
+SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks coder"
 JS_DIRS="bin plugins scripts"
 
 failures=0

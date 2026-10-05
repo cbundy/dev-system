@@ -222,3 +222,96 @@ Keep it generic: no site-specific hosts or addresses in `main.tf`, only in push 
 Provider versions are pinned, with `.terraform.lock.hcl` beside the template; after a
 version bump, run `terraform init -upgrade` here and commit the lock file. Check with
 `terraform fmt -check` and `terraform validate` before pushing.
+
+To try a change from inside a workspace before it reaches `dev-system`, push it as
+`dev-system-next` with `coder/dev-system/push-next.sh smoke`; see
+[Testing template changes from a workspace](#testing-template-changes-from-a-workspace).
+
+## Testing template changes from a workspace
+
+`push-next.sh` beside this README pushes the checked-out template as a second template,
+`dev-system-next`, and can smoke-test it, so a change is tried without touching the
+`dev-system` template every other workspace uses. Run it from a workspace (or any machine
+with the token file):
+
+```bash
+coder/dev-system/push-next.sh          # push as dev-system-next
+coder/dev-system/push-next.sh smoke    # push, create next-smoke-<random> with default
+                                       # parameters, wait (max 10 min) until its agent is
+                                       # ready, print its status and startup log, delete it
+coder/dev-system/push-next.sh cleanup  # delete next-smoke-* workspaces left behind
+```
+
+The template name is fixed in the script and cannot be passed in. It only creates or
+deletes workspaces named `next-smoke-*` from `dev-system-next`, and deletes the smoke
+workspace on failure or Ctrl-C too. Promoting a change to `dev-system` stays the owner's
+step, with the push commands at the top of this README.
+
+It reads two files from the secrets mount (`/run/secrets/dev-system`, or `DEV_SECRETS_DIR`):
+
+- `coder-session-token`: a session token for a Template Admin user. Passed to the CLI in
+  its environment only, never printed or put on a command line.
+- `coder-template-vars`: the push variables, one `name=value` per line (`#` comments and
+  blank lines are skipped), each passed as `--variable`, so no site-specific value lives
+  in the repo. Without it the template's defaults apply.
+
+The deployment URL is `CODER_URL`, else the agent's `CODER_AGENT_URL`. The CLI is the
+workspace agent's own binary, which the agent downloads from the server, so its version
+always matches the server's (a mismatched CLI silently ignored `--parameter` in
+cbundy/dev-system#108). Set `CODER_BIN` to use another.
+
+### What the token can do
+
+On Coder OSS a token cannot be limited to one template. Template Admin is a site-wide role,
+and per-template permissions (groups and template ACLs) need a Premium license, so **this
+token can push, change or delete any template, including `dev-system`**, and can create
+workspaces. Only the script, and the rule in the repo's `CLAUDE.md`, keep it to
+`dev-system-next`. Anyone with a shell in a workspace whose Docker host has the file,
+including an agent running with bypass permissions, can read it. Use a dedicated user, so
+the token is not an owner's and is easy to revoke, and keep its lifetime short. Token
+scopes and allow lists (`coder tokens create --scope ... --allow template:<id>`) might
+narrow it further, but which scopes a push and a smoke run need is untested.
+
+### One-time setup
+
+1. As a Coder Owner (on the PC or the Coder server), create the user, give it the Template
+   Admin role, and mint a token for it. The user has no password (`none` is deprecated in
+   favour of Premium service accounts but still works on OSS):
+
+   ```bash
+   coder users create --username template-tester --email template-tester@localhost \
+     --login-type none
+   coder users edit-roles template-tester --roles template-admin --yes
+   coder tokens create --user template-tester --name dev-system-next --lifetime 2160h
+   ```
+
+   The last command prints the token once.
+2. As root on the workspace Docker host, write the token and the push variables into
+   `secrets_dir` (the same values you pass when pushing `dev-system`):
+
+   ```bash
+   install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/secrets
+   (umask 077 && read -rsp 'Coder token: ' t && printf '%s\n' "$t" > /etc/dev-system/secrets/coder-session-token)
+   (umask 077 && printf '%s\n' 'docker_host=ssh://coder@<docker-host>' > /etc/dev-system/secrets/coder-template-vars)
+   chown 1000:1000 /etc/dev-system/secrets/coder-session-token /etc/dev-system/secrets/coder-template-vars
+   ```
+
+   Add a line for each other variable (`otlp_endpoint=...`, `registry_auth_config=...`).
+   The mount is live, so running workspaces see the files at once.
+
+Smoke workspaces belong to `template-tester`, so they do not show in your own workspace
+list; `coder list --all` shows them.
+
+### Rotation and revocation
+
+The token above expires after 90 days. Mint a new one with the same `tokens create`
+command (a new `--name`, e.g. `dev-system-next-2`), replace the file, then expire the old
+one:
+
+```bash
+coder tokens list --all                 # find the old token's id
+coder tokens remove <id>                # expire it
+```
+
+To revoke access entirely, delete the file from `secrets_dir` and run
+`coder users suspend template-tester`.

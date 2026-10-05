@@ -89,6 +89,9 @@ architecture). Rules specific to working here:
 - The `onboard` skill's `SKILL.md` is generated from `docs/onboarding.md` (plus
   `SKILL.src.md` beside it) by `scripts/build-skills.js`. Edit those, then run
   `npm run build:skills`; `npm run lint` fails while the generated file is stale.
+- Test Coder template changes only with `coder/dev-system/push-next.sh` (pushes
+  `dev-system-next`). Never run `coder templates push` for `dev-system` yourself, even
+  though the token could: promoting to the production template is the owner's step.
 
 This repo is also a consumer of its own templates (`.callum-dev.json`,
 `.callum-dev/baseline/`). Run the checkout's own CLI, `node bin/callum-dev.js`, never an
