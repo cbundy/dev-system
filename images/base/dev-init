@@ -5,16 +5,17 @@
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
 # re-points git at gh's credentials, clones the workspace repo (DEV_REPO_URL)
-# on first start, recovers no-mistakes runtime state and starts the agentsview
-# session push when one is configured, starts the login page when
-# DEV_LOGIN_PORT asks for it and checks the optional /shared mount.
+# on first start, installs the Claude plugins that repo enables, recovers
+# no-mistakes runtime state and starts the agentsview session push when one
+# is configured, starts the login page when DEV_LOGIN_PORT asks for it and
+# checks the optional /shared mount.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
 #
 # Usage: dev-init [--repo]
-#   --repo runs only the repo steps (5-7): git credentials, the clone or
-#   fetch, and the no-mistakes recovery. dev-login runs it once gh's login
-#   is done, for a clone that was waiting for one.
+#   --repo runs only the repo steps (5-8): git credentials, the clone or
+#   fetch, the repo's Claude plugins and the no-mistakes recovery. dev-login
+#   runs it once gh's login is done, for a clone that was waiting for one.
 #
 # Idempotent and best-effort: every problem is logged, and the exit status is
 # always 0, so a container never fails to start because of this script. Run
@@ -184,7 +185,7 @@ sync_repo() {
   local ssh_cmd="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
   if [ -e "$ws/.git" ]; then
-    # No remote (or a repo git refuses to read, which step 7 reports): nothing to fetch.
+    # No remote (or a repo git refuses to read, which step 8 reports): nothing to fetch.
     [ -n "$(git -C "$ws" remote 2>/dev/null)" ] || return 0
     out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 git -C "$ws" fetch --prune --quiet 2>&1) \
       || log "WARNING: git fetch in $ws failed ($(git_reason "$out")) - carrying on with the refs already there"
@@ -226,7 +227,123 @@ sync_repo() {
   fi
 }
 
-# 7. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
+# Why a `claude plugin` command failed, from its output: the text after its
+# first ✘ (the CLI's own error line), else the last line; at most 300 chars.
+plugin_reason() {
+  local line
+  line=$(printf '%s\n' "$1" | grep -m 1 '✘' | sed 's/^.*✘[[:space:]]*//')
+  [ -n "$line" ] || line=$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 1)
+  printf '%s' "${line:0:300}"
+}
+
+# claude_plugin <args...>: claude_plugin_cli (workspace.sh, 60s limit) with
+# its output in $PLUGIN_OUT and the cause of a failure in $PLUGIN_REASON.
+claude_plugin() {
+  local rc
+  PLUGIN_OUT=$(claude_plugin_cli "$@" 2>&1)
+  rc=$?
+  case "$rc" in
+    0) PLUGIN_REASON="" ;;
+    124 | 137) PLUGIN_REASON="it did not finish within ${CLAUDE_PLUGIN_LIMIT:-60}s" ;;
+    *) PLUGIN_REASON=$(plugin_reason "$PLUGIN_OUT") ;;
+  esac
+  return "$rc"
+}
+
+# install_plugin <id> <marketplace> <added>: claude plugin install, retried
+# once after a marketplace update unless the marketplace was only just added
+# (<added> true): Claude's copy of an older one may predate the plugin. On a
+# failure, $PLUGIN_REASON is the install's.
+install_plugin() {
+  local reason
+  claude_plugin install "$1" && return 0
+  [ "$3" = false ] || return 1
+  reason="$PLUGIN_REASON"
+  if ! claude_plugin marketplace update "$2"; then
+    PLUGIN_REASON="$reason"
+    return 1
+  fi
+  claude_plugin install "$1"
+}
+
+# 7. The workspace repo's Claude plugins (cbundy/dev-system#112). A repo's
+#    committed .claude/settings.json can enable plugins (enabledPlugins) from
+#    marketplaces it declares (extraKnownMarketplaces), but Claude installs
+#    them only from its interactive folder-trust prompt, which a headless
+#    session, or any session on a fresh CLAUDE_CONFIG_DIR volume, may never
+#    show. So each plugin enabled there that Claude has not installed is
+#    installed here (user scope, in CLAUDE_CONFIG_DIR), after adding its
+#    marketplace from the declared source (github or git) when Claude does not
+#    know it yet. An install that fails on a marketplace Claude already knew
+#    is retried once after updating it (the plugin may be newer than the
+#    marketplace's copy). After step 6, so a fresh clone counts. Nothing is
+#    hardcoded: the repo's settings are the only input. Each CLI call is
+#    limited to 60s; failures are logged and the start carries on.
+install_repo_plugins() {
+  local settings plugins installed known id plugin mkt kind src ref added
+  command -v claude >/dev/null 2>&1 || return 0
+  settings=$(repo_settings) || return 0
+  if ! plugins=$(enabled_plugins "$settings"); then
+    log "WARNING: $settings is not valid JSON - the Claude plugins it enables are not installed."
+    log "  Fix: correct it, then run: dev-init --repo"
+    return 0
+  fi
+  [ -n "$plugins" ] || return 0
+  # Unknown (the listing failed) means try them all: an install of a plugin
+  # that is already there is a no-op.
+  installed=$(installed_plugins) || installed=""
+  known=""
+  if claude_plugin marketplace list --json; then
+    known=$(printf '%s\n' "$PLUGIN_OUT" | jq -r '.[].name' 2>/dev/null)
+  fi
+
+  while IFS= read -r id; do
+    grep -qxF -- "$id" <<<"$installed" && continue
+    plugin="${id%@*}"
+    mkt="${id##*@}"
+    added=false
+    if ! grep -qxF -- "$mkt" <<<"$known"; then
+      kind=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.source? // empty' "$settings" 2>/dev/null)
+      ref=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.ref? // empty' "$settings" 2>/dev/null)
+      case "$kind" in
+        github) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.repo // empty' "$settings") ;;
+        git) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.url // empty' "$settings") ;;
+        "")
+          log "WARNING: Claude plugin $id is enabled in $settings, but marketplace $mkt is neither known to Claude nor declared there - not installed."
+          log "  Fix: declare it under extraKnownMarketplaces in $settings (or run: claude plugin marketplace add <source>), then run: dev-init --repo"
+          continue
+          ;;
+        *)
+          log "WARNING: marketplace $mkt in $settings has source type \"$kind\", which dev-init cannot add (only github and git) - Claude plugin $id not installed."
+          log "  Fix: run: claude plugin marketplace add <its source> && claude plugin install $id"
+          continue
+          ;;
+      esac
+      if [ -z "$src" ]; then
+        log "WARNING: marketplace $mkt in $settings has a $kind source with no $([ "$kind" = github ] && echo repo || echo url) - Claude plugin $id not installed."
+        log "  Fix: correct extraKnownMarketplaces.$mkt in $settings, then run: dev-init --repo"
+        continue
+      fi
+      src="$src${ref:+#$ref}"
+      if ! claude_plugin marketplace add "$src"; then
+        log "WARNING: could not add Claude plugin marketplace $mkt from $src: $PLUGIN_REASON - Claude plugin $id not installed."
+        log "  Fix: check that git here can read $src, then run: dev-init --repo"
+        continue
+      fi
+      known="$known"$'\n'"$mkt"
+      added=true
+    fi
+    if ! install_plugin "$id" "$mkt" "$added"; then
+      log "WARNING: could not install Claude plugin $id: $PLUGIN_REASON"
+      log "  Fix: check that marketplace $mkt has a plugin named $plugin, then run: dev-init --repo (or: claude plugin install $id)"
+      continue
+    fi
+    log "installed Claude plugin $id"
+  done <<<"$plugins"
+  return 0
+}
+
+# 8. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
 #    the daemon is a process and is gone after every restart, so it is started
 #    whenever the workspace opts in. Then the callum-tools recovery re-registers
 #    a repo the daemon has lost (e.g. a fresh volume).
@@ -305,7 +422,7 @@ set_toml_top_key() {
   return "$rc"
 }
 
-# 8. agentsview session push. With a PostgreSQL URL configured (the
+# 9. agentsview session push. With a PostgreSQL URL configured (the
 #    agentsview-pg-url secret file, or AGENTSVIEW_PG_URL: agentsview.sh), keep
 #    `agentsview pg push --watch` running so this machine's Claude and codex
 #    sessions reach the central PostgreSQL that `agentsview pg serve` reads.
@@ -358,7 +475,7 @@ start_agentsview_push() {
   log "started agentsview session push (log: $AGENTSVIEW_PUSH_LOG, $data/pg-watch.log)"
 }
 
-# 9. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
+# 10. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
 #    is left alone. A mount node cannot write gets a warning naming the fix.
 check_shared_dir() {
   local dir="${DEV_SHARED_DIR:-/shared}"
@@ -368,7 +485,7 @@ check_shared_dir() {
   log "  Fix: squash all NFS clients to a NAS user that can write the export (Linux exports: all_squash,anonuid=1000,anongid=1000; TrueNAS: Mapall User/Group), or own it by UID 1000 (a Docker volume: chown 1000:1000)."
 }
 
-# 10. The login page (dev-login serve), only when DEV_LOGIN_PORT is set: no
+# 11. The login page (dev-login serve), only when DEV_LOGIN_PORT is set: no
 #    port is opened by default. It runs in the background, one per container,
 #    and exits by itself once every login is done (unless
 #    DEV_LOGIN_PAGE_EXIT=0).
@@ -384,6 +501,7 @@ start_login_page() {
 if [ "${1:-}" = --repo ]; then
   setup_git_credentials
   sync_repo
+  install_repo_plugins
   recover_no_mistakes
   exit 0
 fi
@@ -394,11 +512,12 @@ seed_codex_config
 seed_no_mistakes_model
 setup_git_credentials
 sync_repo
+install_repo_plugins
 recover_no_mistakes
 start_agentsview_push
 check_shared_dir
 start_login_page
 
-# 11. Report anything still broken, without failing the start.
+# 12. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true
 exit 0

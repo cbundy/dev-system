@@ -16,7 +16,9 @@
 # the first-run logins in #74 (against stub CLIs), including the page behind
 # an nginx path prefix (#79, a throwaway nginx container), section 12 the
 # workspace repo clone in #77 (local bare repos over file:// and a git smart
-# HTTP server in the container, so no network is needed). Test 7 needs
+# HTTP server in the container, so no network is needed), section 13 the
+# workspace repo's Claude plugins in #112 (against a stub `claude plugin`).
+# Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
@@ -1333,6 +1335,117 @@ check "after the clone, Claude's next start is in the repo" bash -c "
   docker exec '$c' cat /tmp/claude-starts
   [ \"\$(docker exec '$c' sed -n 2p /tmp/claude-starts)\" = '/workspaces/my-repo --remote-control my-repo' ]"
 docker rm -f "$c" >/dev/null
+
+echo "== 13. the workspace repo's Claude plugins"
+
+# A stub claude for `claude plugin`: it records each call (its directory and
+# arguments) in /tmp/plugin-calls and keeps its state as files in
+# /tmp/plugin-state - mkt-<name> for a known marketplace, inst-<id> for an
+# installed plugin. `marketplace add <source>` names the marketplace after the
+# source's last path part (without #ref and .git) and fails for a source
+# containing "fail"; `install` fails like the real CLI (a ✘ line) while
+# /tmp/plugin-fail exists, or once for /tmp/plugin-fail-once, or when its
+# marketplace is unknown. `auth status` is logged in.
+STUB_PLUGIN='#!/bin/bash
+[ "$1" = auth ] && { echo "{\"loggedIn\":true}"; exit 0; }
+[ "$1" = plugin ] || exit 0
+shift
+echo "$PWD $*" >> /tmp/plugin-calls
+s=/tmp/plugin-state
+mkdir -p "$s"
+ids() { for f in "$s/$1"-*; do [ -e "$f" ] && echo "${f#"$s/$1"-}"; done; }
+case "$1 ${2:-}" in
+  "list --json") ids inst | jq -R . | jq -s "map({id: .})" ;;
+  "marketplace list") ids mkt | jq -R . | jq -s "map({name: .})" ;;
+  "marketplace add")
+    case "$3" in *fail*) echo "Adding marketplace…✘ Failed to add marketplace: no such repo"; exit 1 ;; esac
+    n="${3%%#*}"; n="${n%.git}"; n="${n##*/}"
+    touch "$s/mkt-$n"; echo "✔ Successfully added marketplace: $n" ;;
+  "marketplace update") touch "$s/updated-$3" ;;
+  install\ *)
+    if [ -e /tmp/plugin-fail ] || { [ -e /tmp/plugin-fail-once ] && rm /tmp/plugin-fail-once; }; then
+      echo "Installing plugin \"$2\"...✘ Failed to install plugin \"$2\": boom"; exit 1
+    fi
+    [ -e "$s/mkt-${2##*@}" ] || { echo "✘ Failed to install plugin \"$2\": not found in marketplace \"${2##*@}\""; exit 1; }
+    touch "$s/inst-$2"; echo "✔ Successfully installed plugin: $2 (scope: user)" ;;
+esac'
+# The workspace: a repo at /tmp/ws whose .claude/settings.json is $SETTINGS
+# (none when it is empty), with the stub first on PATH.
+WITH_PLUGIN_WS='mkdir -p /tmp/stub && printf "%s\n" "$STUB_PLUGIN" > /tmp/stub/claude && chmod +x /tmp/stub/claude &&
+  export PATH=/tmp/stub:$PATH && git init -q /tmp/ws &&
+  if [ -n "${SETTINGS:-}" ]; then mkdir /tmp/ws/.claude && printf "%s\n" "$SETTINGS" > /tmp/ws/.claude/settings.json; fi'
+# Enables one@gh (a github marketplace with a ref), two@gitm (a git one) and
+# three@odd (a directory one, which dev-init cannot add); off@gh is false.
+PLUGIN_SETTINGS='{
+  "extraKnownMarketplaces": {
+    "gh": { "source": { "source": "github", "repo": "me/gh", "ref": "v1" } },
+    "gitm": { "source": { "source": "git", "url": "https://example.com/gitm.git" } },
+    "odd": { "source": { "source": "directory", "path": "./odd" } }
+  },
+  "enabledPlugins": { "one@gh": true, "two@gitm": true, "off@gh": false, "three@odd": true }
+}'
+# plugin_check <description> <script> [docker run args...]: the script runs in
+# a throwaway container with the workspace and stub above and $SETTINGS
+# (default PLUGIN_SETTINGS).
+plugin_check() {
+  local desc="$1" script="$2"
+  shift 2
+  check "$desc" in_image "$WITH_PLUGIN_WS && $script" -e STUB_PLUGIN="$STUB_PLUGIN" -e SETTINGS="$PLUGIN_SETTINGS" \
+    -e DEV_WORKSPACE=/tmp/ws --entrypoint "" "$@"
+}
+
+plugin_check "dev-init adds each enabled plugin's marketplace from its github or git source and installs it, outside the checkout" '
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -i plugin; cat /tmp/plugin-calls
+  [ $rc = 0 ] &&
+  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add me/gh#v1" "/ install one@gh" \
+    "/ marketplace add https://example.com/gitm.git" "/ install two@gitm")" ] &&
+  ! grep -qv "^/ " /tmp/plugin-calls &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin one@gh" &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin two@gitm" &&
+  echo "$out" | grep -qF "dev-init: WARNING: marketplace odd in /tmp/ws/.claude/settings.json has source type \"directory\", which dev-init cannot add" &&
+  echo "$out" | grep -qF "dev-doctor: WARN Claude plugins enabled in /tmp/ws/.claude/settings.json are not installed: three@odd"'
+plugin_check "dev-init installs nothing that is installed already, and dev-doctor finds them all" '
+  mkdir -p /tmp/plugin-state && touch /tmp/plugin-state/mkt-gh /tmp/plugin-state/inst-one@gh
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
+  [ $rc = 0 ] && ! grep -qE " (install|marketplace add)" /tmp/plugin-calls &&
+  ! echo "$out" | grep -q "installed Claude plugin" &&
+  echo "$out" | grep -qxF "dev-doctor: OK   Claude plugins enabled in /tmp/ws/.claude/settings.json are installed"' \
+  -e SETTINGS='{"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"me/gh"}}},"enabledPlugins":{"one@gh":true}}'
+plugin_check "a plugin set to false runs no plugin command" '
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls 2>/dev/null
+  [ $rc = 0 ] && ! test -e /tmp/plugin-calls && ! echo "$out" | grep -qi "plugin"' \
+  -e SETTINGS='{"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"me/gh"}}},"enabledPlugins":{"one@gh":false}}'
+plugin_check "no .claude/settings.json runs no plugin command" '
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls 2>/dev/null
+  [ $rc = 0 ] && ! test -e /tmp/plugin-calls && ! echo "$out" | grep -qi "plugin"' \
+  -e SETTINGS=
+plugin_check "an invalid settings file: a WARNING from dev-init and dev-doctor, and no plugin command" '
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 "not valid JSON"
+  [ $rc = 0 ] && ! test -e /tmp/plugin-calls &&
+  echo "$out" | grep -qxF "dev-init: WARNING: /tmp/ws/.claude/settings.json is not valid JSON - the Claude plugins it enables are not installed." &&
+  echo "$out" | grep -qF "dev-doctor: WARN /tmp/ws/.claude/settings.json is not valid JSON"' \
+  -e SETTINGS='{"enabledPlugins":'
+plugin_check "a failing install or marketplace add: dev-init exits 0 with a WARNING naming the cause, and a Fix line" '
+  touch /tmp/plugin-fail
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 "WARNING: could not"; cat /tmp/plugin-calls
+  [ $rc = 0 ] &&
+  echo "$out" | grep -qxF "dev-init: WARNING: could not install Claude plugin one@gh: Failed to install plugin \"one@gh\": boom" &&
+  echo "$out" | grep -A1 "could not install Claude plugin one@gh" | grep -qF "dev-init:   Fix: " &&
+  echo "$out" | grep -qxF "dev-init: WARNING: could not add Claude plugin marketplace fail from me/fail: Failed to add marketplace: no such repo - Claude plugin x@fail not installed." &&
+  ! grep -q "marketplace update" /tmp/plugin-calls && ! grep -q "install x@fail" /tmp/plugin-calls &&
+  ! echo "$out" | grep -q "installed Claude plugin"' \
+  -e SETTINGS='{"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"me/gh"}},"fail":{"source":{"source":"github","repo":"me/fail"}}},"enabledPlugins":{"one@gh":true,"x@fail":true}}'
+plugin_check "an install that fails on a marketplace Claude already knew is retried once after updating it" '
+  mkdir -p /tmp/plugin-state && touch /tmp/plugin-state/mkt-gh /tmp/plugin-fail-once
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
+  [ $rc = 0 ] &&
+  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ install one@gh" "/ marketplace update gh" "/ install one@gh")" ] &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin one@gh"' \
+  -e SETTINGS='{"extraKnownMarketplaces":{"gh":{"source":{"source":"github","repo":"me/gh"}}},"enabledPlugins":{"one@gh":true}}'
+plugin_check "dev-init --repo installs them too (a clone that arrives after the start)" '
+  out=$(dev-init --repo 2>&1); rc=$?; echo "$out"
+  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin one@gh" &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin two@gitm"'
 
 echo
 echo "$PASSES passed, $FAILURES failed"
