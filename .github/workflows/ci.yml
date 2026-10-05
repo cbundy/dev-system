@@ -1,0 +1,79 @@
+name: CI
+
+# The always-on gate (cbundy/dev-system#137): `npm run lint` and `npm test` on
+# every pull request and every push to main. No `paths` filter: branch
+# protection requires this check, and a required check that does not run on a
+# PR would block it forever.
+#
+# The job id and name `ci` is the status check name branch protection requires.
+# Keep it stable; renaming it silently drops the requirement until the branch
+# protection setting is updated to match.
+#
+# What it covers:
+# - `npm run lint` (scripts/lint.sh): shellcheck over the repo's shell scripts,
+#   node --check, the generated-skill drift check against docs/, and terraform
+#   fmt -check, init and validate on coder/dev-system. LINT_REQUIRE_TERRAFORM=1
+#   makes a missing terraform fail instead of skipping.
+# - `npm test`: runs the callum-dev bin end-to-end (init, update
+#   merges/conflicts, check) in scratch dirs, so template shape changes that
+#   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
+#   (dev-system#52) and the callum-tools script tests.
+# The heavy, path-filtered image and feature workflows stay separate and
+# optional.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel a PR's superseded runs; every push to main runs to completion.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # terraform is the version the dev image pins (.devcontainer/Dockerfile),
+      # read from there so the two never drift.
+      - name: Read the dev image's terraform version
+        id: tf
+        run: |
+          version=$(sed -n 's/^ARG TERRAFORM_VERSION=//p' .devcontainer/Dockerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::No ARG TERRAFORM_VERSION=X.Y.Z in .devcontainer/Dockerfile (got '$version')."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ steps.tf.outputs.version }}
+          terraform_wrapper: false
+
+      # ubuntu-latest ships shellcheck; printing its version fails the step if
+      # it is missing, so lint can never silently drop to syntax-only checks.
+      - name: Check shellcheck
+        run: shellcheck --version
+
+      - name: Lint
+        env:
+          LINT_REQUIRE_TERRAFORM: "1"
+        run: npm run lint
+
+      - name: Test
+        run: npm test

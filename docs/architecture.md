@@ -37,11 +37,12 @@ coder/dev-system/                 Coder template (Terraform) on the base image
 templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
-tests/                            CLI and hook tests (test-cli.yml)
+tests/                            CLI and hook tests (ci.yml)
 scripts/lint.sh                   lint entrypoint (npm run lint)
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
-.github/workflows/                release.yml, publish-base-image.yml, publish-dev-image.yml,
-                                  publish-features.yml, tests
+.github/workflows/                ci.yml (lint and test on every PR and push to main; the
+                                  required check), release.yml, publish-base-image.yml,
+                                  publish-dev-image.yml, publish-features.yml, test-features.yml
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs
 ```
