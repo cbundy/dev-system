@@ -1,0 +1,10 @@
+# shellcheck config for every shell script in this repo (scripts/lint.sh runs it).
+# It lives at the root because shellcheck looks for it from each script's directory
+# upwards, so one file covers images/, features/, plugins/, scripts/ and coder/.
+#
+# Follow sourced files, resolving them beside the script that sources them: the
+# image's scripts source workspace.sh and friends from where the image installs
+# them (/usr/local/share/dev-system), and a `# shellcheck source=<file>` directive
+# points shellcheck at the copy in the repo.
+external-sources=true
+source-path=SCRIPTDIR

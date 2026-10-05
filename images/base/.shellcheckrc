@@ -1,4 +1,0 @@
-# The scripts here source workspace.sh from where the image installs it
-# (/usr/local/share/dev-system); shellcheck checks the copy beside them.
-external-sources=true
-source-path=SCRIPTDIR

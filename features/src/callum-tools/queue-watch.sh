@@ -28,7 +28,7 @@ while [ "$#" -gt 0 ]; do
     *) usage ;;
   esac
 done
-[ -n "$repo" ] && [ -n "$label" ] || usage
+if [ -z "$repo" ] || [ -z "$label" ]; then usage; fi
 
 while :; do
   if current=$(gh issue list --repo "$repo" --label "$label" --state open \

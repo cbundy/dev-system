@@ -5,6 +5,9 @@ name: Test CLI
 # so template shape changes that break the CLI's assumptions fail here too.
 # `npm test` (node --test tests/) also picks up plugins/callum-flow's hook
 # tests (dev-system#52), so a plugin change needs this gate too.
+# It also runs `npm run lint` (shellcheck over the repo's shell scripts, node
+# --check, the generated-skill drift check against docs/), so the paths cover
+# every directory lint reads.
 on:
   pull_request:
     paths:
@@ -12,6 +15,12 @@ on:
       - "tests/**"
       - "templates/**"
       - "plugins/**"
+      - "scripts/**"
+      - "images/base/**"
+      - "features/**"
+      - "coder/**"
+      - "docs/**"
+      - ".shellcheckrc"
       - "package.json"
       - ".github/workflows/test-cli.yml"
   workflow_dispatch:
@@ -27,6 +36,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      # ubuntu-latest ships shellcheck; printing its version fails the step if
+      # it is missing, so lint can never silently drop to syntax-only checks.
+      - name: Lint
+        run: |
+          shellcheck --version
+          npm run lint
 
       - name: Run CLI tests
         run: npm test

@@ -33,7 +33,7 @@ RUN echo "cache bust: ${CACHE_BUST}" \
     > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update \
   && apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends gh jq less openssh-client ripgrep tini tmux \
+  && apt-get install -y --no-install-recommends gh jq less openssh-client ripgrep shellcheck tini tmux \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 

@@ -327,6 +327,7 @@ NM_START_LIMIT=30
 NM_RECOVER_LIMIT=100
 recover_no_mistakes() {
   local ws top out rc nm_home="${NM_HOME:-/persist/no-mistakes}"
+  # shellcheck disable=SC2119 # the argument is optional; none means the default
   ws=$(workspace)
   command -v no-mistakes >/dev/null 2>&1 || return 0
   [ -d "$ws" ] || return 0
@@ -430,6 +431,7 @@ start_agentsview_push() {
   if [ -n "${DEV_MACHINE_NAME:-}" ]; then
     name="$DEV_MACHINE_NAME"
   elif [ "${DEV_DESKTOP:-0}" = 1 ]; then
+    # shellcheck disable=SC2119 # the argument is optional; none means the default
     name="desktop-$(basename "$(workspace)")"
     name_mode=seed
   fi
@@ -598,6 +600,7 @@ install_repo_plugins() {
   PLUGIN_DEADLINE=$((SECONDS + budget))
   PLUGIN_EXPIRED=false
   command -v claude >/dev/null 2>&1 || return 0
+  # shellcheck disable=SC2119 # the argument is optional; none means the default
   settings=$(repo_settings) || return 0
   if ! plugins=$(enabled_plugins "$settings"); then
     log "WARNING: $settings is not valid JSON - the Claude plugins it enables are not installed."

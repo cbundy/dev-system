@@ -56,21 +56,22 @@ Run these from the repo root. Do not re-derive per-directory commands or run
 test suites file-by-file - use a single entrypoint per gate so nothing is ever skipped,
 and adding a new test file should require no extra wiring.
 
-- `npm run lint` - syntax-checks every shell script under `images/base/`,
-  `features/src/callum-tools/`, `features/test/` and `plugins/callum-flow/hooks/`, and
-  runs `node --check` on the JavaScript under `bin/`, `plugins/` and `scripts/`, and
-  fails if a generated skill is out of date (`scripts/build-skills.js --check`)
-  (`scripts/lint.sh`). When `terraform` is on PATH (the dev image has it) it also runs
-  `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it, it
-  prints a skip line and CI's `test-coder.yml` runs them.
-  Interim until shellcheck replaces the `-n` checks (see #116).
+- `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script
+  under `images/base/`, `features/src/callum-tools/`, `features/test/`,
+  `plugins/callum-flow/hooks/`, `coder/` and `scripts/`, runs `node --check` on the
+  JavaScript under `bin/`, `plugins/` and `scripts/`, and fails if a generated skill is
+  out of date (`scripts/build-skills.js --check`) (`scripts/lint.sh`). The base image
+  ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
+  syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
+  runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
+  it prints a skip line and CI's `test-coder.yml` runs them.
 - `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
   script tests (`pin-codex-model`, `recover-no-mistakes`).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
-and CI's `test-cli.yml` runs `npm test` and `test-coder.yml` runs `npm run lint` (with
-terraform). A new test or script check belongs inside one of these entrypoints, not in a
-bespoke CI step.
+and CI runs both: `test-cli.yml` runs `npm run lint` (with shellcheck) and `npm test`, and
+`test-coder.yml` runs `npm run lint` (with terraform). A new test or script check belongs
+inside one of these entrypoints, not in a bespoke CI step.
 
 ## Dev environment image
 

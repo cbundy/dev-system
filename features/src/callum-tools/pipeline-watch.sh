@@ -146,6 +146,7 @@ while :; do
   n_seen=0
   # Newest run dirs first: only the most recent run per branch counts -
   # an older failed/cancelled run superseded by a rerun must not fire.
+  # shellcheck disable=SC2012 # ls -t is the portable mtime sort; run ids hold no whitespace
   for id in $(ls -t "$logs_dir" 2>/dev/null | head -20); do
     [ -d "$logs_dir/$id" ] || continue
     out=$(no-mistakes axi status --run "$id" 2>/dev/null) || continue

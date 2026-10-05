@@ -5,6 +5,7 @@
 # per-user tools land under $HOME, not /root.
 set -euo pipefail
 
+# shellcheck disable=SC1091 # written by install.sh at feature install time, not in the repo
 . /usr/local/share/callum-tools/options.env
 
 # Ensure a user-local bin dir exists and is preferred for this script, so the

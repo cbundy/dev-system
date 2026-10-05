@@ -1,13 +1,15 @@
 #!/bin/sh
 # Canonical lint entrypoint (`npm run lint`; CLAUDE.md "Canonical commands").
 #
-# Interim: syntax-only checks (`sh -n` / `bash -n` / `node --check`) until shellcheck
-# replaces the `-n` checks (see #116).
-#
 # Shell scripts are discovered, not listed: every file under the directories below whose
-# first line is a shell shebang or a `# shellcheck shell=...` directive is checked with the
+# first line is a shell shebang or a `# shellcheck shell=...` directive is checked for the
 # shell it declares, so a new script is covered without touching this file. Everything
 # else (Dockerfile, README, .js, .json, .awk) is skipped.
+#
+# The check is `shellcheck -x -s <shell>` (config in the root .shellcheckrc) when shellcheck
+# is on PATH - it is in the base image and on CI's runners. Without it, the check falls
+# back to a syntax-only `sh -n` / `bash -n` and says so; CI still runs shellcheck.
+# JavaScript gets `node --check`.
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
 # and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
@@ -15,7 +17,7 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
-SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks coder"
+SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks coder scripts"
 JS_DIRS="bin plugins scripts"
 
 failures=0
@@ -39,6 +41,13 @@ shell_of() {
   esac
 }
 
+if command -v shellcheck >/dev/null 2>&1; then
+  have_shellcheck=1
+else
+  have_shellcheck=0
+  echo "lint: shellcheck not on PATH - syntax checks only (CI runs shellcheck)"
+fi
+
 # A temp file, not a pipe, so the loops run in this shell and can count failures.
 list=$(mktemp) || exit 1
 trap 'rm -f "$list"' EXIT
@@ -55,13 +64,18 @@ while IFS= read -r file; do
       ;;
   esac
   checked=$((checked + 1))
-  if ! out=$("$sh_name" -n "$file" 2>&1); then
+  if [ "$have_shellcheck" = 1 ]; then
+    if ! out=$(shellcheck -x -s "$sh_name" "$file" 2>&1); then
+      fail "$file (shellcheck -s $sh_name)"
+      printf '%s\n' "$out" >&2
+    fi
+  elif ! out=$("$sh_name" -n "$file" 2>&1); then
     fail "$file ($sh_name -n)"
     printf '%s\n' "$out" >&2
   fi
 done < "$list"
 
-# shellcheck disable=SC2086
+# shellcheck disable=SC2086 # word-splitting the directory list is intended
 find $JS_DIRS -type f -name '*.js' | sort > "$list"
 while IFS= read -r file; do
   checked=$((checked + 1))

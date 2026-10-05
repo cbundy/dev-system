@@ -29,7 +29,7 @@ them, so those scripts stay maintained.
    | agentsview | pinned release tarball, checksum-verified | bump `AGENTSVIEW_VERSION` in the Dockerfile |
    | git | base image | image rebuild |
 
-   Also `jq`, `ripgrep`, `tmux` (Claude's Remote Control session runs in it), `tini`
+   Also `jq`, `ripgrep`, `shellcheck` (shell linting), `tmux` (Claude's Remote Control session runs in it), `tini`
    (PID 1), `less` and `openssh-client`. No systemd runs in the container, and `systemctl`
    says so and fails (the devcontainers base image's own stub reports success, which sent
    no-mistakes after a service that never starts - cbundy/dev-system#101). Every tool binary lives outside `/persist`, so a new image always
