@@ -86,8 +86,4 @@ Thumbs.db
 # Last-match-wins applies, so this is also where to un-ignore something a synced
 # rule catches, e.g.:
 #   !docs/design/**/*.png
-
-# npm pack output, from verifying that templates/gitignore really is packaged
-# (npm drops any file literally named .gitignore - see the note in bin/callum-dev.js).
-*.tgz
 # --- end repo-owned ---

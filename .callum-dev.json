@@ -1,0 +1,13 @@
+{
+  "version": "0.7.1",
+  "baseline": ".callum-dev/baseline",
+  "devcontainer": "base-image",
+  "files": [
+    ".no-mistakes.yaml",
+    "treehouse.toml",
+    "CLAUDE.md",
+    ".claude/settings.json",
+    ".devcontainer/devcontainer.json",
+    ".gitignore"
+  ]
+}

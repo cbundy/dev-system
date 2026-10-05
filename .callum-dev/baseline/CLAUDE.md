@@ -21,7 +21,8 @@
 - When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection.
   If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way.
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
-  using this repo's e2e visual verification tooling (n/a - no UI), and attach it to the PR description before the PR is considered ready.
+  using this repo's e2e visual verification tooling (<REPLACE: path to your e2e visual verification doc, e.g.
+  `docs/design/e2e-visual-verification.md`>), and attach it to the PR description before the PR is considered ready.
 - Keep PR descriptions brief and concise. They are reviewed by a head of engineering, not an engineer,
   so they must be high quality and ready to go without low-level technical detail. Always attach pictures
   (screenshots, and a short video/GIF for animated/interactive changes) when the change is visual.
@@ -56,61 +57,19 @@ Run these from the repo root. Do not re-derive per-directory commands or run
 test suites file-by-file - use a single entrypoint per gate so nothing is ever skipped,
 and adding a new test file should require no extra wiring.
 
-- `npm run lint` - syntax-checks every shell script under `images/base/`,
-  `features/src/callum-tools/`, `features/test/` and `plugins/callum-flow/hooks/`, and
-  runs `node --check` on the JavaScript under `bin/` and `plugins/` (`scripts/lint.sh`).
-  Interim until shellcheck replaces the `-n` checks (see #116).
-- `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
-  script tests (`pin-codex-model`, `recover-no-mistakes`).
-
-The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
-and CI's `test-cli.yml` runs `npm test`. A new test or script check belongs inside one of
-these entrypoints, not in a bespoke CI step.
-
-## This repo
-
-This is the source of truth for Callum's portable dev system (see docs/architecture.md for the
-architecture). Rules specific to working here:
-
-- Shared skills in `plugins/` must stay generic and stateless - no repo-specific state or
-  hardcoded paths from a consumer repo. Repo-specific state belongs at repo-local paths in
-  the consumer (e.g. `.claude/orchestrator-memory.md`).
-- Behavior changes ship by tagging a release; consumers pull. Never advise patching a copy
-  of a skill or template inside a consumer repo.
-- The `callum-tools` Dev Container Feature is deprecated (#89); the base image in
-  `images/base/` is the supported environment. Never add capabilities to the feature or
-  the `feature` devcontainer template, and never steer a consumer onto them. Put new
-  tooling in `images/base/`. The scripts in `features/src/callum-tools/` are still the
-  image's source, so fixing them is fine.
-- Templates in `templates/` must keep a clear split between synced content and repo-owned
-  values so `callum-dev update` can merge cleanly.
-
-This repo is also a consumer of its own templates (`.callum-dev.json`,
-`.callum-dev/baseline/`). Run the checkout's own CLI, `node bin/callum-dev.js`, never an
-npm dependency on this package. After each release, bring the stamp up to date
-(RELEASING.md).
-
-## No Docker in the dev environment (for now)
-
-The dev environment has no Docker access yet (tracked under #114). Changes under
-`images/base/`, `features/` and `coder/` are verified by PR CI: `publish-base-image.yml`
-builds the image and runs `images/base/test/test.sh`, and `test-features.yml` runs the
-feature tests. Never claim an image, devcontainer or feature-in-container test ran
-locally - point to the PR's CI run instead.
-
-## Trying skill changes
-
-Sessions in this repo run the *released* callum-flow plugin from the marketplace, not this
-checkout, so editing `plugins/callum-flow/` does not change the running session. To try a
-skill or hook change, start a session with `claude --plugin-dir plugins/callum-flow`.
+<REPLACE: list this repo's canonical commands here, e.g. lint / typecheck / test / test:all /
+a combined check command. State which command CI calls for each gate, so the local command
+and the CI gate can never drift apart. If you add a new category of tests, extend the single
+entrypoint here rather than adding a bespoke CI step.>
 
 ## Implementation sub-agents
 
-Any agent making code changes - solo or delegated - works inside a treehouse worktree.
-Sub-agents delegated an issue follow the `implement-issue` skill for the full working
-procedure (worktree, build, verify, evidence, /no-mistakes pipeline, handoff).
-Orchestration is driven by the `issue-orchestrator` skill.
+Any agent making code changes - solo or delegated - works inside a <REPLACE: this repo's
+worktree/isolation mechanism, e.g. a treehouse worktree>. Sub-agents delegated an issue
+follow the `implement-issue` skill for the full working procedure (worktree, build, verify,
+evidence, /no-mistakes pipeline, handoff). Orchestration is driven by the
+`issue-orchestrator` skill.
 
-There is no app to boot here. Image, devcontainer and feature changes cannot be exercised
-locally (see "No Docker in the dev environment" above), so their evidence is the PR's CI run.
+<REPLACE: note any repo-specific variations to the above (e.g. extra build/boot steps
+before an agent can safely run this repo's app).>
 <!-- end repo-owned -->

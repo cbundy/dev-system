@@ -32,6 +32,7 @@ templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (test-cli.yml)
+scripts/lint.sh                   lint entrypoint (npm run lint)
 .github/workflows/                release.yml, publish-base-image.yml, publish-features.yml, tests
 package.json                      makes the repo npm-installable (bin + templates only)
 docs/                             these docs
@@ -83,6 +84,10 @@ steps.
 | `.callum-dev.json` | rewritten | Stamp: applied template version, devcontainer kind |
 | `.callum-dev/baseline/` | rewritten | Pristine copy of each template: the base of the 3-way merge |
 | `package.json` devDependency | - | `@callum/dev-system` from `github:cbundy/dev-system#semver:0.x` |
+
+dev-system is itself a consumer: it commits these files too, minus the devDependency. It
+runs its own checkout's CLI (`node bin/callum-dev.js`), and its stamp is brought up to date
+after each release (`RELEASING.md`).
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the orchestrator
 in the main checkout gets (`gh pr merge`, `gh pr edit`, `no-mistakes axi respond`,
