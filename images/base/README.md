@@ -1049,4 +1049,4 @@ images/base/test/test.sh "dev-system-base:test-$(git rev-parse --short HEAD)"
 
 **Visibility:** the package is public, so consumers pull it with no login. It took the
 visibility of this public repo when the first dispatch created it (1.0.0, 2026-10-03), so
-there is no manual step; see "Visibility decision" in the root README.
+there is no manual step; see "GHCR visibility" in `docs/architecture.md`.
