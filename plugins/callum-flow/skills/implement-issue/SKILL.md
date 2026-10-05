@@ -169,6 +169,9 @@ tests would otherwise have missed:
   `--instructions "<what to do>"` - never `--yes`. This commits on the run's
   own head in the run's own worktree, so there is no second writer on the
   branch and none of the rebase/abort rules below apply.
+  `axi respond` blocks like `axi run`, so launch it detached the same way
+  (`nohup ... > <log> 2>&1 &` or `run_in_background`), never in the
+  foreground, where the 120s tool timeout kills the driver and strands the run.
 - Only when the fix needs your own commit - code the pipeline cannot write
   from instructions alone, or the run has already completed - do the rebase
   and abort steps apply. If you are committing on a branch that already has a
