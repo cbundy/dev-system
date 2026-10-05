@@ -89,8 +89,18 @@ coder create my-ws --template dev-system   # Enter accepts each default
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
 | `remote_control_mode` | `session` | yes | `session`: one interactive Claude. `server`: one Claude per session started in claude.ai, each in its own git worktree; that needs a repo (without one the sessions share the directory). |
+| `remote_control_skip_permissions` | `false` | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
 | `cpus` | 2 | yes | CPU limit (1-8). |
 | `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
+
+`remote_control_skip_permissions` sets `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` to `1` (else
+`0`), documented in the [image README](../../images/base/README.md). In `session` mode the
+image starts Claude with `--dangerously-skip-permissions`, its one-time consent dialog
+skipped. In `server` mode it adds `--permission-mode bypassPermissions` to
+`claude remote-control`, so the sessions started from claude.ai run in (or can be switched
+to) bypass permissions, and it accepts the bypass disclaimer in `.claude.json`. The
+supervisor reads the variable when it starts, so a change takes effect on the next workspace
+restart.
 
 ### Repo
 

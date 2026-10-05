@@ -16,8 +16,9 @@
 #   postStartCommand does;
 # - logins without a shell: a "Log in" app proxies dev-login's page and a
 #   "Logins" metadata row shows each tool's state;
-# - image, CPU, memory, repo and Remote Control mode parameters, OTLP
-#   telemetry env (variable otlp_endpoint) and pinned provider versions;
+# - image, CPU, memory, repo, Remote Control mode and skip-permissions
+#   (bypass) parameters, OTLP telemetry env (variable otlp_endpoint) and
+#   pinned provider versions;
 # - runtime secrets from a directory on the Docker host (variable
 #   secrets_dir), mounted read-only where the image looks for them, so the
 #   agentsview session push is on in every workspace once the host has its
@@ -134,6 +135,16 @@ data "coder_parameter" "remote_control_mode" {
   }
 }
 
+data "coder_parameter" "remote_control_skip_permissions" {
+  name         = "remote_control_skip_permissions"
+  display_name = "Skip permissions (bypass)"
+  description  = "Lets Claude act without asking you to approve tool use: bypass permissions, in both session and server modes. Only turn on for a workspace you are happy to let act unsupervised. Takes effect on the next workspace start."
+  type         = "bool"
+  default      = false
+  mutable      = true
+  order        = 4
+}
+
 data "coder_parameter" "cpus" {
   name         = "cpus"
   display_name = "CPUs"
@@ -141,7 +152,7 @@ data "coder_parameter" "cpus" {
   type         = "number"
   default      = 2
   mutable      = true
-  order        = 4
+  order        = 5
   validation {
     min = 1
     max = 8
@@ -155,7 +166,7 @@ data "coder_parameter" "memory_gb" {
   type         = "number"
   default      = 4
   mutable      = true
-  order        = 5
+  order        = 6
   validation {
     min = 1
     max = 16
@@ -234,6 +245,8 @@ resource "coder_agent" "main" {
       GIT_COMMITTER_EMAIL     = data.coder_workspace_owner.me.email
       DEV_REMOTE_CONTROL      = "1"
       DEV_REMOTE_CONTROL_MODE = data.coder_parameter.remote_control_mode.value
+      # The parameter's value is the string "true" or "false".
+      DEV_REMOTE_CONTROL_SKIP_PERMISSIONS = tobool(data.coder_parameter.remote_control_skip_permissions.value) ? "1" : "0"
       # dev-init serves the login page on this port; it stays up as a status
       # page so the app button always works.
       DEV_LOGIN_PORT      = tostring(local.login_port)
