@@ -109,7 +109,10 @@ shared by every repo on the host.
   image, because the devcontainer CLI expands no variables in image metadata: there
   `${devcontainerId}` comes out empty and every repo would share one set (cbundy/dev-system#73,
   #78). Synced, so `callum-dev update` keeps every repo's set correct. Without them that
-  state is lost on every rebuild, and `dev-init` warns at start-up.
+  state is lost on every rebuild, and `dev-init` warns at start-up. `${devcontainerId}`
+  hashes the workspace folder and the config file's path, so a repo with several
+  devcontainer configs gets separate volumes, and so separate Claude and codex logins, for
+  each config (gh's volume is shared).
 
 ### `feature`: `.devcontainer/devcontainer.json`
 

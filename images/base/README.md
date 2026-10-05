@@ -615,7 +615,7 @@ it is:
   // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:2"
   "mounts": [
     // Per-repo tool state. Keep these four as they are: ${devcontainerId} is
-    // stable for this workspace folder and unique to it.
+    // stable for this workspace folder and config file, and unique to them.
     { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
@@ -640,9 +640,15 @@ which the devcontainer CLI and VS Code merge into your config:
 The per-repo mounts cannot come from the image: the devcontainer CLI expands no variables
 in image metadata (`${devcontainerId}` comes out empty), so every repo would get the same
 volumes. Leave them out and that state lives in the container itself, lost on every
-rebuild; `dev-init` warns about it at start-up, and so does `dev-doctor`. `${devcontainerId}` is derived from the workspace
-folder, so a second clone of the same repo gets its own volumes, and a moved or renamed
-clone starts with new, empty ones (one more login).
+rebuild; `dev-init` warns about it at start-up, and so does `dev-doctor`. `${devcontainerId}` is a hash of the workspace
+folder and the path of the devcontainer config file, so:
+
+- a second clone of the same repo gets its own volumes, and a moved or renamed clone
+  starts with new, empty ones (one more login);
+- a repo with several configs (say `.devcontainer/devcontainer.json` and
+  `.devcontainer/gpu/devcontainer.json`) gets separate volumes for each, so a separate
+  Claude and codex login for each. gh is the exception: `dev-system-gh` is shared by
+  all of them. Moving or renaming a config file also starts it on new, empty volumes.
 
 To list a repo's volumes: `docker volume ls --filter name=dev-system-`. To delete a repo's
 state, remove its four volumes once its container is gone.

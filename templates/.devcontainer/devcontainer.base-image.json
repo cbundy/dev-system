@@ -25,10 +25,11 @@
     // ~/.no-mistakes or other tool state (cbundy/dev-system#19, #73).
     // --- end repo-owned ---
 
-    // Per-repo tool state (cbundy/dev-system#73). ${devcontainerId} is stable for this
-    // workspace folder and unique to it, so each repo keeps its own logins and state
-    // across rebuilds. These cannot come from the image: the devcontainer CLI expands no
-    // variables in image metadata.
+    // Per-repo tool state (cbundy/dev-system#73). ${devcontainerId} is a hash of the
+    // workspace folder and this config file's path, stable across rebuilds, so each repo
+    // keeps its own logins and state. A second config in .devcontainer/ gets its own
+    // volumes, so its own logins too. These cannot come from the image: the devcontainer
+    // CLI expands no variables in image metadata.
     { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
