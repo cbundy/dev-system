@@ -703,7 +703,11 @@ exit 3'
 # touching /tmp/<tool>-approve, which logs the tool in (gh then runs
 # `auth setup-git`, recorded in /tmp/gh-setup-git, which also gives git a
 # credential helper, as the real one does); /tmp/<tool>-expire ends
-# the attempt without a login, as an expired code does.
+# the attempt without a login, as an expired code does. gh's login records
+# its arguments in /tmp/gh-login-args and grants the workflow scope when asked
+# for it (/tmp/gh-workflow); `auth status --json` reports the scopes, and
+# `auth refresh --scopes workflow` adds the scope on /tmp/gh-approve, with its
+# own code (cbundy/dev-system#181).
 STUB_CODEX='#!/bin/bash
 case "$1 ${2:-}" in
   "login status") [ -e /tmp/codex-in ]; exit ;;
@@ -719,15 +723,29 @@ case "$1 ${2:-}" in
 esac'
 STUB_GH='#!/bin/bash
 case "$1 ${2:-}" in
-  "auth status") [ -e /tmp/gh-in ]; exit ;;
+  "auth status")
+    [ -e /tmp/gh-in ] || exit 1
+    if [ "${3:-}" = --json ]; then
+      scopes="gist, read:org, repo"
+      [ -e /tmp/gh-workflow ] && scopes="$scopes, workflow"
+      printf "{\"hosts\":{\"github.com\":[{\"state\":\"success\",\"active\":true,\"scopes\":\"%s\"}]}}\n" "$scopes"
+    fi ;;
   "auth setup-git")
     touch /tmp/gh-setup-git
     git config --global credential.helper "!f() { echo username=stub; echo password=stub; }; f" ;;
   "auth login")
+    echo "$*" > /tmp/gh-login-args
     echo "! First copy your one-time code: GH12-3456"
     echo "Open this URL to continue in your web browser: https://github.com/login/device"
     until [ -e /tmp/gh-approve ]; do sleep 0.2; done
+    case " $* " in *" --scopes workflow "*) touch /tmp/gh-workflow ;; esac
     touch /tmp/gh-in ;;
+  "auth refresh")
+    echo "$*" > /tmp/gh-refresh-args
+    echo "! First copy your one-time code: GH56-7890"
+    echo "Open this URL to continue in your web browser: https://github.com/login/device"
+    until [ -e /tmp/gh-approve ]; do sleep 0.2; done
+    case " $* " in *" --scopes workflow "*) touch /tmp/gh-workflow ;; esac ;;
 esac'
 # Installs $STUB, $STUB_CODEX and $STUB_GH first on PATH (an empty one is a
 # CLI that is always logged in, so the codex and gh stubs only matter where
@@ -1217,6 +1235,8 @@ docker exec "$c" touch /tmp/codex-approve /tmp/gh-approve
 check "approving codex and gh completes them; gh wires git (setup-git)" in_c "$c" '
   for _ in $(seq 20); do dev-login status | grep -qx "gh: in" && dev-login status | grep -qx "codex: in" && break; sleep 0.5; done
   dev-login status; dev-login status | grep -qx "codex: in" && dev-login status | grep -qx "gh: in" && test -e /tmp/gh-setup-git'
+check "gh's login asks for the workflow scope" in_c "$c" '
+  cat /tmp/gh-login-args; grep -q -- "--scopes workflow" /tmp/gh-login-args && test -e /tmp/gh-workflow'
 check "the watcher reports all logins done and exits" bash -c "
   for _ in \$(seq 40); do docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && break; sleep 1; done
   docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && ! docker exec '$c' pgrep -f 'dev-login watch'"
@@ -1237,6 +1257,32 @@ c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e 
   "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in && $WITH_STUB exec dev-remote-control")
 check "with GH_TOKEN set, no gh login starts and gh counts as done" in_c "$c" '
   sleep 3; dev-login status | grep -qx "gh: token" && ! tmux has-session -t login-gh 2>/dev/null'
+docker rm -f "$c" >/dev/null
+
+# gh logged in without the workflow scope (cbundy/dev-system#181): the
+# watcher refreshes the token instead of leaving it as it is.
+c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
+  "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in /tmp/gh-in && $WITH_STUB exec dev-remote-control")
+check "a gh login without the workflow scope: dev-login status says scope, dev-doctor warns" in_c "$c" '
+  for _ in $(seq 40); do dev-login status --json | jq -e .gh.code >/dev/null && break; sleep 0.5; done
+  out=$(dev-login status; dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -qx "gh: scope" &&
+  echo "$out" | grep -q "WARN gh.s token lacks the workflow scope" &&
+  echo "$out" | grep -qF "gh auth refresh -h github.com -s workflow" &&
+  dev-login status --json | jq -e ".gh == {state: \"scope\", url: \"https://github.com/login/device\", code: \"GH56-7890\"}"'
+check "the watcher starts gh's refresh with the workflow scope, and logs its link" bash -c "
+  for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: gh (workflow scope): open' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep 'dev-login'
+  docker logs '$c' 2>&1 | grep -qF 'dev-login: gh (workflow scope): open https://github.com/login/device and enter the code GH56-7890' &&
+  docker exec '$c' grep -q -- '--hostname github.com --scopes workflow' /tmp/gh-refresh-args &&
+  docker exec '$c' test ! -e /tmp/gh-login-args"
+docker exec "$c" touch /tmp/gh-approve
+check "approving the refresh makes the watcher finish" bash -c "
+  for _ in \$(seq 40); do docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && break; sleep 1; done
+  docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done'"
+check "after the refresh, gh is in and dev-doctor reports the workflow scope" in_c "$c" '
+  out=$(dev-login status; dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -qx "gh: in" && echo "$out" | grep -q "OK   gh.s token has the workflow scope"'
 docker rm -f "$c" >/dev/null
 
 # The page: dev-init starts it (DEV_LOGIN_PORT), so the stubs go first on PATH

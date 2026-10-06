@@ -5,7 +5,7 @@
 # One line per check, OK or FAIL, with a recovery hint on every FAIL, so
 # missing auth or broken persistence shows up at start-up instead of halfway
 # through an agent run (cbundy/dev-system#19). An INFO line reports state
-# that is neither (telemetry export) and never fails.
+# that is neither (telemetry export, gh scopes it cannot read) and never fails.
 #
 # Usage: dev-doctor [--warn-only]
 #   Exits 1 if any check fails. --warn-only (used by dev-init) prints the same
@@ -119,6 +119,33 @@ check_login() {
 check_login claude "claude auth login" claude auth status
 check_login codex "codex login --device-auth" codex login status
 check_login gh "gh auth login, then dev-init" gh auth status
+
+# gh's token needs the workflow scope to push a change under
+# .github/workflows/ (cbundy/dev-system#181). A WARN, since everything else
+# works without it; scopes that cannot be read (offline, a fine-grained
+# token) are only information.
+# shellcheck source=gh.sh
+. /usr/local/share/dev-system/gh.sh
+if command -v gh >/dev/null 2>&1; then
+  case "$(gh_workflow_scope)" in
+    yes) ok "gh's token has the workflow scope" ;;
+    no)
+      if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+        scope_fix="give the GH_TOKEN / GITHUB_TOKEN token the workflow scope (on Coder: add workflow to the GitHub external auth's scopes)"
+      elif login_wanted gh; then
+        scope_fix="$LOGIN_FIX (or: gh auth refresh -h github.com -s workflow)"
+      else
+        scope_fix="run: gh auth refresh -h github.com -s workflow"
+      fi
+      warn "gh's token lacks the workflow scope, so pushing a change under .github/workflows/ is refused" "$scope_fix"
+      ;;
+    unknown)
+      if gh auth status >/dev/null 2>&1; then
+        info "gh's token scopes could not be read (offline, or a token without OAuth scopes), so the workflow scope is unchecked"
+      fi
+      ;;
+  esac
+fi
 
 if ! command -v no-mistakes >/dev/null 2>&1; then
   fail "no-mistakes is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
