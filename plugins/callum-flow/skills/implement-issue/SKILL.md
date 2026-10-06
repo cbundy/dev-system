@@ -203,7 +203,8 @@ tests would otherwise have missed:
   this PR should close its issue. Note it is not durable: the pipeline
   regenerates the body from your `--intent` text on every run, so keep
   instructions *about* the keyword out of that text - they get paraphrased into
-  prose GitHub does not parse. Write the intent as what the change does.
+  prose GitHub does not parse. Keep the intent to the acceptance criteria
+  (section 6); the delegator derives and sets the final linkage at merge.
 - NEVER write close/closes/fixes/resolves immediately before an issue number
   you do not mean to close - GitHub's parser ignores negation and surrounding
   context, so `"must NOT close #93"` still registers as a closing reference.
