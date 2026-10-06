@@ -538,7 +538,7 @@ orphaned processes, so containers stop in well under a second instead of hitting
    at the one-time "Enable Remote Control? (y/n)" prompt, which `claude remote-control`
    shows on a fresh config (cbundy/dev-system#88). Enabling `DEV_REMOTE_CONTROL` (the
    headless default) is the consent to Remote Control, so the supervisor answers it for
-   you. Only missing values are set.
+   you. Existing unrelated values are preserved.
 3. **Runs Claude with Remote Control** in the tmux session `claude`, in the workspace,
    in one of two modes (`DEV_REMOTE_CONTROL_MODE`):
    - `session` (default): `claude --remote-control <name>`, the interactive Claude. The

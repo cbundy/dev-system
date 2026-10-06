@@ -43,7 +43,7 @@ Telemetry goes to the `otlp_endpoint` in `terraform.tfvars` (what is collected a
 privacy defaults are in
 [the image's Telemetry section](../../images/base/README.md#telemetry-opentelemetry-export)).
 
-### Variables (set in `terraform.tfvars`)
+### Template variables
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -141,10 +141,11 @@ From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
 
 - **With a repo URL** (`repo_url`, or the `DEV_REPO_URL` a per-repo image carries),
   `dev-init` clones it into `/workspaces/<repo name>` on the first start and only fetches
-  after that. Claude runs there, and the Remote Control name (the session or environment
-  name in claude.ai) is the repo name. The template sets neither. Remote Control mode
-  `auto` becomes `server`, so the workspace shows up in claude.ai as an environment
-  where each new session gets its own worktree.
+  after that. Claude runs there. In `dev-system`, the Remote Control name (the session or
+  environment name in claude.ai) is the repo name; `orchestrator` formats it as
+  `🔄 <repo name> orchestrator`. Remote Control mode `auto` becomes `server`, so the
+  `dev-system` workspace shows up in claude.ai as an environment where each new session
+  gets its own worktree.
   - A private repo needs a GitHub credential: Coder external auth (`GIT_ASKPASS`), or
     else the gh login on the Log in page, after which `dev-login watch` runs the clone.
 - **Without one**, the startup script sets `DEV_WORKSPACE=/workspaces`, so Claude still
@@ -165,7 +166,7 @@ rejects, so set the mode explicitly to run `dev-remote-control` by hand there. O
 
 The `orchestrator` template runs one long-lived interactive Claude, for the
 `issue-orchestrator` skill, that comes back as the same conversation after any stop,
-restart, template update or crash (cbundy/dev-system#164; needs base image 2.5.0 or
+restart, rebuild, template update or crash (cbundy/dev-system#164; needs base image 2.5.0 or
 later). The intended unattended settings:
 
 - **`session` mode** (the template's default): one conversation, not one per claude.ai
@@ -190,7 +191,7 @@ later). The intended unattended settings:
   until then, approve from claude.ai or the Claude app.
 
 **Durability.** The conversation history lives on the workspace's `/persist` volume, so
-it survives a stop, a restart and a template update. It does **not** survive deleting the
+it survives a stop, a restart, a rebuild and a template update. It does **not** survive deleting the
 workspace (both volumes are deleted with it, the memory file's checkout included), and a
 compaction can lose detail. Keep the orchestrator's durable state in its memory file and
 on GitHub, so a lossy compaction or a lost transcript costs little.
