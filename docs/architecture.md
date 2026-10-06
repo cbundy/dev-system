@@ -39,6 +39,8 @@ bin/callum-dev.js                 CLI: init, update, check. Node built-ins and g
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (ci.yml)
 scripts/lint.sh                   lint entrypoint (npm run lint)
+scripts/test.sh                   test entrypoint (npm test); discovers tests by glob, quiet on success
+scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
