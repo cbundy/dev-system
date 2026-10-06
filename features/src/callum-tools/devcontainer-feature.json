@@ -23,7 +23,7 @@
     },
     "codexModel": {
       "type": "string",
-      "default": "gpt-5.6-sol",
+      "default": "gpt-6.1-sol",
       "description": "Codex model the no-mistakes pipeline runs on. Written into ~/.no-mistakes/config.yaml as agent_args_override (a global-only key) unless that file already pins one. Empty string skips the pin."
     }
   },
