@@ -218,7 +218,9 @@ wait_for_login() {
 # the one-time Remote Control consent (remoteDialogSeen: `claude
 # remote-control` blocks on "Enable Remote Control? (y/n)" without it, and the
 # interactive Claude has a matching dialog; enabling DEV_REMOTE_CONTROL is the
-# consent, cbundy/dev-system#88) and, if somehow still pending, onboarding.
+# consent, cbundy/dev-system#88), the one-time "Try the new fullscreen
+# renderer?" prompt (fullscreenUpsellSeenCount, shown while it is below 3) and,
+# if somehow still pending, onboarding.
 # With a second argument of 1 it also accepts the bypass-permissions
 # disclaimer, as answering it interactively would: server mode has no
 # --settings flag to skip it per run, and a spawned session would otherwise
@@ -227,9 +229,9 @@ wait_for_login() {
 prepare_claude_config() {
   local ws="$1" bypass="${2:-0}" cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" tmp
   local want='.hasCompletedOnboarding == true and .projects[$ws].hasTrustDialogAccepted == true
-    and .remoteDialogSeen == true and ($bypass != "1" or .bypassPermissionsModeAccepted == true)'
+    and .remoteDialogSeen == true and (.fullscreenUpsellSeenCount // 0) >= 3 and ($bypass != "1" or .bypassPermissionsModeAccepted == true)'
   local set='.hasCompletedOnboarding = true | .projects[$ws].hasTrustDialogAccepted = true
-    | .remoteDialogSeen = true
+    | .remoteDialogSeen = true | .fullscreenUpsellSeenCount = ([.fullscreenUpsellSeenCount // 0, 3] | max)
     | if $bypass == "1" then .bypassPermissionsModeAccepted = true else . end'
   [ -s "$cfg" ] || (umask 077 && echo '{}' > "$cfg") || return 0
   jq -e --arg ws "$ws" --arg bypass "$bypass" "$want" "$cfg" >/dev/null 2>&1 && return 0

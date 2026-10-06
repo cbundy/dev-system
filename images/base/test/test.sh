@@ -963,14 +963,16 @@ docker rm -f "$c" >/dev/null
 # pre-answers it in both modes, so the stub starts without prompting, and
 # keeps the config's other values.
 for mode in session server; do
+  seen=; [ "$mode" = server ] && seen=',\"fullscreenUpsellSeenCount\":7'
+  want=3; [ "$mode" = server ] && want=7
   c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=$mode "$IMAGE" bash -c "
-    echo '{\"userID\":\"keep-me\",\"hasCompletedOnboarding\":true}' > /persist/claude/.claude.json &&
+    echo '{\"userID\":\"keep-me\",\"hasCompletedOnboarding\":true$seen}' > /persist/claude/.claude.json &&
     touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
   check "$mode mode: Remote Control consent is pre-answered, so Claude starts unattended" bash -c "
     for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
     docker exec '$c' cat /tmp/claude-starts
     docker exec '$c' test -s /tmp/claude-starts && ! docker exec '$c' test -e /tmp/claude-consent-prompt &&
-    docker exec '$c' jq -e '.remoteDialogSeen == true and .userID == \"keep-me\"' /persist/claude/.claude.json"
+    docker exec '$c' jq -e '.remoteDialogSeen == true and .userID == \"keep-me\" and .fullscreenUpsellSeenCount == $want' /persist/claude/.claude.json"
   docker rm -f "$c" >/dev/null
 done
 

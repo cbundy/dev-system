@@ -531,7 +531,9 @@ orphaned processes, so containers stop in well under a second instead of hitting
    Control rejects both, and `dev-login` leaves it alone.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`),
-   Remote Control as accepted (`remoteDialogSeen`), and onboarding as done. An unattended
+   Remote Control as accepted (`remoteDialogSeen`), the one-time "Try the new fullscreen
+   renderer?" prompt as seen (`fullscreenUpsellSeenCount` raised to at least 3, a higher
+   value is kept), and onboarding as done. An unattended
    Claude otherwise sits at the folder trust dialog, which comes before anything else, or
    at the one-time "Enable Remote Control? (y/n)" prompt, which `claude remote-control`
    shows on a fresh config (cbundy/dev-system#88). Enabling `DEV_REMOTE_CONTROL` (the
