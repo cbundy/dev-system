@@ -396,19 +396,25 @@ container never fails to start because of it.
    With `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also writes codex's `[otel]` table there
    (and removes it once the endpoint is unset), unless you have `otel` settings of your
    own (see [Telemetry](#telemetry-opentelemetry-export)).
-4. Pins the models no-mistakes runs on (codex, and claude, the pipeline's fallback agent)
-   in a managed block of `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
-   `# END dev-system managed`. The block is rewritten on every start from
-   [`models.env`](models.env) as it is on this repo's `main` branch, fetched once per start
-   from `DEV_MODELS_URL`, so a model change merged to `main` reaches every workspace on its
-   next start, with no release or image rebuild. The fetch is short (3s to connect, 8s in
-   all) and never fails the start: if it fails, or the file sets no valid model, one
-   `WARNING` names the URL and the reason and the copy baked into the image is used. Per
-   model, a valid fetched value beats the baked one. Content outside the markers is never
-   touched. `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override both; an empty value skips that
-   pin (`DEV_CODEX_MODEL=""` removes the block). A pin of your own wins: an
-   `agent_args_override` or `agent_config` outside the markers means no block is written
-   (delete the block, markers included, before pinning by hand). The unmarked pin older images wrote is replaced by the block.
+4. Writes the no-mistakes pipeline's agent order and model pin in a managed block of
+   `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
+   `# END dev-system managed`. The block has two independent parts: the ordered agent list
+   (`agent: [codex, claude]`, from `AGENTS`; no-mistakes moves to the next agent when one
+   fails) and the model pin (`agent_args_override`: codex, and claude). It is rewritten on
+   every start from [`models.env`](models.env) as it is on this repo's `main` branch,
+   fetched once per start from `DEV_MODELS_URL`, so a change merged to `main` reaches every
+   workspace on its next start, with no release or image rebuild. The fetch is short (3s to
+   connect, 8s in all) and never fails the start: if it fails, or the file sets no valid
+   key, one `WARNING` names the URL and the reason and the copy baked into the image is
+   used. Per key, a valid fetched value beats the baked one. Content outside the markers is
+   never touched. `DEV_NM_AGENTS` / `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override both; an
+   empty value skips that part (`DEV_NM_AGENTS=""` writes no `agent`, `DEV_CODEX_MODEL=""`
+   no pin; with both empty the block is removed). A key of your own outside the markers
+   wins over its part only: a top-level `agent` drops the agent order, an
+   `agent_args_override` or `agent_config` drops the model pin (delete the block, markers
+   included, before setting both by hand). A repo whose `.no-mistakes.yaml` sets `agent`
+   replaces the agent order for that repo. The unmarked pin older images wrote is replaced
+   by the block.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
@@ -418,7 +424,7 @@ container never fails to start because of it.
    git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
    after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
    the repo if needed. A daemon that is already running (a second `dev-init` in the same
-   container) is restarted instead when step 4 changed the model pin, since it reads the
+   container) is restarted instead when step 4 changed the managed block, since it reads the
    config only at start-up. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
    has its own short time limit (30s), so a daemon that never answers is logged with the
@@ -440,13 +446,14 @@ container never fails to start because of it.
     never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
 
-The model pin in step 4 reads these variables:
+The managed block in step 4 reads these variables:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty removes the managed block. |
-| `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude, the pipeline's fallback agent. Set, it beats both models files; empty leaves claude unpinned. |
-| `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
+| `DEV_NM_AGENTS` | unset: the models file (`AGENTS`) | The pipeline's ordered agent list, comma-separated with no spaces (`codex,claude`; names such as `claude`, `codex`, `grok`, `opencode`, `acp:<name>`). Set, it beats the fetched and the baked models file; empty writes no `agent` in the block. An invalid list is skipped with a one-line note. |
+| `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty drops the model pin (and the block, when there is no agent order either). |
+| `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude. Set, it beats both models files; empty leaves claude unpinned. |
+| `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the agents and models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
 
 ## `dev-doctor`
 

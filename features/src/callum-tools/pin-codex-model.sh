@@ -1,17 +1,22 @@
 #!/bin/sh
 #
-# Pin the models the no-mistakes pipeline runs on, as a managed block.
+# Write the no-mistakes pipeline's agent order and model pin, as a managed block.
 #
-# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model]
+# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model] [agents]
 #
-# `agent_args_override` is honoured ONLY in the global no-mistakes config.yaml
-# - a copy in a repo's .no-mistakes.yaml is silently ignored, leaving codex on
-# its (top-end) default. The optional third argument also pins the model of
-# claude, the fallback agent in the synced `agent: [codex, claude]`.
+# The block has two independent parts, both for the global no-mistakes
+# config.yaml:
+#   - The agent order, from agents (comma-separated, in order, e.g.
+#     codex,claude), written as `agent: [codex, claude]`. A repo's
+#     .no-mistakes.yaml `agent` replaces it entirely for that repo.
+#   - The model pin, `agent_args_override`: codex's model, and claude's when the
+#     third argument is set. It is honoured ONLY in the global config - a copy
+#     in a repo's .no-mistakes.yaml is silently ignored, leaving codex on its
+#     (top-end) default.
 #
-# The pin lives between two marker lines, and every call rewrites what is
-# between them (in place, wherever the block sits), so a model change reaches
-# an existing config on the next start:
+# The block lives between two marker lines, and every call rewrites what is
+# between them (in place, wherever the block sits), so a change reaches an
+# existing config on the next start:
 #
 #   # BEGIN dev-system managed (rewritten on every start - edit outside this block)
 #   ...
@@ -22,12 +27,14 @@
 #   - The unmarked block older versions of this script appended (its comment
 #     line, then the `agent_args_override:` mapping up to the next top-level
 #     line) is replaced by the managed block where it stands.
-#   - A pin set by hand - an `agent_args_override:` or `agent_config:` outside
-#     the markers that is not that old block - wins: no managed block is
-#     written (an existing one is removed, as it would duplicate the key), and
-#     a one-line note goes to stderr.
-#   - An empty codex model opts out: an existing managed block is removed and
-#     nothing is written.
+#   - A key set by hand outside the markers (and not that old block) wins over
+#     its part, and only its part, with a one-line note on stderr (the part
+#     would duplicate the key): a top-level `agent:` drops the agent order; an
+#     `agent_args_override:` or `agent_config:` drops the model pin.
+#   - An empty codex model drops the model pin; empty (or absent) agents drop
+#     the agent order. Agents that are not a comma-separated list of names, each
+#     [a-z0-9][a-z0-9:_-]* with no spaces, drop it too, with a note.
+#   - The block is written when either part is left, and removed when neither is.
 #   - The file is rewritten atomically (temp file + mv in the same directory,
 #     keeping its mode) and only when its content changes, so a second identical
 #     call leaves it byte-for-byte alone. A missing parent directory is created.
@@ -39,17 +46,19 @@
 # non-zero on failure. The no-mistakes daemon reads this file only at start-up,
 # so a running daemon needs a restart to see a change.
 #
-# Shared by the callum-tools feature (setup.sh) and the dev-system base image
-# (images/base/dev-init), so both write the same block with the same rules.
+# Shared by the callum-tools feature (setup.sh, which passes no agents) and the
+# dev-system base image (images/base/dev-init), so both write the same block
+# with the same rules.
 set -eu
 
 [ "$#" -ge 2 ] || {
-  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model]" >&2
+  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model] [agents]" >&2
   exit 2
 }
 NM_CONFIG="$1"
 CODEX_MODEL="$2"
 CLAUDE_MODEL="${3:-}"
+AGENTS="${4:-}"
 
 PIN_BEGIN='# BEGIN dev-system managed (rewritten on every start - edit outside this block)'
 PIN_END='# END dev-system managed'
@@ -101,6 +110,23 @@ render() {
     }'
 }
 
+# agents_valid <list>: one or more comma-separated names, each
+# [a-z0-9][a-z0-9:_-]*, with no empty entries and no spaces - the rule
+# images/base/models.sh applies to AGENTS.
+agents_valid() {
+  case "$1" in
+    "" | *[!a-z0-9:_,-]*) return 1 ;;
+  esac
+  rest="$1,"
+  while [ -n "$rest" ]; do
+    case "${rest%%,*}" in
+      [a-z0-9]*) ;;
+      *) return 1 ;;
+    esac
+    rest="${rest#*,}"
+  done
+}
+
 if [ -f "$NM_CONFIG" ]; then
   begins=$(grep -cxF -- "$PIN_BEGIN" "$NM_CONFIG" || true)
   ends=$(grep -cxF -- "$PIN_END" "$NM_CONFIG" || true)
@@ -110,15 +136,37 @@ if [ -f "$NM_CONFIG" ]; then
   fi
 fi
 
-want=0
+if [ -n "$AGENTS" ] && ! agents_valid "$AGENTS"; then
+  note "ignored the agent list '$AGENTS' - it must be comma-separated names, each [a-z0-9][a-z0-9:_-]*, with no spaces - no dev-system agent order written"
+  AGENTS=""
+fi
+
+# What is set by hand: the config without its managed and legacy blocks.
+hand=""
+if [ -f "$NM_CONFIG" ]; then
+  hand=$(PIN_BLOCK='' render 0 < "$NM_CONFIG")
+fi
+
+want_pin=0
 if [ -n "$CODEX_MODEL" ]; then
-  want=1
-  # A pin set by hand outside the managed and legacy blocks wins.
-  if [ -f "$NM_CONFIG" ] && PIN_BLOCK='' render 0 < "$NM_CONFIG" | grep -qE '^(agent_args_override|agent_config):'; then
-    want=0
+  want_pin=1
+  if printf '%s\n' "$hand" | grep -qE '^(agent_args_override|agent_config):'; then
+    want_pin=0
     note "left the hand-set agent_args_override / agent_config in $NM_CONFIG alone - no dev-system model pin written"
   fi
 fi
+
+want_agents=0
+if [ -n "$AGENTS" ]; then
+  want_agents=1
+  if printf '%s\n' "$hand" | grep -qE '^agent[[:space:]]*:'; then
+    want_agents=0
+    note "left the hand-set agent in $NM_CONFIG alone - no dev-system agent order written"
+  fi
+fi
+
+want=1
+[ "$want_pin" = 1 ] || [ "$want_agents" = 1 ] || want=0
 
 # Nothing to write: leave the file alone unless it holds a block to remove.
 if [ "$want" = 0 ]; then
@@ -127,10 +175,16 @@ if [ "$want" = 0 ]; then
 fi
 
 PIN_BLOCK=$(
-  cat <<EOF
-$PIN_BEGIN
-# The no-mistakes model pin (a global-only key), written by dev-system. To pin models by
-# hand, delete this whole block, markers included, and write your own agent_args_override.
+  echo "$PIN_BEGIN"
+  echo "# Written by dev-system (its images/base/models.env). To set one of these keys by hand,"
+  echo "# delete this whole block, markers included, and write your own outside it."
+  if [ "$want_agents" = 1 ]; then
+    echo "# The pipeline's ordered agent list: no-mistakes moves to the next agent when one fails."
+    echo "agent: [$(printf '%s' "$AGENTS" | sed 's/,/, /g')]"
+  fi
+  if [ "$want_pin" = 1 ]; then
+    cat <<EOF
+# The model pin (a global-only key).
 agent_args_override:
   codex:
     - -m
@@ -140,12 +194,13 @@ agent_args_override:
     - -c
     - model_reasoning_effort="medium"
 EOF
-  if [ -n "$CLAUDE_MODEL" ]; then
-    cat <<EOF
+    if [ -n "$CLAUDE_MODEL" ]; then
+      cat <<EOF
   claude:
     - --model
     - ${CLAUDE_MODEL}
 EOF
+    fi
   fi
   echo "$PIN_END"
 )

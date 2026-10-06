@@ -14,14 +14,16 @@ no-mistakes pipeline config.
   remember fresh no-mistakes worktrees have no dependencies installed, so install first if
   your package manager needs it), additions to `ignore_patterns`, and the optional
   `document.instructions` block.
-- Synced: `auto_fix`, `agent`, and the commented-out optional
+- Synced: `auto_fix`, and the commented-out optional
   sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
   block if you want to opt in, rather than uncommenting the synced copy in place.
-- Not here: the codex model pin. `agent_args_override` / `agent_config` are global-only
-  keys that no-mistakes silently ignores in a repo file; the base image's `dev-init` keeps
-  the pin as a managed block in the global no-mistakes config instead, rewritten on every
-  start from `images/base/models.env` as it is on dev-system's `main` branch, with the
-  image's baked copy as the offline fallback (see `images/base/README.md`).
+- Not here: the pipeline's agent order (`agent`) and the codex model pin
+  (`agent_args_override` / `agent_config`). The base image's `dev-init` keeps both in a
+  managed block of the global no-mistakes config instead, rewritten on every start from
+  `images/base/models.env` as it is on dev-system's `main` branch, with the image's baked
+  copy as the offline fallback (see `images/base/README.md`). The model pin is global-only:
+  no-mistakes silently ignores it in a repo file. The agent order is not: a repo that needs
+  its own sets `agent:` in its repo-owned block, which replaces the global order entirely.
 
 ## `treehouse.toml` -> `treehouse.toml`
 

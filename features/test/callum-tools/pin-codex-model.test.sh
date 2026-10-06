@@ -177,6 +177,103 @@ printf 'agent: codex' > "$cfg"
 pin "$cfg" ""
 [ "$(cat "$cfg"; echo x)" = "agent: codexx" ] || fail "a config with no block was rewritten"
 
+# --- the agent order (4th argument): written in order, with the pin, or alone
+cfg="$tmpdir/agents.yaml"
+pin "$cfg" test-model claude-test codex,claude
+[ "$out" = changed ] || fail "a write with agents should report 'changed'"
+[ "$(managed "$cfg" | grep -c '^agent:')" = 1 ] || fail "agent not written once in the block: $(cat "$cfg")"
+managed "$cfg" | grep -qx 'agent: \[codex, claude\]' || fail "agent order not written as a list in order: $(cat "$cfg")"
+managed "$cfg" | grep -qx '    - test-model' || fail "the pin should be written next to the agent order"
+pin "$cfg" test-model claude-test codex,claude
+[ -z "$out" ] || fail "an identical call with agents should report nothing, got '$out'"
+
+# a list change rewrites the block in place, keeping content around it
+printf 'auto_fix:\n  lint: 5\n' > "$cfg"
+pin "$cfg" test-model "" codex,claude
+printf '\nkeep: 1\n' >> "$cfg"
+pin "$cfg" test-model "" claude,acp:my-agent,codex
+[ "$out" = changed ] || fail "a list change should report 'changed'"
+grep -qx 'agent: \[claude, acp:my-agent, codex\]' "$cfg" || fail "new agent order not written: $(cat "$cfg")"
+[ "$(grep -c '^agent:' "$cfg")" = 1 ] || fail "agent duplicated on a list change: $(cat "$cfg")"
+expected=$(
+  printf 'auto_fix:\n  lint: 5\n\n'
+  managed "$cfg"
+  printf '\nkeep: 1\n'
+)
+[ "$(cat "$cfg")" = "$expected" ] || fail "content around the block not preserved on a list change: $(cat "$cfg")"
+
+# an empty codex model removes only the pin part; empty agents remove only the agent part
+pin "$cfg" "" "" claude
+[ "$out" = changed ] || fail "dropping the pin should report 'changed'"
+grep -qx 'agent: \[claude\]' "$cfg" || fail "agent part lost when the pin was dropped: $(cat "$cfg")"
+grep -q 'agent_args_override' "$cfg" && fail "pin kept for an empty codex model: $(cat "$cfg")"
+pin "$cfg" test-model "" ""
+[ "$out" = changed ] || fail "dropping the agents should report 'changed'"
+grep -q '^agent:' "$cfg" && fail "agent part kept for empty agents: $(cat "$cfg")"
+grep -qx '    - test-model' "$cfg" || fail "pin not written when the agents were dropped"
+
+# both parts empty removes the block, and the blank line before it
+pin "$cfg" test-model "" codex
+pin "$cfg" "" "" ""
+[ "$out" = changed ] || fail "removing the block for two empty parts should report 'changed'"
+[ "$(cat "$cfg")" = "$(printf 'auto_fix:\n  lint: 5\n\nkeep: 1')" ] || fail "block not removed cleanly: $(cat "$cfg")"
+
+# an invalid agent list drops only the agent part, with a one-line note
+# shellcheck disable=SC2016 # a literal $(id), to prove it is rejected
+for bad in 'codex,,claude' ',codex' 'codex,' 'codex, claude' 'Codex' 'codex;rm' '$(id)' '-codex' 'co dex'; do
+  cfg="$tmpdir/bad-agents.yaml"
+  rm -f "$cfg"
+  pin "$cfg" test-model "" "$bad"
+  grep -q '^agent:' "$cfg" && fail "invalid agent list '$bad' written: $(cat "$cfg")"
+  grep -qx '    - test-model' "$cfg" || fail "pin lost for an invalid agent list '$bad'"
+  grep -q 'ignored the agent list' "$tmpdir/err" || fail "no note for the invalid agent list '$bad'"
+  [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
+done
+
+# --- a hand-set top-level agent suppresses only the agent part
+cfg="$tmpdir/hand-agent.yaml"
+printf 'agent: claude\n' > "$cfg"
+pin "$cfg" test-model claude-test codex,claude
+[ "$out" = changed ] || fail "the pin should still be written next to a hand-set agent"
+[ "$(grep -c '^agent:' "$cfg")" = 1 ] || fail "agent duplicated next to a hand-set one: $(cat "$cfg")"
+[ "$(head -n 1 "$cfg")" = 'agent: claude' ] || fail "hand-set agent changed: $(cat "$cfg")"
+grep -qx '    - test-model' "$cfg" || fail "pin not written next to a hand-set agent"
+grep -q 'left the hand-set agent in' "$tmpdir/err" || fail "no note for a hand-set agent: $(cat "$tmpdir/err")"
+[ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
+# ... and an existing managed agent part is removed when one is set by hand later
+cfg="$tmpdir/hand-agent-later.yaml"
+pin "$cfg" test-model "" codex,claude
+printf '\nagent: [claude]\n' >> "$cfg"
+pin "$cfg" test-model "" codex,claude
+[ "$out" = changed ] || fail "removing the managed agent part should report 'changed'"
+[ "$(grep -c '^agent:' "$cfg")" = 1 ] || fail "managed agent kept next to a hand-set one: $(cat "$cfg")"
+[ "$(tail -n 1 "$cfg")" = 'agent: [claude]' ] || fail "hand-set agent changed: $(cat "$cfg")"
+grep -qx '    - test-model' "$cfg" || fail "pin lost when the agent was set by hand"
+# a hand-set agent and an empty codex model: nothing left to write
+cfg="$tmpdir/hand-agent-only.yaml"
+printf 'agent: claude\n' > "$cfg"
+pin "$cfg" "" "" codex
+[ -z "$out" ] || fail "nothing to write should report nothing, got '$out'"
+[ "$(cat "$cfg")" = 'agent: claude' ] || fail "hand-set agent config was modified: $(cat "$cfg")"
+# agent_args_override and agent_config are not a hand-set agent
+cfg="$tmpdir/agent-lookalike.yaml"
+printf 'agent_timeout: 5m\n' > "$cfg"
+pin "$cfg" test-model "" codex
+grep -qx 'agent: \[codex\]' "$cfg" || fail "a look-alike key suppressed the agent part: $(cat "$cfg")"
+
+# --- a hand-set pin suppresses only the pin part
+for key in agent_config agent_args_override; do
+  cfg="$tmpdir/hand-pin-agents-$key.yaml"
+  printf '%s:\n  codex:\n    - -m\n    - my-own\n' "$key" > "$cfg"
+  pin "$cfg" test-model claude-test codex,claude
+  [ "$out" = changed ] || fail "the agent part should still be written next to a hand-set $key"
+  grep -qx 'agent: \[codex, claude\]' "$cfg" || fail "agent part not written next to a hand-set $key: $(cat "$cfg")"
+  [ "$(grep -c "^$key:" "$cfg")" = 1 ] || fail "$key duplicated: $(cat "$cfg")"
+  managed "$cfg" | grep -q 'agent_args_override\|test-model' && fail "pin written next to a hand-set $key: $(cat "$cfg")"
+  [ "$(head -n 4 "$cfg")" = "$(printf '%s:\n  codex:\n    - -m\n    - my-own' "$key")" ] || fail "hand-set $key changed"
+  grep -q "hand-set agent_args_override / agent_config" "$tmpdir/err" || fail "no note for a hand-set $key"
+done
+
 # --- unbalanced markers: an error, file left alone
 cfg="$tmpdir/unbalanced.yaml"
 printf '%s\nagent_args_override: {}\nfoo: 1\n' "$BEGIN" > "$cfg"
