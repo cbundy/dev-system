@@ -963,7 +963,7 @@ docker rm -f "$c" >/dev/null
 # pre-answers it in both modes, so the stub starts without prompting, and
 # keeps the config's other values.
 for mode in session server; do
-  seen=; [ "$mode" = server ] && seen=',\"fullscreenUpsellSeenCount\":7'
+  seen=; [ "$mode" = server ] && seen=',"fullscreenUpsellSeenCount":7'
   want=3; [ "$mode" = server ] && want=7
   c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=$mode "$IMAGE" bash -c "
     echo '{\"userID\":\"keep-me\",\"hasCompletedOnboarding\":true$seen}' > /persist/claude/.claude.json &&
