@@ -209,7 +209,8 @@ configure_codex_otel() {
 
 # 4. The no-mistakes codex model pin, with the callum-tools `codexModel`
 #    semantics: DEV_CODEX_MODEL overrides the feature's default, and an empty
-#    value skips the pin. An existing pin is never touched.
+#    value skips the pin. An existing pin is never touched. DEV_CLAUDE_MODEL
+#    (default claude-sonnet-5-5, empty to skip) pins the claude fallback agent.
 seed_no_mistakes_model() {
   local nm_home="${NM_HOME:-/persist/no-mistakes}" model
   [ -w "$nm_home" ] || return 0
@@ -218,7 +219,7 @@ seed_no_mistakes_model() {
   else
     model=$(cat /usr/local/share/dev-system/codex-model.default 2>/dev/null || true)
   fi
-  "$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$model" \
+  "$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$model" "${DEV_CLAUDE_MODEL-claude-sonnet-5-5}" \
     || log "WARNING: could not write the codex model pin to $nm_home/config.yaml"
 }
 

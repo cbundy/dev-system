@@ -2,11 +2,12 @@
 #
 # Pin the codex model the no-mistakes pipeline runs on.
 #
-# Usage: pin-codex-model.sh <no-mistakes config.yaml> <model>
+# Usage: pin-codex-model.sh <no-mistakes config.yaml> <model> [claude fallback model]
 #
 # `agent_args_override` is honoured ONLY in the global no-mistakes config.yaml
 # - a copy in a repo's .no-mistakes.yaml is silently ignored, leaving codex on
-# its (top-end) default. Append the block once; an existing pin, however it
+# its (top-end) default. The optional third argument also pins the model of
+# claude, the fallback agent in the synced `agent: [codex, claude]`. Append the block once; an existing pin, however it
 # got there, is left alone. An empty model skips the pin. The daemon reads
 # this file at start-up, so a running daemon needs a restart to see it.
 #
@@ -16,6 +17,7 @@ set -eu
 
 NM_CONFIG="$1"
 CODEX_MODEL="$2"
+CLAUDE_MODEL="${3:-}"
 
 [ -n "$CODEX_MODEL" ] || exit 0
 if grep -qE '^(agent_args_override|agent_config):' "$NM_CONFIG" 2>/dev/null; then
@@ -35,3 +37,10 @@ agent_args_override:
     - -c
     - model_reasoning_effort="medium"
 EOF
+if [ -n "$CLAUDE_MODEL" ]; then
+  cat >> "$NM_CONFIG" <<EOF
+  claude:
+    - --model
+    - ${CLAUDE_MODEL}
+EOF
+fi
