@@ -213,6 +213,12 @@ else
   fail "treehouse is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
 fi
 
+if command -v uv >/dev/null 2>&1; then
+  ok "uv is on PATH"
+else
+  fail "uv is not on PATH" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
+fi
+
 # agentsview session push: on when a PostgreSQL URL is configured, the
 # secret file or AGENTSVIEW_PG_URL (agentsview.sh). Off is a WARN with the way
 # to turn it on: every container is meant to push. Only with a URL are the
