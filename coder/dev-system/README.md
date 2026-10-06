@@ -15,13 +15,13 @@ Control. After one login per workspace it shows up in claude.ai and the Claude a
 
 ## Push
 
-This directory is pushed as two templates, which differ only in the Remote Control mode
-default:
+This directory is pushed as two templates, which differ only in their variables: the
+Remote Control mode default and the long-lived session's settings:
 
 | Template | Display | Remote Control mode default | For |
 |---|---|---|---|
 | `dev-system` | dev-system (Docker icon) | `auto`: `server` with a repo, else `session` | Working on a repo, one worktree per claude.ai session |
-| `orchestrator` | Orchestrator (🔄) | `session` | One long-running interactive Claude, e.g. the issue orchestrator |
+| `orchestrator` | Orchestrator (🔄) | `session`, resumed on every start | One long-running interactive Claude running the issue orchestrator. See [Orchestrator workspace](#orchestrator-workspace). |
 
 From the repo root, with the `coder` CLI logged in as a template admin:
 
@@ -31,7 +31,9 @@ coder/push.sh orchestrator
 ```
 
 [`coder/push.sh`](../push.sh) holds each template's name, display name, icon,
-description and `remote_control_default_mode`, and pushes the first time too. The site's
+description and `remote_control_*` variables, and pushes the first time too. The coder
+CLI reads each `--variable` as a CSV record, so `push.sh` quotes every `name=value` as
+one field, which keeps commas, emoji and spaces in a value intact. The site's
 values for the variables below are committed in [`terraform.tfvars`](terraform.tfvars),
 which `coder templates push` reads from this directory on every push, so no push can drop
 one. To change a value, edit that file and push both templates again. A `--variable` flag
@@ -41,13 +43,18 @@ Telemetry goes to the `otlp_endpoint` in `terraform.tfvars` (what is collected a
 privacy defaults are in
 [the image's Telemetry section](../../images/base/README.md#telemetry-opentelemetry-export)).
 
-### Variables (set in `terraform.tfvars`)
+### Template variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
 | `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
+| `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator`). |
+| `remote_control_default_skip_permissions` | `false` | Default of the `remote_control_skip_permissions` parameter. Set per template by `push.sh` (`false` for both, for now). |
+| `remote_control_prompt` | empty | `session` mode: the first message of a fresh conversation (`DEV_REMOTE_CONTROL_PROMPT`). Set per template by `push.sh` (`/callum-flow:issue-orchestrator` for `orchestrator`). |
+| `remote_control_resume_prompt` | empty | `session` mode: the message sent when the conversation is resumed (`DEV_REMOTE_CONTROL_RESUME_PROMPT`). Set per template by `push.sh` (for `orchestrator`, a nudge to re-read its memory file and re-arm its loop). |
+| `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🔄 {name} orchestrator` for `orchestrator`). |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
@@ -98,7 +105,8 @@ coder create my-ws --template dev-system   # Enter accepts each default
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
 | `remote_control_mode` | `auto` (`session` in `orchestrator`) | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
-| `remote_control_skip_permissions` | `false` | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
+| `remote_control_skip_permissions` | `false` (from `remote_control_default_skip_permissions`) | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
+| `remote_control_resume` | `false` (`true` in `orchestrator`) | yes | `session` mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Sets `DEV_REMOTE_CONTROL_RESUME=1`. Ignored in `server` mode. See [Orchestrator workspace](#orchestrator-workspace). |
 | `cpus` | 2 | yes | CPU limit (1-8). |
 | `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
 | `template_testing` | `false` | yes | Mounts the Template Admin token from `template_tester_secrets_dir`, so agents here can push `dev-system-next`. That token can change any template: only for a workspace developing dev-system. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
@@ -133,14 +141,17 @@ From base image 2.1.0 (cbundy/dev-system#77; see "Workspace and repo" in the
 
 - **With a repo URL** (`repo_url`, or the `DEV_REPO_URL` a per-repo image carries),
   `dev-init` clones it into `/workspaces/<repo name>` on the first start and only fetches
-  after that. Claude runs there, and the Remote Control name (the session or environment
-  name in claude.ai) is the repo name. The template sets neither. Remote Control mode
-  `auto` becomes `server`, so the workspace shows up in claude.ai as an environment
-  where each new session gets its own worktree.
+  after that. Claude runs there. In `dev-system`, the Remote Control name (the session or
+  environment name in claude.ai) is the repo name; `orchestrator` formats it as
+  `🔄 <repo name> orchestrator`. Remote Control mode `auto` becomes `server`, so the
+  `dev-system` workspace shows up in claude.ai as an environment where each new session
+  gets its own worktree.
   - A private repo needs a GitHub credential: Coder external auth (`GIT_ASKPASS`), or
     else the gh login on the Log in page, after which `dev-login watch` runs the clone.
 - **Without one**, the startup script sets `DEV_WORKSPACE=/workspaces`, so Claude still
-  runs on the volume, and names the session `coder-<workspace>`. Mode `auto` becomes
+  runs on the volume, and names the session `coder-<workspace>` (with a
+  `remote_control_name_format`, the image fills in the hostname, which is the workspace
+  name, instead). Mode `auto` becomes
   `session`: one interactive Claude, as `server` mode would put every session in the
   same directory.
 
@@ -150,6 +161,40 @@ resolved mode for `dev-init` and `dev-remote-control --post-start`; the agent `e
 so a `coder ssh` shell, still holds `DEV_REMOTE_CONTROL_MODE=auto`, which the image
 rejects, so set the mode explicitly to run `dev-remote-control` by hand there. On an image older than
 2.1.0, nothing is cloned and Claude runs in `/workspaces`.
+
+## Orchestrator workspace
+
+The `orchestrator` template runs one long-lived interactive Claude, for the
+`issue-orchestrator` skill, that comes back as the same conversation after any stop,
+restart, rebuild, template update or crash (cbundy/dev-system#164; needs base image 2.5.0 or
+later). The intended unattended settings:
+
+- **`session` mode** (the template's default): one conversation, not one per claude.ai
+  session.
+- **Resume on** (`remote_control_resume`, on by default here): each start resumes the
+  workspace's last conversation and reattaches to the same claude.ai Remote Control
+  session, with its history. How the image picks the conversation is in
+  "Resuming the conversation" in the [image README](../../images/base/README.md).
+- **Auto-start**: a fresh conversation starts with `/callum-flow:issue-orchestrator`, so
+  nobody has to type the first message. A resumed one gets a nudge instead, to re-read
+  `.claude/orchestrator-memory.md` and re-arm its watchers, audit and loop, since those
+  do not survive a process restart. After the first real conversation every start, a
+  crash loop included, resumes it, so the startup prompt is never sent twice.
+- **Name**: `🔄 <repo> orchestrator` (`remote_control_name_format`), told apart from the
+  per-project sessions at a glance and stable across restarts.
+- **Auto-compact left on auto**, so the one Claude process can run indefinitely.
+- **A repo set** (`repo_url` or a per-repo image), so the memory file sits in the
+  workspace's checkout and Claude's transcripts in its `/persist`, both on that
+  workspace's volumes.
+- **Skip permissions** (`remote_control_skip_permissions`): off by default for now.
+  Whether the orchestrator acts without anyone approving tool calls is the owner's call;
+  until then, approve from claude.ai or the Claude app.
+
+**Durability.** The conversation history lives on the workspace's `/persist` volume, so
+it survives a stop, a restart, a rebuild and a template update. It does **not** survive deleting the
+workspace (both volumes are deleted with it, the memory file's checkout included), and a
+compaction can lose detail. Keep the orchestrator's durable state in its memory file and
+on GitHub, so a lossy compaction or a lost transcript costs little.
 
 ## What the template does
 
