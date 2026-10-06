@@ -22,7 +22,7 @@ every repo, so no repo carries a fork of the setup.
 | **Self-checks** (`dev-init`, `dev-doctor`) | Idempotent start-up setup and a health report. Every failure line comes with a `fix:` hint. |
 | **Issue-delivery workflow** (`callum-flow` plugin) | `issue-orchestrator` works a `ready` issue queue. `implement-issue` takes one issue through a treehouse worktree and the no-mistakes pipeline. `/update-dev` upstreams a change to this repo as a PR. `/callum-flow:onboard` onboards a repo. A hook blocks `git stash`. |
 | **Synced repo config** (`callum-dev`) | `init` scaffolds the config. `update` merges template changes 3-way, so a repo's own edits survive. `check` fails CI when a repo is behind the installed version. |
-| **Coder template** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. |
+| **Coder templates** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. The `orchestrator` template is the same, with one interactive Claude session by default. |
 | **Central session history** (agentsview) | Every container pushes its Claude and codex sessions to one PostgreSQL. You browse and search them in one viewer. Set the URL once per host. |
 | **Telemetry** (OTLP) | Coder workspaces can export Claude Code and codex telemetry to an OTLP endpoint. |
 
@@ -46,6 +46,6 @@ npx callum-dev init          # then fill every <REPLACE> and commit
 | [`docs/onboarding.md`](docs/onboarding.md) | Making a repo a dev-system repo (written for agents) |
 | [`docs/architecture.md`](docs/architecture.md) | Layers, versioning, how updates reach repos, the runtime map for debugging |
 | [`images/base/README.md`](images/base/README.md) | The base image: persistence, `dev-init`, `dev-doctor`, Remote Control, logins, agentsview |
-| [`coder/dev-system/README.md`](coder/dev-system/README.md) | The Coder template: pushing it, parameters, OTLP |
+| [`coder/dev-system/README.md`](coder/dev-system/README.md) | The Coder templates: pushing them, parameters, OTLP |
 | [`templates/README.md`](templates/README.md) | Each template file: what is synced and what the repo owns |
 | [`RELEASING.md`](RELEASING.md) | Cutting a release of each layer |

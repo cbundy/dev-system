@@ -11,11 +11,13 @@
 # creates or deletes workspaces named next-smoke-* built from it. Promoting a change to the
 # production dev-system template is the owner's step, not this script's.
 #
-# Inputs, all from the template-tester mount, which the template mounts only into a
+# The token comes from the template-tester mount, which the template mounts only into a
 # workspace with the template_testing parameter on (see "Testing template changes from a
 # workspace" in README.md beside this script):
 #   $DEV_TEMPLATE_TESTER_DIR/coder-session-token  a session token for a Template Admin user
-#   $DEV_TEMPLATE_TESTER_DIR/coder-template-vars  name=value per line, passed as --variable
+# The template's variables come from terraform.tfvars beside this script, which coder reads
+# on every push, exactly as for dev-system, except that template_tester_secrets_dir is always
+# pushed empty, so dev-system-next workspaces never get the token.
 # DEV_TEMPLATE_TESTER_DIR defaults to /run/secrets/dev-system-template-tester. The shared
 # secrets mount (/run/secrets/dev-system, in every workspace) is deliberately not read. The
 # deployment URL is CODER_URL, else the agent's CODER_AGENT_URL.
@@ -35,7 +37,6 @@ SETUP_HINT='see "Testing template changes from a workspace" in coder/dev-system/
 TEMPLATE_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 TESTER_DIR=${DEV_TEMPLATE_TESTER_DIR:-/run/secrets/dev-system-template-tester}
 TOKEN_FILE=$TESTER_DIR/coder-session-token
-VARS_FILE=$TESTER_DIR/coder-template-vars
 OPT_IN_HINT="enable the template_testing parameter on this workspace (and push the template with its template_tester_secrets_dir variable set) - $SETUP_HINT"
 # How long smoke waits for the new workspace's agent, and how often it looks.
 TIMEOUT=${PUSH_NEXT_TIMEOUT:-600}
@@ -112,23 +113,12 @@ coder_run() {
 }
 
 push() {
-  set -- templates push "$TEMPLATE" --directory "$TEMPLATE_DIR" --yes
+  # coder reads the variables from terraform.tfvars; the flag overrides the file's
+  # template_tester_secrets_dir, so no dev-system-next workspace ever mounts the token.
+  set -- templates push "$TEMPLATE" --directory "$TEMPLATE_DIR" --yes \
+    --variable template_tester_secrets_dir=
   sha=$(git -C "$TEMPLATE_DIR" rev-parse --short HEAD 2>/dev/null || true)
   [ -z "$sha" ] || set -- "$@" --message "push-next.sh from $sha"
-  if [ -r "$VARS_FILE" ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        '' | '#'*) continue ;;
-      esac
-      name=${line%%=*}
-      case "$name" in
-        "$line" | '' | [0-9]* | *[!A-Za-z0-9_]*) die "$VARS_FILE: not a name=value line: $line" ;;
-      esac
-      set -- "$@" --variable "$line"
-    done < "$VARS_FILE"
-  else
-    echo "push-next: no $VARS_FILE, pushing with the template's default variables" >&2
-  fi
   echo "push-next: pushing $TEMPLATE_DIR as $TEMPLATE" >&2
   coder_run "$@"
 }
