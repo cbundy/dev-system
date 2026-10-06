@@ -47,4 +47,11 @@ cfg4="$tmpdir/empty/config.yaml"
 "$PIN_SH" "$cfg4" ""
 [ ! -e "$cfg4" ] || fail "empty model should skip the pin"
 
+# claude fallback model -> pinned under the same block
+cfg5="$tmpdir/claude.yaml"
+"$PIN_SH" "$cfg5" test-model claude-test
+grep -qx '  claude:' "$cfg5" || fail "claude pin not written"
+grep -qx '    - claude-test' "$cfg5" || fail "claude model not written - config was: $(cat "$cfg5")"
+grep -q '  claude:' "$cfg" && fail "claude pin written without a claude model"
+
 echo "pin-codex-model.sh: all tests passed"

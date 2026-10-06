@@ -399,6 +399,8 @@ container never fails to start because of it.
 4. Pins the codex model no-mistakes uses in `$NM_HOME/config.yaml`, only if no pin exists,
    with the same rules as the callum-tools `codexModel` option. `DEV_CODEX_MODEL` overrides
    the default (the feature's `codexModel` default); `DEV_CODEX_MODEL=""` skips the pin.
+   The same block pins claude, the pipeline's fallback agent, to `DEV_CLAUDE_MODEL`
+   (default `claude-sonnet-5-5`; empty to leave claude on its default).
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or

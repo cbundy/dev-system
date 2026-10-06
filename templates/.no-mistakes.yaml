@@ -34,7 +34,8 @@ auto_fix:
   lint: 5
   ci: 3
 
-agent: codex
+# Ordered fallback list: no-mistakes moves to claude when codex fails, e.g. out of usage.
+agent: [codex, claude]
 
 # The codex model pin (agent_args_override / agent_config) is a GLOBAL-ONLY key: no-mistakes
 # ignores it here without warning. It lives in the global no-mistakes config, written by
