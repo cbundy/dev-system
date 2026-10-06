@@ -28,6 +28,23 @@
 set -euo pipefail
 
 IMAGE="${1:?usage: test.sh <image>}"
+
+# Every container these tests start reads its models from the image's baked
+# models.env only (DEV_MODELS_URL empty): dev-init would otherwise fetch the
+# file from GitHub on each start, so results would depend on the network and on
+# what main holds. The fetch's own tests (section 5) set DEV_MODELS_URL inside
+# the container, which wins over this. Exported, so the `bash -c` checks get it.
+# xargs in cleanup runs the real docker, which is fine: it never runs a container.
+# shellcheck disable=SC2032
+docker() {
+  if [ "${1:-}" = run ]; then
+    shift
+    command docker run -e DEV_MODELS_URL= "$@"
+  else
+    command docker "$@"
+  fi
+}
+export -f docker
 DEVCONTAINER="${DEVCONTAINER:-devcontainer}"
 RUN_ID="dsb-test-$$"
 PASSES=0
@@ -79,6 +96,7 @@ put_secret() {
 # a log, a report, a process list or docker inspect.
 SECRET="dsb-secret-$$-pw"
 
+# shellcheck disable=SC2033 # xargs runs the real docker on purpose, see docker() above
 cleanup() {
   docker ps -aq --filter "label=$RUN_ID" | xargs -r docker rm -f >/dev/null 2>&1 || true
   docker volume ls -q --filter "label=$RUN_ID" | xargs -r docker volume rm -f >/dev/null 2>&1 || true
@@ -211,15 +229,55 @@ check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and 
   grep -qx -- "    - other-model" $cfg && ! grep -q "my-model\|my-claude\|  claude:" $cfg
   [ "$(head -n 1 $cfg)" = "agent: codex" ] && [ "$(tail -n 1 $cfg)" = "keep: 1" ]
   DEV_CODEX_MODEL= dev-init >/dev/null 2>&1
-  ! grep -q "agent_args_override\|dev-system managed" $cfg
+  ! grep -q "agent_args_override\|dev-system managed" $cfg || exit 1
   [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
+  --entrypoint ""
+# The models file fetched on every start (cbundy/dev-system#162), served over
+# file:// so no network is needed: per key over the baked file, env over both.
+check "dev-init pins the models fetched from DEV_MODELS_URL, per key over the baked ones, env over both" in_image '
+  set -e
+  . /usr/local/share/dev-system/models.sh
+  env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
+  printf "CODEX_MODEL=fetched-codex\nCLAUDE_MODEL=not;valid\n" > /tmp/m.env
+  out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1); echo "$out" | grep -i model
+  grep -qx -- "    - fetched-codex" $cfg
+  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg
+  echo "$out" | grep -qF "dev-init: models read from file:///tmp/m.env, with the image"
+  if echo "$out" | grep -q "WARNING: could not use the models file"; then exit 1; fi
+  out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
+  if echo "$out" | grep -q "models read from"; then echo "logged with the pin unchanged"; exit 1; fi
+  DEV_MODELS_URL=file:///tmp/m.env DEV_CODEX_MODEL=env-codex dev-init >/dev/null 2>&1
+  grep -qx -- "    - env-codex" $cfg
+  [ -z "$(find /tmp -maxdepth 1 -name "dev-models.*")" ]' \
+  --entrypoint ""
+check "dev-init falls back to the baked models with one WARNING when the fetch fails, and an empty DEV_MODELS_URL skips it" in_image '
+  set -e
+  . /usr/local/share/dev-system/models.sh
+  env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
+  baked="    - $(models_value $env CODEX_MODEL)"
+  for url in file:///tmp/missing.env https://127.0.0.1:1/models.env; do
+    out=$(DEV_MODELS_URL=$url dev-init 2>&1; echo "rc=$?"); echo "$out" | grep -i "model\|rc="
+    echo "$out" | grep -qx "rc=0"
+    [ "$(echo "$out" | grep -c "WARNING: could not use the models file from $url (")" = 1 ]
+    grep -qx -- "$baked" $cfg
+    printf "agent: codex\n" > $cfg
+  done
+  printf "nothing here\n" > /tmp/m.env
+  out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
+  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid CODEX_MODEL or CLAUDE_MODEL)"
+  grep -qx -- "$baked" $cfg
+  printf "CODEX_MODEL=fetched-codex\n" > /tmp/m.env
+  out=$(DEV_MODELS_URL= dev-init 2>&1)
+  if echo "$out" | grep -q "models file\|models read from"; then exit 1; fi
+  grep -qx -- "$baked" $cfg
+  [ -z "$(find /tmp -maxdepth 1 -name "dev-models.*")" ]' \
   --entrypoint ""
 check "dev-init migrates the unmarked pin an older image wrote, and respects a hand-set one" in_image '
   set -e
   cfg=/persist/no-mistakes/config.yaml
   printf "\n# Codex model pin, written by the callum-tools devcontainer feature (global-only key).\nagent_args_override:\n  codex:\n    - -m\n    - gpt-old\n" > $cfg
   dev-init >/dev/null 2>&1
-  ! grep -q "gpt-old\|callum-tools devcontainer feature" $cfg
+  ! grep -q "gpt-old\|callum-tools devcontainer feature" $cfg || exit 1
   grep -q "^# BEGIN dev-system managed" $cfg && [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
   printf "agent_config:\n  codex: {}\n" > $cfg
   out=$(dev-init 2>&1)
@@ -284,7 +342,7 @@ check "dev-init restarts a running no-mistakes daemon only when the model pin ch
   dev-init >/dev/null 2>&1
   first=$(pid); [ -n "$first" ]
   out=$(dev-init 2>&1)
-  ! echo "$out" | grep -q "restarted the no-mistakes daemon"
+  ! echo "$out" | grep -q "restarted the no-mistakes daemon" || exit 1
   [ "$(pid)" = "$first" ]
   out=$(DEV_CODEX_MODEL=changed-model dev-init 2>&1); echo "$out"
   echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new model pin"

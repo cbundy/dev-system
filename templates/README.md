@@ -20,7 +20,8 @@ no-mistakes pipeline config.
 - Not here: the codex model pin. `agent_args_override` / `agent_config` are global-only
   keys that no-mistakes silently ignores in a repo file; the base image's `dev-init` keeps
   the pin as a managed block in the global no-mistakes config instead, rewritten on every
-  start from `images/base/models.env` (see `images/base/README.md`).
+  start from `images/base/models.env` as it is on dev-system's `main` branch, with the
+  image's baked copy as the offline fallback (see `images/base/README.md`).
 
 ## `treehouse.toml` -> `treehouse.toml`
 

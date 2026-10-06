@@ -215,31 +215,48 @@ configure_codex_otel() {
 #    of these that has it:
 #    - DEV_CODEX_MODEL / DEV_CLAUDE_MODEL, when set at all: an empty value
 #      skips that pin (an empty codex model removes the block);
-#    - each file model_sources lists (models.sh parses them, never sources).
+#    - each file model_sources lists (models.sh parses them, never sources):
+#      the models file fetched once per start from DEV_MODELS_URL (default:
+#      images/base/models.env on this repo's main branch, so a merged model
+#      change reaches every workspace on its next start; empty turns the fetch
+#      off), then the copy baked into the image, the offline fallback. Per
+#      key, a valid fetched value beats the baked one.
 #    A changed block makes step 7 restart a running daemon, which reads the
 #    config only at start-up.
 MODELS_BAKED=/usr/local/share/dev-system/models.env
+MODELS_FETCHED=""
+MODELS_URL_USED=""
 NM_PIN_CHANGED=false
 
-# The models files to read, highest precedence first. A copy fetched at start
-# from the repo's main branch (cbundy/dev-system#162, follow-up) goes before
-# the defaults baked into the image.
+# The models files to read, highest precedence first.
 model_sources() {
+  [ -z "$MODELS_FETCHED" ] || echo "$MODELS_FETCHED"
   echo "$MODELS_BAKED"
 }
 
 # resolve_model <env var> <models.env key>: the model to pin, or nothing.
 resolve_model() {
-  local var="$1" key="$2" file value
-  if [ "${!var+set}" = set ]; then
-    printf '%s\n' "${!var}"
+  local sources
+  mapfile -t sources < <(model_sources)
+  models_resolve "$1" "$2" "${sources[@]}"
+}
+
+# fetch_models: fetches the models file from DEV_MODELS_URL into
+# MODELS_FETCHED. Any failure is one WARNING, and the baked file is used.
+fetch_models() {
+  local url tmp reason
+  url=$(models_url) || return 0
+  if ! tmp=$(mktemp "${TMPDIR:-/tmp}/dev-models.XXXXXX"); then
+    log "WARNING: could not fetch the models file from $url (no temp file) - using the image's baked models"
     return 0
   fi
-  while IFS= read -r file; do
-    value=$(models_value "$file" "$key") || continue
-    printf '%s\n' "$value"
-    return 0
-  done < <(model_sources)
+  if reason=$(models_fetch "$url" "$tmp"); then
+    MODELS_FETCHED="$tmp"
+    MODELS_URL_USED="$url"
+  else
+    log "WARNING: could not use the models file from $url ($reason) - using the image's baked models"
+    rm -f "$tmp"
+  fi
 }
 
 seed_no_mistakes_model() {
@@ -247,8 +264,13 @@ seed_no_mistakes_model() {
   [ -w "$nm_home" ] || return 0
   # shellcheck source=models.sh
   . /usr/local/share/dev-system/models.sh
+  fetch_models
   codex=$(resolve_model DEV_CODEX_MODEL CODEX_MODEL)
   claude=$(resolve_model DEV_CLAUDE_MODEL CLAUDE_MODEL)
+  if [ -n "$MODELS_FETCHED" ]; then
+    rm -f "$MODELS_FETCHED"
+    MODELS_FETCHED=""
+  fi
   if ! out=$("$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$codex" "$claude"); then
     log "WARNING: could not write the no-mistakes model pin to $nm_home/config.yaml"
     return 0
@@ -260,6 +282,7 @@ seed_no_mistakes_model() {
   else
     log "removed dev-init's no-mistakes model pin from $nm_home/config.yaml"
   fi
+  [ -z "$MODELS_URL_USED" ] || log "models read from $MODELS_URL_USED, with the image's baked models as the fallback"
 }
 
 # 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
