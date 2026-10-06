@@ -55,8 +55,8 @@ session. A session that is not watching stalls silently - nothing tells you.
   deliberately-parked issues (blocked, awaiting the owner) from firing. A
   change must be seen on two consecutive polls before it fires, which
   absorbs GitHub's label-list lag right after a claim.
-- **Pipeline watcher** - one for all in-flight branches; its arguments and
-  events are under Monitoring in-flight agents.
+- **Pipeline watcher** - one for the whole session, covering every live
+  run; its arguments and events are under Monitoring in-flight agents.
 
 **Run them under Monitor.** Where the harness has a **Monitor** tool (a
 long-running command whose every stdout line wakes the session), run each
@@ -73,10 +73,11 @@ describes. Two more lines can arrive:
 - **`watcher-error <reason>`** - the watcher has exited on a fatal error.
   Fix the cause if needed and re-arm at once.
 
-To change the pipeline watcher's branch set (a run newly in flight, a branch
-merged), stop its monitor and arm a new one with the new `--branches` and
-the `--known` baseline of what you have handled. Never run two of the same
-watcher - every event would arrive twice.
+The pipeline watcher derives its watch set from live runs on every poll, so
+a run newly in flight or a branch merged needs no re-arm - never maintain a
+branch list by hand; it drifts from what is actually running exactly when
+most is in flight. Never run two of the same watcher - every event would
+arrive twice.
 
 **Fallback where there is no Monitor tool:** run each watcher single-shot
 (no `--stream`) with the harness's `run_in_background`; it exits printing
@@ -134,14 +135,17 @@ you need ("wake me when this specific known state changes"), write a small
 background one-shot script that exits the moment the condition changes and start it
 with `run_in_background` - never fall back to polling inline.
 
-- Watch all in-flight branches with one pipeline watcher, run as described
-  under Watchers (`--stream` under Monitor, or the single-shot fallback):
-  `/usr/local/share/callum-tools/pipeline-watch.sh
-  --branches <branch-a,branch-b> --worktree <branch-a>=<worktree-path>
-  --worktree <branch-b>=<worktree-path>`, mapping each branch to the worktree
-  its agent works in. Every 25 seconds the watcher probes the
-  newest run per watched branch (`no-mistakes axi status --run <id>`, plus the
-  run's ci.log for the CI-green marker) and prints a line when one becomes
+- Watch every live run with one pipeline watcher, run as described under
+  Watchers (`--stream` under Monitor, or the single-shot fallback) from the
+  repo's checkout: `/usr/local/share/callum-tools/pipeline-watch.sh`, with
+  no `--branches`. Every 25 seconds it lists the repo's runs (`no-mistakes
+  runs`), so every branch with a run is watched - including one you never
+  noted and one that failed at launch - and it maps each branch to the
+  worktree it is checked out in automatically (`--worktree
+  <branch>=<path>` overrides that; `--branches` restricts the set, for a
+  one-off watch only). It probes the newest run per branch (`no-mistakes
+  axi status`, plus the run's ci.log for the CI-green marker) and prints a
+  line when one becomes
   actionable: `<state> <branch> <run-id>[ <detail>] head=<sha>`. With
   `--stream` it prints one line per branch each time that branch's state
   changes and keeps running; single-shot, it exits after the first line.
@@ -159,7 +163,9 @@ with `run_in_background` - never fall back to polling inline.
     fingerprint baseline: a branch whose current state+head still matches
     its `--known` entry does not re-fire, so arming right after handling an
     event is always safe. Branches with no `--known` entry fire the first
-    time they become actionable. Never respond to a re-fire risk by
+    time they become actionable - so on a fresh arm, an old failed run on
+    an abandoned branch fires once; note it in `--known` and move on.
+    Never respond to a re-fire risk by
     leaving the watcher disarmed - that silently drops coverage for every
     OTHER in-flight branch, which is worse than one redundant wake; always
     re-arm it, with an updated `--known` baseline if needed.
@@ -199,7 +205,13 @@ with `run_in_background` - never fall back to polling inline.
     Spawn a fixer agent instead only as the fallback: when the fix needs
     code the pipeline cannot write from instructions, or the run has already
     completed. Only then do the fixer-brief rules apply - see guard 4.
-  - **`failed`** - a step failed, which also parks the run at an approval
+  - **`failed`** - a run that failed before step 1, with no log directory
+    (its run id may print as `unknown`), is an infrastructure failure, not
+    a code defect - e.g. the shared-ref-store lock race `cannot lock ref
+    'refs/remotes/origin/<base>'` between concurrent fetches. Check
+    `~/.no-mistakes/logs/daemon.log`, then rebase the branch and start a
+    fresh `axi run` from its worktree; do not spawn a fixer agent.
+    Otherwise a step failed, which also parks the run at an approval
     gate (`axi status` shows e.g. `test,awaiting_approval`), so the default
     route is the same as `parked`: read the failing step's log
     (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) and drive it with `axi
@@ -249,7 +261,7 @@ following guards fire, and none of them is weakened:
 
 1. **Phantom-gating guard.** The watcher checks this mechanically (a
    `head-mismatch` wake), but only against `origin/<branch>` and the worktree
-   you mapped with `--worktree` - it cannot see a commit made anywhere else.
+   the branch is checked out in - it cannot see a commit made anywhere else.
    Before trusting any green, confirm the run's `head:` SHA equals the
    branch/PR's real HEAD SHA
    (`git log --oneline origin/<branch>..HEAD`, `gh pr view <pr> --json commits`).

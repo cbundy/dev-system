@@ -41,8 +41,13 @@ check "pipeline watcher detects actionable runs" bash -lc '
   echo "all CI checks passed - still monitoring until merged or closed" > "$tmpdir/nm/logs/RUNMERGE/ci.log"
   touch -d "2026-01-01 00:00" "$tmpdir/nm/logs/RUNMERGE"
   touch -d "2026-01-01 00:01" "$tmpdir/nm/logs/RUNOTHER"
+  # fake no-mistakes: `runs` prints runs.txt (real v1.84 rows, no run id);
+  # `axi status` with no --run knows no run for the checkout, so run ids
+  # come from the log directories
   cat > "$tmpdir/no-mistakes" <<'\''EOF'\''
 #!/bin/sh
+[ "$1" != "runs" ] || exec cat "$(dirname "$0")/runs.txt"
+if [ "$*" = "axi status" ]; then echo "current_branch: feat/watched"; exit 0; fi
 [ "$1" = "axi" ] && [ "$2" = "status" ] && [ "$3" = "--run" ] || exit 1
 case "$4" in
 RUNOTHER)
@@ -86,6 +91,8 @@ EOF
   g -C "$tmpdir/repo" push -q origin feat/watched
   g -C "$tmpdir/repo" rev-parse HEAD > "$tmpdir/run-head.txt"
   run_head=$(cat "$tmpdir/run-head.txt")
+  printf "%s\n" "  running      feat/unrelated 0000aaaa  2026-01-01 00:01" \
+    "  running      feat/watched $(printf %.8s "$run_head")  2026-01-01 00:00" > "$tmpdir/runs.txt"
   watch() {
     (cd "$tmpdir/repo" && PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 10 \
       /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/watched,feat/other "$@")
@@ -117,10 +124,13 @@ EOF
   # origin moved past the run head: fetched fresh, so reported even though
   # the local remote-tracking ref is stale
   g -C "$tmpdir/wt" push -q origin feat/watched
-  watch | grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$wt_head head=$run_head"
+  # (the gated repo itself is the branch'\''s worktree, found automatically)
+  watch | grep -qx "head-mismatch feat/watched RUNMERGE run=$run_head branch=$wt_head worktree=$run_head head=$run_head"
   # a newer parked rerun on the same branch outranks the older green run
   mkdir -p "$tmpdir/nm/logs/RUNPARK"
   touch -d "2026-01-01 00:02" "$tmpdir/nm/logs/RUNPARK"
+  printf "%s\n" "  running      feat/watched -  2026-01-01 00:02" "$(cat "$tmpdir/runs.txt")" > "$tmpdir/runs.next"
+  mv "$tmpdir/runs.next" "$tmpdir/runs.txt"
   watch | grep -qx "parked feat/watched RUNPARK head=unknown"
   # --known baseline: a fingerprint matching what was already reported
   # suppresses the re-fire (safe to restart the watcher after handling it)
@@ -136,6 +146,12 @@ EOF
   PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" PIPELINE_WATCH_INTERVAL=1 timeout 10 \
     /usr/local/share/callum-tools/pipeline-watch.sh --branches feat/quiet --deadline 1 |
     grep -qx "timeout"
+  # no --branches: every branch with a run is watched, including a run that
+  # failed at launch with no log directory (no source knows its id)
+  printf "%s\n" "  failed       feat/launch 0badc0de  2026-01-01 00:03" "$(cat "$tmpdir/runs.txt")" > "$tmpdir/runs.next"
+  mv "$tmpdir/runs.next" "$tmpdir/runs.txt"
+  (cd "$tmpdir/repo" && PATH="$tmpdir:$PATH" NO_MISTAKES_HOME="$tmpdir/nm" timeout 10 \
+    /usr/local/share/callum-tools/pipeline-watch.sh) | grep -qx "failed feat/launch unknown head=0badc0de"
 '
 # shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "queue watcher fires only on a ready-set delta" bash -lc '
