@@ -110,6 +110,38 @@ function kills_tmux_by_name(toks, cnt, i,    t) {
   return 0
 }
 
+function wrapper_option_takes_arg(base, opt) {
+  if (base == "env")
+    return (opt == "-u" || opt == "--unset" || opt == "-C" || \
+            opt == "--chdir" || opt == "-S" || opt == "--split-string")
+  if (base == "sudo")
+    return (opt == "-a" || opt == "--auth-type" || opt == "-C" || \
+            opt == "--close-from" || opt == "-D" || opt == "--chdir" || \
+            opt == "-g" || opt == "--group" || opt == "-h" || \
+            opt == "--host" || opt == "-p" || opt == "--prompt" || \
+            opt == "-R" || opt == "--chroot" || opt == "-r" || \
+            opt == "--role" || opt == "-t" || opt == "--type" || \
+            opt == "-T" || opt == "--command-timeout" || opt == "-u" || \
+            opt == "--user")
+  if (base == "exec") return (opt == "-a")
+  if (base == "time")
+    return (opt == "-f" || opt == "--format" || opt == "-o" || \
+            opt == "--output")
+  return 0
+}
+
+function wrapper_command_index(toks, cnt, i, base,    opt) {
+  i++
+  while (i <= cnt) {
+    opt = toks[i]
+    if (opt == "--") return i + 1
+    if (opt !~ /^-/ || opt == "-") return i
+    if (wrapper_option_takes_arg(base, opt)) i += 2
+    else i++
+  }
+  return i
+}
+
 function segment_is_tmux_kill(segment,    toks, cnt, i, base) {
   cnt = tokenize(segment, toks)
   if (cnt == 0) return 0
@@ -118,7 +150,10 @@ function segment_is_tmux_kill(segment,    toks, cnt, i, base) {
     if (toks[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
     base = base_of(toks[i])
     if (base == "env" || base == "sudo" || base == "exec" || base == "command" || \
-        base == "nohup" || base == "time") { i++; continue }
+        base == "nohup" || base == "time") {
+      i = wrapper_command_index(toks, cnt, i, base)
+      continue
+    }
     break
   }
   if (i > cnt) return 0

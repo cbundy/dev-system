@@ -91,6 +91,16 @@ test("refuses with env prefix, wrappers and a path to the binary", () => {
   assertDenied("/usr/bin/tmux kill-server");
   assertDenied("sudo tmux kill-server");
   assertDenied("env FOO=1 tmux kill-session -t a");
+  assertDenied("env -i tmux kill-server");
+  assertDenied("env -u TMUX FOO=1 tmux kill-session -t a");
+  assertDenied("command -- tmux kill-server");
+  assertDenied("nohup -- tmux kill-server");
+  assertDenied("sudo -n tmux kill-server");
+  assertDenied("sudo -u root tmux kill-server");
+  assertDenied("time -p tmux kill-server");
+  assertDenied("time -o /tmp/tmux-time.out tmux kill-server");
+  assertDenied("exec -a tmux-client tmux kill-server");
+  assertDenied("env -i sudo -n command -- /usr/bin/tmux kill-server");
 });
 
 test("refuses pkill and killall aimed at tmux", () => {
@@ -109,7 +119,15 @@ test("allows kill-server and kill-session on a private socket (-L or -S)", () =>
   assertAllowed("tmux -f x -L t kill-session -t a");
   assertAllowed("tmux -uL t kill-server");
   assertAllowed("/usr/bin/tmux -L t kill-server");
+  assertAllowed("env -i sudo -n tmux -L t kill-server");
   assertAllowed("pkill -f 'tmux -L mytest'");
+});
+
+test("does not mistake wrapper option arguments for executables", () => {
+  assertAllowed("env -u tmux kill-server");
+  assertAllowed("sudo -u tmux kill-server");
+  assertAllowed("time -o tmux kill-server");
+  assertAllowed("exec -a tmux kill-server");
 });
 
 test("does not refuse other tmux subcommands", () => {
