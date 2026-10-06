@@ -531,12 +531,14 @@ orphaned processes, so containers stop in well under a second instead of hitting
    Control rejects both, and `dev-login` leaves it alone.
 2. **Pre-answers the start-up dialogs**: it marks the workspace as trusted
    (`projects[<dir>].hasTrustDialogAccepted` in `$CLAUDE_CONFIG_DIR/.claude.json`),
-   Remote Control as accepted (`remoteDialogSeen`), and onboarding as done. An unattended
+   Remote Control as accepted (`remoteDialogSeen`), the one-time "Try the new fullscreen
+   renderer?" prompt as seen (`fullscreenUpsellSeenCount` raised to at least 3, a higher
+   value is kept), and onboarding as done. An unattended
    Claude otherwise sits at the folder trust dialog, which comes before anything else, or
    at the one-time "Enable Remote Control? (y/n)" prompt, which `claude remote-control`
    shows on a fresh config (cbundy/dev-system#88). Enabling `DEV_REMOTE_CONTROL` (the
    headless default) is the consent to Remote Control, so the supervisor answers it for
-   you. Only missing values are set.
+   you. Existing unrelated values are preserved.
 3. **Runs Claude with Remote Control** in the tmux session `claude`, in the workspace,
    in one of two modes (`DEV_REMOTE_CONTROL_MODE`):
    - `session` (default): `claude --remote-control <name>`, the interactive Claude. The
@@ -559,6 +561,13 @@ orphaned processes, so containers stop in well under a second instead of hitting
        can collect under `.claude/worktrees/` (cbundy/dev-system#93).
      - Besides the open sessions, the server keeps one spare session process running,
        ready for the next session.
+   In `session` mode the supervisor also decides, at every start, whether to **resume**
+   the workspace's last conversation (`DEV_REMOTE_CONTROL_RESUME=1`, see
+   [Resuming the conversation](#resuming-the-conversation)) or start a fresh one, and
+   adds that branch's first message (`DEV_REMOTE_CONTROL_PROMPT` /
+   `DEV_REMOTE_CONTROL_RESUME_PROMPT`) as the last argument. The log says which branch it
+   took: `resuming the last conversation (<id>) in <dir>` or
+   `starting a fresh conversation`.
 4. **Restarts Claude when it exits** (a crash, `/exit`, a restart after an update) with a
    backoff of 5s, doubling to at most 5 minutes, reset once Claude has run for 10 minutes.
    Each start runs `claude` from `PATH`, so a version Claude's auto-updater installed is
@@ -572,9 +581,53 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | `DEV_REMOTE_CONTROL` | `1` headless, `0` on the desktop | `0`: start nothing; the container stays up for `docker exec` / `kubectl exec`. On the desktop, `1` starts it. |
 | `DEV_REMOTE_CONTROL_MODE` | `session` | `server` runs `claude remote-control` (many sessions, one worktree each) instead of one interactive session. See step 3 above. |
 | `DEV_REMOTE_CONTROL_NAME` | the workspace's repo name | The session name in claude.ai (the environment name in `server` mode). By default the repo name from the workspace's `origin` URL (`dev-system` for `github.com/cbundy/dev-system`), else the name of its git top-level directory, else (no git repo) the repo name in `DEV_REPO_URL`, else the hostname: the container ID under Docker unless you pass `--hostname`, the pod name on Kubernetes. Worked out at every Claude start. |
+| `DEV_REMOTE_CONTROL_NAME_FORMAT` | unset | `session` mode, when `DEV_REMOTE_CONTROL_NAME` is not set: the session name, with `{name}` replaced by the default name above, e.g. `🔄 {name} orchestrator` gives `🔄 dev-system orchestrator`. Emoji, spaces and `&` pass through as they are. |
+| `DEV_REMOTE_CONTROL_RESUME` | `0` | `session` mode: `1` resumes the workspace's last conversation on every start, when there is one. See [Resuming the conversation](#resuming-the-conversation). |
+| `DEV_REMOTE_CONTROL_PROMPT` | unset | `session` mode: the first message of a fresh conversation, e.g. a slash command such as `/callum-flow:issue-orchestrator`. Not sent when a conversation is resumed. |
+| `DEV_REMOTE_CONTROL_RESUME_PROMPT` | unset | `session` mode: the message sent when a conversation is resumed, e.g. to re-arm a loop that did not survive the restart. |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` with `DEV_REPO_URL` set, else the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run (see [Workspace and repo](#workspace-and-repo)). Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
+
+`server` mode ignores the four conversation settings (`_NAME_FORMAT`, `_RESUME`,
+`_PROMPT`, `_RESUME_PROMPT`) and logs one line for each that is set.
+
+#### Resuming the conversation
+
+By default every Claude start in `session` mode is a new, empty conversation, so a
+restart (a stop and start, a template update, a crash) shows up in claude.ai as a new
+session. With `DEV_REMOTE_CONTROL_RESUME=1`, each start instead looks in the
+workspace's Claude project directory, `$CLAUDE_CONFIG_DIR/projects/<dir>/`, where
+`<dir>` is the workspace's physical path with every character other than a letter or
+digit replaced by `-` (`/workspaces/my_repo.x` becomes `-workspaces-my-repo-x`). It
+resumes the newest transcript (`*.jsonl`) there that holds a user message, with
+`claude --remote-control <name> --resume <session id>`. A transcript with nothing but
+Remote Control bookkeeping (a start nobody wrote to) does not count, and with nothing to
+resume Claude starts fresh, so a fresh volume does not loop on the backoff.
+
+The decision is made again at every start: once a real conversation exists, every later
+start, a crash loop included, resumes it and sends `DEV_REMOTE_CONTROL_RESUME_PROMPT`,
+never the startup prompt again. A resumed session does not get back anything that lived
+only in the old process, such as a `/loop` or a scheduled task, so use the resume prompt
+to re-arm it.
+
+Observed with Claude Code 2.1.289-2.1.292 (cbundy/dev-system#164):
+
+- A positional prompt is delivered as the first message alongside `--remote-control`,
+  including a built-in slash command (`/help`) and a plugin skill (`/<plugin>:<skill>`),
+  and alongside `--resume` / `--continue`.
+- A resumed session continues the same transcript (same session ID) and reattaches to
+  the **same** claude.ai Remote Control session (same `bridgeSessionId` and session URL),
+  with the full history.
+- `--continue` resumes the newest transcript even when it is an empty start, which loses
+  the real conversation and opens a new claude.ai session. That is why the supervisor
+  picks the transcript itself and passes `--resume <session id>`.
+- A name with an emoji and spaces is accepted by `--remote-control` and passes through
+  tmux unchanged. How claude.ai and the Claude app show it was not checked.
+
+The history lives in the config volume (`/persist`), so it survives a stop, restart and
+image or template update, but not deleting the volume. Keep anything that must last in
+files in the repo or on GitHub.
 
 **Permissions.** Claude runs in its normal permission mode, so an unattended session
 **waits for you to approve** each tool use that needs approval; approve from claude.ai or

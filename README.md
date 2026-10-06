@@ -22,7 +22,7 @@ every repo, so no repo carries a fork of the setup.
 | **Self-checks** (`dev-init`, `dev-doctor`) | Idempotent start-up setup and a health report. Every failure line comes with a `fix:` hint. |
 | **Issue-delivery workflow** (`callum-flow` plugin) | `issue-orchestrator` works a `ready` issue queue. `implement-issue` takes one issue through a treehouse worktree and the no-mistakes pipeline. `/update-dev` upstreams a change to this repo as a PR. `/callum-flow:onboard` onboards a repo. A hook blocks `git stash`. |
 | **Synced repo config** (`callum-dev`) | `init` scaffolds the config. `update` merges template changes 3-way, so a repo's own edits survive. `check` fails CI when a repo is behind the installed version. |
-| **Coder templates** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. The `orchestrator` template is the same, with one interactive Claude session by default. |
+| **Coder templates** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. The `orchestrator` template configures that workspace as one long-lived Claude session that resumes across restarts and rebuilds; see the [Coder template reference](coder/dev-system/README.md#orchestrator-workspace). |
 | **Central session history** (agentsview) | Every container pushes its Claude and codex sessions to one PostgreSQL. You browse and search them in one viewer. Set the URL once per host. |
 | **Telemetry** (OTLP) | Coder workspaces can export Claude Code and codex telemetry to an OTLP endpoint. |
 
