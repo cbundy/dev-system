@@ -116,8 +116,8 @@ re-arm.
 5. **Delegate** the *what* (your design brief, precisely) to an `IMPL_MODEL`
    sub-agent, plus a pointer to the `implement-issue` skill, which owns the
    *how* (worktree, running `/no-mistakes` end to end, evidence, quality bar,
-   linkage keyword, handoff, fire-and-forget termination). You own the merge -
-   do not have the sub-agent merge.
+   handoff, fire-and-forget termination). You own the merge and the issue
+   linkage (see Linkage) - do not have the sub-agent merge.
 6. **Verify and merge** when the PR lands (see Merge discipline).
 
 ## Monitoring in-flight agents
@@ -293,7 +293,8 @@ following guards fire, and none of them is weakened:
    made after the run started - that only ever belongs to the first case,
    never the second or third. A green run whose head predates a later fix
    proves nothing about that fix.
-2. **Issue<->PR linkage.** Verify the closing keyword matches intent -
+2. **Issue<->PR linkage.** Verify the closing keyword matches intent, with the
+   issue number derived from the branch (see Linkage) -
    `gh pr view <pr> --json closingIssuesReferences --jq '[.closingIssuesReferences[]|.number]'`
    - before merging, and again after any body rewrite (rewrites can silently drop
    or introduce a closing keyword).
@@ -354,7 +355,21 @@ Two distinct failure modes, both seen repeatedly:
    `"must NOT close #93"` (closed the tracking epic it was warning about) and
    `"PR 2, which will actually close #108"`. **Never write close/closes/fixes/resolves
    followed by an issue number unless you mean it** - say "PR 2 finishes this"
-   instead. Tell delegated agents this explicitly: the guard rail causes the bug.
+   instead. The guard rail causes the bug - which is one more reason to keep
+   keyword talk out of delegation briefs (below).
+
+Both modes share one cause: the pipeline regenerates the PR body from the run's
+`--intent` text on every run, so anything a brief says about the keyword arrives
+as an instruction a model must reproduce - and it may emit it, paraphrase it
+("closes issue #N", which GitHub does not parse), or drop it. So do not put
+keyword instructions in a delegation brief, and never treat generated prose as
+the source of truth. Own linkage yourself at merge, deriving the issue number
+mechanically from the branch, which follows the `<type>/issue-<N>-<slug>`
+convention (`implement-issue` section 1); for a branch that does not, take the
+number from your own delegation record. In a repo that merges often, make that
+derivation a script the merge step runs rather than a check to remember. The durable fix is
+upstream - the gate tool could derive the number from the branch itself instead
+of asking a model for a token - so raise it there if you have that channel.
 
 ## Merge and close discipline
 - Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
