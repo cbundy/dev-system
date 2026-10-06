@@ -232,14 +232,12 @@ model_sources() {
 resolve_model() {
   local var="$1" key="$2" file value
   if [ "${!var+set}" = set ]; then
-    printf '%s
-' "${!var}"
+    printf '%s\n' "${!var}"
     return 0
   fi
   while IFS= read -r file; do
     value=$(models_value "$file" "$key") || continue
-    printf '%s
-' "$value"
+    printf '%s\n' "$value"
     return 0
   done < <(model_sources)
 }
