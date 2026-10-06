@@ -406,9 +406,9 @@ container never fails to start because of it.
    `WARNING` names the URL and the reason and the copy baked into the image is used. Per
    model, a valid fetched value beats the baked one. Content outside the markers is never
    touched. `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override both; an empty value skips that
-   pin (`DEV_CODEX_MODEL=""` removes the block). A pin of your own wins: an `agent_args_override` or `agent_config`
-   outside the markers means no block is written (delete the block, markers included,
-   before pinning by hand). The unmarked pin older images wrote is replaced by the block.
+   pin (`DEV_CODEX_MODEL=""` removes the block). A pin of your own wins: an
+   `agent_args_override` or `agent_config` outside the markers means no block is written
+   (delete the block, markers included, before pinning by hand). The unmarked pin older images wrote is replaced by the block.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
