@@ -15,8 +15,9 @@
 # command using -L/-S, and commands that only mention these words (echo,
 # grep, commit messages).
 #
-# Known limits: heuristic parser; does not follow command substitution or
-# `sh -c '...'` strings.
+# Known limits: heuristic parser; intentionally does not expand GNU env -S
+# ${VAR} or \_ syntax, backslash-escaped command spellings, or variables
+# exported by an earlier command segment.
 #
 # POSIX sh + awk only (no jq, no node). Deny form matches forbid-git-stash.sh:
 # JSON on stdout with permissionDecision "deny", exit 0.

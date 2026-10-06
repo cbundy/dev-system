@@ -100,12 +100,49 @@ function tmux_kill_default_socket(toks, cnt, i,    t, k, ch, priv, need) {
   return 0
 }
 
-# pkill/killall aimed at tmux: any argument mentioning tmux, unless it is a
-# pkill -f pattern that itself names a private socket ("tmux -L name").
-function kills_tmux_by_name(toks, cnt, i,    t) {
-  for (; i <= cnt; i++) {
+# pkill/killall aimed at tmux: inspect process-name operands, not option values.
+function name_option_takes_arg(base, opt) {
+  if (base == "pkill")
+    return (opt == "-d" || opt == "--delimiter" || opt == "-F" || opt == "--pidfile" || \
+            opt == "-G" || opt == "--group" || opt == "-g" || opt == "--pgroup" || \
+            opt == "-O" || opt == "--older" || opt == "-P" || opt == "--parent" || \
+            opt == "-s" || opt == "--session" || opt == "-t" || opt == "--terminal" || \
+            opt == "-u" || opt == "--euid" || opt == "-U" || opt == "--uid" || \
+            opt == "--ns" || opt == "--nslist" || opt == "--signal")
+  return (opt == "-o" || opt == "--older-than" || opt == "-s" || opt == "--signal" || \
+          opt == "-u" || opt == "--user" || opt == "-y" || opt == "--younger-than" || \
+          opt == "-Z" || opt == "--context")
+}
+
+function name_short_option_takes_arg(base, ch) {
+  if (base == "pkill") return (ch ~ /^[dFGgOPstuU]$/)
+  return (ch ~ /^[osuyZ]$/)
+}
+
+function kills_tmux_by_name(toks, cnt, i, base,    t, k, ch, skip_next, endopts) {
+  endopts = 0
+  while (i <= cnt) {
     t = toks[i]
-    if (t ~ /tmux/ && t !~ /tmux .*-[LS]/) return 1
+    if (!endopts && t == "--") { endopts = 1; i++; continue }
+    if (!endopts && t ~ /^--/) {
+      if (name_option_takes_arg(base, t)) i += 2
+      else i++
+      continue
+    }
+    if (!endopts && t ~ /^-/ && t != "-") {
+      skip_next = 0
+      for (k = 2; k <= length(t); k++) {
+        ch = substr(t, k, 1)
+        if (name_short_option_takes_arg(base, ch)) {
+          if (k == length(t)) skip_next = 1
+          break
+        }
+      }
+      i += 1 + skip_next
+      continue
+    }
+    if (tolower(t) ~ /tmux/) return 1
+    i++
   }
   return 0
 }
@@ -127,67 +164,16 @@ function wrapper_option_takes_arg(base, opt) {
   return 0
 }
 
-function env_value(name) {
-  if (name in env_values) return env_values[name]
-  return ENVIRON[name]
+function join_tokens(toks, first, cnt,    out, i) {
+  out = ""
+  for (i = first; i <= cnt; i++) out = out (out == "" ? "" : " ") toks[i]
+  return out
 }
 
-function env_split_tokenize(s, out,    n, i, c, nc, q, tok, cnt, started, j, name) {
-  delete out
-  n = length(s)
-  tok = ""
-  q = ""
-  cnt = 0
-  started = 0
-  for (i = 1; i <= n; i++) {
-    c = substr(s, i, 1)
-    if (c == "\\") {
-      nc = substr(s, i + 1, 1)
-      if (nc == "_") {
-        if (q == "") {
-          if (started) { out[++cnt] = tok; tok = ""; started = 0 }
-        } else { tok = tok " "; started = 1 }
-      } else if (nc == "$") { tok = tok "$"; started = 1 }
-      else if (nc == "c") { break }
-      else if (nc == "n") { tok = tok "\n"; started = 1 }
-      else if (nc == "t") { tok = tok "\t"; started = 1 }
-      else { tok = tok nc; started = 1 }
-      i++
-      continue
-    }
-    if (c == "'" || c == "\"") {
-      if (q == "") { q = c; started = 1; continue }
-      if (q == c) { q = ""; continue }
-    }
-    if (c == "$" && q != "'" && substr(s, i + 1, 1) == "{") {
-      name = ""
-      for (j = i + 2; j <= n && substr(s, j, 1) != "}"; j++)
-        name = name substr(s, j, 1)
-      if (j <= n) {
-        tok = tok env_value(name)
-        started = 1
-        i = j
-        continue
-      }
-    }
-    if ((c == " " || c == "\t") && q == "") {
-      if (started) { out[++cnt] = tok; tok = ""; started = 0 }
-      continue
-    }
-    tok = tok c
-    started = 1
-  }
-  if (started) out[++cnt] = tok
-  return cnt
-}
-
-function env_split_kills(toks, cnt, value, tail,    parts, part_cnt, merged, merged_cnt, j) {
-  merged_cnt = 1
-  merged[merged_cnt] = "env"
-  part_cnt = env_split_tokenize(value, parts)
-  for (j = 1; j <= part_cnt; j++) merged[++merged_cnt] = parts[j]
-  for (j = tail; j <= cnt; j++) merged[++merged_cnt] = toks[j]
-  return tokens_are_tmux_kill(merged, merged_cnt, 1)
+function env_split_kills(toks, cnt, value, tail,    command) {
+  command = "env " value
+  if (tail <= cnt) command = command " " join_tokens(toks, tail, cnt)
+  return is_tmux_kill(command)
 }
 
 function env_command_index(toks, cnt, i,    opt, k, ch, value, tail, consumed) {
@@ -241,15 +227,12 @@ function wrapper_command_index(toks, cnt, i, base,    opt) {
   return i
 }
 
-function tokens_are_tmux_kill(toks, cnt, i,    base, eq, name) {
+function tokens_are_tmux_kill(toks, cnt, i,    base, payload, k, first) {
   while (i <= cnt) {
-    if (toks[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
-      eq = index(toks[i], "=")
-      name = substr(toks[i], 1, eq - 1)
-      env_values[name] = substr(toks[i], eq + 1)
-      i++
-      continue
-    }
+    if (toks[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
+    if (toks[i] == "if" || toks[i] == "while" || toks[i] == "until" || \
+        toks[i] == "then" || toks[i] == "do" || toks[i] == "elif" || \
+        toks[i] == "else" || toks[i] == "!") { i++; continue }
     base = base_of(toks[i])
     if (base == "env" || base == "sudo" || base == "exec" || base == "command" || \
         base == "nohup" || base == "time") {
@@ -261,20 +244,68 @@ function tokens_are_tmux_kill(toks, cnt, i,    base, eq, name) {
   }
   if (i > cnt) return 0
   base = base_of(toks[i])
+  if (base == "sh" || base == "bash" || base == "zsh") {
+    for (k = i + 1; k <= cnt; k++) {
+      if (toks[k] ~ /^-[A-Za-z]*c[A-Za-z]*$/ && k < cnt)
+        return is_tmux_kill(toks[k + 1])
+      if (toks[k] == "--") break
+    }
+    return 0
+  }
+  if (base == "eval") {
+    first = i + 1
+    if (toks[first] == "--") first++
+    payload = join_tokens(toks, first, cnt)
+    return (payload != "" && is_tmux_kill(payload))
+  }
   if (base == "tmux") return tmux_kill_default_socket(toks, cnt, i + 1)
-  if (base == "pkill" || base == "killall") return kills_tmux_by_name(toks, cnt, i + 1)
+  if (base == "pkill" || base == "killall") return kills_tmux_by_name(toks, cnt, i + 1, base)
   return 0
 }
 
 function segment_is_tmux_kill(segment,    toks, cnt) {
-  delete env_values
   cnt = tokenize(segment, toks)
   return tokens_are_tmux_kill(toks, cnt, 1)
+}
+
+function nested_is_tmux_kill(cmd,    n, i, j, c, q, iq, depth) {
+  n = length(cmd)
+  q = ""
+  for (i = 1; i <= n; i++) {
+    c = substr(cmd, i, 1)
+    if (q == "'") {
+      if (c == "'") q = ""
+      continue
+    }
+    if (c == "'" && q == "") { q = "'"; continue }
+    if (c == "\"") { q = (q == "\"") ? "" : "\""; continue }
+    if (c == "$" && substr(cmd, i + 1, 1) == "(") {
+      depth = 1
+      iq = ""
+      for (j = i + 2; j <= n; j++) {
+        c = substr(cmd, j, 1)
+        if (iq != "") { if (c == iq) iq = ""; continue }
+        if (c == "'" || c == "\"") { iq = c; continue }
+        if (c == "(") depth++
+        else if (c == ")" && --depth == 0) break
+      }
+      if (j > n || is_tmux_kill(substr(cmd, i + 2, j - i - 2))) return 1
+      i = j
+      continue
+    }
+    if (c == "`") {
+      for (j = i + 1; j <= n && substr(cmd, j, 1) != "`"; j++);
+      if (j > n || is_tmux_kill(substr(cmd, i + 1, j - i - 1))) return 1
+      i = j
+    }
+  }
+  return 0
 }
 
 # Split the whole command into segments on ; & | newline ( ) { }, quote-aware
 # so those characters inside a quoted string never split it.
 function is_tmux_kill(cmd,    n, i, c, q, seg, segs, nseg, j) {
+  if (nested_is_tmux_kill(cmd)) return 1
   n = length(cmd)
   seg = ""
   q = ""

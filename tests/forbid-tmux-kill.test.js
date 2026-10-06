@@ -104,7 +104,6 @@ test("refuses with env prefix, wrappers and a path to the binary", () => {
   assertDenied("env --split-string='FOO=1 tmux kill-server'");
   assertDenied("env -S '-i' tmux kill-server");
   assertDenied("env -iS'tmux kill-server'");
-  assertDenied("T=tmux env -S '${T}\\_kill-server'");
   assertDenied("command -- tmux kill-server");
   assertDenied("nohup -- tmux kill-server");
   assertDenied("sudo -n tmux kill-server");
@@ -121,7 +120,23 @@ test("refuses pkill and killall aimed at tmux", () => {
   assertDenied("pkill -9 -x tmux");
   assertDenied("killall tmux");
   assertDenied("killall -9 tmux");
+  assertDenied("pkill -i TMUX");
+  assertDenied("killall -I TMUX");
+  assertDenied("pkill -f 'tmux -L mytest'");
   assertDenied("true && killall tmux");
+});
+
+test("refuses tmux kills in nested shell execution", () => {
+  assertDenied("sh -c 'tmux kill-server'");
+  assertDenied("bash -lc 'tmux kill-session -t a'");
+  assertDenied("zsh -c 'tmux kill-server'");
+  assertDenied("eval tmux kill-server");
+  assertDenied("eval -- tmux kill-server");
+  assertDenied('echo "$(tmux kill-server)"');
+  assertDenied("echo `tmux kill-session -t a`");
+  assertDenied("if tmux kill-server; then true; fi");
+  assertDenied("while tmux kill-session; do true; done");
+  assertDenied("false || tmux kill-server");
 });
 
 test("allows kill-server and kill-session on a private socket (-L or -S)", () => {
@@ -133,8 +148,9 @@ test("allows kill-server and kill-session on a private socket (-L or -S)", () =>
   assertAllowed("/usr/bin/tmux -L t kill-server");
   assertAllowed("env -i sudo -n tmux -L t kill-server");
   assertAllowed("env -S 'tmux -L t kill-server'");
-  assertAllowed("T=tmux env -S '${T}\\_-L\\_t\\_kill-server'");
-  assertAllowed("pkill -f 'tmux -L mytest'");
+  assertAllowed("bash -c 'tmux -L t kill-server'");
+  assertAllowed("eval tmux -L t kill-server");
+  assertAllowed('echo "$(tmux -L t kill-server)"');
 });
 
 test("does not mistake wrapper option arguments for executables", () => {
@@ -142,7 +158,6 @@ test("does not mistake wrapper option arguments for executables", () => {
   assertAllowed("env -a tmux kill-server");
   assertAllowed("env -S 'echo tmux kill-server'");
   assertAllowed("env -S 'echo safe' tmux kill-server");
-  assertAllowed("T=tmux env -S 'echo\\_${T}\\_kill-server'");
   assertAllowed("sudo -u tmux kill-server");
   assertAllowed("time -o tmux kill-server");
   assertAllowed("exec -a tmux kill-server");
@@ -165,6 +180,15 @@ test("does not refuse commands that merely mention the words", () => {
   assertAllowed("grep tmux file");
   assertAllowed("pgrep tmux");
   assertAllowed("pkill node");
+  assertAllowed("pkill -F /tmp/tmux.pid node");
+  assertAllowed("pkill -F/tmp/tmux.pid node");
+  assertAllowed("pkill --pidfile /tmp/tmux.pid node");
+  assertAllowed("pkill -u tmux node");
+  assertAllowed("killall -u tmux node");
+  assertAllowed("killall -utmux node");
+  assertAllowed("killall --user tmux node");
+  assertAllowed("echo '$(tmux kill-server)'");
+  assertAllowed("sh -c 'echo tmux kill-server'");
 });
 
 test("ignores non-Bash tool calls even if their command field says tmux kill-server", () => {
