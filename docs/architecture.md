@@ -42,6 +42,7 @@ scripts/lint.sh                   lint entrypoint (npm run lint)
 scripts/test.sh                   test entrypoint (npm test); discovers tests by glob, quiet on success
 scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
+scripts/release-bump.js           sets the release version everywhere and refreshes the stamp
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
                                   publish-dev-image.yml, publish-features.yml, test-features.yml
@@ -51,12 +52,13 @@ docs/                             these docs
 
 ## Versioning and release
 
-PRs never bump versions. Releasing is a separate, deliberate step. See
-[`RELEASING.md`](../RELEASING.md) for the commands.
+Ordinary PRs never bump the main release version. Releasing is a separate, deliberate step: a bump PR made
+with `scripts/release-bump.js`, then the `Release` workflow, which tags without pushing to
+main. See [`RELEASING.md`](../RELEASING.md) for the commands.
 
 | What | Version lives in | Released by | Reaches consumers when |
 |---|---|---|---|
-| Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all synced by the workflow) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | Plugin: the marketplace update sees the new `version`. CLI and templates: npm resolves `semver:0.x` against git tags. |
+| Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all set by `scripts/release-bump.js` in the bump PR) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | Plugin: the marketplace update sees the new `version`. CLI and templates: npm resolves `semver:0.x` against git tags. |
 | Base image | `images/base/VERSION` | `Publish base image` workflow, plus a weekly rebuild of the current version | The next pull of the tag. Pin by digest if you need the exact image. |
 | Dev image (this repo only) | none: follows main | `Publish dev image` workflow, on every change to `.devcontainer/` on main, plus a weekly rebuild | Not a consumer layer. Workspaces for this repo pull `latest`. |
 | Feature (deprecated) | `features/src/callum-tools/devcontainer-feature.json` | `Publish features` workflow | The next rebuild of a container pinned to `callum-tools:1` |
@@ -98,8 +100,8 @@ steps.
 | `package.json` devDependency | - | `@callum/dev-system` from `github:cbundy/dev-system#semver:0.x` |
 
 dev-system is itself a consumer: it commits these files too, minus the devDependency. It
-runs its own checkout's CLI (`node bin/callum-dev.js`), and its stamp is brought up to date
-after each release (`RELEASING.md`).
+runs its own checkout's CLI (`node bin/callum-dev.js`), and each release's bump PR brings
+its stamp up to date (`RELEASING.md`).
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the orchestrator
 in the main checkout gets (`gh pr merge`, `gh pr edit`, `no-mistakes axi respond`,
