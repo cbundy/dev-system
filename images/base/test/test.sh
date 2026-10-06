@@ -197,7 +197,10 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   [ "$(grep -c "^# END dev-system managed$" $cfg)" = 1 ]
   [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
   grep -qx -- "    - $(models_value $env CODEX_MODEL)" $cfg
-  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg' \
+  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg
+  [ "$(models_value $env AGENTS)" = codex,claude ]
+  [ "$(grep -c "^agent:" $cfg)" = 1 ]
+  sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" $cfg | grep -qxF "agent: [codex, claude]"' \
   -v "$vol:/persist" --entrypoint ""
 check "dev-init on an empty volume mounted at /persist leaves node-owned subdirs" in_image '
   for d in claude codex gh no-mistakes agentsview; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
@@ -232,6 +235,33 @@ check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and 
   ! grep -q "agent_args_override\|dev-system managed" $cfg || exit 1
   [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
   --entrypoint ""
+# The pipeline's agent order (cbundy/dev-system#163): the AGENTS list, written
+# as `agent: [...]` in the managed block, beside the model pin.
+check "DEV_NM_AGENTS rewrites the managed agent order in place, empty drops it, and a hand-set agent wins" in_image '
+  set -e
+  cfg=/persist/no-mistakes/config.yaml
+  printf "keep: 1\n" > $cfg
+  DEV_MODELS_URL= DEV_NM_AGENTS=claude dev-init >/dev/null 2>&1
+  managed() { sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" $cfg; }
+  managed | grep -qxF "agent: [claude]"
+  [ "$(grep -c "^agent:" $cfg)" = 1 ] && [ "$(head -n 1 $cfg)" = "keep: 1" ]
+  managed | grep -q "^agent_args_override:"
+  out=$(DEV_MODELS_URL= DEV_NM_AGENTS=claude,codex dev-init 2>&1); echo "$out" | grep -i "managed"
+  managed | grep -qxF "agent: [claude, codex]"
+  echo "$out" | grep -qF "dev-init: no-mistakes managed block in $cfg: agents claude,codex;"
+  DEV_MODELS_URL= DEV_NM_AGENTS= dev-init >/dev/null 2>&1
+  ! grep -q "^agent:" $cfg || exit 1
+  managed | grep -q "^agent_args_override:"
+  printf "agent: [claude]\n" > $cfg
+  out=$(DEV_MODELS_URL= dev-init 2>&1)
+  [ "$(grep -c "^agent:" $cfg)" = 1 ] && [ "$(head -n 1 $cfg)" = "agent: [claude]" ]
+  managed | grep -q "^agent_args_override:"
+  echo "$out" | grep -q "pin-codex-model: left the hand-set agent in"
+  printf "AGENTS=claude\n" > /tmp/m.env
+  rm $cfg
+  DEV_MODELS_URL=file:///tmp/m.env dev-init >/dev/null 2>&1
+  managed | grep -qxF "agent: [claude]"' \
+  --entrypoint ""
 # The models file fetched on every start (cbundy/dev-system#162), served over
 # file:// so no network is needed: per key over the baked file, env over both.
 check "dev-init pins the models fetched from DEV_MODELS_URL, per key over the baked ones, env over both" in_image '
@@ -264,7 +294,7 @@ check "dev-init falls back to the baked models with one WARNING when the fetch f
   done
   printf "nothing here\n" > /tmp/m.env
   out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
-  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid CODEX_MODEL or CLAUDE_MODEL)"
+  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid CODEX_MODEL, CLAUDE_MODEL or AGENTS)"
   grep -qx -- "$baked" $cfg
   printf "CODEX_MODEL=fetched-codex\n" > /tmp/m.env
   out=$(DEV_MODELS_URL= dev-init 2>&1)
@@ -272,7 +302,7 @@ check "dev-init falls back to the baked models with one WARNING when the fetch f
   grep -qx -- "$baked" $cfg
   [ -z "$(find /tmp -maxdepth 1 -name "dev-models.*")" ]' \
   --entrypoint ""
-check "dev-init migrates the unmarked pin an older image wrote, and respects a hand-set one" in_image '
+check "dev-init migrates the unmarked pin an older image wrote, and a hand-set one drops only the pin" in_image '
   set -e
   cfg=/persist/no-mistakes/config.yaml
   printf "\n# Codex model pin, written by the callum-tools devcontainer feature (global-only key).\nagent_args_override:\n  codex:\n    - -m\n    - gpt-old\n" > $cfg
@@ -281,8 +311,10 @@ check "dev-init migrates the unmarked pin an older image wrote, and respects a h
   grep -q "^# BEGIN dev-system managed" $cfg && [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
   printf "agent_config:\n  codex: {}\n" > $cfg
   out=$(dev-init 2>&1)
-  [ "$(cat $cfg)" = "$(printf "agent_config:\n  codex: {}")" ]
-  echo "$out" | grep -q "pin-codex-model: left the hand-set"' \
+  [ "$(head -n 2 $cfg)" = "$(printf "agent_config:\n  codex: {}")" ]
+  [ "$(grep -c "^agent_config:\|^agent_args_override:" $cfg)" = 1 ]
+  grep -qxF "agent: [codex, claude]" $cfg
+  echo "$out" | grep -q "pin-codex-model: left the hand-set agent_args_override"' \
   --entrypoint ""
 rootvol=$(docker volume create --label "$RUN_ID")
 # The volume must not be empty, or Docker copies the image's node-owned
@@ -335,7 +367,7 @@ check "dev-init starts the no-mistakes daemon and registers a gated repo within 
   [ "$took" -lt 30 ] && ! echo "$out" | grep -q "WARNING: no-mistakes" &&
   echo "$out" | grep -qF "dev-doctor: OK   no-mistakes: /tmp/r is registered" && no-mistakes daemon status </dev/null' \
   --entrypoint ""
-check "dev-init restarts a running no-mistakes daemon only when the model pin changed" in_image '
+check "dev-init restarts a running no-mistakes daemon only when the managed block changed" in_image '
   set -e
   git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r
   pid() { no-mistakes daemon status </dev/null 2>&1 | sed -n "s/.*daemon running (pid \([0-9]*\)).*/\1/p"; }
@@ -345,8 +377,11 @@ check "dev-init restarts a running no-mistakes daemon only when the model pin ch
   ! echo "$out" | grep -q "restarted the no-mistakes daemon" || exit 1
   [ "$(pid)" = "$first" ]
   out=$(DEV_CODEX_MODEL=changed-model dev-init 2>&1); echo "$out"
-  echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new model pin"
-  second=$(pid); [ -n "$second" ] && [ "$second" != "$first" ]' \
+  echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new agent order and model pin"
+  second=$(pid); [ -n "$second" ] && [ "$second" != "$first" ]
+  out=$(DEV_CODEX_MODEL=changed-model DEV_NM_AGENTS=claude dev-init 2>&1); echo "$out"
+  echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new agent order and model pin"
+  third=$(pid); [ -n "$third" ] && [ "$third" != "$second" ]' \
   --entrypoint ""
 
 echo "== 6. dev-doctor"

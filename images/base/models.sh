@@ -13,10 +13,45 @@
 # models_value prints the value of KEY and returns 0 when the file sets it to a
 # valid value; returns 1 when the file is unreadable, KEY is not a known key or
 # the file does not set it; returns 2 (with a note on stderr) when the value is
-# empty or has characters outside [A-Za-z0-9._:/-]. The last line that sets a
-# key wins. Spaces around a line, and a trailing CR, are ignored.
+# not valid for KEY (models_valid). The last line that sets a key wins. Spaces
+# around a line, and a trailing CR, are ignored.
 
-MODELS_KEYS="CODEX_MODEL CLAUDE_MODEL"
+MODELS_KEYS="CODEX_MODEL CLAUDE_MODEL AGENTS"
+
+# models_valid <KEY> <value>: returns 0 when value is valid for KEY. AGENTS is
+# the pipeline's ordered agent list: one or more comma-separated names, each
+# matching [a-z0-9][a-z0-9:_-]*, with no empty entries and no spaces. Every
+# other key is a model: one or more of [A-Za-z0-9._:/-].
+models_valid() {
+  case "$1" in
+    AGENTS)
+      case "$2" in
+        "" | *[!a-z0-9:_,-]*) return 1 ;;
+      esac
+      _mv_rest="$2,"
+      while [ -n "$_mv_rest" ]; do
+        case "${_mv_rest%%,*}" in
+          [a-z0-9]*) ;;
+          *) return 1 ;;
+        esac
+        _mv_rest="${_mv_rest#*,}"
+      done
+      ;;
+    *)
+      case "$2" in
+        "" | *[!A-Za-z0-9._:/-]*) return 1 ;;
+      esac
+      ;;
+  esac
+}
+
+# models_rule <KEY>: what models_valid wants for KEY, for a note.
+models_rule() {
+  case "$1" in
+    AGENTS) echo "a comma-separated list of agent names, each [a-z0-9][a-z0-9:_-]*, with no spaces" ;;
+    *) echo "one or more of [A-Za-z0-9._:/-]" ;;
+  esac
+}
 
 models_value() {
   _mv_file="$1"
@@ -31,12 +66,10 @@ models_value() {
     /^#/ || $0 == "" { next }
     index($0, ENVIRON["K"] "=") == 1 { value = substr($0, length(ENVIRON["K"]) + 2); found = 1 }
     END { if (found) print value; exit !found }' "$_mv_file") || return 1
-  case "$_mv_value" in
-    "" | *[!A-Za-z0-9._:/-]*)
-      echo "models: ignored $_mv_key in $_mv_file - its value is empty or has characters outside [A-Za-z0-9._:/-]" >&2
-      return 2
-      ;;
-  esac
+  if ! models_valid "$_mv_key" "$_mv_value"; then
+    echo "models: ignored $_mv_key in $_mv_file - its value must be $(models_rule "$_mv_key")" >&2
+    return 2
+  fi
   printf '%s\n' "$_mv_value"
 }
 
@@ -77,12 +110,12 @@ models_fetch() {
   for _mf_key in $MODELS_KEYS; do
     models_value "$_mf_dest" "$_mf_key" >/dev/null 2>&1 && return 0
   done
-  echo "it sets no valid $(echo "$MODELS_KEYS" | sed 's/ / or /g')"
+  echo "it sets no valid $(echo "$MODELS_KEYS" | sed 's/ /, /g; s/, \([^,]*\)$/ or \1/')"
   return 1
 }
 
-# models_resolve <ENV_VAR> <KEY> <file>...: prints the model to use for KEY.
-# ENV_VAR, when set at all, wins (even empty, which means no model); otherwise
+# models_resolve <ENV_VAR> <KEY> <file>...: prints the value to use for KEY.
+# ENV_VAR, when set at all, wins (even empty, which means none); otherwise
 # the first file that sets KEY to a valid value. Prints nothing when none does.
 models_resolve() {
   _mr_var="$1"
