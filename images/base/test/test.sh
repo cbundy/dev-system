@@ -19,7 +19,8 @@
 # HTTP server in the container, so no network is needed), section 13 the
 # workspace repo's Claude plugins in #112 (against a stub `claude plugin`),
 # section 14 the opt-in telemetry export in #68 (stub CLIs, unreachable or
-# in-container endpoints; no collector needed). Test 7 needs
+# in-container endpoints; no collector needed). Section 2's uv check (#149)
+# is the one that needs the network: it installs pytest from PyPI. Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
@@ -114,11 +115,19 @@ check "default user is node with uid 1000 / gid 1000" in_image '
   [ "$(id -u node)" = 1000 ] && [ "$(id -g node)" = 1000 ]'
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse agentsview shellcheck; do
+for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '
   find "$(npm prefix -g)/lib/node_modules/@openai/codex" -name codex-code-mode-host -type f -perm -u+x | grep -q .'
+# The one check that reaches PyPI: a Python repo's gates install their deps
+# this way (cbundy/dev-system#149), so only a real install proves they can.
+# UV_PYTHON_DOWNLOADS=never pins it to the image's own python3, the one that
+# lacks pip and venv.
+check "uv installs a package and runs it with the image's python3, as node" in_image '
+  [ "$(id -un)" = node ] &&
+  UV_PYTHON_DOWNLOADS=never uv run --no-project --with pytest python -c "import pytest"' \
+  --entrypoint ""
 check "callum-tools scripts staged where the callum-flow skills call them" in_image '
   for s in pipeline-watch.sh queue-watch.sh recover-no-mistakes.sh pin-codex-model.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
@@ -143,7 +152,7 @@ check "the image ships /persist empty (no build-time state baked in)" in_image '
   [ -z "$(find /persist -mindepth 2 | head -n 1)" ] || { find /persist -mindepth 2; exit 1; }' \
   --entrypoint ""
 check "no tool binary lives under /persist" in_image '
-  for b in claude codex gh git no-mistakes treehouse agentsview node; do
+  for b in claude codex gh git no-mistakes treehouse uv uvx agentsview node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
   done'
 check "persistence contract label lists the five dirs" bash -c "

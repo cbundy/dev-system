@@ -3,7 +3,7 @@
 # dev-system base image: ghcr.io/cbundy/dev-system/base
 #
 # A prebuilt agent dev environment - Node LTS, Claude Code, codex, no-mistakes,
-# treehouse, agentsview, gh and git - plus a fixed persistence contract under
+# treehouse, uv, agentsview, gh and git - plus a fixed persistence contract under
 # /persist and a /shared mount point for NAS file sharing.
 # See images/base/README.md for the contract, the tag policy and how to extend
 # this image. Build context is the repo root, so the image can reuse the
@@ -107,6 +107,18 @@ RUN curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/do
   && ln -s /persist/no-mistakes/logs /home/node/.no-mistakes/logs
 RUN curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh \
   && treehouse --version
+
+# uv (cbundy/dev-system#149): the Python bootstrapper, so a Python repo runs
+# its gates with `uv run --with ...` / `uvx` and needs no per-repo image just
+# for pip or venv (the Debian python3 ships neither). Its official installer
+# puts uv and uvx in ~/.local/bin, already on PATH, and leaves the shell
+# profiles alone. Its cache (~/.cache/uv), tools and managed Pythons
+# (~/.local/share/uv) stay in node's home, never under /persist, and the
+# install receipt in ~/.config/uv keeps `uv self update` working.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+    | env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR=/home/node/.local/bin sh \
+  && uv --version \
+  && uvx --version
 
 # Scripts come after the tool installs, so editing one (or bumping the
 # feature version) does not re-download every tool on the next build.
@@ -230,7 +242,7 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.version="${VERSION}" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.title="dev-system base" \
-  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
+  org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, uv, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
   dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
   dev.cbundy.shared="/shared" \
   dev.cbundy.secrets="/run/secrets/dev-system" \
