@@ -36,7 +36,7 @@ toolbin="$tmpdir/tools"
 mkdir -p "$fakebin" "$toolbin"
 # A hermetic PATH: the stubs plus only the tools the scripts and stubs use,
 # so a real gh or no-mistakes (the base image has both) can never answer.
-for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname; do
+for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -96,14 +96,49 @@ $(cat "$1")"
 # ---------------------------------------------------------------------------
 # pipeline-watch.sh
 #
-# Stub no-mistakes: `axi status --run <id>` prints runs/<id>.txt; fails while
-# an nm-fail marker exists (a transient failure).
+# Stub no-mistakes, modelled on the real v1.84 output: `axi status --run
+# <id>` prints runs/<id>.txt; `runs` prints one row per id in runs-order
+# (newest first) - "  <status>  <branch> <short-head>  <date>", no run id;
+# `axi status` with no --run prints the newest run of the cwd's branch, or,
+# when that branch has none, the runs[N]{id,branch,status,head,pr} table.
+# Every call fails while an nm-fail marker exists (a transient failure).
 cat > "$fakebin/no-mistakes" <<'EOF'
 #!/bin/sh
 d=$(dirname "$0")
 [ ! -e "$d/nm-fail" ] || exit 1
-[ "$1" = axi ] && [ "$2" = status ] && [ "$3" = --run ] || exit 1
-cat "$d/runs/$4.txt" 2>/dev/null
+# row <id>: "<branch> <status> <short-head>" of a run
+row() {
+  f="$d/runs/$1.txt"
+  b=$(sed -n 's/^  branch: //p' "$f")
+  s=$(sed -n 's/^  status: //p' "$f")
+  h=$(sed -n 's/^  head_sha: //p' "$f" | cut -c1-8)
+  echo "$b $s ${h:--}"
+}
+order=$(cat "$d/runs-order" 2>/dev/null)
+case "$1 ${2-} ${3-}" in
+  "runs --limit "*)
+    [ -n "$order" ] || { echo "  no runs yet."; exit 0; }
+    for id in $order; do
+      set -- $(row "$id")
+      printf '  %-12s %s %s  2026-10-06 21:00\n' "$2" "$1" "$3"
+    done
+    ;;
+  "axi status --run") cat "$d/runs/$4.txt" 2>/dev/null ;;
+  "axi status ")
+    cur=$(git rev-parse --abbrev-ref HEAD)
+    for id in $order; do
+      set -- $(row "$id")
+      [ "$1" != "$cur" ] || exec cat "$d/runs/$id.txt"
+    done
+    echo "current_branch: $cur"
+    echo "runs[9]{id,branch,status,head,pr}:"
+    for id in $order; do
+      set -- $(row "$id")
+      printf '  "%s",%s,%s,%s,""\n' "$id" "$1" "$2" "$3"
+    done
+    ;;
+  *) exit 1 ;;
+esac
 EOF
 # Stub gh: `pr view` prints pr-status.txt; fails while a gh-fail marker exists.
 cat > "$fakebin/gh" <<'EOF'
@@ -133,6 +168,11 @@ echo "MERGEABLE CLEAN" > "$fakebin/pr-status.txt"
 mkdir -p "$nm_home/logs/RUNA" "$nm_home/logs/RUNB"
 touch -d "2026-01-01 00:00" "$nm_home/logs/RUNA"
 touch -d "2026-01-01 00:01" "$nm_home/logs/RUNB"
+# runs_order <id>...: the runs `no-mistakes runs` lists, newest first
+runs_order() {
+  printf '%s\n' "$@" > "$fakebin/runs-order"
+}
+runs_order RUNB RUNA
 
 # run_state <run-id> <branch> <running|parked|failed> [head-sha]
 run_state() {
@@ -257,6 +297,64 @@ single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --deadline 1 -
 [ "$single" = timeout ] || fail "deadline: $single"
 ok # single-shot unchanged
 
+# 5. No --branches (cbundy/dev-system#134): the watch set is every branch
+# with a run, re-read on every poll. A run that appears later - here two
+# that failed at launch, with no log directory - is still reported: one
+# resolved to its id through its branch's worktree, one with no source for
+# its id reported as "unknown".
+g -C "$repo" worktree add -q -b feat/c "$tmpdir/wt-c"
+start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 \
+  --known feat/a=parked:aaa --known "feat/b=merge-ready:$b_head"
+sleep 2
+[ "$(line_count "$out")" -eq 0 ] || fail "handled runs re-fired: $(cat "$out")"
+run_state RUNC feat/c failed ccc
+runs_order RUNC RUNB RUNA
+wait_lines "$out" 1
+run_state RUND feat/d failed ddd
+runs_order RUND RUNC RUNB RUNA
+wait_lines "$out" 2
+sleep 2
+stop_bg
+expect_lines "$out" "failed feat/c RUNC head=ccc
+failed feat/d unknown head=ddd"
+ok # no --branches: new runs and launch failures watched
+
+# 6. --branches still restricts the set: the newer failed runs on other
+# branches do not fire.
+single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches feat/b) ||
+  fail "--branches: did not exit 0"
+[ "$single" = "merge-ready feat/b RUNB head=$b_head" ] || fail "--branches: $single"
+ok # --branches filters
+
+# 7. From a checkout whose branch has no run, the run id comes from the
+# `axi status` run table, so the run with no log directory and no worktree
+# is reported with its id.
+g -C "$repo" worktree add -q -b idle "$tmpdir/wt-idle"
+single=$(in_dir "$tmpdir/wt-idle" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches feat/d) ||
+  fail "run table: did not exit 0"
+[ "$single" = "failed feat/d RUND head=ddd" ] || fail "run table: $single"
+ok # run id resolved from the run table
+
+# 8. The worktree a branch is checked out in is found automatically: a
+# local commit the green run never gated is a head-mismatch with no
+# --worktree mapping.
+g -C "$repo" worktree add -q -b feat/e "$tmpdir/wt-e"
+g -C "$tmpdir/wt-e" push -q origin feat/e
+run_state RUNE feat/e running "$b_head"
+mkdir -p "$nm_home/logs/RUNE"
+echo "all CI checks passed" > "$nm_home/logs/RUNE/ci.log"
+runs_order RUNE RUND RUNC RUNB RUNA
+single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches feat/e) ||
+  fail "auto worktree: did not exit 0"
+[ "$single" = "merge-ready feat/e RUNE head=$b_head" ] || fail "auto worktree, in sync: $single"
+g -C "$tmpdir/wt-e" commit -q --allow-empty -m "ungated"
+e_head=$(g -C "$tmpdir/wt-e" rev-parse HEAD)
+single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches feat/e) ||
+  fail "auto worktree: did not exit 0"
+[ "$single" = "head-mismatch feat/e RUNE run=$b_head branch=$b_head worktree=$e_head head=$b_head" ] ||
+  fail "auto worktree, ungated commit: $single"
+ok # worktree mapped automatically
+
 # ---------------------------------------------------------------------------
 # queue-watch.sh
 
@@ -267,7 +365,7 @@ queue_seq() {
 }
 qw="$QUEUE_WATCH --repo o/r --label ready --interval 1"
 
-# 5. Debounce: a one-poll blip (label-list lag) does not fire.
+# 9. Debounce: a one-poll blip (label-list lag) does not fire.
 queue_seq 305,307 305
 st=0
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
@@ -275,7 +373,7 @@ blip=$(in_dir "$tmpdir" timeout 5 $qw --known 305) || st=$?
 if [ "$st" -ne 124 ] || [ -n "$blip" ]; then fail "one-poll blip: exit $st, output '$blip'"; fi
 ok # debounce ignores a one-poll blip
 
-# 6. Single-shot: a change seen on two polls fires and exits 0; a failed
+# 10. Single-shot: a change seen on two polls fires and exits 0; a failed
 # poll between them neither fires nor clears the pending change.
 queue_seq 305,307 FAIL 305,307
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
@@ -283,7 +381,7 @@ single=$(in_dir "$tmpdir" timeout 10 $qw --known 305) || fail "single-shot queue
 [ "$single" = "queue-changed known=305 now=305,307" ] || fail "single-shot queue: $single"
 ok # single-shot queue fires on a confirmed change
 
-# 7. Stream: one line per confirmed change, `now` carried forward as the new
+# 11. Stream: one line per confirmed change, `now` carried forward as the new
 # baseline, no repeats, an emptied queue reported as none.
 queue_seq 305 305,307
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
@@ -299,7 +397,7 @@ queue-changed known=305,307 now=none"
 stop_bg
 ok # stream queue: one line per change, baseline carried forward
 
-# 8. Stream: gh missing is fatal and reported.
+# 12. Stream: gh missing is fatal and reported.
 mv "$fakebin/gh" "$fakebin/gh.off"
 st=0
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
@@ -309,7 +407,7 @@ mv "$fakebin/gh.off" "$fakebin/gh"
 expect_lines "$out" "watcher-error gh not on PATH"
 ok # queue stream fatal error reported
 
-# 9. Stream: an unexpected failure (here `sleep` itself failing) still ends
+# 13. Stream: an unexpected failure (here `sleep` itself failing) still ends
 # with a watcher-error line, never a silent exit.
 printf '#!/bin/sh\nexit 3\n' > "$fakebin/sleep"
 chmod +x "$fakebin/sleep"
