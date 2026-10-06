@@ -1,7 +1,7 @@
 # dev-system base image
 
 `ghcr.io/cbundy/dev-system/base` is a prebuilt agent dev environment: Node LTS, the agent
-CLIs and Callum's flow tooling baked in, plus a fixed contract for where tool state
+CLIs, Callum's flow tooling and uv (the Python bootstrapper) baked in, plus a fixed contract for where tool state
 persists. The same image runs on the desktop (through a thin `devcontainer.json`) and on
 the homelab (as a Kubernetes pod, a Coder workspace or a plain `docker run`), with no
 devcontainer tooling needed at run time. A fixed mount point, `/shared`, takes an optional
@@ -25,6 +25,7 @@ them, so those scripts stay maintained.
    | codex | `npm i -g @openai/codex`, as `node` (npm prefix is node-owned) | `npm i -g` as `node`, or image rebuild |
    | no-mistakes | its install script, as `node` | `no-mistakes update`, or image rebuild |
    | treehouse | its install script, as `node` | image rebuild |
+   | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
    | agentsview | pinned release tarball, checksum-verified | bump `AGENTSVIEW_VERSION` in the Dockerfile |
    | git | base image | image rebuild |
@@ -66,8 +67,10 @@ modes.
 
 These belong to the consumer image or the runtime:
 
-- Repo-specific tools (Terraform, Python stacks, Docker CLI and so on). Add them in the
-  consumer's Dockerfile.
+- Repo-specific tools (Terraform, Docker CLI, a full Python stack such as a pinned
+  CPython, system libraries or a database client, and so on). Add them in the
+  consumer's Dockerfile. The Python bootstrapper is in base, though: uv runs a Python
+  repo's gates with no image of its own (see [Extending the image](#extending-the-image)).
 - Secrets or credentials of any kind. The image is public.
 - Where volumes come from (Docker named volume, k8s PVC, host bind, the NAS share). The
   image only defines the mount points.
@@ -479,6 +482,7 @@ on every failure:
   missing and the fix `dev-init --repo`, or that the file is not valid JSON. Only run when
   that file enables a plugin;
 - treehouse is on `PATH`;
+- uv is on `PATH`;
 - agentsview is on `PATH`; with no URL configured, a `WARN` that the session push is off
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
@@ -836,14 +840,19 @@ with it, so `subdomain = false` is fine.
 
 ## Extending the image
 
-Each consumer repo has its own Dockerfile that adds repo-specific tools:
+A Python repo usually needs no image of its own. The image's `python3` has no `pip` or
+`venv`, but uv does that job: gates run as `uv run --with pytest --with pyyaml pytest`
+(or `uv run pytest` with a `pyproject.toml`) and `uvx ruff check .`, and uv fetches the
+packages, or a different Python with `uv python install`, at run time into node's home.
+
+A repo that needs system tools has its own Dockerfile that adds them:
 
 ```dockerfile
 FROM ghcr.io/cbundy/dev-system/base:2
 
 USER root
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3-venv \
+  && apt-get install -y --no-install-recommends postgresql-client \
   && rm -rf /var/lib/apt/lists/*
 USER node
 ```
