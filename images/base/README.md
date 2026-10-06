@@ -1150,7 +1150,7 @@ The runtime supplies:
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-gateway:4318` | The collector's base URL. Set and non-empty: export on. |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | unset (`http/protobuf`) | `http/protobuf` (port 4318 on most collectors), `http/json` or `grpc` (port 4317). Must match the collector. |
-| `OTEL_RESOURCE_ATTRIBUTES` | `host=<name>,env=coder` | Labels on everything Claude Code exports (standard OTel syntax). |
+| `OTEL_RESOURCE_ATTRIBUTES` | `host=<name>,env=coder` | Labels on everything Claude Code and codex export (standard OTel syntax). |
 
 With the endpoint set, the image adds what the endpoint alone does not turn on:
 
@@ -1164,9 +1164,14 @@ With the endpoint set, the image adds what the endpoint alone does not turn on:
   `$CODEX_HOME/config.toml` that sends codex's log events and metrics to the endpoint
   (`otlp-http` to `<endpoint>/v1/logs` and `/v1/metrics`, or `otlp-grpc` to the endpoint
   itself when the protocol is `grpc`). Its metrics otherwise go to codex's default,
-  statsig. The table sits between `# BEGIN dev-system telemetry` and
-  `# END dev-system telemetry` at the end of the file: `dev-init` rewrites it when the
-  endpoint changes and removes it when the endpoint is unset. If the file already has
+  statsig. codex reads `OTEL_RESOURCE_ATTRIBUTES` too, but sets its own `env` attribute
+  from the table's `environment` (default `dev`), which beats the runtime's, so the table
+  carries the runtime's `env` (when it sets one) as `environment` (cbundy/dev-system#171).
+  The table sits between `# BEGIN dev-system telemetry` and
+  `# END dev-system telemetry`, after the file's top-level keys and before its first
+  table, so the tables codex appends (its `[projects."..."]` trust entries) stay outside
+  it: `dev-init` rewrites it when the endpoint changes and removes it when the endpoint is
+  unset (`images/base/codex-otel.sh`). If the file already has
   `otel` settings of yours (an `[otel]` table, or any `otel` key outside the markers),
   `dev-init` writes nothing, logs that it left them alone, and drops its own table if one
   was there. To customise codex's export (headers, TLS, `environment`), replace the block,

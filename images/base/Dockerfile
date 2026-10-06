@@ -171,7 +171,8 @@ COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
-  images/base/telemetry.sh images/base/models.sh images/base/models.env /usr/local/share/dev-system/
+  images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
+  /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns
 # Claude Code's export on only when the runtime sets

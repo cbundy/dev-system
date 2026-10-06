@@ -1757,15 +1757,15 @@ check "codex, no endpoint: dev-init leaves config.toml byte for byte as it was" 
   cp /persist/codex/config.toml /tmp/before
   dev-init >/dev/null 2>&1
   cat /persist/codex/config.toml; cmp /tmp/before /persist/codex/config.toml' --entrypoint ""
-check "codex, endpoint set: dev-init writes one [otel] (OTLP/HTTP logs and metrics, prompts redacted) that codex loads" in_image '
+check "codex, endpoint set: dev-init writes one [otel] (OTLP/HTTP logs and metrics, prompts redacted, the runtime's env) that codex loads" in_image '
   dev-init 2>&1 | grep "otel"; dev-init >/dev/null 2>&1
   f=/persist/codex/config.toml; cat $f
   [ "$(grep -c "^\[otel\]" $f)" = 1 ] && grep -q "^sandbox_mode" $f && grep -qx "log_user_prompt = false" $f &&
   grep -qxF "exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/logs\", protocol = \"binary\" } }" $f &&
   grep -qxF "metrics_exporter = { otlp-http = { endpoint = \"http://collector.invalid:4318/v1/metrics\", protocol = \"binary\" } }" $f &&
-  ! grep -q trace_exporter $f &&
+  ! grep -q trace_exporter $f && grep -qx "environment = \"coder\"" $f &&
   out=$(codex login status 2>&1); echo "codex: $out"; ! echo "$out" | grep -q "Error loading configuration"' \
-  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4318/ --entrypoint ""
+  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://collector.invalid:4318/ -e OTEL_RESOURCE_ATTRIBUTES=host=h,env=coder --entrypoint ""
 check "codex, grpc: the [otel] exporters are otlp-grpc to the endpoint as is, and codex loads it" in_image '
   dev-init >/dev/null 2>&1; f=/persist/codex/config.toml; cat $f
   grep -qxF "exporter = { otlp-grpc = { endpoint = \"http://collector.invalid:4317\" } }" $f &&
