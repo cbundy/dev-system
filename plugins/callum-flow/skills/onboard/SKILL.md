@@ -65,7 +65,7 @@ Get these before running anything. Do not guess them.
 | Language and stack, or "decide later" for an empty folder | lint and test commands, `.gitignore` repo-owned block, per-repo Dockerfile |
 | Lint command and full test command, if they exist yet | step 3 (commands) |
 | GitHub owner and visibility; create the repo now? | step 4 |
-| Extra system tools the repo needs (Python, Terraform, a DB client, ...)? | step 3e |
+| Extra system tools the repo needs (Terraform, a DB client, ...)? Python alone needs none: the base image has uv | step 3e |
 | Run it on Coder? With which per-repo image, if any? | step 6 |
 
 ## 1. Prerequisites
@@ -224,7 +224,13 @@ repo-owned block. Check each rule with `git check-ignore -v <path>`.
 
 ### 3e. Per-repo image (only if the repo needs extra tools)
 
-Create `.devcontainer/Dockerfile`:
+A Python repo does not need one just for Python. The base image's `python3` has no `pip`
+or `venv`, but it ships uv: write the gates as `uv run --with pytest pytest` (or
+`uv run pytest` when the repo has a `pyproject.toml`) and `uvx ruff check .`, and uv
+installs what they need on first run. Add a per-repo image only for system tools uv
+cannot provide.
+
+Otherwise, create `.devcontainer/Dockerfile`:
 
 ```dockerfile
 FROM ghcr.io/cbundy/dev-system/base:2
