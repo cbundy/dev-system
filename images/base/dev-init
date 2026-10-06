@@ -207,20 +207,61 @@ configure_codex_otel() {
   rm -f "$tmp"
 }
 
-# 4. The no-mistakes codex model pin, with the callum-tools `codexModel`
-#    semantics: DEV_CODEX_MODEL overrides the feature's default, and an empty
-#    value skips the pin. An existing pin is never touched. DEV_CLAUDE_MODEL
-#    (default claude-sonnet-5-5, empty to skip) pins the claude fallback agent.
-seed_no_mistakes_model() {
-  local nm_home="${NM_HOME:-/persist/no-mistakes}" model
-  [ -w "$nm_home" ] || return 0
-  if [ "${DEV_CODEX_MODEL+set}" = set ]; then
-    model="$DEV_CODEX_MODEL"
-  else
-    model=$(cat /usr/local/share/dev-system/codex-model.default 2>/dev/null || true)
+# 4. The no-mistakes model pin (codex, and claude the fallback agent): a
+#    managed block in the global config, rewritten on every start so a model
+#    change reaches a workspace whose /persist outlived the image
+#    (pin-codex-model.sh has the rules: a pin set by hand outside the block
+#    wins, the old unmarked block is migrated). Each model comes from the first
+#    of these that has it:
+#    - DEV_CODEX_MODEL / DEV_CLAUDE_MODEL, when set at all: an empty value
+#      skips that pin (an empty codex model removes the block);
+#    - each file model_sources lists (models.sh parses them, never sources).
+#    A changed block makes step 7 restart a running daemon, which reads the
+#    config only at start-up.
+MODELS_BAKED=/usr/local/share/dev-system/models.env
+NM_PIN_CHANGED=false
+
+# The models files to read, highest precedence first. A copy fetched at start
+# from the repo's main branch (cbundy/dev-system#162, follow-up) goes before
+# the defaults baked into the image.
+model_sources() {
+  echo "$MODELS_BAKED"
+}
+
+# resolve_model <env var> <models.env key>: the model to pin, or nothing.
+resolve_model() {
+  local var="$1" key="$2" file value
+  if [ "${!var+set}" = set ]; then
+    printf '%s
+' "${!var}"
+    return 0
   fi
-  "$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$model" "${DEV_CLAUDE_MODEL-claude-sonnet-5-5}" \
-    || log "WARNING: could not write the codex model pin to $nm_home/config.yaml"
+  while IFS= read -r file; do
+    value=$(models_value "$file" "$key") || continue
+    printf '%s
+' "$value"
+    return 0
+  done < <(model_sources)
+}
+
+seed_no_mistakes_model() {
+  local nm_home="${NM_HOME:-/persist/no-mistakes}" codex claude out
+  [ -w "$nm_home" ] || return 0
+  # shellcheck source=models.sh
+  . /usr/local/share/dev-system/models.sh
+  codex=$(resolve_model DEV_CODEX_MODEL CODEX_MODEL)
+  claude=$(resolve_model DEV_CLAUDE_MODEL CLAUDE_MODEL)
+  if ! out=$("$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$codex" "$claude"); then
+    log "WARNING: could not write the no-mistakes model pin to $nm_home/config.yaml"
+    return 0
+  fi
+  [ "$out" = changed ] || return 0
+  NM_PIN_CHANGED=true
+  if grep -q '^# BEGIN dev-system managed' "$nm_home/config.yaml"; then
+    log "no-mistakes model pin in $nm_home/config.yaml: codex ${codex}${claude:+, claude $claude}"
+  else
+    log "removed dev-init's no-mistakes model pin from $nm_home/config.yaml"
+  fi
 }
 
 # 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
@@ -317,7 +358,8 @@ sync_repo() {
 
 # 7. no-mistakes in a gated workspace. Registration persists in NM_HOME, but
 #    the daemon is a process and is gone after every restart, so it is started
-#    whenever the workspace opts in. Then the callum-tools recovery re-registers
+#    whenever the workspace opts in (restarted instead when step 4 changed the
+#    model pin under a daemon that is already running). Then the callum-tools recovery re-registers
 #    a repo the daemon has lost (e.g. a fresh volume).
 #    `daemon start` waits up to 135s for a daemon that never answers
 #    (cbundy/dev-system#101), so each call here has its own short limit: a
@@ -327,7 +369,7 @@ sync_repo() {
 NM_START_LIMIT=30
 NM_RECOVER_LIMIT=100
 recover_no_mistakes() {
-  local ws top out rc nm_home="${NM_HOME:-/persist/no-mistakes}"
+  local ws top out rc action nm_home="${NM_HOME:-/persist/no-mistakes}"
   # shellcheck disable=SC2119 # the argument is optional; none means the default
   ws=$(workspace)
   command -v no-mistakes >/dev/null 2>&1 || return 0
@@ -341,19 +383,28 @@ recover_no_mistakes() {
   fi
   [ -f "$top/.no-mistakes.yaml" ] || return 0
   [ -w "$nm_home" ] || return 0
-  out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon start </dev/null 2>&1)
+  # A daemon already running (a second dev-init in this container) read the
+  # config before step 4 rewrote the model pin, so it is restarted to see it.
+  # `daemon status` exits 0 either way; only its text tells running from not.
+  action=start
+  if [ "$NM_PIN_CHANGED" = true ] \
+    && out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon status </dev/null 2>&1) \
+    && printf '%s\n' "$out" | grep -qi 'daemon running'; then
+    action=restart
+  fi
+  out=$(cd "$top" && timeout -k 5 "$NM_START_LIMIT" no-mistakes daemon "$action" </dev/null 2>&1)
   rc=$?
   case "$rc" in
-    0) ;;
+    0) [ "$action" = start ] || log "restarted the no-mistakes daemon so it runs on the new model pin" ;;
     124 | 137)
-      log "WARNING: no-mistakes daemon start did not finish within ${NM_START_LIMIT}s - the no-mistakes daemon is not running, and the repo recovery is skipped."
-      log "  Fix: see $nm_home/logs (cli.log, daemon-bootstrap.log), then run in $top: no-mistakes daemon start && no-mistakes init"
+      log "WARNING: no-mistakes daemon $action did not finish within ${NM_START_LIMIT}s - the no-mistakes daemon is not running, and the repo recovery is skipped."
+      log "  Fix: see $nm_home/logs (cli.log, daemon-bootstrap.log), then run in $top: no-mistakes daemon $action && no-mistakes init"
       return 0
       ;;
     *)
       # Already running is the normal case on a second dev-init.
       printf '%s\n' "$out" | grep -qi 'already running' \
-        || log "WARNING: no-mistakes daemon start failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
+        || log "WARNING: no-mistakes daemon $action failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
       ;;
   esac
   ( cd "$top" && timeout -k 5 "$NM_RECOVER_LIMIT" "$CALLUM_TOOLS/recover-no-mistakes.sh" </dev/null )

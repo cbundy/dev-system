@@ -24,7 +24,7 @@
     "codexModel": {
       "type": "string",
       "default": "gpt-6.1-sol",
-      "description": "Codex model the no-mistakes pipeline runs on. Written into ~/.no-mistakes/config.yaml as agent_args_override (a global-only key) unless that file already pins one. Empty string skips the pin."
+      "description": "Codex model the no-mistakes pipeline runs on. Kept in ~/.no-mistakes/config.yaml as agent_args_override (a global-only key) in a dev-system managed block, rewritten on every setup; a pin set by hand outside the block wins. Empty string removes the pin. Must match CODEX_MODEL in images/base/models.env."
     }
   },
   "postCreateCommand": "/usr/local/share/callum-tools/setup.sh",

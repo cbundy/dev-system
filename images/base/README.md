@@ -396,11 +396,15 @@ container never fails to start because of it.
    With `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also writes codex's `[otel]` table there
    (and removes it once the endpoint is unset), unless you have `otel` settings of your
    own (see [Telemetry](#telemetry-opentelemetry-export)).
-4. Pins the codex model no-mistakes uses in `$NM_HOME/config.yaml`, only if no pin exists,
-   with the same rules as the callum-tools `codexModel` option. `DEV_CODEX_MODEL` overrides
-   the default (the feature's `codexModel` default); `DEV_CODEX_MODEL=""` skips the pin.
-   The same block pins claude, the pipeline's fallback agent, to `DEV_CLAUDE_MODEL`
-   (default `claude-sonnet-5-5`; empty to leave claude on its default).
+4. Pins the models no-mistakes runs on (codex, and claude, the pipeline's fallback agent)
+   in a managed block of `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
+   `# END dev-system managed`. The block is rewritten on every start, so a model change in
+   [`models.env`](models.env) reaches an existing workspace with its next image; content
+   outside the markers is never touched. `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override
+   the defaults in `models.env`; an empty value skips that pin (`DEV_CODEX_MODEL=""`
+   removes the block). A pin of your own wins: an `agent_args_override` or `agent_config`
+   outside the markers means no block is written (delete the block, markers included,
+   before pinning by hand). The unmarked pin older images wrote is replaced by the block.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
@@ -409,7 +413,9 @@ container never fails to start because of it.
 7. If the workspace (`$DEV_WORKSPACE` once it exists, else the current directory) is in a
    git repo with `.no-mistakes.yaml`, starts the no-mistakes daemon (a process, so gone
    after every restart) and runs the callum-tools `recover-no-mistakes.sh` to re-register
-   the repo if needed. If git refuses the checkout because another user owns it ("dubious
+   the repo if needed. A daemon that is already running (a second `dev-init` in the same
+   container) is restarted instead when step 4 changed the model pin, since it reads the
+   config only at start-up. If git refuses the checkout because another user owns it ("dubious
    ownership"), it warns with the fix instead of skipping silently. Each no-mistakes call
    has its own short time limit (30s), so a daemon that never answers is logged with the
    fix and never holds up the steps after it.

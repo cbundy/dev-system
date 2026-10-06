@@ -105,6 +105,11 @@ check "callum-tools scripts staged where the callum-flow skills call them" in_im
   for s in pipeline-watch.sh queue-watch.sh recover-no-mistakes.sh pin-codex-model.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
   done'
+check "models.env and models.sh are baked in, and the old codex-model.default is gone" in_image '
+  . /usr/local/share/dev-system/models.sh &&
+  models_value /usr/local/share/dev-system/models.env CODEX_MODEL &&
+  models_value /usr/local/share/dev-system/models.env CLAUDE_MODEL &&
+  [ ! -e /usr/local/share/dev-system/codex-model.default ]'
 
 echo "== 3. persistence contract"
 check "env vars point at /persist/*" in_image '
@@ -168,9 +173,13 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   dev-init; dev-init
   grep -q "^sandbox_mode = \"danger-full-access\"" /persist/codex/config.toml
   [ "$(grep -c "^sandbox_mode" /persist/codex/config.toml)" = 1 ]
-  grep -qx "agent_args_override:" /persist/no-mistakes/config.yaml
-  [ "$(grep -c "^agent_args_override:" /persist/no-mistakes/config.yaml)" = 1 ]
-  grep -qF -- "- $(cat /usr/local/share/dev-system/codex-model.default)" /persist/no-mistakes/config.yaml' \
+  . /usr/local/share/dev-system/models.sh
+  env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
+  grep -qx "# BEGIN dev-system managed (rewritten on every start - edit outside this block)" $cfg
+  [ "$(grep -c "^# END dev-system managed$" $cfg)" = 1 ]
+  [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
+  grep -qx -- "    - $(models_value $env CODEX_MODEL)" $cfg
+  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg' \
   -v "$vol:/persist" --entrypoint ""
 check "dev-init on an empty volume mounted at /persist leaves node-owned subdirs" in_image '
   for d in claude codex gh no-mistakes agentsview; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
@@ -191,13 +200,31 @@ check "dev-init keeps an existing top-level sandbox_mode and ignores one inside 
   dev-init >/dev/null 2>&1
   head -n 2 /persist/codex/config.toml | grep -qx "sandbox_mode = \"danger-full-access\""
   grep -qx "\[profiles.x\]" /persist/codex/config.toml'
-check "DEV_CODEX_MODEL overrides the pin, and empty skips it" in_image '
+check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and empty removes it" in_image '
   set -e
-  DEV_CODEX_MODEL=my-model dev-init >/dev/null 2>&1
-  grep -qF -- "- my-model" /persist/no-mistakes/config.yaml
-  rm /persist/no-mistakes/config.yaml
+  cfg=/persist/no-mistakes/config.yaml
+  printf "agent: codex\n" > $cfg
+  DEV_CODEX_MODEL=my-model DEV_CLAUDE_MODEL=my-claude dev-init >/dev/null 2>&1
+  grep -qx -- "    - my-model" $cfg && grep -qx -- "    - my-claude" $cfg
+  printf "\nkeep: 1\n" >> $cfg
+  DEV_CODEX_MODEL=other-model DEV_CLAUDE_MODEL= dev-init >/dev/null 2>&1
+  grep -qx -- "    - other-model" $cfg && ! grep -q "my-model\|my-claude\|  claude:" $cfg
+  [ "$(head -n 1 $cfg)" = "agent: codex" ] && [ "$(tail -n 1 $cfg)" = "keep: 1" ]
   DEV_CODEX_MODEL= dev-init >/dev/null 2>&1
-  ! grep -q agent_args_override /persist/no-mistakes/config.yaml 2>/dev/null' \
+  ! grep -q "agent_args_override\|dev-system managed" $cfg
+  [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
+  --entrypoint ""
+check "dev-init migrates the unmarked pin an older image wrote, and respects a hand-set one" in_image '
+  set -e
+  cfg=/persist/no-mistakes/config.yaml
+  printf "\n# Codex model pin, written by the callum-tools devcontainer feature (global-only key).\nagent_args_override:\n  codex:\n    - -m\n    - gpt-old\n" > $cfg
+  dev-init >/dev/null 2>&1
+  ! grep -q "gpt-old\|callum-tools devcontainer feature" $cfg
+  grep -q "^# BEGIN dev-system managed" $cfg && [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
+  printf "agent_config:\n  codex: {}\n" > $cfg
+  out=$(dev-init 2>&1)
+  [ "$(cat $cfg)" = "$(printf "agent_config:\n  codex: {}")" ]
+  echo "$out" | grep -q "pin-codex-model: left the hand-set"' \
   --entrypoint ""
 rootvol=$(docker volume create --label "$RUN_ID")
 # The volume must not be empty, or Docker copies the image's node-owned
@@ -249,6 +276,19 @@ check "dev-init starts the no-mistakes daemon and registers a gated repo within 
   echo "$out"; echo "dev-init took ${took}s"
   [ "$took" -lt 30 ] && ! echo "$out" | grep -q "WARNING: no-mistakes" &&
   echo "$out" | grep -qF "dev-doctor: OK   no-mistakes: /tmp/r is registered" && no-mistakes daemon status </dev/null' \
+  --entrypoint ""
+check "dev-init restarts a running no-mistakes daemon only when the model pin changed" in_image '
+  set -e
+  git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r
+  pid() { no-mistakes daemon status </dev/null 2>&1 | sed -n "s/.*daemon running (pid \([0-9]*\)).*/\1/p"; }
+  dev-init >/dev/null 2>&1
+  first=$(pid); [ -n "$first" ]
+  out=$(dev-init 2>&1)
+  ! echo "$out" | grep -q "restarted the no-mistakes daemon"
+  [ "$(pid)" = "$first" ]
+  out=$(DEV_CODEX_MODEL=changed-model dev-init 2>&1); echo "$out"
+  echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new model pin"
+  second=$(pid); [ -n "$second" ] && [ "$second" != "$first" ]' \
   --entrypoint ""
 
 echo "== 6. dev-doctor"
