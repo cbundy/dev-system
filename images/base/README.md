@@ -398,11 +398,15 @@ container never fails to start because of it.
    own (see [Telemetry](#telemetry-opentelemetry-export)).
 4. Pins the models no-mistakes runs on (codex, and claude, the pipeline's fallback agent)
    in a managed block of `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
-   `# END dev-system managed`. The block is rewritten on every start, so a model change in
-   [`models.env`](models.env) reaches an existing workspace with its next image; content
-   outside the markers is never touched. `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override
-   the defaults in `models.env`; an empty value skips that pin (`DEV_CODEX_MODEL=""`
-   removes the block). A pin of your own wins: an `agent_args_override` or `agent_config`
+   `# END dev-system managed`. The block is rewritten on every start from
+   [`models.env`](models.env) as it is on this repo's `main` branch, fetched once per start
+   from `DEV_MODELS_URL`, so a model change merged to `main` reaches every workspace on its
+   next start, with no release or image rebuild. The fetch is short (3s to connect, 8s in
+   all) and never fails the start: if it fails, or the file sets no valid model, one
+   `WARNING` names the URL and the reason and the copy baked into the image is used. Per
+   model, a valid fetched value beats the baked one. Content outside the markers is never
+   touched. `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override both; an empty value skips that
+   pin (`DEV_CODEX_MODEL=""` removes the block). A pin of your own wins: an `agent_args_override` or `agent_config`
    outside the markers means no block is written (delete the block, markers included,
    before pinning by hand). The unmarked pin older images wrote is replaced by the block.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
@@ -435,6 +439,14 @@ container never fails to start because of it.
     with the fix. Last, and within `DEV_PLUGIN_INSTALL_TIMEOUT` (120s) in all, so it can
     never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
+
+The model pin in step 4 reads these variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty removes the managed block. |
+| `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude, the pipeline's fallback agent. Set, it beats both models files; empty leaves claude unpinned. |
+| `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
 
 ## `dev-doctor`
 

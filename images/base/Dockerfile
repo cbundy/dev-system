@@ -155,8 +155,9 @@ COPY --chmod=0755 \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
-# models.env is the default no-mistakes models, the source of truth dev-init
-# pins from (models.sh parses it).
+# models.env is the baked copy of the no-mistakes models: dev-init pins from
+# the copy it fetches from main on every start, and falls back to this one
+# (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/models.sh images/base/models.env /usr/local/share/dev-system/
 

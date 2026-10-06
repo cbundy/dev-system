@@ -40,7 +40,8 @@ agent: [codex, claude]
 # The codex model pin (agent_args_override / agent_config) is a GLOBAL-ONLY key: no-mistakes
 # ignores it here without warning. It lives in the global no-mistakes config, as a managed
 # block the dev-system base image's dev-init rewrites on every start (images/base/models.env,
-# env DEV_CODEX_MODEL / DEV_CLAUDE_MODEL; images/base/README.md), or written by the
+# fetched from dev-system's main branch with the image's copy as fallback; env DEV_MODELS_URL,
+# DEV_CODEX_MODEL / DEV_CLAUDE_MODEL; images/base/README.md), or written by the
 # deprecated callum-tools feature (option `codexModel`).
 
 # Optional sections below are synced defaults, commented out. Uncomment in a repo-owned

@@ -90,3 +90,133 @@ test("models_value never runs the file", (t) => {
 test("models_value: a missing file is just absent", () => {
   assert.equal(modelsValue("/nonexistent/models.env", "CODEX_MODEL").status, 1);
 });
+
+// The fetched layer (dev-system#162): dev-init fetches models.env from main on every
+// start (models_url, models_fetch) and resolves each model env > fetched > baked
+// (models_resolve). These drive the same functions with file:// URLs, so no network.
+
+// pickModels runs dev-init's step 4 flow through a real sh: the URL, the fetch into a
+// temp file, then each model resolved from env, the fetched file (when valid) and
+// the baked file. env is the whole environment the flow sees.
+function pickModels(t, { baked, env = {} }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "models-fetch-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bakedFile = path.join(dir, "baked.env");
+  fs.writeFileSync(bakedFile, baked);
+  const script = `
+    . "$MODELS_SH"
+    fetched=""
+    if url=$(models_url); then
+      echo "url=$url"
+      if reason=$(models_fetch "$url" "$DIR/fetched.env"); then fetched="$DIR/fetched.env"; else echo "warning=$reason"; fi
+    fi
+    echo "codex=$(models_resolve DEV_CODEX_MODEL CODEX_MODEL $fetched "$BAKED")"
+    echo "claude=$(models_resolve DEV_CLAUDE_MODEL CLAUDE_MODEL $fetched "$BAKED")"`;
+  const r = spawnSync("sh", ["-c", script], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, MODELS_SH, DIR: dir, BAKED: bakedFile, ...env },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const out = {};
+  for (const line of r.stdout.split("\n").filter(Boolean)) {
+    const i = line.indexOf("=");
+    out[line.slice(0, i)] = line.slice(i + 1);
+  }
+  return out;
+}
+
+const BAKED = "CODEX_MODEL=baked-codex\nCLAUDE_MODEL=baked-claude\n";
+
+function servedFile(t, content) {
+  return `file://${tempFile(t, content)}`;
+}
+
+test("models_url defaults to models.env on main, and an empty DEV_MODELS_URL turns the fetch off", () => {
+  const run = (env) =>
+    spawnSync("sh", ["-c", '. "$1" && models_url', "sh", MODELS_SH], {
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, ...env },
+    });
+  const def = run({});
+  assert.equal(def.status, 0);
+  assert.equal(def.stdout, "https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env\n");
+  assert.equal(run({ DEV_MODELS_URL: "file:///x/models.env" }).stdout, "file:///x/models.env\n");
+  const off = run({ DEV_MODELS_URL: "" });
+  assert.equal(off.status, 1);
+  assert.equal(off.stdout, "");
+});
+
+test("the default URL is this repo's models.env, so main's copy is what workspaces fetch", () => {
+  const sh = fs.readFileSync(MODELS_SH, "utf8");
+  assert.match(sh, /^MODELS_URL_DEFAULT=https:\/\/raw\.githubusercontent\.com\/cbundy\/dev-system\/main\/images\/base\/models\.env$/m);
+});
+
+test("a valid fetched file overrides the baked models", (t) => {
+  const url = servedFile(t, "# from main\nCODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\n");
+  assert.deepEqual(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }), {
+    url,
+    codex: "main-codex",
+    claude: "main-claude",
+  });
+});
+
+test("a partly valid fetched file falls back to baked per key, with no warning", (t) => {
+  const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=$(bad)\n");
+  assert.deepEqual(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }), {
+    url,
+    codex: "main-codex",
+    claude: "baked-claude",
+  });
+  const missing = servedFile(t, "CLAUDE_MODEL=main-claude\n");
+  const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: missing } });
+  assert.equal(r.codex, "baked-codex");
+  assert.equal(r.claude, "main-claude");
+  assert.equal(r.warning, undefined);
+});
+
+test("an invalid or empty fetched file falls back to baked, with the reason", (t) => {
+  for (const content of ["", "<html>Not Found</html>\n", "CODEX_MODEL=a b\nCLAUDE_MODEL=\nPATH=/x\n"]) {
+    const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: servedFile(t, content) } });
+    assert.equal(r.warning, "it sets no valid CODEX_MODEL or CLAUDE_MODEL", JSON.stringify(content));
+    assert.equal(r.codex, "baked-codex");
+    assert.equal(r.claude, "baked-claude");
+  }
+});
+
+test("a missing file or an unreachable URL falls back to baked, with curl's reason", (t) => {
+  const missing = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: "file:///nonexistent/models.env" } });
+  assert.match(missing.warning, /Couldn't (open|read) file/);
+  assert.equal(missing.codex, "baked-codex");
+  // Port 1 on loopback refuses at once, so this needs no network.
+  const refused = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: "https://127.0.0.1:1/models.env" } });
+  assert.match(refused.warning, /\(7\) Failed to connect/);
+  assert.equal(refused.claude, "baked-claude");
+});
+
+test("only https (and file, for tests) are fetched: plain http is refused", (t) => {
+  const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: "http://127.0.0.1:1/models.env" } });
+  assert.match(r.warning, /Protocol "http"/);
+  assert.equal(r.codex, "baked-codex");
+});
+
+test("an empty DEV_MODELS_URL skips the fetch and uses baked", (t) => {
+  assert.deepEqual(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: "" } }), {
+    codex: "baked-codex",
+    claude: "baked-claude",
+  });
+});
+
+test("DEV_CODEX_MODEL / DEV_CLAUDE_MODEL beat the fetched file, and empty means no model", (t) => {
+  const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\n");
+  assert.deepEqual(
+    pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url, DEV_CODEX_MODEL: "env-codex", DEV_CLAUDE_MODEL: "" } }),
+    { url, codex: "env-codex", claude: "" },
+  );
+});
+
+test("models_fetch never runs the fetched file", (t) => {
+  const marker = path.join(os.tmpdir(), `models-fetch-pwned-${process.pid}`);
+  const url = servedFile(t, `$(touch ${marker})\ntouch ${marker}\nCODEX_MODEL=ok\n`);
+  assert.equal(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }).codex, "ok");
+  assert.equal(fs.existsSync(marker), false);
+});
