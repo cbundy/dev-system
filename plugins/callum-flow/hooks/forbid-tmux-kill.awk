@@ -112,8 +112,9 @@ function kills_tmux_by_name(toks, cnt, i,    t) {
 
 function wrapper_option_takes_arg(base, opt) {
   if (base == "env")
-    return (opt == "-u" || opt == "--unset" || opt == "-C" || \
-            opt == "--chdir" || opt == "-S" || opt == "--split-string")
+    return (opt == "-a" || opt == "--argv0" || \
+            opt == "-u" || opt == "--unset" || opt == "-C" || \
+            opt == "--chdir")
   if (base == "sudo")
     return (opt == "-a" || opt == "--auth-type" || opt == "-C" || \
             opt == "--close-from" || opt == "-D" || opt == "--chdir" || \
@@ -130,28 +131,50 @@ function wrapper_option_takes_arg(base, opt) {
   return 0
 }
 
+function env_split_kills(toks, cnt, i, opt,    value, tail, parts, part_cnt, merged, merged_cnt, j) {
+  if (opt == "-S" || opt == "--split-string") {
+    if (i == cnt) return 0
+    value = toks[i + 1]
+    tail = i + 2
+  } else if (substr(opt, 1, 2) == "-S") {
+    value = substr(opt, 3)
+    tail = i + 1
+  } else {
+    value = substr(opt, length("--split-string=") + 1)
+    tail = i + 1
+  }
+
+  merged_cnt = 1
+  merged[merged_cnt] = "env"
+  part_cnt = tokenize(value, parts)
+  for (j = 1; j <= part_cnt; j++) merged[++merged_cnt] = parts[j]
+  for (j = tail; j <= cnt; j++) merged[++merged_cnt] = toks[j]
+  return tokens_are_tmux_kill(merged, merged_cnt, 1)
+}
+
 function wrapper_command_index(toks, cnt, i, base,    opt) {
   i++
   while (i <= cnt) {
     opt = toks[i]
     if (opt == "--") return i + 1
     if (opt !~ /^-/ || opt == "-") return i
+    if (base == "env" && (opt == "-S" || substr(opt, 1, 2) == "-S" || \
+        opt == "--split-string" || index(opt, "--split-string=") == 1))
+      return env_split_kills(toks, cnt, i, opt) ? 0 : cnt + 1
     if (wrapper_option_takes_arg(base, opt)) i += 2
     else i++
   }
   return i
 }
 
-function segment_is_tmux_kill(segment,    toks, cnt, i, base) {
-  cnt = tokenize(segment, toks)
-  if (cnt == 0) return 0
-  i = 1
+function tokens_are_tmux_kill(toks, cnt, i,    base) {
   while (i <= cnt) {
     if (toks[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { i++; continue }
     base = base_of(toks[i])
     if (base == "env" || base == "sudo" || base == "exec" || base == "command" || \
         base == "nohup" || base == "time") {
       i = wrapper_command_index(toks, cnt, i, base)
+      if (i == 0) return 1
       continue
     }
     break
@@ -161,6 +184,11 @@ function segment_is_tmux_kill(segment,    toks, cnt, i, base) {
   if (base == "tmux") return tmux_kill_default_socket(toks, cnt, i + 1)
   if (base == "pkill" || base == "killall") return kills_tmux_by_name(toks, cnt, i + 1)
   return 0
+}
+
+function segment_is_tmux_kill(segment,    toks, cnt) {
+  cnt = tokenize(segment, toks)
+  return tokens_are_tmux_kill(toks, cnt, 1)
 }
 
 # Split the whole command into segments on ; & | newline ( ) { }, quote-aware
