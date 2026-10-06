@@ -15,32 +15,39 @@ Control. After one login per workspace it shows up in claude.ai and the Claude a
 
 ## Push
 
+This directory is pushed as two templates, which differ only in the Remote Control mode
+default:
+
+| Template | Display | Remote Control mode default | For |
+|---|---|---|---|
+| `dev-system` | dev-system (Docker icon) | `auto`: `server` with a repo, else `session` | Working on a repo, one worktree per claude.ai session |
+| `orchestrator` | Orchestrator (🔄) | `session` | One long-running interactive Claude, e.g. the issue orchestrator |
+
 From the repo root, with the `coder` CLI logged in as a template admin:
 
 ```bash
-coder templates push dev-system --directory coder/dev-system \
-  --variable docker_host=ssh://coder@<docker-host>
+coder/push.sh dev-system
+coder/push.sh orchestrator
 ```
 
-On the homelab (cbundy/network#141, the workspace LXC; the Coder server's ssh config
-supplies the key):
+[`coder/push.sh`](../push.sh) holds each template's name, display name, icon,
+description and `remote_control_default_mode`, and pushes the first time too. The site's
+values for the variables below are committed in [`terraform.tfvars`](terraform.tfvars),
+which `coder templates push` reads from this directory on every push, so no push can drop
+one. To change a value, edit that file and push both templates again. A `--variable` flag
+on a hand-run `coder templates push` still overrides the file for that push.
 
-```bash
-coder templates push dev-system --directory coder/dev-system \
-  --variable docker_host=ssh://coder@192.168.1.245
-```
-
-Add `--variable otlp_endpoint=http://<gateway>:4318` to export Claude Code and codex
-telemetry (what is collected and the privacy defaults are in
+Telemetry goes to the `otlp_endpoint` in `terraform.tfvars` (what is collected and the
+privacy defaults are in
 [the image's Telemetry section](../../images/base/README.md#telemetry-opentelemetry-export)).
-Pass the same variables on every push.
 
-### Variables (set at push time)
+### Variables (set in `terraform.tfvars`)
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
+| `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
@@ -67,13 +74,12 @@ Terraform state, template variables or workspace parameters:
    container if needed.
 3. Push with the path of that file:
 
-   ```bash
-   coder templates push dev-system --directory coder/dev-system \
-     --variable docker_host=ssh://coder@<docker-host> \
-     --variable registry_auth_config=/etc/coder/registry/config.json
+   ```hcl
+   registry_auth_config = "/etc/coder/registry/config.json"
    ```
 
-   Pass every variable again on every push, or the others fall back to their defaults.
+   Set it in `terraform.tfvars` (the line is there, commented out) and push both templates
+   again.
 
 Only the path is stored in the template; the file is read on each build. It covers the
 digest lookup and the image pull. The Docker host itself needs no login. For a registry
@@ -91,7 +97,7 @@ coder create my-ws --template dev-system   # Enter accepts each default
 |---|---|---|---|
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
-| `remote_control_mode` | `auto` | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
+| `remote_control_mode` | `auto` (`session` in `orchestrator`) | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
 | `remote_control_skip_permissions` | `false` | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
 | `cpus` | 2 | yes | CPU limit (1-8). |
 | `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
@@ -230,7 +236,8 @@ before a workspace builds.
 
 ## Changing the template
 
-Keep it generic: no site-specific hosts or addresses in `main.tf`, only in push commands.
+Keep it generic: no site-specific hosts or addresses in `main.tf`, only in
+`terraform.tfvars`. A change reaches both templates, so push both.
 Provider versions are pinned, with `.terraform.lock.hcl` beside the template; after a
 version bump, run `terraform init -upgrade` here and commit the lock file. `npm run lint`
 from the repo root runs `terraform fmt -check`, `init -lockfile=readonly` and `validate`
@@ -261,15 +268,13 @@ deletes workspaces named `next-smoke-*` from `dev-system-next`, and deletes the 
 workspace on failure or Ctrl-C too. Promoting a change to `dev-system` stays the owner's
 step, with the push commands at the top of this README.
 
-It reads two files from the template-tester mount
-(`/run/secrets/dev-system-template-tester`, or `DEV_TEMPLATE_TESTER_DIR`), never from the
-shared secrets mount that every workspace has:
-
-- `coder-session-token`: a session token for a Template Admin user. Passed to the CLI in
-  its environment only, never printed or put on a command line.
-- `coder-template-vars`: the push variables, one `name=value` per line (`#` comments and
-  blank lines are skipped), each passed as `--variable`, so no site-specific value lives
-  in the repo. Without it the template's defaults apply.
+It reads `coder-session-token`, a session token for a Template Admin user, from the
+template-tester mount (`/run/secrets/dev-system-template-tester`, or
+`DEV_TEMPLATE_TESTER_DIR`), never from the shared secrets mount that every workspace has.
+The token is passed to the CLI in its environment only, never printed or put on a command
+line. The variables come from `terraform.tfvars`, as for `dev-system`, except that
+`template_tester_secrets_dir` is always pushed empty, so `dev-system-next` workspaces never
+get the token.
 
 The deployment URL is `CODER_URL`, else the agent's `CODER_AGENT_URL`. The CLI is the
 workspace agent's own binary, which the agent downloads from the server, so its version
@@ -305,29 +310,17 @@ narrow it further, but which scopes a push and a smoke run need is untested.
    ```
 
    The last command prints the token once.
-2. As root on the workspace Docker host, write the token and the push variables into a
-   directory of their own, not `secrets_dir` (the variables are the values you pass when
-   pushing `dev-system`):
+2. As root on the workspace Docker host, write the token into a directory of its own, not
+   `secrets_dir`:
 
    ```bash
    install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/template-tester
    (umask 077 && read -rsp 'Coder token: ' t && printf '%s\n' "$t" > /etc/dev-system/template-tester/coder-session-token)
-   (umask 077 && printf '%s\n' 'docker_host=ssh://coder@<docker-host>' > /etc/dev-system/template-tester/coder-template-vars)
-   chown 1000:1000 /etc/dev-system/template-tester/coder-session-token /etc/dev-system/template-tester/coder-template-vars
+   chown 1000:1000 /etc/dev-system/template-tester/coder-session-token
    ```
 
-   Add a line for each other variable (`otlp_endpoint=...`, `registry_auth_config=...`).
-   Leave `template_tester_secrets_dir` out, so `dev-system-next` workspaces never get the
-   token.
-3. Push `dev-system` with the variable added to the usual ones:
-
-   ```bash
-   coder templates push dev-system --directory coder/dev-system \
-     --variable docker_host=ssh://coder@<docker-host> \
-     --variable template_tester_secrets_dir=/etc/dev-system/template-tester
-   ```
-
-   Pass it again on every push of `dev-system`, or it falls back to empty (off).
+3. `terraform.tfvars` already sets `template_tester_secrets_dir` to that directory, so the
+   next `coder/push.sh dev-system` turns the feature on.
 
 4. Turn on `template_testing` (Settings, Parameters) on the workspace developing
    dev-system only, and restart it. The mount is live, so a replaced token file is seen at

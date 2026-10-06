@@ -1,6 +1,9 @@
 # Coder workspace template "dev-system": one container per workspace from the
 # dev-system base image (images/base), on a Docker host reached locally or
-# over ssh:// (variable docker_host). See README.md next to this file.
+# over ssh:// (variable docker_host). See README.md next to this file. The
+# same Terraform is also pushed as the "orchestrator" template, which only
+# changes the Remote Control mode default (variable remote_control_default_mode);
+# coder/push.sh holds each template's name, look and variables.
 #
 # Based on Coder's docker starter (coder/coder examples/templates/docker) and
 # the preview template that lived in cbundy/network. Differences from the
@@ -16,9 +19,9 @@
 #   postStartCommand does, in server mode by default when there is a repo;
 # - logins without a shell: a "Log in" app proxies dev-login's page and a
 #   "Logins" metadata row shows each tool's state;
-# - image, CPU, memory, repo, Remote Control mode and skip-permissions
-#   (bypass) parameters, OTLP telemetry env (variable otlp_endpoint) and
-#   pinned provider versions;
+# - image, CPU, memory, repo, Remote Control mode (default from variable
+#   remote_control_default_mode) and skip-permissions (bypass) parameters,
+#   OTLP telemetry env (variable otlp_endpoint) and pinned provider versions;
 # - runtime secrets from a directory on the Docker host (variable
 #   secrets_dir), mounted read-only where the image looks for them, so the
 #   agentsview session push is on in every workspace once the host has its
@@ -56,6 +59,18 @@ variable "otlp_endpoint" {
   type        = string
 }
 
+# The Remote Control mode parameter's default, so one Terraform serves both
+# templates: dev-system keeps auto, orchestrator pushes session (coder/push.sh).
+variable "remote_control_default_mode" {
+  default     = "auto"
+  description = "Default of the Remote Control mode parameter: auto, session or server."
+  type        = string
+  validation {
+    condition     = contains(["auto", "session", "server"], var.remote_control_default_mode)
+    error_message = "remote_control_default_mode must be auto, session or server."
+  }
+}
+
 # The image reads runtime secrets (agentsview-pg-url: the agentsview session
 # push) from DEV_SECRETS_DIR, /run/secrets/dev-system. This host directory is
 # mounted there read-only, so a file put on the Docker host once reaches every
@@ -74,7 +89,7 @@ variable "secrets_dir" {
 # with the template_testing parameter on.
 variable "template_tester_secrets_dir" {
   default     = ""
-  description = "Directory on the Docker host holding coder-session-token and coder-template-vars for push-next.sh (owned 1000:1000, mode 0700). Mounted read-only at /run/secrets/dev-system-template-tester only into workspaces with the template_testing parameter on. Empty turns the feature off."
+  description = "Directory on the Docker host holding coder-session-token for push-next.sh (owned 1000:1000, mode 0700). Mounted read-only at /run/secrets/dev-system-template-tester only into workspaces with the template_testing parameter on. Empty turns the feature off."
   type        = string
 }
 
@@ -138,7 +153,7 @@ data "coder_parameter" "remote_control_mode" {
   type         = "string"
   # auto is resolved by the startup script, which alone knows whether a
   # per-repo image brings its own DEV_REPO_URL (cbundy/dev-system#108).
-  default = "auto"
+  default = var.remote_control_default_mode
   mutable = true
   order   = 3
   option {
@@ -254,7 +269,7 @@ resource "coder_agent" "main" {
       export DEV_REMOTE_CONTROL_NAME="coder-${lower(data.coder_workspace.me.name)}"
     fi
 
-    # Remote Control mode "auto" (the parameter default): server, one worktree
+    # Remote Control mode "auto" (dev-system's default): server, one worktree
     # per claude.ai session, when there is a repo; else session, since server
     # mode without a repo puts every session in one shared directory. Resolved
     # here, before dev-init and dev-remote-control read it: the image accepts

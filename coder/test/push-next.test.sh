@@ -52,12 +52,6 @@ run_case() {
   shift
   mkdir -p "$case/secrets"
   printf '%s\n' "$TOKEN" > "$case/secrets/coder-session-token"
-  cat > "$case/secrets/coder-template-vars" <<'EOF'
-# site values
-docker_host=ssh://coder@192.0.2.10
-
-otlp_endpoint=http://192.0.2.1:4318
-EOF
   : > "$case/calls"
   : > "$case/env"
   [ -z "${PREP:-}" ] || eval "$PREP"
@@ -102,12 +96,14 @@ check_invariants() {
 
 TEMPLATE_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/../dev-system" && pwd)
 
-# 1. push: fixed name, variables from the file, token only in the environment.
+# 1. push: fixed name, the token directory cleared (coder reads every other variable from
+# terraform.tfvars), token only in the environment.
 run_case 1 "$PUSH_NEXT"
 expect_rc -eq
 check_invariants
-grep -q "^templates push dev-system-next --directory $TEMPLATE_DIR --yes .*--variable docker_host=ssh://coder@192.0.2.10 --variable otlp_endpoint=http://192.0.2.1:4318\$" "$case/calls" \
+grep -q "^templates push dev-system-next --directory $TEMPLATE_DIR --yes --variable template_tester_secrets_dir= " "$case/calls" \
   || fail "push call wrong: $(cat "$case/calls")"
+[ "$(grep -c -- '--variable' "$case/calls")" -eq 1 ] || fail "pushed variables other than the token directory: $(cat "$case/calls")"
 [ "$(cat "$case/env")" = "$TOKEN https://coder.example.test" ] || fail "coder did not get the token and URL in its env: $(cat "$case/env")"
 
 # 2. A template name (or anything else) as an argument is refused before any call.
@@ -142,11 +138,10 @@ grep -q 'template_tester_secrets_dir' "$case/out" || fail "no template_tester_se
 grep -q 'Testing template changes from a workspace' "$case/out" || fail "no README pointer: $(cat "$case/out")"
 [ ! -s "$case/calls" ] || fail "called coder without the template-tester directory: $(cat "$case/calls")"
 
-# 5. A malformed vars line fails before pushing.
-# shellcheck disable=SC2016 # PREP is single-quoted on purpose: run_case evals it once $case is set
-PREP='echo "not a variable" >> "$case/secrets/coder-template-vars"' run_case 5 "$PUSH_NEXT"
-expect_rc -ne
-[ ! -s "$case/calls" ] || fail "pushed with a malformed vars file: $(cat "$case/calls")"
+# 5. The template's variables are committed: terraform.tfvars is in the pushed directory
+# and sets the telemetry endpoint.
+grep -q '^otlp_endpoint = "http://' "$TEMPLATE_DIR/terraform.tfvars" \
+  || fail "$TEMPLATE_DIR/terraform.tfvars does not set otlp_endpoint"
 
 # 6. smoke, agent ready: push, create from dev-system-next, ssh for the log, delete.
 run_case 6 "$PUSH_NEXT" smoke

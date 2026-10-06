@@ -13,7 +13,7 @@
   "scripts": {
     "lint": "sh scripts/lint.sh",
     "build:skills": "node scripts/build-skills.js",
-    "test": "node --test tests/ && sh features/test/callum-tools/pin-codex-model.test.sh && sh features/test/callum-tools/recover-no-mistakes.test.sh && sh features/test/callum-tools/watchers.test.sh &&sh coder/test/push-next.test.sh"
+    "test": "node --test tests/*.test.js && sh features/test/callum-tools/pin-codex-model.test.sh && sh features/test/callum-tools/recover-no-mistakes.test.sh && sh features/test/callum-tools/watchers.test.sh && sh coder/test/push-next.test.sh && sh coder/test/push.test.sh"
   },
   "engines": {
     "node": ">=18"
