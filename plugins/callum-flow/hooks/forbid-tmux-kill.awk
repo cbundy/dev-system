@@ -170,9 +170,18 @@ function join_tokens(toks, first, cnt,    out, i) {
   return out
 }
 
-function env_split_kills(toks, cnt, value, tail,    command) {
+function shell_quote(value,    out, i, ch) {
+  out = "'"
+  for (i = 1; i <= length(value); i++) {
+    ch = substr(value, i, 1)
+    out = out (ch == "'" ? "'\\''" : ch)
+  }
+  return out "'"
+}
+
+function env_split_kills(toks, cnt, value, tail,    command, i) {
   command = "env " value
-  if (tail <= cnt) command = command " " join_tokens(toks, tail, cnt)
+  for (i = tail; i <= cnt; i++) command = command " " shell_quote(toks[i])
   return is_tmux_kill(command)
 }
 

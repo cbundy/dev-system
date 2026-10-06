@@ -103,6 +103,7 @@ test("refuses with env prefix, wrappers and a path to the binary", () => {
   assertDenied("env --split-string 'tmux kill-session -t a'");
   assertDenied("env --split-string='FOO=1 tmux kill-server'");
   assertDenied("env -S '-i' tmux kill-server");
+  assertDenied("env -S 'sh -c' 'tmux kill-server'");
   assertDenied("env -iS'tmux kill-server'");
   assertDenied("command -- tmux kill-server");
   assertDenied("nohup -- tmux kill-server");
