@@ -136,20 +136,13 @@ RUN arch=$(dpkg --print-architecture) \
   && agentsview --version
 
 # Shared scripts from the callum-tools feature, staged at the same path the
-# feature uses (the callum-flow skills call the watchers there). The codex
-# model default is read from the feature's own option default, so the feature
-# and the image cannot drift apart.
+# feature uses (the callum-flow skills call the watchers there).
 COPY --chmod=0755 \
   features/src/callum-tools/recover-no-mistakes.sh \
   features/src/callum-tools/pin-codex-model.sh \
   features/src/callum-tools/pipeline-watch.sh \
   features/src/callum-tools/queue-watch.sh \
   /usr/local/share/callum-tools/
-COPY features/src/callum-tools/devcontainer-feature.json /tmp/callum-tools-feature.json
-RUN install -d -m 0755 /usr/local/share/dev-system \
-  && jq -er '.options.codexModel.default' /tmp/callum-tools-feature.json \
-    > /usr/local/share/dev-system/codex-model.default \
-  && rm /tmp/callum-tools-feature.json
 
 # systemctl replaces the base image's shim of the same name, which reports
 # success without systemd (see the script, cbundy/dev-system#101).
@@ -162,8 +155,10 @@ COPY --chmod=0755 \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
+# models.env is the default no-mistakes models, the source of truth dev-init
+# pins from (models.sh parses it).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
-  images/base/telemetry.sh /usr/local/share/dev-system/
+  images/base/telemetry.sh images/base/models.sh images/base/models.env /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns
 # Claude Code's export on only when the runtime sets

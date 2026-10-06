@@ -57,8 +57,8 @@ if [ "${INSTALL_NO_MISTAKES}" = "true" ]; then
 
   # Pin the codex model in the global config (the only place no-mistakes
   # honours it); pin-codex-model.sh documents the rules and is shared with the
-  # dev-system base image.
-  /usr/local/share/callum-tools/pin-codex-model.sh "$HOME/.no-mistakes/config.yaml" "${CODEX_MODEL:-}"
+  # dev-system base image. Its `changed` report is only for dev-init.
+  /usr/local/share/callum-tools/pin-codex-model.sh "$HOME/.no-mistakes/config.yaml" "${CODEX_MODEL:-}" >/dev/null
 
   # Auto-recover runtime state that a container rebuild wipes even when the
   # binaries survive: the daemon (a process) and repo registration under

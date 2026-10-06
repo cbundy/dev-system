@@ -18,8 +18,9 @@ no-mistakes pipeline config.
   sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
   block if you want to opt in, rather than uncommenting the synced copy in place.
 - Not here: the codex model pin. `agent_args_override` / `agent_config` are global-only
-  keys that no-mistakes silently ignores in a repo file; the `callum-tools` feature writes
-  the pin into `~/.no-mistakes/config.yaml` instead (option `codexModel`).
+  keys that no-mistakes silently ignores in a repo file; the base image's `dev-init` keeps
+  the pin as a managed block in the global no-mistakes config instead, rewritten on every
+  start from `images/base/models.env` (see `images/base/README.md`).
 
 ## `treehouse.toml` -> `treehouse.toml`
 
