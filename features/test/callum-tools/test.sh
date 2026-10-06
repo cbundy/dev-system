@@ -159,7 +159,7 @@ EOF
     /usr/local/share/callum-tools/queue-watch.sh --repo o/r --label ready --known 305 |
     grep -qx "queue-changed known=305 now=305,307"
 '
-check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-5.6-sol"
+check "codex model pinned in global config" bash -lc "grep -A3 '^agent_args_override:' ~/.no-mistakes/config.yaml | grep -q gpt-6.1-sol"
 # shellcheck disable=SC2016 # single-quoted on purpose: the script expands in the inner bash -lc
 check "no-mistakes auto-recovery runs daemon start + init when unregistered" bash -lc '
   set -e
