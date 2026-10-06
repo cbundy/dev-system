@@ -337,6 +337,10 @@ following guards fire, and none of them is weakened:
 - Never use `git stash` from the main checkout either - it shares the same
   `refs/stash` as every worktree, so it collides with delegated agents the
   same way; a plugin-shipped hook refuses it everywhere.
+- Never touch the default tmux socket (`tmux kill-server`, `tmux kill-session`,
+  `pkill tmux`, `killall tmux`): it hosts this very session. Tests that need
+  tmux use a private socket (`tmux -L <name>`), and your delegation briefs
+  should say so; a plugin-shipped hook refuses the default-socket commands.
 - Serialize conflict-prone work with native GitHub `blocked_by` dependencies;
   only parallelize genuinely independent work.
 - Keep the worktree pool healthy. Leases from long-merged work accumulate and will
