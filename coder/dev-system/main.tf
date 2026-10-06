@@ -2,8 +2,9 @@
 # dev-system base image (images/base), on a Docker host reached locally or
 # over ssh:// (variable docker_host). See README.md next to this file. The
 # same Terraform is also pushed as the "orchestrator" template, which only
-# changes the Remote Control mode default (variable remote_control_default_mode);
-# coder/push.sh holds each template's name, look and variables.
+# changes variables: the Remote Control mode default and the long-lived
+# session's settings (variables remote_control_*); coder/push.sh holds each
+# template's name, look and variables.
 #
 # Based on Coder's docker starter (coder/coder examples/templates/docker) and
 # the preview template that lived in cbundy/network. Differences from the
@@ -20,8 +21,10 @@
 # - logins without a shell: a "Log in" app proxies dev-login's page and a
 #   "Logins" metadata row shows each tool's state;
 # - image, CPU, memory, repo, Remote Control mode (default from variable
-#   remote_control_default_mode) and skip-permissions (bypass) parameters,
-#   OTLP telemetry env (variable otlp_endpoint) and pinned provider versions;
+#   remote_control_default_mode), skip-permissions (bypass) and resume
+#   parameters, the session-mode prompts and name format (variables
+#   remote_control_*, set per template by coder/push.sh), OTLP telemetry
+#   env (variable otlp_endpoint) and pinned provider versions;
 # - runtime secrets from a directory on the Docker host (variable
 #   secrets_dir), mounted read-only where the image looks for them, so the
 #   agentsview session push is on in every workspace once the host has its
@@ -69,6 +72,39 @@ variable "remote_control_default_mode" {
     condition     = contains(["auto", "session", "server"], var.remote_control_default_mode)
     error_message = "remote_control_default_mode must be auto, session or server."
   }
+}
+
+# The orchestrator's long-lived session (cbundy/dev-system#164), generic so one
+# Terraform serves both templates: coder/push.sh sets these per template, and
+# the defaults keep dev-system's behaviour.
+variable "remote_control_default_resume" {
+  default     = false
+  description = "Default of the remote_control_resume parameter: resume the workspace's last Claude conversation on every start (session mode)."
+  type        = bool
+}
+
+variable "remote_control_default_skip_permissions" {
+  default     = false
+  description = "Default of the remote_control_skip_permissions parameter."
+  type        = bool
+}
+
+variable "remote_control_prompt" {
+  default     = ""
+  description = "Session mode: the first message of a fresh conversation, e.g. a slash command (DEV_REMOTE_CONTROL_PROMPT). Empty sends none."
+  type        = string
+}
+
+variable "remote_control_resume_prompt" {
+  default     = ""
+  description = "Session mode: the message sent when a conversation is resumed (DEV_REMOTE_CONTROL_RESUME_PROMPT). Empty sends none."
+  type        = string
+}
+
+variable "remote_control_name_format" {
+  default     = ""
+  description = "Session mode: the Remote Control session name, with {name} replaced by the default name (DEV_REMOTE_CONTROL_NAME_FORMAT), e.g. '🔄 {name} orchestrator'. Empty keeps the default name."
+  type        = string
 }
 
 # The image reads runtime secrets (agentsview-pg-url: the agentsview session
@@ -175,9 +211,19 @@ data "coder_parameter" "remote_control_skip_permissions" {
   display_name = "Skip permissions (bypass)"
   description  = "Lets Claude act without asking you to approve tool use: bypass permissions, in both session and server modes. Only turn on for a workspace you are happy to let act unsupervised. Takes effect on the next workspace start."
   type         = "bool"
-  default      = false
+  default      = var.remote_control_default_skip_permissions
   mutable      = true
   order        = 4
+}
+
+data "coder_parameter" "remote_control_resume" {
+  name         = "remote_control_resume"
+  display_name = "Resume the conversation"
+  description  = "Session mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Off: every start is a new conversation. Ignored in server mode."
+  type         = "bool"
+  default      = var.remote_control_default_resume
+  mutable      = true
+  order        = 5
 }
 
 data "coder_parameter" "cpus" {
@@ -187,7 +233,7 @@ data "coder_parameter" "cpus" {
   type         = "number"
   default      = 2
   mutable      = true
-  order        = 5
+  order        = 6
   validation {
     min = 1
     max = 8
@@ -201,7 +247,7 @@ data "coder_parameter" "memory_gb" {
   type         = "number"
   default      = 4
   mutable      = true
-  order        = 6
+  order        = 7
   validation {
     min = 1
     max = 16
@@ -215,7 +261,7 @@ data "coder_parameter" "template_testing" {
   type         = "bool"
   default      = false
   mutable      = true
-  order        = 7
+  order        = 8
 }
 
 locals {
@@ -264,9 +310,12 @@ resource "coder_agent" "main" {
     # after the repo. Without one, keep Claude on the volume and name the
     # session coder-<workspace> rather than the hostname. Done here, not in
     # env, because only the container knows the image's DEV_REPO_URL.
+    # A name format (remote_control_name_format) is filled in by the image
+    # instead, with the hostname, which is the workspace name.
     if [ -z "$${DEV_REPO_URL:-}" ]; then
       export DEV_WORKSPACE=/workspaces
-      export DEV_REMOTE_CONTROL_NAME="coder-${lower(data.coder_workspace.me.name)}"
+      [ -n "$${DEV_REMOTE_CONTROL_NAME_FORMAT:-}" ] \
+        || export DEV_REMOTE_CONTROL_NAME="coder-${lower(data.coder_workspace.me.name)}"
     fi
 
     # Remote Control mode "auto" (dev-system's default): server, one worktree
@@ -316,6 +365,12 @@ resource "coder_agent" "main" {
     },
     # Only when set, so a per-repo image's own DEV_REPO_URL applies otherwise.
     data.coder_parameter.repo_url.value != "" ? { DEV_REPO_URL = data.coder_parameter.repo_url.value } : {},
+    # The conversation settings only when on or non-empty, so the image's
+    # defaults apply otherwise.
+    tobool(data.coder_parameter.remote_control_resume.value) ? { DEV_REMOTE_CONTROL_RESUME = "1" } : {},
+    var.remote_control_prompt != "" ? { DEV_REMOTE_CONTROL_PROMPT = var.remote_control_prompt } : {},
+    var.remote_control_resume_prompt != "" ? { DEV_REMOTE_CONTROL_RESUME_PROMPT = var.remote_control_resume_prompt } : {},
+    var.remote_control_name_format != "" ? { DEV_REMOTE_CONTROL_NAME_FORMAT = var.remote_control_name_format } : {},
   )
 
   # One line, e.g. "claude: in, codex: out, gh: out". The text form of

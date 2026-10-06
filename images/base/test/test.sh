@@ -670,8 +670,9 @@ stops_within() {
 # real CLI does, while remoteDialogSeen is not true in .claude.json (it records
 # /tmp/claude-consent-prompt and waits for an answer, so it never starts
 # unattended), then records its directory and arguments in /tmp/claude-starts
-# (and its environment in /tmp/claude-env) and runs until /tmp/claude-exit
-# exists and exits 3.
+# (its arguments one per line in /tmp/claude-argv-<start number>, and its
+# environment in /tmp/claude-env) and runs until /tmp/claude-exit exists and
+# exits 3.
 STUB='#!/bin/bash
 if [ "$1 ${2:-}" = "auth login" ]; then
   n=$(( $(cat /tmp/claude-logins 2>/dev/null || echo 0) + 1 )); echo $n > /tmp/claude-logins
@@ -695,6 +696,7 @@ if [ "$(jq -r .remoteDialogSeen "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.jso
 fi
 env | sort > /tmp/claude-env
 echo "$PWD $*" >> /tmp/claude-starts
+printf "%s\n" "$@" > /tmp/claude-argv-$(grep -c . /tmp/claude-starts)
 until [ -e /tmp/claude-exit ]; do sleep 0.2; done
 exit 3'
 # Stub codex and gh device logins: a URL and a one-time code; approving is
@@ -819,6 +821,89 @@ check "DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 adds --dangerously-skip-permissions
   for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
   docker exec '$c' cat /tmp/claude-starts
   docker exec '$c' grep -qF -- '--remote-control ${c:0:12} --dangerously-skip-permissions --settings {\"skipDangerousModePermissionPrompt\":true}' /tmp/claude-starts"
+docker rm -f "$c" >/dev/null
+
+# Resume (#164): the stub's workspace is /tmp, so Claude's project directory
+# is /persist/claude/projects/-tmp. A real conversation's transcript holds a
+# user message; a start nobody wrote to holds only Remote Control bookkeeping.
+STUB_LINES='{"type":"mode","mode":"normal","sessionId":"SID"}
+{"type":"permission-mode","permissionMode":"default","sessionId":"SID"}
+{"type":"bridge-session","sessionId":"SID","bridgeSessionId":"cse_test","lastSequenceNum":0}
+{"parentUuid":null,"type":"system","subtype":"bridge_status","content":"/remote-control is active","sessionId":"SID"}'
+REAL_LINE='{"parentUuid":null,"type":"user","message":{"role":"user","content":"hello"},"sessionId":"SID"}'
+# transcript <id> <stub|real> [touch -d date]: a script that writes one
+transcript() {
+  local lines="${STUB_LINES//SID/$1}"
+  [ "$2" = stub ] || lines="$lines
+${REAL_LINE//SID/$1}"
+  printf "mkdir -p /persist/claude/projects/-tmp && printf '%%s\\\\n' '%s' > /persist/claude/projects/-tmp/%s.jsonl%s" \
+    "$lines" "$1" "${3:+ && touch -d '$3' /persist/claude/projects/-tmp/$1.jsonl}"
+}
+RESUME_ENV=(-e DEV_REMOTE_CONTROL_RESUME=1 -e DEV_REMOTE_CONTROL_NAME=rc-test
+  -e "DEV_REMOTE_CONTROL_PROMPT=/callum-flow:issue-orchestrator"
+  -e "DEV_REMOTE_CONTROL_RESUME_PROMPT=The workspace restarted: carry on.")
+
+c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" \
+  "$IMAGE" bash -c "touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "resume, nothing to resume: a fresh start with the startup prompt and no --resume" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-argv-1
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-1)\" = \"\$(printf '%s\n' --remote-control rc-test /callum-flow:issue-orchestrator)\" ] &&
+  docker logs '$c' 2>&1 | grep -q 'dev-remote-control: starting a fresh conversation'"
+# The first conversation gets a user message, then Claude exits: the restart
+# resumes it with the resume prompt instead of re-sending the startup prompt.
+docker exec "$c" bash -c "$(transcript 11111111-aaaa-4aaa-8aaa-111111111111 real)"
+docker exec "$c" touch /tmp/claude-exit
+check "resume: after Claude exits, the restart resumes that conversation with the resume prompt" bash -c "
+  for _ in \$(seq 20); do docker exec '$c' test -s /tmp/claude-argv-2 && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' sed -n 2p /tmp/claude-starts)\" = '/tmp --remote-control rc-test --resume 11111111-aaaa-4aaa-8aaa-111111111111 The workspace restarted: carry on.' ] &&
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-2)\" = \"\$(printf '%s\n' --remote-control rc-test --resume 11111111-aaaa-4aaa-8aaa-111111111111 'The workspace restarted: carry on.')\" ] &&
+  docker logs '$c' 2>&1 | grep -q 'dev-remote-control: resuming the last conversation (11111111-aaaa-4aaa-8aaa-111111111111) in /persist/claude/projects/-tmp'"
+docker rm -f "$c" >/dev/null
+
+# A real conversation with a newer empty start beside it (which --continue
+# would pick): the real one is resumed on the very first start.
+c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
+  $(transcript 22222222-bbbb-4bbb-8bbb-222222222222 real '1 hour ago') &&
+  $(transcript 33333333-cccc-4ccc-8ccc-333333333333 stub) &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "resume: an existing conversation is resumed with the resume prompt, skipping a newer empty start" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-argv-1
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-1)\" = \"\$(printf '%s\n' --remote-control rc-test --resume 22222222-bbbb-4bbb-8bbb-222222222222 'The workspace restarted: carry on.')\" ]"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
+  $(transcript 44444444-dddd-4ddd-8ddd-444444444444 stub) &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "resume: a transcript without a user message still counts as fresh" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp --remote-control rc-test /callum-flow:issue-orchestrator' ]"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -w /tmp -e STUB="$STUB" -e "DEV_REMOTE_CONTROL_NAME_FORMAT=🔄 {name} & orchestrator" \
+  "$IMAGE" bash -c "touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "DEV_REMOTE_CONTROL_NAME_FORMAT: an emoji name with spaces and & reaches Claude as one argument" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-argv-1
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-1)\" = \"\$(printf '%s\n' --remote-control '🔄 ${c:0:12} & orchestrator')\" ] &&
+  docker logs '$c' 2>&1 | grep -qF 'as \"🔄 ${c:0:12} & orchestrator\"'"
+docker rm -f "$c" >/dev/null
+
+c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_MODE=server "${RESUME_ENV[@]}" \
+  -e "DEV_REMOTE_CONTROL_NAME_FORMAT=🔄 {name}" "$IMAGE" bash -c "
+  $(transcript 55555555-eeee-4eee-8eee-555555555555 real) &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "server mode ignores resume, both prompts and the name format, logging each" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  docker logs '$c' 2>&1 | grep 'ignored in server mode'
+  [ \"\$(docker exec '$c' cat /tmp/claude-starts)\" = '/tmp remote-control --name rc-test --spawn same-dir' ] &&
+  for v in RESUME PROMPT RESUME_PROMPT NAME_FORMAT; do
+    docker logs '$c' 2>&1 | grep -qx \"dev-remote-control: DEV_REMOTE_CONTROL_\$v is ignored in server mode (session mode only)\" || exit 1
+  done"
 docker rm -f "$c" >/dev/null
 
 # The default name is the workspace's repo name: from the origin URL (the

@@ -21,15 +21,19 @@ fail() {
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
+# One line per call (its arguments joined by spaces) in $FAKE_CALLS, and each call's
+# arguments one per line in $FAKE_CALLS.<n>, to compare them exactly.
 cat > "$tmpdir/coder" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_CALLS"
+printf '%s\n' "$@" > "$FAKE_CALLS.$(wc -l < "$FAKE_CALLS" | tr -d ' ')"
 EOF
 chmod +x "$tmpdir/coder"
 
 # Run push.sh with the given arguments; leaves $calls and $rc.
 run() {
   calls=$tmpdir/calls
+  rm -f "$calls" "$calls".*
   : > "$calls"
   set +e
   CODER_BIN="$tmpdir/coder" FAKE_CALLS="$calls" "$PUSH" "$@" > "$tmpdir/out" 2>&1
@@ -37,25 +41,52 @@ run() {
   set -e
 }
 
-# expect_calls <template> <mode> <display name> <icon>: one push, then one edit.
+# expect_calls <template> <display name> <icon> <variable>...: one push with exactly
+# these variables (each a CSV-quoted name=value, as coder parses --variable), then one
+# edit.
 expect_calls() {
-  [ "$rc" -eq 0 ] || fail "$1: exit status $rc - output: $(cat "$tmpdir/out")"
-  [ "$(wc -l < "$calls")" -eq 2 ] || fail "$1: wanted 2 coder calls: $(cat "$calls")"
-  sed -n 1p "$calls" | grep -qE "^templates push $1 --directory $TEMPLATE_DIR --yes --variable remote_control_default_mode=$2( --message push.sh from [0-9a-f]+)?\$" \
-    || fail "$1: push call wrong: $(cat "$calls")"
+  t=$1 display=$2 icon=$3
+  shift 3
+  [ "$rc" -eq 0 ] || fail "$t: exit status $rc - output: $(cat "$tmpdir/out")"
+  [ "$(wc -l < "$calls")" -eq 2 ] || fail "$t: wanted 2 coder calls: $(cat "$calls")"
+  {
+    printf '%s\n' templates push "$t" --directory "$TEMPLATE_DIR" --yes
+    for v in "$@"; do printf -- '--variable\n"%s"\n' "$v"; done
+  } > "$tmpdir/want"
+  # The commit message is optional (no git outside a checkout).
+  sed '/^--message$/,$d' "$calls.1" > "$tmpdir/got"
+  diff "$tmpdir/want" "$tmpdir/got" >&2 || fail "$t: push arguments differ (- wanted, + got)"
+  case "$(sed -n '/^--message$/,$p' "$calls.1" | tr '\n' ' ')" in
+    "" | "--message push.sh from "[0-9a-f]*" ") ;;
+    *) fail "$t: push --message wrong: $(cat "$calls.1")" ;;
+  esac
   case "$(sed -n 2p "$calls")" in
-    "templates edit $1 --display-name $3 --icon $4 --description "?*" --yes") ;;
-    *) fail "$1: edit call wrong: $(cat "$calls")" ;;
+    "templates edit $t --display-name $display --icon $icon --description "?*" --yes") ;;
+    *) fail "$t: edit call wrong: $(cat "$calls")" ;;
   esac
 }
 
-# 1. dev-system: mode auto, the docker icon.
+# 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest.
 run dev-system
-expect_calls dev-system auto dev-system /icon/docker.svg
+expect_calls dev-system dev-system /icon/docker.svg \
+  remote_control_default_mode=auto \
+  remote_control_default_resume=false \
+  remote_control_default_skip_permissions=false \
+  remote_control_prompt= \
+  remote_control_resume_prompt= \
+  remote_control_name_format=
 
-# 2. orchestrator: mode session, the clockwise arrows emoji.
+# 2. orchestrator: session mode, resumed, the skill as the startup prompt, the resume
+# nudge (its comma survives coder's CSV parsing because the field is quoted), and an
+# emoji name format with spaces.
 run orchestrator
-expect_calls orchestrator session Orchestrator /emojis/1f504.png
+expect_calls orchestrator Orchestrator /emojis/1f504.png \
+  remote_control_default_mode=session \
+  remote_control_default_resume=true \
+  remote_control_default_skip_permissions=false \
+  remote_control_prompt=/callum-flow:issue-orchestrator \
+  'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watchers and the audit, and continue the issue-orchestrator loop.' \
+  'remote_control_name_format=🔄 {name} orchestrator'
 
 # 3. Anything else is refused before any call.
 for args in '' dev-system-next 'dev-system orchestrator'; do
