@@ -67,9 +67,9 @@ has passed.
   ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
   syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
-  it prints a skip line and CI's `ci.yml` runs them.
-- `npm test` - the CLI and hook tests under `tests/`, plus the plain-shell `callum-tools`
-  script tests (`pin-codex-model`, `recover-no-mistakes`).
+  its summary line notes the skip and CI's `ci.yml` runs them.
+- `npm test` - every node test under `tests/` and every plain-shell suite under
+  `features/test/callum-tools/` and `coder/test/` (`scripts/test.sh`).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
 and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`

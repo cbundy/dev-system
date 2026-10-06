@@ -81,6 +81,8 @@ new_repo() {
 
 run_recover() {
   # $1 = dir to run from, $2 = FAKE_NM_REGISTERED, $3 = log file, $4 = extra PATH prefix (optional)
+  # The script's stderr (its "recovering ..." notices) goes to $3.err, so the suite stays
+  # quiet on success; scenarios that check those messages read it from there.
   : > "$3"
   (
     cd "$1"
@@ -90,7 +92,7 @@ run_recover() {
     export FAKE_NM_LOG
     FAKE_NM_REGISTERED="$2"
     export FAKE_NM_REGISTERED
-    "$RECOVER_SH"
+    "$RECOVER_SH" 2> "$3.err"
   )
 }
 
@@ -144,18 +146,18 @@ expect_empty_log "$tmpdir/log6"
 # would end. Scenario 8: so does a hanging `status`, before any recovery.
 for hang in "daemon start" status; do
   start=$(date +%s)
-  NM_CALL_LIMIT=2 FAKE_NM_HANG="$hang" run_recover "$tmpdir/unreg" false "$tmpdir/log7" 2>/dev/null \
+  NM_CALL_LIMIT=2 FAKE_NM_HANG="$hang" run_recover "$tmpdir/unreg" false "$tmpdir/log7" \
     || fail "must exit 0 when '$hang' hangs"
   took=$(($(date +%s) - start))
   [ "$took" -lt 15 ] || fail "'$hang' hangs: took ${took}s, the limit is 2s"
   expect_no_line "$tmpdir/log7" "init"
 done
 expect_no_line "$tmpdir/log7" "daemon start"
-NM_CALL_LIMIT=2 FAKE_NM_HANG="daemon start" run_recover "$tmpdir/unreg" false "$tmpdir/log7" 2> "$tmpdir/err7" \
+NM_CALL_LIMIT=2 FAKE_NM_HANG="daemon start" run_recover "$tmpdir/unreg" false "$tmpdir/log7" \
   || fail "must exit 0 when 'daemon start' hangs"
-grep -qF "callum-tools: daemon start: did not finish within 2s - stopped." "$tmpdir/err7" \
-  || fail "expected a timeout message - stderr was: $(cat "$tmpdir/err7")"
-grep -qF "then run: no-mistakes daemon start" "$tmpdir/err7" \
-  || fail "expected a fix hint - stderr was: $(cat "$tmpdir/err7")"
+grep -qF "callum-tools: daemon start: did not finish within 2s - stopped." "$tmpdir/log7.err" \
+  || fail "expected a timeout message - stderr was: $(cat "$tmpdir/log7.err")"
+grep -qF "then run: no-mistakes daemon start" "$tmpdir/log7.err" \
+  || fail "expected a fix hint - stderr was: $(cat "$tmpdir/log7.err")"
 
 echo "ok - all no-mistakes auto-recovery scenarios passed"

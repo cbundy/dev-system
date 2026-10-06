@@ -13,6 +13,8 @@
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
 # and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
+#
+# Quiet on success: one summary line, which also names any check skipped on this host.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -22,6 +24,12 @@ JS_DIRS="bin plugins scripts"
 
 failures=0
 checked=0
+skipped=""
+
+# Record a check skipped on this host, for the summary line.
+skip() {
+  skipped="${skipped:+$skipped; }$1"
+}
 
 fail() {
   echo "lint: FAIL $1" >&2
@@ -45,7 +53,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   have_shellcheck=1
 else
   have_shellcheck=0
-  echo "lint: shellcheck not on PATH - syntax checks only (CI runs shellcheck)"
+  skip "shellcheck not on PATH, syntax checks only; CI runs shellcheck"
 fi
 
 # A temp file, not a pipe, so the loops run in this shell and can count failures.
@@ -87,7 +95,8 @@ done < "$list"
 
 # Generated skills (scripts/build-skills.js) must match their source doc.
 checked=$((checked + 1))
-if ! node scripts/build-skills.js --check; then
+# Its success line goes nowhere; a stale skill is reported on stderr.
+if ! node scripts/build-skills.js --check > /dev/null; then
   fail "generated skills out of date (run npm run build:skills)"
 fi
 
@@ -123,11 +132,11 @@ elif [ "${LINT_REQUIRE_TERRAFORM:-0}" = 1 ]; then
   checked=$((checked + 1))
   fail "terraform not on PATH, and LINT_REQUIRE_TERRAFORM=1"
 else
-  echo "lint: terraform not on PATH - skipped coder/ checks (CI runs them)"
+  skip "terraform checks skipped: not on PATH; CI runs them"
 fi
 
 if [ "$failures" -gt 0 ]; then
   echo "lint: $failures of $checked file(s) failed" >&2
   exit 1
 fi
-echo "lint: $checked file(s) ok"
+echo "lint: $checked file(s) ok${skipped:+ ($skipped)}"
