@@ -1382,12 +1382,18 @@ host, and a shared tag lets one silently replace another's image mid-run.
 
 Run the container test suite against it. Test 7 needs the devcontainer CLI; set
 `DEVCONTAINER="npx -y @devcontainers/cli"` if it is not installed, or `SKIP_DEVCONTAINER=1`
-to skip it. Test 8 starts a throwaway `postgres:17` container to exercise the agentsview
+to skip it. The agentsview section starts a throwaway `postgres:17` container to exercise the agentsview
 push end to end:
 
 ```bash
 images/base/test/test.sh "dev-system-base:test-$(git rev-parse --short HEAD)"
 ```
+
+With no further argument it runs every section. Add a group name (`test.sh --list-groups`
+prints them) or a section number to run just that part, for example `... logins` or `... 11`.
+The sections are in `images/base/test/sections/`, the shared helpers in `lib.sh`; a new
+section file must be added to a group in `test.sh` (`groups.test.sh`, part of `npm test`,
+fails otherwise, and also checks the workflow matrix lists the same groups).
 
 `.github/workflows/publish-base-image.yml`:
 
@@ -1399,7 +1405,10 @@ images/base/test/test.sh "dev-system-base:test-$(git rev-parse --short HEAD)"
 - **Weekly schedule** rebuilds and re-pushes the current `VERSION`'s tags, but only once
   that version has been released by hand, so merging a `VERSION` bump never publishes it
   by itself. A failed check fails the run rather than skipping the week.
-- The image is built once and tested; the push sends that same tested image.
+- The image is built once and saved as an artifact; the test groups run as parallel jobs
+  against it, and the push job (dispatch and schedule only) needs every one of them and
+  sends that same tested image. The job `Base image result` is green only if the build and
+  every test job passed and the push job passed or was skipped (pull requests): the one name a branch-protection rule could require.
 
 **Visibility:** the package is public, so consumers pull it with no login. It took the
 visibility of this public repo when the first dispatch created it (1.0.0, 2026-10-03), so

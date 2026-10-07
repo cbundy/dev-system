@@ -1,7 +1,11 @@
 name: Publish base image
 
 # Builds and tests ghcr.io/cbundy/dev-system/base (images/base/), and pushes it
-# on a deliberate release or the weekly refresh:
+# on a deliberate release or the weekly refresh. One build job, then the container
+# test sections as parallel matrix jobs against that same image (handed over as a
+# zstd docker-save artifact), then the push job, which needs every test job, and a
+# summary job, "Base image result", that is the one name a branch-protection rule
+# could require:
 #
 # - pull_request: build + test only, never pushes.
 # - workflow_dispatch: the deliberate release, from main only - build, test,
@@ -37,6 +41,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tags: ${{ steps.meta.outputs.tags }}
+      push: ${{ steps.push.outputs.push }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -114,9 +122,9 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Built once with the final tags and loaded into the local daemon: the
-      # tests run against this image and the push step pushes this same image,
-      # so nothing untested is ever published.
+      # Built once with the final tags and loaded into the local daemon, then
+      # saved as an artifact: every test job runs against this image and the
+      # push job pushes this same image, so nothing untested is ever published.
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -134,18 +142,87 @@ jobs:
           cache-from: type=gha,scope=base-image
           cache-to: type=gha,scope=base-image,mode=max
 
-      - name: Install devcontainer CLI
-        run: npm install -g @devcontainers/cli
-
-      - name: Test image
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: images/base/test/test.sh "$IMAGE:$VERSION"
-
-      - name: Push image
-        if: steps.push.outputs.push == 'true'
+      # zstd -3 of the docker-save stream; the artifact itself is not compressed
+      # again. Measured against a GHCR PR tag and a rebuild from the GHA cache in
+      # cbundy/dev-system#199.
+      - name: Save image
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          mapfile -t tags <<< "$TAGS"
+          docker save "${tags[@]}" | zstd -T0 -3 -o "$RUNNER_TEMP/image.tar.zst"
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: base-image
+          path: ${{ runner.temp }}/image.tar.zst
+          compression-level: 0
+          retention-days: 1
+
+  # One job per group of sections in images/base/test/test.sh (--list-groups
+  # prints them; groups.test.sh keeps this list in step). Each loads the image
+  # the build job saved and runs only its group. Needs are per group: the
+  # devcontainer CLI for section 7, a postgres container for section 9 (pulled
+  # by the test), the network for sections 2 and 13.
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [basics, init-plugins, devcontainer-telemetry, entrypoint, agentsview-repo, logins]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: base-image
+          path: ${{ runner.temp }}/image
+
+      - name: Load image
+        run: zstd -d -c "$RUNNER_TEMP/image/image.tar.zst" | docker load
+
+      - name: Install devcontainer CLI
+        if: matrix.group == 'devcontainer-telemetry'
+        run: npm install -g @devcontainers/cli
+
+      - name: Test image (${{ matrix.group }})
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          GROUP: ${{ matrix.group }}
+        run: images/base/test/test.sh "$IMAGE:$VERSION" "$GROUP"
+
+  # Dispatch and schedule only, and only once every test job passed.
+  push:
+    needs: [build, test]
+    if: needs.build.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image
+        uses: actions/download-artifact@v4
+        with:
+          name: base-image
+          path: ${{ runner.temp }}/image
+
+      - name: Load image
+        run: zstd -d -c "$RUNNER_TEMP/image/image.tar.zst" | docker load
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image
+        env:
+          TAGS: ${{ needs.build.outputs.tags }}
         run: |
           while read -r tag; do
             docker push "$tag"
@@ -157,3 +234,19 @@ jobs:
             echo "digest: $(docker image inspect -f '{{index .RepoDigests 0}}' "$(head -n 1 <<< "$TAGS")")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The one stable name for the whole workflow: green only when the build and
+  # every test job succeeded, and the push job succeeded or was intentionally
+  # skipped (pull requests). A skipped or cancelled build or test is not a pass.
+  result:
+    name: Base image result
+    needs: [build, test, push]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to have passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(to_entries[]; .value.result == "success" or (.key == "push" and .value.result == "skipped"))' > /dev/null
