@@ -115,7 +115,7 @@ row bridge-unpushed | grep -q 'unsafe' || fail "unpushed is not unsafe"
 row bridge-merged | grep -q 'merged pull request' || fail "squash-merged is not safe"
 row bridge-young | grep -q 'idle under' || fail "young is not kept for its age"
 row bridge-old | grep -q 'remove' || fail "old is not marked for removal"
-printf '%s\n' "$out" | grep -q 'would remove 6' || fail "dry run should list 5 removals: $out"
+printf '%s\n' "$out" | grep -q 'would remove 6' || fail "dry run should list 6 removals: $out"
 [ "$("$PRUNE" --workspace "$ws" --count)" = 6 ] || fail "--count is not 6"
 
 # --delete: only orphaned + clean + pushed (or merged) + idle >= 72h.
