@@ -244,6 +244,23 @@ check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and 
   ! grep -q "agent_args_override\|dev-system managed" $cfg || exit 1
   [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
   --entrypoint ""
+# The claude fallback's effort (cbundy/job-search#206): CLAUDE_EFFORT from the
+# baked models file, written as claude's --effort after its --model.
+check "dev-init pins the claude fallback's effort from models.env, DEV_CLAUDE_EFFORT overrides it, and empty drops it" in_image '
+  set -e
+  . /usr/local/share/dev-system/models.sh
+  env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
+  claude() { sed -n "/^  claude:\$/,/^# END dev-system managed\$/p" $cfg | sed "\$d"; }
+  rm -f $cfg
+  out=$(DEV_MODELS_URL= dev-init 2>&1); echo "$out" | grep -i "managed"
+  [ "$(claude)" = "$(printf "  claude:\n    - --model\n    - %s\n    - --effort\n    - %s" "$(models_value $env CLAUDE_MODEL)" "$(models_value $env CLAUDE_EFFORT)")" ]
+  echo "$out" | grep -qF ", claude effort $(models_value $env CLAUDE_EFFORT)"
+  DEV_MODELS_URL= DEV_CLAUDE_EFFORT=high dev-init >/dev/null 2>&1
+  [ "$(grep -c -- "--effort" $cfg)" = 1 ] && claude | grep -qx -- "    - high"
+  DEV_MODELS_URL= DEV_CLAUDE_EFFORT= dev-init >/dev/null 2>&1
+  ! grep -q -- "--effort" $cfg || exit 1
+  claude | grep -qx -- "    - --model"' \
+  --entrypoint ""
 # The pipeline's agent order (cbundy/dev-system#163): the AGENTS list, written
 # as `agent: [...]` in the managed block, beside the model pin.
 check "DEV_NM_AGENTS rewrites the managed agent order in place, empty drops it, and a hand-set agent wins" in_image '
@@ -303,7 +320,8 @@ check "dev-init falls back to the baked models with one WARNING when the fetch f
   done
   printf "nothing here\n" > /tmp/m.env
   out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
-  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid CODEX_MODEL, CLAUDE_MODEL or AGENTS)"
+  keys=$(echo "$MODELS_KEYS" | sed "s/ /, /g; s/, \([^,]*\)\$/ or \1/")
+  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid $keys)"
   grep -qx -- "$baked" $cfg
   printf "CODEX_MODEL=fetched-codex\n" > /tmp/m.env
   out=$(DEV_MODELS_URL= dev-init 2>&1)

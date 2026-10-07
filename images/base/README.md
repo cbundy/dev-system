@@ -410,16 +410,20 @@ container never fails to start because of it.
    `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
    `# END dev-system managed`. The block has two independent parts: the ordered agent list
    (`agent: [codex, claude]`, from `AGENTS`; no-mistakes moves to the next agent when one
-   fails) and the model pin (`agent_args_override`: codex, and claude). It is rewritten on
+   fails) and the model pin (`agent_args_override`: codex, and claude's model and effort, so
+   the claude fallback runs on `CLAUDE_MODEL` at `CLAUDE_EFFORT`). It is rewritten on
    every start from [`models.env`](models.env) as it is on this repo's `main` branch,
    fetched once per start from `DEV_MODELS_URL`, so a change merged to `main` reaches every
    workspace on its next start, with no release or image rebuild. The fetch is short (3s to
    connect, 8s in all) and never fails the start: if it fails, or the file sets no valid
    key, one `WARNING` names the URL and the reason and the copy baked into the image is
    used. Per key, a valid fetched value beats the baked one. Content outside the markers is
-   never touched. `DEV_NM_AGENTS` / `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` override both; an
-   empty value skips that part (`DEV_NM_AGENTS=""` writes no `agent`, `DEV_CODEX_MODEL=""`
-   no pin; with both empty the block is removed). A key of your own outside the markers
+   never touched. `DEV_NM_AGENTS` / `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` /
+   `DEV_CLAUDE_EFFORT` override both; an empty value skips that part (`DEV_NM_AGENTS=""`
+   writes no `agent`, `DEV_CODEX_MODEL=""` no pin; with both empty the block is removed).
+   To run codex only, with no claude fallback, set `DEV_NM_AGENTS=codex`. A key in
+   `models.env` that the image does not know yet (such as `CLAUDE_EFFORT` before 2.6.0) is
+   ignored, so a new key needs the image that reads it. A key of your own outside the markers
    wins over its part only: a top-level `agent` drops the agent order, an
    `agent_args_override` or `agent_config` drops the model pin (delete the block, markers
    included, before setting both by hand). A repo whose `.no-mistakes.yaml` sets `agent`
@@ -463,6 +467,7 @@ The managed block in step 4 reads these variables:
 | `DEV_NM_AGENTS` | unset: the models file (`AGENTS`) | The pipeline's ordered agent list, comma-separated with no spaces (`codex,claude`; names such as `claude`, `codex`, `grok`, `opencode`, `acp:<name>`). Set, it beats the fetched and the baked models file; empty writes no `agent` in the block. An invalid list is skipped with a one-line note. |
 | `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty drops the model pin (and the block, when there is no agent order either). |
 | `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude. Set, it beats both models files; empty leaves claude unpinned. |
+| `DEV_CLAUDE_EFFORT` | unset: the models file (`CLAUDE_EFFORT`) | claude's reasoning effort (its `--effort`): `low`, `medium`, `high`, `xhigh` or `max`. Set, it beats both models files; empty leaves claude's effort unpinned. Any other value is left out with a one-line note. |
 | `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the agents and models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
 
 ## `dev-doctor`

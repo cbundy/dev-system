@@ -134,13 +134,14 @@ configure_codex_otel() {
 
 # 4. The no-mistakes managed block in the global config: the pipeline's
 #    ordered agent list (`agent: [codex, claude]`) and the model pin (codex,
-#    and claude). Rewritten on every start so a change reaches a workspace
-#    whose /persist outlived the image (pin-codex-model.sh has the rules: a key
-#    set by hand outside the block wins over its part only, the old unmarked
-#    block is migrated). Each value comes from the first of these that has it:
-#    - DEV_NM_AGENTS / DEV_CODEX_MODEL / DEV_CLAUDE_MODEL, when set at all: an
-#      empty value skips that part (an empty agent list writes no `agent`, an
-#      empty codex model no pin);
+#    and claude's model and effort). Rewritten on every start so a change
+#    reaches a workspace whose /persist outlived the image (pin-codex-model.sh
+#    has the rules: a key set by hand outside the block wins over its part
+#    only, the old unmarked block is migrated). Each value comes from the
+#    first of these that has it:
+#    - DEV_NM_AGENTS / DEV_CODEX_MODEL / DEV_CLAUDE_MODEL / DEV_CLAUDE_EFFORT,
+#      when set at all: an empty value skips that part (an empty agent list
+#      writes no `agent`, an empty codex model no pin);
 #    - each file model_sources lists (models.sh parses them, never sources):
 #      the models file fetched once per start from DEV_MODELS_URL (default:
 #      images/base/models.env on this repo's main branch, so a merged change
@@ -186,7 +187,7 @@ fetch_models() {
 }
 
 seed_no_mistakes_model() {
-  local nm_home="${NM_HOME:-/persist/no-mistakes}" agents codex claude out block pin
+  local nm_home="${NM_HOME:-/persist/no-mistakes}" agents codex claude claude_effort out block pin
   [ -w "$nm_home" ] || return 0
   # shellcheck source=models.sh
   . /usr/local/share/dev-system/models.sh
@@ -194,11 +195,12 @@ seed_no_mistakes_model() {
   agents=$(resolve_model DEV_NM_AGENTS AGENTS)
   codex=$(resolve_model DEV_CODEX_MODEL CODEX_MODEL)
   claude=$(resolve_model DEV_CLAUDE_MODEL CLAUDE_MODEL)
+  claude_effort=$(resolve_model DEV_CLAUDE_EFFORT CLAUDE_EFFORT)
   if [ -n "$MODELS_FETCHED" ]; then
     rm -f "$MODELS_FETCHED"
     MODELS_FETCHED=""
   fi
-  if ! out=$("$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$codex" "$claude" "$agents"); then
+  if ! out=$("$CALLUM_TOOLS/pin-codex-model.sh" "$nm_home/config.yaml" "$codex" "$claude" "$agents" "$claude_effort"); then
     log "WARNING: could not write the no-mistakes managed block (agent order and model pin) to $nm_home/config.yaml"
     return 0
   fi
@@ -209,7 +211,7 @@ seed_no_mistakes_model() {
     block=$(sed -n '/^# BEGIN dev-system managed/,/^# END dev-system managed$/p' "$nm_home/config.yaml")
     agents=$(printf '%s\n' "$block" | sed -n 's/^agent: \[\(.*\)\]$/\1/p' | sed 's/, /,/g')
     pin="no model pin"
-    printf '%s\n' "$block" | grep -q '^agent_args_override:' && pin="codex ${codex}${claude:+, claude $claude}"
+    printf '%s\n' "$block" | grep -q '^agent_args_override:' && pin="codex ${codex}${claude:+, claude $claude}${claude_effort:+, claude effort $claude_effort}"
     log "no-mistakes managed block in $nm_home/config.yaml: agents ${agents:-not set}; $pin"
   else
     log "removed dev-init's no-mistakes managed block from $nm_home/config.yaml"
