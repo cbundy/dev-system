@@ -64,7 +64,8 @@ sleep 1
 dead_pid=$( (sh -c 'echo $$') )
 
 for n in bridge-live bridge-recycled bridge-dead bridge-unlocked bridge-dirty \
-  bridge-unpushed bridge-merged bridge-young bridge-old bridge-nolockpid; do
+  bridge-unpushed bridge-merged bridge-young bridge-old bridge-nolockpid \
+  bridge-startmatch bridge-startmismatch; do
   add_wt "$n"
 done
 git -C "$ws" worktree add -q -b feature "$ws/other" main
@@ -72,6 +73,11 @@ git -C "$ws" worktree add -q -b feature "$ws/other" main
 git -C "$ws" worktree lock --reason "claude remote-control (pid $live_pid)" "$ws/.claude/worktrees/bridge-live"
 git -C "$ws" worktree lock --reason "claude remote-control (pid $live_pid)" "$ws/.claude/worktrees/bridge-recycled"
 git -C "$ws" worktree lock --reason "claude remote-control (pid $dead_pid)" "$ws/.claude/worktrees/bridge-dead"
+# The real Claude Code format: claude <a> <b> (pid <PID> start <START>), START being the
+# process starttime (field 22 of /proc/<pid>/stat).
+live_start=$(sed 's/.*) //' "/proc/$live_pid/stat" | awk '{print $20}')
+git -C "$ws" worktree lock --reason "claude remote-control session (pid $live_pid start $live_start)" "$ws/.claude/worktrees/bridge-startmatch"
+git -C "$ws" worktree lock --reason "claude remote-control session (pid $live_pid start $((live_start + 1)))" "$ws/.claude/worktrees/bridge-startmismatch"
 git -C "$ws" worktree lock --reason "something else" "$ws/.claude/worktrees/bridge-nolockpid"
 
 echo x > "$ws/.claude/worktrees/bridge-dirty/wip.txt"
@@ -80,7 +86,7 @@ git -C "$ws/.claude/worktrees/bridge-merged" commit -q --allow-empty -m squash-m
 git -C "$ws/.claude/worktrees/bridge-merged" rev-parse HEAD > "$GH_MERGED"
 
 for n in bridge-live bridge-recycled bridge-dead bridge-unlocked bridge-dirty \
-  bridge-unpushed bridge-merged bridge-old bridge-nolockpid; do
+  bridge-unpushed bridge-merged bridge-old bridge-nolockpid bridge-startmatch bridge-startmismatch; do
   age "$n" 100
 done
 # bridge-recycled: the pid is alive, but the lock predates the process, so it was recycled.
@@ -98,6 +104,9 @@ row() { printf '%s\n' "$out" | grep "^$1 " || fail "no table row for $1 in: $out
 row bridge-live | grep -q 'in use' || fail "live lock is not 'in use'"
 row bridge-live | grep -q 'keep' || fail "live lock is not kept"
 row bridge-nolockpid | grep -q 'in use' || fail "a lock with no pid is not 'in use'"
+row bridge-startmatch | grep -q 'in use' || fail "matching pid+start is not 'in use'"
+row bridge-startmatch | grep -q 'keep' || fail "matching pid+start is not kept"
+row bridge-startmismatch | grep -q 'recycled' || fail "mismatching start not detected as recycled"
 row bridge-recycled | grep -q 'recycled' || fail "recycled pid not detected"
 row bridge-dead | grep -q 'not running' || fail "dead lock not detected"
 row bridge-unlocked | grep -q 'orphaned' || fail "unlocked is not orphaned"
@@ -106,16 +115,16 @@ row bridge-unpushed | grep -q 'unsafe' || fail "unpushed is not unsafe"
 row bridge-merged | grep -q 'merged pull request' || fail "squash-merged is not safe"
 row bridge-young | grep -q 'idle under' || fail "young is not kept for its age"
 row bridge-old | grep -q 'remove' || fail "old is not marked for removal"
-printf '%s\n' "$out" | grep -q 'would remove 5' || fail "dry run should list 5 removals: $out"
-[ "$("$PRUNE" --workspace "$ws" --count)" = 5 ] || fail "--count is not 5"
+printf '%s\n' "$out" | grep -q 'would remove 6' || fail "dry run should list 5 removals: $out"
+[ "$("$PRUNE" --workspace "$ws" --count)" = 6 ] || fail "--count is not 6"
 
 # --delete: only orphaned + clean + pushed (or merged) + idle >= 72h.
 "$PRUNE" --workspace "$ws" --delete > "$tmp/delete.out" 2>&1 || fail "--delete failed: $(cat "$tmp/delete.out")"
-for n in bridge-recycled bridge-dead bridge-unlocked bridge-merged bridge-old; do
+for n in bridge-recycled bridge-dead bridge-unlocked bridge-merged bridge-old bridge-startmismatch; do
   [ ! -e "$ws/.claude/worktrees/$n" ] || fail "$n was not removed"
   git -C "$ws" rev-parse --verify -q "worktree-$n" >/dev/null && fail "branch worktree-$n was not deleted"
 done
-for n in bridge-live bridge-nolockpid bridge-dirty bridge-unpushed bridge-young; do
+for n in bridge-live bridge-nolockpid bridge-startmatch bridge-dirty bridge-unpushed bridge-young; do
   [ -d "$ws/.claude/worktrees/$n" ] || fail "$n was removed but must be kept"
   git -C "$ws" rev-parse --verify -q "worktree-$n" >/dev/null || fail "branch worktree-$n was deleted"
 done

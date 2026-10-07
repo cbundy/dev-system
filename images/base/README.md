@@ -553,10 +553,14 @@ local branch `worktree-bridge-*`, locked with the server's pid in the reason. A 
 stops leaves them behind and nothing removes them. `dev-prune-worktrees` classifies each one
 and removes the stale ones:
 
-- **in use**: locked by a process that is still alive. The pid is read from the lock reason
-  (`pid N`). A live pid only counts if that process started no later than the lock was
-  taken (the `locked` file's mtime, compared with the process start time from `/proc`);
-  otherwise the pid was recycled and the worktree is orphaned. A lock whose reason names no
+- **in use**: locked by a process that is still alive. Claude Code writes the lock reason
+  as `claude <a> <b> (pid <PID> start <START>)`, where START is the process's starttime
+  (field 22 of `/proc/<PID>/stat`, in clock ticks since boot), or `claude <a> <b> (pid <PID>)`
+  on older versions or when the start is unknown. With `pid N start S` the worktree is in use
+  only if pid N is alive and its starttime equals S exactly; a live pid with a different
+  starttime was recycled, so the worktree is orphaned. With only `pid N`, a live pid counts if
+  that process started no later than the lock was taken (the `locked` file's mtime, compared
+  with the process start time from `/proc`, plus 5 s of slack). A lock whose reason names no
   pid cannot be proven dead, so it counts as in use. Never touched, whatever its age.
 - **orphaned**: unlocked, or locked by a dead or recycled pid.
 - **unsafe** (an orphaned one that is kept): uncommitted or untracked changes, or commits on

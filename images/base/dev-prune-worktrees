@@ -6,7 +6,9 @@
 # `claude remote-control --spawn worktree` gives every session its own git
 # worktree, <workspace>/.claude/worktrees/bridge-*, on a local branch
 # worktree-bridge-*, and locks it (`git worktree lock`) with the server's pid
-# in the reason. A server that stops or crashes leaves the lock behind or the
+# in the reason: `claude <a> <b> (pid <PID> start <START>)`, where START is the
+# process's starttime (field 22 of /proc/<PID>/stat, clock ticks since boot),
+# or `claude <a> <b> (pid <PID>)` on older versions or when the start is unknown. A server that stops or crashes leaves the lock behind or the
 # worktree unlocked, and nothing ever removes it, so they pile up.
 #
 # Usage: dev-prune-worktrees [--delete] [--older-than DURATION] [--workspace DIR] [--count]
@@ -27,11 +29,13 @@
 #
 # Classes, per worktree:
 #   in use    locked by a process that is still alive. Never touched,
-#             whatever its age. The lock reason names the pid ("pid N"). A
-#             live pid only counts if that process started no later than the
-#             lock was taken (the lock file's mtime): a process that started
-#             after the lock is a recycled pid. A lock whose reason has no pid
-#             cannot be proven dead, so it counts as in use.
+#             whatever its age. With "pid N start S" the lock is in use iff
+#             pid N is alive and its /proc starttime equals S exactly; a live
+#             pid with a different starttime is a recycled pid. With only
+#             "pid N" a live pid counts if that process started no later than
+#             the lock was taken (the lock file's mtime, +5s): a process that
+#             started after the lock is a recycled pid. A lock whose reason
+#             has no pid cannot be proven dead, so it counts as in use.
 #   orphaned  unlocked, or locked by a dead (or recycled) pid.
 # Content, for the worktrees that are not in use:
 #   unsafe    uncommitted or untracked changes, or commits that are on no
@@ -121,21 +125,31 @@ NOW=$(date +%s)
 CLK_TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
 BTIME=$(awk '/^btime /{print $2}' /proc/stat 2>/dev/null)
 
-# Epoch second a process started, from /proc; fails when it is not running.
-proc_start() {
+# starttime of a process in clock ticks since boot (field 22 of /proc/<pid>/stat,
+# as proc(5) numbers it), the same value Claude Code writes after "start" in the
+# lock reason; fails when the process is not running. The fields after the
+# "(comm)" - which may hold spaces - start at the state (3), so starttime is the
+# 20th here.
+proc_ticks() {
   local stat ticks
   stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-  # Fields after the "(comm)" - which may hold spaces - start at the state (3);
-  # starttime is field 22, so 20th here.
   ticks=$(echo "${stat##*) }" | awk '{print $20}')
-  [ -n "$ticks" ] && [ -n "$BTIME" ] || return 1
+  [ -n "$ticks" ] || return 1
+  echo "$ticks"
+}
+
+# Epoch second a process started, from /proc; fails when it is not running.
+proc_start() {
+  local ticks
+  ticks=$(proc_ticks "$1") || return 1
+  [ -n "$BTIME" ] || return 1
   echo $((BTIME + ticks / CLK_TCK))
 }
 
 # Sets LOCK_CLASS (inuse|orphaned) and LOCK_WHY for the worktree at $1 whose
 # lock state is $2 (locked, with the reason in $3, or unlocked).
 classify_lock() {
-  local path="$1" state="$2" reason="$3" lc pid started lockfile locked_at
+  local path="$1" state="$2" reason="$3" lc pid pstart ticks started lockfile locked_at
   if [ "$state" = unlocked ]; then
     LOCK_CLASS=orphaned LOCK_WHY="unlocked"
     return
@@ -146,6 +160,18 @@ classify_lock() {
     return
   fi
   pid="${BASH_REMATCH[1]}"
+  if [[ "$lc" =~ pid[[:space:]]+[0-9]+[[:space:]]+start[[:space:]]+([0-9]+) ]]; then
+    # Exact identity: the starttime the locking process recorded.
+    pstart="${BASH_REMATCH[1]}"
+    if ! ticks=$(proc_ticks "$pid"); then
+      LOCK_CLASS=orphaned LOCK_WHY="locked by pid $pid, which is not running"
+    elif [ "$ticks" = "$pstart" ]; then
+      LOCK_CLASS=inuse LOCK_WHY="locked by running pid $pid (start $pstart)"
+    else
+      LOCK_CLASS=orphaned LOCK_WHY="locked by pid $pid, but it now has start $ticks, not $pstart (recycled pid)"
+    fi
+    return
+  fi
   if ! started=$(proc_start "$pid"); then
     LOCK_CLASS=orphaned LOCK_WHY="locked by pid $pid, which is not running"
     return
