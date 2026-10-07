@@ -8,7 +8,8 @@
 # worktree-bridge-*, and locks it (`git worktree lock`) with the server's pid
 # in the reason: `claude <a> <b> (pid <PID> start <START>)`, where START is the
 # process's starttime (field 22 of /proc/<PID>/stat, clock ticks since boot),
-# or `claude <a> <b> (pid <PID>)` on older versions or when the start is unknown. A server that stops or crashes leaves the lock behind or the
+# or `claude <a> <b> (pid <PID>)` on older versions or when the start is
+# unknown. A server that stops or crashes leaves the lock behind or the
 # worktree unlocked, and nothing ever removes it, so they pile up.
 #
 # Usage: dev-prune-worktrees [--delete] [--older-than DURATION] [--workspace DIR] [--count]
