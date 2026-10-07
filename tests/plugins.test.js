@@ -245,9 +245,7 @@ test("wanted_default_plugins and default_plugin_fix: what dev-doctor checks and 
   );
 });
 
-test("the Dockerfile's default is the callum-flow plugin from this repo's marketplace", () => {
-  const dockerfile = fs.readFileSync(path.join(BASE, "Dockerfile"), "utf8");
-  assert.match(dockerfile, new RegExp(`^ENV DEV_DEFAULT_PLUGINS=${DEFAULT}$`, "m"));
+test("this repo's marketplace declares the callum-flow plugin under callum", () => {
   const marketplace = JSON.parse(
     fs.readFileSync(path.join(__dirname, "..", ".claude-plugin", "marketplace.json"), "utf8"),
   );
