@@ -13,6 +13,10 @@ enabled_plugins() {
   jq -r '.enabledPlugins | if type == "object" then to_entries[] | select(.value == true) | .key | select(test("^[^@]+@[^@]+$")) else empty end' "$1" 2>/dev/null
 }
 
+# repo_owned_plugins <settings file>: each plugin the repo's settings take
+# over from the image, one per line - one its enabledPlugins turns off, or
+# turns on and whose marketplace its extraKnownMarketplaces declares. Empty
+# for a file jq cannot parse.
 repo_owned_plugins() {
   jq -r '. as $settings | .enabledPlugins | if type == "object" then to_entries[] | select(.value == false or (.value == true and $settings.extraKnownMarketplaces[(.key | split("@") | last)] != null)) | .key else empty end' "$1" 2>/dev/null
 }
@@ -46,6 +50,8 @@ valid_default_plugin() {
 
 # wanted_default_plugins [settings file]: the default plugins (as
 # default_plugins prints them) the repo's settings file leaves to the image:
+# every one but those repo_owned_plugins names. A default the repo turns on
+# without declaring its marketplace stays the image's, from the image's source.
 wanted_default_plugins() {
   local named=""
   [ -z "${1:-}" ] || named=$(repo_owned_plugins "$1")
