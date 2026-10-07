@@ -98,6 +98,15 @@ other than ghcr.io, also set `registry_auth_address`.
 coder create my-ws --template dev-system   # Enter accepts each default
 ```
 
+Every workspace comes up with the `callum-flow` plugin installed, so its first Claude
+session already has `issue-orchestrator`, `implement-issue`, `onboard` and `update-dev`,
+with no manual step and whether or not it has a repo, onboarded or not. The image's
+`dev-init` installs it on every start (`DEV_DEFAULT_PLUGINS`, see "Claude plugins" in the
+[image README](../../images/base/README.md)); a repo that enables plugins of its own in
+its committed `.claude/settings.json` gets those too. Without network access at the first
+start the workspace still starts, and `dev-doctor` warns with the fix: `dev-init
+--plugins`, then a new Claude session.
+
 ### Parameters
 
 | Parameter | Default | Changeable later | Purpose |

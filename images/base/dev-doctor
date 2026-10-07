@@ -30,6 +30,8 @@ FAILURES=0
 # Sets DEV_WORKSPACE from DEV_REPO_URL, as dev-init and the supervisor do.
 # shellcheck source=workspace.sh
 . /usr/local/share/dev-system/workspace.sh
+# shellcheck source=plugins.sh
+. /usr/local/share/dev-system/plugins.sh
 # shellcheck disable=SC2119 # the argument is optional; none means the default
 workspace=$(workspace)
 
@@ -212,24 +214,48 @@ elif [ "${DEV_DESKTOP:-0}" != 1 ]; then
   fi
 fi
 
-# The Claude plugins the workspace repo enables in its committed
-# .claude/settings.json (cbundy/dev-system#112): dev-init installs them, so
-# one that is still missing is a WARN with the way to retry - Claude runs
-# without it, just without its skills. Checked only when something is
-# enabled, so a repo without plugins never runs the CLI here.
-if command -v claude >/dev/null 2>&1 && settings=$(repo_settings "$workspace"); then
-  if ! wanted=$(enabled_plugins "$settings"); then
-    warn "$settings is not valid JSON, so the Claude plugins it enables cannot be installed" \
-      "correct it, then run: dev-init --repo"
-  elif [ -n "$wanted" ]; then
-    if ! installed=$(installed_plugins); then
-      warn "cannot list Claude's installed plugins (claude plugin list --json failed), so the ones $settings enables are unchecked" \
-        "run: claude plugin list"
-    elif missing=$(printf '%s\n' "$wanted" | grep -vxF -f <(printf '%s\n' "$installed")); then
-      warn "Claude plugins enabled in $settings are not installed: $(printf '%s\n' "$missing" | paste -sd ' ')" \
-        "see dev-init's log for why, then run: dev-init --repo"
-    else
-      ok "Claude plugins enabled in $settings are installed"
+# The Claude plugins dev-init installs (plugins.sh): the ones the workspace
+# repo enables in its committed .claude/settings.json (cbundy/dev-system#112)
+# and the image's default plugins (DEV_DEFAULT_PLUGINS, #148) the repo does
+# not name. One that is still missing is a WARN with the way to retry -
+# Claude runs without it, just without its skills. The CLI runs only when
+# something is wanted, so with no repo plugins and DEV_DEFAULT_PLUGINS empty
+# nothing is checked.
+if command -v claude >/dev/null 2>&1; then
+  settings="" wanted="" installed=""
+  if settings=$(repo_settings "$workspace"); then
+    if ! wanted=$(enabled_plugins "$settings"); then
+      warn "$settings is not valid JSON, so the Claude plugins it enables cannot be installed" \
+        "correct it, then run: dev-init --repo"
+      wanted=""
+    fi
+  else
+    settings=""
+  fi
+  while IFS= read -r bad; do
+    [ -z "$bad" ] || warn "DEV_DEFAULT_PLUGINS entry \"$bad\" is not <plugin>@<marketplace>=<marketplace source>, so it is not installed" \
+      "correct DEV_DEFAULT_PLUGINS in the image or the runtime's environment"
+  done < <(invalid_default_plugins)
+  defaults=$(wanted_default_plugins "$settings")
+  if [ -n "$wanted$defaults" ] && ! installed=$(installed_plugins); then
+    warn "cannot list Claude's installed plugins (claude plugin list --json failed), so the default and repo plugins are unchecked" \
+      "run: claude plugin list"
+  else
+    if [ -n "$wanted" ]; then
+      if absent=$(not_installed "$wanted" "$installed"); then
+        warn "Claude plugins enabled in $settings are not installed: $(printf '%s\n' "$absent" | paste -sd ' ')" \
+          "see dev-init's log for why, then run: dev-init --repo"
+      else
+        ok "Claude plugins enabled in $settings are installed"
+      fi
+    fi
+    if [ -n "$defaults" ]; then
+      if absent=$(not_installed "$defaults" "$installed"); then
+        warn "default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: $(printf '%s\n' "$absent" | cut -d' ' -f1 | paste -sd ' ')" \
+          "run: dev-init --plugins (or by hand: $(default_plugin_fix "$absent")), then start a new Claude session"
+      else
+        ok "default Claude plugins are installed: $(printf '%s\n' "$defaults" | cut -d' ' -f1 | paste -sd ' ')"
+      fi
     fi
   fi
 fi

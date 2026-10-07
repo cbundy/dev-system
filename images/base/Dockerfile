@@ -174,7 +174,7 @@ COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
-  images/base/gh.sh \
+  images/base/gh.sh images/base/plugins.sh \
   /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns
@@ -208,6 +208,15 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   AGENTSVIEW_DISABLE_UPDATE_CHECK=1 \
   DEV_SHARED_DIR=/shared \
   DEV_SECRETS_DIR=/run/secrets/dev-system
+
+# The Claude plugins every workspace gets (cbundy/dev-system#148): dev-init
+# installs each one on every start, with or without a repo, so the callum-flow
+# skills (issue-orchestrator, implement-issue, onboard, update-dev) are in
+# every first Claude session. A whitespace-separated list of
+# <plugin>@<marketplace>=<marketplace source> entries (see plugins.sh). A
+# per-repo image (ENV DEV_DEFAULT_PLUGINS=...) or the runtime's environment
+# can change it; empty installs none.
+ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which

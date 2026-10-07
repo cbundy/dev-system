@@ -298,6 +298,6 @@ Report:
 |---|---|
 | Open it on the desktop | Reopen in Container (VS Code) or `devcontainer up --workspace-folder .`. Then log in once: `dev-login start`. |
 | Run it in Coder | Step 6, if not done: `coder create <name> --template dev-system --parameter repo_url=<https clone url>`, then **Log in** in the dashboard. |
-| Enable the workflow plugin | Trust the folder in Claude Code. `.claude/settings.json` enables `callum-flow@callum`. |
+| Enable the workflow plugin | Nothing to do: `dev-init` installs `callum-flow@callum` on every container start, on the desktop and in Coder (the image's default plugin, which `.claude/settings.json` also enables), so the first Claude session has its skills. If `dev-doctor` warns that it is missing (no network at the start), run `dev-init --plugins` and start a new Claude session. |
 | Session history (agentsview) | Nothing per repo. The URL is set once per host (`images/base/README.md`, "Central session history"). |
 | Keep in sync later | `npm update @callum/dev-system && npx callum-dev update`, then commit. Optionally run `npx callum-dev check` in CI. |
