@@ -14,11 +14,16 @@ check "after dev-init, claude doctor reports a native install with auto-updates 
   echo "$out" | grep -q "Running: native" &&
   echo "$out" | grep -q "Auto-updates: enabled" &&
   echo "$out" | grep -q "No installation issues found"'
-check "claude can replace its own install as node (downgrade, then update back to latest)" in_image '
-  set -e
-  latest=$(claude --version)
-  claude install 2.1.280 >/dev/null 2>&1
-  [ "$(claude --version)" != "$latest" ]
-  claude update
-  [ "$(claude --version)" = "$latest" ]'
+# "Back up" means to the baked version or newer: a Claude release between the image
+# build and this test makes `claude update` land past the baked one.
+check "claude can replace its own install as node (downgrade, then update back up)" in_image '
+  ver() { claude --version | cut -d" " -f1; }
+  baked=$(ver); old=2.1.280
+  echo "baked: $baked"
+  claude install "$old" 2>&1 | tail -n 5
+  echo "after install $old: $(ver)"
+  [ "$(ver)" = "$old" ] || exit 1
+  claude update 2>&1 | tail -n 5
+  now=$(ver); echo "after update: $now"
+  [ "$now" != "$old" ] && [ "$(printf "%s\n%s\n" "$baked" "$now" | sort -V | head -n1)" = "$baked" ]'
 check "DISABLE_AUTOUPDATER is not set" in_image '[ -z "${DISABLE_AUTOUPDATER:-}" ]'
