@@ -304,7 +304,7 @@ work in progress.
 | `DEV_REPO_URL` | empty: no clone | The repo's HTTPS clone URL. A consumer image built by CI gets it as a build argument (`${{ github.server_url }}/${{ github.repository }}.git`), so nobody types it. A runtime value (Coder's `repo_url` parameter, compose `environment:`) overrides the image's. Local and desktop builds leave it empty, since their checkout is bind-mounted. |
 | `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
-| `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system` | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty installs none. |
+| `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system` | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
 | `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the Claude plugins, the default ones and the repo's (see "Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
 
 **Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
@@ -371,8 +371,9 @@ they land in `/persist/claude` and stay across rebuilds:
 A default plugin set to `true` in `enabledPlugins` (as every onboarded repo does for
 `callum-flow`) is installed once from the repo's declared marketplace source. Without
 that declaration, it keeps the image's source. Set to `false`, the repo opts out and it
-is not installed. Repo plugins go first, so a marketplace both name is added from the
-repo's source.
+is not installed by `dev-init`; this does not uninstall an existing copy. Repo plugins
+go first, so a marketplace both name is added from the repo's source when Claude does
+not already know it.
 
 It is the last step of a start, after the login page is up, since it needs the network and
 can be slow while the plugins matter only once Claude starts (`dev-init --repo` runs it
@@ -381,8 +382,8 @@ right after the clone or fetch). For each wanted plugin Claude has not installed
 - the marketplace is added first (`claude plugin marketplace add`) if Claude does not know
   it: a default plugin's from the source `DEV_DEFAULT_PLUGINS` gives, a repo plugin's from
   its declared source, `github` (`repo`, plus `#ref` when one is set) or `git` (`url`). A
-  repo plugin with an unsupported or missing marketplace declaration gets a `WARNING`
-  and is skipped;
+  repo plugin whose marketplace is unknown to Claude and has an unsupported or missing
+  declaration gets a `WARNING` and is skipped;
 - then `claude plugin install <plugin>@<marketplace>`. If that fails on a marketplace
   Claude already knew, it updates the marketplace and tries once more;
 - each call is limited to 60s and runs outside the checkout, and the whole step to
