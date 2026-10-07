@@ -1,0 +1,314 @@
+#!/bin/bash
+#
+# dev-prune-worktrees: classifies and prunes stale Claude Code bridge worktrees
+# (cbundy/dev-system#93).
+#
+# `claude remote-control --spawn worktree` gives every session its own git
+# worktree, <workspace>/.claude/worktrees/bridge-*, on a local branch
+# worktree-bridge-*, and locks it (`git worktree lock`) with the server's pid
+# in the reason. A server that stops or crashes leaves the lock behind or the
+# worktree unlocked, and nothing ever removes it, so they pile up.
+#
+# Usage: dev-prune-worktrees [--delete] [--older-than DURATION] [--workspace DIR] [--count]
+#   (no flags)  dry run: a table of every bridge worktree, then what --delete
+#               would remove. Changes nothing.
+#   --delete    removes the worktrees that are orphaned, safe and idle for at
+#               least the threshold: unlock, `git worktree remove` (never
+#               --force), delete the local worktree-bridge-* branch, then
+#               `git worktree prune`. Everything else is kept and logged with
+#               the reason.
+#   --older-than DURATION
+#               the idle threshold (default 72h). 90m, 12h, 3d, 45s, or a
+#               bare number of hours. 0 removes regardless of idleness.
+#   --workspace DIR
+#               the repo to look in (default: the workspace, see workspace.sh)
+#   --count     prints only how many worktrees --delete would remove (for
+#               dev-doctor)
+#
+# Classes, per worktree:
+#   in use    locked by a process that is still alive. Never touched,
+#             whatever its age. The lock reason names the pid ("pid N"). A
+#             live pid only counts if that process started no later than the
+#             lock was taken (the lock file's mtime): a process that started
+#             after the lock is a recycled pid. A lock whose reason has no pid
+#             cannot be proven dead, so it counts as in use.
+#   orphaned  unlocked, or locked by a dead (or recycled) pid.
+# Content, for the worktrees that are not in use:
+#   unsafe    uncommitted or untracked changes, or commits that are on no
+#             remote branch - unless the commit is the head of a merged pull
+#             request (a squash merge leaves the branch's own commits on no
+#             remote branch). That is looked up with `gh api` and treated as
+#             unsafe when gh is missing, logged out or offline.
+#   safe      everything else.
+# Idle: the age of the newest of the worktree's HEAD, index and reflog and
+# every file and directory in it.
+set -u
+
+THRESHOLD=72h
+DELETE=false
+COUNT=false
+WORKSPACE_DIR=""
+
+die() {
+  echo "dev-prune-worktrees: $*" >&2
+  exit 2
+}
+
+# Seconds in a duration: 45s, 90m, 12h, 3d, or bare hours.
+to_seconds() {
+  local n unit
+  case "$1" in
+    *[!0-9smhd]* | "" | [smhd]*) return 1 ;;
+  esac
+  n="${1%[smhd]}"
+  unit="${1#"$n"}"
+  [ -n "$n" ] || return 1
+  case "${unit:-h}" in
+    s) echo "$n" ;;
+    m) echo $((n * 60)) ;;
+    h) echo $((n * 3600)) ;;
+    d) echo $((n * 86400)) ;;
+  esac
+}
+
+# 3d4h, 5h12m, 7m, 20s
+human_age() {
+  local s="$1"
+  if [ "$s" -ge 86400 ]; then
+    echo "$((s / 86400))d$(((s % 86400) / 3600))h"
+  elif [ "$s" -ge 3600 ]; then
+    echo "$((s / 3600))h$(((s % 3600) / 60))m"
+  elif [ "$s" -ge 60 ]; then
+    echo "$((s / 60))m"
+  else
+    echo "${s}s"
+  fi
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --delete) DELETE=true ;;
+    --count) COUNT=true ;;
+    --older-than)
+      [ $# -ge 2 ] || die "--older-than needs a duration"
+      THRESHOLD="$2"
+      shift
+      ;;
+    --workspace)
+      [ $# -ge 2 ] || die "--workspace needs a directory"
+      WORKSPACE_DIR="$2"
+      shift
+      ;;
+    *) die "usage: dev-prune-worktrees [--delete] [--older-than DURATION] [--workspace DIR] [--count]" ;;
+  esac
+  shift
+done
+THRESHOLD_S=$(to_seconds "$THRESHOLD") || die "invalid --older-than \"$THRESHOLD\" (use e.g. 90m, 72h, 3d)"
+$DELETE && $COUNT && die "--delete and --count cannot be combined"
+
+if [ -z "$WORKSPACE_DIR" ]; then
+  # shellcheck source=workspace.sh
+  . /usr/local/share/dev-system/workspace.sh
+  # shellcheck disable=SC2119 # the argument is optional; none means the default
+  WORKSPACE_DIR=$(workspace)
+fi
+git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1 || {
+  $COUNT && echo 0
+  $COUNT || echo "dev-prune-worktrees: $WORKSPACE_DIR is not a git repository, nothing to do"
+  exit 0
+}
+ROOT=$(git -C "$WORKSPACE_DIR" rev-parse --show-toplevel) || exit 0
+BRIDGE_DIR="$ROOT/.claude/worktrees"
+
+NOW=$(date +%s)
+CLK_TCK=$(getconf CLK_TCK 2>/dev/null || echo 100)
+BTIME=$(awk '/^btime /{print $2}' /proc/stat 2>/dev/null)
+
+# Epoch second a process started, from /proc; fails when it is not running.
+proc_start() {
+  local stat ticks
+  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  # Fields after the "(comm)" - which may hold spaces - start at the state (3);
+  # starttime is field 22, so 20th here.
+  ticks=$(echo "${stat##*) }" | awk '{print $20}')
+  [ -n "$ticks" ] && [ -n "$BTIME" ] || return 1
+  echo $((BTIME + ticks / CLK_TCK))
+}
+
+# Sets LOCK_CLASS (inuse|orphaned) and LOCK_WHY for the worktree at $1 whose
+# lock state is $2 (locked, with the reason in $3, or unlocked).
+classify_lock() {
+  local path="$1" state="$2" reason="$3" lc pid started lockfile locked_at
+  if [ "$state" = unlocked ]; then
+    LOCK_CLASS=orphaned LOCK_WHY="unlocked"
+    return
+  fi
+  lc=$(echo "$reason" | tr '[:upper:]' '[:lower:]')
+  if [[ ! "$lc" =~ pid[^0-9]*([0-9]+) ]]; then
+    LOCK_CLASS=inuse LOCK_WHY="locked, reason names no pid (${reason:-empty}) - cannot prove it dead"
+    return
+  fi
+  pid="${BASH_REMATCH[1]}"
+  if ! started=$(proc_start "$pid"); then
+    LOCK_CLASS=orphaned LOCK_WHY="locked by pid $pid, which is not running"
+    return
+  fi
+  lockfile="$(git -C "$path" rev-parse --absolute-git-dir)/locked"
+  locked_at=$(stat -c %Y "$lockfile" 2>/dev/null || echo "$NOW")
+  # A little slack: the lock is written just after the process starts, and
+  # starttime has only tick resolution.
+  if [ "$started" -le $((locked_at + 5)) ]; then
+    LOCK_CLASS=inuse LOCK_WHY="locked by running pid $pid"
+  else
+    LOCK_CLASS=orphaned LOCK_WHY="locked by pid $pid, but that process started after the lock (recycled pid)"
+  fi
+}
+
+# Sets SAFE (yes|no) and SAFE_WHY for the worktree at $1.
+classify_content() {
+  local path="$1" head
+  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+    SAFE=no SAFE_WHY="uncommitted changes"
+    return
+  fi
+  head=$(git -C "$path" rev-parse HEAD 2>/dev/null) || {
+    SAFE=no SAFE_WHY="cannot read HEAD"
+    return
+  }
+  if [ -z "$(git -C "$path" rev-list -n 1 HEAD --not --remotes 2>/dev/null)" ]; then
+    SAFE=yes SAFE_WHY="clean, all commits on a remote branch"
+    return
+  fi
+  # The commits are on no remote branch. A squash-merged pull request leaves
+  # them that way, so ask GitHub whether HEAD is the head of a merged PR.
+  if (cd "$path" && timeout 15 gh api "repos/{owner}/{repo}/commits/$head/pulls" \
+    --jq '.[] | select(.merged_at != null) | .head.sha' 2>/dev/null) | grep -qx "$head"; then
+    SAFE=yes SAFE_WHY="clean, HEAD is the head of a merged pull request"
+  else
+    SAFE=no SAFE_WHY="commits on no remote branch (and no merged pull request found)"
+  fi
+}
+
+# Seconds since the newest activity in the worktree at $1.
+idle_seconds() {
+  local path="$1" gitdir newest
+  gitdir=$(git -C "$path" rev-parse --absolute-git-dir)
+  newest=$({
+    find "$path" -xdev -not -path "$path/.git" -not -path "$path/.git/*" -printf '%T@\n' 2>/dev/null
+    stat -c '%Y' "$gitdir/HEAD" "$gitdir/index" "$gitdir/logs/HEAD" 2>/dev/null
+  } | sort -n | tail -n 1)
+  newest=${newest%.*}
+  [ -n "$newest" ] || newest=$NOW
+  [ "$newest" -le "$NOW" ] || newest=$NOW
+  echo $((NOW - newest))
+}
+
+W_PATH=() W_BRANCH=() W_LOCKSTATE=() W_REASON=()
+collect() {
+  local line path="" branch="" state="unlocked" reason=""
+  flush() {
+    case "$path" in
+      "$BRIDGE_DIR"/bridge-*)
+        W_PATH+=("$path") W_BRANCH+=("$branch") W_LOCKSTATE+=("$state") W_REASON+=("$reason")
+        ;;
+    esac
+    path="" branch="" state="unlocked" reason=""
+  }
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*)
+        flush
+        path="${line#worktree }"
+        ;;
+      "branch refs/heads/"*) branch="${line#branch refs/heads/}" ;;
+      "locked") state=locked ;;
+      "locked "*)
+        state=locked
+        reason="${line#locked }"
+        ;;
+    esac
+  done < <(git -C "$ROOT" worktree list --porcelain; echo)
+}
+collect
+
+ROWS=() REMOVE_IDX=()
+n=${#W_PATH[@]}
+i=0
+while [ "$i" -lt "$n" ]; do
+  path="${W_PATH[$i]}"
+  name=$(basename "$path")
+  if [ ! -d "$path" ]; then
+    # Registered but gone from disk: `git worktree prune` drops it, nothing else to judge.
+    i=$((i + 1))
+    continue
+  fi
+  classify_lock "$path" "${W_LOCKSTATE[$i]}" "${W_REASON[$i]}"
+  idle=$(idle_seconds "$path")
+  action=keep
+  if [ "$LOCK_CLASS" = inuse ]; then
+    class="in use" content="-" why="$LOCK_WHY"
+  else
+    classify_content "$path"
+    content=$([ "$SAFE" = yes ] && echo safe || echo unsafe)
+    class=orphaned
+    why="$LOCK_WHY; $SAFE_WHY"
+    if [ "$SAFE" = no ]; then
+      why="$why - kept"
+    elif [ "$idle" -lt "$THRESHOLD_S" ]; then
+      why="$why; idle under $THRESHOLD - kept"
+    else
+      action=remove
+      REMOVE_IDX+=("$i")
+    fi
+  fi
+  ROWS+=("$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$name" "$class" "$content" "$(human_age "$idle")" "$action" "$why")")
+  i=$((i + 1))
+done
+
+if $COUNT; then
+  echo "${#REMOVE_IDX[@]}"
+  exit 0
+fi
+
+if [ "${#ROWS[@]}" -eq 0 ]; then
+  echo "dev-prune-worktrees: no bridge worktrees in $BRIDGE_DIR"
+  $DELETE && git -C "$ROOT" worktree prune
+  exit 0
+fi
+
+{
+  printf 'WORKTREE\tCLASS\tCONTENT\tIDLE\tACTION\tREASON\n'
+  printf '%s\n' "${ROWS[@]}"
+} | column -t -s "$(printf '\t')"
+
+if ! $DELETE; then
+  echo
+  if [ "${#REMOVE_IDX[@]}" -eq 0 ]; then
+    echo "dev-prune-worktrees: dry run, nothing would be removed (idle threshold $THRESHOLD)"
+  else
+    echo "dev-prune-worktrees: dry run, --delete would remove ${#REMOVE_IDX[@]} (orphaned, safe, idle >= $THRESHOLD):"
+    for i in "${REMOVE_IDX[@]}"; do
+      echo "  ${W_PATH[$i]}"
+    done
+  fi
+  exit 0
+fi
+
+echo
+failed=0
+for i in "${REMOVE_IDX[@]}"; do
+  path="${W_PATH[$i]}" branch="${W_BRANCH[$i]}"
+  [ "${W_LOCKSTATE[$i]}" != locked ] || git -C "$ROOT" worktree unlock "$path" 2>/dev/null
+  if out=$(git -C "$ROOT" worktree remove "$path" 2>&1); then
+    echo "dev-prune-worktrees: removed $path"
+    case "$branch" in
+      worktree-bridge-*) git -C "$ROOT" branch -D "$branch" >/dev/null 2>&1 && echo "dev-prune-worktrees: deleted branch $branch" ;;
+    esac
+  else
+    echo "dev-prune-worktrees: could not remove $path: $out" >&2
+    failed=$((failed + 1))
+  fi
+done
+git -C "$ROOT" worktree prune
+echo "dev-prune-worktrees: removed $((${#REMOVE_IDX[@]} - failed)), kept $((${#ROWS[@]} - ${#REMOVE_IDX[@]} + failed)) (threshold $THRESHOLD)"
+[ "$failed" -eq 0 ]

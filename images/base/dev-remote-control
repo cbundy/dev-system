@@ -31,6 +31,9 @@
 # - in session mode, decides on every start whether to resume the workspace's
 #   last conversation (DEV_REMOTE_CONTROL_RESUME=1 and one exists) or start a
 #   fresh one, each with its own optional first message;
+# - in server mode, removes stale bridge worktrees before every start
+#   (dev-prune-worktrees --delete: orphaned, clean, pushed, idle 72h+;
+#   cbundy/dev-system#93);
 # - restarts Claude when it exits (crash, /exit, an update restart), with a
 #   backoff, so a Claude that keeps exiting does not spin. Each start runs
 #   `claude` from PATH, so a version the auto-updater installed is picked up;
@@ -189,6 +192,15 @@ start_login_watch() {
   WATCH_PID=$!
 }
 
+# Server mode only: removes the bridge worktrees earlier servers left behind.
+# Never fatal - a failed prune must not keep the server from starting.
+prune_worktrees() {
+  command -v dev-prune-worktrees >/dev/null 2>&1 || return 0
+  git -C "$1" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  timeout 300 dev-prune-worktrees --delete --workspace "$1" 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2
+  return 0
+}
+
 wait_for_login() {
   local name="$1" state polls=0 last=""
   while :; do
@@ -299,6 +311,7 @@ supervise() {
         spawn=same-dir
         log "WARNING: $ws is not a git repository - sessions share it (--spawn same-dir) instead of getting a worktree each"
       fi
+      [ "$spawn" != worktree ] || prune_worktrees "$ws"
       args=(remote-control --name "$name" --spawn "$spawn")
       if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
         args+=(--permission-mode bypassPermissions)

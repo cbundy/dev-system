@@ -214,6 +214,19 @@ elif [ "${DEV_DESKTOP:-0}" != 1 ]; then
   fi
 fi
 
+# Stale Claude Code bridge worktrees (dev-prune-worktrees, cbundy/dev-system#93):
+# silent when the workspace has none.
+if command -v dev-prune-worktrees >/dev/null 2>&1 && [ -d "$workspace/.claude/worktrees" ] \
+  && ls -d "$workspace"/.claude/worktrees/bridge-* >/dev/null 2>&1; then
+  stale=$(dev-prune-worktrees --count --workspace "$workspace" 2>/dev/null || echo 0)
+  if [ "${stale:-0}" -gt 0 ]; then
+    warn "$stale stale bridge worktree(s) in $workspace/.claude/worktrees (orphaned, clean, pushed, idle 72h+)" \
+      "run: dev-prune-worktrees --delete (dev-remote-control does this at every server-mode start)"
+  else
+    ok "no stale bridge worktrees in $workspace/.claude/worktrees"
+  fi
+fi
+
 # The Claude plugins dev-init installs (plugins.sh): the ones the workspace
 # repo enables in its committed .claude/settings.json (cbundy/dev-system#112)
 # and the image's default plugins (DEV_DEFAULT_PLUGINS, #148).
