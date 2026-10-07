@@ -98,6 +98,10 @@ other than ghcr.io, also set `registry_auth_address`.
 coder create my-ws --template dev-system   # Enter accepts each default
 ```
 
+The base image's `dev-init` installs `callum-flow` by default on every start, including
+workspaces without a repo. See [Claude plugins](../../images/base/README.md#workspace-and-repo)
+for repo plugins, opt-outs and recovery when an install fails.
+
 ### Parameters
 
 | Parameter | Default | Changeable later | Purpose |

@@ -9,15 +9,18 @@
 # (DEV_REPO_URL) on first start, recovers no-mistakes runtime state, starts
 # the agentsview session push when one is configured, checks the optional
 # /shared mount, starts the login page when DEV_LOGIN_PORT asks for it and,
-# last, installs the Claude plugins the repo enables.
+# last, installs the Claude plugins: the image's default ones
+# (DEV_DEFAULT_PLUGINS) and the ones the repo enables.
 # Runs as node on every container start (postStartCommand from the image's
 # devcontainer metadata, or the runtime's own start hook).
 #
-# Usage: dev-init [--repo]
+# Usage: dev-init [--repo | --plugins]
 #   --repo runs only the repo steps (5, 6, 11, 7, in that order): git
-#   credentials, the clone or fetch, the repo's Claude plugins and the
-#   no-mistakes recovery. dev-login
-#   runs it once gh's login is done, for a clone that was waiting for one.
+#   credentials, the clone or fetch, the Claude plugins and the no-mistakes
+#   recovery. dev-login runs it once gh's login is done, for a clone that was
+#   waiting for one.
+#   --plugins runs only step 11, the Claude plugins (the retry dev-doctor
+#   names for a missing default plugin).
 #
 # Idempotent and best-effort: every problem is logged, and the exit status is
 # always 0, so a container never fails to start because of this script. Run
@@ -26,15 +29,17 @@ set -u
 
 # shellcheck source=workspace.sh
 . /usr/local/share/dev-system/workspace.sh
+# shellcheck source=plugins.sh
+. /usr/local/share/dev-system/plugins.sh
 
 log() {
   echo "dev-init: $*" >&2
 }
 
 case "${1:-}" in
-  "" | --repo) ;;
+  "" | --repo | --plugins) ;;
   *)
-    echo "usage: dev-init [--repo]" >&2
+    echo "usage: dev-init [--repo | --plugins]" >&2
     exit 2
     ;;
 esac
@@ -478,172 +483,40 @@ start_login_page() {
   log "started the login page on port $DEV_LOGIN_PORT (log: $LOGIN_PAGE_LOG)"
 }
 
-# Why a `claude plugin` command failed, from its output: the text after its
-# first ✘ (the CLI's own error line), else the last line; at most 300 chars.
-plugin_reason() {
-  local line
-  line=$(printf '%s\n' "$1" | grep -m 1 '✘' | sed 's/^.*✘[[:space:]]*//')
-  [ -n "$line" ] || line=$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 1)
-  printf '%s' "${line:0:300}"
-}
-
-# plugin_limit <max>: the time limit for the next `claude plugin` call: <max>
-# seconds, or what is left of the step's deadline (PLUGIN_DEADLINE, in bash's
-# SECONDS) when that is less. Fails once the deadline has passed.
-plugin_limit() {
-  local left=$((PLUGIN_DEADLINE - SECONDS))
-  [ "$left" -gt 0 ] || return 1
-  echo $((left < $1 ? left : $1))
-}
-
-# claude_plugin <args...>: claude_plugin_cli (workspace.sh) limited to 60s or
-# the rest of the step's deadline, with its output in $PLUGIN_OUT and the
-# cause of a failure in $PLUGIN_REASON. Once the deadline has passed it runs
-# nothing, sets PLUGIN_EXPIRED and fails.
-claude_plugin() {
-  local rc limit
-  PLUGIN_OUT=""
-  if ! limit=$(plugin_limit 60); then
-    PLUGIN_EXPIRED=true
-    PLUGIN_REASON="out of time"
-    return 1
-  fi
-  PLUGIN_OUT=$(CLAUDE_PLUGIN_LIMIT="$limit" claude_plugin_cli "$@" 2>&1)
-  rc=$?
-  case "$rc" in
-    0) PLUGIN_REASON="" ;;
-    124 | 137) PLUGIN_REASON="it did not finish within ${limit}s" ;;
-    *) PLUGIN_REASON=$(plugin_reason "$PLUGIN_OUT") ;;
-  esac
-  return "$rc"
-}
-
-# install_plugin <id> <marketplace> <added>: claude plugin install, retried
-# once after a marketplace update unless the marketplace was only just added
-# (<added> true): Claude's copy of an older one may predate the plugin. On a
-# failure, $PLUGIN_REASON is the install's.
-install_plugin() {
-  local reason
-  claude_plugin install "$1" && return 0
-  [ "$3" = false ] || return 1
-  reason="$PLUGIN_REASON"
-  if ! claude_plugin marketplace update "$2"; then
-    PLUGIN_REASON="$reason"
-    return 1
-  fi
-  claude_plugin install "$1"
-}
-
-# install_repo_plugin <id>: one missing plugin of step 11, with $settings and
-# $known (the marketplaces Claude knows, updated here) from
-# install_repo_plugins. A problem is logged and still returns 0; it fails
-# only when the step's deadline stopped it.
-install_repo_plugin() {
-  local id="$1" plugin="${1%@*}" mkt="${1##*@}" kind src ref added=false
-  if ! grep -qxF -- "$mkt" <<<"$known"; then
-    kind=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.source? // empty' "$settings" 2>/dev/null)
-    ref=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.ref? // empty' "$settings" 2>/dev/null)
-    case "$kind" in
-      github) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.repo // empty' "$settings") ;;
-      git) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.url // empty' "$settings") ;;
-      "")
-        log "WARNING: Claude plugin $id is enabled in $settings, but marketplace $mkt is neither known to Claude nor declared there - not installed."
-        log "  Fix: declare it under extraKnownMarketplaces in $settings (or run: claude plugin marketplace add <source>), then run: dev-init --repo"
-        return 0
-        ;;
-      *)
-        log "WARNING: marketplace $mkt in $settings has source type \"$kind\", which dev-init cannot add (only github and git) - Claude plugin $id not installed."
-        log "  Fix: run: claude plugin marketplace add <its source> && claude plugin install $id"
-        return 0
-        ;;
-    esac
-    if [ -z "$src" ]; then
-      log "WARNING: marketplace $mkt in $settings has a $kind source with no $([ "$kind" = github ] && echo repo || echo url) - Claude plugin $id not installed."
-      log "  Fix: correct extraKnownMarketplaces.$mkt in $settings, then run: dev-init --repo"
-      return 0
-    fi
-    src="$src${ref:+#$ref}"
-    if ! claude_plugin marketplace add "$src"; then
-      [ "$PLUGIN_EXPIRED" = false ] || return 1
-      log "WARNING: could not add Claude plugin marketplace $mkt from $src: $PLUGIN_REASON - Claude plugin $id not installed."
-      log "  Fix: check that git here can read $src, then run: dev-init --repo"
-      return 0
-    fi
-    known="$known"$'\n'"$mkt"
-    added=true
-  fi
-  if ! install_plugin "$id" "$mkt" "$added"; then
-    [ "$PLUGIN_EXPIRED" = false ] || return 1
-    log "WARNING: could not install Claude plugin $id: $PLUGIN_REASON"
-    log "  Fix: check that marketplace $mkt has a plugin named $plugin, then run: dev-init --repo (or: claude plugin install $id)"
-    return 0
-  fi
-  log "installed Claude plugin $id"
-}
-
-# 11. The workspace repo's Claude plugins (cbundy/dev-system#112). A repo's
-#     committed .claude/settings.json can enable plugins (enabledPlugins) from
-#     marketplaces it declares (extraKnownMarketplaces), but Claude installs
-#     them only from its interactive folder-trust prompt, which a headless
-#     session, or any session on a fresh CLAUDE_CONFIG_DIR volume, may never
-#     show. So each plugin enabled there that Claude has not installed is
-#     installed here (user scope, in CLAUDE_CONFIG_DIR), after adding its
-#     marketplace from the declared source (github or git) when Claude does not
-#     know it yet. An install that fails on a marketplace Claude already knew
-#     is retried once after updating it (the plugin may be newer than the
-#     marketplace's copy). Nothing is hardcoded: the repo's settings are the
-#     only input. Failures are logged and the start carries on.
+# 11. The Claude plugins (plugins.sh): the image's default plugins
+#     (DEV_DEFAULT_PLUGINS, cbundy/dev-system#148 - callum-flow, so every
+#     workspace has the dev-system skills, with or without a repo) and the
+#     ones the workspace repo's committed .claude/settings.json enables (#112).
+#     A repo can enable plugins (enabledPlugins) from marketplaces it declares
+#     (extraKnownMarketplaces), but Claude installs them only from its
+#     interactive folder-trust prompt, which a headless session, or any session
+#     on a fresh CLAUDE_CONFIG_DIR volume, may never show. So each wanted plugin
+#     that Claude has not installed is installed here (user scope, in
+#     CLAUDE_CONFIG_DIR), after adding its marketplace when Claude does not know
+#     it yet: a repo plugin's from the source the repo declares (github or
+#     git), a default plugin's from the source DEV_DEFAULT_PLUGINS gives.
+#     An install that fails
+#     on a marketplace Claude already knew is retried once after updating it
+#     (the plugin may be newer than the marketplace's copy). Failures are
+#     logged and the start carries on.
 #     Last in a full run: it needs the network and can be slow, the plugins
 #     matter only once Claude starts, and a runtime that bounds dev-init as a
 #     whole (Coder: 300s) must never lose the login page to it. So the whole
 #     step has a deadline (DEV_PLUGIN_INSTALL_TIMEOUT, default 120s), each CLI
 #     call is limited to 60s or what is left of it, and once it has passed the
 #     plugins not yet installed get one WARNING. In dev-init --repo it runs
-#     right after step 6, so a fresh clone counts.
-install_repo_plugins() {
-  local settings plugins installed known id i limit budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
-  local -a missing=()
-  case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
-  PLUGIN_DEADLINE=$((SECONDS + budget))
-  PLUGIN_EXPIRED=false
-  command -v claude >/dev/null 2>&1 || return 0
-  # shellcheck disable=SC2119 # the argument is optional; none means the default
-  settings=$(repo_settings) || return 0
-  if ! plugins=$(enabled_plugins "$settings"); then
-    log "WARNING: $settings is not valid JSON - the Claude plugins it enables are not installed."
-    log "  Fix: correct it, then run: dev-init --repo"
-    return 0
-  fi
-  [ -n "$plugins" ] || return 0
-  # Unknown (the listing failed) means try them all: an install of a plugin
-  # that is already there is a no-op.
-  installed=""
-  if limit=$(plugin_limit 30); then
-    installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
-  fi
-  while IFS= read -r id; do
-    grep -qxF -- "$id" <<<"$installed" || missing+=("$id")
-  done <<<"$plugins"
-  [ "${#missing[@]}" -gt 0 ] || return 0
-  known=""
-  if claude_plugin marketplace list --json; then
-    known=$(printf '%s\n' "$PLUGIN_OUT" | jq -r '.[].name' 2>/dev/null)
-  fi
-
-  for i in "${!missing[@]}"; do
-    [ "$PLUGIN_EXPIRED" = false ] && install_repo_plugin "${missing[i]}" && continue
-    log "WARNING: the Claude plugin install ran out of its ${budget}s (DEV_PLUGIN_INSTALL_TIMEOUT) - not installed: ${missing[*]:i}"
-    log "  Fix: check this container's network access to the plugin marketplaces, then run: dev-init --repo"
-    break
-  done
-  return 0
-}
+#     right after step 6, so a fresh clone counts; dev-init --plugins runs only
+#     this step.
 
 if [ "${1:-}" = --repo ]; then
   setup_git_credentials
   sync_repo
-  install_repo_plugins
+  install_plugins
   recover_no_mistakes
+  exit 0
+fi
+if [ "${1:-}" = --plugins ]; then
+  install_plugins
   exit 0
 fi
 
@@ -658,7 +531,7 @@ recover_no_mistakes
 start_agentsview_push
 check_shared_dir
 start_login_page
-install_repo_plugins
+install_plugins
 
 # 12. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true

@@ -151,8 +151,8 @@ Where to look inside a running container. Full detail is in
 | tmux `login-claude`, `login-codex`, `login-gh` | Logins in progress |
 
 **First commands when debugging:** `dev-doctor`, then `dev-login status`, then the logs
-above. `dev-init` is safe to re-run. `dev-init --repo` redoes only the clone, the fetch and
-the no-mistakes registration.
+above. `dev-init` is safe to re-run. For its `--repo` and `--plugins` modes, see
+[Workspace and repo](../images/base/README.md#workspace-and-repo).
 
 ## Design rules
 

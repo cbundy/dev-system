@@ -304,7 +304,8 @@ work in progress.
 | `DEV_REPO_URL` | empty: no clone | The repo's HTTPS clone URL. A consumer image built by CI gets it as a build argument (`${{ github.server_url }}/${{ github.repository }}.git`), so nobody types it. A runtime value (Coder's `repo_url` parameter, compose `environment:`) overrides the image's. Local and desktop builds leave it empty, since their checkout is bind-mounted. |
 | `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
-| `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the repo's Claude plugins (see "The repo's Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
+| `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system` | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
+| `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the Claude plugins, the default ones and the repo's (see "Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
 
 **Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
 `/workspaces/<repo name>` from `DEV_REPO_URL`. Until that directory exists (a clone still
@@ -345,36 +346,59 @@ is tried anyway.
 | Docker with the shared `dev-system-gh` volume | gh's credential helper (`gh auth setup-git`, which `dev-init` redoes on every start). |
 | The first container on a new host (no gh login yet) | None yet. The clone is tried anyway, since a public repo needs no credential. A private one fails with `Waiting for a GitHub login` in the log, and once gh's device login completes, `dev-login watch` (which the supervisor runs) runs `dev-init --repo` to clone it. After a login made any other way, run `dev-init --repo` yourself. |
 
-`dev-init --repo` runs only the repo steps: git credentials, the clone or fetch, the repo's
-Claude plugins (below) and the no-mistakes recovery.
+`dev-init --repo` runs only the repo steps: git credentials, the clone or fetch, the Claude
+plugins (below) and the no-mistakes recovery. `dev-init --plugins` runs only the Claude
+plugins.
 
-**The repo's Claude plugins.** A repo can enable Claude Code plugins in its committed
-`.claude/settings.json` (`enabledPlugins`, from marketplaces it declares under
-`extraKnownMarketplaces`). Claude itself installs them only from its interactive
-folder-trust prompt, which a headless session, or any session on a fresh `/persist/claude`
-volume, may never show (cbundy/dev-system#112). So `dev-init` installs each plugin set to
-`true` there that Claude has not installed yet. It is the last step of a start, after the
-login page is up, since it needs the network and can be slow while the plugins matter only
-once Claude starts (`dev-init --repo` runs it right after the clone or fetch):
+**Claude plugins.** `dev-init` installs two sets of Claude Code plugins, at user scope, so
+they land in `/persist/claude` and stay across rebuilds:
+
+- **The image's default plugins** (`DEV_DEFAULT_PLUGINS`, cbundy/dev-system#148): the
+  base image lists `callum-flow` from this repo's marketplace (`callum-flow@callum`, added
+  from `cbundy/dev-system`), so every workspace, with a repo or without, and onboarded or
+  not, has the dev-system skills (`issue-orchestrator`, `implement-issue`, `onboard`,
+  `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
+  It is the one plugin the image itself asks for. A per-repo image sets
+  `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
+  runtime's environment overrides both.
+- **The repo's plugins.** A repo can enable plugins in its committed
+  `.claude/settings.json` (`enabledPlugins`, from marketplaces it declares under
+  `extraKnownMarketplaces`). Claude itself installs them only from its interactive
+  folder-trust prompt, which a headless session, or any session on a fresh
+  `/persist/claude` volume, may never show (cbundy/dev-system#112). So `dev-init`
+  installs each plugin set to `true` there.
+
+A default plugin set to `true` in `enabledPlugins` (as every onboarded repo does for
+`callum-flow`) is installed once from the repo's declared marketplace source. Without
+that declaration, it keeps the image's source. Set to `false`, the repo opts out and it
+is not installed by `dev-init`; this does not uninstall an existing copy. Repo plugins
+go first, so a marketplace both name is added from the repo's source when Claude does
+not already know it.
+
+It is the last step of a start, after the login page is up, since it needs the network and
+can be slow while the plugins matter only once Claude starts (`dev-init --repo` runs it
+right after the clone or fetch). For each wanted plugin Claude has not installed yet:
 
 - the marketplace is added first (`claude plugin marketplace add`) if Claude does not know
-  it, from its declared source: `github` (`repo`, plus `#ref` when one is set) or `git`
-  (`url`). Any other source type, or a marketplace that is not declared, gets a `WARNING`
-  and that plugin is skipped;
-- then `claude plugin install <plugin>@<marketplace>`, user scope, so it lands in
-  `/persist/claude` and stays across rebuilds. If that fails on a marketplace Claude
-  already knew, it updates the marketplace and tries once more;
+  it: a default plugin's from the source `DEV_DEFAULT_PLUGINS` gives, a repo plugin's from
+  its declared source, `github` (`repo`, plus `#ref` when one is set) or `git` (`url`). A
+  repo plugin whose marketplace is unknown to Claude and has an unsupported or missing
+  declaration gets a `WARNING` and is skipped;
+- then `claude plugin install <plugin>@<marketplace>`. If that fails on a marketplace
+  Claude already knew, it updates the marketplace and tries once more;
 - each call is limited to 60s and runs outside the checkout, and the whole step to
   `DEV_PLUGIN_INSTALL_TIMEOUT` (120s): no call starts once that is spent, and no call runs
   past it, so a slow or unreachable network cannot use up a runtime's time limit for the
   start (Coder's is 300s). Once it is spent, one `WARNING` names the plugins not yet
-  installed, with the fix `dev-init --repo`;
+  installed, with the fix `dev-init --plugins`;
 - a failure is one `WARNING` line with the CLI's reason and a `Fix:` line, and the start
   carries on. No login is needed, only network access (and, for a private marketplace
   repo, git's credential).
 
-Nothing about any particular plugin is built into the image: the repo's settings are the
-only input. A plugin already installed costs one `claude plugin list --json` call.
+A plugin already installed costs one `claude plugin list --json` call, so later starts
+need no network for it. With no network at the first start, Claude starts without the
+plugin and `dev-doctor` warns, naming the fix (`dev-init --plugins`, then a new Claude
+session).
 
 `dev-doctor` warns when the workspace's `origin` is not `DEV_REPO_URL` (a `.git` or a
 trailing `/` does not count), when `DEV_REPO_URL` is set but nothing is cloned yet, and
@@ -452,11 +476,12 @@ container never fails to start because of it.
    mounted is fine; it is optional.
 10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
     [First-run logins](#first-run-logins)).
-11. If the workspace repo's `.claude/settings.json` enables Claude plugins that are not
-    installed, installs them, adding their marketplaces from the declared source first (see
-    "The repo's Claude plugins" in [Workspace and repo](#workspace-and-repo)). An invalid
-    settings file, an unsupported marketplace source or a failed install is a `WARNING`
-    with the fix. Last, and within `DEV_PLUGIN_INSTALL_TIMEOUT` (120s) in all, so it can
+11. Installs the Claude plugins that are not installed yet: the image's default ones
+    (`DEV_DEFAULT_PLUGINS`, `callum-flow` unless an image or the runtime changes it) and
+    the ones the workspace repo's `.claude/settings.json` enables, adding their
+    marketplaces first (see "Claude plugins" in [Workspace and repo](#workspace-and-repo)).
+    An invalid settings file or `DEV_DEFAULT_PLUGINS` entry, an unsupported marketplace
+    source or a failed install is a `WARNING` with the fix. Last, and within `DEV_PLUGIN_INSTALL_TIMEOUT` (120s) in all, so it can
     never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
 
@@ -496,8 +521,11 @@ on every failure:
   [Workspace and repo](#workspace-and-repo));
 - the Claude plugins the workspace repo's `.claude/settings.json` enables are installed,
   with a `WARN` (not a failure: Claude runs, without their skills) naming any that are
-  missing and the fix `dev-init --repo`, or that the file is not valid JSON. Only run when
-  that file enables a plugin;
+  missing and the fix `dev-init --repo`, or that the file is not valid JSON; and the
+  image's default plugins (`DEV_DEFAULT_PLUGINS`) not disabled or supplied by the repo,
+  with a `WARN` naming any that are missing and the fix (`dev-init --plugins`, or the
+  `claude plugin marketplace add` and `install` commands by hand). Only run when some
+  plugin is wanted;
 - treehouse is on `PATH`;
 - uv is on `PATH`;
 - agentsview is on `PATH`; with no URL configured, a `WARN` that the session push is off

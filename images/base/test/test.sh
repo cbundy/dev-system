@@ -17,10 +17,12 @@
 # an nginx path prefix (#79, a throwaway nginx container), section 12 the
 # workspace repo clone in #77 (local bare repos over file:// and a git smart
 # HTTP server in the container, so no network is needed), section 13 the
-# workspace repo's Claude plugins in #112 (against a stub `claude plugin`),
+# Claude plugins in #112 and #148 (against a stub `claude plugin`, plus one
+# real callum-flow install over the network),
 # section 14 the opt-in telemetry export in #68 (stub CLIs, unreachable or
-# in-container endpoints; no collector needed). Section 2's uv check (#149)
-# is the one that needs the network: it installs pytest from PyPI. Test 7 needs
+# in-container endpoints; no collector needed). Two checks need the network:
+# section 2's uv check (#149) installs pytest from PyPI, and section 13's real
+# install fetches callum-flow from GitHub. Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
 # Test 9 starts a throwaway postgres:17 container. No test needs real
@@ -34,13 +36,17 @@ IMAGE="${1:?usage: test.sh <image>}"
 # models.env only (DEV_MODELS_URL empty): dev-init would otherwise fetch the
 # file from GitHub on each start, so results would depend on the network and on
 # what main holds. The fetch's own tests (section 5) set DEV_MODELS_URL inside
-# the container, which wins over this. Exported, so the `bash -c` checks get it.
+# the container, which wins over this. Likewise no default Claude plugins
+# (DEV_DEFAULT_PLUGINS empty), or every dev-init would install callum-flow
+# from GitHub: section 13's tests set it inside the container, and its one
+# real install runs `command docker run` to keep the image's value. Exported,
+# so the `bash -c` checks get it.
 # xargs in cleanup runs the real docker, which is fine: it never runs a container.
 # shellcheck disable=SC2032
 docker() {
   if [ "${1:-}" = run ]; then
     shift
-    command docker run -e DEV_MODELS_URL= "$@"
+    command docker run -e DEV_MODELS_URL= -e DEV_DEFAULT_PLUGINS= "$@"
   else
     command docker "$@"
   fi
@@ -1632,13 +1638,14 @@ check "after the clone, Claude's next start is in the repo" bash -c "
   [ \"\$(docker exec '$c' sed -n 2p /tmp/claude-starts)\" = '/workspaces/my-repo --remote-control my-repo' ]"
 docker rm -f "$c" >/dev/null
 
-echo "== 13. the workspace repo's Claude plugins"
+echo "== 13. the Claude plugins (the default ones and the workspace repo's)"
 
 # A stub claude for `claude plugin`: it records each call (its directory and
 # arguments) in /tmp/plugin-calls and keeps its state as files in
 # /tmp/plugin-state - mkt-<name> for a known marketplace, inst-<id> for an
 # installed plugin. `marketplace add <source>` names the marketplace after the
-# source's last path part (without #ref and .git) and fails for a source
+# source's last path part (without #ref and .git; callum for
+# cbundy/dev-system, as the real one) and fails for a source
 # containing "fail"; `install` fails like the real CLI (a ✘ line) while
 # /tmp/plugin-fail exists, or once for /tmp/plugin-fail-once, or when its
 # marketplace is unknown. `auth status` is logged in.
@@ -1655,7 +1662,7 @@ case "$1 ${2:-}" in
   "marketplace list") ids mkt | jq -R . | jq -s "map({name: .})" ;;
   "marketplace add")
     case "$3" in *fail*) echo "Adding marketplace…✘ Failed to add marketplace: no such repo"; exit 1 ;; esac
-    n="${3%%#*}"; n="${n%.git}"; n="${n##*/}"
+    n="${3%%#*}"; n="${n%.git}"; n="${n##*/}"; [ "${3%%#*}" = cbundy/dev-system ] && n=callum
     touch "$s/mkt-$n"; echo "✔ Successfully added marketplace: $n" ;;
   "marketplace update") touch "$s/updated-$3" ;;
   install\ *)
@@ -1753,7 +1760,7 @@ plugin_check "a claude plugin that hangs: the step stops at DEV_PLUGIN_INSTALL_T
   [ "$(echo "$out" | grep -c WARNING)" = 1 ] &&
   echo "$out" | grep -qxF "dev-init: WARNING: the Claude plugin install ran out of its 3s (DEV_PLUGIN_INSTALL_TIMEOUT) - not installed: one@gh two@gitm three@odd" &&
   echo "$out" | grep -A1 "ran out of its" | grep -qF "dev-init:   Fix: " &&
-  echo "$out" | grep -A1 "ran out of its" | grep -qF "dev-init --repo"' \
+  echo "$out" | grep -A1 "ran out of its" | grep -qF "dev-init --plugins"' \
   -e DEV_PLUGIN_INSTALL_TIMEOUT=3
 plugin_check "a full dev-init starts the login page before it installs the plugins" '
   out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -nE "login page|installed Claude plugin"
@@ -1761,6 +1768,64 @@ plugin_check "a full dev-init starts the login page before it installs the plugi
   plugin=$(echo "$out" | grep -n "dev-init: installed Claude plugin one@gh" | cut -d: -f1)
   [ $rc = 0 ] && [ -n "$page" ] && [ -n "$plugin" ] && [ "$page" -lt "$plugin" ]' \
   -e DEV_LOGIN_PORT=8765
+
+# The image's default plugins (DEV_DEFAULT_PLUGINS, #148). The stub tests
+# set the image's value inside the container (docker() empties it).
+DEFAULT_PLUGINS='export DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system;'
+check "the image's default Claude plugins are callum-flow from cbundy/dev-system, and plugins.sh is baked in" bash -c "
+  docker image inspect -f '{{json .Config.Env}}' '$IMAGE' | jq -e 'index(\"DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system\")' &&
+  docker run --rm --entrypoint '' '$IMAGE' test -f /usr/local/share/dev-system/plugins.sh"
+plugin_check "no repo: dev-init installs the default plugin, and dev-doctor finds it" "$DEFAULT_PLUGINS"'
+  rm -rf /tmp/ws; out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -i plugin; cat /tmp/plugin-calls
+  [ $rc = 0 ] &&
+  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system" "/ install callum-flow@callum")" ] &&
+  echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
+  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"' \
+  -e SETTINGS=
+plugin_check "a repo that is not onboarded gets the default plugin too, next to nothing of its own" "$DEFAULT_PLUGINS"'
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
+  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
+  [ "$(grep -c " install " /tmp/plugin-calls)" = 1 ]' \
+  -e SETTINGS='{"permissions":{"allow":[]}}'
+plugin_check "a repo that enables callum-flow itself: installed once, from the repo's marketplace" "$DEFAULT_PLUGINS"'
+  out=$(dev-init 2>&1); rc=$?; cat /tmp/plugin-calls
+  [ $rc = 0 ] &&
+  [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system#v1" "/ install callum-flow@callum")" ] &&
+  echo "$out" | grep -qxF "dev-doctor: OK   Claude plugins enabled in /tmp/ws/.claude/settings.json are installed" &&
+  ! echo "$out" | grep -q "default Claude plugins"' \
+  -e SETTINGS='{"extraKnownMarketplaces":{"callum":{"source":{"source":"github","repo":"cbundy/dev-system","ref":"v1"}}},"enabledPlugins":{"callum-flow@callum":true}}'
+plugin_check "an enabled default without a repo marketplace installs once in every dev-init mode" "$DEFAULT_PLUGINS"'
+  for mode in "" --repo --plugins; do
+    rm -rf /tmp/plugin-state /tmp/plugin-calls
+    out=$(dev-init "$mode" 2>&1); rc=$?; echo "$out"; cat /tmp/plugin-calls
+    [ $rc = 0 ] &&
+    [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system" "/ install callum-flow@callum")" ] &&
+    ! echo "$out" | grep -q "WARNING:.*plugin" || exit 1
+    dev-init "$mode" >/dev/null 2>&1 && [ "$(grep -c " install " /tmp/plugin-calls)" = 1 ] || exit 1
+  done
+  dev-doctor --warn-only | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"' \
+  -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}'
+plugin_check "no network: dev-init warns and starts, and dev-doctor warns naming the fix" "$DEFAULT_PLUGINS"'
+  printf "%s\n" "#!/bin/bash" "[ \"\$1 \$2 \$3\" = \"plugin marketplace add\" ] && { echo \"✘ Failed to add marketplace: could not resolve host\"; exit 1; }" "[ \"\$1 \$2\" = \"plugin list\" ] && { echo []; exit 0; }" "[ \"\$1\" = plugin ] && { echo []; exit 0; }" "exit 0" > /tmp/stub/claude
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -iE "plugin"
+  [ $rc = 0 ] &&
+  echo "$out" | grep -qxF "dev-init: WARNING: could not add Claude plugin marketplace callum from cbundy/dev-system: Failed to add marketplace: could not resolve host - Claude plugin callum-flow@callum not installed." &&
+  echo "$out" | grep -qxF "dev-doctor: WARN default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: callum-flow@callum" &&
+  echo "$out" | grep -qxF "dev-doctor:        fix: run: dev-init --plugins (or by hand: claude plugin marketplace add cbundy/dev-system; claude plugin install callum-flow@callum), then start a new Claude session"' \
+  -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}'
+# The one real install (the network, GitHub and the real claude CLI, no
+# login): a workspace with every setting at its default and no repo comes up
+# with the callum-flow skills installed and enabled. command docker keeps the
+# image's DEV_DEFAULT_PLUGINS.
+check "a fresh workspace with no repo gets the real callum-flow plugin and its skills" command docker run --rm -e DEV_MODELS_URL= \
+  --entrypoint "" "$IMAGE" bash -c '
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -i plugin
+  list=$(cd / && claude plugin list --json); echo "$list"
+  [ $rc = 0 ] && echo "$out" | grep -qxF "dev-init: installed Claude plugin callum-flow@callum" &&
+  echo "$list" | jq -e "any(.[]; .id == \"callum-flow@callum\" and .enabled == true)" >/dev/null &&
+  skills=$(ls "$(echo "$list" | jq -r ".[] | select(.id == \"callum-flow@callum\") | .installPath")/skills") && echo "$skills" &&
+  for s in issue-orchestrator implement-issue onboard update-dev; do echo "$skills" | grep -qxF "$s" || exit 1; done &&
+  echo "$out" | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"'
 
 echo "== 14. opt-in telemetry export (OTEL_EXPORTER_OTLP_ENDPOINT)"
 
