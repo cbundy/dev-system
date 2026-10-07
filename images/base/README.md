@@ -63,6 +63,13 @@ orchestrator skill works unchanged. By default each prints one event line and ex
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
 
+`usage-check.sh`, staged beside them, prints the Claude plan's 5-hour and weekly usage as
+one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
+usage gate. It reads the claude.ai usage endpoint with the logged-in OAuth token, falls back
+to a recent status line snapshot (its `--record` mode is a status line command), and prints
+`usage=unavailable reason=...` when neither answers. It spends no model tokens and runs no
+background process. Only the image ships it, not the deprecated feature.
+
 ## What the image does not own
 
 These belong to the consumer image or the runtime:

@@ -148,12 +148,14 @@ RUN arch=$(dpkg --print-architecture) \
   && agentsview --version
 
 # Shared scripts from the callum-tools feature, staged at the same path the
-# feature uses (the callum-flow skills call the watchers there).
+# feature uses (the callum-flow skills call the watchers and usage-check.sh
+# there). usage-check.sh is image-only: the deprecated feature does not ship it.
 COPY --chmod=0755 \
   features/src/callum-tools/recover-no-mistakes.sh \
   features/src/callum-tools/pin-codex-model.sh \
   features/src/callum-tools/pipeline-watch.sh \
   features/src/callum-tools/queue-watch.sh \
+  features/src/callum-tools/usage-check.sh \
   /usr/local/share/callum-tools/
 
 # systemctl replaces the base image's shim of the same name, which reports

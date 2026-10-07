@@ -69,6 +69,12 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   away later), or save it with `git diff > <file>` (or
   `git diff --cached > <file>` for staged changes) and restore it later with
   `git apply <file>`.
+- Never touch the default tmux socket: no `tmux kill-server`, `tmux
+  kill-session`, `pkill tmux` or `killall tmux`. The long-running Claude
+  session (the orchestrator) lives on that socket, so killing it kills the
+  agent running the command and every other session on the host. Anything
+  that needs tmux for a test uses a private socket (`tmux -L <unique-name>
+  ...`); a plugin-shipped hook refuses the default-socket commands.
 
 ## 2. Booting the app (only if you need it for evidence or manual checks)
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
