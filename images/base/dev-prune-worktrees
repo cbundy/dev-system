@@ -57,12 +57,9 @@ die() {
 # Seconds in a duration: 45s, 90m, 12h, 3d, or bare hours.
 to_seconds() {
   local n unit
-  case "$1" in
-    *[!0-9smhd]* | "" | [smhd]*) return 1 ;;
-  esac
-  n="${1%[smhd]}"
-  unit="${1#"$n"}"
-  [ -n "$n" ] || return 1
+  [[ "$1" =~ ^([0-9]+)([smhd]?)$ ]] || return 1
+  n=$((10#${BASH_REMATCH[1]}))
+  unit="${BASH_REMATCH[2]}"
   case "${unit:-h}" in
     s) echo "$n" ;;
     m) echo $((n * 60)) ;;
@@ -166,8 +163,12 @@ classify_lock() {
 
 # Sets SAFE (yes|no) and SAFE_WHY for the worktree at $1.
 classify_content() {
-  local path="$1" head
-  if [ -n "$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null)" ]; then
+  local path="$1" head status unpushed
+  if ! status=$(git -C "$path" status --porcelain --untracked-files=all 2>/dev/null); then
+    SAFE=no SAFE_WHY="cannot read git status"
+    return
+  fi
+  if [ -n "$status" ]; then
     SAFE=no SAFE_WHY="uncommitted changes"
     return
   fi
@@ -175,7 +176,11 @@ classify_content() {
     SAFE=no SAFE_WHY="cannot read HEAD"
     return
   }
-  if [ -z "$(git -C "$path" rev-list -n 1 HEAD --not --remotes 2>/dev/null)" ]; then
+  if ! unpushed=$(git -C "$path" rev-list -n 1 HEAD --not --remotes 2>/dev/null); then
+    SAFE=no SAFE_WHY="cannot list unpushed commits"
+    return
+  fi
+  if [ -z "$unpushed" ]; then
     SAFE=yes SAFE_WHY="clean, all commits on a remote branch"
     return
   fi
@@ -227,7 +232,8 @@ collect() {
         reason="${line#locked }"
         ;;
     esac
-  done < <(git -C "$ROOT" worktree list --porcelain; echo)
+  done < <(git -C "$ROOT" worktree list --porcelain)
+  flush
 }
 collect
 
