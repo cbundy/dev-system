@@ -2,7 +2,7 @@
 # Canonical test entrypoint (`npm test`; CLAUDE.md "Canonical commands").
 #
 # Runs every node test (tests/*.test.js) and every plain-shell suite
-# (features/test/callum-tools/*.test.sh, coder/test/*.test.sh). Both are discovered by
+# (features/test/callum-tools/*.test.sh, coder/test/*.test.sh, images/base/test/*.test.sh). Both are discovered by
 # glob, so a new test file needs no wiring here.
 #
 # Quiet on success: one summary line. On failure it prints only the failing node tests
@@ -32,7 +32,7 @@ fi
 
 # Shell suites: output is shown only for a suite that fails.
 suites=0
-for suite in features/test/callum-tools/*.test.sh coder/test/*.test.sh; do
+for suite in features/test/callum-tools/*.test.sh coder/test/*.test.sh images/base/test/*.test.sh; do
   [ -f "$suite" ] || continue
   suites=$((suites + 1))
   if ! sh "$suite" > "$out" 2>&1; then

@@ -124,6 +124,8 @@ echo "== 2. toolchain"
 for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
+check "dev-prune-worktrees is installed and runs a dry run in a repo with no bridge worktrees" in_image '
+  git init -q /tmp/prune-r && dev-prune-worktrees --workspace /tmp/prune-r | grep -q "no bridge worktrees"'
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '
   find "$(npm prefix -g)/lib/node_modules/@openai/codex" -name codex-code-mode-host -type f -perm -u+x | grep -q .'
 # The one check that reaches PyPI: a Python repo's gates install their deps

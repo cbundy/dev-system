@@ -165,6 +165,7 @@ COPY --chmod=0755 \
   images/base/dev-doctor \
   images/base/dev-entrypoint \
   images/base/dev-remote-control \
+  images/base/dev-prune-worktrees \
   images/base/dev-login \
   images/base/systemctl \
   /usr/local/bin/

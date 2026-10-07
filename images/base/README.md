@@ -42,6 +42,8 @@ them, so those scripts stay maintained.
    repo named by `DEV_REPO_URL` (see [Workspace and repo](#workspace-and-repo)).
 6. `dev-init`, the idempotent start-up setup for state that cannot be baked in.
 7. `dev-doctor`, a health check that reports missing auth or broken state loudly.
+   `dev-prune-worktrees` removes stale Claude bridge worktrees (see
+   [`dev-prune-worktrees`](#dev-prune-worktrees)).
 8. `dev-login`, which starts the logins for you and brings the sign-in links to the
    container log, an optional login page and an optional push notification (see
    [First-run logins](#first-run-logins)).
@@ -534,12 +536,55 @@ on every failure:
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
+- stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
+  with the count when some would be removed, `OK` when there are none, nothing when the
+  workspace has no bridge worktrees;
 - an `INFO` line, never a failure, on telemetry export (see
   [Telemetry](#telemetry-opentelemetry-export)): off, or on with the endpoint, the protocol
   and whether it is reachable.
 
 It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
 the same report and always exits 0.
+
+## `dev-prune-worktrees`
+
+Server mode gives every session a worktree, `<workspace>/.claude/worktrees/bridge-*`, on a
+local branch `worktree-bridge-*`, locked with the server's pid in the reason. A server that
+stops leaves them behind and nothing removes them. `dev-prune-worktrees` classifies each one
+and removes the stale ones:
+
+- **in use**: locked by a process that is still alive. Claude Code writes the lock reason
+  as `claude <a> <b> (pid <PID> start <START>)`, where START is the process's starttime
+  (field 22 of `/proc/<PID>/stat`, in clock ticks since boot), or `claude <a> <b> (pid <PID>)`
+  on older versions or when the start is unknown. With `pid N start S` the worktree is in use
+  only if pid N is alive and its starttime equals S exactly; a live pid with a different
+  starttime was recycled, so the worktree is orphaned. With only `pid N`, a live pid counts if
+  that process started no later than the lock was taken (the `locked` file's mtime, compared
+  with the process start time from `/proc`, plus 5 s of slack). A lock whose reason names no
+  pid cannot be proven dead, so it counts as in use. Never touched, whatever its age.
+- **orphaned**: unlocked, or locked by a dead or recycled pid.
+- **unsafe** (an orphaned one that is kept): uncommitted or untracked changes, or commits on
+  no remote branch. A squash-merged branch's commits are on no remote branch, so HEAD also
+  counts as pushed when GitHub reports it as the head of a merged pull request
+  (`gh api repos/{owner}/{repo}/commits/<sha>/pulls`). With `gh` missing, logged out or
+  offline that lookup finds nothing and the worktree stays unsafe.
+- **idle**: the age of the newest of the worktree's HEAD, index and reflog and every file in
+  it.
+
+```sh
+dev-prune-worktrees                 # dry run: a table of every worktree, then what --delete would remove
+dev-prune-worktrees --delete        # remove orphaned + safe + idle >= 72h
+dev-prune-worktrees --delete --older-than 12h   # 90m, 12h, 3d, or bare hours; 0 ignores idleness
+```
+
+`--delete` unlocks, runs `git worktree remove` (never `--force`), deletes the local
+`worktree-bridge-*` branch and runs `git worktree prune`; everything it skips is logged with
+the reason. `dev-remote-control` runs it with `--delete` before every start in server mode,
+so a stop and start cleans up over time, and `dev-doctor` warns with the count of stale
+ones. The workspace is the one `dev-init` uses (`--workspace DIR` overrides it).
+Sessions the live server can still resume stay until that server stops; after the next
+restart they are orphaned and the 72 hour rule applies. Tested by
+`images/base/test/dev-prune-worktrees.test.sh` (part of `npm test`).
 
 ## Entrypoint: Claude Code with Remote Control
 
@@ -604,8 +649,8 @@ orphaned processes, so containers stop in well under a second instead of hitting
        in the local checkout; push them first if it needs them.
      - Ending or deleting a session in claude.ai removes its worktree and branch.
        Sessions still open when the container stops keep theirs (locked, so they can be
-       resumed), and the next start currently neither reuses nor prunes them, so they
-       can collect under `.claude/worktrees/` (cbundy/dev-system#93).
+       resumed). The next start does not reuse them, but `dev-remote-control` prunes the stale
+       ones (see [`dev-prune-worktrees`](#dev-prune-worktrees)).
      - Besides the open sessions, the server keeps one spare session process running,
        ready for the next session.
    In `session` mode the supervisor also decides, at every start, whether to **resume**
