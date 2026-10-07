@@ -297,6 +297,9 @@ To try a change from inside a workspace before it reaches `dev-system`, push it 
 `dev-system-next` with `coder/dev-system/push-next.sh smoke`; see
 [Testing template changes from a workspace](#testing-template-changes-from-a-workspace).
 
+To develop dev-system itself from a workspace (setup, logins, and what only CI can verify), see
+[Developing dev-system on Coder](../../docs/developing-on-coder.md).
+
 ## Testing template changes from a workspace
 
 `push-next.sh` beside this README pushes the checked-out template as a second template,

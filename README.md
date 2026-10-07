@@ -47,5 +47,6 @@ npx callum-dev init          # then fill every <REPLACE> and commit
 | [`docs/architecture.md`](docs/architecture.md) | Layers, versioning, how updates reach repos, the runtime map for debugging |
 | [`images/base/README.md`](images/base/README.md) | The base image: persistence, `dev-init`, `dev-doctor`, Remote Control, logins, agentsview |
 | [`coder/dev-system/README.md`](coder/dev-system/README.md) | The Coder templates: pushing them, parameters, OTLP |
+| [`docs/developing-on-coder.md`](docs/developing-on-coder.md) | Developing dev-system itself from a Coder workspace: logins, and what only CI can verify |
 | [`templates/README.md`](templates/README.md) | Each template file: what is synced and what the repo owns |
 | [`RELEASING.md`](RELEASING.md) | Cutting a release of each layer |
