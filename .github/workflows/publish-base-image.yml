@@ -236,10 +236,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # The one stable name for the whole workflow: green only when the build and
-  # every test job succeeded (a skipped or cancelled job is not a pass).
+  # every test job succeeded, and the push job succeeded or was intentionally
+  # skipped (pull requests). A skipped or cancelled build or test is not a pass.
   result:
     name: Base image result
-    needs: [build, test]
+    needs: [build, test, push]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -248,4 +249,4 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
+          echo "$RESULTS" | jq -e 'all(to_entries[]; .value.result == "success" or (.key == "push" and .value.result == "skipped"))' > /dev/null
