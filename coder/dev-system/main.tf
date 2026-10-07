@@ -245,7 +245,7 @@ data "coder_parameter" "memory_gb" {
   display_name = "Memory (GB)"
   description  = "Hard memory limit for the workspace container."
   type         = "number"
-  default      = 4
+  default      = 8
   mutable      = true
   order        = 7
   validation {
