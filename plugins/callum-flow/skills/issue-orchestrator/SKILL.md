@@ -26,9 +26,6 @@ devcontainer tooling), and it keeps no repo-specific state of its own - see
 - `READY_LABEL` - the label meaning "ready to pull". Convention: `ready`.
 - `IN_DEV_LABEL` - the label for actively-worked issues. Convention: `In development`.
 - `CADENCE` - how often the loop fires (e.g. every 5 minutes via `/loop`).
-- `MODEL_LABEL_PREFIX` (default `model:`) - issue labels of the form
-  `model:<alias>` (e.g. `model:opus`) override the sub-agent model for that
-  issue only (see Sub-agent models).
 - `USAGE_SLOW_PCT` (default `85`), `USAGE_STOP_NEW_PCT` (default `90`),
   `USAGE_STOP_ALL_PCT` (default `95`) - the plan-usage percentages at which
   the usage gate slows, stops new work, and stops launching anything (see
