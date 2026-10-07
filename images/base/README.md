@@ -1408,7 +1408,7 @@ fails otherwise, and also checks the workflow matrix lists the same groups).
 - The image is built once and saved as an artifact; the test groups run as parallel jobs
   against it, and the push job (dispatch and schedule only) needs every one of them and
   sends that same tested image. The job `Base image result` is green only if the build and
-  every test job passed: the one name a branch-protection rule could require.
+  every test job passed and the push job passed or was skipped (pull requests): the one name a branch-protection rule could require.
 
 **Visibility:** the package is public, so consumers pull it with no login. It took the
 visibility of this public repo when the first dispatch created it (1.0.0, 2026-10-03), so
