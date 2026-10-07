@@ -9,7 +9,7 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 
 | Layer | Source here | Distributed as | Consumer pins | Consumer updates with |
 |---|---|---|---|---|
-| Agent behaviour: skills, hooks | `plugins/callum-flow/` | Claude Code plugin in the `callum` marketplace (`.claude-plugin/marketplace.json`) | `version` in `plugin.json` | `/plugin marketplace update`, or auto-update |
+| Agent behaviour: skills, named agents, hooks | `plugins/callum-flow/` | Claude Code plugin in the `callum` marketplace (`.claude-plugin/marketplace.json`) | `version` in `plugin.json` | `/plugin marketplace update`, or auto-update |
 | Environment | `images/base/` | Image `ghcr.io/cbundy/dev-system/base` on GHCR | Image tag (`:2`) or digest | Rebuild or re-pull. Tags are mutable: they are rebuilt weekly. |
 | Repo config | `templates/`, `bin/callum-dev.js` | npm git dependency `github:cbundy/dev-system#semver:0.x` | `.callum-dev.json` stamp | `npm update @callum/dev-system && npx callum-dev update` |
 
@@ -30,7 +30,7 @@ Two more surfaces build on the layers:
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), hooks
+plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), agents (explorer, implementer, fixer), hooks
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 .devcontainer/                    this repo's dev container and dev image (base + terraform)
