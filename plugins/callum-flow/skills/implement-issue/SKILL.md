@@ -13,7 +13,14 @@ version: 0.9.1
 
 # Implement issue
 
-You have been delegated one issue's implementation. This skill owns the *how*;
+You have been delegated one issue's implementation, normally as the named
+`callum-flow:implementer` (or `callum-flow:fixer`) agent, which the plugin pins
+to Sonnet. Sub-agents you spawn yourself must also go through a named
+`callum-flow:*` agent; never delegate ad hoc with `model` omitted, because that
+inherits your model. If your brief names a model override (an issue `model:<alias>`
+label), pass it explicitly as `model` on any sub-agent you spawn.
+
+ This skill owns the *how*;
 whoever delegated to you owns the *what* (the design/brief). Follow this
 procedure tightly and terminate when done - do not babysit.
 
