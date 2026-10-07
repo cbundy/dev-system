@@ -10,14 +10,19 @@
 #           sign-in page then shows is pasted back with `dev-login <code>`
 #   codex   `codex login --device-auth`: a URL and a one-time code (valid 15
 #           minutes); approving it is enough
-#   gh      `gh auth login --web`: the same, then `gh auth setup-git`
+#   gh      `gh auth login --web --scopes workflow`: the same, then
+#           `gh auth setup-git`. A login whose token lacks the workflow scope
+#           (an older one, or one made by hand) gets
+#           `gh auth refresh --scopes workflow` instead: the same link and
+#           code, which add the scope to the token gh already has
 #
 # Usage:
 #   dev-login status [--json]   each tool's login: in, out, other (Claude is
-#                               logged in, but not with claude.ai), token (gh
-#                               uses GH_TOKEN / GITHUB_TOKEN) or off (not in
-#                               DEV_LOGIN_TOOLS), with the link of an attempt
-#                               in progress
+#                               logged in, but not with claude.ai), scope (gh
+#                               is logged in without the workflow scope),
+#                               token (gh uses GH_TOKEN / GITHUB_TOKEN) or off
+#                               (not in DEV_LOGIN_TOOLS), with the link of an
+#                               attempt in progress
 #   dev-login start [--json]    start every missing login and print the links.
 #                               An attempt in progress is kept, not restarted,
 #                               so the link already handed out stays valid; one
@@ -47,6 +52,9 @@ ALL_TOOLS="claude codex gh"
 WATCH_EVERY=15      # seconds between checks in `watch`
 NOTIFY_EVERY=3600   # seconds between reminder notifications in `watch`
 LINK_WAIT=30        # seconds `start` waits for a new attempt's link
+
+# shellcheck source=gh.sh
+. /usr/local/share/dev-system/gh.sh
 
 log() {
   echo "dev-login: $*" >&2
@@ -89,7 +97,9 @@ wanted() {
   wanted_tools 2>/dev/null | grep -qx "$1"
 }
 
-# in, out, other (claude), token (gh) or off
+# in, out, other (claude), scope or token (gh) or off. A gh token whose scopes
+# cannot be read counts as in: only a token known to lack `workflow` is
+# upgraded.
 tool_state() {
   local tool="$1"
   if ! wanted "$tool"; then
@@ -109,7 +119,7 @@ tool_state() {
       if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
         echo token
       elif gh auth status >/dev/null 2>&1; then
-        echo in
+        if [ "$(gh_workflow_scope)" = no ]; then echo scope; else echo in; fi
       else
         echo out
       fi
@@ -119,6 +129,12 @@ tool_state() {
 
 session() {
   echo "login-$1"
+}
+
+# A state whose login `start` runs: out, or scope for gh's refresh.
+pending() {
+  case "$1" in out | scope) return 0 ;; esac
+  return 1
 }
 
 attempt_running() {
@@ -145,33 +161,42 @@ attempt_code() {
   esac
 }
 
-# Starts the tool's login in its tmux session. The panes are wide so a long
-# URL stays on one line. gh gets no terminal on stdin, which makes it skip its
-# questions and just print the code; git is wired to it afterwards. The lock
+# Starts the tool's login (state out) or gh's scope refresh (state scope) in
+# its tmux session. The panes are wide so a long URL stays on one line. gh
+# gets no terminal on stdin, which makes it skip its questions and just print
+# the code and link, the same for a login and a refresh; git is wired to it
+# after a login (a refresh keeps the account git already uses). The lock
 # (fd 8) and the supervisor's (fd 9) are closed, so a tmux server started here
 # never holds them.
 start_attempt() {
-  local tool="$1" s
+  local tool="$1" state="$2" s
   s=$(session "$tool")
   case "$tool" in
     claude) tmux new-session -d -s "$s" -x 1000 -y 50 claude auth login --claudeai 8>&- 9>&- ;;
     codex) tmux new-session -d -s "$s" -x 1000 -y 50 codex login --device-auth 8>&- 9>&- ;;
     gh)
-      tmux new-session -d -s "$s" -x 1000 -y 50 \
-        'gh auth login --hostname github.com --git-protocol https --web </dev/null && gh auth setup-git' 8>&- 9>&-
+      if [ "$state" = scope ]; then
+        tmux new-session -d -s "$s" -x 1000 -y 50 \
+          'gh auth refresh --hostname github.com --scopes workflow </dev/null' 8>&- 9>&-
+      else
+        tmux new-session -d -s "$s" -x 1000 -y 50 \
+          'gh auth login --hostname github.com --git-protocol https --web --scopes workflow </dev/null && gh auth setup-git' 8>&- 9>&-
+      fi
       ;;
   esac
 }
 
 # One line per tool that still needs a login, for logs and notifications.
 describe() {
-  local tool="$1" url="$2" code="$3"
+  local tool="$1" url="$2" code="$3" state="$4" label="$1"
+  # gh is logged in, but pushing .github/workflows/ needs the scope too.
+  [ "$state" = scope ] && label="gh (workflow scope)"
   if [ -z "$url" ]; then
-    echo "$tool: no sign-in link yet - see: $(exec_hint "tmux attach -t $(session "$tool")")"
+    echo "$label: no sign-in link yet - see: $(exec_hint "tmux attach -t $(session "$tool")")"
   elif [ "$tool" = claude ]; then
     echo "claude: open $url and approve, then paste the code it shows into the login page or run: $(exec_hint 'dev-login <code>')"
   else
-    echo "$tool: open $url and enter the code $code"
+    echo "$label: open $url and enter the code $code"
   fi
 }
 
@@ -185,15 +210,15 @@ report() {
     shift
     url=""
     code=""
-    if [ "$state" = out ] && attempt_running "$tool"; then
+    if pending "$state" && attempt_running "$tool"; then
       url=$(attempt_url "$tool")
       code=$(attempt_code "$tool")
     fi
     if [ "$format" = json ]; then
       json=$(jq -c --arg t "$tool" --arg s "$state" --arg u "$url" --arg c "$code" \
         '.[$t] = {state: $s, url: (if $u == "" then null else $u end), code: (if $c == "" then null else $c end)}' <<<"$json")
-    elif [ "$state" = out ]; then
-      describe "$tool" "$url" "$code"
+    elif pending "$state"; then
+      describe "$tool" "$url" "$code" "$state"
     fi
   done
   [ "$format" = json ] && echo "$json"
@@ -230,7 +255,7 @@ cmd_status() {
 # new attempts' links, and reports. Serialized, so the page and the watcher
 # never start the same login twice.
 cmd_start() {
-  local format=text tool started="" states i _
+  local format=text tool started="" states state i _
   case "${1:-}" in
     --json) format=json ;;
     "") ;;
@@ -243,14 +268,15 @@ cmd_start() {
   i=0
   for tool in $ALL_TOOLS; do
     i=$((i + 1))
-    if [ "$(sed -n "${i}p" <<<"$states")" != out ]; then
+    state=$(sed -n "${i}p" <<<"$states")
+    if ! pending "$state"; then
       # Logged in some other way (or no longer wanted): a leftover attempt
       # would only wait forever.
       tmux kill-session -t "$(session "$tool")" 2>/dev/null
       continue
     fi
     attempt_running "$tool" && continue
-    if start_attempt "$tool"; then
+    if start_attempt "$tool" "$state"; then
       started="$started $tool"
     else
       log "WARNING: could not start the $tool login"
@@ -349,7 +375,7 @@ clone_after_gh_login() {
   [ -n "${DEV_REPO_URL:-}" ] || return 0
   case "$(tool_state gh)" in
     out) GH_WAS_OUT=1 ;;
-    in)
+    in | scope)
       [ "${GH_WAS_OUT:-0}" = 1 ] || return 0
       GH_WAS_OUT=0
       log "gh is logged in - cloning the workspace repo (dev-init --repo)"

@@ -174,6 +174,7 @@ COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
+  images/base/gh.sh \
   /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns

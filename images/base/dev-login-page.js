@@ -95,7 +95,11 @@ const card = (tool, t) => {
 <a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open sign-in page</a>
 <form method="post" action="."><input name="code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste code" required><button>Log in</button></form></section>`;
   }
-  return `<section class="card">${head("")}<ol><li>Open the sign-in page.</li><li>Enter this code and approve. That is all.</li></ol>
+  const scope =
+    t.state === "scope"
+      ? `<p class="muted">Logged in, but without the workflow scope that pushing .github/workflows/ needs. Approve once more to add it.</p>`
+      : "";
+  return `<section class="card">${head("")}${scope}<ol><li>Open the sign-in page.</li><li>Enter this code and approve. That is all.</li></ol>
 <code class="otp">${esc(t.code || "")}</code>
 <a class="btn" href="${esc(t.url)}" target="_blank" rel="noopener noreferrer">Open sign-in page</a></section>`;
 };

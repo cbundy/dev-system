@@ -478,6 +478,11 @@ on every failure:
   `gh auth status`), each with the hint `run: dev-login start` (or the login page, when
   `DEV_LOGIN_PORT` is set). A tool left out of `DEV_LOGIN_TOOLS` is not required to be;
   gh with `GH_TOKEN` set counts as logged in;
+- gh's token has the `workflow` scope, which pushing a change under `.github/workflows/`
+  needs: a `WARN` when it lacks it (fix: `dev-login start`, or
+  `gh auth refresh -h github.com -s workflow`; for `GH_TOKEN`, give that token the scope).
+  When the scopes cannot be read (offline, or a fine-grained token, which has none), an
+  `INFO` line says so and nothing is prompted;
 - no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
   working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
@@ -787,7 +792,7 @@ without a shell in the container:
 |---|---|---|
 | Claude | `claude auth login --claudeai`: a sign-in link. There is no device-code flow for claude.ai logins. | Open the link, approve, paste the code shown back. A wrong code ends that attempt, and the next one has a new link. |
 | codex | `codex login --device-auth`: a link and a one-time code, valid 15 minutes. | Open the link and enter the code. Device-code login may first need turning on in your ChatGPT account's security settings. |
-| gh | `gh auth login --web`: a link and a one-time code; then `gh auth setup-git`. | Open the link and enter the code. On Coder, external auth (`GH_TOKEN`) replaces it. |
+| gh | `gh auth login --web --scopes workflow`: a link and a one-time code; then `gh auth setup-git`. The `workflow` scope lets the pipeline push changes under `.github/workflows/`. A gh login without it (an older one, or one made by hand) gets `gh auth refresh --scopes workflow` instead: a link and a code the same way, which add the scope to the token gh already has. | Open the link and enter the code. On Coder, external auth (`GH_TOKEN`) replaces it. |
 
 Each login runs in its own tmux session (`login-claude`, `login-codex`, `login-gh`), so
 `tmux attach -t login-codex` shows it as it is. An attempt in progress is kept, so a link
@@ -799,7 +804,8 @@ every login is done. On the desktop, where the supervisor is off by default, run
 
 ```text
 dev-login status [--json]   each tool: in, out, other (Claude logged in, but not with
-                            claude.ai), token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS)
+                            claude.ai), scope (gh logged in without the workflow scope),
+                            token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS)
 dev-login start [--json]    start the missing logins, print the links
 dev-login <code>            finish Claude's login (also: dev-login claude <code>)
 dev-login watch             what the supervisor runs: keep starting, log, notify
@@ -830,7 +836,7 @@ link (the page, or the first sign-in link) when you tap it. A failed POST only l
 warning. The URL is never logged, so it may carry an access token.
 
 By hand, the CLIs' own logins still work (`claude auth login`, `codex login --device-auth`,
-`gh auth login`, then `dev-init` to wire git to gh straight away). Run `dev-doctor` to
+`gh auth login --scopes workflow`, then `dev-init` to wire git to gh straight away). Run `dev-doctor` to
 confirm everything is green.
 
 ### Several containers: one nginx route
