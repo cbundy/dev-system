@@ -494,9 +494,8 @@ start_login_page() {
 #     that Claude has not installed is installed here (user scope, in
 #     CLAUDE_CONFIG_DIR), after adding its marketplace when Claude does not know
 #     it yet: a repo plugin's from the source the repo declares (github or
-#     git), a default plugin's from the source DEV_DEFAULT_PLUGINS gives. A
-#     default plugin the repo names in enabledPlugins is left to the repo (true
-#     installs it as a repo plugin, false not at all). An install that fails
+#     git), a default plugin's from the source DEV_DEFAULT_PLUGINS gives.
+#     An install that fails
 #     on a marketplace Claude already knew is retried once after updating it
 #     (the plugin may be newer than the marketplace's copy). Failures are
 #     logged and the start carries on.

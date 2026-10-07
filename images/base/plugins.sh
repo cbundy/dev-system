@@ -13,10 +13,8 @@ enabled_plugins() {
   jq -r '.enabledPlugins | if type == "object" then to_entries[] | select(.value == true) | .key | select(test("^[^@]+@[^@]+$")) else empty end' "$1" 2>/dev/null
 }
 
-# named_plugins <settings file>: each plugin its enabledPlugins names, with
-# any value (true or false), one per line. Empty for a file jq cannot parse.
-named_plugins() {
-  jq -r '.enabledPlugins | if type == "object" then keys[] else empty end' "$1" 2>/dev/null
+repo_owned_plugins() {
+  jq -r '. as $settings | .enabledPlugins | if type == "object" then to_entries[] | select(.value == false or (.value == true and $settings.extraKnownMarketplaces[(.key | split("@") | last)] != null)) | .key else empty end' "$1" 2>/dev/null
 }
 
 # default_plugins: the image's default plugins, one "<plugin>@<marketplace>
@@ -48,11 +46,9 @@ valid_default_plugin() {
 
 # wanted_default_plugins [settings file]: the default plugins (as
 # default_plugins prints them) the repo's settings file leaves to the image:
-# one it names in enabledPlugins is the repo's - installed as a repo plugin
-# when it is true, and not at all when the repo turns it off.
 wanted_default_plugins() {
   local named=""
-  [ -z "${1:-}" ] || named=$(named_plugins "$1")
+  [ -z "${1:-}" ] || named=$(repo_owned_plugins "$1")
   default_plugins | while read -r id src; do
     grep -qxF -- "$id" <<<"$named" || printf '%s %s\n' "$id" "$src"
   done
@@ -211,7 +207,7 @@ install_repo_plugin() {
 # install_plugins: installs each wanted plugin Claude has not installed -
 # first the ones the workspace repo's committed .claude/settings.json enables
 # (their marketplaces added from the sources it declares), then the image's
-# default plugins (DEV_DEFAULT_PLUGINS) the repo does not name. The repo goes
+# default plugins (DEV_DEFAULT_PLUGINS). The repo goes
 # first, so a marketplace it declares under the same name as a default one is
 # added from the repo's source. User scope, in CLAUDE_CONFIG_DIR. The whole
 # step has a deadline (DEV_PLUGIN_INSTALL_TIMEOUT, default 120s), each CLI
@@ -238,6 +234,7 @@ install_plugins() {
     settings=""
   fi
   defaults=$(wanted_default_plugins "$settings")
+  plugins=$(not_installed "$plugins" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || plugins=""
   [ -n "$plugins$defaults" ] || return 0
   # Unknown (the listing failed) means try them all: an install of a plugin
   # that is already there is a no-op.

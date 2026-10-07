@@ -1794,14 +1794,25 @@ plugin_check "a repo that enables callum-flow itself: installed once, from the r
   echo "$out" | grep -qxF "dev-doctor: OK   Claude plugins enabled in /tmp/ws/.claude/settings.json are installed" &&
   ! echo "$out" | grep -q "default Claude plugins"' \
   -e SETTINGS='{"extraKnownMarketplaces":{"callum":{"source":{"source":"github","repo":"cbundy/dev-system","ref":"v1"}}},"enabledPlugins":{"callum-flow@callum":true}}'
+plugin_check "an enabled default without a repo marketplace installs once in every dev-init mode" "$DEFAULT_PLUGINS"'
+  for mode in "" --repo --plugins; do
+    rm -rf /tmp/plugin-state /tmp/plugin-calls
+    out=$(dev-init "$mode" 2>&1); rc=$?; echo "$out"; cat /tmp/plugin-calls
+    [ $rc = 0 ] &&
+    [ "$(grep -vE " list( |$)" /tmp/plugin-calls)" = "$(printf "%s\n" "/ marketplace add cbundy/dev-system" "/ install callum-flow@callum")" ] &&
+    ! echo "$out" | grep -q "WARNING:.*plugin" || exit 1
+    dev-init "$mode" >/dev/null 2>&1 && [ "$(grep -c " install " /tmp/plugin-calls)" = 1 ] || exit 1
+  done
+  dev-doctor --warn-only | grep -qxF "dev-doctor: OK   default Claude plugins are installed: callum-flow@callum"' \
+  -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}'
 plugin_check "no network: dev-init warns and starts, and dev-doctor warns naming the fix" "$DEFAULT_PLUGINS"'
   printf "%s\n" "#!/bin/bash" "[ \"\$1 \$2 \$3\" = \"plugin marketplace add\" ] && { echo \"✘ Failed to add marketplace: could not resolve host\"; exit 1; }" "[ \"\$1 \$2\" = \"plugin list\" ] && { echo []; exit 0; }" "[ \"\$1\" = plugin ] && { echo []; exit 0; }" "exit 0" > /tmp/stub/claude
-  rm -rf /tmp/ws; out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -iE "plugin"
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -iE "plugin"
   [ $rc = 0 ] &&
   echo "$out" | grep -qxF "dev-init: WARNING: could not add Claude plugin marketplace callum from cbundy/dev-system: Failed to add marketplace: could not resolve host - Claude plugin callum-flow@callum not installed." &&
   echo "$out" | grep -qxF "dev-doctor: WARN default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: callum-flow@callum" &&
   echo "$out" | grep -qxF "dev-doctor:        fix: run: dev-init --plugins (or by hand: claude plugin marketplace add cbundy/dev-system; claude plugin install callum-flow@callum), then start a new Claude session"' \
-  -e SETTINGS=
+  -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}'
 # The one real install (the network, GitHub and the real claude CLI, no
 # login): a workspace with every setting at its default and no repo comes up
 # with the callum-flow skills installed and enabled. command docker keeps the

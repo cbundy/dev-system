@@ -368,11 +368,11 @@ they land in `/persist/claude` and stay across rebuilds:
   `/persist/claude` volume, may never show (cbundy/dev-system#112). So `dev-init`
   installs each plugin set to `true` there.
 
-A default plugin the repo names in `enabledPlugins` is the repo's: set to `true` (as every
-onboarded repo does for `callum-flow`), it is installed once, as a repo plugin, from the
-marketplace source the repo declares; set to `false`, the repo opts out and it is not
-installed. Repo plugins go first, so a marketplace both name is added from the repo's
-source.
+A default plugin set to `true` in `enabledPlugins` (as every onboarded repo does for
+`callum-flow`) is installed once from the repo's declared marketplace source. Without
+that declaration, it keeps the image's source. Set to `false`, the repo opts out and it
+is not installed. Repo plugins go first, so a marketplace both name is added from the
+repo's source.
 
 It is the last step of a start, after the login page is up, since it needs the network and
 can be slow while the plugins matter only once Claude starts (`dev-init --repo` runs it
@@ -380,9 +380,9 @@ right after the clone or fetch). For each wanted plugin Claude has not installed
 
 - the marketplace is added first (`claude plugin marketplace add`) if Claude does not know
   it: a default plugin's from the source `DEV_DEFAULT_PLUGINS` gives, a repo plugin's from
-  its declared source, `github` (`repo`, plus `#ref` when one is set) or `git` (`url`). Any
-  other source type, or a marketplace that is not declared, gets a `WARNING` and that
-  plugin is skipped;
+  its declared source, `github` (`repo`, plus `#ref` when one is set) or `git` (`url`). A
+  repo plugin with an unsupported or missing marketplace declaration gets a `WARNING`
+  and is skipped;
 - then `claude plugin install <plugin>@<marketplace>`. If that fails on a marketplace
   Claude already knew, it updates the marketplace and tries once more;
 - each call is limited to 60s and runs outside the checkout, and the whole step to
@@ -521,8 +521,8 @@ on every failure:
 - the Claude plugins the workspace repo's `.claude/settings.json` enables are installed,
   with a `WARN` (not a failure: Claude runs, without their skills) naming any that are
   missing and the fix `dev-init --repo`, or that the file is not valid JSON; and the
-  image's default plugins (`DEV_DEFAULT_PLUGINS`) the repo does not name, with a `WARN`
-  naming any that are missing and the fix (`dev-init --plugins`, or the
+  image's default plugins (`DEV_DEFAULT_PLUGINS`) not disabled or supplied by the repo,
+  with a `WARN` naming any that are missing and the fix (`dev-init --plugins`, or the
   `claude plugin marketplace add` and `install` commands by hand). Only run when some
   plugin is wanted;
 - treehouse is on `PATH`;

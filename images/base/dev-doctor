@@ -216,8 +216,8 @@ fi
 
 # The Claude plugins dev-init installs (plugins.sh): the ones the workspace
 # repo enables in its committed .claude/settings.json (cbundy/dev-system#112)
-# and the image's default plugins (DEV_DEFAULT_PLUGINS, #148) the repo does
-# not name. One that is still missing is a WARN with the way to retry -
+# and the image's default plugins (DEV_DEFAULT_PLUGINS, #148).
+# One that is still missing is a WARN with the way to retry -
 # Claude runs without it, just without its skills. The CLI runs only when
 # something is wanted, so with no repo plugins and DEV_DEFAULT_PLUGINS empty
 # nothing is checked.
@@ -237,6 +237,7 @@ if command -v claude >/dev/null 2>&1; then
       "correct DEV_DEFAULT_PLUGINS in the image or the runtime's environment"
   done < <(invalid_default_plugins)
   defaults=$(wanted_default_plugins "$settings")
+  wanted=$(not_installed "$wanted" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || wanted=""
   if [ -n "$wanted$defaults" ] && ! installed=$(installed_plugins); then
     warn "cannot list Claude's installed plugins (claude plugin list --json failed), so the default and repo plugins are unchecked" \
       "run: claude plugin list"

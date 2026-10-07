@@ -148,6 +148,28 @@ test("a repo that enables the default plugin itself: installed once, from the re
   assert.equal(r.log.match(/installed Claude plugin/g).length, 1);
 });
 
+for (const extraKnownMarketplaces of [undefined, { other: {} }, { callum: null }]) {
+  test(`an enabled default with no marketplace declaration keeps the image source: ${JSON.stringify(extraKnownMarketplaces)}`, (t) => {
+    const ctx = setup(t, {
+      settings: { enabledPlugins: { "callum-flow@callum": true }, extraKnownMarketplaces },
+    });
+    const check = run(
+      ctx,
+      'w=$(wanted_default_plugins "$(repo_settings)"); not_installed "$w" ""; default_plugin_fix "$w"',
+    );
+    assert.equal(check.status, 0, check.log);
+    assert.equal(check.stdout, "callum-flow@callum cbundy/dev-system\nclaude plugin marketplace add cbundy/dev-system; claude plugin install callum-flow@callum");
+    const r = run(ctx, "install_plugins");
+    assert.equal(r.status, 0, r.log);
+    assert.deepEqual(changes(r.calls), ["/ marketplace add cbundy/dev-system", "/ install callum-flow@callum"]);
+    assert.doesNotMatch(r.log, /WARNING/);
+    const again = run(ctx, "install_plugins");
+    assert.equal(again.status, 0, again.log);
+    assert.deepEqual(changes(again.calls), changes(r.calls));
+    assert.equal(again.log, "");
+  });
+}
+
 test("repo plugins go first, so a marketplace both name is added from the repo's source", (t) => {
   const ctx = setup(t, {
     settings: {
