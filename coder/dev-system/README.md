@@ -108,7 +108,7 @@ coder create my-ws --template dev-system   # Enter accepts each default
 | `remote_control_skip_permissions` | `false` (from `remote_control_default_skip_permissions`) | yes | Lets Claude act without asking for approval (bypass permissions), in both modes. Only for a workspace you are happy to let act unsupervised. See below. |
 | `remote_control_resume` | `false` (`true` in `orchestrator`) | yes | `session` mode: every start resumes the workspace's last Claude conversation, so it comes back as the same claude.ai session after a stop, restart, template update or crash. Sets `DEV_REMOTE_CONTROL_RESUME=1`. Ignored in `server` mode. See [Orchestrator workspace](#orchestrator-workspace). |
 | `cpus` | 2 | yes | CPU limit (1-8). |
-| `memory_gb` | 4 | yes | Memory limit in GB (1-16). |
+| `memory_gb` | 8 | yes | Memory limit in GB (1-16). 8 leaves room for an agent, a no-mistakes pipeline and a Playwright e2e run at once; 4 got the browser and test runners OOM-killed (cbundy/job-search#222). |
 | `template_testing` | `false` | yes | Mounts the Template Admin token from `template_tester_secrets_dir`, so agents here can push `dev-system-next`. That token can change any template: only for a workspace developing dev-system. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 
 `remote_control_skip_permissions` sets `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` to `1` (else
