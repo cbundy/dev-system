@@ -28,6 +28,10 @@ devcontainer tooling), and it keeps no repo-specific state of its own - see
 - `CADENCE` - how often the loop fires (e.g. every 5 minutes via `/loop`).
 - `IMPL_MODEL` - model for implementation sub-agents.
 - `EXPLORE_MODEL` - cheaper model for read-only exploration.
+- `USAGE_SLOW_PCT` (default `85`), `USAGE_STOP_NEW_PCT` (default `90`),
+  `USAGE_STOP_ALL_PCT` (default `95`) - the plan-usage percentages at which
+  the usage gate slows, stops new work, and stops launching anything (see
+  Usage gate).
 
 ## Each tick
 
@@ -35,13 +39,65 @@ Ticks are event-driven: the two watchers (see Watchers below) wake the
 session on new `ready` work and on in-flight pipeline events, so a `/loop`
 cadence is optional rather than load-bearing.
 
-1. Scan `REPO` for open issues with `READY_LABEL`. Also list `IN_DEV_LABEL`
+1. Read plan usage and set the tier (see Usage gate). The tier bounds every
+   step below that spends tokens.
+2. Scan `REPO` for open issues with `READY_LABEL`. Also list `IN_DEV_LABEL`
    issues and open PRs.
-2. Check every in-flight sub-agent for progress or being stuck (see Monitoring).
-3. For each genuinely-actionable `ready` issue (not `blocked_by` an open issue),
-   run the per-issue pipeline.
-4. If nothing is actionable, report a one-line idle status and stop until next tick.
-5. If you are at over 70k tokens, run a compaction before the regular tasks.
+3. Check every in-flight sub-agent for progress or being stuck (see Monitoring),
+   acting only as the tier allows.
+4. For each genuinely-actionable `ready` issue (not `blocked_by` an open issue),
+   run the per-issue pipeline, as far as the tier allows new work.
+5. If nothing is actionable, report a one-line idle status and stop until next tick.
+6. If you are at over 70k tokens, run a compaction before the regular tasks.
+
+## Usage gate
+When the plan's usage window runs out, every in-flight agent and pipeline
+stalls at once, mid-task. The gate stops starting work the window cannot
+finish. Check it at the start of every tick and again right before any
+action that spends tokens (a claim, a delegation, a fix-up round, a
+pipeline re-run).
+
+**Read usage** with `/usr/local/share/callum-tools/usage-check.sh` (token-free,
+one call, no background process). It prints one line:
+`five_hour=<pct> resets_at=<time> resets_in=<s> seven_day=<pct>
+seven_day_resets_at=<time> seven_day_resets_in=<s> source=<source>`, where
+`seven_day` is already the highest weekly bucket (all models or any one
+model). Or, when no source answers, `usage=unavailable reason=<why>`.
+
+**The tier** is set by the higher of `five_hour` and `seven_day` - a
+near-empty weekly window is at least as strong a reason to stop as the
+5-hour one. The binding window is the one that sets the tier; its reset
+is the resume time.
+- **Normal** (below `USAGE_SLOW_PCT`) - dispatch as usual.
+- **Slow** (`USAGE_SLOW_PCT` and up) - at most one new dispatch per tick.
+  Prefer finishing and merging in-flight work over claiming new issues.
+- **Stop new** (`USAGE_STOP_NEW_PCT` and up) - claim no `ready` issue and
+  start no sub-agent for new work. In-flight work continues: running
+  sub-agents, `/no-mistakes` runs, fix-ups, verification, merges.
+- **Stop all** (`USAGE_STOP_ALL_PCT` and up) - launch nothing: no
+  sub-agent, no pipeline re-run or fix-up round, no `axi respond`, no
+  pipeline step driven by you. Work that reaches a point where it can
+  safely wait (a parked gate, a finished run awaiting merge, a stopped
+  agent) is left exactly as it is. Only token-free housekeeping continues
+  (watchers, label checks).
+- **Unavailable** - fail open: dispatch as at Normal, and say so in the
+  tick report with the reason. Never stall silently on a missing number.
+
+**Resume is a timer, not a poll.** Utilization does not drain: it drops
+only when the window resets. So when the tier is Stop new or Stop all,
+arm one one-shot wake for the binding window's reset plus 2 minutes
+(`resets_in` or `seven_day_resets_in`, plus 120 seconds) with the
+harness's scheduler (`ScheduleWakeup`, a one-shot cron, `send_later` -
+whichever it has). Keep exactly one pending; re-arm it if a later read
+moves the reset time. On that wake, re-read usage:
+- Back under `USAGE_STOP_NEW_PCT`: resume normal ticks. First re-drive
+  anything held at Stop all, then claim new work, as the tier allows.
+- Still paused (e.g. the weekly window is now the binding one): re-arm for
+  the binding window's next reset.
+
+The resume needs no extra watcher. The queue and pipeline watchers keep
+running while paused; record their events, and act on them only as the
+tier allows.
 
 ## Watchers
 Watching is the default state: keep both watchers armed for the whole
@@ -101,11 +157,16 @@ re-arm.
   watchers are alive - the harness's task list, or `pgrep -af
   'queue-watch|pipeline-watch'` - and re-arms any that is missing. It
   catches the one gap left: an expiry or wake whose re-arm was dropped.
+  The same audit re-reads usage and, when the tier is Stop new or Stop all,
+  checks that a resume wake is pending (the harness's scheduled-task list)
+  and arms one if not. A paused orchestrator with no resume wake is a
+  silent stall, exactly like a missing watcher.
 - Every tick report shows each watcher in its **Watchers** row (see Update
   output). A missing watcher is fixed in the same turn, not just reported.
 
 ## Per-issue pipeline
-1. **Claim** - swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
+1. **Claim** - only when the usage gate allows new work (see Usage gate).
+   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
    (not just removal) marks active work so a crashed agent is recoverable.
 2. **Understand** the ticket's requirements - read the issue body AND its
    comments; comments frequently add or override requirements after the body
@@ -483,9 +544,19 @@ On each tick, output a simple report like this before any other questions or com
   ├─────────────────────┼───────┼───────────────────────────┤
   │ Watchers            │ 2     │ queue armed, pipeline     │
   │                     │       │ armed (task ids)          │
+  ├─────────────────────┼───────┼───────────────────────────┤
+  │ Usage               │ 42%   │ 5h, resets 15:30 UTC;     │
+  │                     │       │ 7d 53%; tier normal       │
   └─────────────────────┴───────┴───────────────────────────┘
   ```
 
 The Watchers row shows each watcher as `armed` (with its task id or PID),
 `idle` (pipeline watcher only, when nothing is in flight) or `MISSING`.
 Check it before ending the turn; re-arm a `MISSING` watcher in that turn.
+
+The Usage row shows the 5-hour and weekly utilization, the binding
+window's reset time, and the tier. When the tier is not Normal it says
+plainly what is slowed or paused and until when, plus the resume wake's
+task id (e.g. `tier stop new - no new claims until 15:32 UTC, resume
+wake armed (id)`). When usage is unavailable it says `unavailable
+(<reason>) - failing open`.

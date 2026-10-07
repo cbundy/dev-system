@@ -134,7 +134,7 @@ Where to look inside a running container. Full detail is in
 | `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url` |
 | `/shared` | Optional NAS share for files exchanged with the PC. Not for checkouts or state. |
 | `/usr/local/bin/dev-*` | `dev-entrypoint`, `dev-init`, `dev-doctor`, `dev-login`, `dev-remote-control` |
-| `/usr/local/share/callum-tools/` | Watcher scripts used by the orchestrator skill |
+| `/usr/local/share/callum-tools/` | Watcher and usage-check scripts used by the orchestrator skill |
 
 **Logs and sessions**
 
