@@ -1,9 +1,11 @@
 name: Release
 
-# Manual, on-demand only: never triggers on push/merge to main. Individual PRs
-# never bump versions (see RELEASING.md); this workflow is the single
-# deliberate release step. Pick a semver version and run from the Actions tab
-# or `gh workflow run release.yml -f version=X.Y.Z`.
+# Manual, on-demand only: never triggers on push/merge to main, and never pushes
+# to main. The version bump and this repo's stamp refresh land first in a normal
+# PR made with `node scripts/release-bump.js X.Y.Z` (see RELEASING.md); this
+# workflow then checks main is at that version with a green `ci` check, tags it
+# and creates the GitHub Release. Run from the Actions tab or
+# `gh workflow run release.yml -f version=X.Y.Z`.
 on:
   workflow_dispatch:
     inputs:
@@ -15,6 +17,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  checks: read
 
 jobs:
   release:
@@ -51,69 +54,40 @@ jobs:
             echo "Tag v$RELEASE_VERSION already exists but no GitHub Release does - resuming a failed release attempt."
           fi
 
-      - name: Sync version into every plugin manifest, skill, and package.json
+      - name: Require a green ci check on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Branch protection gates the bump PR; this makes sure the exact commit being
+        # tagged also passed `ci` on main, not just its PR branch.
+        run: |
+          conclusion=$(gh api "repos/${{ github.repository }}/commits/$GITHUB_SHA/check-runs?check_name=ci" \
+            --jq '[.check_runs | sort_by(.started_at) | reverse | .[] | .conclusion // .status] | first // "missing"')
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::The ci check on $GITHUB_SHA is '$conclusion', not 'success'. Wait for ci to pass on main (or fix it), then re-run Release."
+            exit 1
+          fi
+
+      - name: Check versions were bumped in a PR
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-        # One version for the whole system, for now: every plugin.json gets
-        # `version`, every SKILL.md gets a `version:` frontmatter field
-        # (inserted if missing, replaced if present), and the root package.json
-        # (the npm/CLI layer) gets `version`. New plugins/skills are picked up
-        # automatically - no workflow change needed.
+        # The bump never happens here: this workflow never pushes to main. Every
+        # plugin.json, SKILL.md, package.json and this repo's stamp must already say
+        # the version, via a merged PR made with scripts/release-bump.js.
         run: |
-          node - <<'EOF'
-          const fs = require("node:fs");
-          const path = require("node:path");
-          const version = process.env.RELEASE_VERSION;
+          if ! node scripts/release-bump.js --check "$RELEASE_VERSION"; then
+            echo "::error::main is not at v$RELEASE_VERSION. Run 'node scripts/release-bump.js $RELEASE_VERSION' on a branch, merge it in a PR once ci is green, then re-run Release (see RELEASING.md)."
+            exit 1
+          fi
 
-          const globDirs = (dir) =>
-            fs.existsSync(dir)
-              ? fs.readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => path.join(dir, d.name))
-              : [];
-
-          for (const pluginDir of globDirs("plugins")) {
-            const manifest = path.join(pluginDir, ".claude-plugin", "plugin.json");
-            if (fs.existsSync(manifest)) {
-              const pkg = JSON.parse(fs.readFileSync(manifest, "utf-8"));
-              pkg.version = version;
-              fs.writeFileSync(manifest, JSON.stringify(pkg, null, 2) + "\n");
-              console.log(`bumped ${manifest}`);
-            }
-            for (const skillDir of globDirs(path.join(pluginDir, "skills"))) {
-              const skill = path.join(skillDir, "SKILL.md");
-              if (!fs.existsSync(skill)) continue;
-              const src = fs.readFileSync(skill, "utf-8");
-              const m = src.match(/^---\n([\s\S]*?)\n---/);
-              if (!m) throw new Error(`${skill}: no frontmatter block found`);
-              const body = /^version:/m.test(m[1])
-                ? m[1].replace(/^version:.*$/m, `version: ${version}`)
-                : m[1] + `\nversion: ${version}`;
-              fs.writeFileSync(skill, src.replace(m[0], `---\n${body}\n---`));
-              console.log(`bumped ${skill}`);
-            }
-          }
-
-          const rootPkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
-          rootPkg.version = version;
-          fs.writeFileSync("package.json", JSON.stringify(rootPkg, null, 2) + "\n");
-          console.log("bumped package.json");
-          EOF
-
-      - name: Commit version bump and tag release
+      - name: Tag release
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
           if git rev-parse "refs/tags/v${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "Tag v${RELEASE_VERSION} already exists - skipping commit/tag/push (resuming a failed release attempt)."
+            echo "Tag v${RELEASE_VERSION} already exists - skipping tag/push (resuming a failed release attempt)."
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add plugins package.json
-            if git diff --cached --quiet; then
-              echo "Versions already at v${RELEASE_VERSION} - no version-bump commit needed; tagging current HEAD."
-            else
-              git commit -m "chore(release): v${RELEASE_VERSION}"
-              git push origin HEAD:main
-            fi
             git tag -a "v${RELEASE_VERSION}" -m "v${RELEASE_VERSION}"
             git push origin "v${RELEASE_VERSION}"
           fi

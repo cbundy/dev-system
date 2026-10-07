@@ -6,7 +6,7 @@
 //   - doc: the markdown document; its top-level `# ` title is dropped (the source gives the
 //     skill its own title) and every relative link becomes an absolute GitHub URL, because
 //     a skill is read from the plugin cache, where repo paths do not exist,
-// into output, with `version:` taken from the root package.json. The release workflow sets
+// into output, with `version:` taken from the root package.json. scripts/release-bump.js sets
 // that same version in every SKILL.md and package.json, so a released tree stays in sync
 // without running this script.
 //

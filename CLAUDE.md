@@ -111,8 +111,8 @@ architecture). Rules specific to working here:
 
 This repo is also a consumer of its own templates (`.callum-dev.json`,
 `.callum-dev/baseline/`). Run the checkout's own CLI, `node bin/callum-dev.js`, never an
-npm dependency on this package. After each release, bring the stamp up to date
-(RELEASING.md).
+npm dependency on this package. Each release's bump PR (`scripts/release-bump.js`) also
+brings the stamp up to date (RELEASING.md).
 
 ## No Docker in the dev environment (for now)
 
