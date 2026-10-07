@@ -32,6 +32,9 @@
 # - an opt-in Template Admin token for push-next.sh (variable
 #   template_tester_secrets_dir, parameter template_testing), mounted only into
 #   workspaces that turn the parameter on (cbundy/dev-system#118);
+# - an optional shared gh login (variable gh_volume_name): a named volume over
+#   /persist/gh, shared by every workspace using that name
+#   (cbundy/dev-system#195);
 # - optional registry credentials (variable registry_auth_config), read from a
 #   file on the Coder server, so private per-repo images can be used.
 
@@ -116,6 +119,24 @@ variable "secrets_dir" {
   default     = "/etc/dev-system/secrets"
   description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url (owned 1000:1000, mode 0600). Empty mounts nothing."
   type        = string
+}
+
+# gh state normally lives in /persist/gh on the workspace's own persist volume,
+# so every workspace needs its own gh login. A named Docker volume mounted over
+# it instead shares one login between every workspace using the same name, as
+# the desktop devcontainer's dev-system-gh volume does per Docker host. It is
+# deliberately not a docker_volume resource: one tied to a workspace would be
+# deleted, login and all, with that workspace. Docker creates it on first use
+# and copies the image's node-owned /persist/gh into it.
+variable "gh_volume_name" {
+  default     = ""
+  description = "Named Docker volume mounted at /persist/gh in every workspace, so workspaces using the same name share one gh login (and one token). Created by Docker on first use, never deleted with a workspace. Empty keeps gh state on each workspace's own persist volume."
+  type        = string
+  validation {
+    # Docker's volume name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
+    condition     = var.gh_volume_name == "" || can(regex("^[a-zA-Z0-9][a-zA-Z0-9_.-]+$", var.gh_volume_name))
+    error_message = "gh_volume_name must be empty or a Docker volume name: at least two characters, starting with a letter or digit, then letters, digits, '_', '.' or '-'."
+  }
 }
 
 # push-next.sh (beside this file) pushes the checked-out template as
@@ -517,6 +538,15 @@ resource "docker_container" "workspace" {
   volumes {
     container_path = "/workspaces"
     volume_name    = docker_volume.workspace.name
+  }
+  # One gh login shared between workspaces (variable gh_volume_name), over the
+  # persist volume's gh directory. Not managed here: see the variable.
+  dynamic "volumes" {
+    for_each = var.gh_volume_name == "" ? [] : [var.gh_volume_name]
+    content {
+      container_path = "/persist/gh"
+      volume_name    = volumes.value
+    }
   }
   # Runtime secrets from the Docker host (variable secrets_dir).
   dynamic "volumes" {

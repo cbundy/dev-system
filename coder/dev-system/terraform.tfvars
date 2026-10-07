@@ -20,3 +20,7 @@ template_tester_secrets_dir = "/etc/dev-system/template-tester"
 
 # Uncomment for private per-repo images (see "Private images" in README.md).
 # registry_auth_config = "/etc/coder/registry/config.json"
+
+# Uncomment to share one gh login between all workspaces (see "Sharing one gh
+# login" in README.md).
+# gh_volume_name = "dev-system-gh"

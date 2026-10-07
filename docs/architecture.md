@@ -131,7 +131,7 @@ Where to look inside a running container. Full detail is in
 
 | Path | What |
 |---|---|
-| `/persist/{claude,codex,gh,no-mistakes,agentsview}` | Tool state and logins. One volume each, per repo, except gh, which is shared per host. |
+| `/persist/{claude,codex,gh,no-mistakes,agentsview}` | Tool state and logins. Mount layout depends on the runtime; see the [image persistence contract](../images/base/README.md#how-runtimes-should-mount-it). |
 | `/workspaces/<repo>` | The checkout (`DEV_WORKSPACE`). Cloned from `DEV_REPO_URL` on the first start. |
 | `/run/secrets/dev-system/` | Secrets mounted read-only by the runtime, e.g. `agentsview-pg-url` |
 | `/shared` | Optional NAS share for files exchanged with the PC. Not for checkouts or state. |

@@ -116,7 +116,7 @@ declared by this contract and the devcontainer metadata instead.
 
 ### What is shared and what is per repo
 
-Only `/persist/gh` is shared between repos. Every other directory is per repo (or per
+Only `/persist/gh` can be shared between repos. Every other directory is per repo (or per
 workspace): one volume each for a repo's containers, never shared with another repo.
 Sharing those breaks:
 
@@ -149,10 +149,12 @@ is safe.
 - **Docker (headless: `docker run`, compose)**: the same split by hand - per-project volumes
   for claude, codex, no-mistakes and agentsview, plus the shared `dev-system-gh`. See
   [First start, headless](#first-start-headless).
-- **Kubernetes / Coder**: one PVC per workspace mounted at `/persist`, with
+- **Kubernetes**: one PVC per workspace mounted at `/persist`, with
   `securityContext.fsGroup: 1000` so `node` can write to it. `dev-init` creates any missing
   subdirectory on first start. gh is per workspace too, unless the runtime supplies
-  `GH_TOKEN` instead (Coder external auth).
+  `GH_TOKEN` instead.
+- **Coder**: see the [template's storage reference](../../coder/dev-system/README.md#what-the-template-does)
+  and [gh sharing option](../../coder/dev-system/README.md#sharing-one-gh-login).
 - **Host bind mounts** work if the host directory is writable by UID 1000. Avoid binding a
   Windows-side directory (`${localEnv:USERPROFILE}`) under WSL: permissions and the
   no-mistakes daemon socket do not behave there (cbundy/dev-system#19). Use named volumes.
@@ -808,8 +810,9 @@ container.
 
 ## First-run logins
 
-Each repo on the desktop (each PVC on Kubernetes or Coder) needs one Claude login and one
-codex login; gh needs one per Docker host, since its volume is shared. The logins land in
+Each repo on the desktop (each workspace on Kubernetes or Coder) needs one Claude login
+and one codex login. gh needs one login per shared volume, or per workspace when its
+storage is private; see [runtime mounts](#how-runtimes-should-mount-it). The logins land in
 `/persist`, so they survive container rebuilds and image updates. `dev-login` does them
 without a shell in the container:
 
@@ -825,7 +828,7 @@ without a shell in the container:
 |---|---|---|
 | Claude | `claude auth login --claudeai`: a sign-in link. There is no device-code flow for claude.ai logins. | Open the link, approve, paste the code shown back. A wrong code ends that attempt, and the next one has a new link. |
 | codex | `codex login --device-auth`: a link and a one-time code, valid 15 minutes. | Open the link and enter the code. Device-code login may first need turning on in your ChatGPT account's security settings. |
-| gh | `gh auth login --web --scopes workflow`: a link and a one-time code; then `gh auth setup-git`. The `workflow` scope lets the pipeline push changes under `.github/workflows/`. A gh login without it (an older one, or one made by hand) gets `gh auth refresh --scopes workflow` instead: a link and a code the same way, which add the scope to the token gh already has. | Open the link and enter the code. On Coder, external auth (`GH_TOKEN`) replaces it. |
+| gh | `gh auth login --web --scopes workflow`: a link and a one-time code; then `gh auth setup-git`. The `workflow` scope lets the pipeline push changes under `.github/workflows/`. A gh login without it (an older one, or one made by hand) gets `gh auth refresh --scopes workflow` instead: a link and a code the same way, which add the scope to the token gh already has. | Open the link and enter the code. If the runtime supplies `GH_TOKEN`, it replaces this login; see [Coder external auth](../../coder/dev-system/README.md#github-through-coder-external-auth). |
 
 Each login runs in its own tmux session (`login-claude`, `login-codex`, `login-gh`), so
 `tmux attach -t login-codex` shows it as it is. An attempt in progress is kept, so a link

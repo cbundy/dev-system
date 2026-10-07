@@ -16,7 +16,7 @@ every repo, so no repo carries a fork of the setup.
 |---|---|
 | **Base image** (`ghcr.io/cbundy/dev-system/base:2`) | Node, Claude Code, codex, gh, no-mistakes, treehouse and agentsview, baked in at build time. The same image runs as a desktop dev container, under `docker run`, on Kubernetes and in Coder. |
 | **Headless Claude with Remote Control** | A started container runs Claude in tmux with Remote Control on, so you drive it from claude.ai or the Claude app with no shell. `server` mode gives each session its own git worktree. Claude is restarted when it exits. |
-| **Persistent state** (`/persist`) | Logins and tool state live on volumes, so they survive rebuilds and image updates. You log in once per repo, and once per Docker host for gh. |
+| **Persistent state** (`/persist`) | Logins and tool state live on volumes, so they survive rebuilds and image updates. See the [runtime storage reference](images/base/README.md#how-runtimes-should-mount-it) for login sharing. |
 | **Logins without a shell** (`dev-login`) | Missing logins start automatically. Sign-in links go to the container log, an optional login page and an optional push notification, so you can approve from a phone. |
 | **Auto-clone** (`DEV_REPO_URL`) | A headless container clones its repo on the first start and fetches on every later start. It never pulls. |
 | **Self-checks** (`dev-init`, `dev-doctor`) | Idempotent start-up setup and a health report. Every failure line comes with a `fix:` hint. |
