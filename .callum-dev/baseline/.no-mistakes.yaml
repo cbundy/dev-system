@@ -34,13 +34,16 @@ auto_fix:
   lint: 5
   ci: 3
 
-# Ordered fallback list: no-mistakes moves to claude when codex fails, e.g. out of usage.
-agent: [codex, claude]
+# The pipeline's agent order is set fleet-wide in each workspace's global no-mistakes config,
+# from dev-system's images/base/models.env (env DEV_NM_AGENTS). To override it for this repo,
+# set `agent:` in a repo-owned block - that replaces the global order entirely.
 
 # The codex model pin (agent_args_override / agent_config) is a GLOBAL-ONLY key: no-mistakes
-# ignores it here without warning. It lives in the global no-mistakes config, written by
-# the dev-system base image's dev-init (env DEV_CODEX_MODEL; images/base/README.md), or by
-# the deprecated callum-tools feature (option `codexModel`).
+# ignores it here without warning. It lives in the global no-mistakes config, as a managed
+# block the dev-system base image's dev-init rewrites on every start (images/base/models.env,
+# fetched from dev-system's main branch with the image's copy as fallback; env DEV_MODELS_URL,
+# DEV_CODEX_MODEL / DEV_CLAUDE_MODEL; images/base/README.md), or written by the
+# deprecated callum-tools feature (option `codexModel`).
 
 # Optional sections below are synced defaults, commented out. Uncomment in a repo-owned
 # block (do not uncomment here - dev-system updates will re-comment this synced copy) if
