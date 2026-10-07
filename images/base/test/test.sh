@@ -320,7 +320,8 @@ check "dev-init falls back to the baked models with one WARNING when the fetch f
   done
   printf "nothing here\n" > /tmp/m.env
   out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
-  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS or CLAUDE_EFFORT)"
+  keys=$(echo "$MODELS_KEYS" | sed "s/ /, /g; s/, \([^,]*\)\$/ or \1/")
+  echo "$out" | grep -qF "WARNING: could not use the models file from file:///tmp/m.env (it sets no valid $keys)"
   grep -qx -- "$baked" $cfg
   printf "CODEX_MODEL=fetched-codex\n" > /tmp/m.env
   out=$(DEV_MODELS_URL= dev-init 2>&1)

@@ -267,25 +267,6 @@ test("an invalid or empty fetched file falls back to baked, with the reason", (t
   }
 });
 
-// images/base/test/test.sh asserts this warning inside the image, which only CI can
-// run (no Docker here), so a new models key once left it stale and failed the image
-// build. Hold its expected text to what models_fetch really prints.
-test("the image test expects the warning models_fetch prints for a file with no valid key", (t) => {
-  const file = tempFile(t, "nothing here\n");
-  const r = spawnSync(
-    "sh",
-    ["-c", '. "$1" && models_fetch "file://$2" "$2.out"', "sh", MODELS_SH, file],
-    { encoding: "utf8", env: { ...process.env, MODELS_FETCH_CONNECT_TIMEOUT: "5", MODELS_FETCH_MAX_TIME: "5" } },
-  );
-  assert.equal(r.status, 1, r.stderr);
-  const actual = r.stdout.trim();
-  assert.match(actual, /^it sets no valid /);
-  const imageTest = fs.readFileSync(path.join(ROOT, "images", "base", "test", "test.sh"), "utf8");
-  const expected = [...imageTest.matchAll(/\((it sets no valid [^)]*)\)/g)].map((m) => m[1]);
-  assert.ok(expected.length > 0, "images/base/test/test.sh no longer checks the no-valid-key warning");
-  for (const e of expected) assert.equal(e, actual);
-});
-
 test("a missing file or an unreachable URL falls back to baked, with curl's reason", (t) => {
   const missing = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: "file:///nonexistent/models.env" } });
   assert.match(missing.warning, /Couldn't (open|read) file/);
