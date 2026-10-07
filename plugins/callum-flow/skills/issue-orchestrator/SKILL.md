@@ -26,8 +26,9 @@ devcontainer tooling), and it keeps no repo-specific state of its own - see
 - `READY_LABEL` - the label meaning "ready to pull". Convention: `ready`.
 - `IN_DEV_LABEL` - the label for actively-worked issues. Convention: `In development`.
 - `CADENCE` - how often the loop fires (e.g. every 5 minutes via `/loop`).
-- `IMPL_MODEL` - model for implementation sub-agents.
-- `EXPLORE_MODEL` - cheaper model for read-only exploration.
+- `MODEL_LABEL_PREFIX` (default `model:`) - issue labels of the form
+  `model:<alias>` (e.g. `model:opus`) override the sub-agent model for that
+  issue only (see Sub-agent models).
 - `USAGE_SLOW_PCT` (default `85`), `USAGE_STOP_NEW_PCT` (default `90`),
   `USAGE_STOP_ALL_PCT` (default `95`) - the plan-usage percentages at which
   the usage gate slows, stops new work, and stops launching anything (see
@@ -171,16 +172,37 @@ re-arm.
 2. **Understand** the ticket's requirements - read the issue body AND its
    comments; comments frequently add or override requirements after the body
    was written.
-3. **Explore** - spawn a cheap, read-only `EXPLORE_MODEL` agent to map the exact
+3. **Explore** - spawn the named `callum-flow:explorer` agent (read-only) to map the exact
    files, line numbers, and conventions involved. Its report makes your design
    brief precise. Skip only for trivial, already-understood changes.
 4. **Design** the change yourself from the exploration report.
-5. **Delegate** the *what* (your design brief, precisely) to an `IMPL_MODEL`
-   sub-agent, plus a pointer to the `implement-issue` skill, which owns the
+5. **Delegate** the *what* (your design brief, precisely) to the named
+   `callum-flow:implementer` agent, plus a pointer to the `implement-issue` skill, which owns the
    *how* (worktree, running `/no-mistakes` end to end, evidence, quality bar,
    handoff, fire-and-forget termination). You own the merge and the issue
    linkage (see Linkage) - do not have the sub-agent merge.
 6. **Verify and merge** when the PR lands (see Merge discipline).
+
+## Sub-agent models
+Every sub-agent (explore, implement, fix) runs on Sonnet unless the issue says
+otherwise. This is enforced by the harness, not by per-call discipline: the
+plugin ships named agents under `agents/` - `callum-flow:explorer`,
+`callum-flow:implementer`, `callum-flow:fixer` - each with `model: sonnet` in
+its frontmatter.
+
+- Delegate ONLY through those named agents (`subagent_type:
+  "callum-flow:<name>"`), with no `model` argument.
+- Never delegate ad hoc (`general-purpose` or a bare prompt) with `model`
+  omitted: it inherits the orchestrator session's model, which is a bug.
+- Per-issue override: if the issue carries a `model:<alias>` label (e.g.
+  `model:opus`), pass `model: "<alias>"` explicitly on every sub-agent call for
+  that issue, still through the named agent. An explicit per-invocation `model`
+  takes precedence over the agent's frontmatter model (Claude Code resolution
+  order: per-invocation `model`, then frontmatter `model`, then
+  `CLAUDE_CODE_SUBAGENT_MODEL`, then the main conversation's model). The
+  override also sticks when the sub-agent is resumed. Keep passing it for later
+  fixers on the same issue.
+- The orchestrator session's own model is unaffected.
 
 ## Monitoring in-flight agents
 Monitoring is **event-driven, not polled**. A delegated sub-agent terminates as soon
@@ -299,7 +321,8 @@ with `run_in_background` - never fall back to polling inline.
     keeps the fix on the run's own head in the run's own worktree, so
     nothing about the branch's commit history changes underneath you.
 
-    Fall back to a fresh, single-purpose **fixer** agent only when the
+    Fall back to a fresh, single-purpose **fixer** agent (the named
+    `callum-flow:fixer`, see Sub-agent models) only when the
     pipeline cannot write the fix from instructions alone. The fixer's brief
     must require: rebase onto `origin/<branch>` before committing (the
     pipeline pushes its own commits there, so the worktree's old base is
