@@ -645,8 +645,8 @@ orphaned processes, so containers stop in well under a second instead of hitting
        in the local checkout; push them first if it needs them.
      - Ending or deleting a session in claude.ai removes its worktree and branch.
        Sessions still open when the container stops keep theirs (locked, so they can be
-       resumed), and the next start currently neither reuses nor prunes them, so they
-       can collect under `.claude/worktrees/` (cbundy/dev-system#93).
+       resumed). The next start does not reuse them, but `dev-remote-control` prunes the stale
+       ones (see [`dev-prune-worktrees`](#dev-prune-worktrees)).
      - Besides the open sessions, the server keeps one spare session process running,
        ready for the next session.
    In `session` mode the supervisor also decides, at every start, whether to **resume**
