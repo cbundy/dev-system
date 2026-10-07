@@ -46,6 +46,23 @@ test("models.env holds only KEY=value lines, comments and blank lines", () => {
   }
 });
 
+test("models.env runs the claude fallback at medium effort", () => {
+  assert.deepEqual(modelsValue(MODELS_ENV, "CLAUDE_EFFORT"), { status: 0, stdout: "medium", stderr: "" });
+});
+
+test("models_value accepts CLAUDE_EFFORT only as one of claude's --effort levels", (t) => {
+  for (const good of ["low", "medium", "high", "xhigh", "max"]) {
+    const r = modelsValue(tempFile(t, `CLAUDE_EFFORT=${good}\n`), "CLAUDE_EFFORT");
+    assert.deepEqual(r, { status: 0, stdout: good, stderr: "" }, `CLAUDE_EFFORT=${good} should be accepted`);
+  }
+  for (const bad of ["", "Medium", "minimal", "med", "medium,high", "$(id)", "claude-sonnet-5-5"]) {
+    const r = modelsValue(tempFile(t, `CLAUDE_EFFORT=${bad}\n`), "CLAUDE_EFFORT");
+    assert.equal(r.status, 2, `CLAUDE_EFFORT=${JSON.stringify(bad)} should be rejected`);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /ignored CLAUDE_EFFORT .* one of low, medium, high, xhigh, max/);
+  }
+});
+
 test("models.env sets the pipeline's agent order to codex, then claude", () => {
   assert.deepEqual(modelsValue(MODELS_ENV, "AGENTS"), { status: 0, stdout: "codex,claude", stderr: "" });
 });
@@ -156,7 +173,8 @@ function pickModels(t, { baked, env = {} }) {
     fi
     echo "agents=$(models_resolve DEV_NM_AGENTS AGENTS $fetched "$BAKED")"
     echo "codex=$(models_resolve DEV_CODEX_MODEL CODEX_MODEL $fetched "$BAKED")"
-    echo "claude=$(models_resolve DEV_CLAUDE_MODEL CLAUDE_MODEL $fetched "$BAKED")"`;
+    echo "claude=$(models_resolve DEV_CLAUDE_MODEL CLAUDE_MODEL $fetched "$BAKED")"
+    echo "effort=$(models_resolve DEV_CLAUDE_EFFORT CLAUDE_EFFORT $fetched "$BAKED")"`;
   const r = spawnSync("sh", ["-c", script], {
     encoding: "utf8",
     env: { PATH: process.env.PATH, MODELS_SH, DIR: dir, BAKED: bakedFile, ...env },
@@ -170,7 +188,7 @@ function pickModels(t, { baked, env = {} }) {
   return out;
 }
 
-const BAKED = "AGENTS=codex,claude\nCODEX_MODEL=baked-codex\nCLAUDE_MODEL=baked-claude\n";
+const BAKED = "AGENTS=codex,claude\nCODEX_MODEL=baked-codex\nCLAUDE_MODEL=baked-claude\nCLAUDE_EFFORT=low\n";
 
 function servedFile(t, content) {
   return `file://${tempFile(t, content)}`;
@@ -197,19 +215,20 @@ test("the default URL is this repo's models.env, so main's copy is what workspac
 });
 
 test("a valid fetched file overrides the baked models", (t) => {
-  const url = servedFile(t, "# from main\nCODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\n");
+  const url = servedFile(t, "# from main\nCODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\nCLAUDE_EFFORT=high\n");
   assert.deepEqual(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }), {
     url,
     agents: "codex,claude",
     codex: "main-codex",
     claude: "main-claude",
+    effort: "high",
   });
 });
 
 test("a fetched AGENTS overrides the baked one, and a malformed one falls back to baked per key", (t) => {
   const url = servedFile(t, "AGENTS=claude\n");
   const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } });
-  assert.deepEqual(r, { url, agents: "claude", codex: "baked-codex", claude: "baked-claude" });
+  assert.deepEqual(r, { url, agents: "claude", codex: "baked-codex", claude: "baked-claude", effort: "low" });
   for (const bad of ["claude,,codex", "claude, codex", "CLAUDE", "claude;id"]) {
     const partly = servedFile(t, `AGENTS=${bad}\nCODEX_MODEL=main-codex\n`);
     const p = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: partly } });
@@ -219,17 +238,18 @@ test("a fetched AGENTS overrides the baked one, and a malformed one falls back t
   }
   // A fetched file whose only key is a malformed AGENTS is not used at all.
   const only = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: servedFile(t, "AGENTS=a,,b\n") } });
-  assert.equal(only.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL or AGENTS");
+  assert.equal(only.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS or CLAUDE_EFFORT");
   assert.equal(only.agents, "codex,claude");
 });
 
 test("a partly valid fetched file falls back to baked per key, with no warning", (t) => {
-  const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=$(bad)\n");
+  const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=$(bad)\nCLAUDE_EFFORT=extreme\n");
   assert.deepEqual(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }), {
     url,
     agents: "codex,claude",
     codex: "main-codex",
     claude: "baked-claude",
+    effort: "low",
   });
   const missing = servedFile(t, "CLAUDE_MODEL=main-claude\n");
   const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: missing } });
@@ -241,7 +261,7 @@ test("a partly valid fetched file falls back to baked per key, with no warning",
 test("an invalid or empty fetched file falls back to baked, with the reason", (t) => {
   for (const content of ["", "<html>Not Found</html>\n", "CODEX_MODEL=a b\nCLAUDE_MODEL=\nPATH=/x\n"]) {
     const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: servedFile(t, content) } });
-    assert.equal(r.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL or AGENTS", JSON.stringify(content));
+    assert.equal(r.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS or CLAUDE_EFFORT", JSON.stringify(content));
     assert.equal(r.codex, "baked-codex");
     assert.equal(r.claude, "baked-claude");
   }
@@ -268,6 +288,7 @@ test("an empty DEV_MODELS_URL skips the fetch and uses baked", (t) => {
     agents: "codex,claude",
     codex: "baked-codex",
     claude: "baked-claude",
+    effort: "low",
   });
 });
 
@@ -275,8 +296,15 @@ test("DEV_CODEX_MODEL / DEV_CLAUDE_MODEL beat the fetched file, and empty means 
   const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\n");
   assert.deepEqual(
     pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url, DEV_CODEX_MODEL: "env-codex", DEV_CLAUDE_MODEL: "" } }),
-    { url, agents: "codex,claude", codex: "env-codex", claude: "" },
+    { url, agents: "codex,claude", codex: "env-codex", claude: "", effort: "low" },
   );
+});
+
+test("DEV_CLAUDE_EFFORT beats the fetched and baked CLAUDE_EFFORT, and empty means no effort", (t) => {
+  const url = servedFile(t, "CLAUDE_EFFORT=high\n");
+  assert.equal(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url, DEV_CLAUDE_EFFORT: "max" } }).effort, "max");
+  assert.equal(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url, DEV_CLAUDE_EFFORT: "" } }).effort, "");
+  assert.equal(pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } }).effort, "high");
 });
 
 test("DEV_NM_AGENTS beats the fetched and baked AGENTS, and empty means no agent order", (t) => {

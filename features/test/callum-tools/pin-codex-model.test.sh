@@ -274,6 +274,60 @@ for key in agent_config agent_args_override; do
   grep -q "hand-set agent_args_override / agent_config" "$tmpdir/err" || fail "no note for a hand-set $key"
 done
 
+# --- claude's effort (5th argument): written as --effort after claude's model
+cfg="$tmpdir/effort.yaml"
+pin "$cfg" test-model claude-test codex,claude medium
+[ "$out" = changed ] || fail "a write with a claude effort should report 'changed'"
+expected=$(printf '  claude:\n    - --model\n    - claude-test\n    - --effort\n    - medium')
+[ "$(managed "$cfg" | sed -n '/^  claude:$/,/^# END/p' | sed '$d')" = "$expected" ] \
+  || fail "claude model and effort not written in order: $(cat "$cfg")"
+pin "$cfg" test-model claude-test codex,claude medium
+[ -z "$out" ] || fail "an identical call with a claude effort should report nothing, got '$out'"
+# a level change rewrites it in place, with no duplicate keys
+pin "$cfg" test-model claude-test codex,claude high
+[ "$out" = changed ] || fail "an effort change should report 'changed'"
+[ "$(grep -c -- '--effort' "$cfg")" = 1 ] || fail "effort duplicated: $(cat "$cfg")"
+[ "$(grep -c '^  claude:' "$cfg")" = 1 ] || fail "claude duplicated: $(cat "$cfg")"
+grep -qx '    - high' "$cfg" || fail "new effort not written: $(cat "$cfg")"
+grep -qx '    - medium' "$cfg" && fail "old effort kept: $(cat "$cfg")"
+# no effort -> claude keeps only its model
+pin "$cfg" test-model claude-test codex,claude
+[ "$out" = changed ] || fail "dropping the effort should report 'changed'"
+grep -q -- '--effort' "$cfg" && fail "effort kept after it was dropped: $(cat "$cfg")"
+grep -qx '    - claude-test' "$cfg" || fail "claude model lost when the effort was dropped"
+# an effort with no claude model still pins claude's effort
+pin "$cfg" test-model "" codex,claude low
+[ "$(managed "$cfg" | sed -n '/^  claude:$/,/^# END/p' | sed '$d')" = "$(printf '  claude:\n    - --effort\n    - low')" ] \
+  || fail "effort alone not written for claude: $(cat "$cfg")"
+# the effort is part of the pin: an empty codex model drops it with the rest
+pin "$cfg" "" claude-test codex,claude medium
+grep -q -- '--effort\|  claude:' "$cfg" && fail "claude pinned with no codex pin: $(cat "$cfg")"
+grep -qx 'agent: \[codex, claude\]' "$cfg" || fail "agent order lost: $(cat "$cfg")"
+# every level claude takes is accepted
+for level in low medium high xhigh max; do
+  cfg="$tmpdir/effort-$level.yaml"
+  pin "$cfg" test-model claude-test "" "$level"
+  grep -qx "    - $level" "$cfg" || fail "effort level '$level' not written: $(cat "$cfg")"
+  [ ! -s "$tmpdir/err" ] || fail "a note for the valid level '$level': $(cat "$tmpdir/err")"
+done
+# an invalid effort is left out, with a one-line note; the claude model is kept
+# shellcheck disable=SC2016 # a literal $(id), to prove it is rejected
+for bad in 'Medium' 'minimal' 'med' 'medium high' '$(id)' 'medium;rm' '-x'; do
+  cfg="$tmpdir/bad-effort.yaml"
+  rm -f "$cfg"
+  pin "$cfg" test-model claude-test codex,claude "$bad"
+  grep -q -- '--effort' "$cfg" && fail "invalid effort '$bad' written: $(cat "$cfg")"
+  grep -qx '    - claude-test' "$cfg" || fail "claude model lost for an invalid effort '$bad'"
+  grep -q "ignored the claude effort" "$tmpdir/err" || fail "no note for the invalid effort '$bad'"
+  [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
+done
+# a hand-set agent_config (e.g. agent_config.claude written by hand) wins over the whole pin
+cfg="$tmpdir/hand-agent-config.yaml"
+printf 'agent_config:\n  claude:\n    model: claude-sonnet-5-5\n    effort: medium\n' > "$cfg"
+pin "$cfg" test-model claude-test codex,claude medium
+managed "$cfg" | grep -q -- 'agent_args_override\|--effort' && fail "pin written next to a hand-set agent_config: $(cat "$cfg")"
+[ "$(grep -c '^agent_config:' "$cfg")" = 1 ] || fail "agent_config duplicated: $(cat "$cfg")"
+
 # --- unbalanced markers: an error, file left alone
 cfg="$tmpdir/unbalanced.yaml"
 printf '%s\nagent_args_override: {}\nfoo: 1\n' "$BEGIN" > "$cfg"

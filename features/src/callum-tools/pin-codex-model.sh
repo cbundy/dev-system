@@ -2,17 +2,18 @@
 #
 # Write the no-mistakes pipeline's agent order and model pin, as a managed block.
 #
-# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model] [agents]
+# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model] [agents] [claude effort]
 #
 # The block has two independent parts, both for the global no-mistakes
 # config.yaml:
 #   - The agent order, from agents (comma-separated, in order, e.g.
 #     codex,claude), written as `agent: [codex, claude]`. A repo's
 #     .no-mistakes.yaml `agent` replaces it entirely for that repo.
-#   - The model pin, `agent_args_override`: codex's model, and claude's when the
-#     third argument is set. It is honoured ONLY in the global config - a copy
-#     in a repo's .no-mistakes.yaml is silently ignored, leaving codex on its
-#     (top-end) default.
+#   - The model pin, `agent_args_override`: codex's model, then claude's model
+#     (`--model`, the third argument) and reasoning effort (`--effort`, the
+#     fifth: low, medium, high, xhigh or max), each when set. It is honoured
+#     ONLY in the global config - a copy in a repo's .no-mistakes.yaml is
+#     silently ignored, leaving codex on its (top-end) default.
 #
 # The block lives between two marker lines, and every call rewrites what is
 # between them (in place, wherever the block sits), so a change reaches an
@@ -33,7 +34,8 @@
 #     `agent_args_override:` or `agent_config:` drops the model pin.
 #   - An empty codex model drops the model pin; empty (or absent) agents drop
 #     the agent order. Agents that are not a comma-separated list of names, each
-#     [a-z0-9][a-z0-9:_-]* with no spaces, drop it too, with a note.
+#     [a-z0-9][a-z0-9:_-]* with no spaces, drop it too, with a note. A claude
+#     effort that is not one of claude's levels is left out, with a note.
 #   - The block is written when either part is left, and removed when neither is.
 #   - The file is rewritten atomically (temp file + mv in the same directory,
 #     keeping its mode) and only when its content changes, so a second identical
@@ -52,13 +54,14 @@
 set -eu
 
 [ "$#" -ge 2 ] || {
-  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model] [agents]" >&2
+  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model] [agents] [claude effort]" >&2
   exit 2
 }
 NM_CONFIG="$1"
 CODEX_MODEL="$2"
 CLAUDE_MODEL="${3:-}"
 AGENTS="${4:-}"
+CLAUDE_EFFORT="${5:-}"
 
 PIN_BEGIN='# BEGIN dev-system managed (rewritten on every start - edit outside this block)'
 PIN_END='# END dev-system managed'
@@ -141,6 +144,14 @@ if [ -n "$AGENTS" ] && ! agents_valid "$AGENTS"; then
   AGENTS=""
 fi
 
+case "$CLAUDE_EFFORT" in
+  "" | low | medium | high | xhigh | max) ;;
+  *)
+    note "ignored the claude effort '$CLAUDE_EFFORT' - it must be one of low, medium, high, xhigh, max - claude's effort left unpinned"
+    CLAUDE_EFFORT=""
+    ;;
+esac
+
 # What is set by hand: the config without its managed and legacy blocks.
 hand=""
 if [ -f "$NM_CONFIG" ]; then
@@ -194,12 +205,10 @@ agent_args_override:
     - -c
     - model_reasoning_effort="medium"
 EOF
-    if [ -n "$CLAUDE_MODEL" ]; then
-      cat <<EOF
-  claude:
-    - --model
-    - ${CLAUDE_MODEL}
-EOF
+    if [ -n "$CLAUDE_MODEL" ] || [ -n "$CLAUDE_EFFORT" ]; then
+      echo "  claude:"
+      [ -z "$CLAUDE_MODEL" ] || printf '    - --model\n    - %s\n' "$CLAUDE_MODEL"
+      [ -z "$CLAUDE_EFFORT" ] || printf '    - --effort\n    - %s\n' "$CLAUDE_EFFORT"
     fi
   fi
   echo "$PIN_END"
