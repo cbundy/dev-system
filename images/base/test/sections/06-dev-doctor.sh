@@ -1,0 +1,53 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2016,SC2154
+#
+# Section 6 of the base image container tests. Sourced by test.sh after lib.sh, which
+# provides IMAGE, RUN_ID, SECRET, check, in_image and the rest; never run directly.
+
+echo "== 6. dev-doctor"
+check "dev-doctor exits non-zero with no auth and prints a hint per failure" bash -c "
+  out=\$(docker run --rm '$IMAGE' dev-doctor 2>&1); rc=\$?
+  echo \"\$out\"
+  [ \$rc -ne 0 ] || exit 1
+  fails=\$(echo \"\$out\" | grep -c 'FAIL ' || true)
+  warns=\$(echo \"\$out\" | grep -c 'WARN ' || true)
+  hints=\$(echo \"\$out\" | grep -c 'fix: ' || true)
+  [ \"\$fails\" -ge 3 ] && [ \"\$((fails + warns))\" = \"\$hints\" ] &&
+  echo \"\$out\" | grep -q 'claude auth login' &&
+  echo \"\$out\" | grep -q 'codex login' &&
+  echo \"\$out\" | grep -q 'gh auth login'"
+check "dev-doctor warns, without failing, for each /persist dir with no volume behind it" bash -c "
+  vol=\$(docker volume create --label '$RUN_ID')
+  out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
+  echo \"\$out\"
+  for t in codex gh no-mistakes agentsview; do
+    echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
+  done
+  echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
+  [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
+vol=$(docker volume create --label "$RUN_ID")
+check "dev-doctor: no persistence WARN with one volume for all of /persist (the k8s / Coder shape)" in_image '
+  out=$(dev-doctor --warn-only); echo "$out"
+  ! echo "$out" | grep -q "WARN .*state dir"' \
+  -v "$vol:/persist"
+check "dev-doctor --warn-only exits 0 with the same failures" in_image '
+  out=$(dev-doctor --warn-only); rc=$?
+  echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "FAIL "'
+
+check "dev-doctor fails (not 'registered') when no-mistakes is broken in a gated repo" bash -c "
+  vol=\$(docker volume create --label '$RUN_ID')
+  docker run --rm --user root -v \"\$vol:/persist/no-mistakes\" '$IMAGE' \
+    bash -c 'touch /persist/no-mistakes/.root-owned && chown -R root:root /persist/no-mistakes'
+  out=\$(docker run --rm -v \"\$vol:/persist/no-mistakes\" '$IMAGE' bash -c '
+    git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r && dev-doctor' 2>&1); rc=\$?
+  echo \"\$out\"
+  [ \$rc -ne 0 ] && echo \"\$out\" | grep -q 'FAIL no-mistakes: /tmp/r is not registered or no-mistakes is broken' &&
+  ! echo \"\$out\" | grep -q 'is registered'"
+check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash -c "
+  out=\$(docker run --rm --user root '$IMAGE' bash -c '
+    git init -q /ws && touch /ws/.no-mistakes.yaml
+    su node -c \"cd /ws && dev-init; dev-doctor\"' 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -q 'dev-init: WARNING: git cannot read the repo at /ws' &&
+  echo \"\$out\" | grep -q 'FAIL git cannot read the repo at /ws' &&
+  echo \"\$out\" | grep -q 'safe.directory /ws'"
