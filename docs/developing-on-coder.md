@@ -31,10 +31,9 @@ All parameters are in the [Coder template README](../coder/dev-system/README.md#
 
 ## Log in
 
-Open the workspace in the Coder dashboard and click **Log in**, or run `dev-login start` in the
-workspace. Sign in to Claude, codex and gh. The gh login includes the `workflow` scope,
-which pushes to `.github/workflows/` need ([#181](https://github.com/cbundy/dev-system/issues/181)). Logins live on the workspace's
-`/persist` volume and survive restarts and image updates.
+Follow the [template's first-run login instructions](../coder/dev-system/README.md#first-run-logins),
+including its gh sharing option and the `workflow` scope requirement for pushing changes
+to `.github/workflows/`.
 
 ## What the workspace cannot verify
 

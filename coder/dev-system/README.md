@@ -213,9 +213,7 @@ on GitHub, so a lossy compaction or a lost transcript costs little.
     volume that ownership. An older image has no such directory, so the volume comes up
     root-owned, and the startup script `chown`s it (with `sudo -n`) only in that case.
 
-  With `gh_volume_name` set, a third, shared volume of that name is mounted at
-  `/persist/gh`, over the persist volume's `gh` directory. It belongs to no workspace and
-  is never deleted with one; see [Sharing one gh login](#sharing-one-gh-login).
+  For optional shared gh storage, see [Sharing one gh login](#sharing-one-gh-login).
 
   There is deliberately **no home volume**. The image's tools (Claude Code, codex,
   no-mistakes, treehouse) live under `/home/node`, and a volume there would keep the
@@ -281,19 +279,25 @@ and `coder ssh <ws> -- dev-login <code>` finishes Claude's login.
 
 ### Sharing one gh login
 
-By default each workspace keeps its own gh login. Set `gh_volume_name` in
-`terraform.tfvars` (e.g. `gh_volume_name = "dev-system-gh"`) and push both templates, and
-every workspace started from then on mounts that Docker volume at `/persist/gh`, so one
-gh login on the **Log in** page serves them all (a running workspace picks it up at its
-next start). Docker creates the volume on first use, copying in the image's node-owned
-`/persist/gh`, so there is nothing to set up on the host. The template does not manage
-the volume, so deleting a workspace never deletes the shared login; remove it by hand on
+By default each workspace keeps its own gh login. Leaving `gh_volume_name` empty adds no
+mount and causes no plan change for existing workspaces. Set it in `terraform.tfvars`
+(e.g. `gh_volume_name = "dev-system-gh"`) and push both templates. Workspaces using the
+updated template mount that Docker volume at `/persist/gh`, so one gh login on the
+**Log in** page serves them all. Update existing workspaces to that template version and
+start them to apply the mount. Sharing is limited to workspaces using the same volume
+name on the same Docker host.
+
+The name must have at least two characters: a letter or digit first, followed by letters,
+digits, `_`, `.` or `-`. Docker creates the volume on first use, copying in the image's
+`node:node`-owned, mode `0700` `/persist/gh`, so there is nothing to set up on the host.
+The template does not manage the volume, so deleting a workspace never deletes the
+shared login; remove it by hand on
 the Docker host (`docker volume rm <name>`) if you ever want to.
 
 - **One token for every workspace.** Whoever can open any workspace using the volume can
   read the shared gh token and act as that GitHub account. Only share it between
   workspaces you would trust with the same token.
-- **Concurrent writes.** gh rewrites `hosts.yml` only on login, logout or a token refresh,
+- **Concurrent writes.** gh rewrites `hosts.yml` on login, logout or a token refresh,
   so two workspaces writing at once is rare but possible; if a login looks lost, log in
   again from one workspace.
 - **Switching it on hides the old logins.** A workspace's existing gh login stays on its
@@ -308,9 +312,10 @@ the Docker host (`docker volume rm <name>`) if you ever want to.
 
 The template declares no `coder_external_auth`, so it works whether or not the Coder server
 has a GitHub provider. With one configured and linked, the agent's `GIT_ASKPASS` answers
-git's HTTPS prompts for github.com in every workspace; gh still needs its own login on the
-page. To skip that too, a deployment with a non-expiring token (an OAuth app, not Coder's
-built-in GitHub App) can add `data "coder_external_auth" "github" { id = "github" }` and set
+git's HTTPS prompts for github.com in every workspace; gh still needs a login on the
+page (see [Sharing one gh login](#sharing-one-gh-login)). To skip that too, a deployment
+with a non-expiring token (an OAuth app, not Coder's built-in GitHub App) can add
+`data "coder_external_auth" "github" { id = "github" }` and set
 `GH_TOKEN` from its `access_token` in the agent `env`, which also makes the link required
 before a workspace builds.
 
