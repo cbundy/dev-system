@@ -57,6 +57,7 @@ case "$1 $2" in
       */comments) cat "$d/comments-$(echo "$3" | sed 's#.*/issues/\([0-9]*\)/comments#\1#').json" ;;
       */timeline) cat "$d/timeline-$(echo "$3" | sed 's#.*/issues/\([0-9]*\)/timeline#\1#').json" ;;
     esac ;;
+  'api repos/'*) cat "$d/head-ref-${2##*/}" ;;
   'api -X')
     verb=$3; path=$4
     case "$verb $path" in
@@ -295,8 +296,9 @@ expect_rc 0 "sweep closed"
 no_events "sweep closed"
 
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
-tl() { jq -n --arg m "$1" '[{event: "cross-referenced", source: {issue: {pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
+tl() { jq -n --arg m "$1" '[{event: "cross-referenced", source: {issue: {number: 55, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
 reset
+echo feat/issue-7-claim > "$d/head-ref-55"
 issue 7 OPEN 'In development'
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
@@ -309,9 +311,19 @@ for m in '2026-10-07T00:00:00Z' ''; do
   reset
   issue 7 OPEN 'In development'
   cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  echo feat/issue-7-claim > "$d/head-ref-55"
   tl "$m" > "$d/timeline-7.json"
   rc_of "$SWEEP"
   calls | grep -q -- '--add-label ready' || fail "PR merged [$m] must not shield a stale claim"
+done
+for ref in release/v0.11.0 feat/issue-77-other; do
+  reset
+  issue 7 OPEN 'In development'
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  echo "$ref" > "$d/head-ref-55"
+  tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+  rc_of "$SWEEP"
+  calls | grep -q -- '--add-label ready' || fail "merged PR on $ref must not count as issue 7 done"
 done
 
 # --- sweep: legacy claim without a comment is untouched --------------------------

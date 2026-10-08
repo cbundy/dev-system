@@ -10,8 +10,10 @@
 #   1. Closed: remove the label. No comment, no event.
 #   2. Open, with a PR merged after the newest claim comment was created (a
 #      merged PR that closes or just references the issue shows up as a
-#      `cross-referenced` timeline event): remove the label. No comment, no
-#      event (`merged` is logged elsewhere).
+#      `cross-referenced` timeline event) whose head branch follows the repo
+#      convention `issue-<N>-...` for this issue (matching is by branch name,
+#      so release or other PRs that merely mention the issue do not count):
+#      remove the label. No comment, no event (`merged` is logged elsewhere).
 #   3. Open, newest claim comment expired (server updated_at + the comment's
 #      own `lease:`): remove `In development`, add `ready`, unassign the
 #      claimant, comment why, and log `callum-flow-event reclaimed`.
@@ -83,8 +85,17 @@ for n in $list; do
   created=$(printf '%s' "$claim" | jq -r .created)
 
   tl=$("$GH" api --paginate "repos/$repo/issues/$n/timeline" | jq -s 'add // []') || { err "cannot read the timeline of #$n"; rc=1; continue; }
-  if printf '%s' "$tl" | jq -e --arg c "$created" '
-      any(.[]; .event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)' >/dev/null; then
+  merged=0
+  for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
+      .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
+      | .source.issue.number'); do
+    ref=$("$GH" api "repos/$repo/pulls/$pr" --jq .head.ref 2>/dev/null) || { err "cannot read PR #$pr"; rc=1; continue; }
+    if printf '%s\n' "$ref" | grep -Eq "(^|/)issue-$n-"; then
+      merged=1
+      break
+    fi
+  done
+  if [ "$merged" = 1 ]; then
     "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel merged #$n"; rc=1; }
     continue
   fi
