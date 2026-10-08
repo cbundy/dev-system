@@ -10,9 +10,10 @@
 #
 # Guards (every one is evaluated and reported, none short-circuits):
 #   head     the run's head_sha equals a fresh origin/<branch> and the PR head
-#   linkage  check-pr-linkage.sh reports MATCH (SKIP passes only with --base)
+#   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
+#          name) --issue N is required and the PR must link #N as --expect says
 #   checks   at least one CI check, all pass or skipping
-#   gates    the run has no awaiting_ step and is not failed or aborted
+#   gates    the run has no step parked at a gate and is not failed or aborted
 #   base     the PR targets the default branch, or --base BRANCH
 #
 # Output: nothing when every guard passes; otherwise one line per failed guard,
@@ -115,6 +116,8 @@ else
   fi
 fi
 
+default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
+
 # --- linkage -----------------------------------------------------------------
 lk_out=$("$LINKAGE" "$pr" --expect "$expect" 2> /dev/null)
 lk_rc=$?
@@ -122,8 +125,26 @@ lk_line=$(printf '%s\n' "$lk_out" | sed -n 1p)
 case "$lk_line" in
   MATCH*) [ "$lk_rc" -eq 0 ] || fail linkage "exit $lk_rc: $lk_line" ;;
   SKIP*)
-    if [ "$lk_rc" -ne 0 ] || [ -z "$base" ] || [ "$pr_base" != "$base" ]; then
-      fail linkage "${lk_line:-no output} (SKIP passes only with --base matching the PR base)"
+    if [ "$lk_rc" -ne 0 ]; then
+      fail linkage "${lk_line:-no output}"
+    elif [ -z "$issue" ]; then
+      fail linkage "$lk_line (branch names no issue, pass --issue N)"
+    else
+      lj=$($GH pr view "$pr" --json body,closingIssuesReferences 2> /dev/null) || lj=''
+      api=$(printf '%s' "$lj" | jq -r '[.closingIssuesReferences[]?.number] | sort | join(",")' 2> /dev/null) || api=x
+      body_t=$(printf '%s' "$lj" | jq -r '.body // ""' 2> /dev/null |
+        grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+' |
+        sed -E 's/^[A-Za-z]+[[:space:]]*:?[[:space:]]*//' | sort -u | tr '\n' ',' | sed 's/,$//')
+      has_ref=$(printf '%s' "$lj" | jq -r '.body // ""' 2> /dev/null | grep -ciE "\\b(Refs|Part of)[[:space:]]+#$issue\\b")
+      if [ -z "$lj" ] || [ "$api" = x ]; then
+        fail linkage "cannot read PR #$pr body"
+      elif [ "$expect" = closing ]; then
+        if [ "$body_t" != "#$issue" ] || { [ "$pr_base" = "$default_branch" ] && [ "$api" != "$issue" ]; }; then
+          fail linkage "$lk_line (PR must close exactly #$issue: api=[$api] body=[$body_t])"
+        fi
+      elif [ -n "$api" ] || [ -n "$body_t" ] || [ "${has_ref:-0}" -eq 0 ]; then
+        fail linkage "$lk_line (PR must reference #$issue with Refs or Part of and close nothing: api=[$api] body=[$body_t])"
+      fi
     fi
     ;;
   *) fail linkage "${lk_line:-exit $lk_rc, no output}" ;;
@@ -151,8 +172,8 @@ if [ -z "$status_out" ]; then
   fail gates "no pipeline run to read"
 else
   rstatus=$(field "$status_out" status)
-  if printf '%s\n' "$status_out" | grep -q 'awaiting_'; then
-    fail gates "run $run has a step awaiting approval: $(printf '%s\n' "$status_out" | grep 'awaiting_' | sed -n 1p | sed 's/^[[:space:]]*//' | one_line)"
+  if printf '%s\n' "$status_out" | grep -q 'awaiting_agent\|,awaiting_approval,'; then
+    fail gates "run $run has a step awaiting approval: $(printf '%s\n' "$status_out" | grep 'awaiting_agent\|,awaiting_approval,' | sed -n 1p | sed 's/^[[:space:]]*//' | one_line)"
   fi
   case "$rstatus" in
     '') fail gates "run $run reports no status" ;;
@@ -164,7 +185,7 @@ fi
 if [ -z "$pr_base" ]; then
   fail base "cannot read the PR base"
 else
-  default=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default=''
+  default=$default_branch
   if [ "$pr_base" != "$default" ] && [ "$pr_base" != "$base" ]; then
     fail base "PR targets $pr_base, default branch is ${default:-unknown}${base:+, --base is $base}"
   fi

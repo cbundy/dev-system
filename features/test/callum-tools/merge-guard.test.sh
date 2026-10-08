@@ -53,7 +53,11 @@ cat > "$tmpdir/gh" <<'STUB'
 d=${STUB_DIR:?}
 r() { cat "$d/$1"; }
 case "$1 $2" in
-  'pr view') printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s"}\n' "$(r branch)" "$(r prhead)" "$(r base)" ;;
+  'pr view')
+    case "$*" in
+      *closingIssuesReferences*) jq -n --rawfile b "$d/body" --argjson c "$(r closing)" '{body:$b, closingIssuesReferences:($c | map({number:.}))}' ;;
+      *) printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s"}\n' "$(r branch)" "$(r prhead)" "$(r base)" ;;
+    esac ;;
   'pr checks') cat "$d/checks"; [ ! -f "$d/checks-rc" ] || exit "$(r checks-rc)" ;;
   'repo view') echo main ;;
   'pr merge') echo "$*" >> "$d/gh-calls"; [ ! -f "$d/merge-refuse" ] || exit 1 ;;
@@ -97,6 +101,8 @@ reset() {
   printf '%s\n' '[{"name":"ci","bucket":"pass"}]' > "$st/checks"
   printf '%s\n' 'MATCH #7 issue=#12 expect=closing via=api actual=[12]' > "$st/linkage"
   echo 0 > "$st/linkage-rc"
+  printf '%s\n' 'Closes #12' > "$st/body"
+  printf '%s\n' '[12]' > "$st/closing"
 }
 
 # g <args...>: run the guard; sets out, rc
@@ -137,7 +143,7 @@ expect_pass() {
 reset; g 7; expect_pass "all pass"
 reset; g 7 --run RUN1; expect_pass "explicit run"
 
-reset; echo 'ci,awaiting_approval' > "$st/step"; g 7; expect_fail "gates" gates
+reset; echo 'ci,awaiting_approval,0' > "$st/step"; g 7; expect_fail "gates" gates
 reset; echo failed > "$st/runstatus"; g 7; expect_fail "gates failed" gates
 reset; echo '[]' > "$st/checks"; g 7; expect_fail "zero checks" checks
 reset; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; echo 8 > "$st/checks-rc"; g 7; expect_fail "pending" checks
@@ -149,7 +155,7 @@ reset; echo bogus > "$st/prhead"; g 7; expect_fail "pr head differs" head
 reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 7; expect_fail "base" base
 
 # two guards at once: no short-circuit
-reset; echo '[]' > "$st/checks"; echo 'ci,awaiting_approval' > "$st/step"; g 7; expect_fail "two guards" checks gates
+reset; echo '[]' > "$st/checks"; echo 'ci,awaiting_approval,0' > "$st/step"; g 7; expect_fail "two guards" checks gates
 
 # phantom-gated run: origin moved after the run
 reset
@@ -171,9 +177,27 @@ mv "$origin.gone" "$origin"
 passed=$((passed + 1))
 
 
+# SKIP: the branch names no issue, so --issue N and the PR linkage decide
+skip() { echo 'SKIP #7 feat' > "$st/linkage"; }
+reset; skip; g 7; expect_fail "skip without --issue" linkage
+reset; skip; g 7 --issue 12; expect_pass "skip default base, closes N"
+reset; skip; echo '[13]' > "$st/closing"; g 7 --issue 12; expect_fail "skip default base, closes other" linkage
+reset; skip; echo '[]' > "$st/closing"; g 7 --issue 12; expect_fail "skip default base, closes nothing" linkage
+reset; skip; printf 'Closes #12\nFixes #13\n' > "$st/body"; g 7 --issue 12; expect_fail "skip closes extra" linkage
+reset; skip; echo epic-x > "$st/base"; echo '[]' > "$st/closing"; g 7 --issue 12 --base epic-x; expect_pass "skip epic, body closes N"
+reset; skip; echo epic-x > "$st/base"; echo '[]' > "$st/closing"; echo 'Refs #12' > "$st/body"; g 7 --issue 12 --base epic-x; expect_fail "skip epic, no closing keyword" linkage
+reset; skip; echo epic-x > "$st/base"; g 7 --base epic-x; expect_fail "skip epic without --issue" linkage
+reset; skip; echo 'Refs #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip refs"
+reset; skip; echo 'Part of #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip part of"
+reset; skip; echo 'nothing' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_fail "skip refs missing" linkage
+reset; skip; echo 'Refs #12' > "$st/body"; g 7 --issue 12 --expect refs; expect_fail "skip refs but closes" linkage
+
 # epic base
-reset; echo epic-x > "$st/base"; echo 'SKIP #7 feat' > "$st/linkage"; g 7; expect_fail "epic without --base" base linkage
-reset; echo epic-x > "$st/base"; echo 'SKIP #7 feat' > "$st/linkage"; g 7 --base epic-x; expect_pass "epic with --base"
+reset; echo epic-x > "$st/base"; g 7; expect_fail "epic without --base" base
+reset; echo epic-x > "$st/base"; g 7 --base epic-x; expect_pass "epic with --base"
+
+# awaiting_ in free text is not a parked step
+reset; echo 'note: use awaiting_approval to park' > "$st/step"; g 7; expect_pass "awaiting_ only in free text"
 
 # usage errors
 reset

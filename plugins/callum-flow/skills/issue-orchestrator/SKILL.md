@@ -431,7 +431,8 @@ this script (never with `--fix`):
   expects exactly the branch's issue to be closed.
 - On `GUARD linkage FAIL`, repair by hand as a separate step: run the script
   again with the same expectation and `--fix`, then re-run the guard. A `SKIP`
-  passes only with `--base` after the manual check. Stop on a failed repair, including a preserved Pipeline keyword
+  (no issue in the branch name) passes only when you give `--issue N` and the
+  PR linkage for #N matches `--expect`. Stop on a failed repair, including a preserved Pipeline keyword
   that still causes `MISMATCH`.
 - Never write close/closes/fixes/resolves before an issue number you do not
   mean to close: GitHub ignores negation, so "must NOT close #93" closed a real
