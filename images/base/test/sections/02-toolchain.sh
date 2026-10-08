@@ -5,9 +5,12 @@
 # provides IMAGE, RUN_ID, SECRET, check, in_image and the rest; never run directly.
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck; do
+for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck psql callum-flow-event; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
+check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
+  d=$(mktemp -d) && CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ "$(wc -l < "$d"/*.jsonl)" = 1 ] &&
+  ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ]'
 check "dev-prune-worktrees is installed and runs a dry run in a repo with no bridge worktrees" in_image '
   git init -q /tmp/prune-r && dev-prune-worktrees --workspace /tmp/prune-r | grep -q "no bridge worktrees"'
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '

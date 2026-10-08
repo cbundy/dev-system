@@ -39,10 +39,19 @@ stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 reported=
 
+# record_event <state> [callum-flow-event options]: appends the transition to
+# the factory event log (cbundy/dev-system#218) when callum-flow-event is
+# installed. Best effort: it never changes this script's output or status.
+record_event() {
+  command -v callum-flow-event >/dev/null 2>&1 || return 0
+  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
+}
+
 # fatal <reason>: exit non-zero; in stream mode first print the one
 # watcher-error line on stdout, the event channel.
 fatal() {
   [ -z "$stream" ] || echo "watcher-error $*"
+  record_event watcher_error --note "queue-watch: $*"
   echo "queue-watch.sh: $*" >&2
   reported=1
   exit 1
@@ -52,11 +61,17 @@ fatal() {
 # with a watcher-error line.
 on_exit() {
   rc=$?
-  [ "$rc" -eq 0 ] || [ -n "$reported" ] || echo "watcher-error exited with status $rc"
+  [ "$rc" -eq 0 ] || [ -n "$reported" ] || {
+    echo "watcher-error exited with status $rc"
+    record_event watcher_error --note "queue-watch: exited with status $rc"
+  }
 }
 
 usage() {
-  [ -z "$stream" ] || echo "watcher-error usage${1:+: $1}"
+  [ -z "$stream" ] || {
+    echo "watcher-error usage${1:+: $1}"
+    record_event watcher_error --note "queue-watch: usage${1:+: $1}"
+  }
   [ -z "${1-}" ] || echo "queue-watch.sh: $1" >&2
   echo "usage: queue-watch.sh --repo owner/name --label label [--known n1,n2,...]" \
     "[--stream] [--interval seconds]" >&2
@@ -100,6 +115,10 @@ while :; do
       pending=
     elif [ -n "$pending" ] && [ "${pending#=}" = "$current" ]; then
       printf 'queue-changed known=%s now=%s\n' "${known:-none}" "${current:-none}"
+      # every issue that joined the queue is a "ready" transition
+      for n in $(printf '%s' "$current" | tr ',' ' '); do
+        case ",$known," in *",$n,"*) ;; *) record_event ready --issue "$n" ;; esac
+      done
       [ -n "$stream" ] || exit 0
       known=$current
       pending=

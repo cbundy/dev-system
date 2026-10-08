@@ -162,7 +162,9 @@ tests would otherwise have missed:
 - Launch it detached from the first command, never through `tail`: `nohup
   no-mistakes axi run --intent "<goal>" > /tmp/no-mistakes-<branch>.log
   2>&1 &`. Then make exactly one `no-mistakes status` read to capture the run
-  id and confirm its `head` equals your commit SHA. Write a self-contained
+  id and confirm its `head` equals your commit SHA. Record it with
+  `callum-flow-event run_started --issue <N> --run <id> --branch <branch>
+  --head <sha>` (skip if the command is missing). Write a self-contained
   handoff (see section 8), and TERMINATE.
 - Never pass `--yes` (to `axi run` or `axi respond`). It makes the pipeline
   apply `ask-user` findings - scope and policy judgement calls, including

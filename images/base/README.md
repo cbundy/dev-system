@@ -104,6 +104,7 @@ environment variable set in the image.
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
+| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
 `no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
@@ -1118,6 +1119,25 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
    gh keeps its login (`dev-system-gh` is unchanged).
 3. The old volumes are left in place. Delete them by hand once you no longer need them:
    `docker volume rm dev-system-claude dev-system-codex dev-system-no-mistakes dev-system-agentsview`.
+
+## Factory event log
+
+`callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
+(`ready claimed ... usage`; `callum-flow-event` with no arguments lists the vocabulary) to
+`/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
+fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
+and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
+
+`event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
+the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
+without one, and then the file just accumulates). It creates the schema and table on its
+first push, is idempotent on `(device, repo, seq)` and keeps its progress in
+`/persist/events/.pushed/`. The URL is passed to `psql` as its connection argument and
+all `psql` output is masked. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
+and `dev-doctor` reports when events were last written and last pushed. Variables:
+`CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
+`CREATE` on the database (or the schema and table created for it by an admin). The
+queries are in [docs/metrics.md](../../docs/metrics.md).
 
 ## Central session history (agentsview)
 

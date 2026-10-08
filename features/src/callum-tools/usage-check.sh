@@ -156,4 +156,10 @@ from_statusline() {
   fi
 }
 
-from_oauth || from_statusline || echo "usage=unavailable reason=${reasons%,}"
+line=$(from_oauth || from_statusline || echo "usage=unavailable reason=${reasons%,}")
+printf '%s\n' "$line"
+# record_event: the factory event log (cbundy/dev-system#218), best effort.
+# Only a check is recorded, not --record, which runs on every status line refresh.
+if command -v callum-flow-event >/dev/null 2>&1; then
+  callum-flow-event usage --actor watcher --note "$line" >/dev/null 2>&1 || :
+fi

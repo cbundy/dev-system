@@ -180,6 +180,14 @@ re-arm.
    linkage (see Linkage) - do not have the sub-agent merge.
 4. **Verify and merge** when the PR lands (see Merge discipline).
 
+## Event log
+`callum-flow-event <state> --issue <N>` appends one line per transition to the
+factory log (never fails, no network; bare, it lists the states). The watchers
+write their own events (`ready`, `parked`, `merge_ready`, `conflict`,
+`head_mismatch`, `failed`, `watcher_error`, `usage`); you add the ones above
+plus `merged` (`--pr <P>`, after the merge) and `abandoned` (`--note <why>`
+when you give an issue up).
+
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
 on Opus, `callum-flow:explorer`, `callum-flow:implementer` and `callum-flow:fixer`
@@ -282,7 +290,7 @@ with `run_in_background` - never fall back to polling inline.
     shows only that a human overrode a finding, never whether it was wrong or
     merely not actionable, and those call for opposite responses; the prefix
     makes the reviewer's good-vs-bad rate a query rather than someone's
-    recollection. Where the run can store it, pass it as `--reason` on
+    recollection (`callum-flow-event verdict --issue <N> --note "WRONG: ..."`). Where the run can store it, pass it as `--reason` on
     `--action approve`, which persists with the approval - check `axi respond
     --help` for the gates that accept it (currently only the Test step). The
     other approvals, and `--action fix` (whose `--instructions` text is not
