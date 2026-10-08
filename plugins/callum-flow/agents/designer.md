@@ -38,17 +38,32 @@ low | medium | high - one line why
 ## Sequencing
 - what must merge first, or "none"
 
+## Rollout
+merge | run-it | keep-open - one reason
+
 ## Open decisions
 - options for the owner, never decided by you, or "none"
 ```
 
 `## Risk` is a single value from `low`, `medium`, `high`, followed by a dash and
-one reason; later tooling parses it. Cite file:line only for what you have
+one reason; later tooling parses it.
+
+`## Rollout` is likewise one value, a dash and one reason, and
+`callum-flow-rollout` and the merge guard parse it to decide whether the PR
+closes the issue. Pick it:
+- `run-it` when the issue, or the epic it belongs to, requires a release plus a
+  Run it; the reason names where it is defined (the issue's own `## Run it`
+  heading, or the epic). Then `## Sequencing` says dependents wait for the
+  recorded Run it, not for the merge.
+- `keep-open` for research, a proposal, or a PR that is one part of several.
+- `merge` otherwise.
+ Cite file:line only for what you have
 verified, and check surprising explorer claims yourself. Name the base
 as `origin/<base>`, not the local checkout.
 
 For a large or high-risk issue, do not design it as one unit. Split it into
-sub-issues whose bodies use the same shape (without the date heading), link them
+sub-issues whose bodies use the same shape (without the date heading, with a
+`## Rollout` each), link them
 with native `blocked_by`, and leave them WITHOUT the `ready` label for the owner
 to tag. Keep the parent as a tracking epic.
 

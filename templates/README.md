@@ -71,7 +71,8 @@ Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships th
 generic `permissions.allow` list the implement-issue/orchestrator flow needs
 (`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
 `treehouse get/return/status`, `gh issue/pr view/pr checks/pr list`,
-`callum-flow-merge-guard`, the check-only merge guard, and the read-only
+`callum-flow-merge-guard`, the check-only merge guard, `callum-flow-rollout`, the read-only
+Rollout lookup the guard derives its linkage expectation from, and the read-only
 `check-pr-linkage.sh`) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
 Claude Code plugin's own `settings.json` only applies its `agent` and

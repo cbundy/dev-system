@@ -7,8 +7,14 @@
 #
 # Usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID]
 #          [--base BRANCH] [--issue N] [--emit-verified]
+#   Without --expect, the linkage expectation comes from the issue's Rollout
+#   (callum-flow-rollout): merge means closing, run-it and keep-open mean refs
+#   (cbundy/dev-system#239). Pass --expect only to assert it; a value that
+#   contradicts the Rollout fails the rollout guard.
 #
 # Guards (every one is evaluated and reported, none short-circuits):
+#   rollout  the issue's Rollout was derived (or agrees with --expect); a
+#          conflict or a failure to derive fails closed, never to closing
 #   head     the run's head_sha equals a fresh origin/<branch> and the PR head
 #   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
 #          name) --issue N is required and the PR must link #N as --expect says
@@ -27,7 +33,8 @@
 #
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
-# CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run).
+# CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run),
+# CALLUM_FLOW_ROLLOUT_BIN (callum-flow-rollout).
 # Tuning: GitHub computes mergeability lazily and reports UNKNOWN meanwhile, so
 # the mergeable guard re-reads (read-only) CALLUM_FLOW_MERGEABLE_TRIES times
 # (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
@@ -37,6 +44,7 @@ GH=${CALLUM_FLOW_GH_BIN:-gh}
 NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
 LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
 WATCH=${CALLUM_FLOW_WATCH_BIN:-/usr/local/share/callum-tools/pipeline-watch.sh}
+ROLLOUT=${CALLUM_FLOW_ROLLOUT_BIN:-callum-flow-rollout}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
@@ -44,7 +52,7 @@ usage() {
   exit 2
 }
 
-pr='' expect=closing run='' base='' issue='' emit=
+pr='' expect='' run='' base='' issue='' emit=
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) usage ;;
@@ -66,7 +74,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$pr" ] || usage "missing <pr>"
 case "$pr" in *[!0-9]*) usage "<pr> must be a number" ;; esac
-case "$expect" in closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
+case "$expect" in "" | closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
 case "$issue" in *[!0-9]*) usage "--issue must be a number" ;; esac
 command -v jq > /dev/null 2>&1 || usage "jq not found"
 
@@ -121,7 +129,41 @@ fi
 
 default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
 
+# --- rollout -----------------------------------------------------------------
+# The linkage expectation follows the issue's Rollout, not the caller's memory:
+# #236 closed #219 (a Run it issue) because the default was closing.
+explicit=$expect
+r_issue=$issue
+[ -n "$r_issue" ] || r_issue=$(printf '%s' "$branch" | sed -n 's/.*issue-\([0-9][0-9]*\)\(-.*\)\{0,1\}$/\1/p')
+rollout_ok=1
+if [ -z "$r_issue" ]; then
+  if [ -z "$explicit" ]; then
+    fail rollout "no issue in the branch name, pass --issue N (or --expect to assert linkage)"
+    rollout_ok=0
+  fi
+else
+  r_out=$("$ROLLOUT" "$r_issue" 2> /dev/null)
+  r_rc=$?
+  r_line=$(printf '%s\n' "$r_out" | sed -n 1p)
+  derived=''
+  if [ "$r_rc" -eq 0 ]; then
+    case "$r_line" in
+      "ROLLOUT merge "*) derived=closing ;;
+      "ROLLOUT run-it "* | "ROLLOUT keep-open "*) derived=refs ;;
+    esac
+  fi
+  if [ -z "$derived" ]; then
+    fail rollout "cannot derive the Rollout of #$r_issue: ${r_line:-exit $r_rc, no output}"
+    rollout_ok=0
+  elif [ -z "$explicit" ]; then
+    expect=$derived
+  elif [ "$explicit" != "$derived" ]; then
+    fail rollout "--expect $explicit contradicts #$r_issue: $r_line (needs $derived)"
+  fi
+fi
+
 # --- linkage -----------------------------------------------------------------
+if [ "$rollout_ok" -eq 1 ]; then
 lk_out=$("$LINKAGE" "$pr" --expect "$expect" 2> /dev/null)
 lk_rc=$?
 lk_line=$(printf '%s\n' "$lk_out" | sed -n 1p)
@@ -152,8 +194,9 @@ case "$lk_line" in
     ;;
   *) fail linkage "${lk_line:-exit $lk_rc, no output}" ;;
 esac
+fi
 if [ -z "$issue" ]; then
-  issue=$(printf '%s' "$lk_line" | sed -n 's/.* issue=#\([0-9][0-9]*\).*/\1/p')
+  issue=$(printf '%s' "${lk_line-}" | sed -n 's/.* issue=#\([0-9][0-9]*\).*/\1/p')
 fi
 
 # --- checks ------------------------------------------------------------------

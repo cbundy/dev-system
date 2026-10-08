@@ -7,7 +7,8 @@
 # allow list.
 #
 # Usage: callum-flow-merge <pr> [--method squash|merge|rebase] [guard options]
-#   Guard options (--expect, --run, --base, --issue) go straight to the guard.
+#   Guard options (--expect, --run, --base, --issue) go straight to the guard;
+#   without --expect the guard derives the linkage from the issue's Rollout.
 #   The merge method is squash unless --method or CALLUM_FLOW_MERGE_METHOD
 #   (a per-repo override) says otherwise.
 #

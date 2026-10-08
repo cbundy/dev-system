@@ -1,0 +1,102 @@
+#!/bin/sh
+#
+# callum-flow-rollout: print how an issue is "done", without changing anything
+# (cbundy/dev-system#239). The designer records it as the `## Rollout` field of
+# the issue's design brief; callum-flow-merge-guard derives the PR's linkage
+# expectation from it, so a PR that must stay open can never close its issue.
+#
+# Usage: callum-flow-rollout <issue>
+#
+# Output: exactly one line
+#   ROLLOUT <merge|run-it|keep-open> source=<brief|body>
+# The value is the first word of the `## Rollout` section of the latest
+# `## Design brief` comment. With no brief, or an empty Rollout, it falls back
+# to the issue body: a `## Run it` heading gives run-it, anything else merge.
+# Headings inside fenced code blocks and prose that merely mentions "Run it"
+# do not count.
+#
+# A brief that says merge while the body has a `## Run it` heading, or a brief
+# whose Rollout is not one of the three values, prints
+#   ROLLOUT conflict <reason>
+#   ROLLOUT invalid <reason>
+# and exits 1, as does a failure to read the issue (reason on stderr).
+#
+# Exit codes: 0 resolved, 1 conflict, invalid or unreadable, 2 usage error.
+#
+# Environment (for tests): CALLUM_FLOW_GH_BIN (gh).
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-rollout: $1" >&2
+  echo "usage: callum-flow-rollout <issue>" >&2
+  exit 2
+}
+
+issue=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage ;;
+    -*) usage "unknown option '$1'" ;;
+    *) [ -z "$issue" ] || usage "unexpected argument '$1'"; issue=$1 ;;
+  esac
+  shift
+done
+[ -n "$issue" ] || usage "missing <issue>"
+case "$issue" in *[!0-9]*) usage "<issue> must be a number" ;; esac
+command -v jq > /dev/null 2>&1 || usage "jq not found"
+
+if ! ij=$($GH issue view "$issue" --json body,comments 2> /dev/null) || ! printf '%s' "$ij" | jq -e 'type == "object"' > /dev/null 2>&1; then
+  echo "callum-flow-rollout: cannot read issue #$issue" >&2
+  echo "ROLLOUT unreadable cannot read issue #$issue"
+  exit 1
+fi
+
+# section <heading-regex>: stdin -> the lines under the first matching heading
+# (outside fenced code), up to the next heading of any level
+section() {
+  awk -v re="$1" '
+    /^[ \t]*(```|~~~)/ { fence = !fence; if (on) print; next }
+    fence { if (on) print; next }
+    /^#{1,6}[ \t]/ {
+      if (on) exit
+      if (tolower($0) ~ re) on = 1
+      next
+    }
+    on { print }
+  '
+}
+
+body=$(printf '%s' "$ij" | jq -r '.body // ""')
+brief=$(printf '%s' "$ij" | jq -r '[.comments[]? | select((.body // "") | test("^\\s*##\\s+Design brief"))] | last | .body // ""')
+
+body_runit=0
+# the heading itself counts, even with an empty section
+if printf '%s\n' "$body" | awk '/^[ \t]*(```|~~~)/ {f = !f; next} !f && tolower($0) ~ /^#{1,6}[ \t]+run it[ \t]*$/ {found = 1} END {exit !found}'; then
+  body_runit=1
+fi
+
+val=''
+if [ -n "$brief" ]; then
+  raw=$(printf '%s\n' "$brief" | section '^#{1,6}[ \t]+rollout[ \t]*$' | grep -v '^[[:space:]]*$' | sed -n 1p)
+  val=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed 's/^[^a-z]*//; s/[^a-z-].*$//')
+fi
+
+case "$val" in
+  merge)
+    if [ "$body_runit" = 1 ]; then
+      echo "ROLLOUT conflict brief says merge but issue #$issue has a '## Run it' heading"
+      exit 1
+    fi
+    echo "ROLLOUT merge source=brief"
+    ;;
+  run-it | keep-open) echo "ROLLOUT $val source=brief" ;;
+  '')
+    if [ "$body_runit" = 1 ]; then echo "ROLLOUT run-it source=body"; else echo "ROLLOUT merge source=body"; fi
+    ;;
+  *)
+    echo "ROLLOUT invalid brief Rollout '$val' is not merge, run-it or keep-open"
+    exit 1
+    ;;
+esac

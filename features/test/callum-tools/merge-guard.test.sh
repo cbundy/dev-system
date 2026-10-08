@@ -11,6 +11,7 @@ ROOT="$SCRIPT_DIR/../../.."
 GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
 EVENT="$ROOT/images/base/callum-flow-event"
+ROLLOUT="$ROOT/images/base/callum-flow-rollout"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -64,6 +65,7 @@ case "$1 $2" in
         printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"%s","isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s"}\n' \
           "$(r branch)" "$(r prhead)" "$(r base)" "$(r pstate)" "$(r isdraft)" "$(r pmergeable)" "$mss" ;;
     esac ;;
+  'issue view') cat "$d/issue.json" ;;
   'pr checks') cat "$d/checks"; [ ! -f "$d/checks-rc" ] || exit "$(r checks-rc)" ;;
   'repo view') echo main ;;
   'pr merge')
@@ -114,6 +116,11 @@ esac
 STUB
 cat > "$tmpdir/linkage" <<'STUB'
 #!/bin/sh
+# linkage-actual: what the PR really does (closing|refs); the stub checks it against --expect
+if [ -f "${STUB_DIR:?}/linkage-actual" ]; then
+  if [ "$3" = "$(cat "$STUB_DIR/linkage-actual")" ]; then echo "MATCH #7 issue=#12 expect=$3"; exit 0; fi
+  echo "MISMATCH #7 issue=#12 expect=$3"; exit 1
+fi
 cat "${STUB_DIR:?}/linkage"
 exit "$(cat "$STUB_DIR/linkage-rc")"
 STUB
@@ -142,19 +149,26 @@ reset() {
   printf '%s\n' MERGEABLE > "$st/pmergeable"
   printf '%s\n' false > "$st/isdraft"
   printf '%s\n' CLEAN > "$st/mss"
+  # the issue: no brief, no Run it heading, so Rollout is merge
+  printf '%s\n' '{"body":"A plain bug.","comments":[]}' > "$st/issue.json"
+  ROLLOUT_BIN=''
+}
+# issue_brief <rollout-line> [body]: the issue has a design brief with that Rollout
+issue_brief() {
+  jq -n --arg r "$1" --arg b "${2-A plain bug.}" '{body:$b, comments:[{body:("## Design brief\n\n## Rollout\n" + $r + "\n\n## Open decisions\nnone")}]}' > "$st/issue.json"
 }
 
 # g <args...>: run the guard; sets out, rc
 g() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" \
     CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
 }
 m() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" \
     CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
     "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
@@ -252,7 +266,7 @@ reset
 git -C "$work" fetch -q origin "+refs/heads/$B:refs/remotes/origin/$B"
 mv "$origin" "$origin.gone"
 (PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-  CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" "$SH" "$GUARD" 7 > "$tmpdir/o" 2>&1) && fail "unreachable origin passed"
+  CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" "$SH" "$GUARD" 7 > "$tmpdir/o" 2>&1) && fail "unreachable origin passed"
 grep -q 'GUARD head FAIL .*origin=unknown' "$tmpdir/o" || fail "fetch failure should say unknown: $(cat "$tmpdir/o")"
 mv "$origin.gone" "$origin"
 passed=$((passed + 1))
@@ -260,6 +274,7 @@ passed=$((passed + 1))
 
 # SKIP: the branch names no issue, so --issue N and the PR linkage decide
 skip() { echo 'SKIP #7 feat' > "$st/linkage"; }
+refs_issue() { issue_brief 'keep-open - one part of several'; }
 reset; skip; g 7; expect_fail "skip without --issue" linkage
 reset; skip; g 7 --issue 12; expect_pass "skip default base, closes N"
 reset; skip; echo '[13]' > "$st/closing"; g 7 --issue 12; expect_fail "skip default base, closes other" linkage
@@ -268,10 +283,37 @@ reset; skip; printf 'Closes #12\nFixes #13\n' > "$st/body"; g 7 --issue 12; expe
 reset; skip; echo epic-x > "$st/base"; echo '[]' > "$st/closing"; g 7 --issue 12 --base epic-x; expect_pass "skip epic, body closes N"
 reset; skip; echo epic-x > "$st/base"; echo '[]' > "$st/closing"; echo 'Refs #12' > "$st/body"; g 7 --issue 12 --base epic-x; expect_fail "skip epic, no closing keyword" linkage
 reset; skip; echo epic-x > "$st/base"; g 7 --base epic-x; expect_fail "skip epic without --issue" linkage
-reset; skip; echo 'Refs #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip refs"
-reset; skip; echo 'Part of #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip part of"
-reset; skip; echo 'nothing' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_fail "skip refs missing" linkage
-reset; skip; echo 'Refs #12' > "$st/body"; g 7 --issue 12 --expect refs; expect_fail "skip refs but closes" linkage
+reset; skip; refs_issue; echo 'Refs #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip refs"
+reset; skip; refs_issue; echo 'Part of #12' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_pass "skip part of"
+reset; skip; refs_issue; echo 'nothing' > "$st/body"; echo '[]' > "$st/closing"; g 7 --issue 12 --expect refs; expect_fail "skip refs missing" linkage
+reset; skip; refs_issue; echo 'Refs #12' > "$st/body"; g 7 --issue 12 --expect refs; expect_fail "skip refs but closes" linkage
+
+# rollout (cbundy/dev-system#239): the linkage expectation follows the issue
+# the #219 regression: PR #236 said Closes #219, whose body has a Run it heading
+reset; printf '%s\n' '{"body":"Do it.\n\n## Run it\nrelease then run","comments":[{"body":"## Design brief\n\n## Risk\nlow"}]}' > "$st/issue.json"
+echo closing > "$st/linkage-actual"
+g 7; expect_fail "closing PR on a Run it issue, no --expect" linkage
+printf '%s' "$out" | grep -q 'MISMATCH #7 issue=#12 expect=refs' || fail "linkage should be checked as refs: $out"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - the issue'"'"'s own Run it'; g 7; expect_fail "run-it brief, closing PR" linkage
+reset; issue_brief 'run-it - x'; echo refs > "$st/linkage-actual"; g 7; expect_pass "run-it brief, refs PR"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'merge - plain'; g 7; expect_pass "merge brief, closing PR"
+reset; issue_brief 'keep-open - research'; echo refs > "$st/linkage-actual"; g 7; expect_pass "keep-open brief, refs PR"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - x'; g 7 --expect closing; expect_fail "explicit closing on run-it" rollout
+printf '%s' "$out" | grep -q 'contradicts #12' || fail "contradiction reason: $out"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'merge - x'; g 7 --expect refs; expect_fail "explicit refs on merge" rollout linkage
+reset; issue_brief 'run-it - x'; echo refs > "$st/linkage-actual"; g 7 --expect refs; expect_pass "explicit agreeing --expect"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'merge - x' 'Do it.
+
+## Run it
+go'; g 7; expect_fail "rollout conflict fails closed" rollout
+printf '%s' "$out" | grep -q 'ROLLOUT conflict' || fail "conflict reason: $out"
+reset; ROLLOUT_BIN=/bin/false; g 7; expect_fail "derivation failure" rollout
+reset; echo 'not json' > "$st/issue.json"; g 7; expect_fail "unreadable issue" rollout
+reset; echo bogus/branch > "$st/branch"; echo 'SKIP #7 feat' > "$st/linkage"; g 7; expect_fail "no issue to derive from" rollout head
+reset; issue_brief 'run-it - x'; echo 'SKIP #7 feat' > "$st/linkage"; echo '[]' > "$st/closing"; echo 'Refs #12' > "$st/body"; g 7 --issue 12; expect_pass "--issue drives the derivation"
+reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - x'; m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ]; then fail "merge passes options through and refuses a closing PR on run-it: $rc $out"; fi
+passed=$((passed + 1))
 
 # epic base
 reset; echo epic-x > "$st/base"; g 7; expect_fail "epic without --base" base

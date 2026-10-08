@@ -194,6 +194,7 @@ COPY --chmod=0755 \
   images/base/dev-login \
   images/base/callum-flow-event \
   images/base/callum-flow-merge-guard \
+  images/base/callum-flow-rollout \
   images/base/callum-flow-merge \
   images/base/callum-flow-fix-linkage \
   images/base/callum-flow-claim \

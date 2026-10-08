@@ -31,6 +31,12 @@ test("designer cannot edit code and spawns the explorer", () => {
   assert.match(fm.tools, /Agent/);
 });
 
+test("designer brief shape has a Rollout field between Sequencing and Open decisions", () => {
+  const body = fs.readFileSync(path.join(DIR, "designer.md"), "utf8");
+  assert.match(body, /## Sequencing\n[^\n]*\n\n## Rollout\nmerge \| run-it \| keep-open - [^\n]*\n\n## Open decisions/);
+  for (const v of ["merge", "run-it", "keep-open"]) assert.match(body, new RegExp(`\`${v}\``));
+});
+
 test("adjudicator is read-only, cannot spawn agents, and states the verdict contract", () => {
   const fm = frontmatter("adjudicator");
   assert.match(fm.disallowedTools, /Edit/);
