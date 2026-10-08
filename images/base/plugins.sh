@@ -210,6 +210,59 @@ install_repo_plugin() {
   add_and_install "$id" "$src" "dev-init --repo"
 }
 
+# declared_marketplace <marketplace>: "<location> <ref>" of the marketplace the
+# repo's $settings declares (github repo or git url; ref empty when unpinned),
+# else nothing.
+declared_marketplace() {
+  jq -r --arg m "$1" '.extraKnownMarketplaces[$m].source? | select(.source == "github" or .source == "git") | "\(.repo // .url // "") \(.ref // "")"' "$settings" 2>/dev/null
+}
+
+# drop_moved_marketplaces: removes each known marketplace
+# whose ref is no longer the one wanted (the repo's settings, else the image's
+# DEV_DEFAULT_PLUGINS source), so the normal path re-adds it at the new ref and
+# reinstalls its plugins. Needed because Claude cannot move a marketplace's ref
+# in place (verified with the real CLI): `marketplace add` at a new ref is
+# refused while the old entry exists, and `marketplace update` and
+# `plugin install` keep the old ref and an already installed plugin version.
+# `marketplace remove` uninstalls the marketplace's plugins (and their saved
+# options), so this only acts on a real ref change, and only on a marketplace
+# at the same location. Sets MOVED to the removed names (empty: none). Needs
+# $settings, $plugins and $defaults.
+drop_moved_marketplaces() {
+  MOVED=""
+  local json id mkt want loc ref have_loc have_ref src
+  claude_plugin marketplace list --json || return 0
+  json="$PLUGIN_OUT"
+  while read -r id src; do
+    [ -n "$id" ] || continue
+    mkt="${id##*@}"
+    if [ -n "$src" ]; then
+      loc="${src%%#*}"
+      ref=""
+      [[ "$src" != *#* ]] || ref="${src#*#}"
+    else
+      [ -n "$settings" ] || continue
+      want=$(declared_marketplace "$mkt")
+      [ -n "$want" ] || continue
+      loc="${want%% *}"
+      ref="${want#* }"
+    fi
+    have_loc=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .repo // .url // empty' 2>/dev/null)
+    [ "$have_loc" = "$loc" ] || continue
+    have_ref=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .ref // empty' 2>/dev/null)
+    [ "$have_ref" != "$ref" ] || continue
+    if claude_plugin marketplace remove "$mkt"; then
+      log "Claude plugin marketplace $mkt moved from ${have_ref:-no ref} to ${ref:-no ref}; reinstalling its plugins"
+      MOVED="$MOVED $mkt"
+    else
+      [ "$PLUGIN_EXPIRED" = false ] || return 0
+      log "WARNING: could not remove Claude plugin marketplace $mkt to move it to ${ref:-no ref}: $PLUGIN_REASON"
+      log "  Fix: run: claude plugin marketplace remove $mkt; dev-init --plugins"
+    fi
+  done < <({ printf '%s\n' "$plugins" | sed '/^$/d; s/$/ /'; printf '%s\n' "$defaults" | sed '/^$/d'; })
+  return 0
+}
+
 # install_plugins: installs each wanted plugin Claude has not installed -
 # first the ones the workspace repo's committed .claude/settings.json enables
 # (their marketplaces added from the sources it declares), then the image's
@@ -220,7 +273,7 @@ install_repo_plugin() {
 # call is limited to 60s or what is left of it, and once it has passed the
 # plugins not yet installed get one WARNING. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults installed known id src i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local settings="" plugins="" defaults installed MOVED known id src i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=() sources=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))
@@ -247,6 +300,15 @@ install_plugins() {
   installed=""
   if limit=$(plugin_limit 30); then
     installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
+  fi
+  # A marketplace pinned to another ref than it is wanted at is removed, so
+  # its plugins count as missing below and come back at the wanted ref.
+  drop_moved_marketplaces
+  if [ -n "$MOVED" ]; then
+    installed=""
+    if limit=$(plugin_limit 30); then
+      installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
+    fi
   fi
   # A repo plugin's source is empty: install_repo_plugin reads it from $settings.
   while IFS= read -r id; do

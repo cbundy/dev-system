@@ -69,6 +69,10 @@ major for a breaking change to an existing contract.
 A plugin pinned to an unchanged `version` stays as it is. Changes merged to main reach no
 consumer until a release bumps that version.
 
+Pinning rule: the plugin is installed from a release tag, never from main - the templates'
+`.claude/settings.json` pins the `callum` marketplace `ref` (set by `release-bump.js`), and
+the base image's default plugin is pinned to the release current at its build.
+
 ## How a change reaches a consumer repo
 
 ```

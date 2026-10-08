@@ -4,7 +4,9 @@
 // plugins/*/.claude-plugin/plugin.json, the `version:` frontmatter field of every
 // plugins/*/skills/*/SKILL.md (replaced if present, appended if missing) and the root
 // package.json, then refreshes this repo's own template stamp with
-// `node bin/callum-dev.js update`. The Release workflow runs --check against the version
+// `node bin/callum-dev.js update`. It also pins the callum marketplace `ref` in the
+// templates' .claude/settings.json to the release tag vX.Y.Z, so workspaces install the
+// plugin from a release, never from main (cbundy/dev-system#215). The Release workflow runs --check against the version
 // it is asked to tag and refuses to tag a tree that was not bumped first.
 //
 //   node scripts/release-bump.js X.Y.Z           bump every version and refresh the stamp
@@ -21,6 +23,20 @@ const REPO_ROOT = path.join(__dirname, "..");
 // Same pattern release.yml validated with before this script existed.
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 const STAMP_FILE = ".callum-dev.json";
+// The template whose callum marketplace source carries the release pin.
+const PIN_FILE = "templates/.claude/settings.json";
+const PIN_MARKETPLACE = "callum";
+
+const pinSource = (settings) => settings?.extraKnownMarketplaces?.[PIN_MARKETPLACE]?.source;
+
+function writePin(root, version) {
+  const abs = path.join(root, PIN_FILE);
+  const settings = JSON.parse(fs.readFileSync(abs, "utf-8"));
+  const source = pinSource(settings);
+  if (!source) throw new Error(`${PIN_FILE}: no extraKnownMarketplaces.${PIN_MARKETPLACE}.source to pin`);
+  source.ref = `v${version}`;
+  fs.writeFileSync(abs, JSON.stringify(settings, null, 2) + "\n");
+}
 
 const subdirs = (dir) =>
   fs.existsSync(dir)
@@ -99,6 +115,8 @@ function bump(version, { root = REPO_ROOT, update = runUpdate, log = console.log
     writeVersion(root, entry, version);
     log(`release-bump: bumped ${entry.file}`);
   }
+  writePin(root, version);
+  log(`release-bump: pinned ${PIN_FILE} to v${version}`);
   const status = update(root);
   if (status !== 0) {
     throw new Error(
@@ -116,6 +134,9 @@ function check(version, { root = REPO_ROOT } = {}) {
     const have = readVersion(root, entry);
     if (have !== version) mismatches.push(`${entry.file}: has ${have ?? "no version"}, expected ${version}`);
   }
+  const pinPath = path.join(root, PIN_FILE);
+  const pin = fs.existsSync(pinPath) ? pinSource(JSON.parse(fs.readFileSync(pinPath, "utf-8")))?.ref : undefined;
+  if (pin !== `v${version}`) mismatches.push(`${PIN_FILE}: ref is ${pin ?? "not set"}, expected v${version}`);
   const stampPath = path.join(root, STAMP_FILE);
   const stamp = fs.existsSync(stampPath) ? JSON.parse(fs.readFileSync(stampPath, "utf-8")).version : undefined;
   if (stamp !== version) mismatches.push(`${STAMP_FILE}: has ${stamp ?? "no version"}, expected ${version}`);

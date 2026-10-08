@@ -308,7 +308,7 @@ work in progress.
 | `DEV_REPO_URL` | empty: no clone | The repo's HTTPS clone URL. A consumer image built by CI gets it as a build argument (`${{ github.server_url }}/${{ github.repository }}.git`), so nobody types it. A runtime value (Coder's `repo_url` parameter, compose `environment:`) overrides the image's. Local and desktop builds leave it empty, since their checkout is bind-mounted. |
 | `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
-| `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system` | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
+| `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system#<latest release tag>` (pinned at image build; a local build without the `DEV_PLUGIN_REF` build argument is unpinned) | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
 | `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the Claude plugins, the default ones and the repo's (see "Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
 
 **Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
@@ -362,7 +362,10 @@ they land in `/persist/claude` and stay across rebuilds:
   from `cbundy/dev-system`), so every workspace, with a repo or without, and onboarded or
   not, has the dev-system skills (`issue-orchestrator`, `implement-issue`, `onboard`,
   `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
-  It is the one plugin the image itself asks for. A per-repo image sets
+  It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
+  the release tag current at image build, never to main, and a repo's committed settings ref
+  wins when it declares the marketplace; `dev-init` removes and re-adds a marketplace whose
+  ref moved, so a pin change takes effect on the next start. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
   runtime's environment overrides both.
 - **The repo's plugins.** A repo can enable plugins in its committed

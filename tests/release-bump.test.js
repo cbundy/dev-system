@@ -14,6 +14,7 @@ const SCRIPT = path.join(__dirname, "..", "scripts", "release-bump.js");
 const { bump, check } = require(SCRIPT);
 
 const MANIFEST = "plugins/alpha/.claude-plugin/plugin.json";
+const PIN = "templates/.claude/settings.json";
 const SKILL_WITH = "plugins/alpha/skills/one/SKILL.md";
 const SKILL_WITHOUT = "plugins/alpha/skills/two/SKILL.md";
 
@@ -32,6 +33,11 @@ function fakeRepo(t, { version = "1.0.0", stamp = version } = {}) {
   write(root, SKILL_WITH, `---\nname: one\nversion: ${version}\n---\n\n# One\n`);
   write(root, SKILL_WITHOUT, "---\nname: two\ndescription: Two.\n---\n\n# Two\n");
   write(root, "plugins/alpha/skills/empty/README.md", "no SKILL.md here\n");
+  write(
+    root,
+    "templates/.claude/settings.json",
+    JSON.stringify({ extraKnownMarketplaces: { callum: { source: { source: "github", repo: "o/r", ref: `v${version}` } } } }, null, 2) + "\n",
+  );
   write(root, ".callum-dev.json", JSON.stringify({ version: stamp }, null, 2) + "\n");
   // A stand-in for bin/callum-dev.js: `update` stamps the bumped package.json version, and
   // FAKE_UPDATE_EXIT makes it fail like an update that left conflicts.
@@ -60,6 +66,18 @@ test("bump sets every plugin.json, SKILL.md (replaced or appended) and package.j
   assert.equal(read(root, SKILL_WITHOUT), "---\nname: two\ndescription: Two.\nversion: 2.3.4-rc.1\n---\n\n# Two\n");
   assert.equal(read(root, "package.json"), JSON.stringify({ name: "demo", version: "2.3.4-rc.1" }, null, 2) + "\n");
   assert.deepEqual(updated, [root]);
+  assert.equal(JSON.parse(read(root, PIN)).extraKnownMarketplaces.callum.source.ref, "v2.3.4-rc.1");
+  assert.equal(JSON.parse(read(root, PIN)).extraKnownMarketplaces.callum.source.repo, "o/r");
+});
+
+test("check flags a template ref that is not the release tag, and one that is missing", (t) => {
+  const root = fakeRepo(t);
+  assert.deepEqual(check("1.0.0", { root }).filter((m) => m.startsWith(PIN)), []);
+  assert.deepEqual(check("1.0.1", { root }).filter((m) => m.startsWith(PIN)), [
+    `${PIN}: ref is v1.0.0, expected v1.0.1`,
+  ]);
+  write(root, PIN, JSON.stringify({ extraKnownMarketplaces: { callum: { source: { source: "github" } } } }));
+  assert.match(check("1.0.0", { root }).join("\n"), /ref is not set, expected v1\.0\.0/);
 });
 
 test("bump rejects an invalid version without touching any file", (t) => {
@@ -121,7 +139,7 @@ test("CLI: --check exits 1 and prints every mismatch", (t) => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^release-bump: package\.json: has 1\.0\.0, expected 1\.1\.0$/m);
   assert.match(r.stderr, /^release-bump: \.callum-dev\.json: has 1\.0\.0, expected 1\.1\.0$/m);
-  assert.equal(r.stderr.trim().split("\n").length, 5);
+  assert.equal(r.stderr.trim().split("\n").length, 6);
 });
 
 test("CLI: a failing stamp refresh exits non-zero", (t) => {
