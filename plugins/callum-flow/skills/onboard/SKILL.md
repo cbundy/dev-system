@@ -29,7 +29,7 @@ instructions as a skill (generated from this page, never edited by hand).
 
 ## Done when
 
-- `.no-mistakes.yaml`, `CLAUDE.md`, `.claude/settings.json`,
+- `.no-mistakes.yaml`, `.github/pull_request_template.md`, `CLAUDE.md`, `.claude/settings.json`,
   `.devcontainer/devcontainer.json`, `.gitignore`, `treehouse.toml`, `.callum-dev.json`
   and `.callum-dev/baseline/` are committed.
 - `package.json` has `@callum/dev-system` as a devDependency, from

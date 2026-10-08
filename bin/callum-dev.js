@@ -51,6 +51,9 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // switch merges from the old kind's template to the new one like any update.
 const TEMPLATES = [
   { file: ".no-mistakes.yaml", strategy: "merge" },
+  // The PR body skeleton `pr.template` in .no-mistakes.yaml points at. `merge`, so a repo's
+  // own wording survives and upstream changes still reach it.
+  { file: ".github/pull_request_template.md", strategy: "merge" },
   { file: "treehouse.toml", strategy: "init-only" },
   { file: "CLAUDE.md", strategy: "merge" },
   { file: ".claude/settings.json", strategy: "settings-json" },

@@ -14,9 +14,15 @@ no-mistakes pipeline config.
   remember fresh no-mistakes worktrees have no dependencies installed, so install first if
   your package manager needs it), additions to `ignore_patterns`, and the optional
   `document.instructions` block.
-- Synced: `auto_fix`, and the commented-out optional
+- Synced: `auto_fix`, the `pr:` block (below), and the commented-out optional
   sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
   block if you want to opt in, rather than uncommenting the synced copy in place.
+- `pr:` (`template`, `publish_intent: false`, `appendix: collapsed`) is synced as a whole.
+  It needs no-mistakes 1.75.0 or newer. YAML allows one `pr:` key, so a repo cannot
+  override `template` from a repo-owned block; a repo that wants different wording edits
+  its own `.github/pull_request_template.md` instead (see the next section). A repo that
+  already carries its own `pr:` block (mealplanning) must delete it before its next
+  `callum-dev update`, or the merge leaves a duplicate key to resolve by hand.
 - Not here: the pipeline's agent order (`agent`) and the codex model pin
   (`agent_args_override` / `agent_config`). The base image's `dev-init` keeps both in a
   managed block of the global no-mistakes config instead, rewritten on every start from
@@ -24,6 +30,19 @@ no-mistakes pipeline config.
   copy as the offline fallback (see `images/base/README.md`). The model pin is global-only:
   no-mistakes silently ignores it in a repo file. The agent order is not: a repo that needs
   its own sets `agent:` in its repo-owned block, which replaces the global order entirely.
+
+## `.github/pull_request_template.md` -> `.github/pull_request_template.md`
+
+The PR body skeleton `pr.template` points at: Why / What this does / Evidence / Linked
+issue. no-mistakes enforces its top-level `#` headings, so the drafting agent cannot drop
+the Linked issue section, and later runs refresh only the generated Validation block and
+keep author edits. `N` comes from the branch's `issue-<N>-` segment.
+
+- Merged 3-way like the other synced files, so a repo can tune the wording in place and
+  still receive upstream changes. Keep the four top-level headings and the stray
+  closing-keyword warning.
+- Not marker-split: the file is Markdown, and the HTML comments are agent instructions,
+  not repo-owned slots.
 
 ## `treehouse.toml` -> `treehouse.toml`
 

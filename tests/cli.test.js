@@ -61,10 +61,14 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
   assert.ok(fs.existsSync(path.join(repo, "treehouse.toml")));
 
   assert.ok(fs.existsSync(path.join(repo, ".gitignore")));
+  assert.match(read(repo, ".github/pull_request_template.md"), /^# Linked issue$/m);
+  assert.match(nm, /^pr:\n {2}template: \.github\/pull_request_template\.md$/m);
+  assert.match(nm, /^ {2}publish_intent: false$/m);
+  assert.match(nm, /^ {2}appendix: collapsed$/m);
 
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
-  assert.equal(stamp.files.length, 6);
+  assert.equal(stamp.files.length, 7);
 
   // Baseline must be the pristine template: the substituted lint/test values
   // are repo-owned edits from the merge's point of view.
@@ -100,6 +104,28 @@ test("update merges an upstream synced change without clobbering repo-owned edit
   assert.doesNotMatch(nm, /<<<<<<</);
   // Baseline advanced to the new template so the next update merges from there.
   assert.match(read(repo, ".callum-dev/baseline/.no-mistakes.yaml"), /^  lint: 4$/m);
+});
+
+test("update gives a repo scaffolded before the PR template the file and the pr block, conflict-free", (t) => {
+  const repo = initRepo(t);
+  // Rewind to an older consumer: no template file, no baseline for it, no pr block.
+  fs.rmSync(path.join(repo, ".github"), { recursive: true });
+  fs.rmSync(path.join(repo, ".callum-dev/baseline/.github"), { recursive: true });
+  const withoutPr = (text) => {
+    const start = text.indexOf("\n# PR description policy");
+    const end = text.indexOf("appendix: collapsed\n") + "appendix: collapsed\n".length;
+    return text.slice(0, start) + text.slice(end);
+  };
+  for (const file of [".no-mistakes.yaml", ".callum-dev/baseline/.no-mistakes.yaml"]) {
+    fs.writeFileSync(path.join(repo, file), withoutPr(read(repo, file)));
+  }
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(read(repo, ".github/pull_request_template.md"), /^# Evidence$/m);
+  const merged = read(repo, ".no-mistakes.yaml");
+  assert.match(merged, /^pr:\n {2}template: \.github\/pull_request_template\.md$/m);
+  assert.doesNotMatch(merged, /<<<<<<</);
 });
 
 test("update surfaces a genuine conflict with markers and a non-zero exit", (t) => {

@@ -89,7 +89,8 @@ steps.
 
 | File | Strategy on `update` | Contents |
 |---|---|---|
-| `.no-mistakes.yaml` | 3-way merge | Repo owns: lint and test commands, ignore globs, docs policy. Synced: auto-fix limits, agent. |
+| `.no-mistakes.yaml` | 3-way merge | Repo owns: lint and test commands, ignore globs, docs policy. Synced: auto-fix limits, agent, `pr:` description policy. |
+| `.github/pull_request_template.md` | 3-way merge | Synced: the four-heading PR body skeleton that `pr.template` in `.no-mistakes.yaml` enforces. |
 | `CLAUDE.md` | 3-way merge | Synced: global agent rules, ephemeral-container rules. Repo owns: canonical commands, sub-agent isolation. |
 | `.claude/settings.json` | key-path merge: template keys synced, repo-added keys kept, `permissions.allow` unioned | Synced: marketplace, `callum-flow@callum` enabled, the flow's allow list. Repo owns: any key the template does not have, extra allow entries. |
 | `.devcontainer/devcontainer.json` | 3-way merge | Repo owns: name, image or build, env, extra mounts. Synced: the four per-repo `/persist` volumes. |
