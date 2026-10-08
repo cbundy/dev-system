@@ -16,6 +16,9 @@ check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, an
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'
 check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" in_image '
   [ -x "$(command -v callum-flow-fix-linkage)" ] && callum-flow-fix-linkage 7 --bogus 2>/dev/null; [ $? = 2 ]'
+check "callum-flow-claim and callum-flow-sweep are on PATH and exit 2 on bad arguments" in_image '
+  callum-flow-claim 2>/dev/null; [ $? = 2 ] && ! callum-flow-claim abc 2>/dev/null &&
+  callum-flow-sweep --bogus 2>/dev/null; [ $? = 2 ]'
 check "dev-prune-worktrees is installed and runs a dry run in a repo with no bridge worktrees" in_image '
   git init -q /tmp/prune-r && dev-prune-worktrees --workspace /tmp/prune-r | grep -q "no bridge worktrees"'
 check "codex helper binaries are installed (codex-code-mode-host)" in_image '

@@ -1,0 +1,107 @@
+#!/bin/sh
+#
+# callum-flow-sweep: release stale `In development` labels so no issue stays
+# claimed forever (cbundy/dev-system#220). Pairs with callum-flow-claim, whose
+# claim comments carry the lease. Handles open AND closed issues.
+#
+# Usage: callum-flow-sweep
+#
+# Rules, applied in this order to each `In development` issue:
+#   1. Closed: remove the label. No comment, no event.
+#   2. Open, with a PR merged after the newest claim comment was created (a
+#      merged PR that closes or just references the issue shows up as a
+#      `cross-referenced` timeline event): remove the label. No comment, no
+#      event (`merged` is logged elsewhere).
+#   3. Open, newest claim comment expired (server updated_at + the comment's
+#      own `lease:`): remove `In development`, add `ready`, unassign the
+#      claimant, comment why, and log `callum-flow-event reclaimed`.
+#   4. Open with no claim comment (legacy or hand claims): untouched, one
+#      stderr note. Never flipped to `ready`.
+# Each issue is re-read directly (not through the label list, which lags)
+# and skipped when it no longer carries the label, so a second run right
+# after the first writes nothing.
+#
+# Exit codes: 0 ok, 1 a gh failure (the other issues are still swept), 2 usage
+# error. Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL,
+# CALLUM_FLOW_IN_DEV_LABEL; for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN.
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+READY=${CALLUM_FLOW_READY_LABEL:-ready}
+INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
+
+err() { echo "callum-flow-sweep: $*" >&2; }
+if [ $# -ne 0 ]; then
+  err "takes no arguments"
+  echo "usage: callum-flow-sweep" >&2
+  exit 2
+fi
+command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
+
+repo=${CALLUM_FLOW_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
+[ -n "$repo" ] || { err "cannot determine the repo (set CALLUM_FLOW_REPO)"; exit 1; }
+
+d=$("$GH" api -i rate_limit 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: *//p' | sed -n 1p)
+now=''
+[ -z "$d" ] || now=$(date -u -d "$d" +%s 2>/dev/null) || now=''
+[ -n "$now" ] || now=$(date -u +%s)
+
+list=$("$GH" issue list --label "$INDEV" --state all --json number --limit 500 --jq '.[].number') || {
+  err "cannot list $INDEV issues"
+  exit 1
+}
+
+rc=0
+for n in $list; do
+  view=$("$GH" issue view "$n" --json state,labels) || { err "cannot read #$n"; rc=1; continue; }
+  # The list lags behind edits: trust the direct read.
+  printf '%s' "$view" | jq -e --arg l "$INDEV" '.labels | map(.name) | index($l)' >/dev/null || continue
+  state=$(printf '%s' "$view" | jq -r .state)
+
+  if [ "$state" = CLOSED ]; then
+    "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel closed #$n"; rc=1; }
+    continue
+  fi
+
+  cs=$("$GH" api --paginate "repos/$repo/issues/$n/comments" | jq -s 'add // []') || { err "cannot read comments of #$n"; rc=1; continue; }
+  claim=$(printf '%s' "$cs" | jq -c '
+    [ .[] | select((.body // "") | contains("<!-- callum-flow-claim -->"))
+      | . as $c | ((.body | split("\n"))[0]
+        | capture("^claimed-by: (?<dev>.+) at (?<at>[^ ]+) lease: (?<lease>[0-9]+)")?) as $p
+      | select($p)
+      | {dev: $p.dev, at: $p.at, lease: ($p.lease | tonumber), created: $c.created_at,
+         updated: $c.updated_at, user: ($c.user.login // ""),
+         renewed: ((($c.body | split("\n") | map(select(startswith("renewed: "))) | last) // "") | ltrimstr("renewed: ")),
+         exp: (($c.updated_at | fromdateiso8601) + ($p.lease | tonumber) * 60)} ]
+    | sort_by(.created) | last // empty')
+  if [ -z "$claim" ]; then
+    err "note: #$n is $INDEV with no claim comment (legacy or hand claim) - left alone"
+    continue
+  fi
+  created=$(printf '%s' "$claim" | jq -r .created)
+
+  tl=$("$GH" api --paginate "repos/$repo/issues/$n/timeline" | jq -s 'add // []') || { err "cannot read the timeline of #$n"; rc=1; continue; }
+  if printf '%s' "$tl" | jq -e --arg c "$created" '
+      any(.[]; .event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)' >/dev/null; then
+    "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel merged #$n"; rc=1; }
+    continue
+  fi
+
+  if printf '%s' "$claim" | jq -e --argjson now "$now" '.exp > $now' >/dev/null; then
+    continue
+  fi
+
+  user=$(printf '%s' "$claim" | jq -r .user)
+  set -- --remove-label "$INDEV" --add-label "$READY"
+  [ -z "$user" ] || set -- "$@" --remove-assignee "$user"
+  "$GH" issue edit "$n" "$@" >/dev/null || { err "cannot reclaim #$n"; rc=1; continue; }
+  text=$(printf '%s' "$claim" | jq -r '
+    (if .renewed == "" then "none" else .renewed end) as $r
+    | "Claim lease expired, so the issue goes back to ready. Device: " + .dev + ". Claimed at: " + .at
+      + ". Last renewal: " + $r + ". Lease: " + (.lease | tostring) + " minutes."')
+  "$GH" issue comment "$n" --body "$text" >/dev/null || { err "reclaimed #$n but could not comment"; rc=1; }
+  "$EVENT" reclaimed --issue "$n" --note "lease expired" >/dev/null 2>&1 || err "warning: could not log the reclaimed event for #$n"
+done
+exit "$rc"

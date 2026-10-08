@@ -1,0 +1,179 @@
+#!/bin/sh
+#
+# callum-flow-claim: claim a GitHub issue for this device with a lease, so two
+# orchestrators on different devices never take the same issue
+# (cbundy/dev-system#220). GitHub is the claim store: a claim is one issue
+# comment whose first line is
+#   claimed-by: <device> at <ISO-8601 UTC> lease: <minutes>
+# followed by the hidden marker <!-- callum-flow-claim -->. Scripts find claims
+# by the marker, never by prose.
+#
+# Usage:
+#   callum-flow-claim <issue>
+#   callum-flow-claim --heartbeat [<issue>...]
+#
+# claim: exits 3 without writing if another device holds a live claim. Otherwise
+# it posts its claim comment, re-reads the comments through the API and applies
+# the collision rule - the EARLIEST live claim (server created_at, then id)
+# wins, so any interleaving has exactly one winner. The loser deletes only its
+# own comment, leaves labels and assignee alone (the winner owns them) and exits
+# 3. The winner swaps the labels (`In development` on, `ready` off), assigns
+# @me and logs `callum-flow-event claimed`.
+# --heartbeat: edits this device's live claim comment in place (a `renewed:`
+# line, through the comment API, never a new comment). With no issue numbers it
+# renews every live claim this device holds on an open `In development` issue.
+# Nothing to renew is still exit 0.
+#
+# A claim is live while the comment's server updated_at + its own lease is in
+# the future. "Now" is the server's Date header (the device clock only if that
+# is unavailable); ordering uses server created_at only.
+#
+# Exit codes: 0 ok, 1 a gh failure that left nothing half-done, 2 usage error,
+# 3 claim lost or held by another device.
+#
+# Environment: CALLUM_FLOW_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
+# device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
+# CALLUM_FLOW_READY_LABEL / CALLUM_FLOW_IN_DEV_LABEL (default `ready` /
+# `In development`); for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN.
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+READY=${CALLUM_FLOW_READY_LABEL:-ready}
+INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
+LEASE=${CALLUM_FLOW_LEASE_MINUTES:-120}
+MARKER='<!-- callum-flow-claim -->'
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-claim: $1" >&2
+  echo "usage: callum-flow-claim <issue> | callum-flow-claim --heartbeat [<issue>...]" >&2
+  exit 2
+}
+err() { echo "callum-flow-claim: $*" >&2; }
+
+case "$LEASE" in '' | *[!0-9]* | 0) usage "CALLUM_FLOW_LEASE_MINUTES must be a positive number" ;; esac
+[ $# -ge 1 ] || usage
+mode=claim
+if [ "$1" = --heartbeat ]; then
+  mode=heartbeat
+  shift
+fi
+for a in "$@"; do
+  case "$a" in '' | *[!0-9]*) usage "issue must be a number, got '$a'" ;; esac
+done
+if [ "$mode" = claim ]; then
+  [ $# -eq 1 ] || usage
+fi
+command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
+
+device=${DEV_MACHINE_NAME:-}
+[ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
+[ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+
+repo=${CALLUM_FLOW_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
+[ -n "$repo" ] || { err "cannot determine the repo (set CALLUM_FLOW_REPO)"; exit 1; }
+
+# Server epoch seconds from the Date header; device clock only as a fallback.
+server_now() {
+  d=$("$GH" api -i rate_limit 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: *//p' | sed -n 1p)
+  n=''
+  [ -z "$d" ] || n=$(date -u -d "$d" +%s 2>/dev/null) || n=''
+  [ -n "$n" ] || n=$(date -u +%s)
+  echo "$n"
+}
+iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+
+comments() { "$GH" api --paginate "repos/$repo/issues/$1/comments" | jq -s 'add // []'; }
+
+# Claim comments of a comments array, oldest first, with parsed fields and the
+# epoch at which each expires. Args: --argjson now.
+# shellcheck disable=SC2016
+CLAIMS_JQ='
+  [ .[] | select((.body // "") | contains("<!-- callum-flow-claim -->"))
+    | . as $c | ((.body | split("\n"))[0]
+      | capture("^claimed-by: (?<dev>.+) at (?<at>[^ ]+) lease: (?<lease>[0-9]+)")?) as $p
+    | select($p)
+    | {id: $c.id, dev: $p.dev, at: $p.at, lease: ($p.lease | tonumber), created: $c.created_at,
+       updated: $c.updated_at, user: ($c.user.login // ""), body: $c.body,
+       exp: (($c.updated_at | fromdateiso8601) + ($p.lease | tonumber) * 60)} ]
+  | sort_by([.created, .id])'
+
+if [ "$mode" = heartbeat ]; then
+  rc=0
+  issues="$*"
+  if [ -z "$issues" ]; then
+    issues=$("$GH" issue list --label "$INDEV" --state open --json number --limit 200 --jq '.[].number') || {
+      err "cannot list $INDEV issues"
+      exit 1
+    }
+  fi
+  now=$(server_now)
+  for n in $issues; do
+    cs=$(comments "$n") || { err "cannot read comments of #$n"; rc=1; continue; }
+    mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
+      "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | last // empty')
+    [ -n "$mine" ] || continue
+    id=$(printf '%s' "$mine" | jq -r .id)
+    body=$(printf '%s' "$mine" | jq -r --arg ts "$(iso "$now")" \
+      '[(.body | split("\n") | map(select(startswith("renewed: ") | not)) | join("\n") | rtrimstr("\n")), "renewed: " + $ts] | join("\n")')
+    "$GH" api -X PATCH "repos/$repo/issues/comments/$id" -f "body=$body" >/dev/null || {
+      err "cannot renew the claim on #$n"
+      rc=1
+    }
+  done
+  exit "$rc"
+fi
+
+# --- claim --------------------------------------------------------------------
+n=$1
+now=$(server_now)
+
+cs=$(comments "$n") || { err "cannot read comments of #$n"; exit 1; }
+foreign=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
+  "$CLAIMS_JQ"' | map(select(.dev != $dev and .exp > $now)) | first | if . then "\(.dev) since \(.at)" else empty end')
+if [ -n "$foreign" ]; then
+  err "#$n is held by $foreign"
+  exit 3
+fi
+# A live claim of our own (a restarted orchestrator): keep it, make sure the
+# labels are right, post nothing new.
+ownlive=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
+  "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | first | .id // empty')
+
+set_labels() {
+  "$GH" issue edit "$n" --add-label "$INDEV" --remove-label "$READY" --add-assignee @me >/dev/null
+}
+
+if [ -n "$ownlive" ]; then
+  set_labels || { err "cannot update the labels of #$n"; exit 1; }
+  exit 0
+fi
+
+body="claimed-by: $device at $(iso "$now") lease: $LEASE
+$MARKER"
+posted=$("$GH" api -X POST "repos/$repo/issues/$n/comments" -f "body=$body") || {
+  err "cannot post the claim comment on #$n"
+  exit 1
+}
+mine=$(printf '%s' "$posted" | jq -r '.id // empty')
+[ -n "$mine" ] || { err "claim comment on #$n has no id"; exit 1; }
+
+drop_mine() { "$GH" api -X DELETE "repos/$repo/issues/comments/$mine" >/dev/null 2>&1 || err "could not delete claim comment $mine on #$n"; }
+
+cs=$(comments "$n") || { drop_mine; err "cannot re-read comments of #$n"; exit 1; }
+now=$(server_now)
+winner=$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .id // empty')
+if [ "$winner" != "$mine" ]; then
+  drop_mine
+  err "lost the claim on #$n to another device"
+  exit 3
+fi
+
+if ! set_labels; then
+  drop_mine
+  err "cannot update the labels of #$n - claim withdrawn"
+  exit 1
+fi
+"$EVENT" claimed --issue "$n" >/dev/null 2>&1 || err "warning: could not log the claimed event"
+exit 0

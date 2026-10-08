@@ -1140,6 +1140,17 @@ checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overr
 it is allowed only in the main checkout's `settings.local.json`; the read-only
 `check-pr-linkage.sh` stays in the synced allow list.
 
+`callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
+(`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
+and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
+and exits 3), then swaps `ready` for `In development` and logs `claimed`. `--heartbeat
+[issue...]` renews this device's claim comments in place. `callum-flow-sweep` releases stale
+`In development` labels on open and closed issues: closed or merged-PR issues just lose the
+label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an
+issue with no claim comment is left alone. Liveness uses GitHub server times; the lease is
+120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
+`.claude/settings.json` keys, which `callum-dev update` resets).
+
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
