@@ -319,6 +319,12 @@ with `run_in_background` - never fall back to polling inline.
     watcher is armed afterward.
   - **`cancelled`** - the run was cancelled; decide whether to re-drive or
     drop it.
+  - **`ci-stalled`** - CI never started. `reason=no-workflow`: skip the 168h
+    wait; tell the owner the default branch has no CI workflow, point to the
+    onboarding step that creates `.github/workflows/ci.yml`, do not merge.
+    `reason=no-checks`: `gh pr close <pr> && gh pr reopen <pr>` once; if it
+    stalls again on the same head, tell the owner the workflow's triggers do
+    not match this PR.
 
 ## Merge guard
 The watcher changes only **when** a merge is considered, never **that** it is
