@@ -34,6 +34,18 @@ auto_fix:
   lint: 5
   ci: 3
 
+# PR description policy, read only from the trusted default branch. Synced as a whole: YAML
+# allows one `pr:` key, so a repo cannot override `template` in a repo-owned block - edit its
+# copy of .github/pull_request_template.md instead (callum-dev update 3-way merges it).
+# template: the agent fills this file; its top-level "#" headings are enforced, and a failed
+#   fill refuses to publish rather than falling back to a generic body. Needs no-mistakes 1.75.0+.
+# publish_intent: false stops the run's --intent brief being pasted into the PR as "## Intent".
+# appendix: collapsed folds Risk/Testing/Pipeline evidence into one closed "Validation" block.
+pr:
+  template: .github/pull_request_template.md
+  publish_intent: false
+  appendix: collapsed
+
 # The pipeline's agent order is set fleet-wide in each workspace's global no-mistakes config,
 # from dev-system's images/base/models.env (env DEV_NM_AGENTS). To override it for this repo,
 # set `agent:` in a repo-owned block - that replaces the global order entirely.

@@ -100,7 +100,8 @@ steps.
 
 | File | Strategy on `update` | Contents |
 |---|---|---|
-| `.no-mistakes.yaml` | 3-way merge | Repo owns: lint and test commands, ignore globs, docs policy. Synced: auto-fix limits, agent. |
+| `.no-mistakes.yaml` | 3-way merge | Pipeline config; see [template ownership rules](../templates/README.md). |
+| `.github/pull_request_template.md` | 3-way merge | Synced: the four-heading PR body skeleton that `pr.template` in `.no-mistakes.yaml` enforces. |
 | `CLAUDE.md` | 3-way merge | Synced: global agent rules, ephemeral-container rules. Repo owns: canonical commands, sub-agent isolation. |
 | `.claude/settings.json` | key-path merge: template keys synced, repo-added keys kept, `permissions.allow` unioned | Synced: marketplace, `callum-flow@callum` enabled, the flow's allow list. Repo owns: any key the template does not have, extra allow entries. |
 | `.devcontainer/devcontainer.json` | 3-way merge | Repo owns: name, image or build, env, extra mounts. Synced: the four per-repo `/persist` volumes. |
@@ -118,10 +119,9 @@ Never committed: `.claude/settings.local.json`. It holds powers that only the or
 in the main checkout gets (`gh pr merge`, `gh pr edit`, `no-mistakes axi respond`,
 watchers). Treehouse worktrees start without it, so a worktree sub-agent cannot merge.
 
-The split between synced and repo-owned content is marked inline:
-`--- synced: do not edit ---` / `--- repo-owned: edit freely ---`, in each file's comment
-syntax. JSON has no comments, so the split for `settings.json` is documented in
-[`templates/README.md`](../templates/README.md). `update` uses `git merge-file`, leaves
+The per-file split between synced and repo-owned content, including files without ownership
+markers, is documented in [`templates/README.md`](../templates/README.md).
+`update` uses `git merge-file`, leaves
 real conflicts as markers and exits non-zero. A missing or edited baseline breaks the merge,
 so the baseline is committed.
 
@@ -169,7 +169,7 @@ above. `dev-init` is safe to re-run. For its `--repo` and `--plugins` modes, see
 
 - Shared skills are generic and stateless. Repo-specific state lives at repo-local paths in
   the consumer (e.g. `.claude/orchestrator-memory.md`), never in the skill.
-- Every synced file splits into synced and repo-owned parts, so `update` merges cleanly.
+- Template customization follows the [per-file ownership rules](../templates/README.md).
   Differences between repos live in data the skills read, never in forked skill text.
 - Shared behaviour changes here, gets released, and is pulled by consumers.
 - The image holds no secrets and no checkout. Secrets come from the runtime at

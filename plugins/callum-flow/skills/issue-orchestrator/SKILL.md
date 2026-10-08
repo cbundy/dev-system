@@ -386,11 +386,9 @@ following guards fire, and none of them is weakened:
    made after the run started - that only ever belongs to the first case,
    never the second or third. A green run whose head predates a later fix
    proves nothing about that fix.
-2. **Issue<->PR linkage.** Verify the closing keyword matches intent, with the
-   issue number derived from the branch (see Linkage) -
-   `gh pr view <pr> --json closingIssuesReferences --jq '[.closingIssuesReferences[]|.number]'`
-   - before merging, and again after any body rewrite (rewrites can silently drop
-   or introduce a closing keyword).
+2. **Issue<->PR linkage.** Run `check-pr-linkage.sh` once before merging (see
+   Linkage). Require `MATCH` or `REPAIRED` with exit 0, or verified manual
+   linkage after `SKIP`. A failed check or repair blocks merging.
 3. **Real GitHub CI, not just `merge-ready`.** A `merge-ready` wake (like
    `no-mistakes`'s own `checks-passed` outcome) reflects the local pipeline's
    view of its gates and of CI, a separate system from GitHub Actions
@@ -431,42 +429,29 @@ following guards fire, and none of them is weakened:
 
 
 ## Linkage (issue <-> PR)
-**The highest-value check in this loop.** The keyword has been wrong on multiple
-PRs in a single session before; every one was CI-green and mergeable while
-silently unlinked or wrongly linked. Green says nothing about linkage.
+Green CI and "mergeable" say nothing about linkage, and a wrong keyword either
+leaves the issue open forever or closes the wrong one. One script checks it:
 
-- Every PR MUST reference its issue with a GitHub keyword so the link is tracked.
-- Closing PRs: `Closes #N` (auto-links and auto-closes on merge).
-- Keep-open PRs (research/proposal/one part of a multi-part issue): reference
-  with `Refs #N` / `Part of #N`, NOT a closing keyword.
-- ALWAYS verify before merging, and again after ANY body rewrite. Allow a few
-  seconds - GitHub takes a moment to index and briefly reports `[]`:
-  `gh pr view <pr> --json closingIssuesReferences --jq '[.closingIssuesReferences[]|.number]'`
+`/usr/local/share/callum-tools/check-pr-linkage.sh <pr> [--expect refs] [--fix]`
 
-Two distinct failure modes, both seen repeatedly:
-1. **Dropped.** The pipeline writes prose ("Fix GitHub issue #91"), which GitHub does
-   not treat as a link. Merging ships the work and leaves the issue open forever;
-   anything `blocked_by` it then stalls behind a phantom.
-2. **Stray, caused by prose that *explains* the keyword.** GitHub's parser ignores
-   negation and context. Both of these registered as real closing references:
-   `"must NOT close #93"` (closed the tracking epic it was warning about) and
-   `"PR 2, which will actually close #108"`. **Never write close/closes/fixes/resolves
-   followed by an issue number unless you mean it** - say "PR 2 finishes this"
-   instead. The guard rail causes the bug - which is one more reason to keep
-   keyword talk out of delegation briefs (below).
-
-Both modes share one cause: the pipeline regenerates the PR body from the run's
-`--intent` text on every run, so anything a brief says about the keyword arrives
-as an instruction a model must reproduce - and it may emit it, paraphrase it
-("closes issue #N", which GitHub does not parse), or drop it. So do not put
-keyword instructions in a delegation brief, and never treat generated prose as
-the source of truth. Own linkage yourself at merge, deriving the issue number
-mechanically from the branch, which follows the `<type>/issue-<N>-<slug>`
-convention (`implement-issue` section 1); for a branch that does not, take the
-number from your own delegation record. In a repo that merges often, make that
-derivation a script the merge step runs rather than a check to remember. The durable fix is
-upstream - the gate tool could derive the number from the branch itself instead
-of asking a model for a token - so raise it there if you have that channel.
+- It derives the issue number from the `<type>/issue-<N>-<slug>` branch and
+  prints one line: `MATCH`, `MISMATCH`, `REPAIRED` or `SKIP` (no issue in the
+  branch name; take the number from your delegation record and check by hand).
+- Run it once, before merging. Pass `--expect refs` for a keep-open issue
+  (research, proposal, one part of several); it requires `Refs #N` or
+  `Part of #N` for the branch issue and no closing targets. The default
+  expects exactly the branch's issue to be closed.
+- On `MISMATCH`, run it again with the same expectation and `--fix`. Merge
+  only after `MATCH` or `REPAIRED` with exit 0, or the manual check after
+  `SKIP`. Stop on a failed repair, including a preserved Pipeline keyword
+  that still causes `MISMATCH`.
+- Never write close/closes/fixes/resolves before an issue number you do not
+  mean to close: GitHub ignores negation, so "must NOT close #93" closed a real
+  epic. Keep keyword talk out of delegation briefs too.
+- A PR whose base is not the default branch (an epic branch) never registers
+  closing references, so the script checks the body instead. The issue will not
+  close on merge: for a closing PR, close it by hand with a comment naming the
+  merged PR. Keep-open issues (`--expect refs`) must remain open.
 
 ## Merge and close discipline
 - Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
@@ -504,17 +489,10 @@ of asking a model for a token - so raise it there if you have that channel.
 Keep them brief and head-of-engineering-ready: high-level what and why, ready to
 go, no low-level implementation detail. Include screenshots for visual changes.
 
-**Expect to rewrite every pipeline-generated body.** They are built from the
-sub-agent's `--intent` text, so they arrive as a wall of implementation detail,
-routinely leak the delegation brief verbatim ("PR must contain 'Closes #96'", notes
-about other agents), and have on occasion contained a hallucinated Intent section
-describing an entirely unrelated task. Preserve the auto-generated `## Pipeline`
-section verbatim and replace only the human-facing part:
-```
-gh pr view <pr> --json body --jq '.body' | sed -n '/^## Pipeline/,$p' > pipeline.md
-cat newbody.md pipeline.md > final.md && gh pr edit <pr> --body-file final.md
-```
-Then re-verify linkage - a rewrite can drop or introduce a closing keyword.
+Check each pipeline-generated body before merge: they are built from the
+sub-agent's `--intent` text and can leak the delegation brief or describe an
+unrelated task. Fix the human-facing part with `gh pr edit`, leaving the
+auto-generated `## Pipeline` section as it is.
 
 
 ## Memory

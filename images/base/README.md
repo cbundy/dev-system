@@ -23,7 +23,7 @@ them, so those scripts stay maintained.
    | Node LTS + npm | base image (`mcr.microsoft.com/devcontainers/javascript-node:24-trixie`) | image rebuild |
    | Claude Code | Anthropic's native installer, as `node` | **auto-updates in the running container** |
    | codex | `npm i -g @openai/codex`, as `node` (npm prefix is node-owned) | `npm i -g` as `node`, or image rebuild |
-   | no-mistakes | its install script, as `node` | `no-mistakes update`, or image rebuild |
+   | no-mistakes | its install script, as `node` (unpinned, so each image rebuild takes the latest; the synced `pr:` block needs 1.75.0 or newer) | `no-mistakes update`, or image rebuild |
    | treehouse | its install script, as `node` | image rebuild |
    | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
@@ -58,7 +58,7 @@ them, so those scripts stay maintained.
 12. Opt-in OpenTelemetry export for Claude Code and codex, on only when the runtime sets
     `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Telemetry](#telemetry-opentelemetry-export)).
 
-The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
+The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the pre-merge issue-linkage check) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
 orchestrator skill works unchanged. By default each prints one event line and exits; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each

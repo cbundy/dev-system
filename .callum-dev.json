@@ -4,6 +4,7 @@
   "devcontainer": "base-image",
   "files": [
     ".no-mistakes.yaml",
+    ".github/pull_request_template.md",
     "treehouse.toml",
     "CLAUDE.md",
     ".claude/settings.json",
