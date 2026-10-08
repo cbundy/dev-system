@@ -164,8 +164,8 @@ re-arm.
 
 ## Per-issue pipeline
 1. **Claim** - only when the usage gate allows new work (see Usage gate).
-   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
-   (not just removal) marks active work so a crashed agent is recoverable.
+   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL` (marks active
+   work so a crashed agent is recoverable). Log: `callum-flow-event claimed --issue <N>`.
 2. **Design** - spawn the named `callum-flow:designer` agent with the issue number,
    the branches in flight and the shared files they touch, owner instructions from
    this session, and pointers to `CLAUDE.md` and `.claude/orchestrator-memory.md`.
@@ -176,17 +176,9 @@ re-arm.
 3. **Delegate** the brief *pointer* (the comment URL, never its content) to the
    named `callum-flow:implementer` agent, plus a pointer to the `implement-issue`
    skill, which owns the *how* (worktree, `/no-mistakes`, evidence, quality bar,
-   handoff, fire-and-forget termination). You own the merge and the issue
-   linkage (see Linkage) - do not have the sub-agent merge.
-4. **Verify and merge** when the PR lands (see Merge discipline).
-
-## Event log
-`callum-flow-event <state> --issue <N>` appends one line per transition to the
-factory log (never fails, no network; bare, it lists the states). The watchers
-write their own events (`ready`, `parked`, `merge_ready`, `conflict`,
-`head_mismatch`, `failed`, `watcher_error`, `usage`); you add the ones above
-plus `merged` (`--pr <P>`, after the merge) and `abandoned` (`--note <why>`
-when you give an issue up).
+   handoff, fire-and-forget termination). You own the merge and linkage (see
+   Linkage). Log `delegated`; spawn with `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
+4. **Verify and merge** when the PR lands (see Merge discipline). Log `merged`, `verdict`, `abandoned` (bare `callum-flow-event` lists states).
 
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
@@ -290,7 +282,7 @@ with `run_in_background` - never fall back to polling inline.
     shows only that a human overrode a finding, never whether it was wrong or
     merely not actionable, and those call for opposite responses; the prefix
     makes the reviewer's good-vs-bad rate a query rather than someone's
-    recollection (`callum-flow-event verdict --issue <N> --note "WRONG: ..."`). Where the run can store it, pass it as `--reason` on
+    recollection. Where the run can store it, pass it as `--reason` on
     `--action approve`, which persists with the approval - check `axi respond
     --help` for the gates that accept it (currently only the Test step). The
     other approvals, and `--action fix` (whose `--instructions` text is not
