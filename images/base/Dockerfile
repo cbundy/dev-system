@@ -166,7 +166,7 @@ RUN arch=$(dpkg --print-architecture) \
   && curl -fsSL -o "$tmp/coder.tar.gz" \
     "https://github.com/coder/coder/releases/download/v${CODER_VERSION}/coder_${CODER_VERSION}_linux_${arch}.tar.gz" \
   && echo "$sha256  $tmp/coder.tar.gz" | sha256sum -c - \
-  && tar -xzf "$tmp/coder.tar.gz" -C "$tmp" coder \
+  && tar -xzf "$tmp/coder.tar.gz" -C "$tmp" ./coder \
   && install -m 0755 "$tmp/coder" /usr/local/bin/coder \
   && rm -rf "$tmp" \
   && coder version
