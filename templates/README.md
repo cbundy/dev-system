@@ -70,7 +70,8 @@ Global agent instructions.
 Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
 generic `permissions.allow` list the implement-issue/orchestrator flow needs
 (`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
-`treehouse get/return/status`, `gh issue/pr view/pr checks/pr list`) - see
+`treehouse get/return/status`, `gh issue/pr view/pr checks/pr list`,
+`callum-flow-merge-guard`, the check-only merge guard) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
 Claude Code plugin's own `settings.json` only applies its `agent` and
 `subagentStatusLine` keys; every other key, including `permissions`, is dropped at
@@ -107,7 +108,8 @@ values are compared whole):
   define counts as repo-owned and is kept, and every current `permissions.allow` entry
   is unioned in.
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
-  `gh pr merge`, `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
+  `gh pr merge`, `callum-flow-merge` (the guarded merge; only the check-only
+  `callum-flow-merge-guard` is synced), `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
   `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
   rule for them here: committed settings apply in the main checkout too, so a `deny`

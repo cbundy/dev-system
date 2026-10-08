@@ -1,0 +1,175 @@
+#!/bin/sh
+#
+# callum-flow-merge-guard: check, without changing anything, that a PR is safe
+# to merge (cbundy/dev-system#219). It only reads: callum-flow-merge is the
+# separate command that merges, so allowing this one in the synced permission
+# list cannot let a worktree sub-agent merge.
+#
+# Usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID]
+#          [--base BRANCH] [--issue N] [--emit-verified]
+#
+# Guards (every one is evaluated and reported, none short-circuits):
+#   head     the run's head_sha equals a fresh origin/<branch> and the PR head
+#   linkage  check-pr-linkage.sh reports MATCH (SKIP passes only with --base)
+#   checks   at least one CI check, all pass or skipping
+#   gates    the run has no awaiting_ step and is not failed or aborted
+#   base     the PR targets the default branch, or --base BRANCH
+#
+# Output: nothing when every guard passes; otherwise one line per failed guard,
+#   GUARD <name> FAIL <reason>
+# --emit-verified adds, on success only, one line for callum-flow-merge:
+#   VERIFIED pr=N branch=B head=SHA run=ID issue=N
+#
+# Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
+#
+# Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
+# (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh).
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
+LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
+  echo "usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID] [--base BRANCH] [--issue N] [--emit-verified]" >&2
+  exit 2
+}
+
+pr='' expect=closing run='' base='' issue='' emit=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage ;;
+    --emit-verified) emit=1 ;;
+    --expect | --run | --base | --issue)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      case "$1" in
+        --expect) expect=$2 ;;
+        --run) run=$2 ;;
+        --base) base=$2 ;;
+        --issue) issue=$2 ;;
+      esac
+      shift
+      ;;
+    -*) usage "unknown option '$1'" ;;
+    *) [ -z "$pr" ] || usage "unexpected argument '$1'"; pr=$1 ;;
+  esac
+  shift
+done
+[ -n "$pr" ] || usage "missing <pr>"
+case "$pr" in *[!0-9]*) usage "<pr> must be a number" ;; esac
+case "$expect" in closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
+case "$issue" in *[!0-9]*) usage "--issue must be a number" ;; esac
+command -v jq > /dev/null 2>&1 || usage "jq not found"
+
+failed=0
+fail() {
+  failed=1
+  printf 'GUARD %s FAIL %s\n' "$1" "$2"
+}
+
+# one_line: collapse stdin to a single trimmed line
+one_line() { tr '\n' ' ' | sed 's/[[:space:]]*$//'; }
+clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
+field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
+
+branch='' pr_head='' pr_base=''
+if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName 2> /dev/null); then
+  branch=$(printf '%s' "$pj" | jq -r '.headRefName // empty')
+  pr_head=$(printf '%s' "$pj" | jq -r '.headRefOid // empty')
+  pr_base=$(printf '%s' "$pj" | jq -r '.baseRefName // empty')
+fi
+
+# --- run lookup (head and gates) ---------------------------------------------
+status_out=''
+if [ -n "$branch" ]; then
+  if [ -z "$run" ]; then
+    ids=$($NM runs --limit 200 2> /dev/null | clean | awk '
+      /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ && NF >= 3 && !seen[$2]++ { print $2 }' | sed -n 1,30p)
+    for id in $ids; do
+      o=$($NM axi status --run "$id" 2> /dev/null | clean) || continue
+      if [ "$(field "$o" branch)" = "$branch" ]; then
+        run=$id
+        status_out=$o
+        break
+      fi
+    done
+  else
+    status_out=$($NM axi status --run "$run" 2> /dev/null | clean) || status_out=''
+  fi
+fi
+
+# --- head --------------------------------------------------------------------
+if [ -z "$branch" ]; then
+  fail head "cannot read PR #$pr"
+elif [ -z "$status_out" ]; then
+  fail head "no pipeline run found for $branch"
+else
+  run_sha=$(field "$status_out" head_sha)
+  origin_sha=unknown
+  if git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2> /dev/null; then
+    origin_sha=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}" 2> /dev/null) || origin_sha=unknown
+  fi
+  if [ -z "$run_sha" ] || [ "$run_sha" != "$origin_sha" ] || [ "$run_sha" != "$pr_head" ]; then
+    fail head "run=${run_sha:-unknown} origin=$origin_sha pr=${pr_head:-unknown} (run $run)"
+  fi
+fi
+
+# --- linkage -----------------------------------------------------------------
+lk_out=$("$LINKAGE" "$pr" --expect "$expect" 2> /dev/null)
+lk_rc=$?
+lk_line=$(printf '%s\n' "$lk_out" | sed -n 1p)
+case "$lk_line" in
+  MATCH*) [ "$lk_rc" -eq 0 ] || fail linkage "exit $lk_rc: $lk_line" ;;
+  SKIP*)
+    if [ "$lk_rc" -ne 0 ] || [ -z "$base" ] || [ "$pr_base" != "$base" ]; then
+      fail linkage "${lk_line:-no output} (SKIP passes only with --base matching the PR base)"
+    fi
+    ;;
+  *) fail linkage "${lk_line:-exit $lk_rc, no output}" ;;
+esac
+if [ -z "$issue" ]; then
+  issue=$(printf '%s' "$lk_line" | sed -n 's/.* issue=#\([0-9][0-9]*\).*/\1/p')
+fi
+
+# --- checks ------------------------------------------------------------------
+if cj=$($GH pr checks "$pr" --json name,bucket 2> /dev/null) || [ -n "${cj-}" ]; then
+  if ! printf '%s' "$cj" | jq -e 'type == "array"' > /dev/null 2>&1; then
+    fail checks "cannot parse checks"
+  elif [ "$(printf '%s' "$cj" | jq 'length')" = 0 ]; then
+    fail checks "no checks reported"
+  else
+    bad=$(printf '%s' "$cj" | jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name)=\(.bucket)"] | join(", ")')
+    [ -z "$bad" ] || fail checks "$bad"
+  fi
+else
+  fail checks "cannot read checks"
+fi
+
+# --- gates -------------------------------------------------------------------
+if [ -z "$status_out" ]; then
+  fail gates "no pipeline run to read"
+else
+  rstatus=$(field "$status_out" status)
+  if printf '%s\n' "$status_out" | grep -q 'awaiting_'; then
+    fail gates "run $run has a step awaiting approval: $(printf '%s\n' "$status_out" | grep 'awaiting_' | sed -n 1p | sed 's/^[[:space:]]*//' | one_line)"
+  fi
+  case "$rstatus" in
+    '') fail gates "run $run reports no status" ;;
+    *failed* | *aborted* | *cancel*) fail gates "run $run is $rstatus" ;;
+  esac
+fi
+
+# --- base --------------------------------------------------------------------
+if [ -z "$pr_base" ]; then
+  fail base "cannot read the PR base"
+else
+  default=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default=''
+  if [ "$pr_base" != "$default" ] && [ "$pr_base" != "$base" ]; then
+    fail base "PR targets $pr_base, default branch is ${default:-unknown}${base:+, --base is $base}"
+  fi
+fi
+
+[ "$failed" -eq 0 ] || exit 1
+[ -z "$emit" ] || printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue"
+exit 0

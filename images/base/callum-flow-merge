@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# callum-flow-merge: run callum-flow-merge-guard and, only if every guard
+# passes, squash-merge the PR and log the `merged` event (cbundy/dev-system#219).
+# This is the one command that can merge, so it is allowed only in the main
+# checkout's gitignored .claude/settings.local.json, never in the synced
+# allow list.
+#
+# Usage: callum-flow-merge <pr> [--method squash|merge|rebase] [guard options]
+#   Guard options (--expect, --run, --base, --issue) go straight to the guard.
+#   The merge method is squash unless --method or CALLUM_FLOW_MERGE_METHOD
+#   (a per-repo override) says otherwise.
+#
+# The merge is `gh pr merge <pr> --<method> --match-head-commit <sha>` with the
+# sha the guard verified, so a push after the check makes GitHub refuse it.
+#
+# Exit codes: 0 merged, 1 a guard failed (its GUARD lines are printed) or the
+# merge was refused, 2 usage error.
+#
+# Environment (for tests): CALLUM_FLOW_GH_BIN, CALLUM_FLOW_GUARD_BIN (the
+# guard, default: beside this script), CALLUM_FLOW_EVENT_BIN
+# (callum-flow-event).
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+GUARD=${CALLUM_FLOW_GUARD_BIN:-$here/callum-flow-merge-guard}
+EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+method=${CALLUM_FLOW_MERGE_METHOD:-squash}
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-merge: $1" >&2
+  echo "usage: callum-flow-merge <pr> [--method squash|merge|rebase] [--expect closing|refs] [--run ID] [--base BRANCH] [--issue N]" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+pr=$1
+shift
+case "$pr" in '' | -* | *[!0-9]*) usage "<pr> must be a number" ;; esac
+
+# Rebuild the guard arguments without --method.
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  n=$((n - 1))
+  if [ "$a" = --method ]; then
+    [ "$n" -gt 0 ] || usage "--method needs a value"
+    method=$1
+    shift
+    n=$((n - 1))
+  else
+    set -- "$@" "$a"
+  fi
+done
+case "$method" in squash | merge | rebase) ;; *) usage "method must be squash, merge or rebase" ;; esac
+
+out=$("$GUARD" "$pr" "$@" --emit-verified)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  [ -z "$out" ] || printf '%s\n' "$out"
+  exit "$rc"
+fi
+v=$(printf '%s\n' "$out" | sed -n 's/^VERIFIED //p' | sed -n 1p)
+get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue)
+[ -n "$sha" ] || { echo "callum-flow-merge: the guard verified no head sha - not merging" >&2; exit 1; }
+
+if ! $GH pr merge "$pr" "--$method" --match-head-commit "$sha"; then
+  echo "callum-flow-merge: gh refused to merge #$pr (a push after the check, or a branch rule)" >&2
+  exit 1
+fi
+
+set -- merged --pr "$pr" --branch "$branch" --head "$sha"
+[ -z "$run" ] || set -- "$@" --run "$run"
+[ -z "$issue" ] || set -- "$@" --issue "$issue"
+$EVENT "$@" || echo "callum-flow-merge: warning: merged event not recorded" >&2
+exit 0
