@@ -69,8 +69,10 @@ get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
 branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue)
 [ -n "$sha" ] || { echo "callum-flow-merge: the guard verified no head sha - not merging" >&2; exit 1; }
 
-if ! merge_err=$($GH pr merge "$pr" "--$method" --match-head-commit "$sha" 2>&1); then
-  [ -z "$merge_err" ] || printf '%s\n' "$merge_err" >&2
+merge_rc=0
+merge_err=$($GH pr merge "$pr" "--$method" --match-head-commit "$sha" 2>&1) || merge_rc=$?
+[ -z "$merge_err" ] || printf '%s\n' "$merge_err" >&2
+if [ "$merge_rc" -ne 0 ]; then
   now=$($GH pr view "$pr" --json headRefOid,mergeStateStatus 2> /dev/null) || now=''
   now_sha=$(printf '%s' "$now" | jq -r '.headRefOid // empty' 2> /dev/null)
   now_state=$(printf '%s' "$now" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
