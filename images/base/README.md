@@ -1133,7 +1133,10 @@ gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard
 is in the synced allow list. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
-checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash.
+checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
+unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
+seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
+moved since the check or GitHub's branch rules refused, and logs no event.
 
 `callum-flow-fix-linkage <pr> [--expect closing|refs]` repairs a PR body's issue linkage
 (`Closes #N` / `Refs #N`) and re-checks it. It edits the PR, so, like `callum-flow-merge`,
