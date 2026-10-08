@@ -445,7 +445,8 @@ leaves the issue open forever or closes the wrong one. One script checks it:
   epic. Keep keyword talk out of delegation briefs too.
 - A PR whose base is not the default branch (an epic branch) never registers
   closing references, so the script checks the body instead. The issue will not
-  close on merge: close it by hand with a comment naming the merged PR.
+  close on merge: for a closing PR, close it by hand with a comment naming the
+  merged PR. Keep-open issues (`--expect refs`) must remain open.
 
 ## Merge and close discipline
 - Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
