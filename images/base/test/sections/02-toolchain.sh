@@ -29,3 +29,10 @@ check "models.env and models.sh are baked in, and the old codex-model.default is
   models_value /usr/local/share/dev-system/models.env CODEX_MODEL &&
   models_value /usr/local/share/dev-system/models.env CLAUDE_MODEL &&
   [ ! -e /usr/local/share/dev-system/codex-model.default ]'
+# The Coder CLI is pinned to the deployment's server version by the Dockerfile's
+# CODER_VERSION: a mismatched CLI silently ignores flags (cbundy/dev-system#108).
+coder_pin=$(sed -n 's/^ARG CODER_VERSION=//p' "$(dirname "${BASH_SOURCE[0]}")/../../Dockerfile")
+check "coder CLI runs as node and reports the Dockerfile's CODER_VERSION pin ($coder_pin)" in_image "
+  [ \"\$(id -un)\" = node ] && [ -n '$coder_pin' ] &&
+  coder version | grep -q 'v$coder_pin'" \
+  --entrypoint ""

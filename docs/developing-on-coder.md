@@ -35,6 +35,9 @@ Follow the [template's first-run login instructions](../coder/dev-system/README.
 including its gh sharing option and the `workflow` scope requirement for pushing changes
 to `.github/workflows/`.
 
+The workspace image includes the `coder` CLI, pinned to the server version. To use it from
+the workspace, see [Coder CLI](../images/base/README.md#coder-cli) for the recommended auth.
+
 ## What the workspace cannot verify
 
 `npm run lint` and `npm test` run as normal, including the plain-shell feature tests.
