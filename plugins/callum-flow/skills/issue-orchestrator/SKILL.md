@@ -253,10 +253,10 @@ with `run_in_background` - never fall back to polling inline.
     worktree, so the head cannot drift and there is no second writer on the
     branch. Never read the gate's log or the diff yourself - a judge does:
     1. **Cap check first.** Count this run's review fix rounds in the local event log:
-       `jq -s --arg r <RUN_ID> '[.[] | select(.run==$r and .state=="fix_requested" and .note=="review")] | length' /persist/events/<owner>__<repo>.jsonl`.
+       `jq -s --arg r <RUN_ID> '[.[] | select(.run_id==$r and .state=="fix_requested" and .note=="review")] | length' /persist/events/<owner>__<repo>.jsonl`.
        When the gate is `review` and the count is already 3, the next response would start
        a fourth round: do not respond. Surface the brief URL and the run's `verdict`
-       lines (same file, `state=="verdict"`, same `run`) to the owner and wait.
+       lines (same file, `state=="verdict"`, same `run_id`) to the owner and wait.
     2. **Spawn `callum-flow:adjudicator`** (no `model` argument, except the `model:<alias>`
        rule) with the run id, branch, brief comment URL and the parked step. It returns
        verdict lines (`CORRECT|WRONG|NIT|ENV|DUP: <reason>`, one per finding) and one
