@@ -160,25 +160,25 @@ fi
 
 # current_targets: the issues this PR closes (API) or will claim to close (body).
 current_targets() {
-  local json
-  json="$("$GH_BIN" pr view "$PR" --json body,closingIssuesReferences)"
+  PR_JSON="$("$GH_BIN" pr view "$PR" --json body,closingIssuesReferences)"
+  BODY_TARGETS="$(printf '%s' "$PR_JSON" | nodeb field body | nodeb scan)"
   if [[ "$VIA" == api ]]; then
-    printf '%s' "$json" | nodeb field closing
+    CURRENT="$(printf '%s' "$PR_JSON" | nodeb field closing)"
   else
-    printf '%s' "$json" | nodeb field body | nodeb scan
+    CURRENT="$BODY_TARGETS"
   fi
 }
 
 verify() {
   if [[ "$EXPECT" == closing ]]; then
-    [[ "$CURRENT" == "[${ISSUE}]" ]]
+    [[ "$CURRENT" == "[${ISSUE}]" && "$BODY_TARGETS" == "[${ISSUE}]" ]]
   else
-    [[ "$CURRENT" == "[]" ]]
+    [[ "$CURRENT" == "[]" && "$BODY_TARGETS" == "[]" ]]
   fi
 }
 
-CURRENT="$(current_targets)"
-REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT}"
+current_targets
+REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT} body=${BODY_TARGETS}"
 
 if verify; then
   echo "MATCH #${PR} ${REPORT}"
@@ -207,14 +207,14 @@ printf '%s' "${NEW_BODY%X}" >"$TMP"
 # GitHub takes a moment to index a body edit and can briefly report the old linkage.
 attempt=0
 while true; do
-  CURRENT="$(current_targets)"
+  current_targets
   verify && break
   attempt=$((attempt + 1))
   [[ "$attempt" -lt "$MAX_ATTEMPTS" ]] || break
   sleep "$SLEEP_SECS"
 done
 
-REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT}"
+REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT} body=${BODY_TARGETS}"
 if verify; then
   echo "REPAIRED #${PR} ${REPORT}"
   exit 0

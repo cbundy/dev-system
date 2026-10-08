@@ -33,7 +33,8 @@ case "$1 $2" in
       const fs = require("fs"), d = process.argv[1];
       const r = (f) => fs.readFileSync(d + "/" + f, "utf8").replace(/\n$/, "");
       const body = fs.readFileSync(d + "/body", "utf8");
-      const matches = r("base") === "main" ? [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:(?:([\w.-]+)\/([\w.-]+))?#|https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/)(\d+)\b/gi)] : [];
+      const apiBody = process.env.STUB_API_BODY || body;
+      const matches = r("base") === "main" ? [...apiBody.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:(?:([\w.-]+)\/([\w.-]+))?#|https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/)(\d+)\b/gi)] : [];
       const refs = matches.map((m) => ({number: Number(m[5]), repository: {owner: {login: m[1] || m[3] || "local"}, name: m[2] || m[4] || "repo"}}));
       refs.sort((a, b) => a.number - b.number);
       console.log(JSON.stringify({ headRefName: r("head"), baseRefName: r("base"),
@@ -44,6 +45,9 @@ case "$1 $2" in
   "pr edit")
     [ "$3" = 7 ] && [ "$4" = --body-file ] || exit 1
     cp "$5" "$d/body"
+    if [ -n "${STUB_REWRITE_AFTER_EDIT:-}" ]; then
+      printf '%s' "$STUB_REWRITE_AFTER_EDIT" > "$d/body"
+    fi
     ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
@@ -62,6 +66,7 @@ run_case() {
   printf '%s\n' "$base" > "$STUB_DIR/base"
   printf '%s' "$body" > "$STUB_DIR/body"
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
+    STUB_API_BODY="${stale_api_body:-}" STUB_REWRITE_AFTER_EDIT="${rewrite_after_edit:-}" \
     CHECK_PR_LINKAGE_RETRY_SLEEP=0 bash "$SCRIPT" 7 "$@" 2>"$tmpdir/stderr") && rc=0 || rc=$?
   case "$out" in
     "$want"*) ;;
@@ -123,6 +128,25 @@ grep -q "Keep #12 open after merge" "$tmpdir/stderr" || fail "missing keep-open 
 if grep -q "by hand" "$tmpdir/stderr"; then fail "refs guidance asks for manual closure"; fi
 run_case "epic closing guidance" $H epic/x "Closes #12" "MATCH #7" ""
 grep -q "Close #12 by hand" "$tmpdir/stderr" || fail "missing manual-closing guidance"
+stale_api_body="Closes #12"
+for body in "Closes #99" "Summary" "Closes other/repo#12" "Closes #12${nl}## Pipeline${nl}Closes #99"; do
+  run_case "stale API cannot hide current closing targets" $H main "$body" "MISMATCH #7" "$body"
+done
+run_case "repair body despite stale matching API" $H main "Closes #99" "REPAIRED #7" "Refs #99${nl}${nl}Closes #12${nl}" --fix
+run_case "stale API prevents refs repair success" $H main "Closes #12" "MISMATCH #7" "Refs #12" --expect refs --fix
+stale_api_body="Refs #12"
+for body in "Closes #12" "Fixes other/repo#99" "## Pipeline${nl}Closes #99"; do
+  run_case "stale empty API cannot hide a closing keyword" $H main "$body" "MISMATCH #7" "$body" --expect refs
+done
+run_case "repair refs despite stale matching API" $H main "Closes #12" "REPAIRED #7" "Refs #12" --expect refs --fix
+run_case "stale API prevents closing repair success" $H main "Summary" "MISMATCH #7" "Summary${nl}${nl}Closes #12${nl}" --fix
+stale_api_body="Closes #12"
+rewrite_after_edit="Closes #99"
+run_case "post-edit rewrite cannot pass stale API" $H main "Summary" "MISMATCH #7" "Closes #99" --fix
+stale_api_body="Refs #12"
+rewrite_after_edit="Closes #12"
+run_case "post-edit refs rewrite cannot pass stale API" $H main "Closes #99" "MISMATCH #7" "Closes #12" --expect refs --fix
+unset stale_api_body rewrite_after_edit
 run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 epic/big" ""
 
 echo "check-pr-linkage: $passed passed"
