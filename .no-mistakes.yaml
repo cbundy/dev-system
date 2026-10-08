@@ -7,9 +7,11 @@
 # Fill in this repo's real lint/test commands. Fresh no-mistakes worktrees have no
 # dependencies installed, so if your package manager needs an install step, run it
 # here before the actual command - do not assume node_modules/vendor/etc. already exist.
+# This repo uses only Node built-ins and POSIX shell (no dependencies), so there is no
+# install step. These are the canonical commands from CLAUDE.md.
 commands:
   lint: "npm run lint"
-  test: "npm ci && npm test"
+  test: "npm test"
 
 # Add repo-specific ignore paths below this line. Keep the synced defaults above intact.
 ignore_patterns:

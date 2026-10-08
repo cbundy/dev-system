@@ -71,12 +71,11 @@ has passed.
 - `npm test` - every node test under `tests/` and every plain-shell suite under
   `features/test/callum-tools/` and `coder/test/` (`scripts/test.sh`).
 
-The no-mistakes lint and test steps (`.no-mistakes.yaml`) call these entrypoints, with
-`npm ci` before the test command to install its devDependencies in fresh worktrees.
-CI uses the same commands: `ci.yml` runs `npm run lint` (with shellcheck and terraform)
-and `npm ci && npm test` on every pull request and every push to main. Its `ci` check is
-the one branch protection requires. A new test or script check belongs inside one of
-these entrypoints, not in a bespoke CI step.
+The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
+and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
+on every pull request and every push to main. Its `ci` check is the one branch protection
+requires. A new test or script check belongs inside one of these entrypoints, not in a
+bespoke CI step.
 
 ## Dev environment image
 

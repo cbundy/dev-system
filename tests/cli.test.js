@@ -8,7 +8,6 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
-const YAML = require("yaml");
 
 const BIN = path.join(__dirname, "..", "bin", "callum-dev.js");
 const TEMPLATES = path.join(__dirname, "..", "templates");
@@ -43,11 +42,31 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
+// Dependency-free reader for the flat two-level YAML this config uses: returns
+// { key: { child: "value" } } for every top-level mapping. Throws on a duplicate
+// top-level key (which real YAML parsers also reject) so a doubled `pr:` is caught.
+function topLevelSections(text) {
+  const sections = {};
+  let current = null;
+  for (const line of text.split("\n")) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const top = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (top) {
+      assert.ok(!(top[1] in sections), `duplicate top-level key: ${top[1]}`);
+      current = sections[top[1]] = {};
+      continue;
+    }
+    const child = line.match(/^\s+([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (child && current) current[child[1]] = child[2].replace(/^"(.*)"$/, "$1");
+  }
+  return sections;
+}
+
 function assertConfig(dir, file = ".no-mistakes.yaml") {
-  const config = YAML.parse(read(dir, file), { uniqueKeys: true });
+  const config = topLevelSections(read(dir, file));
   assert.deepEqual(config.pr, {
     template: ".github/pull_request_template.md",
-    publish_intent: false,
+    publish_intent: "false",
     appendix: "collapsed",
   });
   return config;
@@ -110,9 +129,9 @@ test("update merges an upstream synced change without clobbering repo-owned edit
 
   const nm = assertConfig(repo);
   assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
-  assert.equal(nm.auto_fix.lint, 4, "upstream synced change arrived");
+  assert.equal(nm.auto_fix.lint, "4", "upstream synced change arrived");
   // Baseline advanced to the new template so the next update merges from there.
-  assert.equal(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").auto_fix.lint, 4);
+  assert.equal(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").auto_fix.lint, "4");
 });
 
 test("update gives a repo scaffolded before the PR template the file and the pr block, conflict-free", (t) => {
