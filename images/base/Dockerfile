@@ -147,6 +147,30 @@ RUN arch=$(dpkg --print-architecture) \
   && rm -rf "$tmp" \
   && agentsview --version
 
+# Coder CLI: talks to the Coder deployment this workspace runs on. Pinned by
+# version and checksum to the deployment's server version
+# (`curl -s "$CODER_AGENT_URL/api/v2/buildinfo"`): a mismatched CLI silently
+# ignored --parameter before (cbundy/dev-system#108). Bump all three ARGs
+# together when the server is upgraded (checksums: coder_<version>_checksums.txt
+# in the release).
+ARG CODER_VERSION=2.36.6
+ARG CODER_SHA256_AMD64=5579b42bb03e6aa646a9f190862e65a3dadfa6353296ba99553fe95b850329c2
+ARG CODER_SHA256_ARM64=8e87fd117dd76fbddd16be757803a58ae0cf11f52791d2ee97765d294e15bf9c
+RUN arch=$(dpkg --print-architecture) \
+  && case "$arch" in \
+    amd64) sha256="$CODER_SHA256_AMD64" ;; \
+    arm64) sha256="$CODER_SHA256_ARM64" ;; \
+    *) echo "coder: unsupported architecture $arch" >&2; exit 1 ;; \
+  esac \
+  && tmp=$(mktemp -d) \
+  && curl -fsSL -o "$tmp/coder.tar.gz" \
+    "https://github.com/coder/coder/releases/download/v${CODER_VERSION}/coder_${CODER_VERSION}_linux_${arch}.tar.gz" \
+  && echo "$sha256  $tmp/coder.tar.gz" | sha256sum -c - \
+  && tar -xzf "$tmp/coder.tar.gz" -C "$tmp" ./coder \
+  && install -m 0755 "$tmp/coder" /usr/local/bin/coder \
+  && rm -rf "$tmp" \
+  && coder version
+
 # Shared scripts from the callum-tools feature, staged at the same path the
 # feature uses (the callum-flow skills call the watchers and usage-check.sh
 # there). usage-check.sh is image-only: the deprecated feature does not ship it.

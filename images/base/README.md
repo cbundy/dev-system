@@ -28,6 +28,7 @@ them, so those scripts stay maintained.
    | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
    | agentsview | pinned release tarball, checksum-verified | bump `AGENTSVIEW_VERSION` in the Dockerfile |
+   | coder | pinned release tarball, checksum-verified, at the Coder server's version (see "Coder CLI") | bump `CODER_VERSION` and both `CODER_SHA256_*` in the Dockerfile |
    | git | base image | image rebuild |
 
    Also `jq`, `ripgrep`, `shellcheck` (shell linting), `tmux` (Claude's Remote Control session runs in it), `tini`
@@ -413,6 +414,38 @@ when a headless container has neither a repo nor `DEV_REPO_URL`. In that last ca
 runs in a bare directory: server mode cannot give each session a worktree, and the session
 is not named after the repo. Desktop dev containers (`DEV_DESKTOP=1`, from the image
 metadata) skip that check, since they open the checkout they bind-mount.
+
+## Coder CLI
+
+The `coder` CLI is installed at `/usr/local/bin/coder`, from the official release tarball
+with its SHA-256 checked at build time. It is pinned to the Coder **server's** version, not
+latest: a mismatched CLI silently ignored `--parameter` before
+(cbundy/dev-system#108). Read the deployment's version with
+`curl -s "${CODER_AGENT_URL%/}/api/v2/buildinfo"` and, when the server is upgraded, bump
+`CODER_VERSION` and both `CODER_SHA256_*` ARGs in the Dockerfile (checksums are in the
+release's `coder_<version>_checksums.txt`) in the same release.
+
+Authentication is not baked in and `dev-init` does not set it up, so a workspace never
+holds a login by default. Recommended, per shell or script:
+
+```sh
+export CODER_URL="${CODER_URL:-$CODER_AGENT_URL}"   # the deployment this workspace runs on
+CODER_SESSION_TOKEN=$(cat "$DEV_SECRETS_DIR/coder-session-token")   # or a file on /persist
+export CODER_SESSION_TOKEN
+coder whoami
+```
+
+- Both variables are read by the CLI directly, so nothing is written to disk and no
+  `coder login` is needed. `CODER_AGENT_URL` is set inside a Coder workspace; elsewhere set
+  `CODER_URL` yourself.
+- Keep the token in a file, never in the image, the template or a repo: in
+  `$DEV_SECRETS_DIR` (the read-only secrets mount) when the runtime provides one, or in a
+  mode-0600 file on a `/persist` volume so it survives a restart. Create it with
+  `coder tokens create`, scoped and expiring as short as the work allows.
+- `coder login` also works but stores the token in `~/.config/coderv2`, which is not on a
+  volume, so it is lost when the workspace restarts.
+- The agent's own `CODER_AGENT_TOKEN` is not a user session and cannot run `coder`
+  commands as you.
 
 ## `dev-init`
 
