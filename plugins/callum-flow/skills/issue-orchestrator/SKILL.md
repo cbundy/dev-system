@@ -387,7 +387,8 @@ following guards fire, and none of them is weakened:
    never the second or third. A green run whose head predates a later fix
    proves nothing about that fix.
 2. **Issue<->PR linkage.** Run `check-pr-linkage.sh` once before merging (see
-   Linkage).
+   Linkage). Require `MATCH` or `REPAIRED` with exit 0, or verified manual
+   linkage after `SKIP`. A failed check or repair blocks merging.
 3. **Real GitHub CI, not just `merge-ready`.** A `merge-ready` wake (like
    `no-mistakes`'s own `checks-passed` outcome) reflects the local pipeline's
    view of its gates and of CI, a separate system from GitHub Actions
@@ -439,7 +440,10 @@ leaves the issue open forever or closes the wrong one. One script checks it:
 - Run it once, before merging. Pass `--expect refs` for a keep-open issue
   (research, proposal, one part of several); the default expects exactly the
   branch's issue to be closed.
-- On `MISMATCH`, run it again with `--fix`, then merge.
+- On `MISMATCH`, run it again with the same expectation and `--fix`. Merge
+  only after `MATCH` or `REPAIRED` with exit 0, or the manual check after
+  `SKIP`. Stop on a failed repair, including a preserved Pipeline keyword
+  that still causes `MISMATCH`.
 - Never write close/closes/fixes/resolves before an issue number you do not
   mean to close: GitHub ignores negation, so "must NOT close #93" closed a real
   epic. Keep keyword talk out of delegation briefs too.
