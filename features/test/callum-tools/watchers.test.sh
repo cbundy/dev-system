@@ -36,7 +36,7 @@ toolbin="$tmpdir/tools"
 mkdir -p "$fakebin" "$toolbin"
 # A hermetic PATH: the stubs plus only the tools the scripts and stubs use,
 # so a real gh or no-mistakes (the base image has both) can never answer.
-for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut; do
+for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -148,6 +148,18 @@ d=$(dirname "$0")
 [ ! -e "$d/gh-fail" ] || exit 1
 case "$1 $2" in
   "pr view") cat "$d/pr-status.txt" ;;
+  "pr checks")
+    # a gh-checks marker means the PR has a check; else gh's no-checks reply
+    if [ -e "$d/gh-checks" ]; then echo "ci	pass	1m"; exit 0; fi
+    echo "no checks reported on the '$3' branch" >&2
+    exit 1
+    ;;
+  "api repos/{owner}/{repo}/contents/.github/workflows")
+    # a gh-workflows marker holds the number of workflow files; else a 404
+    if [ -e "$d/gh-workflows" ]; then cat "$d/gh-workflows"; exit 0; fi
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+    ;;
   "issue list")
     # queue-watch: pop the first line of queue-seq.txt (the last one
     # repeats); a FAIL line is a failed call
@@ -401,6 +413,76 @@ if [ "$st" -ne 2 ] || [ -n "$res" ]; then fail "--resolve with --branches: exit 
 rm "$fakebin/callum-flow-event"
 runs_order RUNE RUND RUNC RUNB RUNA
 ok # --resolve: id from each source, newest run, no run, failure, no events
+
+# 8c. ci-stalled (cbundy/dev-system#234): ci.log still ends in "no CI checks
+# reported yet" after the grace period and GitHub confirms the PR has none.
+g -C "$repo" branch feat/s "$b_head"
+g -C "$repo" push -q origin feat/s
+run_state RUNS feat/s running "$b_head"
+runs_order RUNS RUNE RUND RUNC RUNB RUNA
+mkdir -p "$nm_home/logs/RUNS"
+slog="$nm_home/logs/RUNS/ci.log"
+waiting="no CI checks reported yet, waiting for checks to register..."
+# stalled_ci <seconds-old> <line>...: write ci.log and backdate it
+stalled_ci() {
+  age=$1
+  shift
+  printf '%s\n' "$@" > "$slog"
+  touch -d "@$(($(date +%s) - age))" "$slog"
+}
+sw() {
+  in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --interval 1 \
+    --deadline 2 --branches feat/s "$@"
+}
+stalled_ci 120 "$waiting"
+res=$(sw) || fail "ci-stalled no-workflow: did not exit 0"
+[ "$res" = "ci-stalled feat/s RUNS reason=no-workflow head=$b_head" ] || fail "no-workflow: $res"
+echo 2 > "$fakebin/gh-workflows"
+res=$(sw) || fail "ci-stalled no-checks: did not exit 0"
+[ "$res" = "ci-stalled feat/s RUNS reason=no-checks head=$b_head" ] || fail "no-checks: $res"
+echo 0 > "$fakebin/gh-workflows"
+res=$(sw) || fail "ci-stalled empty listing: did not exit 0"
+[ "$res" = "ci-stalled feat/s RUNS reason=no-workflow head=$b_head" ] || fail "empty listing: $res"
+rm "$fakebin/gh-workflows"
+# --known suppresses the same head
+res=$(sw --known "feat/s=ci-stalled:$b_head") || fail "ci-stalled known: did not exit 0"
+[ "$res" = timeout ] || fail "ci-stalled with --known: $res"
+# younger than the grace period
+stalled_ci 5 "$waiting"
+res=$(sw) || fail "ci-stalled young: did not exit 0"
+[ "$res" = timeout ] || fail "ci.log younger than the grace: $res"
+# checks registered since the waiting line
+stalled_ci 120 "$waiting" "CI checks running, waiting for results..."
+res=$(sw) || fail "ci-stalled running: did not exit 0"
+[ "$res" = timeout ] || fail "ci.log moved past the waiting line: $res"
+# GitHub reports a check
+stalled_ci 120 "$waiting"
+touch "$fakebin/gh-checks"
+res=$(sw) || fail "ci-stalled checks: did not exit 0"
+[ "$res" = timeout ] || fail "gh reports a check: $res"
+rm "$fakebin/gh-checks"
+# gh failing: nothing fires, no crash
+touch "$fakebin/gh-fail"
+res=$(sw) || fail "ci-stalled gh-fail: did not exit 0"
+[ "$res" = timeout ] || fail "gh failing: $res"
+rm "$fakebin/gh-fail"
+# the grace variable is validated like --interval
+st=0
+res=$(in_dir "$repo" env PIPELINE_WATCH_CI_GRACE=abc "$PIPELINE_WATCH" --branches feat/s 2>&1) || st=$?
+[ "$st" -eq 2 ] || fail "bad grace: exit $st"
+case "$res" in *PIPELINE_WATCH_CI_GRACE*) ;; *) fail "bad grace message: $res" ;; esac
+# stream: once per head, then merge-ready when checks pass
+start_bg "$out" "$repo" env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --stream --interval 1 --branches feat/s
+wait_lines "$out" 1
+sleep 3
+expect_lines "$out" "ci-stalled feat/s RUNS reason=no-workflow head=$b_head"
+echo "all CI checks passed" >> "$slog"
+wait_lines "$out" 2
+stop_bg
+expect_lines "$out" "ci-stalled feat/s RUNS reason=no-workflow head=$b_head
+merge-ready feat/s RUNS head=$b_head"
+runs_order RUNE RUND RUNC RUNB RUNA
+ok # ci-stalled: both reasons, grace, soft failures, fingerprint, then merge-ready
 
 # ---------------------------------------------------------------------------
 # queue-watch.sh

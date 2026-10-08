@@ -26,6 +26,16 @@
 #                `gh` failure is treated as not-yet-known and fires
 #                neither merge-ready nor conflict this cycle - the next
 #                poll tries again
+#   ci-stalled   the run is in its CI step, ci.log's last line is still
+#                "no CI checks reported yet" and has not changed for
+#                PIPELINE_WATCH_CI_GRACE seconds (default 300), and GitHub
+#                confirms the PR has no checks. Printed as
+#                "ci-stalled <branch> <run-id> reason=<r> head=<sha>" with
+#                reason=no-workflow (the default branch has no
+#                .github/workflows) or reason=no-checks (workflows exist
+#                but none ran for this PR: the PR predates them, or a
+#                trigger or path filter does not match). A `gh` failure
+#                is treated as not-yet-known, like `conflict`
 #   parked       a gate is awaiting an agent/approval and needs driving
 #   failed       a step failed
 #   cancelled    the run was cancelled
@@ -169,6 +179,7 @@ usage() {
 branches=
 deadline=0
 interval=${PIPELINE_WATCH_INTERVAL:-25}
+ci_grace=${PIPELINE_WATCH_CI_GRACE:-300}
 worktrees=
 known=
 resolve_branch=
@@ -204,6 +215,7 @@ if [ -n "$resolve_branch" ]; then
   fi
 fi
 case "$interval" in '' | *[!0-9]* | 0) usage "--interval must be a positive whole number of seconds" ;; esac
+case "$ci_grace" in '' | *[!0-9]*) usage "PIPELINE_WATCH_CI_GRACE must be a whole number of seconds" ;; esac
 if [ -n "$stream" ]; then
   [ "$deadline" = 0 ] ||
     usage "--deadline is single-shot only; under --stream the monitor's own timeout is the heartbeat"
@@ -261,6 +273,31 @@ head_check() {
 pr_mergeability() {
   gh pr view "$1" --json mergeable,mergeStateStatus \
     --jq '(.mergeable // "UNKNOWN") + " " + (.mergeStateStatus // "UNKNOWN")' 2>/dev/null || true
+}
+
+# ci_stall <branch> <ci.log>: prints "reason=no-workflow" or
+# "reason=no-checks" when the run's CI step is stalled waiting for checks
+# that GitHub never registered, else nothing. Stalled means ci.log's last
+# non-blank line is "no CI checks reported yet..." and the file has been
+# untouched for $ci_grace seconds; GitHub then confirms the PR has no
+# checks. Only the rare stall path reaches `gh`. Fails soft like
+# pr_mergeability: any gh failure prints nothing.
+ci_stall() {
+  [ -f "$2" ] || return 0
+  grep -q 'all CI checks passed' "$2" 2>/dev/null && return 0
+  case "$(awk 'NF { l = $0 } END { print l }' "$2")" in
+    'no CI checks reported yet'*) ;;
+    *) return 0 ;;
+  esac
+  mtime=$(stat -c %Y "$2" 2>/dev/null) || return 0
+  [ $(($(date +%s) - mtime)) -ge "$ci_grace" ] || return 0
+  checks=$(gh pr checks "$1" 2>&1) && return 0 # checks exist
+  case "$checks" in *'no checks reported'*) ;; *) return 0 ;; esac
+  wf=$(gh api 'repos/{owner}/{repo}/contents/.github/workflows' --jq 'length' 2>&1) || {
+    case "$wf" in *'Not Found'* | *404*) printf 'reason=no-workflow'; return 0 ;; esac
+    return 0
+  }
+  if [ "$wf" = 0 ]; then printf 'reason=no-workflow'; else printf 'reason=no-checks'; fi
 }
 
 # known_fingerprint <branch>: the baseline "state:sha" passed via --known
@@ -442,7 +479,13 @@ poll() {
           elif grep -q 'all CI checks passed' "$logs_dir/$id/ci.log" 2>/dev/null; then
             state=merge-ready
           else
-            quiet=1
+            stall=$(ci_stall "$branch" "$logs_dir/$id/ci.log")
+            if [ -n "$stall" ]; then
+              state=ci-stalled
+              detail=" $stall"
+            else
+              quiet=1
+            fi
           fi
           ;;
       esac
