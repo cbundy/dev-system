@@ -42,6 +42,36 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
+// Dependency-free reader for the flat two-level YAML this config uses: returns
+// { key: { child: "value" } } for every top-level mapping. Throws on a duplicate
+// top-level key (which real YAML parsers also reject) so a doubled `pr:` is caught.
+function topLevelSections(text) {
+  const sections = {};
+  let current = null;
+  for (const line of text.split("\n")) {
+    if (/^\s*(#|$)/.test(line)) continue;
+    const top = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (top) {
+      assert.ok(!(top[1] in sections), `duplicate top-level key: ${top[1]}`);
+      current = sections[top[1]] = {};
+      continue;
+    }
+    const child = line.match(/^\s+([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (child && current) current[child[1]] = child[2].replace(/^"(.*)"$/, "$1");
+  }
+  return sections;
+}
+
+function assertConfig(dir, file = ".no-mistakes.yaml") {
+  const config = topLevelSections(read(dir, file));
+  assert.deepEqual(config.pr, {
+    template: ".github/pull_request_template.md",
+    publish_intent: "false",
+    appendix: "collapsed",
+  });
+  return config;
+}
+
 function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) {
   const repo = scratchRepo(t);
   const result = run(repo, "init", { input, args });
@@ -52,23 +82,26 @@ function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) 
 test("init scaffolds templates, substitutes answers, keeps baseline pristine", (t) => {
   const repo = initRepo(t);
 
-  const nm = read(repo, ".no-mistakes.yaml");
-  assert.match(nm, /^  lint: "bun run lint"$/m);
-  assert.match(nm, /^  test: "bun run test"$/m);
-  assert.match(read(repo, ".devcontainer/devcontainer.json"), /"name": "myrepo"/);
+  const nm = assertConfig(repo);
+  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
+  assert.equal(parseJsonc(read(repo, DEVCONTAINER)).name, "myrepo");
   assert.ok(fs.existsSync(path.join(repo, "CLAUDE.md")));
   assert.ok(fs.existsSync(path.join(repo, ".claude/settings.json")));
   assert.ok(fs.existsSync(path.join(repo, "treehouse.toml")));
 
   assert.ok(fs.existsSync(path.join(repo, ".gitignore")));
+  assert.match(read(repo, ".github/pull_request_template.md"), /^# Linked issue$/m);
 
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
-  assert.equal(stamp.files.length, 6);
+  assert.equal(stamp.files.length, 7);
 
   // Baseline must be the pristine template: the substituted lint/test values
   // are repo-owned edits from the merge's point of view.
-  assert.match(read(repo, ".callum-dev/baseline/.no-mistakes.yaml"), /<REPLACE/);
+  assert.deepEqual(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").commands, {
+    lint: "<REPLACE: install deps if needed, then run lint>",
+    test: "<REPLACE: install deps if needed, then run the full test suite>",
+  });
 });
 
 test("init refuses to clobber existing files and refuses to run twice", (t) => {
@@ -94,12 +127,33 @@ test("update merges an upstream synced change without clobbering repo-owned edit
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 0, result.stderr + result.stdout);
 
-  const nm = read(repo, ".no-mistakes.yaml");
-  assert.match(nm, /^  lint: "bun run lint"$/m, "repo-owned edit survived");
-  assert.match(nm, /^  lint: 4$/m, "upstream synced change arrived");
-  assert.doesNotMatch(nm, /<<<<<<</);
+  const nm = assertConfig(repo);
+  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
+  assert.equal(nm.auto_fix.lint, "4", "upstream synced change arrived");
   // Baseline advanced to the new template so the next update merges from there.
-  assert.match(read(repo, ".callum-dev/baseline/.no-mistakes.yaml"), /^  lint: 4$/m);
+  assert.equal(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").auto_fix.lint, "4");
+});
+
+test("update gives a repo scaffolded before the PR template the file and the pr block, conflict-free", (t) => {
+  const repo = initRepo(t);
+  // Rewind to an older consumer: no template file, no baseline for it, no pr block.
+  fs.rmSync(path.join(repo, ".github"), { recursive: true });
+  fs.rmSync(path.join(repo, ".callum-dev/baseline/.github"), { recursive: true });
+  const withoutPr = (text) => {
+    const start = text.indexOf("\n# PR description policy");
+    const end = text.indexOf("appendix: collapsed\n") + "appendix: collapsed\n".length;
+    return text.slice(0, start) + text.slice(end);
+  };
+  for (const file of [".no-mistakes.yaml", ".callum-dev/baseline/.no-mistakes.yaml"]) {
+    fs.writeFileSync(path.join(repo, file), withoutPr(read(repo, file)));
+  }
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(read(repo, ".github/pull_request_template.md"), /^# Evidence$/m);
+  const merged = assertConfig(repo);
+  assert.deepEqual(merged.commands, { lint: "bun run lint", test: "bun run test" });
+  assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml");
 });
 
 test("update surfaces a genuine conflict with markers and a non-zero exit", (t) => {

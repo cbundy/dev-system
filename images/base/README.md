@@ -23,7 +23,7 @@ them, so those scripts stay maintained.
    | Node LTS + npm | base image (`mcr.microsoft.com/devcontainers/javascript-node:24-trixie`) | image rebuild |
    | Claude Code | Anthropic's native installer, as `node` | **auto-updates in the running container** |
    | codex | `npm i -g @openai/codex`, as `node` (npm prefix is node-owned) | `npm i -g` as `node`, or image rebuild |
-   | no-mistakes | its install script, as `node` | `no-mistakes update`, or image rebuild |
+   | no-mistakes | its install script, as `node` (unpinned, so each image rebuild takes the latest; the synced `pr:` block needs 1.75.0 or newer) | `no-mistakes update`, or image rebuild |
    | treehouse | its install script, as `node` | image rebuild |
    | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
