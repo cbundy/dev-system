@@ -116,7 +116,7 @@ runs its own checkout's CLI (`node bin/callum-dev.js`), and each release's bump 
 its stamp up to date (`RELEASING.md`).
 
 Never committed: `.claude/settings.local.json`. It holds powers that only the orchestrator
-in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `gh pr edit`,
+in the main checkout gets (`gh pr merge` and its wrapper `callum-flow-merge`, `callum-flow-fix-linkage`, `gh pr edit`,
 `no-mistakes axi respond`, watchers). Treehouse worktrees start without it, so a worktree sub-agent cannot merge.
 
 The per-file split between synced and repo-owned content, including files without ownership
