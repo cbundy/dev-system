@@ -1145,7 +1145,8 @@ it is allowed only in the main checkout's `settings.local.json`; the read-only
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
 and exits 3), then swaps `ready` for `In development` and logs `claimed`. `--heartbeat
 [issue...]` renews this device's claim comments in place. `callum-flow-sweep` releases stale
-`In development` labels on open and closed issues: closed or merged-PR issues just lose the
+`In development` labels on open and closed issues: closed issues, and open ones with a PR merged
+after the claim (matched by `issue-<N>-` branch name), just lose the
 label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an
 issue with no claim comment is left alone. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
