@@ -13,6 +13,8 @@
 #
 # The merge is `gh pr merge <pr> --<method> --match-head-commit <sha>` with the
 # sha the guard verified, so a push after the check makes GitHub refuse it.
+# GitHub also refuses for a branch rule (for example a PR that fell behind its
+# base); on a refusal the PR is re-read to say which of the two it was.
 #
 # Exit codes: 0 merged, 1 a guard failed (its GUARD lines are printed) or the
 # merge was refused, 2 usage error.
@@ -67,8 +69,21 @@ get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
 branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue)
 [ -n "$sha" ] || { echo "callum-flow-merge: the guard verified no head sha - not merging" >&2; exit 1; }
 
-if ! $GH pr merge "$pr" "--$method" --match-head-commit "$sha"; then
-  echo "callum-flow-merge: gh refused to merge #$pr (a push after the check, or a branch rule)" >&2
+merge_rc=0
+merge_err=$($GH pr merge "$pr" "--$method" --match-head-commit "$sha" 2>&1) || merge_rc=$?
+[ -z "$merge_err" ] || printf '%s\n' "$merge_err" >&2
+if [ "$merge_rc" -ne 0 ]; then
+  now=$($GH pr view "$pr" --json headRefOid,mergeStateStatus 2> /dev/null) || now=''
+  now_sha=$(printf '%s' "$now" | jq -r '.headRefOid // empty' 2> /dev/null)
+  now_state=$(printf '%s' "$now" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
+  if [ -n "$now_sha" ] && [ "$now_sha" != "$sha" ]; then
+    echo "callum-flow-merge: head moved since the check (verified $(printf %.7s "$sha"), now $(printf %.7s "$now_sha")) - re-gate" >&2
+  else
+    case "$now_state" in
+      BEHIND | DIRTY | BLOCKED | DRAFT) echo "callum-flow-merge: GitHub refused: merge state $now_state (branch rule) - see the guard's mergeable action" >&2 ;;
+      *) echo "callum-flow-merge: GitHub refused the merge (merge state ${now_state:-unknown}), head unchanged - see the error above, retry or check the PR" >&2 ;;
+    esac
+  fi
   exit 1
 fi
 
