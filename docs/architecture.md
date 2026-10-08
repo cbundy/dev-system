@@ -30,7 +30,7 @@ Two more surfaces build on the layers:
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), agents (explorer, implementer, fixer), hooks
+plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard), agents (designer, explorer, implementer, fixer), hooks
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 .devcontainer/                    this repo's dev container and dev image (base + terraform)
