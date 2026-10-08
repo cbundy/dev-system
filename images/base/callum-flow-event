@@ -1,0 +1,116 @@
+#!/bin/sh
+#
+# callum-flow-event: append one JSON line for a factory lifecycle transition
+# to /persist/events/<owner>__<repo>.jsonl (cbundy/dev-system#218). The log is
+# the factory's state: event-push-loop ships it to factory.events in the
+# central PostgreSQL, docs/metrics.md has the queries.
+#
+# Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
+#          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
+#
+# States (closed vocabulary): ready claimed briefed delegated run_started
+#   parked verdict fix_requested failed merge_ready head_mismatch conflict
+#   merged abandoned reclaimed watcher_error usage
+#
+# Exit codes:
+#   0  the line was written, or writing failed (a warning on stderr: the
+#      caller is never failed by logging)
+#   2  usage error: unknown state, missing or non-numeric --issue (nothing
+#      written). --issue may be left out for watcher_error and usage, and is
+#      taken from an issue-<N> branch name when --branch has one.
+#
+# No network, one jq call, one O_APPEND write of a single short line (atomic
+# between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
+# the hostname), session_id (CLAUDE_SESSION_ID, else the newest transcript of
+# the working directory's Claude project, else null), actor
+# (--actor, CALLUM_FLOW_ACTOR, else "agent") and v (1).
+#
+# Environment: CALLUM_EVENTS_DIR (default /persist/events), CALLUM_FLOW_REPO
+# (owner/name, default from the origin remote).
+set -u
+
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict merged abandoned reclaimed watcher_error usage"
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
+  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]" >&2
+  echo "states: $STATES" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+state=$1
+shift
+case " $STATES " in *" $state "*) ;; *) usage "unknown state '$state'" ;; esac
+
+issue='' run='' branch='' pr='' head='' note=''
+actor=${CALLUM_FLOW_ACTOR:-agent}
+repo=${CALLUM_FLOW_REPO-}
+while [ $# -gt 0 ]; do
+  [ $# -ge 2 ] || usage "$1 needs a value"
+  case "$1" in
+    --issue) issue=$2 ;;
+    --run) run=$2 ;;
+    --branch) branch=$2 ;;
+    --pr) pr=$2 ;;
+    --head) head=$2 ;;
+    --note) note=$2 ;;
+    --actor) actor=$2 ;;
+    --repo) repo=$2 ;;
+    *) usage "unknown option '$1'" ;;
+  esac
+  shift 2
+done
+
+if [ -z "$issue" ]; then
+  case "$branch" in
+    *issue-[0-9]*) issue=$(printf '%s' "$branch" | sed -n 's/.*issue-\([0-9][0-9]*\).*/\1/p') ;;
+  esac
+fi
+case "$state" in
+  watcher_error | usage) ;;
+  *) [ -n "$issue" ] || usage "--issue is required for $state" ;;
+esac
+case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
+case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
+
+warn() { echo "callum-flow-event: warning: $*" >&2; }
+
+command -v jq >/dev/null 2>&1 || { warn "jq not found - event not recorded"; exit 0; }
+
+if [ -z "$repo" ]; then
+  url=$(git config --get remote.origin.url 2>/dev/null) || url=
+  repo=$(printf '%s' "$url" | sed 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p')
+  [ -n "$repo" ] || repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+fi
+file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
+
+device=${DEV_MACHINE_NAME:-}
+[ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
+[ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+
+session=${CLAUDE_SESSION_ID:-}
+if [ -z "$session" ]; then
+  pdir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')
+  if [ -d "$pdir" ]; then
+    newest=$(find "$pdir" -maxdepth 1 -type f -name '*.jsonl' -printf '%T@ %f\n' 2>/dev/null | sort -rn | sed -n 1p | cut -d' ' -f2-)
+    [ -z "$newest" ] || session=${newest%.jsonl}
+  fi
+fi
+
+line=$(jq -nc \
+  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg repo "$repo" --arg device "$device" \
+  --arg session "$session" --arg actor "$actor" --arg state "$state" --arg issue "$issue" \
+  --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" '
+  def s: if . == "" then null else . end;
+  def n: if . == "" then null else tonumber end;
+  {v: 1, ts: $ts, repo: $repo, device: $device, session_id: ($session | s), actor: $actor,
+   state: $state, issue: ($issue | n), run_id: ($run | s), branch: ($branch | s),
+   pr: ($pr | n), head: ($head | s), note: ($note | s)}') || { warn "could not build the event"; exit 0; }
+
+dir=${CALLUM_EVENTS_DIR:-/persist/events}
+if [ ! -d "$dir" ]; then
+  mkdir -p "$dir" 2>/dev/null && chmod 0700 "$dir" 2>/dev/null
+fi
+printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null || warn "cannot write $dir/$file - event not recorded"
+exit 0

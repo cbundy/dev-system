@@ -33,7 +33,7 @@ RUN echo "cache bust: ${CACHE_BUST}" \
     > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update \
   && apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends gh jq less openssh-client ripgrep shellcheck tini tmux \
+  && apt-get install -y --no-install-recommends gh jq less openssh-client postgresql-client ripgrep shellcheck tini tmux \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
@@ -43,7 +43,7 @@ RUN echo "cache bust: ${CACHE_BUST}" \
 # under /persist and leave anonymous volumes behind.
 RUN install -d -m 0755 /persist \
   && install -d -o 1000 -g 1000 -m 0700 \
-    /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview
+    /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events
 
 # Shared files: an empty mount point for a NAS share (NFS) beside the code -
 # build artifacts and exchange files, never repo checkouts or tool state. The
@@ -192,9 +192,10 @@ COPY --chmod=0755 \
   images/base/dev-remote-control \
   images/base/dev-prune-worktrees \
   images/base/dev-login \
+  images/base/callum-flow-event \
   images/base/systemctl \
   /usr/local/bin/
-COPY --chmod=0755 images/base/agentsview-push-loop /usr/local/share/dev-system/
+COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop /usr/local/share/dev-system/
 # models.env is the baked copy of the no-mistakes models: dev-init pins from
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).

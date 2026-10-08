@@ -116,10 +116,19 @@ stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 reported=
 
+# record_event <state> [callum-flow-event options]: appends the transition to
+# the factory event log (cbundy/dev-system#218) when callum-flow-event is
+# installed. Best effort: it never changes this script's output or status.
+record_event() {
+  command -v callum-flow-event >/dev/null 2>&1 || return 0
+  callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
+}
+
 # fatal <reason>: exit non-zero; in stream mode first print the one
 # watcher-error line on stdout, the event channel.
 fatal() {
   [ -z "$stream" ] || echo "watcher-error $*"
+  record_event watcher_error --note "pipeline-watch: $*"
   echo "pipeline-watch.sh: $*" >&2
   reported=1
   exit 1
@@ -129,11 +138,17 @@ fatal() {
 # with a watcher-error line.
 on_exit() {
   rc=$?
-  [ "$rc" -eq 0 ] || [ -n "$reported" ] || echo "watcher-error exited with status $rc"
+  [ "$rc" -eq 0 ] || [ -n "$reported" ] || {
+    echo "watcher-error exited with status $rc"
+    record_event watcher_error --note "pipeline-watch: exited with status $rc"
+  }
 }
 
 usage() {
-  [ -z "$stream" ] || echo "watcher-error usage${1:+: $1}"
+  [ -z "$stream" ] || {
+    echo "watcher-error usage${1:+: $1}"
+    record_event watcher_error --note "pipeline-watch: usage${1:+: $1}"
+  }
   [ -z "${1-}" ] || echo "pipeline-watch.sh: $1" >&2
   echo "usage: pipeline-watch.sh [--branches branch[,branch...]]" \
     "[--stream | --deadline seconds] [--interval seconds]" \
@@ -432,6 +447,11 @@ poll() {
     fi
     if [ -n "$state" ]; then
       printf '%s %s %s%s head=%s\n' "$state" "$branch" "$id" "$detail" "${run_sha:-unknown}"
+      # the watcher's states are the log's, with _ for - ("cancelled" is a failed run)
+      case "$state" in
+        cancelled) record_event failed --branch "$branch" --run "$id" --head "${run_sha:-}" --note "cancelled" ;;
+        *) record_event "$(printf '%s' "$state" | tr - _)" --branch "$branch" --run "$id" --head "${run_sha:-}" --note "${detail# }" ;;
+      esac
       [ -n "$stream" ] || exit 0
       set_known "$branch" "$fingerprint"
     elif [ -n "$stream" ] && [ -n "$quiet" ]; then

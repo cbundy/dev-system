@@ -164,8 +164,8 @@ re-arm.
 
 ## Per-issue pipeline
 1. **Claim** - only when the usage gate allows new work (see Usage gate).
-   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
-   (not just removal) marks active work so a crashed agent is recoverable.
+   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL` (marks active
+   work so a crashed agent is recoverable). Log: `callum-flow-event claimed --issue <N>`.
 2. **Design** - spawn the named `callum-flow:designer` agent with the issue number,
    the branches in flight and the shared files they touch, owner instructions from
    this session, and pointers to `CLAUDE.md` and `.claude/orchestrator-memory.md`.
@@ -176,9 +176,9 @@ re-arm.
 3. **Delegate** the brief *pointer* (the comment URL, never its content) to the
    named `callum-flow:implementer` agent, plus a pointer to the `implement-issue`
    skill, which owns the *how* (worktree, `/no-mistakes`, evidence, quality bar,
-   handoff, fire-and-forget termination). You own the merge and the issue
-   linkage (see Linkage) - do not have the sub-agent merge.
-4. **Verify and merge** when the PR lands (see Merge discipline).
+   handoff, fire-and-forget termination). You own the merge and linkage (see
+   Linkage). Log `delegated`; spawn with `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
+4. **Verify and merge** when the PR lands (see Merge discipline). Log `merged`, `verdict`, `abandoned` (bare `callum-flow-event` lists states).
 
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`

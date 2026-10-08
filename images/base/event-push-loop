@@ -1,0 +1,159 @@
+#!/bin/bash
+#
+# event-push-loop: ships the factory event log (/persist/events/*.jsonl, one
+# line per lifecycle transition, written by callum-flow-event) to the
+# factory.events table in the agentsview PostgreSQL (cbundy/dev-system#218).
+#
+# dev-init starts this in the background, under a container-local flock, when
+# a PostgreSQL URL is configured (agentsview.sh: the same secret and the same
+# rules as agentsview-push-loop). The JSONL files are the only local buffer.
+# A file's progress is the number of its lines already pushed, kept in
+# <events dir>/.pushed/<file>; a row's key is (device, repo, seq) with seq the
+# 1-based line number, so a push that died between the insert and the
+# progress write is simply repeated and inserts nothing twice (ON CONFLICT DO
+# NOTHING). Files are append-only: never edit or truncate one.
+#
+# The URL is read again on every pass and reaches only psql, split into PG*
+# variables in psql's own environment (never its argv, which ps shows to every
+# process); all psql output is masked. A database that is down is retried on
+# the next pass.
+#
+# Usage: event-push-loop [--once]    --once makes one pass and exits (tests)
+# Environment: CALLUM_EVENTS_DIR (default /persist/events),
+#   DEV_EVENT_PUSH_INTERVAL seconds between passes (default 30),
+#   EVENT_PUSH_BATCH lines per transaction (default 500).
+set -u
+
+# shellcheck source=agentsview.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/agentsview.sh"
+
+DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
+INTERVAL="${DEV_EVENT_PUSH_INTERVAL:-30}"
+BATCH="${EVENT_PUSH_BATCH:-500}"
+
+DDL="CREATE SCHEMA IF NOT EXISTS factory;
+CREATE TABLE IF NOT EXISTS factory.events (
+  device text NOT NULL,
+  repo text NOT NULL,
+  seq bigint NOT NULL,
+  ts timestamptz NOT NULL,
+  state text NOT NULL,
+  issue integer,
+  run_id text,
+  branch text,
+  pr integer,
+  head text,
+  note text,
+  session_id text,
+  actor text,
+  v integer,
+  raw jsonb NOT NULL,
+  PRIMARY KEY (device, repo, seq)
+);
+CREATE INDEX IF NOT EXISTS events_issue_idx ON factory.events (repo, issue, ts);"
+
+read -r -d '' SQL_ROWS <<'JQ'
+def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" end;
+[inputs | try fromjson catch null] as $rows
+| range(0; $rows | length) as $i
+| $rows[$i]
+| select(type == "object" and ([.device, .repo, .ts, .state] | all(type == "string")))
+| "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, raw) VALUES ("
+  + ([.device, .repo, ($off + $i + 1), .ts, .state, .issue, .run_id, .branch, .pr, .head, .note, .session_id, .actor, .v] | map(q) | join(", "))
+  + ", " + (tojson | q) + "::jsonb) ON CONFLICT DO NOTHING;"
+JQ
+
+# run_psql URL: runs psql on stdin with URL's parts (percent-decoded) and its
+# ssl* query parameters as PG* variables, so no secret is on the command line.
+run_psql() (
+  local rest=${1#*://} query='' db='' userinfo='' hostport kv k v
+  case "$rest" in *\?*) query=${rest#*\?}; rest=${rest%%\?*} ;; esac
+  case "$rest" in */*) db=${rest#*/}; rest=${rest%%/*} ;; esac
+  case "$rest" in *@*) userinfo=${rest%@*}; rest=${rest##*@} ;; esac
+  hostport=$rest
+  dec() { local e=${1//\\/\\\\}; printf '%b' "${e//%/\\x}"; }
+  set_pg() { [ -z "$2" ] || export "$1=$(dec "$2")"; }
+  set_pg PGUSER "${userinfo%%:*}"
+  case "$userinfo" in *:*) set_pg PGPASSWORD "${userinfo#*:}" ;; esac
+  case "$hostport" in
+    \[*\]*) set_pg PGHOST "${hostport%%]*}"; PGHOST=${PGHOST#[}; export PGHOST
+      v=${hostport##*]}; set_pg PGPORT "${v#:}" ;;
+    *:*) set_pg PGHOST "${hostport%%:*}"; set_pg PGPORT "${hostport#*:}" ;;
+    *) set_pg PGHOST "$hostport" ;;
+  esac
+  set_pg PGDATABASE "$db"
+  local IFS='&'
+  for kv in $query; do
+    k=${kv%%=*} v=${kv#*=}
+    case "$k" in
+      host) set_pg PGHOST "$v" ;;
+      hostaddr) set_pg PGHOSTADDR "$v" ;;
+      port) set_pg PGPORT "$v" ;;
+      user) set_pg PGUSER "$v" ;;
+      password) set_pg PGPASSWORD "$v" ;;
+      dbname) set_pg PGDATABASE "$v" ;;
+      service) set_pg PGSERVICE "$v" ;;
+      options) set_pg PGOPTIONS "$v" ;;
+      application_name) set_pg PGAPPNAME "$v" ;;
+      connect_timeout) set_pg PGCONNECT_TIMEOUT "$v" ;;
+      channel_binding) set_pg PGCHANNELBINDING "$v" ;;
+      target_session_attrs) set_pg PGTARGETSESSIONATTRS "$v" ;;
+      sslmode | sslrootcert | sslcert | sslkey | sslcrl | sslsni | gssencmode | krbsrvname | requirepeer)
+        set_pg "PG$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$v" ;;
+      *) echo "event-push-loop: ignoring unsupported URL parameter '$k'" >&2 ;;
+    esac
+  done
+  unset IFS
+  export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-10}
+  exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
+)
+
+# push_file FILE URL: pushes the file's lines not yet pushed. Returns 1 when
+# the database refused a batch.
+push_file() {
+  local f=$1 url=$2 name pushed total n sql out
+  name=$(basename "$f")
+  mkdir -p "$DIR/.pushed" 2>/dev/null || return 0
+  total=$(wc -l < "$f" | tr -d ' ')
+  pushed=$(cat "$DIR/.pushed/$name" 2>/dev/null || echo 0)
+  case "$pushed" in '' | *[!0-9]*) pushed=0 ;; esac
+  while [ "$pushed" -lt "$total" ]; do
+    n=$((total - pushed))
+    [ "$n" -le "$BATCH" ] || n=$BATCH
+    sql=$(tail -n +$((pushed + 1)) "$f" | head -n "$n" | jq -nrR --argjson off "$pushed" "$SQL_ROWS") || return 0
+    if ! out=$({ printf '%s\n' "$DDL"; printf '%s\n' "$sql"; } \
+      | run_psql "$url" 2>&1); then
+      printf '%s\n' "$out" | sed -E "$MASK_SECRETS_SED" >&2
+      echo "event-push-loop: push of $name failed, retrying next pass" >&2
+      return 1
+    fi
+    pushed=$((pushed + n))
+    printf '%s\n' "$pushed" > "$DIR/.pushed/$name.tmp" && mv "$DIR/.pushed/$name.tmp" "$DIR/.pushed/$name"
+  done
+}
+
+pass() {
+  local url f rc=0
+  if ! url=$(agentsview_pg_url); then
+    echo "event-push-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
+    return 2
+  fi
+  for f in "$DIR"/*.jsonl; do
+    [ -f "$f" ] || continue
+    push_file "$f" "$url" || rc=1
+  done
+  return "$rc"
+}
+
+if [ "${1-}" = --once ]; then
+  pass
+  rc=$?
+  [ "$rc" -ne 2 ] || rc=1
+  exit "$rc"
+fi
+
+while :; do
+  pass
+  [ $? -ne 2 ] || exit 0
+  sleep "$INTERVAL"
+done

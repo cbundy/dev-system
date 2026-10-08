@@ -27,7 +27,8 @@
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
       "Bash(gh pr list *)",
-      "Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)"
+      "Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)",
+      "Bash(callum-flow-event *)"
     ]
   }
 }
