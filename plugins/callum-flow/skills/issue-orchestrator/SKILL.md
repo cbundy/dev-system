@@ -179,6 +179,9 @@ re-arm.
    handoff, fire-and-forget termination). You own the merge and linkage (see
    Linkage). Log `delegated`; spawn with `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
 4. **Verify and merge** when the PR lands: run `callum-flow-merge-guard`, then merge through `callum-flow-merge` (see Merge guard). The merge script logs `merged`; log `verdict` and `abandoned` yourself (bare `callum-flow-event` lists states).
+5. **Done by Rollout** (`callum-flow-rollout <N>`): `merge` - the PR closes it. `run-it` - release
+   on its own (never batched with another `run-it` issue), then the Run it; whoever ran it
+   records the result in a comment and closes the issue. `keep-open` - the owner closes it.
 
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
@@ -326,9 +329,11 @@ one script checks the lot and you act on what it names:
 
 It only reads. It exits 0 and prints nothing when every guard passes; otherwise
 it prints one `GUARD <name> FAIL <reason>` line per failed guard (all are
-evaluated, none short-circuits) and exits 1. Pass `--expect refs` for a
-keep-open issue and `--base <epic>` for a PR into an epic branch. Act on each
-named guard:
+evaluated, none short-circuits) and exits 1. Run it without `--expect`: the
+linkage comes from the issue's Rollout. Pass `--base <epic>` for a PR into an
+epic branch. Act on each named guard:
+
+- **`rollout`** - not derivable, conflicting or contradicting `--expect`. Never merge: fix the brief's Rollout or pass `--issue N`.
 
 - **`head`** - the run's head is not the branch/PR head (phantom gating; the
   reason names the shas, `unknown` means one could not be read). Never merge.
@@ -392,7 +397,6 @@ merge command is allowed only in the main checkout's
   do NOT read "commits ahead of the base branch" as unlanded work - squash merges
   leave branches looking ahead when their work has fully landed.
 
-
 ## Linkage (issue <-> PR)
 Green CI and "mergeable" say nothing about linkage, and a wrong keyword either
 leaves the issue open forever or closes the wrong one. The merge guard calls
@@ -403,13 +407,12 @@ this read-only check; it never edits a PR:
 - It derives the issue number from the `<type>/issue-<N>-<slug>` branch and
   prints one line: `MATCH`, `MISMATCH` or `SKIP` (no issue in the
   branch name; take the number from your delegation record and check by hand).
-- The guard runs it for you. Pass `--expect refs` for a keep-open issue
-  (research, proposal, one part of several); it requires `Refs #N` or
-  `Part of #N` for the branch issue and no closing targets. The default
-  expects exactly the branch's issue to be closed.
+- The guard runs it for you, with the expectation derived from the Rollout:
+  `merge` expects exactly the branch's issue closed, `run-it` and `keep-open`
+  expect `Refs #N` or `Part of #N` and no closing targets.
 - On `GUARD linkage FAIL`, repair by hand as a separate step, from the main
-  checkout only: run `callum-flow-fix-linkage <pr> [--expect refs]` with the same
-  expectation (it edits the PR body, re-checks, and prints `REPAIRED` or
+  checkout only: run `callum-flow-fix-linkage <pr>` (it derives the expectation
+  the same way; it edits the PR body, re-checks, and prints `REPAIRED` or
   `MISMATCH ... after-fix`), then re-run the guard. A `SKIP`
   (no issue in the branch name) passes only when you give `--issue N` and the
   PR linkage for #N matches `--expect`. Stop on a failed repair, including a preserved Pipeline keyword
@@ -420,7 +423,7 @@ this read-only check; it never edits a PR:
 - A PR whose base is not the default branch (an epic branch) never registers
   closing references, so the script checks the body instead. The issue will not
   close on merge: for a closing PR, close it by hand with a comment naming the
-  merged PR. Keep-open issues (`--expect refs`) must remain open.
+  merged PR. Issues whose Rollout is not `merge` must remain open.
 
 ## Merge and close discipline
 - Merge only with acceptance verified.
@@ -438,9 +441,6 @@ this read-only check; it never edits a PR:
   additions.
 
 ## Special issue types
-- **Research / proposal** - the deliverable is an artifact for human review (e.g.
-  an HTML report). Do NOT auto-close the issue on merge; hand the artifact to the
-  user and iterate on their feedback. Keep the issue open until they finalize.
 - **High-risk / large** - the designer splits it into unlabelled sub-issues; wait
   for the user to tag each `ready`. If implementation already started, stop the
   agent before it opens a PR.

@@ -215,9 +215,8 @@ tests would otherwise have missed:
   brief explicitly says otherwise.
 
 ## 7. Issue linkage (what you write)
-- Put an exact closing keyword in the PR body when the issue should close on
-  merge, e.g. `Closes #<N>`. Follow whatever your brief says about whether
-  this PR should close its issue. Keep instructions *about* the keyword out of
+- Read the brief's `## Rollout`. Write `Closes #<N>` in the PR body when it is
+  `merge`, and `Refs #<N>` for `run-it` and `keep-open`. Keep instructions *about* the keyword out of
   the `--intent` text (section 6); the delegator checks linkage at merge.
 - NEVER write close/closes/fixes/resolves immediately before an issue number
   you do not mean to close - GitHub's parser ignores negation and surrounding

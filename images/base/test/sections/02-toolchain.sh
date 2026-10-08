@@ -14,6 +14,8 @@ check "callum-flow-event writes a line, rejects an unknown state, and event-push
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'
+check "callum-flow-rollout is on PATH and exits 2 on bad arguments" in_image '
+  [ -x "$(command -v callum-flow-rollout)" ] && callum-flow-rollout 2>/dev/null; [ $? = 2 ] && callum-flow-rollout abc 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" in_image '
   [ -x "$(command -v callum-flow-fix-linkage)" ] && callum-flow-fix-linkage 7 --bogus 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-claim and callum-flow-sweep are on PATH and exit 2 on bad arguments" in_image '
