@@ -29,7 +29,11 @@
       "Bash(gh pr list *)",
       "Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)",
       "Bash(callum-flow-event *)",
-      "Bash(callum-flow-merge-guard *)"
+      "Bash(callum-flow-merge-guard *)",
+      "Bash(callum-flow-claim)",
+      "Bash(callum-flow-claim *)",
+      "Bash(callum-flow-sweep)",
+      "Bash(callum-flow-sweep *)"
     ]
   }
 }

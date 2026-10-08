@@ -50,6 +50,8 @@ package.json                      makes the repo npm-installable (bin + template
 docs/                             these docs
 ```
 
+Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on the issue (earliest live claim wins) and `callum-flow-sweep` returns expired claims to `ready`.
+
 ## Versioning and release
 
 Ordinary PRs never bump the main release version. Releasing is a separate, deliberate step: a bump PR made

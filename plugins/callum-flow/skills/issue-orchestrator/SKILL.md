@@ -155,8 +155,9 @@ re-arm.
   watchers are alive - the harness's task list, or `pgrep -af
   'queue-watch|pipeline-watch'` - and re-arms any that is missing. It
   catches the one gap left: an expiry or wake whose re-arm was dropped.
-  The same audit re-reads usage and, when the tier is Stop new or Stop all,
-  checks that a resume wake is pending (the harness's scheduled-task list)
+  The same audit runs `callum-flow-claim --heartbeat` then `callum-flow-sweep`
+  (renews this device's claims, frees stale ones; a merged PR counts by `issue-<N>-` branch name), and re-reads usage
+  and, when the tier is Stop new or Stop all, checks that a resume wake is pending (the harness's scheduled-task list)
   and arms one if not. A paused orchestrator with no resume wake is a
   silent stall, exactly like a missing watcher.
 - Every tick report shows each watcher in its **Watchers** row (see Update
@@ -164,8 +165,7 @@ re-arm.
 
 ## Per-issue pipeline
 1. **Claim** - only when the usage gate allows new work (see Usage gate).
-   Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL` (marks active
-   work so a crashed agent is recoverable). Log: `callum-flow-event claimed --issue <N>`.
+   Run `callum-flow-claim <N>`; exit 3 means another device holds it, so skip the issue.
 2. **Design** - spawn the named `callum-flow:designer` agent with the issue number,
    the branches in flight and the shared files they touch, owner instructions from
    this session, and pointers to `CLAUDE.md` and `.claude/orchestrator-memory.md`.
