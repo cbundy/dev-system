@@ -2,7 +2,9 @@
 
 The factory event log (`callum-flow-event`, shipped to the `factory.events` table by
 `event-push-loop`; see "Factory event log" in `images/base/README.md`) answers four
-questions. Each query below runs as is in `psql` against the agentsview PostgreSQL.
+questions. Each query below runs as is in `psql` against the agentsview PostgreSQL. When running them by hand against a URL with
+`sslmode=verify-full` or `verify-ca`, set `PGSSLROOTCERT=system` or add `sslrootcert=system`
+to it, as psql 17 has no default root cert (`event-push-loop` does this itself).
 Rows are keyed `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cost and token
 metrics through the `issue` and `device` resource attributes the orchestrator sets on
 sub-agents.

@@ -101,7 +101,7 @@ cat > "$fakebin/psql" <<'STUB'
 d=$(dirname "$0")
 echo x >> "$d/psql-calls"
 printf '%s\n' "$*" > "$d/psql-args"
-{ echo "PGPASSWORD=${PGPASSWORD-}"; echo "PGUSER=${PGUSER-}"; echo "PGHOST=${PGHOST-}"; echo "PGDATABASE=${PGDATABASE-}"; } > "$d/psql-env"
+{ echo "PGPASSWORD=${PGPASSWORD-}"; echo "PGUSER=${PGUSER-}"; echo "PGHOST=${PGHOST-}"; echo "PGDATABASE=${PGDATABASE-}"; echo "PGSSLMODE=${PGSSLMODE-}"; echo "PGSSLROOTCERT=${PGSSLROOTCERT-}"; } > "$d/psql-env"
 cat > "$d/psql-sql-$(wc -l < "$d/psql-calls" | tr -d ' ')"
 if [ -e "$d/psql-fail" ]; then
   echo "psql: error: connection to postgres://app:s3cret@db/x failed password=s3cret" >&2
@@ -116,11 +116,13 @@ printf '%s\n' '{"v":1,"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","st
   'not json' > "$pushdir/o__r.jsonl"
 push() {
   PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$pushdir" DEV_SYSTEM_SHARE="$ROOT/images/base" \
-    AGENTSVIEW_PG_URL="postgres://app:s3cret@db/x" "$BASH" "$PUSH" --once
+    AGENTSVIEW_PG_URL="${PUSH_URL:-postgres://app:s3cret@db/x}" HOME="${PUSH_HOME:-$tmpdir/home}" "$BASH" "$PUSH" --once
 }
 calls() { wc -l < "$fakebin/psql-calls" | tr -d ' '; }
 
+mkdir -p "$tmpdir/home"
 push > "$tmpdir/push.out" 2>&1 || fail "push should succeed: $(cat "$tmpdir/push.out")"
+grep -qx 'PGSSLROOTCERT=' "$fakebin/psql-env" || fail "no sslmode must leave PGSSLROOTCERT unset"
 [ "$(calls)" = 1 ] || fail "one psql call expected"
 if grep -q 's3cret\|postgres:' "$fakebin/psql-args"; then fail "the URL or password reached psql's argv: $(cat "$fakebin/psql-args")"; fi
 grep -qx 'PGPASSWORD=s3cret' "$fakebin/psql-env" || fail "psql should get the password in its environment"
@@ -160,6 +162,33 @@ rc=0
 DEV_SECRETS_DIR="$tmpdir/nosecrets" PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$pushdir" DEV_SYSTEM_SHARE="$ROOT/images/base" \
   "$BASH" "$PUSH" --once > /dev/null 2>&1 || rc=$?
 [ "$rc" != 0 ] || fail "no URL should end the pass non-zero"
+
+# sslrootcert defaulting (#241): each case pushes one new line and reads psql's env
+n=0
+ssl_case() { # URL expected-PGSSLROOTCERT [VAR=value to set in the environment]
+  extra=${3-}
+  n=$((n + 1))
+  printf '%s\n' "{\"v\":1,\"ts\":\"2026-10-08T11:0$n:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":$n}" >> "$pushdir/o__r.jsonl"
+  (
+    case "$extra" in
+      PGSSLROOTCERT=*) PGSSLROOTCERT=${extra#*=}; export PGSSLROOTCERT ;;
+      PGSSLMODE=*) PGSSLMODE=${extra#*=}; export PGSSLMODE ;;
+    esac
+    PUSH_URL="$1" push > /dev/null 2>&1
+  ) || fail "ssl case $1 ($extra): push should succeed"
+  grep -qx "PGSSLROOTCERT=$2" "$fakebin/psql-env" || fail "ssl case $1 ($extra): want PGSSLROOTCERT=$2, got: $(grep SSL "$fakebin/psql-env" | tr '\n' ' ')"
+}
+base=postgres://app:s3cret@db/x
+ssl_case "$base?sslmode=verify-full" system
+ssl_case "$base?sslmode=verify-ca" system
+ssl_case "$base?sslmode=verify-full&sslrootcert=/etc/ca.pem" /etc/ca.pem
+ssl_case "$base?sslmode=verify-full" /x PGSSLROOTCERT=/x
+ssl_case "$base?sslmode=require" ""
+ssl_case "$base?sslmode=prefer" ""
+ssl_case "$base" system PGSSLMODE=verify-full
+mkdir -p "$tmpdir/home2/.postgresql"
+: > "$tmpdir/home2/.postgresql/root.crt"
+PUSH_HOME="$tmpdir/home2" ssl_case "$base?sslmode=verify-full" ""
 
 # --- the watchers call callum-flow-event ------------------------------------
 cat > "$fakebin/callum-flow-event" <<'STUB'
