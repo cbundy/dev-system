@@ -1132,8 +1132,8 @@ and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the h
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
 first push, is idempotent on `(device, repo, seq)` and keeps its progress in
-`/persist/events/.pushed/`. The URL is passed to `psql` as its connection argument and
-all `psql` output is masked. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
+`/persist/events/.pushed/`. The URL is split into `PG*` variables in `psql`'s environment only, never its
+argv, and all `psql` output is masked. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
 and `dev-doctor` reports when events were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
 `CREATE` on the database (or the schema and table created for it by an admin). The

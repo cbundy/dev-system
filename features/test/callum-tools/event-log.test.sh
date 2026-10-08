@@ -101,6 +101,7 @@ cat > "$fakebin/psql" <<'STUB'
 d=$(dirname "$0")
 echo x >> "$d/psql-calls"
 printf '%s\n' "$*" > "$d/psql-args"
+{ echo "PGPASSWORD=${PGPASSWORD-}"; echo "PGUSER=${PGUSER-}"; echo "PGHOST=${PGHOST-}"; echo "PGDATABASE=${PGDATABASE-}"; } > "$d/psql-env"
 cat > "$d/psql-sql-$(wc -l < "$d/psql-calls" | tr -d ' ')"
 if [ -e "$d/psql-fail" ]; then
   echo "psql: error: connection to postgres://app:s3cret@db/x failed password=s3cret" >&2
@@ -121,7 +122,11 @@ calls() { wc -l < "$fakebin/psql-calls" | tr -d ' '; }
 
 push > "$tmpdir/push.out" 2>&1 || fail "push should succeed: $(cat "$tmpdir/push.out")"
 [ "$(calls)" = 1 ] || fail "one psql call expected"
-grep -q 'postgres://app:s3cret@db/x' "$fakebin/psql-args" || fail "psql should get the URL"
+if grep -q 's3cret\|postgres:' "$fakebin/psql-args"; then fail "the URL or password reached psql's argv: $(cat "$fakebin/psql-args")"; fi
+grep -qx 'PGPASSWORD=s3cret' "$fakebin/psql-env" || fail "psql should get the password in its environment"
+grep -qx 'PGUSER=app' "$fakebin/psql-env" || fail "psql should get the user"
+grep -qx 'PGHOST=db' "$fakebin/psql-env" || fail "psql should get the host"
+grep -qx 'PGDATABASE=x' "$fakebin/psql-env" || fail "psql should get the database"
 sql="$fakebin/psql-sql-1"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.events' "$sql" || fail "DDL missing"
 grep -q "VALUES ('d1', 'o/r', '1', '2026-10-08T10:00:00Z', 'ready', '5'" "$sql" || fail "row 1 missing: $(cat "$sql")"

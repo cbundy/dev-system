@@ -13,8 +13,9 @@
 # progress write is simply repeated and inserts nothing twice (ON CONFLICT DO
 # NOTHING). Files are append-only: never edit or truncate one.
 #
-# The URL is read again on every pass and reaches only psql, as its connection
-# argument; all psql output is masked. A database that is down is retried on
+# The URL is read again on every pass and reaches only psql, split into PG*
+# variables in psql's own environment (never its argv, which ps shows to every
+# process); all psql output is masked. A database that is down is retried on
 # the next pass.
 #
 # Usage: event-push-loop [--once]    --once makes one pass and exits (tests)
@@ -62,6 +63,34 @@ def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" en
   + ", " + (tojson | q) + "::jsonb) ON CONFLICT DO NOTHING;"
 JQ
 
+# run_psql URL: runs psql on stdin with URL's parts (percent-decoded) and its
+# ssl* query parameters as PG* variables, so no secret is on the command line.
+run_psql() (
+  local rest=${1#*://} query='' db='' userinfo='' hostport kv k v
+  case "$rest" in *\?*) query=${rest#*\?}; rest=${rest%%\?*} ;; esac
+  case "$rest" in */*) db=${rest#*/}; rest=${rest%%/*} ;; esac
+  case "$rest" in *@*) userinfo=${rest%@*}; rest=${rest##*@} ;; esac
+  hostport=$rest
+  dec() { printf '%b' "${1//%/\\x}"; }
+  set_pg() { [ -z "$2" ] || export "$1=$(dec "$2")"; }
+  set_pg PGUSER "${userinfo%%:*}"
+  case "$userinfo" in *:*) set_pg PGPASSWORD "${userinfo#*:}" ;; esac
+  case "$hostport" in
+    \[*\]*) set_pg PGHOST "${hostport%%]*}"; PGHOST=${PGHOST#[}; export PGHOST
+      v=${hostport##*]}; set_pg PGPORT "${v#:}" ;;
+    *:*) set_pg PGHOST "${hostport%%:*}"; set_pg PGPORT "${hostport#*:}" ;;
+    *) set_pg PGHOST "$hostport" ;;
+  esac
+  set_pg PGDATABASE "$db"
+  local IFS='&'
+  for kv in $query; do
+    k=${kv%%=*} v=${kv#*=}
+    case "$k" in sslmode | sslrootcert | sslcert | sslkey) set_pg "PG$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$v" ;; esac
+  done
+  unset IFS
+  PGCONNECT_TIMEOUT=10 exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
+)
+
 # push_file FILE URL: pushes the file's lines not yet pushed. Returns 1 when
 # the database refused a batch.
 push_file() {
@@ -76,7 +105,7 @@ push_file() {
     [ "$n" -le "$BATCH" ] || n=$BATCH
     sql=$(tail -n +$((pushed + 1)) "$f" | head -n "$n" | jq -nrR --argjson off "$pushed" "$SQL_ROWS") || return 0
     if ! out=$({ printf '%s\n' "$DDL"; printf '%s\n' "$sql"; } \
-      | PGCONNECT_TIMEOUT=10 psql -X -q --single-transaction -v ON_ERROR_STOP=1 "$url" -f - 2>&1); then
+      | run_psql "$url" 2>&1); then
       printf '%s\n' "$out" | sed -E "$MASK_SECRETS_SED" >&2
       echo "event-push-loop: push of $name failed, retrying next pass" >&2
       return 1
