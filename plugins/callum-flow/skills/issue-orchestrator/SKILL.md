@@ -288,8 +288,9 @@ with `run_in_background` - never fall back to polling inline.
     fresh `axi run` from its worktree; do not spawn a fixer agent or the adjudicator.
     Otherwise a step failed, which also parks the run at an approval gate
     (`axi status` shows e.g. `test,awaiting_approval`): handle it exactly as `parked`,
-    with the failing step as the gate. The fixer's own rules (rebase, abort, NOT GATED
-    handoff) are in `fixer.md`. Never resume an old agent - resumption is unreliable.
+    with the failing step as the gate. The fixer's own rules (rebase, abort) are in `fixer.md`;
+    the NOT GATED handoff is in the `implement-issue` skill.
+    Never resume an old agent - resumption is unreliable.
   - **`merge-ready`** - all local steps passed, the run's own CI monitor
     reports GitHub CI green, the run's head equals both `origin/<branch>`
     (fetched fresh) and, when mapped, the worktree's HEAD, and GitHub itself
