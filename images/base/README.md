@@ -1145,7 +1145,9 @@ says `merge` over a body with a `## Run it` heading prints `ROLLOUT conflict ...
 (exit 2 on bad arguments). It only reads, so it is in the synced allow list.
 
 `callum-flow-fix-linkage <pr> [--expect closing|refs]` repairs a PR body's issue linkage
-(`Closes #N` / `Refs #N`) and re-checks it. It edits the PR, so, like `callum-flow-merge`,
+(`Closes #N` / `Refs #N`) and re-checks it. Without `--expect` it derives the keyword from the
+issue's Rollout like the merge guard, and edits nothing on a conflict, a failed lookup or a
+contradicting `--expect`. It edits the PR, so, like `callum-flow-merge`,
 it is allowed only in the main checkout's `settings.local.json`; the read-only
 `check-pr-linkage.sh` stays in the synced allow list.
 
