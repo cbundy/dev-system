@@ -110,6 +110,14 @@
 #
 # --interval <seconds> sets the poll interval (default: the
 # PIPELINE_WATCH_INTERVAL environment variable, else 25).
+#
+# --resolve <branch> (cbundy/dev-system#243) is a one-shot lookup, not a
+# watch: it runs the resolver above once for the branch's newest run, prints
+# the run id alone on one line and exits 0, or exits 1 with no stdout when the
+# branch has no run or the lookup fails. It never polls, never records an
+# event and never prints a watcher state line. It takes no option except
+# --worktree. This is the one place the branch-to-run lookup lives:
+# callum-flow-merge-guard asks the watcher instead of parsing anything itself.
 set -eu
 
 stream=
@@ -152,7 +160,8 @@ usage() {
   [ -z "${1-}" ] || echo "pipeline-watch.sh: $1" >&2
   echo "usage: pipeline-watch.sh [--branches branch[,branch...]]" \
     "[--stream | --deadline seconds] [--interval seconds]" \
-    "[--worktree branch=path]... [--known branch=state:sha]..." >&2
+    "[--worktree branch=path]... [--known branch=state:sha]..." \
+    "| --resolve branch [--worktree branch=path]..." >&2
   reported=1
   exit 2
 }
@@ -162,8 +171,14 @@ deadline=0
 interval=${PIPELINE_WATCH_INTERVAL:-25}
 worktrees=
 known=
+resolve_branch=
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --resolve)
+      resolve_branch=${2-}
+      [ -n "$resolve_branch" ] || usage
+      shift 2
+      ;;
     --branches) branches=${2-}; shift 2 || usage ;;
     --deadline) deadline=${2-}; shift 2 || usage ;;
     --interval) interval=${2-}; shift 2 || usage ;;
@@ -183,6 +198,11 @@ while [ "$#" -gt 0 ]; do
     *) usage ;;
   esac
 done
+if [ -n "$resolve_branch" ]; then
+  if [ -n "$branches$known$stream" ] || [ "$deadline" != 0 ]; then
+    usage "--resolve takes no option except --worktree"
+  fi
+fi
 case "$interval" in '' | *[!0-9]* | 0) usage "--interval must be a positive whole number of seconds" ;; esac
 if [ -n "$stream" ]; then
   [ "$deadline" = 0 ] ||
@@ -367,6 +387,23 @@ resolve() {
 
 started=$(date +%s)
 dir_cache=
+
+# --resolve <branch>: one-shot lookup (see the header); exits before the loop.
+if [ -n "$resolve_branch" ]; then
+  rows=$(run_rows) || exit 1
+  row=$(printf '%s\n' "$rows" | awk -v b="$resolve_branch" '$1 == b { print; exit }')
+  [ -n "$row" ] || exit 1
+  rest=${row#* }
+  auto_worktrees=$(git worktree list --porcelain 2>/dev/null | awk '
+    /^worktree / { p = substr($0, 10) }
+    /^branch refs\/heads\// { print substr($0, 19) "=" p }') || auto_worktrees=
+  table_loaded=
+  dirs_scanned=
+  resolve "$resolve_branch" "${rest%% *}" "${rest#* }" || exit 1
+  [ -n "$id" ] || exit 1
+  printf '%s\n' "$id"
+  exit 0
+fi
 
 # poll: one cycle over every watched branch's newest run.
 poll() {
