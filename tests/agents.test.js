@@ -31,9 +31,12 @@ test("designer cannot edit code and spawns the explorer", () => {
   assert.match(fm.tools, /Agent/);
 });
 
-test("adjudicator is read-only, and cannot spawn agents", () => {
+test("adjudicator is read-only, cannot spawn agents, and states the verdict contract", () => {
   const fm = frontmatter("adjudicator");
   assert.match(fm.disallowedTools, /Edit/);
   assert.match(fm.disallowedTools, /Write/);
   assert.doesNotMatch(fm.tools, /Agent/);
+  const body = fs.readFileSync(path.join(DIR, "adjudicator.md"), "utf8");
+  for (const v of ["CORRECT", "WRONG", "NIT", "ENV", "DUP"]) assert.match(body, new RegExp(`\\b${v}\\b`));
+  assert.match(body, /never run\s+`?axi respond`?/i);
 });
