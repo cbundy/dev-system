@@ -71,7 +71,7 @@ run_psql() (
   case "$rest" in */*) db=${rest#*/}; rest=${rest%%/*} ;; esac
   case "$rest" in *@*) userinfo=${rest%@*}; rest=${rest##*@} ;; esac
   hostport=$rest
-  dec() { printf '%b' "${1//%/\\x}"; }
+  dec() { local e=${1//\\/\\\\}; printf '%b' "${e//%/\\x}"; }
   set_pg() { [ -z "$2" ] || export "$1=$(dec "$2")"; }
   set_pg PGUSER "${userinfo%%:*}"
   case "$userinfo" in *:*) set_pg PGPASSWORD "${userinfo#*:}" ;; esac
@@ -85,10 +85,27 @@ run_psql() (
   local IFS='&'
   for kv in $query; do
     k=${kv%%=*} v=${kv#*=}
-    case "$k" in sslmode | sslrootcert | sslcert | sslkey) set_pg "PG$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$v" ;; esac
+    case "$k" in
+      host) set_pg PGHOST "$v" ;;
+      hostaddr) set_pg PGHOSTADDR "$v" ;;
+      port) set_pg PGPORT "$v" ;;
+      user) set_pg PGUSER "$v" ;;
+      password) set_pg PGPASSWORD "$v" ;;
+      dbname) set_pg PGDATABASE "$v" ;;
+      service) set_pg PGSERVICE "$v" ;;
+      options) set_pg PGOPTIONS "$v" ;;
+      application_name) set_pg PGAPPNAME "$v" ;;
+      connect_timeout) set_pg PGCONNECT_TIMEOUT "$v" ;;
+      channel_binding) set_pg PGCHANNELBINDING "$v" ;;
+      target_session_attrs) set_pg PGTARGETSESSIONATTRS "$v" ;;
+      sslmode | sslrootcert | sslcert | sslkey | sslcrl | sslsni | gssencmode | krbsrvname | requirepeer)
+        set_pg "PG$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$v" ;;
+      *) echo "event-push-loop: ignoring unsupported URL parameter '$k'" >&2 ;;
+    esac
   done
   unset IFS
-  PGCONNECT_TIMEOUT=10 exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
+  export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-10}
+  exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
 )
 
 # push_file FILE URL: pushes the file's lines not yet pushed. Returns 1 when
