@@ -1128,6 +1128,12 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 
+`callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
+gates, base) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
+is in the synced allow list. `callum-flow-merge <pr>` runs it, squash-merges with
+`--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
+checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash.
+
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its

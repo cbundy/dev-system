@@ -193,6 +193,8 @@ COPY --chmod=0755 \
   images/base/dev-prune-worktrees \
   images/base/dev-login \
   images/base/callum-flow-event \
+  images/base/callum-flow-merge-guard \
+  images/base/callum-flow-merge \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop /usr/local/share/dev-system/

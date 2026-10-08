@@ -178,7 +178,7 @@ re-arm.
    skill, which owns the *how* (worktree, `/no-mistakes`, evidence, quality bar,
    handoff, fire-and-forget termination). You own the merge and linkage (see
    Linkage). Log `delegated`; spawn with `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
-4. **Verify and merge** when the PR lands (see Merge discipline). Log `merged`, `verdict`, `abandoned` (bare `callum-flow-event` lists states).
+4. **Verify and merge** when the PR lands: run `callum-flow-merge-guard`, then merge through `callum-flow-merge` (see Merge guard). The merge script logs `merged`; log `verdict` and `abandoned` yourself (bare `callum-flow-event` lists states).
 
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
@@ -330,8 +330,8 @@ with `run_in_background` - never fall back to polling inline.
   - **`merge-ready`** - all local steps passed, the run's own CI monitor
     reports GitHub CI green, the run's head equals both `origin/<branch>`
     (fetched fresh) and, when mapped, the worktree's HEAD, and GitHub itself
-    reports the PR mergeable (not just the run's own view); run the four
-    correctness guards below, then merge it yourself.
+    reports the PR mergeable (not just the run's own view); run the merge
+    guard below, then merge it yourself.
   - **`head-mismatch`** - printed as `head-mismatch <branch> <run-id>
     run=<sha> branch=<sha> [worktree=<sha>]`: the run is green, but for a
     different commit than the branch or its worktree holds (phantom gating;
@@ -353,63 +353,52 @@ with `run_in_background` - never fall back to polling inline.
   - **`cancelled`** - the run was cancelled; decide whether to re-drive or
     drop it.
 
-The watcher changes only **when** this fires - it does not change **that** the
-following guards fire, and none of them is weakened:
+## Merge guard
+The watcher changes only **when** a merge is considered, never **that** it is
+checked. Green looks the same whether or not it vouches for the right commit, so
+one script checks the lot and you act on what it names:
 
-1. **Phantom-gating guard.** The watcher checks this mechanically (a
-   `head-mismatch` wake), but only against `origin/<branch>` and the worktree
-   the branch is checked out in - it cannot see a commit made anywhere else.
-   Before trusting any green, confirm the run's `head:` SHA equals the
-   branch/PR's real HEAD SHA
-   (`git log --oneline origin/<branch>..HEAD`, `gh pr view <pr> --json commits`).
-   One question decides every case: am I adding a commit from outside the
-   pipeline?
-   - **No new commit, run parked at a gate** -> `axi respond` (backgrounded,
-     see `parked` above) or re-attach with `axi run` drives the pipeline's own head. Never abort just to
-     bypass a gate you could respond to.
-   - **New code needed while parked, and the pipeline cannot write it from
-     instructions** -> prefer `respond --action fix` first; only if that
-     genuinely cannot produce the fix, `axi abort`, commit on top of
-     `origin/<branch>` (keeping every pipeline fix commit already on the
-     branch), fresh `axi run`, and accept the full re-validation that
-     follows.
-   - **New commit after a run completed or failed** (including the
-     CI-monitoring tail, which reports `running` for up to 168h) -> rebase
-     onto `origin/<branch>` keeping the pipeline's commits, `axi abort`,
-     fresh `axi run`, and prove the new run's head equals the new commit
-     SHA. `axi run` against a live run just attaches to it and gates
-     nothing.
+`callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID] [--base <branch>] [--issue N]`
 
-   `no-mistakes rerun` re-gates a run's *existing* head rather than a commit
-   made after the run started - that only ever belongs to the first case,
-   never the second or third. A green run whose head predates a later fix
-   proves nothing about that fix.
-2. **Issue<->PR linkage.** Run `check-pr-linkage.sh` once before merging (see
-   Linkage). Require `MATCH` or `REPAIRED` with exit 0, or verified manual
-   linkage after `SKIP`. A failed check or repair blocks merging.
-3. **Real GitHub CI, not just `merge-ready`.** A `merge-ready` wake (like
-   `no-mistakes`'s own `checks-passed` outcome) reflects the local pipeline's
-   view of its gates and of CI, a separate system from GitHub Actions
-   CI that can disagree with it (environment, flakiness, config drift). Confirm the
-   real result with `gh pr checks <pr>` / `statusCheckRollup` before merging, not
-   just the watcher's word.
-4. **Drive a genuinely parked or failed gate correctly.** The three cases in
-   guard 1 are the full decision procedure - repeated here because this is
-   where the mistake actually happens. `axi run` (or `axi respond`, always
-   backgrounded) re-attaches to whatever run already exists on the branch; it only starts
-   a fresh run when there is no live one. Re-attaching (or, better,
-   `respond`ing) is correct exactly in the first case: no new commit of your
-   own, gate genuinely parked (`awaiting_agent`) or failed. Against a run
-   that is still *live* - including the completed run's own CI-monitoring
-   tail, which reports `running` for up to 168h - `axi run` attaches to that
-   live run and gates nothing; it does not pick up a commit made after the
-   run started. That is the third case: `no-mistakes axi abort` it first,
-   then a fresh `axi run` (never with `--yes`), then confirm the new run's
-   `head:` equals the branch HEAD before trusting it - the same sequence the
-   `head-mismatch` handling above uses. Never abort a *live*, still-gating
-   run just to go fix a finding yourself - `respond --action fix` exists
-   precisely so you don't have to; aborting there discards the pipeline's
-   in-flight work and forces a full re-validation for nothing.
+It only reads. It exits 0 and prints nothing when every guard passes; otherwise
+it prints one `GUARD <name> FAIL <reason>` line per failed guard (all are
+evaluated, none short-circuits) and exits 1. Pass `--expect refs` for a
+keep-open issue and `--base <epic>` for a PR into an epic branch. Act on each
+named guard:
+
+- **`head`** - the run's head is not the branch/PR head (phantom gating; the
+  reason names the shas, `unknown` means one could not be read). Never merge.
+  One question decides the fix: am I adding a commit from outside the pipeline?
+  - **No new commit, run parked at a gate** -> `axi respond` (backgrounded, see
+    `parked`) or re-attach with `axi run`. Never abort just to bypass a gate you
+    could respond to.
+  - **New code needed while parked, and the pipeline cannot write it from
+    instructions** -> prefer `respond --action fix`; only if that cannot
+    produce the fix, `axi abort`, commit on top of `origin/<branch>` keeping the
+    pipeline's commits, fresh `axi run`, and accept the full re-validation.
+  - **New commit after a run completed or failed** (including the
+    CI-monitoring tail, which reports `running` for up to 168h) -> rebase onto
+    `origin/<branch>` keeping the pipeline's commits, `axi abort`, fresh
+    `axi run`, and prove the new run's head equals the new commit. `axi run`
+    against a live run just attaches to it and gates nothing.
+
+  `no-mistakes rerun` re-gates a run's *existing* head, so it only belongs to
+  the first case. Never abort a live, still-gating run just to fix a finding
+  yourself - `respond --action fix` exists so you don't have to.
+- **`linkage`** - see Linkage.
+- **`checks`** - GitHub CI is pending, failing or absent, whatever the local
+  run says. Wait for it, or fix the failure.
+- **`gates`** - a step is awaiting approval or the run failed/aborted:
+  `respond`, or re-drive it.
+- **`base`** - the PR does not target the default branch. Confirm it is an epic
+  PR, then re-run the guard with `--base <epic>`.
+
+On a pass, merge with `callum-flow-merge <pr> [same options]`. It re-runs the
+guard, squash-merges with `--match-head-commit` on the verified sha (a push in
+between is refused), and logs `merged`. `--method merge|rebase` or
+`CALLUM_FLOW_MERGE_METHOD` overrides the squash default for a repo that needs
+it. The merge command is allowed only in the main checkout's
+`.claude/settings.local.json`; the guard is in the synced allow list.
 
 - Never use `git stash` from the main checkout either - it shares the same
   `refs/stash` as every worktree, so it collides with delegated agents the
@@ -428,20 +417,22 @@ following guards fire, and none of them is weakened:
 
 ## Linkage (issue <-> PR)
 Green CI and "mergeable" say nothing about linkage, and a wrong keyword either
-leaves the issue open forever or closes the wrong one. One script checks it:
+leaves the issue open forever or closes the wrong one. The merge guard calls
+this script (never with `--fix`):
 
 `/usr/local/share/callum-tools/check-pr-linkage.sh <pr> [--expect refs] [--fix]`
 
 - It derives the issue number from the `<type>/issue-<N>-<slug>` branch and
   prints one line: `MATCH`, `MISMATCH`, `REPAIRED` or `SKIP` (no issue in the
   branch name; take the number from your delegation record and check by hand).
-- Run it once, before merging. Pass `--expect refs` for a keep-open issue
+- The guard runs it for you. Pass `--expect refs` for a keep-open issue
   (research, proposal, one part of several); it requires `Refs #N` or
   `Part of #N` for the branch issue and no closing targets. The default
   expects exactly the branch's issue to be closed.
-- On `MISMATCH`, run it again with the same expectation and `--fix`. Merge
-  only after `MATCH` or `REPAIRED` with exit 0, or the manual check after
-  `SKIP`. Stop on a failed repair, including a preserved Pipeline keyword
+- On `GUARD linkage FAIL`, repair by hand as a separate step: run the script
+  again with the same expectation and `--fix`, then re-run the guard. A `SKIP`
+  (no issue in the branch name) passes only when you give `--issue N` and the
+  PR linkage for #N matches `--expect`. Stop on a failed repair, including a preserved Pipeline keyword
   that still causes `MISMATCH`.
 - Never write close/closes/fixes/resolves before an issue number you do not
   mean to close: GitHub ignores negation, so "must NOT close #93" closed a real
@@ -452,7 +443,7 @@ leaves the issue open forever or closes the wrong one. One script checks it:
   merged PR. Keep-open issues (`--expect refs`) must remain open.
 
 ## Merge and close discipline
-- Merge only gate-passing PRs (CI green, mergeable) with acceptance verified.
+- Merge only with acceptance verified.
 - Read every `no-mistakes(<step>)` fix commit against the issue's requirements
   before merging - a green run can have deleted a requirement and rewritten
   its tests to match.
