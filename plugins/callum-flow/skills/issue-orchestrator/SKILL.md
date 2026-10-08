@@ -166,26 +166,24 @@ re-arm.
 1. **Claim** - only when the usage gate allows new work (see Usage gate).
    Swap the label: remove `READY_LABEL`, add `IN_DEV_LABEL`. The swap
    (not just removal) marks active work so a crashed agent is recoverable.
-2. **Understand** the ticket's requirements - read the issue body AND its
-   comments; comments frequently add or override requirements after the body
-   was written.
-3. **Explore** - spawn the named `callum-flow:explorer` agent (read-only) to map the exact
-   files, line numbers, and conventions involved. Its report makes your design
-   brief precise. Skip only for trivial, already-understood changes.
-4. **Design** the change yourself from the exploration report.
-5. **Delegate** the *what* (your design brief, precisely) to the named
-   `callum-flow:implementer` agent, plus a pointer to the `implement-issue` skill, which owns the
-   *how* (worktree, running `/no-mistakes` end to end, evidence, quality bar,
+2. **Design** - spawn the named `callum-flow:designer` agent with the issue number,
+   the branches in flight and the shared files they touch, owner instructions from
+   this session, and pointers to `CLAUDE.md` and `.claude/orchestrator-memory.md`.
+   It reads the issue, explores, and posts the design brief as an issue comment.
+   Keep only its return: the comment URL, created issue numbers, dependency order,
+   whether an owner decision is pending, and a summary. If a decision is pending,
+   surface it and wait; if it split the issue into unlabelled sub-issues, stop.
+3. **Delegate** the brief *pointer* (the comment URL, never its content) to the
+   named `callum-flow:implementer` agent, plus a pointer to the `implement-issue`
+   skill, which owns the *how* (worktree, `/no-mistakes`, evidence, quality bar,
    handoff, fire-and-forget termination). You own the merge and the issue
    linkage (see Linkage) - do not have the sub-agent merge.
-6. **Verify and merge** when the PR lands (see Merge discipline).
+4. **Verify and merge** when the PR lands (see Merge discipline).
 
 ## Sub-agent models
-Every sub-agent (explore, implement, fix) runs on Sonnet unless the issue says
-otherwise. This is enforced by the harness, not by per-call discipline: the
-plugin ships named agents under `agents/` - `callum-flow:explorer`,
-`callum-flow:implementer`, `callum-flow:fixer` - each with `model: sonnet` in
-its frontmatter.
+Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
+on Opus, `callum-flow:explorer`, `callum-flow:implementer` and `callum-flow:fixer`
+on Sonnet. This is enforced by the harness, not by per-call discipline.
 
 - Delegate ONLY through those named agents (`subagent_type:
   "callum-flow:<name>"`), with no `model` argument.
@@ -472,12 +470,9 @@ leaves the issue open forever or closes the wrong one. One script checks it:
 - **Research / proposal** - the deliverable is an artifact for human review (e.g.
   an HTML report). Do NOT auto-close the issue on merge; hand the artifact to the
   user and iterate on their feedback. Keep the issue open until they finalize.
-- **High-risk / large** - do NOT implement autonomously. Break it into scoped
-  sub-issues, leave them WITHOUT `READY_LABEL`, and wait for the user to tag each
-  `ready`. Keep the parent as a tracking epic. If you already started, stop the
+- **High-risk / large** - the designer splits it into unlabelled sub-issues; wait
+  for the user to tag each `ready`. If implementation already started, stop the
   agent before it opens a PR.
-- **Bug** - reproduce from the real failure (e.g. the actual failed CI run or an
-  end-to-end repro) before designing the fix.
 - **UI change** - require before/after screenshots (and a short clip for
   interactive changes) attached to the PR.
 - **Docs / rules** - keep the change tight; still go through a worktree + PR.
