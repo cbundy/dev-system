@@ -18,24 +18,45 @@ fail() {
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/bin"
-for t in cmp node bash grep cat mktemp rm sleep cp; do
+node_bin=$(command -v node) || fail "node not found"
+for t in cmp bash grep cat mktemp rm sleep cp basename touch; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$tmpdir/bin/$t"
 done
+
+cat > "$tmpdir/bin/node" <<'NODE_STUB'
+#!/bin/sh
+if [ "${STUB_FAIL_NODE:-}" = fix ] && [ "$4" = fix ]; then
+  printf 'partial repaired body'
+  exit 42
+fi
+if [ "${STUB_FAIL_NODE:-}" = empty ] && [ "$4" = fix ]; then
+  exit 42
+fi
+if [ "${STUB_FAIL_NODE:-}" = body ] && [ "$4" = field ] && [ "$5" = body ]; then
+  if [ -f "$STUB_DIR/body-read" ]; then
+    printf 'partial extracted body'
+    exit 42
+  fi
+  touch "$STUB_DIR/body-read"
+fi
+exec "$STUB_NODE_BIN" "$@"
+NODE_STUB
+chmod +x "$tmpdir/bin/node"
 
 cat > "$tmpdir/bin/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
 case "$1 $2" in
-  'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo","url":"https://github.com/local/repo"}' ;;
+  'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
   "pr view")
     node -e '
       const fs = require("fs"), d = process.argv[1];
       const r = (f) => fs.readFileSync(d + "/" + f, "utf8").replace(/\n$/, "");
       const body = fs.readFileSync(d + "/body", "utf8");
       const apiBody = process.env.STUB_API_BODY || body;
-      const matches = r("base") === "main" ? [...apiBody.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:(?:([\w.-]+)\/([\w.-]+))?#|https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/)(\d+)\b/gi)] : [];
-      const refs = matches.map((m) => ({number: Number(m[5]), repository: {owner: {login: m[1] || m[3] || "local"}, name: m[2] || m[4] || "repo"}}));
+      const matches = r("base") === "main" ? [...apiBody.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:([\w.-]+)\/([\w.-]+))?#(\d+)\b/gi)] : [];
+      const refs = matches.map((m) => ({number: Number(m[3]), repository: {owner: {login: m[1] || "local"}, name: m[2] || "repo"}}));
       refs.sort((a, b) => a.number - b.number);
       console.log(JSON.stringify({ headRefName: r("head"), baseRefName: r("base"),
         body: fs.readFileSync(d + "/body", "utf8"),
@@ -44,6 +65,7 @@ case "$1 $2" in
     ;;
   "pr edit")
     [ "$3" = 7 ] && [ "$4" = --body-file ] || exit 1
+    touch "$d/edited"
     cp "$5" "$d/body"
     if [ -n "${STUB_REWRITE_AFTER_EDIT:-}" ]; then
       printf '%s' "$STUB_REWRITE_AFTER_EDIT" > "$d/body"
@@ -66,6 +88,7 @@ run_case() {
   printf '%s\n' "$base" > "$STUB_DIR/base"
   printf '%s' "$body" > "$STUB_DIR/body"
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
+    STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
     STUB_API_BODY="${stale_api_body:-}" STUB_REWRITE_AFTER_EDIT="${rewrite_after_edit:-}" \
     CHECK_PR_LINKAGE_RETRY_SLEEP=0 bash "$SCRIPT" 7 "$@" 2>"$tmpdir/stderr") && rc=0 || rc=$?
   case "$out" in
@@ -73,6 +96,8 @@ run_case() {
     *) fail "$name: expected '$want...', got '$out'" ;;
   esac
   case "$want" in
+    "") [ "$rc" -ne 0 ] || fail "$name: expected failure"
+      [ ! -f "$STUB_DIR/edited" ] || fail "$name: edited PR despite failure" ;;
     MISMATCH*) [ "$rc" -eq 1 ] || fail "$name: expected exit 1, got $rc" ;;
     *) [ "$rc" -eq 0 ] || fail "$name: expected exit 0, got $rc" ;;
   esac
@@ -108,10 +133,6 @@ for base in main epic/x; do
   run_case "repair foreign same-number issue ($base)" $H "$base" "Closes other/repo#12" "REPAIRED #7" "Refs other/repo#12${nl}${nl}Closes #12${nl}" --fix
   run_case "repair foreign stray issue ($base)" $H "$base" "Closes #12; Fixes other/repo#99" "REPAIRED #7" "Closes #12; Refs other/repo#99" --fix
   run_case "refs neutralizes every repository ($base)" $H "$base" "Closes local/repo#12; Resolves other/repo#99" "REPAIRED #7" "Refs local/repo#12; Refs other/repo#99" --expect refs --fix
-  run_case "local URL issue ($base)" $H "$base" "Closes https://github.com/local/repo/issues/12" "MATCH #7" ""
-  run_case "foreign URL issue ($base)" $H "$base" "Closes https://github.com/other/repo/issues/12" "MISMATCH #7" ""
-  run_case "repair foreign URL issue ($base)" $H "$base" "Closes https://github.com/other/repo/issues/12" "REPAIRED #7" "Refs https://github.com/other/repo/issues/12${nl}${nl}Closes #12${nl}" --fix
-  run_case "refs neutralizes URL ($base)" $H "$base" "Closes https://github.com/local/repo/issues/12" "REPAIRED #7" "Refs https://github.com/local/repo/issues/12" --expect refs --fix
   pipeline="Closes #12${nl}## Pipeline${nl}Fixes other/repo#99${nl}"
   run_case "Pipeline stray keyword ($base)" $H "$base" "$pipeline" "MISMATCH #7" ""
   run_case "Pipeline stray keyword cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --fix
@@ -120,8 +141,26 @@ for base in main epic/x; do
   run_case "Pipeline local stray cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --fix
   pipeline="## Pipeline${nl}Closes #12${nl}"
   run_case "Pipeline closing keyword rejects refs ($base)" $H "$base" "$pipeline" "MISMATCH #7" "" --expect refs
-  run_case "Pipeline prevents refs repair ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --expect refs --fix
+  run_case "Pipeline prevents refs repair ($base)" $H "$base" "$pipeline" "MISMATCH #7" "Refs #12${nl}${nl}$pipeline" --expect refs --fix
   run_case "Pipeline local closing keyword ($base)" $H "$base" "$pipeline" "MATCH #7" ""
+  for ref in "Refs #12" "Part of #12" "Refs LOCAL/REPO#12" "Part of local/repo#12"; do
+    run_case "keep-open reference matches ($base)" $H "$base" "$ref" "MATCH #7" "$ref" --expect refs
+    run_case "keep-open fix is unchanged ($base)" $H "$base" "$ref" "MATCH #7" "$ref" --expect refs --fix
+  done
+  for body in "Summary" "Refs #99" "Refs other/repo#12" "Part of other/repo#12" "Refs https://github.com/local/repo/issues/12"; do
+    run_case "missing local keep-open reference ($base)" $H "$base" "$body" "MISMATCH #7" "$body" --expect refs
+    run_case "append missing keep-open reference ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Refs #12${nl}" --expect refs --fix
+  done
+  body="Summary${nl}## Pipeline${nl}Part of #12${nl}"
+  run_case "keep-open reference in Pipeline ($base)" $H "$base" "$body" "MATCH #7" "$body" --expect refs
+  body="Summary${nl}## Pipeline${nl}log  line${nl}"
+  run_case "append refs before preserved Pipeline ($base)" $H "$base" "$body" "REPAIRED #7" "Summary${nl}${nl}Refs #12${nl}${nl}## Pipeline${nl}log  line${nl}" --expect refs --fix
+  body="Closes #99"
+  run_case "refs repair adds local reference after neutralizing stray ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Refs #12${nl}" --expect refs --fix
+  body="Closes #12; Closes https://tracker.example/local/repo/issues/99"
+  run_case "tracker URL is ignored ($base)" $H "$base" "$body" "MATCH #7" "$body"
+  body='Closes https://<host>/owner/repo/issues/99'
+  run_case "placeholder URL is preserved ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Closes #12${nl}" --fix
 done
 run_case "epic refs guidance" $H epic/x "Refs #12" "MATCH #7" "" --expect refs
 grep -q "Keep #12 open after merge" "$tmpdir/stderr" || fail "missing keep-open guidance"
@@ -149,4 +188,16 @@ run_case "post-edit refs rewrite cannot pass stale API" $H main "Closes #99" "MI
 unset stale_api_body rewrite_after_edit
 run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 epic/big" ""
 
+fail_node=body
+run_case "body extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}" --fix
+for fail_node in fix empty; do
+  for base in main epic/x; do
+    for expectation in closing refs; do
+      run_case "internal $fail_node failure preserves PR ($base, $expectation)" $H "$base" "Summary${nl}" "" "Summary${nl}" --expect "$expectation" --fix
+    done
+  done
+done
+unset fail_node
+run_case "reject refs argument alias" $H main "Refs #12" "" "Refs #12" --expect=refs
+run_case "reject closing argument alias" $H main "Closes #12" "" "Closes #12" --expect=closing
 echo "check-pr-linkage: $passed passed"

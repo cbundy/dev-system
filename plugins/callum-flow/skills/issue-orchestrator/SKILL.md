@@ -438,8 +438,9 @@ leaves the issue open forever or closes the wrong one. One script checks it:
   prints one line: `MATCH`, `MISMATCH`, `REPAIRED` or `SKIP` (no issue in the
   branch name; take the number from your delegation record and check by hand).
 - Run it once, before merging. Pass `--expect refs` for a keep-open issue
-  (research, proposal, one part of several); the default expects exactly the
-  branch's issue to be closed.
+  (research, proposal, one part of several); it requires `Refs #N` or
+  `Part of #N` for the branch issue and no closing targets. The default
+  expects exactly the branch's issue to be closed.
 - On `MISMATCH`, run it again with the same expectation and `--fix`. Merge
   only after `MATCH` or `REPAIRED` with exit 0, or the manual check after
   `SKIP`. Stop on a failed repair, including a preserved Pipeline keyword

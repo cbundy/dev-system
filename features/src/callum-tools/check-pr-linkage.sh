@@ -12,7 +12,7 @@
 # `<type>/issue-<N>-<slug>`. A branch with no `issue-<N>-` segment is skipped.
 #
 #   --expect closing (default)  exactly #N is closed by the PR
-#   --expect refs               the PR closes nothing (keep-open issue)
+#   --expect refs               references #N and closes nothing (keep-open issue)
 #   --fix                       repair the body, then re-verify
 #
 # Base branch: GitHub only registers closing references for PRs targeting the
@@ -57,10 +57,6 @@ while [[ $# -gt 0 ]]; do
       EXPECT="$2"
       shift 2
       ;;
-    --expect=*)
-      EXPECT="${1#--expect=}"
-      shift
-      ;;
     --fix)
       FIX=1
       shift
@@ -90,17 +86,14 @@ done
 #   fix <closing|refs> <N>  stdin: body; prints new body
 NODE_PROG='
 const fs = require("fs");
-const [repo, repoUrl, mode, a, b] = process.argv.slice(1);
+const [repo, mode, a, b] = process.argv.slice(1);
 const input = fs.readFileSync(0, "utf8");
 const KW = "(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)";
-const re = new RegExp("\\b" + KW + "\\s*:?\\s*((?:(?:[\\w.-]+/[\\w.-]+)?#|https?://[^/\\s]+/[\\w.-]+/[\\w.-]+/issues/)(\\d+))\\b", "gi");
+const REF = "((?:[\\w.-]+/[\\w.-]+)?#(\\d+))\\b";
+const re = new RegExp("\\b" + KW + "\\s*:?\\s*" + REF, "gi");
+const refsRe = new RegExp("\\b(?:Refs|Part of)\\s+" + REF, "gi");
 const target = (ref, number) => {
-  let owner = ref.slice(0, ref.lastIndexOf("#")).toLowerCase();
-  if (/^https?:/i.test(ref)) {
-    const url = new URL(ref);
-    if (url.host.toLowerCase() !== new URL(repoUrl).host.toLowerCase()) return ref;
-    owner = url.pathname.split("/").slice(1, 3).join("/").toLowerCase();
-  }
+  const owner = ref.slice(0, ref.lastIndexOf("#")).toLowerCase();
   return !owner || owner === repo.toLowerCase() ? Number(number) : owner + "#" + Number(number);
 };
 const split = (s) => {
@@ -115,18 +108,22 @@ if (mode === "field") {
 } else if (mode === "scan") {
   const targets = [...input.matchAll(re)].map((m) => target(m[1], m[2]));
   process.stdout.write(JSON.stringify([...new Set(targets)]));
+} else if (mode === "refs") {
+  process.stdout.write(String([...input.matchAll(refsRe)].some((m) => target(m[1], m[2]) === Number(a))));
 } else if (mode === "fix") {
   const n = Number(b);
   let [head, tail] = split(input);
   head = head.replace(re, (m, ref, d) => (a === "refs" || target(ref, d) !== n ? "Refs " + ref : m));
-  if (a === "closing" && ![...head.matchAll(re)].some((m) => target(m[1], m[2]) === n)) {
+  const expectedRe = a === "refs" ? refsRe : re;
+  const presenceBody = a === "refs" ? head + tail : head;
+  if (![...presenceBody.matchAll(expectedRe)].some((m) => target(m[1], m[2]) === n)) {
     const t = head.replace(/\s+$/, "");
-    head = t + (t ? "\n\n" : "") + "Closes #" + n + "\n" + (tail ? "\n" : "");
+    head = t + (t ? "\n\n" : "") + (a === "refs" ? "Refs #" : "Closes #") + n + "\n" + (tail ? "\n" : "");
   }
   process.stdout.write(head + tail);
 }
 '
-nodeb() { node -e "$NODE_PROG" "${REPO:-}" "${REPO_URL:-}" "$@"; }
+nodeb() { node -e "$NODE_PROG" "${REPO:-}" "$@"; }
 
 echo "Reading PR #${PR} via ${GH_BIN}..." >&2
 PR_JSON="$("$GH_BIN" pr view "$PR" --json headRefName,baseRefName,body,closingIssuesReferences)"
@@ -142,9 +139,8 @@ else
   exit 0
 fi
 
-REPO_JSON="$("$GH_BIN" repo view --json defaultBranchRef,nameWithOwner,url)"
+REPO_JSON="$("$GH_BIN" repo view --json defaultBranchRef,nameWithOwner)"
 REPO="$(printf '%s' "$REPO_JSON" | nodeb field nameWithOwner)"
-REPO_URL="$(printf '%s' "$REPO_JSON" | nodeb field url)"
 DEFAULT_BRANCH="$(printf '%s' "$REPO_JSON" | nodeb field defaultBranch)"
 if [[ "$BASE_REF" == "$DEFAULT_BRANCH" ]]; then
   VIA=api
@@ -162,6 +158,9 @@ fi
 current_targets() {
   PR_JSON="$("$GH_BIN" pr view "$PR" --json body,closingIssuesReferences)"
   BODY_TARGETS="$(printf '%s' "$PR_JSON" | nodeb field body | nodeb scan)"
+  if [[ "$EXPECT" == refs ]]; then
+    HAS_REF="$(printf '%s' "$PR_JSON" | nodeb field body | nodeb refs "$ISSUE")"
+  fi
   if [[ "$VIA" == api ]]; then
     CURRENT="$(printf '%s' "$PR_JSON" | nodeb field closing)"
   else
@@ -173,7 +172,7 @@ verify() {
   if [[ "$EXPECT" == closing ]]; then
     [[ "$CURRENT" == "[${ISSUE}]" && "$BODY_TARGETS" == "[${ISSUE}]" ]]
   else
-    [[ "$CURRENT" == "[]" && "$BODY_TARGETS" == "[]" ]]
+    [[ "$CURRENT" == "[]" && "$BODY_TARGETS" == "[]" && "$HAS_REF" == true ]]
   fi
 }
 
@@ -189,7 +188,7 @@ if [[ "$FIX" -ne 1 ]]; then
   if [[ "$EXPECT" == closing ]]; then
     echo "PR #${PR} (${HEAD_REF}) must close exactly #${ISSUE}; it closes ${CURRENT}. Add 'Closes #${ISSUE}' and neutralize other closing keywords, or rerun with --fix." >&2
   else
-    echo "PR #${PR} (${HEAD_REF}) must not close anything; it closes ${CURRENT}. Use 'Refs #N' instead, or rerun with --fix." >&2
+    echo "PR #${PR} (${HEAD_REF}) must reference #${ISSUE} with 'Refs #${ISSUE}' or 'Part of #${ISSUE}' and close nothing; it closes ${CURRENT}. Rerun with --fix." >&2
   fi
   echo "MISMATCH #${PR} ${REPORT}"
   exit 1
@@ -197,8 +196,8 @@ fi
 
 echo "Repairing PR #${PR} body..." >&2
 # The trailing X survives command substitution, which would strip trailing newlines.
-BODY="$(printf '%s' "$PR_JSON" | nodeb field body; printf X)"
-NEW_BODY="$(printf '%s' "${BODY%X}" | nodeb fix "$EXPECT" "$ISSUE"; printf X)"
+BODY="$(printf '%s' "$PR_JSON" | nodeb field body && printf X)"
+NEW_BODY="$(printf '%s' "${BODY%X}" | nodeb fix "$EXPECT" "$ISSUE" && printf X)"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 printf '%s' "${NEW_BODY%X}" >"$TMP"
