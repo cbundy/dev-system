@@ -182,8 +182,8 @@ re-arm.
 
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
-on Opus, `callum-flow:explorer`, `callum-flow:implementer` and `callum-flow:fixer`
-on Sonnet. This is enforced by the harness, not by per-call discipline.
+on Opus, `callum-flow:explorer`, `callum-flow:implementer`, `callum-flow:fixer` and
+`callum-flow:adjudicator` on Sonnet. This is enforced by the harness, not by per-call discipline.
 
 - Delegate ONLY through those named agents (`subagent_type:
   "callum-flow:<name>"`), with no `model` argument.
@@ -248,19 +248,29 @@ with `run_in_background` - never fall back to polling inline.
     OTHER in-flight branch, which is worse than one redundant wake; always
     re-arm it, with an updated `--known` baseline if needed.
 - Act on the watcher output:
-  - **`parked`** - a gate is awaiting a decision, and the default route is to
-    drive it through the pipeline, not around it: fixing through `axi
-    respond` commits on the run's own head in the run's own worktree, so the
-    head cannot drift and there is no second writer on the branch - none of
-    the phantom-gating shapes below can occur this way. Read it (`no-mistakes
-    axi status` from the branch worktree) and decide yourself with the
-    issue's requirements in hand: `axi respond --action approve`, `--action
-    fix --findings <ids> --instructions "<what to do>"` to fix listed
-    findings, `--action fix --add-finding '<json finding>'` to add something
-    the reviewer missed and have the pipeline fix it, or `--action skip`.
-    Never add `--yes` - it applies every later `ask-user` finding without
-    escalation, which is how reviewer "remove this unrequired component"
-    findings delete in-scope requirements.
+  - **`parked`** - a gate is awaiting a decision. Drive it through the pipeline,
+    not around it: `axi respond` commits on the run's own head in the run's own
+    worktree, so the head cannot drift and there is no second writer on the
+    branch. Never read the gate's log or the diff yourself - a judge does:
+    1. **Cap check first.** Count this run's review fix rounds in the local event log:
+       `jq -s --arg r <RUN_ID> '[.[] | select(.run==$r and .state=="fix_requested" and .note=="review")] | length' /persist/events/<owner>__<repo>.jsonl`.
+       When the gate is `review` and the count is already 3, the next response would start
+       a fourth round: do not respond. Surface the brief URL and the run's `verdict`
+       lines (same file, `state=="verdict"`, same `run`) to the owner and wait.
+    2. **Spawn `callum-flow:adjudicator`** (no `model` argument, except the `model:<alias>`
+       rule) with the run id, branch, brief comment URL and the parked step. It returns
+       verdict lines (`CORRECT|WRONG|NIT|ENV|DUP: <reason>`, one per finding) and one
+       `ACTION:` line, and nothing else.
+    3. **Log each verdict line**: `callum-flow-event verdict --issue <N> --run <id> --branch <b> --note "<line>"`.
+       A zero-finding review has none.
+    4. **Act on the `ACTION:` line**: run the matching `no-mistakes axi respond`
+       (`approve [--reason]`, `fix --findings/--add-finding/--instructions`, `skip`).
+       A `fix` on the `review` step also logs `callum-flow-event fix_requested ... --note review`
+       (that is what the cap counts). `escalate:` goes to the owner. `fixer:` spawns the
+       named `callum-flow:fixer` with the adjudicator's instructions and the brief URL - only
+       when the pipeline cannot write the fix, or the run already completed.
+       Never add `--yes` - it applies every later `ask-user` finding without escalation, which
+       is how reviewer "remove this unrequired component" findings delete in-scope requirements.
 
     **`no-mistakes axi respond` is the run's driver and BLOCKS until the next
     gate or outcome, exactly like `axi run`.** Always launch it with the
@@ -270,63 +280,16 @@ with `run_in_background` - never fall back to polling inline.
     strands at the next gate unwatched. Its exit is a wake: read its output
     (a `gate:` to respond to, or an `outcome:`), handle it, and keep the
     pipeline watcher armed.
-
-    A finding that asserts how a tool behaves is a claim to reproduce, not a
-    fact. Responding `--action fix` to a false one has the pipeline rewrite
-    correct code to satisfy it, which is worse than approving it - so build
-    the smallest repro first and approve with the evidence when it does not
-    hold up.
-
-    Record every adjudication as one line led by a verdict - `CORRECT:`
-    `WRONG:` `NIT:` `ENV:` or `DUP:` - and then why. Without it the record
-    shows only that a human overrode a finding, never whether it was wrong or
-    merely not actionable, and those call for opposite responses; the prefix
-    makes the reviewer's good-vs-bad rate a query rather than someone's
-    recollection. Where the run can store it, pass it as `--reason` on
-    `--action approve`, which persists with the approval - check `axi respond
-    --help` for the gates that accept it (currently only the Test step). The
-    other approvals, and `--action fix` (whose `--instructions` text is not
-    persisted), have no such field, so write the same line where it will
-    last, such as a comment on the PR.
-
-    Newer no-mistakes releases park the review step for approval every run,
-    even with zero findings - that is your cheapest moment to catch a gap,
-    not a rubber stamp. Before approving, read the review against the
-    issue's actual requirements: fix anything real the reviewer flagged
-    (`--findings`), and add anything it missed with `--add-finding`. Once a
-    run has passed its gates there is nothing left to `respond` to - a
-    problem noticed after merge-ready needs the fixer-agent path below, not
-    a `respond` call against a finished run.
-
-    Spawn a fixer agent instead only as the fallback: when the fix needs
-    code the pipeline cannot write from instructions, or the run has already
-    completed. Only then do the fixer-brief rules apply - see guard 4.
   - **`failed`** - a run that failed before step 1, with no log directory
     (its run id may print as `unknown`), is an infrastructure failure, not
     a code defect - e.g. the shared-ref-store lock race `cannot lock ref
     'refs/remotes/origin/<base>'` between concurrent fetches. Check
     `~/.no-mistakes/logs/daemon.log`, then rebase the branch and start a
-    fresh `axi run` from its worktree; do not spawn a fixer agent.
-    Otherwise a step failed, which also parks the run at an approval
-    gate (`axi status` shows e.g. `test,awaiting_approval`), so the default
-    route is the same as `parked`: read the failing step's log
-    (`~/.no-mistakes/logs/<RUN_ID>/<step>.log`) and drive it with `axi
-    respond --action fix --findings <ids>`, `--add-finding '<json
-    finding>'`, and/or `--instructions "<what to do>"` - never `--yes`. This
-    keeps the fix on the run's own head in the run's own worktree, so
-    nothing about the branch's commit history changes underneath you.
-
-    Fall back to a fresh, single-purpose **fixer** agent (the named
-    `callum-flow:fixer`, see Sub-agent models) only when the
-    pipeline cannot write the fix from instructions alone. The fixer's brief
-    must require: rebase onto `origin/<branch>` before committing (the
-    pipeline pushes its own commits there, so the worktree's old base is
-    stale), `no-mistakes axi abort` the old run before starting a new one,
-    and a handoff stating that the new run's head equals the fixer's
-    commit SHA - or says "NOT GATED" if it does not.
-    Never resume the old agent - resumption is unreliable ("No transcript found"
-    once an agent has ended its turn) and re-reads its whole transcript even when
-    it works.
+    fresh `axi run` from its worktree; do not spawn a fixer agent or the adjudicator.
+    Otherwise a step failed, which also parks the run at an approval gate
+    (`axi status` shows e.g. `test,awaiting_approval`): handle it exactly as `parked`,
+    with the failing step as the gate. The fixer's own rules (rebase, abort, NOT GATED
+    handoff) are in `fixer.md`. Never resume an old agent - resumption is unreliable.
   - **`merge-ready`** - all local steps passed, the run's own CI monitor
     reports GitHub CI green, the run's head equals both `origin/<branch>`
     (fetched fresh) and, when mapped, the worktree's HEAD, and GitHub itself

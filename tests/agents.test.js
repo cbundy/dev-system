@@ -16,7 +16,7 @@ function frontmatter(name) {
 }
 
 test("every agent pins its name and a model", () => {
-  const expected = { designer: "opus", explorer: "sonnet", implementer: "sonnet", fixer: "sonnet" };
+  const expected = { designer: "opus", explorer: "sonnet", implementer: "sonnet", fixer: "sonnet", adjudicator: "sonnet" };
   for (const [name, model] of Object.entries(expected)) {
     const fm = frontmatter(name);
     assert.equal(fm.name, name);
@@ -29,4 +29,14 @@ test("designer cannot edit code and spawns the explorer", () => {
   assert.match(fm.disallowedTools, /Edit/);
   assert.match(fm.disallowedTools, /Write/);
   assert.match(fm.tools, /Agent/);
+});
+
+test("adjudicator is read-only, cannot spawn agents, and states the verdict contract", () => {
+  const fm = frontmatter("adjudicator");
+  assert.match(fm.disallowedTools, /Edit/);
+  assert.match(fm.disallowedTools, /Write/);
+  assert.doesNotMatch(fm.tools, /Agent/);
+  const body = fs.readFileSync(path.join(DIR, "adjudicator.md"), "utf8");
+  for (const v of ["CORRECT", "WRONG", "NIT", "ENV", "DUP"]) assert.match(body, new RegExp(`\\b${v}\\b`));
+  assert.match(body, /Never run `axi respond`/);
 });
