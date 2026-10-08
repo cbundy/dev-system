@@ -33,7 +33,14 @@ mkdir -p "$s"
 ids() { for f in "$s/$1"-*; do [ -e "$f" ] && echo "\${f#"$s/$1"-}"; done; }
 case "$1 \${2:-}" in
   "list --json") ids inst | jq -R . | jq -s "map({id: .})" ;;
-  "marketplace list") ids mkt | jq -R . | jq -s "map({name: .})" ;;
+  "marketplace list")
+    ids mkt | while read -r n; do
+      src=""; [ -e "$s/src-$n" ] && src=$(cat "$s/src-$n")
+      jq -n --arg n "$n" --arg l "\${src%%#*}" --arg r "\${src#*#}" --arg src "$src" \
+        '{name: $n} + (if $l != "" then {repo: $l} else {} end) + (if ($src | contains("#")) then {ref: $r} else {} end)'
+    done | jq -s . ;;
+  "marketplace remove")
+    rm -f "$s/mkt-$3" "$s/src-$3" "$s/inst-"*"@$3"; echo "✔ Removed marketplace" ;;
   "marketplace add")
     case "$3" in *fail*) echo "Adding marketplace…✘ Failed to add marketplace: could not clone"; exit 1 ;; esac
     n="\${3%%#*}"; n="\${n##*/}"; [ "\${3%%#*}" = cbundy/dev-system ] && n=callum
@@ -119,8 +126,144 @@ test("already installed: one listing and nothing else", (t) => {
   const ctx = setup(t, { installed: ["callum-flow@callum"], marketplaces: ["callum"] });
   const r = run(ctx, "install_plugins");
   assert.equal(r.status, 0);
-  assert.deepEqual(r.calls, ["/ list --json"]);
+  assert.deepEqual(r.calls, ["/ list --json", "/ marketplace list --json"]);
   assert.equal(r.log, "");
+});
+
+// Claude cannot move a marketplace's ref in place (observed with the real CLI, see PR #215):
+// `marketplace add` at a new ref is refused while the old entry exists, and `update` and
+// `install` keep the old ref and plugin version. So a changed ref is remove + add + install.
+const PIN = (ref) => ({
+  extraKnownMarketplaces: { callum: { source: { source: "github", repo: "cbundy/dev-system", ...(ref && { ref }) } } },
+  enabledPlugins: { "callum-flow@callum": true },
+});
+function withMarketplaceAt(ctx, src) {
+  fs.writeFileSync(path.join(ctx.dir, "state", "mkt-callum"), "");
+  fs.writeFileSync(path.join(ctx.dir, "state", "src-callum"), src);
+  fs.writeFileSync(path.join(ctx.dir, "state", "inst-callum-flow@callum"), "");
+}
+
+test("a repo moves the pinned ref: the marketplace is removed, re-added at the new ref, the plugin reinstalled", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+  ]);
+  assert.match(r.log, /marketplace callum moved from v0\.9\.0 to v0\.10\.0/);
+  assert.doesNotMatch(r.log, /WARNING/);
+  const again = run(ctx, "install_plugins");
+  assert.deepEqual(changes(again.calls.slice(r.calls.length)), []);
+});
+
+test("the marketplace already at the pinned ref is left alone", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.10.0");
+  const r = run(ctx, "install_plugins");
+  assert.deepEqual(changes(r.calls), []);
+  assert.equal(r.log, "");
+});
+
+for (const source of [
+  { source: "github", repo: "cbundy/dev-system" },
+  { source: "git", url: "https://example.test/callum" },
+]) {
+  for (const ref of ["v0.10.0", null]) {
+    for (const moved of [false, true]) {
+      test(`shared ${source.source} marketplace uses the repo ${ref || "unpinned"} source once, moved=${moved}`, (t) => {
+        const settings = {
+          extraKnownMarketplaces: { callum: { source: { ...source, ...(ref && { ref }) } } },
+          enabledPlugins: { "other@callum": true, "extra@callum": true },
+        };
+        const ctx = setup(t, { settings, installed: ["other@callum", "extra@callum"] });
+        const location = source.repo || source.url;
+        const desired = `${location}${ref ? `#${ref}` : ""}`;
+        withMarketplaceAt(ctx, moved ? `${location}#v0.8.0` : desired);
+        const env = { DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.9.0" };
+        const r = run(ctx, "install_plugins", env);
+        assert.equal(r.status, 0, r.log);
+        assert.deepEqual(changes(r.calls), moved ? [
+          "/ marketplace remove callum",
+          `/ marketplace add ${desired}`,
+          "/ install other@callum",
+          "/ install extra@callum",
+          "/ install callum-flow@callum",
+        ] : []);
+        assert.doesNotMatch(r.log, /WARNING/);
+        assert.equal(fs.readFileSync(path.join(ctx.dir, "state", "src-callum"), "utf8").trim(), desired);
+        const again = run(ctx, "install_plugins", env);
+        assert.equal(again.status, 0, again.log);
+        assert.deepEqual(changes(again.calls.slice(r.calls.length)), []);
+        assert.equal(again.log, "");
+      });
+    }
+  }
+}
+
+test("a repo plugin without a declaration leaves migration to the image source", (t) => {
+  const ctx = setup(t, { settings: { enabledPlugins: { "other@callum": true } }, installed: ["callum-flow@callum", "other@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const env = { DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.10.0" };
+  const r = run(ctx, "install_plugins", env);
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install other@callum",
+    "/ install callum-flow@callum",
+  ]);
+});
+
+test("multiple image plugins sharing a marketplace migrate once using the first source", (t) => {
+  const ctx = setup(t);
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.8.0");
+  const env = {
+    DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.10.0 other@callum=cbundy/dev-system#v0.9.0",
+  };
+  const r = run(ctx, "install_plugins", env);
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+    "/ install other@callum",
+  ]);
+  const again = run(ctx, "install_plugins", env);
+  assert.equal(again.status, 0, again.log);
+  assert.deepEqual(changes(again.calls.slice(r.calls.length)), []);
+  assert.equal(again.log, "");
+});
+
+test("a repo that drops the pin moves the marketplace back to the unpinned source", (t) => {
+  const ctx = setup(t, { settings: PIN(null) });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins");
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system",
+    "/ install callum-flow@callum",
+  ]);
+});
+
+test("the image's default pin moves the same way when the repo declares nothing", (t) => {
+  const ctx = setup(t);
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.10.0" });
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+  ]);
+});
+
+test("a marketplace from a different repo is never removed for a ref difference", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0") });
+  withMarketplaceAt(ctx, "someone/else#v1");
+  const r = run(ctx, "install_plugins");
+  assert.deepEqual(changes(r.calls), []);
 });
 
 test("a known marketplace is not added again", (t) => {

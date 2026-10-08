@@ -9,7 +9,7 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 
 | Layer | Source here | Distributed as | Consumer pins | Consumer updates with |
 |---|---|---|---|---|
-| Agent behaviour: skills, named agents, hooks | `plugins/callum-flow/` | Claude Code plugin in the `callum` marketplace (`.claude-plugin/marketplace.json`) | `version` in `plugin.json` | `/plugin marketplace update`, or auto-update |
+| Agent behaviour: skills, named agents, hooks | `plugins/callum-flow/` | Claude Code plugin in the `callum` marketplace (`.claude-plugin/marketplace.json`) | Release-tag marketplace `ref` in `.claude/settings.json` | Refresh templates with `npm update @callum/dev-system && npx callum-dev update`, then run `dev-init` |
 | Environment | `images/base/` | Image `ghcr.io/cbundy/dev-system/base` on GHCR | Image tag (`:2`) or digest | Rebuild or re-pull. Tags are mutable: they are rebuilt weekly. |
 | Repo config | `templates/`, `bin/callum-dev.js` | npm git dependency `github:cbundy/dev-system#semver:0.x` | `.callum-dev.json` stamp | `npm update @callum/dev-system && npx callum-dev update` |
 
@@ -58,7 +58,7 @@ main. See [`RELEASING.md`](../RELEASING.md) for the commands.
 
 | What | Version lives in | Released by | Reaches consumers when |
 |---|---|---|---|
-| Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all set by `scripts/release-bump.js` in the bump PR) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | Plugin: the marketplace update sees the new `version`. CLI and templates: npm resolves `semver:0.x` against git tags. |
+| Plugin, skills, CLI, templates | `package.json`, `plugin.json`, each `SKILL.md` (all set by `scripts/release-bump.js` in the bump PR) | `Release` workflow: tag `vX.Y.Z`, GitHub Release | CLI and templates: npm resolves `semver:0.x` against git tags. Plugin: the refreshed template advances the marketplace `ref`; `dev-init` migrates the installation. |
 | Base image | `images/base/VERSION` | `Publish base image` workflow, plus a weekly rebuild of the current version | The next pull of the tag. Pin by digest if you need the exact image. |
 | Dev image (this repo only) | none: follows main | `Publish dev image` workflow, on every change to `.devcontainer/` on main, plus a weekly rebuild | Not a consumer layer. Workspaces for this repo pull `latest`. |
 | Feature (deprecated) | `features/src/callum-tools/devcontainer-feature.json` | `Publish features` workflow | The next rebuild of a container pinned to `callum-tools:1` |
@@ -66,8 +66,12 @@ main. See [`RELEASING.md`](../RELEASING.md) for the commands.
 Semver for each: patch for wording fixes, minor for a new skill, template or capability,
 major for a breaking change to an existing contract.
 
-A plugin pinned to an unchanged `version` stays as it is. Changes merged to main reach no
-consumer until a release bumps that version.
+A plugin at an unchanged marketplace `ref` stays on that release. Changes merged to main
+reach no consumer until a release is published and the consumer advances its pin.
+
+Pinning rule: the plugin is installed from a release tag, never from main - the templates'
+`.claude/settings.json` pins the `callum` marketplace `ref` (set by `release-bump.js`), and
+the base image's default plugin is pinned to the release current at its build.
 
 ## How a change reaches a consumer repo
 
@@ -75,9 +79,16 @@ consumer until a release bumps that version.
 change in this repo ──PR──▶ main ──release──▶ tag / image / plugin version
                                                     │
          consumer repo ◀── npm update + callum-dev update   (templates, CLI)
-                       ◀── /plugin marketplace update        (skills, hooks)
+                       ◀── refreshed marketplace ref + dev-init (skills, hooks)
                        ◀── image re-pull / rebuild            (environment)
 ```
+
+Commit the updated `.claude/settings.json` from `callum-dev update`, then restart the
+container or run `dev-init --plugins` in it. `dev-init` removes the old marketplace
+(which uninstalls its plugins), adds it at the new ref, and installs the wanted plugins.
+`marketplace update`, auto-update, and `plugin install` or `plugin update` keep the old
+ref; they do not advance a release pin. Adding the new ref while the old marketplace
+is declared in user settings is refused because its source does not match that entry.
 
 The flow also runs in reverse. `/update-dev <request>` in any consumer repo opens a PR here
 with the motivating context. Shared behaviour is never patched in the consumer repo.
@@ -163,7 +174,7 @@ above. `dev-init` is safe to re-run. For its `--repo` and `--plugins` modes, see
 - Shared behaviour changes here, gets released, and is pulled by consumers.
 - The image holds no secrets and no checkout. Secrets come from the runtime at
   `/run/secrets/dev-system`. The checkout lives on a volume.
-- Each layer is pinned on its own: plugin `version`, image tag, npm semver range.
+- Each layer is pinned on its own: plugin marketplace release-tag `ref`, image tag, npm semver range.
 
 ## Deprecated: callum-tools feature
 

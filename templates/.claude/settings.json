@@ -3,7 +3,8 @@
     "callum": {
       "source": {
         "source": "github",
-        "repo": "cbundy/dev-system"
+        "repo": "cbundy/dev-system",
+        "ref": "v0.10.0"
       }
     }
   },
