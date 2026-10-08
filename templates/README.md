@@ -1,10 +1,10 @@
 # templates
 
-Config files a consumer repo copies in verbatim, then edits at the marked repo-owned
-points. Every file uses inline markers - `synced: do not edit (managed by dev-system)` /
-`repo-owned: edit freely` - in that file's own comment syntax, so `callum-dev update` can
-merge synced blocks forward without touching repo-owned ones. JSON has no comment syntax,
-so `.claude/settings.json`'s split is documented here instead (see below).
+Config files a consumer repo copies in, then customizes according to each file's ownership
+rules below. Marker-split files use `synced: do not edit (managed by dev-system)` /
+`repo-owned: edit freely` in their own comment syntax. The PR template, `treehouse.toml`
+and `.claude/settings.json` use the ownership rules documented in their sections instead.
+`callum-dev update` merges upstream changes with repo edits and surfaces conflicts.
 
 ## `.no-mistakes.yaml` -> `.no-mistakes.yaml`
 
