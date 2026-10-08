@@ -31,7 +31,7 @@ SH=$(command -v sh)
 BASH=$(command -v bash)
 
 events="$tmpdir/events"
-ev() { PATH="$toolbin" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
+ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
 log="$events/o__r.jsonl"
 
 # --- callum-flow-event ------------------------------------------------------
