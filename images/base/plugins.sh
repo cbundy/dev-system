@@ -230,12 +230,13 @@ declared_marketplace() {
 # $settings, $plugins and $defaults.
 drop_moved_marketplaces() {
   MOVED=""
-  local json id mkt want loc ref have_loc have_ref src
+  local json id mkt want loc ref have_loc have_ref src seen=""
   claude_plugin marketplace list --json || return 0
   json="$PLUGIN_OUT"
   while read -r id src; do
     [ -n "$id" ] || continue
     mkt="${id##*@}"
+    grep -qxF -- "$mkt" <<<"$seen" && continue
     if [ -n "$src" ]; then
       loc="${src%%#*}"
       ref=""
@@ -247,6 +248,7 @@ drop_moved_marketplaces() {
       loc="${want%% *}"
       ref="${want#* }"
     fi
+    seen="$seen"$'\n'"$mkt"
     have_loc=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .repo // .url // empty' 2>/dev/null)
     [ "$have_loc" = "$loc" ] || continue
     have_ref=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .ref // empty' 2>/dev/null)
@@ -259,7 +261,7 @@ drop_moved_marketplaces() {
       log "WARNING: could not remove Claude plugin marketplace $mkt to move it to ${ref:-no ref}: $PLUGIN_REASON"
       log "  Fix: run: claude plugin marketplace remove $mkt; dev-init --plugins"
     fi
-  done < <({ printf '%s\n' "$plugins" | sed '/^$/d; s/$/ /'; printf '%s\n' "$defaults" | sed '/^$/d'; })
+  done < <({ printf '%s\n' "$plugins"; printf '%s\n' "$defaults"; })
   return 0
 }
 
