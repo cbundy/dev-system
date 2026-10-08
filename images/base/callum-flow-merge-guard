@@ -82,7 +82,7 @@ clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
 field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
 
 branch='' pr_head='' pr_base='' pj=''
-if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,mergeable,mergeStateStatus 2> /dev/null); then
+if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus 2> /dev/null); then
   branch=$(printf '%s' "$pj" | jq -r '.headRefName // empty')
   pr_head=$(printf '%s' "$pj" | jq -r '.headRefOid // empty')
   pr_base=$(printf '%s' "$pj" | jq -r '.baseRefName // empty')
@@ -213,17 +213,19 @@ while :; do
     mstate=$(printf '%s' "$mj" | jq -r '.state // empty' 2> /dev/null)
     mmerge=$(printf '%s' "$mj" | jq -r '.mergeable // empty' 2> /dev/null)
     mmss=$(printf '%s' "$mj" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
+    mdraft=$(printf '%s' "$mj" | jq -r '.isDraft // empty' 2> /dev/null)
     if [ -z "$mstate" ]; then
       :
     elif [ "$mstate" != OPEN ]; then
       mverdict=fail mreason="PR is $mstate"
+    elif [ "$mdraft" = true ] || [ "$mmss" = DRAFT ]; then
+      mverdict=fail mreason="PR is a draft"
     elif [ "$mmss" = DIRTY ] || [ "$mmerge" = CONFLICTING ]; then
       mverdict=fail mreason="conflicts with $mbase, rebase and re-gate"
     else
       case "$mmss" in
         BEHIND) mverdict=fail mreason="behind $mbase, rebase and re-gate" ;;
         BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews)" ;;
-        DRAFT) mverdict=fail mreason="PR is a draft" ;;
         CLEAN | UNSTABLE | HAS_HOOKS) mverdict=pass ;;
       esac
     fi
@@ -235,7 +237,7 @@ while :; do
   fi
   mtry=$((mtry + 1))
   sleep "$msleep"
-  mj=$($GH pr view "$pr" --json state,mergeable,mergeStateStatus 2> /dev/null) || mj=''
+  mj=$($GH pr view "$pr" --json state,isDraft,mergeable,mergeStateStatus 2> /dev/null) || mj=''
 done
 [ "$mverdict" != fail ] || fail mergeable "$mreason"
 

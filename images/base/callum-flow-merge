@@ -79,7 +79,10 @@ if [ "$merge_rc" -ne 0 ]; then
   if [ -n "$now_sha" ] && [ "$now_sha" != "$sha" ]; then
     echo "callum-flow-merge: head moved since the check (verified $(printf %.7s "$sha"), now $(printf %.7s "$now_sha")) - re-gate" >&2
   else
-    echo "callum-flow-merge: GitHub refused: merge state ${now_state:-unknown} (branch rule) - see the guard's mergeable action" >&2
+    case "$now_state" in
+      BEHIND | DIRTY | BLOCKED | DRAFT) echo "callum-flow-merge: GitHub refused: merge state $now_state (branch rule) - see the guard's mergeable action" >&2 ;;
+      *) echo "callum-flow-merge: GitHub refused the merge (merge state ${now_state:-unknown}), head unchanged - see the error above, retry or check the PR" >&2 ;;
+    esac
   fi
   exit 1
 fi

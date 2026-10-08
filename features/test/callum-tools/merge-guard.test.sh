@@ -61,8 +61,8 @@ case "$1 $2" in
         n=$(( $(cat "$d/view-count" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$d/view-count"
         mss=$(r mss)
         if [ -f "$d/mss-seq" ]; then mss=$(sed -n "${n}p" "$d/mss-seq"); [ -n "$mss" ] || mss=$(tail -n 1 "$d/mss-seq"); fi
-        printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"%s","mergeable":"%s","mergeStateStatus":"%s"}\n' \
-          "$(r branch)" "$(r prhead)" "$(r base)" "$(r pstate)" "$(r pmergeable)" "$mss" ;;
+        printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"%s","isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s"}\n' \
+          "$(r branch)" "$(r prhead)" "$(r base)" "$(r pstate)" "$(r isdraft)" "$(r pmergeable)" "$mss" ;;
     esac ;;
   'pr checks') cat "$d/checks"; [ ! -f "$d/checks-rc" ] || exit "$(r checks-rc)" ;;
   'repo view') echo main ;;
@@ -140,6 +140,7 @@ reset() {
   printf '%s\n' '[12]' > "$st/closing"
   printf '%s\n' OPEN > "$st/pstate"
   printf '%s\n' MERGEABLE > "$st/pmergeable"
+  printf '%s\n' false > "$st/isdraft"
   printf '%s\n' CLEAN > "$st/mss"
 }
 
@@ -220,6 +221,8 @@ reset; echo BLOCKED > "$st/mss"; g 7; expect_fail "blocked" mergeable
 printf '%s' "$out" | grep -q 'branch rules not met' || fail "blocked reason: $out"
 reset; echo DRAFT > "$st/mss"; g 7; expect_fail "draft" mergeable
 printf '%s' "$out" | grep -q 'PR is a draft' || fail "draft reason: $out"
+reset; echo BLOCKED > "$st/mss"; echo true > "$st/isdraft"; g 7; expect_fail "draft reporting BLOCKED" mergeable
+printf '%s' "$out" | grep -q 'PR is a draft' || fail "isDraft reason: $out"
 for s in MERGED CLOSED; do
   reset; echo "$s" > "$st/pstate"; echo UNKNOWN > "$st/mss"; g 7; expect_fail "state $s" mergeable
   printf '%s' "$out" | grep -q "GUARD mergeable FAIL PR is $s\$" || fail "$s reason: $out"
