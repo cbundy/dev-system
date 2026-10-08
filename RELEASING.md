@@ -21,7 +21,8 @@ the `Release` workflow only verifies, tags and publishes.
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
    markers before committing.
-2. Open a PR with the result and merge it when `ci` is green.
+2. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
+   (step 3) immediately after: the bumped ref names a tag that does not exist until it runs.
 3. Run the `Release` workflow from main (Actions tab, or):
 
    ```

@@ -139,7 +139,7 @@ plugin_check "a full dev-init starts the login page before it installs the plugi
 # set the image's value inside the container (docker() empties it).
 DEFAULT_PLUGINS='export DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system;'
 check "the image's default Claude plugins are callum-flow from cbundy/dev-system, and plugins.sh is baked in" bash -c "
-  docker image inspect -f '{{json .Config.Env}}' '$IMAGE' | jq -e 'any(.[]; test(\"^DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system(#v[0-9][^ ]*)?$\"))' &&
+  docker image inspect -f '{{json .Config.Env}}' '$IMAGE' | jq -e 'any(.[]; test(\"^DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system#v[0-9][^ ]*$\"))' &&
   docker run --rm --entrypoint '' '$IMAGE' test -f /usr/local/share/dev-system/plugins.sh"
 plugin_check "no repo: dev-init installs the default plugin, and dev-doctor finds it" "$DEFAULT_PLUGINS"'
   rm -rf /tmp/ws; out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -i plugin; cat /tmp/plugin-calls
