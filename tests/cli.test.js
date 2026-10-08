@@ -65,7 +65,7 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
 
   const nm = assertConfig(repo);
   assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
-  assert.match(read(repo, ".devcontainer/devcontainer.json"), /"name": "myrepo"/);
+  assert.equal(parseJsonc(read(repo, DEVCONTAINER)).name, "myrepo");
   assert.ok(fs.existsSync(path.join(repo, "CLAUDE.md")));
   assert.ok(fs.existsSync(path.join(repo, ".claude/settings.json")));
   assert.ok(fs.existsSync(path.join(repo, "treehouse.toml")));
