@@ -20,7 +20,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/bin"
 node_bin=$(command -v node) || fail "node not found"
-for t in cmp bash sh grep cat mktemp rm sleep cp basename touch; do
+for t in cmp bash sh grep cat mktemp rm sleep cp basename touch jq sed printf; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$tmpdir/bin/$t"
 done
@@ -44,6 +44,13 @@ fi
 exec "$STUB_NODE_BIN" "$@"
 NODE_STUB
 chmod +x "$tmpdir/bin/node"
+
+cat > "$tmpdir/bin/rollout" <<'ROLLOUT_STUB'
+#!/bin/sh
+printf '%s\n' "$ROLLOUT_LINE"
+case "$ROLLOUT_LINE" in "ROLLOUT conflict"* | "ROLLOUT invalid"* | "") exit 1 ;; esac
+ROLLOUT_STUB
+chmod +x "$tmpdir/bin/rollout"
 
 cat > "$tmpdir/bin/gh" <<'STUB'
 #!/bin/sh
@@ -82,6 +89,10 @@ passed=0
 run_case() {
   name=$1 head=$2 base=$3 body=$4 want=$5 wantbody=$6
   shift 6
+  case "$*" in
+    "--expect refs") default_rollout="ROLLOUT keep-open source=brief" ;;
+    *) default_rollout="ROLLOUT merge source=brief" ;;
+  esac
   STUB_DIR="$tmpdir/state"
   rm -rf "$STUB_DIR"
   mkdir -p "$STUB_DIR"
@@ -90,6 +101,7 @@ run_case() {
   printf '%s' "$body" > "$STUB_DIR/body"
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
     CALLUM_FLOW_GH_BIN="$tmpdir/bin/gh" CALLUM_FLOW_LINKAGE_BIN="$LINKAGE" \
+    CALLUM_FLOW_ROLLOUT_BIN="$tmpdir/bin/rollout" ROLLOUT_LINE="${rollout_line-$default_rollout}" \
     STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
     STUB_API_BODY="${stale_api_body:-}" STUB_REWRITE_AFTER_EDIT="${rewrite_after_edit:-}" \
     CALLUM_FLOW_FIX_RETRY_SLEEP=0 sh "$SCRIPT" 7 "$@" 2>"$tmpdir/stderr") && rc=0 || rc=$?
@@ -169,6 +181,20 @@ stale_api_body="Refs #12"
 rewrite_after_edit="Closes #12"
 run_case "post-edit refs rewrite cannot pass stale API" $H main "Closes #99" "MISMATCH #7" "Closes #12" --expect refs
 unset stale_api_body rewrite_after_edit
+rollout_line="ROLLOUT run-it source=body"
+run_case "run-it issue without --expect writes Refs" $H main "Closes #12" "REPAIRED #7" "Refs #12"
+run_case "run-it issue without --expect keeps a Refs body" $H main "Refs #12" "MATCH #7 issue=#12 expect=refs" ""
+run_case "run-it issue refuses --expect closing" $H main "Refs #12" "" "Refs #12" --expect closing
+rollout_line="ROLLOUT keep-open source=brief"
+run_case "keep-open issue without --expect writes Refs" $H main "Fixes #12" "REPAIRED #7" "Refs #12"
+rollout_line="ROLLOUT merge source=brief"
+run_case "merge issue refuses --expect refs" $H main "Closes #12" "" "Closes #12" --expect refs
+rollout_line="ROLLOUT conflict brief says merge but body has Run it"
+run_case "rollout conflict refuses without editing" $H main "Closes #12" "" "Closes #12"
+run_case "rollout conflict refuses an explicit --expect" $H main "Summary" "" "Summary" --expect closing
+rollout_line=""
+run_case "failed rollout lookup refuses without editing" $H main "Summary" "" "Summary"
+unset rollout_line
 run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 epic/big" ""
 
 fail_node=body
@@ -232,6 +258,7 @@ lag_case() {
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" REAL_GH="$tmpdir/bin/gh" LAG_READS="$lag" \
     CHECK_PR_LINKAGE_GH_BIN="$tmpdir/lag/gh" CALLUM_FLOW_GH_BIN="$tmpdir/lag/gh" \
     CALLUM_FLOW_LINKAGE_BIN="$LINKAGE" STUB_NODE_BIN="$node_bin" \
+    CALLUM_FLOW_ROLLOUT_BIN="$tmpdir/bin/rollout" ROLLOUT_LINE="ROLLOUT merge source=brief" \
     CALLUM_FLOW_FIX_RETRY_ATTEMPTS="$attempts" CALLUM_FLOW_FIX_RETRY_SLEEP=0 sh "$SCRIPT" 7 2>/dev/null) || rc=$?
   case "$out" in "$want"*) ;; *) fail "$name: expected '$want...', got '$out'" ;; esac
   [ "$rc" -eq "$wantrc" ] || fail "$name: expected exit $wantrc, got $rc"

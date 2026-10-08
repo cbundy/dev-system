@@ -411,8 +411,8 @@ this read-only check; it never edits a PR:
   `merge` expects exactly the branch's issue closed, `run-it` and `keep-open`
   expect `Refs #N` or `Part of #N` and no closing targets.
 - On `GUARD linkage FAIL`, repair by hand as a separate step, from the main
-  checkout only: run `callum-flow-fix-linkage <pr> [--expect refs]` with the same
-  expectation (it edits the PR body, re-checks, and prints `REPAIRED` or
+  checkout only: run `callum-flow-fix-linkage <pr>` (it derives the expectation
+  the same way; it edits the PR body, re-checks, and prints `REPAIRED` or
   `MISMATCH ... after-fix`), then re-run the guard. A `SKIP`
   (no issue in the branch name) passes only when you give `--issue N` and the
   PR linkage for #N matches `--expect`. Stop on a failed repair, including a preserved Pipeline keyword
