@@ -21,7 +21,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls sleep; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -56,11 +56,25 @@ case "$1 $2" in
   'pr view')
     case "$*" in
       *closingIssuesReferences*) jq -n --rawfile b "$d/body" --argjson c "$(r closing)" '{body:$b, closingIssuesReferences:($c | map({number:.}))}' ;;
-      *) printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s"}\n' "$(r branch)" "$(r prhead)" "$(r base)" ;;
+      *)
+        # reads counted, so a test can see how often the guard re-queried
+        n=$(( $(cat "$d/view-count" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$d/view-count"
+        mss=$(r mss)
+        if [ -f "$d/mss-seq" ]; then mss=$(sed -n "${n}p" "$d/mss-seq"); [ -n "$mss" ] || mss=$(tail -n 1 "$d/mss-seq"); fi
+        printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"%s","mergeable":"%s","mergeStateStatus":"%s"}\n' \
+          "$(r branch)" "$(r prhead)" "$(r base)" "$(r pstate)" "$(r pmergeable)" "$mss" ;;
     esac ;;
   'pr checks') cat "$d/checks"; [ ! -f "$d/checks-rc" ] || exit "$(r checks-rc)" ;;
   'repo view') echo main ;;
-  'pr merge') echo "$*" >> "$d/gh-calls"; [ ! -f "$d/merge-refuse" ] || exit 1 ;;
+  'pr merge')
+    echo "$*" >> "$d/gh-calls"
+    if [ -f "$d/merge-refuse" ]; then
+      echo "GraphQL: refused" >&2
+      # the world after the refusal: a moved head and/or a new merge state
+      [ ! -f "$d/refuse-prhead" ] || cat "$d/refuse-prhead" > "$d/prhead"
+      [ ! -f "$d/refuse-mss" ] || { cat "$d/refuse-mss" > "$d/mss"; rm -f "$d/mss-seq"; }
+      exit 1
+    fi ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 STUB
@@ -124,18 +138,23 @@ reset() {
   echo 0 > "$st/linkage-rc"
   printf '%s\n' 'Closes #12' > "$st/body"
   printf '%s\n' '[12]' > "$st/closing"
+  printf '%s\n' OPEN > "$st/pstate"
+  printf '%s\n' MERGEABLE > "$st/pmergeable"
+  printf '%s\n' CLEAN > "$st/mss"
 }
 
 # g <args...>: run the guard; sets out, rc
 g() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" \
+    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
 }
 m() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
     CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" \
+    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
     "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
 }
@@ -186,6 +205,32 @@ reset; echo 'MISMATCH #7 issue=#12 expect=closing' > "$st/linkage"; echo 1 > "$s
 printf '%s' "$out" | grep -q 'MISMATCH #7' || fail "linkage reason should carry the report"
 reset; echo bogus > "$st/prhead"; g 7; expect_fail "pr head differs" head
 reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 7; expect_fail "base" base
+
+# mergeable (cbundy/dev-system#246): the regression is #237, OPEN MERGEABLE BEHIND
+reset; echo BEHIND > "$st/mss"; g 7; expect_fail "behind" mergeable
+printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, rebase and re-gate' || fail "behind reason: $out"
+reset; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty" mergeable
+printf '%s' "$out" | grep -q 'conflicts with main, rebase and re-gate' || fail "dirty reason: $out"
+reset; echo UNKNOWN > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "conflicting, state unknown" mergeable
+printf '%s' "$out" | grep -q 'conflicts with main' || fail "conflicting reason: $out"
+[ "$(cat "$st/view-count")" = 1 ] || fail "conflicting must not retry"
+reset; echo BEHIND > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "behind and conflicting" mergeable
+printf '%s' "$out" | grep -q 'conflicts with main' || fail "conflict reason wins: $out"
+reset; echo BLOCKED > "$st/mss"; g 7; expect_fail "blocked" mergeable
+printf '%s' "$out" | grep -q 'branch rules not met' || fail "blocked reason: $out"
+reset; echo DRAFT > "$st/mss"; g 7; expect_fail "draft" mergeable
+printf '%s' "$out" | grep -q 'PR is a draft' || fail "draft reason: $out"
+for s in MERGED CLOSED; do
+  reset; echo "$s" > "$st/pstate"; echo UNKNOWN > "$st/mss"; g 7; expect_fail "state $s" mergeable
+  printf '%s' "$out" | grep -q "GUARD mergeable FAIL PR is $s\$" || fail "$s reason: $out"
+  [ "$(cat "$st/view-count")" = 1 ] || fail "$s must not retry"
+done
+reset; echo UNKNOWN > "$st/mss"; g 7; expect_fail "unknown persists" mergeable
+printf '%s' "$out" | grep -q 'GitHub has not computed mergeability, retry' || fail "unknown reason: $out"
+[ "$(cat "$st/view-count")" = 3 ] || fail "unknown should read 3 times, read $(cat "$st/view-count")"
+reset; printf 'UNKNOWN\nCLEAN\n' > "$st/mss-seq"; g 7; expect_pass "unknown then clean"
+[ "$(cat "$st/view-count")" = 2 ] || fail "unknown then clean: reads $(cat "$st/view-count")"
+for s in CLEAN UNSTABLE HAS_HOOKS; do reset; echo "$s" > "$st/mss"; g 7; expect_pass "mss $s"; done
 
 # two guards at once: no short-circuit
 reset; echo '[]' > "$st/checks"; echo 'ci,awaiting_approval,0' > "$st/step"; g 7; expect_fail "two guards" checks gates
@@ -263,9 +308,24 @@ printf '%s' "$out" | grep -q '^GUARD checks FAIL' || fail "merge on fail: $out"
 if [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on fail must not merge or log"; fi
 passed=$((passed + 1))
 
-# merge: refused by GitHub (head moved) logs nothing
-reset; touch "$st/merge-refuse"; m 7
-if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge: $rc"; fi
+# merge: refused by GitHub, head moved
+reset; touch "$st/merge-refuse"; printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > "$st/refuse-prhead"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (head moved): $rc"; fi
+grep -q "head moved since the check (verified $(printf %.7s "$SHA"), now bbbbbbb) - re-gate" "$tmpdir/err" || fail "head moved message: $(cat "$tmpdir/err")"
+grep -q 'GraphQL: refused' "$tmpdir/err" || fail "gh stderr should still show: $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+
+# merge: refused by GitHub, head unchanged but the branch fell behind
+reset; touch "$st/merge-refuse"; echo BEHIND > "$st/refuse-mss"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (behind): $rc"; fi
+grep -q "GitHub refused: merge state BEHIND (branch rule) - see the guard's mergeable action" "$tmpdir/err" || fail "behind message: $(cat "$tmpdir/err")"
+grep -q 'head moved' "$tmpdir/err" && fail "unmoved head must not say head moved"
+passed=$((passed + 1))
+
+# merge: a guard failing on mergeable never calls gh pr merge
+reset; echo BEHIND > "$st/mss"; m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on behind: $rc $out"; fi
+printf '%s' "$out" | grep -q '^GUARD mergeable FAIL behind' || fail "merge on behind: $out"
 passed=$((passed + 1))
 
 # the dry-run guard never merges or logs

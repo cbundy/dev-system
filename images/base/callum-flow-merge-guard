@@ -15,6 +15,8 @@
 #   checks   at least one CI check, all pass or skipping
 #   gates    the run has no step parked at a gate and is not failed or aborted
 #   base     the PR targets the default branch, or --base BRANCH
+#   mergeable  GitHub would merge it now: open, not a draft, not conflicting,
+#          not behind its base, branch rules met (cbundy/dev-system#246)
 #
 # Output: nothing when every guard passes; otherwise one line per failed guard,
 #   GUARD <name> FAIL <reason>
@@ -26,6 +28,9 @@
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
 # CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run).
+# Tuning: GitHub computes mergeability lazily and reports UNKNOWN meanwhile, so
+# the mergeable guard re-reads (read-only) CALLUM_FLOW_MERGEABLE_TRIES times
+# (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
@@ -76,8 +81,8 @@ one_line() { tr '\n' ' ' | sed 's/[[:space:]]*$//'; }
 clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
 field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
 
-branch='' pr_head='' pr_base=''
-if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName 2> /dev/null); then
+branch='' pr_head='' pr_base='' pj=''
+if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,mergeable,mergeStateStatus 2> /dev/null); then
   branch=$(printf '%s' "$pj" | jq -r '.headRefName // empty')
   pr_head=$(printf '%s' "$pj" | jq -r '.headRefOid // empty')
   pr_base=$(printf '%s' "$pj" | jq -r '.baseRefName // empty')
@@ -188,6 +193,51 @@ else
     fail base "PR targets $pr_base, default branch is ${default:-unknown}${base:+, --base is $base}"
   fi
 fi
+
+# --- mergeable ---------------------------------------------------------------
+# mergeStateStatus, not mergeable: a BEHIND PR still reports MERGEABLE, yet
+# strict branch protection refuses it (cbundy/dev-system#246).
+mtries=${CALLUM_FLOW_MERGEABLE_TRIES:-5}
+msleep=${CALLUM_FLOW_MERGEABLE_SLEEP:-2}
+case "$mtries" in '' | *[!0-9]*) mtries=5 ;; esac
+case "$msleep" in '' | *[!0-9.]*) msleep=2 ;; esac
+[ "$mtries" -ge 1 ] || mtries=1
+mbase=${pr_base:-its base}
+mj=$pj
+mtry=1
+while :; do
+  mstate='' mmerge='' mmss='' mreason='' mverdict=unknown
+  if [ -z "$mj" ]; then
+    mverdict=fail mreason="cannot read merge state"
+  else
+    mstate=$(printf '%s' "$mj" | jq -r '.state // empty' 2> /dev/null)
+    mmerge=$(printf '%s' "$mj" | jq -r '.mergeable // empty' 2> /dev/null)
+    mmss=$(printf '%s' "$mj" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
+    if [ -z "$mstate" ]; then
+      :
+    elif [ "$mstate" != OPEN ]; then
+      mverdict=fail mreason="PR is $mstate"
+    elif [ "$mmss" = DIRTY ] || [ "$mmerge" = CONFLICTING ]; then
+      mverdict=fail mreason="conflicts with $mbase, rebase and re-gate"
+    else
+      case "$mmss" in
+        BEHIND) mverdict=fail mreason="behind $mbase, rebase and re-gate" ;;
+        BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews)" ;;
+        DRAFT) mverdict=fail mreason="PR is a draft" ;;
+        CLEAN | UNSTABLE | HAS_HOOKS) mverdict=pass ;;
+      esac
+    fi
+  fi
+  [ "$mverdict" = unknown ] || break
+  if [ "$mtry" -ge "$mtries" ]; then
+    mverdict=fail mreason="GitHub has not computed mergeability, retry"
+    break
+  fi
+  mtry=$((mtry + 1))
+  sleep "$msleep"
+  mj=$($GH pr view "$pr" --json state,mergeable,mergeStateStatus 2> /dev/null) || mj=''
+done
+[ "$mverdict" != fail ] || fail mergeable "$mreason"
 
 [ "$failed" -eq 0 ] || exit 1
 [ -z "$emit" ] || printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue"

@@ -1129,7 +1129,7 @@ fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-ch
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
-gates, base) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
+gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
 is in the synced allow list. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main

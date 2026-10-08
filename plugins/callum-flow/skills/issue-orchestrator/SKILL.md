@@ -392,12 +392,26 @@ named guard:
   `respond`, or re-drive it.
 - **`base`** - the PR does not target the default branch. Confirm it is an epic
   PR, then re-run the guard with `--base <epic>`.
+- **`mergeable`** - GitHub would refuse the merge now (`mergeStateStatus`;
+  `mergeable` alone stays `MERGEABLE` for a PR that is only behind). By reason:
+  - **behind or conflicts** -> in a fresh slot on the branch, `git rebase
+    origin/<base>` keeping the pipeline's commits, then `axi abort`, a fresh
+    backgrounded `axi run --intent ...`, and prove the new run's head equals the
+    rebased HEAD. The no-mistakes CI monitor does not rebase a PR that is only
+    behind, and the watcher still says `merge-ready`.
+  - **branch rules not met** -> read which rule is unmet. Never use `--admin`.
+  - **GitHub has not computed mergeability** -> the guard already re-read a few
+    times; run it again.
+  - **PR is MERGED/CLOSED** -> stop.
 
 On a pass, merge with `callum-flow-merge <pr> [same options]`. It re-runs the
 guard, squash-merges with `--match-head-commit` on the verified sha (a push in
 between is refused), and logs `merged`. `--method merge|rebase` or
 `CALLUM_FLOW_MERGE_METHOD` overrides the squash default for a repo that needs
-it. The merge command is allowed only in the main checkout's
+it. If GitHub refuses anyway, it re-reads the PR: `head moved since the check`
+means a push landed (re-gate), `GitHub refused: merge state <STATE>` means a
+branch rule (see `mergeable`). It exits 1 and logs nothing either way. The
+merge command is allowed only in the main checkout's
 `.claude/settings.local.json`; the guard is in the synced allow list.
 
 - Never use `git stash` from the main checkout either - it shares the same
