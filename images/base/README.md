@@ -58,7 +58,7 @@ them, so those scripts stay maintained.
 12. Opt-in OpenTelemetry export for Claude Code and codex, on only when the runtime sets
     `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Telemetry](#telemetry-opentelemetry-export)).
 
-The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) are staged at
+The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the pre-merge issue-linkage check) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
 orchestrator skill works unchanged. By default each prints one event line and exits; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
