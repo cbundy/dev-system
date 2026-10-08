@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
+const YAML = require("yaml");
 
 const BIN = path.join(__dirname, "..", "bin", "callum-dev.js");
 const TEMPLATES = path.join(__dirname, "..", "templates");
@@ -42,6 +43,16 @@ function read(dir, file) {
   return fs.readFileSync(path.join(dir, file), "utf-8");
 }
 
+function assertConfig(dir, file = ".no-mistakes.yaml") {
+  const config = YAML.parse(read(dir, file), { uniqueKeys: true });
+  assert.deepEqual(config.pr, {
+    template: ".github/pull_request_template.md",
+    publish_intent: false,
+    appendix: "collapsed",
+  });
+  return config;
+}
+
 function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) {
   const repo = scratchRepo(t);
   const result = run(repo, "init", { input, args });
@@ -52,9 +63,8 @@ function initRepo(t, input = "myrepo\nbun run lint\nbun run test\n", args = []) 
 test("init scaffolds templates, substitutes answers, keeps baseline pristine", (t) => {
   const repo = initRepo(t);
 
-  const nm = read(repo, ".no-mistakes.yaml");
-  assert.match(nm, /^  lint: "bun run lint"$/m);
-  assert.match(nm, /^  test: "bun run test"$/m);
+  const nm = assertConfig(repo);
+  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
   assert.match(read(repo, ".devcontainer/devcontainer.json"), /"name": "myrepo"/);
   assert.ok(fs.existsSync(path.join(repo, "CLAUDE.md")));
   assert.ok(fs.existsSync(path.join(repo, ".claude/settings.json")));
@@ -62,9 +72,6 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
 
   assert.ok(fs.existsSync(path.join(repo, ".gitignore")));
   assert.match(read(repo, ".github/pull_request_template.md"), /^# Linked issue$/m);
-  assert.match(nm, /^pr:\n {2}template: \.github\/pull_request_template\.md$/m);
-  assert.match(nm, /^ {2}publish_intent: false$/m);
-  assert.match(nm, /^ {2}appendix: collapsed$/m);
 
   const stamp = JSON.parse(read(repo, ".callum-dev.json"));
   assert.equal(stamp.version, PKG_VERSION);
@@ -72,7 +79,10 @@ test("init scaffolds templates, substitutes answers, keeps baseline pristine", (
 
   // Baseline must be the pristine template: the substituted lint/test values
   // are repo-owned edits from the merge's point of view.
-  assert.match(read(repo, ".callum-dev/baseline/.no-mistakes.yaml"), /<REPLACE/);
+  assert.deepEqual(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").commands, {
+    lint: "<REPLACE: install deps if needed, then run lint>",
+    test: "<REPLACE: install deps if needed, then run the full test suite>",
+  });
 });
 
 test("init refuses to clobber existing files and refuses to run twice", (t) => {
@@ -98,12 +108,11 @@ test("update merges an upstream synced change without clobbering repo-owned edit
   const result = run(repo, "update", { templates: upstream });
   assert.equal(result.status, 0, result.stderr + result.stdout);
 
-  const nm = read(repo, ".no-mistakes.yaml");
-  assert.match(nm, /^  lint: "bun run lint"$/m, "repo-owned edit survived");
-  assert.match(nm, /^  lint: 4$/m, "upstream synced change arrived");
-  assert.doesNotMatch(nm, /<<<<<<</);
+  const nm = assertConfig(repo);
+  assert.deepEqual(nm.commands, { lint: "bun run lint", test: "bun run test" });
+  assert.equal(nm.auto_fix.lint, 4, "upstream synced change arrived");
   // Baseline advanced to the new template so the next update merges from there.
-  assert.match(read(repo, ".callum-dev/baseline/.no-mistakes.yaml"), /^  lint: 4$/m);
+  assert.equal(assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml").auto_fix.lint, 4);
 });
 
 test("update gives a repo scaffolded before the PR template the file and the pr block, conflict-free", (t) => {
@@ -123,9 +132,9 @@ test("update gives a repo scaffolded before the PR template the file and the pr 
   const result = run(repo, "update");
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(read(repo, ".github/pull_request_template.md"), /^# Evidence$/m);
-  const merged = read(repo, ".no-mistakes.yaml");
-  assert.match(merged, /^pr:\n {2}template: \.github\/pull_request_template\.md$/m);
-  assert.doesNotMatch(merged, /<<<<<<</);
+  const merged = assertConfig(repo);
+  assert.deepEqual(merged.commands, { lint: "bun run lint", test: "bun run test" });
+  assertConfig(repo, ".callum-dev/baseline/.no-mistakes.yaml");
 });
 
 test("update surfaces a genuine conflict with markers and a non-zero exit", (t) => {
