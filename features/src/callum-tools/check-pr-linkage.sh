@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# check-pr-linkage.sh <pr-number> [--expect closing|refs] [--fix]
+# check-pr-linkage.sh <pr-number> [--expect closing|refs] [--print-fix]
 #
 # Mechanical pre-merge gate: does this PR's issue linkage match what was
 # intended? Green CI and "mergeable" say nothing about it, and a wrong keyword
@@ -13,7 +13,7 @@
 #
 #   --expect closing (default)  exactly #N is closed by the PR
 #   --expect refs               references #N and closes nothing (keep-open issue)
-#   --fix                       repair the body, then re-verify
+#   --print-fix                 print the repaired body to stdout (read-only)
 #
 # Base branch: GitHub only registers closing references for PRs targeting the
 # repo's default branch. For any other base (epic branch) the check reads the
@@ -21,23 +21,26 @@
 # merge: for closing mode, close it by hand with a comment naming the merged PR.
 # Keep-open issues (--expect refs) must remain open.
 #
-# --fix appends `Closes #N`, or turns unwanted closing keywords into `Refs #M`.
-# Everything from a `## Pipeline` heading on is preserved byte for byte.
+# This script never writes to GitHub, so a worktree sub-agent may run it
+# unprompted. The repair is a separate command, `callum-flow-fix-linkage`, that
+# only the main checkout may run (cbundy/dev-system#233). `--fix` is refused.
 #
-# Output: exactly one line on stdout, MATCH / MISMATCH / REPAIRED / SKIP, each
-# starting with the PR number; detail goes to stderr. Exit 0 except MISMATCH.
+# --print-fix writes the repaired body to stdout and nothing else: it appends
+# `Closes #N` (or `Refs #N`), or turns unwanted closing keywords into `Refs #M`.
+# Everything from a `## Pipeline` heading on is preserved byte for byte. An
+# already-matching PR prints its body unchanged. Status goes to stderr.
 #
-# Env (for tests): CHECK_PR_LINKAGE_GH_BIN (gh), CHECK_PR_LINKAGE_RETRY_ATTEMPTS
-# (5), CHECK_PR_LINKAGE_RETRY_SLEEP (2 seconds).
+# Output: exactly one line on stdout, MATCH / MISMATCH / SKIP, each starting
+# with the PR number; detail goes to stderr. Exit 0 except MISMATCH.
+#
+# Env (for tests): CHECK_PR_LINKAGE_GH_BIN (gh).
 
 set -euo pipefail
 
 GH_BIN="${CHECK_PR_LINKAGE_GH_BIN:-gh}"
-MAX_ATTEMPTS="${CHECK_PR_LINKAGE_RETRY_ATTEMPTS:-5}"
-SLEEP_SECS="${CHECK_PR_LINKAGE_RETRY_SLEEP:-2}"
 
 usage() {
-  echo "Usage: $(basename "$0") <pr-number> [--expect closing|refs] [--fix]" >&2
+  echo "Usage: $(basename "$0") <pr-number> [--expect closing|refs] [--print-fix]" >&2
 }
 
 die() {
@@ -47,7 +50,7 @@ die() {
 }
 
 EXPECT=closing
-FIX=0
+PRINT_FIX=0
 PR=
 
 while [[ $# -gt 0 ]]; do
@@ -58,7 +61,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --fix)
-      FIX=1
+      echo "Error: --fix was removed: this script is read-only. Repair the PR body with 'callum-flow-fix-linkage <pr> [--expect closing|refs]' from the main checkout." >&2
+      exit 1
+      ;;
+    --print-fix)
+      PRINT_FIX=1
       shift
       ;;
     -h | --help)
@@ -125,6 +132,13 @@ if (mode === "field") {
 '
 nodeb() { node -e "$NODE_PROG" "${REPO:-}" "$@"; }
 
+# The trailing X survives command substitution, which would strip trailing newlines.
+print_body() {
+  local body
+  body="$(printf '%s' "$PR_JSON" | nodeb field body && printf X)" || return 1
+  printf '%s' "${body%X}"
+}
+
 echo "Reading PR #${PR} via ${GH_BIN}..." >&2
 PR_JSON="$("$GH_BIN" pr view "$PR" --json headRefName,baseRefName,body,closingIssuesReferences)"
 HEAD_REF="$(printf '%s' "$PR_JSON" | nodeb field headRefName)"
@@ -135,7 +149,11 @@ if [[ "$HEAD_REF" =~ issue-([0-9]+)- ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 else
   echo "PR #${PR} branch '${HEAD_REF}' has no issue-<N>- segment - nothing to check." >&2
-  echo "SKIP #${PR} ${HEAD_REF}"
+  if [[ "$PRINT_FIX" -eq 1 ]]; then
+    print_body || exit 1
+  else
+    echo "SKIP #${PR} ${HEAD_REF}"
+  fi
   exit 0
 fi
 
@@ -180,43 +198,27 @@ current_targets
 REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT} body=${BODY_TARGETS}"
 
 if verify; then
-  echo "MATCH #${PR} ${REPORT}"
-  exit 0
-fi
-
-if [[ "$FIX" -ne 1 ]]; then
-  if [[ "$EXPECT" == closing ]]; then
-    echo "PR #${PR} (${HEAD_REF}) must close exactly #${ISSUE}; it closes ${CURRENT}. Add 'Closes #${ISSUE}' and neutralize other closing keywords, or rerun with --fix." >&2
+  if [[ "$PRINT_FIX" -eq 1 ]]; then
+    echo "MATCH #${PR} ${REPORT}" >&2
+    print_body || exit 1
   else
-    echo "PR #${PR} (${HEAD_REF}) must reference #${ISSUE} with 'Refs #${ISSUE}' or 'Part of #${ISSUE}' and close nothing; it closes ${CURRENT}. Rerun with --fix." >&2
+    echo "MATCH #${PR} ${REPORT}"
   fi
-  echo "MISMATCH #${PR} ${REPORT}"
-  exit 1
-fi
-
-echo "Repairing PR #${PR} body..." >&2
-# The trailing X survives command substitution, which would strip trailing newlines.
-BODY="$(printf '%s' "$PR_JSON" | nodeb field body && printf X)"
-NEW_BODY="$(printf '%s' "${BODY%X}" | nodeb fix "$EXPECT" "$ISSUE" && printf X)"
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
-printf '%s' "${NEW_BODY%X}" >"$TMP"
-"$GH_BIN" pr edit "$PR" --body-file "$TMP" >&2
-
-# GitHub takes a moment to index a body edit and can briefly report the old linkage.
-attempt=0
-while true; do
-  current_targets
-  verify && break
-  attempt=$((attempt + 1))
-  [[ "$attempt" -lt "$MAX_ATTEMPTS" ]] || break
-  sleep "$SLEEP_SECS"
-done
-
-REPORT="issue=#${ISSUE} expect=${EXPECT} via=${VIA} actual=${CURRENT} body=${BODY_TARGETS}"
-if verify; then
-  echo "REPAIRED #${PR} ${REPORT}"
   exit 0
 fi
-echo "MISMATCH #${PR} ${REPORT} after-fix"
+
+if [[ "$PRINT_FIX" -eq 1 ]]; then
+  echo "MISMATCH #${PR} ${REPORT}" >&2
+  body="$(print_body && printf X)" || exit 1
+  fixed="$(printf '%s' "${body%X}" | nodeb fix "$EXPECT" "$ISSUE" && printf X)"
+  printf '%s' "${fixed%X}"
+  exit 0
+fi
+
+if [[ "$EXPECT" == closing ]]; then
+  echo "PR #${PR} (${HEAD_REF}) must close exactly #${ISSUE}; it closes ${CURRENT}. Add 'Closes #${ISSUE}' and neutralize other closing keywords, or run 'callum-flow-fix-linkage ${PR}' from the main checkout." >&2
+else
+  echo "PR #${PR} (${HEAD_REF}) must reference #${ISSUE} with 'Refs #${ISSUE}' or 'Part of #${ISSUE}' and close nothing; it closes ${CURRENT}. Run 'callum-flow-fix-linkage ${PR} --expect refs' from the main checkout." >&2
+fi
+echo "MISMATCH #${PR} ${REPORT}"
 exit 1

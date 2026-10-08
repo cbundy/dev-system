@@ -4,7 +4,9 @@
 # location against a stateful stub `gh` (no network, no Docker): the stub keeps
 # a PR's branch, base and body in files, answers `pr view` with JSON, applies
 # `pr edit --body-file`, and derives closingIssuesReferences from the body the
-# way GitHub does - but only when the PR targets the default branch.
+# way GitHub does - but only when the PR targets the default branch. The script
+# is read-only (cbundy/dev-system#233): every case asserts it never edited; the
+# repair itself is tested in fix-linkage.test.sh.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -67,9 +69,6 @@ case "$1 $2" in
     [ "$3" = 7 ] && [ "$4" = --body-file ] || exit 1
     touch "$d/edited"
     cp "$5" "$d/body"
-    if [ -n "${STUB_REWRITE_AFTER_EDIT:-}" ]; then
-      printf '%s' "$STUB_REWRITE_AFTER_EDIT" > "$d/body"
-    fi
     ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
@@ -89,7 +88,7 @@ run_case() {
   printf '%s' "$body" > "$STUB_DIR/body"
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
     STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
-    STUB_API_BODY="${stale_api_body:-}" STUB_REWRITE_AFTER_EDIT="${rewrite_after_edit:-}" \
+    STUB_API_BODY="${stale_api_body:-}" \
     CHECK_PR_LINKAGE_RETRY_SLEEP=0 bash "$SCRIPT" 7 "$@" 2>"$tmpdir/stderr") && rc=0 || rc=$?
   case "$out" in
     "$want"*) ;;
@@ -101,9 +100,38 @@ run_case() {
     MISMATCH*) [ "$rc" -eq 1 ] || fail "$name: expected exit 1, got $rc" ;;
     *) [ "$rc" -eq 0 ] || fail "$name: expected exit 0, got $rc" ;;
   esac
+  [ ! -f "$STUB_DIR/edited" ] || fail "$name: the read-only check edited the PR"
   if [ -n "$wantbody" ]; then
     printf "%s" "$wantbody" | cmp -s - "$STUB_DIR/body" || fail "$name: body is now:
 $(cat "$STUB_DIR/body")"
+  fi
+  passed=$((passed + 1))
+}
+
+# fix_case: same arguments as run_case, last one --print-fix. The repaired body
+# goes to stdout (compared byte for byte against the expected body), nothing is
+# edited, and stdout carries nothing else. An empty expected stdout means failure.
+fix_case() {
+  name=$1 head=$2 base=$3 body=$4 want=$5 wantbody=$6
+  shift 6
+  STUB_DIR="$tmpdir/state"
+  rm -rf "$STUB_DIR"
+  mkdir -p "$STUB_DIR"
+  printf '%s\n' "$head" > "$STUB_DIR/head"
+  printf '%s\n' "$base" > "$STUB_DIR/base"
+  printf '%s' "$body" > "$STUB_DIR/body"
+  rc=0
+  PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
+    STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
+    STUB_API_BODY="${stale_api_body:-}" bash "$SCRIPT" 7 "$@" >"$tmpdir/stdout" 2>"$tmpdir/stderr" || rc=$?
+  [ ! -f "$STUB_DIR/edited" ] || fail "$name: --print-fix edited the PR"
+  if [ -z "$want" ]; then
+    [ "$rc" -ne 0 ] || fail "$name: expected failure"
+    [ ! -s "$tmpdir/stdout" ] || fail "$name: wrote to stdout despite failure"
+  else
+    [ "$rc" -eq 0 ] || fail "$name: expected exit 0, got $rc"
+    printf '%s' "$wantbody" | cmp -s - "$tmpdir/stdout" || fail "$name: stdout is:
+$(cat "$tmpdir/stdout")"
   fi
   passed=$((passed + 1))
 }
@@ -117,50 +145,50 @@ run_case "default branch refs matches" $H main "Refs #12" "MATCH #7 issue=#12 ex
 run_case "closing keyword dropped" $H main "Fix GitHub issue #12" "MISMATCH #7" "" 
 run_case "refs PR with a closing keyword" $H main "Closes #12" "MISMATCH #7 issue=#12 expect=refs" "" --expect refs
 run_case "stray Closes #M in description text" $H main "It must not Closes #99 here.${nl}Closes #12" "MISMATCH #7 issue=#12 expect=closing via=api actual=[12,99]" ""
-run_case "fix appends the keyword" $H main "Summary" "REPAIRED #7" "Summary${nl}${nl}Closes #12${nl}" --fix
-run_case "fix neutralizes a stray closing keyword" $H main "Do not Closes #99.${nl}Closes #12" "REPAIRED #7" "Do not Refs #99.${nl}Closes #12" --fix
-run_case "fix turns a closing keyword into Refs" $H main "Fixes #12" "REPAIRED #7" "Refs #12" --expect refs --fix
-run_case "fix keeps the Pipeline section verbatim" $H main "Hi${nl}${nl}## Pipeline${nl}a log  line${nl}" "REPAIRED #7" "Hi${nl}${nl}Closes #12${nl}${nl}## Pipeline${nl}a log  line${nl}" --fix
+fix_case "fix appends the keyword" $H main "Summary" "REPAIRED #7" "Summary${nl}${nl}Closes #12${nl}" --print-fix
+fix_case "fix neutralizes a stray closing keyword" $H main "Do not Closes #99.${nl}Closes #12" "REPAIRED #7" "Do not Refs #99.${nl}Closes #12" --print-fix
+fix_case "fix turns a closing keyword into Refs" $H main "Fixes #12" "REPAIRED #7" "Refs #12" --expect refs --print-fix
+fix_case "fix keeps the Pipeline section verbatim" $H main "Hi${nl}${nl}## Pipeline${nl}a log  line${nl}" "REPAIRED #7" "Hi${nl}${nl}Closes #12${nl}${nl}## Pipeline${nl}a log  line${nl}" --print-fix
 run_case "epic base closing keyword in body" $H epic/x "Closes #12" "MATCH #7 issue=#12 expect=closing via=body actual=[12]" ""
 run_case "epic base refs matches" $H epic/x "Refs #12" "MATCH #7 issue=#12 expect=refs via=body actual=[]" "" --expect refs
 run_case "epic base missing keyword" $H epic/x "nothing" "MISMATCH #7 issue=#12 expect=closing via=body" ""
-run_case "epic base fix" $H epic/x "nothing" "REPAIRED #7 issue=#12 expect=closing via=body" "nothing${nl}${nl}Closes #12${nl}" --fix
+fix_case "epic base fix" $H epic/x "nothing" "REPAIRED #7 issue=#12 expect=closing via=body" "nothing${nl}${nl}Closes #12${nl}" --print-fix
 for base in main epic/x; do
   run_case "foreign issue with same number ($base)" $H "$base" "Closes other/repo#12" "MISMATCH #7" ""
   run_case "qualified local issue ($base)" $H "$base" "Closes LOCAL/REPO#12" "MATCH #7" ""
   run_case "qualified local and short issue deduplicate ($base)" $H "$base" "Closes #12; Fixes local/repo#12" "MATCH #7" ""
   run_case "foreign stray issue ($base)" $H "$base" "Closes #12; Fixes other/repo#99" "MISMATCH #7" ""
-  run_case "repair foreign same-number issue ($base)" $H "$base" "Closes other/repo#12" "REPAIRED #7" "Refs other/repo#12${nl}${nl}Closes #12${nl}" --fix
-  run_case "repair foreign stray issue ($base)" $H "$base" "Closes #12; Fixes other/repo#99" "REPAIRED #7" "Closes #12; Refs other/repo#99" --fix
-  run_case "refs neutralizes every repository ($base)" $H "$base" "Closes local/repo#12; Resolves other/repo#99" "REPAIRED #7" "Refs local/repo#12; Refs other/repo#99" --expect refs --fix
+  fix_case "repair foreign same-number issue ($base)" $H "$base" "Closes other/repo#12" "REPAIRED #7" "Refs other/repo#12${nl}${nl}Closes #12${nl}" --print-fix
+  fix_case "repair foreign stray issue ($base)" $H "$base" "Closes #12; Fixes other/repo#99" "REPAIRED #7" "Closes #12; Refs other/repo#99" --print-fix
+  fix_case "refs neutralizes every repository ($base)" $H "$base" "Closes local/repo#12; Resolves other/repo#99" "REPAIRED #7" "Refs local/repo#12; Refs other/repo#99" --expect refs --print-fix
   pipeline="Closes #12${nl}## Pipeline${nl}Fixes other/repo#99${nl}"
   run_case "Pipeline stray keyword ($base)" $H "$base" "$pipeline" "MISMATCH #7" ""
-  run_case "Pipeline stray keyword cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --fix
+  fix_case "Pipeline stray keyword cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --print-fix
   pipeline="Closes #12${nl}## Pipeline${nl}Closes #99${nl}"
   run_case "Pipeline local stray keyword ($base)" $H "$base" "$pipeline" "MISMATCH #7" ""
-  run_case "Pipeline local stray cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --fix
+  fix_case "Pipeline local stray cannot be repaired ($base)" $H "$base" "$pipeline" "MISMATCH #7" "$pipeline" --print-fix
   pipeline="## Pipeline${nl}Closes #12${nl}"
   run_case "Pipeline closing keyword rejects refs ($base)" $H "$base" "$pipeline" "MISMATCH #7" "" --expect refs
-  run_case "Pipeline prevents refs repair ($base)" $H "$base" "$pipeline" "MISMATCH #7" "Refs #12${nl}${nl}$pipeline" --expect refs --fix
+  fix_case "Pipeline prevents refs repair ($base)" $H "$base" "$pipeline" "MISMATCH #7" "Refs #12${nl}${nl}$pipeline" --expect refs --print-fix
   run_case "Pipeline local closing keyword ($base)" $H "$base" "$pipeline" "MATCH #7" ""
   for ref in "Refs #12" "Part of #12" "Refs LOCAL/REPO#12" "Part of local/repo#12"; do
     run_case "keep-open reference matches ($base)" $H "$base" "$ref" "MATCH #7" "$ref" --expect refs
-    run_case "keep-open fix is unchanged ($base)" $H "$base" "$ref" "MATCH #7" "$ref" --expect refs --fix
+    fix_case "keep-open fix is unchanged ($base)" $H "$base" "$ref" "MATCH #7" "$ref" --expect refs --print-fix
   done
   for body in "Summary" "Refs #99" "Refs other/repo#12" "Part of other/repo#12" "Refs https://github.com/local/repo/issues/12"; do
     run_case "missing local keep-open reference ($base)" $H "$base" "$body" "MISMATCH #7" "$body" --expect refs
-    run_case "append missing keep-open reference ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Refs #12${nl}" --expect refs --fix
+    fix_case "append missing keep-open reference ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Refs #12${nl}" --expect refs --print-fix
   done
   body="Summary${nl}## Pipeline${nl}Part of #12${nl}"
   run_case "keep-open reference in Pipeline ($base)" $H "$base" "$body" "MATCH #7" "$body" --expect refs
   body="Summary${nl}## Pipeline${nl}log  line${nl}"
-  run_case "append refs before preserved Pipeline ($base)" $H "$base" "$body" "REPAIRED #7" "Summary${nl}${nl}Refs #12${nl}${nl}## Pipeline${nl}log  line${nl}" --expect refs --fix
+  fix_case "append refs before preserved Pipeline ($base)" $H "$base" "$body" "REPAIRED #7" "Summary${nl}${nl}Refs #12${nl}${nl}## Pipeline${nl}log  line${nl}" --expect refs --print-fix
   body="Closes #99"
-  run_case "refs repair adds local reference after neutralizing stray ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Refs #12${nl}" --expect refs --fix
+  fix_case "refs repair adds local reference after neutralizing stray ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Refs #12${nl}" --expect refs --print-fix
   body="Closes #12; Closes https://tracker.example/local/repo/issues/99"
   run_case "tracker URL is ignored ($base)" $H "$base" "$body" "MATCH #7" "$body"
   body='Closes https://<host>/owner/repo/issues/99'
-  run_case "placeholder URL is preserved ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Closes #12${nl}" --fix
+  fix_case "placeholder URL is preserved ($base)" $H "$base" "$body" "REPAIRED #7" "$body${nl}${nl}Closes #12${nl}" --print-fix
 done
 run_case "epic refs guidance" $H epic/x "Refs #12" "MATCH #7" "" --expect refs
 grep -q "Keep #12 open after merge" "$tmpdir/stderr" || fail "missing keep-open guidance"
@@ -171,33 +199,43 @@ stale_api_body="Closes #12"
 for body in "Closes #99" "Summary" "Closes other/repo#12" "Closes #12${nl}## Pipeline${nl}Closes #99"; do
   run_case "stale API cannot hide current closing targets" $H main "$body" "MISMATCH #7" "$body"
 done
-run_case "repair body despite stale matching API" $H main "Closes #99" "REPAIRED #7" "Refs #99${nl}${nl}Closes #12${nl}" --fix
-run_case "stale API prevents refs repair success" $H main "Closes #12" "MISMATCH #7" "Refs #12" --expect refs --fix
+fix_case "repair body despite stale matching API" $H main "Closes #99" "REPAIRED #7" "Refs #99${nl}${nl}Closes #12${nl}" --print-fix
+fix_case "stale API prevents refs repair success" $H main "Closes #12" "MISMATCH #7" "Refs #12" --expect refs --print-fix
 stale_api_body="Refs #12"
 for body in "Closes #12" "Fixes other/repo#99" "## Pipeline${nl}Closes #99"; do
   run_case "stale empty API cannot hide a closing keyword" $H main "$body" "MISMATCH #7" "$body" --expect refs
 done
-run_case "repair refs despite stale matching API" $H main "Closes #12" "REPAIRED #7" "Refs #12" --expect refs --fix
-run_case "stale API prevents closing repair success" $H main "Summary" "MISMATCH #7" "Summary${nl}${nl}Closes #12${nl}" --fix
+fix_case "repair refs despite stale matching API" $H main "Closes #12" "REPAIRED #7" "Refs #12" --expect refs --print-fix
+fix_case "stale API prevents closing repair success" $H main "Summary" "MISMATCH #7" "Summary${nl}${nl}Closes #12${nl}" --print-fix
 stale_api_body="Closes #12"
-rewrite_after_edit="Closes #99"
-run_case "post-edit rewrite cannot pass stale API" $H main "Summary" "MISMATCH #7" "Closes #99" --fix
 stale_api_body="Refs #12"
-rewrite_after_edit="Closes #12"
-run_case "post-edit refs rewrite cannot pass stale API" $H main "Closes #99" "MISMATCH #7" "Closes #12" --expect refs --fix
-unset stale_api_body rewrite_after_edit
+unset stale_api_body
 run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 epic/big" ""
 
 fail_node=body
-run_case "body extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}" --fix
+fix_case "body extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}" --print-fix
 for fail_node in fix empty; do
   for base in main epic/x; do
     for expectation in closing refs; do
-      run_case "internal $fail_node failure preserves PR ($base, $expectation)" $H "$base" "Summary${nl}" "" "Summary${nl}" --expect "$expectation" --fix
+      fix_case "internal $fail_node failure preserves PR ($base, $expectation)" $H "$base" "Summary${nl}" "" "Summary${nl}" --expect "$expectation" --print-fix
     done
   done
 done
 unset fail_node
 run_case "reject refs argument alias" $H main "Refs #12" "" "Refs #12" --expect=refs
 run_case "reject closing argument alias" $H main "Closes #12" "" "Closes #12" --expect=closing
+
+# --fix is gone: it must refuse, name the replacement, and edit nothing.
+for fixargs in "--fix" "--expect refs --fix"; do
+  # shellcheck disable=SC2086
+  run_case "--fix is refused ($fixargs)" $H main "Summary" "" "Summary" $fixargs
+  grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "--fix refusal does not name callum-flow-fix-linkage"
+  if grep -qi "unknown flag" "$tmpdir/stderr"; then fail "--fix refused as a generic unknown flag"; fi
+done
+# The MISMATCH hints point at the replacement, and no case ever edited a PR.
+run_case "mismatch hint names the fix command" $H main "Summary" "MISMATCH #7" "Summary"
+grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "closing hint does not name callum-flow-fix-linkage"
+run_case "refs mismatch hint names the fix command" $H main "Summary" "MISMATCH #7" "Summary" --expect refs
+grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "refs hint does not name callum-flow-fix-linkage"
+if grep -q -- "--fix" "$tmpdir/stderr"; then fail "hint still mentions --fix"; fi
 echo "check-pr-linkage: $passed passed"

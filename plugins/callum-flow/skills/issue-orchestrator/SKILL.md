@@ -418,19 +418,21 @@ it. The merge command is allowed only in the main checkout's
 ## Linkage (issue <-> PR)
 Green CI and "mergeable" say nothing about linkage, and a wrong keyword either
 leaves the issue open forever or closes the wrong one. The merge guard calls
-this script (never with `--fix`):
+this read-only check; it never edits a PR:
 
-`/usr/local/share/callum-tools/check-pr-linkage.sh <pr> [--expect refs] [--fix]`
+`/usr/local/share/callum-tools/check-pr-linkage.sh <pr> [--expect refs]`
 
 - It derives the issue number from the `<type>/issue-<N>-<slug>` branch and
-  prints one line: `MATCH`, `MISMATCH`, `REPAIRED` or `SKIP` (no issue in the
+  prints one line: `MATCH`, `MISMATCH` or `SKIP` (no issue in the
   branch name; take the number from your delegation record and check by hand).
 - The guard runs it for you. Pass `--expect refs` for a keep-open issue
   (research, proposal, one part of several); it requires `Refs #N` or
   `Part of #N` for the branch issue and no closing targets. The default
   expects exactly the branch's issue to be closed.
-- On `GUARD linkage FAIL`, repair by hand as a separate step: run the script
-  again with the same expectation and `--fix`, then re-run the guard. A `SKIP`
+- On `GUARD linkage FAIL`, repair by hand as a separate step, from the main
+  checkout only: run `callum-flow-fix-linkage <pr> [--expect refs]` with the same
+  expectation (it edits the PR body, re-checks, and prints `REPAIRED` or
+  `MISMATCH ... after-fix`), then re-run the guard. A `SKIP`
   (no issue in the branch name) passes only when you give `--issue N` and the
   PR linkage for #N matches `--expect`. Stop on a failed repair, including a preserved Pipeline keyword
   that still causes `MISMATCH`.

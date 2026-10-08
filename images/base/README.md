@@ -59,7 +59,7 @@ them, so those scripts stay maintained.
 12. Opt-in OpenTelemetry export for Claude Code and codex, on only when the runtime sets
     `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Telemetry](#telemetry-opentelemetry-export)).
 
-The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the pre-merge issue-linkage check) are staged at
+The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the read-only pre-merge issue-linkage check) are staged at
 `/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
 orchestrator skill works unchanged. By default each prints one event line and exits; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
@@ -1133,6 +1133,11 @@ gates, base) and prints `GUARD <name> FAIL <reason>` per failed guard; it only r
 is in the synced allow list. `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash.
+
+`callum-flow-fix-linkage <pr> [--expect closing|refs]` repairs a PR body's issue linkage
+(`Closes #N` / `Refs #N`) and re-checks it. It edits the PR, so, like `callum-flow-merge`,
+it is allowed only in the main checkout's `settings.local.json`; the read-only
+`check-pr-linkage.sh` stays in the synced allow list.
 
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off

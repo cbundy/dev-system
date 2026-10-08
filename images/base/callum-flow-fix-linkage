@@ -1,0 +1,107 @@
+#!/bin/sh
+#
+# callum-flow-fix-linkage: repair a PR body's issue linkage and re-verify it
+# (cbundy/dev-system#233). check-pr-linkage.sh only reads; this is the one
+# command that edits a PR body (`gh pr edit`), so it is allowed only in the main
+# checkout's gitignored .claude/settings.local.json, never in the synced allow
+# list. A worktree sub-agent can run the check but cannot repair.
+#
+# Usage: callum-flow-fix-linkage <pr> [--expect closing|refs]
+#
+# Runs the check first. On MATCH or SKIP it prints that line and edits nothing.
+# On MISMATCH it takes the repaired body from `check-pr-linkage.sh --print-fix`
+# (the one place the keyword rules live), edits the PR, and re-checks, retrying
+# while GitHub indexes the edit.
+#
+# Output: one line on stdout: MATCH / SKIP (nothing to do), REPAIRED, or
+# MISMATCH ... after-fix. Exit codes: 0 fine or repaired, 1 still mismatched or
+# an error, 2 usage error.
+#
+# Environment (for tests): CALLUM_FLOW_GH_BIN, CALLUM_FLOW_LINKAGE_BIN
+# (check-pr-linkage.sh), CALLUM_FLOW_FIX_RETRY_ATTEMPTS (5),
+# CALLUM_FLOW_FIX_RETRY_SLEEP (2 seconds).
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
+attempts=${CALLUM_FLOW_FIX_RETRY_ATTEMPTS:-5}
+nap=${CALLUM_FLOW_FIX_RETRY_SLEEP:-2}
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-fix-linkage: $1" >&2
+  echo "usage: callum-flow-fix-linkage <pr> [--expect closing|refs]" >&2
+  exit 2
+}
+
+[ $# -ge 1 ] || usage
+pr=$1
+shift
+case "$pr" in '' | -* | *[!0-9]*) usage "<pr> must be a number" ;; esac
+expect=closing
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --expect)
+      [ $# -ge 2 ] || usage "--expect requires a value"
+      expect=$2
+      shift 2
+      ;;
+    *) usage "unknown argument '$1'" ;;
+  esac
+done
+case "$expect" in closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
+
+tmp=$(mktemp) || exit 1
+trap 'rm -f "$tmp"' EXIT
+
+check() {
+  "$LINKAGE" "$pr" --expect "$expect" 2>/dev/null
+}
+
+line=$(check) && rc=0 || rc=$?
+case "$line" in
+  MATCH* | SKIP*)
+    if [ "$rc" -eq 0 ]; then
+      echo "$line"
+      exit 0
+    fi
+    ;;
+esac
+case "$line" in
+  MISMATCH*) ;;
+  *)
+    echo "callum-flow-fix-linkage: check failed (exit $rc): ${line:-no output}" >&2
+    exit 1
+    ;;
+esac
+
+echo "Repairing PR #$pr body..." >&2
+# The trailing X survives command substitution, which would strip trailing newlines.
+fixed=$("$LINKAGE" "$pr" --expect "$expect" --print-fix 2>/dev/null && printf X) || {
+  echo "callum-flow-fix-linkage: could not compute the repaired body of PR #$pr; nothing edited" >&2
+  exit 1
+}
+printf '%s' "${fixed%X}" > "$tmp"
+"$GH" pr edit "$pr" --body-file "$tmp" >&2 || {
+  echo "callum-flow-fix-linkage: gh pr edit failed" >&2
+  exit 1
+}
+
+# GitHub takes a moment to index a body edit and can briefly report the old linkage.
+n=0
+while :; do
+  line=$(check) && rc=0 || rc=$?
+  [ "$rc" -eq 0 ] && break
+  n=$((n + 1))
+  [ "$n" -lt "$attempts" ] || break
+  sleep "$nap"
+done
+case "$line" in
+  MATCH*)
+    if [ "$rc" -eq 0 ]; then
+      echo "REPAIRED${line#MATCH}"
+      exit 0
+    fi
+    ;;
+esac
+echo "${line:-MISMATCH #$pr} after-fix"
+exit 1
