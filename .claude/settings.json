@@ -3,7 +3,8 @@
     "callum": {
       "source": {
         "source": "github",
-        "repo": "cbundy/dev-system"
+        "repo": "cbundy/dev-system",
+        "ref": "v0.11.0"
       }
     }
   },
@@ -25,7 +26,8 @@
       "Bash(gh issue *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
-      "Bash(gh pr list *)"
+      "Bash(gh pr list *)",
+      "Bash(/usr/local/share/callum-tools/check-pr-linkage.sh *)"
     ]
   }
 }

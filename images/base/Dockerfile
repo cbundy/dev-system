@@ -177,6 +177,7 @@ RUN arch=$(dpkg --print-architecture) \
 COPY --chmod=0755 \
   features/src/callum-tools/recover-no-mistakes.sh \
   features/src/callum-tools/pin-codex-model.sh \
+  features/src/callum-tools/check-pr-linkage.sh \
   features/src/callum-tools/pipeline-watch.sh \
   features/src/callum-tools/queue-watch.sh \
   features/src/callum-tools/usage-check.sh \
@@ -240,8 +241,15 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
 # every first Claude session. A whitespace-separated list of
 # <plugin>@<marketplace>=<marketplace source> entries (see plugins.sh). A
 # per-repo image (ENV DEV_DEFAULT_PLUGINS=...) or the runtime's environment
-# can change it; empty installs none.
-ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system
+# can change it; empty installs none. The default is pinned to the plugin
+# release current at image build (DEV_PLUGIN_REF, a tag such as v0.10.0, set by
+# publish-base-image.yml, which fails without one), so a repo with no
+# settings file gets a release, not main. A repo's committed .claude/settings.json
+# that declares the marketplace wins over this pin
+# (cbundy/dev-system#215).
+# The empty default is only for ad-hoc local builds; published images always set it.
+ARG DEV_PLUGIN_REF=
+ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system${DEV_PLUGIN_REF:+#$DEV_PLUGIN_REF}
 
 # Headless runs (docker run, Kubernetes, Coder) start Claude with Remote
 # Control by default: dev-entrypoint runs dev-init, then the command, which

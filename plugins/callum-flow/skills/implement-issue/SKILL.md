@@ -8,7 +8,7 @@ description: >-
   issue linkage, and handoff shape. Use this when you are a sub-agent that has
   been delegated a single issue to implement (as opposed to orchestrating a
   queue of issues).
-version: 0.10.0
+version: 0.11.0
 ---
 
 # Implement issue
@@ -213,11 +213,8 @@ tests would otherwise have missed:
 ## 7. Issue linkage (what you write)
 - Put an exact closing keyword in the PR body when the issue should close on
   merge, e.g. `Closes #<N>`. Follow whatever your brief says about whether
-  this PR should close its issue. Note it is not durable: the pipeline
-  regenerates the body from your `--intent` text on every run, so keep
-  instructions *about* the keyword out of that text - they get paraphrased into
-  prose GitHub does not parse. Keep the intent to the acceptance criteria
-  (section 6); the delegator derives and sets the final linkage at merge.
+  this PR should close its issue. Keep instructions *about* the keyword out of
+  the `--intent` text (section 6); the delegator checks linkage at merge.
 - NEVER write close/closes/fixes/resolves immediately before an issue number
   you do not mean to close - GitHub's parser ignores negation and surrounding
   context, so `"must NOT close #93"` still registers as a closing reference.

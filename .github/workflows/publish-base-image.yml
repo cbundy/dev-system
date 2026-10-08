@@ -84,6 +84,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The release tag the image's default plugin install is pinned to
+      # (cbundy/dev-system#215), so a workspace with no settings file gets a
+      # release, not main. The build fails when no release tag resolves.
+      - name: Resolve the plugin release
+        id: plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          if [ -z "$tag" ]; then
+            echo "::error::no release tag resolved; cannot pin the default plugin"
+            exit 1
+          fi
+          echo "ref=$tag" >> "$GITHUB_OUTPUT"
+          echo "Pinning the default plugin to: $tag"
+
       - name: Decide whether to push
         id: push
         env:
@@ -139,6 +155,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ github.sha }}
             CREATED=${{ steps.meta.outputs.created }}
+            DEV_PLUGIN_REF=${{ steps.plugin.outputs.ref }}
           cache-from: type=gha,scope=base-image
           cache-to: type=gha,scope=base-image,mode=max
 

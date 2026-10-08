@@ -15,12 +15,14 @@ the `Release` workflow only verifies, tags and publishes.
    ```
 
    It sets the version in every `plugins/*/.claude-plugin/plugin.json`, every skill's
-   `SKILL.md` frontmatter and the root `package.json`, then refreshes this repo's own
+   `SKILL.md` frontmatter and the root `package.json`, pins the `callum` marketplace `ref` in
+   `templates/.claude/settings.json` to `vX.Y.Z`, then refreshes this repo's own
    stamp (`node bin/callum-dev.js update`: `.callum-dev.json`, `.callum-dev/baseline/`
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
    markers before committing.
-2. Open a PR with the result and merge it when `ci` is green.
+2. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
+   (step 3) immediately after: the bumped ref names a tag that does not exist until it runs.
 3. Run the `Release` workflow from main (Actions tab, or):
 
    ```
@@ -28,7 +30,7 @@ the `Release` workflow only verifies, tags and publishes.
    ```
 
    It refuses to run unless `ci` passed on main's HEAD and
-   `node scripts/release-bump.js --check X.Y.Z` passes there (every version and the stamp
+   `node scripts/release-bump.js --check X.Y.Z` passes there (every version, the template pin and the stamp
    at X.Y.Z); then it tags `vX.Y.Z` and creates a GitHub Release with generated notes.
 
 Semver: patch for wording fixes, minor for a new skill/template/capability, major for a

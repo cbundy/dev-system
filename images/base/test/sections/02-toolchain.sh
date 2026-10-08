@@ -21,7 +21,7 @@ check "uv installs a package and runs it with the image's python3, as node" in_i
   UV_PYTHON_DOWNLOADS=never uv run --no-project --with pytest python -c "import pytest"' \
   --entrypoint ""
 check "callum-tools scripts staged where the callum-flow skills call them" in_image '
-  for s in pipeline-watch.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
+  for s in check-pr-linkage.sh pipeline-watch.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
   done'
 check "models.env and models.sh are baked in, and the old codex-model.default is gone" in_image '
