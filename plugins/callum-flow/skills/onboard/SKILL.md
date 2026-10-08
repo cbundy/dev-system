@@ -31,7 +31,7 @@ instructions as a skill (generated from this page, never edited by hand).
 
 - `.no-mistakes.yaml`, `.github/pull_request_template.md`, `CLAUDE.md`, `.claude/settings.json`,
   `.devcontainer/devcontainer.json`, `.gitignore`, `treehouse.toml`, `.callum-dev.json`
-  and `.callum-dev/baseline/` are committed.
+  and `.callum-dev/baseline/` are committed, along with `.github/workflows/ci.yml` (step 3f).
 - `package.json` has `@callum/dev-system` as a devDependency, from
   `github:cbundy/dev-system#semver:0.x`.
 - `grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .` prints
@@ -210,7 +210,7 @@ grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev .
 | `.no-mistakes.yaml` | the commented ignore-glob example | Delete the line, or replace it with real globs |
 | `.no-mistakes.yaml` | `document.instructions` | Which paths own which docs. If there is no rule, delete the whole `document:` block. |
 | `CLAUDE.md` | e2e visual verification doc path | The repo's UI screenshot doc. For a repo with no UI, replace it with `n/a - no UI`. |
-| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `.no-mistakes.yaml` minus the install step, and which CI job calls each |
+| `CLAUDE.md` | `## Canonical commands` | The commands from "Settle the commands first", one per gate, the same as `.no-mistakes.yaml` minus the install step, and which CI job calls each (the real job names from `ci.yml`, step 3f) |
 | `CLAUDE.md` | worktree mechanism | `a treehouse worktree` unless the user says otherwise |
 | `CLAUDE.md` | repo-specific variations | Extra build or boot steps before the app can run, or delete the line |
 | `.devcontainer/devcontainer.json` | `remoteEnv` example | Delete the comment line, or add real env vars, e.g. `"DEV_LOGIN_TOOLS": "claude,gh"` for a repo that never uses codex |
@@ -245,11 +245,37 @@ In `.devcontainer/devcontainer.json`, replace `"image": ...` with
 install anything under `/persist`, or set a `devcontainer.metadata` label. See
 [Extending the image](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#extending-the-image).
 
+### 3f. CI workflow
+
+Do this after the `.no-mistakes.yaml` commands are final. Without a workflow, a PR gets no
+checks and the no-mistakes CI step waits on "no CI checks reported yet".
+
+1. If `no-mistakes ci-workflow` says the repo is not registered, run `no-mistakes init`.
+2. If `.github/workflows/` already has a CI workflow, keep it: check that it runs the same
+   lint and test commands as `.no-mistakes.yaml` and fix it if not. Otherwise run
+   `no-mistakes ci-workflow` (never `--force`).
+3. Review the generated `.github/workflows/ci.yml`:
+   - Delete toolchain setup steps for languages the repo does not use. The known case is
+     `actions/setup-go` with `go-version-file: go.mod` in a repo with no `go.mod` (it fails
+     every run; reported upstream at kunchenguid/no-mistakes#1378).
+   - Add the setup or install step the gate commands need (for example `actions/setup-node`
+     and `npm ci`, or `astral-sh/setup-uv`).
+   - Confirm the jobs run exactly the `.no-mistakes.yaml` lint and test commands.
+4. Put the real job name(s) from `ci.yml` in the `CLAUDE.md` "Canonical commands" note on
+   which CI job runs each gate.
+
+Pushing a workflow file needs a gh token with the `workflow` scope. If a push is refused
+for that, `dev-doctor` shows a WARN with the fix: `gh auth refresh -h github.com -s workflow`.
+
+A PR opened before `ci.yml` reaches the default branch gets no checks until a new
+`pull_request` event (push a commit, or close and reopen it). A no-mistakes run stuck on
+"no CI checks reported yet" usually means there is no workflow.
+
 ## 4. Commit (and GitHub, if the user said yes)
 
 ```bash
 git add -A
-git status --short   # must include .callum-dev.json and .callum-dev/; must not include node_modules/, .env, settings.local.json
+git status --short   # must include .github/workflows/ci.yml, .callum-dev.json and .callum-dev/; must not include node_modules/, .env, settings.local.json
 git commit -m "chore: onboard to dev-system"
 ```
 
@@ -259,6 +285,9 @@ Only if the user agreed in step 0:
 gh repo create <owner>/<name> --<private|public> --source . --push
 ```
 
+The push includes `.github/workflows/ci.yml`, so the gh token needs the `workflow` scope
+(see step 3f).
+
 ## 5. Verify
 
 Run all of these and report each result.
@@ -267,6 +296,7 @@ Run all of these and report each result.
 npx callum-dev check
 node -e 'JSON.parse(require("fs").readFileSync(".claude/settings.json","utf8"))'
 grep -rn '<REPLACE' --exclude-dir=node_modules --exclude-dir=.callum-dev . || echo "no placeholders"
+test -f .github/workflows/ci.yml && echo "ci.yml present" || echo "BAD: no ci.yml (step 3f)"
 git check-ignore -v .no-mistakes.yaml .callum-dev.json .callum-dev/baseline/CLAUDE.md && echo "BAD: tracked file ignored" || echo ok
 ```
 
@@ -282,6 +312,10 @@ git worktree remove --force ../gatecheck-tmp
 If the agent is running inside a dev-system container, also run `dev-init --repo` and
 then `dev-doctor`. Login failures are expected until the user logs in. Report any other
 `FAIL`.
+
+Also check that `.github/workflows/ci.yml` runs the same lint and test commands as
+`.no-mistakes.yaml`. After the first push (step 4), confirm the CI job shows up: `gh pr checks`
+on the PR, or `gh run list --branch <default branch>`.
 
 ## 6. Run it on Coder (if the user said yes)
 
@@ -320,4 +354,4 @@ Report:
 | Run it in Coder | Step 6, if not done: `coder create <name> --template dev-system --parameter repo_url=<https clone url>`, then **Log in** in the dashboard. |
 | Enable the workflow plugin | The base image's `dev-init` installs `callum-flow@callum` by default on every container start, on the desktop and in Coder. See [Claude plugins](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#workspace-and-repo) for opt-outs and recovery when an install fails. |
 | Session history (agentsview) | Nothing per repo. The URL is set once per host (`images/base/README.md`, "Central session history"). |
-| Keep in sync later | `npm update @callum/dev-system && npx callum-dev update`, then commit. Optionally run `npx callum-dev check` in CI. |
+| Keep in sync later | `npm update @callum/dev-system && npx callum-dev update`, then commit. Optionally add `npx callum-dev check` to the `ci.yml` from step 3f. |
