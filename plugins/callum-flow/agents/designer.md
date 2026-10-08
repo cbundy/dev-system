@@ -57,7 +57,8 @@ closes the issue. Pick it:
   recorded Run it, not for the merge.
 - `keep-open` for research, a proposal, or a PR that is one part of several.
 - `merge` otherwise.
- Cite file:line only for what you have
+
+Cite file:line only for what you have
 verified, and check surprising explorer claims yourself. Name the base
 as `origin/<base>`, not the local checkout.
 
