@@ -24,12 +24,14 @@
 # Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
 #
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
-# (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh).
+# (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
+# CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
 LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
+WATCH=${CALLUM_FLOW_WATCH_BIN:-/usr/local/share/callum-tools/pipeline-watch.sh}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
@@ -85,16 +87,12 @@ fi
 status_out=''
 if [ -n "$branch" ]; then
   if [ -z "$run" ]; then
-    ids=$($NM runs --limit 200 2> /dev/null | clean | awk '
-      /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ && NF >= 3 && !seen[$2]++ { print $2 }' | sed -n 1,30p)
-    for id in $ids; do
-      o=$($NM axi status --run "$id" 2> /dev/null | clean) || continue
-      if [ "$(field "$o" branch)" = "$branch" ]; then
-        run=$id
-        status_out=$o
-        break
-      fi
-    done
+    # the watcher owns the branch -> run lookup (cbundy/dev-system#243)
+    if run=$("$WATCH" --resolve "$branch" 2> /dev/null) && [ -n "$run" ]; then
+      status_out=$($NM axi status --run "$run" 2> /dev/null | clean) || status_out=''
+    else
+      run=''
+    fi
   else
     status_out=$($NM axi status --run "$run" 2> /dev/null | clean) || status_out=''
   fi

@@ -21,7 +21,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -64,18 +64,37 @@ case "$1 $2" in
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 STUB
+# no-mistakes, replaying the real v1.84 shapes: `runs` rows carry no run id
+# (status, branch, short head, date, url, then a hint line), `axi status` from
+# a checkout whose branch has a run prints its `run:` detail, from any other
+# checkout the runs[N]{id,branch,status,head,pr} table, and `axi status --run
+# ID` the same nested `run:` detail. The watcher calls `no-mistakes` from PATH
+# (the guard's NM binary is only used for the status probe), so both resolve
+# to this stub.
 cat > "$tmpdir/nm" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
+[ ! -e "$d/nm-fail" ] || exit 1
+b=$(cat "$d/branch")
+h=$(cut -c1-8 "$d/runhead")
+detail() {
+  case "$1" in
+    RUN9) printf 'run:\n  id: "RUN9"\n  branch: other/b\n  status: completed\n  head: abc12345\n  head_sha: zzz\n' ;;
+    RUN1) printf 'run:\n  id: "RUN1"\n  branch: %s\n  status: %s\n  head: %s\n  head_sha: %s\n  steps[1]{step,status}:\n    %s\nbranch_sync:\n' "$b" "$(cat "$d/runstatus")" "$h" "$(cat "$d/runhead")" "$(cat "$d/step")" ;;
+    *) return 1 ;;
+  esac
+}
 case "$1 $2" in
-  'runs --limit') printf '%s\n' 'STATUS ID HEAD' "completed RUN9 abc 2026-01-01 other" "running RUN1 abc 2026-01-02 mine" ;;
+  'runs --limit')
+    printf '  %-12s %s %s  2026-01-01 10:00  https://example.test/pull/1\n' completed other/b abc12345
+    [ -e "$d/norun" ] || printf '  %-12s %s %s  2026-01-02 10:00  https://example.test/pull/7\n' "$(cat "$d/runstatus")" "$b" "$h"
+    printf '\n  (1 more runs, use --limit to see more)\n' ;;
   'axi status')
-    id=$4
-    case "$id" in
-      RUN9) printf 'id: "RUN9"\nbranch: other/b\nstatus: completed\nhead_sha: zzz\n' ;;
-      RUN1) printf 'id: "RUN1"\nbranch: %s\nstatus: %s\nhead_sha: %s\nsteps[1]{step,status}:\n  %s\n' "$(cat "$d/branch")" "$(cat "$d/runstatus")" "$(cat "$d/runhead")" "$(cat "$d/step")" ;;
-      *) exit 1 ;;
-    esac ;;
+    if [ "$3" = --run ]; then detail "$4"; exit; fi
+    if [ "$(git rev-parse --abbrev-ref HEAD)" = "$b" ] && [ ! -e "$d/table" ] && [ ! -e "$d/norun" ]; then detail RUN1; exit; fi
+    printf 'current_branch: main\nruns_on_current_branch: 0\ncount: 2 of 2 total\nruns[2]{id,branch,status,head,pr}:\n'
+    [ -e "$d/norun" ] || printf '  "RUN1",%s,%s,%s,"https://example.test/pull/7"\n' "$b" "$(cat "$d/runstatus")" "\"$h\""
+    printf '  "RUN9",other/b,completed,"069be137","https://example.test/pull/1"\nhelp[1]: ...\n' ;;
   *) exit 1 ;;
 esac
 STUB
@@ -85,6 +104,8 @@ cat "${STUB_DIR:?}/linkage"
 exit "$(cat "$STUB_DIR/linkage-rc")"
 STUB
 chmod +x "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage"
+ln -s "$tmpdir/nm" "$toolbin/no-mistakes"
+WATCH="$ROOT/features/src/callum-tools/pipeline-watch.sh"
 
 events="$tmpdir/events"
 passed=0
@@ -109,12 +130,12 @@ reset() {
 g() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
 }
 m() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_GUARD_BIN="$GUARD" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
     "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
 }
@@ -142,6 +163,18 @@ expect_pass() {
 
 reset; g 7; expect_pass "all pass"
 reset; g 7 --run RUN1; expect_pass "explicit run"
+
+# the run lookup (cbundy/dev-system#243): real-format stub, no --run
+reset; g 7 --emit-verified
+if [ "$rc" != 0 ] || ! printf '%s' "$out" | grep -q ' run=RUN1 '; then fail "worktree lookup: rc=$rc out=$out"; fi
+passed=$((passed + 1))
+reset; touch "$st/table"; g 7 --emit-verified
+if [ "$rc" != 0 ] || ! printf '%s' "$out" | grep -q ' run=RUN1 '; then fail "run table lookup (quoted head): rc=$rc out=$out"; fi
+passed=$((passed + 1))
+reset; touch "$st/norun"; g 7 --emit-verified; expect_fail "branch with no run" head gates
+printf '%s' "$out" | grep -q 'no pipeline run found' || fail "no run reason: $out"
+reset; touch "$st/nm-fail"; g 7; expect_fail "lookup failure" head gates
+printf '%s' "$out" | grep -q 'no pipeline run found' || fail "lookup failure reason: $out"
 
 reset; echo 'ci,awaiting_approval,0' > "$st/step"; g 7; expect_fail "gates" gates
 reset; echo failed > "$st/runstatus"; g 7; expect_fail "gates failed" gates
@@ -171,7 +204,7 @@ reset
 git -C "$work" fetch -q origin "+refs/heads/$B:refs/remotes/origin/$B"
 mv "$origin" "$origin.gone"
 (PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-  CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" "$SH" "$GUARD" 7 > "$tmpdir/o" 2>&1) && fail "unreachable origin passed"
+  CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" "$SH" "$GUARD" 7 > "$tmpdir/o" 2>&1) && fail "unreachable origin passed"
 grep -q 'GUARD head FAIL .*origin=unknown' "$tmpdir/o" || fail "fetch failure should say unknown: $(cat "$tmpdir/o")"
 mv "$origin.gone" "$origin"
 passed=$((passed + 1))

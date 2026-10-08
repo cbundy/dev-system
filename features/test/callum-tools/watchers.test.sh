@@ -131,6 +131,7 @@ case "$1 ${2-} ${3-}" in
       [ "$1" != "$cur" ] || exec cat "$d/runs/$id.txt"
     done
     echo "current_branch: $cur"
+    [ ! -e "$d/no-table" ] || exit 0
     echo "runs[9]{id,branch,status,head,pr}:"
     for id in $order; do
       set -- $(row "$id")
@@ -354,6 +355,52 @@ single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches fea
 [ "$single" = "head-mismatch feat/e RUNE run=$b_head branch=$b_head worktree=$e_head head=$b_head" ] ||
   fail "auto worktree, ungated commit: $single"
 ok # worktree mapped automatically
+
+# 8b. --resolve <branch> (cbundy/dev-system#243): a one-shot lookup that
+# prints the branch's newest run id alone, never polls and never records an
+# event. A stub callum-flow-event records any call it gets.
+cat > "$fakebin/callum-flow-event" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/event-calls"
+EOF
+chmod +x "$fakebin/callum-flow-event"
+resolve() { in_dir "$1" timeout 10 "$PIPELINE_WATCH" --resolve "$2"; }
+
+# from the branch's own worktree (its `axi status` run detail)
+res=$(resolve "$tmpdir/wt-e" feat/e) || fail "--resolve worktree: did not exit 0"
+[ "$res" = RUNE ] || fail "--resolve worktree: $res"
+# from the run table, when the cwd branch has no run
+res=$(resolve "$tmpdir/wt-idle" feat/d) || fail "--resolve table: did not exit 0"
+[ "$res" = RUND ] || fail "--resolve table: $res"
+# the newest of two runs on one branch
+run_state RUNOLD feat/d failed old
+runs_order RUNE RUND RUNC RUNB RUNA RUNOLD
+res=$(resolve "$tmpdir/wt-idle" feat/d) || fail "--resolve newest: did not exit 0"
+[ "$res" = RUND ] || fail "--resolve newest run: $res"
+# from the log directories, when the table has nothing
+touch "$fakebin/no-table"
+mkdir -p "$nm_home/logs/RUND"
+res=$(resolve "$tmpdir/wt-idle" feat/d) || fail "--resolve log directory: did not exit 0"
+[ "$res" = RUND ] || fail "--resolve log directory: $res"
+rm "$fakebin/no-table"
+# no run: exit 1, nothing on stdout
+st=0
+res=$(resolve "$tmpdir/wt-idle" feat/none) || st=$?
+if [ "$st" -ne 1 ] || [ -n "$res" ]; then fail "--resolve no run: exit $st, out '$res'"; fi
+# a failing lookup: exit 1, nothing on stdout
+touch "$fakebin/nm-fail"
+st=0
+res=$(resolve "$tmpdir/wt-idle" feat/d) || st=$?
+rm "$fakebin/nm-fail"
+if [ "$st" -ne 1 ] || [ -n "$res" ]; then fail "--resolve lookup failure: exit $st, out '$res'"; fi
+# no other option
+st=0
+res=$(in_dir "$tmpdir/wt-idle" "$PIPELINE_WATCH" --resolve feat/d --branches feat/d 2>/dev/null) || st=$?
+if [ "$st" -ne 2 ] || [ -n "$res" ]; then fail "--resolve with --branches: exit $st, out '$res'"; fi
+[ ! -e "$fakebin/event-calls" ] || fail "--resolve recorded an event: $(cat "$fakebin/event-calls")"
+rm "$fakebin/callum-flow-event"
+runs_order RUNE RUND RUNC RUNB RUNA
+ok # --resolve: id from each source, newest run, no run, failure, no events
 
 # ---------------------------------------------------------------------------
 # queue-watch.sh
