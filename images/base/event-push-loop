@@ -65,6 +65,9 @@ JQ
 
 # run_psql URL: runs psql on stdin with URL's parts (percent-decoded) and its
 # ssl* query parameters as PG* variables, so no secret is on the command line.
+# With sslmode verify-ca or verify-full and no root cert (URL, environment or
+# libpq's ~/.postgresql/root.crt) it trusts the system store, as the Go
+# agentsview client does; psql 17 would otherwise fail on such a URL.
 run_psql() (
   local rest=${1#*://} query='' db='' userinfo='' hostport kv k v
   case "$rest" in *\?*) query=${rest#*\?}; rest=${rest%%\?*} ;; esac
@@ -104,6 +107,11 @@ run_psql() (
     esac
   done
   unset IFS
+  case "${PGSSLMODE-}" in
+    verify-ca | verify-full)
+      [ -n "${PGSSLROOTCERT-}" ] || [ -e "${HOME:-/nonexistent}/.postgresql/root.crt" ] \
+        || export PGSSLROOTCERT=system ;;
+  esac
   export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-10}
   exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
 )

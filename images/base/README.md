@@ -1144,7 +1144,7 @@ the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_U
 without one, and then the file just accumulates). It creates the schema and table on its
 first push, is idempotent on `(device, repo, seq)` and keeps its progress in
 `/persist/events/.pushed/`. The URL is split into `PG*` variables in `psql`'s environment only, never its
-argv, and all `psql` output is masked. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
+argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
 and `dev-doctor` reports when events were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
 `CREATE` on the database (or the schema and table created for it by an admin). The
