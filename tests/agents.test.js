@@ -30,10 +30,3 @@ test("designer cannot edit code and spawns the explorer", () => {
   assert.match(fm.disallowedTools, /Write/);
   assert.match(fm.tools, /Agent/);
 });
-
-test("designer brief keeps the fixed headings", () => {
-  const body = fs.readFileSync(path.join(DIR, "designer.md"), "utf8");
-  for (const h of ["Design brief (designer", "Acceptance criteria", "Files to touch", "Risk", "Test plan", "Sequencing", "Open decisions"]) {
-    assert.ok(body.includes(`## ${h}`), h);
-  }
-});

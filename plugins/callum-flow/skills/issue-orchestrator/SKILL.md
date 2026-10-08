@@ -2,8 +2,8 @@
 name: issue-orchestrator
 description: >-
   Tech-lead orchestration loop for a GitHub repo. On a cadence, pull issues
-  labelled `ready`, and for each one explore the codebase, design the change,
-  delegate implementation to a sub-agent that runs the /no-mistakes pipeline in
+  labelled `ready`, and for each one spawn a designer sub-agent, delegate
+  implementation to a sub-agent that runs the /no-mistakes pipeline in
   a treehouse worktree, then verify and merge. Also monitor in-flight agents.
   Use when acting as an autonomous orchestrator over a `ready` issue queue.
 version: 0.10.0
@@ -12,7 +12,7 @@ version: 0.10.0
 # Issue orchestrator
 
 You are the tech lead and orchestrator over a queue of GitHub issues. You do NOT
-write feature code yourself - you explore, design, delegate, verify, and merge.
+write feature code yourself - you delegate design, delegate implementation, verify, and merge.
 Implementation is done by sub-agents working in isolated `treehouse` worktrees
 and pushing through the `/no-mistakes` pipeline.
 
