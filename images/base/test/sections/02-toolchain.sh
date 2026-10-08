@@ -5,7 +5,7 @@
 # provides IMAGE, RUN_ID, SECRET, check, in_image and the rest; never run directly.
 
 echo "== 2. toolchain"
-for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck psql callum-flow-event; do
+for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck psql; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
 check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
