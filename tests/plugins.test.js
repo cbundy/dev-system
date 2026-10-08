@@ -204,7 +204,7 @@ for (const source of [
 }
 
 test("a repo plugin without a declaration leaves migration to the image source", (t) => {
-  const ctx = setup(t, { settings: { enabledPlugins: { "other@callum": true } } });
+  const ctx = setup(t, { settings: { enabledPlugins: { "other@callum": true } }, installed: ["callum-flow@callum", "other@callum"] });
   withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
   const env = { DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.10.0" };
   const r = run(ctx, "install_plugins", env);
@@ -212,6 +212,7 @@ test("a repo plugin without a declaration leaves migration to the image source",
   assert.deepEqual(changes(r.calls), [
     "/ marketplace remove callum",
     "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install other@callum",
     "/ install callum-flow@callum",
   ]);
 });

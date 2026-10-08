@@ -53,11 +53,17 @@ valid_default_plugin() {
 # every one but those repo_owned_plugins names. A default the repo turns on
 # without declaring its marketplace stays the image's, from the image's source.
 wanted_default_plugins() {
-  local named=""
+  local named="" defaults marketplaces id src
   [ -z "${1:-}" ] || named=$(repo_owned_plugins "$1")
-  default_plugins | while read -r id src; do
+  defaults=$(default_plugins | while read -r id src; do
     grep -qxF -- "$id" <<<"$named" || printf '%s %s\n' "$id" "$src"
-  done
+  done)
+  marketplaces=$(wanted_marketplaces "${1:-}" "" "$defaults")
+  while read -r id src; do
+    [ -n "$id" ] || continue
+    src=$(printf '%s\n' "$marketplaces" | awk -v m="${id##*@}" '$1 == m { print $2; exit }')
+    printf '%s %s\n' "$id" "$src"
+  done <<<"$defaults"
 }
 
 # not_installed <lines> <installed ids>: each of the lines (a plugin id, then
@@ -178,43 +184,46 @@ add_and_install() {
   log "installed Claude plugin $id"
 }
 
-# install_repo_plugin <id>: one missing plugin the repo enables, with its
-# marketplace source from $settings (github or git) when Claude does not know
-# the marketplace. Returns as add_and_install.
-install_repo_plugin() {
-  local id="$1" mkt="${1##*@}" kind src="" ref
-  if ! grep -qxF -- "$mkt" <<<"$known"; then
+install_wanted_plugin() {
+  local id="$1" src="$2" fix="$3" mkt="${1##*@}" kind
+  if [ -z "$src" ] && ! grep -qxF -- "$mkt" <<<"$known"; then
     kind=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.source? // empty' "$settings" 2>/dev/null)
-    ref=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.ref? // empty' "$settings" 2>/dev/null)
     case "$kind" in
-      github) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.repo // empty' "$settings") ;;
-      git) src=$(jq -r --arg m "$mkt" '.extraKnownMarketplaces[$m].source.url // empty' "$settings") ;;
+      github | git)
+        log "WARNING: marketplace $mkt in $settings has a $kind source with no $([ "$kind" = github ] && echo repo || echo url) - Claude plugin $id not installed."
+        log "  Fix: correct extraKnownMarketplaces.$mkt in $settings, then run: dev-init --repo"
+        ;;
       "")
         log "WARNING: Claude plugin $id is enabled in $settings, but marketplace $mkt is neither known to Claude nor declared there - not installed."
         log "  Fix: declare it under extraKnownMarketplaces in $settings (or run: claude plugin marketplace add <source>), then run: dev-init --repo"
-        return 0
         ;;
       *)
         log "WARNING: marketplace $mkt in $settings has source type \"$kind\", which dev-init cannot add (only github and git) - Claude plugin $id not installed."
         log "  Fix: run: claude plugin marketplace add <its source> && claude plugin install $id"
-        return 0
         ;;
     esac
-    if [ -z "$src" ]; then
-      log "WARNING: marketplace $mkt in $settings has a $kind source with no $([ "$kind" = github ] && echo repo || echo url) - Claude plugin $id not installed."
-      log "  Fix: correct extraKnownMarketplaces.$mkt in $settings, then run: dev-init --repo"
-      return 0
-    fi
-    src="$src${ref:+#$ref}"
+    return 0
   fi
-  add_and_install "$id" "$src" "dev-init --repo"
+  add_and_install "$id" "$src" "$fix"
 }
 
-# declared_marketplace <marketplace>: "<location> <ref>" of the marketplace the
-# repo's $settings declares (github repo or git url; ref empty when unpinned),
-# else nothing.
-declared_marketplace() {
-  jq -r --arg m "$1" '.extraKnownMarketplaces[$m].source? | select(.source == "github" or .source == "git") | "\(.repo // .url // "") \(.ref // "")"' "$settings" 2>/dev/null
+wanted_marketplaces() {
+  local settings="$1" plugins="$2" defaults="$3" mkt src declared
+  while read -r mkt src; do
+    if [ -n "$settings" ]; then
+      declared=$(jq -r --arg m "$mkt" --arg fallback "$src" '
+        .extraKnownMarketplaces[$m] as $declaration |
+        if $declaration == null then $fallback
+        else $declaration.source |
+          (if .source == "github" then .repo elif .source == "git" then .url else "" end) as $location |
+          if ($location // "") == "" then ""
+          else $location + (if (.ref // "") == "" then "" else "#" + .ref end) end
+        end' "$settings" 2>/dev/null) && src="$declared"
+    fi
+    printf '%s %s\n' "$mkt" "$src"
+  done < <({ printf '%s\n' "$plugins"; printf '%s\n' "$defaults"; } |
+    awk '$1 != "" { sub(/^.*@/, "", $1); if (!seen[$1]++) names[++n] = $1; if (source[$1] == "") source[$1] = $2 }
+      END { for (i = 1; i <= n; i++) print names[i], source[names[i]] }')
 }
 
 # drop_moved_marketplaces: removes each known marketplace
@@ -227,28 +236,17 @@ declared_marketplace() {
 # `marketplace remove` uninstalls the marketplace's plugins (and their saved
 # options), so this only acts on a real ref change, and only on a marketplace
 # at the same location. Sets MOVED to the removed names (empty: none). Needs
-# $settings, $plugins and $defaults.
+# $marketplaces.
 drop_moved_marketplaces() {
   MOVED=""
-  local json id mkt want loc ref have_loc have_ref src seen=""
+  local json mkt loc ref have_loc have_ref src
   claude_plugin marketplace list --json || return 0
   json="$PLUGIN_OUT"
-  while read -r id src; do
-    [ -n "$id" ] || continue
-    mkt="${id##*@}"
-    grep -qxF -- "$mkt" <<<"$seen" && continue
-    if [ -n "$src" ]; then
-      loc="${src%%#*}"
-      ref=""
-      [[ "$src" != *#* ]] || ref="${src#*#}"
-    else
-      [ -n "$settings" ] || continue
-      want=$(declared_marketplace "$mkt")
-      [ -n "$want" ] || continue
-      loc="${want%% *}"
-      ref="${want#* }"
-    fi
-    seen="$seen"$'\n'"$mkt"
+  while read -r mkt src; do
+    [ -n "$src" ] || continue
+    loc="${src%%#*}"
+    ref=""
+    [[ "$src" != *#* ]] || ref="${src#*#}"
     have_loc=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .repo // .url // empty' 2>/dev/null)
     [ "$have_loc" = "$loc" ] || continue
     have_ref=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .ref // empty' 2>/dev/null)
@@ -261,7 +259,7 @@ drop_moved_marketplaces() {
       log "WARNING: could not remove Claude plugin marketplace $mkt to move it to ${ref:-no ref}: $PLUGIN_REASON"
       log "  Fix: run: claude plugin marketplace remove $mkt; dev-init --plugins"
     fi
-  done < <({ printf '%s\n' "$plugins"; printf '%s\n' "$defaults"; })
+  done <<<"$marketplaces"
   return 0
 }
 
@@ -275,8 +273,8 @@ drop_moved_marketplaces() {
 # call is limited to 60s or what is left of it, and once it has passed the
 # plugins not yet installed get one WARNING. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults installed MOVED known id src i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
-  local -a missing=() sources=()
+  local settings="" plugins="" defaults marketplaces installed MOVED known id src fix i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local -a missing=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))
   PLUGIN_EXPIRED=false
@@ -297,6 +295,7 @@ install_plugins() {
   defaults=$(wanted_default_plugins "$settings")
   plugins=$(not_installed "$plugins" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || plugins=""
   [ -n "$plugins$defaults" ] || return 0
+  marketplaces=$(wanted_marketplaces "$settings" "$plugins" "$defaults")
   # Unknown (the listing failed) means try them all: an install of a plugin
   # that is already there is a no-op.
   installed=""
@@ -312,13 +311,9 @@ install_plugins() {
       installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
     fi
   fi
-  # A repo plugin's source is empty: install_repo_plugin reads it from $settings.
   while IFS= read -r id; do
-    missing+=("$id") && sources+=("")
-  done < <(not_installed "$plugins" "$installed")
-  while read -r id src; do
-    missing+=("$id") && sources+=("$src")
-  done < <(not_installed "$defaults" "$installed")
+    missing+=("$id")
+  done < <(not_installed "$(printf '%s\n%s\n' "$plugins" "$defaults" | cut -d' ' -f1)" "$installed")
   [ "${#missing[@]}" -gt 0 ] || return 0
   known=""
   if claude_plugin marketplace list --json; then
@@ -327,11 +322,11 @@ install_plugins() {
 
   for i in "${!missing[@]}"; do
     if [ "$PLUGIN_EXPIRED" = false ]; then
-      if [ -z "${sources[i]}" ]; then
-        install_repo_plugin "${missing[i]}" && continue
-      else
-        add_and_install "${missing[i]}" "${sources[i]}" "dev-init --plugins" && continue
-      fi
+      id="${missing[i]}"
+      src=$(printf '%s\n' "$marketplaces" | awk -v m="${id##*@}" '$1 == m { print $2; exit }')
+      fix="dev-init --plugins"
+      grep -qxF -- "$id" <<<"$plugins" && fix="dev-init --repo"
+      install_wanted_plugin "$id" "$src" "$fix" && continue
     fi
     log "WARNING: the Claude plugin install ran out of its ${budget}s (DEV_PLUGIN_INSTALL_TIMEOUT) - not installed: ${missing[*]:i}"
     log "  Fix: check this container's network access to the plugin marketplaces, then run: dev-init --plugins"
