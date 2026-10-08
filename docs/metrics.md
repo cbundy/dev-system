@@ -14,6 +14,7 @@ Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `p
 
 Per issue, the time between the first occurrence of each state on the way to a merge. Watcher
 states carry the polling interval's delay (queue 2 minutes, pipeline 25 seconds).
+`ready` can repeat when a watcher restarts with a stale `--known`, so the query uses the first one per issue.
 
 ```sql
 WITH first AS (
