@@ -86,15 +86,20 @@ for n in $list; do
 
   tl=$("$GH" api --paginate "repos/$repo/issues/$n/timeline" | jq -s 'add // []') || { err "cannot read the timeline of #$n"; rc=1; continue; }
   merged=0
+  failed=0
   for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
       .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
       | .source.issue.number'); do
-    ref=$("$GH" api "repos/$repo/pulls/$pr" --jq .head.ref 2>/dev/null) || { err "cannot read PR #$pr"; rc=1; continue; }
+    ref=$("$GH" api "repos/$repo/pulls/$pr" --jq .head.ref 2>/dev/null) || { err "cannot read PR #$pr"; failed=1; break; }
     if printf '%s\n' "$ref" | grep -Eq "(^|/)issue-$n-"; then
       merged=1
       break
     fi
   done
+  if [ "$failed" = 1 ]; then
+    rc=1
+    continue
+  fi
   if [ "$merged" = 1 ]; then
     "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel merged #$n"; rc=1; }
     continue

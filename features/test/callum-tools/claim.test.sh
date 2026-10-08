@@ -326,6 +326,17 @@ for ref in release/v0.11.0 feat/issue-77-other; do
   calls | grep -q -- '--add-label ready' || fail "merged PR on $ref must not count as issue 7 done"
 done
 
+# an unreadable PR never reclaims the issue
+reset
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+rm -f "$d/head-ref-55"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+rc_of "$SWEEP"
+expect_rc 1 "sweep unreadable PR"
+no_calls "sweep unreadable PR"
+no_events "sweep unreadable PR"
+
 # --- sweep: legacy claim without a comment is untouched --------------------------
 reset
 issue 7 OPEN 'In development'
