@@ -1,30 +1,90 @@
 # dev-system
 
-Shared, versioned setup for running coding agents (Claude Code, codex) on a repo. It covers
-three things:
+Run autonomous coding agents on any repo, from issue to merged pull request, with one shared,
+versioned setup. It is for people who want to hand work to Claude Code (or codex) from a phone or
+a browser and come back to a reviewed PR, without keeping a shell open on any machine.
 
-- the container the agents run in,
-- the workflow they follow from issue to merged PR,
-- the repo config that connects the two.
+## How it works
 
-A repo adopts it once, pins a version and pulls updates. Fixes are made here once and reach
-every repo, so no repo carries a fork of the setup.
+- **Every agent environment is its own container.** The same image runs as a desktop dev
+  container, under `docker run`, on Kubernetes or as a Coder workspace. Inside a container, tmux
+  only keeps one Claude process alive and restarts it when it exits. dev-system is not a tmux
+  multiplexer running many terminals on one machine; you scale out by running more containers.
+- **Two ways to give it work.**
+  1. Talk to a persistent orchestrator session in the Claude app (via Remote Control). It stays
+     alive across restarts, so you come back to it and dispatch work from anywhere.
+  2. Label a GitHub issue `ready`. The orchestrator session watching the repo designs it,
+     implements it in its own git worktree, gates it with the no-mistakes pipeline and opens a PR.
+- **Sub-agents do the work inside the orchestrator's container.** Each issue goes to a sub-agent
+  in its own worktree; the orchestrator does not start new containers.
+- **You never need a shell on the host.** Logins, sessions and approvals happen from the Claude
+  app or a link on your phone.
 
-## Features
+## Architecture
 
-| Feature | What it does for you |
-|---|---|
-| **Base image** (`ghcr.io/cbundy/dev-system/base:2`) | Node, Claude Code, codex, gh, no-mistakes, treehouse and agentsview, baked in at build time. The same image runs as a desktop dev container, under `docker run`, on Kubernetes and in Coder. |
-| **Headless Claude with Remote Control** | A started container runs Claude in tmux with Remote Control on, so you drive it from claude.ai or the Claude app with no shell. `server` mode gives each session its own git worktree. Claude is restarted when it exits. |
-| **Persistent state** (`/persist`) | Logins and tool state live on volumes, so they survive rebuilds and image updates. See the [runtime storage reference](images/base/README.md#how-runtimes-should-mount-it) for login sharing. |
-| **Logins without a shell** (`dev-login`) | Missing logins start automatically. Sign-in links go to the container log, an optional login page and an optional push notification, so you can approve from a phone. |
-| **Auto-clone** (`DEV_REPO_URL`) | A headless container clones its repo on the first start and fetches on every later start. It never pulls. |
-| **Self-checks** (`dev-init`, `dev-doctor`) | Idempotent start-up setup and a health report. Every failure line comes with a `fix:` hint. |
-| **Issue-delivery workflow** (`callum-flow` plugin) | `issue-orchestrator` works a `ready` issue queue. `implement-issue` takes one issue through a treehouse worktree and the no-mistakes pipeline. `/update-dev` upstreams a change to this repo as a PR. `/callum-flow:onboard` onboards a repo. Hooks block `git stash` and killing the default tmux server (`tmux kill-server`, `pkill tmux`; use `tmux -L <name>` for tests). |
-| **Synced repo config** (`callum-dev`) | `init` scaffolds the config. `update` merges template changes 3-way, so a repo's own edits survive. `check` fails CI when a repo is behind the installed version. |
-| **Coder templates** | `coder create <name> --template dev-system` gives you a workspace with Claude, a Log in app and a logins status row. The `orchestrator` template configures that workspace as one long-lived Claude session that resumes across restarts and rebuilds; see the [Coder template reference](coder/dev-system/README.md#orchestrator-workspace). |
-| **Central session history** (agentsview) | Every container pushes its Claude and codex sessions to one PostgreSQL. You browse and search them in one viewer. Set the URL once per host. |
-| **Telemetry** (OTLP) | Coder workspaces can export Claude Code and codex telemetry to an OTLP endpoint. |
+Three layers, versioned and released separately:
+
+- **Agent behaviour** - the `callum-flow` plugin in [`plugins/callum-flow/`](plugins/callum-flow/):
+  the skills and hooks that turn issues into PRs.
+- **Environment** - the base image in [`images/base/`](images/base/README.md): the tools, headless
+  Claude with Remote Control, logins and persistent state.
+- **Repo config** - [`templates/`](templates/README.md) synced into each repo by `callum-dev`, so
+  a repo pins a version and pulls updates.
+
+```mermaid
+flowchart LR
+  app["Claude app<br/>(Remote Control)"] --> orch
+  gh["GitHub issue<br/>labelled ready"] --> orch
+  subgraph c1["Container: orchestrator (one per repo)"]
+    orch["Orchestrator session<br/>(one supervised Claude)"]
+    orch --> w1["Sub-agent<br/>worktree A"]
+    orch --> w2["Sub-agent<br/>worktree B"]
+  end
+  subgraph c2["Container: hands-on workspace"]
+    ws["Supervised Claude<br/>(own worktree per session)"]
+  end
+  app --> ws
+  w1 --> pr["Pull requests<br/>(no-mistakes pipeline)"]
+  w2 --> pr
+  ws --> pr
+```
+
+Containers are independent and sit side by side. See [`docs/architecture.md`](docs/architecture.md)
+for the layers, versioning and the runtime map.
+
+## Typical flows
+
+**Dispatch from a phone**
+
+1. Open the repo's orchestrator session in the Claude app.
+2. Describe the work or point at an issue.
+3. The orchestrator hands it to a sub-agent in a fresh worktree.
+4. The pipeline reviews, tests and opens a PR; you review and merge.
+
+**Label an issue `ready`**
+
+1. Write the issue and add the `ready` label.
+2. The orchestrator session picks it up, designs it and implements it in a worktree.
+3. The no-mistakes pipeline gates the change and opens a PR linked to the issue.
+
+## What's included
+
+- **An environment that runs anywhere** - one image for desktop, `docker run`, Kubernetes and
+  Coder ([`images/base/`](images/base/README.md)).
+- **Agents you drive without a shell** - headless Claude with Remote Control, restarted when it
+  exits ([`images/base/`](images/base/README.md)).
+- **Logins from your phone** - missing logins start automatically and sign-in links reach you as
+  a log line, login page or push notification ([`images/base/`](images/base/README.md)).
+- **State that survives rebuilds** - logins and tool state live on `/persist` volumes
+  ([runtime storage](images/base/README.md#how-runtimes-should-mount-it)).
+- **An issue-to-PR workflow** - `issue-orchestrator`, `implement-issue`, `/update-dev` and
+  `/callum-flow:onboard` (plugin in [`plugins/callum-flow/`](plugins/callum-flow/)).
+- **Repo config that stays current** - `callum-dev init`, `update` and `check`
+  ([`templates/`](templates/README.md)).
+- **Coder workspaces** - including an orchestrator workspace that resumes across restarts
+  ([Coder template reference](coder/dev-system/README.md#orchestrator-workspace)).
+- **Central session history and telemetry** - every container's sessions in one searchable
+  viewer, plus optional OTLP export ([`images/base/`](images/base/README.md)).
 
 ## Start
 
