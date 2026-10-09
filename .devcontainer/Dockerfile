@@ -54,6 +54,21 @@ ENV DEV_REPO_URL=${DEV_REPO_URL} \
 ARG VERSION=dev
 ARG REVISION=unknown
 ARG CREATED=unknown
+# This layer's release stamp (cbundy/dev-system#271), read by dev-version
+# (images/base/README.md, "Tags and versioning"). TAG=latest: the published
+# tags are latest and sha-<short>, so the default (major of VERSION) would not
+# resolve.
+USER root
+RUN mkdir -p /usr/local/share/dev-system/image-release.d \
+  && printf '%s\n' \
+    "IMAGE=ghcr.io/cbundy/dev-system/dev" \
+    "VERSION=${VERSION}" \
+    "REVISION=${REVISION}" \
+    "CREATED=${CREATED}" \
+    "TAG=latest" \
+    > /usr/local/share/dev-system/image-release.d/dev \
+  && chmod 0644 /usr/local/share/dev-system/image-release.d/dev
+USER node
 LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.revision="${REVISION}" \
   org.opencontainers.image.version="${VERSION}" \
