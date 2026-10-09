@@ -321,6 +321,13 @@ Column rules:
   `repo_config_yaml`, and the step log files.
 - `runs.no_mistakes_version` records which no-mistakes wrote the row.
 
+Stability: the mirror reads no-mistakes' internal `state.sqlite` directly. That layout is not a
+stable interface, and any no-mistakes release can add, rename or remove columns or tables.
+Unknown columns are tolerated (they land in `raw`), but a rename or removal shows up as NULLs
+or a skipped table until the exporter is updated. Check `runs.no_mistakes_version` when a
+column goes quiet. The upstream ask for a stable, schema-versioned export is
+[kunchenguid/no-mistakes#985](https://github.com/kunchenguid/no-mistakes/issues/985).
+
 The DDL below is generated from `nm-export`'s schema definition. Regenerate it from the
 repository root with `node -e 'console.log(require("./images/base/nm-export").ddl())'`;
 the exporter is the authoritative source for column names, types, keys and indexes.
