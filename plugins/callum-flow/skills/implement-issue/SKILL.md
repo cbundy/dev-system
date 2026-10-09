@@ -85,6 +85,18 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   that needs tmux for a test uses a private socket (`tmux -L <unique-name>
   ...`); a plugin-shipped hook refuses the default-socket commands.
 
+- To release a worktree, confirm its PR is merged and the tree is clean, then
+  run `treehouse return <absolute path>` from OUTSIDE the worktree (the main
+  checkout, no `cd` into the slot). It takes the path from `treehouse status`,
+  not a slot number, and it terminates processes in the target, so run from
+  inside the slot it kills your own shell and the slot stays leased. Re-read
+  `treehouse status` and confirm `available`. Squash merges leave a landed
+  branch looking "ahead" of the base; that is not unlanded work.
+- Do not rely on a slot staying yours after the agent that leased it exits: the
+  next implementer can reuse it and switch it to another branch. For later work
+  on a branch (a rebase, a fixer), check `treehouse status` and check out a
+  fresh slot on the run's branch.
+
 ## 2. Booting the app (only if you need it for evidence or manual checks)
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
   commands section or `scripts/` for something like `scripts/dev-server.sh`.
@@ -109,6 +121,18 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
 - On failure, a well-behaved boot script prints nothing to stdout, exits
   non-zero, and prints a tail of the server log plus diagnostics to stderr -
   look there first.
+- Worktrees isolate files, not ports or processes. Take a port no other
+  worktree uses, and never the repo's default dev ports: the pipeline's OWN
+  worktree (under `~/.no-mistakes/worktrees`) binds those during its `test`
+  step, so a stack on a default port collides with the pipeline and with the
+  owner's server. To find who holds a port, `ss -ltnp` and then
+  `readlink /proc/<pid>/cwd` for each pid - attribute by cwd, not by guess.
+- Start background services with an absolute `--prefix`/`-C` or a subshell,
+  never `cd X && cmd &` (the `cd` can miss the backgrounded command, so the
+  server runs from the wrong tree). Verify with `readlink /proc/<pid>/cwd`.
+- Judge a process or run by its own state, not a process list: `pgrep -f
+  '<pattern>'` matches the Bash tool's wrapper, which carries the pattern in its
+  argv, so it reports a phantom hit. Use `no-mistakes axi status` for a run.
 
 ## 3. Verification discipline
 - Run targeted tests for the files you touched, using the repo's documented
@@ -185,10 +209,18 @@ tests would otherwise have missed:
   --action fix --findings <ids>`, `--add-finding '<json finding>'`, and/or
   `--instructions "<what to do>"` - never `--yes`. This commits on the run's
   own head in the run's own worktree, so there is no second writer on the
-  branch and none of the rebase/abort rules below apply.
+  branch and none of the rebase/abort rules below apply. `axi respond` targets
+  the run of whatever branch the CURRENT directory has checked out: if another
+  agent has taken over that slot it fails with "no active run to respond to",
+  silently, and the gate stays parked. Respond from a slot you have just
+  checked out on the run's branch, and read the respond log after launching it.
   `axi respond` blocks like `axi run`, so launch it detached the same way
   (`nohup ... > <log> 2>&1 &` or `run_in_background`), never in the
   foreground, where the 120s tool timeout kills the driver and strands the run.
+- `no-mistakes rerun` re-gates the run's EXISTING head, so it never gates a new
+  commit (the run reviews, tests and pushes the branch without it, and reports
+  green). Use it only to re-drive the same head after an infrastructure death.
+  A new commit needs `axi abort` and a fresh `axi run`.
 - Only when the fix needs your own commit - code the pipeline cannot write
   from instructions alone, or the run has already completed - do the rebase
   and abort steps apply. If you are committing on a branch that already has a
@@ -223,6 +255,13 @@ tests would otherwise have missed:
   context, so `"must NOT close #93"` still registers as a closing reference.
   Phrase around it instead (e.g. "part of #93", "finishes the work started in
   PR X").
+- The pipeline builds the PR body from your `--intent` text, so it can leak
+  the delegation brief, internal hostnames or secrets, and sometimes describes
+  an unrelated task. Keep hosts, credentials and instructions about other
+  agents out of `--intent`. The delegator rewrites the human-facing part with
+  `gh pr edit` before merge and keeps the generated `## Pipeline` section
+  verbatim: split it off with `sed -n '/^## Pipeline/,$p'` and re-append it. Grep
+  the new body for private hosts and stray closing keywords first.
 - Linkage verification is the delegator's job, not yours - but writing it
   correctly the first time avoids a stalled downstream dependency.
 

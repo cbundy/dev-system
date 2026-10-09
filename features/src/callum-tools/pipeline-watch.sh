@@ -121,6 +121,20 @@
 # --interval <seconds> sets the poll interval (default: the
 # PIPELINE_WATCH_INTERVAL environment variable, else 25).
 #
+# Arming: run one watcher for the whole session, from the repository's
+# checkout, with no --branches - the watch set comes from live runs, never from
+# a list you keep. Under a harness Monitor tool use --stream with the longest
+# timeout it allows; when that ends the watcher, re-arm it first thing, with a
+# --known entry for each event already handled. Without a Monitor tool, run it
+# single-shot in the background with --deadline 3600: the exit is the wake, so
+# re-arm with the handled line's <state> and head=<sha> as --known before
+# handling it, and treat `timeout` as a heartbeat (check the runs, re-arm).
+# Do not judge a run's liveness by process lists (`pgrep -f` matches its own
+# command line); ask `no-mistakes axi status`. Two copies deliver every event
+# twice. Never bundle arming it with a call that may be refused (a merge, an
+# edit, a push). A `watcher-error <reason>` line means it has exited: fix the
+# cause and re-arm.
+#
 # --resolve <branch> (cbundy/dev-system#243) is a one-shot lookup, not a
 # watch: it runs the resolver above once for the branch's newest run, prints
 # the run id alone on one line and exits 0, or exits 1 with no stdout when the

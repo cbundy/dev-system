@@ -48,6 +48,9 @@ reviews, no edits). You may write throwaway repro scripts only under the system 
   and nothing is missed, emit no verdict line and propose `approve`.
 - A failed test step is judged the same way: a real defect (`CORRECT`) or `ENV`.
 - Never propose `--yes`.
+- Never propose `rerun`: it re-gates the run's old head, so a fix would come back
+  green without the fix in it. A fix that needs a new commit is `fixer:`, which
+  aborts and starts a fresh run.
 
 ## Output contract
 

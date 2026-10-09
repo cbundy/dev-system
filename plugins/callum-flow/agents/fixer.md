@@ -11,3 +11,8 @@ particular its rules for re-entering a branch that already has a run or PR
 (fetch and rebase onto `origin/<branch>`, abort a live run before a fresh
 `axi run`, never `--yes`). Make only the fix described, hand off with the new
 run id and head SHA, and terminate. Do not merge.
+
+Remember how runs are driven. `no-mistakes rerun` re-gates the run's old head and
+never gates your new commit, so use `abort` and a fresh `axi run`. `axi respond`
+acts on the run of the branch your current directory has checked out, so run it
+from a slot you have just checked out on the run's branch and read its log.
