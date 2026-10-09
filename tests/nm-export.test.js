@@ -120,6 +120,42 @@ test("unknown columns go to raw (blobs as base64) and a missing known column is 
   assert.match(rowsOf(r, "runs")[0], /VALUES \('r1', 'rp1', 'feat\/x', NULL,/);
 });
 
+test("raw text preserves literal backslash escapes while removing actual NULs in every table", () => {
+  const tables = ["repos", "runs", "step_results", "step_rounds", "agent_invocations", "run_agent_sessions"];
+  const input = {
+    literal: "ends in \\u0000",
+    actual: "a\u0000b",
+    mixed: "it's \\u0000\u0000 and \\\\u0000",
+  };
+  const expected = {
+    literal: "ends in \\u0000",
+    actual: "ab",
+    mixed: "it's \\u0000 and \\\\u0000",
+  };
+  const db = new DatabaseSync(file);
+  try {
+    for (const table of tables) {
+      for (const [column, value] of Object.entries(input)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT`);
+        db.prepare(`UPDATE ${table} SET ${column} = ?`).run(value);
+      }
+    }
+  } finally {
+    db.close();
+  }
+  const r = exp();
+  assert.equal(r.status, 0, r.err);
+  for (const table of tables) {
+    const rows = rowsOf(r, table);
+    assert.ok(rows.length > 0, table);
+    for (const row of rows) {
+      const raw = /, '((?:[^']|'')*)'::jsonb\) ON CONFLICT/.exec(row);
+      assert.ok(raw, table);
+      assert.deepEqual(JSON.parse(raw[1].replace(/''/g, "'")), expected, table);
+    }
+  }
+});
+
 test("a missing table is skipped with one warning and the rest is sent", () => {
   mutate("DROP TABLE agent_invocations");
   const r = exp();

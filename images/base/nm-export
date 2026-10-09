@@ -120,7 +120,7 @@ function upsert(table, row, extra, rawCols) {
   const raw = {};
   for (const c of rawCols) if (row[c] !== undefined && row[c] !== null) raw[c] = row[c] instanceof Uint8Array ? Buffer.from(row[c]).toString("base64") : row[c];
   const rawSql = Object.keys(raw).length
-    ? `'${JSON.stringify(raw).replace(/\\u0000/g, "").replace(/'/g, "''")}'::jsonb` : "NULL";
+    ? `'${JSON.stringify(raw, (_key, value) => typeof value === "string" ? noNul(value) : value).replace(/'/g, "''")}'::jsonb` : "NULL";
   const vals = names.map((n) => lit(row[n], d.cols[n])).concat([lit(extra.device, "t"), lit(extra.repo, "t"), rawSql]);
   const all = names.concat(["device", "repo", "raw"]);
   const set = all.filter((n) => !d.pk.includes(n)).map((n) => `${n} = EXCLUDED.${n}`).join(", ");
