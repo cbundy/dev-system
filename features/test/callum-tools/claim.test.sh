@@ -179,7 +179,7 @@ cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" 7
 expect_rc 3 "foreign live claim"
 no_calls "foreign live claim"
-no_events "foreign live claim"
+events | jq -e '.state == "claim_lost" and .issue == 7 and (.note | contains("devB"))' >/dev/null || fail "foreign live claim: claim_lost event: $(events)"
 
 # --- expired foreign claim does not block ---------------------------------------
 reset
@@ -194,7 +194,8 @@ cm 100 devB '2026-10-08T11:59:59Z' '2026-10-08T11:59:59Z' | jq -s '.' > "$d/inje
 rc_of "$CLAIM" 7
 expect_rc 3 "collision loser"
 [ "$(calls)" = "$(printf 'POST 7\nDELETE 900')" ] || fail "loser must only post and delete its own comment: $(calls)"
-no_events "collision loser"
+[ "$(events | wc -l)" = 1 ] || fail "collision loser: events: $(events)"
+events | jq -e '.state == "claim_lost" and .issue == 7 and .device == "devA" and (.note | contains("devB"))' >/dev/null || fail "collision loser: claim_lost event: $(events)"
 jq -e 'map(.id) == [100]' "$d/comments-7.json" >/dev/null || fail "loser left the winner's comment alone"
 
 # --- collision: a foreign claim posted after ours loses -------------------------

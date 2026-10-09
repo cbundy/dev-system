@@ -119,17 +119,195 @@ FROM adj JOIN other USING (repo, run_id, finding)
 GROUP BY adj.repo;
 ```
 
+## 6. Double-claims, lost claim races and stuck issues
+
+The two-device trial (cbundy/dev-system#222) asks whether two dispatchers ever hold one issue at
+once. A **double-claim** is two devices with a live `claimed` on one issue and no `ready`,
+`reclaimed`, `merged` or `abandoned` between them. A **lost race** is a `claim_lost` event,
+logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
+contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
+`reclaimed`, `merged` or `abandoned`) and has had no event, other than `claim_lost`, for more than
+twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
+
+```sql
+-- double-claims: one row per pair of overlapping claims
+SELECT c2.repo, c2.issue, c1.device AS first_device, c2.device AS second_device, c2.ts AS at
+FROM factory.events c2
+JOIN factory.events c1
+  ON c1.repo = c2.repo AND c1.issue = c2.issue AND c1.state = 'claimed'
+ AND c1.device <> c2.device AND c1.ts < c2.ts
+WHERE c2.state = 'claimed'
+  AND NOT EXISTS (
+    SELECT 1 FROM factory.events r
+    WHERE r.repo = c2.repo AND r.issue = c2.issue
+      AND r.state IN ('ready', 'reclaimed', 'merged', 'abandoned')
+      AND r.ts >= c1.ts AND r.ts <= c2.ts)
+ORDER BY c2.ts;
+
+-- lost races, and reclaimed leases, per device
+SELECT device,
+  count(*) FILTER (WHERE state = 'claim_lost') AS claim_lost,
+  count(*) FILTER (WHERE state = 'reclaimed')  AS reclaimed
+FROM factory.events
+GROUP BY device;
+
+-- stuck issues
+WITH per_issue AS (
+  SELECT repo, issue,
+    max(ts) FILTER (WHERE state <> 'claim_lost')                                  AS last_ts,
+    (array_agg(state ORDER BY ts DESC) FILTER (WHERE state <> 'claim_lost'))[1]   AS last_state,
+    max(ts) FILTER (WHERE state IN ('ready', 'reclaimed', 'merged', 'abandoned')) AS last_release,
+    max(ts) FILTER (WHERE state = 'claimed')                                      AS last_claim
+  FROM factory.events
+  WHERE issue IS NOT NULL
+  GROUP BY repo, issue
+)
+SELECT repo, issue, last_state, last_ts, now() - last_ts AS silent
+FROM per_issue
+WHERE last_claim IS NOT NULL
+  AND (last_release IS NULL OR last_claim > last_release)
+  AND now() - last_ts > interval '4 hours'
+ORDER BY last_ts;
+```
+
+## 7. The waiting split
+
+Each merged issue's wall-clock time from `ready` to `merged`, cut into three parts:
+
+- **Pipeline-bound**: `run_started` to the run's next `merge_ready` (or `failed`, or the next
+  `run_started`), including CI. Parked time is excluded, because a parked gate waits on the
+  dispatcher.
+- **Dispatcher-bound**: `ready` to the first `claimed`; each `parked` to its next `verdict` or
+  `fix_requested` (or `merge_ready`, `failed`, `merged`); each `merge_ready` to the next `merged`,
+  `run_started` or `failed`.
+- **Agent work**: the rest.
+
+A dispatcher-bound second is flagged "another device idle" when, at that moment, some device other
+than the issue's owner (the device of its first `claimed`) was alive and held no in-flight issue.
+A device is alive for 30 minutes after any event it logged (`usage` included). It holds an issue
+from its `claimed` until that issue's next `ready`, `reclaimed`, `merged` or `abandoned`.
+
+**The B-or-gate rule.** Wait is pipeline-bound plus dispatcher-bound seconds. If the
+dispatcher-bound seconds flagged "another device idle" are more than 50% of the wait, the
+dispatcher (option B) is what limits throughput; otherwise invest in the gate.
+
+Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
+its baseline. The `ready` time therefore comes from each issue's GitHub timeline, the last
+`labeled` `ready` event before the claim. Collect them with
+`gh api repos/<owner>/<name>/issues/<n>/timeline --paginate` and put them in `ready_times`
+below; an issue with no row falls back to its first `ready` event. The SQL needs PostgreSQL 14 or
+later (multiranges). It is the twin of the tool's `waiting` section: the tool also clips the
+"alive" window at the report's end, which the SQL does not.
+
+```sql
+WITH ready_times(repo, issue, ts) AS (
+  -- replace with the labeled-ready times from the timeline, e.g.
+  --   VALUES ('cbundy/dev-system', 222, '2026-10-09T08:00:00Z'::timestamptz), ...
+  SELECT NULL::text, NULL::int, NULL::timestamptz WHERE false
+), merged AS (
+  SELECT repo, issue, min(ts) AS m FROM factory.events
+  WHERE state = 'merged' AND issue IS NOT NULL GROUP BY repo, issue
+), first_claim AS (
+  SELECT DISTINCT ON (repo, issue) repo, issue, ts AS c, device AS owner
+  FROM factory.events WHERE state = 'claimed' ORDER BY repo, issue, ts
+), span AS (
+  SELECT m.repo, m.issue, m.m, fc.c,
+    COALESCE(fc.owner, (SELECT e.device FROM factory.events e
+                        WHERE e.repo = m.repo AND e.issue = m.issue AND e.state = 'merged'
+                        ORDER BY e.ts LIMIT 1)) AS owner,
+    COALESCE(
+      (SELECT max(rt.ts) FROM ready_times rt
+       WHERE rt.repo = m.repo AND rt.issue = m.issue AND (fc.c IS NULL OR rt.ts <= fc.c)),
+      (SELECT min(e.ts) FROM factory.events e
+       WHERE e.repo = m.repo AND e.issue = m.issue AND e.state = 'ready')) AS r
+  FROM merged m LEFT JOIN first_claim fc USING (repo, issue)
+), disp AS (
+  SELECT repo, issue, r AS s, c AS e FROM span WHERE c IS NOT NULL
+  UNION ALL
+  SELECT s.repo, s.issue, p.ts, COALESCE(
+    (SELECT min(x.ts) FROM factory.events x
+     WHERE x.repo = p.repo AND x.issue = p.issue AND x.ts > p.ts
+       AND x.state IN ('verdict', 'fix_requested', 'merge_ready', 'failed', 'merged')), s.m)
+  FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'parked'
+  UNION ALL
+  SELECT s.repo, s.issue, p.ts, COALESCE(
+    (SELECT min(x.ts) FROM factory.events x
+     WHERE x.repo = p.repo AND x.issue = p.issue AND x.ts > p.ts
+       AND x.state IN ('merged', 'run_started', 'failed')), s.m)
+  FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'merge_ready'
+), pipe AS (
+  SELECT s.repo, s.issue, p.ts AS s, COALESCE(
+    (SELECT min(x.ts) FROM factory.events x
+     WHERE x.repo = p.repo AND x.issue = p.issue AND x.ts > p.ts
+       AND x.state IN ('merge_ready', 'failed', 'run_started', 'merged')), s.m) AS e
+  FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'run_started'
+), alive AS (   -- per device: alive for 30 minutes after each event
+  SELECT repo, device, range_agg(tstzrange(ts, ts + interval '30 minutes')) AS mr
+  FROM factory.events GROUP BY repo, device
+), held AS (    -- per device: from each claimed until that issue's next release state
+  SELECT c.repo, c.device, range_agg(tstzrange(c.ts, COALESCE(
+    (SELECT min(x.ts) FROM factory.events x
+     WHERE x.repo = c.repo AND x.issue = c.issue AND x.ts > c.ts
+       AND x.state IN ('ready', 'reclaimed', 'merged', 'abandoned')), 'infinity'))) AS mr
+  FROM factory.events c WHERE c.state = 'claimed' GROUP BY c.repo, c.device
+), idle AS (    -- alive and holding nothing
+  SELECT a.repo, a.device, a.mr - COALESCE(h.mr, '{}'::tstzmultirange) AS mr
+  FROM alive a LEFT JOIN held h USING (repo, device)
+), per_issue AS (
+  SELECT s.repo, s.issue, s.owner, s.r, s.m,
+    COALESCE((SELECT range_agg(tstzrange(LEAST(d.s, d.e), d.e)) FROM disp d
+              WHERE d.repo = s.repo AND d.issue = s.issue), '{}'::tstzmultirange)
+      * tstzmultirange(tstzrange(s.r, s.m)) AS disp,
+    COALESCE((SELECT range_agg(tstzrange(LEAST(p.s, p.e), p.e)) FROM pipe p
+              WHERE p.repo = s.repo AND p.issue = s.issue), '{}'::tstzmultirange)
+      * tstzmultirange(tstzrange(s.r, s.m)) AS pipe,
+    COALESCE((SELECT range_agg(r2) FROM idle i, unnest(i.mr) AS r2
+              WHERE i.repo = s.repo AND i.device <> s.owner), '{}'::tstzmultirange) AS other_idle
+  FROM span s WHERE s.r IS NOT NULL AND s.r < s.m
+), secs AS (
+  SELECT repo, issue, owner, extract(epoch FROM m - r) AS total,
+    (SELECT COALESCE(sum(upper(x) - lower(x)), interval '0') FROM unnest(pipe - disp) x)       AS pipeline_iv,
+    (SELECT COALESCE(sum(upper(x) - lower(x)), interval '0') FROM unnest(disp) x)              AS disp_iv,
+    (SELECT COALESCE(sum(upper(x) - lower(x)), interval '0') FROM unnest(disp * other_idle) x) AS disp_idle_iv
+  FROM per_issue
+)
+SELECT repo, issue, owner,
+  extract(epoch FROM pipeline_iv)  AS pipeline_bound,
+  extract(epoch FROM disp_iv)      AS dispatcher_bound,
+  extract(epoch FROM disp_idle_iv) AS dispatcher_bound_other_idle,
+  total - extract(epoch FROM pipeline_iv) - extract(epoch FROM disp_iv) AS agent_work,
+  total
+FROM secs
+ORDER BY repo, issue;
+```
+
+Totals and the call: sum the columns; `sum(dispatcher_bound_other_idle) / sum(pipeline_bound +
+dispatcher_bound)` above 0.5 means option B.
+
 ## Offline computation: `callum-flow-evaluate`
 
-`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]`
-(base image, `images/base/callum-flow-evaluate`) computes queries 1, 2, 3 and 5 for a time
-window from a local events file (`--events`, default the local event log), plus token spend,
-waste and pipeline numbers from Claude Code transcripts and the no-mistakes `state.sqlite`.
-It is read-only, makes no network calls and is deterministic. The `evaluate-sessions` skill runs it
-and writes the report; every number in a report comes from this tool. Differences from the SQL:
+`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
+[--events <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
+computes queries 1 to 7 for a time window from an events file (`--events`, default the local
+event log; a `factory.events` export covers every device), plus token spend, waste and pipeline
+numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It is read-only, makes
+no network calls and is deterministic. The `evaluate-sessions` skill runs it and writes the
+report; every number in a report comes from this tool. Differences from the SQL:
 the window selects issues by their `merged` event (query 1) or first `merge_ready` (query 2) and
 verdicts by their own timestamp (queries 3 and 5), and the events file is the one device's log
 unless a `factory.events` export is passed (see the skill).
+
+- `per_device` (query 4, plus claims and `claim_lost` per device) and `claims` (query 6:
+  `double_claims`, `claim_lost`, `reclaimed`, `stuck`) read each event's `device`. The stuck test
+  is evaluated at the window's end; its lease comes from `CALLUM_FLOW_LEASE_MINUTES` (default 120).
+- `waiting` (query 7) gives each merged issue's split and the totals, `other_idle_pct_of_wait`
+  and a `decision`: `B` when more than 50% of the wait was dispatcher-bound with another device
+  idle, `gate` otherwise.
+- `--ready-times <file>` is a JSON object `{"<issue>": "<ISO>" | ["<ISO>", ...]}` of the times
+  each issue got its `ready` label, from the GitHub timeline. The tool takes the last one at or
+  before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time
+  row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
+  `issues_without_ready`, so a report can state how many lead times it could not compute.
 
 ### Token and wake definitions
 

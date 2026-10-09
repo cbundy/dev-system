@@ -104,8 +104,8 @@ test("throughput and lead time follow metrics.md query 1", () => {
   const t = json(WINDOW).throughput;
   assert.equal(t.merged_issues, 2);
   assert.deepEqual(t.issues, [
-    { issue: 7, merged_at: "2026-10-08T10:32:00.000Z", waiting_for_claim: 600, design: 1800, implementation: 1200, pipeline: 1800, waiting_for_merge: 3720, total: 9120 },
-    { issue: 8, merged_at: "2026-10-08T10:50:00.000Z", waiting_for_claim: 300, design: 900, implementation: 600, pipeline: 1200, waiting_for_merge: 10800, total: 13800 },
+    { issue: 7, merged_at: "2026-10-08T10:32:00.000Z", ready_source: "event", waiting_for_claim: 600, design: 1800, implementation: 1200, pipeline: 1800, waiting_for_merge: 3720, total: 9120 },
+    { issue: 8, merged_at: "2026-10-08T10:50:00.000Z", ready_source: "event", waiting_for_claim: 300, design: 900, implementation: 600, pipeline: 1200, waiting_for_merge: 10800, total: 13800 },
   ]);
   assert.deepEqual(t.lead_time_total_seconds, { median: 11460, max: 13800, issues_with_total: 2 });
 });
@@ -270,4 +270,99 @@ test("explicit --projects-dir overrides discovery", () => {
   const r = json([...WINDOW, "--projects-dir", path.join(FIX, "claude", "projects", "-work-other")]);
   assert.equal(r.window.sessions, 1);
   assert.equal(r.spend.rows.find((x) => x.role === "orchestrator").input, 500);
+});
+
+// ---- two-device fixture (cbundy/dev-system#222): tests/fixtures/evaluate/two-device
+// Window 2026-10-09 00:00-12:00Z. Device A merges #1 (ready label 08:00 from the GitHub timeline,
+// claimed 08:30, parked 09:20-09:30, merge_ready 09:50, merged 10:10); device B merges #2 (ready
+// 08:35, claimed 09:00, merge_ready 09:35, merged 09:40). B logs `usage` from 08:00 and holds
+// nothing until 09:00, so it is alive and idle for #1's first wait (08:00-08:30) and again from
+// its merge of #2 (09:40) until its last event ages out (10:10), which covers #1's merge wait
+// (09:50-10:10). A holds #6 from 03:00, so it is never idle and #2's waits are not flagged. #3 is double-claimed, #4 loses a race, #6 is stuck, #7 was reclaimed.
+const TWO = path.join(FIX, "two-device");
+const TWO_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-09T00:00:00Z", "--until", "2026-10-09T12:00:00Z",
+  "--events", path.join(TWO, "events.jsonl"), "--ready-times", path.join(TWO, "ready-times.json")];
+
+test("two devices: merges, claims and lost races per device", () => {
+  const r = json(TWO_WINDOW);
+  assert.deepEqual(r.per_device, [
+    { device: "A", merges: 1, claims: 5, claim_lost: 0 },
+    { device: "B", merges: 1, claims: 3, claim_lost: 1 },
+  ]);
+});
+
+test("two devices: double-claim, claim_lost, reclaimed and stuck", () => {
+  const c = json(TWO_WINDOW).claims;
+  assert.deepEqual(c.double_claims, { count: 1, issues: [{ issue: 3, devices: ["A", "B"], at: "2026-10-09T11:01:00.000Z" }] });
+  assert.deepEqual(c.claim_lost, { count: 1, issues: [4] });
+  assert.equal(c.reclaimed, 1);
+  // #6 silent since 03:30 (8.5h > 2 x 120 min); #3 (59 min) and #4 (35 min) are not; #7 was abandoned after its reclaim.
+  assert.deepEqual(c.stuck, {
+    count: 1, lease_minutes: 120,
+    issues: [{ issue: 6, devices: ["A"], last_event_at: "2026-10-09T03:30:00.000Z", last_state: "delegated", silent_seconds: 30600 }],
+  });
+});
+
+test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () => {
+  // a 10 minute lease makes everything silent for over 20 minutes stuck: #3 (59m) and #4 (35m) join #6
+  const c = json(TWO_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "10" }).claims;
+  assert.deepEqual(c.stuck.issues.map((i) => i.issue), [3, 4, 6]);
+});
+
+test("two devices: ready times come from the GitHub timeline (last label at or before the claim)", () => {
+  const t = json(TWO_WINDOW).throughput;
+  assert.deepEqual(t.issues, [
+    { issue: 2, merged_at: "2026-10-09T09:40:00.000Z", ready_source: "github", waiting_for_claim: 1500, design: 900, implementation: 300, pipeline: 900, waiting_for_merge: 300, total: 3900 },
+    { issue: 1, merged_at: "2026-10-09T10:10:00.000Z", ready_source: "github", waiting_for_claim: 1800, design: 900, implementation: 900, pipeline: 3000, waiting_for_merge: 1200, total: 7800 },
+  ]);
+  assert.deepEqual(t.lead_time_total_seconds, { median: 5850, max: 7800, issues_with_total: 2 });
+  assert.equal(t.issues_without_ready, 0);
+  // without the file there is no `ready` event, so the lead-time stages that need it are null
+  const bare = json(TWO_WINDOW.slice(0, -2)).throughput;
+  assert.equal(bare.issues_without_ready, 2);
+  assert.deepEqual(bare.issues.map((i) => [i.ready_source, i.total]), [[null, null], [null, null]]);
+});
+
+test("two devices: the waiting split equals the hand-computed seconds", () => {
+  const w = json(TWO_WINDOW).waiting;
+  // #1: dispatcher 08:00-08:30 + 09:20-09:30 + 09:50-10:10 = 3600s, of which B was idle for 08:00-08:30
+  //     and 09:50-10:10 = 3000s; pipeline 09:00-09:50 minus the 600s parked = 2400s; total 7800s; agent 1800s.
+  // #2: dispatcher 08:35-09:00 + 09:35-09:40 = 1800s (A holds #6, so never idle); pipeline 900s; total 3900s; agent 1200s.
+  assert.deepEqual(w.issues, [
+    { issue: 1, device: "A", ready_source: "github", pipeline_bound: 2400, dispatcher_bound: 3600, dispatcher_bound_other_idle: 3000, agent_work: 1800, total: 7800 },
+    { issue: 2, device: "B", ready_source: "github", pipeline_bound: 900, dispatcher_bound: 1800, dispatcher_bound_other_idle: 0, agent_work: 1200, total: 3900 },
+  ]);
+  assert.deepEqual(w.totals, { pipeline_bound: 3300, dispatcher_bound: 5400, dispatcher_bound_other_idle: 3000, agent_work: 3000, total: 11700 });
+  assert.equal(w.wait_seconds, 8700);
+  assert.equal(w.other_idle_pct_of_wait, 34.5);
+  assert.equal(w.decision, "gate");
+});
+
+test("waiting split: dispatcher wait with another device idle over 50% of wait means B", () => {
+  const file = path.join(tmp, "b-case.jsonl");
+  const ev = (t, device, state, issue) => JSON.stringify({ ts: `2026-10-09T${t}Z`, repo: "acme/widgets", device, state, issue, note: null });
+  fs.writeFileSync(file, [
+    ev("08:00:00", "A", "ready", 5), ev("08:00:00", "B", "usage", null), ev("08:25:00", "B", "usage", null),
+    ev("08:30:00", "A", "claimed", 5), ev("08:50:00", "B", "usage", null), ev("09:00:00", "A", "merged", 5),
+  ].join("\n") + "\n");
+  const w = json(["--repo", "acme/widgets", "--since", "2026-10-09T00:00:00Z", "--until", "2026-10-09T12:00:00Z", "--events", file]).waiting;
+  assert.deepEqual(w.issues, [
+    { issue: 5, device: "A", ready_source: "event", pipeline_bound: 0, dispatcher_bound: 1800, dispatcher_bound_other_idle: 1800, agent_work: 1800, total: 3600 },
+  ]);
+  assert.equal(w.other_idle_pct_of_wait, 100);
+  assert.equal(w.decision, "B");
+});
+
+test("ready-times: a missing file is n/a, a malformed one is an input error", () => {
+  const args = TWO_WINDOW.slice(0, -1);
+  const missing = json([...args, path.join(tmp, "nope.json")]);
+  const src = missing.sources.find((s) => s.kind === "ready-times");
+  assert.equal(src.found, false);
+  assert.match(src["n/a"], /file not found/);
+  assert.equal(missing.throughput.issues_without_ready, 2);
+  const bad = path.join(tmp, "bad-ready.json");
+  fs.writeFileSync(bad, '{"x": "nonsense"}');
+  const r = run([...args, bad]);
+  assert.equal(r.status, 1);
+  assert.match(r.err, /--ready-times/);
 });
