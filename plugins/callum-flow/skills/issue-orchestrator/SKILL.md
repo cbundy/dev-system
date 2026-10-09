@@ -106,8 +106,8 @@ Each pipeline line is `<state> <branch> <run-id> ... head=<sha>`. Never read a
 gate's log or the diff yourself, and never `sleep` or poll a run.
 - **`parked`**, or **`failed`** with a failing step (a failed step parks the run
   at an approval gate): the gate is judged, not read.
-  1. Cap: a run gets at most 3 review fix rounds. Count its `fix_requested`
-     events with `--note review` in the event log; at 3, give the owner the brief
+  1. On a `review` gate only, cap the run at 3 review fix rounds. Count its
+     `fix_requested` events with `--note review` in the event log; at 3, give the owner the brief
      URL and the run's `verdict` lines and wait.
   2. Spawn `callum-flow:adjudicator` with the run id, branch, brief URL and the
      parked step. It returns verdict lines and one `ACTION:` line.

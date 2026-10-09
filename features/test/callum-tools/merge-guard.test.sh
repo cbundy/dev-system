@@ -198,6 +198,31 @@ expect_pass() {
 reset; g 7; expect_pass "all pass"
 reset; g 7 --run RUN1; expect_pass "explicit run"
 
+reset
+git -C "$work" commit -q --allow-empty -m unpushed
+LOCAL=$(git -C "$work" rev-parse HEAD)
+g 7; expect_fail "worktree ahead, automatic run" head
+printf '%s' "$out" | grep -q "worktree=$LOCAL" || fail "worktree head missing: $out"
+g 7 --run RUN1; expect_fail "worktree ahead, explicit run" head
+m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on worktree mismatch: $rc $out"; fi
+git -C "$work" reset -q --hard "$SHA"
+reset
+git -C "$work" reset -q --hard HEAD^
+g 7; expect_fail "worktree behind" head
+case "$out" in *"git merge --ff-only origin/<branch>"*) ;; *) fail "worktree recovery missing: $out" ;; esac
+git -C "$work" merge -q --ff-only "origin/$B"
+g 7; expect_pass "fast-forwarded worktree"
+git -C "$work" checkout -q main
+g 7; expect_pass "unrelated checkout, no implementation worktree"
+git -C "$work" worktree add -q "$tmpdir/implementation slot" "$B"
+git -C "$tmpdir/implementation slot" commit -q --allow-empty -m unpushed
+g 7; expect_fail "implementation worktree from main checkout" head
+git -C "$tmpdir/implementation slot" reset -q --hard "$SHA"
+g 7; expect_pass "aligned implementation worktree from main checkout"
+git -C "$work" worktree remove "$tmpdir/implementation slot"
+git -C "$work" checkout -q "$B"
+
 # the run lookup (cbundy/dev-system#243): real-format stub, no --run
 reset; g 7 --emit-verified
 if [ "$rc" != 0 ] || ! printf '%s' "$out" | grep -q ' run=RUN1 '; then fail "worktree lookup: rc=$rc out=$out"; fi
