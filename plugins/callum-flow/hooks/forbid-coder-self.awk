@@ -3,7 +3,8 @@
 # exactly one of DENY / ALLOW. See forbid-coder-self.sh for the full write-up.
 # The JSON extractor, tokenizer and wrapper/segment logic mirror
 # forbid-tmux-kill.awk on purpose (each hook stays self-contained). Differences:
-# quoted heredoc bodies are skipped, and unparseable input is ALLOWed.
+# quoted heredoc bodies are skipped, an unexpanded $CODER_WORKSPACE_NAME
+# counts as naming self, and unparseable input is ALLOWed.
 # The workspace identity comes from the environment (ENVIRON), not -v, so
 # backslashes in a name are never interpreted by awk.
 
@@ -76,9 +77,24 @@ function base_of(w,    j) {
 }
 
 # Does token t name this workspace? Accepts NAME, OWNER/NAME (or me/NAME), each
-# with an optional .AGENT suffix.
+# with an optional .AGENT suffix. Unexpanded $CODER_WORKSPACE_NAME and
+# $CODER_WORKSPACE_OWNER_NAME references (bare or braced) count as the values.
+function replace_lit(s, from, to,    i, out) {
+  out = ""
+  while ((i = index(s, from)) > 0) {
+    out = out substr(s, 1, i - 1) to
+    s = substr(s, i + length(from))
+  }
+  return out s
+}
+
 function names_self(t,    s) {
-  s = t
+  s = replace_lit(t, "${CODER_WORKSPACE_NAME}", wsname)
+  s = replace_lit(s, "$CODER_WORKSPACE_NAME", wsname)
+  if (wsowner != "") {
+    s = replace_lit(s, "${CODER_WORKSPACE_OWNER_NAME}", wsowner)
+    s = replace_lit(s, "$CODER_WORKSPACE_OWNER_NAME", wsowner)
+  }
   if (s == "") return 0
   if (s == wsname || index(s, wsname ".") == 1) return 1
   if (wsowner != "" && (index(s, wsowner "/" wsname) == 1)) {

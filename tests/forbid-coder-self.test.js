@@ -145,3 +145,15 @@ test("the hook script is committed executable (git mode 100755)", () => {
   assert.notEqual(line, "", `${relPath} is not tracked by git yet`);
   assert.match(line, /^100755\s/, `expected mode 100755 for ${relPath}, got: ${line}`);
 });
+
+test("refuses unexpanded workspace env var references as the target", () => {
+  assertDenied("coder stop $CODER_WORKSPACE_NAME");
+  assertDenied('coder restart "${CODER_WORKSPACE_NAME}" -y');
+  assertDenied("coder update $CODER_WORKSPACE_OWNER_NAME/$CODER_WORKSPACE_NAME");
+  assertDenied("coder stop me/$CODER_WORKSPACE_NAME.main");
+});
+
+test("allows other env vars and mere mentions of the workspace env var", () => {
+  assertAllowed("coder stop $OTHER_WS");
+  assertAllowed("echo coder stop $CODER_WORKSPACE_NAME");
+});

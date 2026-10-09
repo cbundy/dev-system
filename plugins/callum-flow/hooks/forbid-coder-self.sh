@@ -9,7 +9,9 @@
 #
 # Refused (see forbid-coder-self.awk): `coder [opts] restart|stop|update <target>`
 # where <target> is $CODER_WORKSPACE_NAME or $CODER_WORKSPACE_OWNER_NAME/<name>
-# (me/<name> too), each with an optional .<agent> suffix, anywhere in a compound
+# (me/<name> too), each with an optional .<agent> suffix, written literally or
+# as an unexpanded $CODER_WORKSPACE_NAME / ${CODER_WORKSPACE_NAME} reference
+# (owner may be $CODER_WORKSPACE_OWNER_NAME), anywhere in a compound
 # command, behind VAR=... prefixes and sudo/env/exec/nohup/time, and inside
 # sh|bash -c and eval. Allowed: other workspaces, other coder subcommands, text
 # that only mentions these words, and every command when CODER_WORKSPACE_NAME

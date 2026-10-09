@@ -450,7 +450,8 @@ coder whoami
 - Never run `coder restart`, `coder stop` or `coder update` on the workspace your session
   runs in: each stops it first, which kills the session that would start it again, and the
   workspace stays stopped. Use [`dev-restart-self`](#dev-restart-self). The callum-flow
-  plugin's `forbid-coder-self` hook refuses those commands for `$CODER_WORKSPACE_NAME`.
+  plugin's `forbid-coder-self` hook refuses those commands for the workspace name, `owner/name`, or an
+  unexpanded `$CODER_WORKSPACE_NAME` reference.
 
 ## `dev-init`
 
