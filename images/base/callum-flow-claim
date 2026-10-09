@@ -17,8 +17,9 @@
 # the collision rule - the EARLIEST live claim (server created_at, then id)
 # wins, so any interleaving has exactly one winner. The loser deletes only its
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
-# 3. The winner swaps the labels (`In development` on, `ready` off), assigns
-# @me and logs `callum-flow-event claimed`.
+# 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
+# The winner swaps the labels (`In development` on, `ready` off), assigns @me
+# and logs `callum-flow-event claimed`.
 # --heartbeat: edits this device's live claim comment in place (a `renewed:`
 # line, through the comment API, never a new comment). With no issue numbers it
 # renews every live claim this device holds on an open `In development` issue.
@@ -50,6 +51,9 @@ usage() {
   exit 2
 }
 err() { echo "callum-flow-claim: $*" >&2; }
+# A lost claim leaves a trace: the two-device trial (#222) reports claim_lost
+# events as the proof that the lanes contended.
+lost() { "$EVENT" claim_lost --issue "$n" --note "$1" >/dev/null 2>&1 || err "warning: could not log the claim_lost event"; }
 
 case "$LEASE" in '' | *[!0-9]* | 0) usage "CALLUM_FLOW_LEASE_MINUTES must be a positive number" ;; esac
 [ $# -ge 1 ] || usage
@@ -134,6 +138,7 @@ foreign=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
   "$CLAIMS_JQ"' | map(select(.dev != $dev and .exp > $now)) | first | if . then "\(.dev) since \(.at)" else empty end')
 if [ -n "$foreign" ]; then
   err "#$n is held by $foreign"
+  lost "held by $foreign"
   exit 3
 fi
 # A live claim of our own (a restarted orchestrator): keep it, make sure the
@@ -167,6 +172,7 @@ winner=$(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(sele
 if [ "$winner" != "$mine" ]; then
   drop_mine
   err "lost the claim on #$n to another device"
+  lost "race lost to $(printf '%s' "$cs" | jq -r --argjson now "$now" "$CLAIMS_JQ"' | map(select(.exp > $now)) | first | .dev // "another device"')"
   exit 3
 fi
 

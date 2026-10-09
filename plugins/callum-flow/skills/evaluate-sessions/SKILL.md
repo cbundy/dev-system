@@ -51,16 +51,41 @@ report says so rather than filling the gap.
 ### A window across several devices
 
 The default event log is this device's. For a window that covers other devices'
-work, export `factory.events` as JSON lines and pass it with `--events`:
+work (the two-dispatcher trial, cbundy/dev-system#222), export `factory.events`
+for every device as JSON lines and pass it with `--events`:
 
 ```
 PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -c \
   "SELECT row_to_json(e) FROM (SELECT ts, repo, device, session_id, actor, state, issue, run_id, branch, pr, head, note
    FROM factory.events WHERE repo = '<owner/name>' ORDER BY ts) e" > /tmp/events.jsonl
-callum-flow-evaluate --repo <owner/name> --since <ISO> --events /tmp/events.jsonl --format json
 ```
 
+Do not filter by `device`: `per_device`, `claims` and `waiting` need every device's
+events, and a device that logged nothing but `usage` still counts as alive. Check
+that `per_device` lists every device that ran; a missing one means its events were
+never pushed, so say so rather than reporting on half the factory.
+
 Transcripts and the no-mistakes database are always this device's.
+
+### Ready times from the GitHub timeline
+
+Most issues have no `ready` event (the queue watcher logs one only for issues
+missing from its baseline), so lead time and the waiting split take the `ready`
+time from each merged issue's timeline. For every issue in `throughput.issues`
+(run the tool once without the flag to learn them), collect all its `ready`
+labelings and pass the file:
+
+```
+gh api --paginate repos/<owner>/<name>/issues/<N>/timeline \
+  --jq '[.[] | select(.event == "labeled" and .label.name == "ready") | .created_at]'
+```
+
+Write `{"<N>": ["<ISO>", ...], ...}` to `/tmp/ready-times.json` (one array per issue,
+the timestamps exactly as GitHub returns them, no computing) and re-run both
+commands with `--ready-times /tmp/ready-times.json --events /tmp/events.jsonl`. The
+tool picks the last `ready` at or before the first claim. Check `throughput`
+shows `issues_without_ready: 0`; otherwise name those issues and say their lead
+time is not measured.
 
 ## 2. Gather GitHub context
 
@@ -102,7 +127,17 @@ from `/tmp/eval.md` verbatim under each; add prose only to interpret them.
 5. **Token/model spend by role**: `spend`, including model mismatches.
 6. **Wasted turns**: `waste` (idle wakes, re-arms, stale wakes, repeated checks, the
    top wakes), with what the evidence in step 3 showed.
-7. **Ranked gaps with evidence**: highest impact first. Each gap has: the
+7. **Devices and claims** (only when the events cover more than one device, or on
+   request): `per_device` (merges per device) and `claims` (double-claims, lost
+   races, reclaimed leases, stuck issues). Name each double-claimed and stuck
+   issue with its devices and times. A double-claim or a stuck issue is a finding.
+8. **The waiting split** (same condition): `waiting`, with the totals and the
+   per-issue table. End with the call exactly as the tool reports it in
+   `waiting.decision`: `B` means a second dispatcher or a faster one is next, because
+   dispatcher-bound wait with another device idle is more than 50% of the wait;
+   `gate` means invest in the gate. Quote `other_idle_pct_of_wait` and
+   `issues_without_ready`, and say when the call rests on few issues.
+9. **Ranked gaps with evidence**: highest impact first. Each gap has: the
    evidence (session, run, PR and issue ids), the impact (which number it moves),
    a one-line direction (not a design), and related issues.
 

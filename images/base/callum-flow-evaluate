@@ -8,14 +8,21 @@
 //
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
 //          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
-//          [--nm-state <file>]
+//          [--nm-state <file>] [--ready-times <file>]
 //
 // Exit codes: 0 success, 2 bad arguments, 1 a source that exists but cannot be read.
 // A source that is missing, or a sqlite schema without the expected tables or columns, is
 // never an error: the affected metrics read "n/a" with the reason listed under `sources`.
 //
+// --ready-times is a JSON object {"<issue>": "<ISO>" | ["<ISO>", ...]} of the times each issue
+// got its `ready` label (from the GitHub timeline). The tool picks the last one at or before the
+// issue's first `claimed`; without an entry it falls back to the first `ready` event.
+// The events file may be a `factory.events` export covering several devices; the per_device,
+// claims and waiting sections use each event's `device`.
+//
 // Environment: CLAUDE_CONFIG_DIR (default ~/.claude), CALLUM_EVENTS_DIR (default
-// /persist/events), NO_MISTAKES_HOME (default ~/.no-mistakes).
+// /persist/events), NO_MISTAKES_HOME (default ~/.no-mistakes), CALLUM_FLOW_LEASE_MINUTES
+// (default 120, the claim lease the stuck-issue test uses).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,6 +32,10 @@ const { execFileSync } = require('node:child_process');
 // Tunable thresholds, named in docs/metrics.md. Tune after the first real report.
 const REPEAT_WINDOW_MS = 10 * 60 * 1000;
 const TOP_WAKES = 10;
+const ALIVE_MS = 30 * 60 * 1000; // a device is alive if it logged any event in the previous 30 minutes
+const STUCK_LEASES = 2; // stuck: no event for longer than this many leases
+const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound with another device idle, means "B"
+const RELEASE_STATES = ['merged', 'abandoned', 'reclaimed', 'ready']; // end an in-flight claim
 const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
 const ACTION_BASH_RE = new RegExp(
   [
@@ -40,7 +51,8 @@ const STAGE_STATES = ['ready', 'claimed', 'delegated', 'run_started', 'merge_rea
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
 const TOP_KEYS = [
-  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'spend', 'waste',
+  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'per_device', 'claims',
+  'waiting', 'spend', 'waste',
   'pipeline', 'sources',
 ];
 
@@ -66,6 +78,7 @@ function parseArgs(argv) {
     else if (a === '--projects-dir') o.projectsDirs.push(need(i++, a));
     else if (a === '--events') o.events = need(i++, a);
     else if (a === '--nm-state') o.nmState = need(i++, a);
+    else if (a === '--ready-times') o.readyTimes = need(i++, a);
     else if (a === '-h' || a === '--help') o.help = true;
     else throw new UsageError(`unknown option '${a}'`);
   }
@@ -83,7 +96,7 @@ function parseArgs(argv) {
 }
 
 const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
-  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>]';
+  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--ready-times <file>]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -273,6 +286,21 @@ function loadEvents(file) {
   return { events: parseJsonl(readText(file)).filter((e) => e && typeof e.state === 'string' && e.ts), reason: null };
 }
 
+function loadReadyTimes(file) {
+  // issue -> ascending list of ms. A missing file is "n/a"; a present but malformed one is an input error.
+  if (!fs.existsSync(file)) return { times: null, reason: `file not found: ${file}` };
+  let raw;
+  try { raw = JSON.parse(readText(file)); } catch (e) { throw new InputError(`--ready-times ${file} is not JSON: ${e.message}`); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new InputError(`--ready-times ${file} must be a JSON object of issue -> time(s)`);
+  const times = new Map();
+  for (const [k, v] of Object.entries(raw)) {
+    const ms = (Array.isArray(v) ? v : [v]).map((x) => Date.parse(x));
+    if (!/^\d+$/.test(k) || !ms.length || ms.some(Number.isNaN)) throw new InputError(`--ready-times ${file}: bad entry for '${k}'`);
+    times.set(Number(k), ms.sort((a, b) => a - b));
+  }
+  return { times, reason: null, rows: times.size };
+}
+
 function firstTs(events) {
   // state -> earliest ms, over the given events.
   const m = new Map();
@@ -294,25 +322,223 @@ function groupByIssue(events) {
   return g;
 }
 
-function computeEventMetrics(allEvents, win) {
+// ---- interval helpers (half-open [start, end) in ms)
+
+function mergeIv(iv) {
+  const sorted = iv.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const out = [];
+  for (const [a, b] of sorted) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+function subtractIv(A, B) {
+  const out = [];
+  for (let [a, b] of A) {
+    for (const [c, d] of B) {
+      if (d <= a || c >= b) continue;
+      if (c > a) out.push([a, c]);
+      a = Math.max(a, d);
+      if (a >= b) break;
+    }
+    if (a < b) out.push([a, b]);
+  }
+  return out;
+}
+const lenIv = (iv) => sum(iv.map(([a, b]) => b - a));
+const clipIv = (iv, lo, hi) => iv.map(([a, b]) => [Math.max(a, lo), Math.min(b, hi)]).filter(([a, b]) => b > a);
+const secs = (ms) => Math.round(ms / 1000);
+
+function timed(events) {
+  // events with a parsed `t` and a `dev`, in time order (ties keep file order)
+  return events
+    .map((e, i) => ({ e, i, t: Date.parse(e.ts) }))
+    .filter((x) => !Number.isNaN(x.t))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((x) => ({ ...x.e, t: x.t, dev: x.e.device || 'unknown' }));
+}
+
+// Claims: per issue, who holds a live `claimed`, until a release state (metrics.md query 6).
+function computeClaims(evs, win, leaseMinutes) {
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (e.issue === null || e.issue === undefined || e.t >= win.until) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  const double = [];
+  const stuck = [];
+  const staleMs = STUCK_LEASES * leaseMinutes * 60 * 1000;
+  for (const n of [...byIssue.keys()].sort((a, b) => a - b)) {
+    const live = new Map();
+    let flagged = false;
+    let last = null;
+    for (const e of byIssue.get(n)) {
+      if (e.state === 'claim_lost') continue;
+      last = e;
+      if (e.state === 'claimed') {
+        live.set(e.dev, e.t);
+        if (live.size >= 2 && !flagged) {
+          flagged = true;
+          if (e.t >= win.since) double.push({ issue: n, devices: [...live.keys()].sort(), at: iso(e.t) });
+        }
+      } else if (RELEASE_STATES.includes(e.state)) {
+        live.clear();
+        flagged = false;
+      }
+    }
+    if (live.size && last && win.until - last.t > staleMs) {
+      stuck.push({
+        issue: n, devices: [...live.keys()].sort(), last_event_at: iso(last.t), last_state: last.state,
+        silent_seconds: secs(win.until - last.t),
+      });
+    }
+  }
+  const inWinEv = (st) => evs.filter((e) => e.state === st && inWin(e.t, win));
+  return {
+    double_claims: { count: double.length, issues: double },
+    claim_lost: { count: inWinEv('claim_lost').length, issues: [...new Set(inWinEv('claim_lost').map((e) => e.issue))].sort((a, b) => a - b) },
+    reclaimed: inWinEv('reclaimed').length,
+    stuck: { count: stuck.length, lease_minutes: leaseMinutes, issues: stuck },
+  };
+}
+
+// Devices that are alive and hold nothing, as idle intervals per device (the waiting split's flag).
+function idleIntervals(evs, until) {
+  const devs = [...new Set(evs.map((e) => e.dev))].sort();
+  const idle = new Map();
+  for (const d of devs) {
+    const alive = mergeIv(evs.filter((e) => e.dev === d && e.t < until).map((e) => [e.t, Math.min(e.t + ALIVE_MS, until)]));
+    // in flight: from this device's `claimed` of an issue until that issue's next release state
+    const held = [];
+    const byIssue = new Map();
+    for (const e of evs) {
+      if (e.issue === null || e.issue === undefined) continue;
+      if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+      byIssue.get(e.issue).push(e);
+    }
+    for (const list of byIssue.values()) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].state !== 'claimed' || list[i].dev !== d) continue;
+        const end = list.slice(i + 1).find((x) => RELEASE_STATES.includes(x.state));
+        held.push([list[i].t, end ? end.t : until]);
+      }
+    }
+    idle.set(d, subtractIv(alive, mergeIv(held)));
+  }
+  return idle;
+}
+
+function readyFor(n, issueEvents, readyTimes) {
+  const claimed = issueEvents.find((e) => e.state === 'claimed');
+  const gh = readyTimes ? readyTimes.get(n) : undefined;
+  if (gh) {
+    const cand = gh.filter((t) => !claimed || t <= claimed.t);
+    if (cand.length) return { t: cand[cand.length - 1], source: 'github' };
+  }
+  const ev = issueEvents.find((e) => e.state === 'ready');
+  return ev ? { t: ev.t, source: 'event' } : null;
+}
+
+// The waiting split (metrics.md query 7): each merged issue's ready -> merged time cut into
+// pipeline-bound, dispatcher-bound and agent work, with the dispatcher-bound part flagged when
+// another device was idle.
+function computeWaiting(evs, mergedIssues, readyTimes, idle) {
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (e.issue === null || e.issue === undefined) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  const rows = [];
+  let without = 0;
+  for (const n of [...mergedIssues].sort((a, b) => a - b)) {
+    const list = byIssue.get(n);
+    const mergedEv = list.find((e) => e.state === 'merged');
+    const rd = readyFor(n, list, readyTimes);
+    if (!rd || rd.t >= mergedEv.t) { without++; continue; }
+    const [R, M] = [rd.t, mergedEv.t];
+    const claimedEv = list.find((e) => e.state === 'claimed');
+    const owner = claimedEv ? claimedEv.dev : mergedEv.dev;
+    const after = (i, states) => list.slice(i + 1).find((x) => states.includes(x.state));
+    const disp = [];
+    const pipe = [];
+    if (claimedEv) disp.push([R, claimedEv.t]);
+    list.forEach((e, i) => {
+      if (e.state === 'parked') {
+        const end = after(i, ['verdict', 'fix_requested', 'merge_ready', 'failed', 'merged']);
+        disp.push([e.t, end ? end.t : M]);
+      } else if (e.state === 'merge_ready') {
+        const end = after(i, ['merged', 'run_started', 'failed']);
+        disp.push([e.t, end ? end.t : M]);
+      } else if (e.state === 'run_started') {
+        const end = after(i, ['merge_ready', 'failed', 'run_started', 'merged']);
+        pipe.push([e.t, end ? end.t : M]);
+      }
+    });
+    const D = mergeIv(clipIv(disp, R, M));
+    const P = subtractIv(mergeIv(clipIv(pipe, R, M)), D);
+    const otherIdle = mergeIv([...idle.entries()].filter(([d]) => d !== owner).flatMap(([, iv]) => iv));
+    const dIdle = lenIv(D) - lenIv(subtractIv(D, otherIdle));
+    const total = M - R;
+    rows.push({
+      issue: n, device: owner, ready_source: rd.source,
+      pipeline_bound: secs(lenIv(P)), dispatcher_bound: secs(lenIv(D)), dispatcher_bound_other_idle: secs(dIdle),
+      agent_work: secs(total - lenIv(P) - lenIv(D)), total: secs(total),
+    });
+  }
+  const t = (k) => sum(rows.map((r) => r[k]));
+  const totals = {
+    pipeline_bound: t('pipeline_bound'), dispatcher_bound: t('dispatcher_bound'),
+    dispatcher_bound_other_idle: t('dispatcher_bound_other_idle'), agent_work: t('agent_work'), total: t('total'),
+  };
+  const wait = totals.pipeline_bound + totals.dispatcher_bound;
+  const ofWait = wait ? pct(totals.dispatcher_bound_other_idle, wait) : null;
+  let decision;
+  if (!rows.length) decision = 'n/a (no merged issue with a known ready time)';
+  else if (!wait) decision = 'n/a (no wait)';
+  else decision = ofWait > IDLE_SHARE_THRESHOLD ? 'B' : 'gate';
+  return {
+    issues_with_split: rows.length,
+    issues_without_ready: without,
+    totals,
+    wait_seconds: wait,
+    other_idle_pct_of_wait: ofWait === null ? 'n/a' : ofWait,
+    other_idle_pct_of_total: totals.total ? pct(totals.dispatcher_bound_other_idle, totals.total) : 'n/a',
+    threshold_pct: IDLE_SHARE_THRESHOLD,
+    decision,
+    issues: rows,
+  };
+}
+
+function computeEventMetrics(allEvents, win, ctx = {}) {
   const byIssue = groupByIssue(allEvents);
   const issues = [...byIssue.keys()].sort((a, b) => a - b);
   const sec = (a, b) => (a !== undefined && b !== undefined ? Math.round((b - a) / 1000) : null);
+  const evs = timed(allEvents);
+  const evsByIssue = groupByIssue(evs);
+  const readyTimes = ctx.readyTimes || null;
+  const leaseMinutes = ctx.leaseMinutes || 120;
 
   // throughput and lead time (metrics.md query 1)
   const merged = [];
   for (const n of issues) {
     const f = firstTs(byIssue.get(n).filter((e) => STAGE_STATES.includes(e.state)));
     if (!f.has('merged') || !inWin(f.get('merged'), win)) continue;
+    const rd = readyFor(n, evsByIssue.get(n) || [], readyTimes);
+    const ready = rd ? rd.t : f.get('ready');
     merged.push({
       issue: n,
       merged_at: iso(f.get('merged')),
-      waiting_for_claim: sec(f.get('ready'), f.get('claimed')),
+      ready_source: rd ? rd.source : null,
+      waiting_for_claim: sec(ready, f.get('claimed')),
       design: sec(f.get('claimed'), f.get('delegated')),
       implementation: sec(f.get('delegated'), f.get('run_started')),
       pipeline: sec(f.get('run_started'), f.get('merge_ready')),
       waiting_for_merge: sec(f.get('merge_ready'), f.get('merged')),
-      total: sec(f.get('ready'), f.get('merged')),
+      total: sec(ready, f.get('merged')),
     });
   }
   merged.sort((a, b) => cmpStr(a.merged_at, b.merged_at) || a.issue - b.issue);
@@ -320,8 +546,26 @@ function computeEventMetrics(allEvents, win) {
   const throughput = {
     merged_issues: merged.length,
     lead_time_total_seconds: { median: median(totals), max: totals.length ? Math.max(...totals) : null, issues_with_total: totals.length },
+    issues_without_ready: merged.length - totals.length,
     issues: merged,
   };
+
+  // per device (metrics.md query 4), claims (query 6) and the waiting split (query 7)
+  const mergedIssues = merged.map((m) => m.issue);
+  const devRows = new Map();
+  const dev = (d) => {
+    if (!devRows.has(d)) devRows.set(d, { device: d, merges: 0, claims: 0, claim_lost: 0 });
+    return devRows.get(d);
+  };
+  for (const n of mergedIssues) dev(evsByIssue.get(n).find((e) => e.state === 'merged').dev).merges++;
+  for (const e of evs) {
+    if (!inWin(e.t, win)) continue;
+    if (e.state === 'claimed') dev(e.dev).claims++;
+    else if (e.state === 'claim_lost') dev(e.dev).claim_lost++;
+  }
+  const per_device = [...devRows.values()].sort((a, b) => cmpStr(a.device, b.device));
+  const claims = computeClaims(evs, win, leaseMinutes);
+  const waiting = computeWaiting(evs, mergedIssues, readyTimes, idleIntervals(evs, win.until));
 
   // first pass (query 2), restricted to a first merge_ready inside the window
   let green = 0;
@@ -409,7 +653,7 @@ function computeEventMetrics(allEvents, win) {
     if (e.issue !== null && e.issue !== undefined && !(mergedAt.issue.get(e.issue) <= t)) mergedAt.issue.set(e.issue, t);
     if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
   }
-  return { throughput, first_pass, review, adjudicator_agreement, mergedAt };
+  return { throughput, first_pass, review, adjudicator_agreement, per_device, claims, waiting, mergedAt };
 }
 
 // ---------------------------------------------------------------- waste
@@ -670,8 +914,21 @@ function evaluate(opts, env = process.env) {
 
   const haveTr = tr.foundDirs.length > 0;
   const pl = computePipeline(nm, win);
+  let rt = { times: null };
+  if (opts.readyTimes) {
+    rt = loadReadyTimes(opts.readyTimes);
+    sources.push({
+      kind: 'ready-times', path: opts.readyTimes, found: rt.times !== null, rows: rt.times ? rt.rows : null,
+      ...(rt.reason ? { 'n/a': rt.reason } : {}),
+    });
+  }
+  sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
   const evNa = ev.events === null ? na(ev.reason) : null;
-  const em = ev.events === null ? null : computeEventMetrics(ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase()), win);
+  const leaseMinutes = Number(env.CALLUM_FLOW_LEASE_MINUTES) > 0 ? Number(env.CALLUM_FLOW_LEASE_MINUTES) : 120;
+  const em = ev.events === null ? null : computeEventMetrics(
+    ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase()), win,
+    { readyTimes: rt.times, leaseMinutes },
+  );
 
   const mains = parsed.filter((f) => f.kind === 'main');
   const subs = parsed.filter((f) => f.kind === 'sub');
@@ -687,6 +944,9 @@ function evaluate(opts, env = process.env) {
     first_pass: em ? em.first_pass : evNa,
     review: em ? em.review : evNa,
     adjudicator_agreement: em ? em.adjudicator_agreement : evNa,
+    per_device: em ? em.per_device : evNa,
+    claims: em ? em.claims : evNa,
+    waiting: em ? em.waiting : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
       rows: computeSpend(parsed, pl.invocations),
       sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
@@ -715,15 +975,33 @@ function toMarkdown(r) {
   const guard = (s, f) => (s && s['n/a'] ? naLine(s) : f(s));
   sec('window', kv(r.window));
   sec('throughput', guard(r.throughput, (t) =>
-    kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max }) + '\n' +
-    table(['issue', 'merged_at', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
-      t.issues.map((i) => [i.issue, i.merged_at, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
+    kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
+    table(['issue', 'merged_at', 'ready_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
+      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
   sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
   sec('review', guard(r.review, (v) =>
     kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
     table(['actor', ...VERDICT_PREFIXES], [['(all)', ...VERDICT_PREFIXES.map((p) => v.by_prefix[p])],
       ...Object.entries(v.by_actor).map(([a, c]) => [a, ...VERDICT_PREFIXES.map((p) => c[p])])])));
   sec('adjudicator_agreement', guard(r.adjudicator_agreement, kv));
+  sec('per_device', guard(r.per_device, (rows) =>
+    table(['device', 'merges', 'claims', 'claim_lost'], rows.map((d) => [d.device, d.merges, d.claims, d.claim_lost]))));
+  sec('claims', guard(r.claims, (c) =>
+    kv({
+      double_claims: c.double_claims.count, claim_lost: c.claim_lost.count, reclaimed: c.reclaimed,
+      stuck: c.stuck.count, lease_minutes: c.stuck.lease_minutes,
+    }) + '\n' +
+    table(['double-claimed issue', 'devices', 'at'], c.double_claims.issues.map((i) => [i.issue, i.devices.join(','), i.at])) + '\n' +
+    table(['stuck issue', 'devices', 'last_state', 'last_event_at', 'silent_seconds'],
+      c.stuck.issues.map((i) => [i.issue, i.devices.join(','), i.last_state, i.last_event_at, i.silent_seconds]))));
+  sec('waiting', guard(r.waiting, (w) =>
+    kv({
+      ...w.totals, wait_seconds: w.wait_seconds, other_idle_pct_of_wait: w.other_idle_pct_of_wait,
+      other_idle_pct_of_total: w.other_idle_pct_of_total, threshold_pct: w.threshold_pct,
+      issues_with_split: w.issues_with_split, issues_without_ready: w.issues_without_ready, decision: w.decision,
+    }) + '\n' +
+    table(['issue', 'device', 'ready_source', 'pipeline_bound', 'dispatcher_bound', 'dispatcher_bound_other_idle', 'agent_work', 'total'],
+      w.issues.map((i) => [i.issue, i.device, i.ready_source, i.pipeline_bound, i.dispatcher_bound, i.dispatcher_bound_other_idle, i.agent_work, i.total]))));
   sec('spend', guard(r.spend, (s) =>
     table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
