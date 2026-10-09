@@ -255,7 +255,7 @@ install -d -m 0700 -o 1000 -g 1000 /etc/dev-system/secrets
 chown 1000:1000 /etc/dev-system/secrets/agentsview-pg-url
 ```
 
-Running workspaces pick it up at their next start (or `coder ssh <ws> -- dev-init`).
+Running workspaces pick it up at their next start (or `coder ssh <ws> -- dev-init`). From inside the workspace, restart it with `dev-restart-self`, never `coder restart`.
 Without the file, Docker creates the directory empty and the push stays off; `dev-doctor`
 in the workspace then says so with the fix. Needs base image 2.2.0 or later; an older
 image ignores the mount. See "Central session history" in the

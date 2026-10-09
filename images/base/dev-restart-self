@@ -1,0 +1,281 @@
+#!/bin/sh
+# dev-restart-self - upgrade the Coder workspace this session runs in, safely (cbundy/dev-system#263).
+#
+#   dev-restart-self [--upgrade]            ask Coder for one start build on the running workspace
+#                                           (default). The build replaces the container, so a moved
+#                                           image tag or a new template version is picked up. No stop
+#                                           request is sent. If Coder rejects it (any 4xx), fall back
+#                                           to --restart --upgrade on its own and say why.
+#   dev-restart-self --restart [--upgrade]  schedule a one-off autostart a few minutes ahead, then
+#                                           stop the workspace; Coder starts it again by itself.
+#                                           With --upgrade, automatic updates are set to "always" for
+#                                           that start so it also picks up the active template version.
+#   dev-restart-self --resume               after the restart: report the last request, restore the
+#                                           autostart schedule and automatic_updates saved before a
+#                                           --restart, and delete the marker. dev-init calls this on
+#                                           every start. With no marker it does nothing, exits 0 and
+#                                           makes no request.
+#   dev-restart-self --dry-run ...          print each request (method, path, body) and send nothing.
+#
+# Why this exists: `coder restart|stop|update <your own workspace>` stops the workspace first,
+# which kills the session that would start it again, so it stays stopped (testbed builds #6, #8,
+# #10). The plugin's forbid-coder-self hook refuses those commands. Never start the workspace by
+# hand after this script ran: it comes back by itself.
+#
+# Credentials (first found wins):
+#   token  CODER_SESSION_TOKEN, then $DEV_SECRETS_DIR/coder-session-token, then
+#          ${CODER_CONFIG_DIR:-$HOME/.config/coderv2}/session
+#   url    CODER_URL, then ${CODER_CONFIG_DIR:-$HOME/.config/coderv2}/url, then CODER_AGENT_URL
+# The workspace agent's own token (CODER_AGENT_TOKEN) cannot create builds, so a user session token
+# is needed. The token is never put on a command line: it goes to curl as a header in a --config
+# read from stdin, so it never shows up in `ps`, and it is never printed.
+#
+# State lives in ${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}:
+#   pending.json     the schedule and automatic_updates saved by --restart, removed by --resume
+#   last-request     what the last run asked for (mode, time, build number), removed by --resume
+# DEV_RESTART_SELF_DELAY_MIN (default 3, minimum 2) is how far ahead the one-off autostart is set.
+set -eu
+
+STATE_DIR=${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}
+MARKER=$STATE_DIR/pending.json
+LAST=$STATE_DIR/last-request
+CONFIG_DIR=${CODER_CONFIG_DIR:-$HOME/.config/coderv2}
+
+MODE=start
+UPGRADE=0
+DRY=0
+RESUME=0
+
+say() { printf 'dev-restart-self: %s\n' "$*" >&2; }
+die() { say "$*"; exit 1; }
+
+usage() {
+  echo "usage: dev-restart-self [--upgrade | --restart [--upgrade] | --resume] [--dry-run]" >&2
+  exit 2
+}
+
+for arg in "$@"; do
+  case $arg in
+    --upgrade) UPGRADE=1 ;;
+    --restart) MODE=restart ;;
+    --resume) RESUME=1 ;;
+    --dry-run) DRY=1 ;;
+    -h | --help) usage ;;
+    *) usage ;;
+  esac
+done
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+read_first_line() { # file: first line, trimmed; fails if unreadable or empty
+  [ -r "$1" ] || return 1
+  v=$(head -n 1 "$1" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+resolve_token() {
+  if [ -n "${CODER_SESSION_TOKEN:-}" ]; then
+    TOKEN=$CODER_SESSION_TOKEN
+  elif TOKEN=$(read_first_line "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/coder-session-token"); then
+    :
+  elif TOKEN=$(read_first_line "$CONFIG_DIR/session"); then
+    :
+  else
+    TOKEN=""
+  fi
+}
+
+resolve_url() {
+  if [ -n "${CODER_URL:-}" ]; then
+    URL=$CODER_URL
+  elif URL=$(read_first_line "$CONFIG_DIR/url"); then
+    :
+  elif [ -n "${CODER_AGENT_URL:-}" ]; then
+    URL=$CODER_AGENT_URL
+  else
+    URL=""
+  fi
+  URL=${URL%/}
+}
+
+# The one place a request is made. Sets API_CODE (HTTP status) and API_BODY (response file).
+api() { # method path [body]
+  _m=$1 _p=$2 _b=${3-}
+  API_BODY=$tmp/response.json
+  : > "$API_BODY"
+  if [ "$DRY" = 1 ]; then
+    printf 'dry-run: %s %s%s\n' "$_m" "$_p" "${_b:+ $_b}"
+    printf '{}' > "$API_BODY"
+    API_CODE=200
+    return 0
+  fi
+  if [ -n "$_b" ]; then
+    API_CODE=$(printf 'header = "Coder-Session-Token: %s"\n' "$TOKEN" |
+      curl -sS -K - -X "$_m" -H 'Content-Type: application/json' -d "$_b" \
+        -o "$API_BODY" -w '%{http_code}' "$URL$_p") || API_CODE=000
+  else
+    API_CODE=$(printf 'header = "Coder-Session-Token: %s"\n' "$TOKEN" |
+      curl -sS -K - -X "$_m" -o "$API_BODY" -w '%{http_code}' "$URL$_p") || API_CODE=000
+  fi
+}
+
+ok() { case $API_CODE in 2??) return 0 ;; *) return 1 ;; esac; }
+
+api_message() { jq -r '.message // empty' "$API_BODY" 2>/dev/null | head -n 1; }
+
+record_last() { # mode
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  _n=$(jq -r '.build_number // "unknown"' "$API_BODY" 2>/dev/null || echo unknown)
+  printf 'mode=%s time=%s build=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_n" > "$LAST" 2>/dev/null || true
+}
+
+need_creds() {
+  [ -n "${CODER_WORKSPACE_ID:-}" ] || die "not running in a Coder workspace (CODER_WORKSPACE_ID is unset); nothing to do."
+  resolve_url
+  [ -n "$URL" ] || die "no Coder URL (set CODER_URL, or run 'coder login'): see \"Coder CLI\" in images/base/README.md."
+  resolve_token
+  if [ -z "$TOKEN" ] && [ "$DRY" = 0 ]; then
+    die "no Coder session token (CODER_SESSION_TOKEN, \$DEV_SECRETS_DIR/coder-session-token or $CONFIG_DIR/session): see \"Coder CLI\" in images/base/README.md."
+  fi
+  [ -n "$TOKEN" ] || TOKEN="<redacted>"
+}
+
+WS_PATH=/api/v2/workspaces/${CODER_WORKSPACE_ID:-}
+
+# Read the workspace; sets WS (JSON). Refuses unless the latest build is start/running.
+load_workspace() {
+  api GET "$WS_PATH"
+  ok || die "could not read the workspace (HTTP $API_CODE $(api_message))."
+  WS=$(cat "$API_BODY")
+  [ "$DRY" = 1 ] && return 0
+  _t=$(printf '%s' "$WS" | jq -r '.latest_build.transition // ""')
+  _s=$(printf '%s' "$WS" | jq -r '.latest_build.status // ""')
+  if [ "$_t" != start ] || [ "$_s" != running ]; then
+    die "refusing: the latest build is $_t/$_s, not start/running. Nothing was changed."
+  fi
+}
+
+print_goodbye() {
+  say "this session will end now and the workspace comes back by itself. Do not start the workspace by hand."
+}
+
+# ---- resume ----------------------------------------------------------------
+
+do_resume() {
+  if [ -f "$LAST" ]; then
+    say "last request: $(cat "$LAST")"
+    rm -f "$LAST"
+  fi
+  [ -f "$MARKER" ] || return 0
+  say "restoring the autostart schedule and automatic updates saved before the restart."
+  _sched=$(jq -c '.autostart_schedule' "$MARKER") || {
+    say "WARNING: $MARKER is unreadable; the one-off autostart may keep firing daily. Fix: restore the workspace's autostart by hand and delete the marker."
+    return 1
+  }
+  _upd=$(jq -r '.automatic_updates // "never"' "$MARKER")
+  need_creds
+  api PUT "$WS_PATH/autostart" "{\"schedule\":$_sched}"
+  if ! ok; then
+    say "WARNING: could not restore the autostart schedule (HTTP $API_CODE $(api_message)); keeping $MARKER. The one-off schedule would keep firing daily. Run 'dev-restart-self --resume' again."
+    return 1
+  fi
+  api PUT "$WS_PATH/autoupdates" "{\"automatic_updates\":\"$_upd\"}"
+  if ! ok; then
+    say "WARNING: could not restore automatic_updates (HTTP $API_CODE $(api_message)); keeping $MARKER. Run 'dev-restart-self --resume' again."
+    return 1
+  fi
+  [ "$DRY" = 1 ] || rm -f "$MARKER"
+  say "restored (autostart_schedule=$_sched, automatic_updates=$_upd)."
+}
+
+# ---- start mode ------------------------------------------------------------
+
+do_start() {
+  load_workspace
+  if [ "$DRY" = 1 ]; then
+    _v='<template_active_version_id>'
+  else
+    _v=$(printf '%s' "$WS" | jq -r '.template_active_version_id // empty')
+    [ -n "$_v" ] || die "the workspace has no template_active_version_id; nothing was changed."
+  fi
+  _body=$(jq -cn --arg v "$_v" '{transition:"start",template_version_id:$v}')
+  print_goodbye
+  api POST "$WS_PATH/builds" "$_body"
+  if ok; then
+    record_last start
+    say "start build requested."
+    return 0
+  fi
+  case $API_CODE in
+    4??)
+      say "Coder rejected the start build (HTTP $API_CODE: $(api_message)); falling back to a scheduled restart with --upgrade."
+      MODE=restart
+      UPGRADE=1
+      do_restart
+      ;;
+    *) die "the start build request failed (HTTP $API_CODE $(api_message)); nothing was stopped." ;;
+  esac
+}
+
+# ---- restart mode ----------------------------------------------------------
+
+do_restart() {
+  load_workspace
+  if [ "$DRY" = 0 ]; then
+    _tid=$(printf '%s' "$WS" | jq -r '.template_id // empty')
+    api GET "/api/v2/templates/$_tid"
+    ok || die "could not read the template (HTTP $API_CODE $(api_message)); nothing was changed."
+    [ "$(jq -r '.allow_user_autostart' "$API_BODY")" = true ] ||
+      die "refusing: the template does not allow user autostart, so the workspace would not come back. Nothing was changed."
+  fi
+
+  _delay=${DEV_RESTART_SELF_DELAY_MIN:-3}
+  case $_delay in '' | *[!0-9]*) _delay=3 ;; esac
+  [ "$_delay" -ge 2 ] || _delay=2
+  _now=${DEV_RESTART_SELF_NOW:-$(date -u +%s)}
+  _cron="CRON_TZ=UTC $(date -u -d "@$((_now + _delay * 60))" '+%-M %-H') * * *"
+
+  if [ "$DRY" = 1 ]; then
+    say "dry-run: would save the current autostart_schedule and automatic_updates to $MARKER"
+  elif [ ! -f "$MARKER" ]; then
+    # Keep an existing marker: its values are the real prior state, ours would be the one-off.
+    mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR; nothing was changed."
+    printf '%s' "$WS" | jq '{autostart_schedule: (.autostart_schedule // null), automatic_updates: (.automatic_updates // "never")}' > "$MARKER" ||
+      die "cannot write $MARKER; nothing was changed."
+  fi
+
+  api PUT "$WS_PATH/autostart" "$(jq -cn --arg s "$_cron" '{schedule:$s}')"
+  ok || { undo "could not set the one-off autostart (HTTP $API_CODE $(api_message))"; }
+  if [ "$UPGRADE" = 1 ]; then
+    api PUT "$WS_PATH/autoupdates" '{"automatic_updates":"always"}'
+    ok || { undo "could not set automatic_updates (HTTP $API_CODE $(api_message))"; }
+  fi
+  print_goodbye
+  api POST "$WS_PATH/builds" '{"transition":"stop"}'
+  ok || { undo "could not request the stop (HTTP $API_CODE $(api_message))"; }
+  record_last restart
+  say "stop requested; the workspace restarts at: $_cron"
+}
+
+undo() { # reason: a step failed before the stop; put the saved state back
+  say "$1; undoing the changes made so far."
+  if [ "$DRY" = 0 ]; then
+    do_resume || true
+  fi
+  exit 1
+}
+
+# ---- main ------------------------------------------------------------------
+
+if [ "$RESUME" = 1 ]; then
+  do_resume
+  exit $?
+fi
+
+need_creds
+case $MODE in
+  start) do_start ;;
+  restart) do_restart ;;
+esac

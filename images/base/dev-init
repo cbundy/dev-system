@@ -84,6 +84,17 @@ check_persist_dirs() {
   log "  A throwaway container with no volumes on purpose can ignore this."
 }
 
+# 1b. Finish a dev-restart-self restart (cbundy/dev-system#263): restore the
+#     autostart schedule and automatic_updates it saved, and report what the
+#     last request was. Early, before the slow plugin install, so a one-off
+#     schedule never keeps firing for long. A no-op when the helper is missing
+#     or there is nothing saved; best-effort, never fails the start.
+resume_restart_self() {
+  command -v dev-restart-self >/dev/null 2>&1 || return 0
+  dev-restart-self --resume 2>&1 | while IFS= read -r line; do log "$line"; done
+  return 0
+}
+
 # 2. Claude records how it was installed in .claude.json, which lives in the
 #    (initially empty) CLAUDE_CONFIG_DIR rather than the image. Without it,
 #    `claude doctor` warns that the native install's method is "not set".
@@ -546,6 +557,7 @@ if [ "${1:-}" = --plugins ]; then
 fi
 
 check_persist_dirs
+resume_restart_self
 seed_claude_config
 seed_codex_config
 configure_codex_otel

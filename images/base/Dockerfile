@@ -191,6 +191,7 @@ COPY --chmod=0755 \
   images/base/dev-entrypoint \
   images/base/dev-remote-control \
   images/base/dev-prune-worktrees \
+  images/base/dev-restart-self \
   images/base/dev-login \
   images/base/callum-flow-event \
   images/base/callum-flow-merge-guard \
