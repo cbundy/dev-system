@@ -237,6 +237,21 @@ FROM ghcr.io/cbundy/dev-system/base:2
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends <packages> \
   && rm -rf /var/lib/apt/lists/*
+# Release stamp, so `dev-version` can tell whether this image is current. Set
+# IMAGE to the image your CI publishes, pass the three build args from CI, and
+# set TAG to the tag workspaces pull.
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=unknown
+RUN mkdir -p /usr/local/share/dev-system/image-release.d \
+  && printf '%s\n' \
+    "IMAGE=ghcr.io/<owner>/<repo>/dev" \
+    "VERSION=${VERSION}" \
+    "REVISION=${REVISION}" \
+    "CREATED=${CREATED}" \
+    "TAG=latest" \
+    > /usr/local/share/dev-system/image-release.d/dev \
+  && chmod 0644 /usr/local/share/dev-system/image-release.d/dev
 USER node
 ```
 
