@@ -9,7 +9,8 @@
 # The check is `shellcheck -x -s <shell>` (config in the root .shellcheckrc) when shellcheck
 # is on PATH - it is in the base image and on CI's runners. Without it, the check falls
 # back to a syntax-only `sh -n` / `bash -n` and says so; CI still runs shellcheck.
-# JavaScript gets `node --check`.
+# JavaScript gets `node --check`, including extensionless files with a node shebang under
+# the directories above (images/base/callum-flow-evaluate).
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
 # and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
@@ -20,7 +21,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks coder scripts"
-JS_DIRS="bin plugins scripts"
+JS_DIRS="images/base bin plugins scripts"
 
 failures=0
 checked=0
@@ -36,12 +37,14 @@ fail() {
   failures=$((failures + 1))
 }
 
-# Print the shell a file declares on its first line (sh or bash), or nothing.
+# Print the shell a file declares on its first line (sh or bash), `node` for an extensionless
+# node script, or nothing.
 shell_of() {
   first=$(head -n 1 "$1")
   case "$first" in
     '#!/bin/sh' | '#!/bin/sh '* | '#!/usr/bin/env sh' | '#!/usr/bin/env sh '*) echo sh ;;
     '#!/bin/bash' | '#!/bin/bash '* | '#!/usr/bin/env bash' | '#!/usr/bin/env bash '*) echo bash ;;
+    '#!/usr/bin/env node' | '#!/usr/bin/env node '*) echo node ;;
     '# shellcheck shell=sh') echo sh ;;
     '# shellcheck shell=bash') echo bash ;;
     # A shell script with a shebang this does not know must not slip through unchecked.
@@ -66,6 +69,14 @@ while IFS= read -r file; do
   sh_name=$(shell_of "$file")
   case "$sh_name" in
     "") continue ;;
+    node)
+      checked=$((checked + 1))
+      if ! out=$(node --check "$file" 2>&1); then
+        fail "$file (node --check)"
+        printf '%s\n' "$out" >&2
+      fi
+      continue
+      ;;
     unknown)
       fail "$file: unrecognised shebang '$(head -n 1 "$file")'"
       continue

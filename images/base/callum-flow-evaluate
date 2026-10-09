@@ -1,0 +1,784 @@
+#!/usr/bin/env node
+'use strict';
+// callum-flow-evaluate: the offline, read-only numbers behind the evaluate-sessions skill
+// (cbundy/dev-system#258). It reads local Claude Code transcripts, the factory event log and
+// the no-mistakes state database, and prints one deterministic report of throughput, gate
+// quality, token spend and wasted agent wakes. No network, no gh, no psql, no LLM: the same
+// inputs give byte-identical output. docs/metrics.md defines every number.
+//
+// Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
+//          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
+//          [--nm-state <file>]
+//
+// Exit codes: 0 success, 2 bad arguments, 1 a source that exists but cannot be read.
+// A source that is missing, or a sqlite schema without the expected tables or columns, is
+// never an error: the affected metrics read "n/a" with the reason listed under `sources`.
+//
+// Environment: CLAUDE_CONFIG_DIR (default ~/.claude), CALLUM_EVENTS_DIR (default
+// /persist/events), NO_MISTAKES_HOME (default ~/.no-mistakes).
+
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+
+// Tunable thresholds, named in docs/metrics.md. Tune after the first real report.
+const REPEAT_WINDOW_MS = 10 * 60 * 1000;
+const TOP_WAKES = 10;
+const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
+const ACTION_BASH_RE = new RegExp(
+  [
+    '\\bgh\\s+(issue|pr)\\s+(create|comment|edit|merge|close|ready)\\b',
+    '\\bgh\\s+workflow\\s+run\\b',
+    '\\bgit\\s+(commit|push|rebase)\\b',
+    '\\baxi\\s+(run|respond|abort)\\b',
+    '\\bcallum-flow-(claim|merge|event|fix-linkage)(?![\\w-])',
+  ].join('|'),
+);
+const REARM_ONLY_TOOLS = new Set(['Monitor', 'TaskStop', 'ToolSearch']);
+const STAGE_STATES = ['ready', 'claimed', 'delegated', 'run_started', 'merge_ready', 'merged'];
+const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
+const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
+const TOP_KEYS = [
+  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'spend', 'waste',
+  'pipeline', 'sources',
+];
+
+class UsageError extends Error {}
+class InputError extends Error {}
+
+const na = (reason) => ({ 'n/a': reason });
+
+// ---------------------------------------------------------------- arguments
+
+function parseArgs(argv) {
+  const o = { projectsDirs: [], format: 'json' };
+  const need = (i, name) => {
+    if (i + 1 >= argv.length) throw new UsageError(`${name} needs a value`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--repo') o.repo = need(i++, a);
+    else if (a === '--since') o.since = need(i++, a);
+    else if (a === '--until') o.until = need(i++, a);
+    else if (a === '--format') o.format = need(i++, a);
+    else if (a === '--projects-dir') o.projectsDirs.push(need(i++, a));
+    else if (a === '--events') o.events = need(i++, a);
+    else if (a === '--nm-state') o.nmState = need(i++, a);
+    else if (a === '-h' || a === '--help') o.help = true;
+    else throw new UsageError(`unknown option '${a}'`);
+  }
+  if (o.help) return o;
+  if (!o.repo || !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) throw new UsageError('--repo <owner/name> is required');
+  if (!o.since) throw new UsageError('--since <ISO> is required');
+  if (!['json', 'markdown'].includes(o.format)) throw new UsageError("--format must be json or markdown");
+  const since = Date.parse(o.since);
+  if (Number.isNaN(since)) throw new UsageError(`--since is not a date: ${o.since}`);
+  const until = o.until === undefined ? Date.now() : Date.parse(o.until);
+  if (Number.isNaN(until)) throw new UsageError(`--until is not a date: ${o.until}`);
+  if (until <= since) throw new UsageError('--until must be after --since');
+  o.win = { since, until };
+  return o;
+}
+
+const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
+  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>]';
+
+// ---------------------------------------------------------------- helpers
+
+const inWin = (ts, win) => {
+  const t = typeof ts === 'number' ? ts : Date.parse(ts);
+  return t >= win.since && t < win.until;
+};
+const iso = (ms) => new Date(ms).toISOString();
+const sum = (xs) => xs.reduce((a, b) => a + b, 0);
+const mungePath = (p) => p.replace(/[^A-Za-z0-9]/g, '-');
+const cmpStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+function median(xs) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+const pct = (num, den) => (den ? Math.round((1000 * num) / den) / 10 : null);
+
+// owner/name from an https or ssh GitHub URL, lower-cased.
+function repoOfUrl(url) {
+  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+// Parse JSONL leniently: a bad line is skipped, never fatal.
+function parseJsonl(text) {
+  const out = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* skip */ }
+  }
+  return out;
+}
+
+function readText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new InputError(`cannot read ${file}: ${e.code || e.message}`);
+  }
+}
+
+// ---------------------------------------------------------------- transcripts
+
+function textOf(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
+  }
+  return '';
+}
+
+// A wake is a user line carrying a task notification or an owner prompt, or a scheduled
+// task fire. Returns null for anything else (including tool results).
+function classifyWake(line) {
+  if (!line || typeof line !== 'object') return null;
+  if (line.type === 'system' && line.subtype === 'scheduled_task_fire') {
+    return { kind: 'cron', taskId: null, status: null, text: String(line.prompt || line.content || '') };
+  }
+  if (line.type !== 'user') return null;
+  const content = line.message && line.message.content;
+  if (Array.isArray(content) && content.some((b) => b && b.type === 'tool_result')) return null;
+  const text = textOf(content);
+  const origin = line.origin && line.origin.kind;
+  if (origin === 'task-notification' || text.includes('<task-notification>')) {
+    const tag = (n) => {
+      const m = new RegExp(`<${n}>([\\s\\S]*?)</${n}>`).exec(text);
+      return m ? m[1].trim() : null;
+    };
+    const summary = tag('summary') || '';
+    const status = tag('status');
+    let kind;
+    if (/^Monitor event/.test(summary)) kind = 'monitor-event';
+    else if (/^Monitor|timed out|didn't finish/i.test(summary) || status === 'stopped') kind = 'monitor-timeout';
+    else if (/^Agent\b/.test(summary)) kind = 'agent-done';
+    else kind = 'bash-done';
+    return { kind, taskId: tag('task-id'), status, text };
+  }
+  if (line.isMeta) return null;
+  if (origin === undefined || origin === 'human') return { kind: 'owner', taskId: null, status: null, text };
+  return null;
+}
+
+// One pass over a session's lines inside the window: distinct-requestId turns (last usage
+// wins, never summed per line) and the wakes they belong to.
+function buildTurns(lines, win) {
+  const turns = [];
+  const wakes = [];
+  const byKey = new Map();
+  let cur = -1;
+  let anon = 0;
+  for (const l of lines) {
+    if (!l || !inWin(l.timestamp, win)) continue;
+    if (l.type === 'assistant') {
+      const msg = l.message || {};
+      const key = typeof l.requestId === 'string' ? l.requestId : `__anon${anon++}`;
+      let t = byKey.get(key);
+      if (!t) {
+        t = {
+          requestId: key, ts: l.timestamp, model: null, wake: cur, tools: [], toolIds: new Set(),
+          usage: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+        };
+        byKey.set(key, t);
+        turns.push(t);
+        if (cur >= 0) wakes[cur].turns.push(t);
+      }
+      if (msg.model) t.model = msg.model;
+      if (msg.usage) {
+        t.usage = {
+          input: msg.usage.input_tokens || 0,
+          output: msg.usage.output_tokens || 0,
+          cache_read: msg.usage.cache_read_input_tokens || 0,
+          cache_creation: msg.usage.cache_creation_input_tokens || 0,
+        };
+      }
+      for (const b of Array.isArray(msg.content) ? msg.content : []) {
+        if (b && b.type === 'tool_use' && !t.toolIds.has(b.id)) {
+          t.toolIds.add(b.id);
+          t.tools.push({ id: b.id, name: b.name, input: b.input || {} });
+        }
+      }
+    } else {
+      const w = classifyWake(l);
+      if (w) {
+        wakes.push({ ...w, ts: l.timestamp, turns: [] });
+        cur = wakes.length - 1;
+      }
+    }
+  }
+  return { turns, wakes };
+}
+
+const turnTokens = (t) => t.usage.input + t.usage.output + t.usage.cache_read + t.usage.cache_creation;
+
+const isActionCall = (tool) =>
+  ACTION_TOOLS.has(tool.name) || (tool.name === 'Bash' && ACTION_BASH_RE.test(String(tool.input.command || '')));
+
+// Discover transcript files. Returns { dirs, files }; a file is
+// { path, session, kind: 'main'|'sub', role, toolUseId }.
+function findTranscripts(projectsRoot, checkouts, explicitDirs) {
+  let dirs;
+  if (explicitDirs.length) {
+    dirs = explicitDirs.map((d) => path.resolve(d));
+  } else {
+    let names = [];
+    try { names = fs.readdirSync(projectsRoot); } catch { /* absent */ }
+    const munged = [...new Set(checkouts.map(mungePath))];
+    dirs = names
+      .filter((n) => munged.some((m) => n === m || n.startsWith(`${m}--`)))
+      .sort()
+      .map((n) => path.join(projectsRoot, n));
+  }
+  const files = [];
+  const foundDirs = [];
+  for (const dir of dirs) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    foundDirs.push(dir);
+    for (const e of entries.sort((a, b) => cmpStr(a.name, b.name))) {
+      if (e.isFile() && e.name.endsWith('.jsonl')) {
+        files.push({ path: path.join(dir, e.name), session: e.name.slice(0, -6), kind: 'main', role: 'orchestrator' });
+      } else if (e.isDirectory()) {
+        const sub = path.join(dir, e.name, 'subagents');
+        let subs = [];
+        try { subs = fs.readdirSync(sub).sort(); } catch { /* none */ }
+        for (const f of subs) {
+          if (!/^agent-.+\.jsonl$/.test(f)) continue;
+          let meta = {};
+          try { meta = JSON.parse(fs.readFileSync(path.join(sub, f.replace(/\.jsonl$/, '.meta.json')), 'utf8')); } catch { /* none */ }
+          files.push({
+            path: path.join(sub, f), session: e.name, kind: 'sub', toolUseId: meta.toolUseId || null,
+            role: meta.agentType || 'unknown',
+          });
+        }
+      }
+    }
+  }
+  return { dirs, foundDirs, files };
+}
+
+// ---------------------------------------------------------------- events
+
+function loadEvents(file) {
+  if (!fs.existsSync(file)) return { events: null, reason: `file not found: ${file}` };
+  return { events: parseJsonl(readText(file)).filter((e) => e && typeof e.state === 'string' && e.ts), reason: null };
+}
+
+function firstTs(events) {
+  // state -> earliest ms, over the given events.
+  const m = new Map();
+  for (const e of events) {
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) continue;
+    if (!m.has(e.state) || t < m.get(e.state)) m.set(e.state, t);
+  }
+  return m;
+}
+
+function groupByIssue(events) {
+  const g = new Map();
+  for (const e of events) {
+    if (e.issue === null || e.issue === undefined) continue;
+    if (!g.has(e.issue)) g.set(e.issue, []);
+    g.get(e.issue).push(e);
+  }
+  return g;
+}
+
+function computeEventMetrics(allEvents, win) {
+  const byIssue = groupByIssue(allEvents);
+  const issues = [...byIssue.keys()].sort((a, b) => a - b);
+  const sec = (a, b) => (a !== undefined && b !== undefined ? Math.round((b - a) / 1000) : null);
+
+  // throughput and lead time (metrics.md query 1)
+  const merged = [];
+  for (const n of issues) {
+    const f = firstTs(byIssue.get(n).filter((e) => STAGE_STATES.includes(e.state)));
+    if (!f.has('merged') || !inWin(f.get('merged'), win)) continue;
+    merged.push({
+      issue: n,
+      merged_at: iso(f.get('merged')),
+      waiting_for_claim: sec(f.get('ready'), f.get('claimed')),
+      design: sec(f.get('claimed'), f.get('delegated')),
+      implementation: sec(f.get('delegated'), f.get('run_started')),
+      pipeline: sec(f.get('run_started'), f.get('merge_ready')),
+      waiting_for_merge: sec(f.get('merge_ready'), f.get('merged')),
+      total: sec(f.get('ready'), f.get('merged')),
+    });
+  }
+  merged.sort((a, b) => cmpStr(a.merged_at, b.merged_at) || a.issue - b.issue);
+  const totals = merged.map((m) => m.total).filter((x) => x !== null);
+  const throughput = {
+    merged_issues: merged.length,
+    lead_time_total_seconds: { median: median(totals), max: totals.length ? Math.max(...totals) : null, issues_with_total: totals.length },
+    issues: merged,
+  };
+
+  // first pass (query 2), restricted to a first merge_ready inside the window
+  let green = 0;
+  let first = 0;
+  const setbacks = [];
+  for (const n of issues) {
+    const evs = byIssue.get(n);
+    const f = firstTs(evs.filter((e) => e.state === 'merge_ready'));
+    if (!f.has('merge_ready') || !inWin(f.get('merge_ready'), win)) continue;
+    const s = firstTs(evs.filter((e) => e.state === 'failed' || e.state === 'fix_requested'));
+    const setback = Math.min(...[...s.values(), Infinity]);
+    green++;
+    if (setback === Infinity || setback > f.get('merge_ready')) first++;
+    else setbacks.push(n);
+  }
+  const first_pass = {
+    reached_green: green,
+    first_pass: first,
+    first_pass_pct: green ? pct(first, green) : 'n/a (0 issues)',
+    setback_issues: setbacks,
+  };
+
+  // review (query 3) and adjudicator agreement
+  const verdicts = allEvents.filter((e) => e.state === 'verdict' && inWin(e.ts, win));
+  const prefixOf = (e) => {
+    const m = /^\s*([A-Z]+)\s*:/.exec(e.note || '');
+    return m && VERDICT_PREFIXES.includes(m[1]) ? m[1] : null;
+  };
+  const counts = {};
+  for (const e of verdicts) {
+    const p = prefixOf(e);
+    if (!p) continue;
+    const a = e.actor || 'unknown';
+    counts[a] = counts[a] || Object.fromEntries(VERDICT_PREFIXES.map((x) => [x, 0]));
+    counts[a][p]++;
+  }
+  const total = (p) => sum(Object.values(counts).map((c) => c[p]));
+  const correct = total('CORRECT');
+  const wrong = total('WRONG');
+  const review = {
+    verdicts: sum(VERDICT_PREFIXES.map(total)),
+    by_prefix: Object.fromEntries(VERDICT_PREFIXES.map((p) => [p, total(p)])),
+    by_actor: Object.fromEntries(Object.keys(counts).sort().map((a) => [a, counts[a]])),
+    false_positive_pct: correct + wrong ? pct(wrong, correct + wrong) : 'n/a (0 CORRECT/WRONG verdicts)',
+  };
+
+  const findingOf = (e) => {
+    const m = /^\s*[A-Z]+\s*:\s*(\S+)/.exec(e.note || '');
+    return m ? m[1] : null;
+  };
+  const keyed = new Map();
+  for (const e of verdicts) {
+    const p = prefixOf(e);
+    const id = findingOf(e);
+    if (!p || !id || !e.run_id) continue;
+    const k = `${e.run_id}\u0000${id}`;
+    if (!keyed.has(k)) keyed.set(k, []);
+    keyed.get(k).push({ actor: e.actor || 'unknown', prefix: p });
+  }
+  let pairs = 0;
+  let agree = 0;
+  let unpaired = 0;
+  for (const rows of keyed.values()) {
+    const adj = rows.filter((r) => r.actor === 'adjudicator');
+    const other = rows.filter((r) => r.actor !== 'adjudicator');
+    if (adj.length && other.length) {
+      // pair the first adjudicator verdict with the first verdict from another actor
+      pairs++;
+      if (adj[0].prefix === other[0].prefix) agree++;
+      unpaired += adj.length - 1;
+    } else unpaired += adj.length;
+  }
+  const adjudicator_agreement = {
+    pairs,
+    agreed: agree,
+    agreement_pct: pairs ? pct(agree, pairs) : 'n/a (0 pairs)',
+    unpaired_adjudicator_verdicts: unpaired,
+  };
+
+  // merged-at lookups for stale-wake detection
+  const mergedAt = { issue: new Map(), run: new Map() };
+  for (const e of allEvents) {
+    if (e.state !== 'merged') continue;
+    const t = Date.parse(e.ts);
+    if (e.issue !== null && e.issue !== undefined && !(mergedAt.issue.get(e.issue) <= t)) mergedAt.issue.set(e.issue, t);
+    if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
+  }
+  return { throughput, first_pass, review, adjudicator_agreement, mergedAt };
+}
+
+// ---------------------------------------------------------------- waste
+
+function isStale(w, seenDone, mergedAt) {
+  const wt = Date.parse(w.ts);
+  if (w.taskId && seenDone.has(w.taskId)) return true;
+  if (!mergedAt) return false;
+  for (const m of w.text.matchAll(/#(\d+)\b/g)) {
+    const t = mergedAt.issue.get(Number(m[1]));
+    if (t !== undefined && t < wt) return true;
+  }
+  for (const m of w.text.matchAll(/\b[0-9A-Z]{26}\b/g)) {
+    const t = mergedAt.run.get(m[0]);
+    if (t !== undefined && t < wt) return true;
+  }
+  return false;
+}
+
+function computeWaste(sessions, mergedAt) {
+  const cat = () => ({ count: 0, tokens: 0 });
+  const out = {
+    wakes: Object.fromEntries(WAKE_KINDS.map((k) => [k, 0])),
+    wake_turns: 0,
+    wake_tokens: 0,
+    idle_wakes: cat(),
+    re_arms: cat(),
+    stale_wakes: cat(),
+    repeated_checks: cat(),
+    top_wakes: [],
+  };
+  const all = [];
+  for (const s of sessions) {
+    const seenDone = new Set();
+    s.wakes.forEach((w) => {
+      const tokens = sum(w.turns.map(turnTokens));
+      const calls = w.turns.flatMap((t) => t.tools);
+      const owner = w.kind === 'owner';
+      out.wakes[w.kind]++;
+      out.wake_turns += w.turns.length;
+      out.wake_tokens += tokens;
+      const idle = !owner && w.turns.length > 0 && !calls.some(isActionCall);
+      const rearm = idle && calls.length > 0 &&
+        calls.every((c) => REARM_ONLY_TOOLS.has(c.name) || (c.name === 'Bash' && c.input.run_in_background === true)) &&
+        calls.some((c) => c.name === 'Monitor' || c.name === 'Bash');
+      const stale = !owner && w.kind !== 'cron' && isStale(w, seenDone, mergedAt);
+      if (w.taskId && w.status === 'completed') seenDone.add(w.taskId);
+      for (const [flag, c] of [[idle, out.idle_wakes], [rearm, out.re_arms], [stale, out.stale_wakes]]) {
+        if (flag) { c.count++; c.tokens += tokens; }
+      }
+      all.push({ session: s.session, ts: w.ts, kind: w.kind, turns: w.turns.length, tokens, idle, re_arm: rearm, stale });
+    });
+
+    // repeated checks: identical Bash command within the window with no action call between
+    const last = new Map();
+    let actions = 0;
+    for (const t of s.turns) {
+      let hit = false;
+      for (const c of t.tools) {
+        if (isActionCall(c)) { actions++; continue; }
+        if (c.name !== 'Bash') continue;
+        const key = String(c.input.command || '').replace(/\s+/g, ' ').trim();
+        const prev = last.get(key);
+        if (prev && prev.actions === actions && Date.parse(t.ts) - prev.ts <= REPEAT_WINDOW_MS) {
+          out.repeated_checks.count++;
+          hit = true;
+        }
+        last.set(key, { ts: Date.parse(t.ts), actions });
+      }
+      if (hit) out.repeated_checks.tokens += turnTokens(t);
+    }
+  }
+  out.top_wakes = all
+    .sort((a, b) => b.tokens - a.tokens || cmpStr(a.ts, b.ts) || cmpStr(a.session, b.session))
+    .slice(0, TOP_WAKES);
+  return out;
+}
+
+// ---------------------------------------------------------------- spend
+
+function computeSpend(fileTurns, invocations) {
+  const rows = new Map();
+  const add = (role, model, turns, u) => {
+    const k = `${role}\u0000${model}`;
+    const r = rows.get(k) || { role, model, turns: 0, input: 0, output: 0, cache_read: 0, cache_creation: 0 };
+    r.turns += turns;
+    r.input += u.input;
+    r.output += u.output;
+    r.cache_read += u.cache_read;
+    r.cache_creation += u.cache_creation;
+    rows.set(k, r);
+  };
+  for (const f of fileTurns) for (const t of f.turns) add(f.role, t.model || 'unknown', 1, t.usage);
+  for (const i of invocations || []) {
+    add(`pipeline:${i.step_name}`, i.model || 'unknown', i.model_roundtrips || 0, {
+      input: i.input_tokens || 0, output: i.output_tokens || 0,
+      cache_read: i.cache_read_tokens || 0, cache_creation: i.cache_creation_tokens || 0,
+    });
+  }
+  return [...rows.values()].sort((a, b) => cmpStr(a.role, b.role) || cmpStr(a.model, b.model));
+}
+
+// Sub-agents whose transcript model differs from the model the Agent call requested.
+function modelMismatches(fileTurns) {
+  const requested = new Map();
+  for (const f of fileTurns) {
+    for (const t of f.turns) {
+      for (const c of t.tools) if (c.name === 'Agent' && c.input.model) requested.set(c.id, String(c.input.model));
+    }
+  }
+  const out = [];
+  for (const f of fileTurns) {
+    if (f.kind !== 'sub' || !f.toolUseId || !requested.has(f.toolUseId)) continue;
+    const want = requested.get(f.toolUseId);
+    const models = [...new Set(f.turns.map((t) => t.model).filter(Boolean))].sort();
+    if (models.length && !models.every((m) => m.toLowerCase().includes(want.toLowerCase()))) {
+      out.push({ session: f.session, role: f.role, requested: want, actual: models });
+    }
+  }
+  return out.sort((a, b) => cmpStr(a.session + a.role, b.session + b.role));
+}
+
+// ---------------------------------------------------------------- no-mistakes
+
+const NM_SCHEMA = {
+  repos: ['id', 'working_path', 'upstream_url'],
+  runs: ['id', 'repo_id', 'status', 'created_at'],
+  step_results: ['id', 'run_id', 'step_name', 'duration_ms'],
+  step_rounds: ['id', 'step_result_id'],
+  agent_invocations: [
+    'run_id', 'step_name', 'model', 'fallback_reason', 'model_roundtrips', 'input_tokens',
+    'output_tokens', 'cache_read_tokens', 'cache_creation_tokens',
+  ],
+};
+
+function loadNoMistakes(file, repo) {
+  if (!fs.existsSync(file)) return { reason: `file not found: ${file}` };
+  let DatabaseSync;
+  try { ({ DatabaseSync } = require('node:sqlite')); } catch { return { reason: 'node:sqlite is not available in this node' }; }
+  let db;
+  try {
+    db = new DatabaseSync(file, { readOnly: true });
+    db.prepare('SELECT 1 FROM sqlite_master LIMIT 1').get();
+  } catch (e) {
+    throw new InputError(`cannot read ${file}: ${e.message}`);
+  }
+  try {
+    const have = {};
+    for (const [table, cols] of Object.entries(NM_SCHEMA)) {
+      const info = db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
+      const missing = cols.filter((c) => !info.includes(c));
+      have[table] = info.length === 0 ? `table ${table} is missing` : missing.length ? `${table} lacks column(s) ${missing.join(', ')}` : null;
+    }
+    if (have.repos || have.runs) return { reason: have.repos || have.runs, tables: have };
+    const repos = db.prepare('SELECT id, working_path, upstream_url FROM repos').all()
+      .filter((r) => repoOfUrl(r.upstream_url) === repo.toLowerCase());
+    const ids = new Set(repos.map((r) => r.id));
+    const ms = (t) => (t > 1e11 ? t : t * 1000);
+    const runs = db.prepare('SELECT id, repo_id, status, created_at FROM runs ORDER BY created_at, id').all()
+      .filter((r) => ids.has(r.repo_id)).map((r) => ({ ...r, created_ms: ms(r.created_at) }));
+    const data = { workingPaths: repos.map((r) => r.working_path).sort(), runs, tables: have, rows: runs.length };
+    data.steps = have.step_results ? null : db.prepare('SELECT id, run_id, step_name, duration_ms FROM step_results').all();
+    data.rounds = have.step_rounds || have.step_results ? null : db.prepare('SELECT id, step_result_id FROM step_rounds').all();
+    data.invocations = have.agent_invocations ? null : db.prepare(
+      'SELECT run_id, step_name, model, fallback_reason, model_roundtrips, input_tokens, output_tokens, ' +
+      'cache_read_tokens, cache_creation_tokens FROM agent_invocations',
+    ).all();
+    return data;
+  } finally {
+    db.close();
+  }
+}
+
+function computePipeline(nm, win) {
+  if (nm.reason) return { pipeline: na(nm.reason), invocations: null };
+  const runs = nm.runs.filter((r) => inWin(r.created_ms, win));
+  const ids = new Set(runs.map((r) => r.id));
+  const byStatus = {};
+  for (const r of runs) byStatus[r.status] = (byStatus[r.status] || 0) + 1;
+  const pipeline = {
+    runs: runs.length,
+    by_status: Object.fromEntries(Object.keys(byStatus).sort().map((k) => [k, byStatus[k]])),
+  };
+  if (nm.rounds) {
+    const reviewIds = new Map(nm.steps.filter((s) => s.step_name === 'review' && ids.has(s.run_id)).map((s) => [s.id, s.run_id]));
+    const per = new Map(runs.map((r) => [r.id, 0]));
+    for (const r of nm.rounds) if (reviewIds.has(r.step_result_id)) per.set(reviewIds.get(r.step_result_id), per.get(reviewIds.get(r.step_result_id)) + 1);
+    const rounds = [...per.entries()].sort((a, b) => cmpStr(a[0], b[0])).map(([run, review_rounds]) => ({ run, review_rounds }));
+    pipeline.review_rounds = { total: sum(rounds.map((r) => r.review_rounds)), max: rounds.length ? Math.max(...rounds.map((r) => r.review_rounds)) : null, per_run: rounds };
+  } else pipeline.review_rounds = na(nm.tables.step_rounds || nm.tables.step_results);
+  const invs = nm.invocations ? nm.invocations.filter((i) => ids.has(i.run_id)) : null;
+  pipeline.fallback_invocations = invs
+    ? { count: invs.filter((i) => i.fallback_reason).length, of: invs.length }
+    : na(nm.tables.agent_invocations);
+  if (nm.steps) {
+    const d = nm.steps.filter((s) => s.step_name === 'ci' && ids.has(s.run_id) && typeof s.duration_ms === 'number').map((s) => s.duration_ms / 1000);
+    pipeline.ci_duration_seconds = { median: median(d), max: d.length ? Math.max(...d) : null, steps: d.length };
+  } else pipeline.ci_duration_seconds = na(nm.tables.step_results);
+  return { pipeline, invocations: invs };
+}
+
+// ---------------------------------------------------------------- assembly
+
+function gitToplevel() {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return null; }
+}
+
+function evaluate(opts, env = process.env) {
+  const win = opts.win;
+  const home = env.HOME || os.homedir();
+  const [owner, name] = opts.repo.split('/');
+  const eventsFile = opts.events || path.join(env.CALLUM_EVENTS_DIR || '/persist/events', `${owner}__${name}.jsonl`);
+  const nmFile = opts.nmState || path.join(env.NO_MISTAKES_HOME || path.join(home, '.no-mistakes'), 'state.sqlite');
+  const projectsRoot = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
+  const sources = [];
+
+  // no-mistakes first: its repos rows name the checkout paths
+  const nm = loadNoMistakes(nmFile, opts.repo);
+  sources.push({
+    kind: 'no-mistakes', path: nmFile, found: fs.existsSync(nmFile),
+    rows: nm.rows === undefined ? null : nm.rows, ...(nm.reason ? { 'n/a': nm.reason } : {}),
+  });
+  if (!nm.reason) {
+    for (const [t, why] of Object.entries(nm.tables)) {
+      if (why) sources.push({ kind: 'no-mistakes', path: `${nmFile}#${t}`, found: false, rows: null, 'n/a': why });
+    }
+  }
+
+  const ev = loadEvents(eventsFile);
+  sources.push({
+    kind: 'events', path: eventsFile, found: ev.events !== null, rows: ev.events ? ev.events.length : null,
+    ...(ev.reason ? { 'n/a': ev.reason } : {}),
+  });
+
+  const checkouts = [];
+  const top = gitToplevel();
+  if (top) checkouts.push(top);
+  if (!nm.reason) checkouts.push(...nm.workingPaths);
+  const tr = findTranscripts(projectsRoot, checkouts, opts.projectsDirs);
+  const parsed = tr.files.map((f) => {
+    const lines = parseJsonl(readText(f.path));
+    return { ...f, lines, ...buildTurns(lines, win), inWindow: lines.some((l) => l && inWin(l.timestamp, win)) };
+  });
+  if (tr.foundDirs.length) {
+    for (const d of tr.foundDirs) {
+      const mine = parsed.filter((f) => path.resolve(f.path).startsWith(`${d}${path.sep}`));
+      sources.push({ kind: 'transcripts', path: d, found: true, rows: sum(mine.map((f) => f.lines.length)), files: mine.length });
+    }
+  } else {
+    sources.push({
+      kind: 'transcripts', path: opts.projectsDirs.length ? opts.projectsDirs.join(',') : projectsRoot, found: false, rows: null,
+      'n/a': opts.projectsDirs.length ? 'no --projects-dir exists' : 'no project directory matches the checkout path(s)',
+    });
+  }
+  sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
+
+  const haveTr = tr.foundDirs.length > 0;
+  const pl = computePipeline(nm, win);
+  const evNa = ev.events === null ? na(ev.reason) : null;
+  const em = ev.events === null ? null : computeEventMetrics(ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase()), win);
+
+  const mains = parsed.filter((f) => f.kind === 'main');
+  const subs = parsed.filter((f) => f.kind === 'sub');
+  const report = {
+    window: {
+      since: iso(win.since),
+      until: iso(win.until),
+      sessions: mains.filter((f) => f.inWindow).length,
+      sub_agents: subs.filter((f) => f.inWindow).length,
+      pipeline_runs: nm.reason ? 'n/a' : pl.pipeline.runs,
+    },
+    throughput: em ? em.throughput : evNa,
+    first_pass: em ? em.first_pass : evNa,
+    review: em ? em.review : evNa,
+    adjudicator_agreement: em ? em.adjudicator_agreement : evNa,
+    spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
+      rows: computeSpend(parsed, pl.invocations),
+      sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
+    },
+    waste: haveTr ? computeWaste(mains, em ? em.mergedAt : null) : na('no transcripts'),
+    pipeline: pl.pipeline,
+    sources,
+  };
+  return report;
+}
+
+// ---------------------------------------------------------------- markdown
+
+const cell = (v) => (v === null || v === undefined ? 'n/a' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+function table(headers, rows) {
+  if (!rows.length) return '(none)\n';
+  const line = (r) => `| ${r.map(cell).join(' | ')} |`;
+  return [line(headers), line(headers.map(() => '---')), ...rows.map(line)].join('\n') + '\n';
+}
+const kv = (obj) => table(['metric', 'value'], Object.entries(obj));
+const naLine = (s) => `n/a: ${s['n/a']}\n`;
+
+function toMarkdown(r) {
+  const out = ['# Session evaluation', ''];
+  const sec = (title, body) => out.push(`## ${title}`, '', body, '');
+  const guard = (s, f) => (s && s['n/a'] ? naLine(s) : f(s));
+  sec('window', kv(r.window));
+  sec('throughput', guard(r.throughput, (t) =>
+    kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max }) + '\n' +
+    table(['issue', 'merged_at', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
+      t.issues.map((i) => [i.issue, i.merged_at, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
+  sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
+  sec('review', guard(r.review, (v) =>
+    kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
+    table(['actor', ...VERDICT_PREFIXES], [['(all)', ...VERDICT_PREFIXES.map((p) => v.by_prefix[p])],
+      ...Object.entries(v.by_actor).map(([a, c]) => [a, ...VERDICT_PREFIXES.map((p) => c[p])])])));
+  sec('adjudicator_agreement', guard(r.adjudicator_agreement, kv));
+  sec('spend', guard(r.spend, (s) =>
+    table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
+      s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +
+    (s.sub_agent_model_mismatches['n/a'] ? naLine(s.sub_agent_model_mismatches)
+      : 'Sub-agents on a model other than requested:\n\n' + table(['session', 'role', 'requested', 'actual'],
+        s.sub_agent_model_mismatches.map((m) => [m.session, m.role, m.requested, m.actual.join(',')])))));
+  sec('waste', guard(r.waste, (w) =>
+    table(['wake kind', 'count'], WAKE_KINDS.map((k) => [k, w.wakes[k]])) + '\n' +
+    table(['category', 'count', 'tokens'], [
+      ['all wakes', sum(Object.values(w.wakes)), w.wake_tokens], ['idle wake', w.idle_wakes.count, w.idle_wakes.tokens],
+      ['re-arm', w.re_arms.count, w.re_arms.tokens], ['stale wake', w.stale_wakes.count, w.stale_wakes.tokens],
+      ['repeated check', w.repeated_checks.count, w.repeated_checks.tokens]]) + '\n' +
+    table(['session', 'ts', 'kind', 'turns', 'tokens', 'idle', 're_arm', 'stale'],
+      w.top_wakes.map((t) => [t.session, t.ts, t.kind, t.turns, t.tokens, t.idle, t.re_arm, t.stale]))));
+  sec('pipeline', guard(r.pipeline, (p) => kv({
+    runs: p.runs,
+    by_status: Object.entries(p.by_status).map(([k, v]) => `${k}=${v}`).join(' ') || 'none',
+    review_rounds: p.review_rounds['n/a'] ? `n/a: ${p.review_rounds['n/a']}` : `total=${p.review_rounds.total} max=${p.review_rounds.max}`,
+    fallback_invocations: p.fallback_invocations['n/a'] ? `n/a: ${p.fallback_invocations['n/a']}` : `${p.fallback_invocations.count} of ${p.fallback_invocations.of}`,
+    ci_duration_seconds: p.ci_duration_seconds['n/a'] ? `n/a: ${p.ci_duration_seconds['n/a']}` : `median=${p.ci_duration_seconds.median} max=${p.ci_duration_seconds.max}`,
+  })));
+  sec('sources', table(['kind', 'path', 'found', 'rows', 'n/a'], r.sources.map((s) => [s.kind, s.path, s.found, s.rows, s['n/a'] || ''])));
+  return out.join('\n');
+}
+
+// ---------------------------------------------------------------- main
+
+function main(argv) {
+  let opts;
+  try {
+    opts = parseArgs(argv);
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    process.stderr.write(`callum-flow-evaluate: ${e.message}\n${USAGE}\n`);
+    return 2;
+  }
+  if (opts.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  let report;
+  try {
+    report = evaluate(opts);
+  } catch (e) {
+    if (!(e instanceof InputError)) throw e;
+    process.stderr.write(`callum-flow-evaluate: ${e.message}\n`);
+    return 1;
+  }
+  process.stdout.write(opts.format === 'markdown' ? toMarkdown(report) : `${JSON.stringify(report, null, 2)}\n`);
+  return 0;
+}
+
+module.exports = {
+  TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend,
+  modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl,
+};
+
+if (require.main === module) process.exitCode = main(process.argv.slice(2));

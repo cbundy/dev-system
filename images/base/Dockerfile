@@ -199,6 +199,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-fix-linkage \
   images/base/callum-flow-claim \
   images/base/callum-flow-sweep \
+  images/base/callum-flow-evaluate \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop /usr/local/share/dev-system/

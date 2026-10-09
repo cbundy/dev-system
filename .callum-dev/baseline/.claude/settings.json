@@ -34,7 +34,8 @@
       "Bash(callum-flow-claim)",
       "Bash(callum-flow-claim *)",
       "Bash(callum-flow-sweep)",
-      "Bash(callum-flow-sweep *)"
+      "Bash(callum-flow-sweep *)",
+      "Bash(callum-flow-evaluate *)"
     ]
   }
 }

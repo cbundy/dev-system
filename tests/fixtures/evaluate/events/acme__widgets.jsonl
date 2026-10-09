@@ -1,0 +1,26 @@
+{"v":1,"ts":"2026-10-08T08:00:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"ready","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T08:10:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"claimed","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T08:40:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"delegated","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T09:00:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"run_started","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T09:30:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merge_ready","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:32:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merged","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T07:00:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"ready","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T07:05:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"claimed","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T07:20:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"delegated","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T07:30:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"run_started","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T07:50:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merge_ready","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:50:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merged","issue":8,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:10:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merge_ready","issue":9,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:05:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"failed","issue":10,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:15:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merge_ready","issue":10,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:20:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"merge_ready","issue":11,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T10:25:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"fix_requested","issue":11,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-08T09:00:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"orchestrator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"WRONG: review-1 old"}
+{"v":1,"ts":"2026-10-08T10:12:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"adjudicator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"CORRECT: review-1 real bug"}
+{"v":1,"ts":"2026-10-08T10:12:01Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"adjudicator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"NIT: review-2 style"}
+{"v":1,"ts":"2026-10-08T10:12:02Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"adjudicator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"WRONG: review-3 bogus"}
+{"v":1,"ts":"2026-10-08T10:12:03Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"adjudicator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"DUP: review-4 dup"}
+{"v":1,"ts":"2026-10-08T10:13:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"orchestrator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"WRONG: review-1 not a bug"}
+{"v":1,"ts":"2026-10-08T10:13:01Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"orchestrator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"NIT: review-2 style ok"}
+{"v":1,"ts":"2026-10-08T10:13:02Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"orchestrator","state":"verdict","issue":9,"run_id":"R1","branch":null,"pr":null,"head":null,"note":"DUP: review-9 dup"}
+{"v":1,"ts":"2026-10-08T10:14:00Z","repo":"acme/widgets","device":"d","session_id":null,"actor":"agent","state":"usage","issue":null,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
