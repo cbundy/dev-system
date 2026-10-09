@@ -87,6 +87,9 @@ idle session must not wake itself.
    then do the Run it; whoever ran it records the result and closes the issue.
    `keep-open` - the owner closes it.
 
+Whenever you abandon claimed work, log `callum-flow-event abandoned --issue
+<N>`; include `--run <id>` and `--branch <b>` when known.
+
 ## Upgrading the workspace you run in
 To pick up a new image or template on your own workspace, run `dev-restart-self`
 (`--restart` forces the scheduled variant). Never `coder restart`, `stop` or `update`
