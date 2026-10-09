@@ -507,6 +507,197 @@ JOIN factory.events e ON e.run_id = r.id AND e.state = 'run_started'
 ORDER BY e.ts;
 ```
 
+### Saved queries
+
+Seven queries on the mirror, each runnable as is in `psql`. They qualify every `nomistakes` column
+with a table alias (`r` runs, `s` step_results, `d` step_rounds, `i` agent_invocations); that is
+the convention `tests/metrics-queries.test.js` relies on to catch a column that has drifted out
+of the schema, and image CI runs every block here against a real PostgreSQL. The JSON columns
+(`findings_json`, `user_findings_json`) are `text`, so each query casts them and treats NULL and
+empty text as "no findings". Values seen in a live `state.sqlite`: `step_name` is one of `rebase`,
+`review`, `test`, `document`, `lint`, `push`, `pr`, `ci`, `intent`; step `status` is `completed`,
+`failed`, `skipped`, `pending` (or `running`); `trigger_type` is `initial` or `auto_fix`;
+`selection_source` is `user`, `user_declined`, `auto_fix` or NULL.
+
+#### 1. First-pass rate per gate
+
+A step is first-pass when it ended `completed` and has no `auto_fix` round. The denominator is
+the steps that reached a verdict (`completed` or `failed`), so `skipped`, `pending` and
+`running` steps are excluded.
+
+```sql
+SELECT s.step_name, r.repo, r.device,
+       count(*) AS steps,
+       count(*) FILTER (WHERE s.status = 'completed' AND NOT EXISTS (
+         SELECT 1 FROM nomistakes.step_rounds d
+         WHERE d.step_result_id = s.id AND d.trigger_type = 'auto_fix')) AS first_pass,
+       round((count(*) FILTER (WHERE s.status = 'completed' AND NOT EXISTS (
+         SELECT 1 FROM nomistakes.step_rounds d
+         WHERE d.step_result_id = s.id AND d.trigger_type = 'auto_fix')))::numeric / count(*), 3) AS first_pass_rate
+FROM nomistakes.step_results s
+JOIN nomistakes.runs r ON r.id = s.run_id
+WHERE s.status IN ('completed', 'failed')
+GROUP BY s.step_name, r.repo, r.device
+ORDER BY first_pass_rate, steps DESC, s.step_name;
+```
+
+#### 2. Fix rounds per step
+
+How many `auto_fix` rounds each gate needed and the deepest round it reached. The gates that
+loop most come first.
+
+```sql
+SELECT s.step_name,
+       count(*) FILTER (WHERE d.trigger_type = 'auto_fix') AS fix_rounds,
+       coalesce(max(d.round), 0) AS max_round,
+       count(DISTINCT s.id) AS steps
+FROM nomistakes.step_results s
+LEFT JOIN nomistakes.step_rounds d ON d.step_result_id = s.id
+GROUP BY s.step_name
+ORDER BY fix_rounds DESC, max_round DESC, s.step_name;
+```
+
+#### 3. Findings per round and share dismissed
+
+Findings per round come from `findings_json`. A round whose `selection_source` is `user_declined`
+is one where the user dismissed the findings, so `dismissed_share` (dismissed findings over the
+findings of rounds with a decision, i.e. a non-NULL `selection_source`) reads as a reviewer
+false-positive signal. `user_added_findings` counts findings the user supplied in
+`user_findings_json`, the opposite signal: something the reviewer missed.
+
+```sql
+SELECT s.step_name, r.repo, r.device,
+       count(*) AS rounds,
+       sum(f.n) AS findings,
+       round(avg(f.n), 2) AS findings_per_round,
+       coalesce(sum(f.n) FILTER (WHERE d.selection_source IS NOT NULL), 0) AS decided_findings,
+       coalesce(sum(f.n) FILTER (WHERE d.selection_source = 'user_declined'), 0) AS dismissed_findings,
+       round(coalesce(sum(f.n) FILTER (WHERE d.selection_source = 'user_declined'), 0)::numeric
+             / nullif(sum(f.n) FILTER (WHERE d.selection_source IS NOT NULL), 0), 3) AS dismissed_share,
+       sum(u.n) AS user_added_findings
+FROM nomistakes.step_rounds d
+JOIN nomistakes.step_results s ON s.id = d.step_result_id
+JOIN nomistakes.runs r ON r.id = s.run_id
+CROSS JOIN LATERAL (SELECT CASE WHEN nullif(btrim(d.findings_json), '') IS NULL THEN 0
+                           ELSE coalesce(jsonb_array_length(d.findings_json::jsonb -> 'findings'), 0) END AS n) f
+CROSS JOIN LATERAL (SELECT CASE WHEN nullif(btrim(d.user_findings_json), '') IS NULL THEN 0
+                           ELSE coalesce(jsonb_array_length(d.user_findings_json::jsonb -> 'findings'), 0) END AS n) u
+GROUP BY s.step_name, r.repo, r.device
+ORDER BY findings DESC, s.step_name;
+```
+
+#### 4. Agent tokens and wall time
+
+One query, three grains (`grain` column): by `agent`, `model` and `purpose`; per run; and per
+merged pull request (`runs.pr_url` where `pr_state = 'merged'`, summed over the runs that
+produced it). `duration_ms` is the invocation wall time.
+
+```sql
+SELECT 'agent_model_purpose' AS grain, NULL::text AS repo, NULL::text AS run_id, NULL::text AS pr_url,
+       i.agent, i.model, i.purpose, count(*) AS invocations,
+       coalesce(sum(i.input_tokens), 0) AS input_tokens, coalesce(sum(i.output_tokens), 0) AS output_tokens,
+       coalesce(sum(i.cache_read_tokens), 0) AS cache_read_tokens,
+       coalesce(sum(i.cache_creation_tokens), 0) AS cache_creation_tokens,
+       coalesce(sum(i.duration_ms), 0) AS duration_ms
+FROM nomistakes.agent_invocations i
+GROUP BY i.agent, i.model, i.purpose
+UNION ALL
+SELECT 'run', r.repo, r.id, r.pr_url, NULL, NULL, NULL, count(*),
+       coalesce(sum(i.input_tokens), 0), coalesce(sum(i.output_tokens), 0),
+       coalesce(sum(i.cache_read_tokens), 0), coalesce(sum(i.cache_creation_tokens), 0),
+       coalesce(sum(i.duration_ms), 0)
+FROM nomistakes.agent_invocations i
+JOIN nomistakes.runs r ON r.id = i.run_id
+GROUP BY r.repo, r.id, r.pr_url
+UNION ALL
+SELECT 'merged_pr', r.repo, NULL, r.pr_url, NULL, NULL, NULL, count(*),
+       coalesce(sum(i.input_tokens), 0), coalesce(sum(i.output_tokens), 0),
+       coalesce(sum(i.cache_read_tokens), 0), coalesce(sum(i.cache_creation_tokens), 0),
+       coalesce(sum(i.duration_ms), 0)
+FROM nomistakes.agent_invocations i
+JOIN nomistakes.runs r ON r.id = i.run_id
+WHERE r.pr_state = 'merged' AND r.pr_url IS NOT NULL
+GROUP BY r.repo, r.pr_url
+ORDER BY grain, input_tokens DESC;
+```
+
+#### 5. Time parked
+
+A run is parked while it waits for an agent or a person; `runs.parked_ms` accumulates that time.
+`totals` rows give the sum and the distribution (median, 90th percentile, max) per repo and
+device over runs that parked at all. `parked_now` rows are the runs parked right now
+(`awaiting_agent_since IS NOT NULL`) with how long they have waited.
+
+```sql
+SELECT 'totals' AS grain, r.repo, r.device, NULL::text AS run_id,
+       count(*) AS runs,
+       sum(r.parked_ms)::bigint AS parked_ms_total,
+       round(percentile_cont(0.5) WITHIN GROUP (ORDER BY r.parked_ms))::bigint AS parked_ms_p50,
+       round(percentile_cont(0.9) WITHIN GROUP (ORDER BY r.parked_ms))::bigint AS parked_ms_p90,
+       max(r.parked_ms)::bigint AS parked_ms_max,
+       NULL::text AS parked_for
+FROM nomistakes.runs r
+WHERE r.parked_ms > 0
+GROUP BY r.repo, r.device
+UNION ALL
+SELECT 'parked_now', r.repo, r.device, r.id, NULL, r.parked_ms::bigint, NULL, NULL, NULL,
+       date_trunc('second', now() - r.awaiting_agent_since)::text
+FROM nomistakes.runs r
+WHERE r.awaiting_agent_since IS NOT NULL
+ORDER BY grain DESC, repo, device;
+```
+
+#### 6. Failure categories and fallback reasons
+
+Counts of invocation outcomes by `purpose` and `model`. An empty `failure_category` means the
+invocation did not fail and shows as `none`; a `fallback_reason` is set when the invocation fell
+back to another agent.
+
+```sql
+SELECT i.purpose, i.model,
+       coalesce(nullif(i.failure_category, ''), 'none') AS failure_category,
+       coalesce(nullif(i.fallback_reason, ''), 'none') AS fallback_reason,
+       count(*) AS invocations
+FROM nomistakes.agent_invocations i
+GROUP BY i.purpose, i.model, 3, 4
+ORDER BY invocations DESC, i.purpose, i.model, 3, 4;
+```
+
+#### 7. Run lead time joined to `factory.events`
+
+Per issue, from the orchestrator's `claimed` event to its `merged` event, split into pipeline
+time and the rest. Pipeline time is `runs.updated_at - runs.created_at` summed over the runs the
+orchestrator linked to the issue with `run_started` events; it includes the time those runs sat
+parked, so `parked_s` is shown beside it (not additional to it). `other_s` is everything
+outside the pipeline: waiting to be picked up, design, review and merge.
+
+```sql
+WITH issues AS (
+  SELECT e.repo, e.issue,
+         min(e.ts) FILTER (WHERE e.state = 'claimed') AS claimed_at,
+         max(e.ts) FILTER (WHERE e.state = 'merged') AS merged_at
+  FROM factory.events e
+  WHERE e.issue IS NOT NULL
+  GROUP BY e.repo, e.issue
+), linked AS (
+  SELECT DISTINCT e.repo, e.issue, e.run_id
+  FROM factory.events e
+  WHERE e.state = 'run_started' AND e.run_id IS NOT NULL
+)
+SELECT n.repo, n.issue,
+       round(extract(epoch FROM n.merged_at - n.claimed_at)) AS lead_s,
+       round(sum(extract(epoch FROM r.updated_at - r.created_at))) AS pipeline_s,
+       round(sum(coalesce(r.parked_ms, 0)) / 1000.0) AS parked_s,
+       round(extract(epoch FROM n.merged_at - n.claimed_at) - sum(extract(epoch FROM r.updated_at - r.created_at))) AS other_s,
+       count(r.id) AS runs
+FROM issues n
+JOIN linked l ON l.repo = n.repo AND l.issue = n.issue
+JOIN nomistakes.runs r ON r.id = l.run_id
+WHERE n.claimed_at IS NOT NULL AND n.merged_at IS NOT NULL
+GROUP BY n.repo, n.issue, n.claimed_at, n.merged_at
+ORDER BY n.merged_at;
+```
+
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]

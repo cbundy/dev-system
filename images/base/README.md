@@ -1278,7 +1278,7 @@ queries are in [docs/metrics.md](../../docs/metrics.md).
 the same URL rules as `event-push-loop`. The source is `state.sqlite` under
 `NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`. See
 [docs/metrics.md](../../docs/metrics.md#no-mistakes-pipeline-data-nomistakes-schema) for the
-tables, export rules, generated DDL and an example join.
+tables, export rules, generated DDL and the saved queries.
 The state is `$AGENTSVIEW_DATA_DIR/nm-push/device-<hex>/state` (default parent
 `/persist/agentsview/nm-push`), where `<hex>` is the UTF-8
 hex encoding of `DEV_MACHINE_NAME` (else hostname). `NM_PUSH_STATE_DIR` overrides the parent
