@@ -1,0 +1,226 @@
+#!/bin/bash
+#
+# dev-version: is this environment current? (cbundy/dev-system#271)
+#
+# One line per component:
+#   dev-version: OK|STALE|UNKNOWN <component> running=<x> latest=<y> [more]
+# Components: the base image, each per-repo image layer that stamped itself, the
+# callum-flow plugin (per scope), and the tools claude, codex, no-mistakes, treehouse,
+# agentsview and coder.
+#
+# Usage: dev-version
+#   Exits 1 if any line is STALE, 0 if every line is OK or UNKNOWN, 2 on bad usage.
+#
+# STALE means something newer exists: a newer image published on GHCR (compared by the
+# git revision the image's stamp carries), a plugin installed below the release the
+# image pins, or a newer upstream release of an unpinned tool (claude, codex,
+# no-mistakes, treehouse). agentsview and coder are pinned by the image build, so they
+# show the pin and the upstream release but are never STALE. UNKNOWN is never a
+# failure: no network, no gh login, no stamp (a local build) or a lookup that timed out.
+#
+# Every lookup runs in parallel under a short timeout, so the whole command finishes
+# in within DEV_VERSION_LIMIT+1 seconds (default 3+1) even offline or against a hung
+# endpoint. Overrides for tests: DEV_VERSION_STAMP, DEV_VERSION_STAMP_DIR,
+# DEV_VERSION_REGISTRY (default https://ghcr.io), DEV_VERSION_NPM (default
+# https://registry.npmjs.org).
+set -u
+
+STAMP="${DEV_VERSION_STAMP:-/usr/local/share/dev-system/image-release}"
+STAMP_DIR="${DEV_VERSION_STAMP_DIR:-/usr/local/share/dev-system/image-release.d}"
+REGISTRY="${DEV_VERSION_REGISTRY:-https://ghcr.io}"
+NPM="${DEV_VERSION_NPM:-https://registry.npmjs.org}"
+LIMIT="${DEV_VERSION_LIMIT:-3}"
+SELF=$(readlink -f "$0")
+
+# shellcheck source=plugins.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/plugins.sh"
+
+# stamp_get <file> <KEY>: the value of KEY in a KEY=VALUE stamp file.
+stamp_get() {
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | sed -n 1p
+}
+
+# semver <text>: the first dotted version in the text, without a leading v.
+semver() {
+  printf '%s\n' "$1" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | sed -n 1p
+}
+
+# older <a> <b>: succeeds when version a is strictly lower than b.
+older() {
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | sed -n 1p)" = "$1" ]
+}
+
+line() { # line <status> <component> <details>
+  printf 'dev-version: %s %s %s\n' "$1" "$2" "$3"
+}
+
+http() { # http <url> [curl args]: GET with a hard per-request limit
+  local url="$1"
+  shift
+  curl -fsSL --connect-timeout 2 --max-time 3 "$@" "$url"
+}
+
+# image_job <component> <stamp file>: compares a stamp with the newest published image.
+image_job() {
+  local comp="$1" file="$2" ref rev tag repo token index mf cfg latest
+  ref=$(stamp_get "$file" IMAGE)
+  rev=$(stamp_get "$file" REVISION)
+  tag=$(stamp_get "$file" TAG)
+  [ -n "$tag" ] || tag=$(stamp_get "$file" VERSION | cut -d. -f1)
+  if [ ! -f "$file" ] || [ -z "$ref" ] || [ -z "$rev" ] || [ "$rev" = unknown ] || [ -z "$tag" ] || [ "$tag" = 0 ]; then
+    line UNKNOWN "$comp" "running=none latest=? (no release stamp: a local build)"
+    return
+  fi
+  repo=${ref#*/}
+  token=$(http "$REGISTRY/token?service=${ref%%/*}&scope=repository:$repo:pull" | jq -r '.token // empty') || token=""
+  if [ -z "$token" ]; then
+    line UNKNOWN "$comp" "running=${rev:0:7} latest=? (registry unreachable)"
+    return
+  fi
+  local accept='application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json'
+  index=$(http "$REGISTRY/v2/$repo/manifests/$tag" -H "Authorization: Bearer $token" -H "Accept: $accept") || index=""
+  mf=$(printf '%s' "$index" | jq -r 'if .manifests then ([.manifests[] | select(.platform.os != "unknown")][0].digest) else empty end' 2>/dev/null)
+  if [ -n "$mf" ]; then
+    index=$(http "$REGISTRY/v2/$repo/manifests/$mf" -H "Authorization: Bearer $token" -H "Accept: $accept") || index=""
+  fi
+  cfg=$(printf '%s' "$index" | jq -r '.config.digest // empty' 2>/dev/null)
+  latest=""
+  if [ -n "$cfg" ]; then
+    latest=$(http "$REGISTRY/v2/$repo/blobs/$cfg" -H "Authorization: Bearer $token" | jq -r '.config.Labels["org.opencontainers.image.revision"] // empty' 2>/dev/null)
+  fi
+  if [ -z "$latest" ]; then
+    line UNKNOWN "$comp" "running=${rev:0:7} latest=? (published image not readable)"
+    return
+  fi
+  if [ "$latest" = "$rev" ]; then
+    line OK "$comp" "running=${rev:0:7} latest=${latest:0:7} (image $ref:$tag)"
+  else
+    line STALE "$comp" "running=${rev:0:7} latest=${latest:0:7} (a newer $ref:$tag is published: dev-restart-self, or rebuild the container)"
+  fi
+}
+
+# plugin_job: installed callum-flow (per scope) against the image's pin.
+plugin_job() {
+  local id src ref pin installed scope ver latest=""
+  while read -r id src; do
+    [ -n "$id" ] || continue
+    ref=""
+    case "$src" in *"#"*) ref=${src#*#} ;; esac
+    pin=$(semver "$ref")
+    installed=$(claude_plugin_cli list --json 2>/dev/null) || { line UNKNOWN "$id" "running=? latest=? (claude plugin list failed)"; continue; }
+    latest=$(gh api "repos/${src%%#*}/releases/latest" --jq .tag_name 2>/dev/null)
+    latest=$(semver "$latest")
+    if ! printf '%s\n' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
+      line UNKNOWN "$id" "running=none pin=${pin:-none} latest=${latest:-?} (not installed)"
+      continue
+    fi
+    while IFS=$'\t' read -r scope ver; do
+      ver=$(semver "$ver")
+      if [ -z "$ver" ]; then
+        line UNKNOWN "$id($scope)" "running=? pin=${pin:-none} latest=${latest:-?}"
+      elif [ -n "$pin" ] && older "$ver" "$pin"; then
+        line STALE "$id($scope)" "running=$ver pin=$pin latest=${latest:-?} (installed below the image's pin: dev-init --plugins)"
+      else
+        line OK "$id($scope)" "running=$ver pin=${pin:-none} latest=${latest:-?}"
+      fi
+    done < <(printf '%s\n' "$installed" | jq -r --arg id "$id" '.[] | select(.id == $id) | [.scope, .version] | @tsv')
+    if [ -n "$pin" ] && [ -n "$latest" ] && older "$pin" "$latest"; then
+      printf '%s\n' "(the image pins $id at $pin, latest is $latest: a newer image fixes that)" > "$OUT/pin-note"
+    fi
+  done < <(default_plugins)
+  return 0
+}
+
+# tool_job <name> <running version command...>: <name> against its upstream release.
+# Env: TOOL_SRC=npm:<package> | gh:<owner/repo>; TOOL_PINNED=1 and TOOL_PIN=<baked
+# pin> for a tool the image build pins (never STALE).
+tool_job() {
+  local name="$1" out run latest ref pin="${TOOL_PIN:-}" extra=""
+  shift
+  out=$(timeout 3 "$@" 2>/dev/null </dev/null) || out=""
+  run=$(semver "$out")
+  case "$TOOL_SRC" in
+    npm:*)
+      latest=$(http "$NPM/$(printf '%s' "${TOOL_SRC#npm:}" | sed 's|/|%2f|')/latest" | jq -r '.version // empty' 2>/dev/null)
+      ;;
+    gh:*)
+      latest=$(gh api "repos/${TOOL_SRC#gh:}/releases/latest" --jq .tag_name 2>/dev/null)
+      ;;
+  esac
+  latest=$(semver "${latest:-}")
+  [ -z "$pin" ] || extra=" pinned=$pin"
+  if [ -z "$run" ]; then
+    line UNKNOWN "$name" "running=none latest=${latest:-?}$extra (not installed)"
+  elif [ -z "$latest" ]; then
+    line UNKNOWN "$name" "running=$run latest=?$extra"
+  elif [ -n "${TOOL_PINNED:-}" ]; then
+    line OK "$name" "running=$run latest=$latest$extra"
+  elif older "$run" "$latest"; then
+    line STALE "$name" "running=$run latest=$latest (newer upstream release)"
+  else
+    line OK "$name" "running=$run latest=$latest"
+  fi
+}
+
+run_job() {
+  case "$1" in
+    image) image_job "base-image" "$STAMP" ;;
+    layer:*) image_job "image:${1#layer:}" "$STAMP_DIR/${1#layer:}" ;;
+    plugin) CLAUDE_PLUGIN_LIMIT=3 plugin_job ;;
+    claude) TOOL_SRC=npm:@anthropic-ai/claude-code tool_job claude claude --version ;;
+    codex) TOOL_SRC=npm:@openai/codex tool_job codex codex --version ;;
+    no-mistakes) TOOL_SRC=gh:kunchenguid/no-mistakes tool_job no-mistakes no-mistakes --version ;;
+    treehouse) TOOL_SRC=gh:kunchenguid/treehouse tool_job treehouse treehouse --version ;;
+    agentsview) TOOL_SRC=gh:kenn-io/agentsview TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" AGENTSVIEW_VERSION) tool_job agentsview agentsview --version ;;
+    coder) TOOL_SRC=gh:coder/coder TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" CODER_VERSION) tool_job coder coder --version ;;
+  esac
+}
+
+if [ "${1:-}" = --job ] && [ $# -eq 3 ]; then
+  OUT="$2"
+  run_job "$3"
+  exit 0
+fi
+if [ $# -gt 0 ]; then
+  echo "usage: dev-version" >&2
+  exit 2
+fi
+
+OUT=$(mktemp -d)
+trap 'rm -rf "$OUT"' EXIT
+jobs_list="image"
+if [ -d "$STAMP_DIR" ]; then
+  for f in "$STAMP_DIR"/*; do
+    [ -f "$f" ] && jobs_list="$jobs_list layer:${f##*/}"
+  done
+fi
+jobs_list="$jobs_list plugin claude codex no-mistakes treehouse agentsview coder"
+
+pids=""
+for j in $jobs_list; do
+  timeout -k 1 "$LIMIT" "$SELF" --job "$OUT" "$j" > "$OUT/${j//[:\/]/_}.out" 2>/dev/null &
+  pids="$pids $!"
+done
+# shellcheck disable=SC2086
+wait $pids
+
+stale=0
+for j in $jobs_list; do
+  f="$OUT/${j//[:\/]/_}.out"
+  if [ -s "$f" ]; then
+    if [ "$j" = image ] && [ -s "$OUT/pin-note" ]; then
+      printf '%s %s\n' "$(cat "$f")" "$(cat "$OUT/pin-note")"
+    else
+      cat "$f"
+    fi
+    grep -q '^dev-version: STALE ' "$f" && stale=1
+  else
+    line UNKNOWN "$j" "running=? latest=? (lookup timed out)"
+  fi
+done
+case "$jobs_list" in
+  *layer:*) ;;
+  *) line INFO "image-layers" "none (no per-repo image stamp in $STAMP_DIR)" ;;
+esac
+[ "$stale" -eq 0 ] || exit 1
+exit 0
