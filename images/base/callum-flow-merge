@@ -16,6 +16,8 @@
 # sha the guard verified, so a push after the check makes GitHub refuse it.
 # GitHub also refuses for a branch rule (for example a PR that fell behind its
 # base); on a refusal the PR is re-read to say which of the two it was.
+# After success, a non-empty guard close_issue field prints a manual closure
+# instruction; this script does not close the issue itself.
 #
 # Exit codes: 0 merged, 1 a guard failed (its GUARD lines are printed) or the
 # merge was refused, 2 usage error.
@@ -67,7 +69,7 @@ if [ "$rc" -ne 0 ]; then
 fi
 v=$(printf '%s\n' "$out" | sed -n 's/^VERIFIED //p' | sed -n 1p)
 get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
-branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue)
+branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue) close_issue=$(get close_issue)
 [ -n "$sha" ] || { echo "callum-flow-merge: the guard verified no head sha - not merging" >&2; exit 1; }
 
 merge_rc=0
@@ -92,4 +94,7 @@ set -- merged --pr "$pr" --branch "$branch" --head "$sha"
 [ -z "$run" ] || set -- "$@" --run "$run"
 [ -z "$issue" ] || set -- "$@" --issue "$issue"
 $EVENT "$@" || echo "callum-flow-merge: warning: merged event not recorded" >&2
+if [ -n "$close_issue" ]; then
+  printf 'Close issue #%s by hand with a comment naming merged PR #%s; GitHub registers no closing references on a non-default base.\n' "$close_issue" "$pr"
+fi
 exit 0

@@ -48,6 +48,10 @@ reviews, no edits). You may write throwaway repro scripts only under the system 
   and nothing is missed, emit no verdict line and propose `approve`.
 - A failed test step is judged the same way: a real defect (`CORRECT`) or `ENV`.
 - Never propose `--yes`.
+- Never propose `rerun`: it re-gates the run's old head, so a fix would come back
+  green without the fix in it. A correction the pipeline can write from instructions
+  is `ACTION: fix`: the pipeline stays the sole writer on the run's own head.
+  Use `fixer:` only when the pipeline cannot write it from instructions or the run is done.
 
 ## Output contract
 
@@ -63,7 +67,7 @@ nothing else - no log excerpts, no diff content, no preamble:
    - `ACTION: fix --findings <ids> --instructions <text>`, and/or
      `--add-finding <json>` for something the reviewer missed
    - `ACTION: skip`
-   - `ACTION: fixer: <instructions>` - the pipeline cannot write the fix from instructions
+   - `ACTION: fixer: <instructions>` - the pipeline cannot write the fix from instructions or the run is done
    - `ACTION: escalate: <why>` - needs the owner (scope or policy call, or you cannot judge)
 
 Every verdict carries a proposed action through that single line: `CORRECT` -> `fix`

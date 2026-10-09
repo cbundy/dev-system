@@ -198,6 +198,31 @@ expect_pass() {
 reset; g 7; expect_pass "all pass"
 reset; g 7 --run RUN1; expect_pass "explicit run"
 
+reset
+git -C "$work" commit -q --allow-empty -m unpushed
+LOCAL=$(git -C "$work" rev-parse HEAD)
+g 7; expect_fail "worktree ahead, automatic run" head
+printf '%s' "$out" | grep -q "worktree=$LOCAL" || fail "worktree head missing: $out"
+g 7 --run RUN1; expect_fail "worktree ahead, explicit run" head
+m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on worktree mismatch: $rc $out"; fi
+git -C "$work" reset -q --hard "$SHA"
+reset
+git -C "$work" reset -q --hard HEAD^
+g 7; expect_fail "worktree behind" head
+case "$out" in *"git merge --ff-only origin/<branch>"*) ;; *) fail "worktree recovery missing: $out" ;; esac
+git -C "$work" merge -q --ff-only "origin/$B"
+g 7; expect_pass "fast-forwarded worktree"
+git -C "$work" checkout -q main
+g 7; expect_pass "unrelated checkout, no implementation worktree"
+git -C "$work" worktree add -q "$tmpdir/implementation slot" "$B"
+git -C "$tmpdir/implementation slot" commit -q --allow-empty -m unpushed
+g 7; expect_fail "implementation worktree from main checkout" head
+git -C "$tmpdir/implementation slot" reset -q --hard "$SHA"
+g 7; expect_pass "aligned implementation worktree from main checkout"
+git -C "$work" worktree remove "$tmpdir/implementation slot"
+git -C "$work" checkout -q "$B"
+
 # the run lookup (cbundy/dev-system#243): real-format stub, no --run
 reset; g 7 --emit-verified
 if [ "$rc" != 0 ] || ! printf '%s' "$out" | grep -q ' run=RUN1 '; then fail "worktree lookup: rc=$rc out=$out"; fi
@@ -224,6 +249,9 @@ reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 
 # mergeable (cbundy/dev-system#246): the regression is #237, OPEN MERGEABLE BEHIND
 reset; echo BEHIND > "$st/mss"; g 7; expect_fail "behind" mergeable
 printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, rebase and re-gate' || fail "behind reason: $out"
+for want in "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD"; do
+  case "$out" in *"$want"*) ;; *) fail "behind FAIL should name the fix ($want): $out" ;; esac
+done
 reset; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty" mergeable
 printf '%s' "$out" | grep -q 'conflicts with main, rebase and re-gate' || fail "dirty reason: $out"
 reset; echo UNKNOWN > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "conflicting, state unknown" mergeable
@@ -259,6 +287,10 @@ NEW=$(git -C "$work" rev-parse HEAD)
 echo "$NEW" > "$st/prhead"
 g 7; expect_fail "stale run head" head
 case "$out" in *"run=$SHA"*"origin=$NEW"*) ;; *) fail "head reason should name both shas: $out" ;; esac
+# the FAIL line carries the fix procedures, not the skill
+for want in "git merge --ff-only origin/<branch>" "no-mistakes axi respond --action fix" "pipeline stays the sole writer" "only for a commit made outside the pipeline" "axi abort" "fresh backgrounded 'axi run" "'rerun' re-gates the OLD head"; do
+  case "$out" in *"$want"*) ;; *) fail "head FAIL should name the fix ($want): $out" ;; esac
+done
 (cd "$work" && git reset -q --hard "$SHA" && git push -q -f origin "$B")
 
 # fetch failure: unreachable origin must never pass on a stale ref
@@ -317,7 +349,37 @@ passed=$((passed + 1))
 
 # epic base
 reset; echo epic-x > "$st/base"; g 7; expect_fail "epic without --base" base
+for want in "confirm that with the brief" "rerun with --base epic-x"; do
+  case "$out" in *"$want"*) ;; *) fail "epic base recovery missing ($want): $out" ;; esac
+done
 reset; echo epic-x > "$st/base"; g 7 --base epic-x; expect_pass "epic with --base"
+reset; echo epic-x > "$st/base"; g 7 --base wrong; expect_fail "epic with incorrect --base" base
+case "$out" in *"rerun with --base epic-x"*) ;; *) fail "incorrect override recovery missing: $out" ;; esac
+for mode in derived explicit skip; do
+  reset; echo epic-x > "$st/base"; echo '[]' > "$st/closing"
+  set -- --base epic-x
+  case "$mode" in
+    explicit) set -- "$@" --expect closing ;;
+    skip) skip; set -- "$@" --issue 12 ;;
+  esac
+  m 7 "$@"
+  [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
+  case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
+  if ! { [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ]; }; then
+    fail "epic merge or event missing"
+  fi
+  passed=$((passed + 1))
+done
+for rollout in run-it keep-open; do
+  reset; echo epic-x > "$st/base"; issue_brief "$rollout - x"; echo refs > "$st/linkage-actual"
+  m 7 --base epic-x
+  expect_pass "epic $rollout does not request closure"
+done
+reset; echo epic-x > "$st/base"; touch "$st/merge-refuse"; m 7 --base epic-x
+if ! { [ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ]; }; then
+  fail "refused epic merge requested closure: $rc $out"
+fi
+passed=$((passed + 1))
 
 # awaiting_ in free text is not a parked step
 reset; echo 'note: use awaiting_approval to park' > "$st/step"; g 7; expect_pass "awaiting_ only in free text"
@@ -335,12 +397,14 @@ passed=$((passed + 1))
 # merge: pass
 reset; m 7
 [ "$rc" = 0 ] || fail "merge pass: exit $rc out=$out"
+[ -z "$out" ] || fail "default base should not request manual closure: $out"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
 [ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
 jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
 
 # merge: method override, flag and env
+reset; m 7 --base main --expect closing; expect_pass "explicit default base does not request closure"
 reset; m 7 --method rebase; grep -q -- '--rebase' "$st/gh-calls" || fail "--method rebase"
 reset; CALLUM_FLOW_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
 reset; m 7 --method bogus; [ "$rc" = 2 ] || fail "bad method exits 2"

@@ -23,7 +23,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 fakebin="$tmpdir/bin"
 mkdir -p "$toolbin" "$fakebin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod paste; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
