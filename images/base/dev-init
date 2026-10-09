@@ -52,6 +52,8 @@ AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
 AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
 EVENT_PUSH_LOCK=/tmp/dev-event-push.lock
 EVENT_PUSH_LOG=/tmp/dev-event-push.log
+NM_PUSH_LOCK=/tmp/dev-nm-push.lock
+NM_PUSH_LOG=/tmp/dev-nm-push.log
 LOGIN_PAGE_LOCK=/tmp/dev-login-page.lock
 LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 
@@ -496,6 +498,25 @@ start_event_push() {
   log "started factory event push (log: $EVENT_PUSH_LOG)"
 }
 
+# 8c. The no-mistakes pipeline data push (cbundy/dev-system#273): with the same
+#     PostgreSQL URL, keep nm-push-loop running so state.sqlite is mirrored into
+#     the nomistakes schema. Its state lives under /persist/agentsview
+#     (PERSIST_DIRS), so nothing is created here. One loop per container (the
+#     lock); the rows are upserts, so several containers are harmless.
+start_nm_push() {
+  local rc=0
+  # shellcheck source=agentsview.sh
+  . /usr/local/share/dev-system/agentsview.sh
+  agentsview_pg_url >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
+  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - no-mistakes push not started."; return 0; }
+  flock -n "$NM_PUSH_LOCK" true 2>/dev/null || return 0
+  : > "$NM_PUSH_LOG"
+  setsid nohup flock -n "$NM_PUSH_LOCK" /usr/local/share/dev-system/nm-push-loop \
+    >> "$NM_PUSH_LOG" 2>&1 < /dev/null &
+  log "started no-mistakes push (log: $NM_PUSH_LOG)"
+}
+
 # 9. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
 #    is left alone. A mount node cannot write gets a warning naming the fix.
 check_shared_dir() {
@@ -567,6 +588,7 @@ sync_repo
 recover_no_mistakes
 start_agentsview_push
 start_event_push
+start_nm_push
 check_shared_dir
 start_login_page
 install_plugins

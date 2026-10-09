@@ -63,59 +63,6 @@ def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" en
   + ", " + (tojson | q) + "::jsonb) ON CONFLICT DO NOTHING;"
 JQ
 
-# run_psql URL: runs psql on stdin with URL's parts (percent-decoded) and its
-# ssl* query parameters as PG* variables, so no secret is on the command line.
-# With sslmode verify-ca or verify-full and no root cert (URL, environment or
-# libpq's ~/.postgresql/root.crt) it trusts the system store, as the Go
-# agentsview client does; psql 17 would otherwise fail on such a URL.
-run_psql() (
-  local rest=${1#*://} query='' db='' userinfo='' hostport kv k v
-  case "$rest" in *\?*) query=${rest#*\?}; rest=${rest%%\?*} ;; esac
-  case "$rest" in */*) db=${rest#*/}; rest=${rest%%/*} ;; esac
-  case "$rest" in *@*) userinfo=${rest%@*}; rest=${rest##*@} ;; esac
-  hostport=$rest
-  dec() { local e=${1//\\/\\\\}; printf '%b' "${e//%/\\x}"; }
-  set_pg() { [ -z "$2" ] || export "$1=$(dec "$2")"; }
-  set_pg PGUSER "${userinfo%%:*}"
-  case "$userinfo" in *:*) set_pg PGPASSWORD "${userinfo#*:}" ;; esac
-  case "$hostport" in
-    \[*\]*) set_pg PGHOST "${hostport%%]*}"; PGHOST=${PGHOST#[}; export PGHOST
-      v=${hostport##*]}; set_pg PGPORT "${v#:}" ;;
-    *:*) set_pg PGHOST "${hostport%%:*}"; set_pg PGPORT "${hostport#*:}" ;;
-    *) set_pg PGHOST "$hostport" ;;
-  esac
-  set_pg PGDATABASE "$db"
-  local IFS='&'
-  for kv in $query; do
-    k=${kv%%=*} v=${kv#*=}
-    case "$k" in
-      host) set_pg PGHOST "$v" ;;
-      hostaddr) set_pg PGHOSTADDR "$v" ;;
-      port) set_pg PGPORT "$v" ;;
-      user) set_pg PGUSER "$v" ;;
-      password) set_pg PGPASSWORD "$v" ;;
-      dbname) set_pg PGDATABASE "$v" ;;
-      service) set_pg PGSERVICE "$v" ;;
-      options) set_pg PGOPTIONS "$v" ;;
-      application_name) set_pg PGAPPNAME "$v" ;;
-      connect_timeout) set_pg PGCONNECT_TIMEOUT "$v" ;;
-      channel_binding) set_pg PGCHANNELBINDING "$v" ;;
-      target_session_attrs) set_pg PGTARGETSESSIONATTRS "$v" ;;
-      sslmode | sslrootcert | sslcert | sslkey | sslcrl | sslsni | gssencmode | krbsrvname | requirepeer)
-        set_pg "PG$(printf '%s' "$k" | tr '[:lower:]' '[:upper:]')" "$v" ;;
-      *) echo "event-push-loop: ignoring unsupported URL parameter '$k'" >&2 ;;
-    esac
-  done
-  unset IFS
-  case "${PGSSLMODE-}" in
-    verify-ca | verify-full)
-      [ -n "${PGSSLROOTCERT-}" ] || [ -e "${HOME:-/nonexistent}/.postgresql/root.crt" ] \
-        || export PGSSLROOTCERT=system ;;
-  esac
-  export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-10}
-  exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
-)
-
 # push_file FILE URL: pushes the file's lines not yet pushed. Returns 1 when
 # the database refused a batch.
 push_file() {

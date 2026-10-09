@@ -9,6 +9,9 @@ Rows are keyed `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cos
 metrics through the `issue` and `device` resource attributes the orchestrator sets on
 sub-agents.
 
+A second schema, `nomistakes`, mirrors the no-mistakes pipeline database (see "no-mistakes
+pipeline data" below); it joins to `factory.events` on `run_id`.
+
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`.
 
@@ -283,6 +286,60 @@ ORDER BY repo, issue;
 
 Totals and the call: sum the columns; `sum(dispatcher_bound_other_idle) / sum(pipeline_bound +
 dispatcher_bound)` above 0.5 means option B.
+
+## no-mistakes pipeline data (`nomistakes` schema)
+
+`nm-push-loop` (`images/base/nm-push-loop`, SQLite half in `nm-export`) mirrors six tables of
+`$NM_HOME/state.sqlite` into the same PostgreSQL: `repos`, `runs`, `step_results`,
+`step_rounds`, `agent_invocations` and `run_agent_sessions`. The tables are created on the first
+push (`CREATE SCHEMA/TABLE IF NOT EXISTS`) and written with upserts on the source key (`id`;
+`(run_id, role)` for `run_agent_sessions`), so a run is updated in place as it progresses.
+
+Column rules:
+
+- Every table has `device` (`DEV_MACHINE_NAME`, else the hostname, as `callum-flow-event`) and
+  `repo` (lowercase `owner/name` from `repos.upstream_url`) beside the source columns.
+- Epoch-second `*_at` and `*_since` columns are `timestamptz`; other integers are `bigint`;
+  JSON columns (`findings_json`, `gates_json`, ...) stay `text`.
+- A column the mirror does not know goes into `raw jsonb` (blobs as base64) instead of failing
+  the push; a known column missing from the SQLite file is NULL.
+- Never shipped, and absent from `raw`: `repos.working_path`, `runs.worktree_dir`,
+  `step_results.log_path` and `agent_pid`, `step_rounds.global_config_yaml` and
+  `repo_config_yaml`, and the step log files.
+- `runs.no_mistakes_version` records which no-mistakes wrote the row.
+
+The tables, abbreviated (the full list of columns is `nm-export`'s `TABLES`):
+
+```sql
+CREATE TABLE nomistakes.runs (
+  id text PRIMARY KEY, repo_id text, branch text, head_sha text, status text, pr_url text,
+  no_mistakes_version text, error text, intent text, created_at timestamptz, updated_at timestamptz,
+  -- ... the other known runs columns ...
+  device text NOT NULL, repo text, raw jsonb);
+CREATE TABLE nomistakes.step_results (id text PRIMARY KEY, run_id text, step_name text, status text,
+  findings_json text, started_at timestamptz, completed_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
+CREATE TABLE nomistakes.step_rounds (id text PRIMARY KEY, step_result_id text, round bigint,
+  findings_json text, user_findings_json text, fix_summary text, created_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
+CREATE TABLE nomistakes.agent_invocations (id text PRIMARY KEY, run_id text, step_name text, model text,
+  input_tokens bigint, output_tokens bigint, completed_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
+CREATE TABLE nomistakes.run_agent_sessions (run_id text, role text, agent text, session_id text,
+  created_at timestamptz, updated_at timestamptz, device text NOT NULL, repo text, raw jsonb,
+  PRIMARY KEY (run_id, role));
+CREATE TABLE nomistakes.repos (id text PRIMARY KEY, upstream_url text, default_branch text, /* ... */ device text NOT NULL, repo text, raw jsonb);
+```
+
+Example: pipeline runs against the factory's own view of the same run (`factory.events.run_id`
+is the no-mistakes run id the orchestrator recorded at `run_started`):
+
+```sql
+SELECT r.repo, e.issue, r.id AS run_id, r.status, r.no_mistakes_version,
+       (SELECT count(*) FROM nomistakes.step_results s WHERE s.run_id = r.id) AS steps,
+       (SELECT sum(i.input_tokens + i.output_tokens) FROM nomistakes.agent_invocations i
+        WHERE i.run_id = r.id) AS tokens
+FROM nomistakes.runs r
+JOIN factory.events e ON e.run_id = r.id AND e.state = 'run_started'
+ORDER BY e.ts;
+```
 
 ## Offline computation: `callum-flow-evaluate`
 

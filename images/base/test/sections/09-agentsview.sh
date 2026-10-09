@@ -97,6 +97,45 @@ write_session "$avclaude" 22222222-2222-4222-8222-222222222222
 check "the second container takes over when the first stops" wait_for_session 22222222-2222-4222-8222-222222222222
 check "both containers pushed as one machine" bash -c "
   [ \"\$(docker exec '$RUN_ID-pg' psql -U av -d agentsview -tAc 'select count(distinct machine) from agentsview.sessions')\" = 1 ]"
+# The no-mistakes mirror (#273): a fixture state.sqlite pushed by nm-push-loop
+# into the same PostgreSQL (container b is the one still running).
+docker cp "$TEST_DIR/nm-fixture.js" "$RUN_ID-b:/tmp/nm-fixture.js" >/dev/null
+nm_push() {
+  docker exec -e NO_MISTAKES_HOME=/tmp/nmfix -e NM_PUSH_STATE_DIR=/tmp/nmfix/state -e DEV_MACHINE_NAME=nm-host \
+    "$RUN_ID-b" /usr/local/share/dev-system/nm-push-loop --once
+}
+nm_fixture() { docker exec "$RUN_ID-b" node /tmp/nm-fixture.js /tmp/nmfix/state.sqlite "$@"; }
+# nm_is <sql> <expected>: the query's single value equals the expected text
+nm_is() { [ "$(psql_av "$1")" = "$2" ]; }
+nm_mirror_first_pass() {
+  docker exec "$RUN_ID-b" mkdir -p /tmp/nmfix && nm_fixture create && nm_push &&
+    nm_is "select count(*) from nomistakes.runs where device='nm-host' and repo='acme/widgets'" 2 &&
+    nm_is "select count(*) from nomistakes.step_results" 2 &&
+    nm_is "select count(*) from nomistakes.step_rounds" 1 &&
+    nm_is "select count(*) from nomistakes.agent_invocations" 1 &&
+    nm_is "select count(*) from nomistakes.run_agent_sessions" 1 &&
+    nm_is "select count(*) from nomistakes.repos" 1 &&
+    nm_is "select intent from nomistakes.runs where id='r1'" 'it'"'"'s \ the intent' &&
+    nm_is "select count(*) from information_schema.columns where table_schema='nomistakes' and column_name in ('worktree_dir','log_path','agent_pid','working_path','global_config_yaml','repo_config_yaml')" 0 &&
+    nm_is "select count(*) from nomistakes.runs where raw is not null" 0
+}
+nm_mirror_second_pass() {
+  nm_fixture status r1 completed && nm_push && nm_push &&
+    nm_is "select count(*) from nomistakes.runs" 2 &&
+    nm_is "select count(*) from nomistakes.step_results" 2 &&
+    nm_is "select status from nomistakes.runs where id='r1'" completed
+}
+nm_mirror_unknown_column() {
+  nm_fixture unknown-column && nm_push &&
+    nm_is "select raw->>'brand_new' from nomistakes.runs where id='r1'" surprise
+}
+check "nm-push-loop mirrors every table with device and repo, and ships no excluded column" nm_mirror_first_pass
+check "a second pass leaves counts unchanged and picks up a status change" nm_mirror_second_pass
+check "an unknown column lands in raw and the pass still succeeds" nm_mirror_unknown_column
+check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR=/tmp/nmfix/state -e NO_MISTAKES_HOME=/tmp/nmfix "$RUN_ID-b" bash -c '
+  out=$(dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
+  echo "$out" | grep -q "waiting: no"'
 check "dev-doctor fails with a hint when the database is unreachable" bash -c "
   out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"

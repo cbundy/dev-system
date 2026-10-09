@@ -103,7 +103,7 @@ environment variable set in the image.
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
-| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
+| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and `nm-push/` (the no-mistakes push state: high-water mark and row counts, written by `nm-push-loop`) |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
@@ -1235,6 +1235,17 @@ and `dev-doctor` reports when events were last written and last pushed. Variable
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
 `CREATE` on the database (or the schema and table created for it by an admin). The
 queries are in [docs/metrics.md](../../docs/metrics.md).
+
+`nm-push-loop` mirrors the no-mistakes pipeline database (`$NM_HOME/state.sqlite`: repos, runs,
+steps, rounds, agent invocations and run sessions) into the `nomistakes` schema of the same
+PostgreSQL, with the same URL rules as `event-push-loop`. `nm-export` reads the SQLite file
+read-only in one snapshot and prints idempotent upserts for every run touched since the
+high-water mark; the loop sends them in one transaction and advances the mark only on success,
+so a pass that fails is repeated in full. Configs, paths, pids and step logs are never shipped.
+The state is `/persist/agentsview/nm-push/state` (`NM_PUSH_STATE_DIR`). `dev-init` starts the
+loop (log: `/tmp/dev-nm-push.log`) and `dev-doctor` reports rows pushed and whether anything
+waits. Variables: `DEV_NM_PUSH_INTERVAL` (default 60 s). Schema and an example join in
+[docs/metrics.md](../../docs/metrics.md).
 
 ## Central session history (agentsview)
 

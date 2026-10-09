@@ -1,0 +1,221 @@
+#!/usr/bin/env node
+// nm-export: turns the no-mistakes state.sqlite into PostgreSQL for nm-push-loop
+// (cbundy/dev-system#273). The pure half of the push: it reads the SQLite file
+// read-only and prints, on stdout, the DDL for the `nomistakes` schema plus one
+// upsert per row of every touched run. It never talks to PostgreSQL.
+//
+// Usage: nm-export <state.sqlite> [--mark N] [--device NAME] [--mark-out FILE] [--waiting]
+//   --mark N       high-water mark (epoch seconds). Runs touched at or after it
+//                  are sent in full; without it everything is sent (backfill).
+//   --device NAME  value of the device column (default DEV_MACHINE_NAME, else hostname)
+//   --mark-out F   write {"mark":<new mark>,"rows":<rows sent>} to F
+//   --waiting      print yes/no (is there activity newer than the mark?) and exit
+// Exit: 0 ok (a missing file is a no-op), 2 bad usage, 1 unreadable database.
+//
+// Columns: the known ones map to typed PostgreSQL columns (`*_at`/`*_since`
+// epoch seconds become timestamptz). Excluded columns (configs, paths, pids)
+// appear nowhere. Any other column goes into `raw jsonb`. A known column the
+// file lacks is NULL, a missing table is skipped with one warning.
+"use strict";
+
+const fs = require("node:fs");
+const os = require("node:os");
+
+const EXCLUDED = {
+  repos: ["working_path"],
+  runs: ["worktree_dir"],
+  step_results: ["log_path", "agent_pid"],
+  step_rounds: ["global_config_yaml", "repo_config_yaml"],
+  agent_invocations: [],
+  run_agent_sessions: [],
+};
+const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+
+// name -> pg type; "ts" is timestamptz, "i" bigint, "r" double precision, "t" text.
+const cols = (spec) => Object.fromEntries(spec.trim().split(/\s+/).map((s) => {
+  const [n, t] = s.split(":");
+  return [n, t || (/_(at|since)$/.test(n) ? "ts" : "t")];
+}));
+const TABLES = {
+  repos: { pk: ["id"], cols: cols("id upstream_url fork_url default_branch created_at") },
+  runs: {
+    pk: ["id"],
+    cols: cols(`id repo_id branch head_sha base_sha submitted_head_sha no_mistakes_version no_mistakes_build_sha
+      review_approved_head_sha status pr_url pr_state pr_state_observed_at ci_ready_at ci_ready_no_ci:i last_pushed_sha
+      push_target_kind push_target_fingerprint push_ref last_pushed_at push_generation:i push_active:i
+      terminal_head_verified_at gates_json error awaiting_agent_since parked_ms:i launch_nonce
+      launch_validation_generation launch_intent_digest launch_receipt_claimed_at pr_base_branch omit_intent:i
+      pi_profile verification_plan created_at updated_at intent intent_source intent_session_id intent_score:r
+      ci_rerun_state custody_returned_at`),
+  },
+  step_results: {
+    pk: ["id"],
+    cols: cols(`id run_id step_name step_order:i status exit_code:i duration_ms:i findings_json error started_at
+      round_started_at completed_at last_activity_at last_activity auto_fix_limit:i ci_fix_attempts:i override_reason
+      skip_reason approval_reason`),
+  },
+  step_rounds: {
+    pk: ["id"],
+    cols: cols(`id step_result_id round:i trigger_type findings_json reviewed_head_sha starting_head_sha
+      trusted_config_sha user_findings_json selected_finding_ids selection_source fix_summary repair_published:i
+      duration_ms:i created_at`),
+  },
+  agent_invocations: {
+    pk: ["id"],
+    cols: cols(`id run_id step_name round:i purpose agent model model_provider session_mode session_key
+      fallback_reason started_at completed_at duration_ms:i subprocess_wait_ms:i exit_status failure_category
+      input_tokens:i output_tokens:i cache_read_tokens:i cache_creation_tokens:i fresh_input_tokens:i
+      reasoning_tokens:i delta_input_tokens:i delta_output_tokens:i delta_cache_read_tokens:i model_roundtrips:i
+      tool_calls:i tool_wait_calls:i tool_test_lint_calls:i tool_edit_calls:i tool_read_calls:i tool_git_calls:i
+      tool_other_calls:i workload_files:i workload_lines:i finding_count:i`),
+  },
+  run_agent_sessions: {
+    pk: ["run_id", "role"],
+    cols: cols("run_id role agent session_id created_at updated_at"),
+  },
+};
+const PG = { ts: "timestamptz", i: "bigint", r: "double precision", t: "text" };
+
+// Same rule as repoOfUrl in callum-flow-evaluate.
+function repoOfUrl(url) {
+  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ""));
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+const noNul = (s) => s.replace(/\u0000/g, "");
+// A SQL literal for any value. Standard conforming strings are on (psql default),
+// so only the quote needs doubling; NUL is not storable in PostgreSQL and is dropped.
+function lit(v, type) {
+  if (v === null || v === undefined) return "NULL";
+  if (v instanceof Uint8Array) v = Buffer.from(v).toString("base64");
+  if (type === "ts") {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return "NULL";
+    return `to_timestamp(${n > 1e11 ? n / 1000 : n})`;
+  }
+  if (type === "i") return Number.isFinite(Number(v)) ? String(Math.trunc(Number(v))) : "NULL";
+  if (type === "r") return Number.isFinite(Number(v)) ? String(Number(v)) : "NULL";
+  return `'${noNul(String(v)).replace(/'/g, "''")}'`;
+}
+
+function ddl() {
+  const out = ["CREATE SCHEMA IF NOT EXISTS nomistakes;"];
+  for (const [t, d] of Object.entries(TABLES)) {
+    const lines = Object.entries(d.cols).map(([n, ty]) => `  ${n} ${PG[ty]}`);
+    lines.push("  device text NOT NULL", "  repo text", "  raw jsonb", `  PRIMARY KEY (${d.pk.join(", ")})`);
+    out.push(`CREATE TABLE IF NOT EXISTS nomistakes.${t} (\n${lines.join(",\n")}\n);`);
+  }
+  out.push(
+    "CREATE INDEX IF NOT EXISTS runs_repo_idx ON nomistakes.runs (repo, created_at);",
+    "CREATE INDEX IF NOT EXISTS step_results_run_idx ON nomistakes.step_results (run_id);",
+    "CREATE INDEX IF NOT EXISTS step_rounds_step_idx ON nomistakes.step_rounds (step_result_id);",
+    "CREATE INDEX IF NOT EXISTS agent_invocations_run_idx ON nomistakes.agent_invocations (run_id);",
+  );
+  return out.join("\n");
+}
+
+function upsert(table, row, extra, rawCols) {
+  const d = TABLES[table];
+  const names = Object.keys(d.cols);
+  const raw = {};
+  for (const c of rawCols) if (row[c] !== undefined && row[c] !== null) raw[c] = row[c] instanceof Uint8Array ? Buffer.from(row[c]).toString("base64") : row[c];
+  const rawSql = Object.keys(raw).length
+    ? `'${JSON.stringify(raw).replace(/\\u0000/g, "").replace(/'/g, "''")}'::jsonb` : "NULL";
+  const vals = names.map((n) => lit(row[n], d.cols[n])).concat([lit(extra.device, "t"), lit(extra.repo, "t"), rawSql]);
+  const all = names.concat(["device", "repo", "raw"]);
+  const set = all.filter((n) => !d.pk.includes(n)).map((n) => `${n} = EXCLUDED.${n}`).join(", ");
+  return `INSERT INTO nomistakes.${table} (${all.join(", ")}) VALUES (${vals.join(", ")}) ` +
+    `ON CONFLICT (${d.pk.join(", ")}) DO UPDATE SET ${set};`;
+}
+
+// Reads every table in one read transaction. Returns {tables, notes}.
+function readAll(file) {
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(file, { readOnly: true });
+  const tables = {};
+  const warnings = [];
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN");
+    for (const [t, d] of Object.entries(TABLES)) {
+      const info = db.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
+      if (!info.length || d.pk.some((k) => !info.includes(k))) {
+        warnings.push(`table ${t} is ${info.length ? "missing its key column" : "missing"}, skipped`);
+        tables[t] = { rows: [], raw: [] };
+        continue;
+      }
+      const raw = info.filter((c) => !(c in d.cols) && !EXCLUDED[t].includes(c));
+      tables[t] = { rows: db.prepare(`SELECT * FROM ${t}`).all(), raw };
+    }
+    db.exec("COMMIT");
+  } finally {
+    db.close();
+  }
+  return { tables, warnings };
+}
+
+const secs = (v) => { const n = Number(v); return Number.isFinite(n) && v !== null ? (n > 1e11 ? Math.floor(n / 1000) : n) : null; };
+
+function build({ tables }, mark, device) {
+  const T = (n) => tables[n].rows;
+  const runById = new Map(T("runs").map((r) => [r.id, r]));
+  const stepRun = new Map(T("step_results").map((s) => [s.id, s.run_id]));
+  const stamps = []; // [runId, seconds] for every timestamp that can touch a run
+  const stamp = (id, v) => { const n = secs(v); if (n !== null && id != null) stamps.push([id, n]); };
+  for (const r of T("runs")) stamp(r.id, r.updated_at);
+  for (const s of T("step_results")) for (const c of ["started_at", "completed_at", "last_activity_at"]) stamp(s.run_id, s[c]);
+  for (const r of T("step_rounds")) stamp(stepRun.get(r.step_result_id), r.created_at);
+  for (const i of T("agent_invocations")) stamp(i.run_id, i.completed_at);
+  for (const s of T("run_agent_sessions")) stamp(s.run_id, s.updated_at);
+
+  const newest = stamps.reduce((m, [, n]) => Math.max(m, n), 0);
+  const touched = new Set();
+  for (const r of T("runs")) if (mark === null || !TERMINAL.has(r.status)) touched.add(r.id);
+  if (mark !== null) for (const [id, n] of stamps) if (n >= mark) touched.add(id);
+
+  const repoName = new Map(T("repos").map((r) => [r.id, repoOfUrl(r.upstream_url)]));
+  const runRepo = (id) => { const r = runById.get(id); return r ? repoName.get(r.repo_id) ?? null : null; };
+  const out = [];
+  const send = (t, row, repo) => out.push(upsert(t, row, { device, repo }, tables[t].raw));
+
+  const wantRepos = new Set([...touched].map((id) => runById.get(id)?.repo_id));
+  for (const r of T("repos")) if (mark === null || wantRepos.has(r.id)) send("repos", r, repoName.get(r.id) ?? null);
+  for (const r of T("runs")) if (touched.has(r.id)) send("runs", r, runRepo(r.id));
+  for (const s of T("step_results")) if (touched.has(s.run_id)) send("step_results", s, runRepo(s.run_id));
+  for (const r of T("step_rounds")) { const run = stepRun.get(r.step_result_id); if (touched.has(run)) send("step_rounds", r, runRepo(run)); }
+  for (const i of T("agent_invocations")) if (touched.has(i.run_id)) send("agent_invocations", i, runRepo(i.run_id));
+  for (const s of T("run_agent_sessions")) if (touched.has(s.run_id)) send("run_agent_sessions", s, runRepo(s.run_id));
+  return { sql: out, newest };
+}
+
+function parseArgs(argv) {
+  const o = { file: null, mark: null, device: null, markOut: null, waiting: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--mark") { o.mark = Number(argv[++i]); if (!Number.isFinite(o.mark)) return null; }
+    else if (a === "--device") o.device = argv[++i];
+    else if (a === "--mark-out") o.markOut = argv[++i];
+    else if (a === "--waiting") o.waiting = true;
+    else if (a.startsWith("--") || o.file) return null;
+    else o.file = a;
+  }
+  return o.file ? o : null;
+}
+
+function main(argv) {
+  const o = parseArgs(argv);
+  if (!o) { process.stderr.write("usage: nm-export <state.sqlite> [--mark N] [--device NAME] [--mark-out FILE] [--waiting]\n"); return 2; }
+  if (!fs.existsSync(o.file)) { if (o.waiting) console.log("no"); return 0; }
+  let data;
+  try { data = readAll(o.file); } catch (e) { process.stderr.write(`nm-export: cannot read ${o.file}: ${e.message}\n`); return 1; }
+  const device = o.device || process.env.DEV_MACHINE_NAME || os.hostname() || "unknown";
+  const { sql, newest } = build(data, o.mark, device);
+  if (o.waiting) { console.log(o.mark === null ? (newest ? "yes" : "no") : newest > o.mark ? "yes" : "no"); return 0; }
+  for (const w of data.warnings) process.stderr.write(`nm-export: ${w}\n`);
+  process.stdout.write(`${ddl()}\n${sql.join("\n")}${sql.length ? "\n" : ""}`);
+  if (o.markOut) fs.writeFileSync(o.markOut, JSON.stringify({ mark: Math.max(newest, o.mark ?? 0), rows: sql.length }));
+  return 0;
+}
+
+if (require.main === module) process.exitCode = main(process.argv.slice(2));
+module.exports = { repoOfUrl, lit, build, readAll, ddl, main };
