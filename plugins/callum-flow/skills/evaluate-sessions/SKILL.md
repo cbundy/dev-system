@@ -41,7 +41,7 @@ network calls, and needs no flags in a normal workspace. Exit 2 is a bad argumen
 exit 1 a source that exists but could not be read (report that and stop).
 
 If `callum-flow-evaluate` is not on PATH, the image predates it. It ships in the
-base image from version 2.10.0 (`images/base/VERSION`). Say which image version is
+base image from version 2.10.0 (`images/base/VERSION`); `--nm-export` needs 2.14.0. Say which image version is
 needed and stop. Never fall back to counting by hand, with `jq`, `grep` or `gh`.
 
 Read the `sources` table first. A source marked `n/a` (no event log, no
@@ -65,7 +65,44 @@ events, and a device that logged nothing but `usage` still counts as alive. Chec
 that `per_device` lists every device that ran; a missing one means its events were
 never pushed, so say so rather than reporting on half the factory.
 
-Transcripts and the no-mistakes database are always this device's.
+For the pipeline numbers across devices, export the `nomistakes` schema too and pass
+it with `--nm-export` (it replaces this device's `state.sqlite` for every pipeline
+number; `state.sqlite` is then only used to find the transcripts). The query is in
+`docs/metrics.md`, under "Scope and the fleet-wide no-mistakes export"; it covers every
+repo and device. Run it with the window's start:
+
+```
+PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
+WITH r AS (
+  SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
+), s AS (
+  SELECT x.* FROM nomistakes.step_results x JOIN r ON r.id = x.run_id
+)
+SELECT jsonb_build_object('table', 'runs', 'row', to_jsonb(r) - 'raw') FROM r
+UNION ALL
+SELECT jsonb_build_object('table', 'step_results', 'row', to_jsonb(s) - 'raw') FROM s
+UNION ALL
+SELECT jsonb_build_object('table', 'step_rounds', 'row', to_jsonb(d) - 'raw')
+FROM nomistakes.step_rounds d JOIN s ON s.id = d.step_result_id
+UNION ALL
+SELECT jsonb_build_object('table', 'agent_invocations', 'row', to_jsonb(i) - 'raw')
+FROM nomistakes.agent_invocations i JOIN r ON r.id = i.run_id
+UNION ALL
+SELECT jsonb_build_object('table', 'run_agent_sessions', 'row', to_jsonb(a) - 'raw')
+FROM nomistakes.run_agent_sessions a JOIN r ON r.id = a.run_id
+UNION ALL
+SELECT jsonb_build_object('table', 'repos', 'row', to_jsonb(p) - 'raw') FROM nomistakes.repos p;
+SQL
+```
+
+Do not filter by `device` or `repo`. Check that `pipeline.by_device` lists every
+device that ran; a missing one means its pipeline data was never pushed (see
+`nm-push-loop`), so say so rather than reporting on half the factory. Read
+`window.scope` first: it states whether `pipeline` and `events` cover the `workspace`
+or the `fleet`, and the report must say which. `pipeline.by_repo` is the one key
+that ignores `--repo`.
+
+Transcripts are always this device's.
 
 ### Ready times from the GitHub timeline
 
@@ -82,7 +119,8 @@ gh api --paginate repos/<owner>/<name>/issues/<N>/timeline \
 
 Write `{"<N>": ["<ISO>", ...], ...}` to `/tmp/ready-times.json` (one array per issue,
 the timestamps exactly as GitHub returns them, no computing) and re-run both
-commands with `--ready-times /tmp/ready-times.json --events /tmp/events.jsonl`. The
+commands with `--ready-times /tmp/ready-times.json --events /tmp/events.jsonl`
+(plus `--nm-export /tmp/nm-export.jsonl` for a multi-device window). The
 tool picks the last `ready` at or before the first claim. Check `throughput`
 shows `issues_without_ready: 0`; otherwise name those issues and say their lead
 time is not measured.
@@ -109,6 +147,10 @@ From the JSON, look at:
   `parked`, `failed` and `fix_requested` events for those issues in the event log.
 - model mismatches in `spend.sub_agent_model_mismatches`, fallback invocations and
   review rounds in `pipeline`.
+- the gates that loop: `pipeline.gates` (first-pass rate per gate) and
+  `pipeline.fix_rounds` (total, per step, deepest run); who spends what:
+  `pipeline.tokens_by_model_purpose`; and where runs wait: `pipeline.parked`. Split
+  by `pipeline.by_device` and `pipeline.by_repo` when a gap is one machine or repo.
 
 Each piece of evidence is an id someone can open: a session id with a timestamp,
 a run id, a PR or issue number.

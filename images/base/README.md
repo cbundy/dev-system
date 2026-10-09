@@ -1213,7 +1213,8 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 
-`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown] [--ready-times <file>]`
+`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
+[--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
@@ -1223,7 +1224,10 @@ so it is in the synced allow list. Inputs: Claude transcripts under
 `.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
 `${CALLUM_EVENTS_DIR:-/persist/events}/<owner>__<repo>.jsonl` (`--events` takes any
 `factory.events` export as JSON lines) and `${NO_MISTAKES_HOME:-~/.no-mistakes}/state.sqlite`
-(`--nm-state`). A missing source makes the affected metrics `n/a` with the reason listed under
+(`--nm-state`). `--nm-export` takes a JSON-lines dump of the `nomistakes` schema (the query is in
+`docs/metrics.md`) and then every pipeline number, including the per-device and per-repo gate
+first-pass rate, fix rounds, tokens by model and purpose and time parked, comes from it and can
+cover the whole fleet; `window.scope` says which scope each source covers. A missing source makes the affected metrics `n/a` with the reason listed under
 `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 

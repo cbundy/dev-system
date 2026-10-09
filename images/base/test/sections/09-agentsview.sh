@@ -173,6 +173,27 @@ SQL
     grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out"
 }
 check "the saved queries in docs/metrics.md run against the mirrored data and return the expected values" nm_metrics_queries
+# The fleet-wide export query in docs/metrics.md (#274): run it against the same PostgreSQL, then
+# feed the JSON lines to callum-flow-evaluate --nm-export inside the image.
+nm_export_query() {
+  local root out want
+  root=$(cd "$TEST_DIR/../../.." && pwd)
+  out=$(mktemp)
+  # the heredoc body of the first <<'SQL' block in metrics.md
+  awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/docs/metrics.md" |
+    docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -v since=2000-01-01T00:00:00Z -At > "$out" || return 1
+  [ -s "$out" ] && ! grep -q '"raw"' "$out" || return 1
+  docker exec -i "$RUN_ID-b" sh -c 'cat > /tmp/nm-export.jsonl' < "$out" || return 1
+  want=$(psql_av "select count(*) from nomistakes.runs where repo = 'acme/widgets'")
+  docker exec -e NO_MISTAKES_HOME=/tmp/nmfix -e CALLUM_EVENTS_DIR=/tmp/nmfix "$RUN_ID-b" callum-flow-evaluate \
+    --repo acme/widgets --since 2000-01-01T00:00:00Z --until 2100-01-01T00:00:00Z --nm-export /tmp/nm-export.jsonl |
+    node -e '
+      const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const want = Number(process.argv[1]);
+      if (r.window.scope.pipeline !== "fleet" || r.pipeline.runs !== want || want < 1) process.exit(1);
+      if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
+}
+check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
 check "dev-doctor fails with a hint when the database is unreachable" bash -c "
   out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"

@@ -8,7 +8,7 @@
 //
 // Usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>]
 //          [--format json|markdown] [--projects-dir <dir>]... [--events <file>]
-//          [--nm-state <file>] [--ready-times <file>]
+//          [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]
 //
 // Exit codes: 0 success, 2 bad arguments, 1 a source that exists but cannot be read.
 // A source that is missing, or a sqlite schema without the expected tables or columns, is
@@ -19,6 +19,10 @@
 // issue's first `claimed`; without an entry it falls back to the first `ready` event.
 // The events file may be a `factory.events` export covering several devices; the per_device,
 // claims and waiting sections use each event's `device`.
+// --nm-export is a JSON-lines dump of the `nomistakes` schema (one {"table", "row"} per line;
+// docs/metrics.md has the query). With it every pipeline number comes from the export, which can
+// cover every device and repo; state.sqlite is then read only to find the checkouts for
+// transcript discovery. `window.scope` says which scope each source covers.
 //
 // Environment: CLAUDE_CONFIG_DIR (default ~/.claude), CALLUM_EVENTS_DIR (default
 // /persist/events), NO_MISTAKES_HOME (default ~/.no-mistakes), CALLUM_FLOW_LEASE_MINUTES
@@ -78,6 +82,7 @@ function parseArgs(argv) {
     else if (a === '--projects-dir') o.projectsDirs.push(need(i++, a));
     else if (a === '--events') o.events = need(i++, a);
     else if (a === '--nm-state') o.nmState = need(i++, a);
+    else if (a === '--nm-export') o.nmExport = need(i++, a);
     else if (a === '--ready-times') o.readyTimes = need(i++, a);
     else if (a === '-h' || a === '--help') o.help = true;
     else throw new UsageError(`unknown option '${a}'`);
@@ -96,7 +101,7 @@ function parseArgs(argv) {
 }
 
 const USAGE = 'usage: callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] ' +
-  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--ready-times <file>]';
+  '[--format json|markdown] [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]';
 
 // ---------------------------------------------------------------- helpers
 
@@ -778,6 +783,11 @@ function modelMismatches(fileTurns) {
 
 // ---------------------------------------------------------------- no-mistakes
 
+// The columns the tool reads. NM_SCHEMA is required: a table without them is unusable.
+// NM_OPTIONAL are read when present and make only the metric that needs them n/a when absent
+// (an older no-mistakes schema, or an export that predates a column). Every name must exist in
+// images/base/nm-export TABLES (tests/evaluate.test.js guards that); `device` and `repo` are
+// the two columns nm-export adds to every mirrored table.
 const NM_SCHEMA = {
   repos: ['id', 'working_path', 'upstream_url'],
   runs: ['id', 'repo_id', 'status', 'created_at'],
@@ -788,8 +798,42 @@ const NM_SCHEMA = {
     'output_tokens', 'cache_read_tokens', 'cache_creation_tokens',
   ],
 };
+const NM_OPTIONAL = {
+  repos: [],
+  runs: ['parked_ms', 'awaiting_agent_since'],
+  step_results: ['status'],
+  step_rounds: ['trigger_type'],
+  agent_invocations: ['purpose'],
+};
+// An export has no repos table and carries `repo` and `device` on each run instead.
+const NM_EXPORT_SCHEMA = {
+  runs: ['id', 'status', 'created_at', 'repo', 'device'],
+  step_results: NM_SCHEMA.step_results,
+  step_rounds: NM_SCHEMA.step_rounds,
+  agent_invocations: NM_SCHEMA.agent_invocations,
+};
 
-function loadNoMistakes(file, repo) {
+const toMs = (t) => (typeof t === 'number' ? (t > 1e11 ? t : t * 1000) : Date.parse(t));
+
+function deviceName(env) {
+  return env.DEV_MACHINE_NAME || os.hostname() || 'unknown';
+}
+
+// Both readers return the same shape: runs (this repo's), allRuns (every repo in the source),
+// steps, rounds, invocations, cols (columns present per table), tables (why a table is unusable).
+function checkTables(schema, colsOf) {
+  const have = {};
+  const cols = {};
+  for (const [table, req] of Object.entries(schema)) {
+    const info = colsOf(table);
+    cols[table] = new Set(info);
+    const missing = req.filter((c) => !info.includes(c));
+    have[table] = info.length === 0 ? `table ${table} is missing` : missing.length ? `${table} lacks column(s) ${missing.join(', ')}` : null;
+  }
+  return { have, cols };
+}
+
+function loadNoMistakes(file, repo, device) {
   if (!fs.existsSync(file)) return { reason: `file not found: ${file}` };
   let DatabaseSync;
   try { ({ DatabaseSync } = require('node:sqlite')); } catch { return { reason: 'node:sqlite is not available in this node' }; }
@@ -801,30 +845,141 @@ function loadNoMistakes(file, repo) {
     throw new InputError(`cannot read ${file}: ${e.message}`);
   }
   try {
-    const have = {};
-    for (const [table, cols] of Object.entries(NM_SCHEMA)) {
-      const info = db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
-      const missing = cols.filter((c) => !info.includes(c));
-      have[table] = info.length === 0 ? `table ${table} is missing` : missing.length ? `${table} lacks column(s) ${missing.join(', ')}` : null;
-    }
+    const { have, cols } = checkTables(NM_SCHEMA, (t) => db.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name));
     if (have.repos || have.runs) return { reason: have.repos || have.runs, tables: have };
-    const repos = db.prepare('SELECT id, working_path, upstream_url FROM repos').all()
-      .filter((r) => repoOfUrl(r.upstream_url) === repo.toLowerCase());
+    const sel = (t) => [...NM_SCHEMA[t], ...NM_OPTIONAL[t].filter((c) => cols[t].has(c))].join(', ');
+    const allRepos = db.prepare('SELECT id, working_path, upstream_url FROM repos').all();
+    const repoName = new Map(allRepos.map((r) => [r.id, repoOfUrl(r.upstream_url)]));
+    const repos = allRepos.filter((r) => repoOfUrl(r.upstream_url) === repo.toLowerCase());
     const ids = new Set(repos.map((r) => r.id));
-    const ms = (t) => (typeof t === 'number' ? (t > 1e11 ? t : t * 1000) : Date.parse(t));
-    const runs = db.prepare('SELECT id, repo_id, status, created_at FROM runs ORDER BY created_at, id').all()
-      .filter((r) => ids.has(r.repo_id)).map((r) => ({ ...r, created_ms: ms(r.created_at) }));
-    const data = { workingPaths: repos.map((r) => r.working_path).sort(), runs, tables: have, rows: runs.length };
-    data.steps = have.step_results ? null : db.prepare('SELECT id, run_id, step_name, duration_ms FROM step_results').all();
-    data.rounds = have.step_rounds || have.step_results ? null : db.prepare('SELECT id, step_result_id FROM step_rounds').all();
-    data.invocations = have.agent_invocations ? null : db.prepare(
-      'SELECT run_id, step_name, model, fallback_reason, model_roundtrips, input_tokens, output_tokens, ' +
-      'cache_read_tokens, cache_creation_tokens FROM agent_invocations',
-    ).all();
+    const allRuns = db.prepare(`SELECT ${sel('runs')} FROM runs ORDER BY created_at, id`).all()
+      .map((r) => ({ ...r, created_ms: toMs(r.created_at), device, repo: repoName.get(r.repo_id) || null }));
+    const runs = allRuns.filter((r) => ids.has(r.repo_id));
+    const data = { workingPaths: repos.map((r) => r.working_path).sort(), runs, allRuns, tables: have, cols, rows: runs.length };
+    data.steps = have.step_results ? null : db.prepare(`SELECT ${sel('step_results')} FROM step_results`).all();
+    data.rounds = have.step_rounds || have.step_results ? null : db.prepare(`SELECT ${sel('step_rounds')} FROM step_rounds`).all();
+    data.invocations = have.agent_invocations ? null : db.prepare(`SELECT ${sel('agent_invocations')} FROM agent_invocations`).all();
     return data;
   } finally {
     db.close();
   }
+}
+
+// A JSON-lines dump of the nomistakes schema (docs/metrics.md, "Fleet-wide no-mistakes export"):
+// one {"table": "<name>", "row": {...}} per line. Tables the tool does not use and lines that do
+// not parse are skipped, like the events file.
+function loadNoMistakesExport(file, repo) {
+  if (!fs.existsSync(file)) return { reason: `file not found: ${file}` };
+  const byTable = Object.fromEntries(Object.keys(NM_EXPORT_SCHEMA).map((t) => [t, []]));
+  for (const l of parseJsonl(readText(file))) {
+    if (l && typeof l.table === 'string' && Object.hasOwn(byTable, l.table) && l.row && typeof l.row === 'object' && !Array.isArray(l.row)) {
+      byTable[l.table].push(l.row);
+    }
+  }
+  const { have, cols } = checkTables(NM_EXPORT_SCHEMA, (t) => {
+    const all = [...NM_EXPORT_SCHEMA[t], ...NM_OPTIONAL[t]];
+    // no rows: nothing to compute from, so the table counts as present and empty
+    return byTable[t].length ? [...new Set(byTable[t].flatMap((r) => Object.keys(r)))] : all;
+  });
+  if (have.runs) return { reason: have.runs, tables: have };
+  const allRuns = byTable.runs.map((r) => ({
+    ...r, created_ms: toMs(r.created_at), device: r.device || 'unknown', repo: r.repo ? String(r.repo).toLowerCase() : null,
+  })).sort((a, b) => cmpStr(String(a.created_at), String(b.created_at)) || cmpStr(String(a.id), String(b.id)));
+  const runs = allRuns.filter((r) => r.repo === repo.toLowerCase());
+  return {
+    workingPaths: [], runs, allRuns, tables: have, cols,
+    rows: sum(Object.values(byTable).map((x) => x.length)),
+    steps: have.step_results ? null : byTable.step_results,
+    rounds: have.step_rounds || have.step_results ? null : byTable.step_rounds,
+    invocations: have.agent_invocations ? null : byTable.agent_invocations,
+  };
+}
+
+// Why a metric cannot be computed: the first table it needs that is unusable, or lacks an
+// optional column. spec is {table: [column, ...]}.
+function unavailable(nm, spec) {
+  for (const [t, need] of Object.entries(spec)) {
+    if (nm.tables[t]) return nm.tables[t];
+    const lacking = need.filter((c) => !nm.cols[t].has(c));
+    if (lacking.length) return `${t} lacks column(s) ${lacking.join(', ')}`;
+  }
+  return null;
+}
+
+const isFix = (r) => typeof r.trigger_type === 'string' && r.trigger_type !== 'initial';
+const isSet = (v) => v !== null && v !== undefined && v !== '' && v !== 0;
+
+// The per-gate and per-run metrics over one set of runs; each key is n/a on its own.
+function pipelineMetrics(nm, runs, invs) {
+  const ids = new Set(runs.map((r) => r.id));
+  const out = {};
+  const stepsOf = nm.steps ? nm.steps.filter((s) => ids.has(s.run_id)) : null;
+  const fixOf = new Map();
+  if (nm.rounds) for (const r of nm.rounds) if (isFix(r)) fixOf.set(r.step_result_id, (fixOf.get(r.step_result_id) || 0) + 1);
+
+  const gatesWhy = unavailable(nm, { step_results: ['status'], step_rounds: ['trigger_type'] });
+  if (gatesWhy) out.gates = na(gatesWhy);
+  else {
+    const by = new Map();
+    for (const s of stepsOf) {
+      if (s.status !== 'completed' && s.status !== 'failed') continue;
+      const g = by.get(s.step_name) || { step: s.step_name, steps: 0, first_pass: 0, first_pass_rate: null };
+      g.steps += 1;
+      if (s.status === 'completed' && !fixOf.get(s.id)) g.first_pass += 1;
+      by.set(s.step_name, g);
+    }
+    out.gates = [...by.values()].sort((a, b) => cmpStr(a.step, b.step)).map((g) => ({ ...g, first_pass_rate: pct(g.first_pass, g.steps) }));
+  }
+
+  const fixWhy = unavailable(nm, { step_results: [], step_rounds: ['trigger_type'] });
+  if (fixWhy) out.fix_rounds = na(fixWhy);
+  else {
+    const perStep = new Map();
+    const perRun = new Map(runs.map((r) => [r.id, 0]));
+    for (const s of stepsOf) {
+      const n = fixOf.get(s.id) || 0;
+      perStep.set(s.step_name, (perStep.get(s.step_name) || 0) + n);
+      perRun.set(s.run_id, perRun.get(s.run_id) + n);
+    }
+    out.fix_rounds = {
+      total: sum([...perStep.values()]),
+      max_per_run: perRun.size ? Math.max(...perRun.values()) : null,
+      by_step: Object.fromEntries([...perStep.entries()].sort((a, b) => cmpStr(a[0], b[0]))),
+    };
+  }
+
+  const tokWhy = unavailable(nm, { agent_invocations: ['purpose'] });
+  if (tokWhy) out.tokens_by_model_purpose = na(tokWhy);
+  else {
+    const rows = new Map();
+    for (const i of invs.filter((x) => ids.has(x.run_id))) {
+      const model = i.model || 'unknown';
+      const purpose = i.purpose || 'unknown';
+      const k = `${model}\u0000${purpose}`;
+      const r = rows.get(k) || { model, purpose, invocations: 0, input: 0, output: 0, cache_read: 0, cache_creation: 0 };
+      r.invocations += 1;
+      r.input += i.input_tokens || 0;
+      r.output += i.output_tokens || 0;
+      r.cache_read += i.cache_read_tokens || 0;
+      r.cache_creation += i.cache_creation_tokens || 0;
+      rows.set(k, r);
+    }
+    out.tokens_by_model_purpose = [...rows.values()].sort((a, b) => cmpStr(a.model, b.model) || cmpStr(a.purpose, b.purpose));
+  }
+
+  const parkWhy = unavailable(nm, { runs: ['parked_ms', 'awaiting_agent_since'] });
+  if (parkWhy) out.parked = na(parkWhy);
+  else {
+    const p = runs.map((r) => r.parked_ms).filter((v) => typeof v === 'number' && v > 0).map((v) => v / 1000);
+    out.parked = {
+      runs_parked: p.length,
+      total_seconds: sum(p),
+      median_seconds: median(p),
+      max_seconds: p.length ? Math.max(...p) : null,
+      awaiting_agent: runs.filter((r) => isSet(r.awaiting_agent_since)).length,
+    };
+  }
+  return out;
 }
 
 function computePipeline(nm, win) {
@@ -852,6 +1007,22 @@ function computePipeline(nm, win) {
     const d = nm.steps.filter((s) => s.step_name === 'ci' && ids.has(s.run_id) && typeof s.duration_ms === 'number').map((s) => s.duration_ms / 1000);
     pipeline.ci_duration_seconds = { median: median(d), max: d.length ? Math.max(...d) : null, steps: d.length };
   } else pipeline.ci_duration_seconds = na(nm.tables.step_results);
+
+  const allInvs = nm.invocations || [];
+  Object.assign(pipeline, pipelineMetrics(nm, runs, allInvs));
+  // by_device covers this repo's runs; by_repo is the one key that covers every repo in the source
+  const split = (rs, key) => {
+    const groups = new Map();
+    for (const r of rs) {
+      const k = r[key] || 'unknown';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(r);
+    }
+    return [...groups.entries()].sort((a, b) => cmpStr(a[0], b[0]))
+      .map(([name, g]) => ({ [key]: name, runs: g.length, ...pipelineMetrics(nm, g, allInvs) }));
+  };
+  pipeline.by_device = split(runs, 'device');
+  pipeline.by_repo = { scope: 'every repo in the source, not limited to --repo', rows: split(nm.allRuns.filter((r) => inWin(r.created_ms, win)), 'repo') };
   return { pipeline, invocations: invs };
 }
 
@@ -872,15 +1043,37 @@ function evaluate(opts, env = process.env) {
   const projectsRoot = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'projects');
   const sources = [];
 
-  // no-mistakes first: its repos rows name the checkout paths
-  const nm = loadNoMistakes(nmFile, opts.repo);
+  // no-mistakes first: its repos rows name the checkout paths. With --nm-export the sqlite is
+  // used for that alone and the export supplies every pipeline number.
+  const device = deviceName(env);
+  let local;
+  try {
+    local = loadNoMistakes(nmFile, opts.repo, device);
+  } catch (e) {
+    if (!(e instanceof InputError) || !opts.nmExport) throw e;
+    local = { reason: e.message };
+  }
   sources.push({
     kind: 'no-mistakes', path: nmFile, found: fs.existsSync(nmFile),
-    rows: nm.rows === undefined ? null : nm.rows, ...(nm.reason ? { 'n/a': nm.reason } : {}),
+    rows: opts.nmExport || local.rows === undefined ? null : local.rows, ...(local.reason ? { 'n/a': local.reason } : {}),
+    ...(opts.nmExport ? { note: 'used for transcript discovery only' } : {}),
   });
-  if (!nm.reason) {
-    for (const [t, why] of Object.entries(nm.tables)) {
+  if (!local.reason && !opts.nmExport) {
+    for (const [t, why] of Object.entries(local.tables)) {
       if (why) sources.push({ kind: 'no-mistakes', path: `${nmFile}#${t}`, found: false, rows: null, 'n/a': why });
+    }
+  }
+  let nm = local;
+  if (opts.nmExport) {
+    nm = loadNoMistakesExport(opts.nmExport, opts.repo);
+    sources.push({
+      kind: 'no-mistakes-export', path: opts.nmExport, found: fs.existsSync(opts.nmExport), rows: nm.reason ? null : nm.rows,
+      ...(nm.reason ? { 'n/a': nm.reason } : {}),
+    });
+    if (!nm.reason) {
+      for (const [t, why] of Object.entries(nm.tables)) {
+        if (why) sources.push({ kind: 'no-mistakes-export', path: `${opts.nmExport}#${t}`, found: false, rows: null, 'n/a': why });
+      }
     }
   }
 
@@ -893,7 +1086,7 @@ function evaluate(opts, env = process.env) {
   const checkouts = [];
   const top = gitToplevel();
   if (top) checkouts.push(top);
-  if (!nm.reason) checkouts.push(...nm.workingPaths);
+  if (!local.reason) checkouts.push(...local.workingPaths);
   const tr = findTranscripts(projectsRoot, checkouts, opts.projectsDirs);
   const parsed = tr.files.map((f) => {
     const lines = parseJsonl(readText(f.path));
@@ -939,6 +1132,11 @@ function evaluate(opts, env = process.env) {
       sessions: mains.filter((f) => f.inWindow).length,
       sub_agents: subs.filter((f) => f.inWindow).length,
       pipeline_runs: nm.reason ? 'n/a' : pl.pipeline.runs,
+      scope: {
+        pipeline: opts.nmExport ? 'fleet' : 'workspace',
+        events: opts.events ? 'fleet' : 'workspace',
+        transcripts: 'workspace',
+      },
     },
     throughput: em ? em.throughput : evNa,
     first_pass: em ? em.first_pass : evNa,
@@ -969,11 +1167,37 @@ function table(headers, rows) {
 const kv = (obj) => table(['metric', 'value'], Object.entries(obj));
 const naLine = (s) => `n/a: ${s['n/a']}\n`;
 
+const parkSecs = (v) => (v === null ? 'n/a' : `${v}s`);
+const parkedLine = (k) => (k['n/a'] ? `n/a: ${k['n/a']}`
+  : `runs=${k.runs_parked} total=${parkSecs(k.total_seconds)} median=${parkSecs(k.median_seconds)} max=${parkSecs(k.max_seconds)} awaiting_agent=${k.awaiting_agent}`);
+const gatesRows = (g) => (g['n/a'] ? `n/a: ${g['n/a']}` : g.map((x) => `${x.step} ${x.first_pass}/${x.steps} (${x.first_pass_rate}%)`).join(', ') || 'none');
+const fixRows = (f) => (f['n/a'] ? `n/a: ${f['n/a']}` : `total=${f.total} max_per_run=${f.max_per_run}`);
+
+function pipelineTables(p) {
+  return 'Gate first-pass rate:\n\n' + (p.gates['n/a'] ? naLine(p.gates)
+    : table(['step', 'steps', 'first_pass', 'first_pass_rate'], p.gates.map((g) => [g.step, g.steps, g.first_pass, g.first_pass_rate]))) +
+    '\nFix rounds per step:\n\n' + (p.fix_rounds['n/a'] ? naLine(p.fix_rounds)
+      : table(['step', 'fix_rounds'], Object.entries(p.fix_rounds.by_step))) +
+    '\nTokens by model and purpose:\n\n' + (p.tokens_by_model_purpose['n/a'] ? naLine(p.tokens_by_model_purpose)
+      : table(['model', 'purpose', 'invocations', 'input', 'output', 'cache_read', 'cache_creation'],
+        p.tokens_by_model_purpose.map((x) => [x.model, x.purpose, x.invocations, x.input, x.output, x.cache_read, x.cache_creation])));
+}
+
+function splitTable(rows, key) {
+  return table([key, 'runs', 'gates (first-pass/steps)', 'fix_rounds', 'tokens (in/out)', 'parked'], rows.map((x) => [
+    x[key], x.runs, gatesRows(x.gates), fixRows(x.fix_rounds),
+    x.tokens_by_model_purpose['n/a'] ? `n/a: ${x.tokens_by_model_purpose['n/a']}`
+      : `${sum(x.tokens_by_model_purpose.map((t) => t.input))}/${sum(x.tokens_by_model_purpose.map((t) => t.output))}`,
+    parkedLine(x.parked),
+  ]));
+}
+
 function toMarkdown(r) {
   const out = ['# Session evaluation', ''];
   const sec = (title, body) => out.push(`## ${title}`, '', body, '');
   const guard = (s, f) => (s && s['n/a'] ? naLine(s) : f(s));
-  sec('window', kv(r.window));
+  const { scope, ...win } = r.window;
+  sec('window', kv(win) + `\nScope: pipeline=${scope.pipeline} events=${scope.events} transcripts=${scope.transcripts}\n`);
   sec('throughput', guard(r.throughput, (t) =>
     kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
     table(['issue', 'merged_at', 'ready_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
@@ -1022,8 +1246,13 @@ function toMarkdown(r) {
     review_rounds: p.review_rounds['n/a'] ? `n/a: ${p.review_rounds['n/a']}` : `total=${p.review_rounds.total} max=${p.review_rounds.max}`,
     fallback_invocations: p.fallback_invocations['n/a'] ? `n/a: ${p.fallback_invocations['n/a']}` : `${p.fallback_invocations.count} of ${p.fallback_invocations.of}`,
     ci_duration_seconds: p.ci_duration_seconds['n/a'] ? `n/a: ${p.ci_duration_seconds['n/a']}` : `median=${p.ci_duration_seconds.median} max=${p.ci_duration_seconds.max}`,
-  })));
-  sec('sources', table(['kind', 'path', 'found', 'rows', 'n/a'], r.sources.map((s) => [s.kind, s.path, s.found, s.rows, s['n/a'] || ''])));
+    fix_rounds: p.fix_rounds['n/a'] ? `n/a: ${p.fix_rounds['n/a']}` : `total=${p.fix_rounds.total} max_per_run=${p.fix_rounds.max_per_run}`,
+    parked: parkedLine(p.parked),
+  }) + '\n' + pipelineTables(p) + '\nBy device:\n\n' + splitTable(p.by_device, 'device') +
+    `\nBy repo (${p.by_repo.scope}):\n\n` + splitTable(p.by_repo.rows, 'repo')));
+  const noted = r.sources.some((s) => s.note);
+  sec('sources', table(['kind', 'path', 'found', 'rows', 'n/a', ...(noted ? ['note'] : [])],
+    r.sources.map((s) => [s.kind, s.path, s.found, s.rows, s['n/a'] || '', ...(noted ? [s.note || ''] : [])])));
   return out.join('\n');
 }
 
@@ -1056,7 +1285,7 @@ function main(argv) {
 
 module.exports = {
   TOP_KEYS, parseArgs, classifyWake, buildTurns, computeEventMetrics, computeWaste, computeSpend,
-  modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl,
+  modelMismatches, evaluate, toMarkdown, mungePath, repoOfUrl, NM_SCHEMA, NM_OPTIONAL, NM_EXPORT_SCHEMA,
 };
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
