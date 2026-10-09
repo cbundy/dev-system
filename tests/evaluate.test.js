@@ -16,6 +16,8 @@ const FIX = path.join(__dirname, "fixtures", "evaluate");
 const mod = require(SCRIPT);
 
 const WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-08T10:00:00Z", "--until", "2026-10-08T11:00:00Z"];
+const NM_EXPORT = path.join(FIX, "nm-export.jsonl");
+const TWO_DIR = path.join(FIX, "two-device");
 let tmp;
 let nmHome;
 
@@ -184,14 +186,62 @@ test("classifyWake and buildTurns, called directly", () => {
   assert.equal(turns[0].usage.output, 9);
 });
 
-test("pipeline: runs by status, review rounds, fallback invocations and ci duration", () => {
-  assert.deepEqual(json(WINDOW).pipeline, {
+const DEVICE = { DEV_MACHINE_NAME: "laptop-test" };
+// Hand-computed from state.sql for the window 10:00-11:00 on acme/widgets (run1, run2; run3 is
+// before the window and runX is another repo):
+//  gates: ci sr2+sr4 both completed with no auto_fix round = 2/2; review sr1 has an auto_fix
+//  round and sr3 failed = 0/2; sr7 (test) is skipped and left out.
+//  fix_rounds: round b is the only auto_fix round in the window (run1, review); max_per_run 1.
+//  tokens: i1 sonnet/review, i2 has no model (unknown) / review, i3 sonnet/fix; i4 is run3.
+//  parked: run1 90 s + run2 30 s; run2 is still awaiting an agent.
+const WIDGETS_GATES = [
+  { step: "ci", steps: 2, first_pass: 2, first_pass_rate: 100 },
+  { step: "review", steps: 2, first_pass: 0, first_pass_rate: 0 },
+];
+const WIDGETS_FIX = { total: 1, max_per_run: 1, by_step: { ci: 0, review: 1, test: 0 } };
+const WIDGETS_TOKENS = [
+  { model: "claude-sonnet-5-5", purpose: "fix", invocations: 1, input: 5, output: 5, cache_read: 50, cache_creation: 0 },
+  { model: "claude-sonnet-5-5", purpose: "review", invocations: 1, input: 10, output: 20, cache_read: 300, cache_creation: 40 },
+  { model: "unknown", purpose: "review", invocations: 1, input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+];
+const WIDGETS_PARKED = { runs_parked: 2, total_seconds: 120, median_seconds: 60, max_seconds: 90, awaiting_agent: 1 };
+
+test("pipeline: runs by status, review rounds, fallback invocations, ci duration and the gate numbers", () => {
+  const p = json(WINDOW, DEVICE).pipeline;
+  assert.deepEqual(p, {
     runs: 2,
     by_status: { completed: 1, failed: 1 },
     review_rounds: { total: 3, max: 2, per_run: [{ run: "run1", review_rounds: 2 }, { run: "run2", review_rounds: 1 }] },
     fallback_invocations: { count: 1, of: 3 },
     ci_duration_seconds: { median: 210, max: 300, steps: 2 },
+    gates: WIDGETS_GATES,
+    fix_rounds: WIDGETS_FIX,
+    tokens_by_model_purpose: WIDGETS_TOKENS,
+    parked: WIDGETS_PARKED,
+    by_device: [{ device: "laptop-test", runs: 2, gates: WIDGETS_GATES, fix_rounds: WIDGETS_FIX, tokens_by_model_purpose: WIDGETS_TOKENS, parked: WIDGETS_PARKED }],
+    by_repo: {
+      scope: "every repo in the source, not limited to --repo",
+      rows: [
+        // runX (acme/other) is in the window: lint sr8 completed with no round; i5 opus/review; 5 s parked
+        {
+          repo: "acme/other", runs: 1,
+          gates: [{ step: "lint", steps: 1, first_pass: 1, first_pass_rate: 100 }],
+          fix_rounds: { total: 0, max_per_run: 0, by_step: { lint: 0 } },
+          tokens_by_model_purpose: [{ model: "claude-opus-5-5", purpose: "review", invocations: 1, input: 7, output: 7, cache_read: 7, cache_creation: 7 }],
+          parked: { runs_parked: 1, total_seconds: 5, median_seconds: 5, max_seconds: 5, awaiting_agent: 0 },
+        },
+        { repo: "acme/widgets", runs: 2, gates: WIDGETS_GATES, fix_rounds: WIDGETS_FIX, tokens_by_model_purpose: WIDGETS_TOKENS, parked: WIDGETS_PARKED },
+      ],
+    },
   });
+});
+
+test("window.scope: workspace by default, fleet when the sources are exports; one line in markdown", () => {
+  assert.deepEqual(json(WINDOW).window.scope, { pipeline: "workspace", events: "workspace", transcripts: "workspace" });
+  assert.deepEqual(json([...WINDOW, "--events", path.join(TWO_DIR, "events.jsonl")]).window.scope, { pipeline: "workspace", events: "fleet", transcripts: "workspace" });
+  assert.deepEqual(json([...WINDOW, "--nm-export", NM_EXPORT]).window.scope, { pipeline: "fleet", events: "workspace", transcripts: "workspace" });
+  assert.match(run([...WINDOW, "--format", "markdown"]).out, /^Scope: pipeline=workspace events=workspace transcripts=workspace$/m);
+  assert.match(run([...WINDOW, "--nm-export", NM_EXPORT, "--format", "markdown"]).out, /^Scope: pipeline=fleet /m);
 });
 
 test("missing sources give n/a with a reason and exit 0", () => {
@@ -237,6 +287,29 @@ test("a sqlite schema without agent_invocations degrades that metric only", () =
   assert.match(json(WINDOW, { NO_MISTAKES_HOME: bare }).pipeline["n/a"], /runs is missing/);
 });
 
+test("an old no-mistakes schema degrades only the metrics that need the missing columns", () => {
+  const home = path.join(tmp, "nm-old");
+  fs.mkdirSync(home);
+  buildDb(path.join(home, "state.sqlite"));
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(home, "state.sqlite"));
+  db.exec("ALTER TABLE step_rounds DROP COLUMN trigger_type; ALTER TABLE agent_invocations DROP COLUMN purpose");
+  db.close();
+  const p = json(WINDOW, { NO_MISTAKES_HOME: home }).pipeline;
+  assert.match(p.fix_rounds["n/a"], /step_rounds lacks column\(s\) trigger_type/);
+  assert.match(p.gates["n/a"], /step_rounds lacks column\(s\) trigger_type/);
+  assert.match(p.tokens_by_model_purpose["n/a"], /agent_invocations lacks column\(s\) purpose/);
+  assert.equal(p.runs, 2);
+  assert.deepEqual(p.by_status, { completed: 1, failed: 1 });
+  assert.equal(p.review_rounds.total, 3);
+  assert.deepEqual(p.fallback_invocations, { count: 1, of: 3 });
+  assert.deepEqual(p.parked, WIDGETS_PARKED);
+  assert.match(p.by_device[0].gates["n/a"], /trigger_type/);
+  assert.deepEqual(p.by_device[0].parked, WIDGETS_PARKED);
+  // pipeline spend rows still come from the invocations, which only lost `purpose`
+  assert.equal(json(WINDOW, { NO_MISTAKES_HOME: home }).spend.rows.some((x) => x.role === "pipeline:review"), true);
+});
+
 test("bad arguments exit 2, an unreadable source exits 1", () => {
   for (const args of [[], ["--repo", "x"], ["--repo", "a/b"], [...WINDOW, "--bogus"], [...WINDOW, "--format", "xml"],
     ["--repo", "a/b", "--since", "nope"], ["--repo", "a/b", "--since", "2026-01-02", "--until", "2026-01-01"], ["--repo", "a/b", "--since"]]) {
@@ -255,10 +328,12 @@ test("bad arguments exit 2, an unreadable source exits 1", () => {
 
 test("output is deterministic, in json and markdown", () => {
   for (const format of ["json", "markdown"]) {
-    const a = run([...WINDOW, "--format", format]);
-    const b = run([...WINDOW, "--format", format]);
-    assert.equal(a.status, 0);
-    assert.equal(a.out, b.out);
+    for (const extra of [[], ["--nm-export", NM_EXPORT]]) {
+      const a = run([...WINDOW, ...extra, "--format", format]);
+      const b = run([...WINDOW, ...extra, "--format", format]);
+      assert.equal(a.status, 0);
+      assert.equal(a.out, b.out);
+    }
   }
   const md = run([...WINDOW, "--format", "markdown"]).out;
   const headings = [...md.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
@@ -365,4 +440,167 @@ test("ready-times: a missing file is n/a, a malformed one is an input error", ()
   const r = run([...args, bad]);
   assert.equal(r.status, 1);
   assert.match(r.err, /--ready-times/);
+});
+
+// ---- fleet-wide no-mistakes export (cbundy/dev-system#274): tests/fixtures/evaluate/nm-export.jsonl
+// Window 2026-10-08 10:00-11:00Z, acme/widgets. Device laptop ran L1 (10:10, review fixed once, 90 s
+// parked) and L2 (10:20, review failed, 30 s parked, still awaiting an agent); device coder ran C1
+// (10:30, lint fixed twice, ci skipped) and C0 (09:00, before the window). O1 is acme/other on coder.
+// The file also holds an unknown table, a row with an unknown column, a table the tool ignores and
+// a line that is not JSON; timestamps are ISO strings with both `Z` and `+00:00`.
+const EXPORT_ARGS = [...WINDOW, "--nm-export", NM_EXPORT];
+
+test("export: every pipeline number comes from the export, across devices", () => {
+  const r = json(EXPORT_ARGS, DEVICE);
+  const p = r.pipeline;
+  assert.equal(r.window.pipeline_runs, 3);
+  assert.equal(p.runs, 3);
+  assert.deepEqual(p.by_status, { completed: 2, failed: 1 });
+  // review rounds: s1 has 2 rounds, s3 1, s5 1
+  assert.deepEqual(p.review_rounds, { total: 4, max: 2, per_run: [{ run: "C1", review_rounds: 1 }, { run: "L1", review_rounds: 2 }, { run: "L2", review_rounds: 1 }] });
+  assert.deepEqual(p.fallback_invocations, { count: 1, of: 4 }); // i2's empty reason is not a fallback; i4's is
+  // ci steps: s2 120 s, s4 300 s (s7 is skipped but has no duration, so it adds nothing)
+  assert.deepEqual(p.ci_duration_seconds, { median: 210, max: 300, steps: 2 });
+  // review: s1 fixed, s3 failed, s5 clean = 1/3; ci: s2, s4 = 2/2 (s7 skipped); lint: s6 fixed twice = 0/1
+  assert.deepEqual(p.gates, [
+    { step: "ci", steps: 2, first_pass: 2, first_pass_rate: 100 },
+    { step: "lint", steps: 1, first_pass: 0, first_pass_rate: 0 },
+    { step: "review", steps: 3, first_pass: 1, first_pass_rate: 33.3 },
+  ]);
+  // auto_fix rounds: d2 (s1) and d6, d7 (s6); per run L1 1, L2 0, C1 2
+  assert.deepEqual(p.fix_rounds, { total: 3, max_per_run: 2, by_step: { ci: 0, lint: 2, review: 1 } });
+  // i1 sonnet/review; i2 + i4 sonnet/fix (5+1, 5+2, 50+3, 0+4); i3 opus/review. i5 is C0, i6 is acme/other.
+  assert.deepEqual(p.tokens_by_model_purpose, [
+    { model: "claude-opus-5-5", purpose: "review", invocations: 1, input: 100, output: 200, cache_read: 3000, cache_creation: 400 },
+    { model: "claude-sonnet-5-5", purpose: "fix", invocations: 2, input: 6, output: 7, cache_read: 53, cache_creation: 4 },
+    { model: "claude-sonnet-5-5", purpose: "review", invocations: 1, input: 10, output: 20, cache_read: 300, cache_creation: 40 },
+  ]);
+  // L1 90 s, L2 30 s; C1 parked 0 ms is not a parked run; C0 is outside the window
+  assert.deepEqual(p.parked, { runs_parked: 2, total_seconds: 120, median_seconds: 60, max_seconds: 90, awaiting_agent: 1 });
+  assert.deepEqual(p.by_device.map((d) => [d.device, d.runs]), [["coder", 1], ["laptop", 2]]);
+  const coder = p.by_device[0];
+  assert.deepEqual(coder.gates, [
+    { step: "lint", steps: 1, first_pass: 0, first_pass_rate: 0 },
+    { step: "review", steps: 1, first_pass: 1, first_pass_rate: 100 },
+  ]);
+  assert.deepEqual(coder.fix_rounds, { total: 2, max_per_run: 2, by_step: { ci: 0, lint: 2, review: 0 } });
+  assert.deepEqual(coder.parked, { runs_parked: 0, total_seconds: 0, median_seconds: null, max_seconds: null, awaiting_agent: 0 });
+  assert.equal(sumField(coder.tokens_by_model_purpose, "invocations"), 2);
+  const laptop = p.by_device[1];
+  assert.deepEqual(laptop.fix_rounds, { total: 1, max_per_run: 1, by_step: { ci: 0, review: 1 } });
+  assert.deepEqual(laptop.parked, { runs_parked: 2, total_seconds: 120, median_seconds: 60, max_seconds: 90, awaiting_agent: 1 });
+  // by_repo covers every repo in the export, in the window
+  assert.equal(p.by_repo.scope, "every repo in the source, not limited to --repo");
+  assert.deepEqual(p.by_repo.rows.map((x) => [x.repo, x.runs]), [["acme/other", 1], ["acme/widgets", 3]]);
+  assert.deepEqual(p.by_repo.rows[0].parked, { runs_parked: 1, total_seconds: 5, median_seconds: 5, max_seconds: 5, awaiting_agent: 0 });
+  assert.deepEqual(p.by_repo.rows[0].gates, [{ step: "lint", steps: 1, first_pass: 1, first_pass_rate: 100 }]);
+  // the pipeline:<step> spend rows come from the export too (model_roundtrips are the turns)
+  assert.deepEqual(r.spend.rows.filter((x) => x.role === "pipeline:review").map((x) => [x.model, x.turns]), [["claude-opus-5-5", 2], ["claude-sonnet-5-5", 3]]);
+  assert.deepEqual(r.window.scope, { pipeline: "fleet", events: "workspace", transcripts: "workspace" });
+});
+
+const sumField = (rows, k) => rows.reduce((a, x) => a + x[k], 0);
+
+test("export: sources list the export and mark state.sqlite as transcript discovery only", () => {
+  const r = json(EXPORT_ARGS);
+  const ex = r.sources.find((s) => s.kind === "no-mistakes-export");
+  // runs 5 + step_results 9 + step_rounds 8 + agent_invocations 6; the other table lines are ignored
+  assert.deepEqual(ex, { kind: "no-mistakes-export", path: NM_EXPORT, found: true, rows: 28 });
+  const sq = r.sources.find((s) => s.kind === "no-mistakes");
+  assert.equal(sq.note, "used for transcript discovery only");
+  assert.equal(sq.rows, null);
+  // transcript discovery still works through the sqlite repos row
+  assert.equal(r.window.sessions, 2);
+  assert.match(run([...EXPORT_ARGS, "--format", "markdown"]).out, /\| note \|/);
+});
+
+test("export: the same runs as sqlite and as an export give identical pipeline numbers (ISO and epoch timestamps)", () => {
+  const { DatabaseSync } = require("node:sqlite");
+  const file = path.join(tmp, "parity.sqlite");
+  buildDb(file);
+  const db = new DatabaseSync(file);
+  const repoOf = new Map(db.prepare("SELECT id, upstream_url FROM repos").all().map((r) => [r.id, mod.repoOfUrl(r.upstream_url)]));
+  const runs = db.prepare("SELECT * FROM runs").all();
+  const runRepo = new Map(runs.map((r) => [r.id, repoOf.get(r.repo_id)]));
+  const lines = [];
+  const add = (table, row) => lines.push(JSON.stringify({ table, row }));
+  const isoOf = (sec) => new Date(sec * 1000).toISOString().replace("Z", "+00:00");
+  for (const r of runs) {
+    add("runs", { ...r, created_at: isoOf(r.created_at), awaiting_agent_since: r.awaiting_agent_since ? isoOf(r.awaiting_agent_since) : null, repo: runRepo.get(r.id), device: "laptop-test" });
+  }
+  for (const t of ["step_results", "step_rounds", "agent_invocations"]) for (const r of db.prepare(`SELECT * FROM ${t}`).all()) add(t, r);
+  db.close();
+  const exp = path.join(tmp, "parity.jsonl");
+  fs.writeFileSync(exp, lines.join("\n") + "\n");
+  const a = json(WINDOW, DEVICE);
+  const b = json([...WINDOW, "--nm-export", exp], DEVICE);
+  assert.deepEqual(b.pipeline, a.pipeline);
+  assert.deepEqual(b.spend.rows.filter((x) => x.role.startsWith("pipeline:")), a.spend.rows.filter((x) => x.role.startsWith("pipeline:")));
+  assert.equal(b.window.pipeline_runs, a.window.pipeline_runs);
+});
+
+test("export: a missing file is n/a with a reason and exit 0; unknown tables and columns are ignored", () => {
+  const missing = json([...WINDOW, "--nm-export", path.join(tmp, "nope.jsonl")]);
+  assert.match(missing.pipeline["n/a"], /file not found/);
+  assert.equal(missing.window.pipeline_runs, "n/a");
+  const src = missing.sources.find((s) => s.kind === "no-mistakes-export");
+  assert.equal(src.found, false);
+  assert.match(src["n/a"], /file not found/);
+  // an export of only unknown tables is an empty one, not an error
+  const odd = path.join(tmp, "odd.jsonl");
+  fs.writeFileSync(odd, '{"table":"nothing","row":{"a":1}}\nnot json\n{"table":"runs"}\n[1]\n');
+  const r = json([...WINDOW, "--nm-export", odd]);
+  assert.equal(r.pipeline.runs, 0);
+  assert.deepEqual(r.pipeline.by_device, []);
+  assert.deepEqual(r.pipeline.gates, []);
+  // a column the tool does not know about changes nothing: L1 carries `future_column` in the fixture
+  assert.equal(json(EXPORT_ARGS).pipeline.runs, 3);
+});
+
+test("export: an old export without trigger_type or purpose degrades only those metrics", () => {
+  const old = path.join(tmp, "old-export.jsonl");
+  const strip = { step_rounds: "trigger_type", agent_invocations: "purpose" };
+  fs.writeFileSync(old, fs.readFileSync(NM_EXPORT, "utf8").split("\n").filter(Boolean).map((l) => {
+    try {
+      const o = JSON.parse(l);
+      if (strip[o.table]) delete o.row[strip[o.table]];
+      return JSON.stringify(o);
+    } catch { return l; }
+  }).join("\n") + "\n");
+  const p = json([...WINDOW, "--nm-export", old]).pipeline;
+  assert.match(p.gates["n/a"], /trigger_type/);
+  assert.match(p.fix_rounds["n/a"], /trigger_type/);
+  assert.match(p.tokens_by_model_purpose["n/a"], /purpose/);
+  assert.equal(p.runs, 3);
+  assert.equal(p.review_rounds.total, 4);
+  assert.equal(p.parked.total_seconds, 120);
+});
+
+test("drift guard: every column the tool reads exists in nm-export's TABLES", () => {
+  const { TABLES } = require(path.join(__dirname, "..", "images", "base", "nm-export"));
+  // nm-export adds device and repo to every mirrored table; it never exports repos.working_path,
+  // which only the workspace reader needs (for transcript discovery)
+  const extra = new Set(["device", "repo", "working_path"]);
+  const check = (schema) => {
+    for (const [table, cols] of Object.entries(schema)) {
+      for (const c of cols) assert.ok(c in TABLES[table].cols || extra.has(c), `${table}.${c} is not a column nm-export mirrors`);
+    }
+  };
+  check(mod.NM_SCHEMA);
+  check(mod.NM_OPTIONAL);
+  check(mod.NM_EXPORT_SCHEMA);
+});
+
+test("the export query is the same in docs/metrics.md and the evaluate-sessions skill", () => {
+  const body = (file) => {
+    const m = /<<'SQL'\n([\s\S]*?)\nSQL\n/.exec(fs.readFileSync(file, "utf8"));
+    assert.ok(m, `${file} has no export query`);
+    return m[1];
+  };
+  const root = path.join(__dirname, "..");
+  const doc = body(path.join(root, "docs", "metrics.md"));
+  assert.equal(body(path.join(root, "plugins", "callum-flow", "skills", "evaluate-sessions", "SKILL.md")), doc);
+  // every table it exports is one the tool reads or knowingly ignores, with a real nm-export table
+  const { TABLES } = require(path.join(root, "images", "base", "nm-export"));
+  for (const m of doc.matchAll(/'table', '(\w+)'/g)) assert.ok(TABLES[m[1]], `${m[1]} is not a mirrored table`);
 });

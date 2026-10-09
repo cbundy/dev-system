@@ -708,7 +708,7 @@ ORDER BY n.merged_at;
 ## Offline computation: `callum-flow-evaluate`
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
-[--events <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
+[--events <file>] [--nm-export <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
 computes queries 1 to 7 for a time window from an events file (`--events`, default the local
 event log; a `factory.events` export covers every device), plus token spend, waste and pipeline
 numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It is read-only, makes
@@ -729,6 +729,86 @@ unless a `factory.events` export is passed (see the skill).
   before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time
   row says which as `ready_source`). Merged issues with neither read `n/a` and are counted in
   `issues_without_ready`, so a report can state how many lead times it could not compute.
+
+### Scope and the fleet-wide no-mistakes export
+
+Every report says which scope each source covers, in `window.scope` (one `Scope:` line under
+`window` in markdown):
+
+- `pipeline`: `workspace` when the numbers come from this device's `state.sqlite`, `fleet` when
+  `--nm-export` is given.
+- `events`: `workspace` for the local event log, `fleet` when `--events` is given (a
+  `factory.events` export is expected there).
+- `transcripts`: always `workspace`.
+
+`--nm-export <file>` replaces `state.sqlite` as the source of every pipeline number
+(`pipeline`, the `pipeline:<step>` rows in `spend`, `window.pipeline_runs`). The tool still opens
+`state.sqlite` for `repos.working_path`, which `nm-export` never ships, to find this checkout's
+transcripts; its `sources` row says it is used for transcript discovery only. The export is read
+offline, so the tool makes no network call in either mode.
+
+The file is JSON lines, one `{"table": "<name>", "row": {...}}` per row, with the column names of
+the `nomistakes` tables. The tool uses `runs`, `step_results`, `step_rounds` and
+`agent_invocations` and ignores any other table, unknown columns and lines that are not JSON,
+like `--events`. Timestamps are the ISO strings `timestamptz` gives; they give the same numbers
+as the epoch seconds in `state.sqlite`. A missing file makes the pipeline metrics `n/a` with the
+reason. A column that an older export lacks (`step_results.status`, `step_rounds.trigger_type`,
+`agent_invocations.purpose`, `runs.parked_ms`, `runs.awaiting_agent_since`) makes only the
+metrics that need it `n/a`. The export query, which covers every repo and device (the
+`raw` column is dropped) and the `step_results`, `step_rounds`, `agent_invocations` and
+`run_agent_sessions` of the runs it selects, plus `repos`:
+
+```sh
+PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
+WITH r AS (
+  SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
+), s AS (
+  SELECT x.* FROM nomistakes.step_results x JOIN r ON r.id = x.run_id
+)
+SELECT jsonb_build_object('table', 'runs', 'row', to_jsonb(r) - 'raw') FROM r
+UNION ALL
+SELECT jsonb_build_object('table', 'step_results', 'row', to_jsonb(s) - 'raw') FROM s
+UNION ALL
+SELECT jsonb_build_object('table', 'step_rounds', 'row', to_jsonb(d) - 'raw')
+FROM nomistakes.step_rounds d JOIN s ON s.id = d.step_result_id
+UNION ALL
+SELECT jsonb_build_object('table', 'agent_invocations', 'row', to_jsonb(i) - 'raw')
+FROM nomistakes.agent_invocations i JOIN r ON r.id = i.run_id
+UNION ALL
+SELECT jsonb_build_object('table', 'run_agent_sessions', 'row', to_jsonb(a) - 'raw')
+FROM nomistakes.run_agent_sessions a JOIN r ON r.id = a.run_id
+UNION ALL
+SELECT jsonb_build_object('table', 'repos', 'row', to_jsonb(p) - 'raw') FROM nomistakes.repos p;
+SQL
+```
+
+Do not filter by `device` or `repo`: `pipeline.by_device` and `pipeline.by_repo` need
+every device's rows, and the report should list every device that ran.
+
+### Pipeline definitions
+
+All of these are in `pipeline`, computed from the runs created in the window for `--repo`, from
+either source. They match saved queries 1 and 2 above. A key is `n/a` on its own when its columns
+are missing.
+
+- **Gate first-pass rate** (`gates`): per `step_name`, the steps that ended `completed` or
+  `failed` (`skipped`, `pending` and `running` are left out), how many of those `completed` with
+  no round whose `trigger_type` is not `initial`, and that share as a percentage. This is the
+  pipeline's gate, not the issue-level `first_pass` of section 2.
+- **Fix rounds** (`fix_rounds`): step rounds with a `trigger_type` other than `initial` (in
+  practice `auto_fix`). Reported as the total, the count per `step_name` (every step that ran,
+  zero included) and `max_per_run`, the most in any one run.
+- **Tokens by model and purpose** (`tokens_by_model_purpose`): one row per `(model, purpose)`
+  with `invocations` and input, output, cache_read and cache_creation tokens, reported
+  separately. An empty model or purpose reads `unknown`. Sorted by model, then purpose.
+- **Time parked** (`parked`): over the runs with `parked_ms > 0`, the count (`runs_parked`), total,
+  median and max in seconds. `awaiting_agent` counts runs with `awaiting_agent_since` set, as of
+  when the data was read, which is the window's end only for a report run right after it.
+- **`by_device`**: the four metrics above per `device`, for `--repo`. In workspace mode there is
+  one row named `DEV_MACHINE_NAME`, else the hostname (the rule `nm-export --device` uses).
+- **`by_repo`**: the same per repo, over every repo in the source (workspace mode names a repo
+  from `repos.upstream_url`). It is the one key that ignores `--repo`, and its `scope` field says
+  so.
 
 ### Token and wake definitions
 
