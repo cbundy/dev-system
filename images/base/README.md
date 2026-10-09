@@ -1175,17 +1175,19 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 
-`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]`
+`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown] [--ready-times <file>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, token spend by role and model, wasted
-wakes, pipeline runs; definitions in `docs/metrics.md`). It only reads and makes no network calls,
+wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
+lost races, stuck issues and the waiting split; definitions in `docs/metrics.md`). It only reads and makes no network calls,
 so it is in the synced allow list. Inputs: Claude transcripts under
 `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` (the project directories of this checkout and its
 `.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
 `${CALLUM_EVENTS_DIR:-/persist/events}/<owner>__<repo>.jsonl` (`--events` takes any
 `factory.events` export as JSON lines) and `${NO_MISTAKES_HOME:-~/.no-mistakes}/state.sqlite`
 (`--nm-state`). A missing source makes the affected metrics `n/a` with the reason listed under
-`sources`. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
+`sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
+(the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
@@ -1213,7 +1215,7 @@ it is allowed only in the main checkout's `settings.local.json`; the read-only
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
-and exits 3), then swaps `ready` for `In development` and logs `claimed`. `--heartbeat
+and exits 3; every exit 3 logs a `claim_lost` event), then swaps `ready` for `In development` and logs `claimed`. `--heartbeat
 [issue...]` renews this device's claim comments in place. `callum-flow-sweep` releases stale
 `In development` labels on open and closed issues: closed issues, and open ones with a PR merged
 after the claim (matched by `issue-<N>-` branch name), just lose the

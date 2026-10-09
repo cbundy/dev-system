@@ -1,0 +1,25 @@
+{"v":1,"ts":"2026-10-09T03:00:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"claimed","issue":6,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T03:30:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"delegated","issue":6,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T05:00:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"claimed","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T07:00:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"reclaimed","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":"lease expired"}
+{"v":1,"ts":"2026-10-09T07:05:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"claimed","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T07:20:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"abandoned","issue":7,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T08:00:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"usage","issue":null,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T08:20:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"usage","issue":null,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T08:30:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"claimed","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T08:40:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"usage","issue":null,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T08:45:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"delegated","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:00:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"run_started","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:00:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"claimed","issue":2,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:15:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"delegated","issue":2,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:20:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"parked","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:20:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"run_started","issue":2,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:30:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"verdict","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":"CORRECT: review-1"}
+{"v":1,"ts":"2026-10-09T09:35:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"merge_ready","issue":2,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:40:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"merged","issue":2,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T09:50:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"merge_ready","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T10:10:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"merged","issue":1,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T11:00:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"claimed","issue":3,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T11:01:00Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"claimed","issue":3,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T11:25:00Z","repo":"acme/widgets","device":"A","session_id":null,"actor":"agent","state":"claimed","issue":4,"run_id":null,"branch":null,"pr":null,"head":null,"note":null}
+{"v":1,"ts":"2026-10-09T11:25:30Z","repo":"acme/widgets","device":"B","session_id":null,"actor":"agent","state":"claim_lost","issue":4,"run_id":null,"branch":null,"pr":null,"head":null,"note":"race lost to A"}
