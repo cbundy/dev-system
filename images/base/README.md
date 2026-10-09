@@ -1227,8 +1227,8 @@ so it is in the synced allow list. Inputs: Claude transcripts under
 (`--nm-state`). `--nm-export` takes a JSON-lines dump of the `nomistakes` schema (the query is in
 `docs/metrics.md`) and then every pipeline number, including the per-device and per-repo gate
 first-pass rate, fix rounds, tokens by model and purpose and time parked, comes from it and can
-cover the whole fleet; `window.scope` says which scope each source covers. A missing source makes the affected metrics `n/a` with the reason listed under
-`sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
+cover the whole fleet; `window.scope` says which scope each source covers. A missing source
+makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
