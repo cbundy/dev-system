@@ -1189,7 +1189,7 @@ so it is in the synced allow list. Inputs: Claude transcripts under
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
-is in the synced allow list. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
+is in the synced allow list. The `head` and `mergeable` FAIL lines name the fix (fast-forward a lagging worktree, or rebase, abort and start a fresh run), so the orchestrator skill carries no separate recipe. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
