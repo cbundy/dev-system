@@ -567,7 +567,7 @@ function loadNoMistakes(file, repo) {
     const repos = db.prepare('SELECT id, working_path, upstream_url FROM repos').all()
       .filter((r) => repoOfUrl(r.upstream_url) === repo.toLowerCase());
     const ids = new Set(repos.map((r) => r.id));
-    const ms = (t) => (t > 1e11 ? t : t * 1000);
+    const ms = (t) => (typeof t === 'number' ? (t > 1e11 ? t : t * 1000) : Date.parse(t));
     const runs = db.prepare('SELECT id, repo_id, status, created_at FROM runs ORDER BY created_at, id').all()
       .filter((r) => ids.has(r.repo_id)).map((r) => ({ ...r, created_ms: ms(r.created_at) }));
     const data = { workingPaths: repos.map((r) => r.working_path).sort(), runs, tables: have, rows: runs.length };
