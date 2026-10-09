@@ -136,6 +136,43 @@ check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
   echo "$out" | grep -q "waiting: no"'
+# The saved queries in docs/metrics.md (#275): every sql block of the nomistakes section runs
+# against this PostgreSQL, filled through the real nm-push-loop path plus a factory.events
+# table seeded for run r3. Each query must return a row, and headline values are exact.
+psql_file() { docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtA; }
+nm_metrics_queries() {
+  local root out ddl f
+  root=$(cd "$TEST_DIR/../../.." && pwd)
+  out=$(mktemp -d)
+  node "$root/tests/metrics-blocks.js" "$root/docs/metrics.md" "$out" || return 1
+  nm_fixture metrics && nm_push || return 1
+  # factory.events as event-push-loop creates it (its DDL is read from the script), then the
+  # orchestrator events for issue 42: claimed 300 s before run r3 was created, merged 120 s after it ended.
+  ddl=$(sed -n '/^DDL="/,/events_issue_idx/p' "$root/images/base/event-push-loop" | sed '1s/^DDL="//; $s/"$//')
+  printf '%s\n' "$ddl" | psql_file >/dev/null || return 1
+  psql_file >/dev/null <<'SQL' || return 1
+INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw) VALUES
+  ('nm-metrics', 'acme/widgets', 1, to_timestamp(1700000700), 'claimed', 42, NULL, '{}'),
+  ('nm-metrics', 'acme/widgets', 2, to_timestamp(1700001010), 'run_started', 42, 'r3', '{}'),
+  ('nm-metrics', 'acme/widgets', 3, to_timestamp(1700001720), 'merged', 42, NULL, '{}')
+ON CONFLICT DO NOTHING;
+SQL
+  # 00 is the DDL block, 01 the example join, 02..08 the seven queries.
+  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 9 ] || { echo "expected 9 sql blocks"; return 1; }
+  for f in "$out"/*.sql; do
+    psql_file < "$f" > "${f%.sql}.out" || { echo "$(basename "$f") failed"; cat "$f"; return 1; }
+    if [ "$(basename "$f")" != 00.sql ] && [ ! -s "${f%.sql}.out" ]; then echo "$(basename "$f") returned no rows"; return 1; fi
+  done
+  grep -Fx 'review|acme/widgets|nm-host|3|2|0.667' "$out/02.out" &&
+    grep -Fx 'test|2|3|2' "$out/03.out" &&
+    grep -Fx 'review|acme/widgets|nm-host|4|6|1.50|6|2|0.333|1' "$out/04.out" &&
+    grep -Fx 'merged_pr|acme/widgets||https://github.com/acme/widgets/pull/7||||4|2500|490|10000|400|140000' "$out/05.out" &&
+    grep -Fx 'totals|acme/widgets|nm-host||2|150000|75000|111000|120000|' "$out/06.out" &&
+    grep -E '^parked_now\|acme/widgets\|nm-host\|r4\|\|30000\|' "$out/06.out" &&
+    grep -Fx 'review-fix|gpt-test|exit|none|1' "$out/07.out" &&
+    grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out"
+}
+check "the saved queries in docs/metrics.md run against the mirrored data and return the expected values" nm_metrics_queries
 check "dev-doctor fails with a hint when the database is unreachable" bash -c "
   out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"

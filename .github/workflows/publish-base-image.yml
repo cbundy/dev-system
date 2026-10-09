@@ -19,6 +19,7 @@ on:
   pull_request:
     paths:
       - "images/base/**"
+      - "docs/metrics.md"
       - "features/src/callum-tools/**"
       - ".github/workflows/publish-base-image.yml"
   workflow_dispatch:
