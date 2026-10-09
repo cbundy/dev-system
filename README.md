@@ -7,14 +7,16 @@ a browser and come back to a reviewed PR, without keeping a shell open on any ma
 ## How it works
 
 - **Every agent environment is its own container.** The same image runs as a desktop dev
-  container, under `docker run`, on Kubernetes or as a Coder workspace. Inside a container, tmux
-  only keeps one Claude process alive and restarts it when it exits. dev-system is not a tmux
-  multiplexer running many terminals on one machine; you scale out by running more containers.
+  container, under `docker run`, on Kubernetes or as a Coder workspace. In an orchestrator
+  container, tmux holds one Claude session and a supervisor restarts it when it exits.
+  dev-system is not a tmux multiplexer running many terminals on one machine; you scale out
+  by running more containers.
 - **Two ways to give it work.**
   1. Talk to a persistent orchestrator session in the Claude app (via Remote Control). It stays
      alive across restarts, so you come back to it and dispatch work from anywhere.
-  2. Label a GitHub issue `ready`. The orchestrator session watching the repo designs it,
-     implements it in its own git worktree, gates it with the no-mistakes pipeline and opens a PR.
+  2. Label a GitHub issue `ready`. The orchestrator session watching the repo delegates design
+     and implementation to sub-agents, which work in git worktrees and open PRs through the
+     no-mistakes pipeline.
 - **Sub-agents do the work inside the orchestrator's container.** Each issue goes to a sub-agent
   in its own worktree; the orchestrator does not start new containers.
 - **You never need a shell on the host.** Logins, sessions and approvals happen from the Claude
@@ -22,7 +24,7 @@ a browser and come back to a reviewed PR, without keeping a shell open on any ma
 
 ## Architecture
 
-Three layers, versioned and released separately:
+Three layers, each pinned independently:
 
 - **Agent behaviour** - the `callum-flow` plugin in [`plugins/callum-flow/`](plugins/callum-flow/):
   the skills and hooks that turn issues into PRs.
@@ -41,7 +43,7 @@ flowchart LR
     orch --> w2["Sub-agent<br/>worktree B"]
   end
   subgraph c2["Container: hands-on workspace"]
-    ws["Supervised Claude<br/>(own worktree per session)"]
+    ws["Remote Control server<br/>(own worktree per new session)"]
   end
   app --> ws
   w1 --> pr["Pull requests<br/>(no-mistakes pipeline)"]
@@ -59,13 +61,15 @@ for the layers, versioning and the runtime map.
 1. Open the repo's orchestrator session in the Claude app.
 2. Describe the work or point at an issue.
 3. The orchestrator hands it to a sub-agent in a fresh worktree.
-4. The pipeline reviews, tests and opens a PR; you review and merge.
+4. The pipeline reviews, tests and opens a PR; the orchestrator verifies and merges it,
+   asking you when an owner decision is needed.
 
 **Label an issue `ready`**
 
 1. Write the issue and add the `ready` label.
-2. The orchestrator session picks it up, designs it and implements it in a worktree.
-3. The no-mistakes pipeline gates the change and opens a PR linked to the issue.
+2. The orchestrator session picks it up and delegates design and implementation to sub-agents.
+3. The implementation sub-agent works in a worktree; the no-mistakes pipeline gates the change
+   and opens a PR linked to the issue. The orchestrator then verifies and merges it.
 
 ## What's included
 
@@ -83,8 +87,8 @@ for the layers, versioning and the runtime map.
   ([`templates/`](templates/README.md)).
 - **Coder workspaces** - including an orchestrator workspace that resumes across restarts
   ([Coder template reference](coder/dev-system/README.md#orchestrator-workspace)).
-- **Central session history and telemetry** - every container's sessions in one searchable
-  viewer, plus optional OTLP export ([`images/base/`](images/base/README.md)).
+- **Central session history and telemetry** - optional session sync to one searchable
+  viewer and OTLP export ([`images/base/`](images/base/README.md)).
 
 ## Start
 
