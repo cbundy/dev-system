@@ -365,7 +365,9 @@ for mode in derived explicit skip; do
   m 7 "$@"
   [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
   case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
-  [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ] || fail "epic merge or event missing"
+  if ! { [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ]; }; then
+    fail "epic merge or event missing"
+  fi
   passed=$((passed + 1))
 done
 for rollout in run-it keep-open; do
@@ -374,7 +376,9 @@ for rollout in run-it keep-open; do
   expect_pass "epic $rollout does not request closure"
 done
 reset; echo epic-x > "$st/base"; touch "$st/merge-refuse"; m 7 --base epic-x
-[ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ] || fail "refused epic merge requested closure: $rc $out"
+if ! { [ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ]; }; then
+  fail "refused epic merge requested closure: $rc $out"
+fi
 passed=$((passed + 1))
 
 # awaiting_ in free text is not a parked step
