@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 #
-# agentsview.sh: where the agentsview session push finds its PostgreSQL URL,
-# shared by dev-init, dev-doctor and agentsview-push-loop
+# agentsview.sh: shared PostgreSQL URL lookup and secret masking for dev-init,
+# dev-doctor and the session, event and no-mistakes push loops; run_psql is
+# shared by the latter two
 # (cbundy/dev-system#103). Sourced, not run.
 #
 # The URL is a secret and the image is public, so it only ever arrives at run

@@ -16,9 +16,9 @@
 # variables in psql's own environment (never its argv); all psql output is
 # masked. A missing state.sqlite is a no-op.
 #
-# Local state, in $NM_PUSH_STATE_DIR (default /persist/agentsview/nm-push):
-# the file `state` with mark, last_rows, total_rows and last_push (epoch
-# seconds), written to a temp file and moved into place.
+# Checkpoint placement and device isolation are documented in
+# images/base/README.md, "Factory event log"; nm_push_state_dir in
+# agentsview.sh is shared with dev-doctor so both use the same checkpoint.
 #
 # Usage: nm-push-loop [--once]    --once makes one pass and exits (tests)
 # Environment: NO_MISTAKES_HOME / NM_HOME (default /persist/no-mistakes),

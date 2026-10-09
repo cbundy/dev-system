@@ -290,10 +290,21 @@ dispatcher_bound)` above 0.5 means option B.
 ## no-mistakes pipeline data (`nomistakes` schema)
 
 `nm-push-loop` (`images/base/nm-push-loop`, SQLite half in `nm-export`) mirrors six tables of
-`$NM_HOME/state.sqlite` into the same PostgreSQL: `repos`, `runs`, `step_results`,
+the local `state.sqlite` into the same PostgreSQL: `repos`, `runs`, `step_results`,
 `step_rounds`, `agent_invocations` and `run_agent_sessions`. The tables are created on the first
 push (`CREATE SCHEMA/TABLE IF NOT EXISTS`) and written with upserts on the source key (`id`;
 `(run_id, role)` for `run_agent_sessions`), so a run is updated in place as it progresses.
+Source and checkpoint paths, startup and controls are documented in the
+[base image reference](../images/base/README.md#factory-event-log).
+
+The exporter opens SQLite read-only and reads all available tables in one read transaction.
+Without a valid checkpoint, it backfills every row in each available table, even when a
+parent table is absent; unresolved repo attribution is NULL. Later passes send all
+nonterminal runs and terminal runs touched at or after the checkpoint (`>=`), with their
+children and repos. Touch timestamps come from `runs.updated_at`, step start/completion/
+activity, round creation, invocation completion and session updates. A missing table or
+one missing a primary-key column is skipped with a warning. Each push is one PostgreSQL
+transaction; the checkpoint advances only after success, so failures are retried in full.
 
 Column rules:
 
@@ -303,29 +314,184 @@ Column rules:
   JSON columns (`findings_json`, `gates_json`, ...) stay `text`.
 - A column the mirror does not know goes into `raw jsonb` (blobs as base64) instead of failing
   the push; a known column missing from the SQLite file is NULL.
+- Actual NUL characters are removed from string values before serialization; literal
+  backslash escape text is preserved.
 - Never shipped, and absent from `raw`: `repos.working_path`, `runs.worktree_dir`,
   `step_results.log_path` and `agent_pid`, `step_rounds.global_config_yaml` and
   `repo_config_yaml`, and the step log files.
 - `runs.no_mistakes_version` records which no-mistakes wrote the row.
 
-The tables, abbreviated (the full list of columns is `nm-export`'s `TABLES`):
+The DDL below is generated from `nm-export`'s schema definition. Regenerate it from the
+repository root with `node -e 'console.log(require("./images/base/nm-export").ddl())'`;
+the exporter is the authoritative source for column names, types, keys and indexes.
 
 ```sql
-CREATE TABLE nomistakes.runs (
-  id text PRIMARY KEY, repo_id text, branch text, head_sha text, status text, pr_url text,
-  no_mistakes_version text, error text, intent text, created_at timestamptz, updated_at timestamptz,
-  -- ... the other known runs columns ...
-  device text NOT NULL, repo text, raw jsonb);
-CREATE TABLE nomistakes.step_results (id text PRIMARY KEY, run_id text, step_name text, status text,
-  findings_json text, started_at timestamptz, completed_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
-CREATE TABLE nomistakes.step_rounds (id text PRIMARY KEY, step_result_id text, round bigint,
-  findings_json text, user_findings_json text, fix_summary text, created_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
-CREATE TABLE nomistakes.agent_invocations (id text PRIMARY KEY, run_id text, step_name text, model text,
-  input_tokens bigint, output_tokens bigint, completed_at timestamptz, /* ... */ device text NOT NULL, repo text, raw jsonb);
-CREATE TABLE nomistakes.run_agent_sessions (run_id text, role text, agent text, session_id text,
-  created_at timestamptz, updated_at timestamptz, device text NOT NULL, repo text, raw jsonb,
-  PRIMARY KEY (run_id, role));
-CREATE TABLE nomistakes.repos (id text PRIMARY KEY, upstream_url text, default_branch text, /* ... */ device text NOT NULL, repo text, raw jsonb);
+CREATE SCHEMA IF NOT EXISTS nomistakes;
+CREATE TABLE IF NOT EXISTS nomistakes.repos (
+  id text,
+  upstream_url text,
+  fork_url text,
+  default_branch text,
+  created_at timestamptz,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS nomistakes.runs (
+  id text,
+  repo_id text,
+  branch text,
+  head_sha text,
+  base_sha text,
+  submitted_head_sha text,
+  no_mistakes_version text,
+  no_mistakes_build_sha text,
+  review_approved_head_sha text,
+  status text,
+  pr_url text,
+  pr_state text,
+  pr_state_observed_at timestamptz,
+  ci_ready_at timestamptz,
+  ci_ready_no_ci bigint,
+  last_pushed_sha text,
+  push_target_kind text,
+  push_target_fingerprint text,
+  push_ref text,
+  last_pushed_at timestamptz,
+  push_generation bigint,
+  push_active bigint,
+  terminal_head_verified_at timestamptz,
+  gates_json text,
+  error text,
+  awaiting_agent_since timestamptz,
+  parked_ms bigint,
+  launch_nonce text,
+  launch_validation_generation text,
+  launch_intent_digest text,
+  launch_receipt_claimed_at timestamptz,
+  pr_base_branch text,
+  omit_intent bigint,
+  pi_profile text,
+  verification_plan text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  intent text,
+  intent_source text,
+  intent_session_id text,
+  intent_score double precision,
+  ci_rerun_state text,
+  custody_returned_at timestamptz,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS nomistakes.step_results (
+  id text,
+  run_id text,
+  step_name text,
+  step_order bigint,
+  status text,
+  exit_code bigint,
+  duration_ms bigint,
+  findings_json text,
+  error text,
+  started_at timestamptz,
+  round_started_at timestamptz,
+  completed_at timestamptz,
+  last_activity_at timestamptz,
+  last_activity text,
+  auto_fix_limit bigint,
+  ci_fix_attempts bigint,
+  override_reason text,
+  skip_reason text,
+  approval_reason text,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS nomistakes.step_rounds (
+  id text,
+  step_result_id text,
+  round bigint,
+  trigger_type text,
+  findings_json text,
+  reviewed_head_sha text,
+  starting_head_sha text,
+  trusted_config_sha text,
+  user_findings_json text,
+  selected_finding_ids text,
+  selection_source text,
+  fix_summary text,
+  repair_published bigint,
+  duration_ms bigint,
+  created_at timestamptz,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS nomistakes.agent_invocations (
+  id text,
+  run_id text,
+  step_name text,
+  round bigint,
+  purpose text,
+  agent text,
+  model text,
+  model_provider text,
+  session_mode text,
+  session_key text,
+  fallback_reason text,
+  started_at timestamptz,
+  completed_at timestamptz,
+  duration_ms bigint,
+  subprocess_wait_ms bigint,
+  exit_status text,
+  failure_category text,
+  input_tokens bigint,
+  output_tokens bigint,
+  cache_read_tokens bigint,
+  cache_creation_tokens bigint,
+  fresh_input_tokens bigint,
+  reasoning_tokens bigint,
+  delta_input_tokens bigint,
+  delta_output_tokens bigint,
+  delta_cache_read_tokens bigint,
+  model_roundtrips bigint,
+  tool_calls bigint,
+  tool_wait_calls bigint,
+  tool_test_lint_calls bigint,
+  tool_edit_calls bigint,
+  tool_read_calls bigint,
+  tool_git_calls bigint,
+  tool_other_calls bigint,
+  workload_files bigint,
+  workload_lines bigint,
+  finding_count bigint,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS nomistakes.run_agent_sessions (
+  run_id text,
+  role text,
+  agent text,
+  session_id text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  device text NOT NULL,
+  repo text,
+  raw jsonb,
+  PRIMARY KEY (run_id, role)
+);
+CREATE INDEX IF NOT EXISTS runs_repo_idx ON nomistakes.runs (repo, created_at);
+CREATE INDEX IF NOT EXISTS step_results_run_idx ON nomistakes.step_results (run_id);
+CREATE INDEX IF NOT EXISTS step_rounds_step_idx ON nomistakes.step_rounds (step_result_id);
+CREATE INDEX IF NOT EXISTS agent_invocations_run_idx ON nomistakes.agent_invocations (run_id);
 ```
 
 Example: pipeline runs against the factory's own view of the same run (`factory.events.run_id`

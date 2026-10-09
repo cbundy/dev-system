@@ -45,7 +45,7 @@ npx callum-dev init          # then fill every <REPLACE> and commit
 |---|---|
 | [`docs/onboarding.md`](docs/onboarding.md) | Making a repo a dev-system repo (written for agents) |
 | [`docs/architecture.md`](docs/architecture.md) | Layers, versioning, how updates reach repos, the runtime map for debugging |
-| [`docs/metrics.md`](docs/metrics.md) | The four factory metrics queries over the event log |
+| [`docs/metrics.md`](docs/metrics.md) | Factory metrics queries and the no-mistakes PostgreSQL mirror |
 | [`images/base/README.md`](images/base/README.md) | The base image: persistence, `dev-init`, `dev-doctor`, Remote Control, logins, agentsview |
 | [`coder/dev-system/README.md`](coder/dev-system/README.md) | The Coder templates: pushing them, parameters, OTLP |
 | [`docs/developing-on-coder.md`](docs/developing-on-coder.md) | Developing dev-system itself from a Coder workspace: logins, and what only CI can verify |
