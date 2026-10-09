@@ -183,6 +183,14 @@ re-arm.
    on its own (never batched with another `run-it` issue), then the Run it; whoever ran it
    records the result in a comment and closes the issue. `keep-open` - the owner closes it.
 
+## Upgrading the workspace you run in
+To pick up a new image or template on the Coder workspace this session runs in, run
+`dev-restart-self` (add `--restart` to force the scheduled variant), never `coder restart`,
+`coder stop` or `coder update` on it: those stop the workspace and kill the session that
+would start it again. The plugin's `forbid-coder-self` hook refuses them. The session
+resumes after the restart, so check the scheduled-task list (CronList) before re-arming
+loops, and never start the workspace by hand.
+
 ## Sub-agent models
 Sub-agents run on the model pinned in their frontmatter: `callum-flow:designer`
 on Opus, `callum-flow:explorer`, `callum-flow:implementer`, `callum-flow:fixer` and

@@ -447,6 +447,11 @@ coder whoami
   volume, so it is lost when the workspace restarts.
 - The agent's own `CODER_AGENT_TOKEN` is not a user session and cannot run `coder`
   commands as you.
+- Never run `coder restart`, `coder stop` or `coder update` on the workspace your session
+  runs in: each stops it first, which kills the session that would start it again, and the
+  workspace stays stopped. Use [`dev-restart-self`](#dev-restart-self). The callum-flow
+  plugin's `forbid-coder-self` hook refuses those commands for the workspace name, `owner/name`, or an
+  unexpanded `$CODER_WORKSPACE_NAME` reference.
 
 ## `dev-init`
 
@@ -462,7 +467,10 @@ container never fails to start because of it.
    printing the fix (`fsGroup: 1000` / `chown 1000:1000`) for unwritable ones. One
    `WARNING` names every directory with no volume behind it, whose state is lost on the
    next rebuild, with the fix for a devcontainer, `docker run` and Kubernetes. It shows in
-   the post-start output and the container log.
+   the post-start output and the container log. Right after, it runs
+   `dev-restart-self --resume` (see [`dev-restart-self`](#dev-restart-self)): it restores
+   what a scheduled restart saved and logs the last request; with nothing saved it does
+   nothing.
 2. Records Claude's `installMethod: native` in `.claude.json` if missing (`claude doctor`
    warns without it, because the config directory starts empty).
 3. Seeds `$CODEX_HOME/config.toml` with a top-level `sandbox_mode = "danger-full-access"`
@@ -582,6 +590,45 @@ on every failure:
 
 It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
 the same report and always exits 0.
+
+## `dev-restart-self`
+
+Upgrades the Coder workspace your session runs in (a moved `base:2`/`dev:latest` image tag
+or a new template version) without the stop-then-start trap of `coder restart`: stopping
+your own workspace kills the session before it can start the workspace again.
+
+```sh
+dev-restart-self              # default (alias --upgrade): one start build, no stop
+dev-restart-self --restart    # scheduled restart; add --upgrade to also take the active template version
+dev-restart-self --dry-run    # print each request (token redacted), send nothing
+dev-restart-self --resume     # dev-init runs this on every start
+```
+
+- **Default mode** reads the workspace, and only when its latest build is `start`/`running`
+  sends one `POST /api/v2/workspaces/<id>/builds {"transition":"start","template_version_id":
+  <active version>}`. The start build replaces the container. No stop is sent.
+- **Fallback.** If Coder rejects that request (any 4xx), the helper prints the status and the
+  server's message and falls back to restart mode with `--upgrade` by itself.
+- **Restart mode** first saves the workspace's `autostart_schedule` and `automatic_updates`
+  to `/persist/dev-restart-self/pending.json`, sets a one-off autostart
+  (`CRON_TZ=UTC <m> <h> * * *`) `DEV_RESTART_SELF_DELAY_MIN` minutes ahead (default 3,
+  minimum 2), with `--upgrade` sets `automatic_updates` to `always`, then stops the
+  workspace. Coder starts it again at the scheduled time. It refuses before changing anything
+  when the template has `allow_user_autostart: false`.
+- **Resume** (`--resume`, run by `dev-init`) reports the `last-request` record, restores the
+  saved schedule (`null` when there was none) and `automatic_updates`, and deletes the marker.
+  With no marker it does nothing. If the restore fails it keeps the marker and exits non-zero
+  with a warning, so the one-off schedule never keeps firing daily without notice.
+- **Credentials**: the token comes from `CODER_SESSION_TOKEN`, then
+  `$DEV_SECRETS_DIR/coder-session-token`, then `${CODER_CONFIG_DIR:-~/.config/coderv2}/session`;
+  the URL from `CODER_URL`, then `${CODER_CONFIG_DIR:-~/.config/coderv2}/url`, then
+  `CODER_AGENT_URL` (see [Coder CLI](#coder-cli)). The token goes to `curl` through a config on
+  stdin, never on a command line.
+
+Outside a Coder workspace (no `CODER_WORKSPACE_ID`) it exits non-zero and makes no request.
+The session ends when the restart begins and resumes afterwards, so check the scheduled-task
+list before re-arming loops, and do not start the workspace by hand. Tested by
+`images/base/test/dev-restart-self.test.sh` (part of `npm test`, stubbed `curl`).
 
 ## `dev-prune-worktrees`
 

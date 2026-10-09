@@ -22,6 +22,12 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   [ "$(grep -c "^agent:" $cfg)" = 1 ]
   sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" $cfg | grep -qxF "agent: [codex, claude]"' \
   -v "$vol:/persist" --entrypoint ""
+check "dev-restart-self is on PATH and dev-init with no marker still exits 0 and makes no request" in_image '
+  set -e
+  command -v dev-restart-self
+  dev-restart-self --resume
+  dev-init >/dev/null 2>&1' \
+  -v "$vol:/persist" --entrypoint ""
 check "dev-init on an empty volume mounted at /persist leaves node-owned subdirs" in_image '
   for d in claude codex gh no-mistakes agentsview; do [ "$(stat -c %u "/persist/$d")" = 1000 ] || exit 1; done' \
   -v "$vol:/persist"
