@@ -1258,6 +1258,14 @@ for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
 the last push time and whether activity is newer than the checkpoint; it fails when a URL
 is configured but the loop is stopped.
 
+`/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
+without connecting to PostgreSQL. `--mark N` selects an incremental export;
+`--mark-out FILE` writes the resulting `{ "mark": N, "rows": N }` metadata.
+`--device NAME` overrides row attribution (default `DEV_MACHINE_NAME`, else hostname);
+it does not change the push loop's checkpoint path. `--waiting` prints `yes` when the
+newest touch timestamp exceeds `--mark` (zero when omitted), otherwise `no`, then exits
+without emitting SQL. Export selection rules are in the linked metrics reference.
+
 ## Central session history (agentsview)
 
 The image ships [agentsview](https://github.com/kenn-io/agentsview), so every container
@@ -1445,9 +1453,10 @@ With the endpoint set, the image adds what the endpoint alone does not turn on:
   `dev-init` writes nothing, logs that it left them alone, and drops its own table if one
   was there. To customise codex's export (headers, TLS, `environment`), replace the block,
   markers included, with your own `[otel]` table.
-- **no-mistakes** has no exporter of its own: its run logs are files under
+- **no-mistakes** has no OTLP exporter of its own: its run logs are files under
   `/persist/no-mistakes/logs` (`$NM_HOME/logs`), for a collector or log shipper to tail if
-  you want pipeline outcomes next to the rest.
+  you want pipeline logs next to the rest. For the PostgreSQL pipeline mirror, see
+  [Factory event log](#factory-event-log).
 
 Traces are not turned on. `dev-doctor` reports the
 state in an `INFO` line, which never fails: export off, or on with the endpoint, the

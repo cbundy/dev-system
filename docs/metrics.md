@@ -308,7 +308,7 @@ transaction; the checkpoint advances only after success, so failures are retried
 
 Column rules:
 
-- Every table has `device` (`DEV_MACHINE_NAME`, else the hostname, as `callum-flow-event`) and
+- Every table has `device` (the exporter's device attribution) and
   `repo` (lowercase `owner/name` from `repos.upstream_url`) beside the source columns.
 - Epoch-second `*_at` and `*_since` columns are `timestamptz`; other integers are `bigint`;
   JSON columns (`findings_json`, `gates_json`, ...) stay `text`.
