@@ -350,6 +350,26 @@ if [ "$av_rc" -eq 0 ]; then
     fail "psql is not on PATH, so factory events cannot be pushed" "the image is broken - pull a fresh ghcr.io/cbundy/dev-system/base"
   fi
 fi
+
+# no-mistakes pipeline data push (cbundy/dev-system#273): rows pushed so far and
+# whether state.sqlite has activity the push has not seen. A configured push
+# whose loop is not running is a failure.
+nm_state="$(nm_push_state_dir)/state"
+nm_db="${NO_MISTAKES_HOME:-${NM_HOME:-/persist/no-mistakes}}/state.sqlite"
+nm_total=$(sed -n 's/^total_rows=//p' "$nm_state" 2>/dev/null | sed -n 1p)
+nm_last=$(sed -n 's/^last_push=//p' "$nm_state" 2>/dev/null | sed -n 1p)
+nm_mark=$(sed -n 's/^mark=//p' "$nm_state" 2>/dev/null | sed -n 1p)
+nm_wait=no
+if [ -f "$nm_db" ]; then
+  nm_wait=$("${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/nm-export" "$nm_db" ${nm_mark:+--mark "$nm_mark"} --waiting 2>/dev/null) || nm_wait=no
+fi
+info "no-mistakes push: ${nm_total:-0} rows pushed (last pushed $(ev_when "${nm_last:-0}")), waiting: $nm_wait"
+if [ "$av_rc" -eq 0 ]; then
+  if flock -n /tmp/dev-nm-push.lock true 2>/dev/null; then
+    fail "no-mistakes push is not running" "run: dev-init (log: /tmp/dev-nm-push.log)"
+  fi
+fi
+unset nm_state nm_db nm_total nm_last nm_mark nm_wait
 unset ev_dir ev_lines ev_pushed ev_last_written ev_last_pushed ev_f ev_m
 
 # Telemetry export (cbundy/dev-system#68) is opt-in, so this line is only

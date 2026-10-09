@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# nm-push-loop: mirrors the no-mistakes pipeline database (state.sqlite) into
+# the nomistakes schema of the agentsview PostgreSQL, next to factory.events
+# (cbundy/dev-system#273). docs/metrics.md has the schema and the column rules.
+#
+# dev-init starts this in the background, under a container-local flock, when
+# a PostgreSQL URL is configured (agentsview.sh) and psql is on PATH, exactly
+# as for event-push-loop. nm-export does the SQLite half (read-only, one
+# snapshot) and prints the DDL plus idempotent upserts for every run touched
+# since the high-water mark; this script only feeds that to psql in ONE
+# transaction. The mark advances only after psql succeeds, so a pass that dies
+# part-way (or a database that is down) is repeated in full next time.
+#
+# The URL is read again on every pass and reaches only psql, split into PG*
+# variables in psql's own environment (never its argv); all psql output is
+# masked. A missing state.sqlite is a no-op.
+#
+# Checkpoint placement and device isolation are documented in
+# images/base/README.md, "Factory event log"; nm_push_state_dir in
+# agentsview.sh is shared with dev-doctor so both use the same checkpoint.
+#
+# Usage: nm-push-loop [--once]    --once makes one pass and exits (tests)
+# Environment: NO_MISTAKES_HOME / NM_HOME (default /persist/no-mistakes),
+#   NM_PUSH_STATE_DIR, DEV_NM_PUSH_INTERVAL seconds between passes (default 60).
+set -u
+
+SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
+# shellcheck source=agentsview.sh
+. "$SHARE/agentsview.sh"
+
+DB="${NO_MISTAKES_HOME:-${NM_HOME:-/persist/no-mistakes}}/state.sqlite"
+STATE_DIR=$(nm_push_state_dir) || exit 1
+INTERVAL="${DEV_NM_PUSH_INTERVAL:-60}"
+
+do_pass() {
+  local url sql mark_out out mark='' last_rows total_rows new_mark rows
+  if ! url=$(agentsview_pg_url); then
+    echo "nm-push-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
+    return 2
+  fi
+  [ -f "$DB" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null || { echo "nm-push-loop: cannot create $STATE_DIR" >&2; return 1; }
+  mark=$(sed -n 's/^mark=//p' "$STATE_DIR/state" 2>/dev/null | sed -n 1p)
+  total_rows=$(sed -n 's/^total_rows=//p' "$STATE_DIR/state" 2>/dev/null | sed -n 1p)
+  case "$mark" in '' | *[!0-9]*) mark='' ;; esac
+  case "$total_rows" in '' | *[!0-9]*) total_rows=0 ;; esac
+  sql=$TMP/export.sql
+  mark_out=$TMP/mark.json
+  if ! "$SHARE/nm-export" "$DB" ${mark:+--mark "$mark"} --mark-out "$mark_out" > "$sql"; then
+    echo "nm-push-loop: reading $DB failed, retrying next pass" >&2
+    return 1
+  fi
+  new_mark=$(jq -r .mark "$mark_out" 2>/dev/null)
+  rows=$(jq -r .rows "$mark_out" 2>/dev/null)
+  case "$new_mark$rows" in '' | *[!0-9]*) echo "nm-push-loop: unreadable exporter result" >&2; return 1 ;; esac
+  # Nothing touched and a successful pass before: no need to connect.
+  if [ "$rows" -eq 0 ] && [ -n "$mark" ]; then return 0; fi
+  if ! out=$(run_psql "$url" < "$sql" 2>&1); then
+    printf '%s\n' "$out" | sed -E "$MASK_SECRETS_SED" >&2
+    echo "nm-push-loop: push failed, retrying next pass" >&2
+    return 1
+  fi
+  last_rows=$rows
+  total_rows=$((total_rows + rows))
+  printf 'mark=%s\nlast_rows=%s\ntotal_rows=%s\nlast_push=%s\n' "$new_mark" "$last_rows" "$total_rows" "$(date +%s)" \
+    > "$STATE_DIR/state.tmp" && mv "$STATE_DIR/state.tmp" "$STATE_DIR/state"
+}
+
+# pass: one pass with a private scratch directory (it holds exported rows).
+pass() {
+  local rc
+  TMP=$(umask 077 && mktemp -d) || return 1
+  do_pass
+  rc=$?
+  rm -rf "$TMP"
+  return "$rc"
+}
+
+if [ "${1-}" = --once ]; then
+  pass
+  rc=$?
+  [ "$rc" -ne 2 ] || rc=0
+  exit "$rc"
+fi
+
+while :; do
+  pass
+  [ $? -ne 2 ] || exit 0
+  sleep "$INTERVAL"
+done

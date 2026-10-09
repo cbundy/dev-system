@@ -203,7 +203,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-evaluate \
   images/base/systemctl \
   /usr/local/bin/
-COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop /usr/local/share/dev-system/
+COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/nm-push-loop images/base/nm-export /usr/local/share/dev-system/
 # models.env is the baked copy of the no-mistakes models: dev-init pins from
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).

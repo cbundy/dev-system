@@ -103,7 +103,7 @@ environment variable set in the image.
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
-| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml` |
+| `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
@@ -520,7 +520,8 @@ container never fails to start because of it.
    `/run/secrets/dev-system/agentsview-pg-url`, or `AGENTSVIEW_PG_URL`), starts the
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
-   cannot read gets a `WARNING`.
+   cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the event and
+   no-mistakes push loops (see [Factory event log](#factory-event-log)).
 9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
 10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
@@ -581,6 +582,7 @@ on every failure:
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
+- event and no-mistakes push status (see [Factory event log](#factory-event-log));
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
   with the count when some would be removed, `OK` when there are none, nothing when the
   workspace has no bridge worktrees;
@@ -1236,6 +1238,34 @@ and `dev-doctor` reports when events were last written and last pushed. Variable
 `CREATE` on the database (or the schema and table created for it by an admin). The
 queries are in [docs/metrics.md](../../docs/metrics.md).
 
+`nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with
+the same URL rules as `event-push-loop`. The source is `state.sqlite` under
+`NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`. See
+[docs/metrics.md](../../docs/metrics.md#no-mistakes-pipeline-data-nomistakes-schema) for the
+tables, export rules, generated DDL and an example join.
+The state is `$AGENTSVIEW_DATA_DIR/nm-push/device-<hex>/state` (default parent
+`/persist/agentsview/nm-push`), where `<hex>` is the UTF-8
+hex encoding of `DEV_MACHINE_NAME` (else hostname). `NM_PUSH_STATE_DIR` overrides the parent
+`nm-push` directory. Containers with separate no-mistakes databases must use distinct device
+names, keeping their checkpoints separate even when agentsview storage is shared.
+State is replaced through a temporary file and rename. `dev-init` starts the loop when a
+URL is configured and `psql` is on `PATH`, under `/tmp/dev-nm-push.lock`
+(log: `/tmp/dev-nm-push.log`). The URL is re-read each pass; a missing or unreadable URL
+stops the loop with exit 0, including when the SQLite file is absent. A missing SQLite
+file otherwise makes the pass a no-op. Run `/usr/local/share/dev-system/nm-push-loop --once`
+for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
+`dev-doctor` prints an INFO line with cumulative upsert counts (including repeated rows),
+the last push time and whether activity is newer than the checkpoint; it fails when a URL
+is configured but the loop is stopped.
+
+`/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
+without connecting to PostgreSQL. `--mark N` selects an incremental export;
+`--mark-out FILE` writes the resulting `{ "mark": N, "rows": N }` metadata.
+`--device NAME` overrides row attribution (default `DEV_MACHINE_NAME`, else hostname);
+it does not change the push loop's checkpoint path. `--waiting` prints `yes` when the
+newest touch timestamp exceeds `--mark` (zero when omitted), otherwise `no`, then exits
+without emitting SQL. Export selection rules are in the linked metrics reference.
+
 ## Central session history (agentsview)
 
 The image ships [agentsview](https://github.com/kenn-io/agentsview), so every container
@@ -1423,9 +1453,10 @@ With the endpoint set, the image adds what the endpoint alone does not turn on:
   `dev-init` writes nothing, logs that it left them alone, and drops its own table if one
   was there. To customise codex's export (headers, TLS, `environment`), replace the block,
   markers included, with your own `[otel]` table.
-- **no-mistakes** has no exporter of its own: its run logs are files under
+- **no-mistakes** has no OTLP exporter of its own: its run logs are files under
   `/persist/no-mistakes/logs` (`$NM_HOME/logs`), for a collector or log shipper to tail if
-  you want pipeline outcomes next to the rest.
+  you want pipeline logs next to the rest. For the PostgreSQL pipeline mirror, see
+  [Factory event log](#factory-event-log).
 
 Traces are not turned on. `dev-doctor` reports the
 state in an `INFO` line, which never fails: export off, or on with the endpoint, the

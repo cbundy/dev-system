@@ -11,6 +11,9 @@ done
 check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
   d=$(mktemp -d) && CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ "$(wc -l < "$d"/*.jsonl)" = 1 ] &&
   ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ]'
+check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
+  [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
+  ! /usr/local/share/dev-system/nm-export 2>/dev/null'
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'
