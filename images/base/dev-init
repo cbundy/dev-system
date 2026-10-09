@@ -500,9 +500,7 @@ start_event_push() {
 
 # 8c. The no-mistakes pipeline data push (cbundy/dev-system#273): with the same
 #     PostgreSQL URL, keep nm-push-loop running so state.sqlite is mirrored into
-#     the nomistakes schema. Its state lives under /persist/agentsview
-#     (PERSIST_DIRS), so nothing is created here. One loop per container (the
-#     lock); the rows are upserts, so several containers are harmless.
+#     the nomistakes schema.
 start_nm_push() {
   local rc=0
   # shellcheck source=agentsview.sh

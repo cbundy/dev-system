@@ -16,6 +16,12 @@ agentsview_pg_url_file() {
   echo "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/agentsview-pg-url"
 }
 
+nm_push_state_dir() {
+  local key
+  key=$(node -e 'process.stdout.write(Buffer.from(process.env.DEV_MACHINE_NAME || require("node:os").hostname() || "unknown").toString("hex"))') || return
+  printf '%s/device-%s\n' "${NM_PUSH_STATE_DIR:-${AGENTSVIEW_DATA_DIR:-/persist/agentsview}/nm-push}" "$key"
+}
+
 # agentsview_pg_url: prints the URL (surrounding whitespace and line ends
 # trimmed) and returns 0. Returns 1 when none is configured (no
 # AGENTSVIEW_PG_URL, no file: the push is off) and 2 when the file exists but

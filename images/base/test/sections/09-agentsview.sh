@@ -132,7 +132,7 @@ nm_mirror_unknown_column() {
 check "nm-push-loop mirrors every table with device and repo, and ships no excluded column" nm_mirror_first_pass
 check "a second pass leaves counts unchanged and picks up a status change" nm_mirror_second_pass
 check "an unknown column lands in raw and the pass still succeeds" nm_mirror_unknown_column
-check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR=/tmp/nmfix/state -e NO_MISTAKES_HOME=/tmp/nmfix "$RUN_ID-b" bash -c '
+check "dev-doctor reports the no-mistakes push" docker exec -e NM_PUSH_STATE_DIR=/tmp/nmfix/state -e NO_MISTAKES_HOME=/tmp/nmfix -e DEV_MACHINE_NAME=nm-host "$RUN_ID-b" bash -c '
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "INFO no-mistakes push: [1-9][0-9]* rows pushed (last pushed 20" &&
   echo "$out" | grep -q "waiting: no"'

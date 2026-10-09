@@ -1242,7 +1242,10 @@ PostgreSQL, with the same URL rules as `event-push-loop`. `nm-export` reads the 
 read-only in one snapshot and prints idempotent upserts for every run touched since the
 high-water mark; the loop sends them in one transaction and advances the mark only on success,
 so a pass that fails is repeated in full. Configs, paths, pids and step logs are never shipped.
-The state is `/persist/agentsview/nm-push/state` (`NM_PUSH_STATE_DIR`). `dev-init` starts the
+The state is `/persist/agentsview/nm-push/device-<hex>/state`, where `<hex>` is the UTF-8
+hex encoding of `DEV_MACHINE_NAME` (else hostname). `NM_PUSH_STATE_DIR` overrides the parent
+`nm-push` directory. Containers with separate no-mistakes databases must use distinct device
+names, keeping their checkpoints separate even when agentsview storage is shared. `dev-init` starts the
 loop (log: `/tmp/dev-nm-push.log`) and `dev-doctor` reports rows pushed and whether anything
 waits. Variables: `DEV_NM_PUSH_INTERVAL` (default 60 s). Schema and an example join in
 [docs/metrics.md](../../docs/metrics.md).
