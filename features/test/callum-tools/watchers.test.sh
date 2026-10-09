@@ -36,7 +36,7 @@ toolbin="$tmpdir/tools"
 mkdir -p "$fakebin" "$toolbin"
 # A hermetic PATH: the stubs plus only the tools the scripts and stubs use,
 # so a real gh or no-mistakes (the base image has both) can never answer.
-for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat; do
+for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat sort paste; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -525,6 +525,20 @@ expect_lines "$out" "queue-changed known=305 now=305,307
 queue-changed known=305,307 now=none"
 stop_bg
 ok # stream queue: one line per change, baseline carried forward
+
+# 11b. --known in any order is the same set: the watcher sorts the baseline
+# numerically, so an unsorted list never fires a spurious queue-changed.
+queue_seq 114,153,219
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+unsorted=$(in_dir "$tmpdir" timeout 6 $qw --known 219,114,153) || st=$?
+if [ "$st" -ne 124 ] || [ -n "$unsorted" ]; then fail "unsorted --known fired: exit $st, output '$unsorted'"; fi
+queue_seq 9,10,100
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+unsorted=$(in_dir "$tmpdir" timeout 6 $qw --known 100,9,10) || st=$?
+if [ "$st" -ne 124 ] || [ -n "$unsorted" ]; then fail "numeric (not text) order: exit $st, output '$unsorted'"; fi
+ok # an unsorted --known does not fire queue-changed
 
 # 12. Stream: gh missing is fatal and reported.
 mv "$fakebin/gh" "$fakebin/gh.off"

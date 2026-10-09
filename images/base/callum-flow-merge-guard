@@ -31,6 +31,10 @@
 #
 # Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
 #
+# Each FAIL line names the fix, so the orchestrator needs no separate recipe:
+#   head      the run gated a different commit than the branch holds
+#   mergeable behind or conflicting: rebase, abort, fresh run
+#
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
 # CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run),
@@ -111,6 +115,11 @@ if [ -n "$branch" ]; then
   fi
 fi
 
+# The fix text carried by the head and mergeable FAIL lines. `rerun` and `axi
+# run` against a live run gate nothing new, hence the abort.
+HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; if a gate is parked and no commit is needed, 'no-mistakes axi respond' (backgrounded) instead of aborting; otherwise rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
+REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
+
 # --- head --------------------------------------------------------------------
 if [ -z "$branch" ]; then
   fail head "cannot read PR #$pr"
@@ -123,7 +132,7 @@ else
     origin_sha=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}" 2> /dev/null) || origin_sha=unknown
   fi
   if [ -z "$run_sha" ] || [ "$run_sha" != "$origin_sha" ] || [ "$run_sha" != "$pr_head" ]; then
-    fail head "run=${run_sha:-unknown} origin=$origin_sha pr=${pr_head:-unknown} (run $run)"
+    fail head "run=${run_sha:-unknown} origin=$origin_sha pr=${pr_head:-unknown} (run $run); $HEAD_FIX"
   fi
 fi
 
@@ -264,11 +273,11 @@ while :; do
     elif [ "$mdraft" = true ] || [ "$mmss" = DRAFT ]; then
       mverdict=fail mreason="PR is a draft"
     elif [ "$mmss" = DIRTY ] || [ "$mmerge" = CONFLICTING ]; then
-      mverdict=fail mreason="conflicts with $mbase, rebase and re-gate"
+      mverdict=fail mreason="conflicts with $mbase, rebase and re-gate: $REBASE_FIX"
     else
       case "$mmss" in
-        BEHIND) mverdict=fail mreason="behind $mbase, rebase and re-gate" ;;
-        BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews)" ;;
+        BEHIND) mverdict=fail mreason="behind $mbase, rebase and re-gate: $REBASE_FIX" ;;
+        BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews); read which rule is unmet, never use --admin" ;;
         CLEAN | UNSTABLE | HAS_HOOKS) mverdict=pass ;;
       esac
     fi

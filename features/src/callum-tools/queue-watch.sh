@@ -33,6 +33,18 @@
 #
 # --interval <seconds> sets the poll interval (default: the
 # QUEUE_WATCH_INTERVAL environment variable, else 120).
+#
+# Arming: pass the numbers currently in the queue as --known, so deliberately
+# parked issues (blocked, awaiting the owner) never fire. The order does not
+# matter: the list is sorted numerically here before it is compared. Run it
+# once per session; two copies deliver every event twice. Under a harness
+# Monitor tool use --stream with the longest timeout the tool allows. When
+# that timeout ends the watcher, re-arm it first thing, with the latest
+# `now=` as --known. Without a Monitor tool, run it single-shot in the
+# background: its exit is the wake, so re-arm with the line's `now=` before
+# handling the event. Never bundle arming it with a call that may be refused
+# (a merge, an edit, a push) - a refusal blocks the whole call.
+# A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 set -eu
 
 stream=
@@ -94,6 +106,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ -z "$repo" ] || [ -z "$label" ]; then usage; fi
+# The poll below yields a numerically sorted set; sort the baseline the same
+# way so a caller's order never fires a spurious queue-changed.
+known=$(printf '%s' "$known" | tr ',' '\n' | sed '/^$/d' | sort -nu | paste -sd, -)
 case "$interval" in '' | *[!0-9]* | 0) usage "--interval must be a positive whole number of seconds" ;; esac
 confirm=15
 [ "$interval" -ge "$confirm" ] || confirm=$interval

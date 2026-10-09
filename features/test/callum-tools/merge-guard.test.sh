@@ -224,6 +224,9 @@ reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 
 # mergeable (cbundy/dev-system#246): the regression is #237, OPEN MERGEABLE BEHIND
 reset; echo BEHIND > "$st/mss"; g 7; expect_fail "behind" mergeable
 printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, rebase and re-gate' || fail "behind reason: $out"
+for want in "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD"; do
+  case "$out" in *"$want"*) ;; *) fail "behind FAIL should name the fix ($want): $out" ;; esac
+done
 reset; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty" mergeable
 printf '%s' "$out" | grep -q 'conflicts with main, rebase and re-gate' || fail "dirty reason: $out"
 reset; echo UNKNOWN > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "conflicting, state unknown" mergeable
@@ -259,6 +262,10 @@ NEW=$(git -C "$work" rev-parse HEAD)
 echo "$NEW" > "$st/prhead"
 g 7; expect_fail "stale run head" head
 case "$out" in *"run=$SHA"*"origin=$NEW"*) ;; *) fail "head reason should name both shas: $out" ;; esac
+# the FAIL line carries the fix procedures, not the skill
+for want in "git merge --ff-only origin/<branch>" "axi respond" "axi abort" "fresh backgrounded 'axi run" "'rerun' re-gates the OLD head"; do
+  case "$out" in *"$want"*) ;; *) fail "head FAIL should name the fix ($want): $out" ;; esac
+done
 (cd "$work" && git reset -q --hard "$SHA" && git push -q -f origin "$B")
 
 # fetch failure: unreachable origin must never pass on a stale ref
