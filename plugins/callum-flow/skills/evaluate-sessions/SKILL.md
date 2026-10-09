@@ -9,7 +9,7 @@ description: >-
   adds GitHub context and the narrative. Use when asked to evaluate, audit or
   review the orchestrator and sub-agent sessions for a window, or to compare one
   window with a baseline.
-version: 0.18.0
+version: 0.19.0
 ---
 
 # evaluate-sessions: report on a window of agent work
