@@ -1128,6 +1128,18 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 
+`callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]`
+prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
+rate, reviewer false positives, adjudicator agreement, token spend by role and model, wasted
+wakes, pipeline runs; definitions in `docs/metrics.md`). It only reads and makes no network calls,
+so it is in the synced allow list. Inputs: Claude transcripts under
+`${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` (the project directories of this checkout and its
+`.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
+`${CALLUM_EVENTS_DIR:-/persist/events}/<owner>__<repo>.jsonl` (`--events` takes any
+`factory.events` export as JSON lines) and `${NO_MISTAKES_HOME:-~/.no-mistakes}/state.sqlite`
+(`--nm-state`). A missing source makes the affected metrics `n/a` with the reason listed under
+`sources`. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
+
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
 is in the synced allow list. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run

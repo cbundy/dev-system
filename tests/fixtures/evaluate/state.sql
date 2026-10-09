@@ -1,0 +1,10 @@
+CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL, upstream_url TEXT NOT NULL);
+CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL);
+CREATE TABLE step_results (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, step_name TEXT NOT NULL, duration_ms INTEGER);
+CREATE TABLE step_rounds (id TEXT PRIMARY KEY, step_result_id TEXT NOT NULL, round INTEGER NOT NULL);
+CREATE TABLE agent_invocations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, step_name TEXT NOT NULL, model TEXT, fallback_reason TEXT, model_roundtrips INTEGER, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_creation_tokens INTEGER);
+INSERT INTO repos VALUES ('repo1','/work/repo','https://github.com/acme/widgets.git'),('repo2','/work/other','git@github.com:acme/other.git');
+INSERT INTO runs VALUES ('run1','repo1','completed',1791454200),('run2','repo1','failed',1791454800),('run3','repo1','completed',1791450000),('runX','repo2','completed',1791454500);
+INSERT INTO step_results VALUES ('sr1','run1','review',60000),('sr2','run1','ci',120000),('sr3','run2','review',50000),('sr4','run2','ci',300000),('sr5','run3','ci',999000),('sr6','run3','review',1),('sr7','run1','test',NULL);
+INSERT INTO step_rounds VALUES ('a','sr1',1),('b','sr1',2),('c','sr3',1),('d','sr6',1),('e','sr6',2),('f','sr6',3),('g','sr6',4),('h','sr6',5);
+INSERT INTO agent_invocations VALUES ('i1','run1','review','claude-sonnet-5-5',NULL,3,10,20,300,40),('i2','run1','review','','codex login missing',NULL,NULL,NULL,NULL,NULL),('i3','run2','lint','claude-sonnet-5-5','',1,5,5,50,0),('i4','run3','lint','claude-sonnet-5-5',NULL,9,900,900,900,900);
