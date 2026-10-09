@@ -250,7 +250,7 @@ function segment_is_coder_self(segment,    toks, cnt) {
 # Remove the bodies of quoted heredocs (<<'X', <<"X", <<\X, with optional -):
 # the shell never expands them, so text in them is data. Unquoted heredoc
 # bodies stay, because $(...) inside them does run.
-function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, t) {
+function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, t, q, n, k, c, rest) {
   nl = split(cmd, lines, "\n")
   out = ""
   skipping = 0
@@ -264,13 +264,26 @@ function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, 
     }
     out = out (i > 1 ? "\n" : "") line
     dash = 0
-    if (match(line, /<<-?[ \t]*('[^']+'|"[^"]+"|\\[A-Za-z_0-9]+)/)) {
-      t = substr(line, RSTART, RLENGTH)
-      dash = (substr(t, 3, 1) == "-")
-      sub(/^<<-?[ \t]*/, "", t)
-      if (substr(t, 1, 1) == "\\") delim = substr(t, 2)
-      else delim = substr(t, 2, length(t) - 2)
-      skipping = 1
+    q = ""
+    n = length(line)
+    for (k = 1; k <= n; k++) {
+      c = substr(line, k, 1)
+      if (c == "\\" && q != "'") { k++; continue }
+      if (q != "") { if (c == q) q = ""; continue }
+      if (c == "'" || c == "\"") { q = c; continue }
+      if (c != "<" || substr(line, k + 1, 1) != "<") continue
+      if (substr(line, k + 2, 1) == "<") { k += 2; continue }
+      rest = substr(line, k)
+      if (match(rest, /^<<-?[ \t]*('[^']+'|"[^"]+"|\\[A-Za-z_0-9]+)/)) {
+        t = substr(rest, 1, RLENGTH)
+        dash = (substr(t, 3, 1) == "-")
+        sub(/^<<-?[ \t]*/, "", t)
+        if (substr(t, 1, 1) == "\\") delim = substr(t, 2)
+        else delim = substr(t, 2, length(t) - 2)
+        skipping = 1
+        break
+      }
+      k++
     }
   }
   return out

@@ -106,6 +106,9 @@ test("skips quoted heredoc bodies, including an unmatched backtick (the #209 sha
   assertAllowed(`cat <<-'EOF'\n\tcoder restart ${SELF}\n\tEOF`);
   // A command after the heredoc is still scanned.
   assertDenied(`cat <<'EOF'\nhello\nEOF\ncoder stop ${SELF}`);
+  // A here-string or quoted text is not a heredoc opener.
+  assertDenied(`cat <<< 'x'\ncoder stop ${SELF}`);
+  assertDenied(`echo "<<'x'"\ncoder stop ${SELF}`);
   // Unquoted heredoc bodies expand $(...), so they are still scanned.
   assertDenied(`cat <<EOF\n$(coder stop ${SELF})\nEOF`);
 });
