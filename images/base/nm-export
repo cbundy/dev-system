@@ -180,11 +180,11 @@ function build({ tables }, mark, device) {
 
   const wantRepos = new Set([...touched].map((id) => runById.get(id)?.repo_id));
   for (const r of T("repos")) if (mark === null || wantRepos.has(r.id)) send("repos", r, repoName.get(r.id) ?? null);
-  for (const r of T("runs")) if (touched.has(r.id)) send("runs", r, runRepo(r.id));
-  for (const s of T("step_results")) if (touched.has(s.run_id)) send("step_results", s, runRepo(s.run_id));
-  for (const r of T("step_rounds")) { const run = stepRun.get(r.step_result_id); if (touched.has(run)) send("step_rounds", r, runRepo(run)); }
-  for (const i of T("agent_invocations")) if (touched.has(i.run_id)) send("agent_invocations", i, runRepo(i.run_id));
-  for (const s of T("run_agent_sessions")) if (touched.has(s.run_id)) send("run_agent_sessions", s, runRepo(s.run_id));
+  for (const r of T("runs")) if (mark === null || touched.has(r.id)) send("runs", r, runRepo(r.id));
+  for (const s of T("step_results")) if (mark === null || touched.has(s.run_id)) send("step_results", s, runRepo(s.run_id));
+  for (const r of T("step_rounds")) { const run = stepRun.get(r.step_result_id); if (mark === null || touched.has(run)) send("step_rounds", r, runRepo(run)); }
+  for (const i of T("agent_invocations")) if (mark === null || touched.has(i.run_id)) send("agent_invocations", i, runRepo(i.run_id));
+  for (const s of T("run_agent_sessions")) if (mark === null || touched.has(s.run_id)) send("run_agent_sessions", s, runRepo(s.run_id));
   return { sql: out, newest };
 }
 

@@ -49,6 +49,43 @@ test("backfill sends every table with device and repo", () => {
   assert.match(rowsOf(r, "runs")[0], /to_timestamp\(1700000100\)/);
 });
 
+for (const missing of [["repos"], ["runs"], ["step_results"], ["repos", "runs", "step_results"]]) {
+  test(`backfill preserves available rows without parent tables: ${missing.join(", ")}`, () => {
+    const expected = {
+      repos: ["rp1"], runs: ["r1", "r2"], step_results: ["s1", "s2"],
+      step_rounds: ["d1"], agent_invocations: ["i1"], run_agent_sessions: ["r1"],
+    };
+    for (const table of missing) mutate(`DROP TABLE ${table}`);
+    const markOut = path.join(tmp, "mark.json");
+    const r = exp(["--mark-out", markOut]);
+    assert.equal(r.status, 0, r.err);
+    for (const [table, ids] of Object.entries(expected)) {
+      const rows = rowsOf(r, table);
+      assert.deepEqual(rows.map((row) => /VALUES \('([^']+)'/.exec(row)[1]).sort(), missing.includes(table) ? [] : ids, table);
+      if (missing.includes(table)) {
+        assert.equal(r.err.split(`table ${table} is missing, skipped`).length - 1, 1, table);
+      }
+      const unresolved = table !== "repos" && (missing.includes("repos") || missing.includes("runs") ||
+        (table === "step_rounds" && missing.includes("step_results")));
+      for (const row of rows) {
+        assert.ok(row.includes(unresolved ? "'dev-box', NULL, NULL) ON CONFLICT" : "'dev-box', 'acme/widgets', NULL) ON CONFLICT"), table);
+      }
+    }
+    assert.equal(JSON.parse(fs.readFileSync(markOut, "utf8")).rows, r.inserts.length);
+  });
+}
+
+test("backfill preserves child rows whose parent records are absent", () => {
+  mutate("UPDATE step_results SET run_id = 'absent'; UPDATE step_rounds SET step_result_id = 'absent'; UPDATE agent_invocations SET run_id = 'absent'; UPDATE run_agent_sessions SET run_id = 'absent'");
+  const r = exp();
+  assert.equal(r.status, 0, r.err);
+  for (const [table, count] of [["step_results", 2], ["step_rounds", 1], ["agent_invocations", 1], ["run_agent_sessions", 1]]) {
+    const rows = rowsOf(r, table);
+    assert.equal(rows.length, count, table);
+    for (const row of rows) assert.ok(row.includes("'dev-box', NULL, NULL) ON CONFLICT"), table);
+  }
+});
+
 test("device falls back to DEV_MACHINE_NAME, then the hostname", () => {
   const r = spawnSync(process.execPath, [SCRIPT, file], { encoding: "utf8", env: { PATH: process.env.PATH, DEV_MACHINE_NAME: "from-env" } });
   assert.match(r.stdout, /'from-env', 'acme\/widgets'/);
