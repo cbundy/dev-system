@@ -220,7 +220,7 @@ tests would otherwise have missed:
 - `no-mistakes rerun` re-gates the run's EXISTING head, so it never gates a new
   commit (the run reviews, tests and pushes the branch without it, and reports
   green). Use it only to re-drive the same head after an infrastructure death.
-  A new commit needs `axi abort` and a fresh `axi run`.
+  A commit made outside the pipeline needs `axi abort` and a fresh `axi run`.
 - Only when the fix needs your own commit - code the pipeline cannot write
   from instructions alone, or the run has already completed - do the rebase
   and abort steps apply. If you are committing on a branch that already has a

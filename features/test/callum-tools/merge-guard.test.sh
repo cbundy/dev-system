@@ -288,7 +288,7 @@ echo "$NEW" > "$st/prhead"
 g 7; expect_fail "stale run head" head
 case "$out" in *"run=$SHA"*"origin=$NEW"*) ;; *) fail "head reason should name both shas: $out" ;; esac
 # the FAIL line carries the fix procedures, not the skill
-for want in "git merge --ff-only origin/<branch>" "axi respond" "axi abort" "fresh backgrounded 'axi run" "'rerun' re-gates the OLD head"; do
+for want in "git merge --ff-only origin/<branch>" "no-mistakes axi respond --action fix" "pipeline stays the sole writer" "only for a commit made outside the pipeline" "axi abort" "fresh backgrounded 'axi run" "'rerun' re-gates the OLD head"; do
   case "$out" in *"$want"*) ;; *) fail "head FAIL should name the fix ($want): $out" ;; esac
 done
 (cd "$work" && git reset -q --hard "$SHA" && git push -q -f origin "$B")
@@ -349,7 +349,33 @@ passed=$((passed + 1))
 
 # epic base
 reset; echo epic-x > "$st/base"; g 7; expect_fail "epic without --base" base
+for want in "confirm that with the brief" "rerun with --base epic-x"; do
+  case "$out" in *"$want"*) ;; *) fail "epic base recovery missing ($want): $out" ;; esac
+done
 reset; echo epic-x > "$st/base"; g 7 --base epic-x; expect_pass "epic with --base"
+reset; echo epic-x > "$st/base"; g 7 --base wrong; expect_fail "epic with incorrect --base" base
+case "$out" in *"rerun with --base epic-x"*) ;; *) fail "incorrect override recovery missing: $out" ;; esac
+for mode in derived explicit skip; do
+  reset; echo epic-x > "$st/base"; echo '[]' > "$st/closing"
+  set -- --base epic-x
+  case "$mode" in
+    explicit) set -- "$@" --expect closing ;;
+    skip) skip; set -- "$@" --issue 12 ;;
+  esac
+  m 7 "$@"
+  [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
+  case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
+  [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ] || fail "epic merge or event missing"
+  passed=$((passed + 1))
+done
+for rollout in run-it keep-open; do
+  reset; echo epic-x > "$st/base"; issue_brief "$rollout - x"; echo refs > "$st/linkage-actual"
+  m 7 --base epic-x
+  expect_pass "epic $rollout does not request closure"
+done
+reset; echo epic-x > "$st/base"; touch "$st/merge-refuse"; m 7 --base epic-x
+[ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ] || fail "refused epic merge requested closure: $rc $out"
+passed=$((passed + 1))
 
 # awaiting_ in free text is not a parked step
 reset; echo 'note: use awaiting_approval to park' > "$st/step"; g 7; expect_pass "awaiting_ only in free text"
@@ -367,12 +393,14 @@ passed=$((passed + 1))
 # merge: pass
 reset; m 7
 [ "$rc" = 0 ] || fail "merge pass: exit $rc out=$out"
+[ -z "$out" ] || fail "default base should not request manual closure: $out"
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
 [ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
 jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
 
 # merge: method override, flag and env
+reset; m 7 --base main --expect closing; expect_pass "explicit default base does not request closure"
 reset; m 7 --method rebase; grep -q -- '--rebase' "$st/gh-calls" || fail "--method rebase"
 reset; CALLUM_FLOW_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
 reset; m 7 --method bogus; [ "$rc" = 2 ] || fail "bad method exits 2"

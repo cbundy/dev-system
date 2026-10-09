@@ -27,7 +27,7 @@
 # Output: nothing when every guard passes; otherwise one line per failed guard,
 #   GUARD <name> FAIL <reason>
 # --emit-verified adds, on success only, one line for callum-flow-merge:
-#   VERIFIED pr=N branch=B head=SHA run=ID issue=N
+#   VERIFIED pr=N branch=B head=SHA run=ID issue=N close_issue=N
 #
 # Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
 #
@@ -117,7 +117,7 @@ fi
 
 # The fix text carried by the head and mergeable FAIL lines. `rerun` and `axi
 # run` against a live run gate nothing new, hence the abort.
-HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; if a gate is parked and no commit is needed, 'no-mistakes axi respond' (backgrounded) instead of aborting; otherwise rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
+HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; while a gate is parked and a correction is needed, prefer backgrounded 'no-mistakes axi respond --action fix' with instructions so the pipeline stays the sole writer on the run's own head; use an external fixer only when the pipeline cannot write the correction from instructions or the run is done; only for a commit made outside the pipeline, rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
 REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
 
 # --- head --------------------------------------------------------------------
@@ -254,7 +254,7 @@ if [ -z "$pr_base" ]; then
 else
   default=$default_branch
   if [ "$pr_base" != "$default" ] && [ "$pr_base" != "$base" ]; then
-    fail base "PR targets $pr_base, default branch is ${default:-unknown}${base:+, --base is $base}"
+    fail base "PR targets $pr_base, default branch is ${default:-unknown}${base:+, --base is $base}; if the PR intentionally targets an epic/integration branch, confirm that with the brief and rerun with --base $pr_base"
   fi
 fi
 
@@ -306,5 +306,11 @@ done
 [ "$mverdict" != fail ] || fail mergeable "$mreason"
 
 [ "$failed" -eq 0 ] || exit 1
-[ -z "$emit" ] || printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue"
+if [ -n "$emit" ]; then
+  close_issue=''
+  if [ "$pr_base" != "$default_branch" ] && [ "$expect" = closing ]; then
+    close_issue=$issue
+  fi
+  printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s close_issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue" "$close_issue"
+fi
 exit 0

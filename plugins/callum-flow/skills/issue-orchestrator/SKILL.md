@@ -82,7 +82,8 @@ idle session must not wake itself.
    `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`. Keep keyword
    talk (`Closes`, `Fixes`) out of briefs.
 4. **Verify and merge** when the PR lands (see Merge).
-5. **Done by Rollout** (`callum-flow-rollout <N>`): `merge` - the PR closes it.
+5. **Done by Rollout** (`callum-flow-rollout <N>`): `merge` - the PR closes it
+   (on an epic base, follow the merge script's manual closure instruction).
    `run-it` - release on its own, never batched with another `run-it` issue,
    then do the Run it; whoever ran it records the result and closes the issue.
    `keep-open` - the owner closes it.
@@ -120,7 +121,7 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
      launched with `run_in_background`, since it blocks like `axi run`. A `fix`
      on `review` also logs `fix_requested ... --note review`. `escalate:` goes to
      the owner. `fixer:` spawns `callum-flow:fixer` with the instructions and the
-     brief URL, only when the pipeline cannot write the fix or the run is done.
+     brief URL, only when the pipeline cannot write the fix from instructions or the run is done.
      Never pass `--yes`. The `implement-issue` skill says how `respond` and
      `rerun` behave.
 - **`failed`** with no log directory (run id `unknown`): an infrastructure
