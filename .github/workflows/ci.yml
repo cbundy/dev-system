@@ -45,7 +45,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       # terraform is the version the dev image pins (.devcontainer/Dockerfile),
       # read from there so the two never drift.
