@@ -51,3 +51,23 @@ check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash
   echo \"\$out\" | grep -q 'dev-init: WARNING: git cannot read the repo at /ws' &&
   echo \"\$out\" | grep -q 'FAIL git cannot read the repo at /ws' &&
   echo \"\$out\" | grep -q 'safe.directory /ws'"
+
+# dev-version (cbundy/dev-system#271): the image stamps its own release info from the build
+# args, and the command and its dev-doctor summary degrade to UNKNOWN offline.
+check "the image carries a release stamp with non-empty keys" in_image '
+  f=/usr/local/share/dev-system/image-release; cat "$f"
+  for k in IMAGE VERSION REVISION CREATED AGENTSVIEW_VERSION CODER_VERSION; do
+    [ -n "$(sed -n "s/^$k=//p" "$f")" ] || { echo "empty $k"; exit 1; }
+  done
+  [ "$(sed -n "s/^IMAGE=//p" "$f")" = ghcr.io/cbundy/dev-system/base ]' --entrypoint ""
+check "dev-version offline: every network line UNKNOWN, exit 0, within 5s" in_image '
+  start=$(date +%s)
+  out=$(dev-version); rc=$?
+  echo "$out"
+  [ $rc -eq 0 ] && [ $(($(date +%s) - start)) -le 5 ] &&
+  ! echo "$out" | grep -q "^dev-version: STALE " &&
+  echo "$out" | grep -q "^dev-version: UNKNOWN base-image" &&
+  echo "$out" | grep -q "^dev-version: INFO image-layers none"' --network none --entrypoint ""
+check "dev-doctor prints the versions INFO line and still exits 0 offline" in_image '
+  out=$(dev-doctor --warn-only); rc=$?
+  echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "dev-doctor: INFO versions: "' --network none

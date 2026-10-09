@@ -588,10 +588,46 @@ on every failure:
   workspace has no bridge worktrees;
 - an `INFO` line, never a failure, on telemetry export (see
   [Telemetry](#telemetry-opentelemetry-export)): off, or on with the endpoint, the protocol
-  and whether it is reachable.
+  and whether it is reachable;
+- an `INFO` line, never a failure, summarising [`dev-version`](#dev-version).
 
 It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
 the same report and always exits 0.
+
+## `dev-version`
+
+`/usr/local/bin/dev-version` answers "is this environment current?" with one line per
+component, `dev-version: OK|STALE|UNKNOWN <component> running=<x> latest=<y>`, and exits 1
+if any line is `STALE`, 0 otherwise, 2 on bad usage:
+
+- the base image: the stamp the build writes to `/usr/local/share/dev-system/image-release`
+  (`KEY=VALUE` lines: `IMAGE`, `VERSION`, `REVISION`, `CREATED`, `DEV_PLUGIN_REF`,
+  `AGENTSVIEW_VERSION`, `CODER_VERSION`, from the same build args as the OCI labels) is
+  compared with the newest image published on GHCR (`base:<major>`, read through an
+  anonymous pull token). `STALE` when the published `REVISION` differs: run
+  `dev-restart-self` or rebuild the container;
+- a per-repo image layer, if it stamped itself (below), compared the same way; without one,
+  an `INFO image-layers none` line, which never affects the exit code;
+- callum-flow, per scope, against the release the image pins in `DEV_DEFAULT_PLUGINS`
+  (`STALE` when installed below it) and the latest release of the plugin's repo. A pin
+  behind the latest release is noted on the base image line, since a newer image fixes it;
+- claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
+  against their latest upstream release (npm for claude and codex, GitHub releases for the
+  others): `STALE` when upstream is newer. agentsview and coder are pinned by the image
+  build, so their lines show the pin (`pinned=`) and the latest release but are never
+  `STALE`.
+
+It never hangs or fails for lack of a network: all lookups run in parallel, each limited to
+3 seconds (`DEV_VERSION_LIMIT`), so the command ends in about 4 seconds even offline. A
+lookup that fails, times out or has nothing to compare (no `gh` login, a local build with no
+release stamp) is `UNKNOWN`. `dev-doctor` runs it under a hard 5 second timeout and prints
+one `INFO` line (`versions: all current`, `versions: N stale (run dev-version)`, or the
+unknown count), so `dev-init` shows the summary on every start.
+
+A per-repo image built `FROM` the base stamps itself by writing the same `KEY=VALUE` file
+(`IMAGE`, `VERSION`, `REVISION`, and optionally `TAG`, the tag to compare against, default
+the major of `VERSION`) to `/usr/local/share/dev-system/image-release.d/<name>`, from its
+own build args.
 
 ## `dev-restart-self`
 
@@ -1547,6 +1583,10 @@ from the same commit (`sha-`) overwrites them too. **Pin by digest**
 (`base@sha256:...`) if you need reproducibility; the publish run's summary lists the
 digest it pushed. The same note is in the image's `org.opencontainers.image.description`
 label.
+
+The image stamps its own release info at `/usr/local/share/dev-system/image-release` (see
+[`dev-version`](#dev-version), which also describes the stamp a per-repo image layer writes
+under `image-release.d/`).
 
 `linux/amd64` only for now; arm64 is tracked in cbundy/dev-system#61.
 

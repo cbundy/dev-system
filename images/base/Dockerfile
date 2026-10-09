@@ -192,6 +192,7 @@ COPY --chmod=0755 \
   images/base/dev-remote-control \
   images/base/dev-prune-worktrees \
   images/base/dev-restart-self \
+  images/base/dev-version \
   images/base/dev-login \
   images/base/callum-flow-event \
   images/base/callum-flow-merge-guard \
@@ -292,6 +293,24 @@ CMD ["dev-remote-control"]
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
 ARG CREATED=unknown
+# The image's own release stamp (cbundy/dev-system#271): the same values as the OCI labels
+# below, so dev-version compares the running image with the newest one published on GHCR
+# without diffing files. A per-repo image layer stamps itself the same way, as
+# image-release.d/<name> (see README.md, "Tags and versioning"). Late, so a changed
+# revision invalidates only this layer.
+USER root
+RUN mkdir -p /usr/local/share/dev-system \
+  && printf '%s\n' \
+    "IMAGE=ghcr.io/cbundy/dev-system/base" \
+    "VERSION=${VERSION}" \
+    "REVISION=${REVISION}" \
+    "CREATED=${CREATED}" \
+    "DEV_PLUGIN_REF=${DEV_PLUGIN_REF}" \
+    "AGENTSVIEW_VERSION=${AGENTSVIEW_VERSION}" \
+    "CODER_VERSION=${CODER_VERSION}" \
+    > /usr/local/share/dev-system/image-release \
+  && chmod 0644 /usr/local/share/dev-system/image-release
+USER node
 LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.revision="${REVISION}" \
   org.opencontainers.image.version="${VERSION}" \

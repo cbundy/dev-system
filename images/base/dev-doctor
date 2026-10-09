@@ -393,6 +393,27 @@ info "$(
   fi
 )"
 
+# Whether the image, plugin and tools are current (dev-version, cbundy/dev-system#271):
+# information only, never a failure. dev-version time-boxes its own lookups; the hard
+# timeout here covers a hang in the command itself.
+if command -v dev-version >/dev/null 2>&1; then
+  dv_out=$(timeout -k 1 5 dev-version 2>/dev/null </dev/null)
+  if [ -z "$dv_out" ]; then
+    info "versions: unknown (dev-version timed out)"
+  else
+    dv_stale=$(printf '%s\n' "$dv_out" | grep -c '^dev-version: STALE ')
+    dv_unknown=$(printf '%s\n' "$dv_out" | grep -c '^dev-version: UNKNOWN ')
+    if [ "$dv_stale" -gt 0 ]; then
+      info "versions: $dv_stale stale (run dev-version)"
+    elif [ "$dv_unknown" -gt 0 ]; then
+      info "versions: all known current, $dv_unknown unknown (run dev-version)"
+    else
+      info "versions: all current"
+    fi
+  fi
+  unset dv_out dv_stale dv_unknown
+fi
+
 if [ "$FAILURES" -gt 0 ]; then
   printf 'dev-doctor: %d check(s) failed\n' "$FAILURES"
   [ "$WARN_ONLY" = true ] && exit 0
