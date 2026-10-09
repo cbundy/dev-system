@@ -16,6 +16,8 @@
 # sha the guard verified, so a push after the check makes GitHub refuse it.
 # GitHub also refuses for a branch rule (for example a PR that fell behind its
 # base); on a refusal the PR is re-read to say which of the two it was.
+# After success, a non-empty guard close_issue field prints a manual closure
+# instruction; this script does not close the issue itself.
 #
 # Exit codes: 0 merged, 1 a guard failed (its GUARD lines are printed) or the
 # merge was refused, 2 usage error.

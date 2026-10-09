@@ -15,7 +15,8 @@
 # Guards (every one is evaluated and reported, none short-circuits):
 #   rollout  the issue's Rollout was derived (or agrees with --expect); a
 #          conflict or a failure to derive fails closed, never to closing
-#   head     the run's head_sha equals a fresh origin/<branch> and the PR head
+#   head     the run's head_sha equals a fresh origin/<branch>, the PR head,
+#          and HEAD in every worktree checked out on the PR branch
 #   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
 #          name) --issue N is required and the PR must link #N as --expect says
 #   checks   at least one CI check, all pass or skipping
@@ -28,12 +29,12 @@
 #   GUARD <name> FAIL <reason>
 # --emit-verified adds, on success only, one line for callum-flow-merge:
 #   VERIFIED pr=N branch=B head=SHA run=ID issue=N close_issue=N
+# close_issue is the issue to close manually for a closing PR on a non-default
+# base; it is empty otherwise.
 #
 # Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
 #
-# Each FAIL line names the fix, so the orchestrator needs no separate recipe:
-#   head      the run gated a different commit than the branch holds
-#   mergeable behind or conflicting: rebase, abort, fresh run
+# Recovery guidance for head, base and mergeable failures is in their FAIL lines.
 #
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
@@ -115,8 +116,7 @@ if [ -n "$branch" ]; then
   fi
 fi
 
-# The fix text carried by the head and mergeable FAIL lines. `rerun` and `axi
-# run` against a live run gate nothing new, hence the abort.
+# Recovery instructions belong in the head and mergeable FAIL lines below.
 HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; while a gate is parked and a correction is needed, prefer backgrounded 'no-mistakes axi respond --action fix' with instructions so the pipeline stays the sole writer on the run's own head; use an external fixer only when the pipeline cannot write the correction from instructions or the run is done; only for a commit made outside the pipeline, rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
 REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
 
