@@ -23,8 +23,19 @@ check "dev-doctor warns, without failing, for each /persist dir with no volume b
   for t in codex gh no-mistakes agentsview; do
     echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
   done
+  for t in events dev-restart-self; do
+    echo \"\$out\" | grep -q \"OK   \$t state dir /persist/\$t is writable\" || { echo \"no OK for \$t\"; exit 1; }
+  done
   echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
   [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
+check "dev-doctor FAILs, naming the fix, for a missing /persist/events and /persist/dev-restart-self" in_image '
+  sudo -n rm -rf /persist/events /persist/dev-restart-self
+  sudo -n chown root:root /persist
+  out=$(dev-doctor 2>&1); echo "$out"
+  for d in events dev-restart-self; do
+    echo "$out" | grep -q "FAIL $d state dir /persist/$d is missing or not writable" &&
+    echo "$out" | grep -qF "fix: sudo install -d -o 1000 -g 1000 -m 0700 /persist/$d" || exit 1
+  done' --entrypoint ""
 vol=$(docker volume create --label "$RUN_ID")
 check "dev-doctor: no persistence WARN with one volume for all of /persist (the k8s / Coder shape)" in_image '
   out=$(dev-doctor --warn-only); echo "$out"

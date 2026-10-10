@@ -104,15 +104,26 @@ environment variable set in the image.
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
-| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
+| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small; `dev-init` and `dev-doctor` do not warn about the missing volume), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
+| `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
 `no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
 `/persist/no-mistakes/logs`, because the callum-flow skills read run logs at that path.
 
 The same list is published as the image label
-`dev.cbundy.persist=/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview`, so
-runtimes and templates can read it.
+`dev.cbundy.persist=/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview,/persist/events,/persist/dev-restart-self`, so
+runtimes and templates can read it. The list is defined once, as the `PERSIST_DIRS` build argument in
+the `Dockerfile`; the image's build-time `install -d`, the label and `/usr/local/share/dev-system/persist-dirs`
+(read by `dev-init` and `dev-doctor`) all come from it.
+
+A directory added to the contract later still reaches **existing** volumes: on every start
+`dev-init` creates each missing contract directory as `node:node` `0700` (a plain `mkdir`, then
+`sudo -n install -d` for a root-owned `/persist` from an older volume). It never chowns a
+directory that already exists, and only tightens a node-owned one that is looser than `0700`.
+Where sudo is unavailable (Kubernetes with no-new-privileges) it warns once per directory with the
+exact `sudo install -d -o 1000 -g 1000 -m 0700 <dir>` fix and still exits 0; `dev-doctor` reports
+the same directory as a FAIL.
 
 There is deliberately **no `VOLUME` instruction**: it would silently discard a child
 image's changes under `/persist` and leave anonymous volumes behind. Mount points are

@@ -41,9 +41,17 @@ RUN echo "cache bust: ${CACHE_BUST}" \
 # Docker named volume mounted here copies that ownership on first use. No
 # VOLUME instruction on purpose - it would silently drop child images' changes
 # under /persist and leave anonymous volumes behind.
-RUN install -d -m 0755 /persist \
-  && install -d -o 1000 -g 1000 -m 0700 \
-    /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events
+#
+# The one list of these directories (cbundy/dev-system#269): this ARG drives the
+# install below, the dev.cbundy.persist label and /usr/local/share/dev-system/
+# persist-dirs, which dev-init and dev-doctor read (persist.sh). A new
+# /persist/<tool> is a one-word change here; dev-init then creates it on
+# existing volumes at the next start.
+ARG PERSIST_DIRS="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview,/persist/events,/persist/dev-restart-self"
+RUN install -d -m 0755 /persist /usr/local/share/dev-system \
+  && echo "$PERSIST_DIRS" | tr ',' '\n' > /usr/local/share/dev-system/persist-dirs \
+  && chmod 0644 /usr/local/share/dev-system/persist-dirs \
+  && install -d -o 1000 -g 1000 -m 0700 $(tr '\n' ' ' < /usr/local/share/dev-system/persist-dirs)
 
 # Shared files: an empty mount point for a NAS share (NFS) beside the code -
 # build artifacts and exchange files, never repo checkouts or tool state. The
@@ -211,7 +219,7 @@ COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop i
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
-  images/base/gh.sh images/base/plugins.sh \
+  images/base/gh.sh images/base/plugins.sh images/base/persist.sh \
   /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns
@@ -318,7 +326,7 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.title="dev-system base" \
   org.opencontainers.image.description="Prebuilt agent dev environment: Node LTS, Claude Code, codex, no-mistakes, treehouse, uv, agentsview, gh, git, with tool state persisted under /persist. Tags are mutable; pin by digest if you need reproducibility." \
-  dev.cbundy.persist="/persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview" \
+  dev.cbundy.persist="${PERSIST_DIRS}" \
   dev.cbundy.shared="/shared" \
   dev.cbundy.secrets="/run/secrets/dev-system" \
   devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"
