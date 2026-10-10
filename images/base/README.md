@@ -1288,7 +1288,7 @@ cover the whole fleet; `window.scope` says which scope each source covers. A mis
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 
-`callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, linkage, CI checks,
+`callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
 is in the synced allow list. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
