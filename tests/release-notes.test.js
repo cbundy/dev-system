@@ -116,3 +116,38 @@ test("--body refuses invalid notes", (t) => {
   assert.match(r.stderr, /missing/);
   assert.ok(typeof buildBody === "function");
 });
+
+test("previousTag follows full prerelease precedence and ignores build metadata", (t) => {
+  const root = fakeRepo(t);
+  commit(root, "chore: baseline (#9)");
+  git(root, "tag", "v1.1.0");
+  const versions = [
+    "1.2.0-alpha", "1.2.0-alpha.1", "1.2.0-alpha.beta", "1.2.0-beta",
+    "1.2.0-beta.2", "1.2.0-beta.11", "1.2.0-rc.1", "1.2.0-rc.2",
+    "1.2.0-rc.9", "1.2.0-rc.10", "1.2.0",
+  ];
+  let previous = "v1.1.0";
+  for (const version of versions) {
+    assert.equal(previousTag(version, root), previous);
+    git(root, "tag", `v${version}`);
+    git(root, "tag", `v${version}+build.1`);
+    assert.equal(previousTag(`${version}+build.2`, root), previous);
+    previous = `v${version}`;
+    git(root, "tag", "-d", `v${version}+build.1`);
+  }
+});
+
+test("--body excludes earlier prerelease changes for prereleases and final releases", (t) => {
+  const root = fakeRepo(t);
+  commit(root, "feat: already stable (#9)");
+  git(root, "tag", "v1.1.0");
+  for (const [version, n] of [["1.2.0-rc.1", 10], ["1.2.0-rc.2", 11], ["1.2.0-rc.9", 12], ["1.2.0-rc.10", 13], ["1.2.0", 14]]) {
+    commit(root, `feat: change ${n} (#${n})`);
+    git(root, "tag", `v${version}`);
+    fs.writeFileSync(path.join(root, `release-notes/v${version}.md`), ONLY_FIXED);
+    const r = run(root, ["--body", version]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout, ONLY_FIXED.trimEnd() +
+      `\n\n<details>\n<summary>Technical changes</summary>\n\n### Enhancements\n\n- change ${n} ${PR(n)}\n\n</details>\n`);
+  }
+});

@@ -45,8 +45,8 @@ breaking change to an existing contract.
 
 How each layer reaches consumers after the tag exists:
 
-- **Plugin**: `npx callum-dev update` moves the pinned marketplace ref in
-  `.claude/settings.json`; commit it, then restart the container or run `dev-init --plugins`
+- **Plugin**: `npm update @callum/dev-system && npx callum-dev update` moves the pinned
+  marketplace ref in `.claude/settings.json`; commit it, then restart the container or run `dev-init --plugins`
   (see [`docs/architecture.md`](docs/architecture.md)). `/plugin marketplace update` alone
   keeps the old ref.
 - **npm/CLI layer**: consumers depend on `github:cbundy/dev-system#semver:0.x` -

@@ -97,12 +97,25 @@ function lint(root = REPO_ROOT) {
   return errors;
 }
 
-const core = (v) => v.replace(/^v/, "").split(/[-+]/)[0].split(".").map(Number);
+const core = (v) => v.replace(/^v/, "").split(/[-+]/)[0].split(".").map(BigInt);
 function compareVersions(a, b) {
   const [x, y] = [core(a), core(b)];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
-  const pre = (v) => /^v?[^-+]+-/.test(v);
-  return pre(a) === pre(b) ? 0 : pre(a) ? -1 : 1;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  const pre = (v) => /^v?[^-+]+-([^+]+)/.exec(v)?.[1].split(".");
+  const [p, q] = [pre(a), pre(b)];
+  if (!p || !q) return p ? -1 : q ? 1 : 0;
+  for (let i = 0; i < Math.min(p.length, q.length); i++) {
+    if (p[i] === q[i]) continue;
+    const [pn, qn] = [/^\d+$/.test(p[i]), /^\d+$/.test(q[i])];
+    if (pn && qn) {
+      const [pv, qv] = [BigInt(p[i]), BigInt(q[i])];
+      if (pv !== qv) return pv < qv ? -1 : 1;
+    } else {
+      if (pn !== qn) return pn ? -1 : 1;
+      return p[i] < q[i] ? -1 : 1;
+    }
+  }
+  return p.length - q.length;
 }
 
 function git(root, args) {
