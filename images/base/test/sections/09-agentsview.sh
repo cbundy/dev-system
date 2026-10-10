@@ -31,7 +31,7 @@ check "an unreadable secret file: dev-init warns, starts no push, and dev-doctor
 net=$(docker network create --label "$RUN_ID" "$RUN_ID-net")
 docker run -d --label "$RUN_ID" --name "$RUN_ID-pg" --network "$net" \
   -e POSTGRES_USER=av -e POSTGRES_PASSWORD="$SECRET" -e POSTGRES_DB=agentsview \
-  --entrypoint bash public.ecr.aws/docker/library/postgres:17 -c '
+  --entrypoint bash postgres:17 -c '
     openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=pg \
       -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
     chown postgres /tmp/k.pem /tmp/c.pem && chmod 600 /tmp/k.pem

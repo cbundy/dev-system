@@ -1736,10 +1736,10 @@ host, and a shared tag lets one silently replace another's image mid-run.
 Run the container test suite against it. Test 7 needs the devcontainer CLI; set
 `DEVCONTAINER="npx -y @devcontainers/cli"` if it is not installed, or `SKIP_DEVCONTAINER=1`
 to skip it. The agentsview section exercises the push end to end with a throwaway
-`public.ecr.aws/docker/library/postgres:17` container; the login section tests its reverse
-proxy with `public.ecr.aws/docker/library/nginx:alpine`. Both service images use the ECR
-Public mirror to avoid Docker Hub's anonymous pull limit (#297), with no Docker Hub login
-or credentials needed:
+`postgres:17` container; the login section tests its reverse proxy with `nginx:alpine`. Both
+are pulled from Docker Hub. CI logs in to Docker Hub when `DOCKERHUB_TOKEN` and the username
+(`DOCKERHUB_USERNAME`) are set; for local runs, `docker login` first to avoid Docker Hub's
+anonymous pull limit:
 
 ```bash
 images/base/test/test.sh "dev-system-base:test-$(git rev-parse --short HEAD)"
