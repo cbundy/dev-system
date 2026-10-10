@@ -1318,7 +1318,7 @@ makes the affected metrics `n/a` with the reason listed under `sources`. `--read
 
 `callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule S1..S5=<minutes>]... [--github on|off]`
 answers "what is the factory doing right now?": per repo, each live issue with its stage (queued,
-designing, implementing, in pipeline, parked, ready to merge, merged), time in stage, holder device, run,
+designing, implementing, in pipeline, parked, ready to merge, merged, closed without merge), time in stage, holder device, run,
 PR and stuck flag; the stuck items with the rule that tripped; and coverage per repo and device, so a data
 gap never reads as idle. It is read-only. It queries `factory.events` and the `nomistakes` mirror through
 `dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
