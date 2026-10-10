@@ -331,11 +331,11 @@ function deriveState(input) {
         const labels = gh.open[n] ? gh.open[n].labels : (gh.states[n] ? gh.states[n].labels || [] : null);
         const st = gh.open[n] ? 'open' : gh.states[n] ? gh.states[n].state : 'unknown';
         d.github = { state: st, labels: labels === null ? null : [...labels].sort(), claim: gh.claims[n] || null };
-        if (st === 'closed' && !d.final) {
-          const closedAt = gh.states[n].closed_at ? ms(gh.states[n].closed_at) : null;
+        const closedAt = st === 'closed' && gh.states[n].closed_at ? ms(gh.states[n].closed_at) : null;
+        if (st === 'closed' && !d.final && (closedAt === null || closedAt <= at)) {
           d.stage = d.stage === 'merged' ? 'merged' : 'closed without merge';
           d.detail = `closed on GitHub${gh.states[n].reason ? ` (${gh.states[n].reason})` : ''}`;
-          d.entered = closedAt !== null && closedAt <= at ? closedAt : at;
+          d.entered = closedAt !== null ? closedAt : at;
           d.final = true;
           d.source = 'github';
           d.stuck = null;
