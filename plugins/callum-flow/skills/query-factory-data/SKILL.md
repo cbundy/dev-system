@@ -9,7 +9,7 @@ description: >-
   with dev-query. Use for a quick targeted number. For a full windowed report
   or a comparison with a baseline, use evaluate-sessions instead. For what is
   happening right now (current stage, stuck issues), use factory-state.
-version: 0.25.0
+version: 0.26.0
 ---
 
 # Query factory data
