@@ -159,11 +159,15 @@ check "queue watcher fires only on a ready-set delta" bash -lc '
   test -x /usr/local/share/callum-tools/queue-watch.sh
   tmpdir=$(mktemp -d)
   trap "rm -rf \"$tmpdir\"" EXIT
-  cat > "$tmpdir/gh" <<'\''EOF'\''
+  # queue-watch lists through callum-flow-issue-read (cbundy/dev-system#310);
+  # a stub reader prints the issue numbers in queue.txt in its list shape
+  cat > "$tmpdir/reader" <<'\''EOF'\''
 #!/bin/sh
-cat "$(dirname "$0")/queue.txt"
+tr "," "\n" < "$(dirname "$0")/queue.txt" |
+  jq -R -s -c "split(\"\n\") | map(select(. != \"\") | {number: tonumber}) | {issues: .}"
 EOF
-  chmod +x "$tmpdir/gh"
+  chmod +x "$tmpdir/reader"
+  export CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/reader"
   # queue matches the baseline: no fire (killed by timeout, no output)
   printf "305" > "$tmpdir/queue.txt"
   out=$(PATH="$tmpdir:$PATH" QUEUE_WATCH_INTERVAL=1 timeout 3 \
