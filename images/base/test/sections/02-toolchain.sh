@@ -27,6 +27,9 @@ check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" 
 check "callum-flow-claim and callum-flow-sweep are on PATH and exit 2 on bad arguments" in_image '
   callum-flow-claim 2>/dev/null; [ $? = 2 ] && ! callum-flow-claim abc 2>/dev/null &&
   callum-flow-sweep --bogus 2>/dev/null; [ $? = 2 ]'
+check "callum-flow-design-route is on PATH and exits 2 on a bad argument and on a bad CALLUM_FLOW_DESIGN_SESSION_PCT" in_image '
+  [ -x "$(command -v callum-flow-design-route)" ] && callum-flow-design-route 2>/dev/null; [ $? = 2 ] && callum-flow-design-route abc 2>/dev/null; [ $? = 2 ] &&
+  CALLUM_FLOW_DESIGN_SESSION_PCT=abc callum-flow-design-route 1 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-issue-read is on PATH, fails closed without CALLUM_FLOW_TRUSTED_AUTHORS and exits 2 on a bad argument" in_image '
   [ -x "$(command -v callum-flow-issue-read)" ] && out=$(env -u CALLUM_FLOW_TRUSTED_AUTHORS CALLUM_FLOW_REPO=o/r callum-flow-issue-read 1 2>&1); [ $? = 1 ] &&
   echo "$out" | grep -q CALLUM_FLOW_TRUSTED_AUTHORS && out=$(CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:1 callum-flow-issue-read --bogus 2>/dev/null); [ $? = 2 ] && [ -z "$out" ]'

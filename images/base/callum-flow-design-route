@@ -1,0 +1,91 @@
+#!/bin/sh
+#
+# callum-flow-design-route: decide how an issue is designed, in a live session
+# the owner can answer or by the designer sub-agent (cbundy/dev-system#288,
+# epic #286). The split must be stable and exact, so it is computed, never asked
+# of a model.
+#
+# Usage: callum-flow-design-route <issue>
+#
+# Prints exactly one line, `session` or `subagent`. Order of decision:
+#   1. label `design:subagent` -> subagent   (reason=label; wins if both are set)
+#   2. label `design:session`  -> session    (reason=label)
+#   3. CALLUM_FLOW_DESIGN_SESSION_PCT unset, empty or 0 -> subagent (reason=default)
+#   4. bucket = POSIX `cksum` CRC of "<owner/repo>#<issue>" (repo lower-cased)
+#      mod 100; session when bucket < pct (reason=hash). cksum is machine
+#      independent, so a resumed orchestrator or a second device decides alike.
+# If the labels cannot be read it prints `subagent` with a warning on stderr
+# (reason=fallback): design never blocks on routing.
+#
+# Every decision is logged once with
+#   callum-flow-event design_routed --issue N --note "route=.. reason=.. bucket=.. pct=.."
+# A logging failure never changes the output or the exit code.
+#
+# Exit codes: 0 routed (including the fallback), 2 usage error (bad issue, or
+# CALLUM_FLOW_DESIGN_SESSION_PCT not a number from 0 to 100); nothing is logged.
+#
+# Environment: CALLUM_FLOW_DESIGN_SESSION_PCT (default 0), CALLUM_FLOW_REPO
+# (owner/name, default from gh); for tests CALLUM_FLOW_GH_BIN,
+# CALLUM_FLOW_EVENT_BIN.
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+PCT=${CALLUM_FLOW_DESIGN_SESSION_PCT:-0}
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-design-route: $1" >&2
+  echo "usage: callum-flow-design-route <issue>" >&2
+  exit 2
+}
+err() { echo "callum-flow-design-route: $*" >&2; }
+
+case "$PCT" in
+  '' | *[!0-9]*) usage "CALLUM_FLOW_DESIGN_SESSION_PCT must be a number from 0 to 100" ;;
+esac
+PCT=$(printf '%s' "$PCT" | sed 's/^0*//')
+PCT=${PCT:-0}
+[ "$PCT" -le 100 ] || usage "CALLUM_FLOW_DESIGN_SESSION_PCT must be a number from 0 to 100"
+[ $# -eq 1 ] || usage
+n=$1
+case "$n" in '' | *[!0-9]*) usage "issue must be a number, got '$n'" ;; esac
+
+# The one place the issue's labels are read (one label per line), so the
+# trusted-author reader can replace it later (#310).
+read_labels() { "$GH" issue view "$1" --repo "$repo" --json labels --jq '.labels[].name'; }
+
+log() {
+  "$EVENT" design_routed --issue "$n" --note "route=$1 reason=$2 bucket=$3 pct=$PCT" >/dev/null 2>&1 ||
+    err "warning: could not log the design_routed event"
+}
+decide() { echo "$1"; log "$1" "$2" "$3"; exit 0; }
+
+repo=${CALLUM_FLOW_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
+if [ -z "$repo" ]; then
+  err "warning: cannot determine the repo (set CALLUM_FLOW_REPO); routing to subagent"
+  decide subagent fallback -
+fi
+repo=$(printf '%s' "$repo" | tr '[:upper:]' '[:lower:]')
+
+if labels=$(read_labels "$n" 2>/dev/null); then
+  case "
+$labels
+" in
+    *"
+design:subagent
+"*) decide subagent label - ;;
+    *"
+design:session
+"*) decide session label - ;;
+  esac
+else
+  err "warning: cannot read the labels of #$n; routing to subagent"
+  decide subagent fallback -
+fi
+
+[ "$PCT" -gt 0 ] || decide subagent default -
+
+bucket=$(printf '%s#%s' "$repo" "$n" | cksum | { read -r crc _; echo $((crc % 100)); })
+if [ "$bucket" -lt "$PCT" ]; then decide session hash "$bucket"; fi
+decide subagent hash "$bucket"
