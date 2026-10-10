@@ -188,10 +188,13 @@ tests would otherwise have missed:
 - Launch it detached from the first command, never through `tail`: `nohup
   no-mistakes axi run --intent "<goal>" > /tmp/no-mistakes-<branch>.log
   2>&1 &`. Then make exactly one `no-mistakes status` read to capture the run
-  id and confirm its `head` equals your commit SHA. Record it with
+  id and confirm its `head` equals your commit SHA. Recording it with
   `callum-flow-event run_started --issue <N> --run <id> --branch <branch>
-  --head <sha>` (skip if the command is missing). Write a self-contained
-  handoff (see section 8), and TERMINATE.
+  --head <sha>` is optional: nothing depends on it, because pipeline facts
+  (run start, status, parked time, PR) come from the no-mistakes mirror, which
+  links a run to its issue by the `issue-<N>` branch name. Skip it freely
+  (`run_started` stays in the event vocabulary so old rows stay valid). Write a
+  self-contained handoff (see section 8), and TERMINATE.
 - Never pass `--yes` (to `axi run` or `axi respond`). It makes the pipeline
   apply `ask-user` findings - scope and policy judgement calls, including
   "remove this component" - with no escalation, which can silently delete

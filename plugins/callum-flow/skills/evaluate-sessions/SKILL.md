@@ -72,7 +72,10 @@ For the pipeline numbers across devices, export the `nomistakes` schema too and 
 it with `--nm-export` (it replaces this device's `state.sqlite` for every pipeline
 number; `state.sqlite` is then only used to find the transcripts). Run the query in
 [docs/metrics.md, "Scope and the fleet-wide no-mistakes export"](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export)
-with `since` set to the window's start and output to `/tmp/nm-export.jsonl`.
+with `since` set to a lookback earlier than the window's start (for example 14 days before
+it) and output to `/tmp/nm-export.jsonl`: the pipeline stage times of an issue merged inside the
+window start at its first run, which may have been created before the window. The report still
+counts only runs created inside the window (`--since` selects them).
 
 Do not filter by `device` or `repo`. Check that `pipeline.by_device` lists every
 device that ran; a missing one means its pipeline data was never pushed (see

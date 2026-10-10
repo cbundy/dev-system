@@ -156,9 +156,33 @@ INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw) VA
   ('nm-metrics', 'acme/widgets', 2, to_timestamp(1700001010), 'run_started', 42, 'r3', '{}'),
   ('nm-metrics', 'acme/widgets', 3, to_timestamp(1700001720), 'merged', 42, NULL, '{}')
 ON CONFLICT DO NOTHING;
+-- Issues for the run-to-issue link (#343), modelled on merged issues with no run_started event.
+-- The runs are in nm-fixture.js (r5 to r11); times are epoch seconds.
+--   51  one run on feat/issue-51-no-event, no run_started event
+--   52  repo spelled 'Acme/Widgets' (factory.events is not lowercased); first run cancelled
+--   53  a run_started event 20 s after the run was created: the mirror time wins
+--   54  run on an off-convention branch, linked only by a legacy run_started event
+INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw)
+SELECT 'nm-metrics', v.repo, v.seq, to_timestamp(v.t), v.state, v.issue, v.run_id, '{}'::jsonb
+FROM (VALUES
+  ('acme/widgets', 10, 1700010000, 'ready', 51, NULL), ('acme/widgets', 11, 1700010060, 'claimed', 51, NULL),
+  ('acme/widgets', 12, 1700010360, 'delegated', 51, NULL), ('acme/widgets', 13, 1700011260, 'merge_ready', 51, NULL),
+  ('acme/widgets', 14, 1700012460, 'merged', 51, NULL),
+  ('Acme/Widgets', 1, 1700020000, 'ready', 52, NULL), ('Acme/Widgets', 2, 1700020060, 'claimed', 52, NULL),
+  ('Acme/Widgets', 3, 1700020360, 'delegated', 52, NULL), ('Acme/Widgets', 4, 1700021660, 'merge_ready', 52, NULL),
+  ('Acme/Widgets', 5, 1700021960, 'merged', 52, NULL),
+  ('acme/widgets', 20, 1700030000, 'ready', 53, NULL), ('acme/widgets', 21, 1700030060, 'claimed', 53, NULL),
+  ('acme/widgets', 22, 1700030360, 'delegated', 53, NULL), ('acme/widgets', 23, 1700030680, 'run_started', 53, 'r8'),
+  ('acme/widgets', 24, 1700031260, 'merge_ready', 53, NULL), ('acme/widgets', 25, 1700031560, 'merged', 53, NULL),
+  ('acme/widgets', 30, 1700040000, 'ready', 54, NULL), ('acme/widgets', 31, 1700040060, 'claimed', 54, NULL),
+  ('acme/widgets', 32, 1700040360, 'delegated', 54, NULL), ('acme/widgets', 33, 1700040670, 'run_started', 54, 'r9'),
+  ('acme/widgets', 34, 1700041460, 'merge_ready', 54, NULL), ('acme/widgets', 35, 1700041560, 'merged', 54, NULL)
+) AS v(repo, seq, t, state, issue, run_id)
+ON CONFLICT DO NOTHING;
 SQL
-  # 00 is the DDL block, 01 the example join, 02..08 the seven queries.
-  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 9 ] || { echo "expected 9 sql blocks"; return 1; }
+  # 00 is the DDL block, 01 the example join, 02..08 the seven queries, 09 "Unlinked runs", then
+  # 10 and 11: lead time by stage and the waiting split, which live outside the nomistakes section.
+  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 12 ] || { echo "expected 12 sql blocks"; return 1; }
   for f in "$out"/*.sql; do
     psql_file < "$f" > "${f%.sql}.out" || { echo "$(basename "$f") failed"; cat "$f"; return 1; }
     if [ "$(basename "$f")" != 00.sql ] && [ ! -s "${f%.sql}.out" ]; then echo "$(basename "$f") returned no rows"; return 1; fi
@@ -170,7 +194,38 @@ SQL
     grep -Fx 'totals|acme/widgets|nm-host||2|150000|75000|111000|120000|' "$out/06.out" &&
     grep -E '^parked_now\|acme/widgets\|nm-host\|r4\|\|30000\|' "$out/06.out" &&
     grep -Fx 'review-fix|gpt-test|exit|none|1' "$out/07.out" &&
-    grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out"
+    grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out" &&
+    nm_link_values "$out"
+}
+# The run-to-issue link (#343): issues with no run_started event still get their pipeline numbers
+# from the mirror. psql prints numeric seconds with six decimals; drop trailing zeros to compare.
+nm_link_values() {
+  local out=$1
+  norm() { sed -E 's/\.0+(\||$)/\1/g' "$1"; }
+  # the saved query 7 gains the new issues; issue 52 keeps its mixed-case repo and both its runs
+  grep -Fx 'acme/widgets|51|2400|600|0|1800|1' "$out/08.out" &&
+    grep -Fx 'Acme/Widgets|52|1900|700|0|1200|2' "$out/08.out" &&
+    grep -Fx 'acme/widgets|53|1500|600|0|900|1' "$out/08.out" &&
+    grep -Fx 'acme/widgets|54|1500|800|0|700|1' "$out/08.out" &&
+    # the example join places a run by branch alone
+    grep -E '^acme/widgets\|51\|r5\|completed\|' "$out/01.out" &&
+    ! grep -q '|r10|' "$out/01.out" &&
+    # unlinked runs: off-convention branches with no event, and a run with no repo; nothing else
+    grep -E '^acme/widgets\|nm-host\|r10\|chore/release-0\.9\.0\|completed\|' "$out/09.out" &&
+    grep -E '^\|nm-host\|r11\|feat/issue-60-orphan\|completed\|' "$out/09.out" &&
+    [ "$(wc -l < "$out/09.out")" -eq 5 ] &&
+    ! grep -Eq '\|(r3|r5|r6|r7|r8|r9)\|' "$out/09.out" &&
+    # query 1: implementation and pipeline from the mirror; issue 42 has none of the other events
+    norm "$out/10.out" | grep -Fx 'acme/widgets|51|00:01:00|00:05:00|00:05:00|00:10:00|00:20:00|00:41:00' &&
+    norm "$out/10.out" | grep -Fx 'Acme/Widgets|52|00:01:00|00:05:00|00:05:00|00:16:40|00:05:00|00:32:40' &&
+    norm "$out/10.out" | grep -Fx 'acme/widgets|53|00:01:00|00:05:00|00:05:00|00:10:00|00:05:00|00:26:00' &&
+    norm "$out/10.out" | grep -Fx 'acme/widgets|54|00:01:00|00:05:00|00:05:00|00:13:20|00:01:40|00:26:00' &&
+    norm "$out/10.out" | grep -Fx 'acme/widgets|42||||||' &&
+    # query 7: the waiting split on mirror run starts
+    norm "$out/11.out" | grep -Fx 'acme/widgets|51|nm-metrics|600|1260|0|600|2460' &&
+    norm "$out/11.out" | grep -Fx 'Acme/Widgets|52|nm-metrics|1000|360|0|600|1960' &&
+    norm "$out/11.out" | grep -Fx 'acme/widgets|53|nm-metrics|600|360|0|600|1560' &&
+    norm "$out/11.out" | grep -Fx 'acme/widgets|54|nm-metrics|800|160|0|600|1560'
 }
 check "the saved queries in docs/metrics.md run against the mirrored data and return the expected values" nm_metrics_queries
 # The fleet-wide export query in docs/metrics.md (#274): run it against the same PostgreSQL, then

@@ -1,5 +1,6 @@
 // Static check of the saved queries in docs/metrics.md (cbundy/dev-system#275): every sql block
-// in the "no-mistakes pipeline data" section may only name `nomistakes` tables and
+// in the "no-mistakes pipeline data" section, and the two top-level queries that join to it
+// (lead time by stage, the waiting split; cbundy/dev-system#343), may only name `nomistakes` tables and
 // `alias.column` references that exist in nm-export's schema, so a change to the mirror's
 // columns fails here instead of silently breaking a documented query. The execution check
 // (the same blocks against real PostgreSQL) is section 9 of images/base/test.
@@ -10,7 +11,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
 
-const { extractBlocks } = require("./metrics-blocks");
+const { extractBlocks, extractTopQueries, extractRunLink, TOP_QUERIES } = require("./metrics-blocks");
 const { TABLES } = require("../images/base/nm-export");
 
 const DOC = path.join(__dirname, "..", "docs", "metrics.md");
@@ -47,18 +48,35 @@ function problems(sql) {
   return out;
 }
 
-const blocks = extractBlocks(fs.readFileSync(DOC, "utf8"));
+const markdown = fs.readFileSync(DOC, "utf8");
+const blocks = extractBlocks(markdown);
 // The DDL block creates the tables; the rest are queries.
 const queries = blocks.filter((b) => !/^\s*CREATE\b/i.test(b.sql));
+const top = extractTopQueries(markdown);
+const RUN_LINK = extractRunLink(markdown);
 
-test("the nomistakes section holds the example join and the seven saved queries", () => {
-  assert.equal(queries.length, 8, `expected 8 query blocks, found ${queries.length}`);
+test("the nomistakes section holds the example join, the seven saved queries and the unlinked-runs query", () => {
+  assert.equal(queries.length, 9, `expected 9 query blocks, found ${queries.length}`);
   const saved = queries.filter((b) => /^\d+\./.test(b.heading));
   assert.equal(saved.length, 7);
   assert.deepEqual(saved.map((b) => b.heading.split(".")[0]), ["1", "2", "3", "4", "5", "6", "7"]);
+  assert.equal(queries[queries.length - 1].heading, "Unlinked runs");
 });
 
-for (const b of queries) {
+test("the top-level queries that join to the mirror are the two the link was added to", () => {
+  assert.deepEqual(top.map((b) => b.heading), TOP_QUERIES);
+});
+
+// Every query that places a run on an issue starts from the one CTE in the link section.
+for (const b of [...top, ...queries.filter((q) => /run_link/.test(q.sql) || q.heading === "" || /^(7\.|Unlinked)/.test(q.heading))]) {
+  test(`metrics.md query "${b.heading || "example join"}" uses the canonical run_link CTE verbatim`, () => {
+    assert.ok(b.sql.includes(RUN_LINK), "the run_link CTE differs from the one in 'Linking pipeline runs to issues'");
+    // outside the legacy link, no query reads an agent-logged run_started timestamp
+    if (b.heading !== "7. The waiting split") assert.ok(!/run_started/.test(b.sql.replace(RUN_LINK, "")), "reads run_started");
+  });
+}
+
+for (const b of [...queries, ...top]) {
   test(`metrics.md query "${b.heading || "example join"}" only names columns that exist`, () => {
     assert.deepEqual(problems(b.sql), []);
   });

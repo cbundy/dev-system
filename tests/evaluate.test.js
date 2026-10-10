@@ -106,8 +106,8 @@ test("throughput and lead time follow metrics.md query 1", () => {
   const t = json(WINDOW).throughput;
   assert.equal(t.merged_issues, 2);
   assert.deepEqual(t.issues, [
-    { issue: 7, merged_at: "2026-10-08T10:32:00.000Z", ready_source: "event", waiting_for_claim: 600, design: 1800, implementation: 1200, pipeline: 1800, waiting_for_merge: 3720, total: 9120 },
-    { issue: 8, merged_at: "2026-10-08T10:50:00.000Z", ready_source: "event", waiting_for_claim: 300, design: 900, implementation: 600, pipeline: 1200, waiting_for_merge: 10800, total: 13800 },
+    { issue: 7, merged_at: "2026-10-08T10:32:00.000Z", ready_source: "event", run_source: "mirror", waiting_for_claim: 600, design: 1800, implementation: 1200, pipeline: 1800, waiting_for_merge: 3720, total: 9120 },
+    { issue: 8, merged_at: "2026-10-08T10:50:00.000Z", ready_source: "event", run_source: "mirror", waiting_for_claim: 300, design: 900, implementation: 600, pipeline: 1200, waiting_for_merge: 10800, total: 13800 },
   ]);
   assert.deepEqual(t.lead_time_total_seconds, { median: 11460, max: 13800, issues_with_total: 2 });
 });
@@ -234,6 +234,7 @@ test("pipeline: runs by status, review rounds, fallback invocations, ci duration
   const p = json(WINDOW, DEVICE).pipeline;
   assert.deepEqual(p, {
     runs: 2,
+    unlinked_runs: 0, // run1 and run2 are on issue-<N> branches
     by_status: { completed: 1, failed: 1 },
     review_rounds: { total: 3, max: 2, per_run: [{ run: "run1", review_rounds: 2 }, { run: "run2", review_rounds: 1 }] },
     fallback_invocations: { count: 1, of: 3 },
@@ -411,8 +412,8 @@ test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () =>
 test("two devices: ready times come from the GitHub timeline (last label at or before the claim)", () => {
   const t = json(TWO_WINDOW).throughput;
   assert.deepEqual(t.issues, [
-    { issue: 2, merged_at: "2026-10-09T09:40:00.000Z", ready_source: "github", waiting_for_claim: 1500, design: 900, implementation: 300, pipeline: 900, waiting_for_merge: 300, total: 3900 },
-    { issue: 1, merged_at: "2026-10-09T10:10:00.000Z", ready_source: "github", waiting_for_claim: 1800, design: 900, implementation: 900, pipeline: 3000, waiting_for_merge: 1200, total: 7800 },
+    { issue: 2, merged_at: "2026-10-09T09:40:00.000Z", ready_source: "github", run_source: "mirror", waiting_for_claim: 1500, design: 900, implementation: 300, pipeline: 900, waiting_for_merge: 300, total: 3900 },
+    { issue: 1, merged_at: "2026-10-09T10:10:00.000Z", ready_source: "github", run_source: "mirror", waiting_for_claim: 1800, design: 900, implementation: 900, pipeline: 3000, waiting_for_merge: 1200, total: 7800 },
   ]);
   assert.deepEqual(t.lead_time_total_seconds, { median: 5850, max: 7800, issues_with_total: 2 });
   assert.equal(t.issues_without_ready, 0);
@@ -528,8 +529,8 @@ const sumField = (rows, k) => rows.reduce((a, x) => a + x[k], 0);
 test("export: sources list the export and mark state.sqlite as transcript discovery only", () => {
   const r = json(EXPORT_ARGS);
   const ex = r.sources.find((s) => s.kind === "no-mistakes-export");
-  // runs 5 + step_results 9 + step_rounds 8 + agent_invocations 6; the other table lines are ignored
-  assert.deepEqual(ex, { kind: "no-mistakes-export", path: NM_EXPORT, found: true, rows: 28 });
+  // runs 7 + step_results 9 + step_rounds 8 + agent_invocations 6; the other table lines are ignored
+  assert.deepEqual(ex, { kind: "no-mistakes-export", path: NM_EXPORT, found: true, rows: 30 });
   const sq = r.sources.find((s) => s.kind === "no-mistakes");
   assert.equal(sq.note, "used for transcript discovery only");
   assert.equal(sq.rows, null);
@@ -598,6 +599,99 @@ test("export: an old export without trigger_type or purpose degrades only those 
   assert.equal(p.runs, 3);
   assert.equal(p.review_rounds.total, 4);
   assert.equal(p.parked.total_seconds, 120);
+});
+
+// ---- the pipeline facts come from the no-mistakes source, not run_started (cbundy/dev-system#343)
+// The same six cases, with the same instants and expected numbers, as the PostgreSQL fixtures in
+// images/base/test/nm-fixture.js and sections/09-agentsview.sh (which run in image CI):
+//  51  one run on feat/issue-51-no-event, no run_started event
+//  52  repo spelled Acme/Widgets in the events; first run cancelled, second on another branch name
+//  53  a run_started event 20 s after the run was created: the mirror time wins
+//  54  run on chore/bump-deps, linked only by a legacy run_started event with its run_id
+//  55  merged with no run in the source at all: null stages, run_source none
+//  r10 off-convention branch with no event, r11 an issue branch but no repo: unlinked
+const LINK_BASE = 1700000000;
+const at = (sec) => new Date((LINK_BASE + sec) * 1000).toISOString();
+const LINK_WINDOW = ["--repo", "acme/widgets", "--since", at(0), "--until", at(70000)];
+
+function linkFixture(dir, { withRuns = true } = {}) {
+  fs.mkdirSync(dir, { recursive: true });
+  const ev = (repo, sec, state, issue, run = null) => JSON.stringify({ v: 1, ts: at(sec), repo, device: "nm-metrics", state, issue, run_id: run, note: null });
+  const story = (repo, issue, t0, steps) => steps.map(([off, state, run]) => ev(repo, t0 + off, state, issue, run));
+  const events = [
+    ...story("acme/widgets", 51, 10000, [[0, "ready"], [60, "claimed"], [360, "delegated"], [1260, "merge_ready"], [2460, "merged"]]),
+    ...story("Acme/Widgets", 52, 20000, [[0, "ready"], [60, "claimed"], [360, "delegated"], [1660, "merge_ready"], [1960, "merged"]]),
+    ...story("acme/widgets", 53, 30000, [[0, "ready"], [60, "claimed"], [360, "delegated"], [680, "run_started", "r8"], [1260, "merge_ready"], [1560, "merged"]]),
+    ...story("acme/widgets", 54, 40000, [[0, "ready"], [60, "claimed"], [360, "delegated"], [670, "run_started", "r9"], [1460, "merge_ready"], [1560, "merged"]]),
+    ...story("acme/widgets", 55, 55000, [[0, "ready"], [60, "claimed"], [360, "delegated"], [900, "merge_ready"], [1000, "merged"]]),
+  ];
+  fs.writeFileSync(path.join(dir, "events.jsonl"), events.join("\n") + "\n");
+  const R = [ // id, repo, branch, status, created (s after LINK_BASE)
+    ["r5", "acme/widgets", "feat/issue-51-no-event", "completed", 10660],
+    ["r6", "acme/widgets", "feat/issue-52-first", "cancelled", 20660],
+    ["r7", "acme/widgets", "fix/issue-52-second", "completed", 21060],
+    ["r8", "acme/widgets", "feat/issue-53-both", "completed", 30660],
+    ["r9", "acme/widgets", "chore/bump-deps", "completed", 40660],
+    ["r10", "acme/widgets", "chore/release-0.9.0", "completed", 50000],
+    ["r11", null, "feat/issue-60-orphan", "completed", 60000],
+  ].filter(() => withRuns);
+  const exp = [];
+  for (const [id, repo, branch, status, t] of R) {
+    exp.push(JSON.stringify({ table: "runs", row: { id, repo_id: "x", branch, repo, device: "nm-host", status, created_at: at(t) } }));
+  }
+  fs.writeFileSync(path.join(dir, "nm-export.jsonl"), exp.join("\n") + "\n");
+  // the same runs as a workspace state.sqlite (r11 has a repo_id with no repos row, so no repo)
+  const { DatabaseSync } = require("node:sqlite");
+  const home = path.join(dir, "nm");
+  fs.mkdirSync(home, { recursive: true });
+  const db = new DatabaseSync(path.join(home, "state.sqlite"));
+  db.exec(fs.readFileSync(path.join(FIX, "state.sql"), "utf8"));
+  db.exec("DELETE FROM runs");
+  const ins = db.prepare("INSERT INTO runs (id, repo_id, branch, status, created_at) VALUES (?, ?, ?, ?, ?)");
+  for (const [id, repo, branch, status, t] of R) ins.run(id, repo ? "repo1" : "repo-none", branch, status, LINK_BASE + t);
+  db.close();
+  return { events: path.join(dir, "events.jsonl"), exportFile: path.join(dir, "nm-export.jsonl"), home };
+}
+
+test("pipeline facts come from the mirror: issues without a run_started event get their stage times", () => {
+  const f = linkFixture(path.join(tmp, "link"));
+  const bySource = {
+    export: [...LINK_WINDOW, "--events", f.events, "--nm-export", f.exportFile],
+    sqlite: [...LINK_WINDOW, "--events", f.events],
+  };
+  for (const [kind, args] of Object.entries(bySource)) {
+    const r = json(args, { NO_MISTAKES_HOME: f.home, DEV_MACHINE_NAME: "nm-host" });
+    const rows = Object.fromEntries(r.throughput.issues.map((i) => [i.issue, i]));
+    const stages = (i) => [i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total];
+    // the same numbers as query 1 in 09-agentsview.sh
+    assert.deepEqual(stages(rows[51]), ["mirror", 60, 300, 300, 600, 1200, 2460], `${kind} 51`);
+    assert.deepEqual(stages(rows[52]), ["mirror", 60, 300, 300, 1000, 300, 1960], `${kind} 52: first run is the cancelled one`);
+    assert.deepEqual(stages(rows[53]), ["mirror", 60, 300, 300, 600, 300, 1560], `${kind} 53: the mirror beats a run_started 20 s later`);
+    assert.deepEqual(stages(rows[54]), ["run_started", 60, 300, 300, 800, 100, 1560], `${kind} 54: legacy link, mirror created_at`);
+    // no run in the source: never a wrong number
+    assert.deepEqual(stages(rows[55]), ["none", 60, 300, null, null, 100, 1000], `${kind} 55`);
+    // the same numbers as query 7 in 09-agentsview.sh
+    const w = Object.fromEntries(r.waiting.issues.map((i) => [i.issue, [i.pipeline_bound, i.dispatcher_bound, i.dispatcher_bound_other_idle, i.agent_work, i.total]]));
+    assert.deepEqual(w[51], [600, 1260, 0, 600, 2460], `${kind} 51`);
+    assert.deepEqual(w[52], [1000, 360, 0, 600, 1960], `${kind} 52`);
+    assert.deepEqual(w[53], [600, 360, 0, 600, 1560], `${kind} 53`);
+    assert.deepEqual(w[54], [800, 160, 0, 600, 1560], `${kind} 54`);
+    assert.deepEqual(w[55], [0, 160, 0, 840, 1000], `${kind} 55: no linked run, so nothing is pipeline-bound`);
+    // r10 is the only unlinked run of acme/widgets (r11 has no repo, so it is not this repo's)
+    assert.equal(r.pipeline.unlinked_runs, 1, kind);
+  }
+});
+
+test("a run_started event alone no longer sets pipeline times; without any pipeline source they are null", () => {
+  const f = linkFixture(path.join(tmp, "link-none"), { withRuns: false });
+  const r = json([...LINK_WINDOW, "--events", f.events, "--nm-export", f.exportFile], { NO_MISTAKES_HOME: f.home });
+  // 53 and 54 have run_started events, but the run is not in the source (and 54's branch is off-convention)
+  for (const i of r.throughput.issues) assert.deepEqual([i.run_source, i.implementation, i.pipeline], ["none", null, null], String(i.issue));
+  assert.equal(r.pipeline.unlinked_runs, 0);
+  // with no pipeline source at all, the same: null, not a number from the events
+  const missing = json([...LINK_WINDOW, "--events", f.events], { NO_MISTAKES_HOME: path.join(tmp, "no-nm") });
+  for (const i of missing.throughput.issues) assert.deepEqual([i.run_source, i.implementation, i.pipeline], ["none", null, null]);
+  assert.match(run([...LINK_WINDOW, "--events", f.events, "--format", "markdown"], { NO_MISTAKES_HOME: path.join(tmp, "no-nm") }).out, /\| run_source \|/);
 });
 
 test("drift guard: every column the tool reads exists in nm-export's TABLES", () => {
