@@ -590,17 +590,3 @@ test("drift guard: every column the tool reads exists in nm-export's TABLES", ()
   check(mod.NM_OPTIONAL);
   check(mod.NM_EXPORT_SCHEMA);
 });
-
-test("the export query is the same in docs/metrics.md and the evaluate-sessions skill", () => {
-  const body = (file) => {
-    const m = /<<'SQL'\n([\s\S]*?)\nSQL\n/.exec(fs.readFileSync(file, "utf8"));
-    assert.ok(m, `${file} has no export query`);
-    return m[1];
-  };
-  const root = path.join(__dirname, "..");
-  const doc = body(path.join(root, "docs", "metrics.md"));
-  assert.equal(body(path.join(root, "plugins", "callum-flow", "skills", "evaluate-sessions", "SKILL.md")), doc);
-  // every table it exports is one the tool reads or knowingly ignores, with a real nm-export table
-  const { TABLES } = require(path.join(root, "images", "base", "nm-export"));
-  for (const m of doc.matchAll(/'table', '(\w+)'/g)) assert.ok(TABLES[m[1]], `${m[1]} is not a mirrored table`);
-});

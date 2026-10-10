@@ -54,8 +54,11 @@ The default event log is this device's. For a window that covers other devices'
 work (the two-dispatcher trial, cbundy/dev-system#222), export `factory.events`
 for every device as JSON lines and pass it with `--events`:
 
+These exports need `dev-query`; see its [base-image requirements and usage](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#dev-query).
+If it is not on PATH, report the required image version and stop.
+
 ```
-PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -c \
+dev-query -At -c \
   "SELECT row_to_json(e) FROM (SELECT ts, repo, device, session_id, actor, state, issue, run_id, branch, pr, head, note
    FROM factory.events WHERE repo = '<owner/name>' ORDER BY ts) e" > /tmp/events.jsonl
 ```
@@ -67,33 +70,9 @@ never pushed, so say so rather than reporting on half the factory.
 
 For the pipeline numbers across devices, export the `nomistakes` schema too and pass
 it with `--nm-export` (it replaces this device's `state.sqlite` for every pipeline
-number; `state.sqlite` is then only used to find the transcripts). The query is in
-`docs/metrics.md`, under "Scope and the fleet-wide no-mistakes export"; it covers every
-repo and device. Run it with the window's start:
-
-```
-PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
-WITH r AS (
-  SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
-), s AS (
-  SELECT x.* FROM nomistakes.step_results x JOIN r ON r.id = x.run_id
-)
-SELECT jsonb_build_object('table', 'runs', 'row', to_jsonb(r) - 'raw') FROM r
-UNION ALL
-SELECT jsonb_build_object('table', 'step_results', 'row', to_jsonb(s) - 'raw') FROM s
-UNION ALL
-SELECT jsonb_build_object('table', 'step_rounds', 'row', to_jsonb(d) - 'raw')
-FROM nomistakes.step_rounds d JOIN s ON s.id = d.step_result_id
-UNION ALL
-SELECT jsonb_build_object('table', 'agent_invocations', 'row', to_jsonb(i) - 'raw')
-FROM nomistakes.agent_invocations i JOIN r ON r.id = i.run_id
-UNION ALL
-SELECT jsonb_build_object('table', 'run_agent_sessions', 'row', to_jsonb(a) - 'raw')
-FROM nomistakes.run_agent_sessions a JOIN r ON r.id = a.run_id
-UNION ALL
-SELECT jsonb_build_object('table', 'repos', 'row', to_jsonb(p) - 'raw') FROM nomistakes.repos p;
-SQL
-```
+number; `state.sqlite` is then only used to find the transcripts). Run the query in
+[docs/metrics.md, "Scope and the fleet-wide no-mistakes export"](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export)
+with `since` set to the window's start and output to `/tmp/nm-export.jsonl`.
 
 Do not filter by `device` or `repo`. Check that `pipeline.by_device` lists every
 device that ran; a missing one means its pipeline data was never pushed (see

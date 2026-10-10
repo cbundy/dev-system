@@ -181,8 +181,12 @@ nm_export_query() {
   out=$(mktemp)
   # the heredoc body of the first <<'SQL' block in metrics.md
   awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/docs/metrics.md" |
-    docker exec -i "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -v since=2000-01-01T00:00:00Z -At > "$out" || return 1
+    docker exec -i "$RUN_ID-b" dev-query -At -v since=2000-01-01T00:00:00Z > "$out" || return 1
   [ -s "$out" ] && ! grep -q '"raw"' "$out" || return 1
+  node -e '
+    const { TABLES } = require(process.argv[1]);
+    const seen = new Set(require("fs").readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).table));
+    if (!seen.size || [...seen].some((t) => !TABLES[t])) process.exit(1);' "$root/images/base/nm-export" "$out" || return 1
   docker exec -i "$RUN_ID-b" sh -c 'cat > /tmp/nm-export.jsonl' < "$out" || return 1
   want=$(psql_av "select count(*) from nomistakes.runs where repo = 'acme/widgets'")
   docker exec -e NO_MISTAKES_HOME=/tmp/nmfix -e CALLUM_EVENTS_DIR=/tmp/nmfix "$RUN_ID-b" callum-flow-evaluate \
@@ -194,6 +198,21 @@ nm_export_query() {
       if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
 }
 check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
+# dev-query (#292): container b has AGENTSVIEW_PG_URL.
+dev_query_readonly() {
+  local before after err
+  before=$(psql_av "select count(*) from factory.events")
+  [ -n "$before" ] || return 1
+  case $(docker exec -i "$RUN_ID-b" dev-query -At -c 'select count(*) from factory.events') in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  err=$(docker exec -i "$RUN_ID-b" dev-query -c "insert into factory.events (device, repo, seq, ts, state, raw) values ('x', 'x', 1, now(), 'ready', '{}')" 2>&1) && return 1
+  case $err in *'read-only transaction'*) ;; *) return 1 ;; esac
+  case $err in *"$SECRET"*) return 1 ;; esac
+  after=$(psql_av "select count(*) from factory.events")
+  [ "$before" = "$after" ]
+}
+check "dev-query returns a count and rejects a write as read-only without leaking the password" dev_query_readonly
 check "dev-doctor fails with a hint when the database is unreachable" bash -c "
   out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:$SECRET@no-such-host.invalid:5432/agentsview?sslmode=require' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"

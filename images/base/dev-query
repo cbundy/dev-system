@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# dev-query: run SQL against the central agentsview PostgreSQL (the factory.events
+# and nomistakes tables) without the URL ever reaching argv, the environment, or
+# output (cbundy/dev-system#292). images/base/README.md, "dev-query".
+#
+# Usage: dev-query [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
+#   The SQL comes from -c or from stdin (not both). Sessions are read-only by
+#   default (default_transaction_read_only=on); there is no write mode.
+# Exit: 0 ok; 64 usage; 69 psql missing; 77 URL file unreadable or empty;
+#   78 no URL configured; otherwise psql's own status (1, 2 or 3).
+set -u
+
+SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
+# shellcheck source=agentsview.sh
+. "$SHARE/agentsview.sh"
+
+usage() {
+  cat <<'USAGE'
+Usage: dev-query [-A] [-t] [--csv] [-v NAME=VALUE]... [-c SQL]
+
+Runs SQL against the central agentsview PostgreSQL, read-only. The SQL comes
+from -c or from stdin (not both).
+
+  -A, -t, -At   unaligned / tuples-only output (psql flags)
+  --csv         CSV output
+  -v NAME=VALUE set a psql variable, used as :'NAME' in the SQL (repeatable)
+  -c SQL        the SQL to run
+  -h, --help    show this help
+
+Exit codes: 64 usage, 69 psql missing, 77 URL file unreadable or empty,
+78 no URL configured, otherwise psql's own status.
+USAGE
+}
+
+die() {
+  local code=$1
+  shift
+  echo "dev-query: $*" >&2
+  exit "$code"
+}
+
+sql='' have_sql=0 args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage; exit 0 ;;
+    -A | -t | -At | -tA | --csv) args+=("$1") ;;
+    -v)
+      [ $# -ge 2 ] || die 64 "-v needs NAME=VALUE (see dev-query --help)"
+      case "$2" in
+        [A-Za-z_]*=*) ;;
+        *) die 64 "-v needs NAME=VALUE, got '$2'" ;;
+      esac
+      case "${2%%=*}" in *[!A-Za-z0-9_]*) die 64 "invalid variable name in '-v $2'" ;; esac
+      args+=(-v "$2")
+      shift
+      ;;
+    -c)
+      [ $# -ge 2 ] || die 64 "-c needs the SQL (see dev-query --help)"
+      [ "$have_sql" = 0 ] || die 64 "-c given more than once"
+      sql=$2 have_sql=1
+      shift
+      ;;
+    *) die 64 "unsupported option '$1' (see dev-query --help)" ;;
+  esac
+  shift
+done
+
+if [ "$have_sql" = 1 ]; then
+  # A stdin that already holds data alongside -c is ambiguous. An empty or silent
+  # stdin (an agent shell's inherited one) is fine.
+  if [ ! -t 0 ] && IFS= read -r -t 0.2 -N 1 _ 2>/dev/null; then
+    die 64 "give the SQL with -c or on stdin, not both"
+  fi
+else
+  [ ! -t 0 ] || die 64 "no SQL: pass -c '<sql>' or pipe it on stdin (see dev-query --help)"
+fi
+
+command -v psql >/dev/null 2>&1 || die 69 "psql is not installed: this container image is older than the base image that ships postgresql-client. Run dev-version to compare, then rebuild or pull the container. Do not install it by hand."
+
+url=$(agentsview_pg_url)
+case $? in
+  0) ;;
+  1) die 78 "no PostgreSQL URL configured: put it in $(agentsview_pg_url_file) (or set AGENTSVIEW_PG_URL)" ;;
+  *) die 77 "$(agentsview_pg_url_file) exists but is unreadable or empty: fix its permissions or content (or set AGENTSVIEW_PG_URL)" ;;
+esac
+
+tmp=$(mktemp -d) || die 1 "cannot create a temporary directory"
+trap 'rm -rf "$tmp"' EXIT
+if [ "$have_sql" = 1 ]; then
+  printf '%s\n' "$sql" > "$tmp/sql" || die 1 "cannot stage the SQL"
+else
+  cat > "$tmp/sql" || die 1 "cannot read the SQL from stdin"
+fi
+nonblank=$(tr -d '[:space:]' < "$tmp/sql") || die 1 "cannot read the staged SQL"
+[ -n "$nonblank" ] || die 64 "no SQL: pass -c '<sql>' or pipe it on stdin (see dev-query --help)"
+
+# stdout and stderr are masked separately so an export redirected to a file never
+# holds error text; psql's nonzero status wins, else a failed write is an error.
+DEV_PG_FORCE_OPTIONS='-c default_transaction_read_only=on' \
+  run_psql "$url" ${args[@]+"${args[@]}"} < "$tmp/sql" 2> "$tmp/err" | mask_secrets
+rc=${PIPESTATUS[0]} mask_out=${PIPESTATUS[1]}
+mask_secrets < "$tmp/err" >&2
+mask_err=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+[ "$mask_out" -eq 0 ] && [ "$mask_err" -eq 0 ] || exit 1
+exit 0
