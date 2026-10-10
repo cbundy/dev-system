@@ -47,6 +47,12 @@
 # The queue is listed through callum-flow-issue-read (cbundy/dev-system#310), so
 # an issue by an untrusted author never enters `known`/`now` and never logs a
 # `ready` event. A reader failure is a failed poll, never an empty queue.
+# Event log (cbundy/dev-system#344): each issue that joins the queue logs a
+# `ready` event. An issue already queued at the first successful poll but
+# missing from --known (a re-armed watcher with a stale baseline) is a first
+# sight: it is printed in queue-changed as always but logged with
+# callum-flow-event --if-changed, so it adds nothing when the log already ends
+# with that event. An issue that joins after the first poll is always logged.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 set -eu
 
@@ -127,17 +133,39 @@ fi
 # poll to confirm it; empty when there is none. A failed poll is no poll, so
 # it neither confirms nor clears a pending set.
 pending=
+# Issues present at the first successful poll and still queued: seen, not
+# watched joining. Set by the first poll, then only ever shrinks.
+initial=
+polled=
 while :; do
   delay=$interval
   if listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
     current=$(printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null); then
+    if [ -z "$polled" ]; then
+      polled=1
+      initial=$current
+    else
+      kept=
+      for n in $(printf '%s' "$initial" | tr ',' ' '); do
+        case ",$current," in *",$n,"*) kept="$kept,$n" ;; esac
+      done
+      initial=${kept#,}
+    fi
     if [ "$current" = "$known" ]; then
       pending=
     elif [ -n "$pending" ] && [ "${pending#=}" = "$current" ]; then
       printf 'queue-changed known=%s now=%s\n' "${known:-none}" "${current:-none}"
       # every issue that joined the queue is a "ready" transition
       for n in $(printf '%s' "$current" | tr ',' ' '); do
-        case ",$known," in *",$n,"*) ;; *) record_event ready --issue "$n" ;; esac
+        case ",$known," in
+          *",$n,"*) ;;
+          *)
+            case ",$initial," in
+              *",$n,"*) record_event ready --issue "$n" --if-changed ;;
+              *) record_event ready --issue "$n" ;;
+            esac
+            ;;
+        esac
       done
       [ -n "$stream" ] || exit 0
       known=$current

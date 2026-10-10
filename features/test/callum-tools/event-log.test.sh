@@ -104,6 +104,41 @@ git -C "$tmpdir/repo" remote add origin git@github.com:acme/widgets.git
 [ -f "$events/acme__widgets.jsonl" ] || fail "file should be named from the remote: $(ls "$events")"
 [ "$(jq -r .repo "$events/acme__widgets.jsonl")" = acme/widgets ] || fail "repo should come from the remote"
 
+# --if-changed (cbundy/dev-system#344): skip a line that repeats the subject's newest one
+ic="$tmpdir/ic"
+icev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
+iclog="$ic/o__r.jsonl"
+iclines() { wc -l < "$iclog" | tr -d ' '; }
+icev failed --branch fix/issue-9-a --head h1 --run r1 --note cancelled --if-changed || fail "if-changed with no log should exit 0"
+[ "$(iclines)" = 1 ] || fail "if-changed with no log must write"
+icev failed --branch fix/issue-9-a --head h1 --run unknown --note cancelled --if-changed
+[ "$(iclines)" = 1 ] || fail "same state, head and note (run_id differs) must not write"
+icev failed --branch fix/issue-9-a --head h1 --run r1 --if-changed
+[ "$(iclines)" = 2 ] || fail "a different note must write"
+icev failed --branch fix/issue-9-a --head h2 --if-changed
+[ "$(iclines)" = 3 ] || fail "a different head must write"
+icev parked --branch fix/issue-9-a --head h2 --if-changed
+[ "$(iclines)" = 4 ] || fail "a different state must write"
+icev parked --branch fix/issue-9-a --head h2 --if-changed
+[ "$(iclines)" = 4 ] || fail "a repeat must not write"
+icev parked --branch fix/issue-9-a --head h2
+[ "$(iclines)" = 5 ] || fail "without the flag an identical line still writes"
+# the subject is the branch when given: another branch's newest line does not count
+icev parked --branch fix/issue-10-b --head h2 --if-changed
+[ "$(iclines)" = 6 ] || fail "another branch must write"
+# else the issue
+icev ready --issue 20 --if-changed
+icev ready --issue 20 --if-changed
+icev ready --issue 21 --if-changed
+[ "$(iclines)" = 8 ] || fail "issue subject: want 8 lines, got $(iclines)"
+# an interleaved line for the subject makes the repeat a change
+icev claimed --issue 20
+icev ready --issue 20 --if-changed
+[ "$(iclines)" = 10 ] || fail "only the newest line for the subject counts: $(iclines)"
+printf 'not json\n' >> "$iclog"
+icev ready --issue 20 --if-changed
+[ "$(iclines)" = 11 ] || fail "an unparseable line must be ignored, not stop the check: $(iclines)"
+
 # --- event-push-loop --------------------------------------------------------
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
@@ -245,7 +280,7 @@ chmod +x "$fakebin/callum-flow-event" "$fakebin/gh"
 out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
-[ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --actor watcher" ] || fail "queue-watch should record only the new issue: $(cat "$fakebin/event-calls")"
+[ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
 
 : > "$fakebin/event-calls"
 rc=0

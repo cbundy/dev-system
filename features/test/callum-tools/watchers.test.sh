@@ -620,4 +620,105 @@ expect_lines "$out" "watcher-error $tmpdir/missing-reader not on PATH"
 rm "$fakebin/callum-flow-event"
 ok # untrusted issues never enter the queue
 
+
+# ---------------------------------------------------------------------------
+# 15. Restarts do not replay old events (cbundy/dev-system#344). The real
+# callum-flow-event writes a real log here; the watchers print as always.
+evdir="$tmpdir/real-events"
+mkdir -p "$evdir"
+evlog="$evdir/o__r.jsonl"
+cat > "$fakebin/callum-flow-event" <<EOF
+#!/bin/sh
+PATH="$toolbin" CALLUM_EVENTS_DIR="$evdir" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=box CLAUDE_SESSION_ID=s exec "$SHARE/callum-flow-event" "\$@"
+EOF
+chmod +x "$fakebin/callum-flow-event"
+# wait_events <pattern> <n>: wait up to 15s for n log lines matching the pattern
+# (the watcher prints a line before it logs it).
+wait_events() {
+  i=0
+  while [ "$(ev_count "$1")" -lt "$2" ]; do
+    i=$((i + 1))
+    [ "$i" -le 75 ] || fail "timed out waiting for $2 '$1' event(s): $(cat "$evlog" 2>/dev/null)"
+    sleep 0.2
+  done
+}
+ev_count() { if [ -f "$evlog" ]; then grep -c "$1" "$evlog" || :; else echo 0; fi; }
+
+# a branch whose newest run was cancelled, and one that failed at launch with
+# no run id (the #147 shape); both are still terminal when the watcher starts
+mkdir -p "$nm_home/logs/RUNX" "$nm_home/logs/RUNY"
+run_state RUNX fix/issue-181-x failed 1111111111111111111111111111111111111111
+sed -i 's/^  status: failed/  status: cancelled/' "$fakebin/runs/RUNX.txt"
+run_state RUNY feat/issue-147-y failed 2222222222222222222222222222222222222222
+runs_order RUNX RUNY
+single_out() { (in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --branches "$1"); }
+first=$(single_out fix/issue-181-x) || fail "replay: first run did not exit 0"
+case "$first" in "cancelled fix/issue-181-x "*) ;; *) fail "replay: printed '$first'" ;; esac
+for i in 1 2 3; do
+  again=$(single_out fix/issue-181-x) || fail "replay: restart did not exit 0"
+  [ "$again" = "$first" ] || fail "replay: restart printed '$again', want '$first'"
+done
+[ "$(ev_count '"state":"failed"')" = 1 ] || fail "replay: want one failed line, got: $(cat "$evlog")"
+second=$(single_out feat/issue-147-y) || fail "replay: #147 did not exit 0"
+single_out feat/issue-147-y > /dev/null || fail "replay: #147 restart"
+[ "$(grep -c '"branch":"feat/issue-147-y"' "$evlog")" = 1 ] || fail "replay: want one line for #147 ($second): $(cat "$evlog")"
+
+# a changed fact is logged after a restart: the same branch, a new head
+run_state RUNX fix/issue-181-x failed 3333333333333333333333333333333333333333
+changed=$(single_out fix/issue-181-x) || fail "replay: changed head did not exit 0"
+[ "$(grep -c '"branch":"fix/issue-181-x"' "$evlog")" = 2 ] || fail "replay: a new head must be logged ($changed): $(cat "$evlog")"
+
+# stream: restarting with no baseline replays nothing
+before=$(wc -l < "$evlog" | tr -d ' ')
+for i in 1 2; do
+  start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches fix/issue-181-x,feat/issue-147-y
+  wait_lines "$out" 2
+  sleep 1 # let any (wrongly) replayed event reach the log
+  stop_bg
+done
+[ "$(wc -l < "$evlog" | tr -d ' ')" = "$before" ] || fail "replay: stream restarts added events: $(cat "$evlog")"
+
+# an observed transition is logged: parked, running (quiet), parked on the same head
+rm -f "$evlog"
+mkdir -p "$nm_home/logs/RUNP"
+run_state RUNP feat/issue-150-p parked 4444444444444444444444444444444444444444
+runs_order RUNP
+start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches feat/issue-150-p
+wait_lines "$out" 1
+run_state RUNP feat/issue-150-p running 4444444444444444444444444444444444444444
+sleep 3
+run_state RUNP feat/issue-150-p parked 4444444444444444444444444444444444444444
+wait_lines "$out" 2
+wait_events '"state":"parked"' 2
+stop_bg
+[ "$(ev_count '"state":"parked"')" = 2 ] || fail "transition: want two parked lines: $(cat "$evlog")"
+start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 1 --branches feat/issue-150-p
+wait_lines "$out" 1
+sleep 1
+stop_bg
+[ "$(ev_count '"state":"parked"')" = 2 ] || fail "transition: a restart added a parked line: $(cat "$evlog")"
+runs_order RUNE RUND RUNC RUNB RUNA
+ok # pipeline-watch restarts do not replay old events
+
+# queue-watch: a restart with no baseline logs each issue once; a joiner after
+# the first poll is logged even when the log already ends with its ready event
+rm -f "$evlog"
+for i in 1 2; do
+  queue_seq 5,6
+  # shellcheck disable=SC2086 # $qw is the command and its fixed options
+  q=$(in_dir "$tmpdir" timeout 10 $qw) || fail "queue replay: did not exit 0"
+  [ "$q" = "queue-changed known=none now=5,6" ] || fail "queue replay: printed '$q'"
+done
+[ "$(ev_count '"state":"ready"')" = 2 ] || fail "queue replay: want one ready line per issue: $(cat "$evlog")"
+"$fakebin/callum-flow-event" ready --issue 7
+queue_seq 5 5,7
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+start_bg "$out" "$tmpdir" $qw --stream --known 5
+wait_lines "$out" 1
+wait_events '"issue":7' 2
+stop_bg
+[ "$(grep -c '"issue":7' "$evlog")" = 2 ] || fail "queue joiner: a seen joiner must be logged: $(cat "$evlog")"
+rm "$fakebin/callum-flow-event"
+ok # queue-watch restarts do not replay ready events
+
 echo "ok - $passed watcher scenarios passed"
