@@ -489,7 +489,11 @@ test("the base-image devcontainer wires no secret: the image mounts dev-system-s
   const content = read(repo, DEVCONTAINER);
   const config = parseJsonc(content);
   assert.doesNotMatch(content, /AGENTSVIEW_PG_URL|postgres(ql)?:\/\//);
-  assert.equal(config.containerEnv, undefined);
+  // The one synced env var is the trusted-author list, forwarded from the host by name
+  // (cbundy/dev-system#307): the value is never in the template.
+  assert.deepEqual(config.containerEnv, {
+    CALLUM_FLOW_TRUSTED_AUTHORS: "${localEnv:CALLUM_FLOW_TRUSTED_AUTHORS}",
+  });
   assert.deepEqual(config.remoteEnv, {});
   assert.ok(config.mounts.every((m) => !m.target.startsWith("/run/secrets")));
   assert.match(content, /dev-system-secrets/, "the header points at where the secret lives");

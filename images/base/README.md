@@ -1293,6 +1293,23 @@ the appendix block and start a fresh pipeline run). It edits the PR, so, like `c
 it is allowed only in the main checkout's `settings.local.json`; the read-only
 `check-pr-linkage.sh` stays in the synced allow list.
 
+Trusted authors (cbundy/dev-system#307). Issue, PR and comment text can be written by anyone, so
+`callum-flow-issue-read` is the filtered way to read it. An item is trusted only when its
+`user.login` (case-insensitive) and numeric `user.id` both match an entry of
+`CALLUM_FLOW_TRUSTED_AUTHORS`, comma-separated `login:numeric_id` entries such as
+`cbundy:13131067` (`gh api users/<login> --jq .id`); the display name is never consulted. The
+image bakes no list: the variable is the only source. The Coder template sets it from its
+`trusted_authors` variable, the base-image devcontainer template forwards it from the host, and
+`dev-doctor` FAILs when it is unset or malformed. Unset or malformed, the reader refuses every
+read with an error naming the variable. Modes: `<issue> [--comments]` (title and body only if the
+author is trusted, else exit 3 with `untrusted author`; comments are filtered and end with
+`stripped: N`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
+(conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
+stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
+(non-zero, nothing on stdout) and logs an `untrusted_stripped` event with the count, never the
+content. Nothing in the factory calls it yet: scripts, skills and hooks move onto it only once
+the variable is confirmed on every workspace.
+
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment

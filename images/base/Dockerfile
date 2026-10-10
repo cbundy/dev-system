@@ -209,6 +209,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-merge \
   images/base/callum-flow-fix-linkage \
   images/base/callum-flow-claim \
+  images/base/callum-flow-issue-read \
   images/base/callum-flow-sweep \
   images/base/callum-flow-evaluate \
   images/base/systemctl \
@@ -219,7 +220,7 @@ COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop i
 # (models.sh parses both).
 COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
-  images/base/gh.sh images/base/plugins.sh images/base/persist.sh \
+  images/base/gh.sh images/base/plugins.sh images/base/persist.sh images/base/trusted-authors.sh \
   /usr/local/share/dev-system/
 
 # Opt-in OpenTelemetry export (cbundy/dev-system#68): telemetry.sh turns

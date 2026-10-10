@@ -161,6 +161,12 @@ wires it, and it must never be added to `remoteEnv` or `containerEnv` here
   block with a Dockerfile `FROM` it for repo-specific tools), `remoteEnv`, and the nested
   repo-owned slot at the top of `mounts` (each added mount followed by a comma, so the
   synced lines below it stay untouched).
+- Synced: `containerEnv` - `CALLUM_FLOW_TRUSTED_AUTHORS`, forwarded from the host
+  (`${localEnv:CALLUM_FLOW_TRUSTED_AUTHORS}`), the GitHub authors whose text the factory
+  trusts (cbundy/dev-system#307). Export it on the desktop host as `login:numeric_id`
+  (comma-separated for several; `gh api users/<login> --jq .id` gives the id) before the
+  container starts. The image bakes no list, so unset or malformed `dev-doctor` FAILs. On
+  Coder the template sets it instead. It lands in a repo with its next `callum-dev update`.
 - Synced: `mounts` - the four per-repo volumes (`dev-system-${devcontainerId}-claude`,
   `-codex`, `-no-mistakes`, `-agentsview`) at `/persist/*`. They live here, not in the
   image, because the devcontainer CLI expands no variables in image metadata: there
