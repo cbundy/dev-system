@@ -140,10 +140,10 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
 ## Merge
 `callum-flow-merge-guard <pr>` reads only and prints one `GUARD <name> FAIL
 <reason>` line per failed guard, with the fix named in the reason. Act on each,
-re-run it, and merge with `callum-flow-merge <pr>` once it prints nothing.
+re-run it, and merge with `callum-flow-merge <pr>` once it prints no FAIL.
 Before merging:
-- Read every `no-mistakes(<step>)` fix commit against the issue's requirements:
-  a green run can have deleted a requirement and rewritten its tests to match.
+- Act on every `GUARD test-weakening WARN` (advisory, exit 0): spawn the adjudicator on
+  that commit, then restore via a fixer or record the accepted justification in a PR comment.
 - Check the pipeline-built PR body (`implement-issue`, issue linkage).
 - On `GUARD linkage FAIL`, run `callum-flow-fix-linkage <pr>` from the main
   checkout and re-run the guard.

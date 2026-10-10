@@ -201,6 +201,10 @@ tests would otherwise have missed:
   (e.g. "OWNER REQUIREMENTS - do not remove or flag for removal: ..."), not
   a description of the diff. no-mistakes treats an explicit intent as the
   authoritative acceptance criteria its review checks fixes against.
+- End every `--intent` with this sentence, verbatim (the pipeline's auto-fix
+  steps have deleted and weakened tests to turn a gate green; the merge guard
+  warns on it, see `callum-flow-test-weakening`):
+  "TEST POLICY: never delete, skip or weaken an existing test or assertion (no --warn-only, || true, skip/only, commented-out asserts) to make a gate pass; fix the code or the environment instead. Remove a test only if it is clearly and absolutely not required, and never as an auto-fix: raise it as ask-user with the justification so the adjudicator can judge it."
 - Waiting for the run to progress, polling status, tailing logs, or `sleep` of
   any duration is out of scope. The orchestrator's watcher observes pipeline
   events after your handoff.

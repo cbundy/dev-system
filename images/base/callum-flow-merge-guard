@@ -27,10 +27,20 @@
 #   base     the PR targets the default branch, or --base BRANCH
 #   mergeable  GitHub would merge it now: open, not a draft, not conflicting,
 #          not behind its base, branch rules met (cbundy/dev-system#246)
+#   test-weakening  advisory, never fails the guard (cbundy/dev-system#314):
+#          callum-flow-test-weakening scans origin/<pr base>..<pr head> for
+#          commits that delete or weaken tests; each one it cannot see restored
+#          prints a WARN line (below). A detector error is also a WARN.
 #
 # Output: nothing when every guard passes; otherwise one line per failed guard,
 #   GUARD <name> FAIL <reason>
-# --emit-verified adds, on success only, one line for callum-flow-merge:
+# Advisory lines can appear with exit 0 and never change the exit code:
+#   GUARD test-weakening WARN <sha7> step=<s> files=<f> kinds=<k> - <what to do>
+#   GUARD test-weakening WARN detector error: <reason>
+# The orchestrator sends every WARN to the adjudicator before merging.
+# --emit-verified adds, on success only, the detector's WEAKENED lines verbatim
+# (restored ones included, for the test_weakened event) and then one line for
+# callum-flow-merge:
 #   VERIFIED pr=N branch=B head=SHA run=ID issue=N close_issue=N
 # close_issue is the issue to close manually for a closing PR on a non-default
 # base; it is empty otherwise.
@@ -43,7 +53,8 @@
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
 # CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run),
 # CALLUM_FLOW_ROLLOUT_BIN (callum-flow-rollout), CALLUM_FLOW_ISSUE_READ_BIN
-# (callum-flow-issue-read).
+# (callum-flow-issue-read), CALLUM_FLOW_WEAKENING_BIN
+# (callum-flow-test-weakening).
 # Tuning: GitHub computes mergeability lazily and reports UNKNOWN meanwhile, so
 # the mergeable guard re-reads (read-only) CALLUM_FLOW_MERGEABLE_TRIES times
 # (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
@@ -55,6 +66,8 @@ LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkag
 WATCH=${CALLUM_FLOW_WATCH_BIN:-/usr/local/share/callum-tools/pipeline-watch.sh}
 ROLLOUT=${CALLUM_FLOW_ROLLOUT_BIN:-callum-flow-rollout}
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+WEAKENING=${CALLUM_FLOW_WEAKENING_BIN:-$here/callum-flow-test-weakening}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
@@ -269,6 +282,33 @@ else
   esac
 fi
 
+# --- test-weakening ----------------------------------------------------------
+# Advisory only (cbundy/dev-system#314): never sets failed, and a detector
+# problem is itself only a WARN, so a detector bug cannot block a merge.
+weakened=''
+# (skipped when the author or base guard already failed: nothing is merging)
+if [ "$author_ok" -eq 1 ] && [ -n "$pr_base" ] && [ -n "$pr_head" ] &&
+  { [ "$pr_base" = "$default_branch" ] || [ "$pr_base" = "$base" ]; }; then
+  w_rc=0 w_out=''
+  if git fetch --quiet origin "+refs/heads/$pr_base:refs/remotes/origin/$pr_base" 2> /dev/null; then
+    w_out=$("$WEAKENING" --base "origin/$pr_base" --head "$pr_head" 2>&1) || w_rc=$?
+  else
+    w_rc=1 w_out="cannot fetch origin/$pr_base"
+  fi
+  if [ "$w_rc" -ne 0 ]; then
+    printf 'GUARD test-weakening WARN detector error: %s\n' "$(printf '%s' "$w_out" | one_line)"
+  else
+    weakened=$(printf '%s\n' "$w_out" | grep '^WEAKENED ')
+    printf '%s\n' "$weakened" | grep '^WEAKENED commit=.* restored=no ' | while IFS= read -r w_line; do
+      w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')
+      w_step=$(printf '%s' "$w_line" | sed 's/.* step=\([^ ]*\) .*/\1/')
+      w_files=$(printf '%s' "$w_line" | sed 's/.* files=\(.*\) kinds=.*/\1/')
+      w_kinds=$(printf '%s' "$w_line" | sed 's/.* kinds=//')
+      printf 'GUARD test-weakening WARN %.7s step=%s files=%s kinds=%s - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified\n' "$w_commit" "$w_step" "$w_files" "$w_kinds"
+    done
+  fi
+fi
+
 # --- base --------------------------------------------------------------------
 if [ -z "$pr_base" ]; then
   fail base "cannot read the PR base"
@@ -332,6 +372,7 @@ if [ -n "$emit" ]; then
   if [ "$pr_base" != "$default_branch" ] && [ "$expect" = closing ]; then
     close_issue=$issue
   fi
+  [ -z "$weakened" ] || printf '%s\n' "$weakened"
   printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s close_issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue" "$close_issue"
 fi
 exit 0

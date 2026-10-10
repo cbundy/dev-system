@@ -1265,7 +1265,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... usage`; `callum-flow-event` with no arguments lists the vocabulary) to
+(`ready claimed ... test_weakened ... usage`; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
@@ -1273,7 +1273,7 @@ and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the h
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
-rate, reviewer false positives, adjudicator agreement, token spend by role and model, wasted
+rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
 lost races, stuck issues and the waiting split; definitions in `docs/metrics.md`). It only reads and makes no network calls,
 so it is in the synced allow list. Inputs: Claude transcripts under
@@ -1297,6 +1297,15 @@ checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overr
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
+The guard also runs `callum-flow-test-weakening --base origin/<pr base> --head <pr head>`, which
+scans every non-merge commit of the PR for removed assertions, added `--warn-only` / `|| true` /
+skip / `.only` tokens and commented-out assertions in test files (judged per file; moved lines do
+not count). Each commit it cannot see restored prints an advisory `GUARD test-weakening WARN <sha7>
+step=<s> files=<f> kinds=<k> - ...` line with exit 0 (a detector error is a WARN too); the
+orchestrator sends each one to the adjudicator before merging. After a successful merge
+`callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
+(`docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
+adds an ERE of extra test paths.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
 `callum-flow-rollout <issue>` prints `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`: the

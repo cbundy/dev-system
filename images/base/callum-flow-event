@@ -10,7 +10,7 @@
 #
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
-#   ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed watcher_error usage
+#   ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
@@ -29,7 +29,7 @@
 # (owner/name, default from the origin remote).
 set -u
 
-STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed watcher_error usage"
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage"
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2

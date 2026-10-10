@@ -46,3 +46,17 @@ test("adjudicator is read-only, cannot spawn agents, and states the verdict cont
   for (const v of ["CORRECT", "WRONG", "NIT", "ENV", "DUP"]) assert.match(body, new RegExp(`\\b${v}\\b`));
   assert.match(body, /never run\s+`?axi respond`?/i);
 });
+
+test("the TEST POLICY sentence is in implement-issue and the fixer, and the adjudicator judges test removals", () => {
+  const read = (...p) => fs.readFileSync(path.join(__dirname, "..", "plugins", "callum-flow", ...p), "utf8");
+  const impl = read("skills", "implement-issue", "SKILL.md");
+  const m = /"(TEST POLICY: [^"]+)"/.exec(impl);
+  assert.ok(m, "implement-issue section 6 must carry the TEST POLICY sentence");
+  assert.ok(read("agents", "fixer.md").includes(m[1]), "fixer.md must carry the same TEST POLICY sentence");
+  for (const word of ["--warn-only", "|| true", "skip/only", "commented-out", "absolutely not required", "ask-user"]) {
+    assert.ok(m[1].includes(word), `the TEST POLICY sentence should mention ${word}`);
+  }
+  const adj = read("agents", "adjudicator.md");
+  assert.match(adj, /GUARD test-weakening WARN/);
+  assert.match(adj, /unless the stated\s+justification shows the test is absolutely not required/);
+});
