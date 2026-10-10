@@ -60,9 +60,23 @@ ev usage --note "five_hour=3" || fail "usage needs no issue"
 [ "$(tail -n 1 "$log" | jq -r '.issue, .state' | tr '\n' ' ')" = "null usage " ] || fail "usage line wrong"
 
 # every state of the closed vocabulary is accepted
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage; do
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage; do
   ev "$s" --issue 1 || fail "$s should be accepted"
 done
+
+# --path prints the file a write appends to, and writes nothing
+before=$(find "$events" -type f | sort | tr '\n' ' ')
+[ "$(ev --path)" = "$log" ] || fail "--path should print the log: $(ev --path)"
+[ "$(ev --path --repo acme/widgets)" = "$events/acme__widgets.jsonl" ] || fail "--path --repo wrong: $(ev --path --repo acme/widgets)"
+[ "$(PATH="$toolbin" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=acme/widgets "$SH" "$EVENT" --path)" = "$events/acme__widgets.jsonl" ] || fail "--path should honour CALLUM_FLOW_REPO"
+[ "$(PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --path)" = "/persist/events/o__r.jsonl" ] || fail "--path default dir"
+ev closed --issue 31 --repo acme/widgets --note completed
+[ "$(tail -n 1 "$events/acme__widgets.jsonl" | jq -r .state)" = closed ] || fail "closed write should land where --path says"
+rm -f "$events/acme__widgets.jsonl"
+[ "$(find "$events" -type f | sort | tr '\n' ' ')" = "$before" ] || fail "--path must not write"
+rc=0
+ev --path --bogus 2> /dev/null || rc=$?
+[ "$rc" = 2 ] || fail "--path with a bad option should exit 2, got $rc"
 
 # session id: CLAUDE_SESSION_ID, else the newest transcript of the working directory
 CLAUDE_SESSION_ID=sess-1 ev ready --issue 3
