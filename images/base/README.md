@@ -1391,7 +1391,8 @@ factory: every issue in the event log (this device's file, plus the latest event
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
 whose latest event is not `closed` or `abandoned` and that GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. It has no
-time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Liveness uses GitHub server times; the lease is
+time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Issues from untrusted authors are skipped and counted; a failed
+reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
 
