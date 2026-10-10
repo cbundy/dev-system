@@ -9,7 +9,7 @@ description: >-
   "what is in flight?", "what is stuck?" or "what needs attention?". For
   historical numbers use query-factory-data, for a windowed report use
   evaluate-sessions.
-version: 0.25.0
+version: 0.26.0
 ---
 
 # Factory state: what is going on right now
