@@ -1,16 +1,16 @@
 # shellcheck shell=bash
 #
 # agentsview.sh: shared PostgreSQL URL lookup and secret masking for dev-init,
-# dev-doctor and the session, event and no-mistakes push loops; run_psql is
-# shared by the latter two
+# dev-doctor, dev-query and the session, event and no-mistakes push loops;
+# run_psql is shared by dev-query and the latter two loops
 # (cbundy/dev-system#103). Sourced, not run.
 #
 # The URL is a secret and the image is public, so it only ever arrives at run
 # time: as the file agentsview-pg-url in DEV_SECRETS_DIR (a read-only mount:
 # the shared dev-system-secrets volume on Docker, a host directory on Coder, a
 # Secret on Kubernetes), or as AGENTSVIEW_PG_URL in the environment, which
-# wins. The file's value is never exported to the container: only the push
-# loop and dev-doctor's own check get it, in their environment.
+# wins. The file's value is never exported to the container; callers read it
+# when needed (see images/base/README.md, "Each container: the URL, once per host").
 
 # agentsview_pg_url_file: the secret file's path.
 agentsview_pg_url_file() {

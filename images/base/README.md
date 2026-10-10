@@ -1308,8 +1308,9 @@ without emitting SQL. Export selection rules are in the linked metrics reference
 
 ## dev-query
 
-`dev-query` runs SQL against the central agentsview PostgreSQL (`factory.events`, the
-`nomistakes` mirror) from any container that has the database URL. Agents use it instead of
+`dev-query` (base image 2.15.0 and later) runs SQL against the central agentsview
+PostgreSQL (`factory.events`, the `nomistakes` mirror) from any container that has the
+database URL. Agents use it instead of
 `psql "$AGENTSVIEW_PG_URL"`: the URL is deliberately not in the environment, so that
 fails. The saved queries are in [docs/metrics.md](../../docs/metrics.md).
 
@@ -1398,8 +1399,9 @@ and from consumer images built `FROM` this one, pushes with nothing set per repo
 | Coder ([`coder/dev-system`](../../coder/dev-system/README.md)) | a directory on the workspace Docker host (template variable `secrets_dir`, default `/etc/dev-system/secrets`), bind-mounted read-only | Docker host |
 | Kubernetes | a Secret `dev-system-secrets` mounted at the directory (pod spec above) | namespace |
 
-The value is never in the container's environment, so it is not in `docker inspect` or in
-the shells agents run: `dev-init` hands it to the push alone and reads it again on every
+The file's value is never exported to the container's environment, so it is not in
+`docker inspect` or in the shells agents run. The push loops, `dev-doctor` and
+[`dev-query`](#dev-query) read it when needed; `dev-init` reads it again on every
 restart of the push, so a new value takes effect at the next container start. Anything
 that could echo it, the push log and `dev-doctor`, is masked. Where the file is missing
 (an empty volume or directory, which is what a runtime creates when there is none yet) the
