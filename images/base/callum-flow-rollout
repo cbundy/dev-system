@@ -23,10 +23,17 @@
 #
 # Exit codes: 0 resolved, 1 conflict, invalid or unreadable, 2 usage error.
 #
-# Environment (for tests): CALLUM_FLOW_GH_BIN (gh).
+# Trust (cbundy/dev-system#310): the issue and its comments are read only through
+# callum-flow-issue-read, which keeps just the trusted authors' text. An untrusted
+# issue, a failed read or an untrusted trusted-author list prints
+#   ROLLOUT unreadable <reason>
+# and exits 1. A `## Design brief` comment by anyone else is never seen, so it
+# cannot set the Rollout.
+#
+# Environment (for tests): CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
 set -u
 
-GH=${CALLUM_FLOW_GH_BIN:-gh}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-rollout: $1" >&2
@@ -47,7 +54,9 @@ done
 case "$issue" in *[!0-9]*) usage "<issue> must be a number" ;; esac
 command -v jq > /dev/null 2>&1 || usage "jq not found"
 
-if ! ij=$($GH issue view "$issue" --json body,comments 2> /dev/null) || ! printf '%s' "$ij" | jq -e 'type == "object"' > /dev/null 2>&1; then
+# The reader's stderr (its reason, never stripped content) passes through.
+if ! rj=$("$READ" --json "$issue" --comments) ||
+  ! ij=$(printf '%s' "$rj" | jq -ce 'if (.issue | type) == "object" and (.comments | type) == "array" then {body: (.issue.body // ""), comments: .comments} else error("shape") end' 2> /dev/null); then
   echo "callum-flow-rollout: cannot read issue #$issue" >&2
   echo "ROLLOUT unreadable cannot read issue #$issue"
   exit 1

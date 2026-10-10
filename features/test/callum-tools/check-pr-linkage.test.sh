@@ -11,6 +11,8 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SCRIPT="$SCRIPT_DIR/../../src/callum-tools/check-pr-linkage.sh"
+SHARE="$SCRIPT_DIR/../../../images/base"
+READER="$SHARE/callum-flow-issue-read"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -21,7 +23,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 mkdir -p "$tmpdir/bin"
 node_bin=$(command -v node) || fail "node not found"
-for t in cmp bash grep cat mktemp rm sleep cp basename touch; do
+for t in cmp bash grep cat mktemp rm sleep cp basename touch jq; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$tmpdir/bin/$t"
 done
@@ -49,6 +51,16 @@ chmod +x "$tmpdir/bin/node"
 cat > "$tmpdir/bin/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
+if [ "$1" = api ]; then
+  # the PR as REST returns it, for callum-flow-issue-read; the author is a knob
+  [ "$2" = repos/o/r/pulls/7 ] || { echo "no fixture for $2" >&2; exit 1; }
+  echo "$2" >> "$d/api-calls"
+  a='{"login":"cbundy","id":13131067}'
+  [ ! -f "$d/author" ] || a=$(cat "$d/author")
+  [ ! -f "$d/api-fail" ] || exit 1
+  jq -n --argjson u "$a" '{number: 7, state: "open", title: "t", body: "b", user: $u}'
+  exit
+fi
 case "$1 $2" in
   'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
   "pr view")
@@ -75,6 +87,16 @@ esac
 STUB
 chmod +x "$tmpdir/bin/gh"
 
+# the real reader behind the stub gh
+export CALLUM_FLOW_GH_BIN="$tmpdir/bin/gh" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_ISSUE_READ_BIN="$READER" \
+  CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent"
+
+# stub_knobs: apply the author and api_fail knobs to the stub's state
+stub_knobs() {
+  [ -z "${pr_author-}" ] || printf '%s\n' "$pr_author" > "$STUB_DIR/author"
+  [ -z "${api_fail-}" ] || touch "$STUB_DIR/api-fail"
+}
+
 passed=0
 # run_case <name> <head> <base> <body> <expected stdout prefix> <expected body or ""> args...
 run_case() {
@@ -86,6 +108,7 @@ run_case() {
   printf '%s\n' "$head" > "$STUB_DIR/head"
   printf '%s\n' "$base" > "$STUB_DIR/base"
   printf '%s' "$body" > "$STUB_DIR/body"
+  stub_knobs
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
     STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
     STUB_API_BODY="${stale_api_body:-}" \
@@ -120,6 +143,7 @@ fix_case() {
   printf '%s\n' "$head" > "$STUB_DIR/head"
   printf '%s\n' "$base" > "$STUB_DIR/base"
   printf '%s' "$body" > "$STUB_DIR/body"
+  stub_knobs
   rc=0
   PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
     STUB_NODE_BIN="$node_bin" STUB_FAIL_NODE="${fail_node:-}" \
@@ -262,4 +286,24 @@ grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "closing hint does no
 run_case "refs mismatch hint names the fix command" $H main "Summary" "MISMATCH #7" "Summary" --expect refs
 grep -q "callum-flow-fix-linkage" "$tmpdir/stderr" || fail "refs hint does not name callum-flow-fix-linkage"
 if grep -q -- "--fix" "$tmpdir/stderr"; then fail "hint still mentions --fix"; fi
+# trust (cbundy/dev-system#310): an untrusted PR is refused before its body is read or
+# printed, in every mode, and a reader failure fails closed
+stranger='{"login":"mallory","id":999}'
+pr_author=$stranger
+run_case "untrusted author is refused" $H main "Closes #12" "" "Closes #12"
+grep -q "not opened by a trusted author" "$tmpdir/stderr" || fail "untrusted refusal reason: $(cat "$tmpdir/stderr")"
+[ -z "$out" ] || fail "untrusted author printed: $out"
+run_case "untrusted author, refs" $H main "Refs #12" "" "Refs #12" --expect refs
+run_case "untrusted author, print-fix prints no body" $H main "Hostile body" "" "Hostile body" --print-fix
+[ -z "$out" ] || fail "untrusted print-fix leaked the body: $out"
+run_case "untrusted author, branch without issue" epic/big main "Hostile" "" "Hostile"
+pr_author='{"login":"cbundy","id":42}'
+run_case "right login, wrong id is refused" $H main "Closes #12" "" "Closes #12"
+unset pr_author
+api_fail=1 run_case "reader failure fails closed" $H main "Closes #12" "" "Closes #12"
+grep -q "cannot verify the author" "$tmpdir/stderr" || fail "reader failure reason: $(cat "$tmpdir/stderr")"
+CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" run_case "missing reader fails closed" $H main "Closes #12" "" "Closes #12"
+unset api_fail
+export CALLUM_FLOW_ISSUE_READ_BIN="$READER"
+run_case "trusted author still passes" $H main "Closes #12" "MATCH #7" "Closes #12"
 echo "check-pr-linkage: $passed passed"

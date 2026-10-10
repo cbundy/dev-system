@@ -2,12 +2,15 @@
 #
 # shellcheck disable=SC2016
 # (backticks in test data are literal)
-# Plain-shell tests for callum-flow-rollout (cbundy/dev-system#239). A stub gh
-# serves a canned `issue view --json body,comments`; hermetic PATH, no network.
+# Plain-shell tests for callum-flow-rollout (cbundy/dev-system#239, #310). A stub gh
+# serves canned REST issue and comment JSON to the real callum-flow-issue-read, so
+# the trusted-author filter is exercised end to end; hermetic PATH, no network.
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROLLOUT="$SCRIPT_DIR/../../../images/base/callum-flow-rollout"
+SHARE="$SCRIPT_DIR/../../../images/base"
+READER="$SHARE/callum-flow-issue-read"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -27,26 +30,47 @@ SH=$(command -v sh)
 cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
 [ ! -f "${STUB_DIR:?}/gh-fail" ] || exit 1
-cat "$STUB_DIR/issue.json"
+[ "$1" = api ] || { echo "unexpected gh $*" >&2; exit 1; }
+shift
+[ "$1" != --paginate ] || shift
+case "$1" in
+  repos/o/r/issues/5) cat "$STUB_DIR/issue.json" ;;
+  repos/o/r/issues/5/comments) cat "$STUB_DIR/comments.json" ;;
+  *) echo "no fixture for $1" >&2; exit 1 ;;
+esac
 STUB
 chmod +x "$tmpdir/gh"
 st="$tmpdir/st"
 mkdir -p "$st"
 
 passed=0
-# issue <body> [comment-body...]: write the canned issue
+OWNER='{"login":"cbundy","id":13131067}'
+STRANGER='{"login":"mallory","id":999}'
+# issue <body> [comment-body...]: write the canned issue and its comments, all by the owner
 issue() {
   body=$1
   shift
   comments='[]'
-  for c in "$@"; do comments=$(printf '%s' "$comments" | jq --arg c "$c" '. + [{body:$c}]'); done
-  jq -n --arg b "$body" --argjson c "$comments" '{body:$b, comments:$c}' > "$st/issue.json"
+  for c in "$@"; do comments=$(printf '%s' "$comments" | jq --argjson u "$OWNER" --arg c "$c" '. + [{id: (length + 1), user: $u, body: $c}]'); done
+  jq -n --arg b "$body" --argjson u "$OWNER" '{number: 5, state: "open", title: "t", body: $b, user: $u, labels: []}' > "$st/issue.json"
+  printf '%s' "$comments" > "$st/comments.json"
+}
+# stranger_comment <body>: append a comment by an untrusted author
+stranger_comment() {
+  jq --argjson u "$STRANGER" --arg c "$1" '. + [{id: (length + 100), user: $u, body: $c}]' "$st/comments.json" > "$st/c.tmp" && mv "$st/c.tmp" "$st/comments.json"
+}
+# issue_by_stranger: make the canned issue's author untrusted
+issue_by_stranger() {
+  jq --argjson u "$STRANGER" '.user = $u' "$st/issue.json" > "$st/i.tmp" && mv "$st/i.tmp" "$st/issue.json"
 }
 brief() { printf '## Design brief\n\n## Sequencing\nnone\n\n## Rollout\n%s\n\n## Open decisions\nnone\n' "$1"; }
 # r <args>: run the script; sets out, rc
 r() {
   rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" "$SH" "$ROLLOUT" "$@" 2> "$tmpdir/err") || rc=$?
+  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
+    CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" \
+    CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
+    "$SH" "$ROLLOUT" "$@" 2> "$tmpdir/err") || rc=$?
 }
 # want <name> <exit> <line>
 want() {
@@ -100,6 +124,30 @@ issue 'x' "$(printf '## Design brief\n\n```\n## Rollout\nrun-it - in a fence\n``
 # unreadable issue fails, never resolves
 touch "$st/gh-fail"; r 5; want "gh failure" 1 "ROLLOUT unreadable"
 rm "$st/gh-fail"
+
+# trust: a stranger's fake brief, an untrusted issue, an unusable trusted list
+issue 'x' "$(brief 'keep-open - real')"
+stranger_comment "$(brief 'merge - fake')"
+r 5; want "stranger's later brief is ignored" 0 "ROLLOUT keep-open source=brief"
+issue 'x'
+stranger_comment "$(brief 'merge - fake')"
+r 5; want "stranger's brief alone is not a brief" 0 "ROLLOUT merge source=body"
+issue 'Do it.
+
+## Run it
+x'
+stranger_comment "$(brief 'merge - fake')"
+r 5; want "stranger's merge brief cannot hide a Run it body" 0 "ROLLOUT run-it source=body"
+issue 'x' "$(brief 'keep-open - real')"; issue_by_stranger
+r 5; want "untrusted issue" 1 "ROLLOUT unreadable"
+[ "$(printf '%s' "$out" | grep -c 'keep-open')" = 0 ] || fail "untrusted issue leaked a value: $out"
+issue 'x' "$(brief 'keep-open - real')"
+TRUSTED='' r 5; want "unset trusted list fails closed" 1 "ROLLOUT unreadable"
+TRUSTED='cbundy:1' r 5; want "right login, wrong id fails closed" 1 "ROLLOUT unreadable"
+TRUSTED=cbundy:13131067
+READ_BIN="$tmpdir/missing-reader" r 5; want "missing reader fails closed" 1 "ROLLOUT unreadable"
+unset READ_BIN
+r 5; want "restored" 0 "ROLLOUT keep-open source=brief"
 
 # usage errors
 for args in "" "x" "5 6" "--bogus" "-h"; do

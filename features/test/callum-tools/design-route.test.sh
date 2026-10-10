@@ -7,6 +7,8 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROUTE="$SCRIPT_DIR/../../../images/base/callum-flow-design-route"
+SHARE="$SCRIPT_DIR/../../../images/base"
+READER="$SHARE/callum-flow-issue-read"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -17,7 +19,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in sed tr cat cksum; do
+for t in sed tr cat cksum jq grep; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -25,10 +27,18 @@ SH=$(command -v sh)
 
 cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
-# labels live in $STUB_DIR/labels (one per line); $STUB_DIR/gh-fails makes issue view fail
+# labels live in $STUB_DIR/labels (one per line); $STUB_DIR/gh-fails makes the
+# issue read fail; $STUB_DIR/author holds the issue author's user JSON (default the
+# owner). The issue comes back as REST returns it, for callum-flow-issue-read.
 d=${STUB_DIR:?}
 case "$1 $2" in
-  'issue view') [ ! -f "$d/gh-fails" ] || exit 1; cat "$d/labels" ;;
+  'api repos/cbundy/dev-system/issues/'*)
+    [ ! -f "$d/gh-fails" ] || exit 1
+    a='{"login":"cbundy","id":13131067}'
+    [ ! -f "$d/author" ] || a=$(cat "$d/author")
+    jq -R -s --argjson u "$a" '{number: 1, state: "open", title: "t", body: "b", user: $u,
+      labels: (split("\n") | map(select(. != "") | {name: .}))}' "$d/labels" ;;
+  'issue view') echo "raw issue read: gh $*" >&2; exit 1 ;;
   'repo view') echo cbundy/dev-system ;;
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
@@ -52,9 +62,11 @@ route() {
   set +e
   if [ "${2-unset}" = unset ]; then
     PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" \
+      CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
       CALLUM_FLOW_REPO="${REPO:-cbundy/dev-system}" "$SH" "$ROUTE" "$1" >"$tmpdir/out" 2>"$tmpdir/err"
   else
     PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" \
+      CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
       CALLUM_FLOW_REPO="${REPO:-cbundy/dev-system}" CALLUM_FLOW_DESIGN_SESSION_PCT="$2" "$SH" "$ROUTE" "$1" >"$tmpdir/out" 2>"$tmpdir/err"
   fi
   rc=$?
@@ -121,6 +133,23 @@ grep -q CALLUM_FLOW_DESIGN_SESSION_PCT "$tmpdir/err" 2>/dev/null || { reset; rou
 # gh failing on the label read falls back to subagent
 reset; touch "$d/gh-fails"; route 288 100; expect subagent fallback - 100 "gh failure"
 grep -q warning "$tmpdir/err" || fail "fallback must warn on stderr"
+
+# the reader logs untrusted_stripped to the same event stub; only the route events matter
+only_route_events() { grep '^design_routed' "$d/events" > "$d/e2" || true; mv "$d/e2" "$d/events"; }
+# trust (cbundy/dev-system#310): labels of an untrusted issue are never read, so a
+# stranger's design:session label cannot steer the route; the route falls back
+reset; echo design:session > "$d/labels"; echo '{"login":"mallory","id":999}' > "$d/author"; route 288 0
+only_route_events; expect subagent fallback - 0 "untrusted issue's session label is ignored"
+reset; echo design:session > "$d/labels"; echo '{"login":"cbundy","id":42}' > "$d/author"; route 288 0
+only_route_events; expect subagent fallback - 0 "right login, wrong id"
+reset; echo design:session > "$d/labels"; TRUSTED='' route 288 0
+only_route_events; expect subagent fallback - 0 "no trusted list fails closed"
+unset TRUSTED
+reset; echo design:session > "$d/labels"; READ_BIN="$tmpdir/missing-reader" route 288 0
+only_route_events; expect subagent fallback - 0 "missing reader fails closed"
+unset READ_BIN
+reset; echo design:session > "$d/labels"; route 288 100
+only_route_events; expect session label - 100 "trusted issue's label still honoured"
 
 # a failing event script changes nothing
 reset; touch "$d/event-fails"; route 288 83

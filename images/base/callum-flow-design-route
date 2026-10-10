@@ -26,11 +26,12 @@
 #
 # Environment: CALLUM_FLOW_DESIGN_SESSION_PCT (default 0), CALLUM_FLOW_REPO
 # (owner/name, default from gh); for tests CALLUM_FLOW_GH_BIN,
-# CALLUM_FLOW_EVENT_BIN.
+# CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 PCT=${CALLUM_FLOW_DESIGN_SESSION_PCT:-0}
 
 usage() {
@@ -50,9 +51,13 @@ PCT=${PCT:-0}
 n=$1
 case "$n" in '' | *[!0-9]*) usage "issue must be a number, got '$n'" ;; esac
 
-# The one place the issue's labels are read (one label per line), so the
-# trusted-author reader can replace it later (#310).
-read_labels() { "$GH" issue view "$1" --repo "$repo" --json labels --jq '.labels[].name'; }
+# The one place the issue's labels are read (one label per line), through the
+# trusted-author reader (cbundy/dev-system#310): an untrusted issue, or any reader
+# failure, makes this fail, and the caller routes to a sub-agent.
+read_labels() {
+  _rj=$(CALLUM_FLOW_REPO="$repo" "$READ" --json "$1") || return 1
+  printf '%s' "$_rj" | jq -r '.issue.labels | if type == "array" then . else error("shape") end | map(.name) | .[]'
+}
 
 log() {
   "$EVENT" design_routed --issue "$n" --note "route=$1 reason=$2 bucket=$3 pct=$PCT" >/dev/null 2>&1 ||

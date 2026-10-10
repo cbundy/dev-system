@@ -44,12 +44,16 @@
 # background: its exit is the wake, so re-arm with the line's `now=` before
 # handling the event. Never bundle arming it with a call that may be refused
 # (a merge, an edit, a push) - a refusal blocks the whole call.
+# The queue is listed through callum-flow-issue-read (cbundy/dev-system#310), so
+# an issue by an untrusted author never enters `known`/`now` and never logs a
+# `ready` event. A reader failure is a failed poll, never an empty queue.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
 set -eu
 
 stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 reported=
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 
 # record_event <state> [callum-flow-event options]: appends the transition to
 # the factory event log (cbundy/dev-system#218) when callum-flow-event is
@@ -116,6 +120,7 @@ if [ -n "$stream" ]; then
   trap 'reported=1; exit 143' HUP INT TERM
   trap on_exit EXIT
   command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
+  command -v "$READ" >/dev/null 2>&1 || fatal "$READ not on PATH"
 fi
 
 # The changed set seen on the previous successful poll, waiting for a second
@@ -124,8 +129,8 @@ fi
 pending=
 while :; do
   delay=$interval
-  if current=$(gh issue list --repo "$repo" --label "$label" --state open \
-    --json number --jq '[.[].number] | sort | join(",")' 2>/dev/null); then
+  if listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
+    current=$(printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null); then
     if [ "$current" = "$known" ]; then
       pending=
     elif [ -n "$pending" ] && [ "${pending#=}" = "$current" ]; then

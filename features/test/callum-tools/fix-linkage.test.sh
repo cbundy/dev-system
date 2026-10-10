@@ -10,6 +10,8 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 LINKAGE="$SCRIPT_DIR/../../src/callum-tools/check-pr-linkage.sh"
 SCRIPT="$SCRIPT_DIR/../../../images/base/callum-flow-fix-linkage"
+SHARE="$SCRIPT_DIR/../../../images/base"
+READER="$SHARE/callum-flow-issue-read"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -55,6 +57,15 @@ chmod +x "$tmpdir/bin/rollout"
 cat > "$tmpdir/bin/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
+if [ "$1" = api ]; then
+  # the PR as REST returns it, for callum-flow-issue-read; the author is a knob
+  [ "$2" = repos/o/r/pulls/7 ] || { echo "no fixture for $2" >&2; exit 1; }
+  a='{"login":"cbundy","id":13131067}'
+  [ ! -f "$d/author" ] || a=$(cat "$d/author")
+  [ ! -f "$d/api-fail" ] || exit 1
+  jq -n --argjson u "$a" '{number: 7, state: "open", title: "t", body: "b", user: $u}'
+  exit
+fi
 case "$1 $2" in
   'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
   "pr view")
@@ -84,6 +95,15 @@ esac
 STUB
 chmod +x "$tmpdir/bin/gh"
 
+# the real reader behind the stub gh
+export CALLUM_FLOW_REPO=o/r CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent"
+# stub_knobs: apply the pr_author and api_fail knobs to the stub's state
+stub_knobs() {
+  [ -z "${pr_author-}" ] || printf '%s\n' "$pr_author" > "$STUB_DIR/author"
+  [ -z "${api_fail-}" ] || touch "$STUB_DIR/api-fail"
+}
+
 passed=0
 # run_case <name> <head> <base> <body> <expected stdout prefix> <expected body or ""> args...
 run_case() {
@@ -99,6 +119,7 @@ run_case() {
   printf '%s\n' "$head" > "$STUB_DIR/head"
   printf '%s\n' "$base" > "$STUB_DIR/base"
   printf '%s' "$body" > "$STUB_DIR/body"
+  stub_knobs
   out=$(PATH="$tmpdir/bin" STUB_DIR="$STUB_DIR" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/bin/gh" \
     CALLUM_FLOW_GH_BIN="$tmpdir/bin/gh" CALLUM_FLOW_LINKAGE_BIN="$LINKAGE" \
     CALLUM_FLOW_ROLLOUT_BIN="$tmpdir/bin/rollout" ROLLOUT_LINE="${rollout_line-$default_rollout}" \
@@ -271,4 +292,19 @@ lag_case "delayed index within the retry limit" 3 5 "REPAIRED #7" 0
 lag_case "delayed index beyond the retry limit" 9 3 "MISMATCH #7" 1
 run_case "reject refs argument alias" $H main "Refs #12" "" "Refs #12" --expect=refs
 run_case "reject closing argument alias" $H main "Closes #12" "" "Closes #12" --expect=closing
+# trust (cbundy/dev-system#310): an untrusted PR is never parsed or rewritten
+pr_author='{"login":"mallory","id":999}'
+run_case "untrusted author is refused" $H main "Summary" "" "Summary"
+grep -q "not opened by a trusted author" "$tmpdir/stderr" || fail "untrusted refusal reason: $(cat "$tmpdir/stderr")"
+run_case "untrusted author, refs" $H main "Fixes #12" "" "Fixes #12" --expect refs
+run_case "untrusted author with a matching body" $H main "Closes #12" "" "Closes #12"
+pr_author='{"login":"cbundy","id":42}'
+run_case "right login, wrong id is refused" $H main "Summary" "" "Summary"
+unset pr_author
+api_fail=1 run_case "reader failure fails closed" $H main "Summary" "" "Summary"
+grep -q "cannot verify the author" "$tmpdir/stderr" || fail "reader failure reason: $(cat "$tmpdir/stderr")"
+unset api_fail
+CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" run_case "missing reader fails closed" $H main "Summary" "" "Summary"
+export CALLUM_FLOW_ISSUE_READ_BIN="$READER"
+run_case "trusted author still repaired" $H main "Summary" "REPAIRED #7" "Summary${nl}${nl}Closes #12${nl}"
 echo "fix-linkage: $passed passed"

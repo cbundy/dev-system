@@ -10,6 +10,8 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
 CLAIM="$ROOT/images/base/callum-flow-claim"
 SWEEP="$ROOT/images/base/callum-flow-sweep"
+READER="$ROOT/images/base/callum-flow-issue-read"
+SHARE="$ROOT/images/base"
 EVENT="$ROOT/images/base/callum-flow-event"
 
 fail() {
@@ -32,14 +34,17 @@ cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
 # State in $STUB_DIR: issue-N.json {state,labels}, comments-N.json, timeline-N.json,
 # list.txt (the lagging label listing), date (server Date header), post-created,
-# inject-N.json (comments that appear right after our POST).
+# inject-N.json (comments that appear right after our POST). The reader's REST
+# reads (cbundy/dev-system#310) are built from the same files: author-N (an issue's
+# user JSON, default the owner), pr-author-N (a PR's), head-ref-N (a PR's branch).
 d=${STUB_DIR:?}
 now_iso=$(cat "$d/now-iso")
+OWNER='{"login":"cbundy","id":13131067}'
+author_of() { if [ -f "$d/$1-$2" ]; then cat "$d/$1-$2"; else echo "$OWNER"; fi; }
 case "$1 $2" in
   'repo view') echo o/r ;;
   'api -i') printf 'HTTP/2 200\r\nDate: %s\r\n\r\n{}\n' "$(cat "$d/date")" ;;
-  'issue list') cat "$d/list.txt" ;;
-  'issue view') cat "$d/issue-$3.json" ;;
+  'issue list' | 'issue view') echo "raw issue read: gh $*" >&2; exit 1 ;;
   'issue edit')
     n=$3; shift 3
     echo "issue edit $n $*" >> "$d/calls"
@@ -53,11 +58,29 @@ case "$1 $2" in
     done ;;
   'issue comment') echo "issue comment $3 $*" >> "$d/calls" ;;
   'api --paginate')
+    [ ! -f "$d/read-fails" ] || exit 1
     case "$3" in
       */comments) cat "$d/comments-$(echo "$3" | sed 's#.*/issues/\([0-9]*\)/comments#\1#').json" ;;
       */timeline) cat "$d/timeline-$(echo "$3" | sed 's#.*/issues/\([0-9]*\)/timeline#\1#').json" ;;
+      */issues\?*)
+        # the lagging label listing: list.txt names the issues, issue-N.json their state
+        for n in $(cat "$d/list.txt"); do
+          jq -n --argjson n "$n" --argjson u "$(author_of author "$n")" --slurpfile i "$d/issue-$n.json" \
+            '{number: $n, title: "t", body: "b", user: $u, state: ($i[0].state | ascii_downcase), labels: $i[0].labels}'
+        done | jq -s '.' ;;
     esac ;;
-  'api repos/'*) cat "$d/head-ref-${2##*/}" ;;
+  'api repos/'*)
+    [ ! -f "$d/read-fails" ] || exit 1
+    case "$2" in
+      */pulls/*)
+        n=${2##*/}
+        jq -n --argjson n "$n" --argjson u "$(author_of pr-author "$n")" --arg r "$(cat "$d/head-ref-$n")" \
+          '{number: $n, title: "t", body: "b", user: $u, head: {ref: $r}}' ;;
+      */issues/[0-9]*)
+        n=${2##*/}
+        jq --argjson n "$n" --argjson u "$(author_of author "$n")" \
+          '{number: $n, title: "t", body: "b", user: $u, state: (.state | ascii_downcase), labels: .labels}' "$d/issue-$n.json" ;;
+    esac ;;
   'api -X')
     verb=$3; path=$4
     case "$verb $path" in
@@ -68,7 +91,7 @@ case "$1 $2" in
         for a in "$@"; do case "$a" in body=*) body=${a#body=} ;; esac; done
         echo "POST $n" >> "$d/calls"
         jq -n --arg b "$body" --arg c "$(cat "$d/post-created")" \
-          '{id: 900, body: $b, created_at: $c, updated_at: $c, user: {login: "me"}}' > "$d/posted.json"
+          '{id: 900, body: $b, created_at: $c, updated_at: $c, user: {login: "cbundy", id: 13131067}}' > "$d/posted.json"
         jq --slurpfile p "$d/posted.json" '. + $p' "$d/comments-$n.json" > "$d/t" && mv "$d/t" "$d/comments-$n.json"
         if [ -f "$d/inject-$n.json" ]; then
           jq -s 'add' "$d/comments-$n.json" "$d/inject-$n.json" > "$d/t" && mv "$d/t" "$d/comments-$n.json"
@@ -102,10 +125,10 @@ STALE='2026-10-08T08:00:00Z' # 4 hours old: expired
 # cm <id> <device> <created> <updated> [lease] - one claim comment
 cm() {
   jq -n --argjson id "$1" --arg dev "$2" --arg c "$3" --arg u "$4" --arg l "${5:-120}" \
-    '{id: $id, user: {login: "me"}, created_at: $c, updated_at: $u,
+    '{id: $id, user: {login: "cbundy", id: 13131067}, created_at: $c, updated_at: $u,
       body: "claimed-by: \($dev) at \($c) lease: \($l)\n<!-- callum-flow-claim -->"}'
 }
-brief() { jq -n '{id: 5, user: {login: "me"}, created_at: "2026-10-08T11:59:00Z", updated_at: "2026-10-08T11:59:00Z", body: "## Design brief"}'; }
+brief() { jq -n '{id: 5, user: {login: "cbundy", id: 13131067}, created_at: "2026-10-08T11:59:00Z", updated_at: "2026-10-08T11:59:00Z", body: "## Design brief"}'; }
 arr() { jq -s '.'; }
 
 reset() {
@@ -132,6 +155,7 @@ issue() {
 run() {
   PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
     CALLUM_FLOW_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+    CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
 }
 rc_of() { set +e; run "$@" >"$tmpdir/out" 2>"$tmpdir/err"; rc=$?; set -e; }
@@ -260,7 +284,7 @@ issue 7 OPEN 'In development'
 { brief; cm 100 devB "$STALE" "$STALE"; } | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep stale"
-calls | grep -q 'issue edit 7 --remove-label In development --add-label ready --remove-assignee me' || fail "stale: swap: $(calls)"
+calls | grep -q 'issue edit 7 --remove-label In development --add-label ready --remove-assignee cbundy' || fail "stale: swap: $(calls)"
 [ "$(calls | grep -c '^issue comment 7')" = 1 ] || fail "stale: comment count"
 calls | grep "issue comment 7" | grep -q devB || { calls >&2; cat "$tmpdir/err" >&2; fail "stale: comment names the device"; }
 [ "$(events | wc -l)" = 1 ] || fail "stale: event"
@@ -297,7 +321,7 @@ expect_rc 0 "sweep closed"
 no_events "sweep closed"
 
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
-tl() { jq -n --arg m "$1" '[{event: "cross-referenced", source: {issue: {number: 55, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
+tl() { jq -n --arg m "$1" '[{event: "cross-referenced", actor: {login: "cbundy", id: 13131067}, source: {issue: {number: 55, user: {login: "cbundy", id: 13131067}, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
 reset
 echo feat/issue-7-claim > "$d/head-ref-55"
 issue 7 OPEN 'In development'
@@ -347,5 +371,176 @@ expect_rc 0 "sweep legacy"
 no_calls "sweep legacy"
 no_events "sweep legacy"
 grep -q 'no claim comment' "$tmpdir/err" || fail "legacy: no stderr note"
+
+# --- trust (cbundy/dev-system#310): untrusted text is ignored or refused -----------
+# the reader logs untrusted_stripped when it refuses; no other event may appear
+no_factory_events() { [ -z "$(events | jq -c 'select(.state != "untrusted_stripped")')" ] || fail "$1: unexpected events: $(events)"; }
+STRANGER='{"login":"mallory","id":999}'
+# scm <id> <device> <created> <updated> - a claim comment by an untrusted author
+scm() { cm "$@" | jq --argjson u "$STRANGER" '.user = $u'; }
+
+# a stranger's older, unexpired claim neither blocks nor wins
+reset
+scm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" 7
+expect_rc 0 "stranger's live claim does not block"
+calls | grep -q '^POST 7$' || fail "stranger's live claim blocked the claim: $(calls)"
+calls | grep -q 'DELETE' && fail "stranger's live claim won the re-read"
+no_events_lost() { events | jq -e '.state == "claim_lost"' >/dev/null 2>&1 && fail "$1: claim_lost logged"; return 0; }
+no_events_lost "stranger's live claim"
+
+# in the re-read race a stranger's earlier claim does not win
+reset
+scm 100 devB '2026-10-08T11:59:59Z' '2026-10-08T11:59:59Z' | jq -s '.' > "$d/inject-7.json"
+rc_of "$CLAIM" 7
+expect_rc 0 "stranger does not win the race"
+calls | grep -q 'DELETE' && fail "race: our claim was deleted"
+calls | grep -q 'issue edit 7' || fail "race: labels not swapped"
+
+# a trusted live claim still blocks when a stranger also claimed
+reset
+{ scm 101 devC "$FRESH" "$FRESH"; cm 100 devB "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
+rc_of "$CLAIM" 7
+expect_rc 3 "trusted claim still blocks"
+no_calls "trusted claim still blocks"
+
+# heartbeat ignores a stranger's claim even when it names this device
+reset
+scm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" --heartbeat 7
+expect_rc 0 "heartbeat ignores stranger"
+no_calls "heartbeat ignores stranger"
+reset
+issue 7 OPEN 'In development'
+scm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat all ignores stranger"
+no_calls "heartbeat all ignores stranger"
+
+# an untrusted issue is refused: nothing written, no event
+for who in '{"login":"mallory","id":999}' '{"login":"cbundy","id":42}'; do
+  reset
+  printf '%s\n' "$who" > "$d/author-7"
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  rc_of "$CLAIM" 7
+  expect_rc 1 "untrusted issue $who"
+  no_calls "untrusted issue"
+  no_factory_events "untrusted issue"
+  grep -q 'not by a trusted author' "$tmpdir/err" || fail "untrusted issue reason: $(cat "$tmpdir/err")"
+done
+# heartbeat skips an untrusted issue silently
+reset
+issue 7 OPEN 'In development'
+echo "$STRANGER" > "$d/author-7"
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" --heartbeat 7
+expect_rc 0 "heartbeat untrusted issue"
+no_calls "heartbeat untrusted issue"
+rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat all, untrusted issue"
+no_calls "heartbeat all, untrusted issue"
+
+# a reader failure is an error, never "no comments": nothing is claimed
+reset
+touch "$d/read-fails"
+rc_of "$CLAIM" 7
+expect_rc 1 "claim reader failure"
+no_calls "claim reader failure"
+rc_of "$CLAIM" --heartbeat 7
+expect_rc 1 "heartbeat reader failure"
+no_calls "heartbeat reader failure"
+issue 7 OPEN 'In development'
+rc_of "$CLAIM" --heartbeat
+expect_rc 1 "heartbeat list failure"
+# an unusable trusted list fails closed too
+reset
+TRUSTED='' rc_of "$CLAIM" 7
+expect_rc 1 "claim with no trusted list"
+no_calls "claim with no trusted list"
+unset TRUSTED
+READ_BIN="$tmpdir/missing-reader" rc_of "$CLAIM" 7
+expect_rc 1 "claim with no reader"
+no_calls "claim with no reader"
+unset READ_BIN
+
+# --- sweep trust ------------------------------------------------------------------
+# a stranger's fresh claim does not shield a stale trusted claim
+reset
+issue 7 OPEN 'In development'
+{ cm 100 devB "$STALE" "$STALE"; scm 101 devC "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
+rc_of "$SWEEP"
+expect_rc 0 "sweep stranger's fresh claim"
+calls | grep -q -- '--add-label ready' || fail "stranger's fresh claim shielded a stale one: $(calls)"
+calls | grep "issue comment 7" | grep -q devB || fail "reclaim must name the trusted claim"
+# a stranger's stale claim alone is no claim: legacy path, nothing reclaimed
+reset
+issue 7 OPEN 'In development'
+scm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+rc_of "$SWEEP"
+expect_rc 0 "sweep stranger's stale claim"
+no_calls "sweep stranger's stale claim"
+grep -q 'no claim comment' "$tmpdir/err" || fail "stranger's claim should read as no claim"
+# an untrusted issue is skipped silently, apart from a count
+for who in '{"login":"mallory","id":999}' '{"login":"cbundy","id":42}'; do
+  reset
+  issue 7 CLOSED 'In development'
+  echo "$who" > "$d/author-7"
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep untrusted issue"
+  no_calls "sweep untrusted closed issue"
+  grep -q 'skipped 1 ' "$tmpdir/err" || fail "sweep should count the skipped issue: $(cat "$tmpdir/err")"
+done
+reset
+issue 7 OPEN 'In development'
+echo "$STRANGER" > "$d/author-7"
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+rc_of "$SWEEP"
+expect_rc 0 "sweep untrusted open issue"
+no_calls "sweep untrusted open issue"
+no_factory_events "sweep untrusted open issue"
+# an untrusted PR, or an untrusted actor, never counts as a merge
+reset
+echo feat/issue-7-claim > "$d/head-ref-55"
+echo "$STRANGER" > "$d/pr-author-55"
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+rc_of "$SWEEP"
+expect_rc 0 "sweep untrusted PR"
+calls | grep -q -- '--add-label ready' || fail "an untrusted merged PR shielded a stale claim: $(calls)"
+reset
+echo feat/issue-7-claim > "$d/head-ref-55"
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' | jq --argjson u "$STRANGER" '.[0].actor = $u' > "$d/timeline-7.json"
+rc_of "$SWEEP"
+calls | grep -q -- '--add-label ready' || fail "an untrusted actor's cross-reference shielded a stale claim: $(calls)"
+reset
+echo feat/issue-7-claim > "$d/head-ref-55"
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' | jq --argjson u "$STRANGER" '.[0].source.issue.user = $u' > "$d/timeline-7.json"
+rc_of "$SWEEP"
+calls | grep -q -- '--add-label ready' || fail "an untrusted source issue shielded a stale claim: $(calls)"
+# the trusted merged PR still counts (control)
+reset
+echo feat/issue-7-claim > "$d/head-ref-55"
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+rc_of "$SWEEP"
+[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "trusted merged PR control: $(calls)"
+# a reader failure is an error for the sweep, never "no comments"
+reset
+issue 7 OPEN 'In development'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+touch "$d/read-fails"
+rc_of "$SWEEP"
+expect_rc 1 "sweep reader failure"
+no_calls "sweep reader failure"
+READ_BIN="$tmpdir/missing-reader" rc_of "$SWEEP"
+expect_rc 1 "sweep with no reader"
+no_calls "sweep with no reader"
+unset READ_BIN
 
 echo "PASS: claim.test.sh"
