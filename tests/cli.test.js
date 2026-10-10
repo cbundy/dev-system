@@ -597,3 +597,74 @@ test("update --devcontainer switches a feature repo to the base image; a stamp w
   // The choice sticks: the next plain update stays on the base image.
   assert.match(run(repo, "update").stdout, /Already in sync/);
 });
+
+// dev-system#312: permissions.deny is merged by value like permissions.allow, so the
+// template's deny list does not overwrite a consumer's own deny entries.
+test("update unions a repo-added permissions.deny entry with the synced list, and folds in a new upstream one", (t) => {
+  const repo = initRepo(t);
+  const repoEntry = "Bash(rm -rf *)";
+  editSettings(repo, (s) => s.permissions.deny.push(repoEntry));
+  const upstreamEntry = "Bash(gh search issues *)";
+  const upstream = upstreamCopy(t, (dir) => editSettings(dir, (s) => s.permissions.deny.push(upstreamEntry)));
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+
+  const deny = JSON.parse(read(repo, ".claude/settings.json")).permissions.deny;
+  assert.ok(deny.includes(repoEntry), "repo-owned deny entry survived");
+  assert.ok(deny.includes(upstreamEntry), "new upstream deny entry landed");
+  for (const entry of JSON.parse(read(TEMPLATES, ".claude/settings.json")).permissions.deny) {
+    assert.ok(deny.includes(entry), `original synced deny entry survived: ${entry}`);
+  }
+  assert.equal(deny.length, new Set(deny).size, "no duplicate entries");
+});
+
+test("a deny entry the template removed is dropped on update", (t) => {
+  const repo = initRepo(t);
+  const dropped = JSON.parse(read(repo, ".claude/settings.json")).permissions.deny[0];
+  const upstream = upstreamCopy(t, (dir) =>
+    editSettings(dir, (s) => {
+      s.permissions.deny = s.permissions.deny.filter((e) => e !== dropped);
+    }),
+  );
+
+  const result = run(repo, "update", { templates: upstream });
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.ok(!JSON.parse(read(repo, ".claude/settings.json")).permissions.deny.includes(dropped));
+});
+
+test("a consumer's own deny list survives the update that first introduces the template's", (t) => {
+  const repo = initRepo(t);
+  const repoEntry = "Bash(terraform destroy *)";
+  // Rewind to a consumer from before the template had a deny list.
+  for (const rel of [".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
+    const file = path.join(repo, rel);
+    const s = JSON.parse(fs.readFileSync(file, "utf-8"));
+    delete s.permissions.deny;
+    if (rel === ".claude/settings.json") s.permissions.deny = [repoEntry];
+    fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
+  }
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const deny = JSON.parse(read(repo, ".claude/settings.json")).permissions.deny;
+  assert.ok(deny.includes(repoEntry), "repo deny entry kept");
+  for (const entry of JSON.parse(read(TEMPLATES, ".claude/settings.json")).permissions.deny) {
+    assert.ok(deny.includes(entry), `template deny entry added: ${entry}`);
+  }
+});
+
+test("settings.json update with no baseline unions the current deny entries in", (t) => {
+  const repo = initRepo(t);
+  const repoEntry = "Bash(rm -rf *)";
+  editSettings(repo, (s) => s.permissions.deny.push(repoEntry));
+  fs.rmSync(path.join(repo, ".callum-dev/baseline/.claude/settings.json"));
+
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const deny = JSON.parse(read(repo, ".claude/settings.json")).permissions.deny;
+  assert.ok(deny.includes(repoEntry));
+  for (const entry of JSON.parse(read(TEMPLATES, ".claude/settings.json")).permissions.deny) {
+    assert.ok(deny.includes(entry));
+  }
+});

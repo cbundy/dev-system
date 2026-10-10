@@ -23,7 +23,10 @@
       "Bash(treehouse get *)",
       "Bash(treehouse return *)",
       "Bash(treehouse status *)",
-      "Bash(gh issue *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue close *)",
+      "Bash(gh issue create *)",
       "Bash(gh pr view *)",
       "Bash(gh pr checks *)",
       "Bash(gh pr list *)",
@@ -36,7 +39,15 @@
       "Bash(callum-flow-design-route *)",
       "Bash(callum-flow-sweep)",
       "Bash(callum-flow-sweep *)",
-      "Bash(callum-flow-evaluate *)"
+      "Bash(callum-flow-evaluate *)",
+      "Bash(callum-flow-issue-read *)"
+    ],
+    "deny": [
+      "Bash(gh issue view *)",
+      "Bash(gh issue list)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue status)",
+      "Bash(gh issue status *)"
     ]
   }
 }

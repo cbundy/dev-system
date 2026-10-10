@@ -111,8 +111,9 @@ time is not measured.
 
 For the same window, with `gh` (read-only):
 
-- PRs merged: `gh pr list --state merged --search "merged:>=<date>" --json number,title,mergedAt,headRefName`
-  (metadata only, no body or comment text)
+- PRs merged: `gh pr list --state merged --search "merged:>=<date>" --json number,mergedAt,headRefName`
+  (metadata only, no title, body or comment text; take a title, when needed, from
+  `callum-flow-issue-read --pr <N>`)
 - issues closed: `callum-flow-issue-read --json --list --state closed`, then keep those closed
   on or after `<date>`
 

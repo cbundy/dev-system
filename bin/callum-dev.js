@@ -271,8 +271,10 @@ async function init(options) {
 //   baseline - is carried over, e.g. a repo's `extraKnownMarketplaces.callum.autoUpdate`
 //   (dev-system#57). Plain objects are compared key by key; arrays and scalars are
 //   leaves. A repo-added key whose parent the template no longer has keeps its parent.
-// - `permissions.allow` is the one array merged by value: the fresh synced list,
-//   unioned with whatever entries the repo added beyond the old baseline. A worktree
+// - `permissions.allow` and `permissions.deny` are the arrays merged by value: the fresh
+//   synced list, unioned with whatever entries the repo added beyond the old baseline
+//   (an entry the template dropped is dropped; a deny list the repo already had survives
+//   the update that first introduces the template's own). A worktree
 //   sub-agent only ever sees the committed `.claude/settings.json` - never the
 //   gitignored, main-checkout-only `.claude/settings.local.json` - so a repo-specific
 //   allow entry (e.g. a local script the pipeline runs) has to live in the committed
@@ -280,6 +282,9 @@ async function init(options) {
 //
 // A missing baseline counts as empty: everything the template does not define is
 // treated as repo-added and kept, and every current allow entry is unioned in.
+// The permission arrays merged by value (see mergeSettingsJson) instead of as leaves.
+const MERGED_BY_VALUE = ["permissions.allow", "permissions.deny"];
+
 function mergeSettingsJson(currentContent, baselineContent, newContent) {
   const current = JSON.parse(currentContent);
   const baseline = baselineContent ? JSON.parse(baselineContent) : {};
@@ -289,19 +294,20 @@ function mergeSettingsJson(currentContent, baselineContent, newContent) {
   const merged = next;
   carryRepoAddedKeys(merged, current, baseline, []);
 
-  const baselineAllow = new Set((baseline.permissions && baseline.permissions.allow) || []);
-  const currentAllow = (current.permissions && current.permissions.allow) || [];
-  const nextAllow = (next.permissions && next.permissions.allow) || [];
+  for (const list of MERGED_BY_VALUE) {
+    const key = list.split(".")[1];
+    const get = (settings) => (settings.permissions && settings.permissions[key]) || [];
+    const baselineEntries = new Set(get(baseline));
+    // Entries the repo added itself: present now but not in the old baseline.
+    const repoOwned = get(current).filter((entry) => !baselineEntries.has(entry));
 
-  // Entries the repo added itself: present now but not in the old baseline.
-  const repoOwned = currentAllow.filter((entry) => !baselineAllow.has(entry));
-
-  const allow = [...nextAllow];
-  for (const entry of repoOwned) {
-    if (!allow.includes(entry)) allow.push(entry);
-  }
-  if (allow.length > 0) {
-    merged.permissions = { ...merged.permissions, allow };
+    const entries = [...get(next)];
+    for (const entry of repoOwned) {
+      if (!entries.includes(entry)) entries.push(entry);
+    }
+    if (entries.length > 0) {
+      merged.permissions = { ...merged.permissions, [key]: entries };
+    }
   }
   return JSON.stringify(merged, null, 2) + "\n";
 }
@@ -319,7 +325,7 @@ function carryRepoAddedKeys(target, current, baseline, keyPath) {
   for (const [key, value] of Object.entries(current)) {
     const childPath = [...keyPath, key];
     // Merged by value in mergeSettingsJson, not as a leaf here.
-    if (childPath.join(".") === "permissions.allow") continue;
+    if (MERGED_BY_VALUE.includes(childPath.join("."))) continue;
 
     const inBaseline = isPlainObject(baseline) && Object.hasOwn(baseline, key);
     const baseValue = inBaseline ? baseline[key] : undefined;
