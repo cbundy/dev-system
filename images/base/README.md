@@ -104,7 +104,7 @@ environment variable set in the image.
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
-| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
+| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small; `dev-init` and `dev-doctor` do not warn about the missing volume), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and

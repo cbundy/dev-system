@@ -68,9 +68,11 @@ LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 #    itself. Where neither works, a loud message names the exact fix. A
 #    writable directory with no volume at it or above it (its mount point is /,
 #    the container's own layer) loses its state on every rebuild. That stays a
-#    warning - a one-off `docker run IMAGE <cmd>` has no volumes on purpose.
+#    warning (not raised for events and dev-restart-self, which have no
+#    per-dir volume in the desktop templates) - a one-off `docker run IMAGE <cmd>` has no volumes on purpose.
 check_persist_dirs() {
-  local dir mode unmounted=""
+  local dir mode unmounted="" needs_volume
+  needs_volume=$(persist_dirs --volume)
   while IFS= read -r dir; do
     if [ ! -d "$dir" ]; then
       mkdir -m 0700 "$dir" 2>/dev/null ||
@@ -87,7 +89,7 @@ check_persist_dirs() {
     if [ ! -w "$dir" ]; then
       log "WARNING: $dir is not writable by $(id -un) ($(id -u):$(id -g)) - state for this tool will NOT persist and logins will fail."
       log "  Fix: chown 1000:1000 the volume behind $dir (k8s: securityContext.fsGroup: 1000)."
-    elif [ "$(stat -c %m "$dir" 2>/dev/null)" = / ]; then
+    elif [ "$(stat -c %m "$dir" 2>/dev/null)" = / ] && printf '%s\n' "$needs_volume" | grep -qxF -- "$dir"; then
       unmounted="$unmounted $dir"
     fi
   done < <(persist_dirs)

@@ -23,6 +23,9 @@ check "dev-doctor warns, without failing, for each /persist dir with no volume b
   for t in codex gh no-mistakes agentsview; do
     echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
   done
+  for t in events dev-restart-self; do
+    echo \"\$out\" | grep -q \"OK   \$t state dir /persist/\$t is writable\" || { echo \"no OK for \$t\"; exit 1; }
+  done
   echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
   [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
 check "dev-doctor FAILs, naming the fix, for a missing /persist/events and /persist/dev-restart-self" in_image '

@@ -8,11 +8,17 @@
 PERSIST_LIST=${DEV_PERSIST_LIST:-/usr/local/share/dev-system/persist-dirs}
 
 # Prints every contract directory, one per line, honouring the env var that
-# relocates a tool's directory.
+# relocates a tool's directory. With --volume, prints only the directories
+# that are meant to have a volume behind them: events and dev-restart-self
+# have no per-dir volume in the desktop devcontainer templates and live in the
+# container layer there.
 persist_dirs() {
-  local d
+  local d own=$1
   [ -r "$PERSIST_LIST" ] || return 0
   while IFS= read -r d || [ -n "$d" ]; do
+    if [ "$own" = --volume ]; then
+      case "$d" in /persist/events | /persist/dev-restart-self) continue ;; esac
+    fi
     case "$d" in
       /persist/claude) d=${CLAUDE_CONFIG_DIR:-$d} ;;
       /persist/codex) d=${CODEX_HOME:-$d} ;;
