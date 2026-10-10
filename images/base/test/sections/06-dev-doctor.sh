@@ -79,6 +79,16 @@ check "dev-version offline: every network line UNKNOWN, exit 0, within 5s" in_im
   ! echo "$out" | grep -q "^dev-version: STALE " &&
   echo "$out" | grep -q "^dev-version: UNKNOWN base-image" &&
   echo "$out" | grep -q "^dev-version: INFO image-layers none"' --network none --entrypoint ""
+check "dev-doctor reports a STALE base image as WARN with the rebuild fix, and still exits 0" in_image '
+  mkdir -p /tmp/stub
+  printf "#!/bin/sh\necho \"dev-version: STALE base-image running=aaaaaaa latest=bbbbbbb (x)\"\necho \"dev-version: STALE claude running=1 latest=2\"\n" > /tmp/stub/dev-version
+  chmod +x /tmp/stub/dev-version
+  out=$(PATH=/tmp/stub:$PATH dev-doctor 2>&1); rc=$?
+  echo "$out"
+  [ $rc -eq 0 ] &&
+  echo "$out" | grep -q "dev-doctor: WARN image is out of date: STALE base-image" &&
+  echo "$out" | grep -A1 "WARN image is out of date" | grep -q "fix: rebuild the container" &&
+  echo "$out" | grep -q "dev-doctor: INFO versions: 1 stale"' --entrypoint ""
 check "dev-doctor prints the versions INFO line and still exits 0 offline" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "dev-doctor: INFO versions: "' --network none

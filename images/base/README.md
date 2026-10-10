@@ -600,7 +600,9 @@ on every failure:
 - an `INFO` line, never a failure, on telemetry export (see
   [Telemetry](#telemetry-opentelemetry-export)): off, or on with the endpoint, the protocol
   and whether it is reachable;
-- an `INFO` line, never a failure, summarising [`dev-version`](#dev-version).
+- a `WARN` (with the `fix: rebuild the container` line) for each `STALE` base image or per-repo
+  image layer, so an out-of-date container is visible; and an `INFO` line, never a failure,
+  summarising the rest of [`dev-version`](#dev-version) (tool and plugin drift).
 
 It exits 1 if any check fails; `WARN` lines do not count. `dev-doctor --warn-only` prints
 the same report and always exits 0.
@@ -633,7 +635,30 @@ It never hangs or fails for lack of a network: all lookups run in parallel, each
 lookup that fails, times out or has nothing to compare (no `gh` login, a local build with no
 release stamp) is `UNKNOWN`. `dev-doctor` runs it under a hard 5 second timeout and prints
 one `INFO` line (`versions: all current`, `versions: N stale (run dev-version)`, or the
-unknown count), so `dev-init` shows the summary on every start.
+unknown count) for plugin and tool drift, and a `WARN` for a stale image or image layer, so
+`dev-init` shows the summary on every start.
+
+**A missing base-image tool means the container is stale.** If `dev-query`, `psql`,
+`dev-version` or another tool this README documents is "command not found" (or
+`/usr/local/share/dev-system/image-release`, `event-push-loop` or `nm-push-loop` is missing),
+the container's image is older than the base image that ships it. Rebuild the container
+(`dev-restart-self`, or Rebuild Container in a desktop dev container); do not install the
+tool by hand, because the install is lost on the next rebuild and hides the real problem.
+(`event-push-loop`, `nm-push-loop` and `nm-export` are deliberately not on PATH; run them by
+their path under `/usr/local/share/dev-system/`.)
+
+The callum-flow plugin reaches containers whose image is too old to warn about itself, so it
+carries two hooks (`hooks/stale-image.sh`), both silent outside a base-image container (no
+`/usr/local/share/dev-system/`), when everything is current, offline and without `jq`:
+
+- `SessionStart` (`startup`, `resume`): adds context to the session, naming each missing
+  item, when a tool or file the plugin expects from the image is missing (`psql`,
+  `dev-version`, `dev-query`, `image-release`, `event-push-loop`, `nm-push-loop`); otherwise
+  when `dev-version` (hard 5 second limit) reports a `STALE` base image or image layer, quoting
+  those lines. Tool and plugin drift is never surfaced. Both name the rebuild fix.
+- `PostToolUseFailure` (`Bash`): after exit 127 with `<tool>: command not found` for one of
+  those tools or `nm-export`, adds the likely cause and the fix, so it still reaches an agent
+  whose session-start context was compacted away.
 
 A per-repo image built `FROM` the base stamps itself by writing the same `KEY=VALUE` file
 (`IMAGE`, `VERSION`, `REVISION`, and optionally `TAG`, the tag to compare against, default
@@ -1354,7 +1379,7 @@ The SQL comes from `-c` or from stdin, not both. Accepted flags: `-A`, `-t` (or 
 |---|---|
 | 0 | ok |
 | 64 | usage error (unknown flag, both `-c` and stdin, no SQL, a terminal on stdin with no `-c`) |
-| 69 | `psql` is not installed: the container image is older than the base image that ships `postgresql-client`; run `dev-version` and rebuild or pull the container, do not install it by hand |
+| 69 | `psql` is not installed: the container image is older than the base image that ships `postgresql-client`; rebuild the container (see [`dev-version`](#dev-version)), do not install it by hand |
 | 77 | the secret file `agentsview-pg-url` exists but is unreadable or empty |
 | 78 | no URL configured (no secret file and no `AGENTSVIEW_PG_URL`) |
 | 1, 2, 3 | `psql`'s own status (SQL error, connection failure, ...), passed through |
