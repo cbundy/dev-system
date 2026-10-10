@@ -205,7 +205,7 @@ pa="$RUN_ID-pa"
 pb="$RUN_ID-pb"
 page_bg --name "$pa" --network "$login_net" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude >/dev/null
 page_bg --name "$pb" --network "$login_net" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_TOOLS=claude,codex >/dev/null
-run_bg --name "$RUN_ID-nginx" --network "$login_net" -e NGINX_CONF="$NGINX_CONF" nginx:alpine \
+run_bg --name "$RUN_ID-nginx" --network "$login_net" -e NGINX_CONF="$NGINX_CONF" public.ecr.aws/docker/library/nginx:alpine \
   sh -c 'printf "%s\n" "$NGINX_CONF" > /etc/nginx/conf.d/default.conf && exec nginx -g "daemon off;"' >/dev/null
 # via <path> [curl args...]: curl through nginx, from inside $pa (on the network)
 via() {

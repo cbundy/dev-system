@@ -31,7 +31,9 @@
 # install fetches callum-flow from GitHub. Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
-# Test 9 starts a throwaway postgres:17 container. No test needs real
+# Throwaway service images use the ECR Public mirror (#297); see
+# images/base/README.md (Building, testing and publishing) for image references
+# and pull requirements. No test needs real
 # credentials: the logged-in path runs against a stub `claude`, and the
 # agentsview URLs point at that throwaway database or at nowhere.
 set -euo pipefail
