@@ -35,3 +35,36 @@ for (const rel of [
     }
   });
 }
+
+// dev-system#312: raw reads of issue and PR text are denied everywhere. The three settings
+// files carry the same lists, the allow list names only the issue writes and the filtered
+// reader, and the deny list covers the issue reads (bare and `*` forms).
+const settingsFiles = ["templates/.claude/settings.json", ".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"];
+
+test("the three synced settings files are byte-identical", () => {
+  const [first, ...rest] = settingsFiles.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf-8"));
+  for (const other of rest) assert.equal(other, first);
+});
+
+for (const rel of settingsFiles) {
+  test(`${rel} allows the filtered reader and issue writes, and denies raw issue reads`, () => {
+    const { allow, deny } = JSON.parse(fs.readFileSync(path.join(ROOT, rel), "utf-8")).permissions;
+    assert.ok(!allow.includes("Bash(gh issue *)"), "the blanket gh issue allow is gone");
+    for (const entry of [
+      "Bash(gh issue comment *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue close *)",
+      "Bash(gh issue create *)",
+      "Bash(callum-flow-issue-read *)",
+    ]) {
+      assert.ok(allow.includes(entry), `allow carries ${entry}`);
+    }
+    assert.deepEqual(deny, [
+      "Bash(gh issue view *)",
+      "Bash(gh issue list)",
+      "Bash(gh issue list *)",
+      "Bash(gh issue status)",
+      "Bash(gh issue status *)",
+    ]);
+  });
+}
