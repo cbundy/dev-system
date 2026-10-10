@@ -8,7 +8,9 @@ Releasing is one deliberate step, run when ready.
 Releasing never pushes to main: the version bump lands in a normal PR gated by `ci`, and
 the `Release` workflow only verifies, tags and publishes.
 
-1. On a branch from an up-to-date main, run:
+1. On a branch from an up-to-date main, use the `release` skill
+   (`.claude/skills/release/SKILL.md`) to draft `release-notes/vX.Y.Z.md` from the merged
+   PRs and propose the version. Once you approve the version and notes, run:
 
    ```
    node scripts/release-bump.js X.Y.Z
@@ -21,9 +23,11 @@ the `Release` workflow only verifies, tags and publishes.
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
    markers before committing.
-2. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
-   (step 3) immediately after: the bumped ref names a tag that does not exist until it runs.
-3. Run the `Release` workflow from main (Actions tab, or):
+2. Commit the approved notes in the same bump PR. `npm run lint` validates every file in
+   `release-notes/` and requires valid notes for the `package.json` version.
+3. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
+   (step 4) immediately after: the bumped ref names a tag that does not exist until it runs.
+4. Run the `Release` workflow from main (Actions tab, or):
 
    ```
    gh workflow run release.yml -f version=X.Y.Z
@@ -31,15 +35,22 @@ the `Release` workflow only verifies, tags and publishes.
 
    It refuses to run unless `ci` passed on main's HEAD and
    `node scripts/release-bump.js --check X.Y.Z` passes there (every version, the template pin and the stamp
-   at X.Y.Z); then it tags `vX.Y.Z` and creates a GitHub Release with generated notes.
+   at X.Y.Z) and `node scripts/release-notes.js --check X.Y.Z` passes (valid
+   `release-notes/vX.Y.Z.md`); then it tags `vX.Y.Z` and creates a GitHub Release whose body
+   is those notes plus a collapsed "Technical changes" list built from first-parent commits
+   since the highest `v*` semver tag below X.Y.Z (or the full first-parent history if none
+   exists). The technical list is omitted when that range contains no commits.
+   An existing `vX.Y.Z` tag must point to the exact workflow commit;
+   otherwise the workflow refuses to proceed. Re-running on that commit skips tagging
+   and rewrites the release title and body, even if the GitHub Release already exists.
 
 Semver: patch for wording fixes, minor for a new skill/template/capability, major for a
 breaking change to an existing contract.
 
 How each layer reaches consumers after the tag exists:
 
-- **Plugin**: `/plugin marketplace update` (or auto-update) picks up the bumped
-  `version` field.
+- **Plugin**: follow the [consumer update flow](docs/architecture.md#how-a-change-reaches-a-consumer-repo)
+  to advance the marketplace pin and migrate the installation.
 - **npm/CLI layer**: consumers depend on `github:cbundy/dev-system#semver:0.x` -
   npm resolves that range against the git tags, so `npm update @callum/dev-system`
   pulls the new tag, then `npx callum-dev update` merges template changes into the

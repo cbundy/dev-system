@@ -43,6 +43,7 @@ scripts/test.sh                   test entrypoint (npm test); discovers tests by
 scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 scripts/release-bump.js           sets the release version everywhere and refreshes the stamp
+scripts/release-notes.js          validates release-notes/vX.Y.Z.md and builds the release body
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
                                   publish-dev-image.yml, publish-features.yml, test-features.yml
@@ -56,7 +57,8 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 
 Ordinary PRs never bump the main release version. Releasing is a separate, deliberate step: a bump PR made
 with `scripts/release-bump.js`, then the `Release` workflow, which tags without pushing to
-main. See [`RELEASING.md`](../RELEASING.md) for the commands.
+main. See [`RELEASING.md`](../RELEASING.md) for the bump PR's release notes requirements
+and the workflow checks and commands.
 
 | What | Version lives in | Released by | Reaches consumers when |
 |---|---|---|---|
