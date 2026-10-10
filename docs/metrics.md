@@ -209,7 +209,7 @@ dispatcher (option B) is what limits throughput; otherwise invest in the gate.
 Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
 its baseline. The `ready` time therefore comes from each issue's GitHub timeline, the last
 `labeled` `ready` event before the claim. Collect them with
-`gh api repos/<owner>/<name>/issues/<n>/timeline --paginate` and put them in `ready_times`
+`callum-flow-issue-read --json --timeline <n>` and put them in `ready_times`
 below; an issue with no row falls back to its first `ready` event. The SQL needs PostgreSQL 14 or
 later (multiranges). It is the twin of the tool's `waiting` section: the tool also clips the
 "alive" window at the report's end, which the SQL does not.
