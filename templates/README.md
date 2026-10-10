@@ -68,9 +68,10 @@ Global agent instructions.
 ## `.claude/settings.json` -> `.claude/settings.json`
 
 Wires up the `callum` plugin marketplace and enables `callum-flow`, and ships the
-generic `permissions.allow` list the implement-issue/orchestrator flow needs
+generic `permissions.allow` and `permissions.deny` lists the implement-issue/orchestrator flow needs
 (`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
-`treehouse get/return/status`, `gh issue/pr view/pr checks/pr list`,
+`treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
+`callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
 `callum-flow-merge-guard`, the check-only merge guard, `callum-flow-rollout`, the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
 `check-pr-linkage.sh`) - see
@@ -106,6 +107,11 @@ values are compared whole):
   you added beyond the old baseline, deduplicated. Add your own by editing this
   committed file directly - it is the only settings file a treehouse worktree
   sub-agent ever sees.
+- **Synced**: `permissions.deny`, which denies `gh issue view`, `gh issue list` and
+  `gh issue status` (bare and `*` forms) so a raw issue read is refused even without the
+  plugin. It merges by value exactly like `allow`: the fresh synced list, plus entries
+  your repo added beyond the old baseline, minus entries the template dropped. A deny
+  list your repo already had survives the update that first introduces the template's.
 - With no baseline (deleted, or never committed), every key the template does not
   define counts as repo-owned and is kept, and every current `permissions.allow` entry
   is unioned in.
@@ -115,8 +121,13 @@ values are compared whole):
   the read-only `check-pr-linkage.sh` is synced), `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
   `.claude/settings.local.json` in the main checkout instead. Do not add a `deny`
-  rule for them here: committed settings apply in the main checkout too, so a `deny`
-  would also block the orchestrator, not just worktree sub-agents. The split that
+  rule for these orchestrator-only powers: committed settings apply in the main
+  checkout too, so a `deny` would also block the orchestrator, not just worktree
+  sub-agents. Raw reads of issue and PR text are the deliberate exception: they are
+  denied everywhere, orchestrator and owner included, because that text may come from
+  an untrusted author and `callum-flow-issue-read` is the one door (dev-system#307; the
+  `forbid-raw-gh-read` plugin hook is the second layer and also covers `gh api`, curl
+  and WebFetch). The split that
   keeps a worktree sub-agent from merging is that `settings.local.json` never leaves
   the main checkout - worktrees start with none of it - not a rule that blocks the
   command everywhere.

@@ -13,8 +13,8 @@ approves the draft.
 - `git fetch --tags`; confirm main is up to date and `ci` is green on its HEAD
   (`gh run list --branch main --workflow ci.yml --limit 1`).
 - Previous tag: the highest `v*` semver tag. List PRs merged since it:
-  `git log --first-parent --format=%s <prev>..origin/main`, then `gh pr view <N>` for the
-  title and body of each.
+  `git log --first-parent --format=%s <prev>..origin/main`, then
+  `callum-flow-issue-read --pr <N>` for the title and body of each.
 - Propose the bump per RELEASING.md: patch for wording fixes, minor for a new
   skill/template/capability, major for a breaking change to an existing contract. Give reasons.
 
