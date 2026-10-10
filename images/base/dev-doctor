@@ -382,7 +382,7 @@ unset ev_dir ev_lines ev_pushed ev_last_written ev_last_pushed ev_f ev_m
 # shellcheck source=trusted-authors.sh
 . /usr/local/share/dev-system/trusted-authors.sh
 if ta_msg=$(trusted_authors_check); then
-  ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '%s' "$CALLUM_FLOW_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
+  ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '%s\n' "$CALLUM_FLOW_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
 else
   fail "$ta_msg" \
     "Coder: set trusted_authors = \"<login>:<numeric id>\" (e.g. cbundy:13131067) in coder/dev-system/terraform.tfvars and push both templates, then restart the workspace; desktop: export CALLUM_FLOW_TRUSTED_AUTHORS=<login>:<numeric id> on the host (the synced devcontainer.json forwards it) and rebuild the container; look an id up with: gh api users/<login> --jq .id"

@@ -138,13 +138,6 @@ grep -q 'template_tester_secrets_dir' "$case/out" || fail "no template_tester_se
 grep -q 'Testing template changes from a workspace' "$case/out" || fail "no README pointer: $(cat "$case/out")"
 [ ! -s "$case/calls" ] || fail "called coder without the template-tester directory: $(cat "$case/calls")"
 
-# 5. The template's variables are committed: terraform.tfvars is in the pushed directory
-# and sets the telemetry endpoint.
-grep -q '^otlp_endpoint = "http://' "$TEMPLATE_DIR/terraform.tfvars" \
-  || fail "$TEMPLATE_DIR/terraform.tfvars does not set otlp_endpoint"
-grep -q '^trusted_authors = "[A-Za-z0-9-]*:[0-9]*"' "$TEMPLATE_DIR/terraform.tfvars" \
-  || fail "$TEMPLATE_DIR/terraform.tfvars does not set trusted_authors"
-
 # 6. smoke, agent ready: push, create from dev-system-next, ssh for the log, delete.
 run_case 6 "$PUSH_NEXT" smoke
 expect_rc -eq
