@@ -138,6 +138,18 @@ grep -q 'template_tester_secrets_dir' "$case/out" || fail "no template_tester_se
 grep -q 'Testing template changes from a workspace' "$case/out" || fail "no README pointer: $(cat "$case/out")"
 [ ! -s "$case/calls" ] || fail "called coder without the template-tester directory: $(cat "$case/calls")"
 
+# 5. The template's variables are committed: terraform.tfvars is in the pushed directory,
+# sets the telemetry endpoint, and provisions trusted_authors with a value that passes the
+# variable's validation (main.tf defaults it to empty, so this is the guard that the
+# provisioning stays committed).
+grep -q '^otlp_endpoint = "http://' "$TEMPLATE_DIR/terraform.tfvars" \
+  || fail "$TEMPLATE_DIR/terraform.tfvars does not set otlp_endpoint"
+trusted=$(sed -n 's/^trusted_authors = "\(.*\)"$/\1/p' "$TEMPLATE_DIR/terraform.tfvars")
+[ -n "$trusted" ] || fail "$TEMPLATE_DIR/terraform.tfvars does not set trusted_authors"
+entry='[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?:[1-9][0-9]*'
+printf '%s\n' "$trusted" | grep -Eq "^$entry(,$entry)*\$" \
+  || fail "trusted_authors '$trusted' in terraform.tfvars fails the variable's validation"
+
 # 6. smoke, agent ready: push, create from dev-system-next, ssh for the log, delete.
 run_case 6 "$PUSH_NEXT" smoke
 expect_rc -eq
