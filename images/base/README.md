@@ -663,6 +663,25 @@ carries two hooks (`hooks/stale-image.sh`), both silent outside a base-image con
   those tools or `nm-export`, adds the likely cause and the fix, so it still reaches an agent
   whose session-start context was compacted away.
 
+### Machine-readable output and the version snapshot
+
+- `dev-version --json` prints one JSON document instead of the lines:
+  `{status, local, components[]}`, each component `{name, status, running, pinned, latest,
+  note}` (`null` where unknown; `status` is the same `OK|STALE|UNKNOWN`). It reports every
+  component above and adds running-only entries for `gh`, `node`, `psql`, `jq` and `tmux`
+  (`latest` null). Plain `dev-version` output and exit codes do not change.
+- `dev-version --local` (with or without `--json`) makes no network call: no GHCR, `gh api` or
+  npm lookup. It reports running and pinned versions, `latest` unknown.
+- `dev-version --snapshot [FILE]` writes the `--local --json` document plus identity fields to
+  `FILE` (default `${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`) atomically (temp file and
+  `mv`). `dev-init` runs it at start, after the plugins install and after `dev-init --plugins`
+  and `--repo`. Identity fields, `null` when the environment does not provide them:
+  `device` (`DEV_MACHINE_NAME`), `base_image` (the base stamp `VERSION`), `dev_image` (the
+  `VERSION` of the per-repo layer stamp in `image-release.d/`, e.g. `sha-<short>`),
+  `template_version` (`DEV_CODER_TEMPLATE_VERSION`), `plugin_version` (the user-scope
+  callum-flow version), `role` (`DEV_ROLE`), `ring` (`DEV_RING`), `runtime` (`DEV_RUNTIME`,
+  else `coder` when `CODER_AGENT_URL` is set) and `coder_workspace` (`DEV_CODER_WORKSPACE`).
+
 A per-repo image built `FROM` the base stamps itself by writing the same `KEY=VALUE` file
 (`IMAGE`, `VERSION`, `REVISION`, and optionally `TAG`, the tag to compare against, default
 the major of `VERSION`) to `/usr/local/share/dev-system/image-release.d/<name>`, from its

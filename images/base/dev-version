@@ -8,7 +8,17 @@
 # callum-flow plugin (per scope), and the tools claude, codex, no-mistakes, treehouse,
 # agentsview and coder.
 #
-# Usage: dev-version
+# Usage: dev-version [--json] [--local] [--snapshot [FILE]]
+#   --json      print one JSON document instead of the text lines: {status, local,
+#               components[]}, each component {name, status, running, pinned, latest, note}
+#               (null where unknown). It adds running-only entries for gh, node, psql, jq
+#               and tmux. The text output, without --json, is unchanged.
+#   --local     make no network call at all (no GHCR, gh api or npm registry): running and
+#               pinned versions only, latest unknown. Fast enough for a heartbeat.
+#   --snapshot  write the --local --json document plus the identity fields (device,
+#               base_image, dev_image, template_version, plugin_version, role, ring,
+#               runtime, coder_workspace) atomically to FILE, default
+#               ${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}. dev-init calls it.
 #   Exits 1 if any line is STALE, 0 if every line is OK or UNKNOWN, 2 on bad usage.
 #
 # STALE means something newer exists: a newer image published on GHCR (compared by the
@@ -31,6 +41,7 @@ REGISTRY="${DEV_VERSION_REGISTRY:-https://ghcr.io}"
 NPM="${DEV_VERSION_NPM:-https://registry.npmjs.org}"
 LIMIT="${DEV_VERSION_LIMIT:-3}"
 SELF=$(readlink -f "$0")
+LOCAL=${DEV_VERSION_LOCAL:-}
 
 # shellcheck source=plugins.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/plugins.sh"
@@ -71,6 +82,10 @@ image_job() {
     line UNKNOWN "$comp" "running=none latest=? (no release stamp: a local build)"
     return
   fi
+  if [ -n "$LOCAL" ]; then
+    line UNKNOWN "$comp" "running=${rev:0:7} latest=? (local: no registry lookup)"
+    return
+  fi
   repo=${ref#*/}
   token=$(http "$REGISTRY/token?service=${ref%%/*}&scope=repository:$repo:pull" | jq -r '.token // empty') || token=""
   if [ -z "$token" ]; then
@@ -108,7 +123,8 @@ plugin_job() {
     case "$src" in *"#"*) ref=${src#*#} ;; esac
     pin=$(semver "$ref")
     installed=$(claude_plugin_cli list --json 2>/dev/null) || { line UNKNOWN "$id" "running=? latest=? (claude plugin list failed)"; continue; }
-    latest=$(gh api "repos/${src%%#*}/releases/latest" --jq .tag_name 2>/dev/null)
+    latest=""
+    [ -n "$LOCAL" ] || latest=$(gh api "repos/${src%%#*}/releases/latest" --jq .tag_name 2>/dev/null)
     latest=$(semver "$latest")
     if ! printf '%s\n' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
       line UNKNOWN "$id" "running=none pin=${pin:-none} latest=${latest:-?} (not installed)"
@@ -139,11 +155,12 @@ tool_job() {
   shift
   out=$(timeout 3 "$@" 2>/dev/null </dev/null) || out=""
   run=$(semver "$out")
-  case "$TOOL_SRC" in
-    npm:*)
+  case "${LOCAL:+local}:$TOOL_SRC" in
+    local:*) latest="" ;;
+    :npm:*)
       latest=$(http "$NPM/$(printf '%s' "${TOOL_SRC#npm:}" | sed 's|/|%2f|')/latest" | jq -r '.version // empty' 2>/dev/null)
       ;;
-    gh:*)
+    :gh:*)
       latest=$(gh api "repos/${TOOL_SRC#gh:}/releases/latest" --jq .tag_name 2>/dev/null)
       ;;
   esac
@@ -162,6 +179,19 @@ tool_job() {
   fi
 }
 
+# extra_job <name> <command...>: a tool reported for its running version only.
+extra_job() {
+  local name="$1" out run
+  shift
+  out=$(timeout 3 "$@" 2>/dev/null </dev/null) || out=""
+  run=$(printf '%s\n' "$out" | grep -oE '[0-9]+(\.[0-9]+)+' | sed -n 1p)
+  if [ -n "$run" ]; then
+    line OK "$name" "running=$run latest=? (running version only)"
+  else
+    line UNKNOWN "$name" "running=none latest=? (not installed)"
+  fi
+}
+
 run_job() {
   case "$1" in
     image) image_job "base-image" "$STAMP" ;;
@@ -173,6 +203,11 @@ run_job() {
     treehouse) TOOL_SRC=gh:kunchenguid/treehouse tool_job treehouse treehouse --version ;;
     agentsview) TOOL_SRC=gh:kenn-io/agentsview TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" AGENTSVIEW_VERSION) tool_job agentsview agentsview --version ;;
     coder) TOOL_SRC=gh:coder/coder TOOL_PINNED=1 TOOL_PIN=$(stamp_get "$STAMP" CODER_VERSION) tool_job coder coder --version ;;
+    extra:gh) extra_job gh gh --version ;;
+    extra:node) extra_job node node --version ;;
+    extra:psql) extra_job psql psql --version ;;
+    extra:jq) extra_job jq jq --version ;;
+    extra:tmux) extra_job tmux tmux -V ;;
   esac
 }
 
@@ -181,10 +216,27 @@ if [ "${1:-}" = --job ] && [ $# -eq 3 ]; then
   run_job "$3"
   exit 0
 fi
-if [ $# -gt 0 ]; then
-  echo "usage: dev-version" >&2
-  exit 2
-fi
+JSON="" SNAPSHOT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1 ;;
+    --local) LOCAL=1 ;;
+    --snapshot)
+      JSON=1 LOCAL=1 SNAPSHOT="${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}"
+      if [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+        SNAPSHOT=$2
+        shift
+      fi
+      ;;
+    *)
+      echo "usage: dev-version [--json] [--local] [--snapshot [FILE]]" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+DEV_VERSION_LOCAL=$LOCAL
+export DEV_VERSION_LOCAL
 
 OUT=$(mktemp -d)
 trap 'rm -rf "$OUT"' EXIT
@@ -195,6 +247,7 @@ if [ -d "$STAMP_DIR" ]; then
   done
 fi
 jobs_list="$jobs_list plugin claude codex no-mistakes treehouse agentsview coder"
+[ -z "$JSON" ] || jobs_list="$jobs_list extra:gh extra:node extra:psql extra:jq extra:tmux"
 
 pids=""
 for j in $jobs_list; do
@@ -203,6 +256,76 @@ for j in $jobs_list; do
 done
 # shellcheck disable=SC2086
 wait $pids
+
+# json_component <job output file or "-" for a timeout> <job>: one TSV row per output line.
+json_rows() {
+  local j="$1" f="$2" l rest status comp running pinned latest note
+  if [ ! -s "$f" ]; then
+    printf 'UNKNOWN\t%s\t?\t?\t?\tlookup timed out\n' "$j"
+    return
+  fi
+  while IFS= read -r l; do
+    l=${l#dev-version: }
+    status=${l%% *}
+    rest=${l#* }
+    comp=${rest%% *}
+    rest=${rest#* }
+    running=$(printf '%s\n' "$rest" | sed -n 's/.*\(^\| \)running=\([^ ]*\).*/\2/p')
+    pinned=$(printf '%s\n' "$rest" | sed -n 's/.*\(^\| \)pin\(ned\)\{0,1\}=\([^ ]*\).*/\3/p')
+    latest=$(printf '%s\n' "$rest" | sed -n 's/.*\(^\| \)latest=\([^ ]*\).*/\2/p')
+    note=$(printf '%s\n' "$rest" | sed -n 's/^[^(]*(\(.*\))[^)]*$/\1/p')
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$status" "$comp" "$running" "$pinned" "$latest" "$note"
+  done < "$f"
+}
+
+# json_doc <rows file>: the JSON document for the TSV rows.
+json_doc() {
+  jq -Rn --arg local "${LOCAL:+1}" '
+    def nz: if . == "" or . == "?" or . == "none" then null else . end;
+    [inputs | split("\t") | {name: .[1], status: .[0], running: (.[2] | nz), pinned: (.[3] | nz), latest: (.[4] | nz), note: (.[5] // "" | if . == "" then null else . end)}] as $c
+    | {status: (if any($c[]; .status == "STALE") then "STALE" else "OK" end), local: ($local == "1"), components: $c}' < "$1"
+}
+
+if [ -n "$JSON" ]; then
+  : > "$OUT/rows.tsv"
+  stale=0
+  for j in $jobs_list; do
+    f="$OUT/${j//[:\/]/_}.out"
+    json_rows "$j" "$f" >> "$OUT/rows.tsv"
+    ! grep -q '^dev-version: STALE ' "$f" 2>/dev/null || stale=1
+  done
+  json_doc "$OUT/rows.tsv" > "$OUT/doc.json" || exit 2
+  if [ -n "$SNAPSHOT" ]; then
+    dev_image=""
+    if [ -d "$STAMP_DIR" ]; then
+      for f in "$STAMP_DIR"/*; do
+        [ -f "$f" ] || continue
+        dev_image=$(stamp_get "$f" VERSION)
+        break
+      done
+    fi
+    runtime=${DEV_RUNTIME:-}
+    [ -n "$runtime" ] || [ -z "${CODER_AGENT_URL:-}" ] || runtime=coder
+    jq --arg device "${DEV_MACHINE_NAME:-}" --arg base "$(stamp_get "$STAMP" VERSION)" --arg dev "$dev_image" \
+      --arg tpl "${DEV_CODER_TEMPLATE_VERSION:-}" --arg role "${DEV_ROLE:-}" --arg ring "${DEV_RING:-}" \
+      --arg rt "$runtime" --arg ws "${DEV_CODER_WORKSPACE:-}" '
+      def e: if . == "" then null else . end;
+      {device: ($device | e), base_image: ($base | e), dev_image: ($dev | e), template_version: ($tpl | e),
+       plugin_version: ([.components[] | select((.name | startswith("callum-flow@")) and (.name | endswith("(user)"))) | .running][0]),
+       role: ($role | e), ring: ($ring | e), runtime: ($rt | e), coder_workspace: ($ws | e)} + .' \
+      "$OUT/doc.json" > "$OUT/snapshot.json" || exit 2
+    dest_dir=$(dirname -- "$SNAPSHOT")
+    tmpf=$(mktemp "$dest_dir/.dev-versions.XXXXXX") || exit 2
+    if cat "$OUT/snapshot.json" > "$tmpf" && chmod 644 "$tmpf" && mv -f "$tmpf" "$SNAPSHOT"; then
+      exit 0
+    fi
+    rm -f "$tmpf"
+    exit 2
+  fi
+  cat "$OUT/doc.json"
+  [ "$stale" -eq 0 ] || exit 1
+  exit 0
+fi
 
 stale=0
 for j in $jobs_list; do

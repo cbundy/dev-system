@@ -575,15 +575,24 @@ start_login_page() {
 #     right after step 6, so a fresh clone counts; dev-init --plugins runs only
 #     this step.
 
+# write_versions: refresh the version snapshot (dev-version --snapshot,
+# ${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}) that the heartbeat and the
+# reconciler read. Local lookups only; a failure is logged, never fatal.
+write_versions() {
+  dev-version --snapshot > /dev/null 2>&1 || log "WARNING: could not write the version snapshot"
+}
+
 if [ "${1:-}" = --repo ]; then
   setup_git_credentials
   sync_repo
   install_plugins
+  write_versions
   recover_no_mistakes
   exit 0
 fi
 if [ "${1:-}" = --plugins ]; then
   install_plugins
+  write_versions
   exit 0
 fi
 
@@ -596,12 +605,14 @@ seed_no_mistakes_model
 setup_git_credentials
 sync_repo
 recover_no_mistakes
+write_versions
 start_agentsview_push
 start_event_push
 start_nm_push
 check_shared_dir
 start_login_page
 install_plugins
+write_versions
 
 # 12. Report anything still broken, without failing the start.
 dev-doctor --warn-only || true

@@ -42,6 +42,7 @@ cat > "$bin/gh" <<'STUB'
 #!/bin/sh
 [ ! -f "$FIX/hang" ] || exec sleep 30
 [ ! -f "$FIX/offline" ] || exit 1
+[ "$1" != --version ] || { echo "gh version 2.50.0 (2026-01-01)"; exit 0; }
 # gh api repos/<owner>/<repo>/releases/latest --jq .tag_name
 f="$FIX/gh.$(echo "$2" | cut -d/ -f3)"
 [ -f "$f" ] && cat "$f"
@@ -58,7 +59,20 @@ printf '#!/bin/sh\necho "no-mistakes version v$(cat "$FIX/nm.run") (abc) 2026-01
 printf '#!/bin/sh\necho "v$(cat "$FIX/treehouse.run")"\n' > "$bin/treehouse"
 printf '#!/bin/sh\necho "agentsview v0.44.0 (commit abc)"\n' > "$bin/agentsview"
 printf '#!/bin/sh\necho "Coder v2.36.6+abc Mon"\n' > "$bin/coder"
+printf '#!/bin/sh\necho v20.11.1\n' > "$bin/node"
+printf '#!/bin/sh\necho "psql (PostgreSQL) 16.3"\n' > "$bin/psql"
+printf '#!/bin/sh\necho "tmux 3.4"\n' > "$bin/tmux"
 chmod +x "$bin"/*
+
+# A second bin dir whose curl and gh fail loudly (and leave a marker) when called.
+nonet="$tmp/nonet"
+mkdir "$nonet"
+for t in curl gh; do
+  printf '#!/bin/sh\necho "$0 $*" >> "%s/network-called"\nexit 99\n' "$tmp" > "$nonet/$t"
+done
+# gh --version is a local call: only gh api (the network) is loud.
+printf '#!/bin/sh\n[ "$1" != --version ] || { echo "gh version 2.50.0"; exit 0; }\necho "$0 $*" >> "%s/network-called"\nexit 99\n' "$tmp" > "$nonet/gh"
+chmod +x "$nonet"/*
 
 FIX="$tmp/fix"
 export FIX
@@ -90,7 +104,7 @@ STAMP
 # run_cmd [args]: runs the command with the stubs; sets $out and $rc.
 run_cmd() {
   rc=0
-  out=$(PATH="$bin:$PATH" DEV_VERSION_STAMP="${STAMP_FILE:-$tmp/stamp}" DEV_VERSION_STAMP_DIR="$tmp/layers" \
+  out=$(PATH="${EXTRA_PATH:+$EXTRA_PATH:}$bin:$PATH" DEV_VERSION_STAMP="${STAMP_FILE:-$tmp/stamp}" DEV_VERSION_STAMP_DIR="$tmp/layers" \
     DEV_SYSTEM_SHARE="$SCRIPT_DIR/.." DEV_VERSION_REGISTRY=https://reg.test DEV_VERSION_NPM=https://npm.test \
     DEV_DEFAULT_PLUGINS='callum-flow@callum=cbundy/dev-system#v0.2.0' "$CMD" "$@" 2>&1) || rc=$?
 }
@@ -162,6 +176,87 @@ STAMP
 run_cmd
 expect "layer stamp compared" 0 '^dev-version: OK image:dev running=aaaaaaa latest=aaaaaaa'
 printf '%s\n' "$out" | grep -q 'image-layers none' && fail "layer stamp: still prints none"
+
+# --json: every component, plus the running-only tools.
+reset; run_cmd --json
+expect "json" 0
+printf '%s\n' "$out" | jq -e '.status == "OK" and .local == false' > /dev/null || fail "json: status/local. Output: $out"
+for c in base-image 'callum-flow@callum(user)' claude codex no-mistakes treehouse agentsview coder gh node psql jq tmux; do
+  printf '%s\n' "$out" | jq -e --arg c "$c" 'any(.components[]; .name == $c)' > /dev/null || fail "json: no component $c. Output: $out"
+done
+printf '%s\n' "$out" | jq -e '
+  (.components[] | select(.name == "base-image")) as $b | $b.status == "OK" and $b.running == "aaaaaaa" and $b.latest == "aaaaaaa" and $b.pinned == null
+  and ((.components[] | select(.name == "claude")) | .running == "1.0.0" and .latest == "1.0.0" and .pinned == null)
+  and ((.components[] | select(.name == "agentsview")) | .running == "0.44.0" and .pinned == "0.44.0" and .latest == "0.44.0")
+  and ((.components[] | select(.name == "callum-flow@callum(user)")) | .running == "0.2.0" and .pinned == "0.2.0" and .latest == "0.2.0")
+  and ((.components[] | select(.name == "tmux")) | .running == "3.4" and .latest == null and .status == "OK")
+  and ((.components[] | select(.name == "node")) | .running == "20.11.1")' > /dev/null || fail "json: wrong values. Output: $out"
+reset; echo 9.9.9 > "$FIX/claude.latest"; run_cmd --json
+expect "json stale keeps exit 1" 1
+printf '%s\n' "$out" | jq -e '.status == "STALE" and ((.components[] | select(.name == "claude")) | .status == "STALE" and .latest == "9.9.9")' > /dev/null || fail "json stale: $out"
+reset; touch "$FIX/offline"; run_cmd --json
+expect "json offline" 0
+printf '%s\n' "$out" | jq -e '(.components[] | select(.name == "claude")) | .running == "1.0.0" and .latest == null and .status == "UNKNOWN"' > /dev/null || fail "json offline: $out"
+reset
+cat > "$tmp/layers/dev" <<STAMP
+IMAGE=ghcr.io/cbundy/dev-system/dev
+VERSION=sha-abc1234
+REVISION=aaaaaaa1111
+TAG=2
+STAMP
+run_cmd --json
+printf '%s\n' "$out" | jq -e 'any(.components[]; .name == "image:dev" and .status == "OK")' > /dev/null || fail "json layer: $out"
+rm -f "$tmp/layers/dev"
+
+# The plain text output lists no running-only tools.
+reset; run_cmd
+printf '%s\n' "$out" | grep -qE '^dev-version: [A-Z]+ (gh|node|psql|jq|tmux) ' && fail "text output grew running-only lines"
+
+# --local: no network call at all, running and pinned only.
+reset; rm -f "$tmp/network-called"
+start=$(date +%s)
+EXTRA_PATH=$nonet run_cmd --local --json
+expect "local json" 0
+[ ! -e "$tmp/network-called" ] || fail "local: touched the network: $(cat "$tmp/network-called")"
+printf '%s\n' "$out" | jq -e '.local == true and all(.components[]; .latest == null)
+  and ((.components[] | select(.name == "claude")) | .running == "1.0.0")
+  and ((.components[] | select(.name == "agentsview")) | .pinned == "0.44.0")
+  and ((.components[] | select(.name == "callum-flow@callum(user)")) | .running == "0.2.0" and .pinned == "0.2.0")' > /dev/null || fail "local json: $out"
+[ $(($(date +%s) - start)) -le 2 ] || fail "local took too long"
+EXTRA_PATH=$nonet run_cmd --local
+expect "local text" 0 '^dev-version: UNKNOWN base-image running=aaaaaaa latest=\?' '^dev-version: UNKNOWN claude running=1.0.0 latest=\?'
+[ ! -e "$tmp/network-called" ] || fail "local text: touched the network"
+reset; printf '[{"id":"callum-flow@callum","version":"0.1.0","scope":"user"}]' > "$FIX/plugins.json"
+EXTRA_PATH=$nonet run_cmd --local
+expect "local still flags a plugin below the pin" 1 '^dev-version: STALE callum-flow@callum\(user\)'
+
+# --snapshot: the local json plus identity fields, written atomically.
+reset
+cat > "$tmp/layers/dev" <<STAMP
+IMAGE=ghcr.io/cbundy/dev-system/dev
+VERSION=sha-abc1234
+REVISION=aaaaaaa1111
+TAG=2
+STAMP
+snap="$tmp/snap/versions.json"
+mkdir "$tmp/snap"
+rm -f "$tmp/network-called"
+DEV_MACHINE_NAME=coder-x DEV_ROLE=worker DEV_RING=canary DEV_CODER_TEMPLATE_VERSION=v7 DEV_CODER_WORKSPACE=ws1 DEV_RUNTIME=coder \
+  EXTRA_PATH=$nonet run_cmd --snapshot "$snap"
+expect "snapshot" 0
+[ -z "$out" ] || fail "snapshot printed: $out"
+[ ! -e "$tmp/network-called" ] || fail "snapshot: touched the network"
+jq -e '.device == "coder-x" and .base_image == "2.13.0" and .dev_image == "sha-abc1234" and .template_version == "v7"
+  and .plugin_version == "0.2.0" and .role == "worker" and .ring == "canary" and .runtime == "coder"
+  and .coder_workspace == "ws1" and .local == true and (.components | length) > 8' "$snap" > /dev/null || fail "snapshot content: $(cat "$snap")"
+[ "$(ls -A "$tmp/snap")" = versions.json ] || fail "snapshot left temp files: $(ls -A "$tmp/snap")"
+# Missing identity env gives nulls, not errors; the default path honours DEV_VERSIONS_FILE.
+rm -f "$tmp/layers/dev" "$snap"
+(unset DEV_MACHINE_NAME DEV_ROLE DEV_RING DEV_CODER_TEMPLATE_VERSION DEV_CODER_WORKSPACE DEV_RUNTIME CODER_AGENT_URL
+  DEV_VERSIONS_FILE=$snap run_cmd --snapshot
+  [ "$rc" -eq 0 ] || fail "snapshot without env: exit $rc: $out")
+jq -e '.device == null and .dev_image == null and .template_version == null and .role == null and .ring == null
+  and .runtime == null and .coder_workspace == null and .base_image == "2.13.0"' "$snap" > /dev/null || fail "snapshot nulls: $(cat "$snap")"
 
 reset; run_cmd --bogus
 expect "bad flag" 2 'usage: dev-version'
