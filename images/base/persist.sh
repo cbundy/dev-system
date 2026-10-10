@@ -20,6 +20,7 @@ persist_dirs() {
       /persist/no-mistakes) d=${NM_HOME:-$d} ;;
       /persist/agentsview) d=${AGENTSVIEW_DATA_DIR:-$d} ;;
       /persist/events) d=${CALLUM_EVENTS_DIR:-$d} ;;
+      /persist/dev-restart-self) d=${DEV_RESTART_SELF_DIR:-$d} ;;
     esac
     [ -n "$d" ] && printf '%s\n' "$d"
   done < "$PERSIST_LIST"
