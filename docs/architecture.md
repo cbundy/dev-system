@@ -41,7 +41,7 @@ and the factory share one trusted identity, so every trusted comment counts equa
 
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
-plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard, evaluate-sessions, query-factory-data), agents (designer, explorer, implementer, fixer, adjudicator), hooks (forbid-git-stash, forbid-tmux-kill, forbid-coder-self, stale-image)
+plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard, evaluate-sessions, query-factory-data, factory-state), agents (designer, explorer, implementer, fixer, adjudicator), hooks (forbid-git-stash, forbid-tmux-kill, forbid-coder-self, stale-image)
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 .devcontainer/                    this repo's dev container and dev image (base + terraform)

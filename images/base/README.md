@@ -1316,6 +1316,19 @@ cover the whole fleet; `window.scope` says which scope each source covers. A mis
 makes the affected metrics `n/a` with the reason listed under `sources`. `--ready-times` takes a JSON object of issue to the ISO times it was labeled `ready`
 (the skill collects them with `gh api` timelines) so the claim wait is measured offline. Exit 2 is bad arguments, 1 a source that exists but cannot be read.
 
+`callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule S1..S5=<minutes>]... [--github on|off]`
+answers "what is the factory doing right now?": per repo, each live issue with its stage (queued,
+designing, implementing, in pipeline, parked, ready to merge, merged, closed without merge), time in stage, holder device, run,
+PR and stuck flag; the stuck items with the rule that tripped; and coverage per repo and device, so a data
+gap never reads as idle. It is read-only. It queries `factory.events` and the `nomistakes` mirror through
+`dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
+claim comment) through `callum-flow-issue-read`, so a past `--at` is exact for the database but not for
+GitHub; `--github off` skips it. Stages, source precedence (GitHub closure first), stuck rules and
+coverage classes are defined in [`docs/factory-state.md`](../../docs/factory-state.md). A missing
+`factory.workers_status` or unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad arguments, 1 a
+required source that cannot be read. The `factory-state` skill runs it and adds a short narrative. It is in
+the synced allow list.
+
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
 is in the synced allow list. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run

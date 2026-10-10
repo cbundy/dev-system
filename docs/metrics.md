@@ -194,6 +194,10 @@ logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it 
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
 `reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
+`callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
+use `callum-flow-factory-state` ([factory-state.md](factory-state.md)): it has six stuck rules with
+adjustable thresholds and puts GitHub closure first. The hardcoded 4 hour stuck query that used to
+follow is retired in its favour.
 
 ```sql
 -- double-claims: one row per pair of overlapping claims
@@ -216,24 +220,6 @@ SELECT device,
   count(*) FILTER (WHERE state = 'reclaimed')  AS reclaimed
 FROM factory.events
 GROUP BY device;
-
--- stuck issues
-WITH per_issue AS (
-  SELECT repo, issue,
-    max(ts) FILTER (WHERE state <> 'claim_lost')                                  AS last_ts,
-    (array_agg(state ORDER BY ts DESC) FILTER (WHERE state <> 'claim_lost'))[1]   AS last_state,
-    max(ts) FILTER (WHERE state IN ('ready', 'reclaimed', 'merged', 'abandoned', 'closed')) AS last_release,
-    max(ts) FILTER (WHERE state = 'claimed')                                      AS last_claim
-  FROM factory.events
-  WHERE issue IS NOT NULL
-  GROUP BY repo, issue
-)
-SELECT repo, issue, last_state, last_ts, now() - last_ts AS silent
-FROM per_issue
-WHERE last_claim IS NOT NULL
-  AND (last_release IS NULL OR last_claim > last_release)
-  AND now() - last_ts > interval '4 hours'
-ORDER BY last_ts;
 ```
 
 ## 7. The waiting split

@@ -8,7 +8,7 @@ description: >-
   from the read-only `callum-flow-evaluate` tool in the base image; this skill
   adds GitHub context and the narrative. Use when asked to evaluate, audit or
   review the orchestrator and sub-agent sessions for a window, or to compare one
-  window with a baseline.
+  window with a baseline. For what is happening right now, use factory-state.
 version: 0.25.0
 ---
 

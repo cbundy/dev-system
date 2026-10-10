@@ -36,7 +36,9 @@
       "Bash(callum-flow-design-route *)",
       "Bash(callum-flow-sweep)",
       "Bash(callum-flow-sweep *)",
-      "Bash(callum-flow-evaluate *)"
+      "Bash(callum-flow-evaluate *)",
+      "Bash(callum-flow-factory-state)",
+      "Bash(callum-flow-factory-state *)"
     ]
   }
 }

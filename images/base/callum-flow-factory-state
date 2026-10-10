@@ -1,0 +1,641 @@
+#!/usr/bin/env node
+'use strict';
+// callum-flow-factory-state: one deterministic answer to "what is the factory doing right now?"
+// (cbundy/dev-system#345, part of #340). It reads the fleet database through dev-query
+// (factory.events, the nomistakes mirror and, once it exists, factory.workers_status) and, unless
+// --github off, GitHub through callum-flow-issue-read (labels, open or closed, claim comments).
+// It never writes anything. docs/factory-state.md defines every stage, the source precedence, the
+// stuck rules and the coverage classes; the SQL below lives here so it is versioned and tested with
+// the image.
+//
+// Usage: callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
+//          [--rule S1..S5=<minutes>]... [--github on|off]
+//
+// Exit codes: 0 ok, 2 bad arguments, 1 a required source (factory.events, nomistakes.runs) that
+// cannot be read. A missing optional source (factory.workers_status, GitHub) shows as `n/a` with the
+// reason and is never an error.
+//
+// With the same database rows, the same --at and the same GitHub answers the output is
+// byte-identical. GitHub facts are read live, so for a past --at they are not as of that time
+// (the output says so under `github`).
+//
+// Environment (tests): CALLUM_FLOW_DEV_QUERY_BIN (dev-query), CALLUM_FLOW_ISSUE_READ_BIN
+// (callum-flow-issue-read).
+
+const { execFileSync } = require('node:child_process');
+
+const DEV_QUERY = process.env.CALLUM_FLOW_DEV_QUERY_BIN || 'dev-query';
+const ISSUE_READ = process.env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read';
+
+// Stage order is the sort order of the output.
+const STAGES = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'ready to merge', 'merged', 'closed without merge'];
+const FINAL_RECENT_MS = 24 * 3600 * 1000;
+const DEFAULT_RULES = { S1: 240, S2: 60, S3: 30, S4: 30, S5: 30 };
+const RULE_TEXT = {
+  S1: 'designing for more than S1 minutes',
+  S2: 'implementing, with no pipeline run in progress, for more than S2 minutes',
+  S3: 'parked for more than S3 minutes',
+  S4: 'ready to merge for more than S4 minutes',
+  S5: 'in pipeline with no run update for more than S5 minutes',
+  S6: "the holder's worker is stale or stopped",
+};
+const DECISION_STAGE = {
+  ready: 'queued', reclaimed: 'queued', claimed: 'designing', briefed: 'designing', design_routed: 'designing', delegated: 'implementing',
+};
+// Pipeline facts logged by agents: only ever reported as hints when the mirror has no run.
+const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed', 'head_mismatch', 'conflict', 'ci_stalled']);
+const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+const LABEL_QUEUED = 'ready';
+const LABEL_ACTIVE = 'In development';
+const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']);
+
+class UsageError extends Error {}
+class InputError extends Error {}
+
+// ---------------------------------------------------------------- SQL
+
+// The canonical run-to-issue link of docs/metrics.md ("Linking pipeline runs to issues"),
+// copied verbatim; tests/factory-state.test.js fails if the copies drift.
+const RUN_LINK = `WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+)`;
+
+const T = (col) => `to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`;
+const REPO_FILTER = (col) => `(:'repos' = '' OR ${col} = ANY(string_to_array(:'repos', ',')))`;
+
+const SQL_META = `-- fs:meta
+SELECT json_build_object(
+  'now', ${T('now()')},
+  'events', to_regclass('factory.events') IS NOT NULL,
+  'runs', to_regclass('nomistakes.runs') IS NOT NULL,
+  'workers', to_regclass('factory.workers_status') IS NOT NULL);`;
+
+const SQL_EVENTS = `-- fs:events
+SELECT coalesce(json_agg(json_build_object(
+  'repo', repo, 'device', device, 'ts', ${T('ts')}, 'state', state, 'issue', issue,
+  'run_id', run_id, 'branch', branch, 'pr', pr, 'note', note, 'actor', actor)
+  ORDER BY ts, device, state, issue), '[]'::json)
+FROM factory.events
+WHERE ts <= :'at'::timestamptz AND ${REPO_FILTER('lower(repo)')};`;
+
+const SQL_RUNS = `-- fs:runs
+${RUN_LINK}
+SELECT coalesce(json_agg(json_build_object(
+  'id', r.id, 'repo', r.repo, 'device', r.device, 'branch', r.branch, 'status', r.status,
+  'pr_url', r.pr_url, 'pr_state', r.pr_state, 'issue', l.issue,
+  'awaiting_agent_since', ${T('r.awaiting_agent_since')},
+  'created_at', ${T('r.created_at')}, 'updated_at', ${T('r.updated_at')})
+  ORDER BY r.created_at, r.id, l.issue), '[]'::json)
+FROM nomistakes.runs r LEFT JOIN run_link l ON l.run_id = r.id
+WHERE r.repo IS NOT NULL AND r.created_at <= :'at'::timestamptz AND ${REPO_FILTER('r.repo')};`;
+
+// ---------------------------------------------------------------- arguments
+
+function parseArgs(argv) {
+  const o = { repos: [], format: 'text', rules: { ...DEFAULT_RULES }, github: true };
+  const need = (i, name) => {
+    if (i + 1 >= argv.length) throw new UsageError(`${name} needs a value`);
+    return argv[i + 1];
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--repo') {
+      const v = need(i++, a);
+      if (!/^[\w.-]+\/[\w.-]+$/.test(v)) throw new UsageError(`--repo must be owner/name, got '${v}'`);
+      if (!o.repos.includes(v.toLowerCase())) o.repos.push(v.toLowerCase());
+    } else if (a === '--at') {
+      const v = need(i++, a);
+      const t = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v) ? Date.parse(v) : NaN;
+      if (Number.isNaN(t)) throw new UsageError(`--at is not an ISO time with a zone (for example 2026-10-10T12:00:00Z): ${v}`);
+      o.at = t;
+    } else if (a === '--format') {
+      o.format = need(i++, a);
+      if (!['text', 'json'].includes(o.format)) throw new UsageError('--format must be text or json');
+    } else if (a === '--rule') {
+      const v = need(i++, a);
+      const m = /^(S[1-5])=(\d{1,7})$/.exec(v);
+      if (!m) throw new UsageError(`--rule must be S1..S5=<minutes>, got '${v}'`);
+      o.rules[m[1]] = Number(m[2]);
+    } else if (a === '--github') {
+      const v = need(i++, a);
+      if (!['on', 'off'].includes(v)) throw new UsageError('--github must be on or off');
+      o.github = v === 'on';
+    } else if (a === '-h' || a === '--help') o.help = true;
+    else throw new UsageError(`unknown option '${a}'`);
+  }
+  o.repos.sort();
+  return o;
+}
+
+const USAGE = 'usage: callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] ' +
+  '[--rule S1..S5=<minutes>]... [--github on|off]';
+
+// ---------------------------------------------------------------- helpers
+
+const ms = (v) => (v === null || v === undefined ? null : Date.parse(v));
+const iso = (t) => (t === null || t === undefined ? null : new Date(t).toISOString());
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const minutesBetween = (from, to) => (from === null || from === undefined ? null : Math.max(0, Math.floor((to - from) / 60000)));
+const last = (xs) => (xs.length ? xs[xs.length - 1] : null);
+const prNumber = (url) => {
+  const m = /\/pull\/(\d+)/.exec(String(url || ''));
+  return m ? Number(m[1]) : null;
+};
+
+// ---------------------------------------------------------------- derivation
+
+// What a run looked like at `at`. The mirror holds only each run's latest row, so for a run updated
+// after `at` the state then is reconstructed from timestamps and marked approximate.
+function runView(run, at) {
+  const created = ms(run.created_at);
+  const updated = ms(run.updated_at) ?? created;
+  const approx = updated > at;
+  let status = run.status;
+  let prState = run.pr_state || null;
+  let awaiting = ms(run.awaiting_agent_since);
+  if (approx) {
+    status = 'running';
+    prState = null;
+  }
+  const running = !TERMINAL.has(status);
+  if (awaiting !== null && (awaiting > at || !running)) awaiting = null;
+  return {
+    id: run.id, device: run.device || null, branch: run.branch || null, status, prState, prUrl: run.pr_url || null,
+    created, updated: approx ? at : updated, awaiting, running, approx,
+  };
+}
+
+function stageOfRun(rv) {
+  if (rv.running) return rv.awaiting !== null ? { stage: 'parked' } : { stage: 'in pipeline' };
+  if (rv.status === 'completed') {
+    if (rv.prState === 'merged') return { stage: 'merged' };
+    if (rv.prState === 'closed') return { stage: 'implementing', detail: 'run finished, PR closed without merge' };
+    if (rv.prState === 'open' || (!rv.prState && rv.prUrl)) return { stage: 'ready to merge' };
+    return { stage: 'implementing', detail: 'run completed without a PR' };
+  }
+  return { stage: 'implementing', detail: `last run ${rv.status}` };
+}
+
+// Start of the unbroken stretch of decision events (newest backwards) that all map to `stage`.
+function stageEntered(decisions, stage) {
+  let t = null;
+  for (let i = decisions.length - 1; i >= 0; i--) {
+    if (DECISION_STAGE[decisions[i].state] !== stage) break;
+    t = decisions[i].t;
+  }
+  return t;
+}
+
+function deriveIssue(repo, issue, evs, runs, at, rules) {
+  const decisions = evs.filter((e) => DECISION_STAGE[e.state]);
+  const lastDec = last(decisions);
+  const lastClaim = last(evs.filter((e) => e.state === 'claimed'));
+  const lastFinalEv = last(evs.filter((e) => e.state === 'closed' || e.state === 'abandoned'));
+  const mergedEv = last(evs.filter((e) => e.state === 'merged'));
+  const final = lastFinalEv && !(lastClaim && lastClaim.t > lastFinalEv.t) ? lastFinalEv : null;
+  const merged = mergedEv && !(lastClaim && lastClaim.t > mergedEv.t) ? mergedEv : null;
+  const latestRun = last(runs.map((r) => runView(r, at)).sort((a, b) => a.created - b.created || cmp(a.id, b.id)));
+
+  let stage = null;
+  let detail = null;
+  let entered = null;
+  let source = 'event';
+  let rv = latestRun;
+  const fromDecision = () => {
+    const s = DECISION_STAGE[lastDec.state];
+    stage = s;
+    entered = stageEntered(decisions, s);
+    detail = s === 'implementing' ? 'delegated, no pipeline run yet' : null;
+    source = 'event';
+  };
+  const fromRun = () => {
+    const s = stageOfRun(rv);
+    stage = s.stage;
+    detail = s.detail || null;
+    source = 'mirror';
+    if (stage === 'in pipeline') entered = rv.created;
+    else if (stage === 'parked') entered = rv.awaiting;
+    else entered = rv.updated;
+  };
+
+  if (final) {
+    stage = merged || (final.state === 'closed' && rv && stageOfRun(rv).stage === 'merged') ? 'merged' : 'closed without merge';
+    entered = final.t;
+    detail = `${final.state}${final.note ? ` (${final.note})` : ''}`;
+  } else if (merged) {
+    stage = 'merged';
+    entered = merged.t;
+  } else if (rv) {
+    const rs = stageOfRun(rv).stage;
+    const live = rs === 'parked' || rs === 'in pipeline' || rs === 'ready to merge';
+    if (live) fromRun();
+    else if (lastDec && lastDec.t > rv.updated) fromDecision();
+    else fromRun();
+  } else if (lastDec) fromDecision();
+
+  const finalNow = Boolean(final);
+  let hint = null;
+  if (!rv && !finalNow && stage !== 'merged') {
+    const h = last(evs.filter((e) => PIPELINE_HINTS.has(e.state) && (!lastClaim || e.t >= lastClaim.t)));
+    if (h) hint = `event-only: ${h.state} at ${iso(h.t)}, no matching run in the mirror`;
+  }
+
+  // Stuck rules (docs/factory-state.md).
+  let stuck = null;
+  const age = stage === null || entered === null ? null : minutesBetween(entered, at);
+  if (!finalNow && stage !== null) {
+    if (stage === 'designing' && age > rules.S1) stuck = 'S1';
+    else if (stage === 'implementing' && age > rules.S2) stuck = 'S2';
+    else if (stage === 'parked' && age > rules.S3) stuck = 'S3';
+    else if (stage === 'ready to merge' && age > rules.S4) stuck = 'S4';
+    else if (stage === 'in pipeline' && rv && !rv.approx && minutesBetween(rv.updated, at) > rules.S5) stuck = 'S5';
+  }
+
+  const event = last(evs.filter((e) => e.pr !== null && e.pr !== undefined));
+  return {
+    repo, issue, stage, detail, entered, source, stuck, final: finalNow, hint,
+    holder: lastClaim ? lastClaim.device : null,
+    run: rv ? rv.id : (last(evs.filter((e) => e.run_id)) || {}).run_id || null,
+    runApprox: Boolean(rv && rv.approx),
+    runStatus: rv ? rv.status : null,
+    pr: rv && prNumber(rv.prUrl) ? prNumber(rv.prUrl) : event ? event.pr : null,
+    hasEvents: evs.length > 0,
+    hasRun: Boolean(rv),
+  };
+}
+
+function normalizeEvents(events, at) {
+  return events
+    .map((e) => ({
+      repo: String(e.repo).toLowerCase(), device: e.device, state: e.state, issue: e.issue, run_id: e.run_id || null,
+      pr: e.pr === undefined ? null : e.pr, note: e.note || null, t: ms(e.ts),
+    }))
+    .filter((e) => e.t <= at)
+    .sort((a, b) => a.t - b.t || cmp(a.device || '', b.device || '') || cmp(a.state, b.state) || cmp(String(a.issue), String(b.issue)) ||
+      cmp(a.run_id || '', b.run_id || '') || cmp(a.note || '', b.note || '') || cmp(String(a.pr), String(b.pr)));
+}
+
+function dedupeRuns(runs, at) {
+  const byId = new Map();
+  for (const r of runs) {
+    if (ms(r.created_at) > at) continue;
+    const prev = byId.get(r.id);
+    if (!prev || (r.issue !== null && (prev.issue === null || r.issue < prev.issue))) byId.set(r.id, r);
+  }
+  return [...byId.values()];
+}
+
+function expectedLabelProblem(stage, labels) {
+  const has = (l) => labels.includes(l);
+  if (stage === 'queued' && has(LABEL_ACTIVE)) return `queued, but the issue carries '${LABEL_ACTIVE}'`;
+  if (stage === 'queued' && !has(LABEL_QUEUED)) return `queued, but the issue has no '${LABEL_QUEUED}' label`;
+  if (ACTIVE_STAGES.has(stage) && !has(LABEL_ACTIVE)) return `${stage}, but the issue lacks '${LABEL_ACTIVE}'`;
+  return null;
+}
+
+// Pure: rows in, the full report out. `github` is null (not read) or { <repo>: { ok, reason, open, states, claims } }.
+function deriveState(input) {
+  const { at, rules, github = null, workers } = input;
+  const events = normalizeEvents(input.events, at);
+  const runs = dedupeRuns(input.runs.map((r) => ({ ...r, repo: String(r.repo).toLowerCase() })), at);
+  const repoNames = new Set([...input.repos, ...events.map((e) => e.repo), ...runs.map((r) => r.repo)]);
+  const repos = [];
+  const stuckAll = [];
+
+  for (const repo of [...repoNames].sort()) {
+    const evR = events.filter((e) => e.repo === repo);
+    const runsR = runs.filter((r) => r.repo === repo);
+    const gh = github && github[repo] ? github[repo] : null;
+    const issueNums = new Set([...evR.filter((e) => Number.isInteger(e.issue)).map((e) => e.issue), ...runsR.filter((r) => r.issue !== null).map((r) => r.issue)]);
+    const live = [];
+    const recent = [];
+    const placed = new Set();
+
+    for (const n of [...issueNums].sort((a, b) => a - b)) {
+      const d = deriveIssue(repo, n, evR.filter((e) => e.issue === n), runsR.filter((r) => r.issue === n), at, rules);
+      if (d.stage === null) continue; // only noise events (claim_lost, usage, ...): nothing to place
+      // pipeline-only issues: only what is still moving shows up (history stays out of the live view)
+      if (!d.hasEvents && !d.final && !['in pipeline', 'parked', 'ready to merge'].includes(d.stage)) continue;
+      // GitHub closure beats everything
+      d.github = null;
+      if (gh && gh.ok) {
+        const labels = gh.open[n] ? gh.open[n].labels : (gh.states[n] ? gh.states[n].labels || [] : null);
+        const st = gh.open[n] ? 'open' : gh.states[n] ? gh.states[n].state : 'unknown';
+        d.github = { state: st, labels: labels === null ? null : [...labels].sort(), claim: gh.claims[n] || null };
+        const closedAt = st === 'closed' && gh.states[n].closed_at ? ms(gh.states[n].closed_at) : null;
+        if (st === 'closed' && !d.final && (closedAt === null || closedAt <= at)) {
+          d.stage = d.stage === 'merged' ? 'merged' : 'closed without merge';
+          d.detail = `closed on GitHub${gh.states[n].reason ? ` (${gh.states[n].reason})` : ''}`;
+          d.entered = closedAt !== null ? closedAt : at;
+          d.final = true;
+          d.source = 'github';
+          d.stuck = null;
+          d.hint = null;
+        }
+      }
+      d.flags = [];
+      if (!d.final && d.github) {
+        if (d.github.state === 'open' && d.github.labels) {
+          const p = expectedLabelProblem(d.stage, d.github.labels);
+          if (p) d.flags.push(`label: ${p}`);
+        }
+        if (d.github.state === 'unknown') d.flags.push('github: state could not be read');
+        if (d.github.claim && d.holder && d.github.claim.device !== d.holder && ACTIVE_STAGES.has(d.stage)) {
+          d.flags.push(`claim: GitHub comment says ${d.github.claim.device}, events say ${d.holder}`);
+        }
+      }
+      placed.add(n);
+      if (d.final) {
+        if (at - d.entered <= FINAL_RECENT_MS && d.entered <= at) recent.push(d);
+      } else live.push(d);
+    }
+
+    // issues GitHub knows are in flight but the database has never seen
+    if (gh && gh.ok) {
+      for (const n of Object.keys(gh.open).map(Number).sort((a, b) => a - b)) {
+        if (placed.has(n)) continue;
+        const labels = gh.open[n].labels;
+        const stage = labels.includes(LABEL_ACTIVE) ? 'implementing' : labels.includes(LABEL_QUEUED) ? 'queued' : null;
+        if (!stage) continue;
+        live.push({
+          repo, issue: n, stage, detail: 'GitHub label only, no events or runs', entered: null, source: 'github', stuck: null, final: false,
+          hint: null, holder: gh.claims[n] ? gh.claims[n].device : null, run: null, runApprox: false, runStatus: null, pr: null,
+          hasEvents: false, hasRun: false, github: { state: 'open', labels: [...labels].sort(), claim: gh.claims[n] || null }, flags: [],
+        });
+      }
+    }
+
+    const order = (a, b) => STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage) || a.issue - b.issue;
+    live.sort(order);
+    recent.sort(order);
+
+    const otherRuns = runsR.filter((r) => r.issue === null).map((r) => ({ r, v: runView(r, at) })).filter((x) => x.v.running)
+      .sort((a, b) => a.v.created - b.v.created || cmp(a.r.id, b.r.id))
+      .map(({ v }) => ({ run: v.id, branch: v.branch, device: v.device, status: v.status, parked: v.awaiting !== null, created_at: iso(v.created), approximate: v.approx }));
+
+    const devices = new Map();
+    for (const e of evR) {
+      const x = devices.get(e.device) || { device: e.device, events: 0, last_event_at: null };
+      x.events++;
+      x.last_event_at = iso(e.t);
+      devices.set(e.device, x);
+    }
+    const lastEvent = last(evR);
+    const lastRun = runsR.reduce((m, r) => Math.max(m, ms(r.updated_at) ?? ms(r.created_at)), -Infinity);
+    const cls = evR.length && runsR.length ? 'full' : runsR.length ? 'pipeline only' : evR.length ? 'events only' : 'none';
+    const notes = [];
+    if (cls === 'pipeline only') notes.push('the repo has pipeline runs but no factory events: claims, delegation and queue state are unknown, so a quiet issue is not necessarily idle');
+    if (cls === 'events only') notes.push('the repo has factory events but no mirrored runs: pipeline stages come from agent-logged events only');
+    if (cls === 'none') notes.push('no events and no runs in the database for this repo');
+    const bySource = { mirror: 0, event: 0, github: 0 };
+    for (const d of live) bySource[d.source]++;
+    const eventHints = live.filter((d) => d.hint).length;
+    if (eventHints) notes.push(`${eventHints} live issue(s) have pipeline events with no matching run in the mirror`);
+    if (gh && !gh.ok) notes.push(`GitHub not read for this repo: ${gh.reason}`);
+    if (gh && gh.ok && gh.stripped) notes.push(`${gh.stripped} open issue(s) by untrusted authors were not read`);
+
+    for (const d of live) if (d.stuck) stuckAll.push({ repo, issue: d.issue, stage: d.stage, rule: d.stuck, minutes_in_stage: minutesBetween(d.entered, at), detail: RULE_TEXT[d.stuck].replace(/S\d/, `${rules[d.stuck]}`) });
+
+    const out = (d) => ({
+      issue: d.issue,
+      stage: d.stage,
+      detail: d.detail,
+      entered_at: iso(d.entered),
+      minutes_in_stage: minutesBetween(d.entered, at),
+      holder: d.holder,
+      run: d.run,
+      pr: d.pr,
+      stuck: d.stuck ? { rule: d.stuck, text: RULE_TEXT[d.stuck].replace(/S\d/, `${rules[d.stuck]}`) } : null,
+      source: d.source,
+      approximate: d.runApprox,
+      hint: d.hint,
+      github: d.github,
+      flags: d.flags,
+    });
+    repos.push({
+      repo,
+      coverage: {
+        class: cls,
+        events: evR.length,
+        runs: runsR.length,
+        last_event_at: lastEvent ? iso(lastEvent.t) : null,
+        last_run_update_at: Number.isFinite(lastRun) ? iso(lastRun) : null,
+        heartbeat: workers.available ? 'see workers' : 'n/a (see workers)',
+        devices: [...devices.values()].sort((a, b) => cmp(a.device, b.device)),
+        live_issue_sources: bySource,
+        notes,
+      },
+      issues: live.map(out),
+      recent: recent.map(out),
+      other_runs: otherRuns,
+    });
+  }
+  stuckAll.sort((a, b) => cmp(a.repo, b.repo) || a.issue - b.issue);
+
+  const anyApprox = repos.some((r) => r.issues.concat(r.recent).some((i) => i.approximate));
+  return {
+    at: iso(at),
+    at_source: input.atSource,
+    rules: { ...rules, S6: 'n/a' },
+    github: github === null
+      ? { 'n/a': 'not read (--github off)' }
+      : { read: 'live', note: 'GitHub labels, state and claim comments are read now, not as of --at' },
+    approximate: anyApprox
+      ? 'a run updated after --at is reconstructed from timestamps (running unless it finished by --at), marked approximate'
+      : null,
+    workers: workers.available ? workers.data : { 'n/a': workers.reason },
+    stuck: stuckAll,
+    repos,
+  };
+}
+
+// ---------------------------------------------------------------- sources
+
+function devQuery(sql, vars) {
+  const args = ['-At'];
+  for (const [k, v] of Object.entries(vars)) args.push('-v', `${k}=${v}`);
+  args.push('-c', sql);
+  try {
+    return execFileSync(DEV_QUERY, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 512 * 1024 * 1024 });
+  } catch (e) {
+    const err = String((e.stderr || e.message || '')).trim().split('\n').slice(-3).join(' | ');
+    throw new InputError(`cannot read the fleet database through dev-query (${e.status === undefined ? e.code || 'failed' : `exit ${e.status}`}): ${err}`);
+  }
+}
+
+function queryJson(sql, vars, what) {
+  const out = devQuery(sql, vars).trim();
+  try {
+    return JSON.parse(out);
+  } catch {
+    throw new InputError(`dev-query returned unreadable ${what}`);
+  }
+}
+
+function loadDatabase(opts) {
+  const meta = queryJson(SQL_META, {}, 'metadata');
+  if (!meta.events) throw new InputError('factory.events does not exist in the database');
+  if (!meta.runs) throw new InputError('nomistakes.runs does not exist in the database');
+  const at = opts.at !== undefined ? opts.at : Date.parse(meta.now);
+  if (Number.isNaN(at)) throw new InputError('dev-query returned no usable current time');
+  const vars = { at: iso(at), repos: opts.repos.join(',') };
+  const events = queryJson(SQL_EVENTS, vars, 'events');
+  const runs = queryJson(SQL_RUNS, vars, 'runs');
+  if (!Array.isArray(events) || !Array.isArray(runs)) throw new InputError('dev-query returned unexpected data');
+  // factory.workers_status belongs to #339 and its columns are not read here yet.
+  const workers = meta.workers
+    ? { available: false, reason: 'factory.workers_status exists but this version does not read it yet' }
+    : { available: false, reason: 'factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)' };
+  return { at, atSource: opts.at !== undefined ? '--at' : 'database now()', events, runs, workers };
+}
+
+function readIssue(repo, args) {
+  try {
+    const out = execFileSync(ISSUE_READ, ['--json', ...args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, CALLUM_FLOW_REPO: repo },
+    });
+    return { ok: true, data: JSON.parse(out) };
+  } catch (e) {
+    return { ok: false, code: e.status, reason: e.status === 3 ? 'untrusted author' : `callum-flow-issue-read exit ${e.status === undefined ? 'failed' : e.status}` };
+  }
+}
+
+const labelNames = (issue) => (Array.isArray(issue.labels) ? issue.labels.map((l) => (typeof l === 'string' ? l : l.name)) : []);
+
+function parseClaim(comments) {
+  let claim = null;
+  for (const c of comments || []) {
+    const m = /^claimed-by: (.+) at (\S+) lease: (\d+)/m.exec(c.body || '');
+    if (!m) continue;
+    const r = /^renewed: (\S+)/m.exec(c.body);
+    claim = { device: m[1], at: m[2], lease_minutes: Number(m[3]), renewed_at: r ? r[1] : null };
+  }
+  return claim;
+}
+
+// Reads GitHub for the repos of a first-pass report: one open-issue list per repo, a single read for
+// each live issue the list does not show (closed?), and the claim comment of each in-flight issue.
+function loadGithub(report) {
+  const github = {};
+  for (const r of report.repos) {
+    const list = readIssue(r.repo, ['--list', '--state', 'open']);
+    if (!list.ok || !Array.isArray(list.data.issues)) {
+      github[r.repo] = { ok: false, reason: list.ok ? 'unexpected response' : list.reason };
+      continue;
+    }
+    const g = { ok: true, open: {}, states: {}, claims: {}, stripped: list.data.stripped || 0 };
+    for (const i of list.data.issues) g.open[i.number] = { labels: labelNames(i) };
+    for (const d of r.issues) {
+      if (!g.open[d.issue]) {
+        const one = readIssue(r.repo, [String(d.issue)]);
+        if (one.ok && one.data.issue) {
+          g.states[d.issue] = { state: one.data.issue.state, labels: labelNames(one.data.issue), reason: one.data.issue.state_reason || null, closed_at: one.data.issue.closed_at || null };
+        } else g.states[d.issue] = { state: 'unknown' };
+      } else if (ACTIVE_STAGES.has(d.stage)) {
+        const one = readIssue(r.repo, [String(d.issue), '--comments']);
+        if (one.ok) {
+          const c = parseClaim(one.data.comments);
+          if (c) g.claims[d.issue] = c;
+        }
+      }
+    }
+    github[r.repo] = g;
+  }
+  return github;
+}
+
+// ---------------------------------------------------------------- text
+
+function table(head, rows) {
+  const all = [head, ...rows].map((r) => r.map((c) => (c === null || c === undefined || c === '' ? '-' : String(c))));
+  const w = head.map((_, i) => Math.max(...all.map((r) => r[i].length)));
+  return all.map((r) => r.map((c, i) => c.padEnd(w[i])).join('  ').trimEnd()).join('\n');
+}
+const dur = (m) => {
+  if (m === null || m === undefined) return '-';
+  if (m < 60) return `${m}m`;
+  if (m < 2880) return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+  return `${Math.floor(m / 1440)}d`;
+};
+
+function renderText(r) {
+  const out = [];
+  out.push(`Factory state at ${r.at} (${r.at_source})`);
+  out.push(`Stuck rules (minutes): ${Object.entries(r.rules).map(([k, v]) => `${k}=${v}`).join(' ')}`);
+  out.push(`GitHub: ${r.github['n/a'] ? `n/a: ${r.github['n/a']}` : r.github.note}`);
+  if (r.approximate) out.push(`Approximate: ${r.approximate}`);
+  out.push('');
+  out.push('Stuck');
+  out.push(r.stuck.length ? table(['repo', 'issue', 'stage', 'rule', 'in stage', 'why'], r.stuck.map((s) => [s.repo, `#${s.issue}`, s.stage, s.rule, dur(s.minutes_in_stage), s.detail])) : 'none');
+  out.push('');
+  out.push('Workers');
+  out.push(r.workers['n/a'] ? `n/a: ${r.workers['n/a']}` : JSON.stringify(r.workers));
+  for (const repo of r.repos) {
+    out.push('');
+    out.push(`== ${repo.repo} - coverage: ${repo.coverage.class}`);
+    const c = repo.coverage;
+    out.push(`events ${c.events} (last ${c.last_event_at || '-'}), runs ${c.runs} (last update ${c.last_run_update_at || '-'}), heartbeat ${c.heartbeat}`);
+    if (c.devices.length) out.push(`devices: ${c.devices.map((d) => `${d.device} (${d.events} events, last ${d.last_event_at})`).join('; ')}`);
+    out.push(`live issues by source: mirror ${c.live_issue_sources.mirror}, event ${c.live_issue_sources.event}, github ${c.live_issue_sources.github}`);
+    for (const n of c.notes) out.push(`note: ${n}`);
+    const row = (i) => [`#${i.issue}`, i.stage + (i.approximate ? ' (approx)' : ''), dur(i.minutes_in_stage), i.holder, i.run, i.pr ? `#${i.pr}` : null,
+      i.stuck ? `STUCK ${i.stuck.rule}` : null, i.source, [i.detail, i.hint, ...i.flags].filter(Boolean).join('; ')];
+    const head = ['issue', 'stage', 'in stage', 'holder', 'run', 'pr', 'stuck', 'source', 'detail'];
+    out.push('');
+    out.push('Live issues');
+    out.push(repo.issues.length ? table(head, repo.issues.map(row)) : 'none');
+    if (repo.recent.length) {
+      out.push('');
+      out.push('Recently ended (24h)');
+      out.push(table(head, repo.recent.map(row)));
+    }
+    if (repo.other_runs.length) {
+      out.push('');
+      out.push('Other runs (branch has no issue number)');
+      out.push(table(['run', 'branch', 'device', 'status', 'parked', 'created'], repo.other_runs.map((o) => [o.run, o.branch, o.device, o.status, o.parked ? 'yes' : 'no', o.created_at])));
+    }
+  }
+  return `${out.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------- main
+
+function main(argv) {
+  const opts = parseArgs(argv);
+  if (opts.help) {
+    process.stdout.write(`${USAGE}\n`);
+    return 0;
+  }
+  const db = loadDatabase(opts);
+  const base = { ...db, repos: opts.repos, rules: opts.rules, workers: db.workers };
+  let report = deriveState({ ...base, github: null });
+  if (opts.github) report = deriveState({ ...base, github: loadGithub(report) });
+  process.stdout.write(opts.format === 'json' ? `${JSON.stringify(report, null, 2)}\n` : renderText(report));
+  return 0;
+}
+
+if (require.main === module) {
+  try {
+    process.exitCode = main(process.argv.slice(2));
+  } catch (e) {
+    if (e instanceof UsageError) {
+      process.stderr.write(`callum-flow-factory-state: ${e.message}\n${USAGE}\n`);
+      process.exitCode = 2;
+    } else if (e instanceof InputError) {
+      process.stderr.write(`callum-flow-factory-state: ${e.message}\n`);
+      process.exitCode = 1;
+    } else throw e;
+  }
+}
+
+module.exports = { deriveState, parseArgs, renderText, RUN_LINK, SQL_META, SQL_EVENTS, SQL_RUNS, DEFAULT_RULES, STAGES };

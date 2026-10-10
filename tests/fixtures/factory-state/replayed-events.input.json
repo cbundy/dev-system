@@ -1,0 +1,157 @@
+{
+ "at": "2026-10-10T12:00:00.000Z",
+ "repos": [],
+ "workers": {
+  "available": false,
+  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+ },
+ "events": [
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T03:40:00.000Z",
+   "state": "claimed",
+   "issue": 30,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T08:40:00.000Z",
+   "state": "merged",
+   "issue": 30,
+   "run_id": "r30",
+   "branch": null,
+   "pr": 130,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T08:50:00.000Z",
+   "state": "closed",
+   "issue": 30,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": "completed",
+   "actor": "sweep"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:55:00.000Z",
+   "state": "failed",
+   "issue": 30,
+   "run_id": "r30",
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T03:40:00.000Z",
+   "state": "claimed",
+   "issue": 31,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "closed",
+   "issue": 31,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": "not_planned",
+   "actor": "sweep"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:55:00.000Z",
+   "state": "failed",
+   "issue": 31,
+   "run_id": "r31",
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:56:00.000Z",
+   "state": "failed",
+   "issue": 31,
+   "run_id": "r31",
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T03:40:00.000Z",
+   "state": "claimed",
+   "issue": 32,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T08:40:00.000Z",
+   "state": "merged",
+   "issue": 32,
+   "run_id": null,
+   "branch": null,
+   "pr": 132,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:55:00.000Z",
+   "state": "failed",
+   "issue": 32,
+   "run_id": "r32",
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  }
+ ],
+ "runs": [
+  {
+   "id": "r30",
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "branch": "feat/issue-30-x",
+   "status": "completed",
+   "pr_url": "https://github.com/acme/widgets/pull/130",
+   "pr_state": "merged",
+   "issue": 30,
+   "awaiting_agent_since": null,
+   "created_at": "2026-10-10T05:20:00.000Z",
+   "updated_at": "2026-10-10T08:40:00.000Z"
+  }
+ ]
+}

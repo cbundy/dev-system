@@ -1,0 +1,112 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [
+    {
+      "repo": "acme/widgets",
+      "issue": 40,
+      "stage": "designing",
+      "rule": "S1",
+      "minutes_in_stage": 300,
+      "detail": "designing for more than 240 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "events only",
+        "events": 5,
+        "runs": 0,
+        "last_event_at": "2026-10-10T11:50:00.000Z",
+        "last_run_update_at": null,
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 5,
+            "last_event_at": "2026-10-10T11:50:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 0,
+          "event": 3,
+          "github": 0
+        },
+        "notes": [
+          "the repo has factory events but no mirrored runs: pipeline stages come from agent-logged events only"
+        ]
+      },
+      "issues": [
+        {
+          "issue": 41,
+          "stage": "queued",
+          "detail": null,
+          "entered_at": "2026-10-10T11:40:00.000Z",
+          "minutes_in_stage": 20,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 40,
+          "stage": "designing",
+          "detail": null,
+          "entered_at": "2026-10-10T07:00:00.000Z",
+          "minutes_in_stage": 300,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": {
+            "rule": "S1",
+            "text": "designing for more than 240 minutes"
+          },
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 42,
+          "stage": "designing",
+          "detail": null,
+          "entered_at": "2026-10-10T11:30:00.000Z",
+          "minutes_in_stage": 30,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}

@@ -1,0 +1,170 @@
+{
+ "at": "2026-10-10T12:00:00.000Z",
+ "repos": [],
+ "workers": {
+  "available": false,
+  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+ },
+ "events": [
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "claimed",
+   "issue": 80,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:30:00.000Z",
+   "state": "delegated",
+   "issue": 80,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "claimed",
+   "issue": 81,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "ready",
+   "issue": 82,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "claimed",
+   "issue": 83,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:10:00.000Z",
+   "state": "merged",
+   "issue": 83,
+   "run_id": null,
+   "branch": null,
+   "pr": 183,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "claimed",
+   "issue": 84,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T10:20:00.000Z",
+   "state": "claimed",
+   "issue": 86,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  }
+ ],
+ "runs": [],
+ "github": {
+  "acme/widgets": {
+   "ok": true,
+   "stripped": 0,
+   "open": {
+    "81": {
+     "labels": [
+      "In development"
+     ]
+    },
+    "82": {
+     "labels": [
+      "ready",
+      "In development"
+     ]
+    },
+    "83": {
+     "labels": [
+      "In development"
+     ]
+    },
+    "84": {
+     "labels": []
+    },
+    "90": {
+     "labels": [
+      "ready"
+     ]
+    },
+    "91": {
+     "labels": [
+      "In development"
+     ]
+    },
+    "92": {
+     "labels": [
+      "enhancement"
+     ]
+    }
+   },
+   "states": {
+    "80": {
+     "state": "closed",
+     "labels": [
+      "In development"
+     ],
+     "reason": "completed",
+     "closed_at": "2026-10-10T11:40:00.000Z"
+    },
+    "86": {
+     "state": "unknown"
+    }
+   },
+   "claims": {
+    "81": {
+     "device": "dev-b",
+     "at": "2026-10-10T10:20:00Z",
+     "lease_minutes": 120,
+     "renewed_at": null
+    }
+   }
+  }
+ }
+}
