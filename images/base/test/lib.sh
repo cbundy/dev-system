@@ -127,7 +127,7 @@ stops_within() {
 }
 
 # A stub claude: `auth status` reports a claude.ai login once /tmp/logged-in
-# exists; `auth login` behaves like the real one (a sign-in URL, then a
+# exists; `--version` prints a version and exits (dev-version asks; it is no session); `auth login` behaves like the real one (a sign-in URL, then a
 # prompt for the code; attempt N accepts good-code-N, anything else gets
 # "Invalid code"); a session first asks for Remote Control consent, as the
 # real CLI does, while remoteDialogSeen is not true in .claude.json (it records
@@ -146,6 +146,10 @@ if [ "$1 ${2:-}" = "auth login" ]; then
     echo "Invalid code. Please make sure the full code was copied."
   done
   exit 1
+fi
+if [ "$1" = --version ]; then
+  echo "0.0.0 (Claude Code)"
+  exit 0
 fi
 if [ "$1" = auth ]; then
   [ -e /tmp/logged-in ] && { echo "{\"loggedIn\":true,\"authMethod\":\"claude.ai\"}"; exit 0; }
