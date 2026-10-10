@@ -340,4 +340,14 @@ expect_rc 0 "large single comment and parent issue"
 jq -e '.comment.id == 55 and .comment.body == ("\n" * 65536) and .stripped == 0' "$tmpdir/out" > /dev/null \
   || fail "large single comment truncated"
 
+# a late formatting failure must not leave partial stdout
+{
+  jq -n --argjson u "$OWNER" '{event: "labeled", actor: $u, created_at: "2026-10-10T10:00:00Z", label: {name: "ready"}}'
+  jq -n --argjson u "$OWNER" '{event: "labeled", actor: $u, created_at: "2026-10-10T10:01:00Z", label: 1}'
+} | arr > "$d/repos_o_r_issues_7_timeline.json"
+rm -f "$d/repos_o_r_issues_7_timeline.page2fail"
+rc_of "$READ" --timeline 7
+[ "$rc" != 0 ] || fail "timeline with a malformed trusted event must fail"
+no_out "timeline with a malformed trusted event"
+
 echo "issue-read tests passed"

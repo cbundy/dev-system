@@ -236,7 +236,7 @@ if [ "$json" = true ]; then
 fi
 
 # Text output for agents.
-printf '%s' "$res" | jq -r '
+out=$(printf '%s' "$res" | jq -r '
   def labels: [.labels[]? | .name] | join(", ");
   def item($k): "\($k): #\(.number)\nstate: \(.state)\nlabels: \(labels)\nauthor: \(.user.login)\ntitle: \(.title)\nbody:\n\(.body // "")";
   def cm: "--- \(.id) \(.user.login) \(.created_at // .submitted_at // "")" + (if .state then " [\(.state)]" else "" end) + "\n\(.body // "")";
@@ -251,4 +251,5 @@ printf '%s' "$res" | jq -r '
   (if .comments then "comments:" , (.comments[] | cm) else empty end),
   (if .review_comments then "review comments:", (.review_comments[] | cm) else empty end),
   (if .reviews then "reviews:", (.reviews[] | cm) else empty end),
-  "stripped: \(.stripped)"' || die "cannot format the result"
+  "stripped: \(.stripped)"') || die "cannot format the result"
+printf '%s\n' "$out"
