@@ -55,7 +55,7 @@ const STAGE_STATES = ['ready', 'claimed', 'delegated', 'run_started', 'merge_rea
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
 const TOP_KEYS = [
-  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'per_device', 'claims',
+  'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
   'waiting', 'spend', 'waste',
   'pipeline', 'sources',
 ];
@@ -650,6 +650,26 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     unpaired_adjudicator_verdicts: unpaired,
   };
 
+  // test_weakened (cbundy/dev-system#314): one event per commit that deleted or weakened a test
+  const twBy = new Map();
+  let twRestored = 0;
+  let twTotal = 0;
+  for (const e of allEvents) {
+    if (e.state !== 'test_weakened' || !inWin(e.ts, win)) continue;
+    const step = (/(?:^|\s)step=(\S+)/.exec(e.note || '') || [])[1] || 'none';
+    const restored = /(?:^|\s)restored=yes(?:\s|$)/.test(e.note || '');
+    if (!twBy.has(step)) twBy.set(step, { step, restored: 0, unrestored: 0 });
+    twBy.get(step)[restored ? 'restored' : 'unrestored']++;
+    twTotal++;
+    if (restored) twRestored++;
+  }
+  const test_weakened = {
+    total: twTotal,
+    restored: twRestored,
+    unrestored: twTotal - twRestored,
+    by_step: [...twBy.values()].sort((a, b) => cmpStr(a.step, b.step)),
+  };
+
   // merged-at lookups for stale-wake detection
   const mergedAt = { issue: new Map(), run: new Map() };
   for (const e of allEvents) {
@@ -658,7 +678,7 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (e.issue !== null && e.issue !== undefined && !(mergedAt.issue.get(e.issue) <= t)) mergedAt.issue.set(e.issue, t);
     if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
   }
-  return { throughput, first_pass, review, adjudicator_agreement, per_device, claims, waiting, mergedAt };
+  return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, mergedAt };
 }
 
 // ---------------------------------------------------------------- waste
@@ -1142,6 +1162,7 @@ function evaluate(opts, env = process.env) {
     first_pass: em ? em.first_pass : evNa,
     review: em ? em.review : evNa,
     adjudicator_agreement: em ? em.adjudicator_agreement : evNa,
+    test_weakened: em ? em.test_weakened : evNa,
     per_device: em ? em.per_device : evNa,
     claims: em ? em.claims : evNa,
     waiting: em ? em.waiting : evNa,
@@ -1208,6 +1229,9 @@ function toMarkdown(r) {
     table(['actor', ...VERDICT_PREFIXES], [['(all)', ...VERDICT_PREFIXES.map((p) => v.by_prefix[p])],
       ...Object.entries(v.by_actor).map(([a, c]) => [a, ...VERDICT_PREFIXES.map((p) => c[p])])])));
   sec('adjudicator_agreement', guard(r.adjudicator_agreement, kv));
+  sec('test_weakened', guard(r.test_weakened, (t) =>
+    kv({ total: t.total, restored: t.restored, unrestored: t.unrestored }) + '\n' +
+    table(['step', 'restored', 'unrestored'], t.by_step.map((x) => [x.step, x.restored, x.unrestored]))));
   sec('per_device', guard(r.per_device, (rows) =>
     table(['device', 'merges', 'claims', 'claim_lost'], rows.map((d) => [d.device, d.merges, d.claims, d.claim_lost]))));
   sec('claims', guard(r.claims, (c) =>

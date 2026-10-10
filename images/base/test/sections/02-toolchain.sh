@@ -20,6 +20,9 @@ check "dev-query is on PATH, prints usage, and exits 78 with no URL configured" 
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'
+check "callum-flow-test-weakening is on PATH, exits 2 on bad usage and 1 on an unknown ref" in_image '
+  [ -x "$(command -v callum-flow-test-weakening)" ] && callum-flow-test-weakening --bogus 2>/dev/null; [ $? = 2 ] &&
+  callum-flow-test-weakening --base nope --head HEAD 2>/dev/null; [ $? = 1 ]'
 check "callum-flow-rollout is on PATH and exits 2 on bad arguments" in_image '
   [ -x "$(command -v callum-flow-rollout)" ] && callum-flow-rollout 2>/dev/null; [ $? = 2 ] && callum-flow-rollout abc 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" in_image '

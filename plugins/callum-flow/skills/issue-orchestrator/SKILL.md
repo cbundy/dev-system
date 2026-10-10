@@ -139,19 +139,19 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
 
 ## Merge
 `callum-flow-merge-guard <pr>` reads only and prints one `GUARD <name> FAIL
-<reason>` line per failed guard, with the fix named in the reason. Act on each,
-re-run it, and merge with `callum-flow-merge <pr>` once it prints nothing.
+<reason>` line per failed guard, naming the fix. Act on each, re-run it, and
+merge with `callum-flow-merge <pr>` once it prints no FAIL.
 Before merging:
 - Read every `no-mistakes(<step>)` fix commit against the issue's requirements:
   a green run can have deleted a requirement and rewritten its tests to match.
+- Send every `GUARD test-weakening WARN` (advisory) to the adjudicator, then
+  restore via a fixer or record the accepted justification in a PR comment.
 - Check the pipeline-built PR body (`implement-issue`, issue linkage).
-- On `GUARD linkage FAIL`, run `callum-flow-fix-linkage <pr>` from the main
-  checkout and re-run the guard.
+- On `GUARD linkage FAIL`, run `callum-flow-fix-linkage <pr>` from the main checkout, re-run the guard.
 
 A run that sits green without a merge (park-after-green) is yours to merge. If
-the harness refuses the merge, give the owner the PR link and the guard output
-and carry on: the watchers and the other work do not stop. Release the worktree
-after merge as `implement-issue` says.
+the harness refuses, give the owner the PR link and guard output and carry on.
+Release the worktree after merge as `implement-issue` says.
 
 ## Special issue types
 - **High-risk or large**: the designer splits it into unlabelled sub-issues;

@@ -16,6 +16,10 @@
 # sha the guard verified, so a push after the check makes GitHub refuse it.
 # GitHub also refuses for a branch rule (for example a PR that fell behind its
 # base); on a refusal the PR is re-read to say which of the two it was.
+# The guard's advisory `GUARD test-weakening WARN` lines are relayed to stderr
+# (they never block); after a successful merge one `test_weakened` event is
+# logged per WEAKENED line the guard reported, restored ones included
+# (cbundy/dev-system#314).
 # After success, a non-empty guard close_issue field prints a manual closure
 # instruction; this script does not close the issue itself.
 #
@@ -67,6 +71,7 @@ if [ "$rc" -ne 0 ]; then
   [ -z "$out" ] || printf '%s\n' "$out"
   exit "$rc"
 fi
+printf '%s\n' "$out" | grep '^GUARD ' >&2
 v=$(printf '%s\n' "$out" | sed -n 's/^VERIFIED //p' | sed -n 1p)
 get() { printf '%s\n' "$v" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
 branch=$(get branch) sha=$(get head) run=$(get run) issue=$(get issue) close_issue=$(get close_issue)
@@ -94,6 +99,22 @@ set -- merged --pr "$pr" --branch "$branch" --head "$sha"
 [ -z "$run" ] || set -- "$@" --run "$run"
 [ -z "$issue" ] || set -- "$@" --issue "$issue"
 $EVENT "$@" || echo "callum-flow-merge: warning: merged event not recorded" >&2
+# one test_weakened event per flagged commit (the guard's WEAKENED lines)
+printf '%s\n' "$out" | grep '^WEAKENED ' | while IFS= read -r w_line; do
+  w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')
+  w_step=$(printf '%s' "$w_line" | sed 's/.* step=\([^ ]*\) .*/\1/')
+  w_restored=$(printf '%s' "$w_line" | sed 's/.* restored=\([^ ]*\) .*/\1/')
+  w_files=$(printf '%s' "$w_line" | sed 's/.* files=\(.*\) kinds=.*/\1/')
+  w_kinds=$(printf '%s' "$w_line" | sed 's/.* kinds=//')
+  if [ -z "$issue" ]; then
+    echo "callum-flow-merge: warning: no issue known, test_weakened event for $(printf %.7s "$w_commit") not recorded" >&2
+    continue
+  fi
+  set -- test_weakened --pr "$pr" --branch "$branch" --head "$sha" --issue "$issue"
+  [ -z "$run" ] || set -- "$@" --run "$run"
+  $EVENT "$@" --note "step=$w_step commit=$(printf %.7s "$w_commit") restored=$w_restored kinds=$w_kinds files=$w_files" ||
+    echo "callum-flow-merge: warning: test_weakened event not recorded" >&2
+done
 if [ -n "$close_issue" ]; then
   printf 'Close issue #%s by hand with a comment naming merged PR #%s; GitHub registers no closing references on a non-default base.\n' "$close_issue" "$pr"
 fi

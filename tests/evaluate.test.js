@@ -146,6 +146,30 @@ test("adjudicator agreement pairs verdicts by run and finding id", () => {
   });
 });
 
+test("test_weakened counts commits per step and splits restored from unrestored", () => {
+  const ev = (ts, note) => JSON.stringify({ repo: "acme/widgets", state: "test_weakened", ts, issue: 1, note });
+  const file = path.join(tmp, "weakened.jsonl");
+  fs.writeFileSync(file, [
+    ev("2026-10-08T10:10:00Z", "step=ci commit=abcdef0 restored=no kinds=removed-assertion files=tests/a.test.js"),
+    ev("2026-10-08T10:20:00Z", "step=ci commit=abcdef1 restored=yes kinds=skip files=tests/b.test.js"),
+    ev("2026-10-08T10:30:00Z", "step=none commit=abcdef2 restored=no kinds=warn-only files=t/c.sh"),
+    ev("2026-10-08T10:40:00Z", "step=review commit=abcdef3 restored=no kinds=removed-assertion files=t/d.sh"),
+    ev("2026-10-08T09:00:00Z", "step=lint commit=abcdef4 restored=no kinds=only files=t/e.js"), // before the window
+  ].join("\n"));
+  const r = json([...WINDOW, "--events", file]);
+  assert.deepEqual(r.test_weakened, {
+    total: 4, restored: 1, unrestored: 3,
+    by_step: [
+      { step: "ci", restored: 1, unrestored: 1 },
+      { step: "none", restored: 0, unrestored: 1 },
+      { step: "review", restored: 0, unrestored: 1 },
+    ],
+  });
+  const md = run([...WINDOW, "--events", file, "--format", "markdown"]).out;
+  assert.match(md, /## test_weakened\n\n[^]*\| ci \| 1 \| 1 \|/);
+  assert.deepEqual(json(WINDOW).test_weakened, { total: 0, restored: 0, unrestored: 0, by_step: [] });
+});
+
 test("waste: each fixture wake gets its kind and category", () => {
   const w = json(WINDOW).waste;
   assert.deepEqual(w.wakes, { "monitor-event": 1, "monitor-timeout": 1, "agent-done": 2, "bash-done": 1, cron: 1, owner: 1 });

@@ -4,6 +4,7 @@
 # (cbundy/dev-system#219). Stub gh / no-mistakes / linkage script, a real local
 # bare repo as origin so the fetch and rev-parse are real. Hermetic PATH, no
 # network, no Docker, so `npm test` runs it anywhere.
+# shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -41,6 +42,7 @@ git init -q "$work"
   git remote add origin "$origin"
   git commit -q --allow-empty -m base
   git push -q origin HEAD:refs/heads/main
+  git push -q origin HEAD:refs/heads/epic-x
   git checkout -q -b feat/issue-12-x
   git commit -q --allow-empty -m work
   git push -q origin feat/issue-12-x
@@ -142,7 +144,16 @@ fi
 cat "${STUB_DIR:?}/linkage"
 exit "$(cat "$STUB_DIR/linkage-rc")"
 STUB
-chmod +x "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage"
+# the test-weakening detector (cbundy/dev-system#314): its output and exit code are set per test
+cat > "$tmpdir/weakening" <<'STUB'
+#!/bin/sh
+d=${STUB_DIR:?}
+echo "$*" > "$d/weakening-args"
+[ ! -f "$d/weakening" ] || cat "$d/weakening"
+[ ! -f "$d/weakening-rc" ] || exit "$(cat "$d/weakening-rc")"
+exit 0
+STUB
+chmod +x "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage" "$tmpdir/weakening"
 ln -s "$tmpdir/nm" "$toolbin/no-mistakes"
 WATCH="$ROOT/features/src/callum-tools/pipeline-watch.sh"
 
@@ -177,7 +188,7 @@ issue_brief() {
 }
 
 # the real reader behind the stub gh
-export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent"
+export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_WEAKENING_BIN="$tmpdir/weakening"
 
 # g <args...>: run the guard; sets out, rc
 g() {
@@ -405,6 +416,27 @@ passed=$((passed + 1))
 # awaiting_ in free text is not a parked step
 reset; echo 'note: use awaiting_approval to park' > "$st/step"; g 7; expect_pass "awaiting_ only in free text"
 
+# test-weakening (cbundy/dev-system#314): advisory, never fails the guard
+W1="WEAKENED commit=${SHA} step=ci restored=no files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only"
+W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 step=review restored=yes files=tests/c.test.js kinds=skip"
+reset; g 7; expect_pass "no weakening"
+[ "$(cat "$st/weakening-args")" = "--base origin/main --head $SHA" ] || fail "detector arguments: $(cat "$st/weakening-args")"
+reset; printf '%s\n' "$W1" > "$st/weakening"; g 7
+[ "$rc" = 0 ] || fail "WARN must not fail the guard: $rc $out"
+want="GUARD test-weakening WARN $(printf %.7s "$SHA") step=ci files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only - have the adjudicator judge it against the brief; restore via fixer unless the removal is justified"
+[ "$out" = "$want" ] || fail "WARN line: [$out]"
+passed=$((passed + 1))
+reset; printf '%s\n' "$W2" > "$st/weakening"; g 7; expect_pass "restored weakening prints nothing"
+reset; printf '%s\n%s\n' "$W1" "$W2" > "$st/weakening"; echo '[]' > "$st/checks"; g 7
+[ "$rc" = 1 ] && [ "$(printf '%s\n' "$out" | grep -c '^GUARD test-weakening WARN ')" = 1 ] && printf '%s\n' "$out" | grep -q '^GUARD checks FAIL ' || fail "WARN beside a FAIL: $rc $out"
+passed=$((passed + 1))
+reset; echo 'fatal: bad object' > "$st/weakening"; echo 1 > "$st/weakening-rc"; g 7
+[ "$rc" = 0 ] && [ "$out" = "GUARD test-weakening WARN detector error: fatal: bad object" ] || fail "detector error: $rc [$out]"
+passed=$((passed + 1))
+reset; printf '%s\n' "$W1" > "$st/weakening"; g 7 --emit-verified
+[ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q '^VERIFIED ' && printf '%s\n' "$out" | grep -q "^WEAKENED commit=$SHA " || fail "emit-verified carries the WEAKENED lines: $out"
+passed=$((passed + 1))
+
 # usage errors
 reset
 for args in "7 --expect closes" "7 --bogus" "" "x"; do
@@ -422,6 +454,21 @@ reset; m 7
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
 [ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
 jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+
+# merge: WARN relayed to stderr, one test_weakened event per WEAKENED line (restored ones too)
+reset; printf '%s\n%s\n' "$W1" "$W2" > "$st/weakening"; m 7
+[ "$rc" = 0 ] || fail "merge with weakening: $rc $out"
+grep -q '^GUARD test-weakening WARN ' "$tmpdir/err" || fail "WARN not relayed to stderr: $(cat "$tmpdir/err")"
+[ -f "$st/gh-calls" ] || fail "a WARN must not stop the merge"
+[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 2 ] || fail "two test_weakened events expected: $(cat "$events/o__r.jsonl")"
+jq -e -s --arg sha "$SHA" '.[] | select(.state == "test_weakened") | select(.note == ("step=ci commit=" + ($sha[0:7]) + " restored=no kinds=removed-assertion,warn-only files=tests/a.test.js,tests/b.test.sh")) | select(.pr == 7 and .issue == 12 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1")' "$events/o__r.jsonl" > /dev/null || fail "first test_weakened event: $(cat "$events/o__r.jsonl")"
+jq -e -s '.[] | select(.state == "test_weakened") | select(.note == "step=review commit=1234567 restored=yes kinds=skip files=tests/c.test.js")' "$events/o__r.jsonl" > /dev/null || fail "restored test_weakened event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+reset; printf '%s\n' "$W1" > "$st/weakening"; touch "$st/merge-refuse"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "a refused merge must log no test_weakened event: $rc $(cat "$events/o__r.jsonl" 2> /dev/null)"; fi
+reset; m 7
+[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 0 ] || fail "nothing flagged, no event"
 passed=$((passed + 1))
 
 # merge: method override, flag and env

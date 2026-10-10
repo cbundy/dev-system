@@ -134,6 +134,27 @@ FROM adj JOIN other USING (repo, run_id, finding)
 GROUP BY adj.repo;
 ```
 
+## 5b. Tests deleted or weakened by auto-fixes
+
+`callum-flow-merge` logs one `test_weakened` event per commit that `callum-flow-test-weakening`
+flagged on a merged PR (a commit that deleted assertions, or added `--warn-only`, `|| true`, a
+skip or `.only`, or commented an assertion out; cbundy/dev-system#314). The `note` is
+`step=<review|document|ci|test|lint|rebase|none> commit=<sha7> restored=<yes|no> kinds=<k1,k2>
+files=<a,b>`; `step=none` is a repair commit without a `no-mistakes(<step>)` subject. `restored=yes`
+means a later commit put the test back. `callum-flow-evaluate` reports the same counts as its
+`test_weakened` section.
+
+```sql
+SELECT repo,
+  substring(note FROM 'step=(\S+)')                         AS step,
+  count(*)                                                  AS commits,
+  count(*) FILTER (WHERE note LIKE '%restored=no%')         AS unrestored
+FROM factory.events
+WHERE state = 'test_weakened'
+GROUP BY repo, step
+ORDER BY unrestored DESC, commits DESC;
+```
+
 ## 6. Double-claims, lost claim races and stuck issues
 
 The two-device trial (cbundy/dev-system#222) asks whether two dispatchers ever hold one issue at

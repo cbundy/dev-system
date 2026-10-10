@@ -50,6 +50,13 @@ reviews, no edits). You may write throwaway repro scripts only under the system 
   emit a `CORRECT` line and add it with `--add-finding`. If there are zero findings
   and nothing is missed, emit no verdict line and propose `approve`.
 - A failed test step is judged the same way: a real defect (`CORRECT`) or `ENV`.
+- A test deletion or weakening is judged against the brief: an `ask-user` finding that
+  proposes removing a test, a committed auto-fix that removed assertions, added
+  `--warn-only` or `|| true`, skipped a test or commented an assertion out, or a
+  `GUARD test-weakening WARN` commit the orchestrator hands you. It is `CORRECT`
+  (restore the test, via `ACTION: fix` or `fixer:` once committed) unless the stated
+  justification shows the test is absolutely not required by the brief; only that
+  evidence makes it `WRONG` (approve).
 - Never propose `--yes`.
 - Never propose `rerun`: it re-gates the run's old head, so a fix would come back
   green without the fix in it. A correction the pipeline can write from instructions

@@ -1,0 +1,198 @@
+#!/bin/sh
+#
+# callum-flow-test-weakening: find commits in a branch that delete or weaken
+# tests (cbundy/dev-system#314). The /no-mistakes pipeline's auto-fix steps have
+# been seen to make a gate pass by removing an assertion, adding --warn-only or
+# commenting a check out. This only reads: it never changes the repo.
+#
+# Usage: callum-flow-test-weakening --base <ref> --head <sha>
+#   Looks at every non-merge commit in <base>..<head> (the pipeline's repair
+#   commits cannot be told apart by subject alone, so none is skipped) and only
+#   at its changes to test files. A path is a test file when it matches
+#   (^|/)tests?/, \.test\., _test\., \.spec\. or (^|/)test_[^/]*$, or the ERE in
+#   CALLUM_FLOW_TEST_PATHS when that is set (it widens the match).
+#
+# Each test file is judged on its own; added lines in one file never offset
+# removals in another. A commit is flagged when any test file shows:
+#   removed-assertion  more assertion lines removed than added. A removed line
+#                      that still exists (trimmed) in a test file of the commit's
+#                      own tree was moved or duplicated and does not count.
+#                      JS assertions: assert(, assert.x(, expect(, test( it(
+#                      describe( openers. Shell: lines calling fail, check,
+#                      expect_fail, expect_pass or assert*, or ending in || fail
+#   warn-only          more --warn-only tokens added than removed
+#   or-true            more "|| true" tokens added than removed
+#   skip               more .skip, "{ skip", test.todo or skip( tokens added
+#   only               more .only tokens added than removed
+#   commented-assert   an added "#" or "//" copy of a removed assertion line
+#
+# Output: nothing when no commit is flagged; otherwise one line per commit,
+#   WEAKENED commit=<sha> step=<step> restored=<yes|no> files=<a,b> kinds=<k1,k2>
+# step is taken from a "no-mistakes(<step>): " subject (review, document, ci,
+# test, lint, rebase), otherwise none. restored=yes when every flagged removed
+# line is present again in a test file at <head> and every flagged added line is
+# gone from its file at <head>.
+#
+# Exit codes: 0 success (whether or not anything is flagged), 1 a git error
+# (for example an unknown ref), 2 usage error.
+set -u
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-test-weakening: $1" >&2
+  echo "usage: callum-flow-test-weakening --base <ref> --head <sha>" >&2
+  exit 2
+}
+
+base='' head=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage ;;
+    --base | --head)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      case "$1" in --base) base=$2 ;; --head) head=$2 ;; esac
+      shift
+      ;;
+    *) usage "unknown argument '$1'" ;;
+  esac
+  shift
+done
+[ -n "$base" ] || usage "missing --base"
+[ -n "$head" ] || usage "missing --head"
+
+git_err() { echo "callum-flow-test-weakening: $1" >&2; exit 1; }
+base_sha=$(git rev-parse --verify --quiet "$base^{commit}" 2> /dev/null) || git_err "unknown --base '$base'"
+head_sha=$(git rev-parse --verify --quiet "$head^{commit}" 2> /dev/null) || git_err "unknown --head '$head'"
+commits=$(git rev-list --reverse --no-merges "$base_sha..$head_sha" 2> /dev/null) || git_err "cannot list $base..$head"
+[ -n "$commits" ] || exit 0
+
+tmp=$(mktemp -d 2> /dev/null) || git_err "cannot create a temp dir"
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+tab=$(printf '\t')
+
+LIB='
+function is_test(p) {
+  if (p ~ /(^|\/)tests?\// || p ~ /\.test\./ || p ~ /_test\./ || p ~ /\.spec\./ || p ~ /(^|\/)test_[^\/]*$/) return 1
+  if (extra != "" && p ~ extra) return 1
+  return 0
+}
+function trim(s) { gsub(/^[ \t]+/, "", s); gsub(/[ \t\r]+$/, "", s); return s }
+'
+export CALLUM_FLOW_TEST_PATHS="${CALLUM_FLOW_TEST_PATHS-}"
+EXTRA='BEGIN { extra = ENVIRON["CALLUM_FLOW_TEST_PATHS"] }'
+
+# testlines <rev>: every trimmed line of every test file at <rev>
+testlines() {
+  git -c core.quotepath=off ls-tree -r --name-only "$1" 2> /dev/null |
+    awk "$EXTRA $LIB"'is_test($0) { print rev ":" $0 }' rev="$1" |
+    git cat-file --batch 2> /dev/null |
+    awk "$LIB"'{ print trim($0) }'
+}
+
+# shellcheck disable=SC2016  # awk programs, not shell expansions
+PARSE="$EXTRA $LIB"'
+/^diff --git / { inhunk = 0; old = ""; file = ""; next }
+!inhunk && /^--- / { old = substr($0, 5); sub(/\t.*/, "", old); sub(/^a\//, "", old); next }
+!inhunk && /^\+\+\+ / {
+  file = substr($0, 5); sub(/\t.*/, "", file)
+  if (file == "/dev/null") file = old; else sub(/^b\//, "", file)
+  next
+}
+/^@@ / { inhunk = 1; next }
+inhunk && is_test(file) {
+  c = substr($0, 1, 1)
+  if (c == "-" || c == "+") {
+    l = trim(substr($0, 2))
+    if (l != "") print (c == "-" ? "R" : "A") "\t" file "\t" l
+  }
+}'
+
+# shellcheck disable=SC2016
+JUDGE="$EXTRA $LIB"'
+function isjs(f) { return f ~ /\.(js|mjs|cjs|jsx|ts|tsx)$/ }
+function isassert(f, l) {
+  if (isjs(f)) return l ~ /^(assert\(|assert\.[A-Za-z]+\(|expect\(|(test|it|describe)(\.[A-Za-z]+)?\()/
+  return (l ~ /^(fail|check|expect_fail|expect_pass|assert[A-Za-z_]*)([ (]|$)/) || (l ~ /\|\| *fail( |$)/)
+}
+function cnt(l, re,   t) { t = l; return gsub(re, "", t) }
+function addtoken(f, l, d,   k, n) {
+  for (k = 1; k <= 4; k++) {
+    n = cnt(l, re[k])
+    if (n > 0) { tok[f, k] += d * n; if (d > 0) { na[f, k]++; al[f, k, na[f, k]] = l } }
+  }
+}
+BEGIN {
+  re[1] = "--warn-only"; re[2] = "\\|\\| true"; re[3] = "\\.skip|\\{ skip|test\\.todo|skip\\("; re[4] = "\\.only"
+  kn[1] = "warn-only"; kn[2] = "or-true"; kn[3] = "skip"; kn[4] = "only"
+}
+FILENAME == ARGV[1] { cset[$0] = 1; next }
+{
+  t = substr($0, 1, 1); rest = substr($0, 3); i = index(rest, "\t")
+  f = substr(rest, 1, i - 1); l = substr(rest, i + 1)
+  if (!(f in seen)) { seen[f] = 1; files[++nf] = f }
+  if (t == "R") {
+    addtoken(f, l, -1)
+    if (isassert(f, l) && !(l in cset)) { nr[f]++; rl[f, nr[f]] = l; rset[f, l] = 1 }
+  } else {
+    addtoken(f, l, 1)
+    if (isassert(f, l)) nad[f]++
+    else if (l ~ /^(#|\/\/)/) { s = l; sub(/^(#+|\/\/+)[ \t]*/, "", s); nc[f]++; cl[f, nc[f]] = l; cs[f, nc[f]] = s }
+  }
+}
+END {
+  for (x = 1; x <= nf; x++) {
+    f = files[x]; kinds = ""; commented = 0
+    if (nr[f] > nad[f]) kinds = "removed-assertion"
+    for (k = 1; k <= 4; k++) if (tok[f, k] > 0) kinds = kinds (kinds == "" ? "" : ",") kn[k]
+    for (j = 1; j <= nc[f]; j++) if ((f, cs[f, j]) in rset) { commented = 1 }
+    if (commented) kinds = kinds (kinds == "" ? "" : ",") "commented-assert"
+    if (kinds == "") continue
+    print "FILE\t" f "\t" kinds
+    if (nr[f] > nad[f] || commented) for (j = 1; j <= nr[f]; j++) print "R\t" f "\t" rl[f, j]
+    for (k = 1; k <= 4; k++) if (tok[f, k] > 0) for (j = 1; j <= na[f, k]; j++) print "A\t" f "\t" al[f, k, j]
+    if (commented) for (j = 1; j <= nc[f]; j++) if ((f, cs[f, j]) in rset) print "A\t" f "\t" cl[f, j]
+  }
+}'
+
+hset_ready=
+for c in $commits; do
+  git -c core.quotepath=off diff-tree -p -U0 --no-renames --root -r "$c" 2> /dev/null | awk "$PARSE" > "$tmp/recs" || git_err "cannot read commit $c"
+  [ -s "$tmp/recs" ] || continue
+  if awk -F'\t' '$1 == "R"' "$tmp/recs" | sed -n 1p | grep -q .; then
+    testlines "$c" > "$tmp/cset"
+  else
+    : > "$tmp/cset"
+  fi
+  awk "$JUDGE" "$tmp/cset" "$tmp/recs" > "$tmp/judged" || git_err "cannot judge commit $c"
+  [ -s "$tmp/judged" ] || continue
+
+  if [ -z "$hset_ready" ]; then
+    testlines "$head_sha" > "$tmp/hset"
+    hset_ready=1
+  fi
+  files='' kinds=''
+  restored=yes
+  while IFS="$tab" read -r t f rest; do
+    case "$t" in
+      FILE)
+        files="${files:+$files,}$f"
+        ;;
+      R)
+        grep -qxF -e "$rest" "$tmp/hset" || restored=no
+        ;;
+      A)
+        if git show "$head_sha:$f" 2> /dev/null | awk "$LIB"'{ print trim($0) }' | grep -qxF -e "$rest"; then
+          restored=no
+        fi
+        ;;
+    esac
+  done < "$tmp/judged"
+  all_kinds=$(awk -F'\t' '$1 == "FILE" { n = split($3, a, ","); for (i = 1; i <= n; i++) print a[i] }' "$tmp/judged")
+  for k in removed-assertion warn-only or-true skip only commented-assert; do
+    if printf '%s\n' "$all_kinds" | grep -qx "$k"; then kinds="${kinds:+$kinds,}$k"; fi
+  done
+  subject=$(git log -1 --format=%s "$c" 2> /dev/null)
+  step=$(printf '%s\n' "$subject" | sed -n 's/^no-mistakes(\([a-z][a-z-]*\)).*/\1/p')
+  case "$step" in review | document | ci | test | lint | rebase) ;; *) step=none ;; esac
+  printf 'WEAKENED commit=%s step=%s restored=%s files=%s kinds=%s\n' "$c" "$step" "$restored" "$files" "$kinds"
+done
+exit 0
