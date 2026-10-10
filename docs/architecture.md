@@ -57,8 +57,8 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 
 Ordinary PRs never bump the main release version. Releasing is a separate, deliberate step: a bump PR made
 with `scripts/release-bump.js`, then the `Release` workflow, which tags without pushing to
-main. The bump PR also carries `release-notes/vX.Y.Z.md`; `scripts/release-notes.js` gates it in
-lint and in the workflow. See [`RELEASING.md`](../RELEASING.md) for the commands.
+main. See [`RELEASING.md`](../RELEASING.md) for the bump PR's release notes requirements
+and the workflow checks and commands.
 
 | What | Version lives in | Released by | Reaches consumers when |
 |---|---|---|---|

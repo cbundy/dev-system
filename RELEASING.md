@@ -8,7 +8,9 @@ Releasing is one deliberate step, run when ready.
 Releasing never pushes to main: the version bump lands in a normal PR gated by `ci`, and
 the `Release` workflow only verifies, tags and publishes.
 
-1. On a branch from an up-to-date main, run:
+1. On a branch from an up-to-date main, use the `release` skill
+   (`.claude/skills/release/SKILL.md`) to draft `release-notes/vX.Y.Z.md` from the merged
+   PRs and propose the version. Once you approve the version and notes, run:
 
    ```
    node scripts/release-bump.js X.Y.Z
@@ -21,10 +23,8 @@ the `Release` workflow only verifies, tags and publishes.
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
    markers before committing.
-2. Write the release notes with the `release` skill (`.claude/skills/release/SKILL.md`):
-   it drafts `release-notes/vX.Y.Z.md` from the merged PRs, proposes the version, and waits
-   for your approval. Commit that file in the same bump PR; `npm run lint` fails the PR
-   without valid notes for the `package.json` version.
+2. Commit the approved notes in the same bump PR. `npm run lint` validates every file in
+   `release-notes/` and requires valid notes for the `package.json` version.
 3. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
    (step 4) immediately after: the bumped ref names a tag that does not exist until it runs.
 4. Run the `Release` workflow from main (Actions tab, or):
@@ -38,17 +38,17 @@ the `Release` workflow only verifies, tags and publishes.
    at X.Y.Z) and `node scripts/release-notes.js --check X.Y.Z` passes (valid
    `release-notes/vX.Y.Z.md`); then it tags `vX.Y.Z` and creates a GitHub Release whose body
    is those notes plus a collapsed "Technical changes" list built from the commits since the
-   previous tag. A re-run rewrites the same body.
+   previous tag. An existing `vX.Y.Z` tag must point to the exact workflow commit;
+   otherwise the workflow refuses to proceed. Re-running on that commit skips tagging
+   and rewrites the release title and body, even if the GitHub Release already exists.
 
 Semver: patch for wording fixes, minor for a new skill/template/capability, major for a
 breaking change to an existing contract.
 
 How each layer reaches consumers after the tag exists:
 
-- **Plugin**: `npm update @callum/dev-system && npx callum-dev update` moves the pinned
-  marketplace ref in `.claude/settings.json`; commit it, then restart the container or run `dev-init --plugins`
-  (see [`docs/architecture.md`](docs/architecture.md)). `/plugin marketplace update` alone
-  keeps the old ref.
+- **Plugin**: follow the [consumer update flow](docs/architecture.md#how-a-change-reaches-a-consumer-repo)
+  to advance the marketplace pin and migrate the installation.
 - **npm/CLI layer**: consumers depend on `github:cbundy/dev-system#semver:0.x` -
   npm resolves that range against the git tags, so `npm update @callum/dev-system`
   pulls the new tag, then `npx callum-dev update` merges template changes into the

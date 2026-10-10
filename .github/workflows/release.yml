@@ -26,8 +26,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          # Full history + tags: needed to validate the tag doesn't already
-          # exist and to find the previous release tag for release notes.
+          # Full history + tags: needed to verify an existing tag points to this
+          # commit and to find the previous release tag for release notes.
           fetch-depth: 0
 
       - name: Ensure running from main
