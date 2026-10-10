@@ -15,6 +15,13 @@ pipeline data" below). Pipeline facts (when a run started, its status, parked ti
 from that mirror, never from agent-logged `run_started` events: a run belongs to an issue by its
 branch name (see "Linking pipeline runs to issues" below).
 
+`closed` is logged by `callum-flow-sweep` (actor `sweep`) for every issue GitHub reports closed
+whose latest event is not `closed` or `abandoned`, including issues closed by hand, as duplicates
+or after research. Its `note` is GitHub's close reason verbatim: `completed`, `not_planned` or
+`duplicate` (empty when GitHub gives none). It releases a claim like `merged` does, but
+throughput and lead-time queries keep counting `merged` only. Two devices sweeping before either
+has pushed can both log it, so count identical consecutive rows once.
+
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`, `event_id`.
 
@@ -182,10 +189,10 @@ ORDER BY unrestored DESC, commits DESC;
 
 The two-device trial (cbundy/dev-system#222) asks whether two dispatchers ever hold one issue at
 once. A **double-claim** is two devices with a live `claimed` on one issue and no `ready`,
-`reclaimed`, `merged` or `abandoned` between them. A **lost race** is a `claim_lost` event,
+`reclaimed`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
 logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
-`reclaimed`, `merged` or `abandoned`) and has had no event, other than `claim_lost`, for more than
+`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 
 ```sql
@@ -199,7 +206,7 @@ WHERE c2.state = 'claimed'
   AND NOT EXISTS (
     SELECT 1 FROM factory.events r
     WHERE r.repo = c2.repo AND r.issue = c2.issue
-      AND r.state IN ('ready', 'reclaimed', 'merged', 'abandoned')
+      AND r.state IN ('ready', 'reclaimed', 'merged', 'abandoned', 'closed')
       AND r.ts >= c1.ts AND r.ts <= c2.ts)
 ORDER BY c2.ts;
 
@@ -215,7 +222,7 @@ WITH per_issue AS (
   SELECT repo, issue,
     max(ts) FILTER (WHERE state <> 'claim_lost')                                  AS last_ts,
     (array_agg(state ORDER BY ts DESC) FILTER (WHERE state <> 'claim_lost'))[1]   AS last_state,
-    max(ts) FILTER (WHERE state IN ('ready', 'reclaimed', 'merged', 'abandoned')) AS last_release,
+    max(ts) FILTER (WHERE state IN ('ready', 'reclaimed', 'merged', 'abandoned', 'closed')) AS last_release,
     max(ts) FILTER (WHERE state = 'claimed')                                      AS last_claim
   FROM factory.events
   WHERE issue IS NOT NULL
@@ -244,7 +251,7 @@ Each merged issue's wall-clock time from `ready` to `merged`, cut into three par
 A dispatcher-bound second is flagged "another device idle" when, at that moment, some device other
 than the issue's owner (the device of its first `claimed`) was alive and held no in-flight issue.
 A device is alive for 30 minutes after any event it logged (`usage` included). It holds an issue
-from its `claimed` until that issue's next `ready`, `reclaimed`, `merged` or `abandoned`.
+from its `claimed` until that issue's next `ready`, `reclaimed`, `merged`, `abandoned` or `closed`.
 
 **The B-or-gate rule.** Wait is pipeline-bound plus dispatcher-bound seconds. If the
 dispatcher-bound seconds flagged "another device idle" are more than 50% of the wait, the
@@ -326,7 +333,7 @@ ready_times(repo, issue, ts) AS (
   SELECT c.repo, c.device, range_agg(tstzrange(c.ts, COALESCE(
     (SELECT min(x.ts) FROM factory.events x
      WHERE x.repo = c.repo AND x.issue = c.issue AND x.ts > c.ts
-       AND x.state IN ('ready', 'reclaimed', 'merged', 'abandoned')), 'infinity'))) AS mr
+       AND x.state IN ('ready', 'reclaimed', 'merged', 'abandoned', 'closed')), 'infinity'))) AS mr
   FROM factory.events c WHERE c.state = 'claimed' GROUP BY c.repo, c.device
 ), idle AS (    -- alive and holding nothing
   SELECT a.repo, a.device, a.mr - COALESCE(h.mr, '{}'::tstzmultirange) AS mr
