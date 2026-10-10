@@ -402,6 +402,16 @@ test("two devices: double-claim, claim_lost, reclaimed and stuck", () => {
   });
 });
 
+test("two devices: a claim ended by `closed` is released, so it is not stuck", () => {
+  // #6 is stuck in the fixture (claimed 03:00 on A, last event 03:30). The sweep closing it releases the claim.
+  const events = path.join(tmp, "two-device-closed.jsonl");
+  const closed = { v: 1, ts: "2026-10-09T04:00:00Z", repo: "acme/widgets", device: "A", session_id: null, actor: "sweep", state: "closed", issue: 6, run_id: null, branch: null, pr: null, head: null, note: "not_planned" };
+  fs.writeFileSync(events, fs.readFileSync(path.join(TWO, "events.jsonl"), "utf8") + JSON.stringify(closed) + "\n");
+  const args = TWO_WINDOW.map((a) => (a === path.join(TWO, "events.jsonl") ? events : a));
+  const c = json(args).claims;
+  assert.deepEqual(c.stuck, { count: 0, lease_minutes: 120, issues: [] });
+});
+
 test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () => {
   // a 10 minute lease makes everything silent for over 20 minutes stuck: #3 (59m) and #4 (35m) join #6
   const c = json(TWO_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "10" }).claims;

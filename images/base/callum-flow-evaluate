@@ -39,7 +39,7 @@ const TOP_WAKES = 10;
 const ALIVE_MS = 30 * 60 * 1000; // a device is alive if it logged any event in the previous 30 minutes
 const STUCK_LEASES = 2; // stuck: no event for longer than this many leases
 const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound with another device idle, means "B"
-const RELEASE_STATES = ['merged', 'abandoned', 'reclaimed', 'ready']; // end an in-flight claim
+const RELEASE_STATES = ['merged', 'abandoned', 'closed', 'reclaimed', 'ready']; // end an in-flight claim
 const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
 const ACTION_BASH_RE = new RegExp(
   [
