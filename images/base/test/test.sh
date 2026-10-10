@@ -20,8 +20,7 @@
 # entrypoint tests in #64, section 9 the agentsview push in #69, section 10
 # the /shared tests in #65 (Docker volumes stand in for the NAS), section 11
 # the first-run logins in #74 (against stub CLIs), including the page behind
-# an nginx path prefix (#79, a throwaway nginx container from ECR Public,
-# see #297), section 12 the
+# an nginx path prefix (#79, a throwaway nginx container), section 12 the
 # workspace repo clone in #77 (local bare repos over file:// and a git smart
 # HTTP server in the container, so no network is needed), section 13 the
 # Claude plugins in #112 and #148 (against a stub `claude plugin`, plus one
@@ -32,9 +31,9 @@
 # install fetches callum-flow from GitHub. Test 7 needs
 # the devcontainer CLI (`devcontainer` on PATH, or set
 # DEVCONTAINER="npx -y @devcontainers/cli"); SKIP_DEVCONTAINER=1 skips it.
-# Test 9 starts a throwaway postgres:17 container. Both throwaway images come
-# from ECR Public, which mirrors Docker Hub without its anonymous pull limit
-# (#297). No test needs real
+# Throwaway service images use the ECR Public mirror (#297); see
+# images/base/README.md (Building, testing and publishing) for image references
+# and pull requirements. No test needs real
 # credentials: the logged-in path runs against a stub `claude`, and the
 # agentsview URLs point at that throwaway database or at nowhere.
 set -euo pipefail
