@@ -27,6 +27,14 @@ check "callum-flow-fix-linkage is on PATH and rejects a bad option with exit 2" 
 check "callum-flow-claim and callum-flow-sweep are on PATH and exit 2 on bad arguments" in_image '
   callum-flow-claim 2>/dev/null; [ $? = 2 ] && ! callum-flow-claim abc 2>/dev/null &&
   callum-flow-sweep --bogus 2>/dev/null; [ $? = 2 ]'
+check "callum-flow-issue-read is on PATH, fails closed without CALLUM_FLOW_TRUSTED_AUTHORS and exits 2 on a bad argument" in_image '
+  [ -x "$(command -v callum-flow-issue-read)" ] && out=$(env -u CALLUM_FLOW_TRUSTED_AUTHORS CALLUM_FLOW_REPO=o/r callum-flow-issue-read 1 2>&1); [ $? = 1 ] &&
+  echo "$out" | grep -q CALLUM_FLOW_TRUSTED_AUTHORS && out=$(CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:1 callum-flow-issue-read --bogus 2>/dev/null); [ $? = 2 ] && [ -z "$out" ]'
+check "dev-doctor FAILs without CALLUM_FLOW_TRUSTED_AUTHORS with the fix, and reports OK once it is set" in_image '
+  out=$(env -u CALLUM_FLOW_TRUSTED_AUTHORS dev-doctor 2>&1); echo "$out" | grep -q "^dev-doctor: FAIL CALLUM_FLOW_TRUSTED_AUTHORS is not set" &&
+  echo "$out" | grep -A1 "FAIL CALLUM_FLOW_TRUSTED_AUTHORS" | grep -q "fix: " &&
+  CALLUM_FLOW_TRUSTED_AUTHORS=bad dev-doctor 2>&1 | grep -q "FAIL CALLUM_FLOW_TRUSTED_AUTHORS is malformed" &&
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 dev-doctor 2>&1 | grep -q "OK   CALLUM_FLOW_TRUSTED_AUTHORS is set"'
 check "callum-flow-evaluate is on PATH, exits 2 on a bad argument and prints every report key (all n/a) for empty inputs" in_image '
   [ -x "$(command -v callum-flow-evaluate)" ] && callum-flow-evaluate --bogus 2>/dev/null; [ $? = 2 ] &&
   d=$(mktemp -d) &&

@@ -1,0 +1,252 @@
+#!/bin/sh
+#
+# callum-flow-issue-read: read GitHub issue, PR and comment text through the
+# trusted-author filter, the one sanctioned read path for text written by people
+# the factory does not trust (cbundy/dev-system#307). Anyone can open an issue or
+# comment on a public repo, and an agent that reads that text can be steered by it.
+#
+# Usage:
+#   callum-flow-issue-read [--json] <issue> [--comments]
+#   callum-flow-issue-read [--json] --comment <id|url>
+#   callum-flow-issue-read [--json] --list [--label L] [--state open|closed|all]
+#   callum-flow-issue-read [--json] --pr <pr> [--comments]
+#   callum-flow-issue-read [--json] --timeline <issue>
+#
+# <issue>: number, state, labels, author, title and body - only if the issue
+#   author is trusted. --comments adds the trusted comments (id, login,
+#   created_at, body) and a final `stripped: N` line. The content of a stripped
+#   comment is never printed.
+# --comment: one comment, only if its author and its issue's author are trusted.
+# --list: number and title of the issues by trusted authors (default state open),
+#   plus a stripped count. Pull requests are not listed.
+# --pr: the PR title and body, only if the PR author is trusted. --comments adds
+#   the conversation comments, review comments and reviews, all filtered.
+# --timeline: only events whose actor is trusted. A cross-referenced event also
+#   needs a trusted author on the source issue or PR.
+# --json: stable machine shape, always one object with a top-level `stripped`
+#   count: {issue, comments?, stripped}, {comment, stripped}, {issues, stripped},
+#   {pr, comments?, review_comments?, reviews?, stripped}, {events, stripped}.
+#   Items are as GitHub returns them. Text output (the default) is for agents.
+#
+# Trust: an author is trusted only when its user.login (case-insensitive) AND
+# numeric user.id both match one entry of CALLUM_FLOW_TRUSTED_AUTHORS. The display
+# name is never consulted. The variable is the ONLY source of the list (the image
+# bakes none): comma-separated login:numeric_id entries, e.g. cbundy:13131067,
+# provisioned by the Coder template and the desktop devcontainer templates.
+# Unset or malformed, every read fails closed with an error naming the variable.
+#
+# It fails closed: an API error, a pagination failure, a missing user object or
+# unexpected JSON exits non-zero with nothing on stdout. Stripped content never
+# reaches stdout, stderr or a log, only the count. When something is stripped or
+# refused it logs an `untrusted_stripped` event; failing to log changes nothing.
+#
+# Exit codes: 0 ok, 1 failure (API, JSON, trusted list), 2 usage error,
+# 3 the requested issue, PR or comment is by an untrusted author (nothing printed).
+#
+# Environment: CALLUM_FLOW_TRUSTED_AUTHORS, CALLUM_FLOW_REPO (owner/name, default
+# from gh); for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN.
+set -u
+
+GH=${CALLUM_FLOW_GH_BIN:-gh}
+EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+SHARE=${CALLUM_FLOW_SHARE_DIR:-/usr/local/share/dev-system}
+ME=callum-flow-issue-read
+
+usage() {
+  [ -z "${1-}" ] || echo "$ME: $1" >&2
+  echo "usage: $ME [--json] <issue> [--comments] | --comment <id|url> | --list [--label L] [--state S] | --pr <pr> [--comments] | --timeline <issue>" >&2
+  exit 2
+}
+err() { echo "$ME: $*" >&2; }
+die() { err "$*"; exit 1; }
+isnum() { case "$1" in '' | *[!0-9]*) return 1 ;; esac; }
+
+json=false mode=issue n='' comments=false label='' state=open cid=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) json=true ;;
+    --comments) comments=true ;;
+    --comment | --list | --pr | --timeline)
+      if [ "$mode" != issue ] || [ -n "$n" ]; then usage "only one mode at a time"; fi
+      mode=${1#--}
+      if [ "$mode" != list ]; then
+        [ $# -ge 2 ] || usage "$1 needs a value"
+        if [ "$mode" = comment ]; then cid=$2; else n=$2; fi
+        shift
+      fi
+      ;;
+    --label | --state)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      if [ "$1" = --label ]; then label=$2; else state=$2; fi
+      shift
+      ;;
+    -*) usage "unknown option '$1'" ;;
+    *)
+      if [ "$mode" != issue ] || [ -n "$n" ]; then usage "unexpected argument '$1'"; fi
+      n=$1
+      ;;
+  esac
+  shift
+done
+
+case "$mode" in
+  issue | pr | timeline) isnum "$n" || usage "an issue or PR number is required, got '${n}'" ;;
+  comment)
+    # an id, a .../issues/comments/<id> URL or a ...#issuecomment-<id> URL
+    cid=${cid##*issuecomment-}
+    cid=${cid##*/comments/}
+    isnum "$cid" || usage "--comment needs a comment id or URL"
+    ;;
+  list) ;;
+esac
+[ "$comments" = false ] || case "$mode" in issue | pr) ;; *) usage "--comments only goes with an issue number or --pr" ;; esac
+if [ "$mode" != list ] && { [ -n "$label" ] || [ "$state" != open ]; }; then usage "--label and --state only go with --list"; fi
+case "$state" in open | closed | all) ;; *) usage "--state must be open, closed or all" ;; esac
+
+command -v jq >/dev/null 2>&1 || die "jq not found"
+
+# The one definition of the list and its format, shared with dev-doctor.
+# shellcheck source=trusted-authors.sh
+. "$SHARE/trusted-authors.sh" 2>/dev/null || die "cannot read $SHARE/trusted-authors.sh"
+msg=$(trusted_authors_check) || die "$msg - set it to the trusted GitHub authors; dev-doctor shows the fix. Refusing every read."
+trusted=$(trusted_authors_json) || die "cannot parse CALLUM_FLOW_TRUSTED_AUTHORS"
+
+repo=${CALLUM_FLOW_REPO-}
+[ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
+[ -n "$repo" ] || die "cannot determine the repo (set CALLUM_FLOW_REPO)"
+
+# jq prelude. trusted: user.login (case-insensitive) AND user.id both match.
+# A missing or malformed user object is an error, never "no comments".
+# shellcheck disable=SC2016
+PRELUDE='
+  def user_of($u): if ($u | type) == "object" and ($u.login | type) == "string" and ($u.id | type) == "number"
+    then $u else error("missing user") end;
+  def trusted_user($u): user_of($u) as $x | any($T[]; .login == ($x.login | ascii_downcase) and .id == $x.id);
+  def trusted: trusted_user(.user);
+  def need_array: if type == "array" then . else error("not an array") end;
+  def keep: need_array | map(select(trusted));
+  def n_stripped: need_array | map(select(trusted | not)) | length;
+'
+
+# Fetch helpers: the whole response is captured before anything is printed.
+fetch_one() { # path -> JSON object on stdout
+  _o=$("$GH" api "$1") || return 1
+  printf '%s' "$_o" | jq -ce 'if type == "object" then . else error("not an object") end'
+}
+fetch_all() { # path -> one JSON array on stdout, across all pages
+  _o=$("$GH" api --paginate "$1") || return 1
+  printf '%s' "$_o" | jq -sce 'if length > 0 and all(.[]; type == "array") then add else error("not an array") end'
+}
+jqf() { jq -r --argjson T "$trusted" "$@"; }
+
+log_stripped() { # issue note [pr]
+  if [ -n "${3-}" ]; then
+    "$EVENT" untrusted_stripped --issue "$1" --pr "$3" --note "$2" >/dev/null 2>&1 || true
+  else
+    "$EVENT" untrusted_stripped --issue "$1" --note "$2" >/dev/null 2>&1 || true
+  fi
+}
+
+refuse() { # kind issue [pr]
+  log_stripped "$2" "$1" "${3-}"
+  err "untrusted author"
+  exit 3
+}
+
+# --- fetch and filter everything, print at the end ----------------------------
+logn='' logpr=''
+case "$mode" in
+  issue | pr)
+    if [ "$mode" = pr ]; then
+      obj=$(fetch_one "repos/$repo/pulls/$n") || die "cannot read PR #$n"
+      logpr=$n
+    else
+      obj=$(fetch_one "repos/$repo/issues/$n") || die "cannot read issue #$n"
+    fi
+    ok=$(printf '%s' "$obj" | jqf "$PRELUDE"' trusted') || die "cannot determine the author of #$n"
+    [ "$ok" = true ] || refuse "$mode" "$n" "$logpr"
+    logn=$n
+    c1='[]' c2='[]' c3='[]'
+    if [ "$comments" = true ]; then
+      c1=$(fetch_all "repos/$repo/issues/$n/comments") || die "cannot read the comments of #$n"
+      if [ "$mode" = pr ]; then
+        c2=$(fetch_all "repos/$repo/pulls/$n/comments") || die "cannot read the review comments of #$n"
+        c3=$(fetch_all "repos/$repo/pulls/$n/reviews") || die "cannot read the reviews of #$n"
+      fi
+    fi
+    # one jq call so that any malformed item fails the whole read
+    res=$(jq -n -c --argjson T "$trusted" --argjson o "$obj" --argjson c1 "$c1" --argjson c2 "$c2" --argjson c3 "$c3" \
+      --arg mode "$mode" --argjson with "$comments" "$PRELUDE"'
+      (($c1 | n_stripped) + ($c2 | n_stripped) + ($c3 | n_stripped)) as $s
+      | if $mode == "pr"
+        then {pr: $o} + (if $with then {comments: ($c1 | keep), review_comments: ($c2 | keep), reviews: ($c3 | keep)} else {} end)
+        else {issue: $o} + (if $with then {comments: ($c1 | keep)} else {} end) end
+      | . + {stripped: $s}') || die "unexpected response for #$n"
+    ;;
+  comment)
+    obj=$(fetch_one "repos/$repo/issues/comments/$cid") || die "cannot read comment $cid"
+    iu=$(printf '%s' "$obj" | jq -r '.issue_url // empty') || iu=
+    inum=${iu##*/}
+    isnum "$inum" || die "cannot determine the issue of comment $cid"
+    parent=$(fetch_one "repos/$repo/issues/$inum") || die "cannot read issue #$inum"
+    ok=$(jq -n -r --argjson T "$trusted" --argjson c "$obj" --argjson p "$parent" "$PRELUDE"'
+      ($c | trusted) and ($p | trusted)') || die "cannot determine the author of comment $cid"
+    [ "$ok" = true ] || refuse comment "$inum"
+    res=$(jq -n -c --argjson c "$obj" '{comment: $c, stripped: 0}')
+    ;;
+  list)
+    q="state=$state&per_page=100"
+    if [ -n "$label" ]; then
+      enc=$(printf '%s' "$label" | jq -sRr @uri) || die "cannot encode the label"
+      q="$q&labels=$enc"
+    fi
+    all=$(fetch_all "repos/$repo/issues?$q") || die "cannot list issues"
+    res=$(printf '%s' "$all" | jq -c --argjson T "$trusted" "$PRELUDE"'
+      map(select(has("pull_request") | not)) as $i
+      | {issues: ($i | keep), stripped: ($i | n_stripped)}') || die "unexpected response listing issues"
+    logn=$(printf '%s' "$all" | jq -r --argjson T "$trusted" "$PRELUDE"'
+      [.[] | select((has("pull_request") | not) and (trusted | not)) | .number] | min // empty') || die "unexpected response listing issues"
+    ;;
+  timeline)
+    all=$(fetch_all "repos/$repo/issues/$n/timeline") || die "cannot read the timeline of #$n"
+    # An event is trusted by its actor (user for commented events). A cross-
+    # referenced event also needs a trusted source author. No actor: stripped.
+    res=$(printf '%s' "$all" | jq -c --argjson T "$trusted" "$PRELUDE"'
+      def tl_ok: ((.actor // .user) as $a | if ($a | type) == "object" then trusted_user($a) else false end)
+        and (if .event == "cross-referenced" then trusted_user(.source.issue.user) else true end);
+      need_array | {events: map(select(tl_ok)), stripped: (map(select(tl_ok | not)) | length)}') || die "unexpected response for the timeline of #$n"
+    logn=$n
+    ;;
+esac
+
+stripped=$(printf '%s' "$res" | jq -r .stripped) || die "unexpected response"
+if [ "$stripped" -gt 0 ] 2>/dev/null && [ -n "$logn" ]; then
+  case "$mode" in
+    list) log_stripped "$logn" "list stripped=$stripped" ;;
+    timeline) log_stripped "$logn" "timeline=$stripped" ;;
+    *) log_stripped "$logn" "comments=$stripped" "$logpr" ;;
+  esac
+fi
+
+if [ "$json" = true ]; then
+  printf '%s\n' "$res"
+  exit 0
+fi
+
+# Text output for agents.
+printf '%s' "$res" | jq -r '
+  def labels: [.labels[]? | .name] | join(", ");
+  def item($k): "\($k): #\(.number)\nstate: \(.state)\nlabels: \(labels)\nauthor: \(.user.login)\ntitle: \(.title)\nbody:\n\(.body // "")";
+  def cm: "--- \(.id) \(.user.login) \(.created_at // .submitted_at // "")" + (if .state then " [\(.state)]" else "" end) + "\n\(.body // "")";
+  (if .issue then (.issue | item("issue")) else empty end),
+  (if .pr then (.pr | item("pr")) else empty end),
+  (if .comment then (.comment | cm) else empty end),
+  (if .issues then (.issues[] | "#\(.number) \(.title)") else empty end),
+  (if .events then (.events[] | "\(.created_at // "") \(.event) \((.actor // .user).login)"
+    + (if .label then " \(.label.name)" else "" end)
+    + (if .event == "cross-referenced" then " #\(.source.issue.number) \(.source.issue.title)" else "" end)
+    + (if .event == "commented" then "\n\(.body // "")" else "" end)) else empty end),
+  (if .comments then "comments:" , (.comments[] | cm) else empty end),
+  (if .review_comments then "review comments:", (.review_comments[] | cm) else empty end),
+  (if .reviews then "reviews:", (.reviews[] | cm) else empty end),
+  "stripped: \(.stripped)"' || die "cannot format the result"

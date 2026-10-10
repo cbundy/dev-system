@@ -65,6 +65,21 @@ variable "otlp_endpoint" {
   type        = string
 }
 
+# The authors whose GitHub issue, PR and comment text the factory trusts
+# (cbundy/dev-system#307). The image bakes no list: this variable is the only
+# source, so every workspace gets it from the template, and callum-flow-issue-read
+# and dev-doctor fail closed when it is missing or malformed.
+variable "trusted_authors" {
+  default     = ""
+  description = "Comma-separated login:numeric_id entries, e.g. cbundy:13131067 (look the id up with: gh api users/<login> --jq .id). Set as CALLUM_FLOW_TRUSTED_AUTHORS in every workspace. Empty leaves it unset, and dev-doctor reports that as a failure."
+  type        = string
+
+  validation {
+    condition     = var.trusted_authors == "" || can(regex("^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?:[1-9][0-9]*(,[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?:[1-9][0-9]*)*$", var.trusted_authors))
+    error_message = "trusted_authors must be comma-separated login:numeric_id entries with no spaces, e.g. cbundy:13131067."
+  }
+}
+
 # The Remote Control mode parameter's default, so one Terraform serves both
 # templates: dev-system keeps auto, orchestrator pushes session (coder/push.sh).
 variable "remote_control_default_mode" {
@@ -302,6 +317,11 @@ locals {
     "OTEL_RESOURCE_ATTRIBUTES=host=${local.container_name},env=coder",
   ]
 
+  # Set for every workspace, so agents and dev-doctor read the same list.
+  trusted_env = var.trusted_authors == "" ? [] : [
+    "CALLUM_FLOW_TRUSTED_AUTHORS=${var.trusted_authors}",
+  ]
+
   # Docker labels, to trace orphaned resources back to their workspace.
   labels = {
     "coder.owner"        = data.coder_workspace_owner.me.name
@@ -523,7 +543,7 @@ resource "docker_container" "workspace" {
   # own init is PID 1: it reaps the orphans tmux and Claude leave behind.
   init       = true
   entrypoint = ["sh", "-c", coder_agent.main.init_script]
-  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env)
+  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)

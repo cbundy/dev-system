@@ -13,6 +13,11 @@ docker_host = "ssh://coder@192.168.1.245"
 # The OTLP collector: Claude Code and codex telemetry from every workspace.
 otlp_endpoint = "http://192.168.1.10:4318"
 
+# Whose GitHub text the factory trusts (cbundy/dev-system#307), as
+# CALLUM_FLOW_TRUSTED_AUTHORS in every workspace of both templates: login:numeric_id,
+# verified with `gh api users/cbundy --jq .id`. The image bakes no list.
+trusted_authors = "cbundy:13131067"
+
 # The Template Admin token for push-next.sh, mounted only into workspaces with
 # the template_testing parameter on. Inert until the directory is set up (see
 # "Testing template changes from a workspace" in README.md).

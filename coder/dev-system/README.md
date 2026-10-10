@@ -49,6 +49,7 @@ privacy defaults are in
 |---|---|---|
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
+| `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of both templates. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
 | `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
 | `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator`). |
 | `remote_control_default_skip_permissions` | `false` | Default of the `remote_control_skip_permissions` parameter. Set per template by `push.sh` (`false` for both, for now). |
