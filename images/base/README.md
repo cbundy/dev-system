@@ -1258,7 +1258,7 @@ entries into it.
 Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mistakes` and
 `-agentsview` volumes into every repo. 2.0 drops them:
 
-1. Add the four per-repo mounts above to each repo's `devcontainer.json` and move it to
+1. Add the five per-repo mounts above to each repo's `devcontainer.json` and move it to
    `base:2`. A repo scaffolded by `callum-dev` gets both from
    `npx callum-dev update --devcontainer base-image`.
 2. Rebuild. The new volumes start empty, so log Claude and codex in once in each repo.
