@@ -1263,7 +1263,8 @@ says `merge` over a body with a `## Run it` heading prints `ROLLOUT conflict ...
 (`Closes #N` / `Refs #N`) and re-checks it. Without `--expect` it derives the keyword from the
 issue's Rollout like the merge guard, and edits nothing on a conflict, a failed lookup or a
 contradicting `--expect`. The keyword goes in the author text; the no-mistakes PR appendix
-is never edited. It edits the PR, so, like `callum-flow-merge`,
+is never edited; an unwanted closing keyword inside the appendix is reported on stderr (remove
+the appendix block and start a fresh pipeline run). It edits the PR, so, like `callum-flow-merge`,
 it is allowed only in the main checkout's `settings.local.json`; the read-only
 `check-pr-linkage.sh` stays in the synced allow list.
 
