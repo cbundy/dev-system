@@ -7,7 +7,8 @@
 # Usage: callum-flow-sweep
 #
 # Rules, applied in this order to each `In development` issue:
-#   1. Closed: remove the label. No comment, no event.
+#   1. Closed: remove the label, and log `closed` (below) when the issue's
+#      latest event is not final.
 #   2. Open, with a PR merged after the newest claim comment was created (a
 #      merged PR that closes or just references the issue shows up as a
 #      `cross-referenced` timeline event) whose head branch follows the repo
@@ -19,6 +20,17 @@
 #      claimant, comment why, and log `callum-flow-event reclaimed`.
 #   4. Open with no claim comment (legacy or hand claims): untouched, one
 #      stderr note. Never flipped to `ready`.
+# After those rules, one more pass records issues closed outside the factory
+# (cbundy/dev-system#342). Every issue in the event log whose latest event is
+# not final (`closed` or `abandoned`; `merged` is not final, the issue may still
+# be open) and that GitHub reports closed gets `callum-flow-event closed --note
+# <GitHub's state_reason: completed, not_planned or duplicate> --actor sweep`.
+# The log is this device's file (`callum-flow-event --path`) plus, when
+# dev-query is configured, the latest event per issue in factory.events, so
+# issues only another device saw are found too. A failed central read warns
+# and falls back to the local log. The pass has no time limit, so the first run
+# is the backfill. Two devices sweeping before either has pushed can both log
+# `closed`; consumers count identical consecutive rows once.
 # Each issue is re-read directly (not through the label list, which lags)
 # and skipped when it no longer carries the label, so a second run right
 # after the first writes nothing.
@@ -35,12 +47,13 @@
 #
 # Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL,
 # CALLUM_FLOW_IN_DEV_LABEL; for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN,
-# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
+# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read), CALLUM_FLOW_DEV_QUERY_BIN.
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
+DEVQ=${CALLUM_FLOW_DEV_QUERY_BIN:-dev-query}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
 INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
 
@@ -70,6 +83,43 @@ fi
 untrusted=$(printf '%s' "$lj" | jq -r '.stripped // 0')
 [ "$untrusted" = 0 ] || err "note: skipped $untrusted $INDEV issue(s) by untrusted authors"
 
+tmp=$(mktemp -d 2>/dev/null) || { err "cannot create a temporary directory"; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+: > "$tmp/handled"
+
+# latest_open_issues: the issues whose latest event is not final, from this
+# device's log and (best effort) the central factory.events.
+: > "$tmp/central"
+if command -v "$DEVQ" >/dev/null 2>&1; then
+  crc=0
+  "$DEVQ" -At -v "repo=$repo" -c "SELECT DISTINCT ON (issue) to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') || '|' || issue || '|' || state
+    FROM factory.events WHERE repo = :'repo' AND issue IS NOT NULL ORDER BY issue, ts DESC, seq DESC" \
+    > "$tmp/central.raw" 2> "$tmp/central.err" < /dev/null || crc=$?
+  if [ "$crc" -eq 0 ]; then
+    jq -R -c 'split("|") | select(length == 3) | {ts: .[0], issue: (.[1] | tonumber), state: .[2]}' "$tmp/central.raw" > "$tmp/central" 2>/dev/null || : > "$tmp/central"
+  elif [ "$crc" -ne 78 ]; then
+    err "warning: cannot read the central event log (dev-query exit $crc), using this device's log only"
+  fi
+fi
+: > "$tmp/local"
+logfile=$("$EVENT" --path --repo "$repo" 2>/dev/null) || logfile=
+if [ -n "$logfile" ] && [ -f "$logfile" ]; then
+  jq -R -c 'fromjson? | select(type == "object" and (.issue | type) == "number") | {ts: .ts, issue: .issue, state: .state}' "$logfile" > "$tmp/local" 2>/dev/null || : > "$tmp/local"
+fi
+# Latest per issue by ts; jq sorts stably, so equal timestamps keep file order
+# (central first, then this device's log).
+cat "$tmp/central" "$tmp/local" | jq -s -r 'sort_by(.ts) | group_by(.issue) | map(last) | .[] | "\(.issue) \(.state)"' > "$tmp/latest" 2>/dev/null || : > "$tmp/latest"
+# is_final N: the issue's latest event is closed or abandoned
+is_final() { awk -v n="$1" '$1 == n && ($2 == "closed" || $2 == "abandoned") { f = 1 } END { exit !f }' "$tmp/latest"; }
+# has_events N: the log has seen the issue at all
+has_events() { awk -v n="$1" '$1 == n { f = 1 } END { exit !f }' "$tmp/latest"; }
+# log_closed N VIEW: log the closed event with GitHub's close reason
+log_closed() {
+  reason=$(printf '%s' "$2" | jq -r '.state_reason // empty')
+  "$EVENT" closed --issue "$1" --note "$reason" --actor sweep >/dev/null 2>&1 || err "warning: could not log the closed event for #$1"
+  echo "$1" >> "$tmp/handled"
+}
+
 rc=0
 for n in $list; do
   crc=0
@@ -86,6 +136,7 @@ for n in $list; do
   state=$(printf '%s' "$view" | jq -r '.state | ascii_upcase')
 
   if [ "$state" = CLOSED ]; then
+    if has_events "$n" && ! is_final "$n"; then log_closed "$n" "$view"; fi
     "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel closed #$n"; rc=1; }
     continue
   fi
@@ -160,5 +211,22 @@ for n in $list; do
       + ". Last renewal: " + $r + ". Lease: " + (.lease | tostring) + " minutes."')
   "$GH" issue comment "$n" --body "$text" >/dev/null || { err "reclaimed #$n but could not comment"; rc=1; }
   "$EVENT" reclaimed --issue "$n" --note "lease expired" >/dev/null 2>&1 || err "warning: could not log the reclaimed event for #$n"
+done
+
+# Issues closed outside the factory: every issue the log has seen, not final,
+# that GitHub reports closed. Open ones are left alone.
+cands=$(awk '$2 != "closed" && $2 != "abandoned" && $2 != "untrusted_stripped" { print $1 }' "$tmp/latest")
+for n in $cands; do
+  grep -qx "$n" "$tmp/handled" && continue
+  crc=0
+  vj=$("$READ" --json "$n") || crc=$?
+  if [ "$crc" -eq 3 ]; then continue; fi
+  if [ "$crc" -ne 0 ] || ! view=$(printf '%s' "$vj" | jq -ce '.issue | if type == "object" then . else error("shape") end'); then
+    err "cannot read #$n"
+    rc=1
+    continue
+  fi
+  [ "$(printf '%s' "$view" | jq -r '.state | ascii_upcase')" = CLOSED ] || continue
+  log_closed "$n" "$view"
 done
 exit "$rc"

@@ -23,7 +23,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname mktemp; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -79,7 +79,7 @@ case "$1 $2" in
       */issues/[0-9]*)
         n=${2##*/}
         jq --argjson n "$n" --argjson u "$(author_of author "$n")" \
-          '{number: $n, title: "t", body: "b", user: $u, state: (.state | ascii_downcase), labels: .labels}' "$d/issue-$n.json" ;;
+          '{number: $n, title: "t", body: "b", user: $u, state: (.state | ascii_downcase), state_reason: (.state_reason // null), labels: .labels}' "$d/issue-$n.json" ;;
     esac ;;
   'api -X')
     verb=$3; path=$4
@@ -312,13 +312,188 @@ cm 100 devB "$STALE" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 no_calls "sweep renewed"
 
-# --- sweep: closed issue loses the label silently --------------------------------
+# --- sweep: closed issue loses the label, and the closure is logged (#342) --------
+# seed <state> <issue> : append a real event to this device's log
+seed() { rc_of "$EVENT" "$1" --issue "$2" --repo o/r; }
+# closed_issue <n> <reason> : a closed issue with GitHub's close reason
+closed_issue() { jq -n --arg r "$2" '{state: "CLOSED", labels: [], state_reason: (if $r == "" then null else $r end)}' > "$d/issue-$1.json"; }
+# stub dev-query: prints $STUB_DIR/central (the DISTINCT ON rows), or fails with $STUB_DIR/central-rc
+cat > "$tmpdir/dev-query" <<'STUB'
+#!/bin/sh
+d=${STUB_DIR:?}
+echo "dev-query $*" >> "$d/dq-calls"
+[ ! -f "$d/central-rc" ] || { echo "dev-query: boom" >&2; exit "$(cat "$d/central-rc")"; }
+[ ! -f "$d/central" ] || cat "$d/central"
+STUB
+chmod +x "$tmpdir/dev-query"
+unset CALLUM_FLOW_DEV_QUERY_BIN 2> /dev/null || true
+
 reset
 issue 7 CLOSED 'In development'
 rc_of "$SWEEP"
 expect_rc 0 "sweep closed"
 [ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "closed: $(calls)"
-no_events "sweep closed"
+no_events "sweep closed (no prior event)"
+
+# In development + closed + a prior claimed: label removed, one closed event, then nothing
+reset
+closed_issue 7 completed
+jq '.labels = [{name: "In development"}]' "$d/issue-7.json" > "$d/t" && mv "$d/t" "$d/issue-7.json"
+seed claimed 7
+rc_of "$SWEEP"
+expect_rc 0 "sweep closed in dev"
+[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "closed in dev: $(calls)"
+[ "$(events | grep -c '"state":"closed"')" = 1 ] || fail "closed in dev: $(events)"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .note == "completed" and .actor == "sweep"' > /dev/null || fail "closed in dev event: $(events)"
+: > "$d/calls"
+n=$(events | wc -l)
+rc_of "$SWEEP"
+expect_rc 0 "sweep closed in dev twice"
+no_calls "sweep closed in dev twice"
+[ "$(events | wc -l)" = "$n" ] || fail "closed in dev twice wrote: $(events)"
+
+# manual close, duplicate close, not_planned and no reason: one closed line each, note verbatim
+for r in completed duplicate not_planned ''; do
+  reset
+  closed_issue 7 "$r"
+  seed claimed 7
+  n=$(events | wc -l)
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep close [$r]"
+  no_calls "sweep close [$r]"
+  [ "$(events | wc -l)" = $((n + 1)) ] || fail "close [$r]: $(events)"
+  events | tail -n 1 | jq -e --arg r "$r" '.state == "closed" and .issue == 7 and .actor == "sweep" and (.note // "") == $r' > /dev/null || fail "close [$r]: $(events)"
+  # repeat run right after: nothing
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep close repeat [$r]"
+  no_calls "sweep close repeat [$r]"
+  [ "$(events | wc -l)" = $((n + 1)) ] || fail "close repeat [$r]: $(events)"
+done
+
+# an issue that already ended (closed, abandoned) gets no event
+for fin in closed abandoned; do
+  reset
+  closed_issue 7 completed
+  seed claimed 7
+  seed "$fin" 7
+  n=$(events | wc -l)
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep final $fin"
+  [ "$(events | wc -l)" = "$n" ] || fail "final $fin: $(events)"
+done
+
+# merged is not final: a merged issue GitHub closed gets closed (owner decision on #345) ...
+reset
+closed_issue 7 completed
+seed claimed 7
+seed merged 7
+rc_of "$SWEEP"
+expect_rc 0 "sweep merged then closed"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "merged then closed: $(events)"
+# ... once
+n=$(events | wc -l)
+rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "merged then closed twice: $(events)"
+# a stray event after closed (the real #239 shape: final, then verdict) closes it again
+seed verdict 7
+rc_of "$SWEEP"
+events | tail -n 1 | jq -e '.state == "closed"' > /dev/null || fail "stray verdict after closed: $(events)"
+
+# a merged issue that is still open (research, Refs) gets nothing
+reset
+issue 7 OPEN
+seed merged 7
+n=$(events | wc -l)
+rc_of "$SWEEP"
+expect_rc 0 "sweep merged open"
+no_calls "sweep merged open"
+[ "$(events | wc -l)" = "$n" ] || fail "merged open: $(events)"
+
+# an open issue whose latest event is not final: no event, no write
+reset
+issue 7 OPEN
+seed claimed 7
+n=$(events | wc -l)
+rc_of "$SWEEP"
+expect_rc 0 "sweep open candidate"
+no_calls "sweep open candidate"
+[ "$(events | wc -l)" = "$n" ] || fail "open candidate: $(events)"
+
+# a closed issue the log never saw gets no event
+reset
+closed_issue 7 completed
+rc_of "$SWEEP"
+expect_rc 0 "sweep unseen"
+no_events "sweep unseen"
+
+# untrusted candidate: skipped and counted; reader failure: exit 1, the others are still logged
+reset
+closed_issue 7 completed
+closed_issue 8 completed
+echo '{"login":"mallory","id":1}' > "$d/author-7"
+seed claimed 7
+seed claimed 8
+rc_of "$SWEEP"
+expect_rc 0 "sweep untrusted candidate"
+events | jq -e 'select(.state == "closed" and .issue == 7)' > /dev/null && fail "untrusted candidate was closed: $(events)"
+events | jq -e 'select(.state == "closed" and .issue == 8)' > /dev/null || fail "trusted candidate not closed: $(events)"
+grep -q 'skipped 1 .*untrusted authors' "$tmpdir/err" || fail "untrusted candidate not counted: $(cat "$tmpdir/err")"
+reset
+closed_issue 7 completed
+closed_issue 8 completed
+seed claimed 7
+seed claimed 8
+rm -f "$d/issue-7.json"
+rc_of "$SWEEP"
+expect_rc 1 "sweep candidate read failure"
+events | jq -e 'select(.state == "closed" and .issue == 8)' > /dev/null || fail "other candidate not closed after a failure: $(events)"
+
+# --- sweep: central factory.events via dev-query (#342) ----------------------------
+dq() { CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
+# an issue only another device saw (no local event) is closed from the central read
+reset
+closed_issue 9 not_planned
+echo '2026-10-10T10:00:00Z|9|verdict' > "$d/central"
+dq
+expect_rc 0 "sweep central"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 9 and .note == "not_planned" and .actor == "sweep"' > /dev/null || fail "central: $(events)"
+grep -q 'factory.events' "$d/dq-calls" || fail "central: no query"
+n=$(events | wc -l)
+dq
+[ "$(events | wc -l)" = "$n" ] || fail "central twice: $(events)"
+# central says closed later than the local log: nothing
+reset
+closed_issue 9 completed
+seed claimed 9
+echo '2999-01-01T00:00:00Z|9|closed' > "$d/central"
+dq
+[ "$(events | grep -c '"state":"closed"')" = 0 ] || fail "central final: $(events)"
+# local closed later than a stale central row: nothing
+reset
+closed_issue 9 completed
+echo '2000-01-01T00:00:00Z|9|claimed' > "$d/central"
+seed closed 9
+n=$(events | wc -l)
+dq
+[ "$(events | wc -l)" = "$n" ] || fail "local final over stale central: $(events)"
+# not configured (exit 78): silent fallback to the local log
+reset
+closed_issue 7 completed
+seed claimed 7
+echo 78 > "$d/central-rc"
+dq
+expect_rc 0 "sweep central unconfigured"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "unconfigured: $(events)"
+[ ! -s "$tmpdir/err" ] || fail "unconfigured should be silent: $(cat "$tmpdir/err")"
+# a failing central read warns and falls back
+reset
+closed_issue 7 completed
+seed claimed 7
+echo 3 > "$d/central-rc"
+dq
+expect_rc 0 "sweep central failing"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "central failing: $(events)"
+grep -q 'cannot read the central event log' "$tmpdir/err" || fail "central failing: no warning: $(cat "$tmpdir/err")"
 
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
 tl() { jq -n --arg m "$1" '[{event: "cross-referenced", actor: {login: "cbundy", id: 13131067}, source: {issue: {number: 55, user: {login: "cbundy", id: 13131067}, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }

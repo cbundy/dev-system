@@ -1288,13 +1288,15 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... test_weakened ... usage`; `callum-flow-event` with no arguments lists the vocabulary) to
+(`ready claimed ... closed ... test_weakened ... usage`; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
 `--if-changed`, which skips a line identical in state, head and note to the subject's newest one, so a
 restart never replays old events; transitions a watcher observes are always logged.
+`callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
+`CALLUM_EVENTS_DIR` default as a write) and writes nothing.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
@@ -1384,7 +1386,13 @@ and exits 3; every exit 3 logs a `claim_lost` event), then swaps `ready` for `In
 `In development` labels on open and closed issues: closed issues, and open ones with a PR merged
 after the claim (matched by `issue-<N>-` branch name), just lose the
 label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an
-issue with no claim comment is left alone. Liveness uses GitHub server times; the lease is
+issue with no claim comment is left alone. The sweep also records issues closed outside the
+factory: every issue in the event log (this device's file, plus the latest event per issue in the
+central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
+whose latest event is not `closed` or `abandoned` and that GitHub reports closed gets a `closed`
+event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. It has no
+time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. Issues from untrusted authors are skipped and counted; a failed
+reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
 

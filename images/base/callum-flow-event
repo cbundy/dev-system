@@ -8,6 +8,7 @@
 # Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
 #          [--if-changed]
+#        callum-flow-event --path [--repo O/N]
 #
 # --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
 # newest line already in the log for the same subject (the same branch when
@@ -18,9 +19,14 @@
 # A missing or unreadable log counts as changed. Without the flag every call
 # writes, as before.
 #
+# --path prints the absolute path of the repo's log file, named and placed as a
+# write would, and writes nothing (callum-flow-sweep reads the log through it).
+#
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
-#   ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage
+#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage
+#   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
+#   reason - completed, not_planned or duplicate)
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
@@ -43,16 +49,42 @@
 # override of /proc/sys/kernel/random/uuid).
 set -u
 
-STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage"
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage"
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
   echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed]" >&2
+  echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "states: $STATES" >&2
   exit 2
 }
 
 [ $# -ge 1 ] || usage
+
+# repo_file: derive the repo (when not given) and the log file name from it.
+repo_file() {
+  if [ -z "$repo" ]; then
+    url=$(git config --get remote.origin.url 2>/dev/null) || url=
+    repo=$(printf '%s' "$url" | sed 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p')
+    [ -n "$repo" ] || repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+  fi
+  file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
+}
+
+if [ "$1" = --path ]; then
+  shift
+  repo=${CALLUM_FLOW_REPO-}
+  while [ $# -gt 0 ]; do
+    if [ "$1" != --repo ] || [ $# -lt 2 ]; then usage "--path takes only --repo O/N"; fi
+    repo=$2
+    shift 2
+  done
+  repo_file
+  dir=${CALLUM_EVENTS_DIR:-/persist/events}
+  case "$dir" in /*) ;; *) dir=$(pwd)/$dir ;; esac
+  printf '%s/%s\n' "$dir" "$file"
+  exit 0
+fi
 state=$1
 shift
 case " $STATES " in *" $state "*) ;; *) usage "unknown state '$state'" ;; esac
@@ -98,12 +130,7 @@ warn() { echo "callum-flow-event: warning: $*" >&2; }
 
 command -v jq >/dev/null 2>&1 || { warn "jq not found - event not recorded"; exit 0; }
 
-if [ -z "$repo" ]; then
-  url=$(git config --get remote.origin.url 2>/dev/null) || url=
-  repo=$(printf '%s' "$url" | sed 's#\.git$##' | sed -n 's#^.*[:/]\([^/:]*/[^/]*\)$#\1#p')
-  [ -n "$repo" ] || repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
-fi
-file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
+repo_file
 
 device=${DEV_MACHINE_NAME:-}
 [ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
