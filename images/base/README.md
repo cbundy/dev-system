@@ -105,7 +105,7 @@ environment variable set in the image.
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small; `dev-init` and `dev-doctor` do not warn about the missing volume), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
-| `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart. |
+| `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
 `no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
@@ -431,8 +431,11 @@ metadata) skip that check, since they open the checkout they bind-mount.
 
 The `coder` CLI is installed at `/usr/local/bin/coder`, from the official release tarball
 with its SHA-256 checked at build time. It is pinned to the Coder **server's** version, not
-latest: a mismatched CLI silently ignored `--parameter` before
-(cbundy/dev-system#108). Read the deployment's version with
+latest, so the CLI and the API agree. The pin does not make `--parameter` change an
+existing workspace's parameters: it does not on a matching server either (see "Changing a
+parameter on an existing workspace" in
+[coder/dev-system/README.md](../../coder/dev-system/README.md); use `dev-restart-self
+--parameter`, cbundy/dev-system#268). Read the deployment's version with
 `curl -s "${CODER_AGENT_URL%/}/api/v2/buildinfo"` and, when the server is upgraded, bump
 `CODER_VERSION` and both `CODER_SHA256_*` ARGs in the Dockerfile (checksums are in the
 release's `coder_<version>_checksums.txt`) in the same release.
@@ -674,6 +677,8 @@ your own workspace kills the session before it can start the workspace again.
 ```sh
 dev-restart-self              # default (alias --upgrade): one start build, no stop
 dev-restart-self --restart    # scheduled restart; add --upgrade to also take the active template version
+dev-restart-self --parameter remote_control_resume=false   # change a parameter (repeatable)
+dev-restart-self --fresh      # the next start begins a new conversation, once
 dev-restart-self --dry-run    # print each request (token redacted), send nothing
 dev-restart-self --resume     # dev-init runs this on every start
 ```
@@ -689,6 +694,22 @@ dev-restart-self --resume     # dev-init runs this on every start
   minimum 2), with `--upgrade` sets `automatic_updates` to `always`, then stops the
   workspace. Coder starts it again at the scheduled time. It refuses before changing anything
   when the template has `allow_user_autostart: false`.
+- **`--parameter name=value`** (repeatable) puts the values in the build's
+  `rich_parameter_values`: the start build, or with `--restart` (and in the 4xx fallback) the
+  stop build, whose values the autostarted build keeps. It then reads
+  `/api/v2/workspacebuilds/<id>/parameters` back and exits non-zero naming any value that did
+  not take. A `name` with no `=` is a usage error and sends nothing. This is the way to change
+  a mutable parameter (`remote_control_resume`, `image`, ...) from inside the workspace:
+  `coder start|restart|update --parameter` is silently ignored for an existing workspace
+  (cbundy/dev-system#268; see [coder/dev-system/README.md](../../coder/dev-system/README.md)).
+  With `--restart` the read-back covers the stop build, since the session ends before the
+  autostart.
+- **`--fresh`** leaves the one-shot marker `/persist/dev-restart-self/fresh-conversation`
+  (`$DEV_RESTART_SELF_DIR`). On the next start `dev-remote-control` (session mode) does not
+  resume the last conversation, sends the startup prompt, and deletes the marker; a later
+  restart resumes the new conversation again. `remote_control_resume` is never changed.
+  Combines with `--upgrade`, `--restart` and `--parameter`. No marker is left when the
+  request is refused or fails before the workspace is stopped.
 - **Resume** (`--resume`, run by `dev-init`) reports the `last-request` record, restores the
   saved schedule (`null` when there was none) and `automatic_updates`, and deletes the marker.
   With no marker it does nothing. If the restore fails it keeps the marker and exits non-zero

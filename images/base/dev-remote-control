@@ -30,7 +30,8 @@
 #   anything else) or the one-time "Enable Remote Control?" prompt;
 # - in session mode, decides on every start whether to resume the workspace's
 #   last conversation (DEV_REMOTE_CONTROL_RESUME=1 and one exists) or start a
-#   fresh one, each with its own optional first message;
+#   fresh one, each with its own optional first message. The one-shot marker
+#   dev-restart-self --fresh leaves forces a fresh start once;
 # - in server mode, removes stale bridge worktrees before every start
 #   (dev-prune-worktrees --delete: orphaned, clean, pushed, idle 72h+;
 #   cbundy/dev-system#93);
@@ -326,7 +327,17 @@ supervise() {
       # Decided again on every start, so after the first real conversation a
       # crash loop resumes it each time and never re-sends the startup prompt.
       # The prompts stay single arguments.
-      if [ "${DEV_REMOTE_CONTROL_RESUME:-0}" = 1 ] && session=$(resume_session "$ws"); then
+      # `dev-restart-self --fresh` leaves a one-shot marker: this start begins a
+      # new conversation and deletes it, so the next start (a crash, a restart)
+      # resumes that new conversation again (cbundy/dev-system#268).
+      fresh_marker=${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}/fresh-conversation
+      fresh=0
+      if [ -e "$fresh_marker" ]; then
+        fresh=1
+        rm -f "$fresh_marker"
+        log "fresh conversation requested by dev-restart-self --fresh: not resuming this once"
+      fi
+      if [ "$fresh" = 0 ] && [ "${DEV_REMOTE_CONTROL_RESUME:-0}" = 1 ] && session=$(resume_session "$ws"); then
         log "resuming the last conversation ($session) in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${ws//[^a-zA-Z0-9]/-}"
         args+=(--resume "$session")
         [ -z "${DEV_REMOTE_CONTROL_RESUME_PROMPT:-}" ] || args+=("$DEV_REMOTE_CONTROL_RESUME_PROMPT")

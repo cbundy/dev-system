@@ -290,4 +290,160 @@ UNSET="CODER_WORKSPACE_ID CODER_SESSION_TOKEN" run --resume
 assert_status 0 resume-none
 no_calls resume-none
 
+# --- --parameter (cbundy/dev-system#268) --------------------------------------------------------
+BID=bbbbbbbb-1111-2222-3333-444444444444
+BP="/api/v2/workspacebuilds/$BID/parameters"
+param_case() { # name: a start build that returns an id, and a read-back fixture
+  new_case "$1"
+  put POST "/api/v2/workspaces/$WS/builds" "{\"build_number\":12,\"id\":\"$BID\"}"
+}
+
+param_case param-one
+put GET "$BP" '[{"name":"remote_control_resume","value":"false"},{"name":"image","value":"x"}]'
+run --parameter remote_control_resume=false
+assert_status 0 param-one
+want_calls param-one <<'X'
+GET WS
+POST WS/builds
+GET /api/v2/workspacebuilds/bbbbbbbb-1111-2222-3333-444444444444/parameters
+X
+grep -qF "POST /api/v2/workspaces/$WS/builds {\"transition\":\"start\",\"template_version_id\":\"$VER\",\"rich_parameter_values\":[{\"name\":\"remote_control_resume\",\"value\":\"false\"}]}" "$C/calls" || { cat "$C/calls" >&2; fail "param-one: wrong body"; }
+grep -q "remote_control_resume=false took effect" "$C/out" || fail "param-one: no confirmation"
+
+# two values, one in the --parameter=name=value form; a value may itself contain "="
+param_case param-two
+put GET "$BP" '[{"name":"remote_control_resume","value":"false"},{"name":"image","value":"ghcr.io/x/dev:latest"}]'
+run --parameter remote_control_resume=false --parameter=image=ghcr.io/x/dev:latest
+assert_status 0 param-two
+grep -F 'POST ' "$C/calls" | sed 's/^POST [^ ]* //' | jq -e '.rich_parameter_values == [{"name":"remote_control_resume","value":"false"},{"name":"image","value":"ghcr.io/x/dev:latest"}]' > /dev/null || { cat "$C/calls" >&2; fail "param-two: wrong values"; }
+param_case param-equals
+put GET "$BP" '[{"name":"repo_url","value":"a=b"}]'
+run --parameter repo_url=a=b
+assert_status 0 param-equals
+
+# a build that did not take the value is a failure, naming the parameter
+param_case param-mismatch
+put GET "$BP" '[{"name":"remote_control_resume","value":"true"}]'
+run --parameter remote_control_resume=false
+assert_status 1 param-mismatch
+grep -q 'parameter remote_control_resume is "true" in build .*, not "false"' "$C/out" || fail "param-mismatch: no mismatch message"
+
+# a parameter missing from the build is a failure too
+param_case param-missing
+put GET "$BP" '[]'
+run --parameter remote_control_resume=false
+assert_status 1 param-missing
+
+# malformed: usage error, no request at all
+for bad in "novalue" "=x"; do
+  new_case "param-bad"
+  run --parameter "$bad"
+  assert_status 2 "param-bad $bad"
+  no_calls "param-bad $bad"
+done
+new_case param-bare
+run --parameter
+assert_status 2 param-bare
+no_calls param-bare
+
+# --dry-run shows the values and sends nothing
+new_case param-dry
+run --dry-run --parameter remote_control_resume=false
+assert_status 0 param-dry
+[ ! -s "$C/argv" ] || fail "param-dry: curl was called"
+grep -qF '"rich_parameter_values":[{"name":"remote_control_resume","value":"false"}]' "$C/out" || fail "param-dry: values not shown"
+
+# a 4xx falls back to a restart that carries the parameters in the stop build
+param_case param-403
+: > "$C/reject-first"
+put GET "$BP" '[{"name":"remote_control_resume","value":"false"}]'
+put POST "/api/v2/workspaces/$WS/builds" "{\"build_number\":13,\"id\":\"$BID\"}"
+run --parameter remote_control_resume=false
+assert_status 0 param-403
+want_calls param-403 <<'X'
+GET WS
+POST WS/builds
+GET WS
+GET TPL
+PUT WS/autostart
+PUT WS/autoupdates
+POST WS/builds
+GET /api/v2/workspacebuilds/bbbbbbbb-1111-2222-3333-444444444444/parameters
+X
+sed -n 7p "$C/calls" | grep -qF '{"transition":"stop","rich_parameter_values":[{"name":"remote_control_resume","value":"false"}]}' || { cat "$C/calls" >&2; fail "param-403: stop body must carry the parameter"; }
+
+# --restart carries the parameters in the stop build; the read-back checks that build
+param_case param-restart
+put GET "$BP" '[{"name":"image","value":"z"}]'
+run --restart --parameter image=z
+assert_status 0 param-restart
+want_calls param-restart <<'X'
+GET WS
+GET TPL
+PUT WS/autostart
+POST WS/builds
+GET /api/v2/workspacebuilds/bbbbbbbb-1111-2222-3333-444444444444/parameters
+X
+sed -n 4p "$C/calls" | grep -qF '{"transition":"stop","rich_parameter_values":[{"name":"image","value":"z"}]}' || fail "param-restart: stop body must carry the parameter"
+param_case param-restart-mismatch
+put GET "$BP" '[{"name":"image","value":"old"}]'
+run --restart --parameter image=z
+assert_status 1 param-restart-mismatch
+
+# --- --fresh (cbundy/dev-system#268) ---------------------------------------------------------
+new_case fresh
+run --fresh
+assert_status 0 fresh
+[ -e "$C/state/fresh-conversation" ] || fail "fresh: marker not written"
+want_calls fresh <<'X'
+GET WS
+POST WS/builds
+X
+grep -qF "\"template_version_id\":\"$VER\"}" "$C/calls" || fail "fresh: body should be the plain start build"
+grep -q rich_parameter_values "$C/calls" && fail "fresh: must not change any parameter"
+
+# combined with --upgrade and --parameter
+param_case fresh-param
+put GET "$BP" '[{"name":"image","value":"y"}]'
+run --upgrade --fresh --parameter image=y
+assert_status 0 fresh-param
+[ -e "$C/state/fresh-conversation" ] || fail "fresh-param: marker not written"
+
+# with --restart the marker is written too, and kept
+new_case fresh-restart
+run --restart --fresh
+assert_status 0 fresh-restart
+[ -e "$C/state/fresh-conversation" ] || fail "fresh-restart: marker not written"
+[ -e "$C/state/pending.json" ] || fail "fresh-restart: pending.json missing"
+
+# a refusal leaves no marker
+new_case fresh-refused
+put GET "/api/v2/workspaces/$WS" '{"template_active_version_id":"v","latest_build":{"transition":"stop","status":"stopped"}}'
+run --fresh
+assert_status 1 fresh-refused
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-refused: left a marker"
+
+# a failed start leaves no marker (5xx, and the 4xx fallback whose restart also fails)
+new_case fresh-500
+put POST "/api/v2/workspaces/$WS/builds" '{"message":"oops"}' 500
+run --fresh
+assert_status 1 fresh-500
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-500: left a marker"
+new_case fresh-403
+put POST "/api/v2/workspaces/$WS/builds" '{"message":"no"}' 403
+run --fresh
+assert_status 1 fresh-403
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-403: left a marker"
+
+# --dry-run writes nothing; --resume leaves the marker for dev-remote-control
+new_case fresh-dry
+run --fresh --dry-run
+assert_status 0 fresh-dry
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-dry: wrote a marker"
+new_case fresh-resume
+: > "$C/state/fresh-conversation"
+UNSET="CODER_WORKSPACE_ID CODER_SESSION_TOKEN" run --resume
+assert_status 0 fresh-resume
+[ -e "$C/state/fresh-conversation" ] || fail "fresh-resume: --resume must not consume the marker"
+
 echo "dev-restart-self: ok"

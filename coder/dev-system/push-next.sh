@@ -23,8 +23,7 @@
 # deployment URL is CODER_URL, else the agent's CODER_AGENT_URL.
 #
 # The CLI used is CODER_BIN if set, else the workspace agent's own binary (downloaded from
-# the server, so its version always matches: a mismatched CLI silently ignored --parameter
-# in cbundy/dev-system#108), else `coder` on PATH.
+# the server, so its version always matches), else `coder` on PATH.
 #
 # The token is never printed or put on a command line: it is passed to each coder call in
 # the environment (CODER_SESSION_TOKEN) and not exported to anything else.
