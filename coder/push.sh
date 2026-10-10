@@ -27,6 +27,7 @@ usage() {
 name=$1
 case "$name" in
   dev-system)
+    role=dev
     display_name=dev-system
     icon=/icon/docker.svg
     description='A dev-system base image workspace with Claude Code Remote Control and a login page'
@@ -38,6 +39,7 @@ case "$name" in
     name_format=
     ;;
   orchestrator)
+    role=orchestrator
     display_name=Orchestrator
     icon=/emojis/1f504.png # U+1F504, the clockwise arrows emoji
     description='A dev-system workspace running one interactive Claude Code Remote Control session, e.g. for the issue orchestrator'
@@ -60,6 +62,7 @@ csv() {
 }
 
 set -- templates push "$name" --directory "$TEMPLATE_DIR" --yes \
+  --variable "$(csv "role=$role")" \
   --variable "$(csv "remote_control_default_mode=$mode")" \
   --variable "$(csv "remote_control_default_resume=$resume")" \
   --variable "$(csv "remote_control_default_skip_permissions=$skip_permissions")" \
