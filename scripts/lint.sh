@@ -111,6 +111,14 @@ if ! node scripts/build-skills.js --check > /dev/null; then
   fail "generated skills out of date (run npm run build:skills)"
 fi
 
+# Release notes (scripts/release-notes.js): every file valid, and notes for the package.json
+# version, so a bump PR cannot pass ci without its notes.
+checked=$((checked + 1))
+if ! out=$(node scripts/release-notes.js --lint 2>&1); then
+  fail "release notes invalid (run the release skill)"
+  printf '%s\n' "$out" >&2
+fi
+
 # The Coder template (cbundy/dev-system#117): terraform fmt and validate. terraform is in
 # this repo's dev image (.devcontainer/Dockerfile) and in CI (ci.yml), not on every
 # host, so without it this is skipped with a note - unless LINT_REQUIRE_TERRAFORM=1 (CI),

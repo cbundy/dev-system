@@ -79,6 +79,17 @@ jobs:
             exit 1
           fi
 
+      - name: Check release notes
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        # The curated notes (release-notes/vX.Y.Z.md) land in the bump PR. Checked before
+        # tagging, so a version without valid notes never gets a tag, on resume too.
+        run: |
+          if ! node scripts/release-notes.js --check "$RELEASE_VERSION"; then
+            echo "::error::release-notes/v$RELEASE_VERSION.md is missing or invalid. Run the 'release' skill (.claude/skills/release/SKILL.md) to write it, add it to the bump PR, merge, then re-run Release (see RELEASING.md)."
+            exit 1
+          fi
+
       - name: Tag release
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -97,11 +108,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
+          node scripts/release-notes.js --body "$RELEASE_VERSION" > "$RUNNER_TEMP/release-body.md"
           if gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "Release v${RELEASE_VERSION} already exists - retrying: regenerating notes."
-            gh release edit "v${RELEASE_VERSION}" --title "v${RELEASE_VERSION}"
+            echo "Release v${RELEASE_VERSION} already exists - retrying: rewriting title and notes."
+            gh release edit "v${RELEASE_VERSION}" --title "v${RELEASE_VERSION}" \
+              --notes-file "$RUNNER_TEMP/release-body.md"
           else
             gh release create "v${RELEASE_VERSION}" \
               --title "v${RELEASE_VERSION}" \
-              --generate-notes
+              --notes-file "$RUNNER_TEMP/release-body.md"
           fi
