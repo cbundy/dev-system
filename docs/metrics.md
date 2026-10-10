@@ -11,7 +11,9 @@ metrics through the `issue` and `device` resource attributes the orchestrator se
 sub-agents.
 
 A second schema, `nomistakes`, mirrors the no-mistakes pipeline database (see "no-mistakes
-pipeline data" below); it joins to `factory.events` on `run_id`.
+pipeline data" below). Pipeline facts (when a run started, its status, parked time, its PR) come
+from that mirror, never from agent-logged `run_started` events: a run belongs to an issue by its
+branch name (see "Linking pipeline runs to issues" below).
 
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`.
@@ -31,21 +33,42 @@ Check coverage before quoting any window, and never extrapolate before it.
 
 Per issue, the time between the first occurrence of each state on the way to a merge. Watcher
 states carry the polling interval's delay (queue 2 minutes, pipeline 25 seconds).
+The pipeline stage starts at the first linked run's `nomistakes.runs.created_at`, not at an
+agent-logged event: `implementation` is `delegated` to that start and `pipeline` is that start to
+`merge_ready`. An issue with no linkable run has NULL `implementation` and `pipeline`.
 `ready` can repeat when a watcher restarts with a stale `--known`, so the query uses the first one per issue.
 
 ```sql
-WITH first AS (
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+),
+first AS (
   SELECT repo, issue, state, min(ts) AS ts
   FROM factory.events
   WHERE issue IS NOT NULL
-    AND state IN ('ready', 'claimed', 'delegated', 'run_started', 'merge_ready', 'merged')
+    AND state IN ('ready', 'claimed', 'delegated', 'merge_ready', 'merged')
   GROUP BY repo, issue, state
+  UNION ALL
+  SELECT e.repo, rl.issue, 'run', min(rl.created_at)
+  FROM run_link rl
+  JOIN (SELECT DISTINCT repo, issue FROM factory.events WHERE issue IS NOT NULL) e
+    ON lower(e.repo) = rl.repo AND e.issue = rl.issue
+  GROUP BY e.repo, rl.issue
 )
 SELECT repo, issue,
   min(ts) FILTER (WHERE state = 'claimed')     - min(ts) FILTER (WHERE state = 'ready')       AS waiting_for_claim,
   min(ts) FILTER (WHERE state = 'delegated')   - min(ts) FILTER (WHERE state = 'claimed')     AS design,
-  min(ts) FILTER (WHERE state = 'run_started') - min(ts) FILTER (WHERE state = 'delegated')   AS implementation,
-  min(ts) FILTER (WHERE state = 'merge_ready') - min(ts) FILTER (WHERE state = 'run_started') AS pipeline,
+  min(ts) FILTER (WHERE state = 'run')         - min(ts) FILTER (WHERE state = 'delegated')   AS implementation,
+  min(ts) FILTER (WHERE state = 'merge_ready') - min(ts) FILTER (WHERE state = 'run')         AS pipeline,
   min(ts) FILTER (WHERE state = 'merged')      - min(ts) FILTER (WHERE state = 'merge_ready') AS waiting_for_merge,
   min(ts) FILTER (WHERE state = 'merged')      - min(ts) FILTER (WHERE state = 'ready')       AS total
 FROM first
@@ -210,12 +233,12 @@ ORDER BY last_ts;
 
 Each merged issue's wall-clock time from `ready` to `merged`, cut into three parts:
 
-- **Pipeline-bound**: `run_started` to the run's next `merge_ready` (or `failed`, or the next
-  `run_started`), including CI. Parked time is excluded, because a parked gate waits on the
+- **Pipeline-bound**: a linked run's `created_at` to the run's next `merge_ready` (or `failed`, or
+  the next linked run's start), including CI. Parked time is excluded, because a parked gate waits on the
   dispatcher.
 - **Dispatcher-bound**: `ready` to the first `claimed`; each `parked` to its next `verdict` or
   `fix_requested` (or `merge_ready`, `failed`, `merged`); each `merge_ready` to the next `merged`,
-  `run_started` or `failed`.
+  linked run start or `failed`.
 - **Agent work**: the rest.
 
 A dispatcher-bound second is flagged "another device idle" when, at that moment, some device other
@@ -227,7 +250,7 @@ from its `claimed` until that issue's next `ready`, `reclaimed`, `merged` or `ab
 dispatcher-bound seconds flagged "another device idle" are more than 50% of the wait, the
 dispatcher (option B) is what limits throughput; otherwise invest in the gate.
 
-Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
+Run starts come from the mirror (`run_link`, see "Linking pipeline runs to issues"); `run_started` events are not read. Most issues have no `ready` event, because `queue-watch.sh` logs one only for issues missing from
 its baseline. The `ready` time therefore comes from each issue's GitHub timeline, the last
 `labeled` `ready` event before the claim. Collect them with
 `callum-flow-issue-read --json --timeline <n>` and put them in `ready_times`
@@ -236,10 +259,29 @@ later (multiranges). It is the twin of the tool's `waiting` section: the tool al
 "alive" window at the report's end, which the SQL does not.
 
 ```sql
-WITH ready_times(repo, issue, ts) AS (
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+),
+ready_times(repo, issue, ts) AS (
   -- replace with the labeled-ready times from the timeline, e.g.
   --   VALUES ('cbundy/dev-system', 222, '2026-10-09T08:00:00Z'::timestamptz), ...
   SELECT NULL::text, NULL::int, NULL::timestamptz WHERE false
+), pev AS (   -- events, with the mirror's run starts in place of run_started
+  SELECT repo, issue, state, ts FROM factory.events WHERE issue IS NOT NULL AND state <> 'run_started'
+  UNION ALL
+  SELECT e.repo, rl.issue, 'run_started', rl.created_at
+  FROM run_link rl
+  JOIN (SELECT DISTINCT repo, issue FROM factory.events WHERE issue IS NOT NULL) e
+    ON lower(e.repo) = rl.repo AND e.issue = rl.issue
 ), merged AS (
   SELECT repo, issue, min(ts) AS m FROM factory.events
   WHERE state = 'merged' AND issue IS NOT NULL GROUP BY repo, issue
@@ -267,16 +309,16 @@ WITH ready_times(repo, issue, ts) AS (
   FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'parked'
   UNION ALL
   SELECT s.repo, s.issue, p.ts, COALESCE(
-    (SELECT min(x.ts) FROM factory.events x
+    (SELECT min(x.ts) FROM pev x
      WHERE x.repo = p.repo AND x.issue = p.issue AND x.ts > p.ts
        AND x.state IN ('merged', 'run_started', 'failed')), s.m)
   FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'merge_ready'
 ), pipe AS (
   SELECT s.repo, s.issue, p.ts AS s, COALESCE(
-    (SELECT min(x.ts) FROM factory.events x
+    (SELECT min(x.ts) FROM pev x
      WHERE x.repo = p.repo AND x.issue = p.issue AND x.ts > p.ts
        AND x.state IN ('merge_ready', 'failed', 'run_started', 'merged')), s.m) AS e
-  FROM span s JOIN factory.events p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'run_started'
+  FROM span s JOIN pev p ON p.repo = s.repo AND p.issue = s.issue AND p.state = 'run_started'
 ), alive AS (   -- per device: alive for 30 minutes after each event
   SELECT repo, device, range_agg(tstzrange(ts, ts + interval '30 minutes')) AS mr
   FROM factory.events GROUP BY repo, device
@@ -319,6 +361,43 @@ ORDER BY repo, issue;
 
 Totals and the call: sum the columns; `sum(dispatcher_bound_other_idle) / sum(pipeline_bound +
 dispatcher_bound)` above 0.5 means option B.
+
+## Linking pipeline runs to issues
+
+`run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have
+none. The no-mistakes database records every run itself and `nm-push-loop` mirrors it, so the
+mirror is the source of every pipeline fact (start time, status, parked time, PR). A run belongs to
+issue N of repo R when:
+
+- `runs.repo = lower(R)` (the exporter lowercases `repo`; `factory.events.repo` is not lowercased,
+  so compare with `lower()`), and
+- its `branch` matches `(^|/)issue-([0-9]+)(-|$)`, the `feat/issue-<N>-<slug>` convention the
+  `implement-issue` skill uses (the CTE reads up to nine digits).
+
+Legacy fallback: a run whose branch carries no issue number is linked through a `run_started` event
+with the same `run_id`, so old rows keep working. The branch wins when the two disagree. Every
+other run, including one with NULL `repo`, is unlinked: it is left out of per-issue numbers and
+listed by the "Unlinked runs" saved query, never silently dropped. The start of a pipeline run in
+any issue-level metric is the linked run's `created_at`; `run_started` timestamps are never read.
+
+Copy the CTE verbatim. Queries 1 and 7, the example join, saved query 7 and "Unlinked runs" all
+start with it (`tests/metrics-queries.test.js` fails if a copy drifts):
+
+```sql
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+)
+SELECT * FROM run_link ORDER BY repo, issue, created_at;
+```
 
 ## no-mistakes pipeline data (`nomistakes` schema)
 
@@ -534,17 +613,29 @@ CREATE INDEX IF NOT EXISTS step_rounds_step_idx ON nomistakes.step_rounds (step_
 CREATE INDEX IF NOT EXISTS agent_invocations_run_idx ON nomistakes.agent_invocations (run_id);
 ```
 
-Example: pipeline runs against the factory's own view of the same run (`factory.events.run_id`
-is the no-mistakes run id the orchestrator recorded at `run_started`):
+Example: pipeline runs with the issue each one belongs to (`run_link`, from "Linking pipeline
+runs to issues" above; the branch name does the linking, so no event is needed):
 
 ```sql
-SELECT r.repo, e.issue, r.id AS run_id, r.status, r.no_mistakes_version,
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+)
+SELECT r.repo, rl.issue, r.id AS run_id, r.status, r.no_mistakes_version,
        (SELECT count(*) FROM nomistakes.step_results s WHERE s.run_id = r.id) AS steps,
        (SELECT sum(i.input_tokens + i.output_tokens) FROM nomistakes.agent_invocations i
         WHERE i.run_id = r.id) AS tokens
 FROM nomistakes.runs r
-JOIN factory.events e ON e.run_id = r.id AND e.state = 'run_started'
-ORDER BY e.ts;
+JOIN run_link rl ON rl.run_id = r.id
+ORDER BY r.created_at, r.id;
 ```
 
 ### Saved queries
@@ -706,23 +797,31 @@ ORDER BY invocations DESC, i.purpose, i.model, 3, 4;
 #### 7. Run lead time joined to `factory.events`
 
 Per issue, from the orchestrator's `claimed` event to its `merged` event, split into pipeline
-time and the rest. Pipeline time is `runs.updated_at - runs.created_at` summed over the runs the
-orchestrator linked to the issue with `run_started` events; it includes the time those runs sat
-parked, so `parked_s` is shown beside it (not additional to it). `other_s` is everything
-outside the pipeline: waiting to be picked up, design, review and merge.
+time and the rest. Pipeline time is `runs.updated_at - runs.created_at` summed over the runs
+`run_link` places on the issue (by branch name, see "Linking pipeline runs to issues"); it
+includes the time those runs sat parked, so `parked_s` is shown beside it (not additional to it).
+`other_s` is everything outside the pipeline: waiting to be picked up, design, review and merge.
 
 ```sql
-WITH issues AS (
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+),
+issues AS (
   SELECT e.repo, e.issue,
          min(e.ts) FILTER (WHERE e.state = 'claimed') AS claimed_at,
          max(e.ts) FILTER (WHERE e.state = 'merged') AS merged_at
   FROM factory.events e
   WHERE e.issue IS NOT NULL
   GROUP BY e.repo, e.issue
-), linked AS (
-  SELECT DISTINCT e.repo, e.issue, e.run_id
-  FROM factory.events e
-  WHERE e.state = 'run_started' AND e.run_id IS NOT NULL
 )
 SELECT n.repo, n.issue,
        round(extract(epoch FROM n.merged_at - n.claimed_at)) AS lead_s,
@@ -731,11 +830,37 @@ SELECT n.repo, n.issue,
        round(extract(epoch FROM n.merged_at - n.claimed_at) - sum(extract(epoch FROM r.updated_at - r.created_at))) AS other_s,
        count(r.id) AS runs
 FROM issues n
-JOIN linked l ON l.repo = n.repo AND l.issue = n.issue
+JOIN run_link l ON lower(n.repo) = l.repo AND l.issue = n.issue
 JOIN nomistakes.runs r ON r.id = l.run_id
 WHERE n.claimed_at IS NOT NULL AND n.merged_at IS NOT NULL
 GROUP BY n.repo, n.issue, n.claimed_at, n.merged_at
 ORDER BY n.merged_at;
+```
+
+#### Unlinked runs
+
+The runs `run_link` cannot place on an issue, so no per-issue number counts them: a branch with no
+`issue-<N>` (a release, a chore, a probe), or a run with no `repo`. An issue whose only runs are
+listed here shows NULL pipeline times in queries 1 and 7. One row per run, ordered by repo and
+device.
+
+```sql
+WITH run_link AS (
+  SELECT r.repo, ((regexp_match(r.branch, '(?:^|/)issue-([0-9]{1,9})(?:-|$)'))[1])::int AS issue,
+         r.id AS run_id, r.created_at
+  FROM nomistakes.runs r
+  WHERE r.repo IS NOT NULL AND r.branch ~ '(^|/)issue-[0-9]{1,9}(-|$)'
+  UNION
+  SELECT r.repo, e.issue, r.id, r.created_at
+  FROM nomistakes.runs r
+  JOIN factory.events e ON e.run_id = r.id AND lower(e.repo) = r.repo
+                       AND e.state = 'run_started' AND e.issue IS NOT NULL
+  WHERE r.repo IS NOT NULL AND (r.branch IS NULL OR r.branch !~ '(^|/)issue-[0-9]{1,9}(-|$)')
+)
+SELECT r.repo, r.device, r.id AS run_id, r.branch, r.status, r.created_at
+FROM nomistakes.runs r
+WHERE NOT EXISTS (SELECT 1 FROM run_link rl WHERE rl.run_id = r.id)
+ORDER BY r.repo, r.device, r.created_at, r.id;
 ```
 
 ## Offline computation: `callum-flow-evaluate`
@@ -751,6 +876,16 @@ the window selects issues by their `merged` event (query 1) or first `merge_read
 verdicts by their own timestamp (queries 3 and 5), and the events file is the one device's log
 unless a `factory.events` export is passed (see the skill).
 
+- `throughput` (query 1) and `waiting` (query 7) take every pipeline run start from the linked
+  runs of the no-mistakes source (`state.sqlite` or `--nm-export`), by the rules in "Linking
+  pipeline runs to issues"; `run_started` events are read only for the legacy link, never for a
+  timestamp. Each lead-time row carries `run_source`: `mirror` (the first linked run is linked by
+  its branch), `run_started` (linked only by a legacy event) or `none`. With no linked run in the
+  source, `implementation` and `pipeline` are `null`, never a number from the events, and nothing
+  is pipeline-bound in the waiting split. `pipeline.unlinked_runs` counts this repo's runs created
+  in the window that no issue claims (the "Unlinked runs" query; runs with no `repo` belong to no
+  repo and are not counted). A run created before `--since` for an issue merged inside the window
+  must be in the source, so export the mirror from a lookback earlier than the window start.
 - `per_device` (query 4, plus claims and `claim_lost` per device) and `claims` (query 6:
   `double_claims`, `claim_lost`, `reclaimed`, `stuck`) read each event's `device`. The stuck test
   is evaluated at the window's end; its lease comes from `CALLUM_FLOW_LEASE_MINUTES` (default 120).

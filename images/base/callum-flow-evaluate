@@ -24,6 +24,11 @@
 // cover every device and repo; state.sqlite is then read only to find the checkouts for
 // transcript discovery. `window.scope` says which scope each source covers.
 //
+// Pipeline run starts: a no-mistakes run belongs to issue N of --repo when its branch matches
+// (^|/)issue-N(-|$); a run on another branch is linked only through a legacy run_started event
+// with its run_id, else it is unlinked (counted in pipeline.unlinked_runs). Lead-time stages and
+// the waiting split use the linked runs' created_at, never a run_started timestamp.
+//
 // Environment: CLAUDE_CONFIG_DIR (default ~/.claude), CALLUM_EVENTS_DIR (default
 // /persist/events), NO_MISTAKES_HOME (default ~/.no-mistakes), CALLUM_FLOW_LEASE_MINUTES
 // (default 120, the claim lease the stuck-issue test uses).
@@ -51,7 +56,12 @@ const ACTION_BASH_RE = new RegExp(
   ].join('|'),
 );
 const REARM_ONLY_TOOLS = new Set(['Monitor', 'TaskStop', 'ToolSearch']);
-const STAGE_STATES = ['ready', 'claimed', 'delegated', 'run_started', 'merge_ready', 'merged'];
+// run_started is not here: pipeline run starts come from the no-mistakes mirror (linkRuns), never
+// from an agent-logged event (cbundy/dev-system#343).
+const STAGE_STATES = ['ready', 'claimed', 'delegated', 'merge_ready', 'merged'];
+// A run belongs to issue N when its branch names it; the same convention as docs/metrics.md
+// "Linking pipeline runs to issues" and callum-flow-sweep.
+const ISSUE_BRANCH_RE = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/;
 const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
 const TOP_KEYS = [
@@ -447,10 +457,40 @@ function readyFor(n, issueEvents, readyTimes) {
   return ev ? { t: ev.t, source: 'event' } : null;
 }
 
+// Links the source's runs (already restricted to one repo) to issues, like the run_link CTE in
+// docs/metrics.md. Returns { byIssue: Map(issue -> [{ id, t, source }] by start time), linked: Set(run id) }.
+// `source` is 'mirror' (branch) or 'run_started' (legacy: a branch with no issue number, linked
+// by an agent-logged event with the same run_id). The branch wins when the two disagree.
+function linkRuns(runs, events) {
+  const legacy = new Map();
+  for (const e of events) {
+    if (e.state === 'run_started' && e.run_id && e.issue !== null && e.issue !== undefined && !legacy.has(e.run_id)) legacy.set(e.run_id, e.issue);
+  }
+  const byIssue = new Map();
+  const linked = new Set();
+  for (const r of runs) {
+    const m = ISSUE_BRANCH_RE.exec(typeof r.branch === 'string' ? r.branch : '');
+    const issue = m ? Number(m[1]) : legacy.get(r.id);
+    if (issue === undefined || Number.isNaN(r.created_ms)) continue;
+    if (!byIssue.has(issue)) byIssue.set(issue, []);
+    byIssue.get(issue).push({ id: r.id, t: r.created_ms, source: m ? 'mirror' : 'run_started' });
+    linked.add(r.id);
+  }
+  for (const l of byIssue.values()) l.sort((a, b) => a.t - b.t || cmpStr(a.id, b.id));
+  return { byIssue, linked };
+}
+
+// One issue's events in time order with the linked runs' starts as its run_started events.
+function withRunStarts(list, starts) {
+  const out = list.filter((e) => e.state !== 'run_started').map((e, i) => ({ e, i }));
+  starts.forEach((r, i) => out.push({ e: { state: 'run_started', t: r.t, dev: 'mirror' }, i: list.length + i }));
+  return out.sort((a, b) => a.e.t - b.e.t || a.i - b.i).map((x) => x.e);
+}
+
 // The waiting split (metrics.md query 7): each merged issue's ready -> merged time cut into
 // pipeline-bound, dispatcher-bound and agent work, with the dispatcher-bound part flagged when
 // another device was idle.
-function computeWaiting(evs, mergedIssues, readyTimes, idle) {
+function computeWaiting(evs, mergedIssues, readyTimes, idle, runLinks) {
   const byIssue = new Map();
   for (const e of evs) {
     if (e.issue === null || e.issue === undefined) continue;
@@ -460,7 +500,7 @@ function computeWaiting(evs, mergedIssues, readyTimes, idle) {
   const rows = [];
   let without = 0;
   for (const n of [...mergedIssues].sort((a, b) => a - b)) {
-    const list = byIssue.get(n);
+    const list = withRunStarts(byIssue.get(n), (runLinks && runLinks.get(n)) || []);
     const mergedEv = list.find((e) => e.state === 'merged');
     const rd = readyFor(n, list, readyTimes);
     if (!rd || rd.t >= mergedEv.t) { without++; continue; }
@@ -525,6 +565,7 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
   const evs = timed(allEvents);
   const evsByIssue = groupByIssue(evs);
   const readyTimes = ctx.readyTimes || null;
+  const runLinks = ctx.runLinks || null; // issue -> linked runs; null when the pipeline source is unavailable
   const leaseMinutes = ctx.leaseMinutes || 120;
 
   // throughput and lead time (metrics.md query 1)
@@ -534,14 +575,18 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (!f.has('merged') || !inWin(f.get('merged'), win)) continue;
     const rd = readyFor(n, evsByIssue.get(n) || [], readyTimes);
     const ready = rd ? rd.t : f.get('ready');
+    // pipeline start: the first linked run in the no-mistakes source; none means null stages, never a guess
+    const run = runLinks && runLinks.get(n) ? runLinks.get(n)[0] : null;
+    const runAt = run ? run.t : undefined;
     merged.push({
       issue: n,
       merged_at: iso(f.get('merged')),
       ready_source: rd ? rd.source : null,
+      run_source: run ? run.source : 'none',
       waiting_for_claim: sec(ready, f.get('claimed')),
       design: sec(f.get('claimed'), f.get('delegated')),
-      implementation: sec(f.get('delegated'), f.get('run_started')),
-      pipeline: sec(f.get('run_started'), f.get('merge_ready')),
+      implementation: sec(f.get('delegated'), runAt),
+      pipeline: sec(runAt, f.get('merge_ready')),
       waiting_for_merge: sec(f.get('merge_ready'), f.get('merged')),
       total: sec(ready, f.get('merged')),
     });
@@ -570,7 +615,7 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
   }
   const per_device = [...devRows.values()].sort((a, b) => cmpStr(a.device, b.device));
   const claims = computeClaims(evs, win, leaseMinutes);
-  const waiting = computeWaiting(evs, mergedIssues, readyTimes, idleIntervals(evs, win.until));
+  const waiting = computeWaiting(evs, mergedIssues, readyTimes, idleIntervals(evs, win.until), runLinks);
 
   // first pass (query 2), restricted to a first merge_ready inside the window
   let green = 0;
@@ -810,7 +855,7 @@ function modelMismatches(fileTurns) {
 // the two columns nm-export adds to every mirrored table.
 const NM_SCHEMA = {
   repos: ['id', 'working_path', 'upstream_url'],
-  runs: ['id', 'repo_id', 'status', 'created_at'],
+  runs: ['id', 'repo_id', 'branch', 'status', 'created_at'],
   step_results: ['id', 'run_id', 'step_name', 'duration_ms'],
   step_rounds: ['id', 'step_result_id'],
   agent_invocations: [
@@ -827,7 +872,7 @@ const NM_OPTIONAL = {
 };
 // An export has no repos table and carries `repo` and `device` on each run instead.
 const NM_EXPORT_SCHEMA = {
-  runs: ['id', 'status', 'created_at', 'repo', 'device'],
+  runs: ['id', 'branch', 'status', 'created_at', 'repo', 'device'],
   step_results: NM_SCHEMA.step_results,
   step_rounds: NM_SCHEMA.step_rounds,
   agent_invocations: NM_SCHEMA.agent_invocations,
@@ -1002,7 +1047,7 @@ function pipelineMetrics(nm, runs, invs) {
   return out;
 }
 
-function computePipeline(nm, win) {
+function computePipeline(nm, win, linked) {
   if (nm.reason) return { pipeline: na(nm.reason), invocations: null };
   const runs = nm.runs.filter((r) => inWin(r.created_ms, win));
   const ids = new Set(runs.map((r) => r.id));
@@ -1011,6 +1056,8 @@ function computePipeline(nm, win) {
   const pipeline = {
     runs: runs.length,
     by_status: Object.fromEntries(Object.keys(byStatus).sort().map((k) => [k, byStatus[k]])),
+    // this repo's runs in the window that no issue claims (docs/metrics.md "Unlinked runs")
+    unlinked_runs: runs.filter((r) => !linked.has(r.id)).length,
   };
   if (nm.rounds) {
     const reviewIds = new Map(nm.steps.filter((s) => s.step_name === 'review' && ids.has(s.run_id)).map((s) => [s.id, s.run_id]));
@@ -1126,7 +1173,9 @@ function evaluate(opts, env = process.env) {
   sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
 
   const haveTr = tr.foundDirs.length > 0;
-  const pl = computePipeline(nm, win);
+  const repoEvents = ev.events === null ? [] : ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase());
+  const links = nm.reason ? null : linkRuns(nm.runs, repoEvents);
+  const pl = computePipeline(nm, win, links ? links.linked : new Set());
   let rt = { times: null };
   if (opts.readyTimes) {
     rt = loadReadyTimes(opts.readyTimes);
@@ -1138,10 +1187,8 @@ function evaluate(opts, env = process.env) {
   sources.sort((a, b) => cmpStr(a.kind + a.path, b.kind + b.path));
   const evNa = ev.events === null ? na(ev.reason) : null;
   const leaseMinutes = Number(env.CALLUM_FLOW_LEASE_MINUTES) > 0 ? Number(env.CALLUM_FLOW_LEASE_MINUTES) : 120;
-  const em = ev.events === null ? null : computeEventMetrics(
-    ev.events.filter((e) => !e.repo || String(e.repo).toLowerCase() === opts.repo.toLowerCase()), win,
-    { readyTimes: rt.times, leaseMinutes },
-  );
+  const em = ev.events === null ? null : computeEventMetrics(repoEvents, win,
+    { readyTimes: rt.times, leaseMinutes, runLinks: links ? links.byIssue : null });
 
   const mains = parsed.filter((f) => f.kind === 'main');
   const subs = parsed.filter((f) => f.kind === 'sub');
@@ -1221,8 +1268,8 @@ function toMarkdown(r) {
   sec('window', kv(win) + `\nScope: pipeline=${scope.pipeline} events=${scope.events} transcripts=${scope.transcripts}\n`);
   sec('throughput', guard(r.throughput, (t) =>
     kv({ merged_issues: t.merged_issues, 'lead_time_total_seconds.median': t.lead_time_total_seconds.median, 'lead_time_total_seconds.max': t.lead_time_total_seconds.max, issues_without_ready: t.issues_without_ready }) + '\n' +
-    table(['issue', 'merged_at', 'ready_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
-      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
+    table(['issue', 'merged_at', 'ready_source', 'run_source', 'waiting_for_claim', 'design', 'implementation', 'pipeline', 'waiting_for_merge', 'total'],
+      t.issues.map((i) => [i.issue, i.merged_at, i.ready_source, i.run_source, i.waiting_for_claim, i.design, i.implementation, i.pipeline, i.waiting_for_merge, i.total]))));
   sec('first_pass', guard(r.first_pass, (f) => kv({ ...f, setback_issues: f.setback_issues.join(',') || 'none' })));
   sec('review', guard(r.review, (v) =>
     kv({ verdicts: v.verdicts, false_positive_pct: v.false_positive_pct }) + '\n' +
@@ -1266,6 +1313,7 @@ function toMarkdown(r) {
       w.top_wakes.map((t) => [t.session, t.ts, t.kind, t.turns, t.tokens, t.idle, t.re_arm, t.stale]))));
   sec('pipeline', guard(r.pipeline, (p) => kv({
     runs: p.runs,
+    unlinked_runs: p.unlinked_runs,
     by_status: Object.entries(p.by_status).map(([k, v]) => `${k}=${v}`).join(' ') || 'none',
     review_rounds: p.review_rounds['n/a'] ? `n/a: ${p.review_rounds['n/a']}` : `total=${p.review_rounds.total} max=${p.review_rounds.max}`,
     fallback_invocations: p.fallback_invocations['n/a'] ? `n/a: ${p.fallback_invocations['n/a']}` : `${p.fallback_invocations.count} of ${p.fallback_invocations.of}`,

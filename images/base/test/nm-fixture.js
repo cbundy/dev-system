@@ -52,6 +52,25 @@ if (cmd === "create") {
       ('s4a', 'r4', 'review', 'completed'), ('s4b', 'r4', 'test', 'failed'), ('s4c', 'r4', 'ci', 'pending'),
       ('s4d', 'r4', 'pr', 'skipped');
   `);
+  // Runs for the run-to-issue link (cbundy/dev-system#343, docs/metrics.md "Linking pipeline runs to
+  // issues"), modelled on the merged issues that have no run_started event. Times are epoch seconds
+  // and the issue events in sections/09-agentsview.sh are timed against them.
+  //   r5      issue 51, one run, no run_started event
+  //   r6, r7  issue 52, first run cancelled (as #220 #291 #328); events carry a mixed-case repo
+  //   r8      issue 53, plus a run_started event 20 s after created_at: the mirror time wins
+  //   r9      branch without an issue number, linked only by a legacy run_started event (issue 54)
+  //   r10     branch without an issue number and no event: unlinked
+  //   r11     issue branch but repo_id matches no repos row, so repo is NULL: unlinked
+  db.exec(`
+    INSERT INTO runs (id, repo_id, branch, status, created_at, updated_at) VALUES
+      ('r5', 'rp1', 'feat/issue-51-no-event', 'completed', 1700010660, 1700011260),
+      ('r6', 'rp1', 'feat/issue-52-first', 'cancelled', 1700020660, 1700020760),
+      ('r7', 'rp1', 'fix/issue-52-second', 'completed', 1700021060, 1700021660),
+      ('r8', 'rp1', 'feat/issue-53-both', 'completed', 1700030660, 1700031260),
+      ('r9', 'rp1', 'chore/bump-deps', 'completed', 1700040660, 1700041460),
+      ('r10', 'rp1', 'chore/release-0.9.0', 'completed', 1700050000, 1700050100),
+      ('r11', 'rp-none', 'feat/issue-60-orphan', 'completed', 1700060000, 1700060100);
+  `);
   const round = db.prepare("INSERT INTO step_rounds (id, step_result_id, round, trigger_type, findings_json, user_findings_json, selection_source) VALUES (?, ?, ?, ?, ?, ?, ?)");
   round.run("d3a1", "s3a", 1, "initial", finds(3, "rv"), finds(1, "user"), "user");
   round.run("d3a2", "s3a", 2, "auto_fix", finds(1, "rv"), "", "auto_fix");
