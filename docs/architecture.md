@@ -206,3 +206,14 @@ The image and feature packages are public, the `dev` image included. They contai
 public tools and install scripts. A private package would need a `packages:read` token on every machine and CI job
 that pulls it. Packages take this repo's visibility on first publish. If the repo is ever
 made private, set each package's visibility by hand.
+
+## Docker Hub credentials
+
+Docker Hub rate-limits anonymous pulls, which the image workflows hit (the base and dev
+image builds pull `moby/buildkit` and the Dockerfile frontend; the base image tests pull
+`postgres:17` and `nginx:alpine`). `publish-base-image.yml`, `publish-dev-image.yml` and
+`test-features.yml` therefore log in with the `DOCKERHUB_TOKEN` secret and the
+`DOCKERHUB_USERNAME` setting (a repository variable, or a secret if no variable exists)
+before their first pull, on pull requests too. When either is empty (fork and Dependabot
+PRs, or a repo without them) the login step is skipped and pulls are anonymous; a rejected
+login fails the job.

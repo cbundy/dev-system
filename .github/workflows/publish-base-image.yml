@@ -39,6 +39,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     permissions:
       contents: read
       packages: write
@@ -84,6 +87,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Authenticated pulls lift Docker Hub's anonymous rate limit. Skipped (anonymous
+      # pulls) when the username or token is not set, e.g. fork PRs; a rejected
+      # login fails the job.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       # The release tag the image's default plugin install is pinned to
       # (cbundy/dev-system#215), so a workspace with no settings file gets a
@@ -182,10 +195,13 @@ jobs:
   # prints them; groups.test.sh keeps this list in step). Each loads the image
   # the build job saved and runs only its group. Needs are per group: the
   # devcontainer CLI for section 7, a postgres container for section 9 (pulled
-  # by the test), the network for sections 2 and 13.
+  # from Docker Hub by the test), the network for sections 2 and 13.
   test:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME || secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -202,6 +218,16 @@ jobs:
 
       - name: Load image
         run: zstd -d -c "$RUNNER_TEMP/image/image.tar.zst" | docker load
+
+      # Authenticated pulls lift Docker Hub's anonymous rate limit. Skipped (anonymous
+      # pulls) when the username or token is not set, e.g. fork PRs; a rejected
+      # login fails the job.
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: Install devcontainer CLI
         if: matrix.group == 'devcontainer-telemetry'
