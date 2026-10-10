@@ -60,7 +60,7 @@ ev usage --note "five_hour=3" || fail "usage needs no issue"
 [ "$(tail -n 1 "$log" | jq -r '.issue, .state' | tr '\n' ' ')" = "null usage " ] || fail "usage line wrong"
 
 # every state of the closed vocabulary is accepted
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped watcher_error usage; do
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed watcher_error usage; do
   ev "$s" --issue 1 || fail "$s should be accepted"
 done
 

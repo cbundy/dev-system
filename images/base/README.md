@@ -1343,6 +1343,14 @@ issue with no claim comment is left alone. Liveness uses GitHub server times; th
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).
 
+`callum-flow-design-route <issue>` prints `session` or `subagent`: how an issue is designed (epic #286). The label
+`design:subagent` wins, then `design:session`, else `CALLUM_FLOW_DESIGN_SESSION_PCT` (default `0`, a number from 0 to 100; anything else
+exits 2) sends that percentage of issues to `session` by a stable hash (`cksum` of the lower-cased `<owner/repo>#<issue>` mod 100), so
+every device decides alike. Unreadable labels print `subagent` with a warning. Each call logs a `design_routed` event, and it is in the
+synced allow list. Set the percentage in a repo-owned place, not the synced `.claude/settings.json` keys. Consumer repos create the
+labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
+`gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
+
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
