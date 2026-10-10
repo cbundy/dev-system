@@ -76,6 +76,34 @@ test("--lint and --check require notes for the package.json version", (t) => {
   assert.match(r.stderr, /v1\.0\.0\.md/);
 });
 
+test("all notes commands reject unsupported content in every section", (t) => {
+  const root = fakeRepo(t);
+  commit(root, "feat: a thing (#1)");
+  const file = path.join(root, "release-notes/v1.1.0.md");
+  const commands = [["--check", "1.1.0"], ["--lint"], ["--body", "1.1.0"]];
+  for (const heading of ["Breaking", "New", "Changed", "Fixed", "Upgrade"]) {
+    const notes = heading === "Upgrade" ? ONLY_FIXED :
+      `## ${heading}\n- **Thing** - Does a thing. ${PR(1)}\n\n## Upgrade\n- Run it.\n`;
+    const item = heading === "Upgrade" ? "- Run it." : `- **Thing** - Does a thing. ${PR(1)}`;
+    for (const content of ["1. Unlinked change", "+ Unlinked change", "Unlinked change", "  Continued text"]) {
+      const invalid = notes.replace(item, `${item}\n${content}`);
+      fs.writeFileSync(file, invalid);
+      for (const args of commands) {
+        const r = run(root, args);
+        assert.equal(r.status, 1, `${args[0]} accepted ${content} in ${heading}`);
+        assert.match(r.stderr, /unsupported content; section items must be bullets/);
+        assert.equal(r.stdout, "");
+      }
+    }
+    fs.writeFileSync(file, notes);
+    for (const args of commands) {
+      const r = run(root, args);
+      assert.equal(r.status, 0, r.stderr);
+      if (args[0] === "--body") assert.ok(r.stdout.startsWith(notes.trimEnd() + "\n"));
+    }
+  }
+});
+
 test("--body groups the commits since the previous tag, deterministically", (t) => {
   const root = fakeRepo(t);
   commit(root, "chore: old (#9)");

@@ -57,8 +57,8 @@ function validateNotes(text, file = "release-notes") {
         if (!BULLET.test(line)) err(`line ${i + 1}: item must look like "- **Title** - description ([#N](${REPO_URL}/pull/N))"`);
         if (!PR_LINK.test(line)) err(`line ${i + 1}: item has no PR link ([#N](${REPO_URL}/pull/N))`);
       }
-    } else if (line.trim() && !h && !current) {
-      err(`line ${i + 1}: text before the first "##" heading`);
+    } else if (line.trim()) {
+      err(`line ${i + 1}: ${current ? "unsupported content; section items must be bullets" : 'text before the first "##" heading'}`);
     }
   });
 
