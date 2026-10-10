@@ -27,8 +27,13 @@
 #
 # --print-fix writes the repaired body to stdout and nothing else: it appends
 # `Closes #N` (or `Refs #N`), or turns unwanted closing keywords into `Refs #M`.
-# Everything from a `## Pipeline` heading on is preserved byte for byte. An
-# already-matching PR prints its body unchanged. Status goes to stderr.
+# The no-mistakes PR appendix (from the line opening `<!-- no-mistakes-pr-appendix:v1`
+# through the line closing `<!-- /no-mistakes-pr-appendix:v1 -->`, or to the end of the
+# body when never closed) is preserved byte for byte, and the keyword goes in the author
+# text before it. Author text after the closing marker stays editable. Only when there is
+# no appendix does the older anchor apply: everything from a `## Pipeline` heading on is
+# preserved. A closing keyword stuck inside the appendix cannot be repaired; a reason is
+# written to stderr. An already-matching PR prints its body unchanged. Status goes to stderr.
 #
 # Output: exactly one line on stdout, MATCH / MISMATCH / SKIP, each starting
 # with the PR number; detail goes to stderr. Exit 0 except MISMATCH.
@@ -103,9 +108,18 @@ const target = (ref, number) => {
   const owner = ref.slice(0, ref.lastIndexOf("#")).toLowerCase();
   return !owner || owner === repo.toLowerCase() ? Number(number) : owner + "#" + Number(number);
 };
+// Returns [editable-before, protected, editable-after, kind]. The appendix wins over the
+// older Pipeline heading anchor; an unclosed opening marker protects to the end of the body.
 const split = (s) => {
+  const open = /^<!-- no-mistakes-pr-appendix:v1\b.*$/m.exec(s);
+  if (open) {
+    const rest = s.slice(open.index);
+    const close = /^<!-- \/no-mistakes-pr-appendix:v1 -->.*\n?/m.exec(rest);
+    const end = close ? open.index + close.index + close[0].length : s.length;
+    return [s.slice(0, open.index), s.slice(open.index, end), s.slice(end), "appendix"];
+  }
   const m = /^## Pipeline[ \t]*$/m.exec(s);
-  return m ? [s.slice(0, m.index), s.slice(m.index)] : [s, ""];
+  return m ? [s.slice(0, m.index), s.slice(m.index), "", "pipeline"] : [s, "", "", "none"];
 };
 if (mode === "field") {
   const pr = JSON.parse(input);
@@ -119,15 +133,20 @@ if (mode === "field") {
   process.stdout.write(String([...input.matchAll(refsRe)].some((m) => target(m[1], m[2]) === Number(a))));
 } else if (mode === "fix") {
   const n = Number(b);
-  let [head, tail] = split(input);
-  head = head.replace(re, (m, ref, d) => (a === "refs" || target(ref, d) !== n ? "Refs " + ref : m));
+  let [head, tail, after, kind] = split(input);
+  const rewrite = (t) => t.replace(re, (m, ref, d) => (a === "refs" || target(ref, d) !== n ? "Refs " + ref : m));
+  head = rewrite(head);
+  after = rewrite(after);
+  if (kind === "appendix" && [...tail.matchAll(re)].some((m) => a === "refs" || target(m[1], m[2]) !== n)) {
+    process.stderr.write("A closing keyword for another issue sits inside the no-mistakes appendix and was left untouched. Remove the appendix block from the PR body, then start a fresh pipeline run.\n");
+  }
   const expectedRe = a === "refs" ? refsRe : re;
-  const presenceBody = a === "refs" ? head + tail : head;
+  const presenceBody = a === "refs" && kind !== "appendix" ? head + tail : head + after;
   if (![...presenceBody.matchAll(expectedRe)].some((m) => target(m[1], m[2]) === n)) {
     const t = head.replace(/\s+$/, "");
     head = t + (t ? "\n\n" : "") + (a === "refs" ? "Refs #" : "Closes #") + n + "\n" + (tail ? "\n" : "");
   }
-  process.stdout.write(head + tail);
+  process.stdout.write(head + tail + after);
 }
 '
 nodeb() { node -e "$NODE_PROG" "${REPO:-}" "$@"; }

@@ -107,7 +107,7 @@ esac
 
 echo "Repairing PR #$pr body..." >&2
 # The trailing X survives command substitution, which would strip trailing newlines.
-fixed=$("$LINKAGE" "$pr" --expect "$expect" --print-fix 2>/dev/null && printf X) || {
+fixed=$("$LINKAGE" "$pr" --expect "$expect" --print-fix && printf X) || {
   echo "callum-flow-fix-linkage: could not compute the repaired body of PR #$pr; nothing edited" >&2
   exit 1
 }
