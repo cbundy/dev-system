@@ -28,6 +28,8 @@
   (screenshots, and a short video/GIF for animated/interactive changes) when the change is visual.
 - Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+- Questions about factory latency, throughput or pipeline cost are answered from factory data via the
+  callum-flow `query-factory-data` skill, not from guesses.
 
 ## Dev container is ephemeral
 
