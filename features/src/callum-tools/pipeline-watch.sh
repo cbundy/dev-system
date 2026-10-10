@@ -118,6 +118,14 @@
 # normal end and prints nothing. --deadline is rejected in stream mode: the
 # harness's own monitor timeout is the heartbeat there.
 #
+# Event log (cbundy/dev-system#218, #344): every printed line is also logged.
+# A line for a branch the process has not yet seen change - no fingerprint of
+# its own, only a missing or stale --known - is a first sight, e.g. an old
+# failed run reported again by a re-armed watcher. It is printed as always but
+# logged with callum-flow-event --if-changed, so it adds nothing when the log
+# already ends with the same event. A transition seen inside this process (the
+# branch went quiet, or reported another state, since) is always logged.
+#
 # --interval <seconds> sets the poll interval (default: the
 # PIPELINE_WATCH_INTERVAL environment variable, else 25).
 #
@@ -147,6 +155,7 @@ set -eu
 stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
 reported=
+seen= # branches this process has set_known for: their transitions were observed
 
 # record_event <state> [callum-flow-event options]: appends the transition to
 # the factory event log (cbundy/dev-system#218) when callum-flow-event is
@@ -323,6 +332,9 @@ known_fingerprint() {
 # set_known <branch> <fingerprint>: stream mode's record of the last line
 # printed for a branch, or "none" once the branch is seen non-actionable.
 set_known() {
+  seen="$seen
+$1
+"
   known="$(printf '%s' "$known" | awk -v b="$1" 'index($0, b "=") != 1')
 $1=$2
 "
@@ -541,10 +553,19 @@ poll() {
     fi
     if [ -n "$state" ]; then
       printf '%s %s %s%s head=%s\n' "$state" "$branch" "$id" "$detail" "${run_sha:-unknown}"
-      # the watcher's states are the log's, with _ for - ("cancelled" is a failed run)
+      # the watcher's states are the log's, with _ for - ("cancelled" is a failed run).
+      # A branch this process has not yet watched change (no fingerprint of its own,
+      # only a missing or stale --known) is a first sight: the event is logged only
+      # if the log does not already end with it (cbundy/dev-system#344).
+      first=
+      case "
+$seen
+" in *"
+$branch
+"*) ;; *) first=--if-changed ;; esac
       case "$state" in
-        cancelled) record_event failed --branch "$branch" --run "$id" --head "${run_sha:-}" --note "cancelled" ;;
-        *) record_event "$(printf '%s' "$state" | tr - _)" --branch "$branch" --run "$id" --head "${run_sha:-}" --note "${detail# }" ;;
+        cancelled) record_event failed --branch "$branch" --run "$id" --head "${run_sha:-}" --note "cancelled" $first ;;
+        *) record_event "$(printf '%s' "$state" | tr - _)" --branch "$branch" --run "$id" --head "${run_sha:-}" --note "${detail# }" $first ;;
       esac
       [ -n "$stream" ] || exit 0
       set_known "$branch" "$fingerprint"

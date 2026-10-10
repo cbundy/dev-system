@@ -1292,6 +1292,9 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
+A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
+`--if-changed`, which skips a line identical in state, head and note to the subject's newest one, so a
+restart never replays old events; transitions a watcher observes are always logged.
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
