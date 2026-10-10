@@ -6,7 +6,7 @@ description: >-
   implementation to a sub-agent that runs the /no-mistakes pipeline in
   a treehouse worktree, then verify and merge. Also drive in-flight pipelines.
   Use when acting as an autonomous orchestrator over a `ready` issue queue.
-version: 0.24.0
+version: 0.25.0
 ---
 
 # Issue orchestrator
