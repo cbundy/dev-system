@@ -9,15 +9,17 @@
 # curl, WebFetch) returns the text unfiltered. This is a guard against reading by
 # habit or by accident, not a sandbox against an evasive agent. Accepted limits:
 # interpreters doing HTTP, `git fetch` of PR refs, a stranger's PR diff, `gh api`
-# paths built at runtime, and the settings layer under bypass-permissions.
+# paths built at runtime, GraphQL mutations (every `gh api graphql` is refused), and the
+# settings layer under bypass-permissions.
 #
 # Refused (see forbid-raw-gh-read.awk): the gh issue view/list/status forms, gh pr
 # view/list forms that return title, body, comments or reviews, gh search for issues
-# and PRs, gh api paths for issues, pulls, comments, timeline, reviews or graphql, and
+# and PRs, gh api GET paths for issues, pulls, comments, timeline, reviews, and any graphql, and
 # curl/wget/WebFetch of api.github.com, patch-diff.githubusercontent.com or a github.com
 # issue or pull URL. Seen anywhere in a compound command, behind VAR=... prefixes and
 # sudo/env/exec/nohup/time, inside sh|bash -c, eval and command substitution, and when
-# gh is invoked by path. Allowed: the reader, metadata-only `gh pr view --json`, writes,
+# gh is invoked by path. Allowed: the reader, metadata-only `gh pr view --json`, writes (including `gh api` with
+# -X POST|PUT|PATCH|DELETE or -f/-F/--input fields and no explicit GET),
 # and text that only mentions these words.
 #
 # Fails open: quoted heredoc bodies are skipped, and input the parser cannot make sense

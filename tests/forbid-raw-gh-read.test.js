@@ -86,6 +86,9 @@ const RAW_READS = [
   "gh api search/issues?q=x",
   "gh api graphql -f query='{ viewer { login } }'",
   "gh api -X GET repos/o/r/issues",
+  "gh api repos/o/r/issues/5",
+  "gh api -X GET repos/o/r/issues/5/comments -f per_page=100",
+  "gh api graphql -f query='mutation{ addComment(input:{}){ clientMutationId } }'",
   "curl -s https://api.github.com/repos/o/r/issues/5",
   "curl -sL https://patch-diff.githubusercontent.com/raw/o/r/pull/5.diff",
   "wget https://github.com/o/r/pull/5",
@@ -160,6 +163,11 @@ test("allows writes and other gh areas", () => {
   assertAllowed("gh auth status");
   assertAllowed("gh api users/cbundy --jq .id");
   assertAllowed("gh api rate_limit");
+  assertAllowed("gh api -X PUT repos/o/r/pulls/5/merge");
+  assertAllowed("gh api repos/o/r/issues/5/comments -f body=x");
+  assertAllowed("gh api --method=PATCH repos/o/r/issues/5 -f state=closed");
+  assertAllowed("gh api -XPOST repos/o/r/issues/5/comments");
+  assertAllowed("gh api -X DELETE repos/o/r/issues/comments/9");
   assertAllowed("gh api repos/{owner}/{repo}/contents/README.md");
   assertAllowed("callum-flow-merge-guard 5");
   assertAllowed("/usr/local/share/callum-tools/check-pr-linkage.sh 5");

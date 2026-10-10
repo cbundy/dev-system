@@ -119,7 +119,7 @@ function gh_api_flag_takes_arg(opt) {
 
 # gh [global opts] <group> <action> ...: is it a raw read of issue, PR or comment
 # text? i is the index after the gh word.
-function gh_is_raw(toks, cnt, i,    t, group, action, k, json, hasjson, lt) {
+function gh_is_raw(toks, cnt, i,    t, group, action, k, json, hasjson, lt, method, hasfield, hit) {
   group = ""
   action = ""
   while (i <= cnt) {
@@ -137,18 +137,27 @@ function gh_is_raw(toks, cnt, i,    t, group, action, k, json, hasjson, lt) {
   if (group == "") return 0
 
   if (group == "api") {
+    method = ""
+    hasfield = 0
+    hit = 0
     for (k = i; k <= cnt; k++) {
       t = toks[k]
       if (t ~ /^-/) {
+        if (t == "-X" || t == "--method") { method = toupper(toks[k + 1]); k++; continue }
+        if (index(t, "--method=") == 1) { method = toupper(substr(t, 10)); continue }
+        if (t ~ /^-X./) { method = toupper(substr(t, 3)); continue }
+        if (t == "-f" || t == "-F" || t == "--field" || t == "--raw-field" || t == "--input") hasfield = 1
+        else if (t ~ /^-[fF]./ || t ~ /^--(field|raw-field|input)=/) hasfield = 1
         if (gh_api_flag_takes_arg(t)) k++
         continue
       }
       lt = tolower(t)
       if (lt == "graphql") return 1
       if (index(lt, "issues") || index(lt, "pulls") || index(lt, "comments") || \
-          index(lt, "timeline") || index(lt, "reviews")) return 1
+          index(lt, "timeline") || index(lt, "reviews")) hit = 1
     }
-    return 0
+    if (method != "" ? method != "GET" : hasfield) return 0
+    return hit
   }
   if (group == "search") return (action == "issues" || action == "prs")
   if (group == "issue") return (action == "view" || action == "list" || action == "status")
