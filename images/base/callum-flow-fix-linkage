@@ -24,12 +24,16 @@
 # Environment (for tests): CALLUM_FLOW_GH_BIN, CALLUM_FLOW_LINKAGE_BIN
 # (check-pr-linkage.sh), CALLUM_FLOW_FIX_RETRY_ATTEMPTS (5),
 # CALLUM_FLOW_FIX_RETRY_SLEEP (2 seconds), CALLUM_FLOW_ROLLOUT_BIN
-# (callum-flow-rollout).
+# (callum-flow-rollout), CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
+#
+# A PR opened by an untrusted author is never parsed or rewritten
+# (cbundy/dev-system#310): one line on stderr, nothing edited, exit 1.
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
 ROLLOUT=${CALLUM_FLOW_ROLLOUT_BIN:-callum-flow-rollout}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 attempts=${CALLUM_FLOW_FIX_RETRY_ATTEMPTS:-5}
 nap=${CALLUM_FLOW_FIX_RETRY_SLEEP:-2}
 
@@ -57,6 +61,15 @@ done
 case "$expect" in '' | closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
 
 command -v jq >/dev/null 2>&1 || usage "jq not found"
+"$READ" --json --pr "$pr" >/dev/null 2>&1 && a_rc=0 || a_rc=$?
+if [ "$a_rc" -ne 0 ]; then
+  if [ "$a_rc" -eq 3 ]; then
+    echo "callum-flow-fix-linkage: PR #$pr was not opened by a trusted author; nothing edited" >&2
+  else
+    echo "callum-flow-fix-linkage: cannot verify the author of PR #$pr (reader exit $a_rc); nothing edited" >&2
+  fi
+  exit 1
+fi
 branch=$("$GH" pr view "$pr" --json headRefName 2>/dev/null | jq -r '.headRefName // empty') || branch=''
 r_issue=$(printf '%s' "$branch" | sed -n 's/.*issue-\([0-9][0-9]*\)\(-.*\)\{0,1\}$/\1/p')
 if [ -n "$r_issue" ]; then

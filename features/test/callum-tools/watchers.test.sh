@@ -12,6 +12,8 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SRC="$SCRIPT_DIR/../../src/callum-tools"
 PIPELINE_WATCH="$SRC/pipeline-watch.sh"
 QUEUE_WATCH="$SRC/queue-watch.sh"
+SHARE="$SCRIPT_DIR/../../../images/base"
+READER="$SHARE/callum-flow-issue-read"
 
 passed=0
 fail() {
@@ -36,7 +38,7 @@ toolbin="$tmpdir/tools"
 mkdir -p "$fakebin" "$toolbin"
 # A hermetic PATH: the stubs plus only the tools the scripts and stubs use,
 # so a real gh or no-mistakes (the base image has both) can never answer.
-for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat sort paste; do
+for t in git awk sed ls head grep tr date sleep cat timeout env wc tail mv dirname cut stat sort paste jq; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -49,7 +51,11 @@ in_dir() {
   shift
   PATH="$fakebin:$toolbin"
   NO_MISTAKES_HOME="$nm_home"
-  export PATH NO_MISTAKES_HOME
+  # queue-watch lists through the real trusted-author reader (cbundy/dev-system#310)
+  CALLUM_FLOW_ISSUE_READ_BIN="$READER"
+  CALLUM_FLOW_SHARE_DIR="$SHARE"
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067
+  export PATH NO_MISTAKES_HOME CALLUM_FLOW_ISSUE_READ_BIN CALLUM_FLOW_SHARE_DIR CALLUM_FLOW_TRUSTED_AUTHORS
   exec "$@"
 }
 
@@ -160,16 +166,23 @@ case "$1 $2" in
     echo "gh: Not Found (HTTP 404)" >&2
     exit 1
     ;;
-  "issue list")
-    # queue-watch: pop the first line of queue-seq.txt (the last one
-    # repeats); a FAIL line is a failed call
+  "api --paginate")
+    # queue-watch lists through callum-flow-issue-read, which asks for the REST
+    # issue list: pop the first line of queue-seq.txt (the last one repeats);
+    # a FAIL line is a failed call. Numbers are comma separated; an x prefix
+    # (x307) marks an issue opened by an untrusted author.
+    case "$3" in repos/o/r/issues\?*) ;; *) exit 1 ;; esac
     f="$d/queue-seq.txt"
     line=$(sed -n 1p "$f")
     if [ "$(wc -l < "$f")" -gt 1 ]; then
       tail -n +2 "$f" > "$f.next" && mv "$f.next" "$f"
     fi
     [ "$line" != FAIL ] || exit 1
-    echo "$line"
+    printf '%s' "$line" | tr ',' '\n' | jq -R -s -c '
+      split("\n") | map(select(. != "")) | map(
+        (startswith("x")) as $x | ltrimstr("x") | tonumber as $n
+        | {number: $n, title: "t", body: "b", state: "open", labels: [],
+           user: (if $x then {login: "mallory", id: 999} else {login: "cbundy", id: 13131067} end)})'
     ;;
   *) exit 1 ;;
 esac
@@ -562,5 +575,49 @@ rm "$fakebin/sleep"
 [ "$st" -eq 3 ] || fail "unexpected failure: exit $st, want 3"
 expect_lines "$out" "watcher-error exited with status 3"
 ok # unexpected exit reported
+
+# 14. Trust (cbundy/dev-system#310): an issue by an untrusted author never enters
+# the queue, so it never fires queue-changed and no ready event is logged for it.
+cat > "$fakebin/callum-flow-event" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$(dirname "$0")/event-calls"
+EOF
+chmod +x "$fakebin/callum-flow-event"
+rm -f "$fakebin/event-calls"
+# only an untrusted issue joins: nothing fires
+queue_seq 305,x400
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+untrusted=$(in_dir "$tmpdir" timeout 6 $qw --known 305) || st=$?
+if [ "$st" -ne 124 ] || [ -n "$untrusted" ]; then fail "untrusted ready issue fired: exit $st, output '$untrusted'"; fi
+if grep -q 'ready' "$fakebin/event-calls" 2>/dev/null; then fail "ready event for an untrusted issue: $(cat "$fakebin/event-calls")"; fi
+# a trusted issue beside it still fires, and only it is in now= and logged
+queue_seq 305,307,x400
+rm -f "$fakebin/event-calls"
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+mixed=$(in_dir "$tmpdir" timeout 10 $qw --known 305) || fail "mixed queue: did not exit 0"
+[ "$mixed" = "queue-changed known=305 now=305,307" ] || fail "mixed queue: $mixed"
+grep -q 'ready --issue 307' "$fakebin/event-calls" || fail "no ready event for the trusted issue"
+if grep -q 'ready --issue 400' "$fakebin/event-calls"; then fail "ready event for the untrusted issue"; fi
+# a reader failure is a failed poll: never an empty queue
+queue_seq FAIL
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+failing=$(in_dir "$tmpdir" timeout 6 $qw --known 305) || st=$?
+if [ "$st" -ne 124 ] || [ -n "$failing" ]; then fail "reader failure fired: exit $st, output '$failing'"; fi
+# an unusable trusted list is a failed poll too
+queue_seq 307
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+unconfigured=$(in_dir "$tmpdir" env CALLUM_FLOW_TRUSTED_AUTHORS= timeout 6 $qw --known 305) || st=$?
+if [ "$st" -ne 124 ] || [ -n "$unconfigured" ]; then fail "no trusted list fired: exit $st, output '$unconfigured'"; fi
+# a missing reader is fatal in stream mode
+st=0
+# shellcheck disable=SC2086 # $qw is the command and its fixed options
+(in_dir "$tmpdir" env CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" $qw --stream) > "$out" 2>/dev/null || st=$?
+[ "$st" -ne 0 ] || fail "queue stream without the reader: exited 0"
+expect_lines "$out" "watcher-error $tmpdir/missing-reader not on PATH"
+rm "$fakebin/callum-flow-event"
+ok # untrusted issues never enter the queue
 
 echo "ok - $passed watcher scenarios passed"

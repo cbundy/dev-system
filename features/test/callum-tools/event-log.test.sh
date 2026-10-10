@@ -196,13 +196,17 @@ cat > "$fakebin/callum-flow-event" <<'STUB'
 printf '%s\n' "$*" >> "$(dirname "$0")/event-calls"
 exit 3
 STUB
+# queue-watch lists through the trusted-author reader (cbundy/dev-system#310), which
+# asks the REST issue list: two issues by the owner
 cat > "$fakebin/gh" <<'STUB'
 #!/bin/sh
-echo "4,9"
+[ "$1 $2" = "api --paginate" ] || exit 1
+echo '[{"number":4,"title":"a","user":{"login":"cbundy","id":13131067}},{"number":9,"title":"b","user":{"login":"cbundy","id":13131067}}]'
 STUB
 chmod +x "$fakebin/callum-flow-event" "$fakebin/gh"
 : > "$fakebin/event-calls"
-out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
+out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --interval 1 --known 4 2> /dev/null) || fail "queue-watch should exit 0 (a failing event call must not matter)"
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
 [ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --actor watcher" ] || fail "queue-watch should record only the new issue: $(cat "$fakebin/event-calls")"
 

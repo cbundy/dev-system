@@ -24,12 +24,23 @@
 # after the first writes nothing.
 #
 # Exit codes: 0 ok, 1 a gh failure (the other issues are still swept), 2 usage
-# error. Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL,
-# CALLUM_FLOW_IN_DEV_LABEL; for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN.
+# error.
+#
+# Trust (cbundy/dev-system#310): issues, comments, the timeline and PRs are read
+# only through callum-flow-issue-read. An untrusted issue is skipped without a
+# word (one stderr line gives the count), an untrusted `claimed-by:` comment is
+# ignored, and a cross-referenced event by an untrusted actor or from an
+# untrusted PR never counts as a merge. A reader failure is an error for that
+# issue, never "no comments".
+#
+# Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL,
+# CALLUM_FLOW_IN_DEV_LABEL; for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN,
+# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
 INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
 
@@ -44,30 +55,47 @@ command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
 repo=${CALLUM_FLOW_REPO-}
 [ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
 [ -n "$repo" ] || { err "cannot determine the repo (set CALLUM_FLOW_REPO)"; exit 1; }
+export CALLUM_FLOW_REPO="$repo"
 
 d=$("$GH" api -i rate_limit 2>/dev/null | tr -d '\r' | sed -n 's/^[Dd]ate: *//p' | sed -n 1p)
 now=''
 [ -z "$d" ] || now=$(date -u -d "$d" +%s 2>/dev/null) || now=''
 [ -n "$now" ] || now=$(date -u +%s)
 
-list=$("$GH" issue list --label "$INDEV" --state all --json number --limit 500 --jq '.[].number') || {
+if ! lj=$("$READ" --json --list --label "$INDEV" --state all) ||
+  ! list=$(printf '%s' "$lj" | jq -r '.issues[].number'); then
   err "cannot list $INDEV issues"
   exit 1
-}
+fi
+untrusted=$(printf '%s' "$lj" | jq -r '.stripped // 0')
+[ "$untrusted" = 0 ] || err "note: skipped $untrusted $INDEV issue(s) by untrusted authors"
 
 rc=0
 for n in $list; do
-  view=$("$GH" issue view "$n" --json state,labels) || { err "cannot read #$n"; rc=1; continue; }
+  crc=0
+  vj=$("$READ" --json "$n") || crc=$?
+  # an untrusted issue is skipped without a word (the list already counted it)
+  if [ "$crc" -eq 3 ]; then continue; fi
+  if [ "$crc" -ne 0 ] || ! view=$(printf '%s' "$vj" | jq -ce '.issue | if type == "object" then . else error("shape") end'); then
+    err "cannot read #$n"
+    rc=1
+    continue
+  fi
   # The list lags behind edits: trust the direct read.
   printf '%s' "$view" | jq -e --arg l "$INDEV" '.labels | map(.name) | index($l)' >/dev/null || continue
-  state=$(printf '%s' "$view" | jq -r .state)
+  state=$(printf '%s' "$view" | jq -r '.state | ascii_upcase')
 
   if [ "$state" = CLOSED ]; then
     "$GH" issue edit "$n" --remove-label "$INDEV" >/dev/null || { err "cannot unlabel closed #$n"; rc=1; }
     continue
   fi
 
-  cs=$("$GH" api --paginate "repos/$repo/issues/$n/comments" | jq -s 'add // []') || { err "cannot read comments of #$n"; rc=1; continue; }
+  if ! cj=$("$READ" --json "$n" --comments) ||
+    ! cs=$(printf '%s' "$cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'); then
+    err "cannot read comments of #$n"
+    rc=1
+    continue
+  fi
   claim=$(printf '%s' "$cs" | jq -c '
     [ .[] | select((.body // "") | contains("<!-- callum-flow-claim -->"))
       | . as $c | ((.body | split("\n"))[0]
@@ -84,13 +112,26 @@ for n in $list; do
   fi
   created=$(printf '%s' "$claim" | jq -r .created)
 
-  tl=$("$GH" api --paginate "repos/$repo/issues/$n/timeline" | jq -s 'add // []') || { err "cannot read the timeline of #$n"; rc=1; continue; }
+  if ! tj=$("$READ" --json --timeline "$n") ||
+    ! tl=$(printf '%s' "$tj" | jq -ce 'if (.events | type) == "array" then .events else error("shape") end'); then
+    err "cannot read the timeline of #$n"
+    rc=1
+    continue
+  fi
   merged=0
   failed=0
   for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
       .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
       | .source.issue.number'); do
-    ref=$("$GH" api "repos/$repo/pulls/$pr" --jq .head.ref 2>/dev/null) || { err "cannot read PR #$pr"; failed=1; break; }
+    crc=0
+    pj=$("$READ" --json --pr "$pr") || crc=$?
+    # an untrusted PR never counts as a merge
+    if [ "$crc" -eq 3 ]; then continue; fi
+    if [ "$crc" -ne 0 ] || ! ref=$(printf '%s' "$pj" | jq -r '.pr.head.ref // empty') || [ -z "$ref" ]; then
+      err "cannot read PR #$pr"
+      failed=1
+      break
+    fi
     if printf '%s\n' "$ref" | grep -Eq "(^|/)issue-$n-"; then
       merged=1
       break

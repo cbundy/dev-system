@@ -1328,8 +1328,17 @@ author is trusted, else exit 3 with `untrusted author`; comments are filtered an
 (conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
 stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
 (non-zero, nothing on stdout) and logs an `untrusted_stripped` event with the count, never the
-content. Nothing in the factory calls it yet: scripts, skills and hooks move onto it only once
-the variable is confirmed on every workspace.
+content. The factory scripts that read issue, PR or comment content go through it and so only
+see trusted content (cbundy/dev-system#310; the agent and skill prose follows in #311, the deny
+hook in #312): `callum-flow-rollout` (an untrusted issue is `ROLLOUT unreadable ...`, exit 1, and
+a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author` guard fails a PR
+not opened by a trusted author and reads nothing further from it), `check-pr-linkage.sh` and
+`callum-flow-fix-linkage` (an untrusted PR is refused with one line, never parsed or rewritten),
+`callum-flow-claim` and `callum-flow-sweep` (only trusted `claimed-by:` comments count; claim
+refuses an untrusted issue, sweep skips it with a count; an untrusted cross-referenced PR or
+actor never counts as a merge) and `queue-watch.sh` (an untrusted `ready` issue never enters
+the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
+a reader failure: it never treats it as "no comments". Write calls are unchanged.
 
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments

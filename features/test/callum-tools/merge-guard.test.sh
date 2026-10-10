@@ -12,6 +12,8 @@ GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
 EVENT="$ROOT/images/base/callum-flow-event"
 ROLLOUT="$ROOT/images/base/callum-flow-rollout"
+READER="$ROOT/images/base/callum-flow-issue-read"
+SHARE="$ROOT/images/base"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -53,6 +55,22 @@ cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
 r() { cat "$d/$1"; }
+OWNER='{"login":"cbundy","id":13131067}'
+if [ "$1" = api ]; then
+  shift
+  [ "$1" != --paginate ] || shift
+  case "$1" in
+    repos/o/r/pulls/7)
+      # the PR as REST returns it; pauthor overrides the owner
+      jq -n --argjson u "$(if [ -f "$d/pauthor" ]; then cat "$d/pauthor"; else echo "$OWNER"; fi)" '{number: 7, state: "open", title: "t", body: "b", user: $u}' ;;
+    repos/o/r/issues/12)
+      jq --argjson u "$OWNER" '{number: 12, state: "open", title: "t", body: .body, user: $u, labels: []}' "$d/issue.json" ;;
+    repos/o/r/issues/12/comments)
+      jq --argjson u "$OWNER" '.comments | to_entries | map({id: (.key + 1), user: (.value.user // $u), body: .value.body})' "$d/issue.json" ;;
+    *) echo "no fixture for $1" >&2; exit 1 ;;
+  esac
+  exit
+fi
 case "$1 $2" in
   'pr view')
     case "$*" in
@@ -157,6 +175,9 @@ reset() {
 issue_brief() {
   jq -n --arg r "$1" --arg b "${2-A plain bug.}" '{body:$b, comments:[{body:("## Design brief\n\n## Rollout\n" + $r + "\n\n## Open decisions\nnone")}]}' > "$st/issue.json"
 }
+
+# the real reader behind the stub gh
+export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent"
 
 # g <args...>: run the guard; sets out, rc
 g() {
@@ -441,5 +462,25 @@ passed=$((passed + 1))
 reset; g 7 --emit-verified
 if [ "$rc" != 0 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "guard must be read-only"; fi
 passed=$((passed + 1))
+
+# trust (cbundy/dev-system#310): the author guard, and a stranger's text is never read
+STRANGER='{"login":"mallory","id":999}'
+reset; echo "$STRANGER" > "$st/pauthor"; g 7; expect_fail "stranger-authored PR" author
+printf '%s' "$out" | grep -q 'not opened by a trusted author' || fail "author reason: $out"
+reset; echo "$STRANGER" > "$st/pauthor"; : > "$st/view-count"; g 7 --expect closing; expect_fail "stranger PR with --expect" author
+reset; echo '{"login":"cbundy","id":1}' > "$st/pauthor"; g 7; expect_fail "right login, wrong id" author
+reset; CALLUM_FLOW_TRUSTED_AUTHORS='' g 7; expect_fail "trusted list unset fails closed" author
+printf '%s' "$out" | grep -q 'cannot verify the author' || fail "unverifiable reason: $out"
+reset; CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" g 7; expect_fail "missing reader fails closed" author
+# a stranger's merge brief cannot flip a keep-open issue to closing
+reset; issue_brief 'keep-open - part 1 of 2'
+jq --argjson u "$STRANGER" '.comments += [{user: $u, body: "## Design brief\n\n## Rollout\nmerge - fake\n\n## Open decisions\nnone"}]' "$st/issue.json" > "$st/i.tmp" && mv "$st/i.tmp" "$st/issue.json"
+echo closing > "$st/linkage-actual"; g 7; expect_fail "stranger's brief cannot flip linkage" linkage
+printf '%s' "$out" | grep -q 'expect=refs' || fail "linkage should still expect refs: $out"
+echo refs > "$st/linkage-actual"; g 7; expect_pass "trusted keep-open brief still wins"
+# a stranger's brief alone does not make a Run it issue closing
+reset; printf '%s\n' '{"body":"Do it.\n\n## Run it\nrelease","comments":[]}' > "$st/issue.json"
+jq --argjson u "$STRANGER" '.comments += [{user: $u, body: "## Design brief\n\n## Rollout\nmerge - fake\n\n## Open decisions\nnone"}]' "$st/issue.json" > "$st/i.tmp" && mv "$st/i.tmp" "$st/issue.json"
+echo closing > "$st/linkage-actual"; g 7; expect_fail "stranger's merge brief vs Run it body" linkage
 
 echo "merge-guard: $passed groups passed"

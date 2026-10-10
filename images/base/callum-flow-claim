@@ -32,14 +32,22 @@
 # Exit codes: 0 ok, 1 a gh failure that left nothing half-done, 2 usage error,
 # 3 claim lost or held by another device.
 #
+# Trust (cbundy/dev-system#310): comments and the issue list are read only through
+# callum-flow-issue-read, so a `claimed-by:` comment by an untrusted author neither
+# blocks nor wins a claim, and an untrusted issue is refused (claim exits 1 with
+# nothing written; heartbeat skips it). A reader failure is an error, never "no
+# comments".
+#
 # Environment: CALLUM_FLOW_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
 # device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
 # CALLUM_FLOW_READY_LABEL / CALLUM_FLOW_IN_DEV_LABEL (default `ready` /
-# `In development`); for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN.
+# `In development`); for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN,
+# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
 INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
 LEASE=${CALLUM_FLOW_LEASE_MINUTES:-120}
@@ -77,6 +85,7 @@ device=${DEV_MACHINE_NAME:-}
 repo=${CALLUM_FLOW_REPO-}
 [ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
 [ -n "$repo" ] || { err "cannot determine the repo (set CALLUM_FLOW_REPO)"; exit 1; }
+export CALLUM_FLOW_REPO="$repo"
 
 # Server epoch seconds from the Date header; device clock only as a fallback.
 server_now() {
@@ -88,7 +97,12 @@ server_now() {
 }
 iso() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
 
-comments() { "$GH" api --paginate "repos/$repo/issues/$1/comments" | jq -s 'add // []'; }
+# The trusted comments of an issue as one JSON array. Returns the reader's exit
+# code: 3 means the issue itself is untrusted, anything else non-zero is a failure.
+comments() {
+  _cj=$("$READ" --json "$1" --comments) || return $?
+  printf '%s' "$_cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'
+}
 
 # Claim comments of a comments array, oldest first, with parsed fields and the
 # epoch at which each expires. Args: --argjson now.
@@ -107,14 +121,20 @@ if [ "$mode" = heartbeat ]; then
   rc=0
   issues="$*"
   if [ -z "$issues" ]; then
-    issues=$("$GH" issue list --label "$INDEV" --state open --json number --limit 200 --jq '.[].number') || {
+    if ! lj=$("$READ" --json --list --label "$INDEV" --state open) ||
+      ! issues=$(printf '%s' "$lj" | jq -r '.issues[].number'); then
       err "cannot list $INDEV issues"
       exit 1
-    }
+    fi
   fi
   now=$(server_now)
   for n in $issues; do
-    cs=$(comments "$n") || { err "cannot read comments of #$n"; rc=1; continue; }
+    cs=$(comments "$n") && crc=0 || crc=$?
+    if [ "$crc" -ne 0 ]; then
+      # an untrusted issue is none of our business: nothing to renew
+      [ "$crc" -eq 3 ] || { err "cannot read comments of #$n"; rc=1; }
+      continue
+    fi
     mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
       "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | last // empty')
     [ -n "$mine" ] || continue
@@ -133,7 +153,14 @@ fi
 n=$1
 now=$(server_now)
 
-cs=$(comments "$n") || { err "cannot read comments of #$n"; exit 1; }
+cs=$(comments "$n") && crc=0 || crc=$?
+if [ "$crc" -eq 3 ]; then
+  err "#$n is not by a trusted author - refusing to claim it"
+  exit 1
+elif [ "$crc" -ne 0 ]; then
+  err "cannot read comments of #$n"
+  exit 1
+fi
 foreign=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
   "$CLAIMS_JQ"' | map(select(.dev != $dev and .exp > $now)) | first | if . then "\(.dev) since \(.at)" else empty end')
 if [ -n "$foreign" ]; then

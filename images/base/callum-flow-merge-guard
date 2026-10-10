@@ -12,7 +12,10 @@
 #   (cbundy/dev-system#239). Pass --expect only to assert it; a value that
 #   contradicts the Rollout fails the rollout guard.
 #
-# Guards (every one is evaluated and reported, none short-circuits):
+# Guards (every one is evaluated and reported, none short-circuits, except that a
+# PR by an untrusted author is read no further: rollout and linkage are skipped):
+#   author   the PR was opened by a trusted author (callum-flow-issue-read,
+#          cbundy/dev-system#310); an untrusted or unverifiable author fails
 #   rollout  the issue's Rollout was derived (or agrees with --expect); a
 #          conflict or a failure to derive fails closed, never to closing
 #   head     the run's head_sha equals a fresh origin/<branch>, the PR head,
@@ -39,7 +42,8 @@
 # Environment (for tests): CALLUM_FLOW_GH_BIN (gh), CALLUM_FLOW_NM_BIN
 # (no-mistakes), CALLUM_FLOW_LINKAGE_BIN (check-pr-linkage.sh),
 # CALLUM_FLOW_WATCH_BIN (pipeline-watch.sh, whose --resolve finds the run),
-# CALLUM_FLOW_ROLLOUT_BIN (callum-flow-rollout).
+# CALLUM_FLOW_ROLLOUT_BIN (callum-flow-rollout), CALLUM_FLOW_ISSUE_READ_BIN
+# (callum-flow-issue-read).
 # Tuning: GitHub computes mergeability lazily and reports UNKNOWN meanwhile, so
 # the mergeable guard re-reads (read-only) CALLUM_FLOW_MERGEABLE_TRIES times
 # (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
@@ -50,6 +54,7 @@ NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
 LINKAGE=${CALLUM_FLOW_LINKAGE_BIN:-/usr/local/share/callum-tools/check-pr-linkage.sh}
 WATCH=${CALLUM_FLOW_WATCH_BIN:-/usr/local/share/callum-tools/pipeline-watch.sh}
 ROLLOUT=${CALLUM_FLOW_ROLLOUT_BIN:-callum-flow-rollout}
+READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
@@ -150,6 +155,20 @@ fi
 
 default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
 
+# --- author ------------------------------------------------------------------
+# Only a PR opened by a trusted author is read any further (the reader exits 3
+# for an untrusted author and 1 when it cannot tell; both fail closed).
+author_ok=1
+"$READ" --json --pr "$pr" > /dev/null 2>&1
+a_rc=$?
+if [ "$a_rc" -eq 3 ]; then
+  author_ok=0
+  fail author "PR #$pr was not opened by a trusted author"
+elif [ "$a_rc" -ne 0 ]; then
+  author_ok=0
+  fail author "cannot verify the author of PR #$pr (reader exit $a_rc)"
+fi
+
 # --- rollout -----------------------------------------------------------------
 # The linkage expectation follows the issue's Rollout, not the caller's memory:
 # #236 closed #219 (a Run it issue) because the default was closing.
@@ -157,7 +176,9 @@ explicit=$expect
 r_issue=$issue
 [ -n "$r_issue" ] || r_issue=$(printf '%s' "$branch" | sed -n 's/.*issue-\([0-9][0-9]*\)\(-.*\)\{0,1\}$/\1/p')
 rollout_ok=1
-if [ -z "$r_issue" ]; then
+if [ "$author_ok" -eq 0 ]; then
+  rollout_ok=0
+elif [ -z "$r_issue" ]; then
   if [ -z "$explicit" ]; then
     fail rollout "no issue in the branch name, pass --issue N (or --expect to assert linkage)"
     rollout_ok=0
