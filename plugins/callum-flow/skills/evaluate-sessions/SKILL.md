@@ -54,7 +54,7 @@ The default event log is this device's. For a window that covers other devices'
 work (the two-dispatcher trial, cbundy/dev-system#222), export `factory.events`
 for every device as JSON lines and pass it with `--events`:
 
-These exports need `dev-query`; see its [base-image requirements and usage](../../../../images/base/README.md#dev-query).
+These exports need `dev-query`; see its [base-image requirements and usage](https://github.com/cbundy/dev-system/blob/main/images/base/README.md#dev-query).
 If it is not on PATH, report the required image version and stop.
 
 ```
@@ -71,7 +71,7 @@ never pushed, so say so rather than reporting on half the factory.
 For the pipeline numbers across devices, export the `nomistakes` schema too and pass
 it with `--nm-export` (it replaces this device's `state.sqlite` for every pipeline
 number; `state.sqlite` is then only used to find the transcripts). Run the query in
-[docs/metrics.md, "Scope and the fleet-wide no-mistakes export"](../../../../docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export)
+[docs/metrics.md, "Scope and the fleet-wide no-mistakes export"](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#scope-and-the-fleet-wide-no-mistakes-export)
 with `since` set to the window's start and output to `/tmp/nm-export.jsonl`.
 
 Do not filter by `device` or `repo`. Check that `pipeline.by_device` lists every
