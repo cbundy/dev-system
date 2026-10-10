@@ -7,6 +7,16 @@
 #
 # Usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B]
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
+#          [--if-changed]
+#
+# --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
+# newest line already in the log for the same subject (the same branch when
+# --branch is given, else the same issue) has the same state, head and note.
+# The watchers use it for a transition they did not see happen (a restart's
+# first sight of a run), so a re-armed watcher never re-logs old events.
+# run_id is not compared: the same run is logged under a ULID and "unknown".
+# A missing or unreadable log counts as changed. Without the flag every call
+# writes, as before.
 #
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
@@ -33,7 +43,7 @@ STATES="ready claimed briefed delegated run_started parked verdict fix_requested
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
-  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]" >&2
+  echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed]" >&2
   echo "states: $STATES" >&2
   exit 2
 }
@@ -46,7 +56,13 @@ case " $STATES " in *" $state "*) ;; *) usage "unknown state '$state'" ;; esac
 issue='' run='' branch='' pr='' head='' note=''
 actor=${CALLUM_FLOW_ACTOR:-agent}
 repo=${CALLUM_FLOW_REPO-}
+if_changed=
 while [ $# -gt 0 ]; do
+  if [ "$1" = --if-changed ]; then
+    if_changed=1
+    shift
+    continue
+  fi
   [ $# -ge 2 ] || usage "$1 needs a value"
   case "$1" in
     --issue) issue=$2 ;;
@@ -111,6 +127,14 @@ line=$(jq -nc \
 dir=${CALLUM_EVENTS_DIR:-/persist/events}
 if [ ! -d "$dir" ]; then
   mkdir -p "$dir" 2>/dev/null && chmod 0700 "$dir" 2>/dev/null
+fi
+if [ -n "$if_changed" ] && [ -r "$dir/$file" ]; then
+  same=$(jq -Rn --argjson new "$line" '
+    [inputs | fromjson? | select(type == "object")
+     | select(if $new.branch != null then .branch == $new.branch else .issue == $new.issue end)]
+    | last
+    | . != null and .state == $new.state and .head == $new.head and .note == $new.note' "$dir/$file" 2>/dev/null) || same=
+  [ "$same" != true ] || exit 0
 fi
 printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null || warn "cannot write $dir/$file - event not recorded"
 exit 0
