@@ -1,0 +1,159 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [
+    {
+      "repo": "acme/widgets",
+      "issue": 70,
+      "stage": "implementing",
+      "rule": "S2",
+      "minutes_in_stage": 120,
+      "detail": "implementing, with no pipeline run in progress, for more than 60 minutes"
+    },
+    {
+      "repo": "acme/widgets",
+      "issue": 71,
+      "stage": "ready to merge",
+      "rule": "S4",
+      "minutes_in_stage": 45,
+      "detail": "ready to merge for more than 30 minutes"
+    },
+    {
+      "repo": "acme/widgets",
+      "issue": 72,
+      "stage": "in pipeline",
+      "rule": "S5",
+      "minutes_in_stage": 190,
+      "detail": "in pipeline with no run update for more than 30 minutes"
+    },
+    {
+      "repo": "acme/widgets",
+      "issue": 73,
+      "stage": "implementing",
+      "rule": "S2",
+      "minutes_in_stage": 70,
+      "detail": "implementing, with no pipeline run in progress, for more than 60 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 8,
+        "runs": 3,
+        "last_event_at": "2026-10-10T10:00:00.000Z",
+        "last_run_update_at": "2026-10-10T11:20:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 8,
+            "last_event_at": "2026-10-10T10:00:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 3,
+          "event": 1,
+          "github": 0
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 70,
+          "stage": "implementing",
+          "detail": "delegated, no pipeline run yet",
+          "entered_at": "2026-10-10T10:00:00.000Z",
+          "minutes_in_stage": 120,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": {
+            "rule": "S2",
+            "text": "implementing, with no pipeline run in progress, for more than 60 minutes"
+          },
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 73,
+          "stage": "implementing",
+          "detail": "last run failed",
+          "entered_at": "2026-10-10T10:50:00.000Z",
+          "minutes_in_stage": 70,
+          "holder": "dev-a",
+          "run": "r73",
+          "pr": null,
+          "stuck": {
+            "rule": "S2",
+            "text": "implementing, with no pipeline run in progress, for more than 60 minutes"
+          },
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 72,
+          "stage": "in pipeline",
+          "detail": null,
+          "entered_at": "2026-10-10T08:50:00.000Z",
+          "minutes_in_stage": 190,
+          "holder": "dev-a",
+          "run": "r72",
+          "pr": null,
+          "stuck": {
+            "rule": "S5",
+            "text": "in pipeline with no run update for more than 30 minutes"
+          },
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 71,
+          "stage": "ready to merge",
+          "detail": null,
+          "entered_at": "2026-10-10T11:15:00.000Z",
+          "minutes_in_stage": 45,
+          "holder": "dev-a",
+          "run": "r71",
+          "pr": 171,
+          "stuck": {
+            "rule": "S4",
+            "text": "ready to merge for more than 30 minutes"
+          },
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}

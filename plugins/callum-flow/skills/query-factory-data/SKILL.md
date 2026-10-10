@@ -7,7 +7,8 @@ description: >-
   and token spend for an issue, a run or a time window. Routes the question to
   the right saved query in factory.events or the nomistakes mirror and runs it
   with dev-query. Use for a quick targeted number. For a full windowed report
-  or a comparison with a baseline, use evaluate-sessions instead.
+  or a comparison with a baseline, use evaluate-sessions instead. For what is
+  happening right now (current stage, stuck issues), use factory-state.
 version: 0.25.0
 ---
 

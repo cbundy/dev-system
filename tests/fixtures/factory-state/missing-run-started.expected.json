@@ -1,0 +1,98 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 6,
+        "runs": 3,
+        "last_event_at": "2026-10-10T10:30:00.000Z",
+        "last_run_update_at": "2026-10-10T11:58:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 6,
+            "last_event_at": "2026-10-10T10:30:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 3,
+          "event": 0,
+          "github": 0
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 20,
+          "stage": "in pipeline",
+          "detail": null,
+          "entered_at": "2026-10-10T10:40:00.000Z",
+          "minutes_in_stage": 80,
+          "holder": "dev-a",
+          "run": "r20",
+          "pr": null,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 21,
+          "stage": "ready to merge",
+          "detail": null,
+          "entered_at": "2026-10-10T11:50:00.000Z",
+          "minutes_in_stage": 10,
+          "holder": "dev-a",
+          "run": "r21",
+          "pr": 121,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 22,
+          "stage": "merged",
+          "detail": null,
+          "entered_at": "2026-10-10T10:20:00.000Z",
+          "minutes_in_stage": 100,
+          "holder": "dev-a",
+          "run": "r22",
+          "pr": 122,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}

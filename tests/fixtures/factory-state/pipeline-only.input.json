@@ -1,0 +1,63 @@
+{
+ "at": "2026-10-10T12:00:00.000Z",
+ "repos": [],
+ "workers": {
+  "available": false,
+  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+ },
+ "events": [],
+ "runs": [
+  {
+   "id": "g1",
+   "repo": "acme/gadgets",
+   "device": "dev-a",
+   "branch": "feat/issue-5-x",
+   "status": "running",
+   "pr_url": null,
+   "pr_state": null,
+   "issue": 5,
+   "awaiting_agent_since": null,
+   "created_at": "2026-10-10T10:30:00.000Z",
+   "updated_at": "2026-10-10T11:57:00.000Z"
+  },
+  {
+   "id": "g2",
+   "repo": "acme/gadgets",
+   "device": "dev-a",
+   "branch": "feat/issue-6-x",
+   "status": "running",
+   "pr_url": null,
+   "pr_state": null,
+   "issue": 6,
+   "awaiting_agent_since": "2026-10-10T11:20:00.000Z",
+   "created_at": "2026-10-10T08:40:00.000Z",
+   "updated_at": "2026-10-10T11:10:00.000Z"
+  },
+  {
+   "id": "g3",
+   "repo": "acme/gadgets",
+   "device": "dev-a",
+   "branch": "feat/issue-7-x",
+   "status": "completed",
+   "pr_url": "https://github.com/acme/gadgets/pull/7",
+   "pr_state": "merged",
+   "issue": 7,
+   "awaiting_agent_since": null,
+   "created_at": "2026-10-07T00:40:00.000Z",
+   "updated_at": "2026-10-07T02:20:00.000Z"
+  },
+  {
+   "id": "g4",
+   "repo": "acme/gadgets",
+   "device": "dev-a",
+   "branch": "chore/release-1.0",
+   "status": "running",
+   "pr_url": null,
+   "pr_state": null,
+   "issue": null,
+   "awaiting_agent_since": null,
+   "created_at": "2026-10-10T11:40:00.000Z",
+   "updated_at": "2026-10-10T11:59:00.000Z"
+  }
+ ]
+}

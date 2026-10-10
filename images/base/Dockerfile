@@ -214,6 +214,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-issue-read \
   images/base/callum-flow-sweep \
   images/base/callum-flow-evaluate \
+  images/base/callum-flow-factory-state \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/nm-push-loop images/base/nm-export /usr/local/share/dev-system/

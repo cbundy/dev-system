@@ -253,6 +253,22 @@ nm_export_query() {
       if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
 }
 check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
+# callum-flow-factory-state (#345) runs its real SQL through dev-query against the data the checks
+# above loaded: the events of issues 42 and 51 to 54 (issue 52 spelled 'Acme/Widgets', issue 54 linked
+# to its run only by a legacy run_started event) and their mirrored runs. All five were merged, and
+# with GitHub off the tool must place each on its run, lower-casing the repo.
+factory_state_query() {
+  local out
+  out=$(docker exec "$RUN_ID-b" callum-flow-factory-state --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
+  printf '%s' "$out" | node -e '
+    const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    if (r.repos.length !== 1 || r.repos[0].repo !== "acme/widgets" || r.at_source !== "--at") process.exit(1);
+    if (r.repos[0].coverage.class !== "full" || !r.workers["n/a"]) process.exit(1);
+    const by = Object.fromEntries(r.repos[0].issues.map((i) => [i.issue, i]));
+    for (const n of [42, 51, 52, 53, 54]) if (!by[n] || by[n].stage !== "merged") process.exit(1);
+    if (by[51].run !== "r5" || by[54].run !== "r9" || by[42].run !== "r3") process.exit(1);'
+}
+check "callum-flow-factory-state reads the mirrored runs and events through dev-query and places the merged issues" factory_state_query
 # Event identity survives losing the file (#229). The table starts as the old one (primary
 # key (device, repo, seq)) with three old-format rows; the real event-push-loop (container b)
 # migrates it, then a wiped log (with and without its marker) must still land every event.

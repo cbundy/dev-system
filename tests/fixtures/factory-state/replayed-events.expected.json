@@ -1,0 +1,99 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 11,
+        "runs": 1,
+        "last_event_at": "2026-10-10T11:56:00.000Z",
+        "last_run_update_at": "2026-10-10T08:40:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 11,
+            "last_event_at": "2026-10-10T11:56:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 0,
+          "event": 1,
+          "github": 0
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 32,
+          "stage": "merged",
+          "detail": null,
+          "entered_at": "2026-10-10T08:40:00.000Z",
+          "minutes_in_stage": 200,
+          "holder": "dev-a",
+          "run": "r32",
+          "pr": 132,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [
+        {
+          "issue": 30,
+          "stage": "merged",
+          "detail": "closed (completed)",
+          "entered_at": "2026-10-10T08:50:00.000Z",
+          "minutes_in_stage": 190,
+          "holder": "dev-a",
+          "run": "r30",
+          "pr": 130,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 31,
+          "stage": "closed without merge",
+          "detail": "closed (not_planned)",
+          "entered_at": "2026-10-10T10:20:00.000Z",
+          "minutes_in_stage": 100,
+          "holder": "dev-a",
+          "run": "r31",
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "other_runs": []
+    }
+  ]
+}

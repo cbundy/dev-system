@@ -1,0 +1,100 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [
+    {
+      "repo": "acme/gadgets",
+      "issue": 6,
+      "stage": "parked",
+      "rule": "S3",
+      "minutes_in_stage": 40,
+      "detail": "parked for more than 30 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/gadgets",
+      "coverage": {
+        "class": "pipeline only",
+        "events": 0,
+        "runs": 4,
+        "last_event_at": null,
+        "last_run_update_at": "2026-10-10T11:59:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [],
+        "live_issue_sources": {
+          "mirror": 2,
+          "event": 0,
+          "github": 0
+        },
+        "notes": [
+          "the repo has pipeline runs but no factory events: claims, delegation and queue state are unknown, so a quiet issue is not necessarily idle"
+        ]
+      },
+      "issues": [
+        {
+          "issue": 5,
+          "stage": "in pipeline",
+          "detail": null,
+          "entered_at": "2026-10-10T10:30:00.000Z",
+          "minutes_in_stage": 90,
+          "holder": null,
+          "run": "g1",
+          "pr": null,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 6,
+          "stage": "parked",
+          "detail": null,
+          "entered_at": "2026-10-10T11:20:00.000Z",
+          "minutes_in_stage": 40,
+          "holder": null,
+          "run": "g2",
+          "pr": null,
+          "stuck": {
+            "rule": "S3",
+            "text": "parked for more than 30 minutes"
+          },
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": [
+        {
+          "run": "g4",
+          "branch": "chore/release-1.0",
+          "device": "dev-a",
+          "status": "running",
+          "parked": false,
+          "created_at": "2026-10-10T11:40:00.000Z",
+          "approximate": false
+        }
+      ]
+    }
+  ]
+}

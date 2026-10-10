@@ -1,0 +1,66 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 2,
+        "runs": 1,
+        "last_event_at": "2026-10-10T10:10:00.000Z",
+        "last_run_update_at": "2026-10-10T11:50:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 2,
+            "last_event_at": "2026-10-10T10:10:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 1,
+          "event": 0,
+          "github": 0
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 60,
+          "stage": "ready to merge",
+          "detail": null,
+          "entered_at": "2026-10-10T11:50:00.000Z",
+          "minutes_in_stage": 10,
+          "holder": "dev-a",
+          "run": "r60",
+          "pr": 160,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}

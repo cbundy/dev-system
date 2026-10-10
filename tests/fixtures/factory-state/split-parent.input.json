@@ -1,0 +1,71 @@
+{
+ "at": "2026-10-10T12:00:00.000Z",
+ "repos": [],
+ "workers": {
+  "available": false,
+  "reason": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+ },
+ "events": [
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T05:20:00.000Z",
+   "state": "ready",
+   "issue": 40,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T07:00:00.000Z",
+   "state": "claimed",
+   "issue": 40,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:40:00.000Z",
+   "state": "ready",
+   "issue": 41,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:30:00.000Z",
+   "state": "claimed",
+   "issue": 42,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:50:00.000Z",
+   "state": "briefed",
+   "issue": 42,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": null,
+   "actor": "agent"
+  }
+ ],
+ "runs": []
+}

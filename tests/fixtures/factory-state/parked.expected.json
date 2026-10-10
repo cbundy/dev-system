@@ -1,0 +1,94 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "n/a": "not read (--github off)"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "stuck": [
+    {
+      "repo": "acme/widgets",
+      "issue": 50,
+      "stage": "parked",
+      "rule": "S3",
+      "minutes_in_stage": 45,
+      "detail": "parked for more than 30 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 5,
+        "runs": 2,
+        "last_event_at": "2026-10-10T11:16:00.000Z",
+        "last_run_update_at": "2026-10-10T11:55:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 5,
+            "last_event_at": "2026-10-10T11:16:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 2,
+          "event": 0,
+          "github": 0
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 50,
+          "stage": "parked",
+          "detail": null,
+          "entered_at": "2026-10-10T11:15:00.000Z",
+          "minutes_in_stage": 45,
+          "holder": "dev-a",
+          "run": "r50",
+          "pr": null,
+          "stuck": {
+            "rule": "S3",
+            "text": "parked for more than 30 minutes"
+          },
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        },
+        {
+          "issue": 51,
+          "stage": "parked",
+          "detail": null,
+          "entered_at": "2026-10-10T11:55:00.000Z",
+          "minutes_in_stage": 5,
+          "holder": "dev-a",
+          "run": "r51",
+          "pr": null,
+          "stuck": null,
+          "source": "mirror",
+          "approximate": false,
+          "hint": null,
+          "github": null,
+          "flags": []
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}
