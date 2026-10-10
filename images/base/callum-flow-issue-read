@@ -175,8 +175,9 @@ case "$mode" in
       fi
     fi
     # one jq call so that any malformed item fails the whole read
-    res=$(jq -n -c --argjson T "$trusted" --argjson o "$obj" --argjson c1 "$c1" --argjson c2 "$c2" --argjson c3 "$c3" \
+    res=$(printf '%s\n' "$obj" "$c1" "$c2" "$c3" | jq -s -c --argjson T "$trusted" \
       --arg mode "$mode" --argjson with "$comments" "$PRELUDE"'
+      .[0] as $o | .[1] as $c1 | .[2] as $c2 | .[3] as $c3 |
       (($c1 | n_stripped) + ($c2 | n_stripped) + ($c3 | n_stripped)) as $s
       | if $mode == "pr"
         then {pr: $o} + (if $with then {comments: ($c1 | keep), review_comments: ($c2 | keep), reviews: ($c3 | keep)} else {} end)
@@ -189,10 +190,11 @@ case "$mode" in
     inum=${iu##*/}
     isnum "$inum" || die "cannot determine the issue of comment $cid"
     parent=$(fetch_one "repos/$repo/issues/$inum") || die "cannot read issue #$inum"
-    ok=$(jq -n -r --argjson T "$trusted" --argjson c "$obj" --argjson p "$parent" "$PRELUDE"'
+    ok=$(printf '%s\n' "$obj" "$parent" | jq -s -r --argjson T "$trusted" "$PRELUDE"'
+      .[0] as $c | .[1] as $p |
       ($c | trusted) and ($p | trusted)') || die "cannot determine the author of comment $cid"
     [ "$ok" = true ] || refuse comment "$inum"
-    res=$(jq -n -c --argjson c "$obj" '{comment: $c, stripped: 0}')
+    res=$(printf '%s' "$obj" | jq -c '{comment: ., stripped: 0}') || die "unexpected response for comment $cid"
     ;;
   list)
     q="state=$state&per_page=100"

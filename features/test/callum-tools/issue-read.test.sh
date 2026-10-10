@@ -320,4 +320,24 @@ jq -e '(.events | length) == 2 and .stripped == 3' "$tmpdir/out" > /dev/null || 
 touch "$d/repos_o_r_issues_7_timeline.page2fail"
 rc_of "$READ" --timeline 7; expect_rc 1 "timeline page 2 failure"; no_out "timeline page 2 failure"
 
+reset
+jq -n --argjson u "$OWNER" '{number: 7, title: "large", body: ("\n" * 65536), state: "open", labels: [], user: $u}' > "$d/repos_o_r_issues_7.json"
+cp "$d/repos_o_r_issues_7.json" "$d/repos_o_r_pulls_7.json"
+jq -cn --argjson u "$OWNER" 'range(1; 4) | [{id: ., user: $u, body: ("x" * 51200)}]' > "$d/repos_o_r_issues_7_comments.json"
+cp "$d/repos_o_r_issues_7_comments.json" "$d/repos_o_r_pulls_7_comments.json"
+cp "$d/repos_o_r_issues_7_comments.json" "$d/repos_o_r_pulls_7_reviews.json"
+rc_of "$READ" --json 7 --comments
+expect_rc 0 "large issue and paginated comments"
+jq -e '(.issue.body == ("\n" * 65536)) and (.comments | length) == 3 and all(.comments[]; .body == ("x" * 51200)) and .stripped == 0' "$tmpdir/out" > /dev/null \
+  || fail "large issue or comments truncated"
+rc_of "$READ" --json --pr 7 --comments
+expect_rc 0 "large PR and all comment collections"
+jq -e '(.pr.body == ("\n" * 65536)) and all(.comments, .review_comments, .reviews; length == 3 and all(.[]; .body == ("x" * 51200))) and .stripped == 0' "$tmpdir/out" > /dev/null \
+  || fail "large PR or comment collections truncated"
+jq -n --argjson u "$OWNER" '{id: 55, user: $u, body: ("\n" * 65536), issue_url: "https://api.github.com/repos/o/r/issues/7"}' > "$d/repos_o_r_issues_comments_55.json"
+rc_of "$READ" --json --comment 55
+expect_rc 0 "large single comment and parent issue"
+jq -e '.comment.id == 55 and .comment.body == ("\n" * 65536) and .stripped == 0' "$tmpdir/out" > /dev/null \
+  || fail "large single comment truncated"
+
 echo "issue-read tests passed"
