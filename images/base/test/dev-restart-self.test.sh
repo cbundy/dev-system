@@ -434,6 +434,18 @@ put POST "/api/v2/workspaces/$WS/builds" '{"message":"no"}' 403
 run --fresh
 assert_status 1 fresh-403
 [ ! -e "$C/state/fresh-conversation" ] || fail "fresh-403: left a marker"
+new_case fresh-403-noautostart
+put POST "/api/v2/workspaces/$WS/builds" '{"message":"no"}' 403
+put GET "/api/v2/templates/$TPL" '{"allow_user_autostart":false}'
+run --fresh
+assert_status 1 fresh-403-noautostart
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-403-noautostart: left a marker"
+new_case fresh-403-template-error
+put POST "/api/v2/workspaces/$WS/builds" '{"message":"no"}' 403
+put GET "/api/v2/templates/$TPL" '{"message":"boom"}' 500
+run --fresh
+assert_status 1 fresh-403-template-error
+[ ! -e "$C/state/fresh-conversation" ] || fail "fresh-403-template-error: left a marker"
 
 # --dry-run writes nothing; --resume leaves the marker for dev-remote-control
 new_case fresh-dry

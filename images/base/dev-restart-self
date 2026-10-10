@@ -292,6 +292,7 @@ do_start() {
   case $API_CODE in
     4??)
       say "Coder rejected the start build (HTTP $API_CODE: $(api_message)); falling back to a scheduled restart with --upgrade."
+      drop_fresh
       MODE=restart
       UPGRADE=1
       do_restart
@@ -307,12 +308,11 @@ do_restart() {
   if [ "$DRY" = 0 ]; then
     _tid=$(printf '%s' "$WS" | jq -r '.template_id // empty')
     api GET "/api/v2/templates/$_tid"
-    ok || { drop_fresh; die "could not read the template (HTTP $API_CODE $(api_message)); nothing was changed."; }
+    ok || die "could not read the template (HTTP $API_CODE $(api_message)); nothing was changed."
     [ "$(jq -r '.allow_user_autostart' "$API_BODY")" = true ] ||
-      { drop_fresh; die "refusing: the template does not allow user autostart, so the workspace would not come back. Nothing was changed."; }
+      die "refusing: the template does not allow user autostart, so the workspace would not come back. Nothing was changed."
   fi
 
-  write_fresh
   _delay=${DEV_RESTART_SELF_DELAY_MIN:-3}
   case $_delay in '' | *[!0-9]*) _delay=3 ;; esac
   [ "$_delay" -ge 2 ] || _delay=2
@@ -323,10 +323,12 @@ do_restart() {
     say "dry-run: would save the current autostart_schedule and automatic_updates to $MARKER"
   elif [ ! -f "$MARKER" ]; then
     # Keep an existing marker: its values are the real prior state, ours would be the one-off.
-    mkdir -p "$STATE_DIR" || { drop_fresh; die "cannot create $STATE_DIR; nothing was changed. Run dev-doctor for the fix (dev-init creates it on start)."; }
+    mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR; nothing was changed. Run dev-doctor for the fix (dev-init creates it on start)."
     printf '%s' "$WS" | jq '{autostart_schedule: (.autostart_schedule // null), automatic_updates: (.automatic_updates // "never")}' > "$MARKER" ||
-      { drop_fresh; die "cannot write $MARKER; nothing was changed."; }
+      die "cannot write $MARKER; nothing was changed."
   fi
+
+  write_fresh
 
   api PUT "$WS_PATH/autostart" "$(jq -cn --arg s "$_cron" '{schedule:$s}')"
   ok || { undo "could not set the one-off autostart (HTTP $API_CODE $(api_message))"; }
