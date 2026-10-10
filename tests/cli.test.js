@@ -461,7 +461,7 @@ function parseJsonc(content) {
 
 const DEVCONTAINER = ".devcontainer/devcontainer.json";
 const BASE_IMAGE_TEMPLATE = ".devcontainer/devcontainer.base-image.json";
-const PER_REPO_MOUNTS = ["claude", "codex", "no-mistakes", "agentsview"].map((tool) => ({
+const PER_REPO_MOUNTS = ["claude", "codex", "no-mistakes", "agentsview", "events"].map((tool) => ({
   type: "volume",
   source: `dev-system-\${devcontainerId}-${tool}`,
   target: `/persist/${tool}`,
@@ -549,7 +549,7 @@ test("base-image devcontainer: repo-owned edits survive an update that changes t
       )
       .replace(/( *\/\/ --- end repo-owned ---\n)(\n *\/\/ Per-repo)/, `${repoMount}$1$2`),
   );
-  assert.equal(parseJsonc(read(repo, DEVCONTAINER)).mounts.length, 5, "test setup should add a mount");
+  assert.equal(parseJsonc(read(repo, DEVCONTAINER)).mounts.length, 6, "test setup should add a mount");
 
   const upstream = upstreamCopy(t, (dir) => {
     const f = path.join(dir, BASE_IMAGE_TEMPLATE);

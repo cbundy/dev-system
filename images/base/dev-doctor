@@ -58,8 +58,8 @@ fail() {
 
 # A writable directory still loses its state with the container unless a
 # volume is mounted at it or above it (one volume for all of /persist): one
-# whose mount point is / lives in the container's own writable layer. Events
-# and dev-restart-self are exempt: the desktop templates give them no volume.
+# whose mount point is / lives in the container's own writable layer.
+# dev-restart-self is exempt: the desktop templates give it no volume.
 check_persist_dir() {
   local dir="$1" name
   name=$(basename "$dir")
@@ -332,19 +332,29 @@ unset av_url
 ev_dir="${CALLUM_EVENTS_DIR:-/persist/events}"
 ev_lines=0
 ev_pushed=0
+ev_waiting=0
 ev_last_written=0
 ev_last_pushed=0
 for ev_f in "$ev_dir"/*.jsonl; do
   [ -f "$ev_f" ] || continue
-  ev_lines=$((ev_lines + $(wc -l < "$ev_f")))
-  ev_pushed=$((ev_pushed + $(cat "$ev_dir/.pushed/$(basename "$ev_f")" 2>/dev/null || echo 0)))
+  ev_n=$(wc -l < "$ev_f" | tr -d ' ')
+  ev_p=$(cat "$ev_dir/.pushed/$(basename "$ev_f")" 2>/dev/null || echo 0)
+  case "$ev_p" in '' | *[!0-9]*) ev_p=0 ;; esac
+  ev_lines=$((ev_lines + ev_n))
+  ev_pushed=$((ev_pushed + ev_p))
+  if [ "$ev_p" -gt "$ev_n" ]; then
+    warn "event log $ev_f has $ev_n lines but $ev_p were pushed - the file was replaced under the push loop" \
+      "nothing to do: event-push-loop pushes it again from the start (rows with an event_id dedup)"
+  else
+    ev_waiting=$((ev_waiting + ev_n - ev_p))
+  fi
   ev_m=$(stat -c %Y "$ev_f" 2>/dev/null || echo 0)
   [ "$ev_m" -le "$ev_last_written" ] || ev_last_written=$ev_m
   ev_m=$(stat -c %Y "$ev_dir/.pushed/$(basename "$ev_f")" 2>/dev/null || echo 0)
   [ "$ev_m" -le "$ev_last_pushed" ] || ev_last_pushed=$ev_m
 done
 ev_when() { if [ "$1" -gt 0 ]; then date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; else echo never; fi; }
-info "factory events: $ev_lines recorded (last written $(ev_when "$ev_last_written")), $ev_pushed pushed (last pushed $(ev_when "$ev_last_pushed")), $((ev_lines - ev_pushed)) waiting"
+info "factory events: $ev_lines recorded (last written $(ev_when "$ev_last_written")), $ev_pushed pushed (last pushed $(ev_when "$ev_last_pushed")), $ev_waiting waiting"
 if [ "$av_rc" -eq 0 ]; then
   if flock -n /tmp/dev-event-push.lock true 2>/dev/null; then
     fail "factory event push is not running" "run: dev-init (log: /tmp/dev-event-push.log)"

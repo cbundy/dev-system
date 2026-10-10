@@ -20,14 +20,20 @@ check "dev-doctor warns, without failing, for each /persist dir with no volume b
   vol=\$(docker volume create --label '$RUN_ID')
   out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"
-  for t in codex gh no-mistakes agentsview; do
+  for t in codex gh no-mistakes agentsview events; do
     echo \"\$out\" | grep -q \"WARN \$t state dir /persist/\$t is writable but not on a volume\" || { echo \"no WARN for \$t\"; exit 1; }
   done
-  for t in events dev-restart-self; do
+  for t in dev-restart-self; do
     echo \"\$out\" | grep -q \"OK   \$t state dir /persist/\$t is writable\" || { echo \"no OK for \$t\"; exit 1; }
   done
   echo \"\$out\" | grep -q 'OK   claude state dir /persist/claude is writable' &&
   [ \"\$(echo \"\$out\" | grep -c 'FAIL ')\" = \"\$(echo \"\$out\" | sed -n 's/^dev-doctor: \\([0-9]*\\) check(s) failed\$/\\1/p')\" ]"
+check "dev-doctor WARNs, naming the file, when an event log has fewer lines than its .pushed marker" in_image '
+  d=$(mktemp -d); mkdir -p "$d/.pushed"
+  printf "%s\n%s\n" a b > "$d/o__r.jsonl"; echo 5 > "$d/.pushed/o__r.jsonl"
+  out=$(CALLUM_EVENTS_DIR="$d" dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "WARN event log $d/o__r.jsonl has 2 lines but 5 were pushed" &&
+  echo "$out" | grep -q "INFO factory events: 2 recorded.*, 0 waiting"' --entrypoint ""
 check "dev-doctor FAILs, naming the fix, for a missing /persist/events and /persist/dev-restart-self" in_image '
   sudo -n rm -rf /persist/events /persist/dev-restart-self
   sudo -n chown root:root /persist

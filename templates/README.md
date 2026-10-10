@@ -167,8 +167,8 @@ wires it, and it must never be added to `remoteEnv` or `containerEnv` here
   (comma-separated for several; `gh api users/<login> --jq .id` gives the id) before the
   container starts. The image bakes no list, so unset or malformed `dev-doctor` FAILs. On
   Coder the template sets it instead. It lands in a repo with its next `callum-dev update`.
-- Synced: `mounts` - the four per-repo volumes (`dev-system-${devcontainerId}-claude`,
-  `-codex`, `-no-mistakes`, `-agentsview`) at `/persist/*`. They live here, not in the
+- Synced: `mounts` - the five per-repo volumes (`dev-system-${devcontainerId}-claude`,
+  `-codex`, `-no-mistakes`, `-agentsview`, `-events`) at `/persist/*`. They live here, not in the
   image, because the devcontainer CLI expands no variables in image metadata: there
   `${devcontainerId}` comes out empty and every repo would share one set (cbundy/dev-system#73,
   #78). Synced, so `callum-dev update` keeps every repo's set correct. Without them that

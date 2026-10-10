@@ -148,7 +148,7 @@ nm_metrics_queries() {
   nm_fixture metrics && nm_push || return 1
   # factory.events as event-push-loop creates it (its DDL is read from the script), then the
   # orchestrator events for issue 42: claimed 300 s before run r3 was created, merged 120 s after it ended.
-  ddl=$(sed -n '/^DDL="/,/events_issue_idx/p' "$root/images/base/event-push-loop" | sed '1s/^DDL="//; $s/"$//')
+  ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/event-push-loop")
   printf '%s\n' "$ddl" | psql_file >/dev/null || return 1
   psql_file >/dev/null <<'SQL' || return 1
 INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, raw) VALUES
@@ -253,6 +253,53 @@ nm_export_query() {
       if (!Array.isArray(r.pipeline.gates) || !r.pipeline.by_device.length) process.exit(1);' "$want"
 }
 check "the export query in docs/metrics.md runs and callum-flow-evaluate reads its output" nm_export_query
+# Event identity survives losing the file (#229). The table starts as the old one (primary
+# key (device, repo, seq)) with three old-format rows; the real event-push-loop (container b)
+# migrates it, then a wiped log (with and without its marker) must still land every event.
+ev_run() { docker exec -e CALLUM_EVENTS_DIR=/tmp/evmig "$RUN_ID-b" /usr/local/share/dev-system/event-push-loop --once; }
+ev_write() { # <count> <tag> [noid]: count lines for device d1, repo o/r
+  docker exec -e N="$1" -e TAG="$2" -e NOID="${3-}" -e CALLUM_EVENTS_DIR=/tmp/evmig "$RUN_ID-b" bash -c '
+    mkdir -p "$CALLUM_EVENTS_DIR"
+    for i in $(seq 1 "$N"); do
+      id=""; [ -n "$NOID" ] || id=",\"event_id\":\"$(cat /proc/sys/kernel/random/uuid)\""
+      printf "{\"v\":1,\"ts\":\"2026-10-10T10:00:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":1,\"note\":\"%s-%s\"%s}\n" "$TAG" "$i" "$id" >> "$CALLUM_EVENTS_DIR/o__r.jsonl"
+    done'
+}
+event_identity() {
+  local ddl root
+  root=$(cd "$TEST_DIR/../../.." && pwd)
+  ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/event-push-loop")
+  docker exec "$RUN_ID-b" rm -rf /tmp/evmig
+  psql_file >/dev/null <<'SQL' || return 1
+DROP TABLE IF EXISTS factory.events;
+CREATE SCHEMA IF NOT EXISTS factory;
+CREATE TABLE factory.events (
+  device text NOT NULL, repo text NOT NULL, seq bigint NOT NULL, ts timestamptz NOT NULL,
+  state text NOT NULL, issue integer, run_id text, branch text, pr integer, head text, note text,
+  session_id text, actor text, v integer, raw jsonb NOT NULL,
+  PRIMARY KEY (device, repo, seq)
+);
+SQL
+  ev_write 3 old noid && ev_run || return 1
+  [ "$(psql_av "select count(*) from factory.events where event_id is null")" = 3 ] || { echo "old rows lost"; return 1; }
+  [ "$(psql_av "select count(*) from pg_constraint where conrelid = 'factory.events'::regclass and contype = 'p'")" = 0 ] || { echo "primary key still there"; return 1; }
+  ev_write 3 new && ev_run || return 1
+  [ "$(psql_av "select count(*) from factory.events")" = 6 ] || { echo "want 6 rows"; return 1; }
+  # wipe the file and its marker, write 3 more: they reuse seq 1-3
+  docker exec "$RUN_ID-b" rm -rf /tmp/evmig
+  ev_write 3 wiped && ev_run || return 1
+  [ "$(psql_av "select count(*) from factory.events")" = 9 ] || { echo "want 9 rows after the wipe"; return 1; }
+  [ "$(psql_av "select count(*) from factory.events where note like 'wiped-%' and seq between 1 and 3")" = 3 ] || { echo "post-wipe rows missing"; return 1; }
+  # replace the file but keep a marker larger than it
+  docker exec "$RUN_ID-b" bash -c 'echo 5 > /tmp/evmig/.pushed/o__r.jsonl; rm /tmp/evmig/o__r.jsonl'
+  ev_write 2 kept && ev_run || return 1
+  [ "$(psql_av "select count(*) from factory.events where note like 'kept-%'")" = 2 ] || { echo "kept-marker rows missing"; return 1; }
+  # a repeat adds nothing, and the DDL runs again cleanly
+  ev_run || return 1
+  [ "$(psql_av "select count(*) from factory.events")" = 11 ] || { echo "repeat pushed duplicates"; return 1; }
+  printf '%s\n%s\n' "$ddl" "$ddl" | psql_file >/dev/null
+}
+check "factory.events migrates in place and keeps every event after the log file is wiped or replaced" event_identity
 # dev-query (#292): container b has AGENTSVIEW_PG_URL.
 dev_query_readonly() {
   local before after err
