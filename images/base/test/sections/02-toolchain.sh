@@ -14,6 +14,9 @@ check "callum-flow-event writes a line, rejects an unknown state, and event-push
 check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
   [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
   ! /usr/local/share/dev-system/nm-export 2>/dev/null'
+check "dev-query is on PATH, prints usage, and exits 78 with no URL configured" in_image '
+  [ -x "$(command -v dev-query)" ] && dev-query --help >/dev/null &&
+  env -u AGENTSVIEW_PG_URL DEV_SECRETS_DIR=$(mktemp -d) dev-query -c "select 1" 2>/dev/null; [ $? = 78 ]'
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'

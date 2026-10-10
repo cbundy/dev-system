@@ -193,6 +193,7 @@ COPY --chmod=0755 \
   images/base/dev-prune-worktrees \
   images/base/dev-restart-self \
   images/base/dev-version \
+  images/base/dev-query \
   images/base/dev-login \
   images/base/callum-flow-event \
   images/base/callum-flow-merge-guard \

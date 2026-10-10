@@ -2,9 +2,8 @@
 
 The factory event log (`callum-flow-event`, shipped to the `factory.events` table by
 `event-push-loop`; see "Factory event log" in `images/base/README.md`) answers the questions
-below, plus the waste measures at the end. Each query below runs as is in `psql` against the agentsview PostgreSQL. When running them by hand against a URL with
-`sslmode=verify-full` or `verify-ca`, set `PGSSLROOTCERT=system` or add `sslrootcert=system`
-to it, as psql 17 has no default root cert (`event-push-loop` does this itself).
+below, plus the waste measures at the end. Each query below runs as is with `dev-query` (see "dev-query" in `images/base/README.md`), which
+connects to the agentsview PostgreSQL read-only and handles the TLS root-cert and secret-masking details.
 Rows are keyed `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cost and token
 metrics through the `issue` and `device` resource attributes the orchestrator sets on
 sub-agents.
@@ -516,7 +515,7 @@ ORDER BY e.ts;
 
 ### Saved queries
 
-Seven queries on the mirror, each runnable as is in `psql`. They qualify every `nomistakes` column
+Seven queries on the mirror, each runnable as is with `dev-query`. They qualify every `nomistakes` column
 with a table alias (`r` runs, `s` step_results, `d` step_rounds, `i` agent_invocations); that is
 the convention `tests/metrics-queries.test.js` relies on to catch a column that has drifted out
 of the schema, and image CI runs every block here against a real PostgreSQL. The JSON columns
@@ -759,7 +758,7 @@ metrics that need it `n/a`. The export query, which covers every repo and device
 `run_agent_sessions` of the runs it selects, plus `repos`:
 
 ```sh
-PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
+dev-query -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
 WITH r AS (
   SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
 ), s AS (

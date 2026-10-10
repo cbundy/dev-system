@@ -1306,6 +1306,45 @@ it does not change the push loop's checkpoint path. `--waiting` prints `yes` whe
 newest touch timestamp exceeds `--mark` (zero when omitted), otherwise `no`, then exits
 without emitting SQL. Export selection rules are in the linked metrics reference.
 
+## dev-query
+
+`dev-query` runs SQL against the central agentsview PostgreSQL (`factory.events`, the
+`nomistakes` mirror) from any container that has the database URL. Agents use it instead of
+`psql "$AGENTSVIEW_PG_URL"`: the URL is deliberately not in the environment, so that
+fails. The saved queries are in [docs/metrics.md](../../docs/metrics.md).
+
+```sh
+echo 'select count(*) from factory.events' | dev-query
+dev-query -At -c "select count(*) from factory.events where repo = 'owner/name'"
+dev-query -At -v since=2026-10-01T00:00:00Z > /tmp/nm-export.jsonl <<'SQL'
+select count(*) from nomistakes.runs where created_at >= :'since'::timestamptz
+SQL
+```
+
+The SQL comes from `-c` or from stdin, not both. Accepted flags: `-A`, `-t` (or `-At`), `--csv`,
+`-v NAME=VALUE` (repeatable) and `--help`; anything else is a usage error.
+
+- **Read-only.** Every session starts with `default_transaction_read_only=on`, appended after
+  any `options=` in the URL, so an `INSERT`, `UPDATE`, `DELETE` or DDL statement fails with
+  PostgreSQL's read-only error. This is a guard against accidents, not an access-control
+  boundary: SQL that deliberately runs `SET default_transaction_read_only = off` can still
+  write. There is no write mode; the push loops own all writes. A dedicated read-only
+  database role would be the real boundary and is a separate follow-up.
+- **No secret leaks.** The URL is read from the secret file or `AGENTSVIEW_PG_URL` (as for the
+  push loops), handed to `psql` as `PG*` variables only in its own environment, and never put
+  in argv or exported to the caller. Stdout and stderr are each passed through the secret
+  masker, so a redirect such as `> file` never captures error text.
+- **TLS.** With `sslmode=verify-ca` or `verify-full` and no root cert, the system store is trusted.
+
+| Exit | Meaning |
+|---|---|
+| 0 | ok |
+| 64 | usage error (unknown flag, both `-c` and stdin, no SQL, a terminal on stdin with no `-c`) |
+| 69 | `psql` is not installed: the container image is older than the base image that ships `postgresql-client`; run `dev-version` and rebuild or pull the container, do not install it by hand |
+| 77 | the secret file `agentsview-pg-url` exists but is unreadable or empty |
+| 78 | no URL configured (no secret file and no `AGENTSVIEW_PG_URL`) |
+| 1, 2, 3 | `psql`'s own status (SQL error, connection failure, ...), passed through |
+
 ## Central session history (agentsview)
 
 The image ships [agentsview](https://github.com/kenn-io/agentsview), so every container

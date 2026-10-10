@@ -54,13 +54,19 @@ mask_secrets() {
   sed -u -E "$MASK_SECRETS_SED"
 }
 
-# run_psql URL: runs psql on stdin with URL's parts (percent-decoded) and its
+# run_psql URL [PSQL_ARG...]: runs psql on stdin with URL's parts (percent-decoded) and its
 # ssl* query parameters as PG* variables, so no secret is on the command line.
 # With sslmode verify-ca or verify-full and no root cert (URL, environment or
 # libpq's ~/.postgresql/root.crt) it trusts the system store, as the Go
 # agentsview client does; psql 17 would otherwise fail on such a URL.
+# Extra arguments go to psql just before "-f -" (dev-query passes its output
+# flags this way). A non-empty DEV_PG_FORCE_OPTIONS in the caller's environment
+# is appended to PGOPTIONS after the URL is parsed, so it wins over any
+# options= in the URL (dev-query uses it for default_transaction_read_only).
 run_psql() (
-  local rest=${1#*://} query='' db='' userinfo='' hostport kv k v
+  local url=$1
+  shift
+  local rest=${url#*://} query='' db='' userinfo='' hostport kv k v
   case "$rest" in *\?*) query=${rest#*\?}; rest=${rest%%\?*} ;; esac
   case "$rest" in */*) db=${rest#*/}; rest=${rest%%/*} ;; esac
   case "$rest" in *@*) userinfo=${rest%@*}; rest=${rest##*@} ;; esac
@@ -104,5 +110,6 @@ run_psql() (
         || export PGSSLROOTCERT=system ;;
   esac
   export PGCONNECT_TIMEOUT=${PGCONNECT_TIMEOUT:-10}
-  exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 -f -
+  [ -z "${DEV_PG_FORCE_OPTIONS-}" ] || export PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }$DEV_PG_FORCE_OPTIONS"
+  exec psql -X -q --single-transaction -v ON_ERROR_STOP=1 "$@" -f -
 )

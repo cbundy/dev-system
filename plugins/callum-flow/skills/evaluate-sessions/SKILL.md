@@ -55,7 +55,7 @@ work (the two-dispatcher trial, cbundy/dev-system#222), export `factory.events`
 for every device as JSON lines and pass it with `--events`:
 
 ```
-PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -c \
+dev-query -At -c \
   "SELECT row_to_json(e) FROM (SELECT ts, repo, device, session_id, actor, state, issue, run_id, branch, pr, head, note
    FROM factory.events WHERE repo = '<owner/name>' ORDER BY ts) e" > /tmp/events.jsonl
 ```
@@ -72,7 +72,7 @@ number; `state.sqlite` is then only used to find the transcripts). The query is 
 repo and device. Run it with the window's start:
 
 ```
-PGSSLROOTCERT=system psql "$AGENTSVIEW_PG_URL" -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
+dev-query -At -v since=<ISO> > /tmp/nm-export.jsonl <<'SQL'
 WITH r AS (
   SELECT * FROM nomistakes.runs WHERE created_at >= :'since'::timestamptz
 ), s AS (
