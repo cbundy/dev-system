@@ -159,6 +159,9 @@ for base in main epic/x; do
   done
   body="Summary${nl}## Pipeline${nl}Part of #12${nl}"
   run_case "keep-open reference in Pipeline ($base)" $H "$base" "$body" "MATCH #7" "$body" --expect refs
+  body="Summary${nl}${nl}<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}Fixes #99${nl}<!-- /no-mistakes-pr-appendix:v1 -->${nl}"
+  run_case "appendix stray keyword keeps the appendix and surfaces the reason ($base)" $H "$base" "$body" "MISMATCH #7" "Summary${nl}${nl}Closes #12${nl}${nl}<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}Fixes #99${nl}<!-- /no-mistakes-pr-appendix:v1 -->${nl}"
+  grep -q "inside the no-mistakes appendix" "$tmpdir/stderr" || fail "appendix stray reason did not reach stderr"
   body="Summary${nl}## Pipeline${nl}log  line${nl}"
   run_case "append refs before preserved Pipeline ($base)" $H "$base" "$body" "REPAIRED #7" "Summary${nl}${nl}Refs #12${nl}${nl}## Pipeline${nl}log  line${nl}" --expect refs
   body="Closes #99"

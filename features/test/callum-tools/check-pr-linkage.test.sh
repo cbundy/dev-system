@@ -183,6 +183,30 @@ for base in main epic/x; do
   run_case "keep-open reference in Pipeline ($base)" $H "$base" "$body" "MATCH #7" "$body" --expect refs
   body="Summary${nl}## Pipeline${nl}log  line${nl}"
   fix_case "append refs before preserved Pipeline ($base)" $H "$base" "$body" "REPAIRED #7" "Summary${nl}${nl}Refs #12${nl}${nl}## Pipeline${nl}log  line${nl}" --expect refs --print-fix
+  author="Summary line"
+  appendix="<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}## Risk Assessment${nl}low${nl}## Pipeline${nl}log  line${nl}<!-- /no-mistakes-pr-appendix:v1 -->${nl}"
+  body="${author}${nl}${nl}${appendix}"
+  fix_case "appendix: keyword lands before the marker ($base)" $H "$base" "$body" "REPAIRED #7" "${author}${nl}${nl}Closes #12${nl}${nl}${appendix}" --print-fix
+  fix_case "appendix: refs keyword lands before the marker ($base)" $H "$base" "$body" "REPAIRED #7" "${author}${nl}${nl}Refs #12${nl}${nl}${appendix}" --expect refs --print-fix
+  body="${appendix}"
+  fix_case "appendix at the very start ($base)" $H "$base" "$body" "REPAIRED #7" "Closes #12${nl}${nl}${appendix}" --print-fix
+  body="Fixes #99${nl}${nl}${appendix}"
+  fix_case "appendix: stray keyword in author text is rewritten ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Closes #12${nl}${nl}${appendix}" --print-fix
+  appendix_stray="<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}Fixes #99${nl}<!-- /no-mistakes-pr-appendix:v1 -->${nl}"
+  body="${author}${nl}${nl}${appendix_stray}"
+  fix_case "appendix: stray keyword inside is untouched ($base)" $H "$base" "$body" "MISMATCH #7" "${author}${nl}${nl}Closes #12${nl}${nl}${appendix_stray}" --print-fix
+  grep -q "inside the no-mistakes appendix" "$tmpdir/stderr" || fail "appendix stray: stderr does not name the appendix"
+  grep -q "fresh pipeline run" "$tmpdir/stderr" || fail "appendix stray: stderr does not name the workaround"
+  fix_case "appendix: clean body prints no appendix reason ($base)" $H "$base" "${author}${nl}${nl}${appendix}" "REPAIRED #7" "${author}${nl}${nl}Closes #12${nl}${nl}${appendix}" --print-fix
+  if grep -q "inside the no-mistakes appendix" "$tmpdir/stderr"; then fail "clean appendix printed a reason"; fi
+  appendix_quote="<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}intent: Closes #12${nl}<!-- /no-mistakes-pr-appendix:v1 -->${nl}"
+  body="Fixes #99${nl}${nl}${appendix_quote}"
+  fix_case "appendix: keyword only inside does not count as present ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Closes #12${nl}${nl}${appendix_quote}" --print-fix
+  body="${author}${nl}${nl}${appendix}${nl}After Fixes #99 text"
+  fix_case "appendix: author text after the closing marker is editable ($base)" $H "$base" "$body" "REPAIRED #7" "${author}${nl}${nl}Closes #12${nl}${nl}${appendix}${nl}After Refs #99 text" --print-fix
+  unclosed="<!-- no-mistakes-pr-appendix:v1 sha256=abc -->${nl}Fixes #99${nl}tail  text"
+  body="${author}${nl}${nl}${unclosed}"
+  fix_case "appendix: unclosed marker protects to the end ($base)" $H "$base" "$body" "MISMATCH #7" "${author}${nl}${nl}Closes #12${nl}${nl}${unclosed}" --print-fix
   body="Closes #99"
   fix_case "refs repair adds local reference after neutralizing stray ($base)" $H "$base" "$body" "REPAIRED #7" "Refs #99${nl}${nl}Refs #12${nl}" --expect refs --print-fix
   body="Closes #12; Closes https://tracker.example/local/repo/issues/99"
