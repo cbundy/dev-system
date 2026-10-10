@@ -57,6 +57,20 @@ variable "docker_host" {
   type        = string
 }
 
+# What kind of workspace this template makes; coder/push.sh sets it per template.
+# It becomes DEV_ROLE in the workspace (cbundy/dev-system#338), also read by the
+# session-start health banner (#306).
+variable "role" {
+  default     = "dev"
+  description = "The workspace's role, passed in as DEV_ROLE: dev, or orchestrator."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "orchestrator"], var.role)
+    error_message = "role must be dev or orchestrator."
+  }
+}
+
 # The image turns Claude Code and codex telemetry export on when
 # OTEL_EXPORTER_OTLP_ENDPOINT is set (cbundy/dev-system#68).
 variable "otlp_endpoint" {
@@ -300,6 +314,32 @@ data "coder_parameter" "template_testing" {
   order        = 8
 }
 
+# The rollout ring (cbundy/dev-system#338), passed in as DEV_RING. Coder ignores
+# parameter changes on an existing workspace's update or restart (#268), so the
+# default is the right value for every workspace that never sets it.
+data "coder_parameter" "ring" {
+  name         = "ring"
+  display_name = "Rollout ring"
+  description  = "Which release ring this workspace belongs to, reported as DEV_RING: testbed, dev-system or consumer."
+  type         = "string"
+  default      = "consumer"
+  mutable      = true
+  order        = 9
+
+  option {
+    name  = "testbed"
+    value = "testbed"
+  }
+  option {
+    name  = "dev-system"
+    value = "dev-system"
+  }
+  option {
+    name  = "consumer"
+    value = "consumer"
+  }
+}
+
 locals {
   # dev-login's page; coder_app.login proxies it.
   login_port = 8765
@@ -403,6 +443,12 @@ resource "coder_agent" "main" {
       # The workspace's label in agentsview (when the push is on): coder-<name>,
       # as the image's desktop default is desktop-<checkout folder>.
       DEV_MACHINE_NAME = "coder-${lower(data.coder_workspace.me.name)}"
+      # Where this workspace sits in the rollout and which template it runs
+      # (cbundy/dev-system#338). Desktop containers get none of these.
+      DEV_ROLE                   = var.role
+      DEV_RING                   = data.coder_parameter.ring.value
+      DEV_CODER_WORKSPACE        = data.coder_workspace.me.name
+      DEV_CODER_TEMPLATE_VERSION = data.coder_workspace.me.template_version
     },
     # Only when set, so a per-repo image's own DEV_REPO_URL applies otherwise.
     data.coder_parameter.repo_url.value != "" ? { DEV_REPO_URL = data.coder_parameter.repo_url.value } : {},

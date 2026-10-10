@@ -269,6 +269,13 @@ on GitHub, so a lossy compaction or a lost transcript costs little.
 - **Runtime secrets.** The Docker host's `secrets_dir` is bind-mounted read-only at the
   image's `/run/secrets/dev-system`. No secret passes through Terraform state, template
   variables or workspace parameters. `DEV_MACHINE_NAME` is `coder-<workspace>`.
+- **Identity env vars.** The agent passes `DEV_ROLE` (`dev` or `orchestrator`, from the
+  template's `role` variable, which `coder/push.sh` sets per template), `DEV_RING` (the
+  `ring` workspace parameter: `testbed`, `dev-system` or `consumer`, default `consumer`, so
+  existing workspaces get a value without a parameter change), `DEV_CODER_WORKSPACE` (the
+  workspace name) and `DEV_CODER_TEMPLATE_VERSION` (the template version the workspace
+  runs). Desktop containers get none of them: a missing `DEV_CODER_WORKSPACE` means runtime
+  `desktop`, a missing `DEV_ROLE` means `dev`.
 - **Template-tester token, opt-in.** Only with `template_tester_secrets_dir` set and the
   workspace's `template_testing` parameter on, that directory is bind-mounted read-only at
   `/run/secrets/dev-system-template-tester` for `push-next.sh`. Every other workspace

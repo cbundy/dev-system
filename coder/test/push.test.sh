@@ -69,6 +69,7 @@ expect_calls() {
 # 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest.
 run dev-system
 expect_calls dev-system dev-system /icon/docker.svg \
+  role=dev \
   remote_control_default_mode=auto \
   remote_control_default_resume=false \
   remote_control_default_skip_permissions=false \
@@ -81,6 +82,7 @@ expect_calls dev-system dev-system /icon/docker.svg \
 # emoji name format with spaces.
 run orchestrator
 expect_calls orchestrator Orchestrator /emojis/1f504.png \
+  role=orchestrator \
   remote_control_default_mode=session \
   remote_control_default_resume=true \
   remote_control_default_skip_permissions=false \
