@@ -173,23 +173,67 @@ check "dev-init warns but exits 0 (twice) with a root-owned /persist/claude" in_
   echo "$out" | grep -q "chown 1000:1000" &&
   echo "$out" | grep -q "FAIL claude state dir"' \
   -v "$rootvol:/persist/claude"
+# A volume that predates a contract directory (cbundy/dev-system#269): /persist
+# is root-owned 0755 and holds only the older tool dirs, so node cannot mkdir the
+# newer ones. Docker copies the image's /persist into an EMPTY volume only, so
+# the seed makes it non-empty first, then drops the two newest dirs and hands
+# /persist to root - exactly what a Coder workspace from before #218 has.
+oldvol=$(docker volume create --label "$RUN_ID")
+docker run --rm --user root -v "$oldvol:/persist" "$IMAGE" bash -c '
+  rm -rf /persist/events /persist/dev-restart-self
+  for t in claude codex gh no-mistakes agentsview; do touch /persist/$t/.seed; done
+  chown root:root /persist && chmod 0755 /persist'
+check "dev-init creates the missing contract dirs as 1000:1000 0700 on a volume that predates them, and a second run is quiet" in_image '
+  out=$( { dev-init; echo "rc=$?"; } 2>&1 ); echo "$out"
+  echo "$out" | grep -qx "rc=0" || exit 1
+  for d in events dev-restart-self; do
+    [ "$(stat -c %u:%g:%a /persist/$d)" = 1000:1000:700 ] || { echo "/persist/$d: $(stat -c %u:%g:%a /persist/$d)"; exit 1; }
+  done
+  callum-flow-event ready --issue 1 --repo a/b 2>&1 | tee /tmp/ev.out
+  ! grep -q "event not recorded" /tmp/ev.out && [ "$(cat /persist/events/*.jsonl | wc -l)" = 1 ] || exit 1
+  out2=$( { dev-init; echo "rc=$?"; } 2>&1 ); echo "$out2"
+  echo "$out2" | grep -qx "rc=0" && ! echo "$out2" | grep -q "dev-init: WARNING: /persist"' \
+  -v "$oldvol:/persist" --entrypoint ""
+# Existing dirs are never chowned, but a node-owned looser one is tightened.
+check "dev-init tightens a node-owned looser contract dir to 0700 and leaves the rest alone" in_image '
+  chmod 0755 /persist/events
+  dev-init >/dev/null 2>&1
+  [ "$(stat -c %u:%g:%a /persist/events)" = 1000:1000:700 ]' \
+  -v "$oldvol:/persist" --entrypoint ""
+# No sudo (Kubernetes with no-new-privileges, say): one WARNING per dir naming
+# the fix, and the start still succeeds.
+nosudovol=$(docker volume create --label "$RUN_ID")
+docker run --rm --user root -v "$nosudovol:/persist" "$IMAGE" bash -c '
+  rm -rf /persist/events /persist/dev-restart-self
+  for t in claude codex gh no-mistakes agentsview; do touch /persist/$t/.seed; done
+  chown root:root /persist && chmod 0755 /persist'
+check "dev-init warns with the exact fix per missing dir and exits 0 when sudo is unusable" bash -c "
+  out=\$(docker run --rm --entrypoint '' --security-opt no-new-privileges -v '$nosudovol:/persist' '$IMAGE' bash -c 'dev-init; echo rc=\$?' 2>&1)
+  echo \"\$out\"
+  echo \"\$out\" | grep -qx 'rc=0' &&
+  for d in events dev-restart-self; do
+    echo \"\$out\" | grep -qF \"dev-init: WARNING: /persist/\$d is missing and cannot be created\" &&
+    echo \"\$out\" | grep -qF \"sudo install -d -o 1000 -g 1000 -m 0700 /persist/\$d\" &&
+    echo \"\$out\" | grep -q \"FAIL \$d state dir\" || exit 1
+  done"
+
 # The start-up warning for /persist dirs with no volume behind them (#78):
 # loud, naming each one, but never failing the start.
 check "dev-init warns (exit 0) naming every /persist dir with no volume, only those" bash -c "
   out=\$(docker run --rm --entrypoint '' '$IMAGE' bash -c 'dev-init; echo rc=\$?' 2>&1)
   echo \"\$out\"
   echo \"\$out\" | grep -qx 'rc=0' &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - ' &&
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self - ' &&
   echo \"\$out\" | grep -qF 'npx callum-dev update --devcontainer base-image' &&
   out=\$(docker run --rm --entrypoint '' -v \"\$(docker volume create --label '$RUN_ID'):/persist/claude\" '$IMAGE' dev-init 2>&1) &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - '"
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self - '"
 check "dev-init: no volume warning with one volume for all of /persist (the k8s / Coder shape)" in_image '
   out=$(dev-init 2>&1); echo "$out"
   ! echo "$out" | grep -q "no volume behind"' \
   -v "$vol:/persist" --entrypoint ""
 check "dev-init: no volume warning with a volume per /persist dir (the devcontainer shape)" bash -c "
   args=()
-  for t in claude codex gh no-mistakes agentsview; do
+  for t in $PERSIST_NAMES; do
     args+=(-v \"\$(docker volume create --label '$RUN_ID'):/persist/\$t\")
   done
   out=\$(docker run --rm --entrypoint '' \"\${args[@]}\" '$IMAGE' dev-init 2>&1)

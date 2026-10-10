@@ -10,7 +10,7 @@ check "env vars point at /persist/*" in_image '
   [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ] &&
   [ "$AGENTSVIEW_DATA_DIR" = /persist/agentsview ]'
 check "every /persist dir exists, is owned 1000:1000 with mode 0700 and is writable by node" in_image '
-  for d in /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview; do
+  for d in /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self; do
     [ "$(stat -c %u:%g:%a "$d")" = 1000:1000:700 ] || { echo "$d: $(stat -c %u:%g:%a "$d")"; exit 1; }
     touch "$d/.probe" && rm "$d/.probe" || exit 1
   done'
@@ -21,9 +21,10 @@ check "no tool binary lives under /persist" in_image '
   for b in claude codex gh git no-mistakes treehouse uv uvx agentsview node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
   done'
-check "persistence contract label lists the five dirs" bash -c "
-  [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \
-    /persist/claude,/persist/codex,/persist/gh,/persist/no-mistakes,/persist/agentsview ]"
+check "the persistence list file, the label and PERSIST_NAMES agree on the seven dirs" bash -c "
+  want=\$(for n in $PERSIST_NAMES; do printf '/persist/%s,' \"\$n\"; done); want=\${want%,}
+  [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \"\$want\" ] &&
+  [ \"\$(docker run --rm --entrypoint '' '$IMAGE' cat /usr/local/share/dev-system/persist-dirs | paste -sd,)\" = \"\$want\" ]"
 check "the runtime secrets mount point is empty, node-owned, 0700, and named by DEV_SECRETS_DIR" in_image '
   [ "$DEV_SECRETS_DIR" = /run/secrets/dev-system ] &&
   [ "$(stat -c %u:%g:%a "$DEV_SECRETS_DIR")" = 1000:1000:700 ] &&

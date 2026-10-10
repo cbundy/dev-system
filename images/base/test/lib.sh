@@ -26,6 +26,9 @@ docker() {
 }
 export -f docker
 DEVCONTAINER="${DEVCONTAINER:-devcontainer}"
+# The persistence contract's directory names, in the image's order (the
+# PERSIST_DIRS ARG in the Dockerfile). Section 3 proves the image matches.
+PERSIST_NAMES="claude codex gh no-mistakes agentsview events dev-restart-self"
 RUN_ID="dsb-test-$$"
 PASSES=0
 FAILURES=0

@@ -32,6 +32,8 @@ FAILURES=0
 . /usr/local/share/dev-system/workspace.sh
 # shellcheck source=plugins.sh
 . /usr/local/share/dev-system/plugins.sh
+# shellcheck source=persist.sh
+. /usr/local/share/dev-system/persist.sh
 # shellcheck disable=SC2119 # the argument is optional; none means the default
 workspace=$(workspace)
 
@@ -58,7 +60,8 @@ fail() {
 # volume is mounted at it or above it (one volume for all of /persist): one
 # whose mount point is / lives in the container's own writable layer.
 check_persist_dir() {
-  local name="$1" dir="$2"
+  local dir="$1" name
+  name=$(basename "$dir")
   if [ -d "$dir" ] && [ -w "$dir" ]; then
     if [ "$(stat -c %m "$dir" 2>/dev/null)" = / ]; then
       warn "$name state dir $dir is writable but not on a volume - it is lost when the container is removed" \
@@ -68,15 +71,13 @@ check_persist_dir() {
     fi
   else
     fail "$name state dir $dir is missing or not writable by $(id -un) ($(id -u):$(id -g))" \
-      "mount a volume at $dir owned by 1000:1000 (k8s: securityContext.fsGroup: 1000)"
+      "$(persist_fix_cmd "$dir") (or mount a volume at $dir owned by 1000:1000; k8s: securityContext.fsGroup: 1000); dev-init does this on the next start"
   fi
 }
 
-check_persist_dir claude "${CLAUDE_CONFIG_DIR:-/persist/claude}"
-check_persist_dir codex "${CODEX_HOME:-/persist/codex}"
-check_persist_dir gh "${GH_CONFIG_DIR:-/persist/gh}"
-check_persist_dir no-mistakes "${NM_HOME:-/persist/no-mistakes}"
-check_persist_dir agentsview "${AGENTSVIEW_DATA_DIR:-/persist/agentsview}"
+while IFS= read -r _persist_dir; do
+  check_persist_dir "$_persist_dir"
+done < <(persist_dirs)
 
 # The shared files mount is optional: not mounted is fine, mounted must work.
 shared="${DEV_SHARED_DIR:-/shared}"
