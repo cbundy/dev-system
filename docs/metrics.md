@@ -2,8 +2,10 @@
 
 The factory event log (`callum-flow-event`, shipped to the `factory.events` table by
 `event-push-loop`; see "Factory event log" in `images/base/README.md`) answers the questions
-below, plus the waste measures at the end. Each query below runs as is with `dev-query` (see "dev-query" in `images/base/README.md`), which
-connects to the agentsview PostgreSQL read-only and handles the TLS root-cert and secret-masking details.
+below, plus the waste measures at the end. Run the queries with `dev-query` (see "dev-query" in `images/base/README.md`), e.g.
+`dev-query -c '<sql>'` or the SQL on stdin: it connects to the agentsview PostgreSQL read-only and
+handles the TLS root-cert and secret-masking details. To run by hand with `psql` instead, you need
+the database URL and, for `sslmode=verify-ca`/`verify-full` with a private CA, `PGSSLROOTCERT`.
 Rows are keyed `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cost and token
 metrics through the `issue` and `device` resource attributes the orchestrator sets on
 sub-agents.
@@ -13,6 +15,17 @@ pipeline data" below); it joins to `factory.events` on `run_id`.
 
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`.
+
+## Data coverage
+
+Check coverage before quoting any window, and never extrapolate before it.
+
+- `factory.events` data starts 2026-10-08. `nomistakes` data starts with the first push from the
+  release that ships `nm-push-loop`.
+- Per device and repo, the earliest and latest row:
+  `select device, min(ts), max(ts) from factory.events where repo = '<owner/name>' group by device`.
+- A device whose container is stale (older than the base image that ships the push loops) pushes
+  nothing, so a missing device means missing data, not zero work.
 
 ## 1. Lead time by stage
 
