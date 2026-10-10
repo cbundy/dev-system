@@ -23,10 +23,14 @@
 # between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
 # the hostname), session_id (CLAUDE_SESSION_ID, else the newest transcript of
 # the working directory's Claude project, else null), actor
-# (--actor, CALLUM_FLOW_ACTOR, else "agent") and v (1).
+# (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (1) and event_id (a UUID made
+# locally from the kernel, so an event keeps a unique identity even if the file
+# is lost and restarts at line 1; omitted with a warning if the kernel source is
+# unreadable - cbundy/dev-system#229).
 #
 # Environment: CALLUM_EVENTS_DIR (default /persist/events), CALLUM_FLOW_REPO
-# (owner/name, default from the origin remote).
+# (owner/name, default from the origin remote), CALLUM_EVENT_UUID_SOURCE (test
+# override of /proc/sys/kernel/random/uuid).
 set -u
 
 STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage"
@@ -98,15 +102,21 @@ if [ -z "$session" ]; then
   fi
 fi
 
+event_id=$({ tr 'A-F' 'a-f' < "${CALLUM_EVENT_UUID_SOURCE:-/proc/sys/kernel/random/uuid}"; } 2>/dev/null) || event_id=
+case "$event_id" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+  *) warn "no event_id available - event recorded without one"; event_id= ;;
+esac
+
 line=$(jq -nc \
   --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg repo "$repo" --arg device "$device" \
   --arg session "$session" --arg actor "$actor" --arg state "$state" --arg issue "$issue" \
-  --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" '
+  --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" --arg event_id "$event_id" '
   def s: if . == "" then null else . end;
   def n: if . == "" then null else tonumber end;
   {v: 1, ts: $ts, repo: $repo, device: $device, session_id: ($session | s), actor: $actor,
    state: $state, issue: ($issue | n), run_id: ($run | s), branch: ($branch | s),
-   pr: ($pr | n), head: ($head | s), note: ($note | s)}') || { warn "could not build the event"; exit 0; }
+   pr: ($pr | n), head: ($head | s), note: ($note | s), event_id: ($event_id | s)}') || { warn "could not build the event"; exit 0; }
 
 dir=${CALLUM_EVENTS_DIR:-/persist/events}
 if [ ! -d "$dir" ]; then

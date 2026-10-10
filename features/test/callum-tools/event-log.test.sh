@@ -59,6 +59,17 @@ ev merged --issue x 2> /dev/null || rc=$?
 ev usage --note "five_hour=3" || fail "usage needs no issue"
 [ "$(tail -n 1 "$log" | jq -r '.issue, .state' | tr '\n' ' ')" = "null usage " ] || fail "usage line wrong"
 
+# every line carries a UUID event_id, and two lines differ (#229)
+uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+jq -s -e --arg re "$uuid_re" 'all(.[]; .event_id | type == "string" and test($re))' "$log" > /dev/null || fail "every line needs a UUID event_id: $(cat "$log")"
+[ "$(jq -r .event_id "$log" | sort -u | wc -l | tr -d ' ')" = "$(wc -l < "$log" | tr -d ' ')" ] || fail "event_ids must be unique"
+# an unreadable UUID source: the line is still written, without event_id, exit 0
+before=$(wc -l < "$log" | tr -d ' ')
+out=$(CALLUM_EVENT_UUID_SOURCE="$tmpdir/no-such-uuid" ev ready --issue 2 2>&1) || fail "a missing UUID source must exit 0"
+case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn: $out" ;; esac
+[ "$(wc -l < "$log" | tr -d ' ')" = $((before + 1)) ] || fail "the line must still be written"
+[ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
+
 # every state of the closed vocabulary is accepted
 for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage; do
   ev "$s" --issue 1 || fail "$s should be accepted"
@@ -189,6 +200,32 @@ ssl_case "$base" system PGSSLMODE=verify-full
 mkdir -p "$tmpdir/home2/.postgresql"
 : > "$tmpdir/home2/.postgresql/root.crt"
 PUSH_HOME="$tmpdir/home2" ssl_case "$base?sslmode=verify-full" ""
+
+# event identity (#229): the INSERT carries the validated event_id, and the DDL migrates
+ev_dir="$tmpdir/push-id"
+mkdir -p "$ev_dir"
+id1=0b0e3c1a-5d9f-4e2b-8a41-1c2d3e4f5a6b
+printf '%s\n' \
+  '{"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","state":"ready","event_id":"'"$id1"'"}' \
+  '{"ts":"2026-10-08T10:01:00Z","repo":"o/r","device":"d1","state":"ready","event_id":"not-a-uuid'"'"'; drop table x"}' \
+  '{"ts":"2026-10-08T10:02:00Z","repo":"o/r","device":"d1","state":"ready"}' > "$ev_dir/o__r.jsonl"
+rm -f "$fakebin/psql-calls"
+idpush() { PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$ev_dir" DEV_SYSTEM_SHARE="$ROOT/images/base" AGENTSVIEW_PG_URL=postgres://app:s3cret@db/x HOME="$tmpdir/home" "$BASH" "$PUSH" --once; }
+idpush > "$tmpdir/idpush.out" 2>&1 || fail "id push should succeed: $(cat "$tmpdir/idpush.out")"
+sql="$fakebin/psql-sql-1"
+grep -q 'actor, v, event_id, raw) VALUES' "$sql" || fail "INSERT should name event_id"
+grep -q "'$id1', '{" "$sql" || fail "a valid event_id should be passed on"
+[ "$(grep -c "NULL, '{" "$sql")" -ge 2 ] || fail "a malformed or missing event_id must be NULL"
+grep 'not-a-uuid' "$sql" | grep -q "NULL, '{" || fail "the malformed event_id column must be NULL"
+for frag in 'ADD COLUMN IF NOT EXISTS event_id uuid' 'events_event_id_key' 'WHERE event_id IS NOT NULL' 'events_legacy_key' 'WHERE event_id IS NULL' 'DROP CONSTRAINT' 'pg_advisory_xact_lock'; do
+  grep -q "$frag" "$sql" || fail "the DDL should contain: $frag"
+done
+# a file with fewer lines than its marker is pushed again from the start, with one log line
+printf '5\n' > "$ev_dir/.pushed/o__r.jsonl"
+idpush > "$tmpdir/idpush.out" 2>&1 || fail "replaced-file push should succeed"
+[ "$(grep -c '^INSERT' "$fakebin/psql-sql-2")" = 3 ] || fail "all 3 lines should be pushed again"
+[ "$(grep -c 'file replaced' "$tmpdir/idpush.out")" = 1 ] || fail "one log line expected: $(cat "$tmpdir/idpush.out")"
+[ "$(cat "$ev_dir/.pushed/o__r.jsonl")" = 3 ] || fail "the marker should be 3 again"
 
 # --- the watchers call callum-flow-event ------------------------------------
 cat > "$fakebin/callum-flow-event" <<'STUB'

@@ -6,7 +6,7 @@ below, plus the waste measures at the end. Run the queries with `dev-query` (see
 `dev-query -c '<sql>'` or the SQL on stdin: it connects to the agentsview PostgreSQL read-only and
 handles the TLS root-cert and secret-masking details. To run by hand with `psql` instead, you need
 the database URL and, for `sslmode=verify-ca`/`verify-full` with a private CA, `PGSSLROOTCERT`.
-Rows are keyed `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cost and token
+Rows are unique on `event_id` (a UUID the writer makes locally), or, for older rows without one, on `(device, repo, seq)`; `issue` joins to GitHub, and to Claude cost and token
 metrics through the `issue` and `device` resource attributes the orchestrator sets on
 sub-agents.
 
@@ -16,7 +16,7 @@ from that mirror, never from agent-logged `run_started` events: a run belongs to
 branch name (see "Linking pipeline runs to issues" below).
 
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
-`note`, `session_id`, `actor`, `v`, `raw`.
+`note`, `session_id`, `actor`, `v`, `raw`, `event_id`.
 
 ## Data coverage
 

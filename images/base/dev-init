@@ -68,8 +68,8 @@ LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 #    itself. Where neither works, a loud message names the exact fix. A
 #    writable directory with no volume at it or above it (its mount point is /,
 #    the container's own layer) loses its state on every rebuild. That stays a
-#    warning (not raised for events and dev-restart-self, which have no
-#    per-dir volume in the desktop templates) - a one-off `docker run IMAGE <cmd>` has no volumes on purpose.
+#    warning (not raised for dev-restart-self, which has no per-dir
+#    volume in the desktop templates) - a one-off `docker run IMAGE <cmd>` has no volumes on purpose.
 check_persist_dirs() {
   local dir mode unmounted="" needs_volume
   needs_volume=$(persist_dirs --volume)

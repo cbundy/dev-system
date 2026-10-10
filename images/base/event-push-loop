@@ -8,10 +8,15 @@
 # a PostgreSQL URL is configured (agentsview.sh: the same secret and the same
 # rules as agentsview-push-loop). The JSONL files are the only local buffer.
 # A file's progress is the number of its lines already pushed, kept in
-# <events dir>/.pushed/<file>; a row's key is (device, repo, seq) with seq the
-# 1-based line number, so a push that died between the insert and the
-# progress write is simply repeated and inserts nothing twice (ON CONFLICT DO
-# NOTHING). Files are append-only: never edit or truncate one.
+# <events dir>/.pushed/<file>. A row with an event_id (a UUID the writer makes
+# locally) is unique on it alone, so a log that was lost and restarted still
+# inserts its new events; a line without one (older files) is keyed
+# (device, repo, seq) with seq the 1-based line number. Either way a push that
+# died between the insert and the progress write is simply repeated and
+# inserts nothing twice (ON CONFLICT DO NOTHING). A file with fewer lines than
+# its marker was replaced under the loop: the marker restarts at 0 and the
+# file is pushed again (event_id rows dedup). Files are append-only: never
+# edit or truncate one.
 #
 # The URL is read again on every pass and reaches only psql, split into PG*
 # variables in psql's own environment (never its argv, which ps shows to every
@@ -31,7 +36,12 @@ DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
 INTERVAL="${DEV_EVENT_PUSH_INTERVAL:-30}"
 BATCH="${EVENT_PUSH_BATCH:-500}"
 
-DDL="CREATE SCHEMA IF NOT EXISTS factory;
+# The DDL runs on every batch from every device, so each change is guarded by a
+# catalog check and a repeat takes no ACCESS EXCLUSIVE lock. A migration that
+# is needed runs in one transaction under an advisory lock (the unique indexes
+# are in place before the old primary key goes) and is re-checked inside it.
+read -r -d '' DDL <<'SQL'
+CREATE SCHEMA IF NOT EXISTS factory;
 CREATE TABLE IF NOT EXISTS factory.events (
   device text NOT NULL,
   repo text NOT NULL,
@@ -48,9 +58,41 @@ CREATE TABLE IF NOT EXISTS factory.events (
   actor text,
   v integer,
   raw jsonb NOT NULL,
-  PRIMARY KEY (device, repo, seq)
+  event_id uuid
 );
-CREATE INDEX IF NOT EXISTS events_issue_idx ON factory.events (repo, issue, ts);"
+CREATE INDEX IF NOT EXISTS events_issue_idx ON factory.events (repo, issue, ts);
+DO $mig$
+DECLARE
+  pk text;
+  needs_migration boolean;
+BEGIN
+  FOR i IN 1..2 LOOP
+    SELECT conname INTO pk FROM pg_constraint
+      WHERE conrelid = 'factory.events'::regclass AND contype = 'p';
+    needs_migration := pk IS NOT NULL
+      OR NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.events'::regclass
+                     AND attname = 'event_id' AND NOT attisdropped)
+      OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'factory'
+                     AND indexname = 'events_event_id_key')
+      OR NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'factory'
+                     AND indexname = 'events_legacy_key');
+    EXIT WHEN NOT needs_migration;
+    IF i = 1 THEN
+      PERFORM pg_advisory_xact_lock(hashtext('factory.events migration'));
+    ELSE
+      ALTER TABLE factory.events ADD COLUMN IF NOT EXISTS event_id uuid;
+      CREATE UNIQUE INDEX IF NOT EXISTS events_event_id_key
+        ON factory.events (event_id) WHERE event_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS events_legacy_key
+        ON factory.events (device, repo, seq) WHERE event_id IS NULL;
+      IF pk IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE factory.events DROP CONSTRAINT %I', pk);
+      END IF;
+    END IF;
+  END LOOP;
+END
+$mig$;
+SQL
 
 read -r -d '' SQL_ROWS <<'JQ'
 def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" end;
@@ -58,8 +100,9 @@ def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" en
 | range(0; $rows | length) as $i
 | $rows[$i]
 | select(type == "object" and ([.device, .repo, .ts, .state] | all(type == "string")))
-| "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, raw) VALUES ("
-  + ([.device, .repo, ($off + $i + 1), .ts, .state, .issue, .run_id, .branch, .pr, .head, .note, .session_id, .actor, .v] | map(q) | join(", "))
+| "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, event_id, raw) VALUES ("
+  + ([.device, .repo, ($off + $i + 1), .ts, .state, .issue, .run_id, .branch, .pr, .head, .note, .session_id, .actor, .v,
+      (.event_id | if type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") then ascii_downcase else null end)] | map(q) | join(", "))
   + ", " + (tojson | q) + "::jsonb) ON CONFLICT DO NOTHING;"
 JQ
 
@@ -72,6 +115,11 @@ push_file() {
   total=$(wc -l < "$f" | tr -d ' ')
   pushed=$(cat "$DIR/.pushed/$name" 2>/dev/null || echo 0)
   case "$pushed" in '' | *[!0-9]*) pushed=0 ;; esac
+  if [ "$pushed" -gt "$total" ]; then
+    echo "event-push-loop: $name has $total lines but $pushed were pushed (file replaced) - pushing it again from the start" >&2
+    pushed=0
+    printf '0\n' > "$DIR/.pushed/$name.tmp" && mv "$DIR/.pushed/$name.tmp" "$DIR/.pushed/$name"
+  fi
   while [ "$pushed" -lt "$total" ]; do
     n=$((total - pushed))
     [ "$n" -le "$BATCH" ] || n=$BATCH

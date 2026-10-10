@@ -104,7 +104,7 @@ environment variable set in the image.
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
 | `/persist/agentsview` | agentsview | `AGENTSVIEW_DATA_DIR` | installation ID (this machine's identity in the shared database), local session archive, `config.toml`, and no-mistakes push state (see [Factory event log](#factory-event-log)) |
-| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`; it has no volume of its own in the per-repo devcontainer mounts, so on the desktop it lives in the container layer until the mounts gain one (the push keeps the loss window small; `dev-init` and `dev-doctor` do not warn about the missing volume), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
+| `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
 no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
@@ -156,13 +156,13 @@ is safe.
 ### How runtimes should mount it
 
 - **Docker (desktop)**: one named volume per directory. `dev-system-gh` is shared by every
-  repo and comes from the image's devcontainer metadata; the other four are per repo and
+  repo and comes from the image's devcontainer metadata; the other five are per repo and
   come from the consumer's `devcontainer.json`, named after its `${devcontainerId}` (see
   [Extending the image](#extending-the-image)). A new named volume copies the image
   directory's ownership on first use, which is why the directories exist in the image
   owned by 1000.
 - **Docker (headless: `docker run`, compose)**: the same split by hand - per-project volumes
-  for claude, codex, no-mistakes and agentsview, plus the shared `dev-system-gh`. See
+  for claude, codex, no-mistakes, agentsview and events, plus the shared `dev-system-gh`. See
   [First start, headless](#first-start-headless).
 - **Kubernetes**: one PVC per workspace mounted at `/persist`, with
   `securityContext.fsGroup: 1000` so `node` can write to it. `dev-init` creates any missing
@@ -924,7 +924,7 @@ project called `my-repo`:
 ```bash
 docker run -d --name my-repo \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
-  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
+  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
   -v dev-system-gh:/persist/gh -v my-repo-workspaces:/workspaces \
   -v dev-system-secrets:/run/secrets/dev-system:ro \
   -e DEV_REPO_URL=https://github.com/me/my-repo.git -e DEV_MACHINE_NAME=docker-my-repo \
@@ -944,7 +944,7 @@ VPN only: see [Security](#security)); a second container then needs another host
 (`-p 8766:8765`), which the proxy avoids.
 
 The same with docker compose. Compose prefixes volume names with the project name, which
-keeps the four per-project volumes apart from other projects'; `name:` turns that off for
+keeps the five per-project volumes apart from other projects'; `name:` turns that off for
 the shared gh and secrets volumes, so every project uses the same `dev-system-gh` and
 `dev-system-secrets`:
 
@@ -960,6 +960,7 @@ services:
       - codex:/persist/codex
       - no-mistakes:/persist/no-mistakes
       - agentsview:/persist/agentsview
+      - events:/persist/events
       - gh:/persist/gh
       - workspaces:/workspaces
       - secrets:/run/secrets/dev-system:ro
@@ -968,6 +969,7 @@ volumes:
   codex:
   no-mistakes:
   agentsview:
+  events:
   workspaces:
   gh:
     name: dev-system-gh   # shared by every project on this Docker host
@@ -1130,7 +1132,7 @@ docker run -d --name login-proxy --network dev -p 443:443 \
 docker run -d --name my-repo --network dev \
   -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_URL=https://<host>/login/my-repo/ \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
-  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview \
+  -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
   -v dev-system-gh:/persist/gh -v dev-system-secrets:/run/secrets/dev-system:ro \
   ghcr.io/cbundy/dev-system/base:2
 ```
@@ -1199,12 +1201,13 @@ it is:
   "build": { "dockerfile": "Dockerfile" },
   // or, with no repo-specific tools: "image": "ghcr.io/cbundy/dev-system/base:2"
   "mounts": [
-    // Per-repo tool state. Keep these four as they are: ${devcontainerId} is
+    // Per-repo tool state. Keep these five as they are: ${devcontainerId} is
     // stable for this workspace folder and config file, and unique to them.
     { "type": "volume", "source": "dev-system-${devcontainerId}-claude", "target": "/persist/claude" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-codex", "target": "/persist/codex" },
     { "type": "volume", "source": "dev-system-${devcontainerId}-no-mistakes", "target": "/persist/no-mistakes" },
-    { "type": "volume", "source": "dev-system-${devcontainerId}-agentsview", "target": "/persist/agentsview" }
+    { "type": "volume", "source": "dev-system-${devcontainerId}-agentsview", "target": "/persist/agentsview" },
+    { "type": "volume", "source": "dev-system-${devcontainerId}-events", "target": "/persist/events" }
   ]
 }
 ```
@@ -1222,6 +1225,7 @@ secrets volumes, which the devcontainer CLI and VS Code merge into your config:
 | `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-no-mistakes` | `/persist/no-mistakes` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-agentsview` | `/persist/agentsview` | this repo (your `devcontainer.json`) |
+| `dev-system-<devcontainerId>-events` | `/persist/events` | this repo (your `devcontainer.json`) |
 
 The per-repo mounts cannot come from the image: the devcontainer CLI expands no variables
 in image metadata (`${devcontainerId}` comes out empty), so every repo would get the same
@@ -1237,7 +1241,7 @@ folder and the path of the devcontainer config file, so:
   all of them. Moving or renaming a config file also starts it on new, empty volumes.
 
 To list a repo's volumes: `docker volume ls --filter name=dev-system-`. To delete a repo's
-state, remove its four volumes once its container is gone.
+state, remove its five volumes once its container is gone.
 
 `updateRemoteUserUID: false` keeps `node` at UID 1000 even on a Linux host whose user has
 another UID. Otherwise the devcontainer CLI renumbers `node` to the host UID and it can no
@@ -1373,8 +1377,12 @@ labels once: `gh label create design:session --description "Design this issue in
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
-first push, is idempotent on `(device, repo, seq)` and keeps its progress in
-`/persist/events/.pushed/`. The URL is split into `PG*` variables in `psql`'s environment only, never its
+first push and keeps its progress in `/persist/events/.pushed/`. Every line carries an `event_id` (a UUID made
+locally), and a row dedups on it alone, so a log lost with its container and restarted at line 1 still inserts
+its new events. Lines without one (older files) keep the `(device, repo, seq)` rule. A file with fewer lines than
+its marker was replaced: the loop pushes it again from the start and `dev-doctor` warns. The loop also migrates an
+existing table in place (adds `event_id`, swaps the old primary key for two partial unique indexes), guarded so a
+repeat takes no exclusive lock; the role in the URL must own the table. The URL is split into `PG*` variables in `psql`'s environment only, never its
 argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
 and `dev-doctor` reports when events were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs

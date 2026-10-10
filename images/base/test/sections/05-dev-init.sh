@@ -223,11 +223,11 @@ check "dev-init warns (exit 0) naming every /persist dir with no volume, only th
   out=\$(docker run --rm --entrypoint '' '$IMAGE' bash -c 'dev-init; echo rc=\$?' 2>&1)
   echo \"\$out\"
   echo \"\$out\" | grep -qx 'rc=0' &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - ' &&
-  ! echo \"\$out\" | grep -E 'no volume behind.*(events|dev-restart-self)' &&
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - ' &&
+  ! echo \"\$out\" | grep -E 'no volume behind.*(dev-restart-self)' &&
   echo \"\$out\" | grep -qF 'npx callum-dev update --devcontainer base-image' &&
   out=\$(docker run --rm --entrypoint '' -v \"\$(docker volume create --label '$RUN_ID'):/persist/claude\" '$IMAGE' dev-init 2>&1) &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview - '"
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - '"
 check "dev-init: no volume warning with one volume for all of /persist (the k8s / Coder shape)" in_image '
   out=$(dev-init 2>&1); echo "$out"
   ! echo "$out" | grep -q "no volume behind"' \

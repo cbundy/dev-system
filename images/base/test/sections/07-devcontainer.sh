@@ -26,12 +26,12 @@ else
       and \$m.mounts == [{\"type\": \"volume\", \"source\": \"dev-system-gh\", \"target\": \"/persist/gh\"},
         \"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]'"
 
-  # The four per-repo mounts exactly as the synced base-image template ships
+  # The five per-repo mounts exactly as the synced base-image template ships
   # them (#78), with $RUN_ID in place of the dev-system prefix.
   template="$(dirname "$0")/../../../templates/.devcontainer/devcontainer.base-image.json"
   template_mounts=$(grep -F '"target": "/persist/' "$template" | sed "s/\"dev-system-/\"$RUN_ID-/")
-  check "the base-image template's four per-repo mounts are found" \
-    [ "$(printf '%s\n' "$template_mounts" | grep -cF "\"$RUN_ID-\${devcontainerId}-")" = 4 ]
+  check "the base-image template's five per-repo mounts are found" \
+    [ "$(printf '%s\n' "$template_mounts" | grep -cF "\"$RUN_ID-\${devcontainerId}-")" = 5 ]
 
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
