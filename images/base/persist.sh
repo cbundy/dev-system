@@ -13,7 +13,7 @@ PERSIST_LIST=${DEV_PERSIST_LIST:-/usr/local/share/dev-system/persist-dirs}
 # have no per-dir volume in the desktop devcontainer templates and live in the
 # container layer there.
 persist_dirs() {
-  local d own=$1
+  local d own=${1:-}
   [ -r "$PERSIST_LIST" ] || return 0
   while IFS= read -r d || [ -n "$d" ]; do
     if [ "$own" = --volume ]; then
