@@ -88,16 +88,20 @@ esac
 tmp=$(mktemp -d) || die 1 "cannot create a temporary directory"
 trap 'rm -rf "$tmp"' EXIT
 if [ "$have_sql" = 1 ]; then
-  printf '%s\n' "$sql" > "$tmp/sql"
+  printf '%s\n' "$sql" > "$tmp/sql" || die 1 "cannot stage the SQL"
 else
-  cat > "$tmp/sql"
+  cat > "$tmp/sql" || die 1 "cannot read the SQL from stdin"
 fi
-[ -n "$(tr -d '[:space:]' < "$tmp/sql")" ] || die 64 "no SQL: pass -c '<sql>' or pipe it on stdin (see dev-query --help)"
+nonblank=$(tr -d '[:space:]' < "$tmp/sql") || die 1 "cannot read the staged SQL"
+[ -n "$nonblank" ] || die 64 "no SQL: pass -c '<sql>' or pipe it on stdin (see dev-query --help)"
 
 # stdout and stderr are masked separately so an export redirected to a file never
-# holds error text; the exit status is psql's, not the masking pipe's.
+# holds error text; psql's nonzero status wins, else a failed write is an error.
 DEV_PG_FORCE_OPTIONS='-c default_transaction_read_only=on' \
   run_psql "$url" ${args[@]+"${args[@]}"} < "$tmp/sql" 2> "$tmp/err" | mask_secrets
-rc=${PIPESTATUS[0]}
+rc=${PIPESTATUS[0]} mask_out=${PIPESTATUS[1]}
 mask_secrets < "$tmp/err" >&2
-exit "$rc"
+mask_err=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+[ "$mask_out" -eq 0 ] && [ "$mask_err" -eq 0 ] || exit 1
+exit 0

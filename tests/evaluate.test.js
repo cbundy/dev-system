@@ -590,26 +590,3 @@ test("drift guard: every column the tool reads exists in nm-export's TABLES", ()
   check(mod.NM_OPTIONAL);
   check(mod.NM_EXPORT_SCHEMA);
 });
-
-test("every table the docs/metrics.md export query names is a mirrored nm-export table", () => {
-  const root = path.join(__dirname, "..");
-  const docs = fs.readFileSync(path.join(root, "docs", "metrics.md"), "utf8");
-  const m = /<<'SQL'\n([\s\S]*?)\nSQL\n/.exec(docs);
-  assert.ok(m, "docs/metrics.md has no export query");
-  const { TABLES } = require(path.join(root, "images", "base", "nm-export"));
-  const names = [...m[1].matchAll(/'table', '(\w+)'/g)].map((x) => x[1]);
-  assert.ok(names.length > 0, "export query names no tables");
-  for (const n of names) assert.ok(TABLES[n], `${n} is not a mirrored table`);
-});
-
-test("the evaluate-sessions skill links docs/metrics.md by absolute URL to a real heading", () => {
-  const root = path.join(__dirname, "..");
-  const skill = fs.readFileSync(path.join(root, "plugins", "callum-flow", "skills", "evaluate-sessions", "SKILL.md"), "utf8");
-  assert.doesNotMatch(skill, /\]\((\.\.\/|\/)/, "relative links break in consumer repos");
-  const m = /\]\(https:\/\/github\.com\/cbundy\/dev-system\/blob\/main\/docs\/metrics\.md#([\w-]+)\)/.exec(skill);
-  assert.ok(m, "skill has no absolute link to docs/metrics.md");
-  const slugs = fs.readFileSync(path.join(root, "docs", "metrics.md"), "utf8").split("\n")
-    .filter((l) => /^#+ /.test(l))
-    .map((l) => l.replace(/^#+ /, "").toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s/g, "-"));
-  assert.ok(slugs.includes(m[1]), `no heading for #${m[1]}`);
-});

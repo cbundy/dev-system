@@ -183,6 +183,10 @@ nm_export_query() {
   awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/docs/metrics.md" |
     docker exec -i "$RUN_ID-b" dev-query -At -v since=2000-01-01T00:00:00Z > "$out" || return 1
   [ -s "$out" ] && ! grep -q '"raw"' "$out" || return 1
+  node -e '
+    const { TABLES } = require(process.argv[1]);
+    const seen = new Set(require("fs").readFileSync(process.argv[2], "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).table));
+    if (!seen.size || [...seen].some((t) => !TABLES[t])) process.exit(1);' "$root/images/base/nm-export" "$out" || return 1
   docker exec -i "$RUN_ID-b" sh -c 'cat > /tmp/nm-export.jsonl' < "$out" || return 1
   want=$(psql_av "select count(*) from nomistakes.runs where repo = 'acme/widgets'")
   docker exec -e NO_MISTAKES_HOME=/tmp/nmfix -e CALLUM_EVENTS_DIR=/tmp/nmfix "$RUN_ID-b" callum-flow-evaluate \
