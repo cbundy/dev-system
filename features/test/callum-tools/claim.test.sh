@@ -437,7 +437,7 @@ rc_of "$SWEEP"
 expect_rc 0 "sweep untrusted candidate"
 events | jq -e 'select(.state == "closed" and .issue == 7)' > /dev/null && fail "untrusted candidate was closed: $(events)"
 events | jq -e 'select(.state == "closed" and .issue == 8)' > /dev/null || fail "trusted candidate not closed: $(events)"
-grep -q 'skipped 1 logged issue' "$tmpdir/err" || fail "untrusted candidate not counted: $(cat "$tmpdir/err")"
+grep -q 'skipped 1 .*untrusted authors' "$tmpdir/err" || fail "untrusted candidate not counted: $(cat "$tmpdir/err")"
 reset
 closed_issue 7 completed
 closed_issue 8 completed

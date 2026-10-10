@@ -215,16 +215,12 @@ done
 
 # Issues closed outside the factory: every issue the log has seen, not final,
 # that GitHub reports closed. Open ones are left alone.
-cand_untrusted=0
-cands=$(awk '$2 != "closed" && $2 != "abandoned" { print $1 }' "$tmp/latest")
+cands=$(awk '$2 != "closed" && $2 != "abandoned" && $2 != "untrusted_stripped" { print $1 }' "$tmp/latest")
 for n in $cands; do
   grep -qx "$n" "$tmp/handled" && continue
   crc=0
   vj=$("$READ" --json "$n") || crc=$?
-  if [ "$crc" -eq 3 ]; then
-    cand_untrusted=$((cand_untrusted + 1))
-    continue
-  fi
+  if [ "$crc" -eq 3 ]; then continue; fi
   if [ "$crc" -ne 0 ] || ! view=$(printf '%s' "$vj" | jq -ce '.issue | if type == "object" then . else error("shape") end'); then
     err "cannot read #$n"
     rc=1
@@ -233,5 +229,4 @@ for n in $cands; do
   [ "$(printf '%s' "$view" | jq -r '.state | ascii_upcase')" = CLOSED ] || continue
   log_closed "$n" "$view"
 done
-[ "$cand_untrusted" = 0 ] || err "note: skipped $cand_untrusted logged issue(s) by untrusted authors"
 exit "$rc"
