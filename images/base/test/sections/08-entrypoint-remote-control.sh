@@ -148,6 +148,26 @@ check "resume: an existing conversation is resumed with the resume prompt, skipp
   [ \"\$(docker exec '$c' cat /tmp/claude-argv-1)\" = \"\$(printf '%s\n' --remote-control rc-test --resume 22222222-bbbb-4bbb-8bbb-222222222222 'The workspace restarted: carry on.')\" ]"
 docker rm -f "$c" >/dev/null
 
+# dev-restart-self --fresh leaves a one-shot marker (cbundy/dev-system#268): an
+# existing conversation is not resumed on that start, the marker is deleted, and
+# the next start resumes as usual.
+c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
+  $(transcript 66666666-ffff-4fff-8fff-666666666666 real) &&
+  mkdir -p /persist/dev-restart-self && touch /persist/dev-restart-self/fresh-conversation &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "fresh marker: the first start skips the resume and sends the startup prompt, then deletes the marker" bash -c "
+  for _ in \$(seq 15); do docker exec '$c' test -s /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-argv-1
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-1)\" = \"\$(printf '%s\n' --remote-control rc-test /callum-flow:issue-orchestrator)\" ] &&
+  ! docker exec '$c' test -e /persist/dev-restart-self/fresh-conversation &&
+  docker logs '$c' 2>&1 | grep -q 'dev-remote-control: fresh conversation requested by dev-restart-self --fresh'"
+docker exec "$c" touch /tmp/claude-exit
+check "fresh marker: the next start resumes the conversation again" bash -c "
+  for _ in \$(seq 20); do docker exec '$c' test -s /tmp/claude-argv-2 && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' cat /tmp/claude-argv-2)\" = \"\$(printf '%s\n' --remote-control rc-test --resume 66666666-ffff-4fff-8fff-666666666666 'The workspace restarted: carry on.')\" ]"
+docker rm -f "$c" >/dev/null
+
 c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
   $(transcript 44444444-dddd-4ddd-8ddd-444444444444 stub) &&
   touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")

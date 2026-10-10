@@ -135,10 +135,42 @@ credentials.
 A workspace keeps the parameter values it was created with, so one created before `auto`
 became the default (cbundy/dev-system#108) stays on `session` until you change it.
 
-To change a parameter, use the dashboard (Settings, Parameters) or a `coder` CLI that
-matches the server's version: `coder update/start/restart --parameter
-remote_control_mode=server` silently did not apply with CLI v2.37.1 against server
-v2.36.6.
+### Changing a parameter on an existing workspace
+
+`coder start`, `coder restart` and `coder update` with `--parameter` (or
+`--rich-parameter-file`) do **not** change an existing workspace's parameters on server
+v2.36.6: the build succeeds and keeps the old value, or `coder update` reports "Workspace is
+up-to-date" and builds nothing (cbundy/dev-system#268). A CLI whose version matches the server
+does not help, and neither does `use_classic_parameter_flow`. Do not rely on them. These work:
+
+- **The dashboard**: the workspace's Settings, Parameters.
+- **From inside the workspace**: `dev-restart-self --parameter name=value` (repeatable), for
+  example `dev-restart-self --parameter remote_control_resume=false` or
+  `dev-restart-self --parameter image=ghcr.io/cbundy/dev-system/dev:latest`. It reads the
+  build's parameters back and exits non-zero if a value did not take. See
+  [`dev-restart-self`](../../images/base/README.md#dev-restart-self). For one fresh Claude
+  conversation without touching `remote_control_resume`, use `dev-restart-self --fresh`.
+- **From outside**: a start build with `rich_parameter_values`. The token is read from a
+  file and goes to `curl` through a config on stdin, never on its command line:
+
+  ```sh
+  CODER_URL=https://coder.example.com WS_ID=<workspace id> TOKEN_FILE=<file holding a session token>
+  api() { printf 'header = "Coder-Session-Token: %s"\n' "$(cat "$TOKEN_FILE")" | curl -sS -K - "$@"; }
+  v=$(api "$CODER_URL/api/v2/workspaces/$WS_ID" | jq -r .template_active_version_id)
+  build=$(api -X POST -H 'Content-Type: application/json' "$CODER_URL/api/v2/workspaces/$WS_ID/builds" \
+    -d "$(jq -cn --arg v "$v" '{transition:"start",template_version_id:$v,rich_parameter_values:[{name:"remote_control_resume",value:"false"}]}')" | jq -r .id)
+  ```
+
+To confirm a change, read the build's parameters back (`build` is the id from the response
+above; the workspace's `latest_build.id` works too):
+
+```sh
+api "$CODER_URL/api/v2/workspacebuilds/$build/parameters" | jq -c '.[] | {name, value}'
+```
+
+A stop build that carries `rich_parameter_values` is also kept by the start that follows it
+(the scheduled autostart of `dev-restart-self --restart`), which is how `--restart
+--parameter` works.
 
 ### Repo
 
@@ -367,8 +399,7 @@ get the token.
 
 The deployment URL is `CODER_URL`, else the agent's `CODER_AGENT_URL`. The CLI is the
 workspace agent's own binary, which the agent downloads from the server, so its version
-always matches the server's (a mismatched CLI silently ignored `--parameter` in
-cbundy/dev-system#108). Set `CODER_BIN` to use another.
+always matches the server's. Set `CODER_BIN` to use another.
 
 ### What the token can do
 

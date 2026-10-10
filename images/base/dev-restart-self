@@ -15,6 +15,20 @@
 #                                           --restart, and delete the marker. dev-init calls this on
 #                                           every start. With no marker it does nothing, exits 0 and
 #                                           makes no request.
+#   dev-restart-self --parameter name=value ...
+#                                           repeatable: put the values in the build's
+#                                           rich_parameter_values (the start build, or with --restart
+#                                           the stop build, whose values the autostarted build keeps),
+#                                           then read the build's parameters back and exit non-zero if
+#                                           any did not take. This is how a mutable parameter
+#                                           (remote_control_resume, image, ...) is changed from inside
+#                                           the workspace: `coder start|restart|update --parameter` is
+#                                           silently ignored for an existing workspace
+#                                           (cbundy/dev-system#268).
+#   dev-restart-self --fresh ...            the next start begins a new Claude conversation instead of
+#                                           resuming the last one, once. Leaves a marker that
+#                                           dev-remote-control consumes; remote_control_resume is not
+#                                           changed, so later restarts resume again.
 #   dev-restart-self --dry-run ...          print each request (method, path, body) and send nothing.
 #
 # Why this exists: `coder restart|stop|update <your own workspace>` stops the workspace first,
@@ -33,11 +47,13 @@
 # State lives in ${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}:
 #   pending.json     the schedule and automatic_updates saved by --restart, removed by --resume
 #   last-request     what the last run asked for (mode, time, build number), removed by --resume
+#   fresh-conversation  one-shot marker from --fresh, deleted by dev-remote-control when it starts Claude
 # DEV_RESTART_SELF_DELAY_MIN (default 3, minimum 2) is how far ahead the one-off autostart is set.
 set -eu
 
 STATE_DIR=${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}
 MARKER=$STATE_DIR/pending.json
+FRESH=$STATE_DIR/fresh-conversation
 LAST=$STATE_DIR/last-request
 CONFIG_DIR=${CODER_CONFIG_DIR:-$HOME/.config/coderv2}
 
@@ -45,24 +61,42 @@ MODE=start
 UPGRADE=0
 DRY=0
 RESUME=0
+WANT_FRESH=0
+PARAMS=""  # one name=value per line
 
 say() { printf 'dev-restart-self: %s\n' "$*" >&2; }
 die() { say "$*"; exit 1; }
 
 usage() {
-  echo "usage: dev-restart-self [--upgrade | --restart [--upgrade] | --resume] [--dry-run]" >&2
+  echo "usage: dev-restart-self [--upgrade | --restart [--upgrade] | --resume] [--parameter name=value]... [--fresh] [--dry-run]" >&2
   exit 2
 }
 
-for arg in "$@"; do
-  case $arg in
+add_param() { # name=value
+  case $1 in
+    ?*=*) PARAMS=${PARAMS:+$PARAMS
+}$1 ;;
+    *) say "--parameter needs name=value, got \"$1\"."; usage ;;
+  esac
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
     --upgrade) UPGRADE=1 ;;
     --restart) MODE=restart ;;
     --resume) RESUME=1 ;;
     --dry-run) DRY=1 ;;
+    --fresh) WANT_FRESH=1 ;;
+    --parameter)
+      [ $# -ge 2 ] || { say "--parameter needs name=value."; usage; }
+      add_param "$2"
+      shift
+      ;;
+    --parameter=*) add_param "${1#--parameter=}" ;;
     -h | --help) usage ;;
     *) usage ;;
   esac
+  shift
 done
 
 tmp=$(mktemp -d)
@@ -157,6 +191,47 @@ load_workspace() {
   fi
 }
 
+# One-shot marker: the next dev-remote-control start begins a new conversation.
+write_fresh() {
+  [ "$WANT_FRESH" = 1 ] || return 0
+  if [ "$DRY" = 1 ]; then
+    say "dry-run: would write $FRESH"
+    return 0
+  fi
+  { mkdir -p "$STATE_DIR" && : > "$FRESH"; } 2>/dev/null ||
+    die "cannot write $FRESH; nothing was changed. Run dev-doctor for the fix (dev-init creates $STATE_DIR on start)."
+}
+drop_fresh() { if [ "$WANT_FRESH" = 1 ] && [ "$DRY" = 0 ]; then rm -f "$FRESH"; fi; }
+
+# rich_parameter_values JSON array from PARAMS.
+params_json() {
+  printf '%s\n' "$PARAMS" | jq -Rn '[inputs | select(length > 0) | index("=") as $i | {name: .[:$i], value: .[$i + 1:]}]'
+}
+
+# After a build with --parameter: the build's own parameters must hold every requested value.
+verify_params() {
+  [ -n "$PARAMS" ] && [ "$DRY" = 0 ] || return 0
+  _id=$(jq -r '.id // empty' "$API_BODY" 2>/dev/null)
+  [ -n "$_id" ] || { say "ERROR: the build response has no id, so the parameters cannot be verified."; return 1; }
+  api GET "/api/v2/workspacebuilds/$_id/parameters"
+  ok || { say "ERROR: could not read back the build's parameters (HTTP $API_CODE $(api_message))."; return 1; }
+  _bad=0
+  while IFS= read -r _kv; do
+    [ -n "$_kv" ] || continue
+    _n=${_kv%%=*} _v=${_kv#*=}
+    _got=$(jq -r --arg n "$_n" '[.[] | select(.name == $n) | .value][0] // "<unset>"' "$API_BODY")
+    if [ "$_got" = "$_v" ]; then
+      say "parameter $_n=$_v took effect."
+    else
+      say "ERROR: parameter $_n is \"$_got\" in build $_id, not \"$_v\"."
+      _bad=1
+    fi
+  done <<VALS
+$PARAMS
+VALS
+  return $_bad
+}
+
 print_goodbye() {
   say "this session will end now and the workspace comes back by itself. Do not start the workspace by hand."
 }
@@ -200,22 +275,29 @@ do_start() {
     _v=$(printf '%s' "$WS" | jq -r '.template_active_version_id // empty')
     [ -n "$_v" ] || die "the workspace has no template_active_version_id; nothing was changed."
   fi
-  _body=$(jq -cn --arg v "$_v" '{transition:"start",template_version_id:$v}')
+  if [ -n "$PARAMS" ]; then
+    _body=$(jq -cn --arg v "$_v" --argjson p "$(params_json)" '{transition:"start",template_version_id:$v,rich_parameter_values:$p}')
+  else
+    _body=$(jq -cn --arg v "$_v" '{transition:"start",template_version_id:$v}')
+  fi
+  write_fresh
   print_goodbye
   api POST "$WS_PATH/builds" "$_body"
   if ok; then
     record_last start
     say "start build requested."
+    verify_params || die "a requested parameter did not take effect; the workspace is restarting anyway."
     return 0
   fi
   case $API_CODE in
     4??)
       say "Coder rejected the start build (HTTP $API_CODE: $(api_message)); falling back to a scheduled restart with --upgrade."
+      drop_fresh
       MODE=restart
       UPGRADE=1
       do_restart
       ;;
-    *) die "the start build request failed (HTTP $API_CODE $(api_message)); nothing was stopped." ;;
+    *) drop_fresh; die "the start build request failed (HTTP $API_CODE $(api_message)); nothing was stopped." ;;
   esac
 }
 
@@ -246,6 +328,8 @@ do_restart() {
       die "cannot write $MARKER; nothing was changed."
   fi
 
+  write_fresh
+
   api PUT "$WS_PATH/autostart" "$(jq -cn --arg s "$_cron" '{schedule:$s}')"
   ok || { undo "could not set the one-off autostart (HTTP $API_CODE $(api_message))"; }
   if [ "$UPGRADE" = 1 ]; then
@@ -253,14 +337,21 @@ do_restart() {
     ok || { undo "could not set automatic_updates (HTTP $API_CODE $(api_message))"; }
   fi
   print_goodbye
-  api POST "$WS_PATH/builds" '{"transition":"stop"}'
+  if [ -n "$PARAMS" ]; then
+    _stop=$(jq -cn --argjson p "$(params_json)" '{transition:"stop",rich_parameter_values:$p}')
+  else
+    _stop='{"transition":"stop"}'
+  fi
+  api POST "$WS_PATH/builds" "$_stop"
   ok || { undo "could not request the stop (HTTP $API_CODE $(api_message))"; }
   record_last restart
   say "stop requested; the workspace restarts at: $_cron"
+  verify_params || die "a requested parameter did not take effect in the stop build; the autostarted build keeps the values of the stop build."
 }
 
 undo() { # reason: a step failed before the stop; put the saved state back
   say "$1; undoing the changes made so far."
+  drop_fresh
   if [ "$DRY" = 0 ]; then
     do_resume || true
   fi
