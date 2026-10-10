@@ -8,7 +8,7 @@ description: >-
   the right saved query in factory.events or the nomistakes mirror and runs it
   with dev-query. Use for a quick targeted number. For a full windowed report
   or a comparison with a baseline, use evaluate-sessions instead.
-version: 0.22.0
+version: 0.23.0
 ---
 
 # Query factory data

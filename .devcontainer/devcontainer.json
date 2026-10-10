@@ -20,6 +20,13 @@
   // --- end repo-owned ---
 
   // --- synced: do not edit (managed by dev-system) ---
+  // The GitHub authors the factory trusts (cbundy/dev-system#307), forwarded from the
+  // host: export CALLUM_FLOW_TRUSTED_AUTHORS=<login>:<numeric id> (comma-separated for
+  // more than one) before starting the container. The image bakes no list, so unset or
+  // malformed, dev-doctor FAILs and callum-flow-issue-read refuses every read.
+  "containerEnv": {
+    "CALLUM_FLOW_TRUSTED_AUTHORS": "${localEnv:CALLUM_FLOW_TRUSTED_AUTHORS}"
+  },
   "mounts": [
     // --- repo-owned: edit freely --- add repo-specific mounts here, each followed by a
     // comma, e.g. the /shared NAS volume (images/base/README.md). Don't bind-mount a host
