@@ -26,7 +26,7 @@ const ALLOW = [
   // The hook that denies raw reads and the README that documents its deny list name the
   // forms they refuse; neither tells an agent to run them.
   { file: 'plugins/callum-flow/hooks/forbid-raw-gh-read.sh', includes: 'gh issue view/list/status forms' },
-  { file: 'plugins/callum-flow/hooks/forbid-raw-gh-read.sh', includes: 'and PRs, gh api paths for issues' },
+  { file: 'plugins/callum-flow/hooks/forbid-raw-gh-read.sh', includes: 'and PRs, gh api GET paths for issues' },
   { file: 'templates/README.md', includes: 'which denies `gh issue view`' },
 ];
 
