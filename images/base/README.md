@@ -1336,7 +1336,8 @@ not opened by a trusted author and reads nothing further from it), `check-pr-lin
 `callum-flow-fix-linkage` (an untrusted PR is refused with one line, never parsed or rewritten),
 `callum-flow-claim` and `callum-flow-sweep` (only trusted `claimed-by:` comments count; claim
 refuses an untrusted issue, sweep skips it with a count; an untrusted cross-referenced PR or
-actor never counts as a merge) and `queue-watch.sh` (an untrusted `ready` issue never enters
+actor never counts as a merge), `callum-flow-design-route` (an untrusted issue's labels are not
+read, so it routes to a sub-agent) and `queue-watch.sh` (an untrusted `ready` issue never enters
 the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
 a reader failure: it never treats it as "no comments". Write calls are unchanged.
 
