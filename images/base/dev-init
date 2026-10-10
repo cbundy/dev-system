@@ -500,7 +500,7 @@ start_event_push() {
   . /usr/local/share/dev-system/agentsview.sh
   agentsview_pg_url >/dev/null || rc=$?
   [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
-  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - factory event push not started."; return 0; }
+  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - factory event push not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
   # check_persist_dirs (step 1) already created it; this only guards the loop.
   [ -w "${CALLUM_EVENTS_DIR:-/persist/events}" ] || { log "WARNING: ${CALLUM_EVENTS_DIR:-/persist/events} is not writable - factory event push not started."; return 0; }
   flock -n "$EVENT_PUSH_LOCK" true 2>/dev/null || return 0
@@ -519,7 +519,7 @@ start_nm_push() {
   . /usr/local/share/dev-system/agentsview.sh
   agentsview_pg_url >/dev/null || rc=$?
   [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
-  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - no-mistakes push not started."; return 0; }
+  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - no-mistakes push not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
   flock -n "$NM_PUSH_LOCK" true 2>/dev/null || return 0
   : > "$NM_PUSH_LOG"
   setsid nohup flock -n "$NM_PUSH_LOCK" /usr/local/share/dev-system/nm-push-loop \

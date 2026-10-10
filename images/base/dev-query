@@ -76,7 +76,7 @@ else
   [ ! -t 0 ] || die 64 "no SQL: pass -c '<sql>' or pipe it on stdin (see dev-query --help)"
 fi
 
-command -v psql >/dev/null 2>&1 || die 69 "psql is not installed: this container image is older than the base image that ships postgresql-client. Run dev-version to compare, then rebuild or pull the container. Do not install it by hand."
+command -v psql >/dev/null 2>&1 || die 69 "psql is not installed: this container image is older than the base image that ships postgresql-client (dev-version compares them). Fix: rebuild the container (dev-restart-self, or Rebuild Container in a desktop dev container); do not install the tool by hand."
 
 url=$(agentsview_pg_url)
 case $? in

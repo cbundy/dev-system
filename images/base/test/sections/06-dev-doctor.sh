@@ -79,6 +79,24 @@ check "dev-version offline: every network line UNKNOWN, exit 0, within 5s" in_im
   ! echo "$out" | grep -q "^dev-version: STALE " &&
   echo "$out" | grep -q "^dev-version: UNKNOWN base-image" &&
   echo "$out" | grep -q "^dev-version: INFO image-layers none"' --network none --entrypoint ""
+check "dev-doctor reports a STALE base image as WARN with the rebuild fix, without changing its exit status" in_image '
+  # The test container has unrelated FAILs (not logged in), so compare exit codes of a
+  # run with an all-OK dev-version against one with a STALE base image: they must match.
+  mkdir -p /tmp/stub
+  printf "#!/bin/sh\necho \"dev-version: OK base-image running=aaaaaaa latest=aaaaaaa\"\n" > /tmp/stub/dev-version
+  chmod +x /tmp/stub/dev-version
+  ok_out=$(PATH=/tmp/stub:$PATH dev-doctor 2>&1); ok_rc=$?
+  printf "#!/bin/sh\necho \"dev-version: STALE base-image running=aaaaaaa latest=bbbbbbb (x)\"\necho \"dev-version: STALE claude running=1 latest=2\"\n" > /tmp/stub/dev-version
+  out=$(PATH=/tmp/stub:$PATH dev-doctor 2>&1); rc=$?
+  echo "$out"
+  echo "ok run rc=$ok_rc, stale run rc=$rc"
+  [ "$ok_rc" -eq "$rc" ] &&
+  ! echo "$ok_out" | grep -q "WARN image is out of date" &&
+  echo "$out" | grep -q "dev-doctor: WARN image is out of date: STALE base-image" &&
+  echo "$out" | grep -A1 "WARN image is out of date" | grep -q "fix: rebuild the container" &&
+  ! echo "$out" | grep -q "WARN image is out of date: STALE claude" &&
+  [ "$(echo "$out" | grep -c "WARN image is out of date")" = 1 ] &&
+  echo "$out" | grep -q "dev-doctor: INFO versions: 1 stale"' --entrypoint ""
 check "dev-doctor prints the versions INFO line and still exits 0 offline" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "dev-doctor: INFO versions: "' --network none

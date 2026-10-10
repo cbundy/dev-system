@@ -396,24 +396,33 @@ info "$(
 )"
 
 # Whether the image, plugin and tools are current (dev-version, cbundy/dev-system#271):
-# information only, never a failure. dev-version time-boxes its own lookups; the hard
+# information only, never a failure (a stale image is a WARN, which does not count as one).
+# dev-version time-boxes its own lookups; the hard
 # timeout here covers a hang in the command itself.
 if command -v dev-version >/dev/null 2>&1; then
   dv_out=$(timeout -k 1 5 dev-version 2>/dev/null </dev/null)
   if [ -z "$dv_out" ]; then
     info "versions: unknown (dev-version timed out)"
   else
+    dv_img=$(printf '%s\n' "$dv_out" | grep -E '^dev-version: STALE (base-image|image:)')
     dv_stale=$(printf '%s\n' "$dv_out" | grep -c '^dev-version: STALE ')
     dv_unknown=$(printf '%s\n' "$dv_out" | grep -c '^dev-version: UNKNOWN ')
+    if [ -n "$dv_img" ]; then
+      # An old image is the cause of "command not found" for tools added since; say so.
+      while IFS= read -r dv_line; do
+        warn "image is out of date: ${dv_line#dev-version: }" "rebuild the container (dev-restart-self, or Rebuild Container in a desktop dev container); do not install missing tools by hand"
+      done <<< "$dv_img"
+      dv_stale=$((dv_stale - $(printf '%s\n' "$dv_img" | wc -l)))
+    fi
     if [ "$dv_stale" -gt 0 ]; then
       info "versions: $dv_stale stale (run dev-version)"
     elif [ "$dv_unknown" -gt 0 ]; then
       info "versions: all known current, $dv_unknown unknown (run dev-version)"
-    else
+    elif [ -z "$dv_img" ]; then
       info "versions: all current"
     fi
   fi
-  unset dv_out dv_stale dv_unknown
+  unset dv_out dv_img dv_line dv_stale dv_unknown
 fi
 
 if [ "$FAILURES" -gt 0 ]; then
