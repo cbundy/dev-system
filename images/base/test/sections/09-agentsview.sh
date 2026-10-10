@@ -256,7 +256,7 @@ check "the export query in docs/metrics.md runs and callum-flow-evaluate reads i
 # Event identity survives losing the file (#229). The table starts as the old one (primary
 # key (device, repo, seq)) with three old-format rows; the real event-push-loop (container b)
 # migrates it, then a wiped log (with and without its marker) must still land every event.
-ev_run() { docker exec -e CALLUM_EVENTS_DIR=/tmp/evmig "$RUN_ID-b" event-push-loop --once; }
+ev_run() { docker exec -e CALLUM_EVENTS_DIR=/tmp/evmig "$RUN_ID-b" /usr/local/share/dev-system/event-push-loop --once; }
 ev_write() { # <count> <tag> [noid]: count lines for device d1, repo o/r
   docker exec -e N="$1" -e TAG="$2" -e NOID="${3-}" -e CALLUM_EVENTS_DIR=/tmp/evmig "$RUN_ID-b" bash -c '
     mkdir -p "$CALLUM_EVENTS_DIR"
