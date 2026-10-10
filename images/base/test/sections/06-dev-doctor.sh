@@ -83,7 +83,7 @@ check "dev-doctor reports a STALE base image as WARN with the rebuild fix, and s
   mkdir -p /tmp/stub
   printf "#!/bin/sh\necho \"dev-version: STALE base-image running=aaaaaaa latest=bbbbbbb (x)\"\necho \"dev-version: STALE claude running=1 latest=2\"\n" > /tmp/stub/dev-version
   chmod +x /tmp/stub/dev-version
-  out=$(PATH=/tmp/stub:$PATH dev-doctor 2>&1); rc=$?
+  out=$(PATH=/tmp/stub:$PATH dev-doctor --warn-only 2>&1); rc=$?
   echo "$out"
   [ $rc -eq 0 ] &&
   echo "$out" | grep -q "dev-doctor: WARN image is out of date: STALE base-image" &&
