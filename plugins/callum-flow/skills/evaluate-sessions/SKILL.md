@@ -92,8 +92,8 @@ time from each merged issue's timeline. For every issue in `throughput.issues`
 labelings and pass the file:
 
 ```
-gh api --paginate repos/<owner>/<name>/issues/<N>/timeline \
-  --jq '[.[] | select(.event == "labeled" and .label.name == "ready") | .created_at]'
+callum-flow-issue-read --json --timeline <N> \
+  | jq '[.events[] | select(.event == "labeled" and .label.name == "ready") | .created_at]'
 ```
 
 Write `{"<N>": ["<ISO>", ...], ...}` to `/tmp/ready-times.json` (one array per issue,
@@ -109,7 +109,9 @@ time is not measured.
 For the same window, with `gh` (read-only):
 
 - PRs merged: `gh pr list --state merged --search "merged:>=<date>" --json number,title,mergedAt,headRefName`
-- issues closed: `gh issue list --state closed --search "closed:>=<date>" --json number,title,closedAt`
+  (metadata only, no body or comment text)
+- issues closed: `callum-flow-issue-read --json --list --state closed`, then keep those closed
+  on or after `<date>`
 
 Use them to name what shipped and to connect an issue number in the tool's tables
 to its PR.
@@ -163,7 +165,7 @@ from `/tmp/eval.md` verbatim under each; add prose only to interpret them.
    a one-line direction (not a design), and related issues.
 
 If a baseline issue was given, add a short comparison after the gaps: read its
-last report with `gh issue view <baseline> --comments`, and compare only the
+last report with `callum-flow-issue-read <baseline> --comments`, and compare only the
 numbers both reports contain, quoting both. Do not recompute the baseline's
 numbers; if its window needs re-running, run the tool for that window.
 
