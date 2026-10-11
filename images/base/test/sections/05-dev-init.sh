@@ -15,9 +15,14 @@ check "dev-init runs twice cleanly on an empty volume at /persist" in_image '
   env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
   grep -qx "# BEGIN dev-system managed (rewritten on every start - edit outside this block)" $cfg
   [ "$(grep -c "^# END dev-system managed$" $cfg)" = 1 ]
-  [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
-  grep -qx -- "    - $(models_value $env CODEX_MODEL)" $cfg
-  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg
+  [ "$(grep -c "^agent_config:" $cfg)" = 1 ]
+  ! grep -v "^#" $cfg | grep -q "agent_args_override\|service_tier\|--model\|--effort"
+  grep -qx -- "    model: $(models_value $env CODEX_MODEL)" $cfg
+  grep -qx -- "    model: $(models_value $env CLAUDE_MODEL)" $cfg
+  [ "$(grep -c "^review_agents:" $cfg)" = 1 ]
+  [ "$(grep -c -x -- "    agent: $(models_value $env REVIEW_AGENT)" $cfg)" = 2 ]
+  [ "$(grep -c -x -- "    model: $(models_value $env REVIEW_MODEL)" $cfg)" = 2 ]
+  [ "$(grep -c -x -- "    effort: $(models_value $env REVIEW_EFFORT)" $cfg)" = 2 ]
   [ "$(models_value $env AGENTS)" = codex,claude ]
   [ "$(grep -c "^agent:" $cfg)" = 1 ]
   sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" $cfg | grep -qxF "agent: [codex, claude]"' \
@@ -52,31 +57,50 @@ check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and 
   cfg=/persist/no-mistakes/config.yaml
   printf "agent: codex\n" > $cfg
   DEV_CODEX_MODEL=my-model DEV_CLAUDE_MODEL=my-claude dev-init >/dev/null 2>&1
-  grep -qx -- "    - my-model" $cfg && grep -qx -- "    - my-claude" $cfg
+  grep -qx -- "    model: my-model" $cfg && grep -qx -- "    model: my-claude" $cfg
   printf "\nkeep: 1\n" >> $cfg
-  DEV_CODEX_MODEL=other-model DEV_CLAUDE_MODEL= dev-init >/dev/null 2>&1
-  grep -qx -- "    - other-model" $cfg && ! grep -q "my-model\|my-claude\|  claude:" $cfg
+  DEV_CODEX_MODEL=other-model DEV_CLAUDE_MODEL= DEV_CLAUDE_EFFORT= dev-init >/dev/null 2>&1
+  grep -qx -- "    model: other-model" $cfg && ! grep -q "my-model\|my-claude\|  claude:" $cfg
   [ "$(head -n 1 $cfg)" = "agent: codex" ] && [ "$(tail -n 1 $cfg)" = "keep: 1" ]
   DEV_CODEX_MODEL= dev-init >/dev/null 2>&1
-  ! grep -q "agent_args_override\|dev-system managed" $cfg || exit 1
+  # the review roles are their own part: they stay when the model pin is dropped
+  ! grep -q "^agent_config:" $cfg && grep -q "^review_agents:" $cfg
+  DEV_CODEX_MODEL= DEV_REVIEW_AGENT= dev-init >/dev/null 2>&1
+  ! grep -q "agent_config\|review_agents\|dev-system managed" $cfg || exit 1
   [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
   --entrypoint ""
 # The claude fallback's effort (cbundy/job-search#206): CLAUDE_EFFORT from the
-# baked models file, written as claude's --effort after its --model.
+# baked models file, written as claude's agent_config effort after its model.
 check "dev-init pins the claude fallback's effort from models.env, DEV_CLAUDE_EFFORT overrides it, and empty drops it" in_image '
   set -e
   . /usr/local/share/dev-system/models.sh
   env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
-  claude() { sed -n "/^  claude:\$/,/^# END dev-system managed\$/p" $cfg | sed "\$d"; }
+  claude() { sed -n "/^  claude:\$/,/^[^ ]/p" $cfg | sed "1d;\$d"; }
   rm -f $cfg
   out=$(DEV_MODELS_URL= dev-init 2>&1); echo "$out" | grep -i "managed"
-  [ "$(claude)" = "$(printf "  claude:\n    - --model\n    - %s\n    - --effort\n    - %s" "$(models_value $env CLAUDE_MODEL)" "$(models_value $env CLAUDE_EFFORT)")" ]
-  echo "$out" | grep -qF ", claude effort $(models_value $env CLAUDE_EFFORT)"
+  [ "$(claude)" = "$(printf "    model: %s\n    effort: %s" "$(models_value $env CLAUDE_MODEL)" "$(models_value $env CLAUDE_EFFORT)")" ]
+  echo "$out" | grep -qF ", claude $(models_value $env CLAUDE_MODEL) ($(models_value $env CLAUDE_EFFORT))"
   DEV_MODELS_URL= DEV_CLAUDE_EFFORT=high dev-init >/dev/null 2>&1
-  [ "$(grep -c -- "--effort" $cfg)" = 1 ] && claude | grep -qx -- "    - high"
+  claude | grep -qx -- "    effort: high"
   DEV_MODELS_URL= DEV_CLAUDE_EFFORT= dev-init >/dev/null 2>&1
-  ! grep -q -- "--effort" $cfg || exit 1
-  claude | grep -qx -- "    - --model"' \
+  [ "$(claude)" = "    model: $(models_value $env CLAUDE_MODEL)" ]
+  [ "$(grep -c -x -- "    effort: $(models_value $env REVIEW_EFFORT)" $cfg)" = 2 ]' \
+  --entrypoint ""
+# The review roles: REVIEW_AGENT / REVIEW_MODEL / REVIEW_EFFORT
+# from the baked models file, written as review_agents for the reviewer and the fixer.
+check "DEV_REVIEW_* rewrite the review roles in place, empty drops them, and the log names them" in_image '
+  set -e
+  . /usr/local/share/dev-system/models.sh
+  env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
+  rm -f $cfg
+  out=$(DEV_MODELS_URL= dev-init 2>&1); echo "$out" | grep -i "managed"
+  echo "$out" | grep -qF "review $(models_value $env REVIEW_AGENT) $(models_value $env REVIEW_MODEL) ($(models_value $env REVIEW_EFFORT)), no fallback"
+  DEV_MODELS_URL= DEV_REVIEW_MODEL=my-opus DEV_REVIEW_EFFORT=max dev-init >/dev/null 2>&1
+  [ "$(grep -c -x -- "    model: my-opus" $cfg)" = 2 ] && [ "$(grep -c -x -- "    effort: max" $cfg)" = 2 ]
+  ! grep -q "$(models_value $env REVIEW_MODEL)" $cfg
+  DEV_MODELS_URL= DEV_REVIEW_AGENT= dev-init >/dev/null 2>&1
+  ! grep -q "^review_agents:" $cfg
+  grep -q "^agent_config:" $cfg' \
   --entrypoint ""
 # The pipeline's agent order (cbundy/dev-system#163): the AGENTS list, written
 # as `agent: [...]` in the managed block, beside the model pin.
@@ -88,17 +112,17 @@ check "DEV_NM_AGENTS rewrites the managed agent order in place, empty drops it, 
   managed() { sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" $cfg; }
   managed | grep -qxF "agent: [claude]"
   [ "$(grep -c "^agent:" $cfg)" = 1 ] && [ "$(head -n 1 $cfg)" = "keep: 1" ]
-  managed | grep -q "^agent_args_override:"
+  managed | grep -q "^agent_config:"
   out=$(DEV_MODELS_URL= DEV_NM_AGENTS=claude,codex dev-init 2>&1); echo "$out" | grep -i "managed"
   managed | grep -qxF "agent: [claude, codex]"
   echo "$out" | grep -qF "dev-init: no-mistakes managed block in $cfg: agents claude,codex;"
   DEV_MODELS_URL= DEV_NM_AGENTS= dev-init >/dev/null 2>&1
   ! grep -q "^agent:" $cfg || exit 1
-  managed | grep -q "^agent_args_override:"
+  managed | grep -q "^agent_config:"
   printf "agent: [claude]\n" > $cfg
   out=$(DEV_MODELS_URL= dev-init 2>&1)
   [ "$(grep -c "^agent:" $cfg)" = 1 ] && [ "$(head -n 1 $cfg)" = "agent: [claude]" ]
-  managed | grep -q "^agent_args_override:"
+  managed | grep -q "^agent_config:"
   echo "$out" | grep -q "pin-codex-model: left the hand-set agent in"
   printf "AGENTS=claude\n" > /tmp/m.env
   rm $cfg
@@ -113,21 +137,21 @@ check "dev-init pins the models fetched from DEV_MODELS_URL, per key over the ba
   env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
   printf "CODEX_MODEL=fetched-codex\nCLAUDE_MODEL=not;valid\n" > /tmp/m.env
   out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1); echo "$out" | grep -i model
-  grep -qx -- "    - fetched-codex" $cfg
-  grep -qx -- "    - $(models_value $env CLAUDE_MODEL)" $cfg
+  grep -qx -- "    model: fetched-codex" $cfg
+  grep -qx -- "    model: $(models_value $env CLAUDE_MODEL)" $cfg
   echo "$out" | grep -qF "dev-init: models read from file:///tmp/m.env, with the image"
   if echo "$out" | grep -q "WARNING: could not use the models file"; then exit 1; fi
   out=$(DEV_MODELS_URL=file:///tmp/m.env dev-init 2>&1)
   if echo "$out" | grep -q "models read from"; then echo "logged with the pin unchanged"; exit 1; fi
   DEV_MODELS_URL=file:///tmp/m.env DEV_CODEX_MODEL=env-codex dev-init >/dev/null 2>&1
-  grep -qx -- "    - env-codex" $cfg
+  grep -qx -- "    model: env-codex" $cfg
   [ -z "$(find /tmp -maxdepth 1 -name "dev-models.*")" ]' \
   --entrypoint ""
 check "dev-init falls back to the baked models with one WARNING when the fetch fails, and an empty DEV_MODELS_URL skips it" in_image '
   set -e
   . /usr/local/share/dev-system/models.sh
   env=/usr/local/share/dev-system/models.env cfg=/persist/no-mistakes/config.yaml
-  baked="    - $(models_value $env CODEX_MODEL)"
+  baked="    model: $(models_value $env CODEX_MODEL)"
   for url in file:///tmp/missing.env https://127.0.0.1:1/models.env; do
     out=$(DEV_MODELS_URL=$url dev-init 2>&1; echo "rc=$?"); echo "$out" | grep -i "model\|rc="
     echo "$out" | grep -qx "rc=0"
@@ -152,12 +176,13 @@ check "dev-init migrates the unmarked pin an older image wrote, and a hand-set o
   printf "\n# Codex model pin, written by the callum-tools devcontainer feature (global-only key).\nagent_args_override:\n  codex:\n    - -m\n    - gpt-old\n" > $cfg
   dev-init >/dev/null 2>&1
   ! grep -q "gpt-old\|callum-tools devcontainer feature" $cfg || exit 1
-  grep -q "^# BEGIN dev-system managed" $cfg && [ "$(grep -c "^agent_args_override:" $cfg)" = 1 ]
+  grep -q "^# BEGIN dev-system managed" $cfg && [ "$(grep -c "^agent_config:" $cfg)" = 1 ]
   printf "agent_config:\n  codex: {}\n" > $cfg
   out=$(dev-init 2>&1)
   [ "$(head -n 2 $cfg)" = "$(printf "agent_config:\n  codex: {}")" ]
   [ "$(grep -c "^agent_config:\|^agent_args_override:" $cfg)" = 1 ]
   grep -qxF "agent: [codex, claude]" $cfg
+  grep -q "^review_agents:" $cfg
   echo "$out" | grep -q "pin-codex-model: left the hand-set agent_args_override"' \
   --entrypoint ""
 rootvol=$(docker volume create --label "$RUN_ID")

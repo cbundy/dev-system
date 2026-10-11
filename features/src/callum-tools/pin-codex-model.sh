@@ -2,18 +2,24 @@
 #
 # Write the no-mistakes pipeline's agent order and model pin, as a managed block.
 #
-# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model] [agents] [claude effort]
+# Usage: pin-codex-model.sh <no-mistakes config.yaml> <codex model> [claude model] [agents] [claude effort] [review agent] [review model] [review effort]
 #
-# The block has two independent parts, both for the global no-mistakes
+# The block has three independent parts, all for the global no-mistakes
 # config.yaml:
 #   - The agent order, from agents (comma-separated, in order, e.g.
 #     codex,claude), written as `agent: [codex, claude]`. A repo's
 #     .no-mistakes.yaml `agent` replaces it entirely for that repo.
-#   - The model pin, `agent_args_override`: codex's model, then claude's model
-#     (`--model`, the third argument) and reasoning effort (`--effort`, the
-#     fifth: low, medium, high, xhigh or max), each when set. It is honoured
+#   - The model pin, `agent_config`: codex's model (effort medium), then
+#     claude's model (the third argument) and reasoning effort (the fifth:
+#     low, medium, high, xhigh or max), each knob when set. It is honoured
 #     ONLY in the global config - a copy in a repo's .no-mistakes.yaml is
-#     silently ignored, leaving codex on its (top-end) default.
+#     silently ignored. The models live in agent_config, not in
+#     agent_args_override, because native agent_args_override flags would beat
+#     the review_agents values below.
+#   - The review roles, `review_agents`: the reviewer and the review fixer each
+#     run on one agent (the sixth argument, a single name), model (seventh) and
+#     effort (eighth), with no fallback by design: a failing review agent
+#     fails the review step instead of being served by another agent.
 #
 # The block lives between two marker lines, and every call rewrites what is
 # between them (in place, wherever the block sits), so a change reaches an
@@ -31,8 +37,14 @@
 #   - A key set by hand outside the markers (and not that old block) wins over
 #     its part, and only its part, with a one-line note on stderr (the part
 #     would duplicate the key): a top-level `agent:` drops the agent order; an
-#     `agent_args_override:` or `agent_config:` drops the model pin.
-#   - An empty codex model drops the model pin; empty (or absent) agents drop
+#     `agent_args_override:` or `agent_config:` drops the model pin; a
+#     `review_agents:` drops the review roles.
+#   - An old managed block (the agent_args_override pin, with its service
+#     tier and claude --model / --effort entries) is rewritten in place to
+#     this shape.
+#   - An empty codex model drops the model pin; an empty review agent drops
+#     the review roles (so does an invalid one, with a note: it must be one
+#     name, [a-z0-9][a-z0-9:_-]*, no comma); empty (or absent) agents drop
 #     the agent order. Agents that are not a comma-separated list of names, each
 #     [a-z0-9][a-z0-9:_-]* with no spaces, drop it too, with a note. A claude
 #     effort that is not one of claude's levels is left out, with a note.
@@ -54,7 +66,7 @@
 set -eu
 
 [ "$#" -ge 2 ] || {
-  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model] [agents] [claude effort]" >&2
+  echo "usage: pin-codex-model.sh <config.yaml> <codex model> [claude model] [agents] [claude effort] [review agent] [review model] [review effort]" >&2
   exit 2
 }
 NM_CONFIG="$1"
@@ -62,6 +74,9 @@ CODEX_MODEL="$2"
 CLAUDE_MODEL="${3:-}"
 AGENTS="${4:-}"
 CLAUDE_EFFORT="${5:-}"
+REVIEW_AGENT="${6:-}"
+REVIEW_MODEL="${7:-}"
+REVIEW_EFFORT="${8:-}"
 
 PIN_BEGIN='# BEGIN dev-system managed (rewritten on every start - edit outside this block)'
 PIN_END='# END dev-system managed'
@@ -152,18 +167,47 @@ case "$CLAUDE_EFFORT" in
     ;;
 esac
 
+case "$REVIEW_EFFORT" in
+  "" | low | medium | high | xhigh | max) ;;
+  *)
+    note "ignored the review effort '$REVIEW_EFFORT' - it must be one of low, medium, high, xhigh, max - the review roles' effort left unpinned"
+    REVIEW_EFFORT=""
+    ;;
+esac
+
+# The review agent is a single name: the review roles have no fallback list.
+if [ -n "$REVIEW_AGENT" ]; then
+  case "$REVIEW_AGENT" in
+    *,*) review_ok=0 ;;
+    *) agents_valid "$REVIEW_AGENT" && review_ok=1 || review_ok=0 ;;
+  esac
+  if [ "$review_ok" = 0 ]; then
+    note "ignored the review agent '$REVIEW_AGENT' - it must be one name, [a-z0-9][a-z0-9:_-]*, with no comma - no dev-system review roles written"
+    REVIEW_AGENT=""
+  fi
+fi
+
 # What is set by hand: the config without its managed and legacy blocks.
 hand=""
 if [ -f "$NM_CONFIG" ]; then
   hand=$(PIN_BLOCK='' render 0 < "$NM_CONFIG")
 fi
 
-want_pin=0
+want_config=0
 if [ -n "$CODEX_MODEL" ]; then
-  want_pin=1
+  want_config=1
   if printf '%s\n' "$hand" | grep -qE '^(agent_args_override|agent_config):'; then
-    want_pin=0
+    want_config=0
     note "left the hand-set agent_args_override / agent_config in $NM_CONFIG alone - no dev-system model pin written"
+  fi
+fi
+
+want_review=0
+if [ -n "$REVIEW_AGENT" ]; then
+  want_review=1
+  if printf '%s\n' "$hand" | grep -qE '^review_agents[[:space:]]*:'; then
+    want_review=0
+    note "left the hand-set review_agents in $NM_CONFIG alone - no dev-system review roles written"
   fi
 fi
 
@@ -177,7 +221,7 @@ if [ -n "$AGENTS" ]; then
 fi
 
 want=1
-[ "$want_pin" = 1 ] || [ "$want_agents" = 1 ] || want=0
+[ "$want_config" = 1 ] || [ "$want_agents" = 1 ] || [ "$want_review" = 1 ] || want=0
 
 # Nothing to write: leave the file alone unless it holds a block to remove.
 if [ "$want" = 0 ]; then
@@ -193,23 +237,25 @@ PIN_BLOCK=$(
     echo "# The pipeline's ordered agent list: no-mistakes moves to the next agent when one fails."
     echo "agent: [$(printf '%s' "$AGENTS" | sed 's/,/, /g')]"
   fi
-  if [ "$want_pin" = 1 ]; then
-    cat <<EOF
-# The model pin (a global-only key).
-agent_args_override:
-  codex:
-    - -m
-    - ${CODEX_MODEL}
-    - -c
-    - service_tier="priority"
-    - -c
-    - model_reasoning_effort="medium"
-EOF
+  if [ "$want_config" = 1 ]; then
+    echo "# The model pin (a global-only key). Models live in agent_config, not agent_args_override:"
+    echo "# native agent_args_override flags would beat the review_agents values below."
+    echo "agent_config:"
+    printf '  codex:\n    model: %s\n    effort: medium\n' "$CODEX_MODEL"
     if [ -n "$CLAUDE_MODEL" ] || [ -n "$CLAUDE_EFFORT" ]; then
       echo "  claude:"
-      [ -z "$CLAUDE_MODEL" ] || printf '    - --model\n    - %s\n' "$CLAUDE_MODEL"
-      [ -z "$CLAUDE_EFFORT" ] || printf '    - --effort\n    - %s\n' "$CLAUDE_EFFORT"
+      [ -z "$CLAUDE_MODEL" ] || printf '    model: %s\n' "$CLAUDE_MODEL"
+      [ -z "$CLAUDE_EFFORT" ] || printf '    effort: %s\n' "$CLAUDE_EFFORT"
     fi
+  fi
+  if [ "$want_review" = 1 ]; then
+    echo "# The review loop's reviewer and fixer, with no fallback by design: a failing review agent fails the review step."
+    echo "review_agents:"
+    for role in reviewer fixer; do
+      printf '  %s:\n    agent: %s\n' "$role" "$REVIEW_AGENT"
+      [ -z "$REVIEW_MODEL" ] || printf '    model: %s\n' "$REVIEW_MODEL"
+      [ -z "$REVIEW_EFFORT" ] || printf '    effort: %s\n' "$REVIEW_EFFORT"
+    done
   fi
   echo "$PIN_END"
 )

@@ -63,6 +63,55 @@ test("models_value accepts CLAUDE_EFFORT only as one of claude's --effort levels
   }
 });
 
+test("models.env runs the review loop on claude Opus at high effort", () => {
+  assert.deepEqual(modelsValue(MODELS_ENV, "REVIEW_AGENT"), { status: 0, stdout: "claude", stderr: "" });
+  assert.deepEqual(modelsValue(MODELS_ENV, "REVIEW_MODEL"), { status: 0, stdout: "claude-opus-5-5", stderr: "" });
+  assert.deepEqual(modelsValue(MODELS_ENV, "REVIEW_EFFORT"), { status: 0, stdout: "high", stderr: "" });
+});
+
+test("models_value accepts REVIEW_EFFORT only as one of claude's --effort levels", (t) => {
+  for (const good of ["low", "medium", "high", "xhigh", "max"]) {
+    const r = modelsValue(tempFile(t, `REVIEW_EFFORT=${good}\n`), "REVIEW_EFFORT");
+    assert.deepEqual(r, { status: 0, stdout: good, stderr: "" });
+  }
+  for (const bad of ["", "High", "minimal", "high,max", "$(id)"]) {
+    const r = modelsValue(tempFile(t, `REVIEW_EFFORT=${bad}\n`), "REVIEW_EFFORT");
+    assert.equal(r.status, 2, `REVIEW_EFFORT=${JSON.stringify(bad)} should be rejected`);
+    assert.match(r.stderr, /ignored REVIEW_EFFORT .* one of low, medium, high, xhigh, max/);
+  }
+});
+
+test("models_value accepts REVIEW_AGENT as a single agent name only", (t) => {
+  for (const good of ["claude", "codex", "acp:my-agent", "open_code", "0x"]) {
+    const r = modelsValue(tempFile(t, `REVIEW_AGENT=${good}\n`), "REVIEW_AGENT");
+    assert.deepEqual(r, { status: 0, stdout: good, stderr: "" });
+  }
+  for (const bad of ["", "claude,codex", "claude,", ",claude", "Claude", "claude codex", "-claude", ":x", "$(id)", "claude;rm", "claude/x"]) {
+    const r = modelsValue(tempFile(t, `REVIEW_AGENT=${bad}\n`), "REVIEW_AGENT");
+    assert.equal(r.status, 2, `REVIEW_AGENT=${JSON.stringify(bad)} should be rejected`);
+    assert.equal(r.stdout, "");
+    assert.match(r.stderr, /ignored REVIEW_AGENT .* one agent name/);
+  }
+});
+
+test("models_value accepts REVIEW_MODEL in the model charset only", (t) => {
+  assert.equal(modelsValue(tempFile(t, "REVIEW_MODEL=org/claude-opus:v1.2_3\n"), "REVIEW_MODEL").stdout, "org/claude-opus:v1.2_3");
+  for (const bad of ["", "a,b", "a b", "$(id)", "a;b"]) {
+    assert.equal(modelsValue(tempFile(t, `REVIEW_MODEL=${bad}\n`), "REVIEW_MODEL").status, 2, JSON.stringify(bad));
+  }
+});
+
+test("DEV_REVIEW_* beat the fetched and baked REVIEW_* keys, and empty skips the part", (t) => {
+  const url = servedFile(t, "REVIEW_AGENT=fetched-review\nREVIEW_MODEL=fetched-opus\nREVIEW_EFFORT=high\n");
+  const fetched = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } });
+  assert.deepEqual([fetched.reviewAgent, fetched.reviewModel, fetched.reviewEffort], ["fetched-review", "fetched-opus", "high"]);
+  const env = { DEV_MODELS_URL: url, DEV_REVIEW_AGENT: "env-review", DEV_REVIEW_MODEL: "env-opus", DEV_REVIEW_EFFORT: "max" };
+  const set = pickModels(t, { baked: BAKED, env });
+  assert.deepEqual([set.reviewAgent, set.reviewModel, set.reviewEffort], ["env-review", "env-opus", "max"]);
+  const empty = pickModels(t, { baked: BAKED, env: { ...env, DEV_REVIEW_AGENT: "", DEV_REVIEW_MODEL: "", DEV_REVIEW_EFFORT: "" } });
+  assert.deepEqual([empty.reviewAgent, empty.reviewModel, empty.reviewEffort], ["", "", ""]);
+});
+
 test("models.env sets the pipeline's agent order to codex, then claude", () => {
   assert.deepEqual(modelsValue(MODELS_ENV, "AGENTS"), { status: 0, stdout: "codex,claude", stderr: "" });
 });
@@ -174,7 +223,10 @@ function pickModels(t, { baked, env = {} }) {
     echo "agents=$(models_resolve DEV_NM_AGENTS AGENTS $fetched "$BAKED")"
     echo "codex=$(models_resolve DEV_CODEX_MODEL CODEX_MODEL $fetched "$BAKED")"
     echo "claude=$(models_resolve DEV_CLAUDE_MODEL CLAUDE_MODEL $fetched "$BAKED")"
-    echo "effort=$(models_resolve DEV_CLAUDE_EFFORT CLAUDE_EFFORT $fetched "$BAKED")"`;
+    echo "effort=$(models_resolve DEV_CLAUDE_EFFORT CLAUDE_EFFORT $fetched "$BAKED")"
+    echo "reviewAgent=$(models_resolve DEV_REVIEW_AGENT REVIEW_AGENT $fetched "$BAKED")"
+    echo "reviewModel=$(models_resolve DEV_REVIEW_MODEL REVIEW_MODEL $fetched "$BAKED")"
+    echo "reviewEffort=$(models_resolve DEV_REVIEW_EFFORT REVIEW_EFFORT $fetched "$BAKED")"`;
   const r = spawnSync("sh", ["-c", script], {
     encoding: "utf8",
     env: { PATH: process.env.PATH, MODELS_SH, DIR: dir, BAKED: bakedFile, ...env },
@@ -188,7 +240,9 @@ function pickModels(t, { baked, env = {} }) {
   return out;
 }
 
-const BAKED = "AGENTS=codex,claude\nCODEX_MODEL=baked-codex\nCLAUDE_MODEL=baked-claude\nCLAUDE_EFFORT=low\n";
+const BAKED = "AGENTS=codex,claude\nCODEX_MODEL=baked-codex\nCLAUDE_MODEL=baked-claude\nCLAUDE_EFFORT=low\nREVIEW_AGENT=baked-review\nREVIEW_MODEL=baked-opus\nREVIEW_EFFORT=medium\n";
+
+const BAKED_REVIEW = { reviewAgent: "baked-review", reviewModel: "baked-opus", reviewEffort: "medium" };
 
 function servedFile(t, content) {
   return `file://${tempFile(t, content)}`;
@@ -222,13 +276,14 @@ test("a valid fetched file overrides the baked models", (t) => {
     codex: "main-codex",
     claude: "main-claude",
     effort: "high",
+    ...BAKED_REVIEW,
   });
 });
 
 test("a fetched AGENTS overrides the baked one, and a malformed one falls back to baked per key", (t) => {
   const url = servedFile(t, "AGENTS=claude\n");
   const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url } });
-  assert.deepEqual(r, { url, agents: "claude", codex: "baked-codex", claude: "baked-claude", effort: "low" });
+  assert.deepEqual(r, { url, agents: "claude", codex: "baked-codex", claude: "baked-claude", effort: "low", ...BAKED_REVIEW });
   for (const bad of ["claude,,codex", "claude, codex", "CLAUDE", "claude;id"]) {
     const partly = servedFile(t, `AGENTS=${bad}\nCODEX_MODEL=main-codex\n`);
     const p = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: partly } });
@@ -238,7 +293,7 @@ test("a fetched AGENTS overrides the baked one, and a malformed one falls back t
   }
   // A fetched file whose only key is a malformed AGENTS is not used at all.
   const only = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: servedFile(t, "AGENTS=a,,b\n") } });
-  assert.equal(only.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS or CLAUDE_EFFORT");
+  assert.equal(only.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS, CLAUDE_EFFORT, REVIEW_AGENT, REVIEW_MODEL or REVIEW_EFFORT");
   assert.equal(only.agents, "codex,claude");
 });
 
@@ -250,6 +305,7 @@ test("a partly valid fetched file falls back to baked per key, with no warning",
     codex: "main-codex",
     claude: "baked-claude",
     effort: "low",
+    ...BAKED_REVIEW,
   });
   const missing = servedFile(t, "CLAUDE_MODEL=main-claude\n");
   const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: missing } });
@@ -261,7 +317,7 @@ test("a partly valid fetched file falls back to baked per key, with no warning",
 test("an invalid or empty fetched file falls back to baked, with the reason", (t) => {
   for (const content of ["", "<html>Not Found</html>\n", "CODEX_MODEL=a b\nCLAUDE_MODEL=\nPATH=/x\n"]) {
     const r = pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: servedFile(t, content) } });
-    assert.equal(r.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS or CLAUDE_EFFORT", JSON.stringify(content));
+    assert.equal(r.warning, "it sets no valid CODEX_MODEL, CLAUDE_MODEL, AGENTS, CLAUDE_EFFORT, REVIEW_AGENT, REVIEW_MODEL or REVIEW_EFFORT", JSON.stringify(content));
     assert.equal(r.codex, "baked-codex");
     assert.equal(r.claude, "baked-claude");
   }
@@ -289,6 +345,7 @@ test("an empty DEV_MODELS_URL skips the fetch and uses baked", (t) => {
     codex: "baked-codex",
     claude: "baked-claude",
     effort: "low",
+    ...BAKED_REVIEW,
   });
 });
 
@@ -296,7 +353,7 @@ test("DEV_CODEX_MODEL / DEV_CLAUDE_MODEL beat the fetched file, and empty means 
   const url = servedFile(t, "CODEX_MODEL=main-codex\nCLAUDE_MODEL=main-claude\n");
   assert.deepEqual(
     pickModels(t, { baked: BAKED, env: { DEV_MODELS_URL: url, DEV_CODEX_MODEL: "env-codex", DEV_CLAUDE_MODEL: "" } }),
-    { url, agents: "codex,claude", codex: "env-codex", claude: "", effort: "low" },
+    { url, agents: "codex,claude", codex: "env-codex", claude: "", effort: "low", ...BAKED_REVIEW },
   );
 });
 

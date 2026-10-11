@@ -37,6 +37,11 @@ managed() {
   sed -n "/^# BEGIN dev-system managed/,/^# END dev-system managed\$/p" "$1"
 }
 
+# A config without its comment lines (the managed block's comments name keys).
+nocomment() {
+  grep -v '^[[:space:]]*#' "$1" || true
+}
+
 # The block as an older script appended it, byte for byte.
 legacy_block() {
   cat <<'EOF'
@@ -60,10 +65,11 @@ pin "$cfg" test-model
 [ "$(count "$BEGIN" "$cfg")" = 1 ] || fail "BEGIN marker missing: $(cat "$cfg")"
 [ "$(count "$END" "$cfg")" = 1 ] || fail "END marker missing: $(cat "$cfg")"
 head -n 1 "$cfg" | grep -qxF -- "$BEGIN" || fail "a fresh config should start with the block: $(cat "$cfg")"
-grep -qx 'agent_args_override:' "$cfg" || fail "agent_args_override not written"
-grep -qx '    - test-model' "$cfg" || fail "model not written - config was: $(cat "$cfg")"
-grep -qx '    - service_tier="priority"' "$cfg" || fail "service_tier not written"
-grep -qx '    - model_reasoning_effort="medium"' "$cfg" || fail "reasoning effort not written"
+grep -qx 'agent_config:' "$cfg" || fail "agent_config not written"
+grep -qx '    model: test-model' "$cfg" || fail "model not written - config was: $(cat "$cfg")"
+grep -qx '    effort: medium' "$cfg" || fail "codex effort not written"
+nocomment "$cfg" | grep -q 'agent_args_override\|service_tier\|--model\|--effort\|model_reasoning_effort' && fail "args-override flags or service tier written: $(cat "$cfg")"
+nocomment "$cfg" | grep -q 'review_agents' && fail "review_agents written without a review agent"
 grep -q '  claude:' "$cfg" && fail "claude pin written without a claude model"
 [ "$(stat -c %a "$cfg")" = 644 ] || fail "a new config should be 0644, is $(stat -c %a "$cfg")"
 
@@ -82,9 +88,9 @@ chmod 600 "$cfg"
 pin "$cfg" new-model claude-new
 [ "$out" = changed ] || fail "a model change should report 'changed'"
 grep -q old-model "$cfg" && fail "old model still in the block: $(cat "$cfg")"
-grep -qx '    - new-model' "$cfg" || fail "new model not written"
+grep -qx '    model: new-model' "$cfg" || fail "new model not written"
 grep -qx '  claude:' "$cfg" || fail "claude pin not written"
-grep -qx '    - claude-new' "$cfg" || fail "claude model not written"
+grep -qx '    model: claude-new' "$cfg" || fail "claude model not written"
 [ "$(count "$BEGIN" "$cfg")" = 1 ] || fail "block duplicated on a model change"
 expected=$(
   printf 'agent: codex\n\n'
@@ -108,8 +114,8 @@ pin "$cfg" test-model claude-test
 [ "$out" = changed ] || fail "the migration should report 'changed'"
 grep -q 'written by the callum-tools devcontainer feature' "$cfg" && fail "legacy comment not removed: $(cat "$cfg")"
 grep -q gpt-5.6-sol "$cfg" && fail "legacy model not removed"
-[ "$(grep -c '^agent_args_override:' "$cfg")" = 1 ] || fail "agent_args_override duplicated by the migration: $(cat "$cfg")"
-grep -qx '    - test-model' "$cfg" || fail "managed model not written by the migration"
+[ "$(grep -c '^agent_args_override:' "$cfg")" = 0 ] || fail "agent_args_override kept by the migration: $(cat "$cfg")"
+grep -qx '    model: test-model' "$cfg" || fail "managed model not written by the migration"
 pin "$cfg" test-model claude-test
 [ -z "$out" ] || fail "a migrated config should be stable on the next call"
 
@@ -183,7 +189,7 @@ pin "$cfg" test-model claude-test codex,claude
 [ "$out" = changed ] || fail "a write with agents should report 'changed'"
 [ "$(managed "$cfg" | grep -c '^agent:')" = 1 ] || fail "agent not written once in the block: $(cat "$cfg")"
 managed "$cfg" | grep -qx 'agent: \[codex, claude\]' || fail "agent order not written as a list in order: $(cat "$cfg")"
-managed "$cfg" | grep -qx '    - test-model' || fail "the pin should be written next to the agent order"
+managed "$cfg" | grep -qx '    model: test-model' || fail "the pin should be written next to the agent order"
 pin "$cfg" test-model claude-test codex,claude
 [ -z "$out" ] || fail "an identical call with agents should report nothing, got '$out'"
 
@@ -206,11 +212,11 @@ expected=$(
 pin "$cfg" "" "" claude
 [ "$out" = changed ] || fail "dropping the pin should report 'changed'"
 grep -qx 'agent: \[claude\]' "$cfg" || fail "agent part lost when the pin was dropped: $(cat "$cfg")"
-grep -q 'agent_args_override' "$cfg" && fail "pin kept for an empty codex model: $(cat "$cfg")"
+nocomment "$cfg" | grep -q 'agent_config' && fail "pin kept for an empty codex model: $(cat "$cfg")"
 pin "$cfg" test-model "" ""
 [ "$out" = changed ] || fail "dropping the agents should report 'changed'"
 grep -q '^agent:' "$cfg" && fail "agent part kept for empty agents: $(cat "$cfg")"
-grep -qx '    - test-model' "$cfg" || fail "pin not written when the agents were dropped"
+grep -qx '    model: test-model' "$cfg" || fail "pin not written when the agents were dropped"
 
 # both parts empty removes the block, and the blank line before it
 pin "$cfg" test-model "" codex
@@ -225,7 +231,7 @@ for bad in 'codex,,claude' ',codex' 'codex,' 'codex, claude' 'Codex' 'codex;rm' 
   rm -f "$cfg"
   pin "$cfg" test-model "" "$bad"
   grep -q '^agent:' "$cfg" && fail "invalid agent list '$bad' written: $(cat "$cfg")"
-  grep -qx '    - test-model' "$cfg" || fail "pin lost for an invalid agent list '$bad'"
+  grep -qx '    model: test-model' "$cfg" || fail "pin lost for an invalid agent list '$bad'"
   grep -q 'ignored the agent list' "$tmpdir/err" || fail "no note for the invalid agent list '$bad'"
   [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
 done
@@ -237,7 +243,7 @@ pin "$cfg" test-model claude-test codex,claude
 [ "$out" = changed ] || fail "the pin should still be written next to a hand-set agent"
 [ "$(grep -c '^agent:' "$cfg")" = 1 ] || fail "agent duplicated next to a hand-set one: $(cat "$cfg")"
 [ "$(head -n 1 "$cfg")" = 'agent: claude' ] || fail "hand-set agent changed: $(cat "$cfg")"
-grep -qx '    - test-model' "$cfg" || fail "pin not written next to a hand-set agent"
+grep -qx '    model: test-model' "$cfg" || fail "pin not written next to a hand-set agent"
 grep -q 'left the hand-set agent in' "$tmpdir/err" || fail "no note for a hand-set agent: $(cat "$tmpdir/err")"
 [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
 # ... and an existing managed agent part is removed when one is set by hand later
@@ -248,7 +254,7 @@ pin "$cfg" test-model "" codex,claude
 [ "$out" = changed ] || fail "removing the managed agent part should report 'changed'"
 [ "$(grep -c '^agent:' "$cfg")" = 1 ] || fail "managed agent kept next to a hand-set one: $(cat "$cfg")"
 [ "$(tail -n 1 "$cfg")" = 'agent: [claude]' ] || fail "hand-set agent changed: $(cat "$cfg")"
-grep -qx '    - test-model' "$cfg" || fail "pin lost when the agent was set by hand"
+grep -qx '    model: test-model' "$cfg" || fail "pin lost when the agent was set by hand"
 # a hand-set agent and an empty codex model: nothing left to write
 cfg="$tmpdir/hand-agent-only.yaml"
 printf 'agent: claude\n' > "$cfg"
@@ -269,7 +275,7 @@ for key in agent_config agent_args_override; do
   [ "$out" = changed ] || fail "the agent part should still be written next to a hand-set $key"
   grep -qx 'agent: \[codex, claude\]' "$cfg" || fail "agent part not written next to a hand-set $key: $(cat "$cfg")"
   [ "$(grep -c "^$key:" "$cfg")" = 1 ] || fail "$key duplicated: $(cat "$cfg")"
-  managed "$cfg" | grep -q 'agent_args_override\|test-model' && fail "pin written next to a hand-set $key: $(cat "$cfg")"
+  managed "$cfg" | grep -v '^#' | grep -q 'agent_config\|test-model' && fail "pin written next to a hand-set $key: $(cat "$cfg")"
   [ "$(head -n 4 "$cfg")" = "$(printf '%s:\n  codex:\n    - -m\n    - my-own' "$key")" ] || fail "hand-set $key changed"
   grep -q "hand-set agent_args_override / agent_config" "$tmpdir/err" || fail "no note for a hand-set $key"
 done
@@ -278,7 +284,7 @@ done
 cfg="$tmpdir/effort.yaml"
 pin "$cfg" test-model claude-test codex,claude medium
 [ "$out" = changed ] || fail "a write with a claude effort should report 'changed'"
-expected=$(printf '  claude:\n    - --model\n    - claude-test\n    - --effort\n    - medium')
+expected=$(printf '  claude:\n    model: claude-test\n    effort: medium')
 [ "$(managed "$cfg" | sed -n '/^  claude:$/,/^# END/p' | sed '$d')" = "$expected" ] \
   || fail "claude model and effort not written in order: $(cat "$cfg")"
 pin "$cfg" test-model claude-test codex,claude medium
@@ -286,28 +292,28 @@ pin "$cfg" test-model claude-test codex,claude medium
 # a level change rewrites it in place, with no duplicate keys
 pin "$cfg" test-model claude-test codex,claude high
 [ "$out" = changed ] || fail "an effort change should report 'changed'"
-[ "$(grep -c -- '--effort' "$cfg")" = 1 ] || fail "effort duplicated: $(cat "$cfg")"
+[ "$(grep -c 'effort: ' "$cfg")" = 2 ] || fail "effort duplicated: $(cat "$cfg")"
 [ "$(grep -c '^  claude:' "$cfg")" = 1 ] || fail "claude duplicated: $(cat "$cfg")"
-grep -qx '    - high' "$cfg" || fail "new effort not written: $(cat "$cfg")"
-grep -qx '    - medium' "$cfg" && fail "old effort kept: $(cat "$cfg")"
+grep -qx '    effort: high' "$cfg" || fail "new effort not written: $(cat "$cfg")"
+managed "$cfg" | sed -n '/^  claude:$/,$p' | grep -qx '    effort: medium' && fail "old effort kept: $(cat "$cfg")"
 # no effort -> claude keeps only its model
 pin "$cfg" test-model claude-test codex,claude
 [ "$out" = changed ] || fail "dropping the effort should report 'changed'"
-grep -q -- '--effort' "$cfg" && fail "effort kept after it was dropped: $(cat "$cfg")"
-grep -qx '    - claude-test' "$cfg" || fail "claude model lost when the effort was dropped"
+managed "$cfg" | sed -n '/^  claude:$/,$p' | grep -q 'effort' && fail "effort kept after it was dropped: $(cat "$cfg")"
+grep -qx '    model: claude-test' "$cfg" || fail "claude model lost when the effort was dropped"
 # an effort with no claude model still pins claude's effort
 pin "$cfg" test-model "" codex,claude low
-[ "$(managed "$cfg" | sed -n '/^  claude:$/,/^# END/p' | sed '$d')" = "$(printf '  claude:\n    - --effort\n    - low')" ] \
+[ "$(managed "$cfg" | sed -n '/^  claude:$/,/^# END/p' | sed '$d')" = "$(printf '  claude:\n    effort: low')" ] \
   || fail "effort alone not written for claude: $(cat "$cfg")"
 # the effort is part of the pin: an empty codex model drops it with the rest
 pin "$cfg" "" claude-test codex,claude medium
-grep -q -- '--effort\|  claude:' "$cfg" && fail "claude pinned with no codex pin: $(cat "$cfg")"
+grep -q 'effort: low\|  claude:' "$cfg" && fail "claude pinned with no codex pin: $(cat "$cfg")"
 grep -qx 'agent: \[codex, claude\]' "$cfg" || fail "agent order lost: $(cat "$cfg")"
 # every level claude takes is accepted
 for level in low medium high xhigh max; do
   cfg="$tmpdir/effort-$level.yaml"
   pin "$cfg" test-model claude-test "" "$level"
-  grep -qx "    - $level" "$cfg" || fail "effort level '$level' not written: $(cat "$cfg")"
+  grep -qx "    effort: $level" "$cfg" || fail "effort level '$level' not written: $(cat "$cfg")"
   [ ! -s "$tmpdir/err" ] || fail "a note for the valid level '$level': $(cat "$tmpdir/err")"
 done
 # an invalid effort is left out, with a one-line note; the claude model is kept
@@ -316,8 +322,8 @@ for bad in 'Medium' 'minimal' 'med' 'medium high' '$(id)' 'medium;rm' '-x'; do
   cfg="$tmpdir/bad-effort.yaml"
   rm -f "$cfg"
   pin "$cfg" test-model claude-test codex,claude "$bad"
-  grep -q -- '--effort' "$cfg" && fail "invalid effort '$bad' written: $(cat "$cfg")"
-  grep -qx '    - claude-test' "$cfg" || fail "claude model lost for an invalid effort '$bad'"
+  grep -qx "    effort: $bad" "$cfg" && fail "invalid effort '$bad' written: $(cat "$cfg")"
+  grep -qx '    model: claude-test' "$cfg" || fail "claude model lost for an invalid effort '$bad'"
   grep -q "ignored the claude effort" "$tmpdir/err" || fail "no note for the invalid effort '$bad'"
   [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
 done
@@ -325,7 +331,7 @@ done
 cfg="$tmpdir/hand-agent-config.yaml"
 printf 'agent_config:\n  claude:\n    model: claude-sonnet-5-5\n    effort: medium\n' > "$cfg"
 pin "$cfg" test-model claude-test codex,claude medium
-managed "$cfg" | grep -q -- 'agent_args_override\|--effort' && fail "pin written next to a hand-set agent_config: $(cat "$cfg")"
+managed "$cfg" | grep -v '^#' | grep -q 'agent_config\|effort' && fail "pin written next to a hand-set agent_config: $(cat "$cfg")"
 [ "$(grep -c '^agent_config:' "$cfg")" = 1 ] || fail "agent_config duplicated: $(cat "$cfg")"
 
 # --- unbalanced markers: an error, file left alone
@@ -337,5 +343,92 @@ if "$PIN_SH" "$cfg" test-model > /dev/null 2> "$tmpdir/err"; then
 fi
 cmp -s "$cfg" "$tmpdir/before" || fail "a config with unbalanced markers was modified"
 grep -q 'fix the managed block by hand' "$tmpdir/err" || fail "no fix for unbalanced markers: $(cat "$tmpdir/err")"
+
+# --- the review roles (6th-8th arguments): reviewer and fixer in review_agents
+cfg="$tmpdir/review.yaml"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+[ "$out" = changed ] || fail "a write with review roles should report 'changed'"
+expected=$(printf 'review_agents:\n  reviewer:\n    agent: claude\n    model: opus-test\n    effort: high\n  fixer:\n    agent: claude\n    model: opus-test\n    effort: high')
+[ "$(managed "$cfg" | sed -n '/^review_agents:$/,/^# END/p' | sed '$d')" = "$expected" ] || fail "review_agents not written: $(cat "$cfg")"
+managed "$cfg" | grep -qx 'agent: \[codex, claude\]' || fail "agent order lost: $(cat "$cfg")"
+managed "$cfg" | grep -qx '    model: claude-test' || fail "claude model lost: $(cat "$cfg")"
+nocomment "$cfg" | grep -q 'agent_args_override\|service_tier\|--model\|--effort\|model_reasoning_effort\|-m$' && fail "args-override flags or service tier written: $(cat "$cfg")"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+[ -z "$out" ] || fail "an identical call with review roles should report nothing, got '$out'"
+# an empty review agent writes no review_agents (and removes an old one)
+pin "$cfg" test-model claude-test codex,claude medium "" opus-test high
+[ "$out" = changed ] || fail "dropping the review agent should report 'changed'"
+nocomment "$cfg" | grep -q 'review_agents' && fail "review_agents kept for an empty review agent: $(cat "$cfg")"
+grep -qx '    model: test-model' "$cfg" || fail "pin lost when the review roles were dropped"
+# model and effort are each written only when set
+pin "$cfg" test-model claude-test codex,claude medium claude
+managed "$cfg" | sed -n '/^review_agents:$/,/^# END/p' | grep -q 'model\|effort' && fail "review model or effort written when empty: $(cat "$cfg")"
+# the review roles alone are enough to write the block
+cfg="$tmpdir/review-alone.yaml"
+pin "$cfg" "" "" "" "" claude opus-test high
+[ "$out" = changed ] || fail "review roles alone should write the block"
+nocomment "$cfg" | grep -q 'agent_config\|^agent:' && fail "other parts written: $(cat "$cfg")"
+# an invalid review agent (a list included) or effort is skipped with a one-line note
+# shellcheck disable=SC2016 # a literal $(id), to prove it is rejected
+for bad in 'claude,codex' 'Claude' 'claude codex' '-claude' '$(id)' 'claude;rm'; do
+  cfg="$tmpdir/bad-review.yaml"
+  rm -f "$cfg"
+  pin "$cfg" test-model claude-test codex,claude medium "$bad" opus-test high
+  nocomment "$cfg" | grep -q 'review_agents' && fail "invalid review agent '$bad' written: $(cat "$cfg")"
+  grep -qx '    model: test-model' "$cfg" || fail "pin lost for an invalid review agent '$bad'"
+  grep -q 'ignored the review agent' "$tmpdir/err" || fail "no note for the invalid review agent '$bad'"
+  [ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
+done
+for bad in 'Medium' 'minimal' 'high;rm'; do
+  cfg="$tmpdir/bad-review-effort.yaml"
+  rm -f "$cfg"
+  pin "$cfg" test-model claude-test codex,claude medium claude opus-test "$bad"
+  managed "$cfg" | sed -n '/^review_agents:$/,/^# END/p' | grep -q 'effort' && fail "invalid review effort '$bad' written: $(cat "$cfg")"
+  grep -q 'agent: claude' "$cfg" || fail "review roles lost for an invalid effort '$bad'"
+  grep -q 'ignored the review effort' "$tmpdir/err" || fail "no note for the invalid review effort '$bad'"
+done
+# a hand-set review_agents wins over its part only, with a one-line note
+cfg="$tmpdir/hand-review.yaml"
+printf 'review_agents:\n  reviewer:\n    agent: codex\n' > "$cfg"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+grep -qx 'agent: \[codex, claude\]' "$cfg" || fail "agent part lost next to a hand-set review_agents"
+grep -qx '    model: test-model' "$cfg" || fail "pin lost next to a hand-set review_agents"
+[ "$(grep -c '^review_agents:' "$cfg")" = 1 ] || fail "review_agents duplicated: $(cat "$cfg")"
+grep -q 'left the hand-set review_agents' "$tmpdir/err" || fail "no note for a hand-set review_agents"
+[ "$(wc -l < "$tmpdir/err")" = 1 ] || fail "the note should be one line: $(cat "$tmpdir/err")"
+# ... and a hand-set agent_args_override drops only the agent_config part
+cfg="$tmpdir/hand-args-review.yaml"
+printf 'agent_args_override:\n  codex:\n    - -m\n    - my-own\n' > "$cfg"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+managed "$cfg" | grep -v '^#' | grep -q 'agent_config' && fail "agent_config written next to a hand-set agent_args_override"
+managed "$cfg" | grep -q 'review_agents' || fail "review part lost next to a hand-set agent_args_override: $(cat "$cfg")"
+# an existing managed review part is removed when one is set by hand later
+cfg="$tmpdir/hand-review-later.yaml"
+pin "$cfg" test-model "" codex claude opus-test high
+printf '\nreview_agents: {}\n' >> "$cfg"
+pin "$cfg" test-model "" codex claude opus-test high
+managed "$cfg" | grep -v '^#' | grep -q 'review_agents' && fail "managed review part kept next to a hand-set one: $(cat "$cfg")"
+
+# --- the old managed block (args-override pin with a service tier and claude --model / --effort) migrates in place
+cfg="$tmpdir/old-managed.yaml"
+{
+  printf 'keep: 1\n\n%s\n' "$BEGIN"
+  printf '# old\nagent: [codex, claude]\nagent_args_override:\n  codex:\n    - -m\n    - old-codex\n    - -c\n    - service_tier="priority"\n    - -c\n    - model_reasoning_effort="medium"\n'
+  printf '  claude:\n    - --model\n    - old-claude\n    - --effort\n    - medium\n%s\n\nafter: 2\n' "$END"
+} > "$cfg"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+[ "$out" = changed ] || fail "the old managed block should be rewritten"
+nocomment "$cfg" | grep -q 'agent_args_override\|service_tier\|--model\|--effort\|old-' && fail "old block content kept: $(cat "$cfg")"
+grep -qx 'keep: 1' "$cfg" || fail "content before the block lost: $(cat "$cfg")"
+grep -qx 'after: 2' "$cfg" || fail "content around the block lost: $(cat "$cfg")"
+managed "$cfg" | grep -qx '    model: claude-test' || fail "new block not written: $(cat "$cfg")"
+pin "$cfg" test-model claude-test codex,claude medium claude opus-test high
+[ -z "$out" ] || fail "a second run after the migration should print nothing, got '$out'"
+
+# --- the codex-only call (the feature's setup.sh) writes no service tier or review roles
+cfg="$tmpdir/codex-only.yaml"
+pin "$cfg" test-model
+nocomment "$cfg" | grep -q 'service_tier\|review_agents\|agent_args_override' && fail "codex-only call wrote more than agent_config: $(cat "$cfg")"
+grep -qx '    model: test-model' "$cfg" || fail "codex-only call lost the model"
 
 echo "pin-codex-model.sh: all tests passed"

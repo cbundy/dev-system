@@ -16,19 +16,25 @@
 # not valid for KEY (models_valid). The last line that sets a key wins. Spaces
 # around a line, and a trailing CR, are ignored.
 
-MODELS_KEYS="CODEX_MODEL CLAUDE_MODEL AGENTS CLAUDE_EFFORT"
+MODELS_KEYS="CODEX_MODEL CLAUDE_MODEL AGENTS CLAUDE_EFFORT REVIEW_AGENT REVIEW_MODEL REVIEW_EFFORT"
 
 # models_valid <KEY> <value>: returns 0 when value is valid for KEY. AGENTS is
 # the pipeline's ordered agent list: one or more comma-separated names, each
 # matching [a-z0-9][a-z0-9:_-]*, with no empty entries and no spaces.
-# CLAUDE_EFFORT is one of claude's --effort levels. Every other key is a model:
+# REVIEW_AGENT is a single such name (the review roles have no fallback list).
+# CLAUDE_EFFORT and REVIEW_EFFORT are one of claude's --effort levels. Every other key is a model:
 # one or more of [A-Za-z0-9._:/-].
 models_valid() {
   case "$1" in
-    CLAUDE_EFFORT)
+    CLAUDE_EFFORT | REVIEW_EFFORT)
       case "$2" in
         low | medium | high | xhigh | max) ;;
         *) return 1 ;;
+      esac
+      ;;
+    REVIEW_AGENT)
+      case "$2" in
+        "" | *[!a-z0-9:_-]* | [!a-z0-9]*) return 1 ;;
       esac
       ;;
     AGENTS)
@@ -56,7 +62,8 @@ models_valid() {
 models_rule() {
   case "$1" in
     AGENTS) echo "a comma-separated list of agent names, each [a-z0-9][a-z0-9:_-]*, with no spaces" ;;
-    CLAUDE_EFFORT) echo "one of low, medium, high, xhigh, max" ;;
+    REVIEW_AGENT) echo "one agent name, [a-z0-9][a-z0-9:_-]*, with no comma" ;;
+    CLAUDE_EFFORT | REVIEW_EFFORT) echo "one of low, medium, high, xhigh, max" ;;
     *) echo "one or more of [A-Za-z0-9._:/-]" ;;
   esac
 }
