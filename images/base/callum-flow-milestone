@@ -41,8 +41,15 @@
 # Exit codes: 0 done or no-op, 1 a GitHub error (or `later` with no open Later),
 # 2 usage error.
 #
-# Environment: CALLUM_FLOW_REPO (owner/name, default from gh); for tests
-# CALLUM_FLOW_GH_BIN.
+# show lists only items whose author is trusted (CALLUM_FLOW_TRUSTED_AUTHORS, the
+# same list callum-flow-issue-read enforces): a title is text an untrusted user
+# wrote, so it never reaches the agent; the count of hidden items goes to stderr.
+# tag moves only items of the PR's own repo: a closing reference into another
+# repository is left alone with a warning (milestone numbers are per repo).
+#
+# Environment: CALLUM_FLOW_REPO (owner/name, default from gh),
+# CALLUM_FLOW_TRUSTED_AUTHORS (show); for tests CALLUM_FLOW_GH_BIN and
+# CALLUM_FLOW_SHARE_DIR.
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
@@ -127,6 +134,11 @@ item_title() {
   printf '%s' "$_j" | jq -r '.milestone.title // empty' 2> /dev/null || return 1
 }
 
+# jq: an item is trusted when its user's login (case-insensitive) and id both match
+# one entry of $T; a missing user is untrusted.
+# shellcheck disable=SC2016
+TRUST='def is_trusted: (.user // null) as $u | ($u | type) == "object" and any($T[]; .login == (($u.login // "") | ascii_downcase) and .id == $u.id); '
+
 case "$cmd" in
   plan)
     n=$1
@@ -145,6 +157,11 @@ case "$cmd" in
     ;;
 
   show)
+    SHARE=${CALLUM_FLOW_SHARE_DIR:-/usr/local/share/dev-system}
+    # shellcheck source=trusted-authors.sh
+    . "$SHARE/trusted-authors.sh" 2> /dev/null || { err "cannot read $SHARE/trusted-authors.sh"; exit 1; }
+    msg=$(trusted_authors_check) || { err "$msg - refusing to list items"; exit 1; }
+    trusted=$(trusted_authors_json) || { err "cannot parse CALLUM_FLOW_TRUSTED_AUTHORS"; exit 1; }
     rc=0
     for which in $( [ $# -eq 1 ] && echo "$1" || echo "next later" ); do
       if [ "$which" = next ]; then t=$NEXT mn=$next_n; else t=$LATER mn=$later_n; fi
@@ -159,7 +176,9 @@ case "$cmd" in
       fi
       items=$(list "repos/$repo/issues?milestone=$mn&state=all&per_page=100") ||
         { err "cannot list the items of \"$t\""; rc=1; continue; }
-      printf '%s' "$items" | jq -r '.[] | "#\(.number) \(.state) \(if .pull_request then "pr" else "issue" end) \(.title)"' ||
+      hidden=$(printf '%s' "$items" | jq --argjson T "$trusted" "$TRUST"'[.[] | select(is_trusted | not)] | length' 2> /dev/null) || hidden=
+      [ -z "$hidden" ] || [ "$hidden" = 0 ] || err "$hidden item(s) of \"$t\" by untrusted authors not shown"
+      printf '%s' "$items" | jq -r --argjson T "$trusted" "$TRUST"'.[] | select(is_trusted) | "#\(.number) \(.state) \(if .pull_request then "pr" else "issue" end) \(.title)"' ||
         { err "cannot read the items of \"$t\""; rc=1; }
     done
     exit "$rc"
@@ -198,7 +217,17 @@ case "$cmd" in
       echo "PR #$pr targets $base, not $def - it does not ship in \"$NEXT\", nothing tagged"
       exit 0
     fi
-    items="$pr $(printf '%s' "$info" | jq -r '[.closingIssuesReferences[]?.number] | map(tostring) | join(" ")')"
+    refs=$(printf '%s' "$info" | jq -r --arg r "$repo" '.closingIssuesReferences[]? |
+      "\(if .repository then "\(.repository.owner.login)/\(.repository.name)" else $r end)#\(.number)"') ||
+      { err "cannot read the issues PR #$pr closes"; exit 1; }
+    items=$pr
+    for ref in $refs; do
+      if [ "${ref%#*}" = "$repo" ]; then
+        items="$items ${ref#*#}"
+      else
+        err "warning: $ref is in another repository, not moved"
+      fi
+    done
     rc=0
     for n in $items; do
       from=$(item_title "$n") || { err "cannot read #$n"; rc=1; continue; }
