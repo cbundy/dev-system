@@ -87,7 +87,7 @@ expect_calls orchestrator Orchestrator /emojis/1f504.png \
   remote_control_default_resume=true \
   remote_control_default_skip_permissions=false \
   remote_control_prompt=/callum-flow:issue-orchestrator \
-  'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watchers and the audit, and continue the issue-orchestrator loop.' \
+  'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.' \
   'remote_control_name_format=🔄 {name} orchestrator'
 
 # 3. Anything else is refused before any call.

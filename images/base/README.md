@@ -60,12 +60,14 @@ them, so those scripts stay maintained.
     `OTEL_EXPORTER_OTLP_ENDPOINT` (see [Telemetry](#telemetry-opentelemetry-export)).
 
 The callum-tools watcher scripts (`pipeline-watch.sh`, `queue-watch.sh`) and `check-pr-linkage.sh` (the read-only pre-merge issue-linkage check) are staged at
-`/usr/local/share/callum-tools/`, the same path the feature uses, so the `callum-flow`
-orchestrator skill works unchanged. By default each prints one event line and exits; with
+`/usr/local/share/callum-tools/`, the same path the feature uses. For direct use, each
+watcher prints one event line and exits by default; with
 `--stream` it keeps running and prints one line per change, for a harness that turns each
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
-`orchestrator-watch.sh` runs both as one process with one `--deadline` (single-shot or
+The [issue-orchestrator skill](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md)
+owns the orchestrator's arming and restart policy. It uses `orchestrator-watch.sh`, which
+runs both as one process with one `--deadline` (single-shot or
 `--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
 baselines forward, and refuses a second copy per repository.
 Its single-shot collection window is set by `ORCHESTRATOR_WATCH_WINDOW`, defaulting
