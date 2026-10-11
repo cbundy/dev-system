@@ -42,6 +42,16 @@
             "timeout": 6
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/fresh-worktree.sh\"",
+            "timeout": 20
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
