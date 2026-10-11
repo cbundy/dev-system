@@ -9,6 +9,13 @@
 # (the only GitHub API call dev-login makes) in $FIX/status.calls; `auth token` is local.
 set -eu
 
+# Start from a clean host environment. Only settings assigned by this suite below
+# may reach dev-login, including direct concurrent and timeout invocations.
+for name in $(env | sed -n 's/^\(DEV_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$name"
+done
+unset GH_TOKEN GITHUB_TOKEN
+
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 BASE="$SCRIPT_DIR/.."
 CMD="$BASE/dev-login"
@@ -78,12 +85,21 @@ STUB
 cat > "$bin/sleep" <<'STUB'
 #!/bin/sh
 if [ "$1" -ge 10 ] 2>/dev/null; then
+  if [ -f "$FIX/login-gh-after-sleep" ]; then
+    printf 'tok1\n' > "$FIX/token"
+    rm "$FIX/login-gh-after-sleep"
+  fi
   echo "$1" >> "$FIX/sleeps"
   n=$(wc -l < "$FIX/sleeps")
   [ "$n" -lt "$(cat "$FIX/flip-after" 2>/dev/null || echo 1000)" ] || : > "$FIX/claude-in"
   [ "$n" -lt 100 ] || exit 1
 fi
 exit 0
+STUB
+cat > "$bin/dev-init" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$FIX/dev-init.args"
+exit 1
 STUB
 cat > "$bin/curl" <<'STUB'
 #!/bin/sh
@@ -253,6 +269,7 @@ timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
   || fail "watch should exit 0 with only codex missing"
 [ ! -f "$FIX/tmux.started" ] || fail "watch must not start codex"
 [ ! -f "$FIX/sleeps" ] || fail "watch should not have slept"
+[ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
 # an empty DEV_LOGIN_OPTIONAL makes codex required again
 DEV_LOGIN_OPTIONAL="" dl status --json 2>/dev/null | jq -e '.codex | has("optional") | not' >/dev/null \
   || fail "DEV_LOGIN_OPTIONAL= should make codex required"
@@ -270,6 +287,7 @@ done
 [ ! -f "$FIX/tmux.started" ] || fail "watch must not start attempts with all tools logged in"
 [ ! -f "$FIX/sleeps" ] || fail "watch should not sleep with all tools logged in"
 expect_calls 1 "completed attempts cleanup"
+[ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
 
 # --- watch backs off, and gives up on gh's scope -----------------------------------------
 reset tok1 "$noscope_json"
@@ -291,6 +309,8 @@ expect_calls 1 "a whole watch"
 [ ! -f "$FIX/session.login-claude" ] || fail "watch must clean up Claude's attempt after an external login"
 [ ! -f "$FIX/gh.unexpected" ] || fail "unexpected gh calls: $(cat "$FIX/gh.unexpected")"
 
+[ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
+
 # a changed set of pending logins starts the backoff over
 reset tok1 "$ok_json"
 rm -f "$FIX/claude-in"
@@ -298,5 +318,25 @@ echo 4 > "$FIX/flip-after"
 timeout 60 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
   DEV_LOGIN_WATCH_MAX=80 bash "$CMD" watch >/dev/null 2>&1 || fail "second watch did not finish"
 [ "$(tr '\n' ' ' < "$FIX/sleeps")" = "15 30 60 80 " ] || fail "backoff steps: $(tr '\n' ' ' < "$FIX/sleeps")"
+
+[ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
+
+# A GitHub login transition must not clone a repo inherited from the host.
+reset none "$ok_json"
+rm -f "$FIX/claude-in"
+: > "$FIX/login-gh-after-sleep"
+echo 2 > "$FIX/flip-after"
+timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
+  bash "$CMD" watch > /dev/null 2>"$err" \
+  || { cat "$err" >&2; fail "plain GitHub transition watch did not finish"; }
+[ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
+
+# Explicit repo configuration reaches only the failing stub, never host dev-init.
+reset none "$ok_json"
+: > "$FIX/login-gh-after-sleep"
+timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
+  DEV_REPO_URL=https://repo.invalid/test.git bash "$CMD" watch >/dev/null 2>&1 \
+  || fail "explicit repo watch did not finish"
+[ "$(cat "$FIX/dev-init.args")" = '--repo' ] || fail "dev-init stub must receive --repo once"
 
 echo "dev-login: ok"

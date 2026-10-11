@@ -35,10 +35,11 @@ const get = (port, p) =>
 async function startPage(t, tools, env = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "login-page-"));
   fs.writeFileSync(path.join(dir, "tools.json"), JSON.stringify(tools));
-  fs.writeFileSync(path.join(dir, "dev-login"), `#!/bin/sh\necho "$*" >> "${dir}/args"\ncat "${dir}/tools.json"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, "dev-login"), `#!/bin/sh\necho "$*" >> "${dir}/args"\nenv | sed -n 's/^\\(DEV_[A-Za-z0-9_]*\\)=.*/\\1/p' > "${dir}/env-names"\ncat "${dir}/tools.json"\n`, { mode: 0o755 });
   const port = await freePort();
+  const hostEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("DEV_")));
   const child = spawn("node", [PAGE], {
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, DEV_LOGIN_PORT: String(port), ...env },
+    env: { ...hostEnv, PATH: `${dir}:${process.env.PATH}`, DEV_LOGIN_PORT: String(port), ...env },
     stdio: ["ignore", "ignore", "pipe"],
   });
   const exited = new Promise((resolve) => child.on("exit", resolve));
@@ -56,7 +57,8 @@ async function startPage(t, tools, env = {}) {
     }
   }
   const calls = () => (fs.existsSync(path.join(dir, "args")) ? fs.readFileSync(path.join(dir, "args"), "utf8").trim().split("\n") : []);
-  return { port, calls, stderr: () => stderr, child, exited };
+  const envNames = () => fs.readFileSync(path.join(dir, "env-names"), "utf8").trim().split("\n").sort();
+  return { port, calls, envNames, stderr: () => stderr, child, exited };
 }
 
 const tools = {
@@ -93,4 +95,25 @@ test("a required tool that is out keeps the page up", async (t) => {
   const page = await startPage(t, { ...tools, claude: { state: "out", url: null, code: null } }, { DEV_LOGIN_PAGE_EXIT: "1" });
   assert.equal((await get(page.port, "/healthz")).status, 200);
   assert.equal(page.child.exitCode, null);
+});
+
+test("page commands receive only explicit DEV settings", async (t) => {
+  const inherited = {
+    DEV_REPO_URL: "https://host.invalid/workspace.git",
+    DEV_NOTIFY_URL: "https://notify.invalid/host",
+    DEV_LOGIN_PAGE_URL: "https://page.invalid/host",
+    DEV_LOGIN_TOOLS: "host-tool",
+  };
+  const previous = Object.fromEntries(Object.keys(inherited).map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, inherited);
+    const page = await startPage(t, tools, { DEV_LOGIN_PAGE_EXIT: "0" });
+    assert.equal((await get(page.port, "/")).status, 200);
+    assert.deepEqual(page.envNames(), ["DEV_LOGIN_PAGE_EXIT", "DEV_LOGIN_PORT"]);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
