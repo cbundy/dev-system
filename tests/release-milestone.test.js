@@ -93,7 +93,7 @@ function throughGh(t, api) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gh-responses-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const response = path.join(dir, "response.json");
-  fs.writeFileSync(path.join(dir, "gh"), `#!/bin/sh\ncat '${response}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, "gh"), `#!/bin/sh\ncase " $* " in *" --input "*) cat >/dev/null ;; esac\ncat '${response}'\n`, { mode: 0o755 });
   return async (method, endpoint, body) => {
     const value = await api(method, endpoint, body);
     const pages = Array.isArray(value) ? [value.slice(0, 1), value.slice(1)] : [value];
