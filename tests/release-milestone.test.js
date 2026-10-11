@@ -328,6 +328,17 @@ test("--plan says so when there is no Next release", async (t) => {
   assert.match(r.stdout, /no open Next release milestone/);
 });
 
+test("prerelease and malformed versions are refused before any API call", async (t) => {
+  const root = fakeRepo(t, []);
+  const api = () => { throw new Error("api called"); };
+  for (const args of [["--release", "1.2.0-rc.1"], ["--plan", "1.2.0-rc.1"], ["--backfill", "1.2.0-rc.1"], ["--release", "1.2.3foo"]]) {
+    let err = "";
+    const code = await main(args, { api, stdout: { write() {} }, stderr: { write: (m) => { err += m; } }, root });
+    assert.equal(code, 2, args.join(" "));
+    if (args[1].includes("rc")) assert.match(err, /1\.2\.0-rc\.1.*only for final releases/);
+  }
+});
+
 test("CLI: usage errors exit 2 and the real gh wiring is used", (t) => {
   const bad = spawnSync("node", [SCRIPT, "--bogus"], { encoding: "utf-8" });
   assert.equal(bad.status, 2);

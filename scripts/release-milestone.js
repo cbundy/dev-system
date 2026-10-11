@@ -205,7 +205,11 @@ async function main(argv, { api = ghApi, stdout = process.stdout, stderr = proce
     return i >= 0 ? rest[i + 1] : undefined;
   };
   const known = rest.every((a, i) => ["--from", "--to"].includes(a) || ["--from", "--to"].includes(rest[i - 1]));
-  if (!modes[mode] || !/^\d+\.\d+\.\d+/.test(version || "") || !known) {
+  if (/^\d+\.\d+\.\d+-/.test(version || "")) {
+    stderr.write(`${version} is a prerelease; milestones are only for final releases (X.Y.Z)\n`);
+    return 2;
+  }
+  if (!modes[mode] || !/^\d+\.\d+\.\d+$/.test(version || "") || !known) {
     stderr.write(USAGE);
     return 2;
   }

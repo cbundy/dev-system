@@ -10,11 +10,14 @@ const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
 const SCRIPT = path.join(__dirname, "..", "scripts", "release-notes.js");
-const { validateNotes, previousTag, buildBody, MAX_LINES } = require(SCRIPT);
+const { validateNotes, previousTag, buildBody, MAX_LINES, MAX_VERIFY } = require(SCRIPT);
 
 const PR = (n) => `([#${n}](https://github.com/cbundy/dev-system/pull/${n}))`;
-const GOOD = `## New\n- **Thing** - Does a thing. ${PR(1)}\n\n## Fixed\n- **Bug** - No more bug. ${PR(2)}\n\n## Upgrade\n- Run \`npx callum-dev update\`.\n`;
-const ONLY_FIXED = `## Fixed\n- **Bug** - No more bug. ${PR(2)}\n\n## Upgrade\n- Run it.\n`;
+const VERIFY = "\n## Verify\n- Run it and see it work.\n";
+const BASE = `## New\n- **Thing** - Does a thing. ${PR(1)}\n\n## Fixed\n- **Bug** - No more bug. ${PR(2)}\n\n## Upgrade\n- Run \`npx callum-dev update\`.\n`;
+const BASE_FIXED = `## Fixed\n- **Bug** - No more bug. ${PR(2)}\n\n## Upgrade\n- Run it.\n`;
+const GOOD = BASE + VERIFY;
+const ONLY_FIXED = BASE_FIXED + VERIFY;
 
 const errs = (text) => validateNotes(text, "f.md").join("\n");
 
@@ -83,7 +86,7 @@ test("all notes commands reject unsupported content in every section", (t) => {
   const commands = [["--check", "1.1.0"], ["--lint"], ["--body", "1.1.0"]];
   for (const heading of ["Breaking", "New", "Changed", "Fixed", "Upgrade"]) {
     const notes = heading === "Upgrade" ? ONLY_FIXED :
-      `## ${heading}\n- **Thing** - Does a thing. ${PR(1)}\n\n## Upgrade\n- Run it.\n`;
+      `## ${heading}\n- **Thing** - Does a thing. ${PR(1)}\n\n## Upgrade\n- Run it.\n${VERIFY}`;
     const item = heading === "Upgrade" ? "- Run it." : `- **Thing** - Does a thing. ${PR(1)}`;
     for (const content of ["1. Unlinked change", "+ Unlinked change", "Unlinked change", "  Continued text"]) {
       const invalid = notes.replace(item, `${item}\n${content}`);
@@ -99,7 +102,7 @@ test("all notes commands reject unsupported content in every section", (t) => {
     for (const args of commands) {
       const r = run(root, args);
       assert.equal(r.status, 0, r.stderr);
-      if (args[0] === "--body") assert.ok(r.stdout.startsWith(notes.trimEnd() + "\n"));
+      if (args[0] === "--body") assert.ok(r.stdout.startsWith(notes.replace(VERIFY, "").trimEnd() + "\n"));
     }
   }
 });
@@ -115,7 +118,7 @@ test("--body groups the commits since the previous tag, deterministically", (t) 
   commit(root, "refactor: d", "BREAKING CHANGE: gone");
   git(root, "tag", "v2.0.0");
   git(root, "tag", "v1.0.0-rc.1");
-  assert.equal(previousTag("1.1.0", root), "v1.0.0-rc.1");
+  assert.equal(previousTag("1.1.0", root), "v0.9.0");
   git(root, "tag", "-d", "v1.0.0-rc.1");
   assert.equal(previousTag("1.1.0", root), "v0.9.0");
   fs.writeFileSync(path.join(root, "release-notes/v1.1.0.md"), GOOD);
@@ -126,7 +129,7 @@ test("--body groups the commits since the previous tag, deterministically", (t) 
   assert.equal(run(root, args).stdout, a.stdout);
   const link = (n) => `([#${n}](https://github.com/cbundy/dev-system/pull/${n}))`;
   const expected =
-    GOOD.trimEnd() +
+    BASE.trimEnd() +
     "\n\n<details>\n<summary>Technical changes</summary>\n\n" +
     "### Breaking\n\n- d\n- b " + link(2) + "\n\n" +
     "### Enhancements\n\n- x: a " + link(1) + "\n\n" +
@@ -145,37 +148,66 @@ test("--body refuses invalid notes", (t) => {
   assert.ok(typeof buildBody === "function");
 });
 
-test("previousTag follows full prerelease precedence and ignores build metadata", (t) => {
+test("previousTag returns the highest final tag below the core version, never a release candidate", (t) => {
   const root = fakeRepo(t);
   commit(root, "chore: baseline (#9)");
   git(root, "tag", "v1.1.0");
-  const versions = [
-    "1.2.0-alpha", "1.2.0-alpha.1", "1.2.0-alpha.beta", "1.2.0-beta",
-    "1.2.0-beta.2", "1.2.0-beta.11", "1.2.0-rc.1", "1.2.0-rc.2",
-    "1.2.0-rc.9", "1.2.0-rc.10", "1.2.0",
-  ];
-  let previous = "v1.1.0";
-  for (const version of versions) {
-    assert.equal(previousTag(version, root), previous);
-    git(root, "tag", `v${version}`);
-    git(root, "tag", `v${version}+build.1`);
-    assert.equal(previousTag(`${version}+build.2`, root), previous);
-    previous = `v${version}`;
-    git(root, "tag", "-d", `v${version}+build.1`);
-  }
+  for (const tag of ["v1.2.0-rc.1", "v1.2.0-rc.2"]) git(root, "tag", tag);
+  for (const v of ["1.2.0-rc.1", "1.2.0-rc.2", "1.2.0", "1.2.0+build.2"]) assert.equal(previousTag(v, root), "v1.1.0", v);
+  git(root, "tag", "v1.2.0");
+  assert.equal(previousTag("1.2.0", root), "v1.1.0");
+  assert.equal(previousTag("1.3.0", root), "v1.2.0");
+  assert.equal(previousTag("1.3.0-rc.1", root), "v1.2.0");
 });
 
-test("--body excludes earlier prerelease changes for prereleases and final releases", (t) => {
+test("--body rc and final modes share the technical list; only the rc keeps Verify", (t) => {
   const root = fakeRepo(t);
   commit(root, "feat: already stable (#9)");
   git(root, "tag", "v1.1.0");
-  for (const [version, n] of [["1.2.0-rc.1", 10], ["1.2.0-rc.2", 11], ["1.2.0-rc.9", 12], ["1.2.0-rc.10", 13], ["1.2.0", 14]]) {
-    commit(root, `feat: change ${n} (#${n})`);
-    git(root, "tag", `v${version}`);
-    fs.writeFileSync(path.join(root, `release-notes/v${version}.md`), ONLY_FIXED);
-    const r = run(root, ["--body", version]);
-    assert.equal(r.status, 0, r.stderr);
-    assert.equal(r.stdout, ONLY_FIXED.trimEnd() +
-      `\n\n<details>\n<summary>Technical changes</summary>\n\n### Enhancements\n\n- change ${n} ${PR(n)}\n\n</details>\n`);
-  }
+  commit(root, "feat: change 10 (#10)");
+  git(root, "tag", "v1.2.0-rc.1");
+  commit(root, "fix: change 11 (#11)");
+  git(root, "tag", "v1.2.0-rc.2");
+  git(root, "tag", "v1.2.0");
+  fs.writeFileSync(path.join(root, "release-notes/v1.2.0.md"), GOOD);
+  const rc = run(root, ["--body", "1.2.0-rc.2"]);
+  const fin = run(root, ["--body", "1.2.0"]);
+  assert.equal(rc.status, 0, rc.stderr);
+  assert.equal(fin.status, 0, fin.stderr);
+  const details = (out) => out.slice(out.indexOf("<details>"));
+  assert.equal(details(rc.stdout), details(fin.stdout));
+  assert.match(details(fin.stdout), /change 10[^]*change 11|change 11[^]*change 10/);
+  assert.match(rc.stdout, /## Verify\n- Run it and see it work\./);
+  assert.doesNotMatch(fin.stdout, /Verify/);
+  assert.equal(fin.stdout.split("<details>")[0], BASE + "\n");
+  // An rc whose tag does not exist yet ends at HEAD and uses the same notes file.
+  assert.equal(run(root, ["--check", "1.2.0-rc.3"]).status, 0);
+  assert.equal(run(root, ["--body", "1.2.0-rc.3"]).status, 0);
+});
+
+test("Verify validation", () => {
+  const e = (text, v) => validateNotes(text, "n", v).join("\n");
+  assert.deepEqual(validateNotes(GOOD, "n", "1.1.0"), []);
+  assert.match(e(BASE, "1.1.0"), /needs a "Verify" section/);
+  assert.equal(e(BASE, "0.27.0"), "");
+  assert.match(e(BASE + "\n## Verify\n", "1.1.0"), /empty "Verify" group/);
+  assert.match(e(BASE.replace("## Upgrade", "## Verify\n- x\n\n## Upgrade"), "1.1.0"), /out of order/);
+  assert.match(e(GOOD + "\n## Verify\n- again\n", "1.1.0"), /duplicated or out of order/);
+  const many = (n) => BASE + "\n## Verify\n" + Array.from({ length: n }, (_, i) => `- check ${i}`).join("\n") + "\n";
+  assert.equal(e(many(MAX_VERIFY), "1.1.0"), "");
+  assert.match(e(many(MAX_VERIFY + 1), "1.1.0"), /over the 10-item cap/);
+  // The line cap counts only the lines before Verify.
+  const filler = Array.from({ length: MAX_LINES - BASE.trimEnd().split("\n").length }, () => "").join("\n");
+  const full = BASE.replace("## Fixed", filler + "\n## Fixed");
+  assert.equal(full.trimEnd().split("\n").length, MAX_LINES);
+  assert.equal(e(full + many(MAX_VERIFY).slice(BASE.length), "1.1.0"), "");
+  assert.match(e(full.replace("## Fixed", "\n## Fixed") + VERIFY, "1.1.0"), /over the 40-line cap/);
+});
+
+test("--lint rejects a prerelease-named notes file", (t) => {
+  const root = fakeRepo(t);
+  fs.writeFileSync(path.join(root, "release-notes/v1.2.0-rc.1.md"), GOOD);
+  const r = run(root, ["--lint"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /notes are keyed by the final version/);
 });

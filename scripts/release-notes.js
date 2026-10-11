@@ -5,11 +5,14 @@
 // the curated notes, then a collapsed "Technical changes" list built from the commits
 // since the previous release tag.
 //
-//   node scripts/release-notes.js --check X.Y.Z      exit 1 unless the notes exist and are valid
+//   node scripts/release-notes.js --check X.Y.Z[-rc.N]  exit 1 unless the notes exist and are valid
+//                                                    (notes are keyed by the final version)
 //   node scripts/release-notes.js --lint             validate every notes file, and require
 //                                                    notes for the root package.json version
-//   node scripts/release-notes.js --body X.Y.Z [--from <prev-tag>] [--to <ref>]
-//                                                    print the release body to stdout
+//   node scripts/release-notes.js --body X.Y.Z[-rc.N] [--from <prev-tag>] [--to <ref>]
+//                                                    print the release body to stdout; the rc
+//                                                    form keeps the Verify section, the final
+//                                                    form drops it
 //
 // Node built-ins only.
 "use strict";
@@ -24,20 +27,31 @@ const REPO_URL = "https://github.com/cbundy/dev-system";
 const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 // "Fits on one screen": the cap on the notes file's lines, blank lines included.
 const MAX_LINES = 40;
-const HEADINGS = ["Breaking", "New", "Changed", "Fixed", "Upgrade"];
+// The Verify section (what to check on a release candidate) is last, outside the line cap,
+// and has its own item cap. Releases above VERIFY_REQUIRED_AFTER must have one.
+const MAX_VERIFY = 10;
+const VERIFY_REQUIRED_AFTER = "0.27.0";
+const VERIFY_HEADING = /^##\s+Verify\s*$/;
+const HEADINGS = ["Breaking", "New", "Changed", "Fixed", "Upgrade", "Verify"];
 const ITEM_HEADINGS = HEADINGS.slice(0, 4);
 const PR_LINK = /\[#\d+\]\(https:\/\/github\.com\/cbundy\/dev-system\/pull\/\d+\)/;
 const BULLET = /^- \*\*[^*]+\*\* - \S/;
+
+const core = (v) => v.replace(/^v/, "").split(/[-+]/)[0].split(".").map(BigInt);
+const coreString = (v) => v.replace(/^v/, "").split(/[-+]/)[0];
+const isPrerelease = (v) => /^v?[^-+]+-/.test(v);
 
 const notesPath = (version) => `${NOTES_DIR}/v${version}.md`;
 const hint = (version) => `write it with the \`release\` skill (.claude/skills/release/SKILL.md)${version ? ` for v${version}` : ""}`;
 
 // Returns the list of problems with one notes file's text (empty when valid).
-function validateNotes(text, file = "release-notes") {
+function validateNotes(text, file = "release-notes", version = null) {
   const errors = [];
   const err = (msg) => errors.push(`${file}: ${msg}`);
   const lines = text.replace(/\n+$/, "").split("\n");
-  if (lines.length > MAX_LINES) err(`${lines.length} lines, over the ${MAX_LINES}-line cap (notes must fit on one screen)`);
+  const verifyAt = lines.findIndex((l) => VERIFY_HEADING.test(l));
+  const mainLines = (verifyAt < 0 ? lines : lines.slice(0, verifyAt)).join("\n").replace(/\n+$/, "").split("\n");
+  if (mainLines.length > MAX_LINES) err(`${mainLines.length} lines before Verify, over the ${MAX_LINES}-line cap (notes must fit on one screen)`);
   if (/<details/i.test(text)) err("contains a <details> block; the technical list is added when the body is built");
   if (/^#+\s*technical changes/im.test(text)) err('contains a "Technical changes" heading; it is added when the body is built');
 
@@ -53,7 +67,7 @@ function validateNotes(text, file = "release-notes") {
     if (/^#\s/.test(line) || /^#{3,}\s/.test(line)) err(`line ${i + 1}: only "##" headings are allowed (${HEADINGS.join(", ")})`);
     if (/^\s*[-*]\s/.test(line) && current) {
       current.items += 1;
-      if (current.name !== "Upgrade") {
+      if (current.name !== "Upgrade" && current.name !== "Verify") {
         if (!BULLET.test(line)) err(`line ${i + 1}: item must look like "- **Title** - description ([#N](${REPO_URL}/pull/N))"`);
         if (!PR_LINK.test(line)) err(`line ${i + 1}: item has no PR link ([#N](${REPO_URL}/pull/N))`);
       }
@@ -72,15 +86,21 @@ function validateNotes(text, file = "release-notes") {
   }
   if (!sections.some((s) => ITEM_HEADINGS.includes(s.name))) err(`needs at least one of: ${ITEM_HEADINGS.join(", ")}`);
   if (!sections.some((s) => s.name === "Upgrade")) err('needs an "Upgrade" section');
+  const verify = sections.find((s) => s.name === "Verify");
+  if (verify && verify.items > MAX_VERIFY) err(`Verify has ${verify.items} items, over the ${MAX_VERIFY}-item cap`);
+  if (!verify && version && compareVersions(core(version).join("."), VERIFY_REQUIRED_AFTER) > 0) {
+    err(`needs a "Verify" section as the last section (required above v${VERIFY_REQUIRED_AFTER})`);
+  }
   return errors;
 }
 
 function checkVersion(version, root = REPO_ROOT) {
   if (!SEMVER.test(version || "")) return [`'${version}' is not a valid semantic version`];
-  const rel = notesPath(version);
+  const final = coreString(version);
+  const rel = notesPath(final);
   const file = path.join(root, rel);
-  if (!fs.existsSync(file)) return [`${rel}: missing; ${hint(version)}`];
-  return validateNotes(fs.readFileSync(file, "utf-8"), rel).map((e) => `${e} (see the release skill)`);
+  if (!fs.existsSync(file)) return [`${rel}: missing; ${hint(final)}`];
+  return validateNotes(fs.readFileSync(file, "utf-8"), rel, final).map((e) => `${e} (see the release skill)`);
 }
 
 function lint(root = REPO_ROOT) {
@@ -89,15 +109,15 @@ function lint(root = REPO_ROOT) {
   const files = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
   for (const f of files) {
     const m = /^v(.+)\.md$/.exec(f);
-    if (!m || !SEMVER.test(m[1])) errors.push(`${NOTES_DIR}/${f}: name must be vX.Y.Z.md`);
-    else errors.push(...validateNotes(fs.readFileSync(path.join(dir, f), "utf-8"), `${NOTES_DIR}/${f}`));
+    if (m && SEMVER.test(m[1]) && /^[^+]*-/.test(m[1])) errors.push(`${NOTES_DIR}/${f}: notes are keyed by the final version; name it v${coreString(m[1])}.md`);
+    else if (!m || !SEMVER.test(m[1])) errors.push(`${NOTES_DIR}/${f}: name must be vX.Y.Z.md`);
+    else errors.push(...validateNotes(fs.readFileSync(path.join(dir, f), "utf-8"), `${NOTES_DIR}/${f}`, m[1]));
   }
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8"));
   if (!files.includes(`v${pkg.version}.md`)) errors.push(`${notesPath(pkg.version)}: missing for package.json version ${pkg.version}; ${hint(pkg.version)}`);
   return errors;
 }
 
-const core = (v) => v.replace(/^v/, "").split(/[-+]/)[0].split(".").map(BigInt);
 function compareVersions(a, b) {
   const [x, y] = [core(a), core(b)];
   for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
@@ -124,10 +144,12 @@ function git(root, args) {
   return r.stdout;
 }
 
-// The highest v* semver tag strictly below `version`, or null.
+// The highest final (non-prerelease) v* tag strictly below the core version of `version`, or
+// null. Release candidates never count, so an rc and its final cover the same range.
 function previousTag(version, root = REPO_ROOT) {
-  const tags = git(root, ["tag", "--list", "v*"]).split("\n").filter((t) => /^v\d+\.\d+\.\d+/.test(t) && SEMVER.test(t.slice(1)));
-  const below = tags.filter((t) => compareVersions(t, version) < 0);
+  const tags = git(root, ["tag", "--list", "v*"]).split("\n").filter((t) => /^v\d+\.\d+\.\d+/.test(t) && SEMVER.test(t.slice(1)) && !isPrerelease(t));
+  const target = coreString(version);
+  const below = tags.filter((t) => compareVersions(t, target) < 0);
   below.sort(compareVersions);
   return below.length ? below[below.length - 1] : null;
 }
@@ -181,7 +203,12 @@ function technicalChanges(version, opts = {}, root = REPO_ROOT) {
 function buildBody(version, opts = {}, root = REPO_ROOT) {
   const errors = checkVersion(version, root);
   if (errors.length) throw new Error(errors.join("\n"));
-  const notes = fs.readFileSync(path.join(root, notesPath(version)), "utf-8").replace(/\n+$/, "");
+  let notes = fs.readFileSync(path.join(root, notesPath(coreString(version))), "utf-8").replace(/\n+$/, "");
+  if (!isPrerelease(version)) {
+    const lines = notes.split("\n");
+    const at = lines.findIndex((l) => VERIFY_HEADING.test(l));
+    if (at >= 0) notes = lines.slice(0, at).join("\n").replace(/\n+$/, "");
+  }
   const groups = technicalChanges(version, opts, root);
   const parts = Object.entries(groups).filter(([, e]) => e.length).map(([name, e]) => `### ${name}\n\n${e.join("\n")}`);
   if (!parts.length) return `${notes}\n`;
@@ -218,10 +245,10 @@ function main(argv) {
       return fail([e.message]);
     }
   }
-  process.stderr.write("usage: release-notes.js --check X.Y.Z | --lint | --body X.Y.Z [--from <tag>] [--to <ref>]\n");
+  process.stderr.write("usage: release-notes.js --check X.Y.Z[-rc.N] | --lint | --body X.Y.Z[-rc.N] [--from <tag>] [--to <ref>]\n");
   return 2;
 }
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
-module.exports = { validateNotes, checkVersion, lint, previousTag, releaseRange, rangeCommits, mergedPrs, technicalChanges, buildBody, MAX_LINES };
+module.exports = { validateNotes, checkVersion, lint, previousTag, releaseRange, rangeCommits, mergedPrs, technicalChanges, buildBody, MAX_LINES, MAX_VERIFY, VERIFY_REQUIRED_AFTER };
