@@ -82,7 +82,7 @@ nap() {
     sleep "$nap_left" &
     nap_pid=$!
     nap_rc=0
-    wait "$nap_pid" || nap_rc=$?
+    wait "$nap_pid" 2>/dev/null || nap_rc=$?
     nap_pid=
     [ "$nap_rc" -gt 128 ] || return "$nap_rc"
     nap_left=$((nap_end - $(date +%s)))

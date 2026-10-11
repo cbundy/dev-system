@@ -769,6 +769,7 @@ kill "$victim"
 sleep 1
 kill -0 "$w" 2>/dev/null || fail "queue-watch died with its sleep: $(cat "$out" "$out.err")"
 [ "$(interrupted_lines "$out.err")" = 1 ] || fail "queue sleep kill: want one stderr line: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "queue sleep kill: extra stderr: $(cat "$out.err")"
 grep -q '^queue-watch.sh: sleep interrupted (status 143), sleeping the remaining [0-9]*s$' "$out.err" ||
   fail "queue sleep kill: stderr shape: $(cat "$out.err")"
 [ ! -s "$out" ] || fail "queue sleep kill: stdout must stay empty: $(cat "$out")"
@@ -797,6 +798,7 @@ kill "$victim"
 sleep 1
 kill -0 "$w" 2>/dev/null || fail "pipeline-watch died with its sleep: $(cat "$out" "$out.err")"
 [ "$(interrupted_lines "$out.err")" = 1 ] || fail "pipeline sleep kill: want one stderr line: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "pipeline sleep kill: extra stderr: $(cat "$out.err")"
 grep -q '^pipeline-watch.sh: sleep interrupted (status 143), sleeping the remaining [0-9]*s$' "$out.err" ||
   fail "pipeline sleep kill: stderr shape: $(cat "$out.err")"
 [ ! -s "$out" ] || fail "pipeline sleep kill: stdout must stay empty: $(cat "$out")"

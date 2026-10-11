@@ -506,6 +506,7 @@ sleep 1
 kill -0 "$bg_pid" 2>/dev/null || fail "child sleep kill: watcher died: $(cat "$out" "$out.err")"
 [ ! -s "$out" ] || fail "child sleep kill: stdout must stay empty: $(cat "$out")"
 grep -q '^queue-watch.sh: sleep interrupted (status 143)' "$out.err" || fail "child sleep kill: stderr: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "child sleep kill: extra stderr: $(cat "$out.err")"
 queue_seq 5,6
 wait_lines "$out" 1
 expect_lines "$out" "queue-changed known=5 now=5,6"
@@ -527,6 +528,7 @@ wait_lines "$out" 2
 [ $(($(date +%s) - t0)) -ge 9 ] || fail "timer sleep kill: deadline came early"
 [ "$(sed -n 1p "$out")" = timeout ] || fail "timer sleep kill: $(cat "$out")"
 grep -q '^orchestrator-watch.sh: sleep interrupted' "$out.err" || fail "timer sleep kill: stderr: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "timer sleep kill: extra stderr: $(cat "$out.err")"
 wait "$bg_pid" || fail "timer sleep kill: did not exit 0"
 bg_pid=
 ok # a killed timer sleep still delivers the deadline
