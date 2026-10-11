@@ -68,6 +68,9 @@ modes.
 `orchestrator-watch.sh` runs both as one process with one `--deadline` (single-shot or
 `--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
 baselines forward, and refuses a second copy per repository.
+Its single-shot collection window is set by `ORCHESTRATOR_WATCH_WINDOW`, defaulting
+to 5 seconds when unset or empty. Nonnumeric values and the literal `0` are usage
+errors (exit 2); leading zeros are accepted and durations are interpreted as decimal.
 In both modes, all three retry a `sleep` killed from outside during polling waits,
 queue confirmation delays, or orchestrator deadline and collection-window timers.
 Each interruption prints exactly one stderr line,

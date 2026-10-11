@@ -29,8 +29,7 @@
 # and, on a fatal error, one final "watcher-error <reason>" line before a
 # non-zero exit, so a crash is never silent. Fatal: `gh` missing from PATH,
 # a usage error, or any unexpected exit. A signal (the harness stopping the
-# monitor) is a normal end and prints nothing. A `sleep` between polls killed
-# from outside is survived: one stderr line, the rest of the wait is slept.
+# monitor) is a normal end and prints nothing.
 #
 # --interval <seconds> sets the poll interval (default: the
 # QUEUE_WATCH_INTERVAL environment variable, else 120).
@@ -70,14 +69,10 @@ record_event() {
   callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
 }
 
-# nap <whole-seconds>: wait that long, surviving a sleep killed from outside.
-# The sleep runs in the background and is waited on, so a signal to this
-# script runs its trap at once. A sleep that died of a signal (status above
-# 128) is logged once on stderr and the rest of the wait is slept, measured
-# from the wall clock so the wait is never shortened or ended. Any other
-# non-zero status is returned and stays fatal under set -e. Same body in
-# queue-watch.sh, pipeline-watch.sh and orchestrator-watch.sh (copied, not
-# sourced: the scripts are installed one by one).
+# Background sleep lets the shell handle watcher signals while waiting.
+# Keep this helper's body aligned across the three watchers: scripts are
+# installed individually, so the helper is copied rather than sourced.
+# Sleep-interruption behavior is documented in images/base/README.md.
 nap_pid=
 nap() {
   nap_left=$(printf '%s' "$1" | sed 's/^0*//')
