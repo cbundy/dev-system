@@ -71,6 +71,8 @@ LINK_WAIT=30        # seconds `start` waits for a new attempt's link
 
 # shellcheck source=gh.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/gh.sh"
+# shellcheck source=exec-hint.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/exec-hint.sh"
 
 log() {
   echo "dev-login: $*" >&2
@@ -79,18 +81,6 @@ log() {
 usage() {
   sed -n '/^# Usage:/,/^# Environment:/p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
   exit 2
-}
-
-# How to run a command in this container from outside, for the hints. The
-# hostname is the container ID under Docker and the pod name on Kubernetes.
-exec_hint() {
-  local host="${HOSTNAME:-$(cat /etc/hostname)}" ns
-  if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
-    ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || true)
-    echo "kubectl exec -it${ns:+ -n $ns} $host -- $1"
-  else
-    echo "docker exec -it $host $1"
-  fi
 }
 
 # The tools in DEV_LOGIN_TOOLS, in a fixed order; unknown names are skipped

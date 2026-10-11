@@ -6,7 +6,7 @@
 # session `claude`, in one of two modes (DEV_REMOTE_CONTROL_MODE):
 #   session  (default) interactive Claude (`claude --remote-control <name>`):
 #            one session, reachable from claude.ai / the Claude app and
-#            locally with `tmux attach -t claude` (via docker exec / kubectl exec)
+#            locally with `tmux attach -t claude` (via docker exec / kubectl exec / coder ssh)
 #   server   `claude remote-control --name <name> --spawn worktree`: the
 #            container shows up as an environment in claude.ai / the Claude
 #            app, and each session started there gets its own Claude in its
@@ -78,6 +78,8 @@ set -u
 
 # shellcheck source=workspace.sh
 . /usr/local/share/dev-system/workspace.sh
+# shellcheck source=exec-hint.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/exec-hint.sh"
 
 SESSION=claude
 LOCK=/tmp/dev-remote-control.lock
@@ -155,18 +157,6 @@ pause() {
   wait "$SLEEP_PID"
 }
 
-# How to open a shell in this container, for the login hint. The hostname is
-# the container ID under Docker and the pod name on Kubernetes.
-exec_hint() {
-  local host="${HOSTNAME:-$(cat /etc/hostname)}" ns
-  if [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
-    ns=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace 2>/dev/null || true)
-    echo "kubectl exec -it${ns:+ -n $ns} $host -- $1"
-  else
-    echo "docker exec -it $host $1"
-  fi
-}
-
 # Prints the login state: claude.ai (Remote Control works), none, or the other
 # auth method in use (api_key, oauth_token, api_key_helper, third_party).
 login_state() {
@@ -213,7 +203,7 @@ wait_for_login() {
     fi
     if [ "$state" != "$last" ] || [ $((polls % REMIND_EVERY)) -eq 0 ]; then
       if [ "$state" = none ] && dev_login_claude; then
-        log "Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: $(exec_hint 'dev-login <code>')"
+        log "Claude is not logged in - open the sign-in link dev-login logs (or the login page${DEV_LOGIN_PAGE_URL:+ at $DEV_LOGIN_PAGE_URL}), then paste the code: $(exec_hint 'dev-login <code>')"
       elif [ "$state" = none ]; then
         log "Claude is not logged in - run: $(exec_hint 'claude auth login')"
       else

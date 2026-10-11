@@ -815,7 +815,7 @@ orphaned processes, so containers stop in well under a second instead of hitting
    links). Remote Control needs a claude.ai
    subscription login, so while `claude auth status` reports none, it logs
    `Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it <container> dev-login <code>`
-   (the `kubectl exec` form on Kubernetes) once, then every 10 checks (5 minutes),
+   (the `kubectl exec` form on Kubernetes, `coder ssh <workspace> -- dev-login <code>` on Coder; when `DEV_LOGIN_PAGE_URL` is set the line names that URL) once, then every 10 checks (5 minutes),
    checking every 30s. It starts Claude as soon as the login appears; no restart needed.
    An API key or `CLAUDE_CODE_OAUTH_TOKEN` login gets its own message, since Remote
    Control rejects both, and `dev-login` leaves it alone.
@@ -929,6 +929,7 @@ you accept Claude acting without approvals in that container.
 ```bash
 docker exec -it <container> tmux attach -t claude    # detach again with Ctrl-b d
 kubectl exec -it <pod> -- tmux attach -t claude
+coder ssh <workspace> -- tmux attach -t claude        # on Coder
 ```
 
 Exec as the default user (`node`), not root, or tmux will not find the session. `/exit`

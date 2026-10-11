@@ -14,7 +14,10 @@ set -eu
 for name in $(env | sed -n 's/^\(DEV_[A-Za-z0-9_]*\)=.*/\1/p'); do
   unset "$name"
 done
-unset GH_TOKEN GITHUB_TOKEN
+unset GH_TOKEN GITHUB_TOKEN KUBERNETES_SERVICE_HOST
+for name in $(env | sed -n 's/^\(CODER_[A-Za-z0-9_]*\)=.*/\1/p'); do
+  unset "$name"
+done
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 BASE="$SCRIPT_DIR/.."
@@ -338,5 +341,12 @@ timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
   DEV_REPO_URL=https://repo.invalid/test.git bash "$CMD" watch >/dev/null 2>&1 \
   || fail "explicit repo watch did not finish"
 [ "$(cat "$FIX/dev-init.args")" = '--repo' ] || fail "dev-init stub must receive --repo once"
+
+# --- the exec hint names the way in for this environment (#98) ---------------------------
+reset none "$ok_json"
+dl status 2>/dev/null | grep -q 'docker exec -it testbox' || fail "no Coder: hint should say docker exec"
+out=$(DEV_CODER_WORKSPACE=ws1 dl status 2>/dev/null)
+echo "$out" | grep -q 'coder ssh ws1 -- tmux attach -t login-gh' || fail "Coder hint missing: $out"
+echo "$out" | grep -q 'docker exec' && fail "Coder hint must not say docker exec"
 
 echo "dev-login: ok"
