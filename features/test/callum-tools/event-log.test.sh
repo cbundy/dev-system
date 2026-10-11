@@ -180,11 +180,17 @@ cat > "$fakebin/psql" <<'STUB'
 # stub psql: records the connection argument and the SQL; a psql-fail marker
 # makes it fail with an error that quotes the URL.
 d=$(dirname "$0")
-echo x >> "$d/psql-calls"
+# Decide pass/fail first and append to psql-calls LAST: when the counter shows
+# call N, call N is complete (SQL file written, outcome fixed), so the test can
+# remove psql-fail afterwards without racing this call.
+fail=0
+[ -e "$d/psql-fail" ] && fail=1
+n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
 printf '%s\n' "$*" > "$d/psql-args"
 { echo "PGPASSWORD=${PGPASSWORD-}"; echo "PGUSER=${PGUSER-}"; echo "PGHOST=${PGHOST-}"; echo "PGDATABASE=${PGDATABASE-}"; echo "PGSSLMODE=${PGSSLMODE-}"; echo "PGSSLROOTCERT=${PGSSLROOTCERT-}"; } > "$d/psql-env"
-cat > "$d/psql-sql-$(wc -l < "$d/psql-calls" | tr -d ' ')"
-if [ -e "$d/psql-fail" ]; then
+cat > "$d/psql-sql-$n"
+echo x >> "$d/psql-calls"
+if [ "$fail" = 1 ]; then
   echo "psql: error: connection to postgres://app:s3cret@db/x failed password=s3cret" >&2
   exit 2
 fi
@@ -320,11 +326,18 @@ printf '%s\n' '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","st
 rm -f "$fakebin/psql-calls"
 wline() { printf '%s\n' "{\"v\":2,\"ts\":\"2026-10-08T10:0$1:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":$1}" >> "$wdir/o__r.jsonl"; }
 ncalls() { if [ -f "$fakebin/psql-calls" ]; then calls; else echo 0; fi; }
-wait_calls() { # N SECONDS
+wait_for() { # SECONDS COMMAND... : poll until the command succeeds, bounded
+  limit=$(($1 * 10)); shift
   t=0
-  while [ "$(ncalls)" -lt "$1" ] && [ "$t" -lt $(($2 * 10)) ]; do sleep 0.1; t=$((t + 1)); done
-  [ "$(ncalls)" -ge "$1" ]
+  until "$@"; do
+    t=$((t + 1))
+    [ "$t" -lt "$limit" ] || return 1
+    sleep 0.1
+  done
 }
+calls_ge() { [ "$(ncalls)" -ge "$1" ]; }
+wait_calls() { wait_for "$2" calls_ge "$1"; } # N SECONDS
+pushed_is() { [ "$(cat "$wdir/.pushed/o__r.jsonl" 2> /dev/null)" = "$1" ]; }
 PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$wdir" DEV_SYSTEM_SHARE="$ROOT/images/base" DEV_EVENT_PUSH_INTERVAL=30 \
   AGENTSVIEW_PG_URL=postgres://app:s3cret@db/x HOME="$tmpdir/home" "$BASH" "$PUSH" > "$tmpdir/loop.out" 2>&1 &
 loop_pid=$!
@@ -347,7 +360,7 @@ rm "$fakebin/psql-fail"
 touch "$wdir/.wake"
 wait_calls 4 5 || fail "the retry should run on the next wake"
 grep -q 'CREATE TABLE IF NOT EXISTS' "$fakebin/psql-sql-4" || fail "a failed batch must make the next pass resend the DDL"
-[ "$(cat "$wdir/.pushed/o__r.jsonl")" = 3 ] || fail "retry should catch up"
+wait_for 5 pushed_is 3 || fail "retry should catch up"
 kill "$loop_pid" 2> /dev/null || :
 wait "$loop_pid" 2> /dev/null || :
 trap 'rm -rf "$tmpdir"' EXIT
