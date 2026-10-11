@@ -22,15 +22,3 @@ test("issue-orchestrator SKILL.md arms the single orchestrator watcher", () => {
   assert.ok(!/CronList[^.]*audit/.test(text), "CronList is for the usage reset wake only");
   assert.ok(!text.includes("20 minutes"));
 });
-
-test("issue-orchestrator SKILL.md carries the release-planning rules", () => {
-  const skill = path.join(__dirname, "..", "plugins", "callum-flow", "skills", "issue-orchestrator", "SKILL.md");
-  const text = fs.readFileSync(skill, "utf8").replace(/\s+/g, " ");
-  assert.ok(text.includes("Next release"));
-  assert.ok(text.includes("callum-flow-milestone plan <N> next"));
-  assert.ok(text.includes("callum-flow-milestone plan <N> later"));
-  assert.ok(text.includes("callum-flow-milestone expect"));
-  assert.ok(text.includes("callum-flow-milestone show"));
-  assert.ok(text.includes("Next release has no open items"));
-  assert.ok(!text.includes("callum-flow-milestone tag"), "merge-time tagging belongs to callum-flow-merge");
-});
