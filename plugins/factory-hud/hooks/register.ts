@@ -109,9 +109,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // A /clear starts a new conversation in the same process, with no session.start.
+  // A /clear or /resume moves to another conversation in the same process, with no
+  // session.start: the last one's context figure, toasts and /hud do not carry over.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      hud.context = undefined
       await update($, isHidden, () => false)
       await update($, alerted, () => [])
       await draw($)
