@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { CommandRunInput, On, SessionStartInput } from 'claude-code'
+import type { CommandRunInput, On, SessionEndInput, SessionStartInput } from 'claude-code'
 
 import { counts, dueAlerts, repoSlug, statusText, versionsText } from '../hooks/format'
 
@@ -30,6 +30,7 @@ const SNAPSHOT = JSON.stringify({
 // 2026-10-11T20:41:00Z
 const NOW = Date.UTC(2026, 9, 11, 20, 41)
 const START: SessionStartInput = { cwd: '/work', surface: 'terminal', isInteractive: true }
+const CLEAR: SessionEndInput = { reason: 'clear', sessionId: 's1', resume: { id: 's1' } }
 // /hud typed on a phone, through Remote Control.
 const HUD: CommandRunInput = {
   command: 'hud',
@@ -104,6 +105,7 @@ function world(on: On, factory: string | null = FACTORY) {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   on('ui.status', ($, e) => {
     drawn.status.push(e.text)
     return { value: undefined }
@@ -158,7 +160,7 @@ describe('in a session', () => {
     expect(drawn.status.at(-1)).toContain('| 6 live: ')
   })
 
-  test('a failing factory-state leaves the counts loading, not broken', async ($, on) => {
+  test('a failing factory-state drops the factory segment, not the line', async ($, on) => {
     mock.env(on, { DEV_ROLE: 'orchestrator', TZ: 'UTC' })
     const drawn = world(on, null)
     await $.session.start(START)
@@ -179,6 +181,24 @@ describe('in a session', () => {
     await $.session.measure(high)
     expect(drawn.status.at(-1)).toContain('ctx 88%  7d 95%')
     expect(drawn.toasts).toEqual(['Context is 88% full', '7d usage is at 95%'])
+  })
+
+  test('/clear starts the toasts and /hud over for the new conversation', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'dev', TZ: 'UTC' })
+    const drawn = world(on)
+    await $.session.start(START)
+    const high = {
+      context: { window: 200_000, percent: 88 },
+      rateLimits: [],
+      changed: ['context' as const],
+    }
+    await $.session.measure(high)
+    await $.command.run(HUD)
+    expect(drawn.status.at(-1)).toBeUndefined()
+    await $.session.end(CLEAR)
+    expect(drawn.status.at(-1)).toContain('ctx 88%')
+    await $.session.measure(high)
+    expect(drawn.toasts.filter(text => text === 'Context is 88% full')).toHaveLength(2)
   })
 
   test('/hud hides and shows it, without a word to the conversation', async ($, on) => {

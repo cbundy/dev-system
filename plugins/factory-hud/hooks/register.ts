@@ -109,6 +109,17 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A /clear starts a new conversation in the same process, with no session.start.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await update($, isHidden, () => false)
+      await update($, alerted, () => [])
+      await draw($)
+    }
+
+    return next(e)
+  })
+
   // Answered with a toast, not command output, so nothing is added to the conversation.
   on('command.run', { command: 'hud' }, async $ => {
     const isNowHidden = await update($, isHidden, was => !was)
