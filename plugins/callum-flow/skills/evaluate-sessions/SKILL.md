@@ -9,7 +9,7 @@ description: >-
   adds GitHub context and the narrative. Use when asked to evaluate, audit or
   review the orchestrator and sub-agent sessions for a window, or to compare one
   window with a baseline. For what is happening right now, use factory-state.
-version: 0.26.1
+version: 0.27.0
 ---
 
 # evaluate-sessions: report on a window of agent work
