@@ -33,7 +33,8 @@ never queries tables itself, never edits labels, issues or runs, and never "fixe
 
 ## Narrate (and nothing else)
 
-Lead with what needs attention, in this order, then stop:
+Lead with what needs attention, in this order, then stop. Name each item by what it does, with
+the issue number in parentheses, and say who has to act on it, especially when it is the owner:
 
 1. `stuck` items, each with its rule and the minutes in stage. Name the rule's meaning, for
    example S3 means a pipeline run has waited on an agent or the owner too long.

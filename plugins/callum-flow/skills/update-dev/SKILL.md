@@ -107,7 +107,7 @@ Content standards for the edit itself:
 
 ## 6. Hand off
 
-Report to the user: the PR URL and a one-line summary of the change. Remind
-them that the change reaches consumers only after they merge AND the next
-release bumps the plugin version - the current session keeps running on the
+Lead with the owner action: they must merge the PR, then a release must bump the
+plugin version before consumers get the change. Then give the PR URL and a
+one-line summary of the change. The current session keeps running on the
 installed version until then.

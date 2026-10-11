@@ -170,6 +170,6 @@ A generic lesson belongs in this plugin, so propose it upstream with
 `/update-dev` rather than recording it there.
 
 ## Tick report
-Output a short report first: ready, in-development and open-PR counts, each
-in-flight pipeline, the watchers (`armed`, `idle` or `MISSING`), and the usage
-tier with the resume wake id when paused.
+Open with what happens next and who acts (owner or you), naming work by what it does
+(issue number in parentheses). Then: ready, in-development and open-PR counts, pipelines,
+watchers (`armed`, `idle`, `MISSING`), usage tier and resume wake id when paused.
