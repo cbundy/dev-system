@@ -58,9 +58,9 @@ from the main checkout (its lock refuses a second copy; the header has the argum
   sub-agent): under Monitor at the maximum timeout, `--stream --deadline 1740`.
 - **Idle** (none of those): single-shot under background Bash, `--deadline 7140`, inside
   the 2-hour cap; its exit is the only wake. Without Monitor, always single-shot.
-- **Re-arm** first on every wake, from its last `rearm` line, before handling the event;
-  pick the mode there (add or drop `--stream`, set the deadline). With no `rearm` line
-  yet, arm from the queue (`--queue-known` ascending, or `none`), no `--pipeline-known`.
+- **Re-arm** first whenever the copy has exited (a single-shot event or exit, a stream `timeout`), from its last
+  `rearm` line, before handling the event; pick the mode there (add or drop `--stream`, set the deadline). A running
+  stream copy is not relaunched on a stream event or sub-agent tick: the lock refuses it. With no `rearm` line yet, arm from the queue (`--queue-known` ascending, or `none`), no `--pipeline-known`.
 - **`timeout`** is the audit tick: re-arm, `callum-flow-claim --heartbeat` then
   `callum-flow-sweep`, re-read usage, and in Stop new or Stop all check a resume wake is
   pending. Fix a missing watcher or wake in the turn you see it.
