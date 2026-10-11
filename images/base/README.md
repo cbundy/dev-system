@@ -496,12 +496,16 @@ container never fails to start because of it.
    With `OTEL_EXPORTER_OTLP_ENDPOINT` set, it also writes codex's `[otel]` table there
    (and removes it once the endpoint is unset), unless you have `otel` settings of your
    own (see [Telemetry](#telemetry-opentelemetry-export)).
-4. Writes the no-mistakes pipeline's agent order and model pin in a managed block of
-   `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
-   `# END dev-system managed`. The block has two independent parts: the ordered agent list
+4. Writes the no-mistakes pipeline's agent order, model pin and review roles in a managed
+   block of `$NM_HOME/config.yaml`, between `# BEGIN dev-system managed` and
+   `# END dev-system managed`. The block has three independent parts: the ordered agent list
    (`agent: [codex, claude]`, from `AGENTS`; no-mistakes moves to the next agent when one
-   fails) and the model pin (`agent_args_override`: codex, and claude's model and effort, so
-   the claude fallback runs on `CLAUDE_MODEL` at `CLAUDE_EFFORT`). It is rewritten on
+   fails), the model pin (`agent_config`: codex, and claude's model and effort, so the
+   claude fallback runs on `CLAUDE_MODEL` at `CLAUDE_EFFORT`) and the review roles
+   (`review_agents`: the reviewer and the review fixer, both on `REVIEW_AGENT` /
+   `REVIEW_MODEL` at `REVIEW_EFFORT`, with no fallback by design). The models live in
+   `agent_config`, not `agent_args_override`, because native `agent_args_override` flags
+   would beat the `review_agents` values; there is no codex service tier. It is rewritten on
    every start from [`models.env`](models.env) as it is on this repo's `main` branch,
    fetched once per start from `DEV_MODELS_URL`, so a change merged to `main` reaches every
    workspace on its next start, with no release or image rebuild. The fetch is short (3s to
@@ -509,16 +513,30 @@ container never fails to start because of it.
    key, one `WARNING` names the URL and the reason and the copy baked into the image is
    used. Per key, a valid fetched value beats the baked one. Content outside the markers is
    never touched. `DEV_NM_AGENTS` / `DEV_CODEX_MODEL` / `DEV_CLAUDE_MODEL` /
-   `DEV_CLAUDE_EFFORT` override both; an empty value skips that part (`DEV_NM_AGENTS=""`
-   writes no `agent`, `DEV_CODEX_MODEL=""` no pin; with both empty the block is removed).
-   To run codex only, with no claude fallback, set `DEV_NM_AGENTS=codex`. A key in
+   `DEV_CLAUDE_EFFORT` / `DEV_REVIEW_AGENT` / `DEV_REVIEW_MODEL` / `DEV_REVIEW_EFFORT`
+   override both; an empty value skips that part (`DEV_NM_AGENTS=""` writes no `agent`,
+   `DEV_CODEX_MODEL=""` no pin, `DEV_REVIEW_AGENT=""` no review roles; with all empty the
+   block is removed). To run codex only, with no claude fallback, set
+   `DEV_NM_AGENTS=codex`; this does not affect review. A key in
    `models.env` that the image does not know yet (such as `CLAUDE_EFFORT` before 2.6.0) is
    ignored, so a new key needs the image that reads it. A key of your own outside the markers
    wins over its part only: a top-level `agent` drops the agent order, an
-   `agent_args_override` or `agent_config` drops the model pin (delete the block, markers
-   included, before setting both by hand). A repo whose `.no-mistakes.yaml` sets `agent`
-   replaces the agent order for that repo. The unmarked pin older images wrote is replaced
-   by the block.
+   `agent_args_override` or `agent_config` drops the model pin, a `review_agents` drops the
+   review roles (delete the block, markers included, before setting them all by hand). A repo whose `.no-mistakes.yaml` sets `agent`
+   replaces the agent order for that repo. The unmarked pin older images wrote, and the
+   earlier `agent_args_override` block, are replaced by the new block.
+
+   Which agent and model runs each step (no-mistakes v1.84.0):
+
+   | Step | Runs on | Fallback |
+   |---|---|---|
+   | review, review fixes | claude `REVIEW_MODEL` (`claude-opus-5-5`), effort `REVIEW_EFFORT` | none: a failing review agent (for example out of usage) fails the review step visibly |
+   | test, lint repair, document, CI repair, PR, rebase conflict repair, intent | codex `CODEX_MODEL` (`gpt-6.1-sol`), effort medium | claude `CLAUDE_MODEL` (`claude-sonnet-5-5`) at `CLAUDE_EFFORT` |
+
+   v1.84.0 has no per-step agent or model key, so only two groups can differ: the review
+   loop (`review_agents`, one agent per role, no fallback list) and everything else, which
+   shares one ordered `agent` chain and one model per harness (`agent_config`). A non-review
+   step such as lint or PR therefore cannot be given its own agent or model.
 5. If gh is logged in, runs `gh auth setup-git`. `~/.gitconfig` is not persisted, so this is
    redone on each start.
 6. If `DEV_REPO_URL` is set, clones it into `$DEV_WORKSPACE` when that is missing or
@@ -552,7 +570,9 @@ container never fails to start because of it.
     never hold up the login page or the steps before it.
 12. Runs `dev-doctor --warn-only`.
 
-The managed block in step 4 reads these variables:
+The managed block in step 4 reads these variables. `dev-doctor` shows the block's agents,
+models and review roles as an info line, and warns when the review agent is not on `PATH`
+(every gate would then fail at review):
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -560,6 +580,9 @@ The managed block in step 4 reads these variables:
 | `DEV_CODEX_MODEL` | unset: the models file | The codex model no-mistakes runs on. Set, it beats the fetched and the baked models file; empty drops the model pin (and the block, when there is no agent order either). |
 | `DEV_CLAUDE_MODEL` | unset: the models file | The model of claude. Set, it beats both models files; empty leaves claude unpinned. |
 | `DEV_CLAUDE_EFFORT` | unset: the models file (`CLAUDE_EFFORT`) | claude's reasoning effort (its `--effort`): `low`, `medium`, `high`, `xhigh` or `max`. Set, it beats both models files; empty leaves claude's effort unpinned. Any other value is left out with a one-line note. |
+| `DEV_REVIEW_AGENT` | unset: the models file (`REVIEW_AGENT`) | The single agent both review roles (reviewer and review fixer) run on: one name, no comma, no fallback. Set, it beats both models files; empty writes no `review_agents`. An invalid value is skipped with a one-line note. |
+| `DEV_REVIEW_MODEL` | unset: the models file (`REVIEW_MODEL`) | The review roles' model. Set, it beats both models files; empty leaves the model unpinned. |
+| `DEV_REVIEW_EFFORT` | unset: the models file (`REVIEW_EFFORT`) | The review roles' reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. Set, it beats both models files; empty leaves it unpinned. |
 | `DEV_MODELS_URL` | `https://raw.githubusercontent.com/cbundy/dev-system/main/images/base/models.env` | Where `dev-init` fetches the models file from on every start (`https://`, or `file://` for tests). Empty turns the fetch off, for an offline workspace or one pinned to its image's models. Trust: anyone who can merge to `cbundy/dev-system` `main` sets the agents and models for every workspace - the same trust as the published image. The file is parsed, never run: only known keys with plain values are read. |
 
 ## `dev-doctor`

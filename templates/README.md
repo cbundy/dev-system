@@ -23,12 +23,12 @@ no-mistakes pipeline config.
   its own `.github/pull_request_template.md` instead (see the next section). A repo that
   already carries its own `pr:` block (mealplanning) must delete it before its next
   `callum-dev update`, or the merge leaves a duplicate key to resolve by hand.
-- Not here: the pipeline's agent order (`agent`) and the codex model pin
-  (`agent_args_override` / `agent_config`). The base image's `dev-init` keeps both in a
+- Not here: the pipeline's agent order (`agent`), the model pin (`agent_config`) and the
+  review roles (`review_agents`). The base image's `dev-init` keeps all three in a
   managed block of the global no-mistakes config instead, rewritten on every start from
   `images/base/models.env` as it is on dev-system's `main` branch, with the image's baked
-  copy as the offline fallback (see `images/base/README.md`). The model pin is global-only:
-  no-mistakes silently ignores it in a repo file. The agent order is not: a repo that needs
+  copy as the offline fallback (see `images/base/README.md`). The model pin and the review roles are
+  global-only: no-mistakes silently ignores them in a repo file. The agent order is not: a repo that needs
   its own sets `agent:` in its repo-owned block, which replaces the global order entirely.
 
 ## `.github/pull_request_template.md` -> `.github/pull_request_template.md`

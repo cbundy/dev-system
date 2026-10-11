@@ -106,3 +106,12 @@ check "dev-doctor reports a STALE base image as WARN with the rebuild fix, witho
 check "dev-doctor prints the versions INFO line and still exits 0 offline" in_image '
   out=$(dev-doctor --warn-only); rc=$?
   echo "$out"; [ $rc -eq 0 ] && echo "$out" | grep -q "dev-doctor: INFO versions: "' --network none
+check "dev-doctor shows the no-mistakes agents, models and review roles, and warns when the review agent is not on PATH" in_image '
+  dev-init >/dev/null 2>&1
+  out=$(dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -qE "INFO no-mistakes managed block: agents codex,claude; codex .*, claude .* \(.*\); review claude .* \(.*\), no fallback"
+  ! echo "$out" | grep -q "WARN the review agent"
+  sed -i "s/^    agent: claude\$/    agent: no-such-agent/" /persist/no-mistakes/config.yaml
+  out=$(dev-doctor --warn-only); echo "$out"
+  echo "$out" | grep -q "WARN the review agent .no-such-agent. is not on PATH"' \
+  -v "$vol:/persist" --entrypoint ""
