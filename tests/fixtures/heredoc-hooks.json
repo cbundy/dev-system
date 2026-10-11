@@ -1,0 +1,145 @@
+[
+  {
+    "name": "comment substitution preserves following command",
+    "command": "gh issue comment 1 --body \"$(cat <<'EOF'\nUse `foo` - it's fine\nEOF\n)\"\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "comment substitution literal body",
+    "command": "gh issue comment 1 --body \"$(cat <<'EOF'\nUse `foo` - it's fine; @COMMAND@\nEOF\n)\"",
+    "denied": false
+  },
+  {
+    "name": "multiline double quote is not an opener",
+    "command": "echo \"documentation\n<<'x'\n\"\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "multiline single quote is not an opener",
+    "command": "echo 'documentation\n<<\"x\"\n'\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "quoted text inside substitution is not an opener",
+    "command": "echo \"$(echo \"documentation\n<<'x'\n\")\"\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "comment is not an opener",
+    "command": "# <<'x'\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "single quoted delimiter prefix",
+    "command": "cat <<'EO'F\ntext\nEOF\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "double quoted delimiter prefix",
+    "command": "cat <<\"E\"OF\ntext\nEOF\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "escaped delimiter prefix",
+    "command": "cat <<\\EOF\ntext\nEOF\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "mixed delimiter literal body",
+    "command": "cat <<'EO'F\n@COMMAND@\nEOF",
+    "denied": false
+  },
+  {
+    "name": "double quoted prefix literal body",
+    "command": "cat <<\"E\"OF\n@COMMAND@\nEOF",
+    "denied": false
+  },
+  {
+    "name": "escaped delimiter literal body",
+    "command": "cat <<\\EOF\n@COMMAND@\nEOF",
+    "denied": false
+  },
+  {
+    "name": "unquoted body precedes quoted body",
+    "command": "cat <<U <<'Q'\n$(@COMMAND@)\nU\ntext\nQ",
+    "denied": true
+  },
+  {
+    "name": "second quoted body stays literal",
+    "command": "cat <<'A' <<'B'\ntext\nA\n@COMMAND@\nB",
+    "denied": false
+  },
+  {
+    "name": "quoted body precedes unquoted body",
+    "command": "cat <<'Q' <<U\ntext\nQ\n$(@COMMAND@)\nU",
+    "denied": true
+  },
+  {
+    "name": "command after both bodies",
+    "command": "cat <<'A' <<'B'\ntext\nA\ntext\nB\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "tab stripped bodies in declaration order",
+    "command": "cat <<-'A' <<-\"B\"\n\ttext\n\tA\n\t@COMMAND@\n\tB",
+    "denied": false
+  },
+  {
+    "name": "here string is not an opener",
+    "command": "cat <<<'x'\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "quoted operator is not an opener",
+    "command": "echo \"<<x\"\n@COMMAND@",
+    "denied": true
+  },
+  {
+    "name": "command before literal body",
+    "command": "@COMMAND@\ncat <<'EOF'\n` $(\nEOF",
+    "denied": true
+  },
+  {
+    "name": "recursive substitution preserves later inner command",
+    "command": "echo \"$(cat <<'EOF'\nit's `literal`\nEOF\n@COMMAND@\n)\"",
+    "denied": true,
+    "hooks": [
+      "tmux-kill",
+      "coder-self",
+      "raw-gh-read"
+    ]
+  },
+  {
+    "name": "completed command before echo \"`\"",
+    "command": "@COMMAND@\necho \"`\"",
+    "denied": true
+  },
+  {
+    "name": "completed command before echo \"$(\"",
+    "command": "@COMMAND@\necho \"$(\"",
+    "denied": true
+  },
+  {
+    "name": "completed command before echo \"unfinished",
+    "command": "@COMMAND@\necho \"unfinished",
+    "denied": true
+  },
+  {
+    "name": "unfinished segment fails open echo \"`\"",
+    "command": "echo \"`\"\n@COMMAND@",
+    "denied": false,
+    "hooks": [
+      "coder-self",
+      "raw-gh-read"
+    ]
+  },
+  {
+    "name": "unfinished segment fails open echo \"$(\"",
+    "command": "echo \"$(\"\n@COMMAND@",
+    "denied": false,
+    "hooks": [
+      "coder-self",
+      "raw-gh-read"
+    ]
+  }
+]

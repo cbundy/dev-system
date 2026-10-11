@@ -161,3 +161,13 @@ test("allows other env vars and mere mentions of the workspace env var", () => {
   assertAllowed("coder stop $OTHER_WS");
   assertAllowed("echo coder stop $CODER_WORKSPACE_NAME");
 });
+
+const heredocCases = require("./fixtures/heredoc-hooks.json");
+for (const fixture of heredocCases) {
+  if (fixture.hooks && !fixture.hooks.includes("coder-self")) continue;
+  test(`heredoc regression: ${fixture.name}`, () => {
+    const command = fixture.command.replaceAll("@COMMAND@", "coder stop dev-system-testbed");
+    if (fixture.denied) assertDenied(command);
+    else assertAllowed(command);
+  });
+}

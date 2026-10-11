@@ -153,3 +153,13 @@ test("the hook script is committed executable (git mode 100755)", () => {
   assert.notEqual(line, "", `${relPath} is not tracked by git yet`);
   assert.match(line, /^100755\s/, `expected mode 100755 for ${relPath}, got: ${line}`);
 });
+
+const heredocCases = require("./fixtures/heredoc-hooks.json");
+for (const fixture of heredocCases) {
+  if (fixture.hooks && !fixture.hooks.includes("git-stash")) continue;
+  test(`heredoc regression: ${fixture.name}`, () => {
+    const command = fixture.command.replaceAll("@COMMAND@", "git stash");
+    if (fixture.denied) assertDenied(command);
+    else assertAllowed(command);
+  });
+}
