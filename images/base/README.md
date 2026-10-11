@@ -811,8 +811,8 @@ orphaned processes, so containers stop in well under a second instead of hitting
 **`dev-remote-control`** is the supervisor:
 
 1. **Starts the logins and waits for Claude's.** It runs `dev-login watch` in the
-   background, which starts every missing login in `DEV_LOGIN_TOOLS` and logs its sign-in
-   link (see [First-run logins](#first-run-logins)). Remote Control needs a claude.ai
+   background (see [First-run logins](#first-run-logins) for required tools and sign-in
+   links). Remote Control needs a claude.ai
    subscription login, so while `claude auth status` reports none, it logs
    `Claude is not logged in - open the sign-in link dev-login logs (or the login page), then paste the code: docker exec -it <container> dev-login <code>`
    (the `kubectl exec` form on Kubernetes) once, then every 10 checks (5 minutes),
@@ -1056,14 +1056,15 @@ container.
 ## First-run logins
 
 Each repo on the desktop (each workspace on Kubernetes or Coder) needs one Claude login
-and one codex login. gh needs one login per shared volume, or per workspace when its
-storage is private; see [runtime mounts](#how-runtimes-should-mount-it). The logins land in
-`/persist`, so they survive container rebuilds and image updates. `dev-login` does them
+and, if you use codex, one codex login. gh needs one login per shared volume, or per
+workspace when its storage is private; see [runtime mounts](#how-runtimes-should-mount-it).
+The logins land in `/persist`, so they survive container rebuilds and image updates. `dev-login` does them
 without a shell in the container:
 
-1. The container starts and sees that Claude, codex or gh is not logged in.
+1. The container starts and sees which required tools are not logged in.
 2. It starts their logins and brings you the sign-in links: in the container log, on the
-   login page (opt-in) and in a push notification (opt-in).
+   login page (opt-in) and in a push notification (opt-in). For optional tools (codex by
+   default), open the login page or run `dev-login start --optional`.
 3. You approve on any device, a phone included. For Claude, paste the code its sign-in page
    shows into the login page (or `dev-login <code>`). For codex and gh, approving is
    enough.
@@ -1073,23 +1074,24 @@ without a shell in the container:
 |---|---|---|
 | Claude | `claude auth login --claudeai`: a sign-in link. There is no device-code flow for claude.ai logins. | Open the link, approve, paste the code shown back. A wrong code ends that attempt, and the next one has a new link. |
 | codex | `codex login --device-auth`: a link and a one-time code, valid 15 minutes. | Open the link and enter the code. Device-code login may first need turning on in your ChatGPT account's security settings. |
-| gh | `gh auth login --web --scopes workflow`: a link and a one-time code; then `gh auth setup-git`. The `workflow` scope lets the pipeline push changes under `.github/workflows/`. A gh login without it (an older one, or one made by hand) gets `gh auth refresh --scopes workflow` instead: a link and a code the same way, which add the scope to the token gh already has. | Open the link and enter the code. If the runtime supplies `GH_TOKEN`, it replaces this login; see [Coder external auth](../../coder/dev-system/README.md#github-through-coder-external-auth). |
+| gh | `gh auth login --web --scopes workflow`: a link and a one-time code; then `gh auth setup-git`. The `workflow` scope lets the pipeline push changes under `.github/workflows/`. For a gh login without it (an older one, or one made by hand), opening the login page or running `dev-login start` starts `gh auth refresh --scopes workflow` instead: a link and a code the same way, which add the scope to the token gh already has. | Open the link and enter the code. If the runtime supplies `GH_TOKEN`, it replaces this login; see [Coder external auth](../../coder/dev-system/README.md#github-through-coder-external-auth). |
 
 Each login runs in its own tmux session (`login-claude`, `login-codex`, `login-gh`), so
 `tmux attach -t login-codex` shows it as it is. An attempt in progress is kept, so a link
 you were given stays valid; one that ended (an expired code, a rejected paste) is
 replaced, so there is always a fresh link. The supervisor (`dev-remote-control`) runs
 `dev-login watch`, which checks every 15 seconds at first, then backs off (doubling up to
-`DEV_LOGIN_WATCH_MAX`) while nothing changes, and logs each new link once, until every
-required login is done. On the desktop, where the supervisor is off by default, run
-`dev-login start` in a terminal instead.
+`DEV_LOGIN_WATCH_MAX`) until the pending set changes, which resets the wait to 15 seconds.
+It logs each new link once and exits when no required login remains, excluding gh's
+missing workflow scope (see the API budget below). On the desktop, where the supervisor
+is off by default, run `dev-login start` in a terminal instead.
 
 ```text
 dev-login status [--json] [--cached]
                             each tool: in, out, other (Claude logged in, but not with
                             claude.ai), scope (gh logged in without the workflow scope),
                             token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS).
-                            --cached never asks GitHub when gh's result is cached
+                            --cached uses the current token's cache even after its TTL
 dev-login start [--json] [--optional]
                             start the missing logins, print the links (tools in
                             DEV_LOGIN_OPTIONAL only with --optional)
@@ -1105,7 +1107,7 @@ dev-login serve             the login page (dev-init starts it when DEV_LOGIN_PO
 | `DEV_LOGIN_GH_TTL` | `900` | Seconds gh's login result is cached in `/tmp/dev-login/gh-state`. |
 | `DEV_LOGIN_WATCH_MAX` | `900` | The longest wait between `watch` passes. |
 | `DEV_LOGIN_PORT` | unset: no page | The port the login page listens on, on all interfaces (`0.0.0.0`). Publish it only where [Security](#security) allows. |
-| `DEV_LOGIN_PAGE_EXIT` | `1` | `1`: the page exits once every login is done (Docker, LAN). `0` keeps it up, showing each tool's state (behind Coder, so the app button always works). |
+| `DEV_LOGIN_PAGE_EXIT` | `1` | `1`: the page exits once every required login is done (Docker, LAN). `0` keeps it up, showing each tool's state (behind Coder, so the app button always works). |
 | `DEV_LOGIN_PAGE_URL` | unset | The page's address as you reach it (the Coder app URL, say), for the log and the notification. There is no reliable way to work it out from inside. |
 | `DEV_NOTIFY_URL` | unset | Where to POST a notification when logins are needed: an [ntfy](https://ntfy.sh) topic URL, or anything that takes a POST body. |
 
@@ -1117,23 +1119,30 @@ Every link, form and redirect on it is relative, so it works at `/` and under an
 prefix a proxy strips (a Coder path-based app, the nginx route below), as long as the
 address ends in `/`.
 
-**GitHub API budget.** The GitHub REST limit (5000 an hour) is shared by everything
-logged in as the same user, so checking logins must not spend it
-(cbundy/dev-system#375). `dev-login` reads whether gh has a token from its local config
-(`gh auth token`: no API call; no token means `out`). The one real check, `gh auth status
---json hosts`, runs when nothing is cached for the current token or the cache is older than
-`DEV_LOGIN_GH_TTL`; its result (state, plus a hash of the token, never the token) is cached,
-and a login, refresh or logout changes the hash, so it is picked up at once. A check that
-fails for any reason but a 401 (a rate limit, the network) keeps the previous state. The login page's
-poll, its exit check and the Coder "Logins" row use `status --json --cached`, which never
-calls the API while a cache entry for the token exists. `dev-login watch` backs off, and gives
-up on gh's workflow scope after one log line and one notification. Once the cache is
-populated for an unchanged token and the watcher has exited, the page and metadata row's
-`--cached` reads make zero GitHub API calls. Ordinary `status` (text or `--json`) still
-refreshes after `DEV_LOGIN_GH_TTL`, even when gh is logged in: frequent checks make roughly
-`3600 / DEV_LOGIN_GH_TTL` calls per hour (4 at the default). An active watcher shares this
-TTL cache. Initial checks and token changes can cause additional calls; no local token
-means zero calls. `dev-doctor` still checks live, on demand.
+**GitHub API budget.** Login checks share the user's GitHub API quota with other tools.
+`dev-login status` (text or `--json`) makes zero GitHub API calls when the current local
+token has a cached result fresher than `DEV_LOGIN_GH_TTL`,
+zero when there is no local token, and at most one otherwise. `gh auth token` reads
+local config without an API call; no token means `out`. The real check is
+`gh auth status --json hosts --hostname github.com --active`, restricted to the active
+account even when several accounts are saved. `/tmp/dev-login/gh-state` stores the
+check time, a SHA-256 fingerprint of the token (never the token), and the state. A token
+change invalidates the cache; logout removes it. HTTP 401 means `out`; other failures
+(rate limits, network errors or unexpected replies) keep the current token's previous
+state, or `in` when none exists. These results are cached too.
+
+`status --cached` never calls the API when a valid cache entry exists for the current
+token, even after its TTL. The login page's `/status` poll and exit check use
+`status --json --cached`; the [Coder Logins row](../../coder/dev-system/README.md)
+also uses it. Once the cache is populated, these reads make zero GitHub API calls for
+an unchanged token. Ordinary `status` still refreshes after `DEV_LOGIN_GH_TTL`:
+frequent checks make roughly `3600 / DEV_LOGIN_GH_TTL` calls per hour (4 at the default).
+An active watcher shares this TTL cache. Initial checks and token changes can cause
+additional calls. `dev-doctor` still checks live, on demand.
+
+`dev-login watch` gives up on gh's missing workflow scope after one log line and one
+notification per invocation, stops waiting for it, and never starts `gh auth refresh`
+on its own. Open the login page or run `dev-login start` to approve a refresh.
 
 **The notification** (`DEV_NOTIFY_URL`) is a plain POST, sent when logins are first
 needed and then hourly while they still are. Its `Title` header is

@@ -280,8 +280,10 @@ on GitHub, so a lossy compaction or a lost transcript costs little.
   workspace's `template_testing` parameter on, that directory is bind-mounted read-only at
   `/run/secrets/dev-system-template-tester` for `push-next.sh`. Every other workspace
   never sees it.
-- **Logins metadata.** A row on the workspace page from `dev-login status`, e.g.
-  `claude: in, codex: out, gh: out`, refreshed every 5 minutes from dev-login's cached state (no GitHub API calls in steady state).
+- **Logins metadata.** A row on the workspace page, e.g.
+  `claude: in, codex: out (optional), gh: out`, refreshed every 300 seconds using
+  `dev-login status --json --cached`. Older images that reject `--cached` fall back to
+  `dev-login status --json`. See the [GitHub API budget](../../images/base/README.md#first-run-logins).
 
 ## Central session history (agentsview)
 

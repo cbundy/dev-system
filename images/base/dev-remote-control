@@ -20,8 +20,8 @@
 #                                   DEV_REMOTE_CONTROL=1, otherwise do nothing
 #
 # The supervisor:
-# - starts `dev-login watch` in the background, which starts every missing
-#   login in DEV_LOGIN_TOOLS and logs its sign-in link (cbundy/dev-system#74);
+# - starts `dev-login watch` in the background; login policy is documented in
+#   images/base/README.md, First-run logins (cbundy/dev-system#74);
 # - waits for a claude.ai login (Remote Control does not work with an API key
 #   or a CLAUDE_CODE_OAUTH_TOKEN), polling `claude auth status` and logging a
 #   hint at start and then every few minutes;
@@ -65,7 +65,7 @@
 #                            for the sessions it spawns, with the disclaimer
 #                            accepted in .claude.json)
 #   DEV_REMOTE_CONTROL_POLL  seconds between login checks (default 30)
-#   DEV_LOGIN_TOOLS          the logins dev-login starts (default
+#   DEV_LOGIN_TOOLS          the tools considered by dev-login (default
 #                            claude,codex,gh; empty: none), see dev-login
 #   OTEL_EXPORTER_OTLP_ENDPOINT
 #                            set: Claude exports OpenTelemetry metrics and
@@ -184,8 +184,9 @@ dev_login_claude() {
 }
 
 # Starts `dev-login watch` unless it is already running. It exits by itself
-# once every login is done, so this is called again whenever Claude is found
-# logged out. Its output is the supervisor's: the container log.
+# when no required login remains (excluding gh scope), so it is called again
+# whenever Claude is found logged out. Its output is the supervisor's:
+# the container log.
 start_login_watch() {
   [ -n "${DEV_LOGIN_TOOLS-claude,codex,gh}" ] || return 0
   [ -n "${WATCH_PID:-}" ] && kill -0 "$WATCH_PID" 2>/dev/null && return 0

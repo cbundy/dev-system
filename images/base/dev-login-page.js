@@ -25,7 +25,7 @@
 // (cbundy/dev-system#79).
 //
 // Environment: DEV_LOGIN_PORT (required), DEV_LOGIN_PAGE_EXIT (1, the
-// default: exit once every login is done; 0 keeps it up).
+// default: exit once every required login is done; 0 keeps it up).
 "use strict";
 
 const http = require("node:http");
@@ -48,9 +48,9 @@ const devLogin = (args, timeout = 90000) =>
     ),
   );
 
-// The status checks the page repeats (the client's 5s poll, the exit check) read
-// dev-login's cached gh result, so they cost no GitHub API calls
-// (cbundy/dev-system#375).
+// Route repeated status checks (the client's 5s poll, the exit check) through
+// dev-login's gh_cached_state; see the GitHub API budget
+// in images/base/README.md (cbundy/dev-system#375).
 const STATUS_ARGS = ["status", "--json", "--cached"];
 
 const json = async (args) => {

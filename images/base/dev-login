@@ -12,9 +12,9 @@
 #           minutes); approving it is enough
 #   gh      `gh auth login --web --scopes workflow`: the same, then
 #           `gh auth setup-git`. A login whose token lacks the workflow scope
-#           (an older one, or one made by hand) gets
-#           `gh auth refresh --scopes workflow` instead: the same link and
-#           code, which add the scope to the token gh already has
+#           (an older one, or one made by hand) is refreshed by `start` or
+#           the login page using `gh auth refresh --scopes workflow`: a link
+#           and code, which add the scope to the token gh already has
 #
 # Usage:
 #   dev-login status [--json] [--cached]
@@ -35,9 +35,10 @@
 #                               --optional is given
 #   dev-login [claude] <code>   finish the Claude login with the code its
 #                               sign-in page shows
-#   dev-login watch [--name N]  keep the missing logins started until all are
-#                               done: log each new link, notify DEV_NOTIFY_URL,
-#                               and once gh is logged in, run the repo clone
+#   dev-login watch [--name N]  keep required logins started, leaving gh scope
+#                               refresh to a person: log each new link,
+#                               notify DEV_NOTIFY_URL, and once gh is logged
+#                               in, run the repo clone
 #                               that waited for it (dev-init --repo)
 #   dev-login serve             the login page on DEV_LOGIN_PORT
 #                               (dev-login-page.js)
@@ -46,13 +47,12 @@
 #   DEV_LOGIN_TOOLS      tools to log in (default claude,codex,gh)
 #   DEV_LOGIN_OPTIONAL   tools that never keep a watch, the page or its exit
 #                        alive (default codex; empty makes every tool required)
-#   DEV_LOGIN_GH_TTL     seconds gh's login result is cached (default 900); the
-#                        only GitHub API traffic is one call per TTL, and none
-#                        once gh is logged out locally (cbundy/dev-system#375)
+#   DEV_LOGIN_GH_TTL     seconds gh's login result is cached (default 900);
+#                        see images/base/README.md, GitHub API budget
 #   DEV_LOGIN_WATCH_MAX  the longest wait between `watch` passes (default 900);
 #                        it starts at 15s and doubles while nothing changes
 #   DEV_LOGIN_PORT       the login page's port; unset means no page
-#   DEV_LOGIN_PAGE_EXIT  1 (default): the page exits once every login is done;
+#   DEV_LOGIN_PAGE_EXIT  1 (default): exits once every required login is done;
 #                        0 keeps it up (status for a Coder app)
 #   DEV_LOGIN_PAGE_URL   the page's address as you reach it, for messages
 #   DEV_NOTIFY_URL       POST a notification here (an ntfy topic, or anything
@@ -136,9 +136,9 @@ optional() {
 # gh's login state, with the fewest GitHub API calls possible
 # (cbundy/dev-system#375). `gh auth token` reads the local config: no token
 # means out, with no call. Otherwise the result of the one real check
-# (`gh auth status --json hosts`) is cached in GH_CACHE as "epoch fingerprint
-# state", where the fingerprint is a hash of the token (never the token), so a
-# login, refresh or logout invalidates it. Fresh (under GH_TTL), or any age
+# (`gh auth status --json hosts --hostname github.com --active`) is cached
+# in GH_CACHE as "epoch fingerprint state", where the fingerprint is a hash
+# of the token (never the token), so a token change or logout invalidates it. Fresh (under GH_TTL), or any age
 # with DL_CACHED=1, is answered from the cache. A check that fails for a reason
 # other than a bad token (a rate limit, the network) keeps the previous state
 # (in when there was none) and is cached too, so it is not retried before the
@@ -348,9 +348,7 @@ cmd_status() {
   report "$format" $states
 }
 
-# Starts every missing login that is not already in progress, waits for the
-# new attempts' links, and reports. Serialized, so the page and the watcher
-# never start the same login twice.
+# Serialized so the page and the watcher never start the same login twice.
 cmd_start() {
   local format=text tool started="" states state i _ arg with_optional=0
   for arg in "$@"; do

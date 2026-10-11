@@ -77,8 +77,8 @@ for the layers, versioning and the runtime map.
   Coder ([`images/base/`](images/base/README.md)).
 - **Agents you drive without a shell** - headless Claude with Remote Control, restarted when it
   exits ([`images/base/`](images/base/README.md)).
-- **Logins from your phone** - missing logins start automatically and sign-in links reach you as
-  a log line, login page or push notification ([`images/base/`](images/base/README.md)).
+- **Logins from your phone** - sign-in links reach you as a log line, login page or push
+  notification ([first-run logins](images/base/README.md#first-run-logins)).
 - **State that survives rebuilds** - logins and tool state live on `/persist` volumes
   ([runtime storage](images/base/README.md#how-runtimes-should-mount-it)).
 - **An issue-to-PR workflow** - `issue-orchestrator`, `implement-issue`, `/update-dev` and

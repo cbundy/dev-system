@@ -28,7 +28,7 @@ gh_workflow_scope() {
 }
 
 # gh_login_state <json>: gh's login state from one `gh auth status --json hosts
-# --hostname github.com` reply, a pure function so it needs no network
+# --hostname github.com --active` reply, a pure function so it needs no network
 # (cbundy/dev-system#375). Prints one word:
 #   in       the active account's check succeeded, and its token has the
 #            `workflow` scope (or its scopes cannot be read, which counts as in)
