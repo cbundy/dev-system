@@ -23,7 +23,21 @@ throughput and lead-time queries keep counting `merged` only. Two devices sweepi
 has pushed can both log it, so count identical consecutive rows once.
 
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
-`note`, `session_id`, `actor`, `v`, `raw`, `event_id`.
+`note`, `session_id`, `actor`, `v`, `raw`, `event_id`, `base_image`, `dev_image`,
+`template_version`, `plugin_version`.
+
+The four version columns (what `dev-version --json` calls the running base image, dev image,
+Coder template version and callum-flow plugin version) are filled for events written by
+base image 2.26.0 and later; earlier rows, and rows pushed by older images, are null. To compare
+releases, filter on them:
+
+```sql
+select plugin_version, count(*) from factory.events
+where state = 'merged' and base_image = '2.26.0' group by plugin_version;
+```
+
+Subscribe to new events with `LISTEN factory_events`: each insert notifies a JSON payload with
+`event_id`, `device`, `repo`, `issue` and `state`.
 
 ## Data coverage
 

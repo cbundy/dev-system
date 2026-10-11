@@ -23,9 +23,18 @@
 # process); all psql output is masked. A database that is down is retried on
 # the next pass.
 #
+# Push on write (cbundy/dev-system#316): callum-flow-event touches
+# <events dir>/.wake after every append. Between passes the loop polls that file
+# about once a second and starts the next pass at once when it changed, so a new
+# event reaches the database within a few seconds.
+#
+# The DDL (guarded, see below) is sent with the first batch of each process and
+# again after a failed batch, not with every batch.
+#
 # Usage: event-push-loop [--once]    --once makes one pass and exits (tests)
 # Environment: CALLUM_EVENTS_DIR (default /persist/events),
-#   DEV_EVENT_PUSH_INTERVAL seconds between passes (default 30),
+#   DEV_EVENT_PUSH_INTERVAL seconds between passes (default 30; the fallback
+#   when no event wakes the loop, see below),
 #   EVENT_PUSH_BATCH lines per transaction (default 500).
 set -u
 
@@ -36,8 +45,9 @@ DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
 INTERVAL="${DEV_EVENT_PUSH_INTERVAL:-30}"
 BATCH="${EVENT_PUSH_BATCH:-500}"
 
-# The DDL runs on every batch from every device, so each change is guarded by a
-# catalog check and a repeat takes no ACCESS EXCLUSIVE lock. A migration that
+# The DDL runs from every device, so each change is guarded by a catalog check
+# and a repeat takes no ACCESS EXCLUSIVE lock (ADD COLUMN IF NOT EXISTS takes it
+# even when the column exists, so the column adds are guarded too). A migration that
 # is needed runs in one transaction under an advisory lock (the unique indexes
 # are in place before the old primary key goes) and is re-checked inside it.
 read -r -d '' DDL <<'SQL'
@@ -58,7 +68,11 @@ CREATE TABLE IF NOT EXISTS factory.events (
   actor text,
   v integer,
   raw jsonb NOT NULL,
-  event_id uuid
+  event_id uuid,
+  base_image text,
+  dev_image text,
+  template_version text,
+  plugin_version text
 );
 CREATE INDEX IF NOT EXISTS events_issue_idx ON factory.events (repo, issue, ts);
 DO $mig$
@@ -92,6 +106,44 @@ BEGIN
   END LOOP;
 END
 $mig$;
+DO $ver$
+BEGIN
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid = 'factory.events'::regclass AND NOT attisdropped
+        AND attname IN ('base_image', 'dev_image', 'template_version', 'plugin_version')) < 4 THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.events migration'));
+    ALTER TABLE factory.events
+      ADD COLUMN IF NOT EXISTS base_image text,
+      ADD COLUMN IF NOT EXISTS dev_image text,
+      ADD COLUMN IF NOT EXISTS template_version text,
+      ADD COLUMN IF NOT EXISTS plugin_version text;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'events_notify'
+                 AND pronamespace = 'factory'::regnamespace) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.events notify'));
+    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'events_notify'
+                   AND pronamespace = 'factory'::regnamespace) THEN
+      EXECUTE $fn$
+        CREATE FUNCTION factory.events_notify() RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN
+          PERFORM pg_notify('factory_events', json_build_object('event_id', NEW.event_id,
+            'device', NEW.device, 'repo', NEW.repo, 'issue', NEW.issue, 'state', NEW.state)::text);
+          RETURN NULL;
+        END
+        $body$
+      $fn$;
+    END IF;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'events_notify'
+                 AND tgrelid = 'factory.events'::regclass AND NOT tgisinternal) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.events notify'));
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'events_notify'
+                   AND tgrelid = 'factory.events'::regclass AND NOT tgisinternal) THEN
+      CREATE TRIGGER events_notify AFTER INSERT ON factory.events
+        FOR EACH ROW EXECUTE FUNCTION factory.events_notify();
+    END IF;
+  END IF;
+END
+$ver$;
 SQL
 
 read -r -d '' SQL_ROWS <<'JQ'
@@ -100,11 +152,15 @@ def q: if . == null then "NULL" else "'" + (tostring | gsub("'"; "''")) + "'" en
 | range(0; $rows | length) as $i
 | $rows[$i]
 | select(type == "object" and ([.device, .repo, .ts, .state] | all(type == "string")))
-| "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, event_id, raw) VALUES ("
+| "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, event_id, base_image, dev_image, template_version, plugin_version, raw) VALUES ("
   + ([.device, .repo, ($off + $i + 1), .ts, .state, .issue, .run_id, .branch, .pr, .head, .note, .session_id, .actor, .v,
-      (.event_id | if type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") then ascii_downcase else null end)] | map(q) | join(", "))
+      (.event_id | if type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") then ascii_downcase else null end),
+      (.base_image | if type == "string" then . else null end), (.dev_image | if type == "string" then . else null end), (.template_version | if type == "string" then . else null end), (.plugin_version | if type == "string" then . else null end)] | map(q) | join(", "))
   + ", " + (tojson | q) + "::jsonb) ON CONFLICT DO NOTHING;"
 JQ
+
+# 1 once this process has sent the DDL; reset by a failed batch.
+DDL_SENT=0
 
 # push_file FILE URL: pushes the file's lines not yet pushed. Returns 1 when
 # the database refused a batch.
@@ -124,12 +180,14 @@ push_file() {
     n=$((total - pushed))
     [ "$n" -le "$BATCH" ] || n=$BATCH
     sql=$(tail -n +$((pushed + 1)) "$f" | head -n "$n" | jq -nrR --argjson off "$pushed" "$SQL_ROWS") || return 0
-    if ! out=$({ printf '%s\n' "$DDL"; printf '%s\n' "$sql"; } \
+    if ! out=$({ [ "$DDL_SENT" = 1 ] || printf '%s\n' "$DDL"; printf '%s\n' "$sql"; } \
       | run_psql "$url" 2>&1); then
+      DDL_SENT=0
       printf '%s\n' "$out" | sed -E "$MASK_SECRETS_SED" >&2
       echo "event-push-loop: push of $name failed, retrying next pass" >&2
       return 1
     fi
+    DDL_SENT=1
     pushed=$((pushed + n))
     printf '%s\n' "$pushed" > "$DIR/.pushed/$name.tmp" && mv "$DIR/.pushed/$name.tmp" "$DIR/.pushed/$name"
   done
@@ -155,8 +213,23 @@ if [ "${1-}" = --once ]; then
   exit "$rc"
 fi
 
+wake_stamp() { stat -c %y "$DIR/.wake" 2>/dev/null || echo none; }
+
+# wait_for_wake STAMP: returns after INTERVAL seconds, or as soon as the wake
+# file differs from the STAMP taken before the pass.
+wait_for_wake() {
+  local waited=0
+  case "$INTERVAL" in '' | *[!0-9]*) INTERVAL=30 ;; esac
+  while [ "$waited" -lt "$INTERVAL" ]; do
+    sleep 1
+    [ "$(wake_stamp)" = "$1" ] || return 0
+    waited=$((waited + 1))
+  done
+}
+
 while :; do
+  stamp=$(wake_stamp)
   pass
   [ $? -ne 2 ] || exit 0
-  sleep "$INTERVAL"
+  wait_for_wake "$stamp"
 done

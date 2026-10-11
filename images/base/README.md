@@ -1333,6 +1333,11 @@ restart never replays old events; transitions a watcher observes are always logg
 `callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
 `CALLUM_EVENTS_DIR` default as a write) and writes nothing.
 
+Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
+`plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
+`${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`; they are null when the snapshot is missing or unreadable, and the
+line's `v` is 2. After the append it touches `/persist/events/.wake`, which wakes `event-push-loop`.
+
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--projects-dir <dir>]... [--events <file>] [--nm-state <file>] [--nm-export <file>] [--ready-times <file>]`
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
@@ -1464,7 +1469,14 @@ repeat takes no exclusive lock; the role in the URL must own the table. The URL 
 argv, and all `psql` output is masked. With `sslmode=verify-ca` or `verify-full` and no root cert given (URL, `PGSSLROOTCERT`, or `~/.postgresql/root.crt`), it sets `PGSSLROOTCERT=system`. `dev-init` starts the loop (log: `/tmp/dev-event-push.log`)
 and `dev-doctor` reports when events were last written and last pushed. Variables:
 `CALLUM_EVENTS_DIR`, `DEV_EVENT_PUSH_INTERVAL` (default 30 s). The role in the URL needs
-`CREATE` on the database (or the schema and table created for it by an admin). The
+`CREATE` on the database (or the schema and table created for it by an admin).
+The loop polls the `.wake` file about once a second and starts a pass as soon as it changes, so a new event reaches
+the database within a few seconds; `DEV_EVENT_PUSH_INTERVAL` is only the fallback. It sends its guarded DDL with the
+first batch of the process (and again after a failed batch), not with every batch. The DDL also adds the four
+version columns (older rows stay null) and an `AFTER INSERT` trigger on `factory.events` that runs
+`pg_notify('factory_events', ...)` with the `event_id`, `device`, `repo`, `issue` and `state` as JSON, so readers
+can `LISTEN factory_events` instead of polling; the role in the URL must be able to create the function and trigger.
+Rows from older images (no version columns) still insert and fire it. The
 queries are in [docs/metrics.md](../../docs/metrics.md).
 
 `nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with

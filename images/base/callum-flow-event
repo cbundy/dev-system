@@ -39,12 +39,21 @@
 # between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
 # the hostname), session_id (CLAUDE_SESSION_ID, else the newest transcript of
 # the working directory's Claude project, else null), actor
-# (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (1) and event_id (a UUID made
+# (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (2), the running versions
+# base_image, dev_image, template_version and plugin_version (read from the
+# snapshot dev-init keeps at ${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}, the
+# same local data `dev-version --local` reads; null when it is missing or
+# unreadable - cbundy/dev-system#316) and event_id (a UUID made
 # locally from the kernel, so an event keeps a unique identity even if the file
 # is lost and restarts at line 1; omitted with a warning if the kernel source is
 # unreadable - cbundy/dev-system#229).
 #
-# Environment: CALLUM_EVENTS_DIR (default /persist/events), CALLUM_FLOW_REPO
+# After the append it touches <events dir>/.wake so event-push-loop pushes the
+# line within seconds instead of at its next interval (failure ignored; still
+# no network here).
+#
+# Environment: CALLUM_EVENTS_DIR (default /persist/events), DEV_VERSIONS_FILE,
+# CALLUM_FLOW_REPO
 # (owner/name, default from the origin remote), CALLUM_EVENT_UUID_SOURCE (test
 # override of /proc/sys/kernel/random/uuid).
 set -u
@@ -151,15 +160,21 @@ case "$event_id" in
   *) warn "no event_id available - event recorded without one"; event_id= ;;
 esac
 
-line=$(jq -nc \
+snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
+
+line=$(jq -nc --arg snap "$snap" \
   --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg repo "$repo" --arg device "$device" \
   --arg session "$session" --arg actor "$actor" --arg state "$state" --arg issue "$issue" \
   --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" --arg event_id "$event_id" '
   def s: if . == "" then null else . end;
   def n: if . == "" then null else tonumber end;
-  {v: 1, ts: $ts, repo: $repo, device: $device, session_id: ($session | s), actor: $actor,
+  (try ($snap | fromjson) catch null) as $s
+  | def sv($k): try ($s[$k] | if type == "string" then . else null end) catch null;
+  {v: 2, ts: $ts, repo: $repo, device: $device, session_id: ($session | s), actor: $actor,
    state: $state, issue: ($issue | n), run_id: ($run | s), branch: ($branch | s),
-   pr: ($pr | n), head: ($head | s), note: ($note | s), event_id: ($event_id | s)}') || { warn "could not build the event"; exit 0; }
+   pr: ($pr | n), head: ($head | s), note: ($note | s), event_id: ($event_id | s),
+   base_image: sv("base_image"), dev_image: sv("dev_image"),
+   template_version: sv("template_version"), plugin_version: sv("plugin_version")}') || { warn "could not build the event"; exit 0; }
 
 dir=${CALLUM_EVENTS_DIR:-/persist/events}
 if [ ! -d "$dir" ]; then
@@ -173,5 +188,9 @@ if [ -n "$if_changed" ] && [ -r "$dir/$file" ]; then
     | . != null and .state == $new.state and .head == $new.head and .note == $new.note' "$dir/$file" 2>/dev/null) || same=
   [ "$same" != true ] || exit 0
 fi
-printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null || warn "cannot write $dir/$file - event not recorded"
+if printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
+  touch "$dir/.wake" 2>/dev/null || :
+else
+  warn "cannot write $dir/$file - event not recorded"
+fi
 exit 0

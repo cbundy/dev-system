@@ -375,3 +375,44 @@ check "AGENTSVIEW_PG_URL overrides the file" bash -c "
   out=\$(docker run --rm --entrypoint '' -e AGENTSVIEW_PG_URL='postgres://av:x@no-such-host.invalid/agentsview' -v '$secrets:/run/secrets/dev-system:ro' '$IMAGE' dev-doctor 2>&1)
   echo \"\$out\"
   echo \"\$out\" | grep -q 'cannot reach the central PostgreSQL (URL from AGENTSVIEW_PG_URL'"
+# Version columns and the change notification (#316), on a fresh database holding factory.events in
+# the old shape (no event_id, no version columns, the original primary key). The DDL, read from
+# event-push-loop, must migrate it, run a second time with no error, leave old rows null, accept an
+# old-image insert (the v1 column list), and notify a LISTEN session.
+ver_events_notify() {
+  local root ddl l
+  root=$(cd "$TEST_DIR/../../.." && pwd)
+  ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/event-push-loop")
+  pg() { docker exec -i "$RUN_ID-pg" psql -U av -d old316 -v ON_ERROR_STOP=1 -qtA; }
+  docker exec "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtAc "create database old316" >/dev/null || return 1
+  pg >/dev/null <<'SQL' || return 1
+CREATE SCHEMA factory;
+CREATE TABLE factory.events (device text NOT NULL, repo text NOT NULL, seq bigint NOT NULL, ts timestamptz NOT NULL,
+  state text NOT NULL, issue integer, run_id text, branch text, pr integer, head text, note text, session_id text,
+  actor text, v integer, raw jsonb NOT NULL, PRIMARY KEY (device, repo, seq));
+INSERT INTO factory.events (device, repo, seq, ts, state, issue, v, raw) VALUES ('old', 'o/r', 1, now(), 'ready', 1, 1, '{}');
+SQL
+  printf '%s\n' "$ddl" | pg >/dev/null || { echo "first DDL run failed"; return 1; }
+  printf '%s\n' "$ddl" | pg >/dev/null || { echo "second DDL run failed"; return 1; }
+  [ "$(printf '%s\n' "select count(*) from factory.events where base_image is null and dev_image is null and template_version is null and plugin_version is null" | pg)" = 1 ] || { echo "old row not null"; return 1; }
+  [ "$(printf '%s\n' "select count(*) from pg_trigger where tgname = 'events_notify' and not tgisinternal" | pg)" = 1 ] || { echo "trigger count"; return 1; }
+  l=$(mktemp)
+  { printf 'LISTEN factory_events;\nselect pg_sleep(4);\nselect 1;\n' | pg > "$l" 2>&1; } &
+  local lp=$!
+  sleep 1.5
+  printf '%s\n' "INSERT INTO factory.events (device, repo, seq, ts, state, issue, run_id, branch, pr, head, note, session_id, actor, v, event_id, raw)
+    VALUES ('old-image', 'o/r', 7, now(), 'merged', 7, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, '0b0e3c1a-5d9f-4e2b-8a41-1c2d3e4f5a6b', '{}');
+    INSERT INTO factory.events (device, repo, seq, ts, state, issue, raw, event_id, base_image, dev_image, template_version, plugin_version, v)
+    VALUES ('new-image', 'o/r', 8, now(), 'ready', 8, '{}', '1b0e3c1a-5d9f-4e2b-8a41-1c2d3e4f5a6b', '2.26.0', '1.2.3', 'tpl-9', '0.27.0', 2);" | pg >/dev/null || return 1
+  wait "$lp"
+  cat "$l"
+  grep -F '"event_id" : "0b0e3c1a-5d9f-4e2b-8a41-1c2d3e4f5a6b"' "$l" | grep -F '"device" : "old-image"' | grep -F '"repo" : "o/r"' | grep -F '"issue" : 7' | grep -qF '"state" : "merged"' || { echo "no notification for the old-image insert"; return 1; }
+  grep -qF '"device" : "new-image"' "$l" || { echo "no notification for the new insert"; return 1; }
+  local col val
+  for col in base_image:2.26.0 dev_image:1.2.3 template_version:tpl-9 plugin_version:0.27.0; do
+    val=$(printf '%s\n' "select device from factory.events where ${col%%:*} = '${col#*:}'" | pg)
+    [ "$val" = new-image ] || { echo "filter by ${col%%:*} gave '$val'"; return 1; }
+  done
+  rm -f "$l"
+}
+check "factory.events migrates to the version columns idempotently, an old-image insert still works, and a LISTEN session is notified" ver_events_notify

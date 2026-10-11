@@ -23,7 +23,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 fakebin="$tmpdir/bin"
 mkdir -p "$toolbin" "$fakebin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod paste; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod paste stat; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -31,17 +31,31 @@ SH=$(command -v sh)
 BASH=$(command -v bash)
 
 events="$tmpdir/events"
-ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
+ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="${EV_VERSIONS:-$tmpdir/no-versions.json}" "$SH" "$EVENT" "$@"; }
 log="$events/o__r.jsonl"
 
 # --- callum-flow-event ------------------------------------------------------
 ev claimed --issue 7 --note "it's \"quoted\"" --branch feat/issue-7-x --pr 9 --head abc --run r1 || fail "claimed should exit 0"
 [ "$(wc -l < "$log" | tr -d ' ')" = 1 ] || fail "one line expected"
-jq -e '.v == 1 and .repo == "o/r" and .device == "dev-box" and .state == "claimed" and .issue == 7
+jq -e '.v == 2 and .repo == "o/r" and .device == "dev-box" and .state == "claimed" and .issue == 7
   and .pr == 9 and .head == "abc" and .run_id == "r1" and .branch == "feat/issue-7-x"
   and .note == "it'"'"'s \"quoted\"" and .session_id == null and .actor == "agent"
   and (.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))' "$log" > /dev/null || fail "bad line: $(cat "$log")"
 
+# version fields (#316): read from the snapshot, null without one, one line either way
+[ "$(jq -c '[.base_image, .dev_image, .template_version, .plugin_version]' "$log")" = '[null,null,null,null]' ] || fail "no snapshot must give null version fields: $(cat "$log")"
+printf '%s\n' '{"device":"x","base_image":"2.25.0","dev_image":null,"template_version":"tpl-1","plugin_version":7,"components":[]}' > "$tmpdir/versions.json"
+EV_VERSIONS="$tmpdir/versions.json" ev ready --issue 7 || fail "snapshot event should exit 0"
+[ "$(wc -l < "$log" | tr -d ' ')" = 2 ] || fail "one line per event"
+[ "$(tail -n 1 "$log" | jq -c '[.v, .base_image, .dev_image, .template_version, .plugin_version, .device]')" = '[2,"2.25.0",null,"tpl-1",null,"dev-box"]' ] || fail "snapshot fields wrong: $(tail -n 1 "$log")"
+printf 'not json{' > "$tmpdir/versions.json"
+EV_VERSIONS="$tmpdir/versions.json" ev ready --issue 7 || fail "corrupt snapshot event should exit 0"
+[ "$(tail -n 1 "$log" | jq -c '[.v, .base_image, .plugin_version]')" = '[2,null,null]' ] || fail "corrupt snapshot must give nulls: $(tail -n 1 "$log")"
+head -n 1 "$log" > "$tmpdir/log1" && cp "$tmpdir/log1" "$log"
+[ -e "$events/.wake" ] || fail "an event must touch the wake file"
+rm -f "$events/.wake"
+ev bogus --issue 1 2> /dev/null || :
+[ ! -e "$events/.wake" ] || fail "a rejected call must not touch the wake file"
 ev delegated --branch fix/issue-12-y || fail "issue from branch should exit 0"
 [ "$(tail -n 1 "$log" | jq .issue)" = 12 ] || fail "issue should come from the branch"
 
@@ -262,10 +276,10 @@ rm -f "$fakebin/psql-calls"
 idpush() { PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$ev_dir" DEV_SYSTEM_SHARE="$ROOT/images/base" AGENTSVIEW_PG_URL=postgres://app:s3cret@db/x HOME="$tmpdir/home" "$BASH" "$PUSH" --once; }
 idpush > "$tmpdir/idpush.out" 2>&1 || fail "id push should succeed: $(cat "$tmpdir/idpush.out")"
 sql="$fakebin/psql-sql-1"
-grep -q 'actor, v, event_id, raw) VALUES' "$sql" || fail "INSERT should name event_id"
-grep -q "'$id1', '{" "$sql" || fail "a valid event_id should be passed on"
-[ "$(grep -c "NULL, '{" "$sql")" -ge 2 ] || fail "a malformed or missing event_id must be NULL"
-grep 'not-a-uuid' "$sql" | grep -q "NULL, '{" || fail "the malformed event_id column must be NULL"
+grep -q 'actor, v, event_id, base_image, dev_image, template_version, plugin_version, raw) VALUES' "$sql" || fail "INSERT should name event_id"
+grep -q "'$id1', NULL, NULL, NULL, NULL, '{" "$sql" || fail "a valid event_id should be passed on"
+[ "$(grep -c "NULL, NULL, NULL, NULL, NULL, '{" "$sql")" -ge 2 ] || fail "a malformed or missing event_id must be NULL"
+grep 'not-a-uuid' "$sql" | grep -q "NULL, NULL, NULL, NULL, NULL, '{" || fail "the malformed event_id column must be NULL"
 for frag in 'ADD COLUMN IF NOT EXISTS event_id uuid' 'events_event_id_key' 'WHERE event_id IS NOT NULL' 'events_legacy_key' 'WHERE event_id IS NULL' 'DROP CONSTRAINT' 'pg_advisory_xact_lock'; do
   grep -q "$frag" "$sql" || fail "the DDL should contain: $frag"
 done
@@ -275,6 +289,61 @@ idpush > "$tmpdir/idpush.out" 2>&1 || fail "replaced-file push should succeed"
 [ "$(grep -c '^INSERT' "$fakebin/psql-sql-2")" = 3 ] || fail "all 3 lines should be pushed again"
 [ "$(grep -c 'file replaced' "$tmpdir/idpush.out")" = 1 ] || fail "one log line expected: $(cat "$tmpdir/idpush.out")"
 [ "$(cat "$ev_dir/.pushed/o__r.jsonl")" = 3 ] || fail "the marker should be 3 again"
+
+# version columns (#316): the INSERT names them and carries the values; null when absent
+vdir="$tmpdir/push-ver"
+mkdir -p "$vdir"
+printf '%s\n' \
+  '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","state":"ready","base_image":"2.25.0","dev_image":null,"template_version":"tpl-1","plugin_version":"0.26.1"}' \
+  '{"v":1,"ts":"2026-10-08T10:01:00Z","repo":"o/r","device":"d1","state":"ready","plugin_version":{"x":1}}' > "$vdir/o__r.jsonl"
+rm -f "$fakebin/psql-calls"
+PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$vdir" DEV_SYSTEM_SHARE="$ROOT/images/base" AGENTSVIEW_PG_URL=postgres://app:s3cret@db/x HOME="$tmpdir/home" "$BASH" "$PUSH" --once > /dev/null 2>&1 || fail "version push should succeed"
+sql="$fakebin/psql-sql-1"
+grep -q 'event_id, base_image, dev_image, template_version, plugin_version, raw) VALUES' "$sql" || fail "INSERT should name the version columns"
+grep -q "'2.25.0', NULL, 'tpl-1', '0.26.1', '{" "$sql" || fail "version values wrong: $(grep INSERT "$sql")"
+[ "$(grep -c "NULL, NULL, NULL, NULL, NULL, '{" "$sql")" = 1 ] || fail "a v1 line (or a non-string version) must push null versions"
+for frag in 'ADD COLUMN IF NOT EXISTS base_image text' 'ADD COLUMN IF NOT EXISTS plugin_version text' "pg_notify('factory_events'" 'AFTER INSERT ON factory.events' 'pg_trigger' 'pg_proc'; do
+  grep -q "$frag" "$sql" || fail "the DDL should contain: $frag"
+done
+
+# push on write and DDL once (#316): a long interval, woken by the wake file
+wdir="$tmpdir/push-wake"
+mkdir -p "$wdir"
+printf '%s\n' '{"v":2,"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","state":"ready","issue":1}' > "$wdir/o__r.jsonl"
+rm -f "$fakebin/psql-calls"
+wline() { printf '%s\n' "{\"v\":2,\"ts\":\"2026-10-08T10:0$1:00Z\",\"repo\":\"o/r\",\"device\":\"d1\",\"state\":\"ready\",\"issue\":$1}" >> "$wdir/o__r.jsonl"; }
+ncalls() { if [ -f "$fakebin/psql-calls" ]; then calls; else echo 0; fi; }
+wait_calls() { # N SECONDS
+  t=0
+  while [ "$(ncalls)" -lt "$1" ] && [ "$t" -lt $(($2 * 10)) ]; do sleep 0.1; t=$((t + 1)); done
+  [ "$(ncalls)" -ge "$1" ]
+}
+PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$wdir" DEV_SYSTEM_SHARE="$ROOT/images/base" DEV_EVENT_PUSH_INTERVAL=30 \
+  AGENTSVIEW_PG_URL=postgres://app:s3cret@db/x HOME="$tmpdir/home" "$BASH" "$PUSH" > "$tmpdir/loop.out" 2>&1 &
+loop_pid=$!
+trap 'kill "$loop_pid" 2> /dev/null; rm -rf "$tmpdir"' EXIT
+wait_calls 1 5 || fail "the loop should push the first pass at once"
+grep -q 'CREATE TABLE IF NOT EXISTS' "$fakebin/psql-sql-1" || fail "the first batch should carry the DDL"
+sleep 1.5
+wline 2
+sleep 2.5
+[ "$(calls)" = 1 ] || fail "with no wake, nothing may be pushed before the interval"
+touch "$wdir/.wake"
+wait_calls 2 5 || fail "a wake must push within 5 s: $(cat "$tmpdir/loop.out")"
+grep -q 'CREATE TABLE IF NOT EXISTS' "$fakebin/psql-sql-2" && fail "the DDL must be sent once per process"
+grep -q "'d1', 'o/r', '2'," "$fakebin/psql-sql-2" || fail "the woken pass should push the new line"
+touch "$fakebin/psql-fail"
+wline 3
+touch "$wdir/.wake"
+wait_calls 3 5 || fail "the failing batch should be tried"
+rm "$fakebin/psql-fail"
+touch "$wdir/.wake"
+wait_calls 4 5 || fail "the retry should run on the next wake"
+grep -q 'CREATE TABLE IF NOT EXISTS' "$fakebin/psql-sql-4" || fail "a failed batch must make the next pass resend the DDL"
+[ "$(cat "$wdir/.pushed/o__r.jsonl")" = 3 ] || fail "retry should catch up"
+kill "$loop_pid" 2> /dev/null || :
+wait "$loop_pid" 2> /dev/null || :
+trap 'rm -rf "$tmpdir"' EXIT
 
 # --- the watchers call callum-flow-event ------------------------------------
 cat > "$fakebin/callum-flow-event" <<'STUB'
