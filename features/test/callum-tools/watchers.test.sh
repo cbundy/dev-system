@@ -64,6 +64,9 @@ in_dir() {
 start_bg() {
   out=$1
   shift
+  # create/truncate synchronously so wait_lines never sees a missing or stale file
+  : > "$out"
+  : > "$out.err"
   (in_dir "$@") > "$out" 2> "$out.err" &
   bg_pid=$!
 }
