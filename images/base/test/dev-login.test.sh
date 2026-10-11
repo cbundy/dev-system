@@ -40,7 +40,12 @@ case "$1 ${2:-}" in
       *" --active "*) ;;
       *) [ ! -f "$FIX/multiple-accounts" ] || echo "$*" >> "$FIX/status.calls" ;;
     esac
-    cat "$FIX/status.json" ;;
+    reply=$(cat "$FIX/status.json")
+    if [ "${GH_TEST_BLOCK:-0}" = 1 ]; then
+      : > "$FIX/status.blocked"
+      read -r release < "$FIX/status.release"
+    fi
+    printf '%s\n' "$reply" ;;
   *) echo "unexpected gh $*" >> "$FIX/gh.unexpected"; exit 1 ;;
 esac
 STUB
@@ -196,6 +201,43 @@ expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" in "no active account keeps the pr
 expect_calls 3 "no active account"
 expect_state "$(gh_state --cached)" in "cached reply without an active account"
 expect_calls 3 "reply without an active account is cached"
+
+for transition in revoked logout; do
+  reset tok1 "$ok_json"
+  expect_state "$(gh_state)" in "before concurrent $transition"
+  printf '%s\n' "$ratelimit_json" > "$FIX/status.json"
+  mkfifo "$FIX/status.release"
+  timeout 10 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
+    DEV_LOGIN_GH_TTL=0 GH_TEST_BLOCK=1 bash "$CMD" status --json > "$FIX/first.json" 2> "$FIX/first.err" &
+  first_pid=$!
+  i=0
+  while [ ! -f "$FIX/status.blocked" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 100 ] || fail "first $transition check did not reach gh"
+    sleep 0.05
+  done
+  if [ "$transition" = revoked ]; then
+    printf '%s\n' "$bad_json" > "$FIX/status.json"
+  else
+    rm -f "$FIX/token"
+  fi
+  rc=0
+  timeout 1 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
+    DEV_LOGIN_GH_TTL=0 bash "$CMD" status --json > "$FIX/second.json" 2> "$FIX/second.err" || rc=$?
+  [ "$rc" = 124 ] || fail "concurrent $transition must wait for the in-flight cache update (exit $rc)"
+  expect_calls 2 "blocked concurrent $transition"
+  printf 'release\n' > "$FIX/status.release"
+  wait "$first_pid" || fail "first $transition check failed"
+  expect_state "$(jq -r .gh.state "$FIX/first.json")" in "transient failure during $transition"
+  expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" out "serialized $transition"
+  expect_state "$(gh_state --cached)" out "cached state after $transition"
+  if [ "$transition" = revoked ]; then
+    expect_calls 3 "serialized revocation"
+  else
+    expect_calls 2 "serialized logout"
+    [ ! -f "$tmp/run/gh-state" ] || fail "logout must remove the cached token state"
+  fi
+done
 
 # --- optional codex ----------------------------------------------------------------------
 reset tok1 "$ok_json"

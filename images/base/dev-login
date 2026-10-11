@@ -143,8 +143,11 @@ optional() {
 # other than a bad token (a rate limit, the network) keeps the previous state
 # (in when there was none) and is cached too, so it is not retried before the
 # TTL runs out.
-gh_cached_state() {
+gh_cached_state() (
   local tok fp epoch cfp cstate now st reply
+  install -d -m 0700 "$RUN_DIR" 2>/dev/null || return
+  exec 7>"$GH_CACHE.lock" || return
+  flock 7 || return
   tok=$(gh auth token --hostname github.com 2>/dev/null)
   if [ -z "$tok" ]; then
     rm -f "$GH_CACHE"
@@ -167,11 +170,9 @@ gh_cached_state() {
   if [ "$st" = unknown ]; then
     if [ "$cfp" = "$fp" ] && [ -n "$cstate" ]; then st="$cstate"; else st=in; fi
   fi
-  if install -d -m 0700 "$RUN_DIR" 2>/dev/null; then
-    printf '%s %s %s\n' "$now" "$fp" "$st" >"$GH_CACHE.$$" 2>/dev/null && mv -f "$GH_CACHE.$$" "$GH_CACHE"
-  fi
+  printf '%s %s %s\n' "$now" "$fp" "$st" >"$GH_CACHE.$$" 2>/dev/null && mv -f "$GH_CACHE.$$" "$GH_CACHE"
   echo "$st"
-}
+)
 
 # in, out, other (claude), scope or token (gh) or off. A gh token whose scopes
 # cannot be read counts as in: only a token known to lack `workflow` is
