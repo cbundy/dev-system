@@ -29,6 +29,8 @@
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
 - Questions about factory latency, throughput or pipeline cost are answered from factory data via the
   callum-flow `query-factory-data` skill, not from guesses.
+- When creating an epic issue that will be composed of several issues that make up a completed feature, ensure you use the
+  proper sub-issue approach in GitHub so that issues appear linked correctly in the UI and the owner can see progress of the epic.
 
 ## Dev container is ephemeral
 
