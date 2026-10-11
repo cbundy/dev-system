@@ -4,8 +4,11 @@
 // One card per tool in DEV_LOGIN_TOOLS: Claude's sign-in link and a box for
 // the code its sign-in page shows; codex's and gh's link and one-time code; a
 // tick once a tool is logged in. All the work is dev-login's: a GET runs
-// `dev-login start --json` (starting any missing login, keeping one in
+// `dev-login start --json --optional` (starting any missing login, keeping one in
 // progress) and the code is handed to `dev-login claude <code>`.
+//
+// The /status poll and the exit check use `status --json --cached`; an
+// optional tool (DEV_LOGIN_OPTIONAL) counts as done.
 //
 // What it accepts is deliberately small: GET / (the page), GET /status (each
 // tool's state, for the page to refresh itself), GET /healthz (200 while it is
@@ -22,7 +25,7 @@
 // (cbundy/dev-system#79).
 //
 // Environment: DEV_LOGIN_PORT (required), DEV_LOGIN_PAGE_EXIT (1, the
-// default: exit once every login is done; 0 keeps it up).
+// default: exit once every required login is done; 0 keeps it up).
 "use strict";
 
 const http = require("node:http");
@@ -45,6 +48,11 @@ const devLogin = (args, timeout = 90000) =>
     ),
   );
 
+// Route repeated status checks (the client's 5s poll, the exit check) through
+// dev-login's gh_cached_state; see the GitHub API budget
+// in images/base/README.md (cbundy/dev-system#375).
+const STATUS_ARGS = ["status", "--json", "--cached"];
+
 const json = async (args) => {
   const r = await devLogin(args);
   try {
@@ -54,7 +62,8 @@ const json = async (args) => {
   }
 };
 
-const allDone = (tools) => Object.values(tools).every((t) => DONE.has(t.state));
+// An optional tool (DEV_LOGIN_OPTIONAL) never keeps the page up.
+const allDone = (tools) => Object.values(tools).every((t) => t.optional || DONE.has(t.state));
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -77,7 +86,7 @@ const page = (title, body, script = "") =>
   `<title>${esc(title)}</title><style>${STYLE}</style></head><body><main>${body}</main>${script}</body></html>`;
 
 const card = (tool, t) => {
-  const name = NAMES[tool];
+  const name = NAMES[tool] + (t.optional ? ' <span class="muted">(optional)</span>' : "");
   const head = (status) => `<h2><span>${name}</span>${status}</h2>`;
   switch (t.state) {
     case "in":
@@ -127,7 +136,7 @@ const send = (res, status, type, body, headers = {}) => {
 };
 
 const showPage = async (res) => {
-  const tools = await json(["start", "--json"]);
+  const tools = await json(["start", "--json", "--optional"]);
   if (!tools) {
     send(res, 500, "text/html; charset=utf-8", page("Logins", `<h1>Logins</h1><p>Could not start the logins. See the container log.</p>`));
     return;
@@ -160,7 +169,7 @@ const readCode = (req) =>
 let shuttingDown = false;
 const exitIfDone = async () => {
   if (!exitWhenDone || shuttingDown) return;
-  const tools = await json(["status", "--json"]);
+  const tools = await json(STATUS_ARGS);
   if (tools && allDone(tools)) {
     shuttingDown = true;
     log("every login is done - closing the login page");
@@ -174,7 +183,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === "GET" && path === "/healthz") return send(res, 200, "text/plain", "ok\n");
     if (req.method === "GET" && path === "/status") {
-      const tools = await json(["status", "--json"]);
+      const tools = await json(STATUS_ARGS);
       return tools ? send(res, 200, "application/json", JSON.stringify(statesOf(tools))) : send(res, 500, "text/plain", "error\n");
     }
     if (req.method === "GET" && path === "/") return await showPage(res);
@@ -204,7 +213,7 @@ server.requestTimeout = 120000;
 
 const main = async () => {
   if (exitWhenDone) {
-    const tools = await json(["status", "--json"]);
+    const tools = await json(STATUS_ARGS);
     if (tools && allDone(tools)) {
       log("every login is done - no login page needed");
       return;

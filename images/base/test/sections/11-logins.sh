@@ -13,7 +13,7 @@ in_c() {
 }
 
 # The supervisor with all three logins missing, against the stub CLIs.
-c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
   -e DEV_REMOTE_CONTROL_POLL=1 -e DEV_REMOTE_CONTROL_NAME=login-test \
   "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
 check "the supervisor logs each tool's sign-in link and the paste hint" bash -c "
@@ -59,7 +59,7 @@ check "the watcher reports all logins done and exits" bash -c "
   docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && ! docker exec '$c' pgrep -f 'dev-login watch'"
 docker rm -f "$c" >/dev/null
 
-c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e DEV_LOGIN_TOOLS=claude -e GH_TOKEN=x \
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e DEV_LOGIN_TOOLS=claude -e GH_TOKEN=x \
   "$IMAGE" bash -c "$WITH_STUB exec dev-remote-control")
 check "DEV_LOGIN_TOOLS=claude starts only Claude's login, and dev-doctor does not fail the others" bash -c "
   for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: claude: open' && break; sleep 1; done
@@ -70,34 +70,38 @@ check "DEV_LOGIN_TOOLS=claude starts only Claude's login, and dev-doctor does no
   echo \"\$out\" | grep -q 'FAIL claude is not logged in' && echo \"\$out\" | grep -q 'fix: run: dev-login start (or: claude auth login)'"
 docker rm -f "$c" >/dev/null
 
-c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e GH_TOKEN=gho_not_a_real_token \
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e GH_TOKEN=gho_not_a_real_token \
   "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in && $WITH_STUB exec dev-remote-control")
 check "with GH_TOKEN set, no gh login starts and gh counts as done" in_c "$c" '
   sleep 3; dev-login status | grep -qx "gh: token" && ! tmux has-session -t login-gh 2>/dev/null'
 docker rm -f "$c" >/dev/null
 
-# gh logged in without the workflow scope (cbundy/dev-system#181): the
-# watcher refreshes the token instead of leaving it as it is.
-c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
+# gh logged in without the workflow scope (cbundy/dev-system#181): a person
+# (the page, dev-login start) refreshes the token. The watcher cannot approve it
+# unattended, so it says so once and gives up on it (cbundy/dev-system#375).
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
   "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in /tmp/gh-in && $WITH_STUB exec dev-remote-control")
 check "a gh login without the workflow scope: dev-login status says scope, dev-doctor warns" in_c "$c" '
+  # the container creates the stubs and logins as it boots; start only after
+  for _ in $(seq 50); do [ -x /tmp/stub/gh ] && [ -e /tmp/gh-in ] && break; sleep 0.2; done
+  dev-login start --json >/dev/null
   for _ in $(seq 40); do dev-login status --json | jq -e .gh.code >/dev/null && break; sleep 0.5; done
   out=$(dev-login status; dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -qx "gh: scope" &&
   echo "$out" | grep -q "WARN gh.s token lacks the workflow scope" &&
   echo "$out" | grep -qF "gh auth refresh -h github.com -s workflow" &&
+  grep -q -- "--hostname github.com --scopes workflow" /tmp/gh-refresh-args &&
+  test ! -e /tmp/gh-login-args &&
   dev-login status --json | jq -e ".gh == {state: \"scope\", url: \"https://github.com/login/device\", code: \"GH56-7890\"}"'
-check "the watcher starts gh's refresh with the workflow scope, and logs its link" bash -c "
-  for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: gh (workflow scope): open' && break; sleep 1; done
-  docker logs '$c' 2>&1 | grep 'dev-login'
-  docker logs '$c' 2>&1 | grep -qF 'dev-login: gh (workflow scope): open https://github.com/login/device and enter the code GH56-7890' &&
-  docker exec '$c' grep -q -- '--hostname github.com --scopes workflow' /tmp/gh-refresh-args &&
-  docker exec '$c' test ! -e /tmp/gh-login-args"
+check "the watcher logs the missing workflow scope once, gives up on it and exits" bash -c "
+  for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: gh: logged in without the workflow scope' && break; sleep 1; done
+  sleep 2
+  [ \"\$(docker logs '$c' 2>&1 | grep -c 'dev-login: gh: logged in without the workflow scope')\" = 1 ] &&
+  ! docker exec '$c' pgrep -f 'dev-login watch'"
 docker exec "$c" touch /tmp/gh-approve
-check "approving the refresh makes the watcher finish" bash -c "
-  for _ in \$(seq 40); do docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done' && break; sleep 1; done
-  docker logs '$c' 2>&1 | grep -q 'dev-login: all logins are done'"
 check "after the refresh, gh is in and dev-doctor reports the workflow scope" in_c "$c" '
+  # the refresh in its tmux session notices the approval within a poll or two
+  for _ in $(seq 50); do [ -e /tmp/gh-workflow ] && break; sleep 0.2; done
   out=$(dev-login status; dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -qx "gh: in" && echo "$out" | grep -q "OK   gh.s token has the workflow scope"'
 docker rm -f "$c" >/dev/null
@@ -106,7 +110,7 @@ docker rm -f "$c" >/dev/null
 # before dev-init runs; tini stays PID 1.
 # page_bg <docker run args...>: the supervisor, with dev-init run after the stubs
 page_bg() {
-  run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" "$@" \
+  run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" "$@" \
     --entrypoint /usr/bin/tini "$IMAGE" -- bash -c "$WITH_STUB && dev-init 2>/dev/null; exec dev-remote-control"
 }
 # curl_c <container> <curl args...>: curl against the page from inside
@@ -170,7 +174,7 @@ echo "$*" >> /tmp/nm-calls
 [ "$*" = "daemon start" ] && exec sleep 1000
 [ "$1" = status ] && echo "repo not initialized (run no-mistakes init first)"
 exit 0'
-c=$(run_bg -e STUB="$STUB" -e STUB_NM="$STUB_NM" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude \
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_NM="$STUB_NM" -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_EXIT=0 -e DEV_LOGIN_TOOLS=claude \
   --entrypoint /usr/bin/tini "$IMAGE" -- bash -c "$WITH_STUB && printf '%s\n' \"\$STUB_NM\" > /tmp/stub/no-mistakes &&
     chmod +x /tmp/stub/no-mistakes && git init -q /tmp/r && touch /tmp/r/.no-mistakes.yaml && cd /tmp/r &&
     start=\$(date +%s) && dev-init 2> /tmp/dev-init.log; echo \$((\$(date +%s) - start)) > /tmp/dev-init-took
@@ -244,7 +248,7 @@ docker rm -f "$pa" "$pb" "$RUN_ID-nginx" >/dev/null
 # each request's title, click header and body.
 LISTENER='require("http").createServer((q, r) => { let b = ""; q.on("data", (d) => (b += d)); q.on("end", () => {
   require("fs").appendFileSync("/tmp/notify.log", JSON.stringify({ title: q.headers.title, click: q.headers.click, body: b }) + "\n"); r.end("ok"); }); }).listen(9999)'
-c=$(run_bg -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e LISTENER="$LISTENER" \
+c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" -e LISTENER="$LISTENER" \
   -e DEV_LOGIN_TOOLS=claude,codex -e DEV_REMOTE_CONTROL_NAME=notify-test -e DEV_NOTIFY_URL=http://127.0.0.1:9999/topic \
   "$IMAGE" bash -c "(node -e \"\$LISTENER\" &) && sleep 1 && $WITH_STUB exec dev-remote-control")
 check "DEV_NOTIFY_URL gets one POST naming the logins, with the sign-in links" bash -c "

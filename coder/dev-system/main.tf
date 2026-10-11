@@ -460,19 +460,23 @@ resource "coder_agent" "main" {
     var.remote_control_name_format != "" ? { DEV_REMOTE_CONTROL_NAME_FORMAT = var.remote_control_name_format } : {},
   )
 
-  # One line, e.g. "claude: in, codex: out, gh: out". The text form of
-  # dev-login status also lists every pending sign-in link and code.
+  # One line, e.g. "claude: in, codex: out (optional), gh: out". The text form
+  # of dev-login status also lists every pending sign-in link and code. It reads
+  # dev-login's cached gh result (--cached), so the row costs no GitHub API
+  # calls in steady state (cbundy/dev-system#375); an older image that rejects
+  # --cached falls back to the live check.
   metadata {
     display_name = "Logins"
     key          = "0_logins"
     script       = <<-EOT
       if command -v dev-login >/dev/null 2>&1; then
-        dev-login status --json | jq -r 'to_entries | map("\(.key): \(.value.state)") | join(", ")'
+        { dev-login status --json --cached 2>/dev/null || dev-login status --json; } \
+          | jq -r 'to_entries | map("\(.key): \(.value.state)\(if .value.optional then " (optional)" else "" end)") | join(", ")'
       else
         echo "no dev-login in image"
       fi
     EOT
-    interval     = 30
+    interval     = 300
     timeout      = 10
   }
 

@@ -15,7 +15,7 @@
 # check that succeeded, as one comma-separated string.
 gh_workflow_scope() {
   local scopes
-  scopes=$(gh auth status --json hosts --hostname github.com 2>/dev/null \
+  scopes=$(gh auth status --json hosts --hostname github.com --active 2>/dev/null \
     | jq -r '[.hosts["github.com"][]? | select(.active == true and .state == "success")][0].scopes // empty | strings' 2>/dev/null) \
     || scopes=""
   if [ -z "${scopes//[ ,]/}" ]; then
@@ -25,4 +25,28 @@ gh_workflow_scope() {
   else
     echo no
   fi
+}
+
+# gh_login_state <json>: gh's login state from one `gh auth status --json hosts
+# --hostname github.com --active` reply, a pure function so it needs no network
+# (cbundy/dev-system#375). Prints one word:
+#   in       the active account's check succeeded, and its token has the
+#            `workflow` scope (or its scopes cannot be read, which counts as in)
+#   scope    the check succeeded and the scopes lack `workflow`
+#   out      the check failed with HTTP 401: the token is bad
+#   unknown  anything else: another error (a rate-limit 403, a network failure),
+#            or a reply that is not the expected JSON. Never a reason to prompt;
+#            the caller keeps what it knew.
+# The reply carries state `error` plus an `error` text and gh still exits 0, so
+# the exit status says nothing; only the JSON is read.
+gh_login_state() {
+  printf '%s' "${1:-}" | jq -r '
+    [.hosts["github.com"][]? | select(.active == true)][0] as $a
+    | if $a == null then "unknown"
+      elif $a.state == "success" then
+        (($a.scopes // "") | tostring | gsub("[ ]"; "") | split(",") | map(select(. != ""))) as $s
+        | if ($s | length) == 0 or ($s | index("workflow")) != null then "in" else "scope" end
+      elif $a.state == "error" then
+        (if (($a.error // "") | tostring | test("HTTP 401\\b|Bad credentials")) then "out" else "unknown" end)
+      else "unknown" end' 2>/dev/null | grep -x -e in -e scope -e out -e unknown || echo unknown
 }
