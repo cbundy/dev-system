@@ -49,7 +49,7 @@ case "$name" in
     # decision (cbundy/dev-system#164), to be flipped separately.
     skip_permissions=false
     prompt=/callum-flow:issue-orchestrator
-    resume_prompt='The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watchers and the audit, and continue the issue-orchestrator loop.'
+    resume_prompt='The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.'
     name_format='🔄 {name} orchestrator'
     ;;
   *) usage ;;

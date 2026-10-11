@@ -34,6 +34,9 @@
 # --interval <seconds> sets the poll interval (default: the
 # QUEUE_WATCH_INTERVAL environment variable, else 120).
 #
+# Orchestrator callers: arm orchestrator-watch.sh instead (one watcher for the
+# queue and the pipelines); the rest of this note is for direct use.
+#
 # Arming: pass the numbers currently in the queue as --known, so deliberately
 # parked issues (blocked, awaiting the owner) never fire. The order does not
 # matter: the list is sorted numerically here before it is compared. Run it

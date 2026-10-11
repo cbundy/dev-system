@@ -129,6 +129,9 @@
 # --interval <seconds> sets the poll interval (default: the
 # PIPELINE_WATCH_INTERVAL environment variable, else 25).
 #
+# Orchestrator callers: arm orchestrator-watch.sh instead (one watcher for the
+# queue and the pipelines); the rest of this note is for direct use.
+#
 # Arming: run one watcher for the whole session, from the repository's
 # checkout, with no --branches - the watch set comes from live runs, never from
 # a list you keep. Under a harness Monitor tool use --stream with the longest
