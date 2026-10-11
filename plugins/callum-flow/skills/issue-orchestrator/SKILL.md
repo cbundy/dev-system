@@ -59,15 +59,15 @@ the same kind. Their headers say how to arm and re-arm them.
 - `/usr/local/share/callum-tools/pipeline-watch.sh` (no `--branches`) prints one
   line per branch that needs you.
 
-Arm the audit that catches a dropped re-arm. It runs about every 20 minutes
-(harness cron, but check the scheduled-task list first after a resume, so it is
-never armed twice) and does four things: checks both watchers are alive and
-re-arms a missing one, runs `callum-flow-claim --heartbeat` then
-`callum-flow-sweep`, re-reads usage, and in Stop new or Stop all checks a
-resume wake is pending. A missing watcher or wake is fixed in the turn you see
-it. **While nothing is queued and nothing is in flight, re-arm only the queue
-watcher and stop the audit; the next `queue-changed` event restarts both.** An
-idle session must not wake itself.
+Arm the audit that catches a dropped re-arm. It runs hourly (harness cron; never
+longer than half `CALLUM_FLOW_LEASE_MINUTES`, default 120, so a heartbeat has a
+spare run before a lease expires; check the scheduled-task list first after a resume,
+so it is never armed twice) and does four things: checks both watchers are alive and
+re-arms a missing one, runs `callum-flow-claim --heartbeat` then `callum-flow-sweep`,
+re-reads usage, and in Stop new or Stop all checks a resume wake is pending. A missing
+watcher or wake is fixed in the turn you see it. **While nothing is queued and nothing
+is in flight, re-arm only the queue watcher and stop the audit; the next
+`queue-changed` event restarts both.** An idle session must not wake itself.
 
 ## Per-issue pipeline
 1. **Claim** (only when the tier allows new work): `callum-flow-claim <N>`. Exit
