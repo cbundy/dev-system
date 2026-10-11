@@ -26,6 +26,11 @@
 # command word is `echo`, not `git`) - it never runs stash, it only prints
 # the words.
 #
+# Quoted heredoc bodies (<<'X', <<"X", <<\X, <<-'X') are skipped: the shell never
+# expands them, so text in them is data. An unmatched backtick or $( is not
+# itself a reason to deny; detection still uses the segment scan below,
+# without matching substitution boundaries or truncating at unmatched openers.
+#
 # Known limits: this is a heuristic parser, not a real shell grammar - it
 # does not follow command substitution ($(...) or backticks), and it does
 # not recurse into `sh -c '...'` / `bash -c "..."` strings.

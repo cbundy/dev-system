@@ -118,6 +118,10 @@ test("fails open on input it cannot parse", () => {
   assertAllowed(`echo $(coder stop ${SELF}`);
 });
 
+test("still refuses a real command on a line before a stray unmatched backtick (#209)", () => {
+  assertDenied(`coder stop ${SELF}\necho \``);
+});
+
 test("allows everything when CODER_WORKSPACE_NAME is unset", () => {
   assertAllowed(`coder restart ${SELF} -y`, { env: { CODER_WORKSPACE_NAME: "" } });
 });
@@ -157,3 +161,13 @@ test("allows other env vars and mere mentions of the workspace env var", () => {
   assertAllowed("coder stop $OTHER_WS");
   assertAllowed("echo coder stop $CODER_WORKSPACE_NAME");
 });
+
+const heredocCases = require("./fixtures/heredoc-hooks.json");
+for (const fixture of heredocCases) {
+  if (fixture.hooks && !fixture.hooks.includes("coder-self")) continue;
+  test(`heredoc regression: ${fixture.name}`, () => {
+    const command = fixture.command.replaceAll("@COMMAND@", "coder stop dev-system-testbed");
+    if (fixture.denied) assertDenied(command);
+    else assertAllowed(command);
+  });
+}

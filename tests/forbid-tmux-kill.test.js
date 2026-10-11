@@ -192,6 +192,34 @@ test("does not refuse commands that merely mention the words", () => {
   assertAllowed("sh -c 'echo tmux kill-server'");
 });
 
+test("allows quoted heredoc bodies, including a lone backtick or unclosed substitution (the #209 shape)", () => {
+  const BT = "\x60";
+  assertAllowed(`cat <<'EOF'\nan unmatched ${BT} backtick\nEOF`);
+  assertAllowed(`cat <<"EOF"\nan unmatched ${BT} backtick\nEOF`);
+  assertAllowed(`cat <<\\EOF\nan unmatched ${BT} backtick\nEOF`);
+  assertAllowed(`cat <<-'EOF'\n\tan unmatched ${BT} backtick\n\tEOF`);
+  assertAllowed(`cat <<'EOF'\nan unclosed $( here\nEOF`);
+  assertAllowed(`node - <<'EOF'\nconsole.log(${BT}line one\nline two ${BT} ' ${BT});\nEOF`);
+  assertAllowed(`gh issue comment 1 --body "$(cat <<'EOF'\nUse ${BT}foo${BT} - it's fine\nEOF\n)"`);
+  // Bodies that only mention the words.
+  assertAllowed(`cat <<'EOF'\ntmux kill-server\npkill tmux\nEOF`);
+  assertAllowed(`cat <<"EOF"\ntmux kill-server\nEOF`);
+});
+
+test("still refuses around quoted heredocs and unmatched openers", () => {
+  const BT = "\x60";
+  // A real kill after the heredoc.
+  assertDenied(`cat <<'EOF'\nhello\nEOF\ntmux kill-server`);
+  // A real kill on a line before a stray backtick (bash runs the first line).
+  assertDenied(`tmux kill-server\necho ${BT}`);
+  // Unquoted heredoc bodies still expand $(...).
+  assertDenied(`cat <<EOF\n$(tmux kill-server)\nEOF`);
+  // A here-string is not a heredoc opener.
+  assertDenied(`cat <<<'x'\ntmux kill-server`);
+  // A quoted <<'x' is not a heredoc opener.
+  assertDenied(`echo "<<'x'"\ntmux kill-server`);
+});
+
 test("ignores non-Bash tool calls even if their command field says tmux kill-server", () => {
   assertAllowed("tmux kill-server", { toolName: "Write" });
 });
@@ -221,3 +249,13 @@ test("the hook script is committed executable (git mode 100755)", () => {
   assert.notEqual(line, "", `${relPath} is not tracked by git yet`);
   assert.match(line, /^100755\s/, `expected mode 100755 for ${relPath}, got: ${line}`);
 });
+
+const heredocCases = require("./fixtures/heredoc-hooks.json");
+for (const fixture of heredocCases) {
+  if (fixture.hooks && !fixture.hooks.includes("tmux-kill")) continue;
+  test(`heredoc regression: ${fixture.name}`, () => {
+    const command = fixture.command.replaceAll("@COMMAND@", "tmux kill-server");
+    if (fixture.denied) assertDenied(command);
+    else assertAllowed(command);
+  });
+}

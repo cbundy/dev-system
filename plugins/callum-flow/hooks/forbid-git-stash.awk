@@ -105,9 +105,98 @@ function segment_is_git_stash(segment,    toks, cnt, i, j, t, cmdw, base, slash_
   return 0
 }
 
+# Remove the bodies of quoted heredocs (<<'X', <<"X", <<\X, with optional -):
+# the shell never expands them, so text in them is data. Unquoted heredoc
+# bodies stay, because $(...) inside them does run.
+function strip_heredocs(cmd,    nl, lines, i, out, line, delims, quoted, tabs, head, tail, t, q, stack, depth, n, k, c, j, dq, word, hasword, literal, dash, start, kept, part) {
+  nl = split(cmd, lines, "\n")
+  out = ""
+  q = ""
+  depth = 0
+  head = 1
+  tail = 0
+  for (i = 1; i <= nl; i++) {
+    line = lines[i]
+    if (head <= tail) {
+      t = line
+      if (tabs[head]) sub(/^\t+/, "", t)
+      if (t == delims[head]) head++
+      else if (!quoted[head]) out = out (i > 1 ? "\n" : "") line
+      continue
+    }
+    n = length(line)
+    kept = ""
+    part = 1
+    for (k = 1; k <= n; k++) {
+      c = substr(line, k, 1)
+      if (c == "\\" && q != "'") { k++; continue }
+      if (q == "'") { if (c == q) q = ""; continue }
+      if (c == "$" && substr(line, k + 1, 1) == "(") {
+        stack[++depth] = q
+        q = ""
+        k++
+        continue
+      }
+      if (q != "") { if (c == q) q = ""; continue }
+      if (c == "'" || c == "\"") { q = c; continue }
+      if (c == "#" && (k == 1 || substr(line, k - 1, 1) ~ /[ \t;|&()]/)) break
+      if (c == "(") { stack[++depth] = ""; continue }
+      if (c == ")" && depth > 0) { q = stack[depth--]; continue }
+      if (c != "<" || substr(line, k + 1, 1) != "<") continue
+      if (substr(line, k + 2, 1) == "<") { k += 2; continue }
+      start = k
+      j = k + 2
+      dash = (substr(line, j, 1) == "-")
+      if (dash) j++
+      while (substr(line, j, 1) ~ /[ \t]/ && j <= n) j++
+      word = ""
+      dq = ""
+      literal = 0
+      hasword = 0
+      for (; j <= n; j++) {
+        c = substr(line, j, 1)
+        if (dq == "'") {
+          if (c == dq) dq = ""
+          else word = word c
+          continue
+        }
+        if (c == "\\") {
+          literal = 1
+          hasword = 1
+          if (j == n) break
+          t = substr(line, j + 1, 1)
+          if (dq == "\"" && t !~ /[$`"\\]/) word = word c
+          word = word t
+          j++
+          continue
+        }
+        if (dq != "") {
+          if (c == dq) dq = ""
+          else word = word c
+          continue
+        }
+        if (c == "'" || c == "\"") { dq = c; literal = 1; hasword = 1; continue }
+        if (c ~ /[ \t;|&()<>]/) break
+        hasword = 1
+        word = word c
+      }
+      if (!hasword || dq != "") continue
+      delims[++tail] = word
+      quoted[tail] = literal
+      tabs[tail] = dash
+      kept = kept substr(line, part, start - part) " "
+      part = j
+      k = j - 1
+    }
+    out = out (i > 1 ? "\n" : "") kept substr(line, part)
+  }
+  return out
+}
+
 # Split the whole command into segments on ; & | newline ( ) { }, quote-aware
 # so those characters inside a quoted string never split it.
 function is_git_stash(cmd,    n, i, c, q, seg, segs, nseg, j) {
+  cmd = strip_heredocs(cmd)
   n = length(cmd)
   seg = ""
   q = ""

@@ -3,7 +3,6 @@
 # exactly one of DENY / ALLOW. See forbid-raw-gh-read.sh for the full write-up.
 # The JSON extractor, tokenizer and wrapper/segment/heredoc/substitution logic
 # mirror forbid-coder-self.awk on purpose (each hook stays self-contained).
-# Unparseable input (unmatched quote, unclosed substitution) is ALLOWed.
 
 BEGIN { RS = "\3" }
 { json = $0 }
@@ -312,46 +311,93 @@ function segment_is_raw_read(segment,    toks, cnt) {
 # Remove the bodies of quoted heredocs (<<'X', <<"X", <<\X, with optional -):
 # the shell never expands them, so text in them is data. Unquoted heredoc
 # bodies stay, because $(...) inside them does run.
-function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, t, q, n, k, c, rest) {
+function strip_heredocs(cmd,    nl, lines, i, out, line, delims, quoted, tabs, head, tail, t, q, stack, depth, n, k, c, j, dq, word, hasword, literal, dash, start, kept, part) {
   nl = split(cmd, lines, "\n")
   out = ""
-  skipping = 0
+  q = ""
+  depth = 0
+  head = 1
+  tail = 0
   for (i = 1; i <= nl; i++) {
     line = lines[i]
-    if (skipping) {
+    if (head <= tail) {
       t = line
-      if (dash) sub(/^\t+/, "", t)
-      if (t == delim) skipping = 0
+      if (tabs[head]) sub(/^\t+/, "", t)
+      if (t == delims[head]) head++
+      else if (!quoted[head]) out = out (i > 1 ? "\n" : "") line
       continue
     }
-    out = out (i > 1 ? "\n" : "") line
-    dash = 0
-    q = ""
     n = length(line)
+    kept = ""
+    part = 1
     for (k = 1; k <= n; k++) {
       c = substr(line, k, 1)
       if (c == "\\" && q != "'") { k++; continue }
+      if (q == "'") { if (c == q) q = ""; continue }
+      if (c == "$" && substr(line, k + 1, 1) == "(") {
+        stack[++depth] = q
+        q = ""
+        k++
+        continue
+      }
       if (q != "") { if (c == q) q = ""; continue }
       if (c == "'" || c == "\"") { q = c; continue }
+      if (c == "#" && (k == 1 || substr(line, k - 1, 1) ~ /[ \t;|&()]/)) break
+      if (c == "(") { stack[++depth] = ""; continue }
+      if (c == ")" && depth > 0) { q = stack[depth--]; continue }
       if (c != "<" || substr(line, k + 1, 1) != "<") continue
       if (substr(line, k + 2, 1) == "<") { k += 2; continue }
-      rest = substr(line, k)
-      if (match(rest, /^<<-?[ \t]*('[^']+'|"[^"]+"|\\[A-Za-z_0-9]+)/)) {
-        t = substr(rest, 1, RLENGTH)
-        dash = (substr(t, 3, 1) == "-")
-        sub(/^<<-?[ \t]*/, "", t)
-        if (substr(t, 1, 1) == "\\") delim = substr(t, 2)
-        else delim = substr(t, 2, length(t) - 2)
-        skipping = 1
-        break
+      start = k
+      j = k + 2
+      dash = (substr(line, j, 1) == "-")
+      if (dash) j++
+      while (substr(line, j, 1) ~ /[ \t]/ && j <= n) j++
+      word = ""
+      dq = ""
+      literal = 0
+      hasword = 0
+      for (; j <= n; j++) {
+        c = substr(line, j, 1)
+        if (dq == "'") {
+          if (c == dq) dq = ""
+          else word = word c
+          continue
+        }
+        if (c == "\\") {
+          literal = 1
+          hasword = 1
+          if (j == n) break
+          t = substr(line, j + 1, 1)
+          if (dq == "\"" && t !~ /[$`"\\]/) word = word c
+          word = word t
+          j++
+          continue
+        }
+        if (dq != "") {
+          if (c == dq) dq = ""
+          else word = word c
+          continue
+        }
+        if (c == "'" || c == "\"") { dq = c; literal = 1; hasword = 1; continue }
+        if (c ~ /[ \t;|&()<>]/) break
+        hasword = 1
+        word = word c
       }
-      k++
+      if (!hasword || dq != "") continue
+      delims[++tail] = word
+      quoted[tail] = literal
+      tabs[tail] = dash
+      kept = kept substr(line, part, start - part) " "
+      part = j
+      k = j - 1
     }
+    out = out (i > 1 ? "\n" : "") kept substr(line, part)
   }
   return out
 }
 
-# Command substitutions. Unmatched $( or backtick: cannot parse, so allow.
+# Command substitutions. An unmatched $( or backtick stops this scan only; the
+# segment scan still runs on the text before the opener.
 function nested_is_raw_read(cmd,    n, i, j, c, q, iq, depth) {
   n = length(cmd)
   q = ""
@@ -373,15 +419,17 @@ function nested_is_raw_read(cmd,    n, i, j, c, q, iq, depth) {
         if (c == "(") depth++
         else if (c == ")" && --depth == 0) break
       }
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_raw_read(substr(cmd, i + 2, j - i - 2))) return 1
+      unparseable = 0
       i = j
       continue
     }
     if (c == "`") {
       for (j = i + 1; j <= n && substr(cmd, j, 1) != "`"; j++);
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_raw_read(substr(cmd, i + 1, j - i - 1))) return 1
+      unparseable = 0
       i = j
     }
   }
@@ -392,7 +440,7 @@ function is_raw_read(cmd,    n, i, c, q, seg, segs, nseg, j) {
   cmd = strip_heredocs(cmd)
   unparseable = 0
   if (nested_is_raw_read(cmd)) return 1
-  if (unparseable) return 0
+  if (unparseable) cmd = substr(cmd, 1, unparseable - 1)
   n = length(cmd)
   seg = ""
   q = ""
@@ -412,8 +460,7 @@ function is_raw_read(cmd,    n, i, c, q, seg, segs, nseg, j) {
     }
     seg = seg c
   }
-  if (q != "") return 0
-  nseg++; segs[nseg] = seg
+  if (q == "") { nseg++; segs[nseg] = seg }
 
   for (j = 1; j <= nseg; j++) {
     if (segment_is_raw_read(segs[j])) return 1

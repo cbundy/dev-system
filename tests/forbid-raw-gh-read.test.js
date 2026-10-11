@@ -209,6 +209,10 @@ test("fails open when the parser cannot make sense of the command", () => {
   assertAllowed("echo 'unterminated; gh issue view 5");
 });
 
+test("still refuses a raw read on a line before a stray unmatched backtick (#209)", () => {
+  assertDenied("gh issue view 5\necho `");
+});
+
 test("reason: names the reader forms; adds the stale-image line without the reader", () => {
   const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "no-reader-"));
   try {
@@ -264,3 +268,13 @@ test("the hook script is committed executable (git mode 100755)", () => {
   assert.notEqual(line, "", `${relPath} is not tracked by git yet`);
   assert.match(line, /^100755\s/, `expected mode 100755 for ${relPath}, got: ${line}`);
 });
+
+const heredocCases = require("./fixtures/heredoc-hooks.json");
+for (const fixture of heredocCases) {
+  if (fixture.hooks && !fixture.hooks.includes("raw-gh-read")) continue;
+  test(`heredoc regression: ${fixture.name}`, () => {
+    const command = fixture.command.replaceAll("@COMMAND@", "gh issue view 5");
+    if (fixture.denied) assertDenied(command);
+    else assertAllowed(command);
+  });
+}

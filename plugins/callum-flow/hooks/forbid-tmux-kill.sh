@@ -15,6 +15,11 @@
 # command using -L/-S, and commands that only mention these words (echo,
 # grep, commit messages).
 #
+# Quoted heredoc bodies (<<'X', <<"X", <<\X, <<-'X') are skipped: the shell never
+# expands them, so text in them is data. An unmatched backtick or $( stops the
+# nested scan and limits the segment scan to text before that opener. Only a
+# positively parsed default-socket kill is refused.
+#
 # Known limits: heuristic parser; intentionally does not expand GNU env -S
 # ${VAR} or \_ syntax, backslash-escaped command spellings, or variables
 # exported by an earlier command segment.
