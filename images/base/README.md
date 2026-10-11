@@ -1442,7 +1442,8 @@ After the merge and the `merged` event, `callum-flow-merge` runs `callum-flow-mi
 because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
-`callum-flow-milestone` keeps issues and PRs in the release milestones so no skill has to remember to.
+`callum-flow-milestone` manages release milestone metadata; `callum-flow-merge` handles merge-time tagging.
+For planning and readiness decisions, see the [issue-orchestrator release rules](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#releases).
 The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
 exact title among open milestones only, and the Next release description carries one line
 `Expected: <patch|minor|major> - <reason>`. A repo with no open `Next release` milestone is not opted in:
