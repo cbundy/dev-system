@@ -36,6 +36,10 @@ case "$1 ${2:-}" in
   "auth token") [ -f "$FIX/token" ] && cat "$FIX/token" ;;
   "auth status")
     echo "$*" >> "$FIX/status.calls"
+    case " $* " in
+      *" --active "*) ;;
+      *) [ ! -f "$FIX/multiple-accounts" ] || echo "$*" >> "$FIX/status.calls" ;;
+    esac
     cat "$FIX/status.json" ;;
   *) echo "unexpected gh $*" >> "$FIX/gh.unexpected"; exit 1 ;;
 esac
@@ -121,6 +125,7 @@ expect_state() {
 
 # --- steady state: one call, then none ---------------------------------------------------
 reset tok1 "$ok_json"
+: > "$FIX/multiple-accounts"
 expect_state "$(gh_state)" in "first check"
 expect_calls 1 "first check"
 i=0
@@ -178,6 +183,20 @@ expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" out "401 is out"
 printf '%s\n' 'not json' > "$FIX/status.json"
 expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" out "malformed reply keeps the previous state"
 
+reset tok1 "$ok_json"
+expect_state "$(gh_state)" in "previous valid token"
+printf '%s\n' '{"hosts":{"github.com":[{"state":"error","active":true,"error":"proxyconnect tcp: dial tcp 127.0.0.1:1401: connect: connection refused"}]}}' > "$FIX/status.json"
+expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" in "connection error containing 401 keeps the previous state"
+expect_calls 2 "connection error after valid token"
+expect_state "$(gh_state)" in "cached connection error"
+expect_state "$(gh_state --cached)" in "cached connection error with --cached"
+expect_calls 2 "connection error is cached"
+printf '%s\n' '{"hosts":{"github.com":[{"state":"success","active":false,"scopes":"repo"}]}}' > "$FIX/status.json"
+expect_state "$(DEV_LOGIN_GH_TTL=0 gh_state)" in "no active account keeps the previous state"
+expect_calls 3 "no active account"
+expect_state "$(gh_state --cached)" in "cached reply without an active account"
+expect_calls 3 "reply without an active account is cached"
+
 # --- optional codex ----------------------------------------------------------------------
 reset tok1 "$ok_json"
 dl status --json 2>/dev/null | jq -e '.codex.optional == true and .codex.state == "out" and (.claude | has("optional") | not)' >/dev/null \
@@ -217,9 +236,9 @@ rm -f "$FIX/claude-in"
 echo 7 > "$FIX/flip-after"
 err="$tmp/watch.err"
 timeout 60 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
-  DEV_LOGIN_WATCH_EVERY=10 DEV_LOGIN_WATCH_MAX=80 DEV_NOTIFY_URL=http://notify.invalid/t bash "$CMD" watch --name t >/dev/null 2>"$err" \
+  DEV_LOGIN_WATCH_MAX=80 DEV_NOTIFY_URL=http://notify.invalid/t bash "$CMD" watch --name t >/dev/null 2>"$err" \
   || { cat "$err" >&2; fail "watch did not finish"; }
-[ "$(tr '\n' ' ' < "$FIX/sleeps")" = "10 20 40 80 80 80 80 " ] \
+[ "$(tr '\n' ' ' < "$FIX/sleeps")" = "15 30 60 80 80 80 80 " ] \
   || fail "backoff steps should double and cap: $(tr '\n' ' ' < "$FIX/sleeps")"
 [ "$(grep -c 'not refreshing it unattended' "$err")" = 1 ] || fail "gh scope should be reported once: $(cat "$err")"
 [ "$(grep -c 'needs the workflow scope' "$FIX/curl.log")" = 1 ] || fail "one notification for the scope: $(cat "$FIX/curl.log")"
@@ -235,7 +254,7 @@ reset tok1 "$ok_json"
 rm -f "$FIX/claude-in"
 echo 4 > "$FIX/flip-after"
 timeout 60 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
-  DEV_LOGIN_WATCH_EVERY=10 DEV_LOGIN_WATCH_MAX=80 bash "$CMD" watch >/dev/null 2>&1 || fail "second watch did not finish"
-[ "$(tr '\n' ' ' < "$FIX/sleeps")" = "10 20 40 80 " ] || fail "backoff steps: $(tr '\n' ' ' < "$FIX/sleeps")"
+  DEV_LOGIN_WATCH_MAX=80 bash "$CMD" watch >/dev/null 2>&1 || fail "second watch did not finish"
+[ "$(tr '\n' ' ' < "$FIX/sleeps")" = "15 30 60 80 " ] || fail "backoff steps: $(tr '\n' ' ' < "$FIX/sleeps")"
 
 echo "dev-login: ok"

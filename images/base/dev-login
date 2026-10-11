@@ -62,7 +62,7 @@ set -u
 RUN_DIR=${DEV_LOGIN_RUN_DIR:-/tmp/dev-login}
 LOCK="$RUN_DIR/lock"
 ALL_TOOLS="claude codex gh"
-WATCH_EVERY=${DEV_LOGIN_WATCH_EVERY:-15}   # first wait between checks in `watch`
+WATCH_EVERY=15
 WATCH_MAX=${DEV_LOGIN_WATCH_MAX:-900}      # the backoff cap
 GH_TTL=${DEV_LOGIN_GH_TTL:-900}            # seconds gh's login result is cached
 GH_CACHE="$RUN_DIR/gh-state"
@@ -162,7 +162,7 @@ gh_cached_state() {
     echo "$cstate"
     return
   fi
-  reply=$(gh auth status --json hosts --hostname github.com 2>/dev/null)
+  reply=$(gh auth status --json hosts --hostname github.com --active 2>/dev/null)
   st=$(gh_login_state "$reply")
   if [ "$st" = unknown ]; then
     if [ "$cfp" = "$fp" ] && [ -n "$cstate" ]; then st="$cstate"; else st=in; fi

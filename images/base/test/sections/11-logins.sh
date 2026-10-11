@@ -88,6 +88,8 @@ check "a gh login without the workflow scope: dev-login status says scope, dev-d
   echo "$out" | grep -qx "gh: scope" &&
   echo "$out" | grep -q "WARN gh.s token lacks the workflow scope" &&
   echo "$out" | grep -qF "gh auth refresh -h github.com -s workflow" &&
+  grep -q -- "--hostname github.com --scopes workflow" /tmp/gh-refresh-args &&
+  test ! -e /tmp/gh-login-args &&
   dev-login status --json | jq -e ".gh == {state: \"scope\", url: \"https://github.com/login/device\", code: \"GH56-7890\"}"'
 check "the watcher logs the missing workflow scope once, gives up on it and exits" bash -c "
   for _ in \$(seq 30); do docker logs '$c' 2>&1 | grep -q 'dev-login: gh: logged in without the workflow scope' && break; sleep 1; done

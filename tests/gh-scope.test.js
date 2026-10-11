@@ -42,7 +42,7 @@ const host = (fields) => ({
 });
 
 test("asks gh for github.com's login as JSON", (t) => {
-  assert.equal(workflowScope(t, host({ scopes: "repo" })).args, "auth status --json hosts --hostname github.com");
+  assert.equal(workflowScope(t, host({ scopes: "repo" })).args, "auth status --json hosts --hostname github.com --active");
 });
 
 test("yes when the active token has the workflow scope", (t) => {
@@ -108,11 +108,14 @@ test("gh_login_state: scope when the check succeeded without the workflow scope"
 
 test("gh_login_state: out for a 401", () => {
   assert.equal(loginState(host({ state: "error", error: "HTTP 401: Bad credentials" })), "out");
+  assert.equal(loginState(host({ state: "error", error: "HTTP 401: Unauthorized" })), "out");
+  assert.equal(loginState(host({ state: "error", error: "Bad credentials" })), "out");
 });
 
 test("gh_login_state: unknown for a rate limit, a network error and malformed replies", () => {
   assert.equal(loginState(host({ state: "error", error: "HTTP 403: API rate limit exceeded" })), "unknown");
   assert.equal(loginState(host({ state: "error", error: "dial tcp: lookup api.github.com: no such host" })), "unknown");
+  assert.equal(loginState(host({ state: "error", error: "proxyconnect tcp: dial tcp 127.0.0.1:1401: connect: connection refused" })), "unknown");
   assert.equal(loginState("not json"), "unknown");
   assert.equal(loginState(""), "unknown");
   assert.equal(loginState({ hosts: {} }), "unknown");
@@ -128,4 +131,9 @@ test("gh_login_state: reads the active account", () => {
     },
   };
   assert.equal(loginState(reply), "in");
+});
+
+test("gh_login_state: unknown when no account is active", () => {
+  assert.equal(loginState(host({ active: false, scopes: "repo" })), "unknown");
+  assert.equal(loginState(host({ active: false, state: "error", error: "HTTP 401: Bad credentials" })), "unknown");
 });

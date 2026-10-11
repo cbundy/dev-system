@@ -15,7 +15,7 @@
 # check that succeeded, as one comma-separated string.
 gh_workflow_scope() {
   local scopes
-  scopes=$(gh auth status --json hosts --hostname github.com 2>/dev/null \
+  scopes=$(gh auth status --json hosts --hostname github.com --active 2>/dev/null \
     | jq -r '[.hosts["github.com"][]? | select(.active == true and .state == "success")][0].scopes // empty | strings' 2>/dev/null) \
     || scopes=""
   if [ -z "${scopes//[ ,]/}" ]; then
@@ -41,12 +41,12 @@ gh_workflow_scope() {
 # the exit status says nothing; only the JSON is read.
 gh_login_state() {
   printf '%s' "${1:-}" | jq -r '
-    ([.hosts["github.com"][]? | select(.active == true)][0] // (.hosts["github.com"][0]?)) as $a
+    [.hosts["github.com"][]? | select(.active == true)][0] as $a
     | if $a == null then "unknown"
       elif $a.state == "success" then
         (($a.scopes // "") | tostring | gsub("[ ]"; "") | split(",") | map(select(. != ""))) as $s
         | if ($s | length) == 0 or ($s | index("workflow")) != null then "in" else "scope" end
       elif $a.state == "error" then
-        (if (($a.error // "") | tostring | test("401|Bad credentials")) then "out" else "unknown" end)
+        (if (($a.error // "") | tostring | test("HTTP 401\\b|Bad credentials")) then "out" else "unknown" end)
       else "unknown" end' 2>/dev/null | grep -x -e in -e scope -e out -e unknown || echo unknown
 }
