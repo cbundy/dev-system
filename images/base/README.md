@@ -68,8 +68,12 @@ modes.
 `orchestrator-watch.sh` runs both as one process with one `--deadline` (single-shot or
 `--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
 baselines forward, and refuses a second copy per repository.
-All three survive a `sleep` killed from outside between polls: they log one stderr line and sleep the rest of
-the wait.
+In both modes, all three retry a `sleep` killed from outside during polling waits,
+queue confirmation delays, or orchestrator deadline and collection-window timers.
+Each interruption prints exactly one stderr line,
+`<script>: sleep interrupted (status <rc>), sleeping the remaining <N>s`, and
+nothing on stdout. They compute the remaining wait from a `date +%s` deadline;
+only signal-terminated sleeps (status above 128) are retried.
 
 `usage-check.sh`, staged beside them, prints the Claude plan's 5-hour and weekly usage as
 one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
