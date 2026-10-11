@@ -399,6 +399,15 @@ seed verdict 7
 rc_of "$SWEEP"
 events | tail -n 1 | jq -e '.state == "closed"' > /dev/null || fail "stray verdict after closed: $(events)"
 
+# superseded is run-scoped and never final: a closed issue whose latest event is superseded still gets closed
+reset
+closed_issue 7 completed
+seed claimed 7
+rc_of "$EVENT" superseded --issue 7 --run r7a --repo o/r
+rc_of "$SWEEP"
+expect_rc 0 "sweep superseded then closed"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "superseded then closed: $(events)"
+
 # a merged issue that is still open (research, Refs) gets nothing
 reset
 issue 7 OPEN

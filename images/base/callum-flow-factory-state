@@ -44,6 +44,12 @@ const DECISION_STAGE = {
 };
 // Pipeline facts logged by agents: only ever reported as hints when the mirror has no run.
 const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed', 'head_mismatch', 'conflict', 'ci_stalled']);
+// `superseded` (a run was replaced for the same issue) is deliberately in neither map above: it is
+// never a stage and never final. It only removes the named run from latest-run selection.
+// What starts a new life after an `abandoned` event (docs/factory-state.md). `failed`,
+// `head_mismatch`, `conflict` and `ci_stalled` replay on old runs and never count.
+const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'delegated']);
+const NEW_LIFE_RUN_EVENTS = new Set(['run_started', 'parked', 'verdict', 'fix_requested', 'merge_ready']);
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const LABEL_QUEUED = 'ready';
 const LABEL_ACTIVE = 'In development';
@@ -195,15 +201,29 @@ function stageEntered(decisions, stage) {
   return t;
 }
 
+// True when something strictly after the `abandoned` event `a` starts the issue's life again.
+function newLifeAfter(a, evs, runs) {
+  if (evs.some((e) => e.t > a.t && (NEW_LIFE_DECISIONS.has(e.state) || e.state === 'merged'))) return true;
+  if (runs.some((r) => ms(r.created_at) > a.t && !evs.some((e) => e.state === 'superseded' && e.run_id === r.id))) return true;
+  const mirror = new Set(runs.map((r) => r.id));
+  const earlier = new Set(evs.filter((e) => e.t <= a.t && e.run_id).map((e) => e.run_id));
+  return evs.some((e) => e.t > a.t && NEW_LIFE_RUN_EVENTS.has(e.state) && e.run_id
+    && e.run_id !== a.run_id && !earlier.has(e.run_id) && !mirror.has(e.run_id));
+}
+
 function deriveIssue(repo, issue, evs, runs, at, rules) {
   const decisions = evs.filter((e) => DECISION_STAGE[e.state]);
   const lastDec = last(decisions);
   const lastClaim = last(evs.filter((e) => e.state === 'claimed'));
   const lastFinalEv = last(evs.filter((e) => e.state === 'closed' || e.state === 'abandoned'));
+  const supersededRuns = new Set(evs.filter((e) => e.state === 'superseded' && e.run_id).map((e) => e.run_id));
   const mergedEv = last(evs.filter((e) => e.state === 'merged'));
-  const final = lastFinalEv && !(lastClaim && lastClaim.t > lastFinalEv.t) ? lastFinalEv : null;
+  const reopened = lastFinalEv && (lastFinalEv.state === 'abandoned'
+    ? newLifeAfter(lastFinalEv, evs, runs)
+    : lastClaim && lastClaim.t > lastFinalEv.t);
+  const final = lastFinalEv && !reopened ? lastFinalEv : null;
   const merged = mergedEv && !(lastClaim && lastClaim.t > mergedEv.t) ? mergedEv : null;
-  const latestRun = last(runs.map((r) => runView(r, at)).sort((a, b) => a.created - b.created || cmp(a.id, b.id)));
+  const latestRun = last(runs.filter((r) => !supersededRuns.has(r.id)).map((r) => runView(r, at)).sort((a, b) => a.created - b.created || cmp(a.id, b.id)));
 
   let stage = null;
   let detail = null;
@@ -264,7 +284,7 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   return {
     repo, issue, stage, detail, entered, source, stuck, final: finalNow, hint,
     holder: lastClaim ? lastClaim.device : null,
-    run: rv ? rv.id : (last(evs.filter((e) => e.run_id)) || {}).run_id || null,
+    run: rv ? rv.id : (last(evs.filter((e) => e.run_id && e.state !== 'superseded')) || {}).run_id || null,
     runApprox: Boolean(rv && rv.approx),
     runStatus: rv ? rv.status : null,
     pr: rv && prNumber(rv.prUrl) ? prNumber(rv.prUrl) : event ? event.pr : null,

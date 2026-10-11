@@ -24,7 +24,8 @@
 #
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
-#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage
+#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded
+#   (`superseded`: a run or branch was replaced for the same issue, --run names the old run; it does not end the issue)
 #   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
 #   reason - completed, not_planned or duplicate)
 #
@@ -58,7 +59,7 @@
 # override of /proc/sys/kernel/random/uuid).
 set -u
 
-STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage"
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded"
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
@@ -132,6 +133,7 @@ case "$state" in
   watcher_error | usage) ;;
   *) [ -n "$issue" ] || usage "--issue is required for $state" ;;
 esac
+[ "$state" != superseded ] || [ -n "$run" ] || usage "--run is required for superseded (the run being replaced)"
 case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 

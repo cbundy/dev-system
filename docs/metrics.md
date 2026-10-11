@@ -15,6 +15,8 @@ pipeline data" below). Pipeline facts (when a run started, its status, parked ti
 from that mirror, never from agent-logged `run_started` events: a run belongs to an issue by its
 branch name (see "Linking pipeline runs to issues" below).
 
+`superseded` is logged by the orchestrator when it replaces a branch or run for the same issue (`--run` names the old run). It is run-scoped, so it ends nothing and releases no claim.
+
 `closed` is logged by `callum-flow-sweep` (actor `sweep`) for every issue GitHub reports closed
 whose latest event is not `closed` or `abandoned`, including issues closed by hand, as duplicates
 or after research. Its `note` is GitHub's close reason verbatim: `completed`, `not_planned` or
@@ -208,6 +210,7 @@ logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it 
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
 `reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
+`superseded` (a run or branch replaced for the same issue, run-scoped) is none of these: it neither ends an issue nor releases a claim.
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
 use `callum-flow-factory-state` ([factory-state.md](factory-state.md)): it has six stuck rules with
 adjustable thresholds and puts GitHub closure first. The hardcoded 4 hour stuck query that used to

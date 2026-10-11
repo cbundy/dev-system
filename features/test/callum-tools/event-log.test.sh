@@ -85,9 +85,16 @@ case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn
 [ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
 
 # every state of the closed vocabulary is accepted
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage; do
-  ev "$s" --issue 1 || fail "$s should be accepted"
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded; do
+  ev "$s" --issue 1 --run r1 || fail "$s should be accepted"
 done
+
+# superseded is run-scoped: --run is required, and the line carries it
+rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
+[ "$rc" = 2 ] || fail "superseded without --run must exit 2, got $rc: $out"
+case "$out" in *"--run is required"*) ;; *) fail "superseded without --run should say so: $out" ;; esac
+ev superseded --issue 1 --run r9 --note "by feat/issue-1-x-v2" || fail "superseded with --run should be accepted"
+[ "$(tail -n 1 "$log" | jq -r '.run_id')" = r9 ] || fail "superseded should record the run"
 
 # --path prints the file a write appends to, and writes nothing
 before=$(find "$events" -type f | sort | tr '\n' ' ')
