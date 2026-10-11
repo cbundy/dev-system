@@ -165,6 +165,33 @@ record_event() {
   callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
 }
 
+# Background sleep lets the shell handle watcher signals while waiting.
+# Keep this helper's body aligned across the three watchers: scripts are
+# installed individually, so the helper is copied rather than sourced.
+# Sleep-interruption behavior is documented in images/base/README.md.
+nap_pid=
+nap() {
+  nap_left=$(printf '%s' "$1" | sed 's/^0*//')
+  nap_left=${nap_left:-0}
+  nap_end=$(($(date +%s) + nap_left))
+  while [ "$nap_left" -gt 0 ]; do
+    sleep "$nap_left" &
+    nap_pid=$!
+    nap_rc=0
+    wait "$nap_pid" 2>/dev/null || nap_rc=$?
+    nap_pid=
+    [ "$nap_rc" -gt 128 ] || return "$nap_rc"
+    nap_left=$((nap_end - $(date +%s)))
+    [ "$nap_left" -gt 0 ] || nap_left=0
+    echo "pipeline-watch.sh: sleep interrupted (status $nap_rc), sleeping the remaining ${nap_left}s" >&2
+  done
+}
+
+# nap_cleanup: kill the recorded nap sleep, if any (never by name).
+nap_cleanup() {
+  [ -z "$nap_pid" ] || kill "$nap_pid" 2>/dev/null || :
+}
+
 # fatal <reason>: exit non-zero; in stream mode first print the one
 # watcher-error line on stdout, the event channel.
 fatal() {
@@ -179,6 +206,7 @@ fatal() {
 # with a watcher-error line.
 on_exit() {
   rc=$?
+  nap_cleanup
   [ "$rc" -eq 0 ] || [ -n "$reported" ] || {
     echo "watcher-error exited with status $rc"
     record_event watcher_error --note "pipeline-watch: exited with status $rc"
@@ -246,6 +274,9 @@ if [ -n "$stream" ]; then
   trap on_exit EXIT
   command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
   git rev-parse --git-dir >/dev/null 2>&1 || fatal "not inside a git repository"
+else
+  trap 'exit 143' HUP INT TERM
+  trap nap_cleanup EXIT
 fi
 
 logs_dir="${NO_MISTAKES_HOME:-$HOME/.no-mistakes}/logs"
@@ -586,5 +617,5 @@ while :; do
     echo timeout
     exit 0
   fi
-  sleep "$interval"
+  nap "$interval"
 done

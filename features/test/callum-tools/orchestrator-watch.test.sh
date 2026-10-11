@@ -308,7 +308,7 @@ queue_seq 5
 runs_order RUNA
 single="$tmpdir/s2.out"
 # shellcheck disable=SC2086
-(in_dir "$repo" timeout 30 env ORCHESTRATOR_WATCH_WINDOW=6 "$OW" $A \
+(in_dir "$repo" timeout 30 env ORCHESTRATOR_WATCH_WINDOW=08 "$OW" $A \
   --queue-known none --pipeline-known feat/z=failed:zzz) > "$single" 2>/dev/null ||
   fail "single-shot did not exit 0"
 grep -qx "parked feat/a RUNA head=aaa" "$single" || fail "single-shot pipeline line: $(cat "$single")"
@@ -466,6 +466,79 @@ d=$(in_dir "$repo" "$OW" --repo o/r) || st=$?
 [ "$st" -eq 2 ] || fail "usage: exit $st"
 case "$d" in "watcher-error usage"*) ;; *) fail "usage: $d" ;; esac
 ok # usage error
+
+# ---------------------------------------------------------------------------
+# A sleep killed from outside is survived (cbundy/dev-system#420). Owner rule:
+# kill ONLY a pid recorded from under our own watcher, never by name or pattern.
+
+# find_sleep <root-pid> <seconds>: the pid of a `sleep <seconds>` anywhere under
+# root (waits up to 10s). The distinct values tell a child's sleep from a timer's.
+find_sleep() {
+  i=0
+  while :; do
+    for p in $(descendants_of "$1"); do
+      if [ "$({ tr '\0' ' ' < "/proc/$p/cmdline"; } 2>/dev/null)" = "sleep $2 " ]; then
+        echo "$p"
+        return 0
+      fi
+    done
+    i=$((i + 1))
+    [ "$i" -le 100 ] || fail "no 'sleep $2' under $1"
+    sleep 0.1
+  done
+}
+descendants_of() {
+  for c in $(pgrep -P "$1" 2>/dev/null || :); do
+    echo "$c"
+    descendants_of "$c"
+  done
+}
+
+# 9. A child's sleep is killed: no watcher-error, the watcher lives, the later
+# queue change still passes through.
+queue_seq 5
+: > "$fakebin/runs-order"
+out="$tmpdir/s9.out"
+start_bg "$out" "$repo" "$OW" --repo o/r --label ready --queue-interval 3 --pipeline-interval 62 --stream --queue-known 5
+victim=$(find_sleep "$bg_pid" 3)
+kill "$victim"
+sleep 1
+kill -0 "$bg_pid" 2>/dev/null || fail "child sleep kill: watcher died: $(cat "$out" "$out.err")"
+[ ! -s "$out" ] || fail "child sleep kill: stdout must stay empty: $(cat "$out")"
+grep -q '^queue-watch.sh: sleep interrupted (status 143)' "$out.err" || fail "child sleep kill: stderr: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "child sleep kill: extra stderr: $(cat "$out.err")"
+queue_seq 5,6
+wait_lines "$out" 1
+expect_lines "$out" "queue-changed known=5 now=5,6"
+stop_bg
+ok # a killed child sleep is survived
+
+# 10. The deadline timer's sleep is killed: timeout and rearm still print, and
+# not before the deadline.
+queue_seq 5
+out="$tmpdir/s10.out"
+t0=$(date +%s)
+start_bg "$out" "$repo" "$OW" --repo o/r --label ready --queue-interval 61 --pipeline-interval 62 --stream --queue-known 5 --deadline 09
+victim=$(find_sleep "$bg_pid" 9)
+kill "$victim"
+sleep 1
+kill -0 "$bg_pid" 2>/dev/null || fail "timer sleep kill: watcher died: $(cat "$out" "$out.err")"
+[ ! -s "$out" ] || fail "timer sleep kill: fired early: $(cat "$out")"
+wait_lines "$out" 2
+[ $(($(date +%s) - t0)) -ge 9 ] || fail "timer sleep kill: deadline came early"
+[ "$(sed -n 1p "$out")" = timeout ] || fail "timer sleep kill: $(cat "$out")"
+grep -q '^orchestrator-watch.sh: sleep interrupted' "$out.err" || fail "timer sleep kill: stderr: $(cat "$out.err")"
+[ "$(line_count "$out.err")" -eq 1 ] || fail "timer sleep kill: extra stderr: $(cat "$out.err")"
+wait "$bg_pid" || fail "timer sleep kill: did not exit 0"
+bg_pid=
+ok # a killed timer sleep still delivers the deadline
+
+# 11. A window that is not a whole number is a usage error.
+st=0
+w=$(in_dir "$repo" env ORCHESTRATOR_WATCH_WINDOW=1.5 "$OW" $A --stream 2>/dev/null) || st=$?
+[ "$st" -eq 2 ] || fail "bad window: exit $st, want 2"
+case "$w" in "watcher-error usage: ORCHESTRATOR_WATCH_WINDOW"*) ;; *) fail "bad window: $w" ;; esac
+ok # ORCHESTRATOR_WATCH_WINDOW is validated
 
 for p in $decoys; do
   kill -0 "$p" 2>/dev/null || fail "decoy process $p was killed: the watcher stopped something that was not its child"
