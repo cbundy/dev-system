@@ -59,9 +59,8 @@ the same kind. Their headers say how to arm and re-arm them.
 - `/usr/local/share/callum-tools/pipeline-watch.sh` (no `--branches`) prints one
   line per branch that needs you.
 
-Arm the audit that catches a dropped re-arm. It runs about every 20 minutes
-(harness cron, but check the scheduled-task list first after a resume, so it is
-never armed twice) and does four things: checks both watchers are alive and
+Arm the audit that catches a dropped re-arm: hourly, never rarer than half the claim lease (harness cron, off :00 and :30;
+after a resume check the scheduled-task list first, so it is never armed twice). It does four things: checks both watchers are alive and
 re-arms a missing one, runs `callum-flow-claim --heartbeat` then
 `callum-flow-sweep`, re-reads usage, and in Stop new or Stop all checks a
 resume wake is pending. A missing watcher or wake is fixed in the turn you see
