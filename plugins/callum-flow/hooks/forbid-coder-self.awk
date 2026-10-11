@@ -2,10 +2,7 @@
 # Reads the raw PreToolUse JSON (one record, see BEGIN) from stdin and prints
 # exactly one of DENY / ALLOW. See forbid-coder-self.sh for the full write-up.
 # The JSON extractor, tokenizer and wrapper/segment logic mirror
-# forbid-tmux-kill.awk on purpose (each hook stays self-contained). Differences:
-# quoted heredoc bodies are skipped, an unexpanded $CODER_WORKSPACE_NAME
-# counts as naming self, and an unmatched opener is not by itself a reason to
-# deny (it stops only the nested-substitution scan).
+# forbid-tmux-kill.awk on purpose (each hook stays self-contained).
 # The workspace identity comes from the environment (ENVIRON), not -v, so
 # backslashes in a name are never interpreted by awk.
 

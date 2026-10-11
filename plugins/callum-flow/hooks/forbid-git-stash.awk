@@ -1,8 +1,7 @@
 # forbid-git-stash.awk - detection logic for forbid-git-stash.sh (dev-system#52).
 # Reads the raw PreToolUse JSON (one record, see BEGIN) from stdin and prints
 # exactly one of DENY / ALLOW. See forbid-git-stash.sh for the full write-up
-# of why and what this does and does not catch. Quoted heredoc bodies are
-# skipped (text in them is data).
+# of why and what this does and does not catch.
 
 BEGIN { RS = "\3" }
 { json = $0 }

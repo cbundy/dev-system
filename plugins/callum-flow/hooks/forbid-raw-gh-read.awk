@@ -3,8 +3,6 @@
 # exactly one of DENY / ALLOW. See forbid-raw-gh-read.sh for the full write-up.
 # The JSON extractor, tokenizer and wrapper/segment/heredoc/substitution logic
 # mirror forbid-coder-self.awk on purpose (each hook stays self-contained).
-# An unmatched opener (quote, backtick, $() is not by itself a reason to deny: it
-# stops only the nested-substitution scan, the text before the opener is still checked.
 
 BEGIN { RS = "\3" }
 { json = $0 }

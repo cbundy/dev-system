@@ -17,10 +17,10 @@
 # that only mentions these words, and every command when CODER_WORKSPACE_NAME
 # is unset.
 #
-# Fails open: quoted heredoc bodies are skipped, and input the parser cannot
-# make sense of (an unmatched backtick or $() is not by itself denied, and the
-# the commands before the opener are still checked. Only a positively parsed
-# self-target is refused, so a parser gap never blocks normal work (see #209).
+# Quoted heredoc bodies are skipped as literal data. An unmatched backtick or
+# $( fails open from that opener onward; the preceding text is still checked.
+# An unfinished quoted segment is ignored, but completed segments before it
+# are checked. Only a positively parsed self-target is refused (see #209).
 #
 # POSIX sh + awk only. Deny form matches forbid-tmux-kill.sh.
 

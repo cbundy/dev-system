@@ -2,9 +2,8 @@
 # Reads the raw PreToolUse JSON (one record, see BEGIN) from stdin and prints
 # exactly one of DENY / ALLOW. See forbid-tmux-kill.sh for the full write-up.
 # The JSON extractor, tokenizer and segment splitter mirror forbid-git-stash.awk
-# on purpose (each hook stays self-contained). Differences: quoted heredoc
-# bodies are skipped, and an unmatched opener stops only the nested-substitution
-# scan (the text before the opener is still checked).
+# on purpose (each hook stays self-contained). Heredoc and fail-open behavior
+# are documented in forbid-tmux-kill.sh.
 
 BEGIN { RS = "\3" }
 { json = $0 }
