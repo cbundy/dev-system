@@ -68,10 +68,10 @@ Milestones record what each release contained. The contract is shared with the b
   the expected version bump. The release skill shows it beside its own proposal.
 - The `Release` workflow runs `scripts/release-milestone.js --release X.Y.Z` after the tag and
   GitHub Release exist. It adds any PR in the release range (and the closed issues it closes) that
-  is missing from the milestone, renames `Next release` to `vX.Y.Z`, creates a fresh `Next release`,
+  has no milestone (or sits in `Next release` or `Later`), renames `Next release` to `vX.Y.Z`, creates a fresh `Next release`,
   moves still-open items into it, and closes `vX.Y.Z`. Without a `Next release` it just creates a
-  closed `vX.Y.Z`. Re-running is safe.
-- `--backfill X.Y.Z` builds a closed `vX.Y.Z` from a tag range without touching `Next release`;
+  closed `vX.Y.Z`. Items in any other milestone are left alone. Re-running is safe.
+- `--backfill X.Y.Z` builds a closed `vX.Y.Z` from a tag range, only adding items with no milestone and never touching `Next release`;
   `--plan X.Y.Z` is the read-only preview the release skill uses.
 
 ## The Dev Container Feature (deprecated, separate cadence)
