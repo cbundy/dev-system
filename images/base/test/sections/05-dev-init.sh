@@ -65,7 +65,7 @@ check "DEV_CODEX_MODEL / DEV_CLAUDE_MODEL rewrite the managed pin in place, and 
   DEV_CODEX_MODEL= dev-init >/dev/null 2>&1
   # the review roles are their own part: they stay when the model pin is dropped
   ! grep -q "^agent_config:" $cfg && grep -q "^review_agents:" $cfg
-  DEV_REVIEW_AGENT= dev-init >/dev/null 2>&1
+  DEV_CODEX_MODEL= DEV_REVIEW_AGENT= dev-init >/dev/null 2>&1
   ! grep -q "agent_config\|review_agents\|dev-system managed" $cfg || exit 1
   [ "$(cat $cfg)" = "$(printf "agent: codex\n\nkeep: 1")" ]' \
   --entrypoint ""
