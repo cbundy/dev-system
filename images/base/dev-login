@@ -526,11 +526,11 @@ cmd_watch() {
       [ "$tool" = gh ] && [ "$state" = scope ] && continue
       sig="$sig $tool=$state"
     done
+    lines=$(DL_WATCH=1 DL_STATES="$states" cmd_start)
     if [ -z "$sig" ]; then
       [ -z "$last" ] || log "all logins are done"
       return 0
     fi
-    lines=$(DL_WATCH=1 DL_STATES="$states" cmd_start)
     if [ "$lines" != "$last" ]; then
       while IFS= read -r tool; do log "$tool"; done <<<"$lines"
       [ -z "$page" ] || log "  or use the login page: $page"

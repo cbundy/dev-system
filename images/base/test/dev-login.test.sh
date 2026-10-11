@@ -196,6 +196,20 @@ timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
 DEV_LOGIN_OPTIONAL="" dl status --json 2>/dev/null | jq -e '.codex | has("optional") | not' >/dev/null \
   || fail "DEV_LOGIN_OPTIONAL= should make codex required"
 
+reset tok1 "$ok_json"
+: > "$FIX/codex-in"
+for tool in claude codex gh; do
+  : > "$FIX/session.login-$tool"
+done
+timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox bash "$CMD" watch >/dev/null 2>&1 \
+  || fail "watch should exit 0 with all tools logged in"
+for tool in claude codex gh; do
+  [ ! -f "$FIX/session.login-$tool" ] || fail "watch must clean up the completed $tool attempt"
+done
+[ ! -f "$FIX/tmux.started" ] || fail "watch must not start attempts with all tools logged in"
+[ ! -f "$FIX/sleeps" ] || fail "watch should not sleep with all tools logged in"
+expect_calls 1 "completed attempts cleanup"
+
 # --- watch backs off, and gives up on gh's scope -----------------------------------------
 reset tok1 "$noscope_json"
 rm -f "$FIX/claude-in"
@@ -213,6 +227,7 @@ timeout 60 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
 { [ "$(grep -c . "$FIX/tmux.started")" = 1 ] && grep -qx login-claude "$FIX/tmux.started"; } \
   || fail "only one claude attempt, no gh refresh and no codex: $(cat "$FIX/tmux.started")"
 expect_calls 1 "a whole watch"
+[ ! -f "$FIX/session.login-claude" ] || fail "watch must clean up Claude's attempt after an external login"
 [ ! -f "$FIX/gh.unexpected" ] || fail "unexpected gh calls: $(cat "$FIX/gh.unexpected")"
 
 # a changed set of pending logins starts the backoff over
