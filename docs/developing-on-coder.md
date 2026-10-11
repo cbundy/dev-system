@@ -63,7 +63,6 @@ Promoting a change to the production templates is the owner's step.
 
 Friction issues recorded while proving this:
 
-- [#98](https://github.com/cbundy/dev-system/issues/98): `dev-login` and `dev-remote-control` hints say `docker exec`, which does not work on Coder.
 - [#187](https://github.com/cbundy/dev-system/issues/187): codex telemetry gaps for hand-started codex.
 - [#188](https://github.com/cbundy/dev-system/issues/188): the Terraform limitation described above.
 - [#189](https://github.com/cbundy/dev-system/issues/189): strict up-to-date branch protection makes each later merge need a branch update and a CI re-run.
