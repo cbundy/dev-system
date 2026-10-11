@@ -78,7 +78,9 @@ has passed.
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
   its summary line notes the skip and CI's `ci.yml` runs them.
 - `npm test` - every node test under `tests/` and every plain-shell suite under
-  `features/test/callum-tools/`, `coder/test/` and `images/base/test/` (`scripts/test.sh`).
+  `features/test/callum-tools/`, `coder/test/` and `images/base/test/`, plus mod validation
+  and tests when Claude Code is available (`scripts/test.sh`; see
+  [mod testing](plugins/factory-hud/README.md#develop-it) for local and CI requirements).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
 and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`

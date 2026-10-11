@@ -7,15 +7,15 @@ A Claude Code mod that keeps a one-line readout on screen:
 ```
 
 - the time (in the workspace's `TZ`), the context window fill, and the plan's 5-hour and
-  7-day usage;
+  7-day usage when Claude Code supplies those figures;
 - for an orchestrator, the factory's counts for the session's repo, by
   [`callum-flow-factory-state`](../../docs/factory-state.md) stage: `live` is every active
   stage, `design` designing, `dev` implementing, `pipe` in pipeline plus parked, `merge` ready
-  to merge. Refreshed every minute; counts older than five minutes show their age;
+  to merge. Refreshed every minute; counts at least five minutes old show their age;
 - the versions of Claude Code, callum-flow, the base image and no-mistakes.
 
-It also shows a toast, once per conversation, when the context passes 85% or a usage window
-passes 90%.
+On usage measurements, it shows a toast once per conversation for each threshold: context
+at 85% or more, 5-hour usage at 90% or more, and 7-day usage at 90% or more.
 
 It only draws. Nothing it shows reaches the conversation, and it never calls a model.
 
@@ -26,7 +26,9 @@ desktop app, VS Code and the Claude mobile app through Remote Control.
 ## Turn it on
 
 It ships in the `callum` marketplace that every dev-system workspace already has, from the
-first release that includes it. It is opt-in: install it where you want it.
+first release that includes it. It is opt-in: install it where you want it. If your
+workspace is pinned to an older release, first follow the
+[consumer update flow](../../docs/architecture.md#how-a-change-reaches-a-consumer-repo).
 
 **An orchestrator workspace (Coder).** Install it once, at user scope, from the workspace's
 own Claude session: attach to it (`coder ssh <workspace> -- tmux attach -t claude`) and type
@@ -44,9 +46,14 @@ on their own there, since the workspace runs with `DEV_ROLE=orchestrator`.
 runs where the session runs (the workspace), and the app you watch from draws its readout.
 Open the session in the Claude app or claude.ai as usual.
 
-**Local sessions on your own machine (terminal or the desktop app's Code tab).** Install it
-from a terminal, `claude plugin install factory-hud@callum --scope user`; the desktop app's
-local sessions load it too. (`/plugin` does not work inside the desktop app.)
+**Local sessions on your own machine (terminal or the desktop app's Code tab).** If the
+`callum` marketplace is not registered there, first run
+`claude plugin marketplace add cbundy/dev-system#<release-tag>`, replacing `<release-tag>`
+with a published release tag containing factory-hud. For an existing older pin, use the
+consumer update flow linked above. Then install from a terminal with
+`claude plugin install factory-hud@callum --scope user` and start a new local session (or
+`/reload-plugins` in an existing terminal session). The desktop app's local sessions load
+it too. (`/plugin` does not work inside the desktop app.)
 
 ## Use it
 
@@ -61,9 +68,9 @@ local sessions load it too. (`/plugin` does not work inside the desktop app.)
 
 - The context and usage figures come from Claude Code itself (`$.session.usage()`, then the
   `session.measure` event each time they move), so they cost nothing.
-- The counts come from `callum-flow-factory-state --repo <origin> --github off`, run once a
-  minute in the background, so the line never waits on the database. A failed read keeps the
-  last counts.
+- The counts come from `callum-flow-factory-state --repo <owner/name> --github off --format json`,
+  using the session repo's GitHub `origin`, run once a minute in the background, so the line
+  never waits on the database. A failed read keeps the last counts.
 - The versions come from `dev-version`'s snapshot (`DEV_VERSIONS_FILE`, default
   `/tmp/dev-versions.json`); outside a dev-system image it shows Claude Code's alone.
 
@@ -71,4 +78,6 @@ local sessions load it too. (`/plugin` does not work inside the desktop app.)
 
 `claude --plugin-dir plugins/factory-hud` loads this checkout's copy for one session and
 reloads it as files change. `npm test` validates it and runs `tests/*.test.ts` through
-`claude plugin validate` and `claude plugin test`.
+`claude plugin validate` and `claude plugin test` when `claude` is on PATH. Without it,
+the other suites still run and the summary notes that mods were skipped. CI installs
+Claude Code and sets `TEST_REQUIRE_CLAUDE=1`, so a missing `claude` fails the gate.

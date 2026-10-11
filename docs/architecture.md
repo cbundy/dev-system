@@ -9,7 +9,7 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 
 | Layer | Source here | Distributed as | Consumer pins | Consumer updates with |
 |---|---|---|---|---|
-| Agent behaviour: skills, named agents, hooks | `plugins/callum-flow/` | Claude Code plugin in the `callum` marketplace (`.claude-plugin/marketplace.json`) | Release-tag marketplace `ref` in `.claude/settings.json` | Refresh templates with `npm update @callum/dev-system && npx callum-dev update`, then run `dev-init` |
+| Agent behaviour and optional HUD | `plugins/callum-flow/`, `plugins/factory-hud/` | Claude Code plugins in the `callum` marketplace (`.claude-plugin/marketplace.json`) | Release-tag marketplace `ref` in `.claude/settings.json` | Refresh templates with `npm update @callum/dev-system && npx callum-dev update`, then run `dev-init` |
 | Environment | `images/base/` | Image `ghcr.io/cbundy/dev-system/base` on GHCR | Image tag (`:2`) or digest | Rebuild or re-pull. Tags are mutable: they are rebuilt weekly. |
 | Repo config | `templates/`, `bin/callum-dev.js` | npm git dependency `github:cbundy/dev-system#semver:0.x` | `.callum-dev.json` stamp | `npm update @callum/dev-system && npx callum-dev update` |
 
@@ -43,7 +43,7 @@ instructing them. The owner and the factory share one trusted identity, so every
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
 plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard, evaluate-sessions, query-factory-data, factory-state), agents (designer, explorer, implementer, fixer, adjudicator), hooks (forbid-git-stash, forbid-tmux-kill, forbid-coder-self, forbid-raw-gh-read, stale-image, fresh-worktree)
-plugins/factory-hud/              opt-in mod: a status readout (usage, factory counts, versions) drawn on every client
+plugins/factory-hud/              opt-in mod; reference and setup in its README.md
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 .devcontainer/                    this repo's dev container and dev image (base + terraform)
