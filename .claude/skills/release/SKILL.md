@@ -15,8 +15,17 @@ approves the draft.
 - Previous tag: the highest `v*` semver tag. List PRs merged since it:
   `git log --first-parent --format=%s <prev>..origin/main`, then
   `callum-flow-issue-read --pr <N>` for the title and body of each.
+- Milestone: `node scripts/release-milestone.js --plan X.Y.Z --to origin/main` (read-only; X.Y.Z is
+  your proposed version). It lists the `Next release` milestone's items, its expected-bump line,
+  the PRs in the git range that are missing from it, and the items in it that are not in the range.
+  - If it says `Next release` still has open items, STOP and name them to the owner. Do not
+    release past them; the owner moves them to `Later` (or finishes them). Never move them yourself.
+  - Draft the notes from the milestone's items and flag every difference from the `git log`
+    range in your message to the owner. The release workflow reconciles the milestone itself.
+  - With no `Next release` milestone, ignore this and work from `git log` as before.
 - Propose the bump per RELEASING.md: patch for wording fixes, minor for a new
-  skill/template/capability, major for a breaking change to an existing contract. Give reasons.
+  skill/template/capability, major for a breaking change to an existing contract. Give reasons. When the milestone has an
+  `expected:` line, show it next to your proposal and say why you agree or differ.
 
 ## 2. Changed layers (from paths)
 `git diff --name-only <prev>..origin/main`:
@@ -56,4 +65,6 @@ for the owner's approval.
    to the same bump PR (`npm run lint` fails without it).
 2. Merge when `ci` is green.
 3. `gh workflow run release.yml -f version=X.Y.Z`, wait for it, then confirm the published
-   body with `gh release view vX.Y.Z` (curated groups, Upgrade, collapsed technical list).
+   body with `gh release view vX.Y.Z` (curated groups, Upgrade, collapsed technical list). The
+   workflow's last step rolls the milestone over; check `vX.Y.Z` is closed and a fresh
+   `Next release` exists (when the repo had one).

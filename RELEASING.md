@@ -40,6 +40,7 @@ the `Release` workflow only verifies, tags and publishes.
    is those notes plus a collapsed "Technical changes" list built from first-parent commits
    since the highest `v*` semver tag below X.Y.Z (or the full first-parent history if none
    exists). The technical list is omitted when that range contains no commits.
+   Its last step rolls the `Next release` milestone over (see Milestones below).
    An existing `vX.Y.Z` tag must point to the exact workflow commit;
    otherwise the workflow refuses to proceed. Re-running on that commit skips tagging
    and rewrites the release title and body, even if the GitHub Release already exists.
@@ -55,6 +56,23 @@ How each layer reaches consumers after the tag exists:
   npm resolves that range against the git tags, so `npm update @callum/dev-system`
   pulls the new tag, then `npx callum-dev update` merges template changes into the
   repo. Tags earlier than v0.3.0 predate `package.json` and cannot be npm-installed.
+
+## Milestones
+
+Milestones record what each release contained. The contract is shared with the base image's
+`callum-flow-milestone` helper:
+
+- The titles are exactly `Next release` and `Later`. A repo opts in by having an open milestone
+  titled `Next release`.
+- The `Next release` description may carry one line, `Expected: <patch|minor|major> - <reason>`,
+  the expected version bump. The release skill shows it beside its own proposal.
+- The `Release` workflow runs `scripts/release-milestone.js --release X.Y.Z` after the tag and
+  GitHub Release exist. It adds any PR in the release range (and the closed issues it closes) that
+  has no milestone (or sits in `Next release` or `Later`), renames `Next release` to `vX.Y.Z`, creates a fresh `Next release`,
+  moves still-open items into it, and closes `vX.Y.Z`. Without a `Next release` it just creates a
+  closed `vX.Y.Z`. Items in any other milestone are left alone. Re-running is safe.
+- `--backfill X.Y.Z` builds a closed `vX.Y.Z` from a tag range, only adding items with no milestone and never touching `Next release`;
+  `--plan X.Y.Z` is the read-only preview the release skill uses.
 
 ## The Dev Container Feature (deprecated, separate cadence)
 
