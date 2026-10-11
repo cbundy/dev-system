@@ -116,11 +116,13 @@ image_job() {
 
 # plugin_job: installed callum-flow (per scope) against the image's pin.
 plugin_job() {
-  local id src ref pin installed scope ver latest=""
+  local id src ref pin installed scope ver latest="" candidate=""
   while read -r id src; do
     [ -n "$id" ] || continue
     ref=""
     case "$src" in *"#"*) ref=${src#*#} ;; esac
+    candidate=""
+    if dev_system_location "${src%%#*}"; then candidate=$(candidate_plugin_ref) || candidate=""; fi
     pin=$(semver "$ref")
     installed=$(claude_plugin_cli list --json 2>/dev/null) || { line UNKNOWN "$id" "running=? latest=? (claude plugin list failed)"; continue; }
     latest=""
@@ -132,7 +134,9 @@ plugin_job() {
     fi
     while IFS=$'\t' read -r scope ver; do
       ver=$(semver "$ver")
-      if [ -z "$ver" ]; then
+      if [ -n "$candidate" ]; then
+        line OK "$id($scope)" "running=${ver:-?} candidate=$candidate latest=${latest:-?}"
+      elif [ -z "$ver" ]; then
         line UNKNOWN "$id($scope)" "running=? pin=${pin:-none} latest=${latest:-?}"
       elif [ -n "$pin" ] && older "$ver" "$pin"; then
         line STALE "$id($scope)" "running=$ver pin=$pin latest=${latest:-?} (installed below the image's pin: dev-init --plugins)"
@@ -140,7 +144,7 @@ plugin_job() {
         line OK "$id($scope)" "running=$ver pin=${pin:-none} latest=${latest:-?}"
       fi
     done < <(printf '%s\n' "$installed" | jq -r --arg id "$id" '.[] | select(.id == $id) | [.scope, .version] | @tsv')
-    if [ -n "$pin" ] && [ -n "$latest" ] && older "$pin" "$latest"; then
+    if [ -z "$candidate" ] && [ -n "$pin" ] && [ -n "$latest" ] && older "$pin" "$latest"; then
       printf '%s\n' "(the image pins $id at $pin, latest is $latest: a newer image fixes that)" > "$OUT/pin-note"
     fi
   done < <(default_plugins)

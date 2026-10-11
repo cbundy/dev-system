@@ -326,6 +326,7 @@ work in progress.
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
 | `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system#<latest release tag>` (pinned at image build) | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
 | `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the Claude plugins, the default ones and the repo's (see "Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
+| `DEV_CANDIDATE_PLUGIN_REF` | unset (no effect) | A ref (`[A-Za-z0-9._/-]+`, for example a release candidate tag such as `v0.28.0-rc.1`) that every `cbundy/dev-system` marketplace (the github repo or its https git URL) is wanted at, replacing both the repo's declared ref and the image's default. Runtime only, set by candidate Coder template versions; not a build argument (do not confuse it with `DEV_PLUGIN_REF`). An invalid value logs one `WARNING` and is ignored. The ref goes through the same resolvability check as any pin (see "Claude plugins"). |
 
 **Precedence.** The workspace is an explicit `DEV_WORKSPACE`, else
 `/workspaces/<repo name>` from `DEV_REPO_URL`. Until that directory exists (a clone still
@@ -381,7 +382,11 @@ they land in `/persist/claude` and stay across rebuilds:
   It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
   the release tag current at image build, never to main, and a repo's committed settings ref
   wins when it declares the marketplace; `dev-init` removes and re-adds a marketplace whose
-  ref moved, so a pin change takes effect on the next start. A per-repo image sets
+  ref moved, so a pin change takes effect on the next start - but only once the wanted ref
+  exists on the marketplace's remote (checked with `git ls-remote`, inside the plugin step's
+  deadline, never prompting). A pin to a tag that is not cut yet, or one that cannot be
+  checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
+  one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
   runtime's environment overrides both.
 - **The repo's plugins.** A repo can enable plugins in its committed
@@ -652,7 +657,9 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
   an `INFO image-layers none` line, which never affects the exit code;
 - callum-flow, per scope, against the release the image pins in `DEV_DEFAULT_PLUGINS`
   (`STALE` when installed below it) and the latest release of the plugin's repo. A pin
-  behind the latest release is noted on the base image line, since a newer image fixes it;
+  behind the latest release is noted on the base image line, since a newer image fixes it.
+  With `DEV_CANDIDATE_PLUGIN_REF` set, the line shows `candidate=<ref>` instead, is never
+  `STALE` because of it, and the pin note is left out;
 - claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
   against their latest upstream release (npm for claude and codex, GitHub releases for the
   others): `STALE` when upstream is newer. agentsview and coder are pinned by the image
