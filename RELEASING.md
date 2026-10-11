@@ -38,8 +38,8 @@ the `Release` workflow only verifies, tags and publishes.
    at X.Y.Z) and `node scripts/release-notes.js --check X.Y.Z` passes (valid
    `release-notes/vX.Y.Z.md`); then it tags `vX.Y.Z` and creates a GitHub Release whose body
    is those notes plus a collapsed "Technical changes" list built from first-parent commits
-   since the highest `v*` semver tag below X.Y.Z (or the full first-parent history if none
-   exists). The technical list is omitted when that range contains no commits.
+   since the highest final (non-prerelease) `v*` tag below X.Y.Z (or the full first-parent history if
+   none exists). The final release drops the notes' `Verify` section. The technical list is omitted when that range contains no commits.
    Its last step rolls the `Next release` milestone over (see Milestones below).
    An existing `vX.Y.Z` tag must point to the exact workflow commit;
    otherwise the workflow refuses to proceed. Re-running on that commit skips tagging
@@ -73,6 +73,7 @@ Milestones record what each release contained. The contract is shared with the b
   closed `vX.Y.Z`. Items in any other milestone are left alone. Re-running is safe.
 - `--backfill X.Y.Z` builds a closed `vX.Y.Z` from a tag range, only adding items with no milestone and never touching `Next release`;
   `--plan X.Y.Z` is the read-only preview the release skill uses.
+  Every mode refuses a prerelease version (exit 2); milestones are only for final releases.
 
 ## The Dev Container Feature (deprecated, separate cadence)
 
