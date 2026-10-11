@@ -186,6 +186,7 @@ COPY --chmod=0755 \
   features/src/callum-tools/recover-no-mistakes.sh \
   features/src/callum-tools/pin-codex-model.sh \
   features/src/callum-tools/check-pr-linkage.sh \
+  features/src/callum-tools/orchestrator-watch.sh \
   features/src/callum-tools/pipeline-watch.sh \
   features/src/callum-tools/queue-watch.sh \
   features/src/callum-tools/usage-check.sh \
