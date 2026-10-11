@@ -65,6 +65,9 @@ orchestrator skill works unchanged. By default each prints one event line and ex
 `--stream` it keeps running and prints one line per change, for a harness that turns each
 output line into an event (Claude Code's Monitor tool). The scripts' headers document both
 modes.
+`orchestrator-watch.sh` runs both as one process with one `--deadline` (single-shot or
+`--stream`), passes their lines through unchanged, ends with a `rearm <args>` line carrying both
+baselines forward, and refuses a second copy per repository.
 
 `usage-check.sh`, staged beside them, prints the Claude plan's 5-hour and weekly usage as
 one line (`five_hour=<pct> resets_at=<time> ... seven_day=<pct> ...`) for the orchestrator's
