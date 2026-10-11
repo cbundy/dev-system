@@ -1,0 +1,146 @@
+#!/bin/bash
+#
+# dev-statusline: the Claude Code status line for dev-system environments.
+#
+#   "statusLine": {"type": "command", "command": "dev-statusline", "refreshInterval": 30}
+#
+# Reads the status line JSON Claude Code passes on stdin and prints up to two rows. It
+# spends no model tokens and never adds to the conversation: Claude Code only draws it.
+#
+#   20:41  ctx 41%  5h 23%  7d 53%  Opus
+#   factory 16 live: design 11  dev 1  pipe 3  merge 1 | queued 11   cc 2.1.296  flow 0.27.0  img 2.27.0
+#
+# Row 1, the session: the local time (TZ), the context window fill and the plan's 5-hour and
+# 7-day usage (both from stdin; absent until the session's first response, and the usage
+# only on a claude.ai login), then the model. Percentages turn yellow at 70 and red at 90.
+#
+# Row 2, the factory and the versions:
+# - The factory counts for this repo (stdin's workspace.repo, else the origin remote), by
+#   callum-flow-factory-state stage (docs/factory-state.md): live is every active stage,
+#   design is designing, dev is implementing, pipe is in pipeline plus parked, merge is
+#   ready to merge, queued is queued. They come from a cache file refreshed in the background
+#   at most every DEV_STATUSLINE_TTL seconds (default 60), so a draw never waits on the
+#   database; a cache older than five minutes shows its age. Shown when DEV_ROLE is
+#   orchestrator, or when DEV_STATUSLINE_FACTORY=on; DEV_STATUSLINE_FACTORY=off hides it.
+# - The versions: Claude Code (stdin), the callum-flow plugin, the base image and no-mistakes,
+#   from dev-version's snapshot (DEV_VERSIONS_FILE, default /tmp/dev-versions.json, which
+#   dev-init writes).
+#
+# It also records the plan usage for usage-check.sh, as its --record mode does, so the
+# orchestrator's usage gate keeps its fallback source.
+#
+# Environment: TZ, DEV_ROLE, DEV_STATUSLINE_FACTORY, DEV_STATUSLINE_TTL,
+# DEV_STATUSLINE_STATE (cache dir, default ${XDG_STATE_HOME:-~/.local/state}/dev-statusline),
+# DEV_VERSIONS_FILE, and for tests CALLUM_FLOW_FACTORY_STATE_BIN, CALLUM_USAGE_CHECK_BIN and
+# DEV_STATUSLINE_NOW (epoch seconds). Always exits 0: a status line that fails draws nothing.
+set -u
+
+FACTORY_STATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
+USAGE_CHECK=${CALLUM_USAGE_CHECK_BIN:-/usr/local/share/callum-tools/usage-check.sh}
+STATE=${DEV_STATUSLINE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/dev-statusline}
+VERSIONS=${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}
+TTL=${DEV_STATUSLINE_TTL:-60}
+case "$TTL" in '' | *[!0-9]*) TTL=60 ;; esac
+NOW=${DEV_STATUSLINE_NOW:-$(date +%s)}
+
+command -v jq >/dev/null 2>&1 || { date +%H:%M; exit 0; }
+
+input=$(cat)
+printf '%s' "$input" | jq -e . >/dev/null 2>&1 || input='{}'
+
+# The plan usage snapshot usage-check.sh falls back on; its own line is not used.
+if [ -x "$USAGE_CHECK" ]; then
+  printf '%s' "$input" | "$USAGE_CHECK" --record >/dev/null 2>&1 || :
+fi
+
+# Row 1. pct() colours a percentage; the thresholds match the orchestrator's usage gate.
+row1=$(printf '%s' "$input" | jq -r --arg time "$(date +%H:%M)" '
+  def pct: ceil | (if . >= 90 then "\u001b[31m" elif . >= 70 then "\u001b[33m" else "\u001b[32m" end)
+    + "\(.)%\u001b[0m";
+  [$time,
+   (.context_window.used_percentage // empty | "ctx \(pct)"),
+   (.rate_limits.five_hour.used_percentage // empty | "5h \(pct)"),
+   (.rate_limits.seven_day.used_percentage // empty | "7d \(pct)"),
+   (.model.display_name // empty | "\u001b[2m\(.)\u001b[0m")]
+  | join("  ")' 2>/dev/null) || row1=$(date +%H:%M)
+
+# factory_on: whether row 2 carries the factory counts.
+factory_on() {
+  case "${DEV_STATUSLINE_FACTORY:-}" in
+    on) return 0 ;;
+    off) return 1 ;;
+  esac
+  [ "${DEV_ROLE:-}" = orchestrator ]
+}
+
+# repo_slug: owner/name of the session's repo, from stdin or the origin remote.
+repo_slug() {
+  local slug dir url
+  slug=$(printf '%s' "$input" | jq -r '.workspace.repo | select(.owner and .name) | "\(.owner)/\(.name)"' 2>/dev/null)
+  if [ -z "$slug" ]; then
+    dir=$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty' 2>/dev/null)
+    url=$(git -C "${dir:-.}" remote get-url origin 2>/dev/null) || url=""
+    slug=$(printf '%s\n' "$url" | sed -nE 's#^.*github\.com[:/]([^/]+/[^/]+)$#\1#p' | sed 's/\.git$//')
+  fi
+  printf '%s' "$slug"
+}
+
+# refresh <repo> <cache>: rewrite the cache from callum-flow-factory-state, detached so a
+# cancelled draw never kills it, and at most one at a time (the lock dir is the guard).
+refresh() {
+  local repo="$1" cache="$2" lock="$2.lock"
+  # A lock left by a refresh that died is cleared after five minutes.
+  if [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +5 2>/dev/null)" ]; then
+    rmdir "$lock" 2>/dev/null || :
+  fi
+  mkdir "$lock" 2>/dev/null || return 0
+  # shellcheck disable=SC2016 # the child shell expands these, from its environment
+  REPO="$repo" CACHE="$cache" LOCK="$lock" FS="$FACTORY_STATE" setsid -f bash -c '
+    trap "rmdir \"\$LOCK\" 2>/dev/null" EXIT
+    tmp="$CACHE.$$"
+    if timeout 30 "$FS" --repo "$REPO" --github off --format json 2>/dev/null | jq -c "
+        [.repos[]?.issues[]?.stage] as \$s
+        | def n(\$x): [\$s[] | select(. as \$v | \$x | index(\$v))] | length;
+        {at: (now | floor), live: n([\"designing\",\"implementing\",\"in pipeline\",\"parked\",\"ready to merge\"]),
+         design: n([\"designing\"]), dev: n([\"implementing\"]), pipe: n([\"in pipeline\",\"parked\"]),
+         merge: n([\"ready to merge\"]), queued: n([\"queued\"])}" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+      mv -f "$tmp" "$CACHE"
+    else
+      rm -f "$tmp"
+    fi' </dev/null >/dev/null 2>&1 || rmdir "$lock" 2>/dev/null
+  return 0
+}
+
+factory=""
+if factory_on; then
+  repo=$(repo_slug)
+  if [ -n "$repo" ] && mkdir -p "$STATE" 2>/dev/null; then
+    cache="$STATE/factory-${repo//\//_}.json"
+    # Read once, before any refresh starts, so this draw never sees a cache mid-swap.
+    counts=$(cat "$cache" 2>/dev/null) || counts=""
+    at=$(printf '%s' "$counts" | jq -r '.at // 0' 2>/dev/null) || at=0
+    [ $((NOW - ${at:-0})) -lt "$TTL" ] || refresh "$repo" "$cache"
+    factory=$(printf '%s' "$counts" | jq -er --argjson now "$NOW" '
+      (($now - .at) / 60 | floor) as $age
+      | "factory \(.live) live: design \(.design)  dev \(.dev)  pipe \(.pipe)"
+        + (if .merge > 0 then "  merge \(.merge)" else "" end)
+        + " | queued \(.queued)"
+        + (if $age >= 5 then "  \u001b[33m(\($age)m old)\u001b[0m" else "" end)' 2>/dev/null) ||
+      factory="factory: loading"
+  fi
+fi
+
+versions=$(jq -rn --arg cc "$(printf '%s' "$input" | jq -r '.version // empty' 2>/dev/null)" \
+  --slurpfile v <(cat "$VERSIONS" 2>/dev/null || echo '{}') '
+  ($v[0] // {}) as $v
+  | [($cc | select(. != "") | "cc \(.)"),
+     ($v.plugin_version // empty | "flow \(.)"),
+     ($v.base_image // empty | "img \(.)"),
+     ([$v.components[]? | select(.name == "no-mistakes") | .running][0] // empty | "nm \(.)")]
+  | join("  ") | if . == "" then empty else "\u001b[2m\(.)\u001b[0m" end' 2>/dev/null) || versions=""
+
+printf '%s\n' "$row1"
+row2=$factory
+[ -z "$versions" ] || row2="${row2:+$row2   }$versions"
+[ -z "$row2" ] || printf '%s\n' "$row2"
+exit 0
