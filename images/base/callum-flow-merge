@@ -20,6 +20,10 @@
 # (they never block); after a successful merge one `test_weakened` event is
 # logged per WEAKENED line the guard reported, restored ones included
 # (cbundy/dev-system#314).
+# After the merge and the `merged` event, `callum-flow-milestone tag <pr>` puts
+# the PR and the issues it closes into the Next release milestone
+# (cbundy/dev-system#403). A failure there only warns - the merge already
+# happened, and the release workflow's reconcile step catches anything missed.
 # After success, a non-empty guard close_issue field prints a manual closure
 # instruction; this script does not close the issue itself.
 #
@@ -28,13 +32,15 @@
 #
 # Environment (for tests): CALLUM_FLOW_GH_BIN, CALLUM_FLOW_GUARD_BIN (the
 # guard, default: beside this script), CALLUM_FLOW_EVENT_BIN
-# (callum-flow-event).
+# (callum-flow-event), CALLUM_FLOW_MILESTONE_BIN (callum-flow-milestone, default:
+# beside this script).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 GUARD=${CALLUM_FLOW_GUARD_BIN:-$here/callum-flow-merge-guard}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+MILESTONE=${CALLUM_FLOW_MILESTONE_BIN:-$here/callum-flow-milestone}
 method=${CALLUM_FLOW_MERGE_METHOD:-squash}
 
 usage() {
@@ -99,6 +105,9 @@ set -- merged --pr "$pr" --branch "$branch" --head "$sha"
 [ -z "$run" ] || set -- "$@" --run "$run"
 [ -z "$issue" ] || set -- "$@" --issue "$issue"
 $EVENT "$@" || echo "callum-flow-merge: warning: merged event not recorded" >&2
+# milestone tagging never fails a merge that already succeeded
+"$MILESTONE" tag "$pr" ||
+  echo "callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it" >&2
 # one test_weakened event per flagged commit (the guard's WEAKENED lines)
 printf '%s\n' "$out" | grep '^WEAKENED ' | while IFS= read -r w_line; do
   w_commit=$(printf '%s' "$w_line" | sed 's/^WEAKENED commit=\([^ ]*\) .*/\1/')

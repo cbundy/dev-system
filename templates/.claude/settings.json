@@ -36,6 +36,8 @@
       "Bash(callum-flow-rollout *)",
       "Bash(callum-flow-claim)",
       "Bash(callum-flow-claim *)",
+      "Bash(callum-flow-milestone)",
+      "Bash(callum-flow-milestone *)",
       "Bash(callum-flow-design-route *)",
       "Bash(callum-flow-sweep)",
       "Bash(callum-flow-sweep *)",

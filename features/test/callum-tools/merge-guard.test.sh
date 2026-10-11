@@ -11,6 +11,7 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
 GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
+MILESTONE_REAL="$ROOT/images/base/callum-flow-milestone"
 EVENT="$ROOT/images/base/callum-flow-event"
 ROLLOUT="$ROOT/images/base/callum-flow-rollout"
 READER="$ROOT/images/base/callum-flow-issue-read"
@@ -153,7 +154,15 @@ echo "$*" > "$d/weakening-args"
 [ ! -f "$d/weakening-rc" ] || exit "$(cat "$d/weakening-rc")"
 exit 0
 STUB
-chmod +x "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage" "$tmpdir/weakening"
+# callum-flow-milestone (cbundy/dev-system#403): records its calls; milestone-rc sets its exit code
+cat > "$tmpdir/milestone" <<'STUB'
+#!/bin/sh
+d=${STUB_DIR:?}
+echo "$*" >> "$d/milestone-calls"
+[ ! -f "$d/milestone-rc" ] || exit "$(cat "$d/milestone-rc")"
+exit 0
+STUB
+chmod +x "$tmpdir/milestone" "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage" "$tmpdir/weakening"
 ln -s "$tmpdir/nm" "$toolbin/no-mistakes"
 WATCH="$ROOT/features/src/callum-tools/pipeline-watch.sh"
 
@@ -200,7 +209,7 @@ g() {
 m() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" \
+    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
     CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
     CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
     "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
@@ -454,6 +463,31 @@ reset; m 7
 [ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
 [ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
 jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+
+# merge: milestone tagging (cbundy/dev-system#403) runs once after the merge and never fails it
+[ "$(cat "$st/milestone-calls")" = "tag 7" ] || fail "tag call: $(cat "$st/milestone-calls" 2> /dev/null)"
+! grep -q 'milestone tagging failed' "$tmpdir/err" || fail "no warning expected on success: $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+reset; echo 1 > "$st/milestone-rc"; m 7
+[ "$rc" = 0 ] || fail "a failing tag must not fail the merge: $rc $out"
+grep -q '^callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
+[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
+passed=$((passed + 1))
+reset; MILESTONE_BIN="$tmpdir/does-not-exist" m 7
+MILESTONE_BIN=''
+[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" || fail "a missing helper only warns: $rc $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+# the real helper against a gh that fails every milestone call after the merge
+reset; MILESTONE_BIN="$MILESTONE_REAL" m 7
+MILESTONE_BIN=''
+[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" && [ -f "$st/gh-calls" ] || fail "a gh failure in tagging only warns: $rc $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+# guard failure and a refused merge never tag
+reset; echo '[]' > "$st/checks"; m 7
+[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a guard failure must not tag: $rc"
+reset; touch "$st/merge-refuse"; m 7
+[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a refused merge must not tag: $rc"
 passed=$((passed + 1))
 
 # merge: WARN relayed to stderr, one test_weakened event per WEAKENED line (restored ones too)

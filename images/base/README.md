@@ -1393,7 +1393,22 @@ orchestrator sends each one to the adjudicator before merging. After a successfu
 `callum-flow-merge` logs one `test_weakened` event per flagged commit, restored ones included
 (`docs/metrics.md`). Override the detector with `CALLUM_FLOW_WEAKENING_BIN`; `CALLUM_FLOW_TEST_PATHS`
 adds an ERE of extra test paths.
+After the merge and the `merged` event, `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
+(override: `CALLUM_FLOW_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
+because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
+
+`callum-flow-milestone` keeps issues and PRs in the release milestones so no skill has to remember to.
+The contract lives in its header: milestones are titled exactly `Next release` and `Later`, looked up by
+exact title among open milestones only, and the Next release description carries one line
+`Expected: <patch|minor|major> - <reason>`. A repo with no open `Next release` milestone is not opted in:
+every subcommand then does nothing and exits 0. `plan <issue|pr> next|later` moves an item, `show
+[next|later]` lists each milestone's open and closed items (`#<n> <open|closed> <issue|pr> <title>`) plus
+the `Expected:` line, `expect patch|minor|major "<reason>"` sets that line, and `tag <pr>` is the merge-time
+rule: the PR and every issue it closes (not keep-open ones) move to Next release when they have no
+milestone or are in Later; an item in another milestone is left alone with a warning, and a PR not based
+on the default branch is not tagged. It writes issue metadata, so, like `callum-flow-claim`, it is in the
+synced allow list.
 
 `callum-flow-rollout <issue>` prints `ROLLOUT <merge|run-it|keep-open> source=<brief|body>`: the
 `## Rollout` value of the issue's latest `## Design brief` comment, else (no brief, or an empty
