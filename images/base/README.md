@@ -1127,10 +1127,13 @@ and a login, refresh or logout changes the hash, so it is picked up at once. A c
 fails for any reason but a 401 (a rate limit, the network) keeps the previous state. The login page's
 poll, its exit check and the Coder "Logins" row use `status --json --cached`, which never
 calls the API while a cache entry for the token exists. `dev-login watch` backs off, and gives
-up on gh's workflow scope after one log line and one notification. Expected calls per
-workspace per hour from `dev-login` (status, watch, page, metadata row): 0 once gh is
-logged in and cached; at most `3600 / DEV_LOGIN_GH_TTL` (4 at the default) while a required
-login is pending. `dev-doctor` still checks live, on demand.
+up on gh's workflow scope after one log line and one notification. Once the cache is
+populated for an unchanged token and the watcher has exited, the page and metadata row's
+`--cached` reads make zero GitHub API calls. Ordinary `status` (text or `--json`) still
+refreshes after `DEV_LOGIN_GH_TTL`, even when gh is logged in: frequent checks make roughly
+`3600 / DEV_LOGIN_GH_TTL` calls per hour (4 at the default). An active watcher shares this
+TTL cache. Initial checks and token changes can cause additional calls; no local token
+means zero calls. `dev-doctor` still checks live, on demand.
 
 **The notification** (`DEV_NOTIFY_URL`) is a plain POST, sent when logins are first
 needed and then hourly while they still are. Its `Title` header is
