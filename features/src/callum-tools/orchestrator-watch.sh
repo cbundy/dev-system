@@ -48,6 +48,9 @@
 # prints "watcher-error already-running pid=<p>" and exits 1. A lock left by a
 # dead process is taken over.
 #
+# A `sleep` killed from outside (a timer's or a child's) is survived: one stderr
+# line, the rest of the wait is slept.
+#
 # Test overrides: ORCHESTRATOR_WATCH_QUEUE_BIN, ORCHESTRATOR_WATCH_PIPELINE_BIN
 # (default: the sibling scripts), ORCHESTRATOR_WATCH_WINDOW.
 # shellcheck disable=SC2317 # cleanup and its helpers run from the EXIT trap
@@ -61,6 +64,31 @@ window=${ORCHESTRATOR_WATCH_WINDOW:-5}
 SOH=$(printf '\001')
 NL='
 '
+
+# nap <whole-seconds>: wait that long, surviving a sleep killed from outside.
+# The sleep runs in the background and is waited on, so a signal to this
+# script runs its trap at once. A sleep that died of a signal (status above
+# 128) is logged once on stderr and the rest of the wait is slept, measured
+# from the wall clock so the wait is never shortened or ended. Any other
+# non-zero status is returned and stays fatal under set -e. Same body in
+# queue-watch.sh, pipeline-watch.sh and orchestrator-watch.sh (copied, not
+# sourced: the scripts are installed one by one).
+nap_pid=
+nap() {
+  nap_left=$1
+  nap_end=$(($(date +%s) + nap_left))
+  while [ "$nap_left" -gt 0 ]; do
+    sleep "$nap_left" &
+    nap_pid=$!
+    nap_rc=0
+    wait "$nap_pid" || nap_rc=$?
+    nap_pid=
+    [ "$nap_rc" -gt 128 ] || return "$nap_rc"
+    nap_left=$((nap_end - $(date +%s)))
+    [ "$nap_left" -gt 0 ] || nap_left=0
+    echo "orchestrator-watch.sh: sleep interrupted (status $nap_rc), sleeping the remaining ${nap_left}s" >&2
+  done
+}
 
 usage() {
   echo "watcher-error usage${1:+: $1}"
@@ -109,6 +137,7 @@ positive() { case "$1" in '' | *[!0-9]* | 0) return 1 ;; esac; }
 for v in "$qint" "$pint" "$deadline"; do
   [ -z "$v" ] || positive "$v" || usage "intervals and --deadline must be positive whole numbers of seconds"
 done
+positive "$window" || usage "ORCHESTRATOR_WATCH_WINDOW must be a positive whole number of seconds"
 [ "$qknown" != none ] || qknown=
 qknown=$(printf '%s' "$qknown" | tr ',' '\n' | sed '/^$/d' | sort -nu | paste -sd, -)
 
@@ -118,12 +147,25 @@ lock=
 owned=
 tmp=
 
-# descendants <pid>: every descendant of pid, deepest first.
+# descendants <pid>: every descendant of pid, deepest first, one per line.
+# Level by level, not recursive: sh has no local variables, and a subshell per
+# level would itself become a descendant to find.
 descendants() {
-  for c in $(pgrep -P "$1" 2>/dev/null || :); do
-    descendants "$c"
-    echo "$c"
+  frontier=$1
+  found=
+  while [ -n "$frontier" ]; do
+    level=
+    for p in $frontier; do
+      level="$level $(pgrep -P "$p" 2>/dev/null || :)"
+    done
+    case $level in
+      *[0-9]*) found="$level $found" ;;
+      *) level= ;;
+    esac
+    frontier=$level
   done
+  # shellcheck disable=SC2086 # a list of pids
+  [ -z "$found" ] || printf '%s\n' $found
 }
 
 # stop_children: stop everything below this process. Each round freezes what it
@@ -183,7 +225,7 @@ while :; do
   fi
   tries=$((tries + 1))
   if [ -z "$p" ] && [ "$tries" -le 5 ]; then
-    sleep 0.2 # the owner is between mkdir and writing its pid
+    sleep 0.2 || : # the owner is between mkdir and writing its pid
     continue
   fi
   [ "$tries" -le 10 ] || { echo "watcher-error cannot take lock $lock"; exit 1; }
@@ -219,7 +261,7 @@ run_pipeline() {
 # shared stream; a timer is another writer of the same kind.
 ( rc=0; run_queue || rc=$?; printf '%sexit queue %s\n' "$SOH" "$rc" ) >&3 &
 ( rc=0; run_pipeline || rc=$?; printf '%sexit pipeline %s\n' "$SOH" "$rc" ) >&3 &
-timer() { ( sleep "$1"; printf '%s%s\n' "$SOH" "$2" ) >&3 & }
+timer() { ( nap "$1"; printf '%s%s\n' "$SOH" "$2" ) >&3 & }
 [ -z "$deadline" ] || timer "$deadline" deadline
 
 # ---- carried baselines ---------------------------------------------------

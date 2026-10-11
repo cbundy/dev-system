@@ -29,7 +29,8 @@
 # and, on a fatal error, one final "watcher-error <reason>" line before a
 # non-zero exit, so a crash is never silent. Fatal: `gh` missing from PATH,
 # a usage error, or any unexpected exit. A signal (the harness stopping the
-# monitor) is a normal end and prints nothing.
+# monitor) is a normal end and prints nothing. A `sleep` between polls killed
+# from outside is survived: one stderr line, the rest of the wait is slept.
 #
 # --interval <seconds> sets the poll interval (default: the
 # QUEUE_WATCH_INTERVAL environment variable, else 120).
@@ -69,6 +70,36 @@ record_event() {
   callum-flow-event "$@" --actor watcher >/dev/null 2>&1 || :
 }
 
+# nap <whole-seconds>: wait that long, surviving a sleep killed from outside.
+# The sleep runs in the background and is waited on, so a signal to this
+# script runs its trap at once. A sleep that died of a signal (status above
+# 128) is logged once on stderr and the rest of the wait is slept, measured
+# from the wall clock so the wait is never shortened or ended. Any other
+# non-zero status is returned and stays fatal under set -e. Same body in
+# queue-watch.sh, pipeline-watch.sh and orchestrator-watch.sh (copied, not
+# sourced: the scripts are installed one by one).
+nap_pid=
+nap() {
+  nap_left=$1
+  nap_end=$(($(date +%s) + nap_left))
+  while [ "$nap_left" -gt 0 ]; do
+    sleep "$nap_left" &
+    nap_pid=$!
+    nap_rc=0
+    wait "$nap_pid" || nap_rc=$?
+    nap_pid=
+    [ "$nap_rc" -gt 128 ] || return "$nap_rc"
+    nap_left=$((nap_end - $(date +%s)))
+    [ "$nap_left" -gt 0 ] || nap_left=0
+    echo "queue-watch.sh: sleep interrupted (status $nap_rc), sleeping the remaining ${nap_left}s" >&2
+  done
+}
+
+# nap_cleanup: kill the recorded nap sleep, if any (never by name).
+nap_cleanup() {
+  [ -z "$nap_pid" ] || kill "$nap_pid" 2>/dev/null || :
+}
+
 # fatal <reason>: exit non-zero; in stream mode first print the one
 # watcher-error line on stdout, the event channel.
 fatal() {
@@ -83,6 +114,7 @@ fatal() {
 # with a watcher-error line.
 on_exit() {
   rc=$?
+  nap_cleanup
   [ "$rc" -eq 0 ] || [ -n "$reported" ] || {
     echo "watcher-error exited with status $rc"
     record_event watcher_error --note "queue-watch: exited with status $rc"
@@ -127,6 +159,9 @@ if [ -n "$stream" ]; then
   trap on_exit EXIT
   command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
   command -v "$READ" >/dev/null 2>&1 || fatal "$READ not on PATH"
+else
+  trap 'exit 143' HUP INT TERM
+  trap nap_cleanup EXIT
 fi
 
 # The changed set seen on the previous successful poll, waiting for a second
@@ -176,5 +211,5 @@ while :; do
       delay=$confirm
     fi
   fi
-  sleep "$delay"
+  nap "$delay"
 done
