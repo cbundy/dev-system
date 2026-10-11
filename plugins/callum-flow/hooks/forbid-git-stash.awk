@@ -1,7 +1,8 @@
 # forbid-git-stash.awk - detection logic for forbid-git-stash.sh (dev-system#52).
 # Reads the raw PreToolUse JSON (one record, see BEGIN) from stdin and prints
 # exactly one of DENY / ALLOW. See forbid-git-stash.sh for the full write-up
-# of why and what this does and does not catch.
+# of why and what this does and does not catch. Quoted heredoc bodies are
+# skipped (text in them is data).
 
 BEGIN { RS = "\3" }
 { json = $0 }
@@ -105,9 +106,52 @@ function segment_is_git_stash(segment,    toks, cnt, i, j, t, cmdw, base, slash_
   return 0
 }
 
+# Remove the bodies of quoted heredocs (<<'X', <<"X", <<\X, with optional -):
+# the shell never expands them, so text in them is data. Unquoted heredoc
+# bodies stay, because $(...) inside them does run.
+function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, t, q, n, k, c, rest) {
+  nl = split(cmd, lines, "\n")
+  out = ""
+  skipping = 0
+  for (i = 1; i <= nl; i++) {
+    line = lines[i]
+    if (skipping) {
+      t = line
+      if (dash) sub(/^\t+/, "", t)
+      if (t == delim) skipping = 0
+      continue
+    }
+    out = out (i > 1 ? "\n" : "") line
+    dash = 0
+    q = ""
+    n = length(line)
+    for (k = 1; k <= n; k++) {
+      c = substr(line, k, 1)
+      if (c == "\\" && q != "'") { k++; continue }
+      if (q != "") { if (c == q) q = ""; continue }
+      if (c == "'" || c == "\"") { q = c; continue }
+      if (c != "<" || substr(line, k + 1, 1) != "<") continue
+      if (substr(line, k + 2, 1) == "<") { k += 2; continue }
+      rest = substr(line, k)
+      if (match(rest, /^<<-?[ \t]*('[^']+'|"[^"]+"|\\[A-Za-z_0-9]+)/)) {
+        t = substr(rest, 1, RLENGTH)
+        dash = (substr(t, 3, 1) == "-")
+        sub(/^<<-?[ \t]*/, "", t)
+        if (substr(t, 1, 1) == "\\") delim = substr(t, 2)
+        else delim = substr(t, 2, length(t) - 2)
+        skipping = 1
+        break
+      }
+      k++
+    }
+  }
+  return out
+}
+
 # Split the whole command into segments on ; & | newline ( ) { }, quote-aware
 # so those characters inside a quoted string never split it.
 function is_git_stash(cmd,    n, i, c, q, seg, segs, nseg, j) {
+  cmd = strip_heredocs(cmd)
   n = length(cmd)
   seg = ""
   q = ""

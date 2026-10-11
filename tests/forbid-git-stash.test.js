@@ -117,6 +117,13 @@ test("does not refuse ordinary git commands, including with global options", () 
   assertAllowed("git -c user.name=x commit -m stash");
 });
 
+test("skips quoted heredoc bodies that only mention git stash", () => {
+  assertAllowed(`cat <<'EOF'\ngit stash\nEOF`);
+  assertAllowed(`cat <<"EOF"\ngit stash pop\nEOF`);
+  assertDenied(`cat <<'EOF'\ngit stash\nEOF\ngit stash`);
+  assertDenied(`cat <<<'x'\ngit stash`);
+});
+
 test("ignores non-Bash tool calls even if their command field says git stash", () => {
   assertAllowed("git stash", { toolName: "Write" });
 });

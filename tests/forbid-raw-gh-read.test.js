@@ -209,6 +209,10 @@ test("fails open when the parser cannot make sense of the command", () => {
   assertAllowed("echo 'unterminated; gh issue view 5");
 });
 
+test("still refuses a raw read on a line before a stray unmatched backtick (#209)", () => {
+  assertDenied("gh issue view 5\necho `");
+});
+
 test("reason: names the reader forms; adds the stale-image line without the reader", () => {
   const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "no-reader-"));
   try {

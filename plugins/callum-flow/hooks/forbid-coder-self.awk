@@ -4,7 +4,8 @@
 # The JSON extractor, tokenizer and wrapper/segment logic mirror
 # forbid-tmux-kill.awk on purpose (each hook stays self-contained). Differences:
 # quoted heredoc bodies are skipped, an unexpanded $CODER_WORKSPACE_NAME
-# counts as naming self, and unparseable input is ALLOWed.
+# counts as naming self, and an unmatched opener is not by itself a reason to
+# deny (it stops only the nested-substitution scan).
 # The workspace identity comes from the environment (ENVIRON), not -v, so
 # backslashes in a name are never interpreted by awk.
 
@@ -305,7 +306,8 @@ function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, 
   return out
 }
 
-# Command substitutions. Unmatched $( or backtick: cannot parse, so allow.
+# Command substitutions. An unmatched $( or backtick stops this scan only; the
+# segment scan still runs on the text before the opener.
 function nested_is_coder_self(cmd,    n, i, j, c, q, iq, depth) {
   n = length(cmd)
   q = ""
@@ -327,15 +329,17 @@ function nested_is_coder_self(cmd,    n, i, j, c, q, iq, depth) {
         if (c == "(") depth++
         else if (c == ")" && --depth == 0) break
       }
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_coder_self(substr(cmd, i + 2, j - i - 2))) return 1
+      unparseable = 0
       i = j
       continue
     }
     if (c == "`") {
       for (j = i + 1; j <= n && substr(cmd, j, 1) != "`"; j++);
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_coder_self(substr(cmd, i + 1, j - i - 1))) return 1
+      unparseable = 0
       i = j
     }
   }
@@ -346,7 +350,7 @@ function is_coder_self(cmd,    n, i, c, q, seg, segs, nseg, j) {
   cmd = strip_heredocs(cmd)
   unparseable = 0
   if (nested_is_coder_self(cmd)) return 1
-  if (unparseable) return 0
+  if (unparseable) cmd = substr(cmd, 1, unparseable - 1)
   n = length(cmd)
   seg = ""
   q = ""

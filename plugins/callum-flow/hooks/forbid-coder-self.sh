@@ -18,7 +18,8 @@
 # is unset.
 #
 # Fails open: quoted heredoc bodies are skipped, and input the parser cannot
-# make sense of (an unmatched backtick or $() is allowed. Only a positively parsed
+# make sense of (an unmatched backtick or $() is not by itself denied, and the
+# the commands before the opener are still checked. Only a positively parsed
 # self-target is refused, so a parser gap never blocks normal work (see #209).
 #
 # POSIX sh + awk only. Deny form matches forbid-tmux-kill.sh.

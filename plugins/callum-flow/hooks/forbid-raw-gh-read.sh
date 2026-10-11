@@ -23,7 +23,8 @@
 # and text that only mentions these words.
 #
 # Fails open: quoted heredoc bodies are skipped, and input the parser cannot make sense
-# of (an unmatched quote, backtick or $() is allowed. Only a positively parsed raw read
+# of (an unmatched quote, backtick or $() is not by itself denied, and the
+# the commands before the opener are still checked. Only a positively parsed raw read
 # is refused, so a parser gap never blocks normal work (see #209).
 #
 # POSIX sh + awk only. Deny form matches forbid-git-stash.sh. Always exits 0.

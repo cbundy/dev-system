@@ -2,7 +2,9 @@
 # Reads the raw PreToolUse JSON (one record, see BEGIN) from stdin and prints
 # exactly one of DENY / ALLOW. See forbid-tmux-kill.sh for the full write-up.
 # The JSON extractor, tokenizer and segment splitter mirror forbid-git-stash.awk
-# on purpose (each hook stays self-contained).
+# on purpose (each hook stays self-contained). Differences: quoted heredoc
+# bodies are skipped, and an unmatched opener stops only the nested-substitution
+# scan (the text before the opener is still checked).
 
 BEGIN { RS = "\3" }
 { json = $0 }
@@ -298,23 +300,72 @@ function nested_is_tmux_kill(cmd,    n, i, j, c, q, iq, depth) {
         if (c == "(") depth++
         else if (c == ")" && --depth == 0) break
       }
-      if (j > n || is_tmux_kill(substr(cmd, i + 2, j - i - 2))) return 1
+      if (j > n) { unparseable = i; return 0 }
+      if (is_tmux_kill(substr(cmd, i + 2, j - i - 2))) return 1
+      unparseable = 0
       i = j
       continue
     }
     if (c == "`") {
       for (j = i + 1; j <= n && substr(cmd, j, 1) != "`"; j++);
-      if (j > n || is_tmux_kill(substr(cmd, i + 1, j - i - 1))) return 1
+      if (j > n) { unparseable = i; return 0 }
+      if (is_tmux_kill(substr(cmd, i + 1, j - i - 1))) return 1
+      unparseable = 0
       i = j
     }
   }
   return 0
 }
 
+# Remove the bodies of quoted heredocs (<<'X', <<"X", <<\X, with optional -):
+# the shell never expands them, so text in them is data. Unquoted heredoc
+# bodies stay, because $(...) inside them does run.
+function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, t, q, n, k, c, rest) {
+  nl = split(cmd, lines, "\n")
+  out = ""
+  skipping = 0
+  for (i = 1; i <= nl; i++) {
+    line = lines[i]
+    if (skipping) {
+      t = line
+      if (dash) sub(/^\t+/, "", t)
+      if (t == delim) skipping = 0
+      continue
+    }
+    out = out (i > 1 ? "\n" : "") line
+    dash = 0
+    q = ""
+    n = length(line)
+    for (k = 1; k <= n; k++) {
+      c = substr(line, k, 1)
+      if (c == "\\" && q != "'") { k++; continue }
+      if (q != "") { if (c == q) q = ""; continue }
+      if (c == "'" || c == "\"") { q = c; continue }
+      if (c != "<" || substr(line, k + 1, 1) != "<") continue
+      if (substr(line, k + 2, 1) == "<") { k += 2; continue }
+      rest = substr(line, k)
+      if (match(rest, /^<<-?[ \t]*('[^']+'|"[^"]+"|\\[A-Za-z_0-9]+)/)) {
+        t = substr(rest, 1, RLENGTH)
+        dash = (substr(t, 3, 1) == "-")
+        sub(/^<<-?[ \t]*/, "", t)
+        if (substr(t, 1, 1) == "\\") delim = substr(t, 2)
+        else delim = substr(t, 2, length(t) - 2)
+        skipping = 1
+        break
+      }
+      k++
+    }
+  }
+  return out
+}
+
 # Split the whole command into segments on ; & | newline ( ) { }, quote-aware
 # so those characters inside a quoted string never split it.
 function is_tmux_kill(cmd,    n, i, c, q, seg, segs, nseg, j) {
+  cmd = strip_heredocs(cmd)
+  unparseable = 0
   if (nested_is_tmux_kill(cmd)) return 1
+  if (unparseable) cmd = substr(cmd, 1, unparseable - 1)
   n = length(cmd)
   seg = ""
   q = ""

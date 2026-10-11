@@ -118,6 +118,10 @@ test("fails open on input it cannot parse", () => {
   assertAllowed(`echo $(coder stop ${SELF}`);
 });
 
+test("still refuses a real command on a line before a stray unmatched backtick (#209)", () => {
+  assertDenied(`coder stop ${SELF}\necho \``);
+});
+
 test("allows everything when CODER_WORKSPACE_NAME is unset", () => {
   assertAllowed(`coder restart ${SELF} -y`, { env: { CODER_WORKSPACE_NAME: "" } });
 });

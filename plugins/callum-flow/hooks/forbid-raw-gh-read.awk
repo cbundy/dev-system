@@ -3,7 +3,8 @@
 # exactly one of DENY / ALLOW. See forbid-raw-gh-read.sh for the full write-up.
 # The JSON extractor, tokenizer and wrapper/segment/heredoc/substitution logic
 # mirror forbid-coder-self.awk on purpose (each hook stays self-contained).
-# Unparseable input (unmatched quote, unclosed substitution) is ALLOWed.
+# An unmatched opener (quote, backtick, $() is not by itself a reason to deny: it
+# stops only the nested-substitution scan, the text before the opener is still checked.
 
 BEGIN { RS = "\3" }
 { json = $0 }
@@ -351,7 +352,8 @@ function strip_heredocs(cmd,    nl, lines, i, out, line, delim, dash, skipping, 
   return out
 }
 
-# Command substitutions. Unmatched $( or backtick: cannot parse, so allow.
+# Command substitutions. An unmatched $( or backtick stops this scan only; the
+# segment scan still runs on the text before the opener.
 function nested_is_raw_read(cmd,    n, i, j, c, q, iq, depth) {
   n = length(cmd)
   q = ""
@@ -373,15 +375,17 @@ function nested_is_raw_read(cmd,    n, i, j, c, q, iq, depth) {
         if (c == "(") depth++
         else if (c == ")" && --depth == 0) break
       }
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_raw_read(substr(cmd, i + 2, j - i - 2))) return 1
+      unparseable = 0
       i = j
       continue
     }
     if (c == "`") {
       for (j = i + 1; j <= n && substr(cmd, j, 1) != "`"; j++);
-      if (j > n) { unparseable = 1; return 0 }
+      if (j > n) { unparseable = i; return 0 }
       if (is_raw_read(substr(cmd, i + 1, j - i - 1))) return 1
+      unparseable = 0
       i = j
     }
   }
@@ -392,7 +396,7 @@ function is_raw_read(cmd,    n, i, c, q, seg, segs, nseg, j) {
   cmd = strip_heredocs(cmd)
   unparseable = 0
   if (nested_is_raw_read(cmd)) return 1
-  if (unparseable) return 0
+  if (unparseable) cmd = substr(cmd, 1, unparseable - 1)
   n = length(cmd)
   seg = ""
   q = ""
