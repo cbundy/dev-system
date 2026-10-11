@@ -207,8 +207,28 @@ install_wanted_plugin() {
   add_and_install "$id" "$src" "$fix"
 }
 
+# candidate_plugin_ref: the ref DEV_CANDIDATE_PLUGIN_REF asks for (a release
+# candidate), printed; fails when it is unset or not a valid ref.
+candidate_plugin_ref() {
+  [[ "${DEV_CANDIDATE_PLUGIN_REF:-}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+  printf '%s\n' "$DEV_CANDIDATE_PLUGIN_REF"
+}
+
+# dev_system_location <location>: succeeds when the marketplace location is
+# this project's repo (a github repo, or its https git URL).
+dev_system_location() {
+  case "$1" in
+    cbundy/dev-system | https://github.com/cbundy/dev-system | https://github.com/cbundy/dev-system.git) return 0 ;;
+  esac
+  return 1
+}
+
+# wanted_marketplaces: "<marketplace> <source>" per marketplace. With
+# DEV_CANDIDATE_PLUGIN_REF set and valid, a cbundy/dev-system marketplace is
+# wanted at that ref, over both the repo's declaration and the image default.
 wanted_marketplaces() {
-  local settings="$1" plugins="$2" defaults="$3" mkt src declared
+  local settings="$1" plugins="$2" defaults="$3" mkt src declared candidate=""
+  candidate=$(candidate_plugin_ref) || candidate=""
   while read -r mkt src; do
     if [ -n "$settings" ]; then
       declared=$(jq -r --arg m "$mkt" --arg fallback "$src" '
@@ -219,6 +239,9 @@ wanted_marketplaces() {
           if ($location // "") == "" then ""
           else $location + (if (.ref // "") == "" then "" else "#" + .ref end) end
         end' "$settings" 2>/dev/null) && src="$declared"
+    fi
+    if [ -n "$candidate" ] && dev_system_location "${src%%#*}"; then
+      src="${src%%#*}#$candidate"
     fi
     printf '%s %s\n' "$mkt" "$src"
   done < <({ printf '%s\n' "$plugins"; printf '%s\n' "$defaults"; } |
@@ -235,8 +258,23 @@ wanted_marketplaces() {
 # `plugin install` keep the old ref and an already installed plugin version.
 # `marketplace remove` uninstalls the marketplace's plugins (and their saved
 # options), so this only acts on a real ref change, and only on a marketplace
-# at the same location. Sets MOVED to the removed names (empty: none). Needs
+# at the same location. A move to a ref that does not exist on the remote (a
+# release pinned before its tag is cut) or cannot be checked (network, auth,
+# the step's deadline) is skipped with one WARNING, so the installed plugins
+# stay. Sets MOVED to the removed names (empty: none). Needs
 # $marketplaces.
+# ref_resolves <location> <ref>: succeeds when <ref> is a tag or branch on the
+# remote of <location> (a github owner/repo, or a git URL). Never prompts, and
+# is limited to what is left of the step's deadline. A full commit SHA cannot
+# be listed, so it counts as resolvable.
+ref_resolves() {
+  local url="$1" limit
+  [[ "$2" =~ ^[0-9a-f]{40}$ ]] && return 0
+  [[ "$url" != */* || "$url" == *:* ]] || url="https://github.com/$url.git"
+  limit=$(plugin_limit 30) || return 1
+  GIT_TERMINAL_PROMPT=0 timeout -k 5 "$limit" git ls-remote --exit-code "$url" "refs/tags/$2" "refs/heads/$2" </dev/null >/dev/null 2>&1
+}
+
 drop_moved_marketplaces() {
   MOVED=""
   local json mkt loc ref have_loc have_ref src
@@ -251,6 +289,12 @@ drop_moved_marketplaces() {
     [ "$have_loc" = "$loc" ] || continue
     have_ref=$(printf '%s\n' "$json" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .ref // empty' 2>/dev/null)
     [ "$have_ref" != "$ref" ] || continue
+    if [ -n "$ref" ] && ! ref_resolves "$loc" "$ref"; then
+      [ "$PLUGIN_DEADLINE" -gt "$SECONDS" ] || return 0
+      log "WARNING: Claude plugin marketplace $mkt is wanted at ref $ref, but that ref was not found on $loc (or could not be checked) - keeping it at ${have_ref:-no ref}."
+      log "  Fix: if a release is in progress nothing is needed, the next start or dev-init --plugins moves it once the tag exists; otherwise correct the ref in ${settings:-DEV_DEFAULT_PLUGINS or DEV_CANDIDATE_PLUGIN_REF}"
+      continue
+    fi
     if claude_plugin marketplace remove "$mkt"; then
       log "Claude plugin marketplace $mkt moved from ${have_ref:-no ref} to ${ref:-no ref}; reinstalling its plugins"
       MOVED="$MOVED $mkt"
@@ -271,7 +315,10 @@ drop_moved_marketplaces() {
 # added from the repo's source. User scope, in CLAUDE_CONFIG_DIR. The whole
 # step has a deadline (DEV_PLUGIN_INSTALL_TIMEOUT, default 120s), each CLI
 # call is limited to 60s or what is left of it, and once it has passed the
-# plugins not yet installed get one WARNING. Always returns 0.
+# plugins not yet installed get one WARNING. A marketplace is only moved to a
+# ref that exists on its remote (see drop_moved_marketplaces), and
+# DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a
+# release candidate. Always returns 0.
 install_plugins() {
   local settings="" plugins="" defaults marketplaces installed MOVED known id src fix i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=()
@@ -295,6 +342,9 @@ install_plugins() {
   defaults=$(wanted_default_plugins "$settings")
   plugins=$(not_installed "$plugins" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || plugins=""
   [ -n "$plugins$defaults" ] || return 0
+  if [ -n "${DEV_CANDIDATE_PLUGIN_REF:-}" ] && ! candidate_plugin_ref >/dev/null; then
+    log "WARNING: DEV_CANDIDATE_PLUGIN_REF \"$DEV_CANDIDATE_PLUGIN_REF\" is not a valid ref ([A-Za-z0-9._/-]+) - ignored."
+  fi
   marketplaces=$(wanted_marketplaces "$settings" "$plugins" "$defaults")
   # Unknown (the listing failed) means try them all: an install of a plugin
   # that is already there is a no-op.

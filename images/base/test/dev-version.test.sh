@@ -138,6 +138,19 @@ expect "plugin below the pin" 1 '^dev-version: STALE callum-flow@callum\(user\) 
 reset; echo v0.3.0 > "$FIX/gh.dev-system"; run_cmd
 expect "pin behind latest release notes the image line" 0 '^dev-version: OK base-image .*a newer image fixes that'
 
+# DEV_CANDIDATE_PLUGIN_REF: the plugin line is a candidate, never STALE against the pin or latest.
+reset; echo v0.3.0 > "$FIX/gh.dev-system"; printf '[{"id":"callum-flow@callum","version":"0.28.0","scope":"user"}]' > "$FIX/plugins.json"
+DEV_CANDIDATE_PLUGIN_REF=v0.28.0-rc.1 run_cmd
+expect "candidate plugin line" 0 '^dev-version: OK callum-flow@callum\(user\) running=0.28.0 candidate=v0.28.0-rc.1 latest=0.3.0'
+printf '%s\n' "$out" | grep -q 'STALE\|a newer image fixes that' && fail "candidate: STALE or pin-note present. Output:
+$out"
+DEV_CANDIDATE_PLUGIN_REF=v0.28.0-rc.1 run_cmd --json
+printf '%s\n' "$out" | jq -e . >/dev/null 2>&1 || fail "candidate --json is not valid JSON. Output:
+$out"
+reset; DEV_CANDIDATE_PLUGIN_REF='bad ref!' run_cmd
+expect "invalid candidate ref is ignored" 0 '^dev-version: OK callum-flow@callum\(user\) running=0.2.0 pin=0.2.0'
+unset DEV_CANDIDATE_PLUGIN_REF
+
 for t in claude codex; do
   reset; echo 9.9.9 > "$FIX/$t.latest"; run_cmd
   expect "$t behind upstream" 1 "^dev-version: STALE $t running="

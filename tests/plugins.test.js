@@ -52,6 +52,19 @@ case "$1 \${2:-}" in
 esac
 `;
 
+// The stub git: `ls-remote` answers from $STUB/git-<ref> (its content is the exit code; no
+// file means the ref resolves), records the call in $STUB/gitcalls, and $STUB/githang makes it
+// hang. Anything else runs the real git.
+const REAL_GIT = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+const GIT_STUB = `#!/bin/bash
+[ "$1" = ls-remote ] || exec ${REAL_GIT} "$@"
+echo "$*" >> "$STUB/gitcalls"
+[ -e "$STUB/githang" ] && exec sleep 600
+ref="\${@: -2:1}"; ref="\${ref#refs/tags/}"
+[ -e "$STUB/git-$ref" ] && exit "$(cat "$STUB/git-$ref")"
+exit 0
+`;
+
 // A temp dir with the stub on PATH and a workspace (a git repo when `settings` is given,
 // with .claude/settings.json set to it unless it is null).
 function setup(t, { repo = false, settings = null, installed = [], marketplaces = [] } = {}) {
@@ -64,6 +77,7 @@ function setup(t, { repo = false, settings = null, installed = [], marketplaces 
   fs.mkdirSync(state);
   fs.mkdirSync(ws);
   fs.writeFileSync(path.join(bin, "claude"), STUB, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "git"), GIT_STUB, { mode: 0o755 });
   for (const id of installed) fs.writeFileSync(path.join(state, `inst-${id}`), "");
   for (const m of marketplaces) fs.writeFileSync(path.join(state, `mkt-${m}`), "");
   if (repo || settings !== null) {
@@ -416,4 +430,123 @@ test("this repo's marketplace declares the callum-flow plugin under callum", () 
   );
   assert.equal(marketplace.name, "callum");
   assert.ok(marketplace.plugins.some((p) => p.name === "callum-flow"));
+});
+
+// A pin to a ref that is not on the remote (a release pinned before its tag exists) must not
+// remove the installed marketplace: removing it uninstalls the plugin and the re-add fails.
+const gitCalls = (ctx) => {
+  const f = path.join(ctx.dir, "gitcalls");
+  return fs.existsSync(f) ? fs.readFileSync(f, "utf8").trim().split("\n") : [];
+};
+const warnings = (r) => r.log.split("\n").filter((l) => /WARNING/.test(l));
+
+for (const code of ["2", "128"]) {
+  test(`a pin to a ref git cannot find (exit ${code}) keeps the marketplace and plugin, with one WARNING`, (t) => {
+    const ctx = setup(t, { settings: PIN("v9.9.9") });
+    withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+    fs.writeFileSync(path.join(ctx.dir, "git-v9.9.9"), code);
+    const r = run(ctx, "install_plugins");
+    assert.equal(r.status, 0, r.log);
+    assert.deepEqual(changes(r.calls), []);
+    assert.equal(warnings(r).length, 1, r.log);
+    assert.match(r.log, /marketplace callum is wanted at ref v9\.9\.9.*keeping it at v0\.9\.0/);
+    assert.match(r.log, /Fix: if a release is in progress/);
+    assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-callum-flow@callum")));
+    assert.match(gitCalls(ctx)[0], /ls-remote --exit-code https:\/\/github\.com\/cbundy\/dev-system\.git refs\/tags\/v9\.9\.9 refs\/heads\/v9\.9\.9/);
+  });
+}
+
+test("a git check that hangs is cut off by the step's deadline and removes nothing", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  fs.writeFileSync(path.join(ctx.dir, "githang"), "");
+  const started = Date.now();
+  const r = run(ctx, "install_plugins", { DEV_PLUGIN_INSTALL_TIMEOUT: "2" });
+  assert.equal(r.status, 0, r.log);
+  assert.ok(Date.now() - started < 20000, "returned within the deadline plus grace");
+  assert.deepEqual(changes(r.calls), []);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-callum-flow@callum")));
+});
+
+test("a move to no ref, or to a full commit SHA, never asks git", (t) => {
+  const ctx = setup(t, { settings: PIN(null) });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.equal(changes(r.calls)[0], "/ marketplace remove callum");
+  assert.deepEqual(gitCalls(ctx), []);
+  const sha = "a".repeat(40);
+  const ctx2 = setup(t, { settings: PIN(sha) });
+  withMarketplaceAt(ctx2, "cbundy/dev-system#v0.9.0");
+  const r2 = run(ctx2, "install_plugins");
+  assert.equal(changes(r2.calls)[0], "/ marketplace remove callum");
+  assert.deepEqual(gitCalls(ctx2), []);
+});
+
+test("a git URL marketplace is checked at its URL as is", (t) => {
+  const settings = { extraKnownMarketplaces: { callum: { source: { source: "git", url: "https://example.test/callum", ref: "v1" } } }, enabledPlugins: { "callum-flow@callum": true } };
+  const ctx = setup(t, { settings });
+  fs.writeFileSync(path.join(ctx.dir, "state", "mkt-callum"), "");
+  fs.writeFileSync(path.join(ctx.dir, "state", "src-callum"), "https://example.test/callum#v0");
+  fs.writeFileSync(path.join(ctx.dir, "state", "inst-callum-flow@callum"), "");
+  fs.writeFileSync(path.join(ctx.dir, "git-v1"), "2");
+  const r = run(ctx, "install_plugins");
+  assert.match(gitCalls(ctx)[0], /ls-remote --exit-code https:\/\/example\.test\/callum refs\/tags\/v1/);
+  assert.deepEqual(changes(r.calls), []);
+});
+
+// DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a candidate ref.
+const RC = "v0.28.0-rc.1";
+test("the candidate ref overrides the repo's declared ref", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.27.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.27.0");
+  const r = run(ctx, "install_plugins", { DEV_CANDIDATE_PLUGIN_REF: RC });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    `/ marketplace add cbundy/dev-system#${RC}`,
+    "/ install callum-flow@callum",
+  ]);
+  assert.doesNotMatch(r.log, /WARNING/);
+});
+
+test("the candidate ref overrides the image default when the repo declares nothing", (t) => {
+  const ctx = setup(t);
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.27.0");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.27.0`, DEV_CANDIDATE_PLUGIN_REF: RC });
+  assert.deepEqual(changes(r.calls).slice(0, 2), ["/ marketplace remove callum", `/ marketplace add cbundy/dev-system#${RC}`]);
+});
+
+test("an untagged candidate ref keeps the installed marketplace", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.27.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.27.0");
+  fs.writeFileSync(path.join(ctx.dir, `git-${RC}`), "2");
+  const r = run(ctx, "install_plugins", { DEV_CANDIDATE_PLUGIN_REF: RC });
+  assert.deepEqual(changes(r.calls), []);
+  assert.equal(warnings(r).length, 1, r.log);
+});
+
+test("the candidate ref leaves a marketplace at another location alone", (t) => {
+  const settings = { extraKnownMarketplaces: { callum: { source: { source: "git", url: "https://example.test/callum", ref: "v1" } } }, enabledPlugins: { "callum-flow@callum": true } };
+  const ctx = setup(t, { settings });
+  fs.writeFileSync(path.join(ctx.dir, "state", "mkt-callum"), "");
+  fs.writeFileSync(path.join(ctx.dir, "state", "src-callum"), "https://example.test/callum#v1");
+  fs.writeFileSync(path.join(ctx.dir, "state", "inst-callum-flow@callum"), "");
+  const r = run(ctx, "install_plugins", { DEV_CANDIDATE_PLUGIN_REF: RC });
+  assert.deepEqual(changes(r.calls), []);
+  assert.deepEqual(gitCalls(ctx), []);
+});
+
+test("the candidate ref also applies to the https git URL of this repo", (t) => {
+  const r = run(setup(t), 'wanted_marketplaces "" "" "callum-flow@callum https://github.com/cbundy/dev-system.git#v0.1.0"', { DEV_CANDIDATE_PLUGIN_REF: RC });
+  assert.equal(r.stdout.trim(), `callum https://github.com/cbundy/dev-system.git#${RC}`);
+});
+
+test("an invalid candidate ref logs one WARNING and is ignored", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.27.0") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.27.0");
+  const r = run(ctx, "install_plugins", { DEV_CANDIDATE_PLUGIN_REF: "bad ref;" });
+  assert.deepEqual(changes(r.calls), []);
+  assert.equal(warnings(r).length, 1, r.log);
+  assert.match(r.log, /DEV_CANDIDATE_PLUGIN_REF "bad ref;" is not a valid ref/);
 });
