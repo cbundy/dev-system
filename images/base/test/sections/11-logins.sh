@@ -100,6 +100,8 @@ check "the watcher logs the missing workflow scope once, gives up on it and exit
   ! docker exec '$c' pgrep -f 'dev-login watch'"
 docker exec "$c" touch /tmp/gh-approve
 check "after the refresh, gh is in and dev-doctor reports the workflow scope" in_c "$c" '
+  # the refresh in its tmux session notices the approval within a poll or two
+  for _ in $(seq 50); do [ -e /tmp/gh-workflow ] && break; sleep 0.2; done
   out=$(dev-login status; dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -qx "gh: in" && echo "$out" | grep -q "OK   gh.s token has the workflow scope"'
 docker rm -f "$c" >/dev/null
