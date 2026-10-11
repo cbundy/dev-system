@@ -143,10 +143,12 @@ a run id, a PR or issue number.
 ## 4. Write the report
 
 Write exactly these sections, in this order. Paste the matching markdown tables
-from `/tmp/eval.md` verbatim under each; add prose only to interpret them.
+from `/tmp/eval.md` verbatim under each; add prose only to interpret them. The tables are evidence; the prose names each issue by
+what it does, with its number in parentheses.
 
-1. **Bottom line**: three to five sentences. What the factory did, the one or two
-   numbers that matter most, and the top gap.
+1. **Bottom line**: three to five sentences. Lead with what should happen next and
+   who acts (the owner or the orchestrator), then what the factory did, the one or
+   two numbers that matter most, and the top gap.
 2. **Throughput and lead time**: `throughput`, with `window` counts.
 3. **First-pass green rate**: `first_pass`, naming the setback issues.
 4. **Reviewer false-positive rate and adjudicator agreement**: `review` and
@@ -164,7 +166,8 @@ from `/tmp/eval.md` verbatim under each; add prose only to interpret them.
    dispatcher-bound wait with another device idle is more than 50% of the wait;
    `gate` means invest in the gate. Quote `other_idle_pct_of_wait` and
    `issues_without_ready`, and say when the call rests on few issues.
-9. **Ranked gaps with evidence**: highest impact first. Each gap has: the
+9. **Ranked gaps with evidence**: highest impact first. Each gap is named by the work
+   it concerns, not an id. Each gap has: the
    evidence (session, run, PR and issue ids), the impact (which number it moves),
    a one-line direction (not a design), and related issues.
 
