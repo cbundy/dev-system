@@ -36,8 +36,11 @@ approves the draft.
 
 ## 3. Draft `release-notes/vX.Y.Z.md`
 Format (checked by `node scripts/release-notes.js --check X.Y.Z`, cap 40 lines):
-- `##` headings only, in this order: `Breaking`, `New`, `Changed`, `Fixed`, `Upgrade`. Leave out
-  empty groups. At least one of the first four, and `Upgrade`, are required.
+- `##` headings only, in this order: `Breaking`, `New`, `Changed`, `Fixed`, `Upgrade`, `Verify`.
+  Leave out empty groups. At least one of the first four, and `Upgrade`, are required.
+- `Verify` is required, last, plain `- ` bullets (no bold title or PR link), at most 10, not
+  counted in the 40-line cap and not shown in the final release: what to check on a release
+  candidate.
 - Each item: `- **Title** - one or two sentences ([#N](https://github.com/cbundy/dev-system/pull/N))`
   with at least one PR link.
 - No `<details>` block and no "Technical changes" heading: the workflow appends the technical
