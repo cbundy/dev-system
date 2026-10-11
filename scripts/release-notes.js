@@ -132,24 +132,44 @@ function previousTag(version, root = REPO_ROOT) {
   return below.length ? below[below.length - 1] : null;
 }
 
-// Parses first-parent squash subjects `type(scope)!: subject (#N)` into groups.
-function technicalChanges(version, { from, to } = {}, root = REPO_ROOT) {
+// The git revision range a release covers: `<prev>..<target>`, where prev defaults to the
+// highest v* tag below `version` and target to v<version> when that tag exists, else HEAD.
+function releaseRange(version, { from, to } = {}, root = REPO_ROOT) {
   const prev = from === undefined ? previousTag(version, root) : from;
   let target = to;
   if (!target) {
     const hasTag = spawnSync("git", ["rev-parse", "-q", "--verify", `refs/tags/v${version}`], { cwd: root }).status === 0;
     target = hasTag ? `v${version}` : "HEAD";
   }
-  const range = prev ? `${prev}..${target}` : target;
-  const raw = git(root, ["log", "--first-parent", "--format=%s%x1f%b%x1e", range]);
-  const groups = { Breaking: [], Enhancements: [], Fixes: [], Maintenance: [] };
+  return prev ? `${prev}..${target}` : target;
+}
+
+// First-parent commits in the release range: [{ subject, body, pr }], pr being the
+// trailing "(#N)" of a squash subject or null.
+function rangeCommits(version, opts = {}, root = REPO_ROOT) {
+  const raw = git(root, ["log", "--first-parent", "--format=%s%x1f%b%x1e", releaseRange(version, opts, root)]);
+  const commits = [];
   for (const rec of raw.split("\x1e")) {
     const [subject, body = ""] = rec.replace(/^\n/, "").split("\x1f");
     if (!subject.trim()) continue;
-    const m = /^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.*?)(?:\s+\(#(\d+)\))?$/.exec(subject.trim());
+    const pr = (/\s\(#(\d+)\)$/.exec(subject.trim()) || [])[1];
+    commits.push({ subject: subject.trim(), body, pr: pr || null });
+  }
+  return commits;
+}
+
+// The PR numbers merged in the release range, newest first.
+function mergedPrs(version, opts = {}, root = REPO_ROOT) {
+  return rangeCommits(version, opts, root).filter((c) => c.pr).map((c) => Number(c.pr));
+}
+
+// Parses first-parent squash subjects `type(scope)!: subject (#N)` into groups.
+function technicalChanges(version, opts = {}, root = REPO_ROOT) {
+  const groups = { Breaking: [], Enhancements: [], Fixes: [], Maintenance: [] };
+  for (const { subject, body, pr } of rangeCommits(version, opts, root)) {
+    const m = /^(\w+)(?:\(([^)]*)\))?(!)?:\s*(.*?)(?:\s+\(#(\d+)\))?$/.exec(subject);
     const type = m ? m[1] : null;
-    const text = m ? (m[2] ? `${m[2]}: ${m[4]}` : m[4]) : subject.trim().replace(/\s+\(#\d+\)$/, "");
-    const pr = m ? m[5] : (/\(#(\d+)\)$/.exec(subject.trim()) || [])[1];
+    const text = m ? (m[2] ? `${m[2]}: ${m[4]}` : m[4]) : subject.replace(/\s+\(#\d+\)$/, "");
     const entry = `- ${text}${pr ? ` ([#${pr}](${REPO_URL}/pull/${pr}))` : ""}`;
     const breaking = (m && m[3]) || /^BREAKING[ -]CHANGE/m.test(body);
     const group = breaking ? "Breaking" : type === "feat" ? "Enhancements" : type === "fix" ? "Fixes" : "Maintenance";
@@ -204,4 +224,4 @@ function main(argv) {
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
-module.exports = { validateNotes, checkVersion, lint, previousTag, technicalChanges, buildBody, MAX_LINES };
+module.exports = { validateNotes, checkVersion, lint, previousTag, releaseRange, rangeCommits, mergedPrs, technicalChanges, buildBody, MAX_LINES };

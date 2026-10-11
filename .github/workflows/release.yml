@@ -16,7 +16,8 @@ on:
 
 permissions:
   contents: write
-  pull-requests: read
+  issues: write
+  pull-requests: write
   checks: read
 
 jobs:
@@ -118,3 +119,9 @@ jobs:
               --title "v${RELEASE_VERSION}" \
               --notes-file "$RUNNER_TEMP/release-body.md"
           fi
+
+      - name: Roll the milestone over
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: node scripts/release-milestone.js --release "$RELEASE_VERSION"
