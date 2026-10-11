@@ -8,6 +8,11 @@
       "name": "callum-flow",
       "source": "./plugins/callum-flow",
       "description": "Issue-orchestrator and implement-issue skills for running a GitHub ready-issue queue end to end."
+    },
+    {
+      "name": "factory-hud",
+      "source": "./plugins/factory-hud",
+      "description": "Opt-in mod: a status entry with the time, context fill, plan usage, factory counts and tool versions on every surface, including mobile and desktop through Remote Control."
     }
   ]
 }

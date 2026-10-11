@@ -1,0 +1,130 @@
+// The pure half of factory-hud: what the status entry says and which toasts are due.
+// No $ here, so the tests drive it directly.
+import type { SessionContextUsage, SessionRateLimit } from 'claude-code'
+
+export type Factory = {
+  live: number
+  design: number
+  dev: number
+  pipe: number
+  merge: number
+  queued: number
+  at: number
+}
+
+export type Readout = {
+  context?: SessionContextUsage
+  limits: readonly SessionRateLimit[]
+  factory?: Factory
+  isFactoryShown: boolean
+  isFactoryLoading: boolean
+  versions: string
+}
+
+// The stages callum-flow-factory-state reports (docs/factory-state.md) that count as live.
+const LIVE = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+const WINDOWS: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
+const STALE_MS = 5 * 60_000
+
+// counts: the factory-state JSON document as the counts the entry shows, or undefined
+// when it is not one.
+export function counts(json: string, at: number): Factory | undefined {
+  let doc: { repos?: { issues?: { stage?: unknown }[] }[] }
+  try {
+    doc = JSON.parse(json)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(doc?.repos)) return undefined
+  const stages = doc.repos.flatMap(repo => repo.issues ?? []).map(issue => String(issue.stage))
+  const n = (names: string[]) => stages.filter(stage => names.includes(stage)).length
+  return {
+    live: n(LIVE),
+    design: n(['designing']),
+    dev: n(['implementing']),
+    pipe: n(['in pipeline', 'parked']),
+    merge: n(['ready to merge']),
+    queued: n(['queued']),
+    at,
+  }
+}
+
+// repoSlug: owner/name from a GitHub origin URL (https or ssh).
+export function repoSlug(url: string): string | undefined {
+  return url.trim().match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/)?.[1]
+}
+
+// clock: HH:MM in the zone, or UTC when the zone is unknown.
+export function clock(ms: number, zone: string | undefined): string {
+  try {
+    return new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: zone })
+  } catch {
+    return new Date(ms).toISOString().slice(11, 16)
+  }
+}
+
+// statusText: the one line the status entry shows.
+export function statusText(r: Readout, now: number, zone: string | undefined): string {
+  const parts = [clock(now, zone)]
+  if (r.context?.percent !== undefined) parts.push(`ctx ${Math.ceil(r.context.percent)}%`)
+  for (const limit of r.limits) {
+    const name = WINDOWS[limit.kind]
+    if (name) parts.push(`${name} ${Math.ceil(limit.percentUsed)}%`)
+  }
+  if (r.isFactoryShown && r.factory) {
+    const f = r.factory
+    const age = now - f.at
+    parts.push(
+      `| ${f.live} live: design ${f.design} dev ${f.dev} pipe ${f.pipe}` +
+        (f.merge > 0 ? ` merge ${f.merge}` : '') +
+        ` | queued ${f.queued}` +
+        (age >= STALE_MS ? ` (${Math.floor(age / 60_000)}m old)` : ''),
+    )
+  } else if (r.isFactoryShown && r.isFactoryLoading) {
+    parts.push('| factory loading')
+  }
+  if (r.versions) parts.push(`| ${r.versions}`)
+  return parts.join('  ')
+}
+
+// versionsText: Claude Code's version, then callum-flow, the base image and no-mistakes
+// from dev-version's snapshot when there is one.
+export function versionsText(claude: string, snapshot: string | undefined): string {
+  const parts = [`cc ${claude.split(' ')[0]}`]
+  if (snapshot) {
+    try {
+      const v = JSON.parse(snapshot) as {
+        plugin_version?: string | null
+        base_image?: string | null
+        components?: { name?: string; running?: string | null }[]
+      }
+      if (v.plugin_version) parts.push(`flow ${v.plugin_version}`)
+      if (v.base_image) parts.push(`img ${v.base_image}`)
+      const nm = v.components?.find(c => c.name === 'no-mistakes')?.running
+      if (nm) parts.push(`nm ${nm}`)
+    } catch {
+      // A snapshot that is not JSON adds nothing.
+    }
+  }
+  return parts.join(' ')
+}
+
+// dueAlerts: the toasts due now and not yet shown, as [key, text]: context at 85%, a usage
+// window at 90%.
+export function dueAlerts(
+  context: SessionContextUsage | undefined,
+  limits: readonly SessionRateLimit[],
+  shown: readonly string[],
+): [string, string][] {
+  const due: [string, string][] = []
+  if ((context?.percent ?? 0) >= 85) {
+    due.push(['context-85', `Context is ${Math.ceil(context?.percent ?? 0)}% full`])
+  }
+  for (const limit of limits) {
+    const name = WINDOWS[limit.kind]
+    if (name && limit.percentUsed >= 90) {
+      due.push([`${limit.kind}-90`, `${name} usage is at ${Math.ceil(limit.percentUsed)}%`])
+    }
+  }
+  return due.filter(([key]) => !shown.includes(key))
+}

@@ -43,6 +43,7 @@ instructing them. The owner and the factory share one trusted identity, so every
 ```
 .claude-plugin/marketplace.json   plugin marketplace catalog ("callum")
 plugins/callum-flow/              skills (issue-orchestrator, implement-issue, update-dev, onboard, evaluate-sessions, query-factory-data, factory-state), agents (designer, explorer, implementer, fixer, adjudicator), hooks (forbid-git-stash, forbid-tmux-kill, forbid-coder-self, forbid-raw-gh-read, stale-image, fresh-worktree)
+plugins/factory-hud/              opt-in mod: a status readout (usage, factory counts, versions) drawn on every client
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
 .devcontainer/                    this repo's dev container and dev image (base + terraform)
