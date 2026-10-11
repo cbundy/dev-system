@@ -126,7 +126,7 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
   fixer, no adjudicator.
 - **`merge-ready`**: run the merge guard, then merge.
 - **`head-mismatch`**, **`conflict`**: never merge. Run the guard, follow its FAIL
-  fix; spawn a fixer for a non-trivial conflict. A rebase keeps BOTH sides.
+  fix; spawn a fixer for a non-trivial conflict. A rebase keeps BOTH sides of colliding additions.
 - **`cancelled`**: re-drive it or drop it. Never resume an old agent.
 - **`ci-stalled`**: `reason=no-workflow` - tell the owner the default branch has
   no CI workflow and do not merge; `reason=no-checks` - `gh pr close <pr> && gh
