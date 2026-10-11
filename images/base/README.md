@@ -1395,7 +1395,7 @@ orchestrator sends each one to the adjudicator before merging. After a successfu
 adds an ERE of extra test paths.
 After the merge and the `merged` event, `callum-flow-merge` runs `callum-flow-milestone tag <pr>`
 (override: `CALLUM_FLOW_MILESTONE_BIN`); a failure only prints a warning and the merge still exits 0,
-because the release workflow's reconcile step catches anything missed.
+because the merge has already happened; a missed item can be moved by hand with `callum-flow-milestone plan`.
 For an epic-base merge, follow any manual issue-closure instruction printed on success.
 
 `callum-flow-milestone` keeps issues and PRs in the release milestones so no skill has to remember to.
