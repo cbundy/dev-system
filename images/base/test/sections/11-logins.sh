@@ -82,6 +82,8 @@ docker rm -f "$c" >/dev/null
 c=$(run_bg -e DEV_LOGIN_OPTIONAL= -e STUB="$STUB" -e STUB_CODEX="$STUB_CODEX" -e STUB_GH="$STUB_GH" \
   "$IMAGE" bash -c "touch /tmp/logged-in /tmp/codex-in /tmp/gh-in && $WITH_STUB exec dev-remote-control")
 check "a gh login without the workflow scope: dev-login status says scope, dev-doctor warns" in_c "$c" '
+  # the container creates the stubs and logins as it boots; start only after
+  for _ in $(seq 50); do [ -x /tmp/stub/gh ] && [ -e /tmp/gh-in ] && break; sleep 0.2; done
   dev-login start --json >/dev/null
   for _ in $(seq 40); do dev-login status --json | jq -e .gh.code >/dev/null && break; sleep 0.5; done
   out=$(dev-login status; dev-doctor --warn-only); echo "$out"
