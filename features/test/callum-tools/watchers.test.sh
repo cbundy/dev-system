@@ -762,7 +762,7 @@ interrupted_lines() { grep -c 'sleep interrupted' "$1" || :; }
 rm -f "$fakebin/gh-calls"
 queue_seq 305
 # shellcheck disable=SC2086 # $qw is the command and its fixed options
-start_bg "$out" "$tmpdir" $QUEUE_WATCH --repo o/r --label ready --interval 3 --stream --known 305
+start_bg "$out" "$tmpdir" $QUEUE_WATCH --repo o/r --label ready --interval 010 --stream --known 305
 w=$bg_pid
 victim=$(wait_sleep "$w")
 kill "$victim"
@@ -773,12 +773,16 @@ grep -q '^queue-watch.sh: sleep interrupted (status 143), sleeping the remaining
   fail "queue sleep kill: stderr shape: $(cat "$out.err")"
 [ ! -s "$out" ] || fail "queue sleep kill: stdout must stay empty: $(cat "$out")"
 queue_seq 305,307
+wait_lines "$fakebin/gh-calls" 2
 wait_lines "$out" 1
 expect_lines "$out" "queue-changed known=305 now=305,307"
 first_call=$(sed -n 1p "$fakebin/gh-calls")
 second_call=$(sed -n 2p "$fakebin/gh-calls")
-[ $((second_call - first_call)) -ge 3 ] ||
+[ $((second_call - first_call)) -ge 10 ] ||
   fail "queue sleep kill shortened the wait: polls at $first_call and $second_call"
+third_call=$(sed -n 3p "$fakebin/gh-calls")
+[ $((third_call - second_call)) -ge 10 ] ||
+  fail "queue confirmation shortened the wait: polls at $second_call and $third_call"
 stop_bg
 ok # queue-watch survives a killed sleep and keeps the interval
 
@@ -786,7 +790,7 @@ ok # queue-watch survives a killed sleep and keeps the interval
 mkdir -p "$nm_home/logs/RUNQ"
 run_state RUNQ feat/issue-160-q running 5555555555555555555555555555555555555555
 runs_order RUNQ
-start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 3 --branches feat/issue-160-q
+start_bg "$out" "$repo" "$PIPELINE_WATCH" --stream --interval 08 --branches feat/issue-160-q
 w=$bg_pid
 victim=$(wait_sleep "$w")
 kill "$victim"

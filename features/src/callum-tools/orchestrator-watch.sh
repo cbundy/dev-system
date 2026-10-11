@@ -75,7 +75,8 @@ NL='
 # sourced: the scripts are installed one by one).
 nap_pid=
 nap() {
-  nap_left=$1
+  nap_left=$(printf '%s' "$1" | sed 's/^0*//')
+  nap_left=${nap_left:-0}
   nap_end=$(($(date +%s) + nap_left))
   while [ "$nap_left" -gt 0 ]; do
     sleep "$nap_left" &

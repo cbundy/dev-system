@@ -308,7 +308,7 @@ queue_seq 5
 runs_order RUNA
 single="$tmpdir/s2.out"
 # shellcheck disable=SC2086
-(in_dir "$repo" timeout 30 env ORCHESTRATOR_WATCH_WINDOW=6 "$OW" $A \
+(in_dir "$repo" timeout 30 env ORCHESTRATOR_WATCH_WINDOW=08 "$OW" $A \
   --queue-known none --pipeline-known feat/z=failed:zzz) > "$single" 2>/dev/null ||
   fail "single-shot did not exit 0"
 grep -qx "parked feat/a RUNA head=aaa" "$single" || fail "single-shot pipeline line: $(cat "$single")"
@@ -517,14 +517,14 @@ ok # a killed child sleep is survived
 queue_seq 5
 out="$tmpdir/s10.out"
 t0=$(date +%s)
-start_bg "$out" "$repo" "$OW" --repo o/r --label ready --queue-interval 61 --pipeline-interval 62 --stream --queue-known 5 --deadline 7
-victim=$(find_sleep "$bg_pid" 7)
+start_bg "$out" "$repo" "$OW" --repo o/r --label ready --queue-interval 61 --pipeline-interval 62 --stream --queue-known 5 --deadline 09
+victim=$(find_sleep "$bg_pid" 9)
 kill "$victim"
 sleep 1
 kill -0 "$bg_pid" 2>/dev/null || fail "timer sleep kill: watcher died: $(cat "$out" "$out.err")"
 [ ! -s "$out" ] || fail "timer sleep kill: fired early: $(cat "$out")"
 wait_lines "$out" 2
-[ $(($(date +%s) - t0)) -ge 7 ] || fail "timer sleep kill: deadline came early"
+[ $(($(date +%s) - t0)) -ge 9 ] || fail "timer sleep kill: deadline came early"
 [ "$(sed -n 1p "$out")" = timeout ] || fail "timer sleep kill: $(cat "$out")"
 grep -q '^orchestrator-watch.sh: sleep interrupted' "$out.err" || fail "timer sleep kill: stderr: $(cat "$out.err")"
 wait "$bg_pid" || fail "timer sleep kill: did not exit 0"
