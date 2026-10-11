@@ -44,12 +44,12 @@ function ghApi(method, endpoint, body) {
   const out = r.stdout.trim();
   if (!out) return null;
   const json = JSON.parse(out);
-  return method === "GET" ? json.flat() : json;
+  return method === "GET" ? (Array.isArray(json[0]) ? json.flat() : json[0]) : json;
 }
 
 const CLOSING_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) { closingIssuesReferences(first: 50) { nodes { number title state } } }
+    pullRequest(number: $number) { closingIssuesReferences(first: 50) { nodes { number title state repository { nameWithOwner } } } }
   }
 }`;
 
@@ -93,7 +93,7 @@ function makeClient(api, out) {
       const [owner, name] = repoName.split("/");
       const res = await api("POST", "graphql", { query: CLOSING_QUERY, variables: { owner, name, number: n } });
       const pr = res && res.data && res.data.repository && res.data.repository.pullRequest;
-      return pr ? pr.closingIssuesReferences.nodes : [];
+      return pr ? pr.closingIssuesReferences.nodes.filter((i) => i.repository.nameWithOwner.toLowerCase() === repoName.toLowerCase()) : [];
     },
   };
 }

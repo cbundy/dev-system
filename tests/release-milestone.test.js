@@ -10,7 +10,7 @@ const { test } = require("node:test");
 const { spawnSync } = require("node:child_process");
 
 const SCRIPT = path.join(__dirname, "..", "scripts", "release-milestone.js");
-const { main } = require(SCRIPT);
+const { main, ghApi } = require(SCRIPT);
 
 function git(root, ...args) {
   const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd: root, encoding: "utf-8" });
@@ -70,7 +70,10 @@ function fakeGithub({ milestones = [], items = [] } = {}) {
     }
     if (method === "POST" && e === "graphql") {
       const pr = its.get(body.variables.number);
-      const nodes = ((pr && pr.closes) || []).map((n) => ({ number: n, title: its.get(n).title || `item ${n}`, state: its.get(n).state.toUpperCase() }));
+      const nodes = ((pr && pr.closes) || []).map((ref) => {
+        if (typeof ref === "object") return ref;
+        return { number: ref, title: its.get(ref).title || `item ${ref}`, state: its.get(ref).state.toUpperCase(), repository: { nameWithOwner: "o/r" } };
+      });
       return { data: { repository: { pullRequest: { closingIssuesReferences: { nodes } } } } };
     }
     throw new Error(`unfaked ${method} ${endpoint}`);
@@ -84,6 +87,87 @@ async function run(gh, root, args) {
   let stderr = "";
   const code = await main(args, { api: gh.api, root, stdout: { write: (s) => (stdout += s) }, stderr: { write: (s) => (stderr += s) } });
   return { code, stdout, stderr };
+}
+
+function throughGh(t, api) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gh-responses-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const response = path.join(dir, "response.json");
+  fs.writeFileSync(path.join(dir, "gh"), `#!/bin/sh\ncat '${response}'\n`, { mode: 0o755 });
+  return async (method, endpoint, body) => {
+    const value = await api(method, endpoint, body);
+    const pages = Array.isArray(value) ? [value.slice(0, 1), value.slice(1)] : [value];
+    fs.writeFileSync(response, JSON.stringify(method === "GET" ? pages : value));
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${dir}:${originalPath}`;
+    try {
+      return ghApi(method, endpoint, body);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  };
+}
+
+for (const mode of ["--release", "--backfill", "--plan"]) {
+  test(`${mode} preserves singleton resources and flattens collection pages through gh`, async (t) => {
+    const root = fakeRepo(t, ["feat: a (#10)", "fix: b (#11)"]);
+    const gh = fakeGithub({
+      milestones: [{ title: "Next release" }, { title: "Later" }],
+      items: [
+        { number: 10, pr: true, state: "closed", milestone: 1, closes: [30] },
+        { number: 11, pr: true, state: "closed", closes: [31] },
+        { number: 20, milestone: 1 },
+        { number: 30, state: "closed", milestone: 1 },
+        { number: 31, state: "closed" },
+      ],
+    });
+    const r = await run({ api: throughGh(t, gh.api) }, root, [mode, "1.1.0"]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(gh.titleOf(20), "Next release");
+    if (mode === "--plan") {
+      assert.deepEqual(gh.writes, []);
+      assert.match(r.stdout, /in the range but not in the milestone \(2\):\n  #11\n  #31/);
+      assert.match(r.stdout, /open items \(1\):\n  #20/);
+    } else {
+      assert.equal(gh.titleOf(10), mode === "--backfill" ? "Next release" : "v1.1.0");
+      assert.equal(gh.titleOf(30), mode === "--backfill" ? "Next release" : "v1.1.0");
+      assert.equal(gh.titleOf(11), "v1.1.0");
+      assert.equal(gh.titleOf(31), "v1.1.0");
+      assert.equal(gh.byTitle("v1.1.0")[0].state, "closed");
+      gh.writes.length = 0;
+      const rerun = await run({ api: throughGh(t, gh.api) }, root, [mode, "1.1.0"]);
+      assert.equal(rerun.code, 0, rerun.stderr);
+      assert.deepEqual(gh.writes, []);
+    }
+  });
+
+  test(`${mode} ignores foreign linked issues with colliding local numbers`, async (t) => {
+    const root = fakeRepo(t, ["feat: a (#10)"]);
+    const gh = fakeGithub({
+      milestones: [{ title: "Next release" }],
+      items: [
+        { number: 10, pr: true, state: "closed", closes: [
+          { number: 31, title: "foreign", state: "CLOSED", repository: { nameWithOwner: "other/repo" } },
+          { number: 32, title: "local", state: "CLOSED", repository: { nameWithOwner: "O/R" } },
+        ] },
+        { number: 31, title: "unrelated local issue", state: "closed" },
+        { number: 32, title: "local", state: "closed" },
+      ],
+    });
+    const calls = [];
+    const r = await run({ api: async (...args) => { calls.push(args); return gh.api(...args); } }, root, [mode, "1.1.0"]);
+    assert.equal(r.code, 0, r.stderr);
+    assert.equal(gh.titleOf(31), null);
+    assert.equal(calls.some(([, endpoint]) => endpoint === "repos/{owner}/{repo}/issues/31"), false);
+    if (mode === "--plan") {
+      assert.deepEqual(gh.writes, []);
+      assert.match(r.stdout, /in the range but not in the milestone \(2\):\n  #10\n  #32/);
+      assert.doesNotMatch(r.stdout, /#31/);
+    } else {
+      assert.equal(gh.titleOf(10), "v1.1.0");
+      assert.equal(gh.titleOf(32), "v1.1.0");
+    }
+  });
 }
 
 test("fresh rollover renames, closes, creates a new Next release and keeps closed items", async (t) => {
