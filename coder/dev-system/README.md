@@ -281,7 +281,7 @@ on GitHub, so a lossy compaction or a lost transcript costs little.
   `/run/secrets/dev-system-template-tester` for `push-next.sh`. Every other workspace
   never sees it.
 - **Logins metadata.** A row on the workspace page from `dev-login status`, e.g.
-  `claude: in, codex: out, gh: out`, refreshed every 30s.
+  `claude: in, codex: out, gh: out`, refreshed every 5 minutes from dev-login's cached state (no GitHub API calls in steady state).
 
 ## Central session history (agentsview)
 

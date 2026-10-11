@@ -17,16 +17,22 @@
 #           code, which add the scope to the token gh already has
 #
 # Usage:
-#   dev-login status [--json]   each tool's login: in, out, other (Claude is
+#   dev-login status [--json] [--cached]
+#                               each tool's login: in, out, other (Claude is
 #                               logged in, but not with claude.ai), scope (gh
 #                               is logged in without the workflow scope),
 #                               token (gh uses GH_TOKEN / GITHUB_TOKEN) or off
 #                               (not in DEV_LOGIN_TOOLS), with the link of an
-#                               attempt in progress
-#   dev-login start [--json]    start every missing login and print the links.
+#                               attempt in progress. --cached never asks
+#                               GitHub when gh's result is cached for the
+#                               current token, even if it has expired
+#   dev-login start [--json] [--optional]
+#                               start every missing login and print the links.
 #                               An attempt in progress is kept, not restarted,
 #                               so the link already handed out stays valid; one
 #                               that ended (expired or rejected) is replaced.
+#                               Tools in DEV_LOGIN_OPTIONAL are skipped unless
+#                               --optional is given
 #   dev-login [claude] <code>   finish the Claude login with the code its
 #                               sign-in page shows
 #   dev-login watch [--name N]  keep the missing logins started until all are
@@ -38,6 +44,13 @@
 #
 # Environment:
 #   DEV_LOGIN_TOOLS      tools to log in (default claude,codex,gh)
+#   DEV_LOGIN_OPTIONAL   tools that never keep a watch, the page or its exit
+#                        alive (default codex; empty makes every tool required)
+#   DEV_LOGIN_GH_TTL     seconds gh's login result is cached (default 900); the
+#                        only GitHub API traffic is one call per TTL, and none
+#                        once gh is logged out locally (cbundy/dev-system#375)
+#   DEV_LOGIN_WATCH_MAX  the longest wait between `watch` passes (default 900);
+#                        it starts at 15s and doubles while nothing changes
 #   DEV_LOGIN_PORT       the login page's port; unset means no page
 #   DEV_LOGIN_PAGE_EXIT  1 (default): the page exits once every login is done;
 #                        0 keeps it up (status for a Coder app)
@@ -46,15 +59,18 @@
 #                        that takes a POST body) when logins are needed
 set -u
 
-RUN_DIR=/tmp/dev-login
+RUN_DIR=${DEV_LOGIN_RUN_DIR:-/tmp/dev-login}
 LOCK="$RUN_DIR/lock"
 ALL_TOOLS="claude codex gh"
-WATCH_EVERY=15      # seconds between checks in `watch`
+WATCH_EVERY=${DEV_LOGIN_WATCH_EVERY:-15}   # first wait between checks in `watch`
+WATCH_MAX=${DEV_LOGIN_WATCH_MAX:-900}      # the backoff cap
+GH_TTL=${DEV_LOGIN_GH_TTL:-900}            # seconds gh's login result is cached
+GH_CACHE="$RUN_DIR/gh-state"
 NOTIFY_EVERY=3600   # seconds between reminder notifications in `watch`
 LINK_WAIT=30        # seconds `start` waits for a new attempt's link
 
 # shellcheck source=gh.sh
-. /usr/local/share/dev-system/gh.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/gh.sh"
 
 log() {
   echo "dev-login: $*" >&2
@@ -97,6 +113,66 @@ wanted() {
   wanted_tools 2>/dev/null | grep -qx "$1"
 }
 
+# The tools in DEV_LOGIN_OPTIONAL (default codex): never required, so they keep
+# neither the watch nor the page alive. Unknown names are skipped with a warning.
+optional_tools() {
+  local list=" ${DEV_LOGIN_OPTIONAL-codex} " t
+  list="${list//,/ }"
+  for t in $list; do
+    case " $ALL_TOOLS " in
+      *" $t "*) ;;
+      *) log "WARNING: DEV_LOGIN_OPTIONAL: unknown tool \"$t\" (known: $ALL_TOOLS)" ;;
+    esac
+  done
+  for t in $ALL_TOOLS; do
+    case "$list" in *" $t "*) echo "$t" ;; esac
+  done
+}
+
+optional() {
+  optional_tools 2>/dev/null | grep -qx "$1"
+}
+
+# gh's login state, with the fewest GitHub API calls possible
+# (cbundy/dev-system#375). `gh auth token` reads the local config: no token
+# means out, with no call. Otherwise the result of the one real check
+# (`gh auth status --json hosts`) is cached in GH_CACHE as "epoch fingerprint
+# state", where the fingerprint is a hash of the token (never the token), so a
+# login, refresh or logout invalidates it. Fresh (under GH_TTL), or any age
+# with DL_CACHED=1, is answered from the cache. A check that fails for a reason
+# other than a bad token (a rate limit, the network) keeps the previous state
+# (in when there was none) and is cached too, so it is not retried before the
+# TTL runs out.
+gh_cached_state() {
+  local tok fp epoch cfp cstate now st reply
+  tok=$(gh auth token --hostname github.com 2>/dev/null)
+  if [ -z "$tok" ]; then
+    rm -f "$GH_CACHE"
+    echo out
+    return
+  fi
+  fp=$(printf '%s' "$tok" | sha256sum | cut -d' ' -f1)
+  now=$(date +%s)
+  epoch=0 cfp="" cstate=""
+  [ -r "$GH_CACHE" ] && read -r epoch cfp cstate <"$GH_CACHE" 2>/dev/null
+  [[ "$epoch" =~ ^[0-9]+$ ]] || epoch=0
+  case "$cstate" in in | scope | out) ;; *) cstate="" ;; esac
+  if [ "$cfp" = "$fp" ] && [ -n "$cstate" ] \
+    && { [ "${DL_CACHED:-0}" = 1 ] || [ $((now - epoch)) -lt "$GH_TTL" ]; }; then
+    echo "$cstate"
+    return
+  fi
+  reply=$(gh auth status --json hosts --hostname github.com 2>/dev/null)
+  st=$(gh_login_state "$reply")
+  if [ "$st" = unknown ]; then
+    if [ "$cfp" = "$fp" ] && [ -n "$cstate" ]; then st="$cstate"; else st=in; fi
+  fi
+  if install -d -m 0700 "$RUN_DIR" 2>/dev/null; then
+    printf '%s %s %s\n' "$now" "$fp" "$st" >"$GH_CACHE.$$" 2>/dev/null && mv -f "$GH_CACHE.$$" "$GH_CACHE"
+  fi
+  echo "$st"
+}
+
 # in, out, other (claude), scope or token (gh) or off. A gh token whose scopes
 # cannot be read counts as in: only a token known to lack `workflow` is
 # upgraded.
@@ -118,10 +194,8 @@ tool_state() {
     gh)
       if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
         echo token
-      elif gh auth status >/dev/null 2>&1; then
-        if [ "$(gh_workflow_scope)" = no ]; then echo scope; else echo in; fi
       else
-        echo out
+        gh_cached_state
       fi
       ;;
   esac
@@ -203,7 +277,7 @@ describe() {
 # report <text|json> <state per tool...>: the tools' states, and each pending
 # attempt's link. Text lists only the tools that still need a login.
 report() {
-  local format="$1" tool state url code json='{}'
+  local format="$1" tool state url code opt json='{}'
   shift
   for tool in $ALL_TOOLS; do
     state="$1"
@@ -214,10 +288,21 @@ report() {
       url=$(attempt_url "$tool")
       code=$(attempt_code "$tool")
     fi
+    opt=false
+    optional "$tool" && opt=true
     if [ "$format" = json ]; then
-      json=$(jq -c --arg t "$tool" --arg s "$state" --arg u "$url" --arg c "$code" \
-        '.[$t] = {state: $s, url: (if $u == "" then null else $u end), code: (if $c == "" then null else $c end)}' <<<"$json")
+      json=$(jq -c --arg t "$tool" --arg s "$state" --arg u "$url" --arg c "$code" --argjson o "$opt" \
+        '.[$t] = {state: $s, url: (if $u == "" then null else $u end), code: (if $c == "" then null else $c end)}
+          + (if $o and $s != "off" then {optional: true} else {} end)' <<<"$json")
     elif pending "$state"; then
+      # An optional tool is listed only when its attempt is running (the page
+      # or --optional started it), and never by the watcher; the watcher has
+      # given up on gh's scope refresh.
+      if [ "$opt" = true ]; then
+        [ "${DL_WATCH:-0}" = 1 ] && continue
+        attempt_running "$tool" || continue
+      fi
+      [ "${DL_WATCH:-0}" = 1 ] && [ "$tool" = gh ] && [ "$state" = scope ] && continue
       describe "$tool" "$url" "$code" "$state"
     fi
   done
@@ -232,13 +317,24 @@ all_states() {
   done
 }
 
+# The state of one tool out of all_states' output.
+state_of() {
+  local tool="$1" states="$2" i=0 t
+  for t in $ALL_TOOLS; do
+    i=$((i + 1))
+    [ "$t" = "$tool" ] && sed -n "${i}p" <<<"$states"
+  done
+}
+
 cmd_status() {
-  local format=text
-  case "${1:-}" in
-    --json) format=json ;;
-    "") ;;
-    *) usage ;;
-  esac
+  local format=text arg
+  for arg in "$@"; do
+    case "$arg" in
+      --json) format=json ;;
+      --cached) DL_CACHED=1 ;;
+      *) usage ;;
+    esac
+  done
   local states tool i=0
   states=$(all_states)
   if [ "$format" = text ]; then
@@ -255,16 +351,20 @@ cmd_status() {
 # new attempts' links, and reports. Serialized, so the page and the watcher
 # never start the same login twice.
 cmd_start() {
-  local format=text tool started="" states state i _
-  case "${1:-}" in
-    --json) format=json ;;
-    "") ;;
-    *) usage ;;
-  esac
+  local format=text tool started="" states state i _ arg with_optional=0
+  for arg in "$@"; do
+    case "$arg" in
+      --json) format=json ;;
+      --optional) with_optional=1 ;;
+      *) usage ;;
+    esac
+  done
   install -d -m 0700 "$RUN_DIR"
   exec 8>"$LOCK"
   flock 8
-  states=$(all_states)
+  # The watcher passes the states it just read (DL_STATES), so a pass costs one
+  # round of checks.
+  states=${DL_STATES:-$(all_states)}
   i=0
   for tool in $ALL_TOOLS; do
     i=$((i + 1))
@@ -275,6 +375,10 @@ cmd_start() {
       tmux kill-session -t "$(session "$tool")" 2>/dev/null
       continue
     fi
+    # Optional tools are started only on request; the watcher also leaves gh's
+    # scope refresh to a person (it needs them to approve).
+    if optional "$tool" && [ "$with_optional" != 1 ]; then continue; fi
+    if [ "${DL_WATCH:-0}" = 1 ] && [ "$tool" = gh ] && [ "$state" = scope ]; then continue; fi
     attempt_running "$tool" && continue
     if start_attempt "$tool" "$state"; then
       started="$started $tool"
@@ -373,7 +477,7 @@ on_signal() {
 # seconds.
 clone_after_gh_login() {
   [ -n "${DEV_REPO_URL:-}" ] || return 0
-  case "$(tool_state gh)" in
+  case "$1" in
     out) GH_WAS_OUT=1 ;;
     in | scope)
       [ "${GH_WAS_OUT:-0}" = 1 ] || return 0
@@ -384,12 +488,19 @@ clone_after_gh_login() {
   esac
 }
 
-# Keeps the missing logins started until every one is done: an attempt that
-# ended (an expired code, a rejected paste) is replaced, each new link is
-# logged once, and DEV_NOTIFY_URL hears when logins are first needed, then
-# hourly while they still are.
+# Keeps the missing logins started until every required one is done: an
+# attempt that ended (an expired code, a rejected paste) is replaced, each new
+# link is logged once, and DEV_NOTIFY_URL hears when logins are first needed,
+# then hourly while they still are. It checks every WATCH_EVERY seconds at
+# first, then doubles the wait (up to WATCH_MAX) while nothing changes, and
+# starts over when the set of pending logins changes, so a login nobody
+# completes costs next to nothing (cbundy/dev-system#375). Optional tools
+# (DEV_LOGIN_OPTIONAL) are not waited for. gh's workflow scope needs a person
+# to approve a refresh, so the watcher tells them once (log and notification)
+# and then stops counting it.
 cmd_watch() {
   local name="" lines last="" last_notify=0 now pending title body click page tool
+  local states sig="" prev_sig="" step="$WATCH_EVERY" state gave_up=0
   case "${1:-}" in
     --name) name="${2:-}" ;;
     "") ;;
@@ -399,12 +510,27 @@ cmd_watch() {
   page=$(page_hint)
   trap on_signal TERM INT HUP
   while :; do
-    lines=$(cmd_start)
-    clone_after_gh_login
-    if [ -z "$lines" ]; then
+    states=$(all_states)
+    clone_after_gh_login "$(state_of gh "$states")"
+    if [ "$(state_of gh "$states")" = scope ] && [ "$gave_up" = 0 ]; then
+      gave_up=1
+      log "gh: logged in without the workflow scope - not refreshing it unattended; approve it on the login page${page:+ ($page)} or run: $(exec_hint 'gh auth refresh --scopes workflow')"
+      notify "GitHub CLI needs the workflow scope ($name)" "${page:+Open the login page: $page}" "$page"
+    fi
+    # The required logins still pending.
+    sig=""
+    for tool in $ALL_TOOLS; do
+      state=$(state_of "$tool" "$states")
+      pending "$state" || continue
+      optional "$tool" && continue
+      [ "$tool" = gh ] && [ "$state" = scope ] && continue
+      sig="$sig $tool=$state"
+    done
+    if [ -z "$sig" ]; then
       [ -z "$last" ] || log "all logins are done"
       return 0
     fi
+    lines=$(DL_WATCH=1 DL_STATES="$states" cmd_start)
     if [ "$lines" != "$last" ]; then
       while IFS= read -r tool; do log "$tool"; done <<<"$lines"
       [ -z "$page" ] || log "  or use the login page: $page"
@@ -424,7 +550,14 @@ cmd_watch() {
       notify "$title" "$body" "$click"
       last_notify=$now
     fi
-    sleep "$WATCH_EVERY" 9>&- &
+    if [ "$sig" = "$prev_sig" ]; then
+      step=$((step * 2))
+      [ "$step" -le "$WATCH_MAX" ] || step="$WATCH_MAX"
+    else
+      step="$WATCH_EVERY"
+    fi
+    prev_sig="$sig"
+    sleep "$step" 9>&- &
     SLEEP_PID=$!
     wait "$SLEEP_PID"
   done
@@ -435,7 +568,7 @@ cmd_serve() {
     log "ERROR: set DEV_LOGIN_PORT to the port for the login page (1-65535), not \"${DEV_LOGIN_PORT:-}\""
     return 2
   fi
-  exec node /usr/local/share/dev-system/dev-login-page.js
+  exec node "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/dev-login-page.js"
 }
 
 if [ "$(id -u)" = 0 ]; then
@@ -448,8 +581,8 @@ fi
 wanted_tools >/dev/null
 
 case "${1:-}" in
-  status) cmd_status "${2:-}" ;;
-  start) cmd_start "${2:-}" ;;
+  status) cmd_status "${@:2}" ;;
+  start) cmd_start "${@:2}" ;;
   watch) cmd_watch "${@:2}" ;;
   serve) cmd_serve ;;
   claude) [ $# -eq 2 ] || usage; cmd_code "$2" ;;

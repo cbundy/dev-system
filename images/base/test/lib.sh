@@ -197,6 +197,10 @@ case "$1 ${2:-}" in
       [ -e /tmp/gh-workflow ] && scopes="$scopes, workflow"
       printf "{\"hosts\":{\"github.com\":[{\"state\":\"success\",\"active\":true,\"scopes\":\"%s\"}]}}\n" "$scopes"
     fi ;;
+  "auth token")
+    # local, like the real one; a refresh that adds the scope changes the token
+    [ -e /tmp/gh-in ] || exit 1
+    if [ -e /tmp/gh-workflow ]; then echo gho_stub_workflow; else echo gho_stub; fi ;;
   "auth setup-git")
     touch /tmp/gh-setup-git
     git config --global credential.helper "!f() { echo username=stub; echo password=stub; }; f" ;;

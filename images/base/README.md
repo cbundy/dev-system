@@ -1079,15 +1079,20 @@ Each login runs in its own tmux session (`login-claude`, `login-codex`, `login-g
 `tmux attach -t login-codex` shows it as it is. An attempt in progress is kept, so a link
 you were given stays valid; one that ended (an expired code, a rejected paste) is
 replaced, so there is always a fresh link. The supervisor (`dev-remote-control`) runs
-`dev-login watch`, which does that every 15 seconds and logs each new link once, until
-every login is done. On the desktop, where the supervisor is off by default, run
+`dev-login watch`, which checks every 15 seconds at first, then backs off (doubling up to
+`DEV_LOGIN_WATCH_MAX`) while nothing changes, and logs each new link once, until every
+required login is done. On the desktop, where the supervisor is off by default, run
 `dev-login start` in a terminal instead.
 
 ```text
-dev-login status [--json]   each tool: in, out, other (Claude logged in, but not with
+dev-login status [--json] [--cached]
+                            each tool: in, out, other (Claude logged in, but not with
                             claude.ai), scope (gh logged in without the workflow scope),
-                            token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS)
-dev-login start [--json]    start the missing logins, print the links
+                            token (gh: GH_TOKEN) or off (not in DEV_LOGIN_TOOLS).
+                            --cached never asks GitHub when gh's result is cached
+dev-login start [--json] [--optional]
+                            start the missing logins, print the links (tools in
+                            DEV_LOGIN_OPTIONAL only with --optional)
 dev-login <code>            finish Claude's login (also: dev-login claude <code>)
 dev-login watch             what the supervisor runs: keep starting, log, notify
 dev-login serve             the login page (dev-init starts it when DEV_LOGIN_PORT is set)
@@ -1096,6 +1101,9 @@ dev-login serve             the login page (dev-init starts it when DEV_LOGIN_PO
 | Variable | Default | Effect |
 |---|---|---|
 | `DEV_LOGIN_TOOLS` | `claude,codex,gh` | The tools to log in. A workspace that never uses codex sets `claude,gh`. `dev-doctor` does not require a login for a tool left out. gh is skipped when `GH_TOKEN` or `GITHUB_TOKEN` is set. Empty: `dev-login watch` is not started. |
+| `DEV_LOGIN_OPTIONAL` | `codex` | Tools that are never required: `watch` neither starts nor waits for them, `start` skips them without `--optional` (the login page passes it, so opening the page still gives a codex link), `status --json` marks them `"optional": true`, and the page and its exit treat them as done. Empty: every wanted tool is required. |
+| `DEV_LOGIN_GH_TTL` | `900` | Seconds gh's login result is cached in `/tmp/dev-login/gh-state`. |
+| `DEV_LOGIN_WATCH_MAX` | `900` | The longest wait between `watch` passes. |
 | `DEV_LOGIN_PORT` | unset: no page | The port the login page listens on, on all interfaces (`0.0.0.0`). Publish it only where [Security](#security) allows. |
 | `DEV_LOGIN_PAGE_EXIT` | `1` | `1`: the page exits once every login is done (Docker, LAN). `0` keeps it up, showing each tool's state (behind Coder, so the app button always works). |
 | `DEV_LOGIN_PAGE_URL` | unset | The page's address as you reach it (the Coder app URL, say), for the log and the notification. There is no reliable way to work it out from inside. |
@@ -1108,6 +1116,21 @@ returns 200 while it is up, for a health check. Its log is `/tmp/dev-login-page.
 Every link, form and redirect on it is relative, so it works at `/` and under any path
 prefix a proxy strips (a Coder path-based app, the nginx route below), as long as the
 address ends in `/`.
+
+**GitHub API budget.** The GitHub REST limit (5000 an hour) is shared by everything
+logged in as the same user, so checking logins must not spend it
+(cbundy/dev-system#375). `dev-login` reads whether gh has a token from its local config
+(`gh auth token`: no API call; no token means `out`). The one real check, `gh auth status
+--json hosts`, runs when nothing is cached for the current token or the cache is older than
+`DEV_LOGIN_GH_TTL`; its result (state, plus a hash of the token, never the token) is cached,
+and a login, refresh or logout changes the hash, so it is picked up at once. A check that
+fails for any reason but a 401 (a rate limit, the network) keeps the previous state. The login page's
+poll, its exit check and the Coder "Logins" row use `status --json --cached`, which never
+calls the API while a cache entry for the token exists. `dev-login watch` backs off, and gives
+up on gh's workflow scope after one log line and one notification. Expected calls per
+workspace per hour from `dev-login` (status, watch, page, metadata row): 0 once gh is
+logged in and cached; at most `3600 / DEV_LOGIN_GH_TTL` (4 at the default) while a required
+login is pending. `dev-doctor` still checks live, on demand.
 
 **The notification** (`DEV_NOTIFY_URL`) is a plain POST, sent when logins are first
 needed and then hourly while they still are. Its `Title` header is
