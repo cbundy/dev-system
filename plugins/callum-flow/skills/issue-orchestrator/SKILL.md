@@ -88,8 +88,8 @@ is in flight, re-arm only the queue watcher and stop the audit; the next
    then do the Run it; whoever ran it records the result and closes the issue.
    `keep-open` - the owner closes it.
 
-Whenever you abandon claimed work, log `callum-flow-event abandoned --issue
-<N>`; include `--run <id>` and `--branch <b>` when known.
+When you replace a branch or run for the same issue (a `-v2` branch, a restart), log `callum-flow-event superseded --issue <N> --run <old run> --note "by <new branch>"`, not `abandoned`.
+When you stop work on the issue (paused, split, dropped), log `callum-flow-event abandoned --issue <N>`, with `--run <id>` and `--branch <b>` when known.
 
 ## Upgrading the workspace you run in
 To pick up a new image or template on your own workspace, run `dev-restart-self`

@@ -413,6 +413,17 @@ test("two devices: a claim ended by `closed` is released, so it is not stuck", (
   assert.deepEqual(c.stuck, { count: 0, lease_minutes: 120, issues: [] });
 });
 
+test("two devices: `superseded` does not release a claim", () => {
+  // #6 is stuck in the fixture; a run-scoped `superseded` for it must leave the claim held, unlike `closed`.
+  const events = path.join(tmp, "two-device-superseded.jsonl");
+  const sup = { v: 1, ts: "2026-10-09T04:00:00Z", repo: "acme/widgets", device: "A", session_id: null, actor: "agent", state: "superseded", issue: 6, run_id: "r6a", branch: null, pr: null, head: null, note: "by feat/issue-6-x-v2" };
+  fs.writeFileSync(events, fs.readFileSync(path.join(TWO, "events.jsonl"), "utf8") + JSON.stringify(sup) + "\n");
+  const args = TWO_WINDOW.map((a) => (a === path.join(TWO, "events.jsonl") ? events : a));
+  const c = json(args).claims;
+  assert.equal(c.stuck.count, 1);
+  assert.equal(c.stuck.issues[0].issue, 6);
+});
+
 test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () => {
   // a 10 minute lease makes everything silent for over 20 minutes stuck: #3 (59m) and #4 (35m) join #6
   const c = json(TWO_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "10" }).claims;

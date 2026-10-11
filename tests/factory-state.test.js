@@ -56,6 +56,23 @@ test("replayed events: a failed after merged or closed neither reopens nor hints
   assert.deepEqual(r.repos[0].issues.map((i) => i.issue), [32], "merged stays visible until GitHub or the sweep closes it");
 });
 
+test("superseded run: an abandon is final only until a new life starts; superseded is never a stage", () => {
+  const r = derive(input("superseded-run"));
+  const st = (n) => issue(r, A, n);
+  assert.equal(st(80).stage, "merged");
+  assert.equal(st(80).run, "r80b");
+  assert.equal(st(80).pr, 180);
+  assert.equal(st(81).stage, "closed without merge", "replays on the abandoned run do not reopen it");
+  assert.equal(st(82).stage, "queued");
+  assert.equal(st(83).stage, "closed without merge", "a run created before the abandon is not a new life");
+  assert.equal(st(84).stage, "in pipeline");
+  assert.equal(st(85).hint.startsWith("event-only: run_started"), true);
+  assert.equal(st(86).stage, "parked");
+  assert.equal(st(86).run, "r86b");
+  assert.equal(st(87).stage, "implementing", "a superseded run is excluded from latest-run selection");
+  for (const i of r.repos[0].issues.concat(r.repos[0].recent)) assert.doesNotMatch(`${i.stage} ${i.detail}`, /superseded(?! by)/);
+});
+
 test("pipeline only: a repo with runs and no events is labelled, and the running run is shown", () => {
   const r = derive(input("pipeline-only"));
   const repo = r.repos[0];

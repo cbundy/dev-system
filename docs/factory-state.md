@@ -29,11 +29,23 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 | `parked` | the latest run is running and waiting on an agent or the owner (`awaiting_agent_since` set) |
 | `ready to merge` | the latest run completed and its PR is open |
 | `merged` | a `merged` event, or the run's `pr_state` is `merged`. Not final: it stays visible until GitHub closes the issue |
-| `closed without merge` | `closed` or `abandoned` with no merge |
+| `closed without merge` | `closed` or `abandoned` (with no new life after it) and no merge |
 
 Only `closed` and `abandoned` end an issue's life in the view. A `merged` issue that is later `closed`
 leaves the live list and shows under "recently ended" (24 hours from `--at`) as `merged`. A new
 `claimed` after a `closed` or `merged` event starts a new life.
+
+An `abandoned` event is final only until a new life starts. Strictly after it, a new life is: a
+`ready`, `reclaimed`, `claimed`, `briefed`, `design_routed` or `delegated` event; a `merged` event; a
+mirror run created after it; or, for a run not in the mirror, a `run_started`, `parked`, `verdict`,
+`fix_requested` or `merge_ready` event on a run id that is not the abandoned one and appears in no
+earlier event. Replay-prone events (`failed`, `head_mismatch`, `conflict`, `ci_stalled`), anything on the
+abandoned run, `superseded`, `usage` and `untrusted_stripped` never start one. `closed` stays final
+unless a later `claimed` follows.
+
+`superseded` (run-scoped, `--run` required) says a run was replaced for the same issue. It is never a
+stage and never final; the named run is dropped when the issue's latest run is chosen, so its stale
+`running` row cannot set the stage.
 
 ## Source precedence
 
@@ -119,6 +131,12 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
 - `closed-outside`: #10 had a running run, #11 was claimed, #12 was `ready` then `claimed`; the sweep
   logged `closed` for each, and #14 was `abandoned` although a run's PR had merged. None is live; all show `closed without merge` under recently ended. #13 was
   closed 8 days ago and is not shown.
+- `superseded-run`: #80 is the real #229 shape: `abandoned` on the old run with the note `superseded by
+  -v2`, a new run, replayed `failed` events on the old run, then `merged` - live `merged` on the new
+  run. #81 only has replays after its `abandoned` and stays `closed without merge`; #82 (`ready`), #84
+  (a newer mirror run) and #85 (an unseen run's `run_started`) start a new life; #83's run predates its
+  abandon so it stays ended. #86 and #87 have a `superseded` old run still `running` in the mirror: #86
+  is `parked` on the new run, #87 is `implementing` with no run.
 - `missing-run-started`: #20, #21 and #22 were claimed and delegated and have no `run_started`. The
   mirror places them: a running run gives `in pipeline`, a completed run with an open PR gives
   `ready to merge`, a completed run whose PR is merged gives `merged`.
