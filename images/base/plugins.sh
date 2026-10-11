@@ -249,6 +249,18 @@ wanted_marketplaces() {
       END { for (i = 1; i <= n; i++) print names[i], source[names[i]] }')
 }
 
+# ref_resolves <location> <ref>: succeeds when <ref> is a tag or branch on the
+# remote of <location> (a github owner/repo, or a git URL). Never prompts, and
+# is limited to what is left of the step's deadline. A full commit SHA cannot
+# be listed, so it counts as resolvable.
+ref_resolves() {
+  local url="$1" limit
+  [[ "$2" =~ ^[0-9a-f]{40}$ ]] && return 0
+  [[ "$url" != */* || "$url" == *:* ]] || url="https://github.com/$url.git"
+  limit=$(plugin_limit 30) || return 1
+  GIT_TERMINAL_PROMPT=0 timeout -k 5 "$limit" git ls-remote --exit-code "$url" "refs/tags/$2" "refs/heads/$2" </dev/null >/dev/null 2>&1
+}
+
 # drop_moved_marketplaces: removes each known marketplace
 # whose ref is no longer the one wanted (the repo's settings, else the image's
 # DEV_DEFAULT_PLUGINS source), so the normal path re-adds it at the new ref and
@@ -263,18 +275,6 @@ wanted_marketplaces() {
 # the step's deadline) is skipped with one WARNING, so the installed plugins
 # stay. Sets MOVED to the removed names (empty: none). Needs
 # $marketplaces.
-# ref_resolves <location> <ref>: succeeds when <ref> is a tag or branch on the
-# remote of <location> (a github owner/repo, or a git URL). Never prompts, and
-# is limited to what is left of the step's deadline. A full commit SHA cannot
-# be listed, so it counts as resolvable.
-ref_resolves() {
-  local url="$1" limit
-  [[ "$2" =~ ^[0-9a-f]{40}$ ]] && return 0
-  [[ "$url" != */* || "$url" == *:* ]] || url="https://github.com/$url.git"
-  limit=$(plugin_limit 30) || return 1
-  GIT_TERMINAL_PROMPT=0 timeout -k 5 "$limit" git ls-remote --exit-code "$url" "refs/tags/$2" "refs/heads/$2" </dev/null >/dev/null 2>&1
-}
-
 drop_moved_marketplaces() {
   MOVED=""
   local json mkt loc ref have_loc have_ref src
