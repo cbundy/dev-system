@@ -105,6 +105,7 @@
     "denied": true,
     "hooks": [
       "tmux-kill",
+      "broad-kill",
       "coder-self",
       "raw-gh-read"
     ]
@@ -129,6 +130,7 @@
     "command": "echo \"`\"\n@COMMAND@",
     "denied": false,
     "hooks": [
+      "broad-kill",
       "coder-self",
       "raw-gh-read"
     ]
@@ -138,6 +140,7 @@
     "command": "echo \"$(\"\n@COMMAND@",
     "denied": false,
     "hooks": [
+      "broad-kill",
       "coder-self",
       "raw-gh-read"
     ]

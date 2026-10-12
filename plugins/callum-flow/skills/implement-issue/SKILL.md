@@ -86,6 +86,10 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   agent running the command and every other session on the host. Anything
   that needs tmux for a test uses a private socket (`tmux -L <unique-name>
   ...`); a plugin-shipped hook refuses the default-socket commands.
+- Never kill processes by name or pattern on the shared host: no `pkill`, `killall`,
+  or `kill $(pgrep ...)`. Other agents and the orchestrator's watchers share it. Kill
+  only PIDs you started and recorded (`cmd & pid=$!; ...; kill "$pid"`); a
+  plugin-shipped hook refuses broad kills.
 
 - To release a worktree, confirm its PR is merged and the tree is clean, then
   run `treehouse return <absolute path>` from OUTSIDE the worktree (the main
