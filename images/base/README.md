@@ -1494,10 +1494,11 @@ that would be lost is first archived as `archive/<branch>-<mirror|run|remote>-<s
 (in the run head, gate ref or origin branch, not in `origin/<base>`, no patch-id equivalent in HEAD) is
 listed on stderr, and a dropped `no-mistakes(...)` commit blocks until `--accept-dropped` names its sha.
 Nothing is deleted, pushed or recovered before that check passes. `--new-branch` (after the live run is
-stopped), or a sync recovery, gate-ref deletion or recovery that moves HEAD, moves the rebased head to
-`<branch>-v<N>` (first name free locally, on origin and on the gate), logs `superseded` and prints
-`REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a `next:` line. Success prints
-`REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch re-gate also logs `superseded`.
+stopped), a sync recovery or gate-ref deletion that cannot finish, a recovery that moves HEAD, or a code
+with no safe action moves the rebased head to `<branch>-v<N>` (first name free locally, on origin and on
+the gate), logs `superseded` and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
+`next:` line. Success prints `REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch
+re-gate also logs `superseded`.
 Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. Preflight and
 dropped-commit refusals change nothing, but a later one (a run that did not stop, a refused lease push)
 may leave the run aborted or recovered and the gate ref deleted, with the archives kept. The behind-only
