@@ -67,6 +67,7 @@ createdb -h "$d" t && psql -h "$d" -d t -c 'select 1'; $pg/pg_ctl -D "$d/data" -
 Coder template changes are tried with `coder/dev-system/push-next.sh`, which pushes only
 `dev-system-next`. Enable `template_testing` after the owner's token setup (see
 [Testing template changes from a workspace](../coder/dev-system/README.md#testing-template-changes-from-a-workspace)).
+Pushed versions are named `<git describe>-<UTC timestamp>`, so the Coder UI maps each back to a commit.
 Promoting a change to the production templates is the owner's step.
 
 ## Known friction

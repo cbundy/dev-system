@@ -69,9 +69,12 @@ set -- templates push "$name" --directory "$TEMPLATE_DIR" --yes \
   --variable "$(csv "remote_control_prompt=$prompt")" \
   --variable "$(csv "remote_control_resume_prompt=$resume_prompt")" \
   --variable "$(csv "remote_control_name_format=$name_format")"
-sha=$(git -C "$TEMPLATE_DIR" rev-parse --short HEAD 2>/dev/null || true)
-[ -z "$sha" ] || set -- "$@" --message "push.sh from $sha"
-echo "push: pushing $TEMPLATE_DIR as $name" >&2
+version_name_sh="$(dirname "$0")/version-name.sh"
+version=$("$version_name_sh" "$TEMPLATE_DIR")
+message=$("$version_name_sh" --message push.sh "$TEMPLATE_DIR")
+set -- "$@" --name "$version"
+[ -z "$message" ] || set -- "$@" --message "$message"
+echo "push: pushing $TEMPLATE_DIR as $name (version $version)" >&2
 "$CODER" "$@"
 # Only the flags given change; every other template setting is kept.
 "$CODER" templates edit "$name" --display-name "$display_name" --icon "$icon" \
