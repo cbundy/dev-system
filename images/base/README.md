@@ -398,7 +398,8 @@ they land in `/persist/claude` and stay across rebuilds:
   re-adds a marketplace whose ref moved, so a pin change takes effect on the next start. The
   removal uninstalls the marketplace's plugins, so every user-scope plugin installed from it
   beforehand, hand-installed ones such as `factory-hud@callum` included, is installed again
-  at the new ref (a failed reinstall is one `WARNING`); project-scope installs are not
+  at the new ref (a failed reinstall is one `WARNING`, whose fix names the
+  `claude plugin install` that restores it); project-scope installs are not
   restored, the user-scope install and the repo's `enabledPlugins` cover them. A pin move
   waits until the wanted ref
   exists on the marketplace's remote (checked with `git ls-remote`, inside the plugin step's
@@ -406,7 +407,7 @@ they land in `/persist/claude` and stay across rebuilds:
   checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
   one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists.
   `dev-init` also prunes project-scope installs whose project directory no longer exists
-  (a deleted worktree): it recreates the path as an empty directory, runs
+  (a deleted worktree), even when no plugin is wanted: it recreates the path as an empty directory, runs
   `claude plugin uninstall --scope project` there, and removes only what it created,
   never touching an existing path, logging one line with the count. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the

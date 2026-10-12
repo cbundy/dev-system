@@ -362,15 +362,15 @@ test("a repo that turns the default plugin off opts out of it", (t) => {
   const ctx = setup(t, { settings: { enabledPlugins: { "callum-flow@callum": false } } });
   const r = run(ctx, "install_plugins");
   assert.equal(r.status, 0);
-  assert.deepEqual(r.calls, []);
+  assert.deepEqual(r.calls, ["/ list --json"]);
   assert.equal(r.log, "");
 });
 
-test("DEV_DEFAULT_PLUGINS empty: no repo plugins means no claude call at all", (t) => {
+test("DEV_DEFAULT_PLUGINS empty: no repo plugins means no claude call but the installs listing", (t) => {
   const ctx = setup(t);
   const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: "" });
   assert.equal(r.status, 0);
-  assert.deepEqual(r.calls, []);
+  assert.deepEqual(r.calls, ["/ list --json"]);
   assert.equal(r.log, "");
 });
 
@@ -639,7 +639,19 @@ test("a hand-installed plugin that fails to reinstall is one WARNING and does no
   assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-callum-flow@callum")));
   assert.equal((r.log.match(/WARNING/g) || []).length, 1, r.log);
   assert.match(r.log, /could not install Claude plugin factory-hud@callum: Failed to install plugin: boom/);
-  assert.match(r.log, /Fix: .*dev-init --plugins/);
+  assert.match(r.log, /Fix: .* then run: dev-init --plugins; claude plugin install factory-hud@callum$/m);
+});
+
+test("out of time before a hand-installed plugin is reinstalled: the Fix names its install", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  // The stub hangs on installing callum-flow, which uses up the step's deadline.
+  const stub = path.join(ctx.dir, "bin", "claude");
+  fs.writeFileSync(stub, fs.readFileSync(stub, "utf8").replace("  install\\ *)", "  install\\ callum-flow*) exec sleep 600 ;;\n  install\\ *)"));
+  const r = run(ctx, "install_plugins", { DEV_PLUGIN_INSTALL_TIMEOUT: "3" });
+  assert.equal(r.status, 0, r.log);
+  assert.match(r.log, /ran out of its 3s \(DEV_PLUGIN_INSTALL_TIMEOUT\) - not installed: factory-hud@callum$/m);
+  assert.match(r.log, /Fix: .* then run: dev-init --plugins; claude plugin install factory-hud@callum$/m);
 });
 
 test("a marketplace that is not moved keeps its plugins untouched", (t) => {
@@ -666,6 +678,29 @@ test("orphaned project installs are pruned from inside their recreated path, whi
   assert.match(r.log, /pruned 1 Claude plugin install\(s\)/);
   const left = fs.readdirSync(path.join(ctx.dir, "state")).filter((f) => f.startsWith("proj-"));
   assert.equal(left.length, 2);
+});
+
+test("orphaned project installs are pruned even when no plugin is wanted", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost3-${process.pid}`);
+  t.after(() => fs.rmSync(ghost, { recursive: true, force: true }));
+  const ctx = setup(t, { projects: [["callum-flow@callum", ghost]] });
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: "" });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [`${ghost} uninstall callum-flow@callum --scope project`]);
+  assert.match(r.log, /pruned 1 Claude plugin install\(s\)/);
+});
+
+test("a plugin only installed for a pruned project path is installed in the same run", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost4-${process.pid}`);
+  t.after(() => fs.rmSync(ghost, { recursive: true, force: true }));
+  const ctx = setup(t, { projects: [["callum-flow@callum", ghost]] });
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    `${ghost} uninstall callum-flow@callum --scope project`,
+    "/ marketplace add cbundy/dev-system",
+    "/ install callum-flow@callum",
+  ]);
 });
 
 test("nothing to prune: no log line", (t) => {
