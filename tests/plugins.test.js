@@ -23,7 +23,7 @@ const DEFAULT = "callum-flow@callum=cbundy/dev-system";
 // project-scope one. `uninstall` succeeds only when run from a project install's path. `marketplace add <source>` names the
 // marketplace "callum" for cbundy/dev-system, else after the source's last path part (no
 // #ref), and fails for a source containing "fail"; `install` fails for an unknown
-// marketplace. $STUB/hang makes every call hang.
+// marketplace. $STUB/hang makes every call hang, $STUB/listfail makes `list --json` fail.
 const STUB = `#!/bin/bash
 [ "$1" = plugin ] || exit 0
 shift
@@ -34,6 +34,7 @@ mkdir -p "$s"
 ids() { for f in "$s/$1"-*; do [ -e "$f" ] && echo "\${f#"$s/$1"-}"; done; }
 case "$1 \${2:-}" in
   "list --json")
+    [ -e "$STUB/listfail" ] && exit 1
     { ids inst | while read -r i; do
         jq -n --arg i "$i" --argjson e "$([ -e "$s/dis-$i" ] && echo false || echo true)" '{id: $i, scope: "user", version: "1.0.0", enabled: $e}'
       done
@@ -706,6 +707,19 @@ test("a disable that fails after a move is one WARNING and does not stop the res
   assert.equal((r.log.match(/WARNING/g) || []).length, 1, r.log);
   assert.match(r.log, /WARNING: Claude plugin factory-hud@callum was disabled before .* so it is now enabled: Failed to disable plugin: boom/);
   assert.match(r.log, /^dev-init: {3}Fix: run: claude plugin disable factory-hud@callum$/m);
+});
+
+test("a failed installs listing puts off a move, so no plugin is lost", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  fs.writeFileSync(path.join(ctx.dir, "listfail"), "");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.ok(!changes(r.calls).some((c) => / marketplace remove /.test(c)), r.calls.join("\n"));
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-factory-hud@callum")));
+  assert.equal((r.log.match(/WARNING/g) || []).length, 1, r.log);
+  assert.match(r.log, /WARNING: Claude plugin marketplace callum is wanted at v0\.10\.0, but Claude's installed plugins could not be listed - keeping it at v0\.9\.0/);
+  assert.match(r.log, /^dev-init: {3}Fix: run: dev-init --plugins$/m);
 });
 
 test("a marketplace that is not moved keeps its plugins untouched", (t) => {

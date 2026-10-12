@@ -406,6 +406,8 @@ they land in `/persist/claude` and stay across rebuilds:
   deadline, never prompting). A pin to a tag that is not cut yet, or one that cannot be
   checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
   one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists.
+  A move is put off the same way while Claude's installed plugins cannot be listed, since the
+  plugins to install again would be unknown.
   `dev-init` also prunes project-scope installs whose project directory no longer exists
   (a deleted worktree), even when no plugin is wanted: after the installs, on what is left of
   the step's deadline, it recreates the path as an empty directory, runs

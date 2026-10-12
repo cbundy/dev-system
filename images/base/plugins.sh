@@ -315,7 +315,8 @@ ref_resolves() {
 # at the same location. A move to a ref that does not exist on the remote (a
 # release pinned before its tag is cut) or cannot be checked (network, auth,
 # the step's deadline) is skipped with one WARNING, so the installed plugins
-# stay. Sets MOVED to the removed names (empty: none) and RESTORE to the ids
+# stay; so is a move while the installs listing is unknown (it failed), since
+# the plugins to install again would be unknown too. Sets MOVED to the removed names (empty: none) and RESTORE to the ids
 # (<plugin>@<marketplace>) of the user-scope plugins that were installed from
 # them, wanted or installed by hand, which install_plugins installs again
 # after the move, and RESTORE_DISABLED to those of them that were disabled
@@ -342,8 +343,13 @@ drop_moved_marketplaces() {
       log "  Fix: if a release is in progress nothing is needed, the next start or dev-init --plugins moves it once the tag exists; otherwise correct the ref in ${settings:-DEV_DEFAULT_PLUGINS or DEV_CANDIDATE_PLUGIN_REF}"
       continue
     fi
-    hand=$(printf '%s\n' "${INSTALLED_JSON:-[]}" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || hand=""
-    disabled=$(printf '%s\n' "${INSTALLED_JSON:-[]}" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and .enabled == false and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || disabled=""
+    if ! printf '%s\n' "$INSTALLED_JSON" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      log "WARNING: Claude plugin marketplace $mkt is wanted at ${ref:-no ref}, but Claude's installed plugins could not be listed - keeping it at ${have_ref:-no ref}, so the plugins installed from it stay."
+      log "  Fix: run: dev-init --plugins"
+      continue
+    fi
+    hand=$(printf '%s\n' "$INSTALLED_JSON" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || hand=""
+    disabled=$(printf '%s\n' "$INSTALLED_JSON" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and .enabled == false and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || disabled=""
     if claude_plugin marketplace remove "$mkt"; then
       RESTORE="${RESTORE:+$RESTORE$'\n'}$hand"
       RESTORE_DISABLED="${RESTORE_DISABLED:+$RESTORE_DISABLED$'\n'}$disabled"
