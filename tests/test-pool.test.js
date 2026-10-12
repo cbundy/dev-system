@@ -50,7 +50,7 @@ test("mixed: only failing blocks, in job order, contiguous, exit 1", () => {
   const jobs = [
     "sleep 1; echo A1; sleep 0.2; echo A2; exit 1",
     "echo passing-output",
-    "echo B1; sleep 0.3; echo B2; exit 2",
+    'echo B1; sleep 0.3; echo B2; echo 2 > "$TEST_JOB_FAILED"; exit 1',
     "exit 1",
   ];
   const x = run(jobs, { env: { TEST_JOBS: "4" } });
@@ -64,8 +64,18 @@ test("mixed: only failing blocks, in job order, contiguous, exit 1", () => {
   }
 });
 
-test("a crash status (126 or more) counts 1", () => {
-  const x = run(["exit 130"], { env: { TEST_JOBS: "1" } });
+test("a failing job's own count is used in full, with no cap", () => {
+  const x = run(['echo 250 > "$TEST_JOB_FAILED"; exit 1'], { env: { TEST_JOBS: "1" } });
+  try {
+    assert.strictEqual(x.r.status, 1);
+    assert.strictEqual(x.failed, "250");
+  } finally {
+    x.cleanup();
+  }
+});
+
+test("a crash status, or a count written by a passing job, counts as the status says", () => {
+  const x = run(["exit 130", 'echo 5 > "$TEST_JOB_FAILED"; exit 0'], { env: { TEST_JOBS: "1" } });
   try {
     assert.strictEqual(x.r.status, 1);
     assert.strictEqual(x.failed, "1");
@@ -186,5 +196,88 @@ test("SIGTERM stops running jobs and leaves no stray processes", async () => {
     for (const pid of pids) assert.ok(!isAlive(pid), `job ${pid} still running`);
   } finally {
     f.cleanup();
+  }
+});
+
+// scripts/test.sh itself, run from a throwaway copy of the repo layout with fixture tests, so
+// the real entrypoint drives the real pool and jobs without running this repo's suite.
+function fakeRepo({ nodeTests = {}, suites = {} }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
+  const scripts = path.join(root, "scripts");
+  fs.mkdirSync(scripts);
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js"]) {
+    fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
+  }
+  fs.mkdirSync(path.join(root, "tests"));
+  for (const [name, body] of Object.entries(nodeTests)) fs.writeFileSync(path.join(root, "tests", name), body);
+  const suiteDir = path.join(root, "features", "test", "callum-tools");
+  fs.mkdirSync(suiteDir, { recursive: true });
+  for (const [name, body] of Object.entries(suites)) fs.writeFileSync(path.join(suiteDir, name), body);
+  const tmp = path.join(root, "tmp");
+  fs.mkdirSync(tmp);
+  // Without node:test's own marker, so the nested `node --test` runs as a top-level run.
+  const env = { ...process.env, TEST_JOBS: "2", TMPDIR: tmp };
+  delete env.NODE_TEST_CONTEXT;
+  return { root, tmp, env, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+}
+
+test("test.sh reports the full node failure count, past 100", () => {
+  const failing = Array.from({ length: 101 }, (_, i) => `test("t${i}", () => assert.fail("no"));`);
+  const repo = fakeRepo({
+    nodeTests: { "many.test.js": `const test = require("node:test"); const assert = require("node:assert");\n${failing.join("\n")}\n` },
+  });
+  try {
+    const r = spawnSync("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      encoding: "utf8",
+      env: repo.env,
+    });
+    assert.strictEqual(r.status, 1);
+    assert.strictEqual(r.stderr.trim().split("\n").pop(), "test: 101 failed");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("Ctrl-C on test.sh stops the backgrounded pool and leaves no stray processes or temp files", async () => {
+  const repo = fakeRepo({
+    nodeTests: { "ok.test.js": 'require("node:test")("ok", () => {});\n' },
+  });
+  const pidfile = path.join(repo.root, "pids");
+  const suite = `echo $$ >> ${pidfile}; sleep 30\n`;
+  fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "a.test.sh"), suite);
+  fs.writeFileSync(path.join(repo.root, "features", "test", "callum-tools", "b.test.sh"), suite);
+  try {
+    // Its own process group, as a terminal's foreground job is, so Ctrl-C hits every process.
+    const child = spawn("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      env: { ...repo.env, TEST_JOBS: "4" },
+      stdio: "ignore",
+      detached: true,
+    });
+    const exited = new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+    for (let i = 0; i < 200 && !(fs.existsSync(pidfile) && fs.readFileSync(pidfile, "utf8").trim().split("\n").length === 2); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const pids = fs.readFileSync(pidfile, "utf8").trim().split("\n").map(Number);
+    assert.strictEqual(pids.length, 2);
+    const start = Date.now();
+    process.kill(-child.pid, "SIGINT");
+    const code = await exited;
+    assert.strictEqual(code, 130);
+    assert.ok(Date.now() - start < 10000, "test.sh waited for the jobs instead of stopping them");
+    const isAlive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 100 && pids.some(isAlive); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    for (const pid of pids) assert.ok(!isAlive(pid), `job ${pid} still running`);
+    assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
+  } finally {
+    repo.cleanup();
   }
 });

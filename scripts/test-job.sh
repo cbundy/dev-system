@@ -7,9 +7,8 @@
 #   <plugin dir>   a mod: `claude plugin validate` then `claude plugin test`
 #
 # A passing job is silent. A failing job prints its report (what the serial runner used to
-# print) and exits with its failure count: node failures count per failing test, a node crash
-# counts 1, a failing suite or mod counts 1. Counts are capped at 100 so the exit code stays
-# well below 126, where the pool treats a code as a crash and counts 1.
+# print) and exits 1. Node failures count per failing test, written to $TEST_JOB_FAILED for the
+# pool (scripts/test-pool.sh); a node crash, a failing suite or a failing mod counts 1.
 #
 # Node writes its test total to $TEST_RESULTS_DIR/node-total for the summary line.
 set -u
@@ -19,8 +18,6 @@ cd "$(dirname "$0")/.." || exit 1
 id=${1:?usage: test-job.sh <id>}
 out=$(mktemp) || exit 1
 trap 'rm -f "$out"' EXIT
-
-cap() { [ "$1" -gt 100 ] && echo 100 || echo "$1"; }
 
 case $id in
   node)
@@ -36,7 +33,8 @@ case $id in
       [ -n "$node_failed" ] && [ "$node_failed" -gt 0 ] || node_failed=1
       sed '$d' "$out"
       [ -n "$node_total" ] || printf '%s\n' "$summary"
-      exit "$(cap "$node_failed")"
+      [ -n "${TEST_JOB_FAILED:-}" ] && printf '%s\n' "$node_failed" > "$TEST_JOB_FAILED"
+      exit 1
     fi
     ;;
   *.test.sh)

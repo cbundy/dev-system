@@ -95,11 +95,12 @@ while IFS= read -r id; do
   fi
 done < "$all"
 
-# Run the pool in the background so a TERM reaches it while we wait.
+# Run the pool in the background so a signal reaches it while we wait. A backgrounded pool
+# ignores SIGINT, so Ctrl-C is forwarded as SIGTERM.
 sh scripts/test-pool.sh "$results" "$results/jobs" "$results/serial" &
 pool=$!
 trap 'kill -TERM "$pool" 2>/dev/null; wait "$pool"; exit 143' TERM
-trap 'kill -INT "$pool" 2>/dev/null; wait "$pool"; exit 130' INT
+trap 'kill -TERM "$pool" 2>/dev/null; wait "$pool"; exit 130' INT
 wait "$pool"
 pool_status=$?
 case $pool_status in

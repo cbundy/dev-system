@@ -6,16 +6,18 @@
 # Each line of <jobs-file> is a shell command: one job. At most $TEST_JOBS run at once
 # (default: the CPU count). Jobs in <serial-file> run one at a time, alone, after the pool has
 # drained. Every job's combined stdout and stderr is buffered in <results-dir>/<n>.out and its
-# exit status in <n>.status (n = line number, serial jobs numbered after the pool's). A job's
-# exit status is its failure count (scripts/test-job.sh); a status of 126 or more means it
-# crashed and counts 1.
+# exit status in <n>.status (n = line number, serial jobs numbered after the pool's). A job
+# fails when it exits non-zero; it counts 1 unless it wrote its own failure count to the file
+# named by $TEST_JOB_FAILED (scripts/test-job.sh does, for node).
 #
 # Quiet on success. Once every job has finished, each failing job's output is printed to
 # stderr as one contiguous block, in job order (never completion order), the total failure
 # count is written to <results-dir>/failed, and the exit status is 1 if anything failed.
 # TEST_JOBS that is not a positive integer fails fast (exit 2).
 #
-# Ctrl-C or SIGTERM stops every running job and exits 130 / 143.
+# SIGTERM stops every running job and exits 143; so does SIGINT (exit 130), but only when the
+# pool runs in the foreground: a pool started with `&` by a non-interactive shell ignores SIGINT,
+# so a parent that backgrounds it (scripts/test.sh) forwards Ctrl-C as SIGTERM.
 set -u
 
 results=${1:?usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]}
@@ -59,7 +61,7 @@ total=$n
 # shellcheck disable=SC2016 # expanded by the inner sh, not here
 run_one='
   r=$1; i=$2
-  sh "$r/$i.cmd" > "$r/$i.out" 2>&1
+  TEST_JOB_FAILED=$r/$i.failed sh "$r/$i.cmd" > "$r/$i.out" 2>&1
   echo $? > "$r/$i.status"
 '
 
@@ -102,7 +104,10 @@ while [ "$i" -lt "$total" ]; do
   i=$((i + 1))
   status=$(cat "$results/$i.status" 2>/dev/null || echo 1)
   [ "$status" -eq 0 ] && continue
-  [ "$status" -ge 126 ] && weight=1 || weight=$status
+  weight=$(cat "$results/$i.failed" 2>/dev/null)
+  case $weight in
+    '' | *[!0-9]* | 0*) weight=1 ;;
+  esac
   failed=$((failed + weight))
   cat "$results/$i.out" >&2
 done
