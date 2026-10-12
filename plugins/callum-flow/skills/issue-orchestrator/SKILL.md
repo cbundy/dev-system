@@ -73,9 +73,9 @@ from the main checkout (its lock refuses a second copy; the header has the argum
 2. **Design**: spawn `callum-flow:designer` with the issue number, the branches
    in flight and the files they touch, and owner instructions from this session.
    Keep only its return (brief URL, created issues, dependency order, pending
-   owner decisions). If a decision is pending, surface it and wait; if it split
-   the issue, release your claim on the parent (now a tracker); the `ready`
-   sub-issues go through the normal queue.
+   owner decisions). If a decision is pending, surface it and wait. On a split,
+   release your claim on the parent (now a tracker): remove `In development`,
+   leave `ready` off, log `abandoned`. Its `ready` sub-issues join the queue.
 3. **Delegate** the brief URL (never its content) to `callum-flow:implementer`,
    with a pointer to the `implement-issue` skill. Log `delegated` and spawn with
    `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`. Keep keyword
