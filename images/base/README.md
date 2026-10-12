@@ -1653,10 +1653,12 @@ fails when a configured URL has no running loop.
 `in_flight` lists the issues and runs that make the worker busy, with `repo`, `issue`, `run_id`,
 `branch` and `state` for each entry; unavailable identifiers are null.
 `state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
-`completed`, `failed` or `cancelled`, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
+`completed`, `failed` or `cancelled` and no `superseded` event on this device names it, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
-`reclaimed`; noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
+`reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
+`briefed`, `design_routed` or `delegated` reopens the issue; replayed run facts such as `failed` or `head_mismatch`
+do not. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and

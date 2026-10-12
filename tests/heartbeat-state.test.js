@@ -197,3 +197,24 @@ test("superseded is noise: after merged stays idle, after claimed stays busy", (
   const { out } = run();
   assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
 });
+
+for (const terminal of ["merged", "abandoned", "closed", "claim_lost"]) {
+  test(`run facts replayed after ${terminal} stay idle; a new-life decision reopens the issue`, () => {
+    writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev(terminal, 5),
+      ev("failed", 5, { ts: "2026-10-12T11:00:00Z" }), ev("head_mismatch", 5, { ts: "2026-10-12T11:01:00Z" }),
+      ev("conflict", 5, { ts: "2026-10-12T11:02:00Z" }), ev("ci_stalled", 5, { ts: "2026-10-12T11:03:00Z" }),
+      ev("run_started", 5, { ts: "2026-10-12T11:04:00Z", run_id: "old" }), ev("parked", 5, { ts: "2026-10-12T11:05:00Z" })]);
+    assert.equal(run().out.state, "idle");
+    writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev(terminal, 5),
+      ev("failed", 5, { ts: "2026-10-12T11:00:00Z" }), ev("claimed", 5, { ts: "2026-10-12T11:30:00Z" }), ev("parked", 5, { ts: "2026-10-12T11:40:00Z" })]);
+    const { out } = run();
+    assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[5, "parked"]]);
+  });
+}
+
+test("a run named by a superseded event on this device is not busy, even while still running", () => {
+  writeEvents([ev("superseded", 12, { run_id: "run1" }), ev("superseded", 13, { run_id: "run2", device: "other" })]);
+  writeRuns([["run1", "feat/issue-12-x", "running"], ["run2", "feat/issue-13-x", "running"]]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight.map((e) => e.run_id), ["run2"]);
+});
