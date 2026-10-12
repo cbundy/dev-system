@@ -15,9 +15,10 @@ version: 0.34.0
 
 You have been delegated one issue's implementation, normally as the named
 `callum-flow:implementer` (or `callum-flow:fixer`) agent, which the plugin pins
-to Sonnet. Sub-agents you spawn yourself must also go through a named
-`callum-flow:*` agent; never delegate ad hoc with `model` omitted, because that
-inherits your model. If your brief names a model override (an issue `model:<alias>`
+to Sonnet (the orchestrator may run an implementer on Opus for a model
+comparison; that changes nothing here). Sub-agents you spawn yourself must
+also go through a named `callum-flow:*` agent; never delegate ad hoc with
+`model` omitted, because that inherits your model. If your brief names a model override (an issue `model:<alias>`
 label), pass it explicitly as `model` on any sub-agent you spawn.
 
  This skill owns the *how*;

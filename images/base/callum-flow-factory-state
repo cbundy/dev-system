@@ -41,7 +41,8 @@ const RULE_TEXT = {
   S6: "the holder's worker is stale or stopped",
 };
 const DECISION_STAGE = {
-  ready: 'queued', reclaimed: 'queued', claimed: 'designing', briefed: 'designing', design_routed: 'designing', delegated: 'implementing',
+  ready: 'queued', reclaimed: 'queued', claimed: 'designing', briefed: 'designing', design_routed: 'designing',
+  implementer_routed: 'implementing', delegated: 'implementing',
 };
 // Pipeline facts logged by agents: only ever reported as hints when the mirror has no run.
 const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed', 'head_mismatch', 'conflict', 'ci_stalled']);
@@ -51,7 +52,7 @@ const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed'
 // never a stage and never final. It only removes the named run from latest-run selection.
 // What starts a new life after an `abandoned` event (docs/factory-state.md). `failed`,
 // `head_mismatch`, `conflict` and `ci_stalled` replay on old runs and never count.
-const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'delegated']);
+const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'implementer_routed', 'delegated']);
 const NEW_LIFE_RUN_EVENTS = new Set(['run_started', 'parked', 'verdict', 'fix_requested', 'merge_ready']);
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const LABEL_QUEUED = 'ready';

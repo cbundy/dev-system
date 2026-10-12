@@ -24,7 +24,7 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 | --- | --- |
 | `queued` | latest decision event is `ready` or `reclaimed`, or a designing claim has lapsed (see below); no pipeline run in progress |
 | `designing` | `claimed`, `briefed` or `design_routed`, with no delegation or run since; any recorded claim lease must still be live (see below) |
-| `implementing` | `delegated` with no run yet, or the latest run ended without a PR to merge (failed, cancelled, completed with no PR, PR closed) |
+| `implementing` | `implementer_routed` or `delegated` with no run yet, or the latest run ended without a PR to merge (failed, cancelled, completed with no PR, PR closed) |
 | `in pipeline` | the latest run is running and not waiting on anyone |
 | `parked` | the latest run is running and waiting on an agent or the owner (`awaiting_agent_since` set) |
 | `ready to merge` | the latest run completed and its PR is open |
@@ -46,7 +46,7 @@ Without a recorded `claimed` or `renewed` event, `briefed` and `design_routed` r
 as a decision newer than a run.
 
 An `abandoned` event is final only until a new life starts. Strictly after it, a new life is: a
-`ready`, `reclaimed`, `claimed`, `briefed`, `design_routed` or `delegated` event; a `merged` event; a
+`ready`, `reclaimed`, `claimed`, `briefed`, `design_routed`, `implementer_routed` or `delegated` event; a `merged` event; a
 mirror run created after it; or, for a run not in the mirror, a `run_started`, `parked`, `verdict`,
 `fix_requested` or `merge_ready` event on a run id that is not the abandoned one and appears in no
 earlier event. Replay-prone events (`failed`, `head_mismatch`, `conflict`, `ci_stalled`), anything on the
@@ -70,7 +70,7 @@ Highest first. A lower source never overrides a higher one.
    `parked`, `merge_ready`, `failed`, `head_mismatch`, `conflict` and `ci_stalled` events never set a
    stage; when the mirror has no run they only appear as an `event-only` hint. A `failed` replayed after
    `merged` or `closed` (#344) is therefore ignored.
-4. Factory decisions: `ready`, `claimed`, `briefed`, `design_routed`, `delegated`, `reclaimed`.
+4. Factory decisions: `ready`, `claimed`, `briefed`, `design_routed`, `implementer_routed`, `delegated`, `reclaimed`.
 5. Worker liveness is currently `n/a`: this reader checks whether `factory.workers_status` exists
    but does not read its rows yet. Use the [fleet status query](metrics.md#workers) for liveness.
 

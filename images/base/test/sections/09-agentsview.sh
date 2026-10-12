@@ -179,10 +179,31 @@ FROM (VALUES
   ('acme/widgets', 34, 1700041460, 'merge_ready', 54, NULL), ('acme/widgets', 35, 1700041560, 'merged', 54, NULL)
 ) AS v(repo, seq, t, state, issue, run_id)
 ON CONFLICT DO NOTHING;
+-- The implementer model comparison (#506): the hash routed 42 and 52 to sonnet, 51 and 53 to opus
+-- (53 then had a review fix requested), and a label routed 54 (left out). In acme/gadgets, away from
+-- the factory-state check: 55 routed to both models (left out), 56 to opus and still in flight, 58 to
+-- sonnet and abandoned.
+INSERT INTO factory.events (device, repo, seq, ts, state, issue, note, raw)
+SELECT 'nm-metrics', v.repo, v.seq, to_timestamp(v.t), v.state, v.issue, v.note, '{}'::jsonb
+FROM (VALUES
+  ('acme/widgets', 40, 1700000750, 'implementer_routed', 42, 'model=sonnet reason=hash bucket=60 pct=50'),
+  ('acme/widgets', 41, 1700010300, 'implementer_routed', 51, 'model=opus reason=hash bucket=10 pct=50'),
+  ('Acme/Widgets', 42, 1700020300, 'implementer_routed', 52, 'model=sonnet reason=hash bucket=70 pct=50'),
+  ('acme/widgets', 43, 1700030300, 'implementer_routed', 53, 'model=opus reason=hash bucket=20 pct=50'),
+  ('acme/widgets', 44, 1700030900, 'fix_requested', 53, 'review'),
+  ('acme/widgets', 45, 1700040300, 'implementer_routed', 54, 'model=opus reason=label bucket=- pct=50'),
+  ('acme/gadgets', 1, 1700050000, 'implementer_routed', 55, 'model=opus reason=hash bucket=30 pct=50'),
+  ('acme/gadgets', 2, 1700050100, 'implementer_routed', 55, 'model=sonnet reason=hash bucket=30 pct=20'),
+  ('acme/gadgets', 3, 1700050200, 'implementer_routed', 56, 'model=opus reason=hash bucket=5 pct=50'),
+  ('acme/gadgets', 4, 1700050300, 'implementer_routed', 58, 'model=sonnet reason=hash bucket=90 pct=50'),
+  ('acme/gadgets', 5, 1700050400, 'abandoned', 58, NULL)
+) AS v(repo, seq, t, state, issue, note)
+ON CONFLICT DO NOTHING;
 SQL
   # 00 is the DDL block, 01 the example join, 02..08 the seven queries, 09 "Unlinked runs", then
-  # 10 and 11: lead time by stage and the waiting split, which live outside the nomistakes section.
-  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 12 ] || { echo "expected 12 sql blocks"; return 1; }
+  # 10, 11 and 12: lead time by stage, the waiting split and the implementer model comparison, which
+  # live outside the nomistakes section.
+  [ "$(find "$out" -name '*.sql' | wc -l)" -eq 13 ] || { echo "expected 13 sql blocks"; return 1; }
   for f in "$out"/*.sql; do
     psql_file < "$f" > "${f%.sql}.out" || { echo "$(basename "$f") failed"; cat "$f"; return 1; }
     if [ "$(basename "$f")" != 00.sql ] && [ ! -s "${f%.sql}.out" ]; then echo "$(basename "$f") returned no rows"; return 1; fi
@@ -195,6 +216,10 @@ SQL
     grep -E '^parked_now\|acme/widgets\|nm-host\|r4\|\|30000\|' "$out/06.out" &&
     grep -Fx 'review-fix|gpt-test|exit|none|1' "$out/07.out" &&
     grep -Fx 'acme/widgets|42|1020|600|120|420|1' "$out/08.out" &&
+    # the implementer model comparison (#506): one row per model, hash-routed issues only
+    grep -Fx 'opus|3|2|0|50.0|300|600|1650|1.00|0.50|0.50|0.50|0|60' "$out/12.out" &&
+    grep -Fx 'sonnet|3|2|1|100.0|300|1000|1600|1.50|0.00|0.50|0.00|60|1495' "$out/12.out" &&
+    [ "$(wc -l < "$out/12.out")" -eq 2 ] &&
     nm_link_values "$out"
 }
 # The run-to-issue link (#343): issues with no run_started event still get their pipeline numbers

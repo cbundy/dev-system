@@ -1582,6 +1582,21 @@ synced allow list. Set the percentage in a repo-owned place, not the synced `.cl
 labels once: `gh label create design:session --description "Design this issue in a live session the owner can answer"` and
 `gh label create design:subagent --description "Design this issue with the designer sub-agent"`.
 
+`callum-flow-implementer-route <issue>` prints the model the `callum-flow:implementer` sub-agent runs on for that
+issue, `sonnet` (its frontmatter model) or `opus`, so the two can be compared on real numbers (#506). The orchestrator
+passes it as `model` on every implementer call for the issue. A trusted `model:<alias>` label wins (the owner's pick,
+left out of the comparison), else `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` (default `0`, a number from 0 to 100; anything else
+exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of `implementer:<owner/repo>#<issue>`, repo
+lower-cased, mod 100). The `implementer:` salt keeps it independent of the design split above, and the hash means a
+re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
+labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
+pipeline keep their own models, so a difference between the groups comes from the implementer. Each call logs an
+`implementer_routed` event (`model=.. reason=label|default|hash|fallback bucket=.. pct=..`), and it is in the synced
+allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
+`.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
+share), keep the share fixed while it runs, and read the result with the
+[implementer model comparison](../../docs/metrics.md#8-implementer-model-comparison) query.
+
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
 without one, and then the file just accumulates). It creates the schema and table on its
@@ -1657,7 +1672,7 @@ fails when a configured URL has no running loop.
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
-`briefed`, `design_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
+`briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
 run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
