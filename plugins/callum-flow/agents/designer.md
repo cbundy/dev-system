@@ -68,11 +68,11 @@ as `origin/<base>`, not the local checkout.
 
 For a large or high-risk issue, do not design it as one unit. Split it into
 sub-issues whose bodies use the same shape (without the date heading, with a
-`## Rollout` each), link them
-with native `blocked_by`, and label them `ready` when the parent was `ready` or
-claimed (blocked pieces wait in the queue on their own). Leave a sub-issue
-unlabelled only when it carries an open owner decision, and say so in your
-return. Keep the parent as a tracking epic.
+`## Rollout` each), create them unlabelled, link them
+with native `blocked_by`, and only once every link exists label them `ready`
+when the parent was `ready` or claimed (blocked pieces then wait in the queue
+on their own). Leave a sub-issue unlabelled only when it carries an open owner
+decision, and say so in your return. Keep the parent as a tracking epic.
 
 Return only: the brief comment URL, the issue numbers you created, the dependency
 order, whether an owner decision is pending (yes/no), and a one-paragraph
