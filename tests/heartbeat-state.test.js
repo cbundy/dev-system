@@ -119,13 +119,14 @@ test("a run is joined to its issue by run_started.run_id before the branch rule,
   assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 7, run_id: "runA", branch: "feat/issue-7-x", state: "run_started" }]);
 });
 
-test("an issue entry carries its repo, and a run joins only the issue of its own repo", () => {
-  writeEvents([ev("claimed", 5, { repo: "O/R" }), ev("claimed", 5, { repo: "a/b" })]);
-  writeRuns([["run1", "feat/issue-5-x", "running"], ["run2", "feat/issue-5-y", "running", "x"]]);
+test("an issue entry carries its lowercase repo, and a run joins only the issue of its own repo", () => {
+  writeEvents([ev("claimed", 5, { repo: "O/R" }), ev("claimed", 5, { repo: "a/b" }), ev("run_started", 8, { repo: "A/B", run_id: "runB" })]);
+  writeRuns([["run1", "feat/issue-5-x", "running"], ["run2", "feat/issue-5-y", "running", "x"], ["runB", "weird-branch", "running"]]);
   const { out } = run();
   assert.deepEqual(out.in_flight, [
-    { repo: "O/R", issue: 5, run_id: "run1", branch: "feat/issue-5-x", state: "claimed" },
+    { repo: "o/r", issue: 5, run_id: "run1", branch: "feat/issue-5-x", state: "claimed" },
     { repo: "a/b", issue: 5, run_id: null, branch: null, state: "claimed" },
+    { repo: "a/b", issue: 8, run_id: "runB", branch: "weird-branch", state: "run_started" },
     { repo: "other/x", issue: 5, run_id: "run2", branch: "feat/issue-5-y", state: "running" },
   ]);
 });
