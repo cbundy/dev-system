@@ -3,7 +3,8 @@
 # dev-system's own dev environment: ghcr.io/cbundy/dev-system/dev
 #
 # The base image plus the tools only this repo needs (cbundy/dev-system#117):
-# terraform, for `npm run lint`'s fmt and validate checks on coder/dev-system.
+# terraform, for `npm run lint`'s fmt and validate checks on coder/dev-system,
+# and a PostgreSQL 17 server (cbundy/dev-system#507).
 # It is a per-repo image like any consumer's (docs/onboarding.md, step 3e;
 # images/base/README.md, "Extending the image"): no ENTRYPOINT, VOLUME,
 # /persist or devcontainer.metadata changes, so the base image's contract and
@@ -37,6 +38,20 @@ RUN arch=$(dpkg --print-architecture) \
   && install -m 0755 "$tmp/terraform" /usr/local/bin/terraform \
   && rm -rf "$tmp" \
   && terraform version
+
+# PostgreSQL 17 server, so the metrics SQL can be checked without Docker
+# (cbundy/dev-system#507). Major 17 matches the base image's psql client and
+# the postgres:17 container of images/base/test section 9. Creating the main
+# cluster is switched off before the server installs, so nothing is created or
+# started at build time: use a throwaway initdb dir as the node user. The
+# binaries stay in /usr/lib/postgresql/17/bin, off PATH.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-common \
+  && sed -i 's/^#\?create_main_cluster.*/create_main_cluster = false/' /etc/postgresql-common/createcluster.conf \
+  && grep -q '^create_main_cluster = false' /etc/postgresql-common/createcluster.conf \
+  && apt-get install -y --no-install-recommends postgresql-17 \
+  && rm -rf /var/lib/apt/lists/* \
+  && /usr/lib/postgresql/17/bin/postgres --version
 
 USER node
 
@@ -75,4 +90,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.base.name="ghcr.io/cbundy/dev-system/base:2" \
   org.opencontainers.image.title="dev-system dev" \
-  org.opencontainers.image.description="dev-system's own dev environment: the dev-system base image plus terraform. Rebuilt on every change and weekly; tags are mutable."
+  org.opencontainers.image.description="dev-system's own dev environment: the dev-system base image plus terraform and a PostgreSQL 17 server. Rebuilt on every change and weekly; tags are mutable."
