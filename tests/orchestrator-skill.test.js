@@ -54,3 +54,15 @@ test("issue-orchestrator SKILL.md step 3 routes the implementer model", () => {
   const step3 = text.slice(text.indexOf("3. **Delegate**"), text.indexOf("4. **Verify and merge**"));
   assert.ok(step3.includes("callum-flow-implementer-route"));
 });
+
+test("issue-orchestrator SKILL.md tick report is compact and links every issue or PR", () => {
+  const skill = path.join(__dirname, "..", "plugins", "callum-flow", "skills", "issue-orchestrator", "SKILL.md");
+  const text = fs.readFileSync(skill, "utf8").replace(/\s+/g, " ");
+  const section = text.slice(text.indexOf("## Tick report"));
+  assert.ok(section.includes("usage"));
+  assert.ok(section.includes("[#N](https://github.com/<REPO>/"));
+  assert.ok(section.includes("never a bare"));
+  for (const m of section.matchAll(/#(\d+|N)\b/g)) {
+    assert.equal(section[m.index - 1], "[", `bare reference near: ${section.slice(Math.max(0, m.index - 20), m.index + 10)}`);
+  }
+});

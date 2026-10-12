@@ -32,7 +32,8 @@
   callum-flow `query-factory-data` skill, not from guesses.
 - When writing to the owner (chat replies, status updates, orchestrator reports, handoffs), lead with what
   needs to happen next and who has to do it. Name each piece of work by what it does, with the issue number at
-  most a parenthetical and never the subject of a sentence. Prefer short prose; use a table only when it is
+  most a parenthetical and never the subject of a sentence. Make each issue or PR reference a markdown link to it,
+  never a bare `#N`. Prefer short prose; use a table only when it is
   clearly the clearest form, and never stack several. Say plainly what is blocked, what it waits on, and
   whether the owner is the one who must act.
 - When creating an epic issue that will be composed of several issues that make up a completed feature, ensure you use the
