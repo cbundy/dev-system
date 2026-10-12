@@ -187,8 +187,9 @@ install_plugin() {
 # add_and_install <id> <source> <fix>: one missing plugin - adds its
 # marketplace from <source> first when Claude does not know it ($known, the
 # marketplaces Claude knows, updated here), then installs it. <fix> is the
-# retry command a WARNING names. A problem is logged and still returns 0; it
-# fails only when the step's deadline stopped it.
+# retry command a WARNING names. A plugin in $RESTORE_DISABLED (disabled before
+# a marketplace move) is disabled again once installed. A problem is logged and
+# still returns 0; it fails only when the step's deadline stopped it.
 add_and_install() {
   local id="$1" src="$2" fix="$3" mkt="${1##*@}" added=false
   if ! grep -qxF -- "$mkt" <<<"$known"; then
@@ -208,6 +209,10 @@ add_and_install() {
     return 0
   fi
   log "installed Claude plugin $id"
+  if grep -qxF -- "$id" <<<"${RESTORE_DISABLED:-}" && ! claude_plugin disable "$id" --scope user; then
+    log "WARNING: Claude plugin $id was disabled before its marketplace moved, but could not be disabled again, so it is now enabled: $PLUGIN_REASON"
+    log "  Fix: run: claude plugin disable $id"
+  fi
 }
 
 install_wanted_plugin() {
@@ -313,11 +318,13 @@ ref_resolves() {
 # stay. Sets MOVED to the removed names (empty: none) and RESTORE to the ids
 # (<plugin>@<marketplace>) of the user-scope plugins that were installed from
 # them, wanted or installed by hand, which install_plugins installs again
-# after the move. Needs $marketplaces and $INSTALLED_JSON (the installs listing).
+# after the move, and RESTORE_DISABLED to those of them that were disabled
+# (no `enabled` field counts as enabled), which it disables again. Needs $marketplaces and $INSTALLED_JSON (the installs listing).
 drop_moved_marketplaces() {
   MOVED=""
   RESTORE=""
-  local json hand mkt loc ref have_loc have_ref src
+  RESTORE_DISABLED=""
+  local json hand disabled mkt loc ref have_loc have_ref src
   claude_plugin marketplace list --json || return 0
   json="$PLUGIN_OUT"
   while read -r mkt src; do
@@ -336,8 +343,10 @@ drop_moved_marketplaces() {
       continue
     fi
     hand=$(printf '%s\n' "${INSTALLED_JSON:-[]}" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || hand=""
+    disabled=$(printf '%s\n' "${INSTALLED_JSON:-[]}" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and .enabled == false and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || disabled=""
     if claude_plugin marketplace remove "$mkt"; then
       RESTORE="${RESTORE:+$RESTORE$'\n'}$hand"
+      RESTORE_DISABLED="${RESTORE_DISABLED:+$RESTORE_DISABLED$'\n'}$disabled"
       log "Claude plugin marketplace $mkt moved from ${have_ref:-no ref} to ${ref:-no ref}; reinstalling its plugins"
       MOVED="$MOVED $mkt"
     else
@@ -397,9 +406,10 @@ prune_orphan_installs() {
 # DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a
 # release candidate. A move keeps the user-scope plugins installed from the
 # marketplace, hand-installed ones included: they are installed again at the
-# new ref; a WARNING for one of those names the install by hand. Always returns 0.
+# new ref, and a disabled one is disabled again; a WARNING for one of those
+# names the install by hand. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults wanted marketplaces installed MOVED RESTORE INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local settings="" plugins="" defaults wanted marketplaces installed MOVED RESTORE RESTORE_DISABLED INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))

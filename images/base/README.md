@@ -398,7 +398,7 @@ they land in `/persist/claude` and stay across rebuilds:
   re-adds a marketplace whose ref moved, so a pin change takes effect on the next start. The
   removal uninstalls the marketplace's plugins, so every user-scope plugin installed from it
   beforehand, hand-installed ones such as `factory-hud@callum` included, is installed again
-  at the new ref (a failed reinstall is one `WARNING`, whose fix names the
+  at the new ref, enabled or disabled as it was (a failed reinstall is one `WARNING`, whose fix names the
   `claude plugin install` that restores it); project-scope installs are not
   restored, the user-scope install and the repo's `enabledPlugins` cover them. A pin move
   waits until the wanted ref

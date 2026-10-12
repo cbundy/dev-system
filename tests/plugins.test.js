@@ -19,7 +19,7 @@ const DEFAULT = "callum-flow@callum=cbundy/dev-system";
 
 // The stub claude: it records each `claude plugin` call (directory and arguments) in
 // $STUB/calls and keeps its state as files in $STUB/state - mkt-<name> for a known
-// marketplace, inst-<id> for a user-scope installed plugin, proj-<n> ("<id>|<projectPath>") for a
+// marketplace, inst-<id> for a user-scope installed plugin (dis-<id> when it is disabled), proj-<n> ("<id>|<projectPath>") for a
 // project-scope one. `uninstall` succeeds only when run from a project install's path. `marketplace add <source>` names the
 // marketplace "callum" for cbundy/dev-system, else after the source's last path part (no
 // #ref), and fails for a source containing "fail"; `install` fails for an unknown
@@ -34,7 +34,9 @@ mkdir -p "$s"
 ids() { for f in "$s/$1"-*; do [ -e "$f" ] && echo "\${f#"$s/$1"-}"; done; }
 case "$1 \${2:-}" in
   "list --json")
-    { ids inst | jq -R '{id: ., scope: "user", version: "1.0.0"}'
+    { ids inst | while read -r i; do
+        jq -n --arg i "$i" --argjson e "$([ -e "$s/dis-$i" ] && echo false || echo true)" '{id: $i, scope: "user", version: "1.0.0", enabled: $e}'
+      done
       for f in "$s"/proj-*; do
         [ -e "$f" ] && jq -R 'split("|") | {id: .[0], scope: "project", version: "1.0.0", projectPath: .[1]}' "$f"
       done; } | jq -s . ;;
@@ -45,7 +47,7 @@ case "$1 \${2:-}" in
         '{name: $n} + (if $l != "" then {repo: $l} else {} end) + (if ($src | contains("#")) then {ref: $r} else {} end)'
     done | jq -s . ;;
   "marketplace remove")
-    rm -f "$s/mkt-$3" "$s/src-$3" "$s/inst-"*"@$3"
+    rm -f "$s/mkt-$3" "$s/src-$3" "$s/inst-"*"@$3" "$s/dis-"*"@$3"
     for f in "$s"/proj-*; do [ -e "$f" ] && grep -q "@$3|" "$f" && rm -f "$f"; done
     echo "✔ Removed marketplace" ;;
   "uninstall "*)
@@ -58,9 +60,12 @@ case "$1 \${2:-}" in
     n="\${3%%#*}"; n="\${n##*/}"; [ "\${3%%#*}" = cbundy/dev-system ] && n=callum
     touch "$s/mkt-$n"; echo "$3" > "$s/src-$n"; echo "✔ Successfully added marketplace: $n" ;;
   "marketplace update") ;;
+  "disable "*)
+    [ "$3 \${4:-}" = "--scope user" ] && [ -e "$s/inst-$2" ] || { echo "✘ Failed to disable plugin \"$2\""; exit 1; }
+    touch "$s/dis-$2"; echo "✔ Disabled plugin $2" ;;
   install\\ *)
     [ -e "$s/mkt-\${2##*@}" ] || { echo "✘ Failed to install plugin \\"$2\\": not found in marketplace \\"\${2##*@}\\""; exit 1; }
-    touch "$s/inst-$2"; echo "✔ Successfully installed plugin: $2 (scope: user)" ;;
+    touch "$s/inst-$2"; rm -f "$s/dis-$2"; echo "✔ Successfully installed plugin: $2 (scope: user)" ;;
 esac
 `;
 
@@ -79,7 +84,7 @@ exit 0
 
 // A temp dir with the stub on PATH and a workspace (a git repo when `settings` is given,
 // with .claude/settings.json set to it unless it is null).
-function setup(t, { repo = false, settings = null, installed = [], marketplaces = [], projects = [] } = {}) {
+function setup(t, { repo = false, settings = null, installed = [], disabled = [], marketplaces = [], projects = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plugins-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, "bin");
@@ -91,6 +96,7 @@ function setup(t, { repo = false, settings = null, installed = [], marketplaces 
   fs.writeFileSync(path.join(bin, "claude"), STUB, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "git"), GIT_STUB, { mode: 0o755 });
   for (const id of installed) fs.writeFileSync(path.join(state, `inst-${id}`), "");
+  for (const id of disabled) fs.writeFileSync(path.join(state, `dis-${id}`), "");
   projects.forEach(([id, p], i) => fs.writeFileSync(path.join(state, `proj-${i}`), `${id}|${p}`));
   for (const m of marketplaces) fs.writeFileSync(path.join(state, `mkt-${m}`), "");
   if (repo || settings !== null) {
@@ -652,6 +658,54 @@ test("out of time before a hand-installed plugin is reinstalled: the Fix names i
   assert.equal(r.status, 0, r.log);
   assert.match(r.log, /ran out of its 3s \(DEV_PLUGIN_INSTALL_TIMEOUT\) - not installed: factory-hud@callum$/m);
   assert.match(r.log, /Fix: .* then run: dev-init --plugins; claude plugin install factory-hud@callum$/m);
+});
+
+test("a disabled hand-installed plugin of a moved marketplace is installed again, then disabled again", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"], disabled: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+    "/ install factory-hud@callum",
+    "/ disable factory-hud@callum --scope user",
+  ]);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-factory-hud@callum")));
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "dis-factory-hud@callum")));
+  assert.doesNotMatch(r.log, /WARNING/);
+});
+
+test("a disabled wanted plugin is disabled again after a move, and an enabled one stays enabled", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  fs.writeFileSync(path.join(ctx.dir, "state", "dis-callum-flow@callum"), "");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+    "/ disable callum-flow@callum --scope user",
+    "/ install factory-hud@callum",
+  ]);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "dis-callum-flow@callum")));
+  assert.ok(!fs.existsSync(path.join(ctx.dir, "state", "dis-factory-hud@callum")));
+});
+
+test("a disable that fails after a move is one WARNING and does not stop the rest", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum", "zz@callum"], disabled: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  // The stub refuses every disable.
+  const stub = path.join(ctx.dir, "bin", "claude");
+  fs.writeFileSync(stub, fs.readFileSync(stub, "utf8").replace('  "disable "*)', '  "disable "*) echo "✘ Failed to disable plugin: boom"; exit 1 ;;\n  "disable-unused "*)'));
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-zz@callum")));
+  assert.equal((r.log.match(/WARNING/g) || []).length, 1, r.log);
+  assert.match(r.log, /WARNING: Claude plugin factory-hud@callum was disabled before .* so it is now enabled: Failed to disable plugin: boom/);
+  assert.match(r.log, /^dev-init: {3}Fix: run: claude plugin disable factory-hud@callum$/m);
 });
 
 test("a marketplace that is not moved keeps its plugins untouched", (t) => {

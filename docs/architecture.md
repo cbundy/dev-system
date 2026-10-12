@@ -123,7 +123,8 @@ Commit the updated `.claude/settings.json` from `callum-dev update`, then restar
 container or run `dev-init --plugins` in it. A repo's marketplace declaration with no ref
 takes the image's pin. `dev-init` removes the old marketplace (which uninstalls its
 plugins), adds it at the new ref, and installs the wanted plugins again, together with
-every user-scope plugin that was installed from it by hand. It also prunes project-scope
+every user-scope plugin that was installed from it by hand, each enabled or disabled as it
+was. It also prunes project-scope
 installs whose project directory is gone.
 `marketplace update`, auto-update, and `plugin install` or `plugin update` keep the old
 ref; they do not advance a release pin. Adding the new ref while the old marketplace
