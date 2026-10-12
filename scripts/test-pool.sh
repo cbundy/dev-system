@@ -90,6 +90,7 @@ interrupt() {
   # shellcheck disable=SC2086
   [ -n "$victims" ] && kill -TERM $victims 2>/dev/null
   # Stopped processes must resume to handle the pending termination signal.
+  # shellcheck disable=SC2086 # victims is a PID list; word splitting is intended
   [ -n "$victims" ] && kill -CONT $victims 2>/dev/null
   wait
   exit "$1"
