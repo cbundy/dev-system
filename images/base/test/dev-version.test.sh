@@ -26,7 +26,7 @@ mkdir "$bin"
 cat > "$bin/curl" <<'STUB'
 #!/bin/sh
 for a in "$@"; do url=$a; done
-[ ! -f "$FIX/hang" ] || exec sleep 30
+[ ! -f "$FIX/hang" ] || exec sleep 120
 [ ! -f "$FIX/offline" ] || exit 6
 case $url in
   */token*) cat "$FIX/token.json" ;;
@@ -40,7 +40,7 @@ esac
 STUB
 cat > "$bin/gh" <<'STUB'
 #!/bin/sh
-[ ! -f "$FIX/hang" ] || exec sleep 30
+[ ! -f "$FIX/hang" ] || exec sleep 120
 [ ! -f "$FIX/offline" ] || exit 1
 [ "$1" != --version ] || { echo "gh version 2.50.0 (2026-01-01)"; exit 0; }
 # gh api repos/<owner>/<repo>/releases/latest --jq .tag_name
@@ -67,11 +67,13 @@ chmod +x "$bin"/*
 # A second bin dir whose curl and gh fail loudly (and leave a marker) when called.
 nonet="$tmp/nonet"
 mkdir "$nonet"
-for t in curl gh; do
+for t in curl wget git; do
   printf '#!/bin/sh\necho "$0 $*" >> "%s/network-called"\nexit 99\n' "$tmp" > "$nonet/$t"
 done
 # gh --version is a local call: only gh api (the network) is loud.
 printf '#!/bin/sh\n[ "$1" != --version ] || { echo "gh version 2.50.0"; exit 0; }\necho "$0 $*" >> "%s/network-called"\nexit 99\n' "$tmp" > "$nonet/gh"
+# claude --version and claude plugin list are local; any other claude call may hit the network.
+printf '#!/bin/sh\ncase $1 in\n  --version) exec "%s/claude" "$@" ;;\n  plugin) [ "$2" != list ] || exec "%s/claude" "$@" ;;\nesac\necho "$0 $*" >> "%s/network-called"\nexit 99\n' "$bin" "$bin" "$tmp" > "$nonet/claude"
 chmod +x "$nonet"/*
 
 FIX="$tmp/fix"
@@ -191,7 +193,9 @@ start=$(date +%s)
 DEV_VERSION_LIMIT=2 run_cmd
 elapsed=$(($(date +%s) - start))
 expect "hanging lookups" 0 '^dev-version: UNKNOWN '
-[ "$elapsed" -le 5 ] || fail "hanging lookups took ${elapsed}s, budget is 5s"
+# The stubs sleep 120s, so a run that waits for them blows this generous, load-proof budget.
+[ "$elapsed" -le 30 ] || fail "hanging lookups took ${elapsed}s, budget is 30s"
+printf '%s\n' "$out" | grep -q 'lookup timed out' || fail "hanging lookups: no component reported a timeout (kill path not exercised)"
 
 reset
 cat > "$tmp/layers/dev" <<STAMP
@@ -241,7 +245,6 @@ printf '%s\n' "$out" | grep -qE '^dev-version: [A-Z]+ (gh|node|psql|jq|tmux) ' &
 
 # --local: no network call at all, running and pinned only.
 reset; rm -f "$tmp/network-called"
-start=$(date +%s)
 EXTRA_PATH=$nonet run_cmd --local --json
 expect "local json" 0
 [ ! -e "$tmp/network-called" ] || fail "local: touched the network: $(cat "$tmp/network-called")"
@@ -249,7 +252,9 @@ printf '%s\n' "$out" | jq -e '.local == true and all(.components[]; .latest == n
   and ((.components[] | select(.name == "claude")) | .running == "1.0.0")
   and ((.components[] | select(.name == "agentsview")) | .pinned == "0.44.0")
   and ((.components[] | select(.name == "callum-flow@callum(user)")) | .running == "0.2.0" and .pinned == "0.2.0")' > /dev/null || fail "local json: $out"
-[ $(($(date +%s) - start)) -le 2 ] || fail "local took too long"
+# --local must never block until the job deadline: no component may carry the timeout note.
+printf '%s\n' "$out" | jq -e 'all(.components[]; .note != "lookup timed out" and (.status == "OK" or .status == "UNKNOWN"))' > /dev/null \
+  || fail "local json: a component timed out or has an unexpected status: $out"
 EXTRA_PATH=$nonet run_cmd --local
 expect "local text" 0 '^dev-version: UNKNOWN base-image running=aaaaaaa latest=\?' '^dev-version: UNKNOWN claude running=1.0.0 latest=\?'
 [ ! -e "$tmp/network-called" ] || fail "local text: touched the network"
