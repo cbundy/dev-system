@@ -31,8 +31,15 @@ approves the draft.
 `git diff --name-only <prev>..origin/main`:
 - `plugins/` - plugin layer.
 - `bin/` or `templates/` - CLI and templates layer.
-- `images/base/` - base image layer; list it only when `images/base/VERSION` moved, and note it
-  is its own publish.
+- `images/base/` - base image layer; list it only when image inputs changed (below) and the image
+  version is bumped, and note it is its own publish.
+
+Image inputs: `git diff --name-only <prev>..origin/main` paths under `images/base/` other than
+`images/base/VERSION`, or under `features/src/callum-tools/` (the publish workflow's PR paths). If
+there are any, propose an image bump level with the RELEASING.md rules (patch for fixes, minor for
+a new tool or capability, major for a breaking change), starting from the current
+`images/base/VERSION`, and show it next to the release version. Feature PRs never bump that file;
+the release bump does.
 
 ## 3. Draft `release-notes/vX.Y.Z.md`
 Format (checked by `node scripts/release-notes.js --check X.Y.Z`, cap 40 lines):
@@ -55,7 +62,7 @@ Upgrade section lists only the layers that changed:
   restart the container or run `dev-init --plugins`. A plain `/plugin marketplace update`
   does not advance the pinned ref.
 - CLI and templates: `npm update @callum/dev-system && npx callum-dev update`.
-- Base image (only if `images/base/VERSION` moved): rebuild or re-pull the dev container.
+- Base image (only if the release bumps `images/base/VERSION`): rebuild or re-pull the dev container.
 
 ## 4. Show and stop
 Run `node scripts/release-notes.js --check X.Y.Z` and
@@ -64,10 +71,13 @@ Show the proposed version, the notes, the validator result and the preview, then
 for the owner's approval.
 
 ## 5. Ship (after approval)
-1. On a branch from main: `node scripts/release-bump.js X.Y.Z`; add `release-notes/vX.Y.Z.md`
+1. On a branch from main: `node scripts/release-bump.js X.Y.Z` (add `--image A.B.C` when image
+   inputs changed and the owner approved the image level); add `release-notes/vX.Y.Z.md`
    to the same bump PR (`npm run lint` fails without it).
 2. Merge when `ci` is green.
 3. `gh workflow run release.yml -f version=X.Y.Z`, wait for it, then confirm the published
    body with `gh release view vX.Y.Z` (curated groups, Upgrade, collapsed technical list). The
    workflow's last step rolls the milestone over; check `vX.Y.Z` is closed and a fresh
    `Next release` exists (when the repo had one).
+4. If the release bumped the image: `gh workflow run publish-base-image.yml` on main to publish the
+   new tags, then confirm the run is green.

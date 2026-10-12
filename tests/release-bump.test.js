@@ -133,6 +133,54 @@ test("CLI: bump then --check passes, quietly", (t) => {
   assert.equal(checked.stdout + checked.stderr, "");
 });
 
+test("CLI: --image sets images/base/VERSION; leaving it out leaves the file byte-identical", (t) => {
+  const root = fakeRepo(t);
+  write(root, "images/base/VERSION", "2.28.0\n");
+  const without = cli(root, ["4.0.0"]);
+  assert.equal(without.status, 0, without.stderr);
+  assert.equal(read(root, "images/base/VERSION"), "2.28.0\n");
+
+  const withImage = cli(root, ["4.1.0", "--image", "2.29.0"]);
+  assert.equal(withImage.status, 0, withImage.stderr);
+  assert.equal(read(root, "images/base/VERSION"), "2.29.0\n");
+  assert.equal(JSON.parse(read(root, "package.json")).version, "4.1.0");
+});
+
+test("CLI: an invalid --image fails like an invalid release version, before writing anything", (t) => {
+  const root = fakeRepo(t);
+  write(root, "images/base/VERSION", "2.28.0\n");
+  const r = cli(root, ["4.0.0", "--image", "bogus"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /release-bump: 'bogus' is not a valid semantic version/);
+  assert.equal(read(root, "images/base/VERSION"), "2.28.0\n");
+  assert.equal(JSON.parse(read(root, "package.json")).version, "1.0.0");
+  assert.equal(cli(root, ["4.0.0", "--image"]).status, 1);
+  assert.equal(cli(root, ["--check", "1.0.0", "--image", "2.29.0"]).status, 1);
+});
+
+test("CLI: --image rejects a prerelease or build suffix publish-base-image.yml would refuse", (t) => {
+  const root = fakeRepo(t);
+  write(root, "images/base/VERSION", "2.28.0\n");
+  for (const image of ["2.29.0-rc.1", "2.29.0+build.5"]) {
+    const r = cli(root, ["4.0.0", "--image", image]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, new RegExp(`release-bump: '${image.replace(/[.+]/g, "\\$&")}' .*expected MAJOR\\.MINOR\\.PATCH, as images/base/VERSION requires`));
+    assert.equal(read(root, "images/base/VERSION"), "2.28.0\n");
+    assert.equal(JSON.parse(read(root, "package.json")).version, "1.0.0");
+  }
+  assert.equal(cli(root, ["4.0.0-rc.1", "--image", "2.29.0"]).status, 0);
+  assert.equal(read(root, "images/base/VERSION"), "2.29.0\n");
+});
+
+test("CLI: --check does not look at images/base/VERSION", (t) => {
+  const root = fakeRepo(t);
+  assert.equal(cli(root, ["1.0.0"]).status, 0);
+  write(root, "images/base/VERSION", "9.9.9\n");
+  const r = cli(root, ["--check", "1.0.0"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout + r.stderr, "");
+});
+
 test("CLI: --check exits 1 and prints every mismatch", (t) => {
   const root = fakeRepo(t);
   const r = cli(root, ["--check", "1.1.0"]);

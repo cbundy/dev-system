@@ -111,6 +111,9 @@ architecture). Rules specific to working here:
   the `feature` devcontainer template, and never steer a consumer onto them. Put new
   tooling in `images/base/`. The scripts in `features/src/callum-tools/` are still the
   image's source, so fixing them is fine.
+- Feature PRs never bump `images/base/VERSION`: the release bump PR does
+  (`node scripts/release-bump.js X.Y.Z --image A.B.C`, RELEASING.md). A PR that is only behind
+  main goes through `callum-flow-merge-guard <pr> --update-behind`, not a new pipeline run.
 - Templates in `templates/` must keep a clear split between synced content and repo-owned
   values so `callum-dev update` can merge cleanly.
 - The `onboard` skill's `SKILL.md` is generated from `docs/onboarding.md` (plus
