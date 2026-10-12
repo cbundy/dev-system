@@ -1,0 +1,16 @@
+{
+  "name": "factory-loop",
+  "displayName": "Factory loop",
+  "version": "0.35.0",
+  "description": "Draft, not yet shipped: the issue orchestrator as one deterministic code loop inside its Claude Code session. Code does the bookkeeping (watching, usage tiers, claims, agents, gates, guards, merges, the status title); the model is woken only for judgment.",
+  "author": {
+    "name": "Callum Bundy"
+  },
+  "homepage": "https://github.com/cbundy/dev-system",
+  "repository": "https://github.com/cbundy/dev-system",
+  "keywords": [
+    "orchestration",
+    "mod"
+  ],
+  "types": "./types/index.d.ts"
+}

@@ -206,6 +206,7 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 | `skipLabels` | `[]` | labels that keep an issue out of `D1` (I-92) |
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
 | `runSource` | `local` | `local` (pipeline-watch) or `events` (shadow and replay) |
+| `shadowDevice` | `null` | observe mode only: observe as this device (the live orchestrator's), so its claims count as the loop's own and the shadow plan can be compared with what it did |
 | `passEveryMs` | 60 000 | the timer |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | 120 000, 300 000, 300 000, 600 000 | observe cadences |
 | `usageStaleMs` | 900 000 | an older reading counts as unavailable |
@@ -301,7 +302,8 @@ action before it is kept.
 
 The `P` and `M` rules act only on an issue's **current run**: the newest run of the issue's
 branches (ULIDs sort by creation time; an `unknown` id counts only when it is the issue's only
-run) that no `superseded` event names, on an issue that is still live. A run on a replaced
+run) that no `superseded` event names, on an issue that is still live. The issue must also be one this device holds: another device's run, or a run nobody claimed
+(the owner's own), is not this loop's to drive. A run on a replaced
 branch is history: 18 of the 21 cancelled runs on dev-system in the week to 2026-10-12 were
 followed by a `superseded`, `merged` or `abandoned` event on their issue.
 
@@ -325,14 +327,14 @@ For each current run in `merge-ready`, `head-mismatch` or `conflict` with a PR, 
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| M1 | no fresh guard outcome for this PR and head: none at all, or the last one ended before a repair on this PR (`fix-linkage`, `pr-comment`), or it saw only transient failures and is older than `guardRecheckMs`, or it is older than `guardTtlMs` | `guard` | `guard:<pr>:<head>:<n>`, n counting this PR and head's guard entries |
-| M2 | the latest guard outcome for this PR and head has FAIL lines | the first match, in this order: `author` gives hold plus `tell(untrusted-pr)`; `rollout` gives `tell(rollout)`; `base` gives `tell(base)`; `gates` waits (the `P` rules own it); `mergeable` with "PR is merged/closed" waits for observe; `mergeable` conflict, or the run state `conflict`, gives `spawn(fixer, purpose conflict)`; `mergeable` behind gives `update-behind`; `linkage` gives `fix-linkage`; `checks` where every bad check is `pending`, `mergeable` "not computed" or "branch rules" waits for the recheck; `checks` with a failed check, `head`, or any line no rule names gives `judge(guard-fail)` | `fixer:conflict:<pr>:<head>`, `update-behind:<pr>:<head>`, `fix-linkage:<pr>:<head>:<n>`, `judge:guard-fail:<pr>:<head>:<n>` |
+| M1 | no fresh guard outcome for this PR and head: none at all, or the last one ended before a `fix-linkage` repair on this PR, or it saw only transient failures and is older than `guardRecheckMs`, or it is older than `guardTtlMs` | `guard` | `guard:<pr>:<head>:<n>`, n counting this PR and head's guard entries |
+| M2 | the latest guard outcome for this PR and head has FAIL lines | the first match, in this order: `author` gives hold plus `tell(untrusted-pr)`; `rollout` gives `tell(rollout)`; `base` gives `tell(base)`; `gates` waits (the `P` rules own it); `mergeable` with "PR is merged/closed" waits for observe; `mergeable` conflict, or the run state `conflict`, gives `spawn(fixer, purpose conflict)`; `mergeable` behind gives `update-behind`; `linkage` gives `fix-linkage` once per head, and a second linkage FAIL after it tells the owner (`tell(linkage)`); `checks` where every bad check is `pending`, `mergeable` "not computed" or "branch rules" waits for the recheck; `checks` with a failed check, `head`, or any line no rule names gives `judge(guard-fail)` | `fixer:conflict:<pr>:<head>`, `update-behind:<pr>:<head>`, `fix-linkage:<pr>:<head>`, `tell:linkage:<pr>:<head>`, `judge:guard-fail:<pr>:<head>:<n>` |
 | M2a | an `update-behind` outcome is `FAIL` | `spawn(fixer, purpose regate)` with the line's re-gate instruction | `fixer:regate:<pr>:<head>` |
 | M2b | an `update-behind` outcome is `SKIP` | `update-behind` again after `updateBehindRetryMs`, at most `updateBehindRetries` times; then hold plus `tell(update-behind)` | `update-behind:<pr>:<head>` (its attempts) |
-| M3 | the guard passed with `test-weakening WARN` lines | `spawn(adjudicator, purpose weakening)` with the lines; `approve` gives `pr-comment` with the justification, then `M4`; `fixer` gives `spawn(fixer, purpose weakening)`; `escalate` gives a hold plus `tell(escalate)` | `adjudicate-weakening:<pr>:<head>`, `pr-comment:<pr>:<head>` |
+| M3 | the guard passed with `test-weakening WARN` lines and no `pr-comment` for this head yet | `spawn(adjudicator, purpose weakening)` with the lines; `approve` or `skip` gives `pr-comment` with the justification, then `M4`; `fixer` or `fix` gives `spawn(fixer, purpose weakening)`; `escalate` gives a hold plus `tell(escalate)` | `adjudicate-weakening:<pr>:<head>`, `pr-comment:<pr>:<head>` |
 | M4 | the guard passed, every WARN is resolved for this head, and no `merge` answer carries over (M5) | `judge(merge-review)`: read the pipeline's fix commits against the brief, the PR body, and UI evidence when it applies | `judge:merge-review:<pr>:<head>` |
 | M5 | the merge review answered `merge` for this head, or for the head an `update-behind` of this PR rebased from (its patch is proven unchanged, so the review carries over), and the run is still mergeable at this head | `merge` | `merge:<pr>:<head>` |
-| M5a | the merge review answered `hold` | hold until resumed or the head moves, `tell(hold)` with the reason | `tell:hold:<pr>:<head>` |
+| M5a | the merge review answered `hold` | hold until the head moves; the model told the owner in the same turn, so no `tell` is sent, and the title counts it | none |
 | M5b | the merge review answered `fixer` | `spawn(fixer, purpose review)` with the instructions | `fixer:review:<pr>:<head>` |
 | M6 | `merge` failed because GitHub or the harness refused it (not a guard FAIL) | hold, `tell(merge-refused)` with the PR link and the guard lines | `tell:merge-refused:<pr>:<head>` |
 | M7 | a `merge` entry is `done` | by the merged issue's rollout (the merge executor reads `callum-flow-rollout`): `merge` with `close_issue` gives `close-issue`; `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the merge-review answer above the milestone's `Expected` gives `milestone-expect` | `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
@@ -344,10 +346,11 @@ outcome, so `M2` handles it on the next pass.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| D1 | for each queue member, in `priority` order and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free` minus this pass's claims above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
+| D1 | for each queue member, in `priority` order and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts) and this pass's claims, above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
 | D2 | mine, stage `designing`, no brief newer than `stageSince`, no designer entry for this life | `spawn(designer)` with the issue's model label | `design:<N>:<stageSince>[:r<n>]` |
 | D3 | the designer entry is `done` | by its `RESULT` line: `pending_decision=yes` gives a hold plus `tell(decision)` until resumed (then `D2` again with `:r<n>` and the owner's notes); `created=<list>` gives `release-parent` (and `A2` if an implementer is running); a brief with no pending decision goes to `D4`; no `RESULT` line gives `judge(report)` | `tell:decision:<N>:<brief>`, `release-parent:<N>`, `judge:report:<entry key>` |
 | D4 | mine, stage `designing` (not yet delegated), a brief for this life (`briefOf`), no pending decision | `delegate` (route, `delegated` event, `spawn(implementer)`) | `delegate:<N>:<brief>` |
+| D4b | mine, stage `implementing`, no run at all, and the last `delegate` entry `failed`, `timed-out` or `lost` | `delegate` again under the same key while attempts remain (then `tell(agent-failed)`) | `delegate:<N>:<brief>` |
 | D5 | an implementer or fixer entry is `done` and its handoff says `NOT GATED` | `judge(handoff)` | `judge:handoff:<entry key>` |
 | D6 | the owner dropped an issue (`control.dropped`) | `abandon` with its run and branch when known, then `A2` stops its agents | `abandon:<N>:<at>` |
 
@@ -373,7 +376,8 @@ The tests in `tests/plan.test.ts` check these on every fixture as well as the ex
 1. **Determinism**: the same state and config give the same result.
 2. **Idempotence**: adding every planned action to the ledger as `running` and planning again
    yields no action except `title`.
-3. **No I/O**: `plan.ts` imports types only and reads no clock (a test greps its source).
+3. **No I/O**: `plan.ts` imports types only and reads no clock (`tests/factory-loop-plan.test.js`
+   reads its source, since plugin tests cannot read files).
 4. **Tier safety**: no action of a class the tier forbids, whatever the state.
 5. **Control safety**: no action names a paused issue except `heartbeat`; nothing is claimed
    with `noNewWork`.
@@ -543,7 +547,7 @@ text the model can correct in the same turn. As a fallback, a line `ANSWER <id> 
 
 | Wake | Allowed decisions | Timeout falls back to |
 |---|---|---|
-| `judge merge-review` | `merge`; `hold` (reason); `fixer` (instructions); optional `bump` | hold plus the title's owner count |
+| `judge merge-review` | `merge`; `hold` (reason, and the model tells the owner in the same turn); `fixer` (instructions); optional `bump` | hold plus the title's owner count |
 | `judge guard-fail` | `fixer` (instructions); `wait`; `hold` (reason) | hold |
 | `judge cancelled` | `redrive`; `drop` (reason) | hold |
 | `judge handoff` | `ok`; `fixer` (instructions); `hold` (reason) | hold |
@@ -589,8 +593,8 @@ blanks the note the rename leaves for the model (FINDINGS check 3).
 A `tell` is a wake whose turn writes one line to the owner in the conversation, which the phone
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). Kinds: `decision`, `escalate`, `review-cap`, `no-ci`,
-`ci-triggers`, `untrusted-pr`, `rollout`, `base`, `update-behind`, `merge-refused`, `hold`,
-`respond-stuck`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`.
+`ci-triggers`, `untrusted-pr`, `rollout`, `base`, `update-behind`, `merge-refused`,
+`respond-stuck`, `linkage`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`.
 Each is sent once per key, and the title counts the open ones.
 
 ## 10. Failure handling
@@ -656,7 +660,7 @@ the next pass, with no restart. Removing it resumes the configured mode.
 
 ### 11.4 Runaway protection
 
-Plan counts the ledger's actions per class, and per kind and issue, in the last hour. An action
+Plan counts the ledger's token-spending actions (claims, spawns, merges, wakes) per class, and per kind and issue, in the last hour. An action
 past its `rateCaps` entry is dropped, the class stays closed until the window clears, and `tell(runaway)` goes out
 once. Three consecutive failures of one executor kind close that kind for 30 minutes and tell
 the owner.

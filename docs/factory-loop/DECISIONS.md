@@ -205,6 +205,9 @@ follow directly from the skill or the brief.
 - **Why**: pipeline runs are local to the workspace that started them, so the spike workspace has
   none for dev-system. The brief forbids touching the live orchestrator's workspace. The watcher
   logs every transition to `factory.events`, which gives the same states, a little later.
+- **And**: the shadow loop observes as the live orchestrator's device (`shadowDevice`), because
+  the plan drives only runs and claims the device holds. That is safe only because observe mode
+  never executes anything, so the setting is refused outside observe mode.
 
 ### D-26 One wake at a time
 
