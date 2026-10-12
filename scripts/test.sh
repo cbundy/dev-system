@@ -8,7 +8,8 @@
 #
 # Quiet on success: one summary line. On failure it prints only the failing node tests
 # (name, file:line, assertion - see scripts/test-reporter.js) and the output of each
-# failing shell suite, then `test: N failed`, and exits non-zero.
+# failing shell suite, plus `FAIL test isolation: <file>` for each entry left in the
+# sandboxed shared-state directories, then `test: N failed`, and exits non-zero.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
