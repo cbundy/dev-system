@@ -104,8 +104,9 @@ check_invariants
 grep -q "^templates push dev-system-next --directory $TEMPLATE_DIR --yes --variable template_tester_secrets_dir= " "$case/calls" \
   || fail "push call wrong: $(cat "$case/calls")"
 push_name=$(grep '^templates push' "$case/calls" | sed -E 's/.* --name ([^ ]+).*/\1/')
-[ "${#push_name}" -le 64 ] && printf '%s' "$push_name" | grep -Eq '^[a-zA-Z0-9]+([_.-][a-zA-Z0-9]+)*$' \
-  || fail "push --name missing or invalid ('$push_name'): $(cat "$case/calls")"
+if [ "${#push_name}" -gt 64 ] || ! printf '%s' "$push_name" | grep -Eq '^[a-zA-Z0-9]+([_.-][a-zA-Z0-9]+)*$'; then
+  fail "push --name missing or invalid ('$push_name'): $(cat "$case/calls")"
+fi
 [ "$(grep -c -- '--variable' "$case/calls")" -eq 1 ] || fail "pushed variables other than the token directory: $(cat "$case/calls")"
 [ "$(cat "$case/env")" = "$TOKEN https://coder.example.test" ] || fail "coder did not get the token and URL in its env: $(cat "$case/env")"
 
