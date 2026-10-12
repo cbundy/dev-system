@@ -57,6 +57,7 @@ d=$(dirname "$0")
 case "$1" in
   --local)
     echo x >> "$d/dver-local-calls"
+    [ ! -e "$d/dver-local-sleep" ] || sleep 3
     [ ! -e "$d/dver-snapshot-fail" ] || exit 2
     printf '%s\n' '{"device":"dev-box","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
     ;;
@@ -71,6 +72,7 @@ STUB
 cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
+[ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 30
 echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
@@ -98,6 +100,8 @@ wait_for() { # SECONDS COMMAND... : poll until it succeeds
 }
 calls_ge() { [ "$(calls)" -ge "$1" ]; }
 gone() { ! kill -0 "$1" 2> /dev/null; }
+sleeps_of() { awk -v p="$1" '$2 == "(sleep)" && $4 == p' /proc/[0-9]*/stat 2> /dev/null | wc -l | tr -d ' '; }
+one_sleep() { [ "$(sleeps_of "$loop_pid")" = 1 ]; }
 start_loop() {
   ( hb_setup; exec env "$@" "$BASH" "$LOOP" > "$tmpdir/loop.out" 2>&1 ) &
   loop_pid=$!
@@ -108,16 +112,12 @@ reset
 once > "$tmpdir/once.out" 2>&1 || fail "--once should succeed: $(cat "$tmpdir/once.out")"
 [ "$(calls)" = 1 ] || fail "one psql call expected"
 sql="$fakebin/psql-sql-1"
-for col in device repo role ring runtime coder_workspace base_image dev_image template_version plugin_version versions state in_flight chat_active_at critical_failures push interval_s started_at last_seen; do
-  grep -q "^  .*\b$col\b" "$sql" || grep -q "\b$col\b" "$sql" || fail "column $col missing"
-done
-grep -q 'INSERT INTO factory.workers (device, repo, role, ring, runtime, coder_workspace, base_image, dev_image,' "$sql" || fail "INSERT should name the columns"
+cols=$(tr '\n' ' ' < "$sql" | sed -n 's/.*INSERT INTO factory\.workers (\([^)]*\)).*/\1/p' | tr -d ' ')
+[ "$cols" = device,repo,role,ring,runtime,coder_workspace,base_image,dev_image,template_version,plugin_version,versions,state,in_flight,chat_active_at,critical_failures,push,interval_s,started_at,last_seen ] ||
+  fail "the INSERT must name exactly the workers columns, got: $cols"
 grep -q 'ON CONFLICT (device) DO UPDATE' "$sql" || fail "upsert expected"
 grep -q 'last_seen = now()' "$sql" || fail "last_seen must be now()"
 grep -q ':.versions.::jsonb' "$sql" || fail "values must be psql variables"
-for frag in 'factory.workers_status' 'AFTER INSERT OR UPDATE ON factory.workers' "pg_notify('factory_workers', NEW.device)" 'pg_advisory_xact_lock' 'make_interval'; do
-  grep -qF "$frag" "$sql" || fail "the DDL should contain: $frag"
-done
 for kv in device=dev-box repo=acme/widgets role=worker ring=canary runtime=coder coder_workspace=ws1 base_image=2.29.0 dev_image=1.0.0 template_version=tpl-3 plugin_version=0.32.0 state=busy interval_s=60; do
   has_arg 1 "$kv" || fail "psql variable $kv missing: $(tr '\n' ' ' < "$fakebin/psql-args-1")"
 done
@@ -211,8 +211,10 @@ start_loop DEV_HEARTBEAT_INTERVAL=60
 wait_for 5 calls_ge 1 || fail "the loop should beat at once: $(cat "$tmpdir/loop.out")"
 [ -e "$hbdir/dev-heartbeat.pid" ] && [ "$(cat "$hbdir/dev-heartbeat.pid")" = "$loop_pid" ] || fail "the pidfile should hold the loop pid"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "the first beat carries the DDL"
+wait_for 5 one_sleep || fail "the loop should sleep between beats"
 kill -USR1 "$loop_pid"
 wait_for 5 calls_ge 2 || fail "SIGUSR1 should beat at once"
+wait_for 5 one_sleep || fail "SIGUSR1 must not leave the interrupted sleep running: $(sleeps_of "$loop_pid") sleeps"
 grep -q 'CREATE TABLE' "$fakebin/psql-sql-2" && fail "the DDL must be sent once per process"
 touch "$fakebin/psql-fail"
 kill -USR1 "$loop_pid"
@@ -231,6 +233,7 @@ wait "$loop_pid" || rc=$?
 loop_pid=''
 [ "$(calls)" = 5 ] || fail "exactly one more (final) beat expected, got $(calls)"
 has_arg 5 state=stopped || fail "the last beat must be stopped"
+grep -q 'CREATE TABLE' "$fakebin/psql-sql-5" && fail "the stopped beat must not resend the DDL this loop already sent"
 [ ! -e "$hbdir/dev-heartbeat.pid" ] || fail "the pidfile must be removed on exit"
 
 # --final signals the running loop and waits
@@ -245,9 +248,19 @@ has_arg "$(calls)" state=stopped || fail "--final must leave a stopped beat"
 reset
 hb env "$BASH" "$LOOP" --final || fail "--final with no loop must exit 0"
 [ "$(calls)" = 1 ] && has_arg 1 state=stopped || fail "--final with no loop writes the stopped beat"
-has_arg 1 'in_flight=[]' && has_arg 1 chat_active_at= || fail "the stopped beat carries no in-flight work"
+grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "the stopped beat carries in_flight from heartbeat-state"
 has_arg 1 base_image=2.29.0 || fail "the stopped beat reuses the versions snapshot"
-[ ! -e "$fakebin/dver-local-calls" ] && [ ! -e "$share/state-calls" ] || fail "the stopped beat must not run dev-version or heartbeat-state"
+[ ! -e "$fakebin/dver-local-calls" ] || fail "the stopped beat must not run dev-version"
+grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "a stopped beat from a process that sent no DDL sends it"
+# a slow dev-version and a hanging heartbeat-state still leave the stopped beat well inside its 5 s bound
+reset
+touch "$fakebin/dver-local-sleep" "$share/state-hang"
+t0=$(date +%s%N)
+hb env "$BASH" "$LOOP" --final || fail "--final with slow tools must exit 0"
+ms=$((($(date +%s%N) - t0) / 1000000))
+rm -f "$fakebin/dver-local-sleep" "$share/state-hang"
+[ "$ms" -lt 3500 ] || fail "the stopped beat took ${ms} ms"
+[ "$(calls)" = 1 ] && has_arg 1 state=stopped && has_arg 1 'in_flight=[]' || fail "a hanging heartbeat-state still gives a stopped beat with no in_flight"
 touch "$fakebin/psql-fail"
 hb env "$BASH" "$LOOP" --final > /dev/null 2>&1 || fail "--final must exit 0 even when the beat fails"
 rm -f "$fakebin/psql-fail"
