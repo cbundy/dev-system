@@ -11,7 +11,7 @@
 //   5 restart  after dev-restart-self: a new "loaded" line and ticks resume
 import type { EngineInterface, McpToolResult, Register } from 'claude-code'
 
-const LOG = '/persist/spike/log.jsonl'
+const LOG = '/persist/claude/spike/log.jsonl'
 const TICK_MS = 60_000
 const AGENT_AFTER_MS = 3 * 60_000
 

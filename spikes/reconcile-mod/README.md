@@ -14,10 +14,10 @@ logs what it observes and shows its state in the session title.
 
 It runs in the throwaway Coder workspace `spike-reconcile-mod` (repo `dev-system-testbed`),
 loaded through `CLAUDE_CODE_PLUGIN_DIRS` in that workspace's Claude settings, from a clone of
-this branch at `/persist/spike/dev-system`.
+this branch at `/persist/claude/spike/dev-system`.
 
 Read the results:
 
 ```bash
-coder ssh spike-reconcile-mod -- cat /persist/spike/log.jsonl
+coder ssh spike-reconcile-mod -- cat /persist/claude/spike/log.jsonl
 ```
