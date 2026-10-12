@@ -180,7 +180,7 @@ split_out() {
   BODY="$DOC_OUT"
 }
 
-# parse <mode> [arg]: run one node over PR_JSON. The trailing X survives command
+# parse <mode> [args...]: run one node over PR_JSON. The trailing X survives command
 # substitution, which would strip trailing newlines from the body.
 parse() {
   DOC_OUT="$(printf '%s' "$PR_JSON" | nodeb "$@" && printf X)" || return 1
