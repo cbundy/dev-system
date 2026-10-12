@@ -9,8 +9,9 @@
 //     reclaimed (closed, queued, or reclaimed from a stale claim: no one here
 //     is working on it). After merged, abandoned, closed or claim_lost only a
 //     new-life decision (ready, reclaimed, claimed, briefed, design_routed,
-//     delegated) counts as a later event, as in callum-flow-factory-state:
-//     run facts such as failed or head_mismatch replay on old runs. Noise
+//     delegated) counts as a later event, as in callum-flow-factory-state;
+//     after any of the idle states the replayed run facts failed,
+//     head_mismatch, conflict and ci_stalled never count. Noise
 //     states never count for or against busy (callum-flow-issue-read logs
 //     untrusted_stripped on any read; renewed is the claim heartbeat).
 //   - a no-mistakes run whose status is not completed, failed or cancelled,
@@ -33,6 +34,7 @@ const isNoise = (s) => NOISE.has(s) || /^(upgrade|drain)/.test(s);
 const DONE = new Set(['merged', 'abandoned', 'claim_lost', 'owner_wait', 'closed', 'ready', 'reclaimed']);
 const TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
 const NEW_LIFE = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'delegated']);
+const REPLAYED = new Set(['failed', 'head_mismatch', 'conflict', 'ci_stalled']);
 const NM_DONE = new Set(['completed', 'failed', 'cancelled']);
 const CHAT_WINDOW_MS = 5 * 60 * 1000;
 const TAIL_BYTES = 512 * 1024;
@@ -77,7 +79,11 @@ function readIssues(dir, dev) {
   const issues = [];
   for (const evs of byIssue.values()) {
     let cur = null;
-    for (const { ev } of evs.sort((a, b) => a.ts - b.ts)) if (!cur || !TERMINAL.has(cur.state) || NEW_LIFE.has(ev.state)) cur = ev;
+    for (const { ev } of evs.sort((a, b) => a.ts - b.ts)) {
+      if (cur && TERMINAL.has(cur.state) && !NEW_LIFE.has(ev.state)) continue;
+      if (cur && DONE.has(cur.state) && REPLAYED.has(ev.state)) continue;
+      cur = ev;
+    }
     if (!DONE.has(cur.state)) issues.push(cur);
   }
   return { issues, runIssue, superseded };
