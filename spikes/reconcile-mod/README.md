@@ -1,5 +1,7 @@
 # reconcile-spike (throwaway, never merged)
 
+Results: [FINDINGS.md](FINDINGS.md), with the raw log in [evidence/log.jsonl](evidence/log.jsonl).
+
 Answers one question before any real work: can a Claude Code mod (a hooks module plugin) drive
 the orchestrator loop inside a Remote Control session? It does nothing to any repo. It only
 logs what it observes and shows its state in the session title.
