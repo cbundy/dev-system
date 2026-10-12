@@ -88,9 +88,10 @@ default_plugin_fix() {
 # claude_plugin_cli <args...>: runs `claude plugin <args>` limited to
 # CLAUDE_PLUGIN_LIMIT seconds (default 60), with no stdin, and from / rather
 # than a checkout: a plugin command run inside a repo can rewrite the repo's
-# own .claude/settings.json (`marketplace remove` does).
+# own .claude/settings.json (`marketplace remove` does). CLAUDE_PLUGIN_CWD
+# names another directory to run from (prune_orphan_installs sets it).
 claude_plugin_cli() {
-  (cd / && timeout -k 5 "${CLAUDE_PLUGIN_LIMIT:-60}" claude plugin "$@" </dev/null)
+  (cd "${CLAUDE_PLUGIN_CWD:-/}" && timeout -k 5 "${CLAUDE_PLUGIN_LIMIT:-60}" claude plugin "$@" </dev/null)
 }
 
 # installed_plugins: the ids (<plugin>@<marketplace>) of the plugins Claude
@@ -98,8 +99,14 @@ claude_plugin_cli() {
 # to CLAUDE_PLUGIN_LIMIT seconds when the caller sets it, else 30.
 installed_plugins() {
   local out
-  out=$(CLAUDE_PLUGIN_LIMIT="${CLAUDE_PLUGIN_LIMIT:-30}" claude_plugin_cli list --json 2>/dev/null) || return 1
+  out=$(installed_plugins_json) || return 1
   printf '%s\n' "$out" | jq -r '.[].id'
+}
+
+# installed_plugins_json: `claude plugin list --json` (every install, with its
+# scope and projectPath), limited like installed_plugins.
+installed_plugins_json() {
+  CLAUDE_PLUGIN_LIMIT="${CLAUDE_PLUGIN_LIMIT:-30}" claude_plugin_cli list --json 2>/dev/null
 }
 
 # Why a `claude plugin` command failed, from its output: the text after its
@@ -223,21 +230,32 @@ dev_system_location() {
   return 1
 }
 
-# wanted_marketplaces: "<marketplace> <source>" per marketplace. With
+# wanted_marketplaces: "<marketplace> <source>" per marketplace. A repo's
+# declaration with no ref, at the same location as the image default's source,
+# takes the default's ref: the image's pin, not main's HEAD. A declared ref
+# wins, and so does a declaration at another location. With
 # DEV_CANDIDATE_PLUGIN_REF set and valid, a cbundy/dev-system marketplace is
 # wanted at that ref, over both the repo's declaration and the image default.
 wanted_marketplaces() {
-  local settings="$1" plugins="$2" defaults="$3" mkt src declared candidate=""
+  local settings="$1" plugins="$2" defaults="$3" mkt src declared inherit candidate=""
   candidate=$(candidate_plugin_ref) || candidate=""
   while read -r mkt src; do
     if [ -n "$settings" ]; then
-      declared=$(jq -r --arg m "$mkt" --arg fallback "$src" '
+      # The ref a no-ref declaration inherits is the image default's, even for a
+      # plugin the repo took over from the image (so $defaults lacks it).
+      inherit=$(default_plugins | awk -v m="$mkt" '{ n = $1; sub(/^.*@/, "", n); if (n == m) { print $2; exit } }')
+      declared=$(jq -r --arg m "$mkt" --arg fallback "$src" --arg inherit "$inherit" '
+        ($inherit | split("#")[0]) as $fallbackLocation |
+        ($inherit | if contains("#") then sub("^[^#]*#"; "") else "" end) as $fallbackRef |
         .extraKnownMarketplaces[$m] as $declaration |
         if $declaration == null then $fallback
         else $declaration.source |
           (if .source == "github" then .repo elif .source == "git" then .url else "" end) as $location |
+          (if (.ref // "") != "" then .ref
+           elif ($location // "") == $fallbackLocation then $fallbackRef
+           else "" end) as $ref |
           if ($location // "") == "" then ""
-          else $location + (if (.ref // "") == "" then "" else "#" + .ref end) end
+          else $location + (if $ref == "" then "" else "#" + $ref end) end
         end' "$settings" 2>/dev/null) && src="$declared"
     fi
     if [ -n "$candidate" ] && dev_system_location "${src%%#*}"; then
@@ -268,18 +286,22 @@ ref_resolves() {
 # in place (verified with the real CLI): `marketplace add` at a new ref is
 # refused while the old entry exists, and `marketplace update` and
 # `plugin install` keep the old ref and an already installed plugin version.
-# `marketplace remove` uninstalls the marketplace's plugins (and their saved
-# options), so this only acts on a real ref change, and only on a marketplace
+# `marketplace remove` uninstalls the marketplace's plugins in every scope (and
+# their saved options), so this only acts on a real ref change, and only on a marketplace
 # at the same location. A move to a ref that does not exist on the remote (a
 # release pinned before its tag is cut) or cannot be checked (network, auth,
 # the step's deadline) is skipped with one WARNING, so the installed plugins
-# stay. Sets MOVED to the removed names (empty: none). Needs
-# $marketplaces.
+# stay. Sets MOVED to the removed names (empty: none) and RESTORE to the ids
+# (<plugin>@<marketplace>) of the user-scope plugins that were installed from
+# them, wanted or installed by hand, which install_plugins installs again
+# after the move. Needs $marketplaces and $INSTALLED_JSON (the installs listing).
 drop_moved_marketplaces() {
   MOVED=""
-  local json mkt loc ref have_loc have_ref src
+  RESTORE=""
+  local json hand mkt loc ref have_loc have_ref src
   claude_plugin marketplace list --json || return 0
   json="$PLUGIN_OUT"
+  PLUGIN_LIST="${INSTALLED_JSON:-[]}"
   while read -r mkt src; do
     [ -n "$src" ] || continue
     loc="${src%%#*}"
@@ -295,7 +317,9 @@ drop_moved_marketplaces() {
       log "  Fix: if a release is in progress nothing is needed, the next start or dev-init --plugins moves it once the tag exists; otherwise correct the ref in ${settings:-DEV_DEFAULT_PLUGINS or DEV_CANDIDATE_PLUGIN_REF}"
       continue
     fi
+    hand=$(printf '%s\n' "$PLUGIN_LIST" | jq -r --arg m "$mkt" '.[] | select((.scope // "user") == "user" and (.id | endswith("@" + $m))) | .id' 2>/dev/null) || hand=""
     if claude_plugin marketplace remove "$mkt"; then
+      RESTORE="${RESTORE:+$RESTORE$'\n'}$hand"
       log "Claude plugin marketplace $mkt moved from ${have_ref:-no ref} to ${ref:-no ref}; reinstalling its plugins"
       MOVED="$MOVED $mkt"
     else
@@ -307,6 +331,38 @@ drop_moved_marketplaces() {
   return 0
 }
 
+# prune_orphan_installs: uninstalls each project-scope plugin install whose
+# projectPath no longer exists (a deleted worktree). Claude only uninstalls a
+# project-scope plugin from inside its project, so the missing directory is
+# created, the uninstall run there, and only the directories created removed.
+# An existing path is never touched, and a relative one is skipped. Stays
+# within the step's deadline. Takes the installs listing (`list --json`). Logs one line with the count pruned, if any.
+prune_orphan_installs() {
+  local json="$1" id dir parent pruned=0
+  local -a made
+  while IFS=$'\t' read -r id dir; do
+    [ -n "$id" ] || continue
+    [[ "$dir" == /* ]] || continue
+    [ ! -e "$dir" ] || continue
+    [ "$PLUGIN_DEADLINE" -gt "$SECONDS" ] || break
+    # What gets created, and removed again: the missing path and its missing ancestors.
+    made=("$dir")
+    parent=$(dirname "$dir")
+    while [ ! -e "$parent" ] && [ "$parent" != "$(dirname "$parent")" ]; do
+      made+=("$parent")
+      parent=$(dirname "$parent")
+    done
+    mkdir -p -- "$dir" 2>/dev/null || continue
+    if CLAUDE_PLUGIN_CWD="$dir" claude_plugin uninstall "$id" --scope project; then
+      pruned=$((pruned + 1))
+    fi
+    # Deepest first; a directory that gained files stays (rmdir refuses it).
+    rmdir -- "${made[@]}" 2>/dev/null || true
+  done < <(printf '%s\n' "$json" | jq -r '.[] | select(.scope == "project" and (.projectPath // "") != "") | [.id, .projectPath] | @tsv' 2>/dev/null)
+  [ "$pruned" -eq 0 ] || log "pruned $pruned Claude plugin install(s) for project paths that no longer exist"
+  return 0
+}
+
 # install_plugins: installs each wanted plugin Claude has not installed -
 # first the ones the workspace repo's committed .claude/settings.json enables
 # (their marketplaces added from the sources it declares), then the image's
@@ -315,12 +371,15 @@ drop_moved_marketplaces() {
 # added from the repo's source. User scope, in CLAUDE_CONFIG_DIR. The whole
 # step has a deadline (DEV_PLUGIN_INSTALL_TIMEOUT, default 120s), each CLI
 # call is limited to 60s or what is left of it, and once it has passed the
-# plugins not yet installed get one WARNING. A marketplace is only moved to a
+# plugins not yet installed get one WARNING. Project-scope installs whose
+# project directory is gone are pruned first (prune_orphan_installs). A marketplace is only moved to a
 # ref that exists on its remote (see drop_moved_marketplaces), and
 # DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a
-# release candidate. Always returns 0.
+# release candidate. A move keeps the user-scope plugins installed from the
+# marketplace, hand-installed ones included: they are installed again at the
+# new ref. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults marketplaces installed MOVED known id src fix i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local settings="" plugins="" defaults marketplaces installed MOVED RESTORE INSTALLED_JSON known id src fix i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))
@@ -349,9 +408,12 @@ install_plugins() {
   # Unknown (the listing failed) means try them all: an install of a plugin
   # that is already there is a no-op.
   installed=""
+  INSTALLED_JSON=""
   if limit=$(plugin_limit 30); then
-    installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
+    INSTALLED_JSON=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins_json) || INSTALLED_JSON=""
+    installed=$(printf '%s\n' "$INSTALLED_JSON" | jq -r '.[].id' 2>/dev/null) || installed=""
   fi
+  [ -z "$INSTALLED_JSON" ] || prune_orphan_installs "$INSTALLED_JSON"
   # A marketplace pinned to another ref than it is wanted at is removed, so
   # its plugins count as missing below and come back at the wanted ref.
   drop_moved_marketplaces
@@ -363,7 +425,7 @@ install_plugins() {
   fi
   while IFS= read -r id; do
     missing+=("$id")
-  done < <(not_installed "$(printf '%s\n%s\n' "$plugins" "$defaults" | cut -d' ' -f1)" "$installed")
+  done < <(not_installed "$(printf '%s\n%s\n%s\n' "$plugins" "$defaults" "$RESTORE" | cut -d' ' -f1 | awk 'NF && !seen[$0]++')" "$installed")
   [ "${#missing[@]}" -gt 0 ] || return 0
   known=""
   if claude_plugin marketplace list --json; then

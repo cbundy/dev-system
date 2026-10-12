@@ -392,12 +392,23 @@ they land in `/persist/claude` and stay across rebuilds:
   `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
   It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
   the release tag current at image build, never to main, and a repo's committed settings ref
-  wins when it declares the marketplace; `dev-init` removes and re-adds a marketplace whose
-  ref moved, so a pin change takes effect on the next start - but only once the wanted ref
+  wins when it declares one. A repo that declares the marketplace with no ref, at the image
+  default's location, takes the image's pin (not main's HEAD), so a plugin first installed
+  from a no-ref marketplace moves up to the pin on the next start. `dev-init` removes and
+  re-adds a marketplace whose ref moved, so a pin change takes effect on the next start. The
+  removal uninstalls the marketplace's plugins, so every user-scope plugin installed from it
+  beforehand, hand-installed ones such as `factory-hud@callum` included, is installed again
+  at the new ref (a failed reinstall is one `WARNING`); project-scope installs are not
+  restored, the user-scope install and the repo's `enabledPlugins` cover them. A pin move
+  waits until the wanted ref
   exists on the marketplace's remote (checked with `git ls-remote`, inside the plugin step's
   deadline, never prompting). A pin to a tag that is not cut yet, or one that cannot be
   checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
-  one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists. A per-repo image sets
+  one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists.
+  `dev-init` also prunes project-scope installs whose project directory no longer exists
+  (a deleted worktree): it recreates the path as an empty directory, runs
+  `claude plugin uninstall --scope project` there, and removes only what it created,
+  never touching an existing path, logging one line with the count. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
   runtime's environment overrides both.
 - **The repo's plugins.** A repo can enable plugins in its committed
@@ -670,7 +681,9 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
   (`STALE` when installed below it) and the latest release of the plugin's repo. A pin
   behind the latest release is noted on the base image line, since a newer image fixes it.
   With `DEV_CANDIDATE_PLUGIN_REF` set, the line shows `candidate=<ref>` instead, is never
-  `STALE` because of it, and the pin note is left out;
+  `STALE` because of it, and the pin note is left out. A project-scope install whose project
+  directory no longer exists gets no line of its own; one `INFO` line counts them and says
+  `dev-init --plugins` prunes them;
 - claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
   against their latest upstream release (npm for claude and codex, GitHub releases for the
   others): `STALE` when upstream is newer. agentsview and coder are pinned by the image

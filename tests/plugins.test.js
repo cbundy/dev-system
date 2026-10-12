@@ -19,7 +19,8 @@ const DEFAULT = "callum-flow@callum=cbundy/dev-system";
 
 // The stub claude: it records each `claude plugin` call (directory and arguments) in
 // $STUB/calls and keeps its state as files in $STUB/state - mkt-<name> for a known
-// marketplace, inst-<id> for an installed plugin. `marketplace add <source>` names the
+// marketplace, inst-<id> for a user-scope installed plugin, proj-<n> ("<id>|<projectPath>") for a
+// project-scope one. `uninstall` succeeds only when run from a project install's path. `marketplace add <source>` names the
 // marketplace "callum" for cbundy/dev-system, else after the source's last path part (no
 // #ref), and fails for a source containing "fail"; `install` fails for an unknown
 // marketplace. $STUB/hang makes every call hang.
@@ -32,7 +33,11 @@ s="$STUB/state"
 mkdir -p "$s"
 ids() { for f in "$s/$1"-*; do [ -e "$f" ] && echo "\${f#"$s/$1"-}"; done; }
 case "$1 \${2:-}" in
-  "list --json") ids inst | jq -R . | jq -s "map({id: .})" ;;
+  "list --json")
+    { ids inst | jq -R '{id: ., scope: "user", version: "1.0.0"}'
+      for f in "$s"/proj-*; do
+        [ -e "$f" ] && jq -R 'split("|") | {id: .[0], scope: "project", version: "1.0.0", projectPath: .[1]}' "$f"
+      done; } | jq -s . ;;
   "marketplace list")
     ids mkt | while read -r n; do
       src=""; [ -e "$s/src-$n" ] && src=$(cat "$s/src-$n")
@@ -40,7 +45,14 @@ case "$1 \${2:-}" in
         '{name: $n} + (if $l != "" then {repo: $l} else {} end) + (if ($src | contains("#")) then {ref: $r} else {} end)'
     done | jq -s . ;;
   "marketplace remove")
-    rm -f "$s/mkt-$3" "$s/src-$3" "$s/inst-"*"@$3"; echo "✔ Removed marketplace" ;;
+    rm -f "$s/mkt-$3" "$s/src-$3" "$s/inst-"*"@$3"
+    for f in "$s"/proj-*; do [ -e "$f" ] && grep -q "@$3|" "$f" && rm -f "$f"; done
+    echo "✔ Removed marketplace" ;;
+  "uninstall "*)
+    for f in "$s"/proj-*; do
+      [ -e "$f" ] && [ "$(cat "$f")" = "$2|$PWD" ] && { rm -f "$f"; echo "✔ Uninstalled $2"; exit 0; }
+    done
+    echo "✘ Failed to uninstall plugin \"$2\": installed in user scope, not project"; exit 1 ;;
   "marketplace add")
     case "$3" in *fail*) echo "Adding marketplace…✘ Failed to add marketplace: could not clone"; exit 1 ;; esac
     n="\${3%%#*}"; n="\${n##*/}"; [ "\${3%%#*}" = cbundy/dev-system ] && n=callum
@@ -67,7 +79,7 @@ exit 0
 
 // A temp dir with the stub on PATH and a workspace (a git repo when `settings` is given,
 // with .claude/settings.json set to it unless it is null).
-function setup(t, { repo = false, settings = null, installed = [], marketplaces = [] } = {}) {
+function setup(t, { repo = false, settings = null, installed = [], marketplaces = [], projects = [] } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plugins-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, "bin");
@@ -79,6 +91,7 @@ function setup(t, { repo = false, settings = null, installed = [], marketplaces 
   fs.writeFileSync(path.join(bin, "claude"), STUB, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "git"), GIT_STUB, { mode: 0o755 });
   for (const id of installed) fs.writeFileSync(path.join(state, `inst-${id}`), "");
+  projects.forEach(([id, p], i) => fs.writeFileSync(path.join(state, `proj-${i}`), `${id}|${p}`));
   for (const m of marketplaces) fs.writeFileSync(path.join(state, `mkt-${m}`), "");
   if (repo || settings !== null) {
     spawnSync("git", ["init", "-q", ws]);
@@ -187,14 +200,17 @@ for (const source of [
 ]) {
   for (const ref of ["v0.10.0", null]) {
     for (const moved of [false, true]) {
-      test(`shared ${source.source} marketplace uses the repo ${ref || "unpinned"} source once, moved=${moved}`, (t) => {
+      // A no-ref declaration at the image default's location (the github case) inherits the
+      // image's pin (#373); one at another location (the git URL case) stays unpinned.
+      const inherited = !ref && source.repo === "cbundy/dev-system" ? "v0.9.0" : ref;
+      test(`shared ${source.source} marketplace uses the repo ${inherited || "unpinned"} source once, moved=${moved}`, (t) => {
         const settings = {
           extraKnownMarketplaces: { callum: { source: { ...source, ...(ref && { ref }) } } },
           enabledPlugins: { "other@callum": true, "extra@callum": true },
         };
         const ctx = setup(t, { settings, installed: ["other@callum", "extra@callum"] });
         const location = source.repo || source.url;
-        const desired = `${location}${ref ? `#${ref}` : ""}`;
+        const desired = `${location}${inherited ? `#${inherited}` : ""}`;
         withMarketplaceAt(ctx, moved ? `${location}#v0.8.0` : desired);
         const env = { DEV_DEFAULT_PLUGINS: "callum-flow@callum=cbundy/dev-system#v0.9.0" };
         const r = run(ctx, "install_plugins", env);
@@ -549,4 +565,122 @@ test("an invalid candidate ref logs one WARNING and is ignored", (t) => {
   assert.deepEqual(changes(r.calls), []);
   assert.equal(warnings(r).length, 1, r.log);
   assert.match(r.log, /DEV_CANDIDATE_PLUGIN_REF "bad ref;" is not a valid ref/);
+});
+
+// A repo declaration with no ref at the image default's location takes the default's ref (the
+// image's pin), so a stale plugin moves up instead of staying at the release it was first
+// installed at (#373).
+const PINNED_DEFAULT = "callum-flow@callum=cbundy/dev-system#v0.26.0";
+const wanted = (ctx, env = {}) =>
+  run(ctx, `wanted_marketplaces "$(repo_settings)" "" "$(default_plugins)"`, { DEV_DEFAULT_PLUGINS: PINNED_DEFAULT, ...env }).stdout.trim();
+
+test("a declaration with no ref inherits the image default's ref", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN(null) })), "callum cbundy/dev-system#v0.26.0");
+});
+
+test("a declared ref wins over the image default's", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") })), "callum cbundy/dev-system#v0.30.0");
+});
+
+test("a declaration at another location keeps no ref", (t) => {
+  const settings = { extraKnownMarketplaces: { callum: { source: { source: "github", repo: "someone/else" } } } };
+  assert.equal(wanted(setup(t, { settings })), "callum someone/else");
+});
+
+test("the candidate ref overrides an inherited ref", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN(null) }), { DEV_CANDIDATE_PLUGIN_REF: "v0.40.0-rc.1" }), "callum cbundy/dev-system#v0.40.0-rc.1");
+});
+
+test("an image default with no ref leaves a no-ref declaration unchanged", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN(null) }), { DEV_DEFAULT_PLUGINS: DEFAULT }), "callum cbundy/dev-system");
+});
+
+test("a no-ref declaration and an older no-ref install: the marketplace moves to the image's pin and callum-flow is reinstalled", (t) => {
+  const ctx = setup(t, { settings: PIN(null) });
+  withMarketplaceAt(ctx, "cbundy/dev-system");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: PINNED_DEFAULT });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.26.0",
+    "/ install callum-flow@callum",
+  ]);
+  assert.match(r.log, /marketplace callum moved from no ref to v0\.26\.0/);
+  assert.doesNotMatch(r.log, /WARNING/);
+  const again = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: PINNED_DEFAULT });
+  assert.deepEqual(changes(again.calls.slice(r.calls.length)), []);
+});
+
+// #462: `marketplace remove` uninstalls every plugin of the marketplace, so the ones a user
+// installed by hand come back after the move too.
+test("a hand-installed plugin of a moved marketplace is installed again", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum", "other@elsewhere"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.10.0",
+    "/ install callum-flow@callum",
+    "/ install factory-hud@callum",
+  ]);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-factory-hud@callum")));
+  assert.doesNotMatch(r.log, /WARNING/);
+});
+
+test("a hand-installed plugin that fails to reinstall is one WARNING and does not stop the rest", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.9.0");
+  // The stub refuses to install factory-hud.
+  const stub = path.join(ctx.dir, "bin", "claude");
+  fs.writeFileSync(stub, fs.readFileSync(stub, "utf8").replace("  install\\ *)", '  install\\ factory-hud*) echo "✘ Failed to install plugin: boom"; exit 1 ;;\n  install\\ *)'));
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.ok(fs.existsSync(path.join(ctx.dir, "state", "inst-callum-flow@callum")));
+  assert.equal((r.log.match(/WARNING/g) || []).length, 1, r.log);
+  assert.match(r.log, /could not install Claude plugin factory-hud@callum: Failed to install plugin: boom/);
+  assert.match(r.log, /Fix: .*dev-init --plugins/);
+});
+
+test("a marketplace that is not moved keeps its plugins untouched", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["factory-hud@callum"] });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.10.0");
+  const r = run(ctx, "install_plugins");
+  assert.deepEqual(changes(r.calls), []);
+});
+
+test("orphaned project installs are pruned from inside their recreated path, which is removed again", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost-${process.pid}`, "worktrees", "abc", "repo");
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), "plugins-live-"));
+  t.after(() => {
+    fs.rmSync(live, { recursive: true, force: true });
+    fs.rmSync(path.join(os.tmpdir(), `plugins-ghost-${process.pid}`), { recursive: true, force: true });
+  });
+  const ctx = setup(t, { installed: ["callum-flow@callum"], projects: [["callum-flow@callum", ghost], ["callum-flow@callum", live], ["callum-flow@callum", "relative/path"]] });
+  fs.writeFileSync(path.join(live, "keep"), "x");
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [`${ghost} uninstall callum-flow@callum --scope project`]);
+  assert.ok(!fs.existsSync(path.join(os.tmpdir(), `plugins-ghost-${process.pid}`)), "created directories are removed");
+  assert.ok(fs.existsSync(path.join(live, "keep")), "an existing path is untouched");
+  assert.match(r.log, /pruned 1 Claude plugin install\(s\)/);
+  const left = fs.readdirSync(path.join(ctx.dir, "state")).filter((f) => f.startsWith("proj-"));
+  assert.equal(left.length, 2);
+});
+
+test("nothing to prune: no log line", (t) => {
+  const ctx = setup(t, { installed: ["callum-flow@callum"] });
+  const r = run(ctx, "install_plugins");
+  assert.equal(r.log, "");
+});
+
+test("an orphaned project install does not touch the repo's settings", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost2-${process.pid}`);
+  t.after(() => fs.rmSync(ghost, { recursive: true, force: true }));
+  const ctx = setup(t, { settings: PIN("v0.10.0"), installed: ["callum-flow@callum"], marketplaces: ["callum"], projects: [["callum-flow@callum", ghost]] });
+  fs.writeFileSync(path.join(ctx.dir, "state", "src-callum"), "cbundy/dev-system#v0.10.0");
+  const file = path.join(ctx.ws, ".claude", "settings.json");
+  const before = fs.readFileSync(file);
+  run(ctx, "install_plugins");
+  assert.deepEqual(fs.readFileSync(file), before);
 });
