@@ -52,7 +52,7 @@ bin/callum-dev.js                 CLI: init, update, check. Node built-ins and g
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (ci.yml)
 scripts/lint.sh                   lint entrypoint (npm run lint)
-scripts/test.sh                   test entrypoint (npm test); discovers tests by glob, quiet on success
+scripts/test.sh                   test entrypoint (npm test); see Test runner below
 scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
 scripts/build-skills.js           generates doc-backed skills, e.g. onboard (npm run build:skills)
 scripts/release-bump.js           sets the release version everywhere and refreshes the stamp
@@ -65,6 +65,25 @@ docs/                             these docs
 ```
 
 Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on the issue (earliest live claim wins) and `callum-flow-sweep` returns expired claims to `ready`.
+
+## Test runner
+
+`npm test` discovers tests by glob: all `tests/*.test.js` form one Node job, each
+`*.test.sh` under `features/test/callum-tools/`, `coder/test/` and `images/base/test/`
+forms a shell job, and each mod's validation and tests form a job. See
+[mod testing](../plugins/factory-hud/README.md#develop-it) for Claude Code requirements.
+`scripts/test-pool.sh` runs these jobs through `scripts/test-job.sh` with at most
+`TEST_JOBS` active jobs. For example, `TEST_JOBS=2 npm test` limits the pool to two;
+this does not limit Node's internal test concurrency. The default is the CPU count
+from `getconf`, then `nproc`, then `sysctl`, falling back to one. Values must be
+positive decimal integers without leading zeros; invalid values produce one error
+line and exit 2 before discovery.
+
+Success prints one summary line. After all jobs finish, failures print each failing
+job's output as a contiguous block in scheduled order, then `test: N failed` and
+exit non-zero. `scripts/test.sh` owns the slow-first order, the currently empty
+serial list, and the shared per-run environment block for a future sandbox.
+SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
 ## Versioning and release
 
