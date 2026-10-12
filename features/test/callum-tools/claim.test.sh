@@ -101,6 +101,7 @@ case "$1 $2" in
         id=${path##*/}
         for a in "$@"; do case "$a" in body=*) body=${a#body=} ;; esac; done
         echo "PATCH $id" >> "$d/calls"
+        [ ! -f "$d/patch-fails" ] || exit 1
         printf '%s' "$body" > "$d/patched-$id"
         for f in "$d"/comments-*.json; do
           jq --argjson i "$id" --arg b "$body" --arg u "$now_iso" \
@@ -155,7 +156,7 @@ issue() {
 run() {
   PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r \
     CALLUM_FLOW_EVENT_BIN="$EVENT" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
-    CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
+    CALLUM_FLOW_FACTORY_STATE_BIN="${FS_BIN:-$tmpdir/no-factory-state}" CALLUM_FLOW_ISSUE_READ_BIN="${READ_BIN:-$READER}" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_TRUSTED_AUTHORS="${TRUSTED-cbundy:13131067}" \
     "$SH" "$@"
 }
 rc_of() { set +e; run "$@" >"$tmpdir/out" 2>"$tmpdir/err"; rc=$?; set -e; }
@@ -189,13 +190,14 @@ calls | grep -qx 'issue edit 7 --add-label In development --remove-label ready -
 jq -e '.[-1].body == "claimed-by: devA at 2026-10-08T12:00:00Z lease: 120\n<!-- callum-flow-claim -->"' "$d/comments-7.json" >/dev/null ||
   fail "fresh: comment format: $(jq -r '.[-1].body' "$d/comments-7.json")"
 [ "$(events | wc -l)" = 1 ] || fail "fresh: event: $(events)"
-events | jq -e '.state == "claimed" and .issue == 7 and .device == "devA"' >/dev/null || fail "fresh: event: $(events)"
+events | jq -e '.state == "claimed" and .issue == 7 and .device == "devA" and .note == "lease: 120"' >/dev/null || fail "fresh: event: $(events)"
 
 # lease override
 reset
 CALLUM_FLOW_LEASE_MINUTES=30 rc_of "$CLAIM" 7
 expect_rc 0 "lease override"
 jq -e '.[-1].body | startswith("claimed-by: devA at 2026-10-08T12:00:00Z lease: 30\n")' "$d/comments-7.json" >/dev/null || fail "lease override not recorded"
+events | jq -e '.state == "claimed" and .note == "lease: 30"' >/dev/null || fail "lease override: claimed note: $(events)"
 
 # --- pre-check: a live foreign claim blocks, even with stale labels -------------
 reset
@@ -254,11 +256,21 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 0 "heartbeat"
 [ "$(calls)" = "PATCH 100" ] || fail "heartbeat must PATCH only our claim comment: $(calls)"
 [ "$(cat "$d/patched-100")" = "$(printf 'claimed-by: devA at %s lease: 120\n<!-- callum-flow-claim -->\nrenewed: 2026-10-08T12:00:00Z' "$FRESH")" ] || fail "heartbeat body: $(cat "$d/patched-100")"
+[ "$(events | wc -l)" = 1 ] || fail "heartbeat: events: $(events)"
+events | jq -e '.state == "renewed" and .issue == 7 and .device == "devA" and .note == "lease: 120"' >/dev/null || fail "heartbeat: renewed event: $(events)"
 # again: the renewed line is replaced, not duplicated
 echo '2026-10-08T12:10:00Z' > "$d/now-iso"
 : > "$d/calls"
 rc_of "$CLAIM" --heartbeat 7
 [ "$(grep -c '^renewed: ' "$d/patched-100")" = 1 ] || fail "heartbeat duplicated the renewed line"
+
+# a failing PATCH logs nothing
+reset
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+touch "$d/patch-fails"
+rc_of "$CLAIM" --heartbeat 7
+expect_rc 1 "heartbeat patch failure"
+no_events "heartbeat patch failure"
 
 # no-argument form: only this device's live claims on open In development issues
 reset
@@ -270,6 +282,8 @@ printf '7\n8\n' > "$d/list.txt"
 rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all"
 [ "$(calls)" = "PATCH 100" ] || fail "heartbeat all: $(calls)"
+[ "$(events | wc -l)" = 1 ] || fail "heartbeat all: one renewed event per renewed claim: $(events)"
+events | jq -e '.state == "renewed" and .issue == 7' >/dev/null || fail "heartbeat all: renewed event: $(events)"
 # nothing to renew is still success
 reset
 issue 7 OPEN 'In development'
@@ -277,6 +291,7 @@ cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat nothing"
 no_calls "heartbeat nothing"
+no_events "heartbeat nothing"
 
 # --- sweep: stale claim is reclaimed ---------------------------------------------
 reset
@@ -457,8 +472,68 @@ rc_of "$SWEEP"
 expect_rc 1 "sweep candidate read failure"
 events | jq -e 'select(.state == "closed" and .issue == 8)' > /dev/null || fail "other candidate not closed after a failure: $(events)"
 
-# --- sweep: central factory.events via dev-query (#342) ----------------------------
 dq() { CALLUM_FLOW_DEV_QUERY_BIN="$tmpdir/dev-query" rc_of "$SWEEP"; }
+# --- sweep: housekeeping events never hide a closed issue (#465) ---------------------
+# delegated, then a recurring untrusted_stripped: the issue is still closed on GitHub
+reset
+closed_issue 7 completed
+seed delegated 7
+seed untrusted_stripped 7
+rc_of "$SWEEP"
+expect_rc 0 "sweep noise after delegated"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .note == "completed" and .actor == "sweep"' > /dev/null || fail "noise: $(events)"
+n=$(events | wc -l)
+rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "noise twice: $(events)"
+# every other housekeeping event is ignored the same way: a final issue stays final
+reset
+closed_issue 7 completed
+seed closed 7
+for s in renewed usage watcher_error test_weakened claim_lost; do seed "$s" 7; done
+n=$(events | wc -l)
+rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "final then noise wrote: $(events)"
+# an issue known only from a mirror run (factory-state lists it, no events): closed on GitHub gets closed
+cat > "$tmpdir/factory-state" <<'STUB'
+#!/bin/sh
+cat "${STUB_DIR:?}/fs-json"
+STUB
+chmod +x "$tmpdir/factory-state"
+reset
+closed_issue 7 completed
+closed_issue 8 completed
+issue 9 OPEN
+echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"},{"issue":9,"stage":"parked"}],"recent":[{"issue":8}]}]}' > "$d/fs-json"
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+expect_rc 0 "sweep mirror-only"
+events | jq -e 'select(.state == "closed" and .issue == 7 and .actor == "sweep")' > /dev/null || fail "mirror-only not closed: $(events)"
+[ "$(events | grep -c '"state":"closed"')" = 1 ] || fail "only the live closed issue gets closed (not recent #8, not open #9): $(events)"
+# the stubbed tool keeps listing it, but the log now ends it, so the second run must not double-log
+n=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "mirror-only twice: $(events)"
+# abandoned, then a later mirror run (factory-state lists it again, no new events): closed on GitHub gets closed
+reset
+closed_issue 7 completed
+seed abandoned 7
+echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"}],"recent":[]}]}' > "$d/fs-json"
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+expect_rc 0 "sweep abandoned then mirror run"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .actor == "sweep"' > /dev/null || fail "abandoned then mirror run not closed: $(events)"
+n=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "abandoned then mirror run twice: $(events)"
+# abandoned and not listed (no new life): stays final, nothing logged
+reset
+closed_issue 7 completed
+seed abandoned 7
+echo '{"repos":[{"repo":"o/r","issues":[],"recent":[{"issue":7}]}]}' > "$d/fs-json"
+n=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "abandoned without new life was closed: $(events)"
+unset FS_BIN
+
+# --- sweep: central factory.events via dev-query (#342) ----------------------------
 # an issue only another device saw (no local event) is closed from the central read
 reset
 closed_issue 9 not_planned

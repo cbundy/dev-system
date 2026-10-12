@@ -391,7 +391,7 @@ function computeClaims(evs, win, leaseMinutes) {
     let flagged = false;
     let last = null;
     for (const e of byIssue.get(n)) {
-      if (e.state === 'claim_lost') continue;
+      if (e.state === 'claim_lost' || e.state === 'renewed') continue;
       last = e;
       if (e.state === 'claimed') {
         live.set(e.dev, e.t);

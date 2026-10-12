@@ -353,6 +353,18 @@
    "pr": null,
    "note": "by feat/issue-87-x-v2",
    "actor": "agent"
+  },
+  {
+   "repo": "acme/widgets",
+   "device": "dev-a",
+   "ts": "2026-10-10T11:00:00.000Z",
+   "state": "renewed",
+   "issue": 85,
+   "run_id": null,
+   "branch": null,
+   "pr": null,
+   "note": "lease: 120",
+   "actor": "agent"
   }
  ],
  "runs": [

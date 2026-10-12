@@ -31,7 +31,7 @@
       "repo": "acme/widgets",
       "coverage": {
         "class": "events only",
-        "events": 5,
+        "events": 6,
         "runs": 0,
         "last_event_at": "2026-10-10T11:50:00.000Z",
         "last_run_update_at": null,
@@ -39,7 +39,7 @@
         "devices": [
           {
             "device": "dev-a",
-            "events": 5,
+            "events": 6,
             "last_event_at": "2026-10-10T11:50:00.000Z"
           }
         ],

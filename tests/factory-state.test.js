@@ -310,3 +310,17 @@ for (const rel of ["templates/.claude/settings.json", ".claude/settings.json", "
     assert.ok(allow.includes("Bash(callum-flow-factory-state *)"));
   });
 }
+
+test("lapsed claim (#465): a claim only counts as designing while its lease is live", () => {
+  const r = derive(input("lapsed-claim"));
+  const stage = (n) => issue(r, A, n).stage;
+  assert.deepEqual([1, 5].map(stage), ["queued", "queued"], "unrenewed claims lapse: legacy 120 min default, and a `lease: 30` note");
+  assert.equal(issue(r, A, 1).detail, "claim lapsed at 2026-10-12T02:00:00.000Z");
+  assert.equal(issue(r, A, 5).detail, "claim lapsed at 2026-10-12T06:50:00.000Z");
+  assert.deepEqual([2, 3, 4].map(stage), ["designing", "designing", "designing"], "fresh, renewed, and briefed-then-renewed claims stay live");
+  assert.equal(stage(6), "closed without merge", "renewed after closed does not reopen");
+  assert.equal(stage(7), "implementing", "housekeeping noise after delegated changes nothing");
+  assert.equal(stage(8), "in pipeline", "a running run is not a claim");
+  const all = r.repos[0].issues.map((i) => i.stage);
+  assert.equal(all.filter((s) => s === "designing").length, 3);
+});
