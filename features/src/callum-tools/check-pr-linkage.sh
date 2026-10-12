@@ -97,15 +97,20 @@ done
 [[ "$PR" =~ ^[0-9]+$ ]] || die "<pr-number> must be numeric, got '${PR}'"
 [[ "$EXPECT" == closing || "$EXPECT" == refs ]] || die "--expect must be 'closing' or 'refs', got '${EXPECT}'"
 
-# Node does the JSON and body editing (it ships in the image). Modes:
-#   field <name>            stdin: PR JSON; prints headRefName, baseRefName, body
-#                           or the API closing targets as a JSON array
-#   scan                    stdin: body; JSON array of issue targets a real
-#                           GitHub closing keyword targets in the entire body
+# Node does the JSON and body editing (it ships in the image), one start-up per
+# document. Every mode but fix prints its values one per line and then the body
+# raw, so the body stays byte-exact (callers append a sentinel before capturing):
+#   head                    stdin: PR JSON; headRefName, baseRefName, then body
+#   doc <N|""> <repo JSON>  stdin: PR JSON; the repo's nameWithOwner and default
+#                           branch name, the API closing targets as a JSON array,
+#                           the body closing targets as a JSON array (scan: the
+#                           issue targets a real GitHub closing keyword targets in
+#                           the entire body), whether the body has a Refs/Part of
+#                           reference to #N ("" when N is empty), then body
 #   fix <closing|refs> <N>  stdin: body; prints new body
 NODE_PROG='
 const fs = require("fs");
-const [repo, mode, a, b] = process.argv.slice(1);
+let [repo, mode, a, b] = process.argv.slice(1);
 const input = fs.readFileSync(0, "utf8");
 const KW = "(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)";
 const REF = "((?:[\\w.-]+/[\\w.-]+)?#(\\d+))\\b";
@@ -128,16 +133,18 @@ const split = (s) => {
   const m = /^## Pipeline[ \t]*$/m.exec(s);
   return m ? [s.slice(0, m.index), s.slice(m.index), "", "pipeline"] : [s, "", "", "none"];
 };
-if (mode === "field") {
+const closing = (pr) => JSON.stringify([...new Set((pr.closingIssuesReferences || []).map((r) => target(r.repository.owner.login + "/" + r.repository.name + "#" + r.number, r.number)))]);
+const scan = (body) => JSON.stringify([...new Set([...body.matchAll(re)].map((m) => target(m[1], m[2])))]);
+const hasRef = (body, n) => String([...body.matchAll(refsRe)].some((m) => target(m[1], m[2]) === Number(n)));
+if (mode === "head") {
   const pr = JSON.parse(input);
-  if (a === "closing") process.stdout.write(JSON.stringify([...new Set((pr.closingIssuesReferences || []).map((r) => target(r.repository.owner.login + "/" + r.repository.name + "#" + r.number, r.number)))]));
-  else if (a === "defaultBranch") process.stdout.write(pr.defaultBranchRef.name);
-  else process.stdout.write(String(pr[a] ?? ""));
-} else if (mode === "scan") {
-  const targets = [...input.matchAll(re)].map((m) => target(m[1], m[2]));
-  process.stdout.write(JSON.stringify([...new Set(targets)]));
-} else if (mode === "refs") {
-  process.stdout.write(String([...input.matchAll(refsRe)].some((m) => target(m[1], m[2]) === Number(a))));
+  process.stdout.write(String(pr.headRefName ?? "") + "\n" + String(pr.baseRefName ?? "") + "\n" + String(pr.body ?? ""));
+} else if (mode === "doc") {
+  const pr = JSON.parse(input);
+  const rv = JSON.parse(b);
+  repo = String(rv.nameWithOwner ?? "");
+  const body = String(pr.body ?? "");
+  process.stdout.write([repo, rv.defaultBranchRef.name, closing(pr), scan(body), a ? hasRef(body, a) : ""].join("\n") + "\n" + body);
 } else if (mode === "fix") {
   const n = Number(b);
   let [head, tail, after, kind] = split(input);
@@ -156,13 +163,32 @@ if (mode === "field") {
   process.stdout.write(head + tail + after);
 }
 '
+# Set by split_out (printf -v); declared so the reads below are visibly assigned.
+REPO='' DEFAULT_BRANCH='' API_TARGETS='' BODY_TARGETS='' HAS_REF='' BODY=''
+
 nodeb() { node -e "$NODE_PROG" "${REPO:-}" "$@"; }
 
-# The trailing X survives command substitution, which would strip trailing newlines.
+# split_out <name>...: DOC_OUT holds one value per line and then the raw body.
+# Sets each <name> in turn and leaves the body in BODY. No subprocess, no loop
+# over the body, so trailing newlines survive.
+split_out() {
+  local name
+  for name in "$@"; do
+    printf -v "$name" '%s' "${DOC_OUT%%$'\n'*}"
+    DOC_OUT="${DOC_OUT#*$'\n'}"
+  done
+  BODY="$DOC_OUT"
+}
+
+# parse <mode> [arg]: run one node over PR_JSON. The trailing X survives command
+# substitution, which would strip trailing newlines from the body.
+parse() {
+  DOC_OUT="$(printf '%s' "$PR_JSON" | nodeb "$@" && printf X)" || return 1
+  DOC_OUT="${DOC_OUT%X}"
+}
+
 print_body() {
-  local body
-  body="$(printf '%s' "$PR_JSON" | nodeb field body && printf X)" || return 1
-  printf '%s' "${body%X}"
+  printf '%s' "$BODY"
 }
 
 # Trusted author first: nothing from the PR is read before this passes.
@@ -180,8 +206,8 @@ fi
 
 echo "Reading PR #${PR} via ${GH_BIN}..." >&2
 PR_JSON="$("$GH_BIN" pr view "$PR" --json headRefName,baseRefName,body,closingIssuesReferences)"
-HEAD_REF="$(printf '%s' "$PR_JSON" | nodeb field headRefName)"
-BASE_REF="$(printf '%s' "$PR_JSON" | nodeb field baseRefName)"
+parse head
+split_out HEAD_REF BASE_REF
 [[ -n "$HEAD_REF" ]] || { echo "Error: could not read the branch of PR #${PR}" >&2; exit 1; }
 
 if [[ "$HEAD_REF" =~ issue-([0-9]+)- ]]; then
@@ -197,29 +223,28 @@ else
 fi
 
 REPO_JSON="$("$GH_BIN" repo view --json defaultBranchRef,nameWithOwner)"
-REPO="$(printf '%s' "$REPO_JSON" | nodeb field nameWithOwner)"
-DEFAULT_BRANCH="$(printf '%s' "$REPO_JSON" | nodeb field defaultBranch)"
-if [[ "$BASE_REF" == "$DEFAULT_BRANCH" ]]; then
-  VIA=api
-else
-  VIA=body
-  echo "PR #${PR} targets '${BASE_REF}', not '${DEFAULT_BRANCH}': GitHub registers no closing references there, so the body is checked instead. The issue will NOT close on merge." >&2
-  if [[ "$EXPECT" == closing ]]; then
-    echo "Close #${ISSUE} by hand with a comment naming the merged PR." >&2
-  else
-    echo "Keep #${ISSUE} open after merge." >&2
-  fi
-fi
-
 # current_targets: the issues this PR closes (API) or will claim to close (body).
+# One node reads the fresh PR document and REPO_JSON together; it also yields the
+# repo name and default branch, which decide whether the API or the body is used.
 current_targets() {
   PR_JSON="$("$GH_BIN" pr view "$PR" --json body,closingIssuesReferences)"
-  BODY_TARGETS="$(printf '%s' "$PR_JSON" | nodeb field body | nodeb scan)"
-  if [[ "$EXPECT" == refs ]]; then
-    HAS_REF="$(printf '%s' "$PR_JSON" | nodeb field body | nodeb refs "$ISSUE")"
+  local refs_for=
+  [[ "$EXPECT" != refs ]] || refs_for="$ISSUE"
+  parse doc "$refs_for" "$REPO_JSON"
+  split_out REPO DEFAULT_BRANCH API_TARGETS BODY_TARGETS HAS_REF
+  if [[ "$BASE_REF" == "$DEFAULT_BRANCH" ]]; then
+    VIA=api
+  else
+    VIA=body
+    echo "PR #${PR} targets '${BASE_REF}', not '${DEFAULT_BRANCH}': GitHub registers no closing references there, so the body is checked instead. The issue will NOT close on merge." >&2
+    if [[ "$EXPECT" == closing ]]; then
+      echo "Close #${ISSUE} by hand with a comment naming the merged PR." >&2
+    else
+      echo "Keep #${ISSUE} open after merge." >&2
+    fi
   fi
   if [[ "$VIA" == api ]]; then
-    CURRENT="$(printf '%s' "$PR_JSON" | nodeb field closing)"
+    CURRENT="$API_TARGETS"
   else
     CURRENT="$BODY_TARGETS"
   fi
@@ -248,8 +273,7 @@ fi
 
 if [[ "$PRINT_FIX" -eq 1 ]]; then
   echo "MISMATCH #${PR} ${REPORT}" >&2
-  body="$(print_body && printf X)" || exit 1
-  fixed="$(printf '%s' "${body%X}" | nodeb fix "$EXPECT" "$ISSUE" && printf X)"
+  fixed="$(printf '%s' "$BODY" | nodeb fix "$EXPECT" "$ISSUE" && printf X)"
   printf '%s' "${fixed%X}"
   exit 0
 fi
