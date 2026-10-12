@@ -9,6 +9,7 @@
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 # shellcheck disable=SC2034  # variables and helpers are used by the sourcing suites
 # shellcheck disable=SC2164  # the caller runs under set -e
+# shellcheck disable=SC2119,SC2120  # behind_setup takes optional arguments
 ROOT="$SCRIPT_DIR/../../.."
 GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
@@ -27,7 +28,7 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls sleep; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls sleep mktemp; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -127,6 +128,12 @@ read -r b < "$d/branch"
 read -r rh < "$d/runhead"
 read -r rs < "$d/runstatus"
 read -r stp < "$d/step"
+# optional multi-row steps (one 'step,status' per line), for runs with steps before ci
+if [ -f "$d/steps" ]; then
+  stp=''
+  while IFS= read -r l || [ -n "$l" ]; do stp="${stp:+$stp
+    }$l"; done < "$d/steps"
+fi
 h=${rh%"${rh#????????}"}
 detail() {
   case "$1" in
@@ -260,3 +267,23 @@ W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 step=review restore
 # SKIP: the branch names no issue, so --issue N and the PR linkage decide
 skip() { echo 'SKIP #7 feat' > "$st/linkage"; }
 refs_issue() { issue_brief 'keep-open - one part of several'; }
+
+# update-behind fixtures (cbundy/dev-system#476), used by both suites
+BASE0=$(git -C "$work" rev-parse origin/main)
+behind_setup() { # behind_setup [other-file] [content]: main moves on touching that file
+  reset
+  (
+    cd "$work"
+    git checkout -q main && git reset -q --hard "$BASE0" && git push -q -f origin main
+    git checkout -q -B "$B" "$BASE0"
+    echo feature > f.txt && git add f.txt && git commit -q -m feature
+    git push -q -f origin "$B"
+    git checkout -q main
+    echo "${2-other}" > "${1-o.txt}" && git add . && git commit -q -m "main moves on"
+    git push -q origin main
+    git checkout -q "$B"
+  )
+  GATED=$(git -C "$work" rev-parse HEAD)
+  echo "$GATED" > "$st/prhead"; echo "$GATED" > "$st/runhead"; echo BEHIND > "$st/mss"
+}
+origin_b() { git -C "$origin" rev-parse "refs/heads/$B"; }
