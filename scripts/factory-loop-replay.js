@@ -18,6 +18,9 @@
 //          --from <ISO> --to <ISO> [--step-minutes 2] [--out <dir>] [--skip-labels a,b]
 //          [--control <JSON>]   owner directives in force over the window (SPEC 4.3), e.g.
 //                               '{"noNewWork":true}' for a drain the memory file records
+//          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
+//                               the live orchestrator instead of replaying: the shadow's
+//                               logged actions stand in for plan()'s
 const { execFileSync } = require("node:child_process");
 const { register } = require("node:module");
 const fs = require("node:fs");
@@ -204,7 +207,17 @@ async function main() {
   };
 
   const results = [];
-  for (const t of samples) {
+  if (a.decisions) {
+    // a shadow run's own log: one line per pass, already planned
+    for (const line of fs.readFileSync(a.decisions, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      const d = JSON.parse(line);
+      const t = Date.parse(d.at);
+      if (!d.actions || t < from || t > to) continue;
+      results.push({ t, at: d.at, tier: d.tier, actions: d.actions, skipped: d.skipped ?? [] });
+    }
+  }
+  for (const t of a.decisions ? [] : samples) {
     const json = run(FACTORY_STATE, ["--repo", a.repo, "--format", "json", "--github", "off", "--at", iso(t)]);
     const factory = parse.parseFactoryState(json, a.repo);
     if (factory === null) throw new Error(`factory-state at ${iso(t)} did not parse`);

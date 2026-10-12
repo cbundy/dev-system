@@ -155,7 +155,17 @@ async function pass($: EngineInterface) {
       },
       actions: result.actions
         .filter(a => a.kind !== 'title')
-        .map(a => ({ key: a.key, kind: a.kind, class: a.class, rule: a.rule, issue: a.issue, reason: a.reason })),
+        .map(a => ({
+          key: a.key,
+          kind: a.kind,
+          class: a.class,
+          rule: a.rule,
+          issue: a.issue,
+          agent: a.kind === 'spawn' ? a.agent : undefined,
+          run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
+          pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
+          reason: a.reason,
+        })),
       skipped: result.skipped.slice(0, 60),
       commands: observed.commands,
       title: result.title,
