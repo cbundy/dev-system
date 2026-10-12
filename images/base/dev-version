@@ -116,7 +116,7 @@ image_job() {
 
 # plugin_job: installed callum-flow (per scope) against the image's pin.
 plugin_job() {
-  local id src ref pin installed scope ver ppath orphans latest="" candidate=""
+  local id src ref pin installed scope ver ppath orphans live latest="" candidate=""
   while read -r id src; do
     [ -n "$id" ] || continue
     ref=""
@@ -128,18 +128,16 @@ plugin_job() {
     latest=""
     [ -n "$LOCAL" ] || latest=$(gh api "repos/${src%%#*}/releases/latest" --jq .tag_name 2>/dev/null)
     latest=$(semver "$latest")
-    if ! printf '%s\n' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
-      line UNKNOWN "$id" "running=none pin=${pin:-none} latest=${latest:-?} (not installed)"
-      continue
-    fi
     orphans=0
+    live=0
     while IFS=$'\t' read -r scope ppath ver; do
       # A project-scope install whose project directory is gone (a deleted
       # worktree) is not running anywhere: counted, not judged.
-      if [ "$scope" = project ] && [ "$ppath" != - ] && [ ! -e "$ppath" ]; then
+      if [ "$scope" = project ] && orphan_path "$ppath"; then
         orphans=$((orphans + 1))
         continue
       fi
+      live=$((live + 1))
       [ "$ver" != - ] || ver=""
       ver=$(semver "$ver")
       if [ -n "$candidate" ]; then
@@ -152,7 +150,9 @@ plugin_job() {
         line OK "$id($scope)" "running=$ver pin=${pin:-none} latest=${latest:-?}"
       fi
     done < <(printf '%s\n' "$installed" | jq -r --arg id "$id" '.[] | select(.id == $id) | [.scope, (.projectPath // "-"), (.version // "-")] | @tsv')
+    [ "$live" -gt 0 ] || line UNKNOWN "$id" "running=none pin=${pin:-none} latest=${latest:-?} (not installed)"
     [ "$orphans" -eq 0 ] || line INFO "$id" "$orphans project-scope install(s) for paths that no longer exist (dev-init --plugins prunes them)"
+    [ "$live" -gt 0 ] || continue
     if [ -z "$candidate" ] && [ -n "$pin" ] && [ -n "$latest" ] && older "$pin" "$latest"; then
       printf '%s\n' "(the image pins $id at $pin, latest is $latest: a newer image fixes that)" > "$OUT/pin-note"
     fi

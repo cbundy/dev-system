@@ -690,17 +690,46 @@ test("orphaned project installs are pruned even when no plugin is wanted", (t) =
   assert.match(r.log, /pruned 1 Claude plugin install\(s\)/);
 });
 
-test("a plugin only installed for a pruned project path is installed in the same run", (t) => {
+test("a plugin only installed for a missing project path counts as not installed, and the prune runs after the installs", (t) => {
   const ghost = path.join(os.tmpdir(), `plugins-ghost4-${process.pid}`);
   t.after(() => fs.rmSync(ghost, { recursive: true, force: true }));
   const ctx = setup(t, { projects: [["callum-flow@callum", ghost]] });
   const r = run(ctx, "install_plugins");
   assert.equal(r.status, 0, r.log);
   assert.deepEqual(changes(r.calls), [
-    `${ghost} uninstall callum-flow@callum --scope project`,
     "/ marketplace add cbundy/dev-system",
     "/ install callum-flow@callum",
+    `${ghost} uninstall callum-flow@callum --scope project`,
   ]);
+});
+
+test("a prune that outlasts the deadline does not hold up a marketplace move", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost5-${process.pid}`);
+  t.after(() => fs.rmSync(ghost, { recursive: true, force: true }));
+  const ctx = setup(t, { settings: PIN(null), projects: [["other@elsewhere", ghost]] });
+  withMarketplaceAt(ctx, "cbundy/dev-system");
+  // The stub hangs on every uninstall, so the prune would use up the step's deadline.
+  const stub = path.join(ctx.dir, "bin", "claude");
+  fs.writeFileSync(stub, fs.readFileSync(stub, "utf8").replace('  "uninstall "*)', '  "uninstall "*) exec sleep 600 ;;\n  "uninstall-unused "*)'));
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: PINNED_DEFAULT, DEV_PLUGIN_INSTALL_TIMEOUT: "3" });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.26.0",
+    "/ install callum-flow@callum",
+    `${ghost} uninstall other@elsewhere --scope project`,
+  ]);
+  assert.match(r.log, /marketplace callum moved from no ref to v0\.26\.0/);
+});
+
+test("installed_plugins leaves out project installs at a missing absolute path", (t) => {
+  const ghost = path.join(os.tmpdir(), `plugins-ghost6-${process.pid}`);
+  const live = fs.mkdtempSync(path.join(os.tmpdir(), "plugins-live-"));
+  t.after(() => fs.rmSync(live, { recursive: true, force: true }));
+  const ctx = setup(t, { installed: ["a@m"], projects: [["b@m", ghost], ["c@m", live], ["d@m", "relative/path"]] });
+  const r = run(ctx, "installed_plugins");
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(r.stdout.trim().split("\n").sort(), ["a@m", "c@m", "d@m"]);
 });
 
 test("nothing to prune: no log line", (t) => {

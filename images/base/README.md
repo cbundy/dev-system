@@ -407,9 +407,11 @@ they land in `/persist/claude` and stay across rebuilds:
   checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
   one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists.
   `dev-init` also prunes project-scope installs whose project directory no longer exists
-  (a deleted worktree), even when no plugin is wanted: it recreates the path as an empty directory, runs
+  (a deleted worktree), even when no plugin is wanted: after the installs, on what is left of
+  the step's deadline, it recreates the path as an empty directory, runs
   `claude plugin uninstall --scope project` there, and removes only what it created,
-  never touching an existing path, logging one line with the count. A per-repo image sets
+  never touching an existing path, logging one line with the count. Such an install never
+  counts as installed. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
   runtime's environment overrides both.
 - **The repo's plugins.** A repo can enable plugins in its committed
@@ -684,7 +686,8 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
   With `DEV_CANDIDATE_PLUGIN_REF` set, the line shows `candidate=<ref>` instead, is never
   `STALE` because of it, and the pin note is left out. A project-scope install whose project
   directory no longer exists gets no line of its own; one `INFO` line counts them and says
-  `dev-init --plugins` prunes them;
+  `dev-init --plugins` prunes them, and a plugin with no other install is `UNKNOWN` (not
+  installed);
 - claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
   against their latest upstream release (npm for claude and codex, GitHub releases for the
   others): `STALE` when upstream is newer. agentsview and coder are pinned by the image

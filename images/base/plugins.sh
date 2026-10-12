@@ -95,12 +95,31 @@ claude_plugin_cli() {
 }
 
 # installed_plugins: the ids (<plugin>@<marketplace>) of the plugins Claude
-# has installed, one per line. Fails when the CLI cannot list them. Limited
-# to CLAUDE_PLUGIN_LIMIT seconds when the caller sets it, else 30.
+# has installed, one per line (install_ids). Fails when the CLI cannot list
+# them. Limited to CLAUDE_PLUGIN_LIMIT seconds when the caller sets it, else 30.
 installed_plugins() {
   local out
   out=$(installed_plugins_json) || return 1
-  printf '%s\n' "$out" | jq -r '.[].id'
+  install_ids "$out"
+}
+
+# orphan_path <projectPath>: succeeds for an absolute project path that no
+# longer exists (a deleted worktree): an install there runs nowhere.
+orphan_path() {
+  [[ "$1" == /* ]] && [ ! -e "$1" ]
+}
+
+# install_ids <installs listing>: the ids in a `list --json` listing, one per
+# install, leaving out the project-scope ones at an orphan_path. Fails when it
+# is not valid JSON.
+install_ids() {
+  local rows id scope dir
+  rows=$(printf '%s\n' "$1" | jq -r '.[] | [.id, (.scope // "user"), (.projectPath // "")] | @tsv' 2>/dev/null) || return 1
+  while IFS=$'\t' read -r id scope dir; do
+    [ -n "$id" ] || continue
+    [ "$scope" = project ] && orphan_path "$dir" && continue
+    printf '%s\n' "$id"
+  done <<<"$rows"
 }
 
 # installed_plugins_json: `claude plugin list --json` (every install, with its
@@ -334,17 +353,15 @@ drop_moved_marketplaces() {
 # projectPath no longer exists (a deleted worktree). Claude only uninstalls a
 # project-scope plugin from inside its project, so the missing directory is
 # created, the uninstall run there, and only the directories created removed.
-# An existing path is never touched, and a relative one is skipped. Stays
-# within the step's deadline. Takes the installs listing (`list --json`). Sets
-# PRUNED to the count pruned and logs one line with it, if any.
+# Only an orphan_path is acted on: an existing path is never touched, and a
+# relative one is skipped. Stays within the step's deadline. Takes the
+# installs listing (`list --json`). Logs one line with the count pruned, if any.
 prune_orphan_installs() {
-  local json="$1" id dir parent
-  PRUNED=0
+  local json="$1" id dir parent pruned=0
   local -a made
   while IFS=$'\t' read -r id dir; do
     [ -n "$id" ] || continue
-    [[ "$dir" == /* ]] || continue
-    [ ! -e "$dir" ] || continue
+    orphan_path "$dir" || continue
     [ "$PLUGIN_DEADLINE" -gt "$SECONDS" ] || break
     # What gets created, and removed again: the missing path and its missing ancestors.
     made=("$dir")
@@ -355,12 +372,12 @@ prune_orphan_installs() {
     done
     mkdir -p -- "$dir" 2>/dev/null || continue
     if CLAUDE_PLUGIN_CWD="$dir" claude_plugin uninstall "$id" --scope project; then
-      PRUNED=$((PRUNED + 1))
+      pruned=$((pruned + 1))
     fi
     # Deepest first; a directory that gained files stays (rmdir refuses it).
     rmdir -- "${made[@]}" 2>/dev/null || true
   done < <(printf '%s\n' "$json" | jq -r '.[] | select(.scope == "project" and (.projectPath // "") != "") | [.id, .projectPath] | @tsv' 2>/dev/null)
-  [ "$PRUNED" -eq 0 ] || log "pruned $PRUNED Claude plugin install(s) for project paths that no longer exist"
+  [ "$pruned" -eq 0 ] || log "pruned $pruned Claude plugin install(s) for project paths that no longer exist"
   return 0
 }
 
@@ -373,15 +390,16 @@ prune_orphan_installs() {
 # step has a deadline (DEV_PLUGIN_INSTALL_TIMEOUT, default 120s), each CLI
 # call is limited to 60s or what is left of it, and once it has passed the
 # plugins not yet installed get one WARNING. Project-scope installs whose
-# project directory is gone are pruned first (prune_orphan_installs), even
-# when no plugin is wanted. A marketplace is only moved to a
+# project directory is gone are pruned last, on what is left of the deadline
+# (prune_orphan_installs), and also when no plugin is wanted; they never count
+# as installed. A marketplace is only moved to a
 # ref that exists on its remote (see drop_moved_marketplaces), and
 # DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a
 # release candidate. A move keeps the user-scope plugins installed from the
 # marketplace, hand-installed ones included: they are installed again at the
 # new ref; a WARNING for one of those names the install by hand. Always returns 0.
 install_plugins() {
-  local settings="" plugins="" defaults wanted marketplaces installed MOVED RESTORE PRUNED=0 INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
+  local settings="" plugins="" defaults wanted marketplaces installed MOVED RESTORE INSTALLED_JSON="" known id src fix by_hand i limit bad budget="${DEV_PLUGIN_INSTALL_TIMEOUT:-120}"
   local -a missing=()
   case "$budget" in '' | *[!0-9]*) budget=120 ;; esac
   PLUGIN_DEADLINE=$((SECONDS + budget))
@@ -405,34 +423,32 @@ install_plugins() {
   if limit=$(plugin_limit 30); then
     INSTALLED_JSON=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins_json) || INSTALLED_JSON=""
   fi
-  [ -z "$INSTALLED_JSON" ] || prune_orphan_installs "$INSTALLED_JSON"
-  [ -n "$plugins$defaults" ] || return 0
-  if [ "$PRUNED" -gt 0 ] && limit=$(plugin_limit 30); then
-    INSTALLED_JSON=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins_json) || INSTALLED_JSON=""
+  if [ -z "$plugins$defaults" ]; then
+    prune_orphan_installs "$INSTALLED_JSON"
+    return 0
   fi
   if [ -n "${DEV_CANDIDATE_PLUGIN_REF:-}" ] && ! candidate_plugin_ref >/dev/null; then
     log "WARNING: DEV_CANDIDATE_PLUGIN_REF \"$DEV_CANDIDATE_PLUGIN_REF\" is not a valid ref ([A-Za-z0-9._/-]+) - ignored."
   fi
   marketplaces=$(wanted_marketplaces "$settings" "$plugins" "$defaults")
-  # Unknown (the listing failed) means try them all: an install of a plugin
-  # that is already there is a no-op.
-  installed=$(printf '%s\n' "$INSTALLED_JSON" | jq -r '.[].id' 2>/dev/null) || installed=""
   # A marketplace pinned to another ref than it is wanted at is removed, so
   # its plugins count as missing below and come back at the wanted ref.
   drop_moved_marketplaces
   if [ -n "$MOVED" ]; then
-    installed=""
+    INSTALLED_JSON=""
     if limit=$(plugin_limit 30); then
-      installed=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins) || installed=""
+      INSTALLED_JSON=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins_json) || INSTALLED_JSON=""
     fi
   fi
+  # Unknown (the listing failed) means try them all: an install of a plugin
+  # that is already there is a no-op.
+  installed=$(install_ids "$INSTALLED_JSON") || installed=""
   wanted=$(printf '%s\n%s\n' "$plugins" "$defaults" | cut -d' ' -f1)
   while IFS= read -r id; do
     missing+=("$id")
   done < <(not_installed "$(printf '%s\n%s\n' "$wanted" "$RESTORE" | awk 'NF && !seen[$0]++')" "$installed")
-  [ "${#missing[@]}" -gt 0 ] || return 0
   known=""
-  if claude_plugin marketplace list --json; then
+  if [ "${#missing[@]}" -gt 0 ] && claude_plugin marketplace list --json; then
     known=$(printf '%s\n' "$PLUGIN_OUT" | jq -r '.[].name' 2>/dev/null)
   fi
 
@@ -453,5 +469,6 @@ install_plugins() {
     log "  Fix: check this container's network access to the plugin marketplaces, then run: dev-init --plugins$by_hand"
     break
   done
+  prune_orphan_installs "$INSTALLED_JSON"
   return 0
 }
