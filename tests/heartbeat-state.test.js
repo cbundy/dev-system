@@ -131,6 +131,12 @@ test("an issue entry carries its lowercase repo, and a run joins only the issue 
   ]);
 });
 
+test("the branch rule links only an issue-<N> path segment, as in docs/metrics.md", () => {
+  writeRuns([["run1", "fix/reissue-3-cache", "running"], ["run2", "feat/issue-12abc", "running"], ["run3", "issue-4", "running"]]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight.map((e) => [e.run_id, e.issue]), [["run1", null], ["run2", null], ["run3", 4]]);
+});
+
 test("an open run on a branch with no issue number is still busy", () => {
   writeRuns([["run9", "scratch", "awaiting_approval"]]);
   const { out } = run();
