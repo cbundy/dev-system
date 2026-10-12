@@ -285,6 +285,19 @@ done
 behind_setup; echo CONFLICTING > "$st/pmergeable"
 g 7 --update-behind
 [ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "CONFLICTING must fail: rc=$rc out=$out"
+# only a conflict falls back to a re-gate; a PR that is not behind needs none
+behind_setup; echo DIRTY > "$st/mss"; g 7 --update-behind
+case "$out" in "UPDATE-BEHIND FAIL PR conflicts with main; fall back to a full re-gate: "*) ;; *) fail "dirty update-behind text: $out" ;; esac
+behind_setup; echo CLEAN > "$st/mss"; g 7 --update-behind
+case "$out" in "UPDATE-BEHIND SKIP PR is not behind its base (state=OPEN mergeStateStatus=CLEAN mergeable=MERGEABLE), nothing to rebase; re-run the guard") ;; *) fail "clean update-behind text: $out" ;; esac
+# UNKNOWN is re-read like the mergeable guard: still computing, then behind, rebases
+behind_setup; printf 'UNKNOWN\nBEHIND\n' > "$st/mss-seq"; g 7 --update-behind
+[ "$rc" = 0 ] && [ "$(origin_b)" != "$GATED" ] || fail "UNKNOWN then BEHIND should rebase: rc=$rc out=$out"
+[ "$(cat "$st/view-count")" = 2 ] || fail "UNKNOWN should be re-read once: $(cat "$st/view-count")"
+behind_setup; echo UNKNOWN > "$st/mss"; g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "UNKNOWN must not push: rc=$rc out=$out"
+[ "$out" = "UPDATE-BEHIND SKIP GitHub has not computed mergeability, retry" ] || fail "unknown update-behind text: $out"
+[ "$(cat "$st/view-count")" = 3 ] || fail "UNKNOWN should be read CALLUM_FLOW_MERGEABLE_TRIES times: $(cat "$st/view-count")"
 # a branch that already moved before the PR was read pushes nothing
 behind_setup; echo bogus > "$st/prhead"
 g 7 --update-behind

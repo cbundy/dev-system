@@ -1373,7 +1373,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... closed ... test_weakened ... usage superseded renewed`; `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run` and neither ends an issue nor releases a claim; `callum-flow-event` with no arguments lists the vocabulary) to
+(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind`; `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run` and neither ends an issue nor releases a claim; `rebased_behind` is run-scoped and logged after `callum-flow-merge-guard <pr> --update-behind`, so the old run's `head_mismatch` that follows is expected; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
