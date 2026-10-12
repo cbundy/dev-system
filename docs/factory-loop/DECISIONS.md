@@ -295,3 +295,18 @@ The spike workspace has no `gh` login, so its loop runs with GitHub off and rule
 labels or blockers. It then claims nothing, which can neither agree nor disagree with the live
 orchestrator. The replay harness (phase 2) approximates GitHub from the event log's `ready`
 events to compare claims.
+
+### D-33 Runtime settings and owner directives are plain JSON files
+
+`${CLAUDE_CONFIG_DIR}/factory-loop/config.json` holds the workspace's mode, repo, shadow device
+and run source, and `<loop dir>/control.json` holds the owner directives (SPEC 4.1, 4.3). The
+plugin options stay as defaults. The first plan put control state in `$.store`; files are easier
+to inspect and set from a shell (the shadow run is configured that way), they survive restarts on
+`/persist` just as well, and the `/loop` command and the control tool write the same file.
+
+### D-34 A shadow run does not heartbeat on its own restarts
+
+Rule `H1` heartbeats on the first pass after a load (I-93). A shadow watches another session, so
+its own load says nothing about when that session restarted. While shadowing, the load time
+counts as unknown, and only real lease timing drives heartbeats. The driver test caught this.
+

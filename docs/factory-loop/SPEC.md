@@ -196,12 +196,15 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 
 ### 4.1 Where it lives
 
-- **Plugin options** (`userConfig`, settable with `/config factory-loop.<key>=<value>`, also from
-  the phone): `mode` (`off`, `observe` default, `act`) and `repo` (default: the session
-  checkout's GitHub `origin`).
+- **Plugin options** (`userConfig`): `mode` (`off`, `observe` default, `act`), `repo` (default:
+  the session checkout's GitHub `origin`), `shadowDevice` and `runSource`.
+- **The workspace file** `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/config.json` overrides the
+  options and adds `checkout` (the consumer's main checkout, when it is not the session's
+  directory) and `poolSize`. It is plain JSON, easy to read and set from a shell, which the shadow
+  run uses (DECISIONS D-33).
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 4.2.
   The plugin ships no repo-specific values (CLAUDE.md: shared plugins stay generic).
-- **Control state** in `$.store` (4.3): owner directives that change at runtime.
+- **Control state** in `<loop dir>/control.json` (4.3): owner directives that change at runtime.
 
 ### 4.2 Settings and defaults
 
@@ -250,7 +253,7 @@ type Control = {
 }
 ```
 
-The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
+They live in `<loop dir>/control.json`. The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
 and the owner can type `/loop <op>` from any client: `status`, `pause <N>`, `unpause <N>`,
 `skip <N>`, `noskip <N>`, `priority <N...>`, `serial on|off`, `new on|off`, `override <pct>
 <hours>`, `resume <N|run>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the

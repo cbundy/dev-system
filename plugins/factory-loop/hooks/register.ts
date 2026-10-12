@@ -137,6 +137,8 @@ async function pass($: EngineInterface) {
       v: 1,
       at,
       pass: passNo,
+      // pass numbers restart when the module reloads; the load time tells the runs apart
+      loaded: new Date(loadedAt).toISOString(),
       mode: rt.mode,
       executed: false,
       note: rt.mode === 'act' ? 'act requested, but this build has no executors: nothing was run' : undefined,
