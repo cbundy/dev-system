@@ -135,9 +135,8 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
   triggers do not match.
 
 ## Merge
-`callum-flow-merge-guard <pr>` reads only and prints a `GUARD <name> FAIL
-<reason>` line per failed guard, naming the fix. Act on each, re-run, and merge
-with `callum-flow-merge <pr>` once no FAIL remains.
+`callum-flow-merge-guard <pr>` reads only and prints a `GUARD <name> FAIL <reason>` line per failed guard, naming the fix; its one writing mode, `--update-behind`, is yours alone (implementers and fixers never run it).
+Act on each, re-run, and merge with `callum-flow-merge <pr>` once no FAIL remains.
 Before merging:
 - Read every `no-mistakes(<step>)` fix commit against the issue's requirements:
   a green run can have deleted a requirement and rewritten its tests to match.

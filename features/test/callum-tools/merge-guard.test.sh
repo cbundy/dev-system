@@ -254,6 +254,15 @@ g 7 --update-behind
 case "$out" in "UPDATE-BEHIND FAIL patch changed by the rebase; fall back to a full re-gate: "*) ;; *) fail "mismatch text: $out" ;; esac
 passed=$((passed + 1))
 
+# fail closed: an indentation-only difference is a different patch (patch-id --verbatim)
+behind_setup
+ALT=$(cd "$work" && git checkout -q --detach "$BASE0" && echo '  feature' > f.txt && git add f.txt && git commit -q -m indented && git rev-parse HEAD && git checkout -q "$B")
+echo "$ALT" > "$st/runhead"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "indentation-only mismatch must fail without a push: rc=$rc out=$out"
+case "$out" in "UPDATE-BEHIND FAIL patch changed by the rebase; fall back to a full re-gate: "*) ;; *) fail "indentation mismatch text: $out" ;; esac
+passed=$((passed + 1))
+
 # fail closed: rebase conflict, no push, lease untouched
 behind_setup f.txt conflicting
 g 7 --update-behind
