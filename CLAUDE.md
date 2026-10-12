@@ -79,7 +79,8 @@ has passed.
   its summary line notes the skip and CI's `ci.yml` runs them.
 - `npm test` - every node test under `tests/` and every plain-shell suite under
   `features/test/callum-tools/`, `coder/test/` and `images/base/test/`, plus mod validation
-  and tests when Claude Code is available (`scripts/test.sh`; see
+  and tests when Claude Code is available, run in parallel (`TEST_JOBS` caps the jobs, default the
+  CPU count; `scripts/test.sh`; see
   [mod testing](plugins/factory-hud/README.md#develop-it) for local and CI requirements).
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
