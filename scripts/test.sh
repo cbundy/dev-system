@@ -1,9 +1,10 @@
 #!/bin/sh
 # Canonical test entrypoint (`npm test`; CLAUDE.md "Canonical commands").
 #
-# Runs every node test (tests/*.test.js) and every plain-shell suite
-# (features/test/callum-tools/*.test.sh, coder/test/*.test.sh, images/base/test/*.test.sh). Both are discovered by
-# glob, so a new test file needs no wiring here.
+# Runs every node test (tests/*.test.js), every plain-shell suite
+# (features/test/callum-tools/*.test.sh, coder/test/*.test.sh, images/base/test/*.test.sh) and every
+# mod's validation and tests (plugins/*/ with a hooks module). All are discovered by glob, so a new
+# test file needs no wiring here.
 #
 # Quiet on success: one summary line. On failure it prints only the failing node tests
 # (name, file:line, assertion - see scripts/test-reporter.js) and the output of each
@@ -42,8 +43,34 @@ for suite in features/test/callum-tools/*.test.sh coder/test/*.test.sh images/ba
   fi
 done
 
+# Mods: every plugin with a hooks module (hooks/hooks.json naming "modules") is validated
+# and its *.test.ts run by Claude Code itself (`claude plugin validate` / `claude plugin
+# test`, no login needed). Without claude on PATH this is skipped with a note - unless
+# TEST_REQUIRE_CLAUDE=1 (CI), where a missing claude must fail rather than pass unchecked.
+mods=0
+mod_note=""
+for hooks in plugins/*/hooks/hooks.json; do
+  grep -q '"modules"' "$hooks" 2>/dev/null || continue
+  mod=${hooks%/hooks/hooks.json}
+  if ! command -v claude >/dev/null 2>&1; then
+    if [ "${TEST_REQUIRE_CLAUDE:-0}" = 1 ]; then
+      echo "FAIL $mod: claude not on PATH, and TEST_REQUIRE_CLAUDE=1" >&2
+      failed=$((failed + 1))
+    else
+      mod_note=" (mods skipped: claude not on PATH; CI runs them)"
+    fi
+    continue
+  fi
+  mods=$((mods + 1))
+  if ! { claude plugin validate "$mod" && claude plugin test "$mod"; } > "$out" 2>&1; then
+    echo "FAIL $mod (claude plugin validate / test)" >&2
+    sed 's/^/    /' "$out" >&2
+    failed=$((failed + 1))
+  fi
+done
+
 if [ "$failed" -gt 0 ]; then
   echo "test: $failed failed" >&2
   exit 1
 fi
-echo "test: ${node_total} node tests, $suites shell suites ok"
+echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note"

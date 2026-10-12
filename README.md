@@ -27,7 +27,9 @@ a browser and come back to a reviewed PR, without keeping a shell open on any ma
 Three layers, each pinned independently:
 
 - **Agent behaviour** - the `callum-flow` plugin in [`plugins/callum-flow/`](plugins/callum-flow/):
-  the skills and hooks that turn issues into PRs.
+  the skills and hooks that turn issues into PRs. Beside it, the opt-in
+  [`factory-hud`](plugins/factory-hud/README.md) mod shows usage and factory counts on every
+  client, the phone included.
 - **Environment** - the base image in [`images/base/`](images/base/README.md): the tools, headless
   Claude with Remote Control, logins and persistent state.
 - **Repo config** - [`templates/`](templates/README.md) synced into each repo by `callum-dev`, so

@@ -17,7 +17,8 @@ name: CI
 # - `npm test`: runs the callum-dev bin end-to-end (init, update
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
-#   (dev-system#52) and the callum-tools script tests.
+#   (dev-system#52), the callum-tools script tests and every mod's validation and
+#   tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
 # The heavy, path-filtered image and feature workflows stay separate and
 # optional.
 on:
@@ -75,5 +76,14 @@ jobs:
           LINT_REQUIRE_TERRAFORM: "1"
         run: npm run lint
 
+      # Claude Code validates and tests the mods (plugins/*/ with a hooks module); it
+      # needs no login for that. Latest, as the image installs it, so a release that
+      # breaks a mod fails here. TEST_REQUIRE_CLAUDE=1 makes a missing claude fail
+      # instead of skipping.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code && claude --version
+
       - name: Test
+        env:
+          TEST_REQUIRE_CLAUDE: "1"
         run: npm test

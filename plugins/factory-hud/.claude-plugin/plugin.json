@@ -1,0 +1,22 @@
+{
+  "name": "factory-hud",
+  "displayName": "Factory HUD",
+  "version": "0.30.0",
+  "description": "A status entry with the time, context fill, plan usage, the agent factory's counts and the tool versions, drawn on every surface a session shows on (terminal, desktop, mobile through Remote Control), plus toasts when context or usage runs high. Display only: nothing reaches the conversation.",
+  "author": {
+    "name": "Callum Bundy"
+  },
+  "homepage": "https://github.com/cbundy/dev-system",
+  "repository": "https://github.com/cbundy/dev-system",
+  "keywords": ["status", "orchestration", "mod"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "factory": {
+      "type": "string",
+      "title": "Factory counts",
+      "description": "Show the agent factory's counts for the session's repo: auto shows them when DEV_ROLE is orchestrator",
+      "options": ["auto", "on", "off"],
+      "default": "auto"
+    }
+  }
+}
