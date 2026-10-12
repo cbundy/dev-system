@@ -54,6 +54,16 @@ run when a PR touches their paths; `ci.yml` runs on every PR. See each workflow'
 
 For changes in these areas, the evidence is the PR's CI run, never a local claim.
 
+The dev image includes a PostgreSQL 17 server (no system cluster, not started), so the
+metrics SQL in `docs/metrics.md` and `callum-flow-factory-state` can be checked against a
+local throwaway server without Docker. Section 9 in image CI is still the gate.
+
+```sh
+d=$(mktemp -d); pg=/usr/lib/postgresql/17/bin
+$pg/initdb -D "$d/data" -A trust && $pg/pg_ctl -D "$d/data" -o "-k $d -c listen_addresses=" -w -l "$d/log" start
+createdb -h "$d" t && psql -h "$d" -d t -c 'select 1'; $pg/pg_ctl -D "$d/data" -w stop
+```
+
 Coder template changes are tried with `coder/dev-system/push-next.sh`, which pushes only
 `dev-system-next`. Enable `template_testing` after the owner's token setup (see
 [Testing template changes from a workspace](../coder/dev-system/README.md#testing-template-changes-from-a-workspace)).

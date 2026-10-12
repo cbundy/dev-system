@@ -1,7 +1,7 @@
 name: Publish dev image
 
 # Builds and smoke-tests ghcr.io/cbundy/dev-system/dev, dev-system's own dev
-# environment (.devcontainer/Dockerfile: the base image plus terraform,
+# environment (.devcontainer/Dockerfile: the base image plus terraform and a PostgreSQL 17 server,
 # cbundy/dev-system#117), and pushes it like any consumer's per-repo image:
 #
 # - pull_request: build + smoke test only, never pushes.
@@ -128,6 +128,18 @@ jobs:
           WANT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           docker run --rm --entrypoint "" "$IMAGE:latest" terraform version
+          # PostgreSQL: no system cluster, and a throwaway server works as the default user.
+          docker run --rm --entrypoint "" "$IMAGE:latest" bash -euc '
+            test ! -e /var/lib/postgresql/17/main
+            pgbin=/usr/lib/postgresql/17/bin
+            d=$(mktemp -d)
+            "$pgbin/initdb" -D "$d/data" -A trust >/dev/null
+            "$pgbin/pg_ctl" -D "$d/data" -o "-k $d -c listen_addresses=" -w -l "$d/log" start >/dev/null
+            createdb -h "$d" smoke
+            got=$(psql -h "$d" -d smoke -tAc "select 1")
+            "$pgbin/pg_ctl" -D "$d/data" -w stop >/dev/null
+            test "$got" = 1
+          '
           got=$(docker run --rm --entrypoint "" "$IMAGE:latest" printenv DEV_REPO_URL)
           if [ "$got" != "$WANT_REPO_URL" ]; then
             echo "::error::DEV_REPO_URL is '$got', expected '$WANT_REPO_URL'."
