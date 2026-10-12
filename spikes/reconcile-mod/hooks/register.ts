@@ -120,7 +120,7 @@ export const register: Register = on => {
         name: e.message.name,
         isMeta: e.message.isMeta,
         chars: JSON.stringify(e.message.content ?? '').length,
-        storedChars: JSON.stringify(result.message.content ?? '').length,
+        storedChars: JSON.stringify(result.message?.content ?? '').length,
       })
     }
     return result
