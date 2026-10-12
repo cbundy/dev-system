@@ -270,8 +270,8 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
 # release current at image build (DEV_PLUGIN_REF, a tag such as v0.10.0, set by
 # publish-base-image.yml, which fails without one), so a repo with no
 # settings file gets a release, not main. A repo's committed .claude/settings.json
-# that declares the marketplace wins over this pin
-# (cbundy/dev-system#215).
+# that declares a ref wins over this pin (cbundy/dev-system#215); one that
+# declares the marketplace with no ref takes this pin (#373).
 # The empty default is only for ad-hoc local builds; published images always set it.
 ARG DEV_PLUGIN_REF=
 ENV DEV_DEFAULT_PLUGINS=callum-flow@callum=cbundy/dev-system${DEV_PLUGIN_REF:+#$DEV_PLUGIN_REF}

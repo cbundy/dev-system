@@ -120,11 +120,9 @@ change in this repo ──PR──▶ main ──release──▶ tag / image / 
 ```
 
 Commit the updated `.claude/settings.json` from `callum-dev update`, then restart the
-container or run `dev-init --plugins` in it. `dev-init` removes the old marketplace
-(which uninstalls its plugins), adds it at the new ref, and installs the wanted plugins.
-`marketplace update`, auto-update, and `plugin install` or `plugin update` keep the old
-ref; they do not advance a release pin. Adding the new ref while the old marketplace
-is declared in user settings is refused because its source does not match that entry.
+container or run `dev-init --plugins` in it to migrate the installation. See the base
+image's [Claude plugins reference](../images/base/README.md#workspace-and-repo) for
+ref inheritance, marketplace migration, plugin restoration and project-install cleanup.
 
 The flow also runs in reverse. `/update-dev <request>` in any consumer repo opens a PR here
 with the motivating context. Shared behaviour is never patched in the consumer repo.

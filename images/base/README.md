@@ -392,12 +392,34 @@ they land in `/persist/claude` and stay across rebuilds:
   `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
   It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
   the release tag current at image build, never to main, and a repo's committed settings ref
-  wins when it declares the marketplace; `dev-init` removes and re-adds a marketplace whose
-  ref moved, so a pin change takes effect on the next start - but only once the wanted ref
+  wins when it declares one. A repo that declares the marketplace with no ref, at the image
+  default's exact location string, takes the image's pin (not main's HEAD). A GitHub
+  `owner/repo` and its git URL are different strings; a declaration at another location
+  keeps its own source without inheriting a ref. A plugin first installed from a matching
+  no-ref marketplace moves up to the pin on the next start. `dev-init` removes and
+  re-adds a marketplace whose ref moved, so a pin change takes effect on the next start. The
+  removal uninstalls the marketplace's plugins, so every user-scope plugin installed from it
+  beforehand, hand-installed ones such as `factory-hud@callum` included, is installed again
+  at the new ref, then disabled again if it was disabled. A failed reinstall is one
+  `WARNING` whose fix names the `claude plugin install` that restores it; a failed disable
+  warns that the plugin is now enabled and names `claude plugin disable` as the fix.
+  Removal clears saved plugin options and installs in every scope. Project-scope installs
+  are not restored; plugins still wanted by the image or repo are installed at user scope.
+  `marketplace update`, auto-update, `plugin install` and `plugin update` keep the old ref;
+  adding the new ref while the old user-settings entry exists is refused because its
+  source does not match. A pin move waits until the wanted ref
   exists on the marketplace's remote (checked with `git ls-remote`, inside the plugin step's
   deadline, never prompting). A pin to a tag that is not cut yet, or one that cannot be
   checked (network, auth, timeout), keeps the installed marketplace and plugins and logs
-  one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists. A per-repo image sets
+  one `WARNING`; the next start or `dev-init --plugins` moves it once the tag exists.
+  A move is put off the same way while Claude's installed plugins cannot be listed, since the
+  plugins to install again would be unknown.
+  `dev-init` also prunes project-scope installs whose project directory no longer exists
+  at an absolute path (a deleted worktree), even when no plugin is wanted: after the
+  installs, on what is left of the step's deadline, it recreates the path as an empty
+  directory, runs `claude plugin uninstall --scope project` there, and removes only what it created,
+  never touching an existing path or pruning a relative path, logging one line with the
+  count. Such an install never counts as installed. A per-repo image sets
   `ENV DEV_DEFAULT_PLUGINS=` to opt out, or lists other plugins in the same format; the
   runtime's environment overrides both.
 - **The repo's plugins.** A repo can enable plugins in its committed
@@ -410,9 +432,9 @@ they land in `/persist/claude` and stay across rebuilds:
 A default plugin set to `true` in `enabledPlugins` (as every onboarded repo does for
 `callum-flow`) is installed once from the repo's declared marketplace source. Without
 that declaration, it keeps the image's source. Set to `false`, the repo opts out and it
-is not installed by `dev-init`; this does not uninstall an existing copy. Repo plugins
-go first, so a marketplace both name is added from the repo's source when Claude does
-not already know it.
+is not requested by `dev-init`; this does not uninstall an existing copy or prevent its
+restoration after a marketplace move. Repo plugins go first, so a marketplace both name
+is added from the repo's source when Claude does not already know it.
 
 It is the last step of a start, after the login page is up, since it needs the network and
 can be slow while the plugins matter only once Claude starts (`dev-init --repo` runs it
@@ -420,22 +442,23 @@ right after the clone or fetch). For each wanted plugin Claude has not installed
 
 - the marketplace is added first (`claude plugin marketplace add`) if Claude does not know
   it: a default plugin's from the source `DEV_DEFAULT_PLUGINS` gives, a repo plugin's from
-  its declared source, `github` (`repo`, plus `#ref` when one is set) or `git` (`url`). A
-  repo plugin whose marketplace is unknown to Claude and has an unsupported or missing
-  declaration gets a `WARNING` and is skipped;
+  its declared source, `github` (`repo`) or `git` (`url`), with the declared or inherited
+  `#ref` under the pinning rule above. A repo plugin whose marketplace is unknown to Claude
+  and has an unsupported or missing declaration gets a `WARNING` and is skipped;
 - then `claude plugin install <plugin>@<marketplace>`. If that fails on a marketplace
   Claude already knew, it updates the marketplace and tries once more;
 - each call is limited to 60s and runs outside the checkout, and the whole step to
   `DEV_PLUGIN_INSTALL_TIMEOUT` (120s): no call starts once that is spent, and no call runs
   past it, so a slow or unreachable network cannot use up a runtime's time limit for the
   start (Coder's is 300s). Once it is spent, one `WARNING` names the plugins not yet
-  installed, with the fix `dev-init --plugins`;
+  installed, with the fix `dev-init --plugins` and explicit install commands for any
+  hand-installed plugins awaiting restoration;
 - a failure is one `WARNING` line with the CLI's reason and a `Fix:` line, and the start
   carries on. No login is needed, only network access (and, for a private marketplace
   repo, git's credential).
 
-A plugin already installed costs one `claude plugin list --json` call, so later starts
-need no network for it. With no network at the first start, Claude starts without the
+A plugin already installed at an unchanged marketplace ref needs no network on later
+starts. With no network at the first start, Claude starts without the
 plugin and `dev-doctor` warns, naming the fix (`dev-init --plugins`, then a new Claude
 session).
 
@@ -667,10 +690,15 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
 - a per-repo image layer, if it stamped itself (below), compared the same way; without one,
   an `INFO image-layers none` line, which never affects the exit code;
 - callum-flow, per scope, against the release the image pins in `DEV_DEFAULT_PLUGINS`
-  (`STALE` when installed below it) and the latest release of the plugin's repo. A pin
-  behind the latest release is noted on the base image line, since a newer image fixes it.
+  (`STALE` when installed below it) and the latest release of the plugin's repo. The fix
+  is `dev-init --plugins`; if the repo explicitly pins an older ref, update that ref in
+  `.claude/settings.json` first. A pin behind the latest release is noted on the base image
+  line, since a newer image fixes it.
   With `DEV_CANDIDATE_PLUGIN_REF` set, the line shows `candidate=<ref>` instead, is never
-  `STALE` because of it, and the pin note is left out;
+  `STALE` because of it, and the pin note is left out. A project-scope install whose
+  absolute project path no longer exists gets no line of its own; one `INFO` line counts them and says
+  `dev-init --plugins` prunes them, and a plugin with no other install is `UNKNOWN` (not
+  installed);
 - claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
   against their latest upstream release (npm for claude and codex, GitHub releases for the
   others): `STALE` when upstream is newer. agentsview and coder are pinned by the image

@@ -135,6 +135,20 @@ expect "newer image published" 1 '^dev-version: STALE base-image running=aaaaaaa
 reset; printf '[{"id":"callum-flow@callum","version":"0.1.0","scope":"user"}]' > "$FIX/plugins.json"; run_cmd
 expect "plugin below the pin" 1 '^dev-version: STALE callum-flow@callum\(user\) running=0.1.0 pin=0.2.0'
 
+# A project-scope install whose project path is gone is not judged: no STALE line, one INFO count.
+# One at a live path below the pin still is.
+reset; printf '[{"id":"callum-flow@callum","version":"0.2.0","scope":"user"},{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/gone"},{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/gone2"}]' "$tmp" "$tmp" > "$FIX/plugins.json"; run_cmd
+expect "orphaned project installs: one INFO count" 0 '^dev-version: INFO callum-flow@callum 2 project-scope install\(s\) for paths that no longer exist \(dev-init --plugins prunes them\)'
+printf '%s\n' "$out" | grep -q 'STALE\|(project)' && fail "orphaned project installs: a per-install line. Output:
+$out"
+reset; printf '[{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/gone"}]' "$tmp" > "$FIX/plugins.json"; run_cmd
+expect "only orphaned project installs: not installed, and the INFO count" 0 \
+  '^dev-version: UNKNOWN callum-flow@callum running=none pin=0.2.0 .*\(not installed\)' \
+  '^dev-version: INFO callum-flow@callum 1 project-scope install\(s\) for paths that no longer exist'
+mkdir -p "$tmp/live"
+reset; printf '[{"id":"callum-flow@callum","version":"0.2.0","scope":"user"},{"id":"callum-flow@callum","version":"0.1.0","scope":"project","projectPath":"%s/live"}]' "$tmp" > "$FIX/plugins.json"; run_cmd
+expect "project install at a live path below the pin" 1 '^dev-version: STALE callum-flow@callum\(project\) running=0.1.0 pin=0.2.0 .*dev-init --plugins; if the repo'"'"'s .claude/settings.json pins an older ref itself'
+
 reset; echo v0.3.0 > "$FIX/gh.dev-system"; run_cmd
 expect "pin behind latest release notes the image line" 0 '^dev-version: OK base-image .*a newer image fixes that'
 

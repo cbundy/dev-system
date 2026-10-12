@@ -577,7 +577,10 @@ start_login_page() {
 #     An install that fails
 #     on a marketplace Claude already knew is retried once after updating it
 #     (the plugin may be newer than the marketplace's copy). Failures are
-#     logged and the start carries on.
+#     logged and the start carries on. A marketplace whose ref moved is
+#     removed and re-added, and the user-scope plugins installed from it
+#     (hand-installed too) come back; project-scope installs whose project
+#     directory is gone are pruned.
 #     Last in a full run: it needs the network and can be slow, the plugins
 #     matter only once Claude starts, and a runtime that bounds dev-init as a
 #     whole (Coder: 300s) must never lose the login page to it. So the whole
