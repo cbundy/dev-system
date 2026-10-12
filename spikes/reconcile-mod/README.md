@@ -9,7 +9,7 @@ logs what it observes and shows its state in the session title.
 | 1 loaded | the log has a `loaded` line and the title reads `spike · loaded ...` |
 | 2 tick | a `tick` line every minute, with no gaps while the session sits idle |
 | 3 title | the title updates every minute (`$.mcp.call`, no permission prompt) |
-| 4 agent | `agent-spawned` then `agent-answered` lines; the `append` and `main-turn` lines after them show whether the result entered the main conversation or woke the model |
+| 4 handback | after `touch /persist/claude/spike/handback-test.request`, a `handback-result` line two minutes later with no `mainRows` and `mainTurns: 0` (the agents reported only to the mod) |
 | 5 restart | after `dev-restart-self`, a second `loaded` line and ticks resume |
 
 It runs in the throwaway Coder workspace `spike-reconcile-mod` (repo `dev-system-testbed`),

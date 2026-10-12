@@ -5,20 +5,31 @@
 //   1 loaded   session.start fires: a "loaded" line (again after each restart)
 //   2 tick     a "tick" line every minute, also while the session sits idle
 //   3 title    $.mcp.call sets the session title, with no permission prompt
-//   4 agent    an Explore agent spawned a few minutes after start answers; the
-//              "append" lines show whether its result entered the main
-//              conversation, the "main-turn" lines whether it woke the model
+//   4 handback on request (touch REQUEST), a built-in and a callum-flow agent
+//              are spawned at once; two minutes later a "handback-result" line
+//              says what reached the main conversation besides the mod's own
+//              renames, and how many model turns ran
 //   5 restart  after dev-restart-self: a new "loaded" line and ticks resume
 import type { EngineInterface, McpToolResult, Register } from 'claude-code'
 
 const LOG = '/persist/claude/spike/log.jsonl'
 const TICK_MS = 60_000
-const AGENT_AFTER_MS = 3 * 60_000
+const REQUEST = '/persist/claude/spike/handback-test.request'
+const TEST_AGENTS = ['Explore', 'callum-flow:explorer']
+const TEST_PROMPT = 'Reply with the single word pong. Do not use any tools.'
+const REPORT_AFTER_MS = 2 * 60_000
+
+type HandbackTest = {
+  startedAt: string
+  agents: Record<string, string>
+  answers: Record<string, unknown>[]
+  mainRows: Record<string, unknown>[]
+  mainTurns: number
+}
 
 let sessionId: string | undefined
 let ticks = 0
-let agentId: string | undefined
-let contextBefore: number | undefined
+let test: HandbackTest | undefined
 let writing: Promise<void> = Promise.resolve()
 
 const hhmm = () => new Date().toISOString().slice(11, 16)
@@ -77,20 +88,33 @@ async function setTitle($: EngineInterface, title: string) {
 
 async function tick($: EngineInterface) {
   ticks += 1
+  await maybeStartHandbackTest($)
   const tokens = await contextTokens($)
   const titled = await setTitle($, `spike · tick ${ticks} · ${hhmm()} UTC · ctx ${tokens ?? '?'}`)
   void log($, 'tick', { n: ticks, contextTokens: tokens, titled })
 }
 
-async function spawnAgent($: EngineInterface) {
-  contextBefore = await contextTokens($)
-  const result = await $.agent.spawn({
-    subagentType: 'Explore',
-    description: 'spike check 4',
-    prompt: 'List the top-level files of the repository in the current directory and say in one sentence what it is for.',
+// Only on request, so a reload never spawns agents by itself.
+async function maybeStartHandbackTest($: EngineInterface) {
+  if (test !== undefined || !(await $.fs.exists(REQUEST))) return
+  await $.process.run(['rm', '-f', REQUEST])
+  const run: HandbackTest = { startedAt: new Date().toISOString(), agents: {}, answers: [], mainRows: [], mainTurns: 0 }
+  test = run
+  const spawned = await Promise.all(
+    TEST_AGENTS.map(subagentType =>
+      $.agent.spawn({ subagentType, model: 'haiku', description: `handback test: ${subagentType}`, prompt: TEST_PROMPT }),
+    ),
+  )
+  spawned.forEach((result, i) => {
+    if (result.agentId !== undefined) run.agents[result.agentId] = TEST_AGENTS[i] ?? '?'
   })
-  agentId = result.agentId
-  void log($, 'agent-spawned', { result, contextBefore })
+  void log($, 'handback-spawned', { spawned, contextTokens: await contextTokens($) })
+  $.clock.after(REPORT_AFTER_MS, () => {
+    void (async () => {
+      await log($, 'handback-result', { ...run, contextTokens: await contextTokens($) })
+      test = undefined
+    })()
+  })
 }
 
 export const register: Register = on => {
@@ -99,7 +123,6 @@ export const register: Register = on => {
     void log($, 'loaded', { version: (await $.session.version()).version })
     void setTitle($, `spike · loaded ${hhmm()} UTC`)
     $.clock.every(TICK_MS, () => void tick($))
-    $.clock.after(AGENT_AFTER_MS, () => void spawnAgent($))
     return result
   })
 
@@ -112,6 +135,10 @@ export const register: Register = on => {
       e.origin.kind === 'plugin' &&
       JSON.stringify(e.message.content ?? '').includes('named this session')
     const result = await next(isRenameNote ? { ...e, message: { ...e.message, content: [] } } : e)
+    const isOwnRename = isRenameNote || e.door === 'command'
+    if (test !== undefined && e.agentId === undefined && !isOwnRename) {
+      test.mainRows.push({ door: e.door, origin: e.origin.kind, type: e.message.type, name: e.message.name })
+    }
     if (e.agentId === undefined) {
       void log($, 'append', {
         door: e.door,
@@ -128,14 +155,11 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (agentId !== undefined && e.agentId === agentId) {
-      void log($, 'agent-answered', {
-        answerChars: e.answer.length,
-        durationMs: e.durationMs,
-        contextBefore,
-      })
-      void setTitle($, `spike · agent answered ${hhmm()} UTC · ctx before ${contextBefore ?? '?'}`)
+    const agentType = e.agentId === undefined ? undefined : test?.agents[e.agentId]
+    if (test !== undefined && agentType !== undefined) {
+      test.answers.push({ agentType, answer: e.answer.slice(0, 60), durationMs: e.durationMs })
     } else if (e.agentId === undefined) {
+      if (test !== undefined) test.mainTurns += 1
       void log($, 'main-turn', { durationMs: e.durationMs, contextTokens: await contextTokens($) })
     }
     return result
