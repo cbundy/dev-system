@@ -485,12 +485,11 @@ events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .note == "com
 n=$(events | wc -l)
 rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "noise twice: $(events)"
-# renewed, usage and claim_lost are ignored the same way: a final issue stays final
+# every other housekeeping event is ignored the same way: a final issue stays final
 reset
 closed_issue 7 completed
 seed closed 7
-seed renewed 7
-seed usage 7
+for s in renewed usage watcher_error test_weakened claim_lost; do seed "$s" 7; done
 n=$(events | wc -l)
 rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "final then noise wrote: $(events)"
