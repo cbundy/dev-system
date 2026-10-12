@@ -26,7 +26,7 @@
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
 #   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded renewed rebased_behind
 #   (`superseded`: a run or branch was replaced for the same issue, --run names the old run; it does not end the issue)
-#   (`rebased_behind`: the orchestrator rebased a behind-only PR with callum-flow-merge-guard --update-behind; the old run's head-mismatch that follows is expected)
+#   (`rebased_behind`: see the lifecycle semantics in docs/metrics.md)
 #   (`renewed`: a claim heartbeat extended the lease; housekeeping, never a stage)
 #   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
 #   reason - completed, not_planned or duplicate)

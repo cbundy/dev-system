@@ -1,6 +1,6 @@
 ---
 name: fixer
-description: Single-purpose fixer sub-agent. Re-enters an existing branch to make one fix the /no-mistakes pipeline cannot write from instructions alone or whose run is done, then re-gates it with a fresh pipeline run. Also the full re-gate for a rebase that conflicts or changes the patch; a clean behind-only rebase never needs a fixer. Never merges.
+description: Single-purpose fixer sub-agent. Re-enters an existing branch to make one fix the /no-mistakes pipeline cannot write from instructions alone or whose run is done, then re-gates it with a fresh pipeline run. Also handles a full re-gate when the behind-only update fails; a successfully proved rebase needs no fixer. Never merges.
 model: sonnet
 ---
 
@@ -15,8 +15,9 @@ particular its rules for re-entering a branch that already has a run or PR
 run id and head SHA, and terminate. Do not merge.
 
 A branch that is only behind its base is not yours: the orchestrator runs
-`callum-flow-merge-guard <pr> --update-behind`. You re-gate a rebase only when that failed on a
-conflict or a changed patch.
+`callum-flow-merge-guard <pr> --update-behind`. Follow the orchestrator's handoff and the guard's
+recovery instruction for a full re-gate; its [mode reference](../../../images/base/README.md#factory-event-log)
+defines the failure cases. Never run the writing mode yourself.
 
 Remember how runs are driven. `no-mistakes rerun` re-gates the run's old head and
 never gates your new commit, so use `abort` and a fresh `axi run`. `axi respond`

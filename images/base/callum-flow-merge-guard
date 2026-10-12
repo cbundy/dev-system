@@ -1,11 +1,9 @@
 #!/bin/sh
 #
-# callum-flow-merge-guard: check, without changing anything, that a PR is safe
-# to merge (cbundy/dev-system#219). It only reads: callum-flow-merge is the
-# separate command that merges, so allowing this one in the synced permission
-# list cannot let a worktree sub-agent merge. The one exception is --update-behind,
-# the guard's one writing mode: only the orchestrator runs it, implementers and
-# fixers never do.
+# callum-flow-merge-guard: check that a PR is safe to merge (cbundy/dev-system#219).
+# Checking is read-only; callum-flow-merge is the separate command that merges.
+# --update-behind is the guard's one writing mode: only the orchestrator runs it,
+# implementers and fixers never do. The mode reference is in images/base/README.md.
 #
 # Usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID]
 #          [--base BRANCH] [--issue N] [--emit-verified]
@@ -19,7 +17,8 @@
 #   (cbundy/dev-system#239). Pass --expect only to assert it; a value that
 #   contradicts the Rollout fails the rollout guard.
 #
-# Guards (every one is evaluated and reported, none short-circuits, except that a
+# Checking guards (--update-behind exits separately; every guard is evaluated and
+# reported, none short-circuits, except that a
 # PR by an untrusted author is read no further: rollout and linkage are skipped):
 #   author   the PR was opened by a trusted author (callum-flow-issue-read,
 #          cbundy/dev-system#310); an untrusted or unverifiable author fails
@@ -43,8 +42,7 @@
 #          commits that delete or weaken tests; each one it cannot see restored
 #          prints a WARN line (below). A detector error is also a WARN.
 #
-# Output: nothing when every guard passes (but the head guard's PASS line on a patch
-#   proof, above); otherwise one line per failed guard,
+# Checking output: a head PASS line on a patch proof, plus one line per failed guard,
 #   GUARD <name> FAIL <reason>
 # Advisory lines can appear with exit 0 and never change the exit code:
 #   GUARD test-weakening WARN <sha7> step=<s> files=<f> kinds=<k> - <what to do>
@@ -58,7 +56,8 @@
 # close_issue is the issue to close manually for a closing PR on a non-default
 # base; it is empty otherwise.
 #
-# Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
+# Exit codes: 0 all guards pass or update succeeds, 1 a guard fails or update fails
+# or skips, 2 usage error.
 #
 # Recovery guidance for head, base and mergeable failures is in their FAIL lines.
 #

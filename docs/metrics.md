@@ -17,7 +17,11 @@ branch name (see "Linking pipeline runs to issues" below).
 
 `superseded` is logged by the orchestrator when it replaces a branch or run for the same issue (`--run` names the old run). It is run-scoped, so it ends nothing and releases no claim.
 
-`rebased_behind` is logged by the orchestrator each time `callum-flow-merge-guard <pr> --update-behind` rebases a behind-only PR without a new pipeline run (cbundy/dev-system#476). It is run-scoped to the original gated run, whose `head-mismatch` event after the push is the expected rebase-only update, not a fault.
+`rebased_behind` is logged by the orchestrator after a successful behind-only update without a
+new pipeline run (cbundy/dev-system#476; see the [merge workflow](../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge)).
+It names the original gated run in `--run` and the pushed head in `--head`. The subsequent
+`head_mismatch` event (`head-mismatch` in watcher output) is expected for that run; the merge
+guard must still verify the patch and all remaining merge conditions.
 
 `closed` is logged by `callum-flow-sweep` (actor `sweep`) for issues closed outside the factory;
 the [factory event log reference](../images/base/README.md#factory-event-log) defines which issues it checks.
