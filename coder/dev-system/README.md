@@ -383,13 +383,13 @@ To develop dev-system itself from a workspace (setup, logins, and what only CI c
 [Developing dev-system on Coder](../../docs/developing-on-coder.md).
 
 ## Testing template changes from a workspace
-Each version it pushes is named like the production ones (`<git describe>-<UTC timestamp>`),
-so `coder templates versions list dev-system-next` shows which commit each came from.
 
 `push-next.sh` beside this README pushes the checked-out template as a second template,
 `dev-system-next`, and can smoke-test it, so a change is tried without touching the
-`dev-system` template every other workspace uses. Run it from a workspace with the
-`template_testing` parameter on (or any machine with the token file):
+`dev-system` template every other workspace uses. Each version it pushes is named like the
+production ones (`<git describe>-<UTC timestamp>`), so
+`coder templates versions list dev-system-next` shows which commit each came from. Run it
+from a workspace with the `template_testing` parameter on (or any machine with the token file):
 
 ```bash
 coder/dev-system/push-next.sh          # push as dev-system-next
