@@ -36,9 +36,9 @@ leaves the live list and shows under "recently ended" (24 hours from `--at`) as 
 `claimed` after a `closed` or `merged` event starts a new life.
 
 A claim is live while its newest `claimed` or `renewed` event plus its lease is still in the future.
-The lease is the event's `lease: <minutes>` note (`callum-flow-claim` writes it on `claimed`, and
-`callum-flow-claim --heartbeat` logs a `renewed` with it for each comment it extends), or 120 minutes
-when the note has no positive lease value. When the issue would be `designing` but that time is at
+The lease is the event's `lease: <minutes>` note, or 120 minutes when the note has no positive
+lease value. See the [factory event log reference](../images/base/README.md#factory-event-log)
+for how claims and heartbeats record it. When the issue would be `designing` but that time is at
 or before `--at`,
 it is `queued` with the detail `claim lapsed at <ISO time>`; time in stage starts at that expiry.
 Without a recorded `claimed` or `renewed` event, `briefed` and `design_routed` remain `designing`.
@@ -96,7 +96,7 @@ Inputs, not judgement. Defaults come from the factory's own data and can be set 
 
 | Rule | Trips when | Default |
 | --- | --- | --- |
-| S1 | `designing` for more than the threshold | 240 min (2 x the claim lease) |
+| S1 | `designing` for more than the threshold | 240 min (2 x the default claim lease) |
 | S2 | `implementing` with no run in progress for more than the threshold | 60 min |
 | S3 | `parked` for more than the threshold | 30 min |
 | S4 | `ready to merge` for more than the threshold | 30 min |
