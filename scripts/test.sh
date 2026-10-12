@@ -12,7 +12,8 @@
 # Quiet on success: one summary line. On failure, once every job has finished, it prints only
 # the failing node tests (name, file:line, assertion - see scripts/test-reporter.js) and the
 # output of each failing shell suite or mod, each as one contiguous block in a stable order,
-# then `test: N failed`, and exits non-zero.
+# plus `FAIL test isolation: <file>` for each entry left in the sandboxed shared-state
+# directories, then `test: N failed`, and exits non-zero.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -32,18 +33,21 @@ features/test/callum-tools/orchestrator-watch.test.sh
 SERIAL=""
 
 results=$(mktemp -d) || exit 1
-trap 'rm -rf "$results"' EXIT
+. ./scripts/test-sandbox.sh
+trap 'test_sandbox_clean; rm -rf "$results"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Shared per-run environment: anything exported here reaches every job. This is the one place
-# for it (e.g. a per-run sandbox for the jobs' event and state dirs). TMPDIR points inside the
-# results dir, so temp files created there by jobs that honour TMPDIR (even ones an
-# interrupted job never got to clean up) are removed with it.
+# for it, including the per-run sandbox for the jobs' event and state dirs
+# (scripts/test-sandbox.sh). TMPDIR points inside the results dir, so temp files created there
+# by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
+# with it.
 mkdir "$results/tmp" || exit 1
 TEST_RESULTS_DIR=$results
 TMPDIR=$results/tmp
 export TEST_RESULTS_DIR TMPDIR
+test_sandbox_setup || exit 1
 
 failed=0
 
@@ -109,6 +113,9 @@ case $pool_status in
   *) exit "$pool_status" ;; # fast failure (bad TEST_JOBS) or an interrupt
 esac
 [ -f "$results/failed" ] && failed=$((failed + $(cat "$results/failed")))
+
+# Isolation: nothing may have written into the sandboxed shared-state directories.
+test_sandbox_check || failed=$((failed + 1))
 
 if [ "$failed" -gt 0 ]; then
   echo "test: $failed failed" >&2

@@ -205,7 +205,7 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
   const scripts = path.join(root, "scripts");
   fs.mkdirSync(scripts);
-  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js"]) {
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh"]) {
     fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
   }
   fs.mkdirSync(path.join(root, "tests"));
@@ -350,4 +350,31 @@ test("invalid TEST_JOBS emits one error before missing required mod tooling", ()
     assert.strictEqual(r.stderr, "test-pool: TEST_JOBS must be a positive integer, got '0'\n");
     assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
   } finally { repo.cleanup(); }
+});
+
+test("test.sh fails, naming each file, when a suite writes into the sandboxed state dirs", () => {
+  const dirs = ["CALLUM_EVENTS_DIR", "NO_MISTAKES_HOME", "NM_PUSH_STATE_DIR", "AGENTSVIEW_DATA_DIR"];
+  const repo = fakeRepo({
+    nodeTests: { "ok.test.js": 'require("node:test")("ok", () => {});\n' },
+    suites: {
+      "clean.test.sh": "true\n",
+      "leak.test.sh": dirs.map((d) => `echo x > "$${d}/leak"; echo "$${d}" >> "$LEAK_LOG"\n`).join(""),
+    },
+  });
+  const log = path.join(repo.root, "leaked");
+  try {
+    const r = spawnSync("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      encoding: "utf8",
+      env: { ...repo.env, LEAK_LOG: log },
+    });
+    assert.strictEqual(r.status, 1, r.stderr);
+    const leaked = fs.readFileSync(log, "utf8").trim().split("\n");
+    assert.strictEqual(leaked.length, 4);
+    const lines = r.stderr.trim().split("\n");
+    for (const dir of leaked) assert.ok(lines.includes(`FAIL test isolation: ${dir}/leak`), r.stderr);
+    assert.strictEqual(lines.pop(), "test: 1 failed");
+    assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
+  } finally {
+    repo.cleanup();
+  }
 });

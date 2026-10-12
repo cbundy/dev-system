@@ -78,7 +78,9 @@ has passed.
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
   its summary line notes the skip and CI's `ci.yml` runs them.
 - `npm test` - the canonical test entrypoint (`scripts/test.sh`); see the
-  [test runner reference](docs/architecture.md#test-runner) for job grouping and concurrency.
+  [test runner reference](docs/architecture.md#test-runner) for job grouping and concurrency. The run is
+  sandboxed (shared defaults for events, no-mistakes, push state and agentsview use temporary
+  directories) and fails if any entries remain in those directories after the suites.
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
 and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
