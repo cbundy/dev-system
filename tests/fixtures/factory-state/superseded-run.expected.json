@@ -55,16 +55,16 @@
       "repo": "acme/widgets",
       "coverage": {
         "class": "full",
-        "events": 29,
+        "events": 30,
         "runs": 7,
-        "last_event_at": "2026-10-10T03:05:00.000Z",
+        "last_event_at": "2026-10-10T11:00:00.000Z",
         "last_run_update_at": "2026-10-10T03:10:00.000Z",
         "heartbeat": "n/a (see workers)",
         "devices": [
           {
             "device": "dev-a",
-            "events": 29,
-            "last_event_at": "2026-10-10T03:05:00.000Z"
+            "events": 30,
+            "last_event_at": "2026-10-10T11:00:00.000Z"
           }
         ],
         "live_issue_sources": {

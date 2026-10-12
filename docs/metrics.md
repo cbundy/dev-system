@@ -208,7 +208,7 @@ once. A **double-claim** is two devices with a live `claimed` on one issue and n
 `reclaimed`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
 logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
-`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, for more than
+`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost` and `renewed` (a heartbeat is not progress), for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 `superseded` (a run or branch replaced for the same issue, run-scoped) is none of these: it neither ends an issue nor releases a claim.
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,

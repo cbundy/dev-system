@@ -23,7 +23,7 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 | Stage | Meaning |
 | --- | --- |
 | `queued` | latest decision event is `ready` or `reclaimed`; no pipeline run in progress |
-| `designing` | `claimed`, `briefed` or `design_routed`, with no delegation or run since |
+| `designing` | `claimed`, `briefed` or `design_routed`, with no delegation or run since, and a live claim (see below) |
 | `implementing` | `delegated` with no run yet, or the latest run ended without a PR to merge (failed, cancelled, completed with no PR, PR closed) |
 | `in pipeline` | the latest run is running and not waiting on anyone |
 | `parked` | the latest run is running and waiting on an agent or the owner (`awaiting_agent_since` set) |
@@ -34,6 +34,14 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 Only `closed` and `abandoned` end an issue's life in the view. A `merged` issue that is later `closed`
 leaves the live list and shows under "recently ended" (24 hours from `--at`) as `merged`. A new
 `claimed` after a `closed` or `merged` event starts a new life.
+
+A claim is live while its newest `claimed` or `renewed` event plus its lease is still in the future.
+The lease is the event's `lease: <minutes>` note (`callum-flow-claim` writes it on `claimed`, and
+`callum-flow-claim --heartbeat` logs a `renewed` with it for each comment it extends), or 120 minutes
+when the event has no note. When the issue would be `designing` but that time is at or before `--at`,
+it is `queued` with the detail `claim lapsed at <ISO time>`: the database cannot see a lease that
+nobody renewed, so this is how it learns the claimant is gone. `renewed` never sets a stage, never
+starts a new life after `closed` or `abandoned`, and never counts as a decision newer than a run.
 
 An `abandoned` event is final only until a new life starts. Strictly after it, a new life is: a
 `ready`, `reclaimed`, `claimed`, `briefed`, `design_routed` or `delegated` event; a `merged` event; a
@@ -145,8 +153,13 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
 - `pipeline-only`: `acme/gadgets` has runs and no events. Coverage is `pipeline only`; the running and
   the parked run show; the old merged run does not; a running run on `chore/release-1.0` is under
   `other_runs`.
-- `split-parent`: #40 was claimed 300 minutes ago and never delegated: `designing`, S1 trips. #41 is
+- `split-parent`: #40 was claimed 300 minutes ago, renewed by a heartbeat 30 minutes ago and never delegated: `designing`, S1 trips. #41 is
   `queued`, #42 is `designing` for 30 minutes.
+- `lapsed-claim` (`--at` = 2026-10-12T07:00Z): #1 was claimed 7 hours ago with no renewal and #5 has a
+  `lease: 30` note and was claimed 40 minutes ago: both are `queued` with `claim lapsed at ...`. #2 is
+  freshly claimed, #3 was claimed long ago but renewed within the lease, and #4 was `briefed` and then
+  renewed: all `designing`. #6 got a `renewed` after `closed` and stays ended, #7 is `implementing`
+  although `untrusted_stripped` came after `delegated`, and #8 has a running run: `in pipeline`.
 - `parked`: #50 has waited 45 minutes (S3 trips), #51 5 minutes.
 - `stuck-rules`: #70 delegated 120 minutes ago with no run (S2), #71 ready to merge for 45 (S4), #72
   in pipeline with no run update for 40 (S5), #73 whose last run failed 70 minutes ago (S2).

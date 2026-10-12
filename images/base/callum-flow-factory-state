@@ -30,6 +30,7 @@ const ISSUE_READ = process.env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-
 // Stage order is the sort order of the output.
 const STAGES = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'ready to merge', 'merged', 'closed without merge'];
 const FINAL_RECENT_MS = 24 * 3600 * 1000;
+const DEFAULT_LEASE_MINUTES = 120; // callum-flow-claim's default lease, for claimed events with no lease note
 const DEFAULT_RULES = { S1: 240, S2: 60, S3: 30, S4: 30, S5: 30 };
 const RULE_TEXT = {
   S1: 'designing for more than S1 minutes',
@@ -44,6 +45,8 @@ const DECISION_STAGE = {
 };
 // Pipeline facts logged by agents: only ever reported as hints when the mirror has no run.
 const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed', 'head_mismatch', 'conflict', 'ci_stalled']);
+// `renewed` (a claim heartbeat) is deliberately in neither map above either: it only extends the lease
+// of a designing stage (see the lapse rule in deriveIssue) and never starts a new life.
 // `superseded` (a run was replaced for the same issue) is deliberately in neither map above: it is
 // never a stage and never final. It only removes the named run from latest-run selection.
 // What starts a new life after an `abandoned` event (docs/factory-state.md). `failed`,
@@ -261,6 +264,22 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
     else if (lastDec && lastDec.t > rv.updated) fromDecision();
     else fromRun();
   } else if (lastDec) fromDecision();
+
+  // A `designing` stage that comes from a claim is only as good as the lease behind it: the newest
+  // `claimed` or `renewed` event plus its lease (the note's `lease: <minutes>`, else the default)
+  // must still be in the future, or the claim lapsed and the issue is queued again.
+  if (stage === 'designing' && source === 'event') {
+    const c = last(evs.filter((e) => e.state === 'claimed' || e.state === 'renewed'));
+    if (c) {
+      const m = /lease: *(\d+)/.exec(c.note || '');
+      const end = c.t + (m && Number(m[1]) > 0 ? Number(m[1]) : DEFAULT_LEASE_MINUTES) * 60000;
+      if (end <= at) {
+        stage = 'queued';
+        entered = end;
+        detail = `claim lapsed at ${iso(end)}`;
+      }
+    }
+  }
 
   const finalNow = Boolean(final);
   let hint = null;

@@ -19,11 +19,13 @@
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
 # 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
 # The winner swaps the labels (`In development` on, `ready` off), assigns @me
-# and logs `callum-flow-event claimed`.
+# and logs `callum-flow-event claimed` with the note `lease: <minutes>`.
 # --heartbeat: edits this device's live claim comment in place (a `renewed:`
 # line, through the comment API, never a new comment). With no issue numbers it
 # renews every live claim this device holds on an open `In development` issue.
-# Nothing to renew is still exit 0.
+# Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
+# `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
+# event log, which callum-flow-factory-state reads, can see the lease is live.
 #
 # A claim is live while the comment's server updated_at + its own lease is in
 # the future. "Now" is the server's Date header (the device clock only if that
@@ -141,10 +143,14 @@ if [ "$mode" = heartbeat ]; then
     id=$(printf '%s' "$mine" | jq -r .id)
     body=$(printf '%s' "$mine" | jq -r --arg ts "$(iso "$now")" \
       '[(.body | split("\n") | map(select(startswith("renewed: ") | not)) | join("\n") | rtrimstr("\n")), "renewed: " + $ts] | join("\n")')
-    "$GH" api -X PATCH "repos/$repo/issues/comments/$id" -f "body=$body" >/dev/null || {
+    if "$GH" api -X PATCH "repos/$repo/issues/comments/$id" -f "body=$body" >/dev/null; then
+      # the lease the comment itself carries, so the log matches the claim
+      ll=$(printf '%s' "$mine" | jq -r .lease)
+      "$EVENT" renewed --issue "$n" --note "lease: $ll" >/dev/null 2>&1 || err "warning: could not log the renewed event"
+    else
       err "cannot renew the claim on #$n"
       rc=1
-    }
+    fi
   done
   exit "$rc"
 fi
@@ -208,5 +214,5 @@ if ! set_labels; then
   err "cannot update the labels of #$n - claim withdrawn"
   exit 1
 fi
-"$EVENT" claimed --issue "$n" >/dev/null 2>&1 || err "warning: could not log the claimed event"
+"$EVENT" claimed --issue "$n" --note "lease: $LEASE" >/dev/null 2>&1 || err "warning: could not log the claimed event"
 exit 0

@@ -85,7 +85,7 @@ case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn
 [ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
 
 # every state of the closed vocabulary is accepted
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded; do
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed test_weakened watcher_error usage superseded renewed; do
   ev "$s" --issue 1 --run r1 || fail "$s should be accepted"
 done
 
