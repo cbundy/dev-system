@@ -80,9 +80,13 @@ positive decimal integers without leading zeros; invalid values produce one erro
 line and exit 2 before discovery.
 
 Success prints one summary line. After all jobs finish, failures print each failing
-job's output as a contiguous block in scheduled order, then `test: N failed` and
-exit non-zero. `scripts/test.sh` owns the slow-first order, the currently empty
-serial list, and the shared per-run environment block for a future sandbox.
+job's output as a contiguous block in scheduled order, then a `FAIL test isolation: <file>`
+line for each entry left in the sandboxed shared-state directories (counted as one
+failure), then `test: N failed` and exit non-zero. `scripts/test.sh` owns the slow-first
+order, the currently empty serial list, and the shared per-run environment block. That
+block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`,
+`NO_MISTAKES_HOME`, `NM_PUSH_STATE_DIR` and `AGENTSVIEW_DATA_DIR` each point to an empty
+temporary directory, which is checked after the suites and removed on exit.
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
 ## Versioning and release

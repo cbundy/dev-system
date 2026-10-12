@@ -39,9 +39,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Shared per-run environment: anything exported here reaches every job. This is the one place
-# for it (e.g. a per-run sandbox for the jobs' event and state dirs). TMPDIR points inside the
-# results dir, so temp files created there by jobs that honour TMPDIR (even ones an
-# interrupted job never got to clean up) are removed with it.
+# for it, including the per-run sandbox for the jobs' event and state dirs
+# (scripts/test-sandbox.sh). TMPDIR points inside the results dir, so temp files created there
+# by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
+# with it.
 mkdir "$results/tmp" || exit 1
 TEST_RESULTS_DIR=$results
 TMPDIR=$results/tmp
