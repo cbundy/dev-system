@@ -103,7 +103,13 @@ wait_for() { # SECONDS COMMAND... : poll until it succeeds
 }
 calls_ge() { [ "$(calls)" -ge "$1" ]; }
 gone() { ! kill -0 "$1" 2> /dev/null; }
-sleeps_of() { awk -v p="$1" '$2 == "(sleep)" && $3 != "Z" && $4 == p { print $1 }' /proc/[0-9]*/stat 2> /dev/null | sort -n | tr '\n' ' '; }
+# Each stat file is read on its own: a process can exit between the glob and the
+# read, and mawk (the image's awk) stops at the first file it cannot open, which
+# under load hid the loop's sleep (cbundy/dev-system#523).
+sleeps_of() {
+  for f in /proc/[0-9]*/stat; do cat "$f" 2> /dev/null || :; done |
+    awk -v p="$1" '$2 == "(sleep)" && $3 != "Z" && $4 == p { print $1 }' | sort -n | tr '\n' ' '
+}
 one_sleep() { [ "$(sleeps_of "$loop_pid" | wc -w | tr -d ' ')" = 1 ]; }
 new_sleep() { sleeps_of "$loop_pid" | grep -qvx "$1 "; }
 sleep_gone() { ! sleeps_of "$loop_pid" | grep -qw "$1"; }
@@ -218,6 +224,8 @@ wait_for 5 calls_ge 1 || fail "the loop should beat at once: $(cat "$tmpdir/loop
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "the first beat carries the DDL"
 wait_for 5 one_sleep || fail "the loop should sleep between beats: $(sleeps_of "$loop_pid")"
 s1=$(sleeps_of "$loop_pid" | tr -d ' ')
+# An empty pid would make sleep_gone's grep -w match every line and never pass.
+[ -n "$s1" ] || fail "no sleep pid read after the first beat"
 kill -USR1 "$loop_pid"
 wait_for 5 calls_ge 2 || fail "SIGUSR1 should beat at once"
 wait_for 5 new_sleep "$s1" || fail "the loop should sleep again after the SIGUSR1 beat"
