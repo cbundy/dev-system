@@ -97,3 +97,25 @@ export function buildState(o: Observed): State {
     githubBackoffUntil: o.githubBackoffUntil,
   }
 }
+
+// digestOf: a short hash of the state without its clock readings, so a pass that saw nothing
+// new is easy to spot in the decision log (SPEC 12). FNV-1a over a stable rendering.
+export function digestOf(state: State): string {
+  const { now: _now, sources, lastTitle: _title, ...rest } = state
+  const quiet = { ...rest, sources: Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, v.ok])) }
+  let hash = 0x811c9dc5
+  for (const ch of stable(quiet)) {
+    hash ^= ch.charCodeAt(0)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined)
+    return `{${entries.sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
