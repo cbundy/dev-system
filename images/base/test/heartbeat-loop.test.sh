@@ -47,6 +47,8 @@ printf '%s\n' "$@" > "$d/psql-args-$n"
 cat > "$d/psql-sql-$n"
 echo x >> "$d/psql-calls"
 if [ "$fail" = 1 ]; then
+  # Recording a call does not mean its error response has reached the loop.
+  sleep 0.2
   echo "psql: error: connection to postgres://app:s3cret@db/x failed password=s3cret" >&2
   exit 2
 fi
@@ -223,6 +225,9 @@ grep -q 'CREATE TABLE' "$fakebin/psql-sql-2" && fail "the DDL must be sent once 
 touch "$fakebin/psql-fail"
 kill -USR1 "$loop_pid"
 wait_for 5 calls_ge 3 || fail "the failing beat should be tried"
+# SIGUSR1 interrupts the interval sleep; wait for the failed beat to finish
+# before requesting the retry, rather than signalling while psql is running.
+wait_for 5 one_sleep || fail "the loop should sleep after the failed beat"
 rm "$fakebin/psql-fail"
 kill -USR1 "$loop_pid"
 wait_for 5 calls_ge 4 || fail "the retry should run"
