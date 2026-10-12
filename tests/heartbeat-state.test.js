@@ -221,7 +221,7 @@ test("a run named by a superseded event on this device is not busy, even while s
 
 for (const idle of ["ready", "reclaimed", "owner_wait"]) {
   test(`run facts replayed after ${idle} stay idle; a new run after it is busy`, () => {
-    writeEvents([ev("claimed", 5, { ts: "2026-10-12T08:00:00Z" }), ev("abandoned", 5, { ts: "2026-10-12T09:00:00Z" }), ev(idle, 5),
+    writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev(idle, 5),
       ev("failed", 5, { ts: "2026-10-12T11:00:00Z" }), ev("head_mismatch", 5, { ts: "2026-10-12T11:01:00Z" }),
       ev("conflict", 5, { ts: "2026-10-12T11:02:00Z" }), ev("ci_stalled", 5, { ts: "2026-10-12T11:03:00Z" })]);
     assert.equal(run().out.state, "idle");
