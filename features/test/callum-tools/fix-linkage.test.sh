@@ -12,6 +12,8 @@ LINKAGE="$SCRIPT_DIR/../../src/callum-tools/check-pr-linkage.sh"
 SCRIPT="$SCRIPT_DIR/../../../images/base/callum-flow-fix-linkage"
 SHARE="$SCRIPT_DIR/../../../images/base"
 READER="$SHARE/callum-flow-issue-read"
+# the stub gh's `pr view` program, shared with the other linkage suite
+export PR_VIEW_JQ="$SCRIPT_DIR/linkage-pr-view.jq"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -36,12 +38,13 @@ fi
 if [ "${STUB_FAIL_NODE:-}" = empty ] && [ "$4" = fix ]; then
   exit 42
 fi
-if [ "${STUB_FAIL_NODE:-}" = body ] && [ "$4" = field ] && [ "$5" = body ]; then
-  if [ -f "$STUB_DIR/body-read" ]; then
-    printf 'partial extracted body'
-    exit 42
-  fi
-  touch "$STUB_DIR/body-read"
+if [ "${STUB_FAIL_NODE:-}" = body ] && [ "$4" = doc ]; then
+  printf '[]\n[]\n\npartial extracted body'
+  exit 42
+fi
+if [ "${STUB_FAIL_NODE:-}" = head ] && [ "$4" = head ]; then
+  printf 'feat/issue-12-thing\nmain\npartial extracted body'
+  exit 42
 fi
 exec "$STUB_NODE_BIN" "$@"
 NODE_STUB
@@ -69,18 +72,9 @@ fi
 case "$1 $2" in
   'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
   "pr view")
-    node -e '
-      const fs = require("fs"), d = process.argv[1];
-      const r = (f) => fs.readFileSync(d + "/" + f, "utf8").replace(/\n$/, "");
-      const body = fs.readFileSync(d + "/body", "utf8");
-      const apiBody = process.env.STUB_API_BODY || body;
-      const matches = r("base") === "main" ? [...apiBody.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*(?:([\w.-]+)\/([\w.-]+))?#(\d+)\b/gi)] : [];
-      const refs = matches.map((m) => ({number: Number(m[3]), repository: {owner: {login: m[1] || "local"}, name: m[2] || "repo"}}));
-      refs.sort((a, b) => a.number - b.number);
-      console.log(JSON.stringify({ headRefName: r("head"), baseRefName: r("base"),
-        body: fs.readFileSync(d + "/body", "utf8"),
-        closingIssuesReferences: refs }));
-    ' "$d"
+    # no node per call: the shared jq program answers from the state files
+    jq -nc --rawfile head "$d/head" --rawfile base "$d/base" --rawfile body "$d/body" \
+      --arg api "${STUB_API_BODY:-}" -f "$PR_VIEW_JQ"
     ;;
   "pr edit")
     [ "$3" = 7 ] && [ "$4" = --body-file ] || exit 1
@@ -223,6 +217,8 @@ run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 ep
 
 fail_node=body
 run_case "body extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}"
+fail_node="head"
+run_case "head extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}"
 for fail_node in fix empty; do
   for base in main epic/x; do
     for expectation in closing refs; do
