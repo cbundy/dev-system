@@ -1,0 +1,5 @@
+{
+  "name": "reconcile-spike",
+  "version": "0.1.0",
+  "description": "Throwaway spike: can a mod drive the orchestrator loop in a Remote Control session?"
+}
