@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for orchestrator-watch.sh --deadline (cbundy/dev-system#394, #420): timeout plus rearm in both modes, stream surviving an event, and a killed timer sleep.
+# Plain-shell tests for orchestrator-watch.sh --deadline (cbundy/dev-system#394, #420): timeout plus rearm in both modes, a killed timer sleep, and a leading-zero deadline.
 # Shared setup, stubs and wait helpers: orchestrator-watch-lib.sh (read its
 # header for the waiting rules). Split from the old orchestrator-watch.test.sh
 # (cbundy/dev-system#478).

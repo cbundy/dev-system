@@ -14,6 +14,7 @@ set -eu
 # and a signal to the watcher itself ends it at once with no orphan sleep.
 # Owner rule: these tests kill ONLY PIDs they recorded - the watcher's own
 # bg_pid, or its sleep child found with `pgrep -P <bg_pid> -x sleep`. Never by
+# name or pattern: live watchers run on the same host.
 
 # interrupted_lines <file>: how many "sleep interrupted" lines the file holds
 interrupted_lines() { grep -c 'sleep interrupted' "$1" || :; }

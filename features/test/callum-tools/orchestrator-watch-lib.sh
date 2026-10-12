@@ -127,7 +127,7 @@ got:
 $(cat "$1")"
 }
 
-# gone <pid>...: none of these processes exists (waits up to 5s)
+# gone <pid>...: none of these processes exists (waits up to 15s)
 gone() {
   for p in "$@"; do
     i=0

@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for pipeline-watch.sh stream mode under transient failures (cbundy/dev-system#54, #123): a no-mistakes failure and a gh failure are skipped, and a branch that re-enters an actionable state is a new event.
+# Plain-shell tests for pipeline-watch.sh stream mode under transient failures (cbundy/dev-system#54, #123): a no-mistakes failure and a gh failure are skipped.
 # Shared setup, stubs and wait helpers: watchers-lib.sh (read its header for the
 # waiting rules: no fixed sleep as a wait, negative windows bounded by watcher
 # progress). Split from the old watchers.test.sh (cbundy/dev-system#478).

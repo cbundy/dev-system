@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for orchestrator-watch.sh event flow (cbundy/dev-system#394): the single-shot window and rearm line, replay and catch-up.
+# Plain-shell tests for orchestrator-watch.sh event flow (cbundy/dev-system#394): the single-shot window and rearm line, replay and usage errors.
 # Shared setup, stubs and wait helpers: orchestrator-watch-lib.sh (read its
 # header for the waiting rules). Split from the old orchestrator-watch.test.sh
 # (cbundy/dev-system#478).
