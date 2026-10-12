@@ -40,18 +40,37 @@ const textOf = (result: McpToolResult) =>
 
 const contextTokens = async ($: EngineInterface) => (await $.session.usage()).context.tokens
 
+// A session started from claude.ai has the claude-code-remote server; one the
+// CLI started (`claude --remote-control`, as orchestrators are) has none, so
+// fall back to the built-in /rename, run as if typed.
+let titleRoute: 'mcp' | 'rename' = 'mcp'
+
+async function setTitleByMcp($: EngineInterface, title: string) {
+  if (sessionId === undefined) {
+    const found = await $.mcp.call('claude-code-remote', 'get_session', {})
+    sessionId = JSON.parse(textOf(found)).ccr?.id
+    if (sessionId === undefined) throw new Error(`no session id: ${textOf(found).slice(0, 200)}`)
+  }
+  const set = await $.mcp.call('claude-code-remote', 'set_session_title', { session_id: sessionId, title })
+  if (set.isError) throw new Error(textOf(set).slice(0, 200))
+}
+
 async function setTitle($: EngineInterface, title: string) {
-  try {
-    if (sessionId === undefined) {
-      const found = await $.mcp.call('claude-code-remote', 'get_session', {})
-      sessionId = JSON.parse(textOf(found)).ccr?.id
-      if (sessionId === undefined) throw new Error(`no session id: ${textOf(found).slice(0, 200)}`)
+  if (titleRoute === 'mcp') {
+    try {
+      await setTitleByMcp($, title)
+      return 'mcp'
+    } catch (err) {
+      void log($, 'title', { route: 'mcp', ok: false, error: String(err) })
+      titleRoute = 'rename'
     }
-    const set = await $.mcp.call('claude-code-remote', 'set_session_title', { session_id: sessionId, title })
-    if (set.isError) throw new Error(textOf(set).slice(0, 200))
-    return true
+  }
+  try {
+    const result = await $.command.run({ command: 'rename', args: title })
+    void log($, 'title', { route: 'rename', ok: true, result })
+    return 'rename'
   } catch (err) {
-    void log($, 'title', { ok: false, error: String(err) })
+    void log($, 'title', { route: 'rename', ok: false, error: String(err) })
     return false
   }
 }
