@@ -29,9 +29,11 @@
 # The DDL (guarded by catalog checks, so a repeat takes no exclusive lock) is
 # sent with the first beat of each process and again after a failed beat.
 # SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' (bounded
-# by `timeout 5`; it reuses the snapshot and the latest cache, with no
-# dev-version or heartbeat-state call, and an empty in_flight) and exit 0.
-# SIGUSR1 beats at once.
+# by `timeout 5`; it reuses the snapshot and the latest cache with no
+# dev-version call, sends the DDL only when this loop has not, and gives
+# heartbeat-state 2 s, else an empty in_flight) and exit 0.
+# SIGUSR1 beats at once: a test hook, the only way to exercise the in-process
+# DDL resend without waiting out the 10 s minimum interval.
 #
 # Usage: heartbeat-loop [--once | --final]
 #   --once   one beat, exit 0 on success and 1 on failure (tests)
@@ -182,7 +184,7 @@ ON CONFLICT (device) DO UPDATE SET
   last_seen = now();
 SQL
 
-DDL_SENT=0
+DDL_SENT=${HEARTBEAT_DDL_SENT:-0}
 
 # mtime FILE...: the newest mtime in epoch seconds, empty when none exists.
 newest_mtime() {
@@ -285,7 +287,7 @@ push_json() {
 
 # beat: one upsert. Returns 0 on success, 1 when psql failed, 2 when the URL is gone.
 beat() {
-  local url snap latest_json versions state_json state in_flight chat_at out device
+  local url snap latest_json versions state_wait state_json state in_flight chat_at out device
   if ! url=$(agentsview_pg_url); then
     echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
     return 2
@@ -298,13 +300,12 @@ beat() {
   if latest_json=$(jq -ec 'select(type == "object")' "$LATEST" 2>/dev/null); then
     versions=$(jq -c --argjson l "$latest_json" '. + {latest: $l}' <<< "$snap")
   fi
-  if [ -n "${HEARTBEAT_STOPPING:-}" ]; then
-    state_json='{"state":"stopped","in_flight":[],"chat_active_at":null}'
-  else
-    state_json=$(timeout 20 "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
-    jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
-  fi
+  state_wait=20
+  [ -z "${HEARTBEAT_STOPPING:-}" ] || state_wait=2
+  state_json=$(timeout "$state_wait" "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
+  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
   state=$(jq -r '.state // "idle"' <<< "$state_json")
+  [ -z "${HEARTBEAT_STOPPING:-}" ] || state=stopped
   in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
   chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
   device=$(jq -r '.device // empty' <<< "$snap")
@@ -329,7 +330,7 @@ beat() {
   return 0
 }
 
-stopped_beat() { HEARTBEAT_STOPPING=1 timeout 5 "$SELF" --once; }
+stopped_beat() { HEARTBEAT_STOPPING=1 HEARTBEAT_DDL_SENT=$DDL_SENT timeout 5 "$SELF" --once; }
 
 case "${1-}" in
   --once)
@@ -380,5 +381,6 @@ while :; do
   sleep "$INTERVAL" &
   sleeper=$!
   wait "$sleeper"
+  kill "$sleeper" 2>/dev/null
   sleeper=''
 done
