@@ -46,6 +46,7 @@ n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi)
 printf '%s\n' "$@" > "$d/psql-args-$n"
 cat > "$d/psql-sql-$n"
 echo x >> "$d/psql-calls"
+[ ! -e "$d/psql-hang" ] || exec sleep 60
 if [ "$fail" = 1 ]; then
   # Recording a call does not mean its error response has reached the loop.
   sleep 0.2
@@ -80,7 +81,7 @@ STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin/psql-fail" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
@@ -262,16 +263,28 @@ grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "the stopped be
 has_arg 1 base_image=2.29.0 || fail "the stopped beat reuses the versions snapshot"
 [ ! -e "$fakebin/dver-local-calls" ] || fail "the stopped beat must not run dev-version"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "a stopped beat from a process that sent no DDL sends it"
-# a hanging dev-version and heartbeat-state (60 s each) still give the stopped beat inside its 5 s bound:
-# the one psql call proves it beat the outer timeout, the wall clock only catches a real hang
+# The stopped beat runs under its own `timeout 5` and every stub hang is 60 s, so
+# a --final that outlives a few of those timeouts is a real hang, not a slow host.
+stop_timeout_ms=5000
+hang_bound_ms=$((stop_timeout_ms * 3))
+final_ms() {
+  t0=$(date +%s%N)
+  hb env "$BASH" "$LOOP" --final > /dev/null 2>&1 || fail "--final must exit 0 ($1)"
+  ms=$((($(date +%s%N) - t0) / 1000000))
+  [ "$ms" -lt "$hang_bound_ms" ] || fail "the stopped beat hung on $1: ${ms} ms"
+}
+# a hanging dev-version and heartbeat-state: the beat still lands, so it beat the outer timeout
 reset
 touch "$fakebin/dver-local-sleep" "$share/state-hang"
-t0=$(date +%s%N)
-hb env "$BASH" "$LOOP" --final || fail "--final with slow tools must exit 0"
-ms=$((($(date +%s%N) - t0) / 1000000))
+final_ms "a hanging dev-version and heartbeat-state"
 rm -f "$fakebin/dver-local-sleep" "$share/state-hang"
-[ "$ms" -lt 20000 ] || fail "the stopped beat took ${ms} ms"
 [ "$(calls)" = 1 ] && has_arg 1 state=stopped && has_arg 1 'in_flight=[]' || fail "a hanging heartbeat-state still gives a stopped beat with no in_flight"
+# an unreachable database that never answers is cut off by the stopped beat's timeout
+reset
+touch "$fakebin/psql-hang"
+final_ms "a database that never answers"
+[ "$(calls)" = 1 ] && has_arg 1 state=stopped || fail "the stopped beat should have been sent to the hanging database"
+rm -f "$fakebin/psql-hang"
 touch "$fakebin/psql-fail"
 hb env "$BASH" "$LOOP" --final > /dev/null 2>&1 || fail "--final must exit 0 even when the beat fails"
 rm -f "$fakebin/psql-fail"
