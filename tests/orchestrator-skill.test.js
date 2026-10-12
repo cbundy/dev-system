@@ -34,3 +34,16 @@ test("issue-orchestrator SKILL.md carries the release-planning rules", () => {
   assert.ok(text.includes("Next release has no open items"));
   assert.ok(!text.includes("callum-flow-milestone tag"), "merge-time tagging belongs to callum-flow-merge");
 });
+
+test("split sub-issues inherit ready in the designer and the orchestrator skill", () => {
+  const root = path.join(__dirname, "..", "plugins", "callum-flow");
+  const norm = (f) => fs.readFileSync(path.join(root, f), "utf8").replace(/\s+/g, " ");
+  const designer = norm("agents/designer.md");
+  assert.ok(designer.includes("label them `ready` when the parent was `ready` or claimed"));
+  assert.ok(!designer.includes("WITHOUT the `ready` label"));
+  const skill = norm("skills/issue-orchestrator/SKILL.md");
+  assert.ok(skill.includes("release your claim on the parent"));
+  assert.ok(skill.includes("split sub-issues arrive `ready`"));
+  assert.ok(!skill.includes("wait for the owner to tag each split sub-issue"));
+  assert.ok(!skill.includes("into unlabelled sub-issues, stop"));
+});
