@@ -518,6 +518,25 @@ events | jq -e 'select(.state == "closed" and .issue == 7 and .actor == "sweep")
 n=$(events | wc -l)
 FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "mirror-only twice: $(events)"
+# abandoned, then a later mirror run (factory-state lists it again, no new events): closed on GitHub gets closed
+reset
+closed_issue 7 completed
+seed abandoned 7
+echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"}],"recent":[]}]}' > "$d/fs-json"
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+expect_rc 0 "sweep abandoned then mirror run"
+events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .actor == "sweep"' > /dev/null || fail "abandoned then mirror run not closed: $(events)"
+n=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "abandoned then mirror run twice: $(events)"
+# abandoned and not listed (no new life): stays final, nothing logged
+reset
+closed_issue 7 completed
+seed abandoned 7
+echo '{"repos":[{"repo":"o/r","issues":[],"recent":[{"issue":7}]}]}' > "$d/fs-json"
+n=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+[ "$(events | wc -l)" = "$n" ] || fail "abandoned without new life was closed: $(events)"
 unset FS_BIN
 
 # --- sweep: central factory.events via dev-query (#342) ----------------------------

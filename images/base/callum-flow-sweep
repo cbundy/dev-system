@@ -220,7 +220,7 @@ for n in $list; do
 done
 
 # Issues closed outside the factory: every issue the log has seen, not final,
-# and every non-final issue callum-flow-factory-state lists, that GitHub reports closed. Open ones are left alone.
+# and every issue callum-flow-factory-state lists the log has not closed, that GitHub reports closed. Open ones are left alone.
 cands=$(awk '$2 != "closed" && $2 != "abandoned" { print $1 }' "$tmp/latest")
 # Plus the issues the factory-state tool still lists as live, which also covers an issue
 # known only from a mirror run (no events at all). A failed read adds nothing.
@@ -228,8 +228,9 @@ FSTATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
 if fs=$("$FSTATE" --repo "$repo" --github off --format json 2>/dev/null </dev/null); then
   live=$(printf '%s' "$fs" | jq -r '.repos[]? | .issues[]? | .issue' 2>/dev/null) || live=
   cands=$(printf '%s\n%s\n' "$cands" "$live" | awk 'NF && !seen[$1]++')
-  # a listed issue the log already ends (the tool reads the log a moment earlier) is not logged twice
-  cands=$(for n in $cands; do is_final "$n" || echo "$n"; done)
+  # a listed issue the log already closed (the tool reads the log a moment earlier) is not logged twice;
+  # an abandoned one it lists has a new life (a later run), so it stays a candidate
+  cands=$(for n in $cands; do awk -v n="$n" '$1 == n && $2 == "closed" { f = 1 } END { exit !f }' "$tmp/latest" || echo "$n"; done)
 fi
 for n in $cands; do
   grep -qx "$n" "$tmp/handled" && continue
