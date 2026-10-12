@@ -1493,11 +1493,14 @@ diverged `origin/<branch>` is replaced with a `--force-with-lease` push on the o
 that would be lost is first archived as `archive/<branch>-<mirror|run|remote>-<sha8>`. A dropped commit
 (in the run head, gate ref or origin branch, not in `origin/<base>`, no patch-id equivalent in HEAD) is
 listed on stderr, and a dropped `no-mistakes(...)` commit blocks until `--accept-dropped` names its sha.
-Nothing is deleted, pushed or recovered before that check passes. `--new-branch`, or any step that cannot
-finish, moves to `<branch>-v<N>` (first name free locally, on origin and on the gate), logs `superseded`
-and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a `next:` line. Success prints
+Nothing is deleted, pushed or recovered before that check passes. `--new-branch` (after the live run is
+stopped), or a sync recovery, gate-ref deletion or recovery that moves HEAD, moves the rebased head to
+`<branch>-v<N>` (first name free locally, on origin and on the gate), logs `superseded` and prints
+`REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a `next:` line. Success prints
 `REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch re-gate also logs `superseded`.
-Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. The behind-only
+Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. Preflight and
+dropped-commit refusals change nothing, but a later one (a run that did not stop, a refused lease push)
+may leave the run aborted or recovered and the gate ref deleted, with the archives kept. The behind-only
 path stays `callum-flow-merge-guard <pr> --update-behind`. Tests: `CALLUM_FLOW_NM_BIN`,
 `CALLUM_FLOW_EVENT_BIN`, `CALLUM_FLOW_REGATE_TRIES`, `CALLUM_FLOW_REGATE_SLEEP`.
 

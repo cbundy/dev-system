@@ -36,6 +36,7 @@ case "$*" in
     ;;
   'axi sync --recover'*)
     git -C "$WORK" for-each-ref refs/heads/archive/ | sed 's/.*/archive_present/' | sed -n 1p >> "$NMS/calls"
+    [ ! -s "$NMS/recover_reset" ] || git -C "$WORK" reset -q --hard "$(cat "$NMS/recover_reset")"
     echo run_pipeline > "$NMS/code"
     ;;
   'axi sync --adopt-published') echo run_pipeline > "$NMS/code" ;;
@@ -169,6 +170,16 @@ rg --accept-dropped "$P" > /dev/null || fail "recover_custody"
 grep -qx 'axi sync --recover' "$NMS/calls" || fail "printed recover command expected"
 mk
 echo recover_custody > "$NMS/code"
+echo 'no-mistakes axi sync --recover' > "$NMS/command"
+rebased=$(git rev-parse HEAD)
+git commit -q --amend -m 'work reworded'
+reworded=$(git rev-parse HEAD)
+echo "$rebased" > "$NMS/recover_reset"
+out=$(rg --accept-dropped "$P") || fail "recover moved HEAD: $out"
+expect "$out" "REGATE new-branch branch=$B-v2" "a recovery that moves HEAD falls back"
+[ "$(git rev-parse HEAD)" = "$reworded" ] || fail "the new branch must start from the deliberate rebase"
+mk
+echo recover_custody > "$NMS/code"
 echo 'no-mistakes eject' > "$NMS/command"
 out=$(rg --accept-dropped "$P") || fail "odd command: $out"
 expect "$out" "REGATE new-branch branch=$B-v2" "an unsafe printed command falls back"
@@ -205,6 +216,17 @@ mk
 git branch "$B-v2"
 out=$(rg --new-branch --accept-dropped "$P") || fail "new-branch: $out"
 expect "$out" "branch=$B-v3" "-v3"
+mk
+echo running > "$NMS/status"
+out=$(rg --new-branch --accept-dropped "$P") || fail "new-branch live: $out"
+expect "$out" "REGATE new-branch branch=$B-v2" "new-branch on a live run"
+grep -q '^axi abort$' "$NMS/calls" || fail "--new-branch must abort a live run"
+mk
+echo 0123456789012345678901234567890123456789 > "$NMS/run_head"
+out=$(rg --accept-dropped "$P") && fail "an unreadable run head must refuse" || :
+expect "$out" "use --new-branch" "unreadable fix text"
+out=$(rg --new-branch --accept-dropped "$P") || fail "unreadable with --new-branch: $out"
+expect "$out" "REGATE new-branch branch=$B-v2" "--new-branch skips an unreadable source"
 mk
 git config -f "$GATE/config" receive.denyDeletes true
 out=$(rg --accept-dropped "$P") || fail "denied delete: $out"

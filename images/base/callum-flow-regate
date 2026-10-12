@@ -18,8 +18,10 @@
 #
 # Output (stdout, one line): REGATE ready branch=B head=SHA archived=REF[,REF]|none
 #   or, in new-branch mode: REGATE new-branch branch=NEW old_branch=B old_run=ID
-#   followed by a 'next:' line. A refusal prints 'REGATE FAIL <reason> fix: ...' and exits 1
-#   having changed nothing (archive refs excepted). Exit 2 is a usage error.
+#   followed by a 'next:' line. A refusal prints 'REGATE FAIL <reason> fix: ...' and exits 1.
+#   Preflight and dropped-commit refusals change nothing; a later one (a run that did not
+#   stop, a refused lease push) may leave the run aborted, recovered or the gate ref deleted,
+#   with the archive refs kept. Exit 2 is a usage error.
 #
 # Safety: a dropped commit is one in the run head, the gate ref or origin/<branch> that is
 # not in origin/<base> and has no patch-id equivalent in HEAD. Every one is archived under
@@ -119,7 +121,10 @@ orig_sha=$(origin_tip)
 srcs='' # "kind sha" lines, only those not already in HEAD
 add_src() {
   [ -n "$2" ] || return 0
-  have "$2" || fail "cannot read $1 commit $(short "$2")" "its objects are not reachable, so it cannot be archived; use --new-branch"
+  if ! have "$2"; then
+    [ -z "$newbranch" ] || return 0
+    fail "cannot read $1 commit $(short "$2")" "its objects are not reachable, so it cannot be archived; use --new-branch"
+  fi
   is_anc "$2" "$head" && return 0
   case "
 $srcs" in *" $2"*) return 0 ;; esac
@@ -178,14 +183,12 @@ new_branch() {
     n=$((n + 1))
   done
   nb="$b-v$n"
-  git switch -q -c "$nb" || fail "cannot create $nb" "check the working tree"
+  git switch -q -c "$nb" "$head" || fail "cannot create $nb" "check the working tree"
   "$EVENT" superseded --issue "$issue" --run "${run_id:-unknown}" --branch "$nb" --note "by $nb" > /dev/null 2>&1 || true
   printf 'REGATE new-branch branch=%s old_branch=%s old_run=%s\n' "$nb" "$b" "${run_id:-unknown}"
   printf 'next: once the new PR exists, close the old PR for %s as superseded by %s\n' "$b" "$nb"
   exit 0
 }
-
-[ -z "$newbranch" ] || new_branch
 
 if [ -n "$live" ]; then
   $NM axi abort > /dev/null 2>&1 || true
@@ -198,6 +201,8 @@ if [ -n "$live" ]; then
     sleep "$nap"
   done
 fi
+
+[ -z "$newbranch" ] || new_branch
 
 sync_code() {
   sync_out=$($NM axi sync --check 2> /dev/null | clean) || sync_out=''
@@ -228,8 +233,7 @@ esac
 if [ -n "$code" ] && [ "$code" != run_pipeline ] && [ "$code" != user_owned ]; then
   sync_code
   case "$code" in run_pipeline | user_owned | '') ;; *) new_branch ;; esac
-  [ "$(git rev-parse HEAD)" = "$head" ] || is_anc "origin/$base" HEAD || new_branch
-  head=$(git rev-parse HEAD)
+  [ "$(git rev-parse HEAD)" = "$head" ] || new_branch
 fi
 
 # stale mirror: clear a gate ref that HEAD does not contain (its content is archived)
