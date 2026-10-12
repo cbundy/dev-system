@@ -58,8 +58,8 @@ st="$tmpdir/state"
 cat > "$tmpdir/gh" <<'STUB'
 #!/bin/sh
 d=${STUB_DIR:?}
-# builtins only: `read` instead of a `cat` process per field. Every state file is
-# newline-terminated, so the first line is the whole value.
+# Scalar state values occupy one newline-terminated line, read with a shell builtin
+# instead of a `cat` process per field. Multiline fixtures use slurp or jq below.
 slurp() { while IFS= read -r l || [ -n "$l" ]; do printf '%s\n' "$l"; done < "$1"; }
 OWNER='{"login":"cbundy","id":13131067}'
 if [ "$1" = api ]; then
