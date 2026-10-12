@@ -77,7 +77,7 @@ it too. (`/plugin` does not work inside the desktop app.)
 ## Develop it
 
 `claude --plugin-dir plugins/factory-hud` loads this checkout's copy for one session and
-reloads it as files change. `npm test` validates it and runs `tests/*.test.ts` through
+reloads it as files change. `npm test` validates it and runs `plugins/factory-hud/tests/*.test.ts` through
 `claude plugin validate` and `claude plugin test` when `claude` is on PATH. Without it,
 the other suites still run and the summary notes that mods were skipped. CI installs
 Claude Code and sets `TEST_REQUIRE_CLAUDE=1`, so a missing `claude` fails the gate.
