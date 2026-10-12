@@ -401,6 +401,17 @@ if [ "$av_rc" -eq 0 ]; then
   fi
 fi
 
+# Worker heartbeat (cbundy/dev-system#339): when the last beat was written and
+# the state it reported. A configured URL whose loop is not running is a failure.
+hb_state=/tmp/dev-heartbeat.state
+hb_last=$(sed -n 's/^last_beat=//p' "$hb_state" 2>/dev/null | sed -n 1p)
+hb_st=$(sed -n 's/^state=//p' "$hb_state" 2>/dev/null | sed -n 1p)
+case "$hb_last" in '' | *[!0-9]*) hb_when=never ;; *) hb_when=$(date -u -d "@$hb_last" +%Y-%m-%dT%H:%M:%SZ) ;; esac
+info "worker heartbeat: last beat $hb_when, state ${hb_st:-unknown}"
+if [ "$av_rc" -eq 0 ] && flock -n /tmp/dev-heartbeat.lock true 2>/dev/null; then
+  fail "heartbeat is not running" "run: dev-init (log: /tmp/dev-heartbeat.log)"
+fi
+
 # no-mistakes pipeline data push (cbundy/dev-system#273): rows pushed so far and
 # whether state.sqlite has activity the push has not seen. A configured push
 # whose loop is not running is a failure.
