@@ -440,7 +440,7 @@ ver_workers() {
   [ "$(grep -cF 'notification "factory_workers" with payload "fresh"' "$l")" -ge 1 ] || { echo "no notification on insert"; rm -f "$l"; return 1; }
   [ "$(grep -cF 'notification "factory_workers" with payload "fresh"' "$l")" -ge 2 ] || { echo "no notification on update"; rm -f "$l"; return 1; }
   rm -f "$l"
-  [ "$(printf '%s\n' "select device || ':' || stale from factory.workers_status order by device" | pg | tr '\n' ' ')" = "fresh:f old:t " ] || { echo "stale wrong"; return 1; }
+  [ "$(printf '%s\n' "select device, stale from factory.workers_status order by device" | pg | tr '\n' ' ')" = "fresh|f old|t " ] || { echo "stale wrong"; return 1; }
   q=$(awk '/^## Workers/ { w = 1 } w && /^```sql$/ { f = 1; next } f && /^```$/ { exit } f' "$root/docs/metrics.md")
   [ -n "$q" ] || { echo "no Workers query in docs/metrics.md"; return 1; }
   printf '%s\n' "$q" | pg >/dev/null || { echo "the Workers query failed"; return 1; }
