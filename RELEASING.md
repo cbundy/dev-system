@@ -22,7 +22,9 @@ the `Release` workflow only verifies, tags and publishes.
    stamp (`node bin/callum-dev.js update`: `.callum-dev.json`, `.callum-dev/baseline/`
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
-   markers before committing.
+   markers before committing. When the release includes base image changes, add
+   `--image A.B.C` (see "The base image" below) so the same PR sets `images/base/VERSION`;
+   without `--image` that file is left untouched.
 2. Commit the approved notes in the same bump PR. `npm run lint` validates every file in
    `release-notes/` and requires valid notes for the `package.json` version.
 3. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
@@ -89,9 +91,14 @@ next container rebuild via their `callum-tools:1` pin.
 
 ## The base image (separate cadence)
 
-The image version lives in `images/base/VERSION` and is NOT set by the release bump.
-A PR that changes the image in a way consumers should be able to pin bumps
-it; after merge, run the `Publish base image` workflow (Actions tab, or
+The image version lives in `images/base/VERSION`. It is independent of the release
+version and is bumped at release time, never in a feature PR (concurrent PRs each bumping
+it collide and force a re-gate of every other open PR). The release bump PR sets it:
+`node scripts/release-bump.js X.Y.Z --image A.B.C`. The `release` skill works out whether
+image inputs changed since the last tag (`images/base/` other than `VERSION`, and
+`features/src/callum-tools/`, the same paths the publish workflow builds on) and proposes
+the level: patch for fixes, minor for a new tool or capability, major for a breaking
+change. After the bump PR merges, run the `Publish base image` workflow (Actions tab, or
 `gh workflow run publish-base-image.yml`) to push the new tags. The workflow also
 re-pushes the current version's tags weekly with fresh OS packages and tools, so tags
 are mutable - see `images/base/README.md`.

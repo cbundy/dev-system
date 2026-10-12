@@ -10,6 +10,10 @@
 // it is asked to tag and refuses to tag a tree that was not bumped first.
 //
 //   node scripts/release-bump.js X.Y.Z           bump every version and refresh the stamp
+//   node scripts/release-bump.js X.Y.Z --image A.B.C   also set images/base/VERSION to A.B.C
+//                                                (the image version is independent of the
+//                                                release version and is bumped only here,
+//                                                never in a feature PR, cbundy/dev-system#359)
 //   node scripts/release-bump.js --check X.Y.Z   exit 1 if any of them is not at X.Y.Z
 //
 // Node built-ins only.
@@ -26,6 +30,8 @@ const STAMP_FILE = ".callum-dev.json";
 // The template whose callum marketplace source carries the release pin.
 const PIN_FILE = "templates/.claude/settings.json";
 const PIN_MARKETPLACE = "callum";
+// The base image's own version, independent of the release version.
+const IMAGE_VERSION_FILE = "images/base/VERSION";
 
 const pinSource = (settings) => settings?.extraKnownMarketplaces?.[PIN_MARKETPLACE]?.source;
 
@@ -109,11 +115,19 @@ function runUpdate(root) {
 }
 
 // Sets every versioned file to `version`, then refreshes the stamp. Throws on failure.
-function bump(version, { root = REPO_ROOT, update = runUpdate, log = console.log } = {}) {
+// With `image`, also sets images/base/VERSION to it; without, leaves that file alone.
+function bump(version, { root = REPO_ROOT, update = runUpdate, log = console.log, image } = {}) {
   validate(version);
+  if (image !== undefined) validate(image);
   for (const entry of versionedFiles(root)) {
     writeVersion(root, entry, version);
     log(`release-bump: bumped ${entry.file}`);
+  }
+  if (image !== undefined) {
+    const imagePath = path.join(root, IMAGE_VERSION_FILE);
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true });
+    fs.writeFileSync(imagePath, `${image}\n`);
+    log(`release-bump: set ${IMAGE_VERSION_FILE} to ${image}`);
   }
   writePin(root, version);
   log(`release-bump: pinned ${PIN_FILE} to v${version}`);
@@ -145,12 +159,15 @@ function check(version, { root = REPO_ROOT } = {}) {
 
 if (require.main === module) {
   const args = process.argv.slice(2);
+  const usage = "usage: node scripts/release-bump.js [--check] X.Y.Z [--image A.B.C]";
   const checkMode = args[0] === "--check";
   const version = checkMode ? args[1] : args[0];
+  const rest = args.slice(checkMode ? 2 : 1);
   try {
-    if (args.length !== (checkMode ? 2 : 1)) {
-      throw new Error("usage: node scripts/release-bump.js [--check] X.Y.Z");
-    }
+    let image;
+    if (rest[0] === "--image" && rest.length === 2 && !checkMode) image = rest[1];
+    else if (rest.length > 0) throw new Error(usage);
+    if (version === undefined) throw new Error(usage);
     if (checkMode) {
       const mismatches = check(version);
       if (mismatches.length > 0) {
@@ -158,7 +175,7 @@ if (require.main === module) {
         process.exit(1);
       }
     } else {
-      bump(version);
+      bump(version, { image });
     }
   } catch (err) {
     console.error(`release-bump: ${err.message}`);
