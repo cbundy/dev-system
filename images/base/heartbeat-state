@@ -7,10 +7,14 @@
 //   - an issue on THIS device whose latest lifecycle event is not merged,
 //     abandoned, claim_lost (the owner's rule), owner_wait, or closed, ready,
 //     reclaimed (closed, queued, or reclaimed from a stale claim: no one here
-//     is working on it). Noise states never count for or against busy
-//     (callum-flow-issue-read logs untrusted_stripped on any read; renewed is
-//     the claim heartbeat).
-//   - a no-mistakes run whose status is not completed, failed or cancelled
+//     is working on it). After merged, abandoned, closed or claim_lost only a
+//     new-life decision (ready, reclaimed, claimed, briefed, design_routed,
+//     delegated) counts as a later event, as in callum-flow-factory-state:
+//     run facts such as failed or head_mismatch replay on old runs. Noise
+//     states never count for or against busy (callum-flow-issue-read logs
+//     untrusted_stripped on any read; renewed is the claim heartbeat).
+//   - a no-mistakes run whose status is not completed, failed or cancelled,
+//     unless a superseded event on this device names it
 //   - a typed prompt (classifyWake kind 'owner', not a sidechain) in a Claude
 //     transcript within the last 5 minutes
 // Any read error degrades to the remaining sources and goes to stderr; this
@@ -27,6 +31,8 @@ const path = require('node:path');
 const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed']);
 const isNoise = (s) => NOISE.has(s) || /^(upgrade|drain)/.test(s);
 const DONE = new Set(['merged', 'abandoned', 'claim_lost', 'owner_wait', 'closed', 'ready', 'reclaimed']);
+const TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
+const NEW_LIFE = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'delegated']);
 const NM_DONE = new Set(['completed', 'failed', 'cancelled']);
 const CHAT_WINDOW_MS = 5 * 60 * 1000;
 const TAIL_BYTES = 512 * 1024;
@@ -47,10 +53,11 @@ const lowerRepo = (repo) => (repo ? String(repo).toLowerCase() : null);
 const issueKey = (repo, issue) => `${repo}#${issue}`;
 
 function readIssues(dir, dev) {
-  const latest = new Map(); // "repo#issue" -> {ts, ev}
+  const byIssue = new Map(); // "repo#issue" -> [{ts, ev}]
   const runIssue = new Map(); // run_id -> {repo, issue}
+  const superseded = new Set(); // run_id
   let names = [];
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort(); } catch { return { issues: [], runIssue }; }
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort(); } catch { return { issues: [], runIssue, superseded }; }
   for (const n of names) {
     let text;
     try { text = fs.readFileSync(path.join(dir, n), 'utf8'); } catch (e) { warn(`${n}: ${e.message}`); continue; }
@@ -60,16 +67,20 @@ function readIssues(dir, dev) {
       try { ev = JSON.parse(line); } catch { continue; }
       if (!ev || typeof ev !== 'object' || ev.device !== dev || typeof ev.state !== 'string') continue;
       if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: lowerRepo(ev.repo), issue: ev.issue });
+      if (ev.state === 'superseded' && ev.run_id) superseded.add(String(ev.run_id));
       if (isNoise(ev.state) || !Number.isInteger(ev.issue)) continue;
       const key = issueKey(lowerRepo(ev.repo), ev.issue);
-      const ts = Date.parse(ev.ts) || 0;
-      const prev = latest.get(key);
-      if (!prev || ts >= prev.ts) latest.set(key, { ts, ev });
+      if (!byIssue.has(key)) byIssue.set(key, []);
+      byIssue.get(key).push({ ts: Date.parse(ev.ts) || 0, ev });
     }
   }
   const issues = [];
-  for (const { ev } of latest.values()) if (!DONE.has(ev.state)) issues.push(ev);
-  return { issues, runIssue };
+  for (const evs of byIssue.values()) {
+    let cur = null;
+    for (const { ev } of evs.sort((a, b) => a.ts - b.ts)) if (!cur || !TERMINAL.has(cur.state) || NEW_LIFE.has(ev.state)) cur = ev;
+    if (!DONE.has(cur.state)) issues.push(cur);
+  }
+  return { issues, runIssue, superseded };
 }
 
 function readRuns(home) {
@@ -141,7 +152,8 @@ function main() {
   const byIssue = new Map();
   let issues = [];
   let runIssue = new Map();
-  try { ({ issues, runIssue } = readIssues(process.env.CALLUM_EVENTS_DIR || '/persist/events', dev)); } catch (e) { warn(`events: ${e.message}`); }
+  let superseded = new Set();
+  try { ({ issues, runIssue, superseded } = readIssues(process.env.CALLUM_EVENTS_DIR || '/persist/events', dev)); } catch (e) { warn(`events: ${e.message}`); }
   for (const ev of issues) {
     const repo = lowerRepo(ev.repo);
     const e = { repo, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
@@ -149,6 +161,7 @@ function main() {
     inFlight.push(e);
   }
   for (const r of readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes')) {
+    if (superseded.has(String(r.id))) continue;
     let { repo, issue } = runIssue.get(String(r.id)) || {};
     if (issue === undefined) {
       const m = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/.exec(r.branch || '');
