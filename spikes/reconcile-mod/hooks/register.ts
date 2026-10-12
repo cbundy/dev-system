@@ -104,8 +104,14 @@ export const register: Register = on => {
   })
 
   // Every row the main conversation keeps: did the agent's result land there?
+  // The note /rename leaves for the model ("The user named this session ...")
+  // is blanked, so a title update costs no context.
   on('session.append', async ($, e, next) => {
-    const result = await next(e)
+    const isRenameNote =
+      e.door === 'prompt' &&
+      e.origin.kind === 'plugin' &&
+      JSON.stringify(e.message.content ?? '').includes('named this session')
+    const result = await next(isRenameNote ? { ...e, message: { ...e.message, content: [] } } : e)
     if (e.agentId === undefined) {
       void log($, 'append', {
         door: e.door,
@@ -114,6 +120,7 @@ export const register: Register = on => {
         name: e.message.name,
         isMeta: e.message.isMeta,
         chars: JSON.stringify(e.message.content ?? '').length,
+        storedChars: JSON.stringify(result.message.content ?? '').length,
       })
     }
     return result
