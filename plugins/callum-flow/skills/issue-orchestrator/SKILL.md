@@ -76,9 +76,13 @@ from the main checkout (its lock refuses a second copy; the header has the argum
    owner decisions). If a decision is pending, surface it and wait. On a split,
    release your claim on the parent (now a tracker): remove `In development`,
    leave `ready` off, log `abandoned`. Its `ready` sub-issues join the queue.
-3. **Delegate** the brief URL (never its content) to `callum-flow:implementer`, with a pointer
-   to the `implement-issue` skill: run `callum-flow-implementer-route <N>`, log `delegated`, then
-   spawn with `model` set to what the route printed and `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
+3. **Delegate** the brief URL (never its content) to `callum-flow:implementer`,
+   with a pointer to the `implement-issue` skill, in this order:
+   - run `callum-flow-implementer-route <N>`: it prints the implementer's model
+     and logs the choice;
+   - log `delegated`;
+   - spawn with `model` set to what the route printed, and with
+     `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`.
    Keep keyword talk (`Closes`, `Fixes`) out of briefs.
 4. **Verify and merge** when the PR lands (see Merge).
 5. **Done by Rollout** (`callum-flow-rollout <N>`): `merge` - the PR closes it
@@ -97,11 +101,12 @@ scheduled variant); never `coder restart`, `stop` or `update` on your own worksp
 (the `forbid-coder-self` hook refuses them). The session resumes after the restart:
 re-arm the watcher (the lock stops a second copy); CronList only for a usage reset wake.
 
-Delegate only through the named `callum-flow:*` agents, with no `model`
-argument (frontmatter pins it) except step 3's; an issue `model:<alias>` label means pass
-`model: "<alias>"` on every other sub-agent call for it, fixers included. Serialize
-conflict-prone work with native `blocked_by`; run independent issues in
-parallel, bounded by the tier and the worktree pool.
+Delegate only through the named `callum-flow:*` agents. Pass no `model`
+argument (frontmatter pins it), except the implementer's from step 3. An issue
+`model:<alias>` label means pass `model: "<alias>"` on every other sub-agent
+call for it, fixers included (the route already applies it to the implementer).
+Serialize conflict-prone work with native `blocked_by`; run independent issues
+in parallel, bounded by the tier and the worktree pool.
 
 ## Pipeline events
 Each pipeline line is `<state> <branch> <run-id> ... head=<sha>`. Never read a
