@@ -73,8 +73,9 @@ from the main checkout (its lock refuses a second copy; the header has the argum
 2. **Design**: spawn `callum-flow:designer` with the issue number, the branches
    in flight and the files they touch, and owner instructions from this session.
    Keep only its return (brief URL, created issues, dependency order, pending
-   owner decisions). If a decision is pending, surface it and wait; if it split
-   the issue into unlabelled sub-issues, stop.
+   owner decisions). If a decision is pending, surface it and wait. On a split,
+   release your claim on the parent (now a tracker): remove `In development`,
+   leave `ready` off, log `abandoned`. Its `ready` sub-issues join the queue.
 3. **Delegate** the brief URL (never its content) to `callum-flow:implementer`,
    with a pointer to the `implement-issue` skill. Log `delegated` and spawn with
    `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,device=$DEV_MACHINE_NAME`. Keep keyword
@@ -150,8 +151,7 @@ refuses, give the owner the PR link and guard output. Release the worktree after
 merge as `implement-issue` says.
 
 ## Special issue types
-- **High-risk or large**: wait for the owner to tag each split sub-issue `ready`;
-  if implementation has begun, stop the agent before it opens a PR.
+- **High-risk or large**: split sub-issues arrive `ready`; only a pending owner decision stops that piece. If implementation has begun, stop the agent before a PR.
 - **UI change**: require before/after screenshots (a clip when interactive) on the PR.
 - **Human-decision gates** (branching, data loss, finalization): surface options, wait.
 

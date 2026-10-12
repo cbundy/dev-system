@@ -70,6 +70,7 @@ for the layers, versioning and the runtime map.
 
 1. Write the issue and add the `ready` label.
 2. The orchestrator session picks it up and delegates design and implementation to sub-agents.
+   Large or high-risk issues follow the [designer's split rules](plugins/callum-flow/agents/designer.md).
 3. The implementation sub-agent works in a worktree; the no-mistakes pipeline gates the change
    and opens a PR linked to the issue. The orchestrator then verifies and merges it.
 
