@@ -205,7 +205,7 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
   const scripts = path.join(root, "scripts");
   fs.mkdirSync(scripts);
-  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js"]) {
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh"]) {
     fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
   }
   fs.mkdirSync(path.join(root, "tests"));
