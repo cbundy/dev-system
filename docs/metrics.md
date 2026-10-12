@@ -383,7 +383,7 @@ dispatcher_bound)` above 0.5 means option B.
 `heartbeat-loop` (base image) upserts one row per device into `factory.workers` every
 `DEV_HEARTBEAT_INTERVAL` seconds (default 60). Read it through `factory.workers_status`, which adds
 `age = now() - last_seen` and `stale = age > 3 * interval_s`. `state` is `idle`, `busy` or `stopped`;
-`in_flight` lists the issues and runs that make a worker busy; `critical_failures` is a JSON array of check
+`in_flight` lists the issues and runs that make a worker busy, each with its `repo`; `critical_failures` is a JSON array of check
 codes (empty when healthy). `LISTEN factory_workers` delivers the device on every beat.
 
 Fleet status:

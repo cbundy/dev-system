@@ -35,6 +35,7 @@ for t in jq sed tr cat mkdir mv dirname basename date sleep rm touch chmod stat 
 done
 BASH=$(command -v bash)
 ln -s "$ROOT/images/base/agentsview.sh" "$share/agentsview.sh"
+ln -s "$ROOT/images/base/workspace.sh" "$share/workspace.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
@@ -55,6 +56,7 @@ cat > "$fakebin/dev-version" <<'STUB'
 d=$(dirname "$0")
 case "$1" in
   --local)
+    echo x >> "$d/dver-local-calls"
     [ ! -e "$d/dver-snapshot-fail" ] || exit 2
     printf '%s\n' '{"device":"dev-box","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
     ;;
@@ -68,12 +70,13 @@ esac
 STUB
 cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
+echo x >> "$(dirname "$0")/state-calls"
 echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin/psql-fail" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin/psql-fail" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
@@ -123,6 +126,13 @@ grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "in_flight from
 grep -q '^push={"events"' "$fakebin/psql-args-1" || fail "push document missing"
 if grep -q 's3cret\|postgres:' "$fakebin/psql-args-1" "$tmpdir/once.out"; then fail "the URL leaked into argv or output"; fi
 [ -e "$hbdir/dev-heartbeat.state" ] && grep -q '^state=busy$' "$hbdir/dev-heartbeat.state" || fail "the state file should be written after a beat"
+
+# --- repo: from DEV_REPO_URL, else the origin of the checkout it runs in -------
+reset
+git init -q "$tmpdir/checkout"
+git -C "$tmpdir/checkout" remote add origin git@github.com:Acme/Desk-Repo.git
+(cd "$tmpdir/checkout" && hb env -u DEV_REPO_URL -u DEV_WORKSPACE "$BASH" "$LOOP" --once) > /dev/null 2>&1 || fail "--once in a checkout"
+has_arg 1 repo=acme/desk-repo || fail "with no DEV_REPO_URL the repo comes from the checkout: $(tr '\n' ' ' < "$fakebin/psql-args-1")"
 
 # --- critical_failures --------------------------------------------------------
 cf() { sed -n 's/^critical_failures=//p' "$fakebin/psql-args-$1"; }
@@ -235,6 +245,9 @@ has_arg "$(calls)" state=stopped || fail "--final must leave a stopped beat"
 reset
 hb env "$BASH" "$LOOP" --final || fail "--final with no loop must exit 0"
 [ "$(calls)" = 1 ] && has_arg 1 state=stopped || fail "--final with no loop writes the stopped beat"
+has_arg 1 'in_flight=[]' && has_arg 1 chat_active_at= || fail "the stopped beat carries no in-flight work"
+has_arg 1 base_image=2.29.0 || fail "the stopped beat reuses the versions snapshot"
+[ ! -e "$fakebin/dver-local-calls" ] && [ ! -e "$share/state-calls" ] || fail "the stopped beat must not run dev-version or heartbeat-state"
 touch "$fakebin/psql-fail"
 hb env "$BASH" "$LOOP" --final > /dev/null 2>&1 || fail "--final must exit 0 even when the beat fails"
 rm -f "$fakebin/psql-fail"

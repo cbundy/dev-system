@@ -38,9 +38,16 @@ function device() {
   return process.env.DEV_MACHINE_NAME || os.hostname() || 'unknown';
 }
 
+// Same rule as repoOfUrl in callum-flow-evaluate.
+function repoOfUrl(url) {
+  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+const issueKey = (repo, issue) => `${String(repo || '').toLowerCase()}#${issue}`;
+
 function readIssues(dir, dev) {
   const latest = new Map(); // "repo#issue" -> {ts, ev}
-  const runIssue = new Map(); // run_id -> issue
+  const runIssue = new Map(); // run_id -> {repo, issue}
   let names = [];
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort(); } catch { return { issues: [], runIssue }; }
   for (const n of names) {
@@ -51,9 +58,9 @@ function readIssues(dir, dev) {
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
       if (!ev || typeof ev !== 'object' || ev.device !== dev || typeof ev.state !== 'string') continue;
-      if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), ev.issue);
+      if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: ev.repo, issue: ev.issue });
       if (isNoise(ev.state) || !Number.isInteger(ev.issue)) continue;
-      const key = `${ev.repo}#${ev.issue}`;
+      const key = issueKey(ev.repo, ev.issue);
       const ts = Date.parse(ev.ts) || 0;
       const prev = latest.get(key);
       if (!prev || ts >= prev.ts) latest.set(key, { ts, ev });
@@ -72,7 +79,8 @@ function readRuns(home) {
     const db = new DatabaseSync(file, { readOnly: true });
     try {
       db.exec('PRAGMA busy_timeout = 2000');
-      return db.prepare('SELECT id, branch, status FROM runs').all().filter((r) => !NM_DONE.has(r.status));
+      return db.prepare('SELECT r.id, r.branch, r.status, p.upstream_url FROM runs r LEFT JOIN repos p ON p.id = r.repo_id').all()
+        .filter((r) => !NM_DONE.has(r.status));
     } finally { db.close(); }
   } catch (e) {
     warn(`state.sqlite: ${e.message}`);
@@ -134,23 +142,25 @@ function main() {
   let runIssue = new Map();
   try { ({ issues, runIssue } = readIssues(process.env.CALLUM_EVENTS_DIR || '/persist/events', dev)); } catch (e) { warn(`events: ${e.message}`); }
   for (const ev of issues) {
-    const e = { issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
-    byIssue.set(ev.issue, e);
+    const e = { repo: ev.repo || null, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
+    byIssue.set(issueKey(ev.repo, ev.issue), e);
     inFlight.push(e);
   }
   for (const r of readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes')) {
-    let issue = runIssue.get(String(r.id));
+    let { repo, issue } = runIssue.get(String(r.id)) || {};
     if (issue === undefined) {
       const m = /issue-(\d+)/.exec(r.branch || '');
+      repo = repoOfUrl(r.upstream_url);
       issue = m ? Number(m[1]) : null;
     }
-    const e = issue !== null ? byIssue.get(issue) : undefined;
+    const key = issue !== null && repo ? issueKey(repo, issue) : null;
+    const e = key ? byIssue.get(key) : undefined;
     if (e) {
       e.run_id = e.run_id || r.id;
       e.branch = e.branch || r.branch || null;
     } else {
-      const n = { issue, run_id: r.id, branch: r.branch || null, state: r.status };
-      if (issue !== null) byIssue.set(issue, n);
+      const n = { repo: repo || null, issue, run_id: r.id, branch: r.branch || null, state: r.status };
+      if (key) byIssue.set(key, n);
       inFlight.push(n);
     }
   }

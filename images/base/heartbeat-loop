@@ -29,7 +29,9 @@
 # The DDL (guarded by catalog checks, so a repeat takes no exclusive lock) is
 # sent with the first beat of each process and again after a failed beat.
 # SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' (bounded
-# by `timeout 5`) and exit 0. SIGUSR1 beats at once.
+# by `timeout 5`; it reuses the snapshot and the latest cache, with no
+# dev-version or heartbeat-state call, and an empty in_flight) and exit 0.
+# SIGUSR1 beats at once.
 #
 # Usage: heartbeat-loop [--once | --final]
 #   --once   one beat, exit 0 on success and 1 on failure (tests)
@@ -44,6 +46,8 @@ set -u
 SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
 # shellcheck source=agentsview.sh
 . "$SHARE/agentsview.sh"
+# shellcheck source=workspace.sh
+. "$SHARE/workspace.sh"
 
 HB_DIR="${DEV_HEARTBEAT_DIR:-/tmp}"
 PIDFILE="$HB_DIR/dev-heartbeat.pid"
@@ -211,11 +215,9 @@ repo_of() { # owner/name from a git URL, empty when it has none
 }
 
 workers_repo() {
-  local url=${DEV_REPO_URL:-} dir
-  if [ -z "$url" ]; then
-    dir=${DEV_WORKSPACE:-}
-    [ -n "$dir" ] && [ -d "$dir" ] && url=$(git -C "$dir" remote get-url origin 2>/dev/null)
-  fi
+  local url=${DEV_REPO_URL:-}
+  # shellcheck disable=SC2119 # the start dir is optional; none means the current one
+  [ -n "$url" ] || url=$(git -C "$(workspace)" remote get-url origin 2>/dev/null)
   [ -z "$url" ] || repo_of "$url"
 }
 
@@ -288,18 +290,21 @@ beat() {
     echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
     return 2
   fi
-  timeout 60 dev-version --local --snapshot > /dev/null 2>&1 || true
+  [ -n "${HEARTBEAT_STOPPING:-}" ] || timeout 60 dev-version --local --snapshot > /dev/null 2>&1 || true
   snap='{}'
   if jq -e 'type == "object"' "$VERSIONS_FILE" >/dev/null 2>&1; then snap=$(cat "$VERSIONS_FILE"); fi
-  refresh_latest
+  [ -n "${HEARTBEAT_STOPPING:-}" ] || refresh_latest
   versions=$snap
   if latest_json=$(jq -ec 'select(type == "object")' "$LATEST" 2>/dev/null); then
     versions=$(jq -c --argjson l "$latest_json" '. + {latest: $l}' <<< "$snap")
   fi
-  state_json=$(timeout 20 "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
-  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
+  if [ -n "${HEARTBEAT_STOPPING:-}" ]; then
+    state_json='{"state":"stopped","in_flight":[],"chat_active_at":null}'
+  else
+    state_json=$(timeout 20 "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
+    jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
+  fi
   state=$(jq -r '.state // "idle"' <<< "$state_json")
-  [ -z "${HEARTBEAT_STATE_OVERRIDE:-}" ] || state=$HEARTBEAT_STATE_OVERRIDE
   in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
   chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
   device=$(jq -r '.device // empty' <<< "$snap")
@@ -324,7 +329,7 @@ beat() {
   return 0
 }
 
-stopped_beat() { HEARTBEAT_STATE_OVERRIDE=stopped timeout 5 "$SELF" --once; }
+stopped_beat() { HEARTBEAT_STOPPING=1 timeout 5 "$SELF" --once; }
 
 case "${1-}" in
   --once)
