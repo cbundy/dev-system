@@ -406,7 +406,8 @@ prune_orphan_installs() {
 # call is limited to 60s or what is left of it, and once it has passed the
 # plugins not yet installed get one WARNING. Project-scope installs whose
 # project directory is gone are pruned last, on what is left of the deadline
-# (prune_orphan_installs), and also when no plugin is wanted; they never count
+# (prune_orphan_installs), and also when no plugin is wanted but Claude has an
+# install registry; fresh state with nothing wanted runs no CLI. They never count
 # as installed. A marketplace is only moved to a
 # ref that exists on its remote (see drop_moved_marketplaces), and
 # DEV_CANDIDATE_PLUGIN_REF repoints the cbundy/dev-system marketplace at a
@@ -436,6 +437,8 @@ install_plugins() {
   fi
   defaults=$(wanted_default_plugins "$settings")
   plugins=$(not_installed "$plugins" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || plugins=""
+  # With nothing wanted and no persisted installs, there is nothing to prune.
+  [ -n "$plugins$defaults" ] || [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json" ] || return 0
   if limit=$(plugin_limit 30); then
     INSTALLED_JSON=$(CLAUDE_PLUGIN_LIMIT="$limit" installed_plugins_json) || INSTALLED_JSON=""
   fi

@@ -94,6 +94,15 @@ function setup(t, { repo = false, settings = null, installed = [], disabled = []
   fs.mkdirSync(bin);
   fs.mkdirSync(state);
   fs.mkdirSync(ws);
+  const config = path.join(dir, "config");
+  fs.mkdirSync(path.join(config, "plugins"), { recursive: true });
+  fs.writeFileSync(path.join(config, "plugins", "installed_plugins.json"), JSON.stringify({
+    version: 2,
+    plugins: Object.fromEntries([...new Set([...installed, ...projects.map(([id]) => id)])].map((id) => [id, [
+      ...(installed.includes(id) ? [{ scope: "user" }] : []),
+      ...projects.filter(([plugin]) => plugin === id).map(([, projectPath]) => ({ scope: "project", projectPath })),
+    ]])),
+  }));
   fs.writeFileSync(path.join(bin, "claude"), STUB, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, "git"), GIT_STUB, { mode: 0o755 });
   for (const id of installed) fs.writeFileSync(path.join(state, `inst-${id}`), "");
@@ -125,6 +134,7 @@ function run(ctx, script, env = {}) {
         ...process.env,
         PATH: `${path.join(ctx.dir, "bin")}:${process.env.PATH}`,
         STUB: ctx.dir,
+        CLAUDE_CONFIG_DIR: path.join(ctx.dir, "config"),
         DEV_WORKSPACE: ctx.ws,
         DEV_REPO_URL: "",
         DEV_DEFAULT_PLUGINS: DEFAULT,
@@ -139,6 +149,18 @@ function run(ctx, script, env = {}) {
 
 // The calls that change something (not the listings).
 const changes = (calls) => calls.filter((c) => !/ list( |$)/.test(c));
+
+for (const settings of [null, { enabledPlugins: { "one@gh": false } }, '{"enabledPlugins":']) {
+  test(`fresh plugin state with no wanted plugins issues no Claude command: ${JSON.stringify(settings)}`, (t) => {
+    const ctx = setup(t, { settings });
+    fs.rmSync(path.join(ctx.dir, "config", "plugins", "installed_plugins.json"));
+    const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: "" });
+    assert.equal(r.status, 0, r.log);
+    assert.deepEqual(r.calls, []);
+    if (typeof settings === "string") assert.match(r.log, /not valid JSON/);
+    else assert.equal(r.log, "");
+  });
+}
 
 test("no repo: the default plugin's marketplace is added and the plugin installed, outside the workspace", (t) => {
   const ctx = setup(t);
