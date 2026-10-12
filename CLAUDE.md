@@ -80,7 +80,8 @@ has passed.
 - `npm test` - every node test under `tests/` and every plain-shell suite under
   `features/test/callum-tools/`, `coder/test/` and `images/base/test/`, plus mod validation
   and tests when Claude Code is available (`scripts/test.sh`; see
-  [mod testing](plugins/factory-hud/README.md#develop-it) for local and CI requirements).
+  [mod testing](plugins/factory-hud/README.md#develop-it) for local and CI requirements). The run is
+  sandboxed (own events, no-mistakes and agentsview directories) and fails if a test writes to them.
 
 The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
 and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`

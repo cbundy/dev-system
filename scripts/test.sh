@@ -15,7 +15,9 @@ cd "$(dirname "$0")/.." || exit 1
 
 failed=0
 out=$(mktemp) || exit 1
-trap 'rm -f "$out"' EXIT
+. ./scripts/test-sandbox.sh
+test_sandbox_setup || exit 1
+trap 'rm -f "$out"; test_sandbox_clean' EXIT
 
 # Node tests. The reporter's last line is `node-tests: <total> total, <failed> failed`.
 node --test --test-reporter=./scripts/test-reporter.js tests/*.test.js > "$out" 2>&1
@@ -68,6 +70,9 @@ for hooks in plugins/*/hooks/hooks.json; do
     failed=$((failed + 1))
   fi
 done
+
+# Isolation: nothing may have written into the sandboxed shared-state directories.
+test_sandbox_check || failed=$((failed + 1))
 
 if [ "$failed" -gt 0 ]; then
   echo "test: $failed failed" >&2
