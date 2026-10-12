@@ -109,10 +109,11 @@ function is_signal(t,    s) {
 }
 
 # Parse the options and operands of a pkill/pgrep/pidof command. Sets the
-# globals sel_parent (the -P/--parent value, "" if none), sel_nops and sel_ops[]
-# (the process-name/pattern operands).
+# globals sel_parent (the -P/--parent value, "" if none), sel_inverse (-v or
+# --inverse seen), sel_nops and sel_ops[] (the process-name/pattern operands).
 function scan_selector(toks, cnt, i, base,    t, k, ch, endopts, val, eq, skip_next, opt) {
   sel_parent = ""
+  sel_inverse = 0
   sel_nops = 0
   delete sel_ops
   endopts = 0
@@ -128,7 +129,10 @@ function scan_selector(toks, cnt, i, base,    t, k, ch, endopts, val, eq, skip_n
       } else if (name_option_takes_arg(base, t)) {
         if (t == "--parent") sel_parent = toks[i + 1]
         i += 2
-      } else i++
+      } else {
+        if (t == "--inverse") sel_inverse = 1
+        i++
+      }
       continue
     }
     if (!endopts && base == "pkill" && t ~ /^-/ && is_signal(t)) { i++; continue }
@@ -136,6 +140,7 @@ function scan_selector(toks, cnt, i, base,    t, k, ch, endopts, val, eq, skip_n
       skip_next = 0
       for (k = 2; k <= length(t); k++) {
         ch = substr(t, k, 1)
+        if (ch == "v") sel_inverse = 1
         if (name_short_option_takes_arg(base, ch)) {
           if (k < length(t)) val = substr(t, k + 1)
           else { val = toks[i + 1]; skip_next = 1 }
@@ -187,9 +192,10 @@ function operand_in_scope(op,    s) {
 }
 
 # 1 when a pkill/pgrep/pidof command (options start at toks[i]) is not scoped
-# to the caller's own processes.
+# to the caller's own processes. An inverted match selects everything else.
 function unscoped_selector(toks, cnt, i, base,    j, all) {
   scan_selector(toks, cnt, i, base)
+  if (sel_inverse) return 1
   if (parent_scoped(sel_parent)) return 0
   if (sel_nops > 0) {
     all = 1

@@ -121,9 +121,7 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   dev server (check `CLAUDE.md`/config for which, if any, is reserved) - a
   well-behaved boot script already refuses to, even if forced.
 - Capture the exact PID the boot process reports and only ever kill that
-  PID. Never `pkill`/`kill` by process name (the language runtime, browser
-  driver, etc.) - that kills the worktree owner's and other agents'
-  processes too.
+  PID (see the rule against killing by name in section 1).
 - On failure, a well-behaved boot script prints nothing to stdout, exits
   non-zero, and prints a tail of the server log plus diagnostics to stderr -
   look there first.

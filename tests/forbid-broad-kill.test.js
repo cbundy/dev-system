@@ -161,6 +161,15 @@ test("worktree and scratchpad path scoping", () => {
   assertAllowed("pkill -f '/tmp/claude-1000/-p/s1/scratchpad/run.sh'");
 });
 
+test("an inverted match is never scoped", () => {
+  assertDenied("pkill -v -P 4242", { cwd: WT });
+  assertDenied("pkill --inverse -P 4242", { cwd: WT });
+  assertDenied(`pkill -vf '${WT}/server.js'`, { cwd: WT });
+  assertDenied(`kill $(pgrep -v -f '${WT}/x')`, { cwd: WT });
+  assertDenied("pgrep -v -P 4242 | xargs kill", { cwd: WT });
+  assertAllowed("pkill -P4242v", { cwd: WT });
+});
+
 test("without git only the scratchpad exemption applies", () => {
   const env = { ...process.env, PATH: "/nonexistent-bin" };
   // sh and awk are needed by the hook itself; give it a PATH of just those.
