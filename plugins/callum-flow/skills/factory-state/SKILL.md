@@ -48,8 +48,9 @@ Then one short line per repo on **coverage**, because a gap must never read as i
   are unknown.
 - `events only`: no mirrored runs, so pipeline stages are only what agents logged.
 - `none`: nothing in the database for the repo.
-- `workers` reading `n/a` means there is no worker heartbeat yet: say liveness is unknown, do not
-  say workers are healthy. Rule S6 is then not evaluated.
+- For `workers` reading `n/a`, say liveness is unknown and include the reported reason. See the
+  [reader's liveness contract](https://github.com/cbundy/dev-system/blob/main/docs/factory-state.md#source-precedence); do not infer
+  workers are healthy. Rule S6 is then not evaluated.
 - `approximate` pipeline facts mean the question was asked about a past time.
 
 Report numbers exactly as the tool prints them. Do not add stages, thresholds or causes the output

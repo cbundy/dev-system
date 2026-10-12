@@ -55,6 +55,8 @@ EVENT_PUSH_LOCK=/tmp/dev-event-push.lock
 EVENT_PUSH_LOG=/tmp/dev-event-push.log
 NM_PUSH_LOCK=/tmp/dev-nm-push.lock
 NM_PUSH_LOG=/tmp/dev-nm-push.log
+HEARTBEAT_LOCK=/tmp/dev-heartbeat.lock
+HEARTBEAT_LOG=/tmp/dev-heartbeat.log
 LOGIN_PAGE_LOCK=/tmp/dev-login-page.lock
 LOGIN_PAGE_LOG=/tmp/dev-login-page.log
 
@@ -539,6 +541,23 @@ start_nm_push() {
   log "started no-mistakes push (log: $NM_PUSH_LOG)"
 }
 
+# 8d. The worker heartbeat (cbundy/dev-system#339): with the same PostgreSQL
+#     URL, keep heartbeat-loop running so this device's factory.workers row
+#     says it is alive, what it runs and whether it is busy.
+start_heartbeat() {
+  local rc=0
+  # shellcheck source=agentsview.sh
+  . /usr/local/share/dev-system/agentsview.sh
+  agentsview_pg_url >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
+  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - worker heartbeat not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
+  flock -n "$HEARTBEAT_LOCK" true 2>/dev/null || return 0
+  : > "$HEARTBEAT_LOG"
+  setsid nohup flock -n "$HEARTBEAT_LOCK" /usr/local/share/dev-system/heartbeat-loop \
+    >> "$HEARTBEAT_LOG" 2>&1 < /dev/null &
+  log "started worker heartbeat (log: $HEARTBEAT_LOG)"
+}
+
 # 9. The shared files mount (DEV_SHARED_DIR) is optional, so an unmounted one
 #    is left alone. A mount node cannot write gets a warning naming the fix.
 check_shared_dir() {
@@ -624,6 +643,7 @@ write_versions
 start_agentsview_push
 start_event_push
 start_nm_push
+start_heartbeat
 check_shared_dir
 start_login_page
 install_plugins

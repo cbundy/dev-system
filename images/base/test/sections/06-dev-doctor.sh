@@ -115,3 +115,15 @@ check "dev-doctor shows the no-mistakes agents, models and review roles, and war
   out=$(dev-doctor --warn-only); echo "$out"
   echo "$out" | grep -q "WARN the review agent .no-such-agent. is not on PATH"' \
   -v "$vol:/persist" --entrypoint ""
+
+# The worker heartbeat (#466): dev-doctor reports the last beat, and fails when a URL is configured and the loop is not running.
+check "dev-doctor prints the heartbeat line, and fails when a configured URL has no running heartbeat loop" in_image '
+  printf "last_beat=%s\nstate=busy\n" "$(date +%s)" > /tmp/dev-heartbeat.state
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "INFO worker heartbeat: last beat 20.*, state busy" &&
+  echo "$out" | grep -q "FAIL heartbeat is not running" &&
+  echo "$out" | grep -qF "fix: run: dev-init (log: /tmp/dev-heartbeat.log)"' \
+  -e AGENTSVIEW_PG_URL=postgres://u:p@no-such-host.invalid/db --entrypoint ""
+check "dev-doctor reports no heartbeat failure without a URL" in_image '
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "INFO worker heartbeat: last beat never" && ! echo "$out" | grep -q "FAIL heartbeat"' --entrypoint ""

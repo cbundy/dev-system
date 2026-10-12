@@ -378,6 +378,20 @@ ORDER BY repo, issue;
 Totals and the call: sum the columns; `sum(dispatcher_bound_other_idle) / sum(pipeline_bound +
 dispatcher_bound)` above 0.5 means option B.
 
+## Workers
+
+The [base image's worker heartbeat reference](../images/base/README.md#worker-heartbeat)
+owns the row fields, state rules, staleness threshold and notifications.
+
+Fleet status:
+
+```sql
+SELECT device, state, stale, age, base_image, dev_image, plugin_version,
+       jsonb_array_length(in_flight) AS in_flight_count, critical_failures
+FROM factory.workers_status
+ORDER BY stale, device;
+```
+
 ## Linking pipeline runs to issues
 
 `run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have

@@ -1,0 +1,198 @@
+#!/usr/bin/env node
+'use strict';
+// heartbeat-state: prints {state, in_flight, chat_active_at} as JSON for
+// heartbeat-loop (cbundy/dev-system#339). One call per beat.
+//
+// busy when any of these holds, otherwise idle:
+//   - an issue on THIS device whose latest lifecycle event is not merged,
+//     abandoned, claim_lost (the owner's rule), owner_wait, or closed, ready,
+//     reclaimed (closed, queued, or reclaimed from a stale claim: no one here
+//     is working on it). After merged, abandoned, closed or claim_lost only a
+//     new-life decision (ready, reclaimed, claimed, briefed, design_routed,
+//     delegated) counts as a later event, as in callum-flow-factory-state;
+//     after any of the idle states the replayed run facts failed,
+//     head_mismatch, conflict and ci_stalled never count. Noise
+//     states never count for or against busy (callum-flow-issue-read logs
+//     untrusted_stripped on any read; renewed is the claim heartbeat).
+//   - a no-mistakes run whose status is not completed, failed or cancelled,
+//     unless a superseded event on this device names it
+//   - a typed prompt (classifyWake kind 'owner', not a sidechain) in a Claude
+//     transcript within the last 5 minutes
+// Any read error degrades to the remaining sources and goes to stderr; this
+// never fails the beat.
+//
+// Environment: CALLUM_EVENTS_DIR, NO_MISTAKES_HOME, CLAUDE_CONFIG_DIR,
+//   DEV_MACHINE_NAME, HEARTBEAT_EVALUATE (path of callum-flow-evaluate),
+//   HEARTBEAT_NOW_MS (tests).
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed']);
+const isNoise = (s) => NOISE.has(s) || /^(upgrade|drain)/.test(s);
+const DONE = new Set(['merged', 'abandoned', 'claim_lost', 'owner_wait', 'closed', 'ready', 'reclaimed']);
+const TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
+const NEW_LIFE = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'delegated']);
+const REPLAYED = new Set(['failed', 'head_mismatch', 'conflict', 'ci_stalled']);
+const NM_DONE = new Set(['completed', 'failed', 'cancelled']);
+const CHAT_WINDOW_MS = 5 * 60 * 1000;
+const TAIL_BYTES = 512 * 1024;
+
+const now = Number(process.env.HEARTBEAT_NOW_MS) || Date.now();
+const warn = (msg) => process.stderr.write(`heartbeat-state: ${msg}\n`);
+
+function device() {
+  return process.env.DEV_MACHINE_NAME || os.hostname() || 'unknown';
+}
+
+// Same rule as repoOfUrl in callum-flow-evaluate.
+function repoOfUrl(url) {
+  const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+const lowerRepo = (repo) => (repo ? String(repo).toLowerCase() : null);
+const issueKey = (repo, issue) => `${repo}#${issue}`;
+
+function readIssues(dir, dev) {
+  const byIssue = new Map(); // "repo#issue" -> [{ts, ev}]
+  const runIssue = new Map(); // run_id -> {repo, issue}
+  const superseded = new Set(); // run_id
+  let names = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort(); } catch { return { issues: [], runIssue, superseded }; }
+  for (const n of names) {
+    let text;
+    try { text = fs.readFileSync(path.join(dir, n), 'utf8'); } catch (e) { warn(`${n}: ${e.message}`); continue; }
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (!ev || typeof ev !== 'object' || ev.device !== dev || typeof ev.state !== 'string') continue;
+      if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: lowerRepo(ev.repo), issue: ev.issue });
+      if (ev.state === 'superseded' && ev.run_id) superseded.add(String(ev.run_id));
+      if (isNoise(ev.state) || !Number.isInteger(ev.issue)) continue;
+      const key = issueKey(lowerRepo(ev.repo), ev.issue);
+      if (!byIssue.has(key)) byIssue.set(key, []);
+      byIssue.get(key).push({ ts: Date.parse(ev.ts) || 0, ev });
+    }
+  }
+  const issues = [];
+  for (const evs of byIssue.values()) {
+    let cur = null;
+    for (const { ev } of evs.sort((a, b) => a.ts - b.ts)) {
+      if (cur && TERMINAL.has(cur.state) && !NEW_LIFE.has(ev.state)) continue;
+      if (cur && DONE.has(cur.state) && REPLAYED.has(ev.state)) continue;
+      cur = ev;
+    }
+    if (!DONE.has(cur.state)) issues.push(cur);
+  }
+  return { issues, runIssue, superseded };
+}
+
+function readRuns(home) {
+  const file = path.join(home, 'state.sqlite');
+  if (!fs.existsSync(file)) return [];
+  try {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      db.exec('PRAGMA busy_timeout = 2000');
+      return db.prepare('SELECT r.id, r.branch, r.status, p.upstream_url FROM runs r LEFT JOIN repos p ON p.id = r.repo_id').all()
+        .filter((r) => !NM_DONE.has(r.status));
+    } finally { db.close(); }
+  } catch (e) {
+    warn(`state.sqlite: ${e.message}`);
+    return [];
+  }
+}
+
+function loadClassifyWake() {
+  const candidates = [process.env.HEARTBEAT_EVALUATE, path.join(__dirname, 'callum-flow-evaluate'), '/usr/local/bin/callum-flow-evaluate'].filter(Boolean);
+  for (const c of candidates) {
+    try { return require(c).classifyWake; } catch { /* next */ }
+  }
+  warn('callum-flow-evaluate not found, chat activity unavailable');
+  return null;
+}
+
+function chatActiveAt(claudeDir) {
+  const classifyWake = loadClassifyWake();
+  if (!classifyWake) return null;
+  let newest = 0;
+  const root = path.join(claudeDir, 'projects');
+  let projects = [];
+  try { projects = fs.readdirSync(root); } catch { return null; }
+  for (const p of projects) {
+    let files = [];
+    try { files = fs.readdirSync(path.join(root, p)).filter((n) => n.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const file = path.join(root, p, f);
+      try {
+        const st = fs.statSync(file);
+        if (now - st.mtimeMs > CHAT_WINDOW_MS) continue;
+        const start = Math.max(0, st.size - TAIL_BYTES);
+        const fd = fs.openSync(file, 'r');
+        const buf = Buffer.alloc(st.size - start);
+        try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+        const lines = buf.toString('utf8').split('\n');
+        if (start > 0) lines.shift(); // a partial first line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let o;
+          try { o = JSON.parse(line); } catch { continue; }
+          if (!o || o.isSidechain) continue;
+          const w = classifyWake(o);
+          if (!w || w.kind !== 'owner') continue;
+          const t = Date.parse(o.timestamp);
+          if (t > newest) newest = t;
+        }
+      } catch (e) { warn(`${f}: ${e.message}`); }
+    }
+  }
+  return newest ? new Date(newest).toISOString() : null;
+}
+
+function main() {
+  const dev = device();
+  const inFlight = [];
+  const byIssue = new Map();
+  let issues = [];
+  let runIssue = new Map();
+  let superseded = new Set();
+  try { ({ issues, runIssue, superseded } = readIssues(process.env.CALLUM_EVENTS_DIR || '/persist/events', dev)); } catch (e) { warn(`events: ${e.message}`); }
+  for (const ev of issues) {
+    const repo = lowerRepo(ev.repo);
+    const e = { repo, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
+    byIssue.set(issueKey(repo, ev.issue), e);
+    inFlight.push(e);
+  }
+  for (const r of readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes')) {
+    if (superseded.has(String(r.id))) continue;
+    let { repo, issue } = runIssue.get(String(r.id)) || {};
+    if (issue === undefined) {
+      const m = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/.exec(r.branch || '');
+      repo = repoOfUrl(r.upstream_url);
+      issue = m ? Number(m[1]) : null;
+    }
+    const key = issue !== null && repo ? issueKey(repo, issue) : null;
+    const e = key ? byIssue.get(key) : undefined;
+    if (e) {
+      e.run_id = e.run_id || r.id;
+      e.branch = e.branch || r.branch || null;
+    } else {
+      const n = { repo, issue, run_id: r.id, branch: r.branch || null, state: r.status };
+      if (key) byIssue.set(key, n);
+      inFlight.push(n);
+    }
+  }
+  let chat = null;
+  try { chat = chatActiveAt(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')); } catch (e) { warn(`chat: ${e.message}`); }
+  const chatBusy = chat !== null && now - Date.parse(chat) <= CHAT_WINDOW_MS;
+  const state = inFlight.length > 0 || chatBusy ? 'busy' : 'idle';
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat })}\n`);
+}
+
+try { main(); } catch (e) {
+  warn(e.message);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null })}\n`);
+}

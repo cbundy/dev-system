@@ -416,3 +416,38 @@ SQL
   rm -f "$l"
 }
 check "factory.events migrates to the version columns idempotently, an old-image insert still works, and a LISTEN session is notified" ver_events_notify
+
+# The worker heartbeat (#466): the DDL, read from heartbeat-loop, applied twice to a fresh database
+# is a no-op; the view marks a row stale after three intervals; a LISTEN session hears an insert and
+# an update; a real beat from the pusher container lands; the metrics.md Workers query runs.
+ver_workers() {
+  local root ddl l q
+  root=$(cd "$TEST_DIR/../../.." && pwd)
+  ddl=$(awk "/<<'SQL'\$/ { f = 1; next } f && /^SQL\$/ { exit } f" "$root/images/base/heartbeat-loop")
+  pg() { docker exec -i "$RUN_ID-pg" psql -U av -d wk466 -v ON_ERROR_STOP=1 -qtA; }
+  docker exec "$RUN_ID-pg" psql -U av -d agentsview -v ON_ERROR_STOP=1 -qtAc "create database wk466" >/dev/null || return 1
+  printf '%s\n' "$ddl" | pg >/dev/null || { echo "first DDL run failed"; return 1; }
+  printf '%s\n' "$ddl" | pg >/dev/null || { echo "second DDL run failed"; return 1; }
+  [ "$(printf '%s\n' "select count(*) from pg_trigger where tgname = 'workers_notify' and not tgisinternal" | pg)" = 1 ] || { echo "trigger count"; return 1; }
+  l=$(mktemp)
+  { printf 'LISTEN factory_workers;\nselect pg_sleep(4);\nselect 1;\n' | pg > "$l" 2>&1; } &
+  local lp=$!
+  sleep 1.5
+  printf '%s\n' "INSERT INTO factory.workers (device, state, interval_s, last_seen) VALUES ('fresh', 'idle', 60, now()), ('old', 'busy', 60, now() - interval '10 minutes');
+    UPDATE factory.workers SET state = 'busy' WHERE device = 'fresh';" | pg >/dev/null || return 1
+  wait "$lp"
+  cat "$l"
+  [ "$(grep -cF 'notification "factory_workers" with payload "fresh"' "$l")" -ge 1 ] || { echo "no notification on insert"; rm -f "$l"; return 1; }
+  [ "$(grep -cF 'notification "factory_workers" with payload "fresh"' "$l")" -ge 2 ] || { echo "no notification on update"; rm -f "$l"; return 1; }
+  rm -f "$l"
+  [ "$(printf '%s\n' "select device, stale from factory.workers_status order by device" | pg | tr '\n' ' ')" = "fresh|f old|t " ] || { echo "stale wrong"; return 1; }
+  q=$(awk '/^## Workers/ { w = 1 } w && /^```sql$/ { f = 1; next } f && /^```$/ { exit } f' "$root/docs/metrics.md")
+  [ -n "$q" ] || { echo "no Workers query in docs/metrics.md"; return 1; }
+  printf '%s\n' "$q" | pg >/dev/null || { echo "the Workers query failed"; return 1; }
+  # a real beat from the pusher container lands, with the container's own identity and a recent last_seen
+  docker exec -e DEV_MACHINE_NAME=hb-beat "$RUN_ID-b" /usr/local/share/dev-system/heartbeat-loop --once || return 1
+  [ "$(psql_av "select count(*) from factory.workers_status where device = 'hb-beat' and not stale and state in ('idle','busy') and jsonb_typeof(critical_failures) = 'array' and jsonb_typeof(versions) = 'object' and started_at is not null")" = 1 ] || { echo "the beat did not land"; return 1; }
+  docker exec -e DEV_MACHINE_NAME=hb-beat "$RUN_ID-b" /usr/local/share/dev-system/heartbeat-loop --once || return 1
+  [ "$(psql_av "select count(*) from factory.workers where device = 'hb-beat'")" = 1 ] || { echo "a second beat must update, not insert"; return 1; }
+}
+check "factory.workers: the DDL is idempotent, the view marks stale, LISTEN hears insert and update, a real beat lands" ver_workers

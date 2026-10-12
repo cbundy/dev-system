@@ -297,3 +297,14 @@ check "dev-init restarts a running no-mistakes daemon only when the managed bloc
   echo "$out" | grep -qF "dev-init: restarted the no-mistakes daemon so it runs on the new agent order and model pin"
   third=$(pid); [ -n "$third" ] && [ "$third" != "$second" ]' \
   --entrypoint ""
+
+# The worker heartbeat (#466): with a URL configured dev-init starts heartbeat-loop, which holds its lock and
+# writes its pidfile even when the database is unreachable (the beat just fails and retries).
+check "dev-init starts the heartbeat loop when a URL is configured: its lock is held and its pidfile is written" in_image '
+  out=$(dev-init 2>&1); echo "$out"
+  echo "$out" | grep -qF "dev-init: started worker heartbeat (log: /tmp/dev-heartbeat.log)" || exit 1
+  for _ in $(seq 1 20); do [ -s /tmp/dev-heartbeat.pid ] && break; sleep 0.5; done
+  ! flock -n /tmp/dev-heartbeat.lock true && [ -s /tmp/dev-heartbeat.pid ] && kill -0 "$(cat /tmp/dev-heartbeat.pid)"' \
+  -e AGENTSVIEW_PG_URL=postgres://u:p@no-such-host.invalid/db --entrypoint ""
+check "dev-init starts no heartbeat loop without a URL" in_image '
+  dev-init >/dev/null 2>&1; flock -n /tmp/dev-heartbeat.lock true && [ ! -e /tmp/dev-heartbeat.pid ]' --entrypoint ""

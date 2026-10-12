@@ -2,7 +2,7 @@
 'use strict';
 // callum-flow-factory-state: one deterministic answer to "what is the factory doing right now?"
 // (cbundy/dev-system#345, part of #340). It reads the fleet database through dev-query
-// (factory.events, the nomistakes mirror and, once it exists, factory.workers_status) and, unless
+// (factory.events and the nomistakes mirror; worker rows are not read yet) and, unless
 // --github off, GitHub through callum-flow-issue-read (labels, open or closed, claim comments).
 // It never writes anything. docs/factory-state.md defines every stage, the source precedence, the
 // stuck rules and the coverage classes; the SQL below lives here so it is versioned and tested with
