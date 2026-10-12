@@ -43,7 +43,8 @@ function repoOfUrl(url) {
   const m = /[:/]([^/:]+)\/([^/]+?)(?:\.git)?\/?$/.exec(String(url || ''));
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
-const issueKey = (repo, issue) => `${String(repo || '').toLowerCase()}#${issue}`;
+const lowerRepo = (repo) => (repo ? String(repo).toLowerCase() : null);
+const issueKey = (repo, issue) => `${repo}#${issue}`;
 
 function readIssues(dir, dev) {
   const latest = new Map(); // "repo#issue" -> {ts, ev}
@@ -58,9 +59,9 @@ function readIssues(dir, dev) {
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
       if (!ev || typeof ev !== 'object' || ev.device !== dev || typeof ev.state !== 'string') continue;
-      if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: ev.repo, issue: ev.issue });
+      if (ev.state === 'run_started' && ev.run_id && Number.isInteger(ev.issue)) runIssue.set(String(ev.run_id), { repo: lowerRepo(ev.repo), issue: ev.issue });
       if (isNoise(ev.state) || !Number.isInteger(ev.issue)) continue;
-      const key = issueKey(ev.repo, ev.issue);
+      const key = issueKey(lowerRepo(ev.repo), ev.issue);
       const ts = Date.parse(ev.ts) || 0;
       const prev = latest.get(key);
       if (!prev || ts >= prev.ts) latest.set(key, { ts, ev });
@@ -142,8 +143,9 @@ function main() {
   let runIssue = new Map();
   try { ({ issues, runIssue } = readIssues(process.env.CALLUM_EVENTS_DIR || '/persist/events', dev)); } catch (e) { warn(`events: ${e.message}`); }
   for (const ev of issues) {
-    const e = { repo: ev.repo || null, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
-    byIssue.set(issueKey(ev.repo, ev.issue), e);
+    const repo = lowerRepo(ev.repo);
+    const e = { repo, issue: ev.issue, run_id: ev.run_id || null, branch: ev.branch || null, state: ev.state };
+    byIssue.set(issueKey(repo, ev.issue), e);
     inFlight.push(e);
   }
   for (const r of readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes')) {
@@ -159,7 +161,7 @@ function main() {
       e.run_id = e.run_id || r.id;
       e.branch = e.branch || r.branch || null;
     } else {
-      const n = { repo: repo || null, issue, run_id: r.id, branch: r.branch || null, state: r.status };
+      const n = { repo, issue, run_id: r.id, branch: r.branch || null, state: r.status };
       if (key) byIssue.set(key, n);
       inFlight.push(n);
     }
