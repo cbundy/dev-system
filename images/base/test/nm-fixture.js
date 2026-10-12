@@ -86,6 +86,12 @@ if (cmd === "create") {
   inv.run("i3d", "r3", "test", "claude-opus", "test", "claude", 800, 150, 3000, 100, 45000, "", null);
   inv.run("i4a", "r4", "review", "claude-opus", "review", "claude", 400, 80, 1000, 50, 20000, "", null);
   inv.run("i4b", "r4", "test", "gpt-test", "test", "codex", 300, 60, 0, 0, 10000, "exit", null);
+  // r5 (issue 51, on Opus in the implementer model comparison, #506): a failed lint step that took
+  // one auto-fix round, and one invocation of 120 tokens
+  db.exec("INSERT INTO step_results (id, run_id, step_name, status) VALUES ('s5a', 'r5', 'lint', 'failed')");
+  round.run("d5a1", "s5a", 1, "initial", finds(1, "l"), null, null);
+  round.run("d5a2", "s5a", 2, "auto_fix", finds(1, "l"), null, "auto_fix");
+  inv.run("i5a", "r5", "lint", "claude-opus", "lint", "claude", 100, 20, 0, 0, 1000, "", null);
 } else {
   process.exit(2);
 }

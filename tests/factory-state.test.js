@@ -56,6 +56,22 @@ test("replayed events: a failed after merged or closed neither reopens nor hints
   assert.deepEqual(r.repos[0].issues.map((i) => i.issue), [32], "merged stays visible until GitHub or the sweep closes it");
 });
 
+test("implementer_routed (#506) is a delegation decision: implementing, and a new life after abandoned", () => {
+  const e = (issue, ts, state, note = null) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note, actor: "agent" });
+  const r = derive({
+    at: "2026-10-10T12:00:00.000Z", repos: [], runs: [], workers: { available: false, reason: "test" },
+    events: [
+      e(90, "2026-10-10T11:00:00.000Z", "claimed", "lease: 120"),
+      e(90, "2026-10-10T11:10:00.000Z", "implementer_routed", "model=opus reason=hash bucket=12 pct=50"),
+      e(91, "2026-10-10T09:00:00.000Z", "claimed"),
+      e(91, "2026-10-10T09:30:00.000Z", "abandoned"),
+      e(91, "2026-10-10T11:00:00.000Z", "implementer_routed", "model=sonnet reason=hash bucket=70 pct=50"),
+    ],
+  });
+  assert.equal(issue(r, A, 90).stage, "implementing", "routed after a live claim");
+  assert.equal(issue(r, A, 91).stage, "implementing", "routed after abandoned starts a new life");
+});
+
 test("superseded run: an abandon is final only until a new life starts; superseded is never a stage", () => {
   const r = derive(input("superseded-run"));
   const st = (n) => issue(r, A, n);

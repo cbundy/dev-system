@@ -1,8 +1,9 @@
 // Static check of the saved queries in docs/metrics.md (cbundy/dev-system#275): every sql block
-// in the "no-mistakes pipeline data" section, and the two top-level queries that join to it
-// (lead time by stage, the waiting split; cbundy/dev-system#343), may only name `nomistakes` tables and
-// `alias.column` references that exist in nm-export's schema, so a change to the mirror's
-// columns fails here instead of silently breaking a documented query. The execution check
+// in the "no-mistakes pipeline data" section, and the top-level queries that join to it
+// (lead time by stage and the waiting split, cbundy/dev-system#343; the implementer model
+// comparison, #506), may only name `nomistakes` tables and `alias.column` references that exist
+// in nm-export's schema, so a change to the mirror's columns fails here instead of silently
+// breaking a documented query. The execution check
 // (the same blocks against real PostgreSQL) is section 9 of images/base/test.
 "use strict";
 
@@ -63,7 +64,7 @@ test("the nomistakes section holds the example join, the seven saved queries and
   assert.equal(queries[queries.length - 1].heading, "Unlinked runs");
 });
 
-test("the top-level queries that join to the mirror are the two the link was added to", () => {
+test("the top-level queries that join to the mirror are the ones TOP_QUERIES lists", () => {
   assert.deepEqual(top.map((b) => b.heading), TOP_QUERIES);
 });
 

@@ -4,7 +4,8 @@ description: >-
   Answer an ad-hoc question about the agent factory from its fleet data: e2e or
   issue latency and lead time, throughput, how long work spent waiting versus
   being worked, pipeline cost, fix rounds, slow or failing gates, parked time,
-  and token spend for an issue, a run or a time window. Routes the question to
+  token spend for an issue, a run or a time window, and Sonnet against Opus as
+  the implementer. Routes the question to
   the right saved query in factory.events or the nomistakes mirror and runs it
   with dev-query. Use for a quick targeted number. For a full windowed report
   or a comparison with a baseline, use evaluate-sessions instead. For what is
@@ -44,13 +45,14 @@ and 77 means its secret file is unreadable or empty; report that, do not work ar
 
 ## Question to query
 
-Name queries by schema and title, never by bare number: both sets are numbered 1 to 7.
+Name queries by schema and title, never by bare number: both sets start at 1.
 
 | Question | Source |
 |---|---|
 | Lead time and stage times | `factory.events`, [1. Lead time by stage](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#1-lead-time-by-stage) |
 | Waiting versus working, dispatcher or gate bound | `factory.events`, [7. The waiting split](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#7-the-waiting-split) |
 | Gate pass rate, fix rounds, findings, agent tokens and wall time, parked time, failure categories | `nomistakes`, the six [Saved queries](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#saved-queries) 1 to 6 by title: "First-pass rate per gate", "Fix rounds per step", "Findings per round and share dismissed", "Agent tokens and wall time", "Time parked", "Failure categories and fallback reasons" |
+| Sonnet against Opus as the implementer: time taken, first-pass rate and pipeline failures per model | `factory.events` and `nomistakes`, [8. Implementer model comparison](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#8-implementer-model-comparison) |
 | Per-run lead time across both sources | `nomistakes`, [7. Run lead time joined to factory.events](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#7-run-lead-time-joined-to-factoryevents) (links runs to issues by the `issue-<N>` branch name, not by `run_id`) |
 | Full windowed report, comparison with a baseline | `evaluate-sessions` / `callum-flow-evaluate` |
 
@@ -77,6 +79,9 @@ restate or invent your own.
   [Linking pipeline runs to issues](https://github.com/cbundy/dev-system/blob/main/docs/metrics.md#linking-pipeline-runs-to-issues)).
 - A device whose container is stale pushes nothing, so a missing device means missing
   data, not zero work.
+- Implementer model comparison: give each model's issue count, and run the noise check the
+  reference describes (the same query on a split of past issues by parity). A gap no bigger
+  than that one is noise; say the result is not yet conclusive rather than pick a winner.
 
 ## How to answer
 
