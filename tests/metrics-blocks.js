@@ -1,13 +1,14 @@
 // Extracts the ```sql blocks of docs/metrics.md that read the `nomistakes` mirror: the whole
-// "no-mistakes pipeline data" section, plus the two queries outside it that use the run link
-// (TOP_QUERIES, cbundy/dev-system#343).
+// "no-mistakes pipeline data" section, plus the queries outside it that use the run link
+// (TOP_QUERIES, cbundy/dev-system#343 and #506).
 // Shared by tests/metrics-queries.test.js (static check under `npm test`) and
 // images/base/test/sections/09-agentsview.sh (execution check against real PostgreSQL), so
 // both see exactly the same blocks.
 //
 // CLI: node tests/metrics-blocks.js <docs/metrics.md> <outdir>
 //   writes every block as <outdir>/NN.sql: the nomistakes section in document order (DDL, example
-//   join, saved queries), then the TOP_QUERIES blocks (lead time by stage, the waiting split).
+//   join, saved queries), then the TOP_QUERIES blocks (lead time by stage, the waiting split, the
+//   implementer model comparison).
 "use strict";
 
 const fs = require("node:fs");
@@ -15,7 +16,7 @@ const path = require("node:path");
 
 // Queries outside the nomistakes section that join to it. Listed by heading, not matched by a wider
 // pattern, because queries 2 to 6 would each need their own fixtures.
-const TOP_QUERIES = ["1. Lead time by stage", "7. The waiting split"];
+const TOP_QUERIES = ["1. Lead time by stage", "7. The waiting split", "8. Implementer model comparison"];
 const LINK_SECTION = "Linking pipeline runs to issues";
 const SECTION = /^## no-mistakes pipeline data \(`nomistakes` schema\)\s*$/;
 

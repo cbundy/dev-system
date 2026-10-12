@@ -213,6 +213,7 @@ COPY --chmod=0755 \
   images/base/callum-flow-claim \
   images/base/callum-flow-milestone \
   images/base/callum-flow-design-route \
+  images/base/callum-flow-implementer-route \
   images/base/callum-flow-issue-read \
   images/base/callum-flow-sweep \
   images/base/callum-flow-evaluate \

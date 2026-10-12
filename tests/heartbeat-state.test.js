@@ -64,7 +64,7 @@ function run() {
   return { out: JSON.parse(r.stdout), stderr: r.stderr };
 }
 
-for (const state of ["claimed", "delegated", "run_started", "owner_resumed", "briefed", "parked", "merge_ready"]) {
+for (const state of ["claimed", "implementer_routed", "delegated", "run_started", "owner_resumed", "briefed", "parked", "merge_ready"]) {
   test(`an issue whose latest event is ${state} is busy`, () => {
     writeEvents([ev("ready", 5, { ts: "2026-10-12T09:00:00Z" }), ev(state, 5)]);
     const { out } = run();
@@ -211,6 +211,15 @@ for (const terminal of ["merged", "abandoned", "closed", "claim_lost"]) {
     assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[5, "parked"]]);
   });
 }
+
+test("implementer_routed (#506) is a new-life decision: after merged or abandoned it reopens the issue", () => {
+  for (const terminal of ["merged", "abandoned"]) {
+    writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev(terminal, 5),
+      ev("implementer_routed", 5, { ts: "2026-10-12T11:00:00Z", note: "model=opus reason=hash bucket=12 pct=50" })]);
+    const { out } = run();
+    assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[5, "implementer_routed"]], terminal);
+  }
+});
 
 test("a run named by a superseded event on this device is not busy, even while still running", () => {
   writeEvents([ev("superseded", 12, { run_id: "run1" }), ev("superseded", 13, { run_id: "run2", device: "other" })]);
