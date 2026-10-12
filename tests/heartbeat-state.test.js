@@ -31,8 +31,10 @@ function writeEvents(lines, name = "o__r.jsonl") {
 function writeRuns(rows) {
   const { DatabaseSync } = require("node:sqlite");
   const db = new DatabaseSync(path.join(tmp, "nm", "state.sqlite"));
+  db.exec("CREATE TABLE repos (id TEXT PRIMARY KEY, upstream_url TEXT NOT NULL)");
+  db.exec("INSERT INTO repos VALUES ('r', 'https://github.com/o/r.git'), ('x', 'git@github.com:Other/X.git')");
   db.exec("CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT, branch TEXT, status TEXT NOT NULL)");
-  for (const [id, branch, status] of rows) db.prepare("INSERT INTO runs VALUES (?, 'r', ?, ?)").run(id, branch, status);
+  for (const [id, branch, status, repo = "r"] of rows) db.prepare("INSERT INTO runs VALUES (?, ?, ?, ?)").run(id, repo, branch, status);
   db.close();
 }
 
@@ -107,14 +109,25 @@ test("a non-terminal no-mistakes run is busy and carries its issue by branch", (
   writeRuns([["run1", "feat/issue-12-x", "running"], ["run2", "feat/issue-13-x", "completed"], ["run3", "feat/issue-14-x", "failed"], ["run4", "feat/issue-15-x", "cancelled"]]);
   const { out } = run();
   assert.equal(out.state, "busy");
-  assert.deepEqual(out.in_flight, [{ issue: 12, run_id: "run1", branch: "feat/issue-12-x", state: "running" }]);
+  assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 12, run_id: "run1", branch: "feat/issue-12-x", state: "running" }]);
 });
 
 test("a run is joined to its issue by run_started.run_id before the branch rule, and merges into the event entry", () => {
   writeEvents([ev("run_started", 7, { run_id: "runA", branch: "feat/issue-7-x" })]);
   writeRuns([["runA", "weird-branch", "running"]]);
   const { out } = run();
-  assert.deepEqual(out.in_flight, [{ issue: 7, run_id: "runA", branch: "feat/issue-7-x", state: "run_started" }]);
+  assert.deepEqual(out.in_flight, [{ repo: "o/r", issue: 7, run_id: "runA", branch: "feat/issue-7-x", state: "run_started" }]);
+});
+
+test("an issue entry carries its repo, and a run joins only the issue of its own repo", () => {
+  writeEvents([ev("claimed", 5, { repo: "O/R" }), ev("claimed", 5, { repo: "a/b" })]);
+  writeRuns([["run1", "feat/issue-5-x", "running"], ["run2", "feat/issue-5-y", "running", "x"]]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight, [
+    { repo: "O/R", issue: 5, run_id: "run1", branch: "feat/issue-5-x", state: "claimed" },
+    { repo: "a/b", issue: 5, run_id: null, branch: null, state: "claimed" },
+    { repo: "other/x", issue: 5, run_id: "run2", branch: "feat/issue-5-y", state: "running" },
+  ]);
 });
 
 test("an open run on a branch with no issue number is still busy", () => {
