@@ -64,7 +64,7 @@ printf '#!/bin/sh\necho "psql (PostgreSQL) 16.3"\n' > "$bin/psql"
 printf '#!/bin/sh\necho "tmux 3.4"\n' > "$bin/tmux"
 chmod +x "$bin"/*
 
-# A second bin dir whose curl and gh fail loudly (and leave a marker) when called.
+# A second bin dir whose curl, wget, git, gh and claude fail loudly (and leave a marker) when called.
 nonet="$tmp/nonet"
 mkdir "$nonet"
 for t in curl wget git; do
