@@ -30,8 +30,10 @@ const STAMP_FILE = ".callum-dev.json";
 // The template whose callum marketplace source carries the release pin.
 const PIN_FILE = "templates/.claude/settings.json";
 const PIN_MARKETPLACE = "callum";
-// The base image's own version, independent of the release version.
+// The base image's own version, independent of the release version. publish-base-image.yml
+// accepts only MAJOR.MINOR.PATCH there, so no prerelease or build suffix.
 const IMAGE_VERSION_FILE = "images/base/VERSION";
+const IMAGE_SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+$/;
 
 const pinSource = (settings) => settings?.extraKnownMarketplaces?.[PIN_MARKETPLACE]?.source;
 
@@ -97,9 +99,9 @@ function writeVersion(root, { file, kind }, version) {
   fs.writeFileSync(abs, src.replace(m[0], `---\n${body}\n---`));
 }
 
-function validate(version) {
-  if (!SEMVER.test(version ?? "")) {
-    throw new Error(`'${version}' is not a valid semantic version (expected e.g. 1.2.3)`);
+function validate(version, pattern = SEMVER, expected = "e.g. 1.2.3") {
+  if (!pattern.test(version ?? "")) {
+    throw new Error(`'${version}' is not a valid semantic version (expected ${expected})`);
   }
 }
 
@@ -118,7 +120,7 @@ function runUpdate(root) {
 // With `image`, also sets images/base/VERSION to it; without, leaves that file alone.
 function bump(version, { root = REPO_ROOT, update = runUpdate, log = console.log, image } = {}) {
   validate(version);
-  if (image !== undefined) validate(image);
+  if (image !== undefined) validate(image, IMAGE_SEMVER, "MAJOR.MINOR.PATCH, e.g. 2.29.0");
   for (const entry of versionedFiles(root)) {
     writeVersion(root, entry, version);
     log(`release-bump: bumped ${entry.file}`);

@@ -158,6 +158,20 @@ test("CLI: an invalid --image fails like an invalid release version, before writ
   assert.equal(cli(root, ["--check", "1.0.0", "--image", "2.29.0"]).status, 1);
 });
 
+test("CLI: --image rejects a prerelease or build suffix publish-base-image.yml would refuse", (t) => {
+  const root = fakeRepo(t);
+  write(root, "images/base/VERSION", "2.28.0\n");
+  for (const image of ["2.29.0-rc.1", "2.29.0+build.5"]) {
+    const r = cli(root, ["4.0.0", "--image", image]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, new RegExp(`release-bump: '${image.replace(/[.+]/g, "\\$&")}' .*expected MAJOR\\.MINOR\\.PATCH`));
+    assert.equal(read(root, "images/base/VERSION"), "2.28.0\n");
+    assert.equal(JSON.parse(read(root, "package.json")).version, "1.0.0");
+  }
+  assert.equal(cli(root, ["4.0.0-rc.1", "--image", "2.29.0"]).status, 0);
+  assert.equal(read(root, "images/base/VERSION"), "2.29.0\n");
+});
+
 test("CLI: --check does not look at images/base/VERSION", (t) => {
   const root = fakeRepo(t);
   assert.equal(cli(root, ["1.0.0"]).status, 0);
