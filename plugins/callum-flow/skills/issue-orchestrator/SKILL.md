@@ -123,12 +123,12 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
      Never pass `--yes`. The `implement-issue` skill says how `respond` and
      `rerun` behave.
 - **`failed`** with no log directory (run id `unknown`): infrastructure, not code.
-  Check `~/.no-mistakes/logs/daemon.log`, rebase and start a fresh `axi run`; no
+  Check `~/.no-mistakes/logs/daemon.log`, rebase, `callum-flow-regate`, start a fresh `axi run`; no
   fixer, no adjudicator.
 - **`merge-ready`**: run the merge guard, then merge.
 - **`head-mismatch`**, **`conflict`**: merge only after all guards pass. Run the guard, follow its FAIL
   fix; spawn a fixer for a non-trivial conflict. A rebase keeps BOTH sides of colliding additions. Only behind its base: `callum-flow-merge-guard <pr> --update-behind` (proved rebase, no new run), then `callum-flow-event rebased_behind --issue <N> --run <run> --pr <pr> --head <to>` from its `UPDATED` line. The old run's `head-mismatch` that follows is expected and is the one that merges: re-run the guard and merge with `callum-flow-merge <pr>` once no FAIL remains (`GUARD head PASS`, CI green on the new head).
-- **`cancelled`**: re-drive it or drop it. Never resume an old agent.
+- **`cancelled`**: re-drive it (rebase, `callum-flow-regate` in the slot, fresh run) or drop it. Never resume an old agent.
 - **`ci-stalled`**: `reason=no-workflow` - tell the owner the default branch has
   no CI workflow and do not merge; `reason=no-checks` - `gh pr close <pr> && gh
   pr reopen <pr>` once, and if it stalls again tell the owner the workflow

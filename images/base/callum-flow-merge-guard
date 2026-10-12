@@ -189,7 +189,7 @@ fi
 
 # Recovery instructions belong in the head and mergeable FAIL lines below.
 HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; while a gate is parked and a correction is needed, prefer backgrounded 'no-mistakes axi respond --action fix' with instructions so the pipeline stays the sole writer on the run's own head; use an external fixer only when the pipeline cannot write the correction from instructions or the run is done; only for a commit made outside the pipeline, rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
-REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
+REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'callum-flow-regate --issue <N>', 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
 BEHIND_FIX="run 'callum-flow-merge-guard <pr> --update-behind' first (a clean rebase with an unchanged patch needs no new run); only if it fails, re-gate: $REBASE_FIX"
 
 mtries=${CALLUM_FLOW_MERGEABLE_TRIES:-5}

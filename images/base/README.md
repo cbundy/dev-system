@@ -1477,6 +1477,30 @@ It never starts, aborts or reruns a pipeline. Success prints
 run, unavailable run head, or failed push lease. `UPDATE-BEHIND SKIP` makes no push and needs no
 re-gate: follow its retry, base-selection or guard instruction. Both exit 1; success exits 0.
 
+`callum-flow-regate --issue <N> [--accept-dropped <sha>[,<sha>]] [--new-branch] [--base BRANCH]` leaves a
+rebased branch that already had a no-mistakes run ready for a fresh `axi run` on the same name
+(cbundy/dev-system#489). Run it in the worktree after the deliberate rebase; it never starts the run, because
+the caller owns the `--intent`. no-mistakes keeps a private mirror of the branch in its gate repo, and a
+rebase leaves that mirror with pipeline commits the branch no longer has, so the next run refuses
+(`preserved recovery evidence cannot be used safely`, `refusing to reconcile private mirror ref`). The
+helper refuses, changing nothing, on a dirty tree, a detached HEAD, the base branch, or a HEAD that lacks
+`origin/<base>`. It aborts a live run and waits for a terminal status, then acts on `axi sync --check`
+`next_action.code`: `run_pipeline` and `user_owned` need nothing, `recover_custody` runs the CLI's own
+printed `sync --recover` command, `inspect_and_reconcile_manually` runs `sync --recover --keep-local`,
+`adopt_published` runs only when `origin/<branch>` equals HEAD, and any other code falls back to a new
+branch. A gate ref that HEAD does not contain is deleted with `git push no-mistakes --delete`, and a
+diverged `origin/<branch>` is replaced with a `--force-with-lease` push on the observed sha. Everything
+that would be lost is first archived as `archive/<branch>-<mirror|run|remote>-<sha8>`. A dropped commit
+(in the run head, gate ref or origin branch, not in `origin/<base>`, no patch-id equivalent in HEAD) is
+listed on stderr, and a dropped `no-mistakes(...)` commit blocks until `--accept-dropped` names its sha.
+Nothing is deleted, pushed or recovered before that check passes. `--new-branch`, or any step that cannot
+finish, moves to `<branch>-v<N>` (first name free locally, on origin and on the gate), logs `superseded`
+and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a `next:` line. Success prints
+`REGATE ready branch=B head=SHA archived=REF[,REF]|none`; a same-branch re-gate also logs `superseded`.
+Failures print `REGATE FAIL <reason> fix: ...` and exit 1; exit 2 is a usage error. The behind-only
+path stays `callum-flow-merge-guard <pr> --update-behind`. Tests: `CALLUM_FLOW_NM_BIN`,
+`CALLUM_FLOW_EVENT_BIN`, `CALLUM_FLOW_REGATE_TRIES`, `CALLUM_FLOW_REGATE_SLEEP`.
+
 The head guard also accepts different run and PR heads when that clean-run patch proof holds,
 origin equals the PR head, and every worktree on the PR branch is at either the gated head or
 the PR head. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
