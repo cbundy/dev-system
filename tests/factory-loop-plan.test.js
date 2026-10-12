@@ -49,6 +49,19 @@ test("plan.ts reads no clock and calls nothing outside itself", () => {
   }
 });
 
+test("the observe half's pure modules read no clock and call nothing outside themselves", () => {
+  for (const file of ["parse.ts", "derive.ts", "state.ts"]) {
+    const src = code(file);
+    for (const [what, pattern] of Object.entries({
+      "the clock (dates are parsed, never read)": /Date\.now|new Date\(|\bperformance\b/,
+      "the engine": /\$\.|\bEngineInterface\b/,
+      "the process or the network": /\bprocess\.|\bfetch\(|\brequire\(|\bimport\(/,
+    })) {
+      assert.doesNotMatch(src, pattern, `${file} must not use ${what}`);
+    }
+  }
+});
+
 test("plan.ts imports and runs under Node, for the replay harness", async () => {
   const mod = await import(path.join(HOOKS, "plan.ts"));
   assert.equal(typeof mod.plan, "function");

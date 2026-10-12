@@ -81,17 +81,20 @@ follow directly from the skill or the brief.
 
 ## Interpretations of the skill
 
-### D-07 What "at most one new dispatch per tick" means in Slow
+### D-07 What "at most one new dispatch per tick" means in Slow (owner call)
 
 - **Decision**: in Slow, at most one claim per pass, none within `slowGapMs` (10 minutes) of the
   last claim, and none in a pass that plans merge work (SPEC 5.2).
-- **Alternatives**: one per pass with no gap; one in flight at a time.
+- **Alternatives**: one per pass with no gap; one in flight at a time; a shorter gap.
 - **Why**: today a tick is a watcher event or an agent's end, every few minutes when busy. The
   loop passes every 60 seconds, so "one per pass" alone would dispatch up to 60 an hour and defeat
-  the tier. A 10-minute gap is close to today's real pace in Slow (claims at 18:40, 18:44 and
-  18:50 on 2026-10-12 at 83 to 85%). "Prefer merging in-flight work" becomes "no claim in a pass
-  that merges". Only the claim counts as the new dispatch: the designer and implementer for a
-  claimed issue follow without waiting for the gap.
+  the tier. "Prefer merging in-flight work" becomes "no claim in a pass that merges". Only the
+  claim counts as the new dispatch: the designer and implementer for a claimed issue follow
+  without waiting for the gap.
+- **Replay evidence** ([REPLAY-REPORT.md](REPLAY-REPORT.md), window 1): in a Slow stretch the live
+  orchestrator spaced claims 4 and 6 minutes apart, so a 10-minute gap would have delayed one
+  claim (#498) by about 4 minutes. A 5-minute gap matches the live pace more closely. It is one
+  number in config, and the conservative value stays until the owner picks.
 
 ### D-08 Stop new also holds the designer and implementer of an already-claimed issue
 
@@ -110,8 +113,9 @@ follow directly from the skill or the brief.
 
 ### D-17 Trackers are never claimed; parked issues are skipped by label
 
-- **Decision**: an issue with sub-issues (`sub_issues_summary.total > 0`) is never a candidate,
-  always. Labels in the repo-local `skipLabels` (for example `parked`) also exclude an issue
+- **Decision**: an issue with sub-issues (`sub_issues_summary.total > 0`), or whose title matches
+  `trackerTitle` (default `Epic` or `Tracker` first, as in #340 "Epic: deterministic current
+  state of the factory", which has no linked sub-issues), is never a candidate. Labels in the repo-local `skipLabels` (for example `parked`) also exclude an issue
   (SPEC D1).
 - **Alternatives**: leave both to owner `skip` directives.
 - **Why**: "trackers are never claimed" is a standing owner rule (MEM 2026-10-12, follow-up #471)

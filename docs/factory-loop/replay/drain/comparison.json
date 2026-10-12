@@ -1,0 +1,946 @@
+{
+ "args": {
+  "stepMinutes": "3",
+  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay-drain",
+  "skipLabels": "parked",
+  "repo": "cbundy/dev-system",
+  "device": "coder-dev-system-orchestrator",
+  "from": "2026-10-12T09:30:00Z",
+  "to": "2026-10-12T14:30:00Z",
+  "control": "{\"noNewWork\":true}"
+ },
+ "decisions": [
+  {
+   "type": "adjudicate",
+   "issue": 481,
+   "run": "01M4QPYJESB8AYEK4WX6J394SG",
+   "ts": 1791797661000,
+   "parkedAt": 1791797307000,
+   "at": "2026-10-12T09:34:21.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 481,
+   "pr": 490,
+   "ts": 1791797946000,
+   "at": "2026-10-12T09:39:06.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "guard:490:e416328896d21fb66d9b83147218c44114ecc4aa:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 465,
+   "run": "01M4QAKV9GV3155GNENY427W99",
+   "ts": 1791798159000,
+   "at": "2026-10-12T09:42:39.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 465,
+   "run": "01M4QQVDWVKZHWM649Q3B0CGCC",
+   "ts": 1791798439000,
+   "parkedAt": 1791798419000,
+   "at": "2026-10-12T09:47:19.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:bd91534530e421f51a73152d309e5e758f725796",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 465,
+   "run": "01M4QQVDWVKZHWM649Q3B0CGCC",
+   "ts": 1791798439000,
+   "at": "2026-10-12T09:47:19.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:bd91534530e421f51a73152d309e5e758f725796",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 465,
+   "run": "01M4QQVDWVKZHWM649Q3B0CGCC",
+   "ts": 1791799125000,
+   "parkedAt": 1791799117000,
+   "at": "2026-10-12T09:58:45.000Z",
+   "agreed": true,
+   "leadMinutes": 12,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:3b7f1e23eae1fc9cb65ceeafa94dfa442bc19030",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 465,
+   "run": "01M4QQVDWVKZHWM649Q3B0CGCC",
+   "ts": 1791799482000,
+   "at": "2026-10-12T10:04:42.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791796023000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 465,
+   "run": "01M4QS4G7DAGT8BM75DF6JJYK2",
+   "ts": 1791800191000,
+   "at": "2026-10-12T10:16:31.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 465,
+   "pr": 493,
+   "ts": 1791802946000,
+   "at": "2026-10-12T11:02:26.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791799584000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "guard:493:c87d85009599a44728b21b67eea13621512e1ee2:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 373,
+   "run": "01M4Q9CGPPQY5A44Y0383KM772",
+   "ts": 1791803209000,
+   "at": "2026-10-12T11:06:49.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 476,
+   "ts": 1791803499000,
+   "at": "2026-10-12T11:11:39.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 476,
+   "ts": 1791803598000,
+   "at": "2026-10-12T11:13:18.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "ts": 1791805129000,
+   "parkedAt": 1791805095000,
+   "at": "2026-10-12T11:38:49.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:43851fb8eb72591e786a870669fe624878e6b463"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "ts": 1791805129000,
+   "at": "2026-10-12T11:38:49.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:43851fb8eb72591e786a870669fe624878e6b463"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "ts": 1791805709000,
+   "parkedAt": 1791805703000,
+   "at": "2026-10-12T11:48:29.000Z",
+   "agreed": true,
+   "leadMinutes": 10,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:2113dd85a275936d23ffc289f1529b07b1aa1884",
+    "guard:494:81c774d8f933b0db286ec42d3bb041c34318e915:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 373,
+   "pr": 494,
+   "ts": 1791805798000,
+   "at": "2026-10-12T11:49:58.000Z",
+   "agreed": true,
+   "leadMinutes": 2,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "guard:494:81c774d8f933b0db286ec42d3bb041c34318e915:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 466,
+   "run": "01M4Q9GSZ4BDGKCD09AKF49HZ7",
+   "ts": 1791806042000,
+   "at": "2026-10-12T11:54:02.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "ts": 1791806369000,
+   "parkedAt": 1791806356000,
+   "at": "2026-10-12T11:59:29.000Z",
+   "agreed": true,
+   "leadMinutes": 21,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791803154000",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:5043c25e1ec334b60b085de91fac4cfd89e0da4d"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "ts": 1791806843000,
+   "at": "2026-10-12T12:07:23.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 476,
+   "run": "01M4R04A1NQ0EP2Q8RNE3CF8YF",
+   "ts": 1791807075000,
+   "parkedAt": 1791807051000,
+   "at": "2026-10-12T12:11:15.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R04A1NQ0EP2Q8RNE3CF8YF:null:be0baa91a4f6b23ef032e57bb2115920c95c58b2"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4QZC1ECQJGFBJYXTP2AXGXR",
+   "ts": 1791807218000,
+   "parkedAt": null,
+   "at": "2026-10-12T12:13:38.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4QZC1ECQJGFBJYXTP2AXGXR:null:85cd566fc98a45d69d82f94768ec89190d1c18cd"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4R0H1C0B2NGS910AAP7HFA7",
+   "ts": 1791807539000,
+   "parkedAt": 1791807512000,
+   "at": "2026-10-12T12:18:59.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R0H1C0B2NGS910AAP7HFA7:null:4cc90f318e8aeb4ddd9cee40f3a0259f9b9e443c"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4R0H1C0B2NGS910AAP7HFA7",
+   "ts": 1791808184000,
+   "parkedAt": 1791808174000,
+   "at": "2026-10-12T12:29:44.000Z",
+   "agreed": true,
+   "leadMinutes": 11,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 476,
+   "pr": 499,
+   "ts": 1791808537000,
+   "at": "2026-10-12T12:35:37.000Z",
+   "agreed": true,
+   "leadMinutes": 3,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "guard:499:1ecf12c0c13fb1abe8c650b2ee2460ccaaf4a41a:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4R1PXSTK9RPJ9GRVE7ET8YX",
+   "ts": 1791808975000,
+   "parkedAt": 1791808946000,
+   "at": "2026-10-12T12:42:55.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:5cf18209e41b43778c97068cb0dcf4791b315dff"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4R1PXSTK9RPJ9GRVE7ET8YX",
+   "ts": 1791809601000,
+   "parkedAt": 1791809590000,
+   "at": "2026-10-12T12:53:21.000Z",
+   "agreed": true,
+   "leadMinutes": 11,
+   "planBefore": [
+    "heartbeat:0",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 359,
+   "run": "01M4Q9H798ZTXA4T4T27CBDMFA",
+   "ts": 1791810649000,
+   "at": "2026-10-12T13:10:49.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000",
+    "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 359,
+   "run": "01M4R3R90RFWMV87CF6BW981EY",
+   "ts": 1791810761000,
+   "parkedAt": 1791810735000,
+   "at": "2026-10-12T13:12:41.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000",
+    "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:f4b49787dda8b142eb0b490e948ef67526703458",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 359,
+   "run": "01M4R3R90RFWMV87CF6BW981EY",
+   "ts": 1791810761000,
+   "at": "2026-10-12T13:12:41.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000",
+    "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:f4b49787dda8b142eb0b490e948ef67526703458",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 336,
+   "run": "01M4QA52FYQBVPSJWVHG9TY326",
+   "ts": 1791810803000,
+   "at": "2026-10-12T13:13:23.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "superseded",
+   "issue": 466,
+   "run": "01M4R1PXSTK9RPJ9GRVE7ET8YX",
+   "ts": 1791811088000,
+   "at": "2026-10-12T13:18:08.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000",
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:496d5341c11a6be5b69341e35bbd116aea70a394"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791811216000,
+   "at": "2026-10-12T13:20:16.000Z",
+   "agreed": true,
+   "leadMinutes": 59,
+   "planBefore": [
+    "heartbeat:0",
+    "sweep:1791808606000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 466,
+   "run": "01M4R48QV0XHZPKK7D735SF00M",
+   "ts": 1791811563000,
+   "parkedAt": 1791811551000,
+   "at": "2026-10-12T13:26:03.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:932c138fd6eeca20854d6a27185ddc51b35ee059"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 466,
+   "run": "01M4R48QV0XHZPKK7D735SF00M",
+   "ts": 1791811563000,
+   "at": "2026-10-12T13:26:03.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:932c138fd6eeca20854d6a27185ddc51b35ee059"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 359,
+   "run": "01M4R4AA2WNS90401EDKFDHNB7",
+   "ts": 1791811632000,
+   "parkedAt": null,
+   "at": "2026-10-12T13:27:12.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 336,
+   "pr": 502,
+   "ts": 1791811915000,
+   "at": "2026-10-12T13:31:55.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
+    "guard:502:2c5389e2407994ba0f45558ee89185368c2dd2a4:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791812140000,
+   "at": "2026-10-12T13:35:40.000Z",
+   "agreed": true,
+   "leadMinutes": 60,
+   "planBefore": [
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 359,
+   "pr": 503,
+   "ts": 1791812397000,
+   "at": "2026-10-12T13:39:57.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "guard:503:011c9b9595512592d4d1de84728e1d537525c149:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791813370000,
+   "at": "2026-10-12T13:56:10.000Z",
+   "agreed": true,
+   "leadMinutes": 59,
+   "planBefore": [
+    "heartbeat:1791812145000",
+    "sweep:1791811245000",
+    "guard:504:a3ba06bf18d0bdf4d31dbd0f790cc1c45b002a81:1"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 466,
+   "pr": 504,
+   "ts": 1791813862000,
+   "at": "2026-10-12T14:04:22.000Z",
+   "agreed": true,
+   "leadMinutes": 9,
+   "planBefore": [
+    "guard:504:a3ba06bf18d0bdf4d31dbd0f790cc1c45b002a81:1"
+   ],
+   "skippedBefore": []
+  }
+ ],
+ "extras": [
+  {
+   "key": "heartbeat:0",
+   "kind": "heartbeat",
+   "rule": "H1",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": [
+    "2026-10-12T13:20:16.000Z",
+    "2026-10-12T13:35:40.000Z",
+    "2026-10-12T13:56:10.000Z",
+    "2026-10-12T14:40:56.000Z",
+    "2026-10-12T14:51:55.000Z"
+   ]
+  },
+  {
+   "key": "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 336,
+   "run": "01M4QA52FYQBVPSJWVHG9TY326",
+   "pr": 483,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 359,
+   "run": "01M4Q9H798ZTXA4T4T27CBDMFA",
+   "pr": null,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 373,
+   "run": "01M4Q9CGPPQY5A44Y0383KM772",
+   "pr": null,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 465,
+   "run": "01M4QAKV9GV3155GNENY427W99",
+   "pr": null,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 466,
+   "run": "01M4Q9GSZ4BDGKCD09AKF49HZ7",
+   "pr": null,
+   "t": 1791797400000,
+   "at": "2026-10-12T09:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791796023000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791797926000,
+   "at": "2026-10-12T09:38:46.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "judge:cancelled:01M4QAKV9GV3155GNENY427W99:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+   "kind": "judge",
+   "rule": "P5",
+   "issue": 465,
+   "run": null,
+   "pr": null,
+   "t": 1791798120000,
+   "at": "2026-10-12T09:42:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:c13a40ccacbfb70769fe54573cb6c3fbee50d625",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 465,
+   "run": "01M4QQVDWVKZHWM649Q3B0CGCC",
+   "pr": 491,
+   "t": 1791799380000,
+   "at": "2026-10-12T10:03:00.000Z",
+   "liveLater": [
+    "2026-10-12T09:47:19.000Z",
+    "2026-10-12T09:58:45.000Z"
+   ]
+  },
+  {
+   "key": "adjudicate:01M4QST4M8H4M4H3CQESVRBF19:null:c13a40ccacbfb70769fe54573cb6c3fbee50d625",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 465,
+   "run": "01M4QST4M8H4M4H3CQESVRBF19",
+   "pr": 493,
+   "t": 1791800460000,
+   "at": "2026-10-12T10:21:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791799584000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791801540000,
+   "at": "2026-10-12T10:39:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "judge:cancelled:01M4Q9CGPPQY5A44Y0383KM772:a9a1f806291e71e894a5362a81cc100b60c5401f",
+   "kind": "judge",
+   "rule": "P5",
+   "issue": 373,
+   "run": null,
+   "pr": null,
+   "t": 1791803160000,
+   "at": "2026-10-12T11:06:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791803154000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791804960000,
+   "at": "2026-10-12T11:36:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "judge:cancelled:01M4Q9GSZ4BDGKCD09AKF49HZ7:facb31c4883ec5738872ad4eec5a94237a2c302a",
+   "kind": "judge",
+   "rule": "P5",
+   "issue": 466,
+   "run": null,
+   "pr": null,
+   "t": 1791805860000,
+   "at": "2026-10-12T11:51:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "guard:497:5043c25e1ec334b60b085de91fac4cfd89e0da4d:1",
+   "kind": "guard",
+   "rule": "M1",
+   "issue": 476,
+   "run": "01M4QXW8CJRAQPFWMD2M1Q8WTY",
+   "pr": 497,
+   "t": 1791806400000,
+   "at": "2026-10-12T12:00:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791806757000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791808560000,
+   "at": "2026-10-12T12:36:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+   "kind": "judge",
+   "rule": "P5",
+   "issue": 336,
+   "run": null,
+   "pr": null,
+   "t": 1791810360000,
+   "at": "2026-10-12T13:06:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791808606000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791810540000,
+   "at": "2026-10-12T13:09:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 466,
+   "run": "01M4R1PXSTK9RPJ9GRVE7ET8YX",
+   "pr": null,
+   "t": 1791810741000,
+   "at": "2026-10-12T13:12:21.000Z",
+   "liveLater": [
+    "2026-10-12T12:42:55.000Z",
+    "2026-10-12T12:53:21.000Z"
+   ]
+  },
+  {
+   "key": "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:496d5341c11a6be5b69341e35bbd116aea70a394",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 359,
+   "run": "01M4R3R90RFWMV87CF6BW981EY",
+   "pr": null,
+   "t": 1791810900000,
+   "at": "2026-10-12T13:15:00.000Z",
+   "liveLater": [
+    "2026-10-12T13:12:41.000Z"
+   ]
+  },
+  {
+   "key": "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
+   "kind": "spawn",
+   "agent": "adjudicator",
+   "rule": "P2",
+   "issue": 466,
+   "run": "01M4R48QV0XHZPKK7D735SF00M",
+   "pr": 504,
+   "t": 1791811800000,
+   "at": "2026-10-12T13:30:00.000Z",
+   "liveLater": [
+    "2026-10-12T13:26:03.000Z"
+   ]
+  },
+  {
+   "key": "sweep:1791811245000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791813060000,
+   "at": "2026-10-12T13:51:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791813379000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791815220000,
+   "at": "2026-10-12T14:27:00.000Z",
+   "liveLater": []
+  }
+ ]
+}

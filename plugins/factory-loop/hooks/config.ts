@@ -10,6 +10,7 @@ export const DEFAULT_CONFIG: Config = {
   readyLabel: 'ready',
   inDevLabel: 'In development',
   skipLabels: [],
+  trackerTitle: '^(Epic|Tracker)\\b',
   usageSlowPct: 85,
   usageStopNewPct: 90,
   usageStopAllPct: 95,

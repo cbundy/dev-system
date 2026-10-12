@@ -96,7 +96,8 @@ export function tierOf(
   if (usage.unavailable || (usage.fiveHour === null && usage.sevenDay === null)) {
     return { tier: 'normal', overridden: false }
   }
-  const binding = Math.max(usage.fiveHour ?? 0, usage.sevenDay ?? 0)
+  const live = (pct: number | null, resetsAt: number | null) => (resetsAt !== null && now >= resetsAt ? 0 : (pct ?? 0))
+  const binding = Math.max(live(usage.fiveHour, usage.fiveHourResetsAt), live(usage.sevenDay, usage.sevenDayResetsAt))
   const base: Tier =
     binding >= config.usageStopAllPct
       ? 'stop-all'
@@ -387,7 +388,9 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
     const brief = briefOf(ctx, issue)
     const model = modelLabel(issue)
 
-    if (run.state === 'parked' || (run.state === 'failed' && run.run !== 'unknown' && run.step !== null)) {
+    // A failed run's step is not always known (the event log does not record it); the
+    // adjudicator reads the run and finds it.
+    if (run.state === 'parked' || (run.state === 'failed' && run.run !== 'unknown')) {
       const resumed = resumes(ctx, `run:${run.run}`)
       const suffix = resumed > 0 ? `:r${resumed}` : ''
       const at = `${run.run}:${run.step}:${run.head}`
@@ -463,6 +466,13 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
       continue
     }
 
+    // A failed or cancelled run while the loop's own fixer or re-drive for the issue is at work
+    // (or just finished) is that work's doing: its handoff, or the new run, comes next.
+    if ((run.state === 'failed' || run.state === 'cancelled') && ownRedrive(ctx, n)) {
+      skip(ctx, 'P4', n, 'a fixer or re-drive of the loop is at work on it')
+      continue
+    }
+
     if (run.state === 'failed' && run.run === 'unknown') {
       want(ctx, wake('task', 'redrive', `task:redrive:${run.branch}:${run.head}`, 'P4', n, { issue: n, branch: run.branch, head: run.head, cause: 'infrastructure' }))
       continue
@@ -505,6 +515,17 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
       }
     }
   }
+}
+
+const REDRIVE_SETTLE_MS = 30 * 60_000
+
+function ownRedrive(ctx: Ctx, issue: number) {
+  return ctx.state.ledger.some(
+    e =>
+      e.issue === issue &&
+      ((e.kind === 'spawn' && e.agent === 'fixer') || (e.kind === 'task' && e.wake === 'redrive')) &&
+      (e.status === 'running' || (e.endedAt !== null && ctx.state.now - e.endedAt < REDRIVE_SETTLE_MS)),
+  )
 }
 
 function ledgerReviewFixes(ctx: Ctx, run: string) {
@@ -1136,6 +1157,7 @@ function candidateProblem(ctx: Ctx, issue: IssueView | undefined, n: number): st
   if (issue.blockedBy > 0) return `blocked by ${issue.blockedBy} open issue${issue.blockedBy > 1 ? 's' : ''}`
   if (issue.subIssues === null) return 'sub-issues unknown'
   if (issue.subIssues > 0) return 'tracker (has sub-issues)'
+  if (issue.epic === true) return 'tracker (title)'
   if (issue.stage !== null && issue.stage !== 'queued') return `stage ${issue.stage}`
   if (state.control.skip.includes(n)) return 'owner: skip'
   if (state.control.paused.includes(n)) return 'owner: paused'

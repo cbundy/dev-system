@@ -91,7 +91,7 @@ describe('G: gates', () => {
   })
 
   test('the tier comes from the higher window; missing usage is Normal (SKILL:38-45)', () => {
-    const u = (fiveHour: number | null, sevenDay: number | null, unavailable = false) => ({ fiveHour, sevenDay, resetsAt: null, unavailable })
+    const u = (fiveHour: number | null, sevenDay: number | null, unavailable = false) => ({ fiveHour, sevenDay, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable })
     expect(tierOf(u(10, 84), CFG, null, NOW).tier).toBe('normal')
     expect(tierOf(u(85, 20), CFG, null, NOW).tier).toBe('slow')
     expect(tierOf(u(10, 90), CFG, null, NOW).tier).toBe('stop-new')
@@ -99,29 +99,36 @@ describe('G: gates', () => {
     expect(tierOf(u(null, null, true), CFG, null, NOW).tier).toBe('normal')
   })
 
+  test('a window whose reset has passed counts as zero until the next read (SKILL:47-48)', () => {
+    const u = { fiveHour: 97, sevenDay: 80, fiveHourResetsAt: NOW - MIN, sevenDayResetsAt: NOW + 3 * 86_400_000, unavailable: false }
+    expect(tierOf(u, CFG, null, NOW).tier).toBe('normal')
+    expect(tierOf({ ...u, sevenDay: 91 }, CFG, null, NOW).tier).toBe('stop-new')
+    expect(tierOf({ ...u, fiveHourResetsAt: NOW + MIN }, CFG, null, NOW).tier).toBe('stop-all')
+  })
+
   test('an owner override runs past a threshold until it expires (SKILL:49)', () => {
-    const u = { fiveHour: 60, sevenDay: 92, resetsAt: null, unavailable: false }
+    const u = { fiveHour: 60, sevenDay: 92, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
     expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW + MIN }, NOW)).toEqual({ tier: 'normal', overridden: true })
     expect(tierOf(u, CFG, { untilPct: 100, expiresAt: NOW - MIN }, NOW).tier).toBe('stop-new')
     expect(tierOf(u, CFG, { untilPct: 91, expiresAt: NOW + MIN }, NOW).tier).toBe('stop-new')
   })
 
   test('Stop new claims nothing but in-flight work continues (SKILL:41-42)', () => {
-    const s = parkedReview({ usage: { fiveHour: 20, sevenDay: 91, resetsAt: null, unavailable: false }, queue: [7] })
+    const s = parkedReview({ usage: { fiveHour: 20, sevenDay: 91, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }, queue: [7] })
     const r = plan({ ...s, issues: [...s.issues, issue(7)] }, CFG)
     expect(r.tier).toBe('stop-new')
     expect(keys(r)).toEqual([`adjudicate:${AT45}`])
   })
 
   test('Stop all launches nothing, not even an adjudicator, but free work like a merge proceeds (SKILL:43-44)', () => {
-    const usage = { fiveHour: 96, sevenDay: 60, resetsAt: null, unavailable: false }
+    const usage = { fiveHour: 96, sevenDay: 60, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
     expect(keys(plan(parkedReview({ usage }), CFG))).toEqual([])
     const r = plan(mergeReady([guarded(), reviewed('merge')], { usage }), CFG)
     expect(keys(r)).toEqual(['merge:550:head50'])
   })
 
   test('Slow: at most one claim per pass, none soon after the last, none while merging (SKILL:40, D-07)', () => {
-    const usage = { fiveHour: 20, sevenDay: 86, resetsAt: null, unavailable: false }
+    const usage = { fiveHour: 20, sevenDay: 86, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
     const s = state({ usage, queue: [7, 8], issues: [issue(7), issue(8)] })
     expect(keys(plan(s, CFG))).toEqual([`claim:7:${NOW - 30 * MIN}`])
     const recent = { ...s, ledger: [...s.ledger, entry('claim:3:x', 'claim', { class: 'start', startedAt: NOW - 5 * MIN })] }
@@ -270,6 +277,16 @@ describe('P: pipeline gates', () => {
     const answer = (d: string) => withLedger(s, [entry(key, 'judge', { wake: 'cancelled', outcome: wakeAnswer(d, { reason: 'stale' }) })])
     expect(keys(plan(answer('redrive'), CFG))).toEqual(['task:redrive:feat/issue-47-work:head47'])
     expect(find(plan(answer('drop'), CFG), 'abandon:47:01M4RQ0047AAAA')).toMatchObject({ kind: 'abandon', note: 'stale' })
+  })
+
+  test('a run cancelled by the loop own fixer or re-drive is not judged again (SPEC P4, P5)', () => {
+    const s = state({ issues: [mine(47, 'implementing')], runs: [run(47, 'cancelled', { step: null })] })
+    const fixer = entry('fixer:gate:x', 'spawn', { agent: 'fixer', issue: 47, status: 'running', endedAt: null })
+    expect(keys(plan(withLedger(s, [fixer]), CFG))).toEqual([])
+    const redrive = entry('task:redrive:b:h', 'task', { wake: 'redrive', issue: 47, endedAt: NOW - 10 * MIN })
+    expect(keys(plan(withLedger(s, [redrive]), CFG))).toEqual([])
+    const old = entry('task:redrive:b:h', 'task', { wake: 'redrive', issue: 47, endedAt: NOW - 40 * MIN })
+    expect(keys(plan(withLedger(s, [old]), CFG))).toEqual(['judge:cancelled:01M4RQ0047AAAA:head47'])
   })
 
   test('ci-stalled: no workflow tells the owner; no checks reopens the PR once, then tells (SKILL:132-135)', () => {
@@ -442,7 +459,7 @@ describe('D: design and delegation', () => {
 
   test('candidates: no tracker, nothing blocked, nothing untrusted, nothing held elsewhere (SKILL:30-31, MEM trackers)', () => {
     const s = state({
-      queue: [1, 2, 3, 4, 5, 6, 7],
+      queue: [1, 2, 3, 4, 5, 6, 7, 8],
       issues: [
         issue(1, { subIssues: 4 }),
         issue(2, { blockedBy: 1 }),
@@ -451,6 +468,7 @@ describe('D: design and delegation', () => {
         issue(5, { labels: ['ready', 'parked'] }),
         issue(6, { stage: 'designing', holder: OTHER }),
         issue(7),
+        issue(8, { epic: true }),
       ],
     })
     const r = plan(s, config({ skipLabels: ['parked'] }))
@@ -463,6 +481,7 @@ describe('D: design and delegation', () => {
       4: 'no ready label',
       5: 'label parked',
       6: 'stage designing',
+      8: 'tracker (title)',
     })
   })
 
@@ -620,14 +639,14 @@ describe('O: owner and report', () => {
 
   test('the title: repo, mode, tier with windows rounded down to 5%, counts, owner items (SKILL:171-173)', () => {
     const s = state({
-      usage: { fiveHour: 67, sevenDay: 86, resetsAt: null, unavailable: false },
+      usage: { fiveHour: 67, sevenDay: 86, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false },
       queue: [1, 2, 3],
       issues: [issue(1), issue(2), issue(3), mine(9, 'implementing'), mine(10, 'designing', { brief: null }), mine(11, 'parked')],
     })
     expect(plan({ ...s, issues: s.issues.filter(i => i.number !== 10) }, CFG).title).toBe(
       '🔄 dev-system · observe · slow 5h 65% 7d 85% · q 3 dev 1 pipe 1 merge 0',
     )
-    const na = plan(state({ usage: { fiveHour: null, sevenDay: null, resetsAt: null, unavailable: true } }), CFG)
+    const na = plan(state({ usage: { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true } }), CFG)
     expect(na.title).toBe('🔄 dev-system · observe · normal usage n/a · q 0 dev 0 pipe 0 merge 0')
   })
 
@@ -751,7 +770,7 @@ describe('properties', () => {
   test('tier safety: no action of a class the tier forbids, in any scenario', () => {
     for (const [name, s] of SCENARIOS) {
       for (const w of TIERS) {
-        const r = plan({ ...s, usage: { ...w, resetsAt: null, unavailable: false } }, CFG)
+        const r = plan({ ...s, usage: { ...w, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false } }, CFG)
         const bad = r.actions.filter(a => !ALLOWED[r.tier]!.includes(a.class)).map(a => a.key)
         expect([name, r.tier, bad]).toEqual([name, r.tier, []])
       }

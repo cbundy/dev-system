@@ -84,7 +84,8 @@ type State = {
 type Usage = {
   fiveHour: number | null         // percent, rounded up, as usage-check.sh prints it
   sevenDay: number | null         // the binding weekly window
-  resetsAt: Ms | null             // the binding window's reset
+  fiveHourResetsAt: Ms | null     // a window whose reset has passed counts as zero until the
+  sevenDayResetsAt: Ms | null     //   next read (the replay found minutes stuck in Stop all)
   unavailable: boolean            // usage=unavailable, or the reading is older than usageStaleMs
 }
 
@@ -102,6 +103,7 @@ type IssueView = {
   labels: string[] | null
   blockedBy: number | null        // issue_dependencies_summary.blocked_by: open blockers
   subIssues: number | null        // sub_issues_summary.total: more than 0 is a tracker
+  epic: boolean | null            // the title matches trackerTitle ("Epic: ..."): also a tracker
   brief: { url: string; at: Ms } | null   // latest '## Design brief' comment by a trusted author
   // the event log (dev-query)
   delegatedBrief: string | null   // the latest 'delegated' event's 'brief <url>' note
@@ -147,7 +149,7 @@ how stale it is.
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --repo <R> --format json --github off` | every pass | everything: a failure makes the pass blind (rule `G2`) |
 | `facts` | one `dev-query --csv` call (SQL in the adapter): per live issue the latest `delegated` note; per run the `fix_requested --note review` count and its `verdict` notes; per branch the latest watcher pipeline event (for `runSource: events`) | every pass | `P1` (the cap), `P2` on a review gate |
-| `runs` | `runSource: local`: `pipeline-watch.sh --once` from the main checkout (new mode, 3.4). `runSource: events`: built from `facts` plus the mirror's stage | every pass | the `P` and `M` rules |
+| `runs` | `runSource: local`: `pipeline-watch.sh --once` from the main checkout (new mode, 3.4). `runSource: events`: the mirror's stage refined by the watcher's events (`derive.ts`): the newest run the watcher saw for the issue, a park with no answer in the log, and merge-ready, head-mismatch, conflict, ci-stalled and cancelled | every pass | the `P` and `M` rules |
 | `queue` | `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (new mode, 3.4) | every `queueEveryMs` (120 s) | rule `D1` |
 | `github` | `callum-flow-issue-read --json <N>` per issue (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for this device's designing issues, to find the latest `## Design brief` comment | per issue every `githubEveryMs` (5 min), and at once for a new queue member | rule `D1`; `D2` (an existing brief) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
@@ -207,6 +209,7 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 |---|---|---|
 | `readyLabel`, `inDevLabel` | `ready`, `In development` | the queue and claim labels (I-03) |
 | `skipLabels` | `[]` | labels that keep an issue out of `D1` (I-92) |
+| `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
 | `runSource` | `local` | `local` (pipeline-watch) or `events` (shadow and replay) |
 | `shadowDevice` | `null` | observe mode only: observe as this device (the live orchestrator's), so its claims count as the loop's own and the shadow plan can be compared with what it did |
@@ -280,7 +283,7 @@ action before it is kept.
 |---|---|---|
 | G1 | mode `off`, or the kill switch exists | The driver does not observe or plan. Title: `loop off`. (Driver, not plan.) |
 | G2 | `sources.factory.ok` is false | Blind pass: no actions except `title`, and `tell(blind)` once the factory source has been failing for `blindNoticeAfterMs`. When `runs` failed, the `P` and `M` rules emit nothing; when `queue`, `github` or `pool` failed, `D1` emits nothing |
-| G3 | always | `tier = tierOf(usage, config, control.usageOverride, now)`: the higher of `fiveHour` and `sevenDay` against the thresholds; Normal when unavailable (flagged); an unexpired override keeps the tier Normal below its `untilPct` |
+| G3 | always | `tier = tierOf(usage, config, control.usageOverride, now)`: the higher of `fiveHour` and `sevenDay` (a window whose reset has passed counting as zero) against the thresholds; Normal when unavailable (flagged); an unexpired override keeps the tier Normal below its `untilPct` |
 | G4 | always | Control filters: an action on a `paused` issue is dropped (except `heartbeat` and `title`); `noNewWork` drops the `start` and `develop` classes; `skip` removes issues from `D1`; `priority` orders `D1`; `serial` allows a claim only while this device has no live issue |
 
 **Tier and class matrix** (each action kind has one class, section 6):
@@ -315,10 +318,11 @@ For each current run, issue not paused:
 | Rule | When | Then | Key |
 |---|---|---|---|
 | P1 | `parked` or `failed`, `step = review`, and `reviewFixRounds >= reviewFixCap + resumes of run:<id>` | no adjudicator; `tell(review-cap)` with the brief URL and the run's verdict lines | `tell:review-cap:<run>:<rounds>` |
-| P2 | `parked`, or `failed` with a step and a known run id; not `P1`; on a review gate only when `facts` is ok | `spawn(adjudicator, purpose gate)` with run, branch, step, brief URL and the issue's model label | `adjudicate:<run>:<step>:<head>[:r<n>]` |
+| P2 | `parked`, or `failed` with a known run id (the step when known: the adjudicator finds it otherwise); not `P1`; on a review gate only when `facts` is ok | `spawn(adjudicator, purpose gate)` with run, branch, step, brief URL and the issue's model label | `adjudicate:<run>:<step>:<head>[:r<n>]` |
 | P3 | the `P2` entry is `done`, and the run is still at that step and head | by its `ACTION`: `approve`, `fix`, `skip` give `respond`; `escalate` gives `tell(escalate)` and a hold until resumed (then `P2` again with `:r<n>`) or the head moves; `fixer` gives `spawn(fixer, purpose gate)`; an unparseable reply counts as a failed attempt of `P2` | `respond:<run>:<step>:<head>:<action>`, `tell:escalate:<run>:<step>:<head>`, `fixer:gate:<run>:<step>:<head>` |
 | P3a | a `respond` entry is `done`, the run is still at that step and head `respondSettleMs` after it ended | `respond` once more; after that `tell(respond-stuck)` | `respond:...:retry`, `tell:respond-stuck:<run>:<step>:<head>` |
 | P4 | `failed` with run id `unknown` | `task(redrive)` for the model (I-57) | `task:redrive:<branch>:<head>` |
+| P4a | `failed` or `cancelled` while the loop's own fixer or re-drive for the issue runs or ended under 30 minutes ago | nothing: that work's handoff or new run comes next | none |
 | P5 | `cancelled` | `judge(cancelled)`; answer `redrive` gives `task(redrive)`, `drop` gives `abandon` | `judge:cancelled:<run>:<head>` |
 | P6 | `ci-stalled reason=no-workflow` | hold, `tell(no-ci)` | `tell:no-ci:<run>` |
 | P6a | `ci-stalled reason=no-checks`, no reopen yet for this run | `pr-reopen` | `reopen:<pr>:<run>` |
@@ -349,7 +353,7 @@ outcome, so `M2` handles it on the next pass.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| D1 | for each queue member, in `priority` order and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts) and this pass's claims, above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
+| D1 | for each queue member, in `priority` order and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` and no tracker title (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts) and this pass's claims, above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
 | D2 | mine, stage `designing`, no brief newer than `stageSince`, no designer entry for this life | `spawn(designer)` with the issue's model label | `design:<N>:<stageSince>[:r<n>]` |
 | D3 | the designer entry is `done` | by its `RESULT` line: `pending_decision=yes` gives a hold plus `tell(decision)` until resumed (then `D2` again with `:r<n>` and the owner's notes); `created=<list>` gives `release-parent` (and `A2` if an implementer is running); a brief with no pending decision goes to `D4`; no `RESULT` line gives `judge(report)` | `tell:decision:<N>:<brief>`, `release-parent:<N>`, `judge:report:<entry key>` |
 | D4 | mine, stage `designing` (not yet delegated), a brief for this life (`briefOf`), no pending decision | `delegate` (route, `delegated` event, `spawn(implementer)`) | `delegate:<N>:<brief>` |

@@ -24,10 +24,13 @@ export type SourceName = 'factory' | 'facts' | 'runs' | 'queue' | 'github' | 'us
 // ok: the last read worked. at: when the data in State was read (null: never).
 export type Source = { ok: boolean; at: Ms | null; error?: string }
 
+// Each window's reading and when it resets: a reading taken before its window reset counts as
+// zero once the reset has passed (the next read confirms it).
 export type Usage = {
   fiveHour: number | null
   sevenDay: number | null
-  resetsAt: Ms | null
+  fiveHourResetsAt: Ms | null
+  sevenDayResetsAt: Ms | null
   unavailable: boolean
 }
 
@@ -46,6 +49,8 @@ export type IssueView = {
   labels: string[] | null
   blockedBy: number | null
   subIssues: number | null
+  // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
+  epic: boolean | null
   brief: Brief | null
   delegatedBrief: string | null
 }
@@ -208,6 +213,8 @@ export type Config = {
   readyLabel: string
   inDevLabel: string
   skipLabels: string[]
+  // a title matching this pattern marks a tracker, like sub-issues do (MEM: trackers are never claimed)
+  trackerTitle: string
   usageSlowPct: number
   usageStopNewPct: number
   usageStopAllPct: number
