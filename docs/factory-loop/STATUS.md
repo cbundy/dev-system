@@ -5,93 +5,105 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
 
 ## What needs to happen next (owner)
 
-1. **Review the spec and the six owner calls** in [DECISIONS.md](DECISIONS.md) (merge review by
-   the model, no new event state, re-drives as model tasks, owner notices through the model,
-   the plugin unlisted, act mode only for the orchestrator role). Nothing is blocked on them yet:
-   each is in force as recorded and can be flipped cheaply.
-2. **Say whether to continue** with the replay harness (phase 2), the observe and act layers
-   (phase 3) and the shadow run (phase 4). For phase 3 the earlier proposal stands: about six to
-   eight agents in a workflow for the adapters, executors and their tests, if you opt in to a
-   workflow; the plan itself is done.
-3. **Merge the flaky-test fix** when convenient:
-   [PR #524](https://github.com/cbundy/dev-system/pull/524) (closes
-   [#523](https://github.com/cbundy/dev-system/issues/523)). It is cherry-picked onto this branch
-   so its gates are honest, and drops out of this diff once it merges.
+1. **Review the spec and the seven owner calls** in [DECISIONS.md](DECISIONS.md):
+   - the merge review stays with the model;
+   - no new event state;
+   - re-drives stay model tasks;
+   - owner notices go through the model;
+   - the plugin stays unlisted;
+   - act mode only runs in an orchestrator workspace;
+   - the Slow-tier claim gap (10 minutes, where the replay suggests 5).
 
-## Done (step 1: inventory, spec, a tested plan)
+   Each is in force as recorded and cheap to change.
+2. **Decide on the act half**: the executors, the two `--once` watcher modes, `/loop` and the
+   control tool, the prompt templates and the judge skill. Then act mode on
+   `dev-system-testbed` with a few test issues you make. The earlier offer stands: a workflow
+   of about six to eight agents for the executors and their tests, if you opt in.
+3. **Merge two small test fixes** when convenient. Both are cherry-picked onto this branch and
+   drop out of its diff once merged:
+   - the heartbeat-loop flake ([PR #524](https://github.com/cbundy/dev-system/pull/524));
+   - the leaked test processes ([PR #527](https://github.com/cbundy/dev-system/pull/527)).
+4. **When you resume the factory**, the shadow keeps comparing itself with the live
+   orchestrator. Regenerate the comparison as [SHADOW-REPORT.md](SHADOW-REPORT.md) says. Stop
+   it with `coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
 
-- **[INVENTORY.md](INVENTORY.md)**: 98 rows, one per orchestrator responsibility, with its new
-  home. Every line of the skill (v0.35.0) maps to a row, checked by script, and so do the
-  owner rules and lessons that live only in the dev-system orchestrator's memory file.
-- **[SPEC.md](SPEC.md)**: the State schema, observe sources (two new `--once` watcher modes),
-  config and owner control state, the decision table (39 rules), the action catalogue with keys,
-  timeouts, retries and outcomes, the ledger and restart re-derivation, the judgment-wake
-  protocol, owner notices, failure handling, safety rails and the cutover plan.
-- **[DECISIONS.md](DECISIONS.md)**: 32 decisions with their alternatives; six marked as owner calls.
-- **`plugins/factory-loop/`**: `plan.ts`, the decision table as one pure function, with types,
-  defaults and a README that pins Claude Code 2.1.296. `register.ts` registers nothing yet, so
-  the plugin changes no session.
-- **Tests**: 72 scenario and property tests under `claude plugin test`, each citing the skill
-  line or rule its expectation comes from. The properties are determinism, idempotence (re-planning
-  after every action started adds nothing), tier safety, control safety, and at most one wake
-  per pass. A repo node test keeps `plan.ts` pure; a mutation check showed it catches a clock
-  read, a value import, an engine call and randomness.
-- **Gates**: `npm run lint` clean; `npm test` 606 node tests, 46 shell suites, 2 mods, all
-  passing. A strict `tsc` against the engine's 2.1.296 declarations is clean.
+Nothing is blocked on anyone else.
+
+## Done
+
+**Step 1, design** (earlier tonight):
+- [INVENTORY.md](INVENTORY.md): 98 orchestrator responsibilities, each with its new home. Every
+  skill line maps to a row.
+- [SPEC.md](SPEC.md): the decision table (40 rules) and everything around it.
+- [DECISIONS.md](DECISIONS.md): 34 decisions with their alternatives.
+- `plan.ts`: one pure function, tested.
+
+**Then your steps 1 to 3:**
+
+- **Judgment wake proven** ([probe](probes/wake-probe/README.md)). In the orchestrators' launch
+  mode a mod wakes the model in under 70 ms. A text `ANSWER` line came back three times out of
+  three (2 s, about 400 tokens), and a tool answer works while the mod is stable. Hidden context
+  is impossible (a mod's own hooks never see its own prompts), so wake details go in the visible
+  text.
+- **Observe half and replay** ([REPLAY-REPORT.md](REPLAY-REPORT.md)). Parsers, event derivation
+  and state assembly, all pure, plus a harness that rebuilds past states from the database and
+  GitHub's timeline. On a normal evening the loop matched every adjudication, heartbeat and merge
+  flow the live orchestrator ran, and 5 of 7 claims. It proposed nothing else but quiet sweeps,
+  and every other difference has a named cause. The replay drove six fixes, all tested.
+- **Shadow run live** ([SHADOW-REPORT.md](SHADOW-REPORT.md)). The loop runs in observe mode in
+  `spike-reconcile-mod`, shadowing the dev-system orchestrator with your wind-down directive.
+  It runs a pass a minute with all sources reading and only reads executed. The live event log
+  holds nothing from it, and the plan matches (the live orchestrator is idle, and so is the
+  shadow).
+- **Gates**:
+  - `npm run lint` clean;
+  - `npm test` 607 node tests, 46 shell suites, 2 mods, all passing;
+  - the plugin's own suite 91 tests;
+  - a strict `tsc` against the engine's 2.1.296 declarations clean.
 
 ## Found along the way
 
-- **Owner directives live as free text** in the orchestrator's memory file (pause these issues,
-  drain one at a time, wind down, never claim trackers). The spec makes them typed control state
-  (SPEC 4.3). The live orchestrator is idle tonight because of your wind-down instruction, so a
-  shadow run must start with `noNewWork` set, or every claim it plans would be a false
-  disagreement.
-- **Cancelled runs are common, but mostly history**: 21 in the week to 2026-10-12, 18 of them
-  followed by a superseded, merged or abandoned issue. The plan acts only on an issue's current
-  run.
-- **Usage checks write factory events** that look like the live watcher's. Observe mode sends
-  every command's events to a local sink (SPEC 11.1). Two such events from this session are in
-  the live log (device `coder-devsystem`).
-- **The heartbeat-loop test flaked** two full runs in six: it scanned `/proc` with one `mawk`
-  call, which stops at the first file a finished process left behind. Fixed in PR #524.
-- **No TypeScript compiler in the dev image**: installed by hand for the type-check; filed as
-  [#525](https://github.com/cbundy/dev-system/issues/525) to bake it in.
+- **The live orchestrator renewed no claim between about 05:00 and 13:20 UTC on 2026-10-12**
+  (replay, window 2). The loop renews every 20 minutes.
+- **The watcher does not log a second park on the same head** at the next gate, and a review
+  with zero findings is approved without verdict lines. Neither is visible in the event log,
+  which limits shadowing, not the loop. A watcher fix to log every park would help the factory's
+  metrics too.
+- **Owner directives live as free text** in the memory file. The loop makes them a control
+  file (`noNewWork`, `paused`, `serial`, `priority`, `skip`).
+- **Test hygiene**: the heartbeat-loop test flaked under load (a `mawk` scan aborted on a vanished
+  `/proc` file), and the orchestrator-watch tests leaked a dozen `sleep 300` processes per run.
+  Each has its own issue and PR. TypeScript is missing from the dev image
+  ([#525](https://github.com/cbundy/dev-system/issues/525)).
 
-## Not done yet
+## Not done
 
-- **Phase 2**: recorded real states and the replay harness against `factory.events`. `plan.ts`
-  already imports under Node, which the harness needs.
-- **Phase 3**: observe adapters, executors, the pass driver, the two `--once` modes with shell
-  tests, the control tool and `/loop`, prompt templates, and the judge skill draft.
-- **Phase 4**: the shadow run in `spike-reconcile-mod`. The work branch is already cloned there
-  at `/persist/claude/loop/dev-system`; its settings still point at the spike mod.
-- **Phase 5**: the draft PR. It opens when there is code to review beyond the plan.
-
-## Untested
-
-- `$.prompt.submit` judgment wakes and the answer tool, in the orchestrators' launch mode
-  (SPEC 8.4). This is the first thing phase 3 tests.
-- `stop-agent` through the `TaskStop` tool from a mod.
-- Long-running agents (implementers for an hour or more, several at once) spawned by a mod.
-- Everything outside `plan()`: no adapter or executor exists yet.
+- **The act half**: executors, the `--once` watcher modes with shell tests, `/loop` and the
+  control tool, prompt templates, the judge skill, and act mode on the testbed.
+- **Untested**: `stop-agent` through `TaskStop`, and long-running agents spawned by a mod.
+  Observe mode spawns nothing.
 
 ## Cutover plan (not executed)
 
-SPEC section 14: the shadow run first; then act mode on `dev-system-testbed` with a few test
-issues you make; then one real repo, with the released skill as the fallback (kill switch plus
-`/callum-flow:issue-orchestrator`); then the rest, each step through the normal release process.
+SPEC section 14:
+1. The shadow, now running.
+2. Act mode on `dev-system-testbed` with a few test issues you make.
+3. One real repo, with the released skill as the fallback (kill switch plus
+   `/callum-flow:issue-orchestrator`).
+4. The rest, each step through the normal release process.
 
 ## History
 
-- **21:08 UTC**: stopped before Phase 0. `usage-check.sh` read the weekly window at 85.0%, the
-  brief's stop line.
-- **21:20 UTC**: you allowed this session up to 100% usage, turned off no-mistakes for the run
-  (testing and review are the agent's), and asked for setup and checks. The setup checks all
-  passed: Claude Code 2.1.296 here and on the spike workspace, byte-identical replay from the
-  database, the spike mod's timer steady, the spike workspace able to read the database but
-  logged out of GitHub.
-- **21:30 to 22:25 UTC**: step 1 (inventory, spec, decisions, the tested plan), as you asked.
-  Usage went from 60% to 73% of the five-hour window and from 86% to 87% of the weekly one.
-- **Live factory**: untouched throughout. No orchestrator workspace modified or restarted, no
-  `ready` label added, no pipeline run, agent or shadow run started. The orchestrator's memory
-  file was read once, read-only.
+- **21:08 UTC**: stopped before Phase 0, the weekly window at the brief's 85% stop line.
+- **21:20**: you allowed up to 100% usage and turned off no-mistakes for this run. Setup and
+  checks.
+- **21:30 to 22:25**: inventory, spec, decisions, the tested plan.
+- **22:30**: you approved the spike workspace's GitHub login and asked for steps 1 to 3.
+- **22:43 to 22:58**: the wake probe.
+- **23:00 to 23:35**: the observe half and two replays.
+- **23:41**: the shadow went live.
+- **Usage**: the five-hour window went from 60% to 84%, the weekly one from 86% to 88%.
+- **Live factory**: untouched throughout. No orchestrator workspace was modified or restarted,
+  no `ready` label was added, and no pipeline run or agent was started. The orchestrator's memory
+  file was read once, read-only. The spike workspace (the brief's throwaway) was restarted twice
+  to change its plugin folders, and its GitHub login was your approval.

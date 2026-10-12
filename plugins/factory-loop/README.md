@@ -14,15 +14,33 @@ re-drive, a release) and to talk to the owner.
 
 ## State of this build
 
-This build has the plan and its tests only. `hooks/register.ts` registers nothing, so loading
-the plugin changes no session. The plugin is not listed in the marketplace (DECISIONS D-02).
+This build runs the **observe half**: every minute it reads the factory, plans, logs its
+decisions and shows its status in the session title. It has **no executors**, so it changes
+nothing in any mode (act mode says so in its log). The plugin is not listed in the marketplace
+(DECISIONS D-02).
 
 | Piece | File | State |
 |---|---|---|
-| The decision table | `hooks/plan.ts` | done, pure, 72 scenario and property tests |
-| Types and defaults | `hooks/types.ts`, `hooks/config.ts` | done |
-| Observe adapters, executors, pass driver | `hooks/observe.ts`, `hooks/act.ts`, `hooks/register.ts` | phase 3 |
-| Judge skill draft | `skills/judge/SKILL.md` | phase 3 |
+| The decision table | `hooks/plan.ts` | done, pure |
+| Parsers, event derivation, state assembly | `hooks/parse.ts`, `hooks/derive.ts`, `hooks/state.ts` | done, pure |
+| Observe adapters and the pass driver | `hooks/observe.ts`, `hooks/register.ts` | done; running as a shadow in `spike-reconcile-mod` |
+| Tests | `tests/plan.test.ts`, `tests/observe.test.ts`, `tests/driver.test.ts` | 91 scenario, property, parser and driver tests |
+| Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
+| Executors, `--once` watcher modes, `/loop`, judge skill | | next (the act half) |
+
+## Run it in observe mode
+
+Load the folder with `claude --plugin-dir plugins/factory-loop`, or name it in
+`CLAUDE_CODE_PLUGIN_DIRS`, and set `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/config.json`:
+
+```json
+{ "mode": "observe", "repo": "cbundy/dev-system", "runSource": "events",
+  "shadowDevice": "coder-dev-system-orchestrator", "checkout": "/path/to/dev-system" }
+```
+
+Decisions go to `${CLAUDE_CONFIG_DIR}/factory-loop/<owner>__<repo>/decisions-YYYY-MM-DD.jsonl`.
+Owner directives go in `control.json` beside them (for example `{"noNewWork": true}`). Create
+`${CLAUDE_CONFIG_DIR}/factory-loop/OFF` to stop it within a minute.
 
 ## Pinned Claude Code version
 
@@ -37,11 +55,11 @@ between releases. Before running the loop on a newer Claude Code:
    them and names their path, then run `tsc` with the `tsconfig.json` from that file's header,
    including `hooks/`, `types/` and `tests/`.
 3. Re-run the spike's five checks in a throwaway workspace (load, timer, title through
-   `/rename`, agents in bypass mode, restart), as its README describes, and the
-   `$.prompt.submit` judgment wake once phase 3 adds it.
+   `/rename`, agents in bypass mode, restart), as its README describes, and the wake probe
+   (`docs/factory-loop/probes/wake-probe/`), which proves the judgment wake and its answers.
 
 ## Develop it
 
-`npm test` runs `tests/plan.test.ts` through `claude plugin test`, and
+`npm test` runs the plugin's tests through `claude plugin test`, and
 `tests/factory-loop-plan.test.js` (repo root) checks that `plan.ts` stays pure. `plan.ts` also
 imports under plain Node, which the replay harness uses.
