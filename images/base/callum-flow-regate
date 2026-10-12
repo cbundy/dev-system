@@ -26,7 +26,8 @@
 # Safety: a dropped commit is one in the run head, the gate ref or origin/<branch> that is
 # not in origin/<base> and has no patch-id equivalent in HEAD. Every one is archived under
 # refs/heads/archive/<branch>-<kind>-<sha8>. Nothing is deleted, pushed or recovered before
-# the dropped-commit check passes, and a live run is aborted and awaited first.
+# the dropped-commit check passes. The gate ref delete and the origin push are leased on the
+# tips that check saw, so a commit a live run adds before it stops makes the helper refuse.
 #
 # Environment (for tests): CALLUM_FLOW_NM_BIN (no-mistakes), CALLUM_FLOW_EVENT_BIN
 # (callum-flow-event), CALLUM_FLOW_REGATE_TRIES / CALLUM_FLOW_REGATE_SLEEP (waits for an
@@ -237,17 +238,18 @@ if [ -n "$code" ] && [ "$code" != run_pipeline ] && [ "$code" != user_owned ]; t
 fi
 
 # stale mirror: clear a gate ref that HEAD does not contain (its content is archived)
-gate_sha=$(gate_tip)
-if [ -n "$gate_sha" ] && ! is_anc "$gate_sha" "$head"; then
-  git push -q no-mistakes --delete "$b" > /dev/null 2>&1 || new_branch
+gate_now=$(gate_tip)
+if [ -n "$gate_now" ] && ! is_anc "$gate_now" "$head"; then
+  [ "$gate_now" = "$gate_sha" ] || fail "the gate ref for $b moved to $(short "$gate_now") after the check" "rerun callum-flow-regate so the new commits are checked and archived"
+  git push -q --force-with-lease="$ref:$gate_sha" no-mistakes --delete "$b" > /dev/null 2>&1 || new_branch
   [ -z "$(gate_tip)" ] || new_branch
 fi
 
 # diverged remote branch: lease-push so the pipeline's rebase does not meet the old commit
-orig_sha=$(origin_tip)
-if [ -n "$orig_sha" ] && ! is_anc "$orig_sha" "$head"; then
-  git push -q --force-with-lease="$b:$orig_sha" origin "HEAD:$ref" > /dev/null 2>&1 ||
-    fail "origin/$b moved or refused the lease push" "fetch and inspect origin/$b, then rebase again or use --new-branch"
+orig_now=$(origin_tip)
+if [ -n "$orig_now" ] && ! is_anc "$orig_now" "$head"; then
+  git push -q --force-with-lease="$ref:$orig_sha" origin "HEAD:$ref" > /dev/null 2>&1 ||
+    fail "origin/$b moved after the check or refused the lease push" "rerun callum-flow-regate so the new commits are checked and archived, or use --new-branch"
 fi
 
 [ -z "$run_id" ] || "$EVENT" superseded --issue "$issue" --run "$run_id" --branch "$b" --note "re-gate on $b" > /dev/null 2>&1 || true

@@ -29,7 +29,10 @@ case "$*" in
     [ "$s" != none ] || exit 1
     printf 'run:\n  id: "RUN1"\n  branch: b\n  status: %s\n  head: abc\n  head_sha: %s\n' "$s" "$(cat "$NMS/run_head" 2> /dev/null)"
     ;;
-  'axi abort') [ -e "$NMS/abort_noop" ] || echo aborted > "$NMS/status" ;;
+  'axi abort')
+    [ ! -s "$NMS/on_abort" ] || sh "$NMS/on_abort"
+    [ -e "$NMS/abort_noop" ] || echo aborted > "$NMS/status"
+    ;;
   'axi sync --check')
     printf 'run:\n  id: "RUN1"\n  status: %s\nbranch_sync:\n  pipeline:\n    current_head: %s\n  next_action:\n    code: %s\n' "$(cat "$NMS/status" 2> /dev/null)" "$(cat "$NMS/run_head" 2> /dev/null)" "$(cat "$NMS/code")"
     [ ! -s "$NMS/command" ] || printf '    command: %s\n' "$(cat "$NMS/command")"
@@ -153,6 +156,18 @@ echo running > "$NMS/status"
 out=$(rg --accept-dropped "$P") && fail "a run that does not stop must refuse" || :
 expect "$out" "did not stop" "stuck run"
 [ "$(tip "$GATE" "$B")" = "$P" ] || fail "nothing deleted while the run lives"
+
+# --- a live run that commits before it stops: nothing it added is deleted or overwritten --
+for remote in no-mistakes origin; do
+  mk
+  echo running > "$NMS/status"
+  late=$(git commit-tree -p "$P" -m 'no-mistakes(review): late fix' "$(git rev-parse "$P^{tree}")")
+  echo "git -C '$WORK' push -q -f $remote $late:refs/heads/$B" > "$NMS/on_abort"
+  out=$(rg --accept-dropped "$P") && fail "$remote moved after the check must refuse" || :
+  expect "$out" "rerun callum-flow-regate" "$remote moved"
+  case $remote in no-mistakes) r=$GATE ;; *) r=$ORIGIN ;; esac
+  [ "$(tip "$r" "$B")" = "$late" ] || fail "the late $remote commit must survive"
+done
 
 # --- inspect_and_reconcile_manually: archive first, then exactly sync --recover --keep-local
 mk

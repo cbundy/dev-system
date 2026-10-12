@@ -1493,7 +1493,9 @@ diverged `origin/<branch>` is replaced with a `--force-with-lease` push on the o
 that would be lost is first archived as `archive/<branch>-<mirror|run|remote>-<sha8>`. A dropped commit
 (in the run head, gate ref or origin branch, not in `origin/<base>`, no patch-id equivalent in HEAD) is
 listed on stderr, and a dropped `no-mistakes(...)` commit blocks until `--accept-dropped` names its sha.
-Nothing is deleted, pushed or recovered before that check passes. `--new-branch` (after the live run is
+Nothing is deleted, pushed or recovered before that check passes, and the gate ref delete and origin push
+are leased on the tips the check saw: a commit a live run adds before it stops makes the helper refuse
+and ask for a rerun. `--new-branch` (after the live run is
 stopped), a sync recovery or gate-ref deletion that cannot finish, a recovery that moves HEAD, or a code
 with no safe action moves the rebased head to `<branch>-v<N>` (first name free locally, on origin and on
 the gate), logs `superseded` and prints `REGATE new-branch branch=NEW old_branch=B old_run=ID` plus a
