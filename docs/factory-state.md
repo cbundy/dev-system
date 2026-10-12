@@ -22,8 +22,8 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 
 | Stage | Meaning |
 | --- | --- |
-| `queued` | latest decision event is `ready` or `reclaimed`; no pipeline run in progress |
-| `designing` | `claimed`, `briefed` or `design_routed`, with no delegation or run since, and a live claim (see below) |
+| `queued` | latest decision event is `ready` or `reclaimed`, or a designing claim has lapsed (see below); no pipeline run in progress |
+| `designing` | `claimed`, `briefed` or `design_routed`, with no delegation or run since; any recorded claim lease must still be live (see below) |
 | `implementing` | `delegated` with no run yet, or the latest run ended without a PR to merge (failed, cancelled, completed with no PR, PR closed) |
 | `in pipeline` | the latest run is running and not waiting on anyone |
 | `parked` | the latest run is running and waiting on an agent or the owner (`awaiting_agent_since` set) |
@@ -38,10 +38,12 @@ leaves the live list and shows under "recently ended" (24 hours from `--at`) as 
 A claim is live while its newest `claimed` or `renewed` event plus its lease is still in the future.
 The lease is the event's `lease: <minutes>` note (`callum-flow-claim` writes it on `claimed`, and
 `callum-flow-claim --heartbeat` logs a `renewed` with it for each comment it extends), or 120 minutes
-when the event has no note. When the issue would be `designing` but that time is at or before `--at`,
-it is `queued` with the detail `claim lapsed at <ISO time>`: the database cannot see a lease that
-nobody renewed, so this is how it learns the claimant is gone. `renewed` never sets a stage, never
-starts a new life after `closed` or `abandoned`, and never counts as a decision newer than a run.
+when the note has no positive lease value. When the issue would be `designing` but that time is at
+or before `--at`,
+it is `queued` with the detail `claim lapsed at <ISO time>`; time in stage starts at that expiry.
+Without a recorded `claimed` or `renewed` event, `briefed` and `design_routed` remain `designing`.
+`renewed` never sets a stage, never starts a new life after `closed` or `abandoned`, and never counts
+as a decision newer than a run.
 
 An `abandoned` event is final only until a new life starts. Strictly after it, a new life is: a
 `ready`, `reclaimed`, `claimed`, `briefed`, `design_routed` or `delegated` event; a `merged` event; a
@@ -128,8 +130,8 @@ A gap is named, never shown as idle.
 
 Per repo the report also gives the last event and last run update, each device's event count and last
 event, the number of live issues by source, and whether a heartbeat exists (`n/a` until #339). Known
-gaps in the data: labels and claim comments never reach the event log (hence the live GitHub read), and
-claim-lease renewals are not logged.
+gaps in the data: labels and claim comment bodies never reach the event log (hence the live GitHub
+read). Claim-lease renewals are recorded as `renewed` events, as described under [Stages](#stages).
 
 ## Worked examples
 

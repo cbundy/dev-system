@@ -17,9 +17,9 @@ branch name (see "Linking pipeline runs to issues" below).
 
 `superseded` is logged by the orchestrator when it replaces a branch or run for the same issue (`--run` names the old run). It is run-scoped, so it ends nothing and releases no claim.
 
-`closed` is logged by `callum-flow-sweep` (actor `sweep`) for every issue GitHub reports closed
-whose latest event is not `closed` or `abandoned`, including issues closed by hand, as duplicates
-or after research. Its `note` is GitHub's close reason verbatim: `completed`, `not_planned` or
+`closed` is logged by `callum-flow-sweep` (actor `sweep`) for issues closed outside the factory;
+the [factory event log reference](../images/base/README.md#factory-event-log) defines which issues it checks.
+Its `note` is GitHub's close reason verbatim: `completed`, `not_planned` or
 `duplicate` (empty when GitHub gives none). It releases a claim like `merged` does, but
 throughput and lead-time queries keep counting `merged` only. Two devices sweeping before either
 has pushed can both log it, so count identical consecutive rows once.

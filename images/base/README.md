@@ -1501,15 +1501,17 @@ a reader failure: it never treats it as "no comments". Write calls are unchanged
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
 and exits 3; every exit 3 logs a `claim_lost` event), then swaps `ready` for `In development` and logs `claimed` with the note `lease: <minutes>`. `--heartbeat
-[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended, which is how `callum-flow-factory-state` tells a live claim from a lapsed one: a `designing` issue whose newest `claimed` or `renewed` event plus lease has ended shows as `queued`, `claim lapsed at <time>`. `callum-flow-sweep` releases stale
+[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events. `callum-flow-sweep` releases stale
 `In development` labels on open and closed issues: closed issues, and open ones with a PR merged
 after the claim (matched by `issue-<N>-` branch name), just lose the
 label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an
 issue with no claim comment is left alone. The sweep also records issues closed outside the
-factory: every issue in the event log (this device's file, plus the latest event per issue in the
+factory: every issue in the event log (this device's file, plus the latest lifecycle event per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
 whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost` or `renewed`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run), and that GitHub reports closed gets a `closed`
-event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. It has no
+event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. A failed
+factory-state read adds no candidates; issues already logged as `closed` are excluded, while a
+listed `abandoned` issue has a new life and remains a candidate. It has no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
 latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped and counted; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is

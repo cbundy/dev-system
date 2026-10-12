@@ -27,9 +27,11 @@
 # be open) and that GitHub reports closed gets `callum-flow-event closed --note
 # <GitHub's state_reason: completed, not_planned or duplicate> --actor sweep`.
 # The log is this device's file (`callum-flow-event --path`) plus, when
-# dev-query is configured, the latest event per issue in factory.events, so
+# dev-query is configured, the latest lifecycle event per issue in factory.events, so
 # issues only another device saw are found too. A failed central read warns
-# and falls back to the local log. The pass has no time limit, so the first run
+# and falls back to the local log. Factory-state's live list also supplies
+# mirror-only issues and new lives after abandonment (see the candidate pass below).
+# The pass has no time limit, so the first run
 # is the backfill. Two devices sweeping before either has pushed can both log
 # `closed`; consumers count identical consecutive rows once.
 # Each issue is re-read directly (not through the label list, which lags)
