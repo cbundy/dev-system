@@ -9,7 +9,7 @@ set -eu
 # shellcheck source=./watchers-lib.sh
 . "$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/watchers-lib.sh"
 
-# feat/b is green with CI passed (the state a stream run leaves).
+# Seed feat/b as green with CI passed, independently of the stream suite.
 run_state RUNB feat/b running "$b_head"
 echo "all CI checks passed" > "$nm_home/logs/RUNB/ci.log"
 
@@ -24,8 +24,8 @@ single=$(in_dir "$repo" timeout 10 "$PIPELINE_WATCH" --interval 1 --deadline 1 -
 [ "$single" = timeout ] || fail "deadline: $single"
 ok # single-shot unchanged
 
-# The runs the discovery suite leaves behind: two failed launches, one on a
-# branch with a worktree, one with none.
+# Seed two failed launches for lookup coverage: one on a branch with a
+# worktree, one with none.
 g -C "$repo" worktree add -q -b feat/c "$tmpdir/wt-c"
 run_state RUNC feat/c failed ccc
 run_state RUND feat/d failed ddd

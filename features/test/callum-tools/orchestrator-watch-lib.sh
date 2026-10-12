@@ -13,9 +13,11 @@
 #
 # Waiting rules (cbundy/dev-system#478): a positive wait polls for the expected
 # file, line or pid. A negative "nothing more happens" window never uses wall
-# time: it is bounded by observed watcher progress, the stub call logs
-# (fakebin/nm-polls: one line per `no-mistakes runs` call, one per pipeline
-# poll; fakebin/gh-calls: one line per queue listing call, one per queue poll).
+# time: it is bounded by observed child progress. Real children use the stub
+# call logs (fakebin/nm-polls: one line per `no-mistakes runs` call, one per
+# pipeline poll; fakebin/gh-calls: one line per queue listing call, one per
+# queue poll). Fake lifecycle children use <name>-beats after writing stderr;
+# see their setup below.
 # Wall time appears only where the watcher itself is under test as a clock: the
 # single-shot window, --deadline, and the interval of a killed sleep.
 # shellcheck disable=SC2046,SC2086 # word-splitting of fixed option lists and pid lists is intended

@@ -1,14 +1,15 @@
 # shellcheck shell=sh
 #
 # Shared setup for the watcher suites (pipeline-watch*.test.sh,
-# pipeline-ci-stalled.test.sh, queue-watch*.test.sh, watcher-replay.test.sh and
+# pipeline-ci-stalled.test.sh, queue-watch*.test.sh, watcher-replay*.test.sh and
 # watcher-sleep-*.test.sh): sourced, never run, and named so the `*.test.sh`
 # glob in scripts/test.sh does not pick it up.
 #
 # Like recover-no-mistakes.test.sh, the suites run the scripts from their source
 # location with stub `gh` and `no-mistakes` on PATH - no Docker, no container
-# build - so `npm test` runs it anywhere. A one-second poll interval keeps them
-# to seconds. The container suite (test.sh) keeps covering the single-shot
+# build - so `npm test` runs them anywhere. Most cases use a one-second poll
+# interval; sleep-kill cases use longer intervals to check the remaining wait.
+# The container suite (test.sh) keeps covering the single-shot
 # states in depth.
 #
 # Waiting rules (cbundy/dev-system#478): a positive wait polls for the expected
@@ -21,8 +22,8 @@
 #   fakebin/gh-calls  one line per queue listing call (its epoch second):
 #                     queue-watch makes exactly one per poll, except when its
 #                     reader fails before asking gh (wait_polls)
-# Wall time appears only where the watcher itself is the clock: --deadline and
-# the interval a killed sleep must still wait out.
+# Elapsed-time assertions check --deadline, the interval a killed sleep must
+# still wait out, and prompt signal shutdown; they do not bound quiet windows.
 # Sourcing this file sets up a private tmpdir (removed on exit) and the stubs.
 # shellcheck disable=SC2034 # variables and helpers for the suites that source this file
 set -eu
