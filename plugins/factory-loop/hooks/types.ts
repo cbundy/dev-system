@@ -232,8 +232,8 @@ export type Config = {
 }
 
 // What a wake asks: the line's first word is the action kind (judge, task, tell), the
-// second this wake name, then key=value fields with no spaces. Context lines go beside
-// the prompt for the model only (SPEC 8.1).
+// second this wake name, then key=value fields with no spaces. Context lines follow it in
+// the visible prompt: a mod cannot attach hidden context to its own prompt (SPEC 8.1).
 type Base = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null }
 
 export type Action =

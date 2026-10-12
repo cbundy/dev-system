@@ -37,6 +37,9 @@ every passEveryMs (60 s), or at once when pinged:
 
 - **One pass at a time.** A ping or a timer tick that arrives during a pass sets a flag, and
   one more pass runs when the current one ends. Passes never overlap.
+- **Start.** The loop starts from `session.start` and, as a fallback, from the first other hook
+  that fires (`session.append` fires every minute with the title), so it never depends on one
+  event.
 - **Pings.** An agent of the loop finished (`turn.complete` with its `agentId`), the model
   answered a wake (the answer tool or the main loop's `turn.complete`), an owner control
   arrived (`/loop` or the control tool), or a detached command's log changed.
@@ -519,31 +522,42 @@ possible: a second adjudicator for a gate already judged, or a repeated owner no
 
 ### 8.1 Lines
 
-The loop submits one line as a prompt (`$.prompt.submit`), which runs as its own turn once the
-session is idle and goes through every other plugin's hooks:
+The loop submits a prompt (`$.prompt.submit`), which runs as its own turn once the session is
+idle. Its first line is machine-shaped; any further lines carry the details the model needs, in
+plain text:
 
 ```text
 JUDGE merge-review id=w41 pr=512 issue=507 run=01M4RQ9K31 head=03a35cd brief=https://github.com/cbundy/dev-system/issues/507#issuecomment-6130415725
 TASK run-it id=w42 issue=406
-TELL decision id=w43 issue=470 brief=https://github.com/cbundy/dev-system/issues/470#issuecomment-1
+TELL review-cap id=w43 issue=470 run=01M4RW4A0G brief=https://github.com/cbundy/dev-system/issues/470#issuecomment-1
+CORRECT: review-1 moved HEAD after recovery must not be accepted
+WRONG: review-6 comma form of --accept-dropped is required
 ```
 
 The first word is the kind of wake, the second the subject, then `id=` and `key=value` fields
 with no spaces. The line names the skill that says how to answer
 (`plugins/factory-loop/skills/judge/SKILL.md`, a draft in phase 3), so a session that lost it to
-compaction can load it again.
+compaction can load it again. The details are visible, in the transcript and on the phone: a mod
+cannot attach hidden context to its own prompt (the wake probe showed a plugin's own
+`prompt.submit` hooks do not see its own submissions).
 
 ### 8.2 Answers
 
-The model answers with one call to a tool the mod registers, `mcp__factory-loop__answer`:
+The model answers with a block in its final message, read in the main loop's `turn.complete`:
 
-```json
-{ "id": "w41", "decision": "merge", "reason": "...", "instructions": "...", "bump": "minor", "bumpReason": "...", "fields": {} }
+```text
+ANSWER w41 merge
+reason: the two review fix commits keep every acceptance criterion
+bump: minor
+bumpReason: a new --once mode
 ```
 
-The tool checks the id is open and the decision is allowed for its kind, and returns an error
-text the model can correct in the same turn. As a fallback, a line `ANSWER <id> <decision>
-[reason]` in the turn's final answer counts, read in the main loop's `turn.complete`.
+The first line is `ANSWER <id> <decision>`; each following `key: value` line (until a blank line)
+is a field (`reason`, `instructions`, `bump`, `bumpReason`, or `fields` as one line of JSON).
+The loop checks the id is open and the decision is allowed for its kind. As an alternative the
+model may call `mcp__factory-loop__answer` with the same fields, which the mod registers; the wake
+probe showed the tool works while the mod is stable, but a turn that starts during a reload does
+not get it, so the text block is the primary channel.
 
 | Wake | Allowed decisions | Timeout falls back to |
 |---|---|---|
@@ -568,10 +582,13 @@ timeout applies. Only one wake is open at a time (rule `O2`).
 - **Owner chat**: relaying `tell` lines, answering questions, turning instructions into control
   calls, and keeping `.claude/orchestrator-memory.md` (I-81).
 
-### 8.4 Untested
+### 8.4 Proven by the wake probe
 
-`$.prompt.submit` has not been tried in the orchestrators' launch mode (FINDINGS section 6). It
-is the first thing phase 3 tests, in the spike workspace, before any judge rule relies on it.
+Tested on 2026-10-12 in the spike workspace, in the orchestrators' launch mode
+([probes/wake-probe](probes/wake-probe/README.md)): `$.prompt.submit` starts a turn 20 to 70 ms
+after the call; a text `ANSWER` line came back three times out of three (2 s, 12 output tokens,
+370 to 630 tokens of context); the tool answer works while the mod is stable. The judge skill must
+keep answers short: a model that cannot do what a wake asks explains at length.
 
 ## 9. Owner notices
 
@@ -699,7 +716,8 @@ changed is also written in full under `states/`, which the replay harness reads.
 
 ## 13. Known gaps and risks
 
-- **`$.prompt.submit` judgment wakes** are untested in the launch mode (8.4).
+- **Judgment wakes** are proven in the launch mode (8.4); a turn that starts while the mod
+  reloads loses the answer tool, so deploys avoid open wakes and the text block is primary.
 - **`stop-agent`** relies on the `TaskStop` tool through `$.tool.call`; untested from a mod. If
   it is unavailable, a timed-out agent is left running, marked `timed-out`, and the owner is told.
 - **Per-agent OTEL attributes**: `agent.spawn` has no environment field, so the

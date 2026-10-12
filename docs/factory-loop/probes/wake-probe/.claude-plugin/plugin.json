@@ -1,0 +1,5 @@
+{
+  "name": "wake-probe",
+  "version": "0.1.0",
+  "description": "Throwaway probe for the factory loop: can a mod wake the main model with a fixed line and get a typed answer back?"
+}

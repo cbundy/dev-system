@@ -145,13 +145,14 @@ follow directly from the skill or the brief.
 - **Why**: observe mode then shows exactly what act mode would do, which is the point of the
   shadow run.
 
-### D-04 The model answers through a registered tool
+### D-04 The model answers with a text block, the tool as an alternative
 
-- **Decision**: `mcp__factory-loop__answer` with a JSON schema, checked by the mod, with an
-  `ANSWER` text line as a fallback (SPEC 8.2).
-- **Alternatives**: parse the turn's final text only.
-- **Why**: a typed answer can be validated and corrected in the same turn, whereas free text breaks
-  on wording. The tool adds a few hundred tokens to the tool list.
+- **Decision**: an `ANSWER <id> <decision>` block with optional `key: value` lines, read in the
+  main loop's `turn.complete`. The `mcp__factory-loop__answer` tool is accepted as well (SPEC 8.2).
+- **Alternatives**: the tool only, as first planned.
+- **Why**: the wake probe showed both work, but the tool goes missing for a turn that starts
+  while the mod reloads, and the text block costs least. The first plan (tool first) changed on
+  that evidence.
 
 ### D-06 Usage comes from `usage-check.sh` every 5 minutes plus the session's own figures
 
