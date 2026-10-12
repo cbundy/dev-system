@@ -23,7 +23,7 @@ the `Release` workflow only verifies, tags and publishes.
    and any merged config files). dev-system is a consumer of its own templates, so the
    bump and the stamp land in the same change. If it reports conflicts, resolve the
    markers before committing. When the release includes base image changes, add
-   `--image A.B.C` (see "The base image" below) so the same PR sets `images/base/VERSION`;
+   `--image A.B.C` (plain MAJOR.MINOR.PATCH; see "The base image" below) so the same PR sets `images/base/VERSION`;
    without `--image` that file is left untouched.
 2. Commit the approved notes in the same bump PR. `npm run lint` validates every file in
    `release-notes/` and requires valid notes for the `package.json` version.
