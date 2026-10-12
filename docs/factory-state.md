@@ -71,7 +71,8 @@ Highest first. A lower source never overrides a higher one.
    stage; when the mirror has no run they only appear as an `event-only` hint. A `failed` replayed after
    `merged` or `closed` (#344) is therefore ignored.
 4. Factory decisions: `ready`, `claimed`, `briefed`, `design_routed`, `delegated`, `reclaimed`.
-5. Liveness from `factory.workers_status` (`n/a` until the worker heartbeat table, #339, is deployed).
+5. Worker liveness is currently `n/a`: this reader checks whether `factory.workers_status` exists
+   but does not read its rows yet. Use the [fleet status query](metrics.md#workers) for liveness.
 
 A live run (in pipeline, parked, ready to merge) decides the stage. When the latest run has ended and
 a newer decision event exists, the decision wins (a re-delegated or reopened issue).
@@ -129,7 +130,7 @@ A gap is named, never shown as idle.
 | `none` | nothing in the database |
 
 Per repo the report also gives the last event and last run update, each device's event count and last
-event, the number of live issues by source, and whether a heartbeat exists (`n/a` until #339). Known
+event, the number of live issues by source, and worker coverage (see [Source precedence](#source-precedence)). Known
 gaps in the data: labels and claim comment bodies never reach the event log (hence the live GitHub
 read). Claim-lease renewals are recorded as `renewed` events, as described under [Stages](#stages).
 
