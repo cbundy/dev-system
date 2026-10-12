@@ -98,6 +98,16 @@ function name_short_option_takes_arg(base, ch) {
   return (ch ~ /^[osuyZ]$/)
 }
 
+# pkill's -SIGNAL form (-9, -TSTP, -SIGPIPE, -rtmin+2): a signal, never an
+# option cluster, so -TSTP or -PIPE is not read as -P <parent>.
+function is_signal(t,    s) {
+  s = toupper(substr(t, 2))
+  sub(/^SIG/, "", s)
+  return (s ~ /^[0-9]+$/ || \
+          s ~ /^(HUP|INT|QUIT|ILL|TRAP|ABRT|IOT|BUS|FPE|KILL|USR1|SEGV|USR2|PIPE|ALRM|TERM|STKFLT|CHLD|CLD|CONT|STOP|TSTP|TTIN|TTOU|URG|XCPU|XFSZ|VTALRM|PROF|WINCH|IO|POLL|PWR|SYS)$/ || \
+          s ~ /^RT(MIN|MAX)([+-][0-9]+)?$/)
+}
+
 # Parse the options and operands of a pkill/pgrep/pidof command. Sets the
 # globals sel_parent (the -P/--parent value, "" if none), sel_nops and sel_ops[]
 # (the process-name/pattern operands).
@@ -121,6 +131,7 @@ function scan_selector(toks, cnt, i, base,    t, k, ch, endopts, val, eq, skip_n
       } else i++
       continue
     }
+    if (!endopts && base == "pkill" && t ~ /^-/ && is_signal(t)) { i++; continue }
     if (!endopts && t ~ /^-/ && t != "-") {
       skip_next = 0
       for (k = 2; k <= length(t); k++) {
@@ -163,8 +174,10 @@ function path_under(s, root,    pos, from, l, pre) {
 }
 
 # Is this name/pattern operand an absolute path inside the agent's own linked
-# worktree or a Claude scratchpad? Backslashes (regex escapes) are removed first.
+# worktree or a Claude scratchpad? Alternation or grouping could make the path
+# optional, so it never counts. Backslashes (regex escapes) are removed first.
 function operand_in_scope(op,    s) {
+  if (op ~ /[|()]/) return 0
   s = op
   gsub(/\\/, "", s)
   if (index(s, "/../") > 0) return 0

@@ -16,7 +16,8 @@
 # Allowed: kill of exact PIDs or variables (`kill 1234`, `kill "$pid"`,
 # `kill -TERM $!`, `kill 0`); bare pgrep/pidof; commands that only mention these
 # words (echo, grep, commit messages); selectors scoped by `-P <pid>` (unless
-# the value is 0 or 1); selectors whose every name/pattern operand, with
+# the value is 0 or 1); selectors whose every name/pattern operand has no
+# `|`, `(` or `)` (which could make the path optional) and, with
 # backslashes removed, contains an absolute path inside the agent's own linked
 # git worktree (git top level of the input cwd, only when its git dir differs
 # from its common dir, so the main checkout never counts) or inside a Claude
@@ -45,15 +46,21 @@ awk_file="$script_dir/forbid-broad-kill.awk"
 input=$(cat)
 
 worktree=''
-cwd=$(printf '%s' "$input" | awk -v mode=cwd -f "$awk_file" 2>/dev/null || true)
-if [ -n "$cwd" ] && command -v git >/dev/null 2>&1; then
-  top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)
-  gitdir=$(git -C "$cwd" rev-parse --absolute-git-dir 2>/dev/null || true)
-  common=$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
-  if [ -n "$top" ] && [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ]; then
-    worktree=$top
-  fi
-fi
+case $input in
+  *pkill* | *pgrep* | *pidof*)
+    cwd=$(printf '%s' "$input" | awk -v mode=cwd -f "$awk_file" 2>/dev/null || true)
+    if [ -n "$cwd" ] && command -v git >/dev/null 2>&1; then
+      paths=$(git -C "$cwd" rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir 2>/dev/null || true)
+      top='' gitdir='' common=''
+      { read -r top && read -r gitdir && read -r common; } <<EOF || true
+$paths
+EOF
+      if [ -n "$top" ] && [ -n "$gitdir" ] && [ -n "$common" ] && [ "$gitdir" != "$common" ]; then
+        worktree=$top
+      fi
+    fi
+    ;;
+esac
 
 decision=$(printf '%s' "$input" | BROAD_KILL_WORKTREE="$worktree" awk -f "$awk_file")
 

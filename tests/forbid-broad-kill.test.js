@@ -83,6 +83,16 @@ test("refuses pkill, killall and killall5", () => {
   assertDenied("killall5 -9");
 });
 
+test("reads pkill -SIGNAL as a signal, not as -P <parent>", () => {
+  assertDenied("pkill -TSTP node");
+  assertDenied("pkill -TRAP node");
+  assertDenied("pkill -PIPE foo");
+  assertDenied("pkill -SIGPWR foo");
+  assertDenied("pkill -rtmin+2 foo");
+  assertAllowed("pkill -TSTP -P 4242");
+  assertAllowed("pkill -9 -P4242 node");
+});
+
 test("refuses pgrep/pidof piped into xargs kill", () => {
   assertDenied("pgrep -f x | xargs kill");
   assertDenied("pgrep x | xargs -r kill -9");
@@ -144,6 +154,10 @@ test("worktree and scratchpad path scoping", () => {
   assertDenied(`pkill -f '${WT}/../x/server.js'`, { cwd: WT });
   assertDenied(`pkill -f '${WT}/server.js' other`, { cwd: WT });
   assertAllowed(`kill $(pgrep -f '${WT}/server.js')`, { cwd: WT });
+  assertDenied(`pkill -f 'sleep|${WT}/x'`, { cwd: WT });
+  assertDenied(`pkill -f '(${WT}/x)?sleep'`, { cwd: WT });
+  assertDenied(`kill $(pgrep -f 'vite|${WT}/server.js')`, { cwd: WT });
+  assertDenied("pkill -f 'sleep|/tmp/claude-1000/-p/s1/scratchpad/run.sh'");
   assertAllowed("pkill -f '/tmp/claude-1000/-p/s1/scratchpad/run.sh'");
 });
 
