@@ -285,10 +285,23 @@ done
 behind_setup; echo CONFLICTING > "$st/pmergeable"
 g 7 --update-behind
 [ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "CONFLICTING must fail: rc=$rc out=$out"
-# a lost lease (the branch moved after the PR was read) pushes nothing
+# a branch that already moved before the PR was read pushes nothing
 behind_setup; echo bogus > "$st/prhead"
 g 7 --update-behind
 [ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "moved branch must fail: rc=$rc out=$out"
+# a lost lease: the branch moves after the checks, while the rebase runs, so the push is refused
+behind_setup; MOVED=$(git -C "$origin" rev-parse refs/heads/main)
+cat > "$work/.git/hooks/post-rewrite" <<HOOK
+#!/bin/sh
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+git -C "$origin" update-ref "refs/heads/$B" "$MOVED"
+HOOK
+chmod +x "$work/.git/hooks/post-rewrite"
+g 7 --update-behind
+rm -f "$work/.git/hooks/post-rewrite"
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$MOVED" ] || fail "lost lease must fail without a push: rc=$rc out=$out"
+case "$out" in *"lost its lease"*) ;; *) fail "lease text: $out" ;; esac
+[ "$(git -C "$work" worktree list | wc -l)" = 1 ] || fail "scratch worktree left after a lost lease"
 passed=$((passed + 1))
 # DIRTY keeps today's REBASE_FIX path on a normal guard run
 behind_setup; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty keeps REBASE_FIX" mergeable

@@ -136,7 +136,7 @@ g 7 --update-behind; [ "$rc" = 0 ] || fail "update-behind for merge: rc=$rc out=
 NEWH=$(origin_b); echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
 m 7
 if [ "$rc" != 0 ] || ! grep -q -- "--match-head-commit $NEWH" "$st/gh-calls"; then fail "merge after update-behind: $rc $out"; fi
-grep -q '"state":"merged"' "$events"/* 2>/dev/null || grep -rq "$NEWH" "$events" || fail "merged event should carry the new head"
+jq -e --arg sha "$NEWH" '.state == "merged" and .head == $sha' "$events/o__r.jsonl" > /dev/null || fail "merged event should carry the new head: $(cat "$events/o__r.jsonl")"
 passed=$((passed + 1))
 
 echo "merge: $passed groups passed"
