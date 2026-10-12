@@ -168,7 +168,8 @@ release process; never report holding it for an issue not in it. Answer "what is
 planned" from `callum-flow-milestone show`.
 
 ## Tick report
-Open with what happens next and who acts (owner or you), naming work by what it does
-(issue number in parentheses). Then: ready, in-development and open-PR counts, pipelines,
-watcher (`active`, `idle`, `MISSING`), usage tier and resume wake id when paused.
-If opted in to Releases: Next release open/closed counts (from `show`) and its blockers by name.
+A routine tick is one status line: usage (5h and 7d percent plus tier), watcher (`active`, `idle`, `MISSING`),
+ready / in-development / open-PR counts; add the resume wake id when paused, and Next release open/closed
+counts plus blockers by name if opted in to Releases. Add a line only for an owner action, an owner decision
+or an orchestrator bug, opening with who acts and what happens next. Name each issue or PR by what the work does, then link it: `([#N](https://github.com/<REPO>/issues/N))` (`/pull/N` for a PR); never a bare number,
+never a number as the subject. Example: `[ACTION] Owner: approve the Postgres dev image release ([#512](https://github.com/<REPO>/pull/512))`

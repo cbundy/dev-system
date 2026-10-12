@@ -16,5 +16,6 @@ test('template and root CLAUDE.md carry the plain-language rule', () => {
     const s = read(p).replace(/\s+/g, ' ');
     assert.match(s, /lead with what needs to happen next and who has to do it/, p);
     assert.match(s, /whether the owner is the one who must act/, p);
+    assert.match(s, /markdown link to it, never a bare `#N`/, p);
   }
 });
