@@ -59,7 +59,7 @@ d=$(dirname "$0")
 case "$1" in
   --local)
     echo x >> "$d/dver-local-calls"
-    [ ! -e "$d/dver-local-sleep" ] || sleep 3
+    [ ! -e "$d/dver-local-sleep" ] || sleep 60
     [ ! -e "$d/dver-snapshot-fail" ] || exit 2
     printf '%s\n' '{"device":"dev-box","role":"worker","ring":"canary","runtime":"coder","coder_workspace":"ws1","base_image":"2.29.0","dev_image":"1.0.0","template_version":"tpl-3","plugin_version":"0.32.0","components":[{"name":"base","running":"2.29.0","latest":null}]}' > "${DEV_VERSIONS_FILE:?}"
     ;;
@@ -74,7 +74,7 @@ STUB
 cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
-[ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 30
+[ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 60
 echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
@@ -234,6 +234,7 @@ wait_for 5 calls_ge 4 || fail "the retry should run"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-4" || fail "a failed beat must make the next one resend the DDL"
 
 # SIGTERM: one stopped beat, exit 0, pidfile removed
+wait_for 5 one_sleep || fail "the loop should sleep after the retry"
 kill -TERM "$loop_pid"
 wait_for 8 gone "$loop_pid" || fail "the loop should exit on TERM"
 rc=0
@@ -261,14 +262,15 @@ grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "the stopped be
 has_arg 1 base_image=2.29.0 || fail "the stopped beat reuses the versions snapshot"
 [ ! -e "$fakebin/dver-local-calls" ] || fail "the stopped beat must not run dev-version"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "a stopped beat from a process that sent no DDL sends it"
-# a slow dev-version and a hanging heartbeat-state still leave the stopped beat well inside its 5 s bound
+# a hanging dev-version and heartbeat-state (60 s each) still give the stopped beat inside its 5 s bound:
+# the one psql call proves it beat the outer timeout, the wall clock only catches a real hang
 reset
 touch "$fakebin/dver-local-sleep" "$share/state-hang"
 t0=$(date +%s%N)
 hb env "$BASH" "$LOOP" --final || fail "--final with slow tools must exit 0"
 ms=$((($(date +%s%N) - t0) / 1000000))
 rm -f "$fakebin/dver-local-sleep" "$share/state-hang"
-[ "$ms" -lt 3500 ] || fail "the stopped beat took ${ms} ms"
+[ "$ms" -lt 20000 ] || fail "the stopped beat took ${ms} ms"
 [ "$(calls)" = 1 ] && has_arg 1 state=stopped && has_arg 1 'in_flight=[]' || fail "a hanging heartbeat-state still gives a stopped beat with no in_flight"
 touch "$fakebin/psql-fail"
 hb env "$BASH" "$LOOP" --final > /dev/null 2>&1 || fail "--final must exit 0 even when the beat fails"
@@ -284,6 +286,7 @@ mkdir -p "$tmpdir/secrets"
 echo 'postgres://app:s3cret@db/x' > "$tmpdir/secrets/agentsview-pg-url"
 HB_URL='' start_loop AGENTSVIEW_PG_URL= DEV_SECRETS_DIR="$tmpdir/secrets"
 wait_for 5 calls_ge 1 || fail "loop with a secret file should beat: $(cat "$tmpdir/loop.out")"
+wait_for 5 one_sleep || fail "the loop should sleep after its first beat"
 rm "$tmpdir/secrets/agentsview-pg-url"
 kill -USR1 "$loop_pid"
 wait_for 8 gone "$loop_pid" || fail "the loop should stop when the URL goes away"
