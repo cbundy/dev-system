@@ -59,6 +59,24 @@ async function refreshFactory($: EngineInterface, cwd: string) {
   await draw($)
 }
 
+// recordWindow: the session's context window size, one file per session id, which the
+// worker heartbeat pushes to the fleet with the session's liveness. Written only on a
+// change; a failed write is dropped.
+let recorded = ''
+async function recordWindow($: EngineInterface) {
+  const window = hud.context?.window
+  if (!window) return
+  try {
+    const id = await $.session.id()
+    if (recorded === `${id}=${window}`) return
+    const dir = (await $.env.get('DEV_CONTEXT_WINDOW_DIR')) || '/tmp/dev-context-window'
+    await $.fs.write(`${dir}/${id}`, `${window}\n`)
+    recorded = `${id}=${window}`
+  } catch {
+    // a missing window stays a gap in the fleet data
+  }
+}
+
 async function snapshot($: EngineInterface) {
   try {
     return await $.fs.read((await $.env.get('DEV_VERSIONS_FILE')) || '/tmp/dev-versions.json')
@@ -84,6 +102,7 @@ export const register: Register = (on, options) => {
     hud.context = usage.context
     hud.limits = usage.rateLimits
     hud.versions = versionsText((await $.session.version()).version, await snapshot($))
+    await recordWindow($)
     if (hud.isFactoryShown) {
       const url = await output($, ['git', 'remote', 'get-url', 'origin'], e.cwd)
       hud.repo = url === undefined ? undefined : repoSlug(url)
@@ -105,6 +124,7 @@ export const register: Register = (on, options) => {
     hud.limits = e.rateLimits
     await draw($)
     await alert($)
+    await recordWindow($)
 
     return next(e)
   })
