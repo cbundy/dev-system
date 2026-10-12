@@ -102,7 +102,7 @@ Inputs, not judgement. Defaults come from the factory's own data and can be set 
 | S3 | `parked` for more than the threshold | 30 min |
 | S4 | `ready to merge` for more than the threshold | 30 min |
 | S5 | `in pipeline` with no run `updated_at` for more than the threshold | 30 min |
-| S6 | the holder's worker is `stale` or `stopped` while the issue is live | `n/a` until #339 |
+| S6 | the holder's worker is `stale` or `stopped` while the issue is live | `n/a`; see [Source precedence](#source-precedence) |
 
 This replaces the hardcoded 4 hour stuck query that `metrics.md` used to carry.
 

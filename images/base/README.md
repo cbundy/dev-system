@@ -1447,8 +1447,8 @@ gap never reads as idle. It is read-only. It queries `factory.events` and the `n
 `dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
 claim comment) through `callum-flow-issue-read`, so a past `--at` is exact for the database but not for
 GitHub; `--github off` skips it. Stages, source precedence (GitHub closure first), stuck rules and
-coverage classes are defined in [`docs/factory-state.md`](../../docs/factory-state.md). A missing
-`factory.workers_status` or unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad arguments, 1 a
+coverage classes and the reader's liveness coverage are defined in
+[`docs/factory-state.md`](../../docs/factory-state.md). Unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad arguments, 1 a
 required source that cannot be read. The `factory-state` skill runs it and adds a short narrative. It is in
 the synced allow list.
 
@@ -1657,13 +1657,15 @@ fails when a configured URL has no running loop.
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`; noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
-that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`,
-`agentsview_push_not_running` (a push loop whose lock is free), `versions_snapshot_missing`, and
+that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
+(the respective container-local lock is free), `agentsview_push_not_running` (the container-local
+push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
 `latest_lookup_failing` (the background lookup has failed for over an hour). On TERM, INT or HUP the loop writes one
 last beat with `state = 'stopped'` on a best-effort basis, bounded to 5 seconds, and exits 0;
 `/usr/local/share/dev-system/heartbeat-loop --final` signals the running loop through its
-pidfile (waiting up to 8 s) or, with none running, writes that beat itself. A desktop stop has no hook, so its row
-goes `stale` after three intervals. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
+pidfile (waiting up to 8 s) and, if none is running or it has not exited after the wait,
+writes that beat itself when a URL is configured. A desktop stop has no hook, so readers use
+the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
 ## dev-query
 
