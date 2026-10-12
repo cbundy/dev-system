@@ -15,7 +15,7 @@ fail() {
 
 # Isolated from whatever sandbox an outer `npm test` exported: this suite makes its own.
 outer_events=${CALLUM_EVENTS_DIR:-}
-outer_active=${TEST_SANDBOX_ACTIVE:-}
+under_npm_test=${TEST_RESULTS_DIR:+1}
 
 (
   . "$ROOT/scripts/test-sandbox.sh"
@@ -43,7 +43,7 @@ outer_active=${TEST_SANDBOX_ACTIVE:-}
 ) || exit 1
 
 # Under `npm test` the run is sandboxed: the events dir is set and not the shared default.
-if [ "$outer_active" = 1 ]; then
+if [ "$under_npm_test" = 1 ]; then
   [ -n "$outer_events" ] || fail "CALLUM_EVENTS_DIR should be set under npm test"
   case "$outer_events" in /persist/*) fail "CALLUM_EVENTS_DIR must not be under /persist: $outer_events" ;; esac
 fi
