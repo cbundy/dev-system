@@ -4,11 +4,11 @@
 # weakening / milestone binaries and the g / m / expect_* helpers. Sourced, never run
 # by itself - its name does not match *.test.sh, so `npm test` does not pick it up.
 # The stubs read state with shell builtins (`read -r`), not a `cat` process per field.
-# The caller runs under `set -eu`. It also sets SCRIPT_DIR and keeps its own `passed` count.
+# The caller runs under `set -eu` and sets SCRIPT_DIR before sourcing. The helper initialises
+# `passed`; each suite increments it and prints the total.
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 # shellcheck disable=SC2034  # variables and helpers are used by the sourcing suites
 # shellcheck disable=SC2164  # the caller runs under set -e
-SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT="$SCRIPT_DIR/../../.."
 GUARD="$ROOT/images/base/callum-flow-merge-guard"
 MERGE="$ROOT/images/base/callum-flow-merge"
