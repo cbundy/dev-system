@@ -11,6 +11,9 @@
 # creates or deletes workspaces named next-smoke-* built from it. Promoting a change to the
 # production dev-system template is the owner's step, not this script's.
 #
+# Each push is named <git describe>-<UTC timestamp> (coder/version-name.sh), e.g.
+# v0.34.0-2-gb3ae3f3-20261012-200455, so a version in the Coder UI maps back to source.
+#
 # The token comes from the template-tester mount, which the template mounts only into a
 # workspace with the template_testing parameter on (see "Testing template changes from a
 # workspace" in README.md beside this script):
@@ -116,9 +119,11 @@ push() {
   # template_tester_secrets_dir, so no dev-system-next workspace ever mounts the token.
   set -- templates push "$TEMPLATE" --directory "$TEMPLATE_DIR" --yes \
     --variable template_tester_secrets_dir=
-  sha=$(git -C "$TEMPLATE_DIR" rev-parse --short HEAD 2>/dev/null || true)
-  [ -z "$sha" ] || set -- "$@" --message "push-next.sh from $sha"
-  echo "push-next: pushing $TEMPLATE_DIR as $TEMPLATE" >&2
+  version=$("$TEMPLATE_DIR/../version-name.sh" "$TEMPLATE_DIR")
+  message=$("$TEMPLATE_DIR/../version-name.sh" --message push-next.sh "$TEMPLATE_DIR")
+  set -- "$@" --name "$version"
+  [ -z "$message" ] || set -- "$@" --message "$message"
+  echo "push-next: pushing $TEMPLATE_DIR as $TEMPLATE (version $version)" >&2
   coder_run "$@"
 }
 

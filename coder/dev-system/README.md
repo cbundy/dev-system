@@ -38,6 +38,10 @@ values for the variables below are committed in [`terraform.tfvars`](terraform.t
 which `coder templates push` reads from this directory on every push, so no push can drop
 one. To change a value, edit that file and push both templates again. A `--variable` flag
 on a hand-run `coder templates push` still overrides the file for that push.
+Every push is named `<git describe>-<UTC timestamp>` (for example
+`v0.34.0-2-gb3ae3f3-20261012-200455`) by [`coder/version-name.sh`](../version-name.sh), so a
+version in the Coder UI maps back to a release or commit; the message says which script
+pushed it and from which branch.
 
 Telemetry goes to the `otlp_endpoint` in `terraform.tfvars` (what is collected and the
 privacy defaults are in
@@ -382,8 +386,10 @@ To develop dev-system itself from a workspace (setup, logins, and what only CI c
 
 `push-next.sh` beside this README pushes the checked-out template as a second template,
 `dev-system-next`, and can smoke-test it, so a change is tried without touching the
-`dev-system` template every other workspace uses. Run it from a workspace with the
-`template_testing` parameter on (or any machine with the token file):
+`dev-system` template every other workspace uses. Each version it pushes is named like the
+production ones (`<git describe>-<UTC timestamp>`), so
+`coder templates versions list dev-system-next` shows which commit each came from. Run it
+from a workspace with the `template_testing` parameter on (or any machine with the token file):
 
 ```bash
 coder/dev-system/push-next.sh          # push as dev-system-next

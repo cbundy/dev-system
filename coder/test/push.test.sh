@@ -41,6 +41,11 @@ run() {
   set -e
 }
 
+# valid_version_name <name>: Coder's template version name rule (at most 64 characters).
+valid_version_name() {
+  [ "${#1}" -le 64 ] && printf '%s' "$1" | grep -Eq '^[a-zA-Z0-9]+([_.-][a-zA-Z0-9]+)*$'
+}
+
 # expect_calls <template> <display name> <icon> <variable>...: one push with exactly
 # these variables (each a CSV-quoted name=value, as coder parses --variable), then one
 # edit.
@@ -53,11 +58,13 @@ expect_calls() {
     printf '%s\n' templates push "$t" --directory "$TEMPLATE_DIR" --yes
     for v in "$@"; do printf -- '--variable\n"%s"\n' "$v"; done
   } > "$tmpdir/want"
-  # The commit message is optional (no git outside a checkout).
-  sed '/^--message$/,$d' "$calls.1" > "$tmpdir/got"
+  # The version name is always there; the commit message is optional (no git outside a checkout).
+  sed '/^--name$/,$d' "$calls.1" > "$tmpdir/got"
+  want_name=$(sed -n '/^--name$/{n;p;}' "$calls.1")
+  valid_version_name "$want_name" || fail "$t: push --name invalid: '$want_name'"
   diff "$tmpdir/want" "$tmpdir/got" >&2 || fail "$t: push arguments differ (- wanted, + got)"
   case "$(sed -n '/^--message$/,$p' "$calls.1" | tr '\n' ' ')" in
-    "" | "--message push.sh from "[0-9a-f]*" ") ;;
+    "" | "--message push.sh from "*" @ "*" ") ;;
     *) fail "$t: push --message wrong: $(cat "$calls.1")" ;;
   esac
   case "$(sed -n 2p "$calls")" in
