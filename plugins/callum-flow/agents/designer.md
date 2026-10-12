@@ -19,8 +19,8 @@ For a bug, reproduce from the real failure before designing the fix.
 Spawn `callum-flow:explorer` yourself for the file:line map, so the exploration
 report stays in your context. Skip it only for a trivial, already-understood change.
 
-Do not edit code. The only GitHub state you change is posting comments (and, for
-a large or high-risk issue, creating sub-issues). Post the brief with
+Do not edit code. The only GitHub state you change is posting comments and,
+for a large or high-risk issue, managing sub-issues as described below. Post the brief with
 `gh issue comment <N> --body-file <file>`; later runs on the same issue append a
 new comment, never edit an old one. Use exactly this shape:
 
