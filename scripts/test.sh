@@ -16,6 +16,7 @@
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
+sh scripts/test-pool.sh --check-jobs || exit $?
 
 # Jobs that run first, in this order, so the longest ones start at once and set the wall time.
 # An entry that no longer exists is ignored; a suite not listed still runs.
@@ -37,8 +38,8 @@ trap 'exit 143' TERM
 
 # Shared per-run environment: anything exported here reaches every job. This is the one place
 # for it (e.g. a per-run sandbox for the jobs' event and state dirs). TMPDIR points inside the
-# results dir, so every temp file a job makes (even one an interrupted job never got to clean
-# up) is removed with it.
+# results dir, so temp files created there by jobs that honour TMPDIR (even ones an
+# interrupted job never got to clean up) are removed with it.
 mkdir "$results/tmp" || exit 1
 TEST_RESULTS_DIR=$results
 TMPDIR=$results/tmp

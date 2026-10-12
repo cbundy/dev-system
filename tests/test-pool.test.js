@@ -281,3 +281,73 @@ test("Ctrl-C on test.sh stops the backgrounded pool and leaves no stray processe
     repo.cleanup();
   }
 });
+
+test("SIGTERM on test.sh cannot launch queued jobs during descendant collection", async () => {
+  const repo = fakeRepo({
+    nodeTests: { "ok.test.js": 'require("node:test")("ok", async () => { await new Promise(r => setTimeout(r, 100)); });\n' },
+  });
+  const pidfile = path.join(repo.root, "pids");
+  const suiteDir = path.join(repo.root, "features", "test", "callum-tools");
+  for (let i = 0; i < 12; i++) {
+    fs.writeFileSync(path.join(suiteDir, `queued-${i}.test.sh`),
+      `echo $$ >> ${pidfile}; sleep 30 &\necho $! >> ${pidfile}; wait\n`);
+  }
+  let child;
+  const alive = (pid) => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+  const pids = () => fs.existsSync(pidfile)
+    ? fs.readFileSync(pidfile, "utf8").trim().split("\n").map(Number) : [];
+  try {
+    child = spawn("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      env: repo.env, stdio: "ignore", detached: true,
+    });
+    const exited = new Promise(resolve => child.on("exit", code => resolve(code)));
+    for (let i = 0; i < 200 && pids().length < 2; i++) {
+      await new Promise(r => setTimeout(r, 25));
+    }
+    assert.ok(pids().length >= 2, "fixture job did not start");
+    child.kill("SIGTERM");
+    let timeout;
+    const code = await Promise.race([
+      exited,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("test.sh did not stop within 10 seconds")), 10000);
+      }),
+    ]).finally(() => clearTimeout(timeout));
+    assert.strictEqual(code, 143);
+    for (let i = 0; i < 100 && pids().some(alive); i++) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+    for (const pid of pids()) assert.ok(!alive(pid), `queued job or child ${pid} survived cancellation`);
+    assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
+  } finally {
+    if (child) {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    }
+    repo.cleanup();
+  }
+});
+
+test("invalid TEST_JOBS emits one error before missing required mod tooling", () => {
+  const repo = fakeRepo({ nodeTests: {} });
+  try {
+    const hooks = path.join(repo.root, "plugins", "fixture", "hooks");
+    fs.mkdirSync(hooks, { recursive: true });
+    fs.writeFileSync(path.join(hooks, "hooks.json"), '{"modules":[]}');
+    // Supply normal shell tools, but deliberately omit the optional Claude CLI.
+    const bin = path.join(repo.root, "bin");
+    fs.mkdirSync(bin);
+    for (const name of ["sh", "dirname", "mktemp", "mkdir", "rm", "grep"]) {
+      const tool = spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+      fs.symlinkSync(tool, path.join(bin, name));
+    }
+    const r = spawnSync("sh", [path.join(repo.root, "scripts", "test.sh")], {
+      encoding: "utf8", env: { ...repo.env, PATH: bin, TEST_REQUIRE_CLAUDE: "1", TEST_JOBS: "0" },
+    });
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stdout, "");
+    assert.strictEqual(r.stderr, "test-pool: TEST_JOBS must be a positive integer, got '0'\n");
+    assert.deepStrictEqual(fs.readdirSync(repo.tmp), []);
+  } finally { repo.cleanup(); }
+});

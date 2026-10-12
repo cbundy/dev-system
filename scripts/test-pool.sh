@@ -2,6 +2,7 @@
 # Bounded job pool for `npm test` (scripts/test.sh).
 #
 # Usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]
+#        test-pool.sh --check-jobs (validate TEST_JOBS without starting jobs)
 #
 # Each line of <jobs-file> is a shell command: one job. At most $TEST_JOBS run at once
 # (default: the CPU count). Jobs in <serial-file> run one at a time, alone, after the pool has
@@ -20,10 +21,6 @@
 # so a parent that backgrounds it (scripts/test.sh) forwards Ctrl-C as SIGTERM.
 set -u
 
-results=${1:?usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]}
-jobs_file=${2:?usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]}
-serial_file=${3:-}
-
 cpu_count() {
   getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1
 }
@@ -39,6 +36,13 @@ case $workers in
     exit 2
     ;;
 esac
+
+# The entrypoint validates before discovery can emit unrelated diagnostics.
+[ "${1:-}" = --check-jobs ] && exit 0
+
+results=${1:?usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]}
+jobs_file=${2:?usage: test-pool.sh <results-dir> <jobs-file> [<serial-file>]}
+serial_file=${3:-}
 
 # Materialise every job as <n>.cmd, parallel jobs first.
 n=0
@@ -68,6 +72,9 @@ run_one='
 # Every descendant of this script (xargs, the jobs, whatever they spawned), deepest last.
 descendants() { # descendants <pid>
   for child in $(ps -A -o pid= -o ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+    # Freeze each parent before inspecting its children: otherwise xargs can replace
+    # a completed job with a queued one while the tree is being collected.
+    kill -STOP "$child" 2>/dev/null
     echo "$child"
     descendants "$child"
   done
@@ -75,12 +82,19 @@ descendants() { # descendants <pid>
 interrupt() {
   trap '' INT TERM
   # Stop xargs first so it starts nothing new, then everything beneath it.
-  victims=$(descendants "$$")
+  victims=""
+  if [ -n "$active" ]; then
+    kill -STOP "$active" 2>/dev/null
+    victims="$active $(descendants "$active")"
+  fi
   # shellcheck disable=SC2086
   [ -n "$victims" ] && kill -TERM $victims 2>/dev/null
+  # Stopped processes must resume to handle the pending termination signal.
+  [ -n "$victims" ] && kill -CONT $victims 2>/dev/null
   wait
   exit "$1"
 }
+active=""
 trap 'interrupt 130' INT
 trap 'interrupt 143' TERM
 
@@ -88,14 +102,18 @@ if [ "$pool_count" -gt 0 ]; then
   i=0
   while [ "$i" -lt "$pool_count" ]; do i=$((i + 1)); echo "$i"; done |
     xargs -n 1 -P "$workers" sh -c "$run_one" sh "$results" &
-  wait $!
+  active=$!
+  wait "$active"
+  active=""
 fi
 
 i=$pool_count
 while [ "$i" -lt "$total" ]; do
   i=$((i + 1))
   sh -c "$run_one" sh "$results" "$i" &
-  wait $!
+  active=$!
+  wait "$active"
+  active=""
 done
 
 failed=0
