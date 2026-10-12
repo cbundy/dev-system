@@ -72,7 +72,7 @@ generic `permissions.allow` and `permissions.deny` lists the implement-issue/orc
 (`no-mistakes axi run/rerun/abort/sync/status`, `no-mistakes runs`/`axi logs`,
 `treehouse get/return/status`, `gh issue comment/edit/close/create`, `gh pr view/pr checks/pr list`,
 `callum-flow-issue-read` (the one filtered reader of issue, comment and PR text),
-`callum-flow-merge-guard`, the check-only merge guard, `callum-flow-rollout`, the read-only
+`callum-flow-merge-guard` (see its [mode reference](../images/base/README.md#factory-event-log)), `callum-flow-rollout`, the read-only
 Rollout lookup the guard derives its linkage expectation from, and the read-only
 `check-pr-linkage.sh`) - see
 dev-system#44. This list exists here, not as plugin-shipped permissions, because a
@@ -116,7 +116,7 @@ values are compared whole):
   define counts as repo-owned and is kept, and every current `permissions.allow` entry
   is unioned in.
 - **Never here**: powers that must stay orchestrator-only in the main checkout -
-  `gh pr merge`, `callum-flow-merge` (the guarded merge; only the check-only
+  `gh pr merge`, `callum-flow-merge` (the guarded merge; only
   `callum-flow-merge-guard` is synced), `callum-flow-fix-linkage` (the linkage repair; only
   the read-only `check-pr-linkage.sh` is synced), `gh pr edit`, `no-mistakes axi respond`, and any pipeline/queue
   watcher script. Keep those as `allow` entries in the gitignored, uncommitted
