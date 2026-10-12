@@ -49,6 +49,11 @@ cleanup() {
     kill -9 $(cat "$f") 2>/dev/null || true
   done
   for p in ${decoys-}; do kill "$p" 2>/dev/null || true; done
+  # a decoy's own sleep, which killing the decoy leaves running for 300s
+  for f in "$tmpdir"/decoy/*.sleep-pid; do
+    [ -f "$f" ] || continue
+    kill $(cat "$f") 2>/dev/null || true
+  done
   rm -rf "$tmpdir"
 }
 trap cleanup EXIT
@@ -321,7 +326,8 @@ A="--repo o/r --label ready --interval 1"
 mkdir -p "$tmpdir/decoy"
 decoys=
 for n in queue-watch.sh pipeline-watch.sh orchestrator-watch.sh; do
-  printf '#!/bin/sh\nsleep 300 &\nwait\n' > "$tmpdir/decoy/$n"
+  # shellcheck disable=SC2016 # $! and $0 are the decoy's own, expanded when it runs
+  printf '#!/bin/sh\nsleep 300 &\necho $! > "$0.sleep-pid"\nwait\n' > "$tmpdir/decoy/$n"
   chmod +x "$tmpdir/decoy/$n"
   "$tmpdir/decoy/$n" > /dev/null 2>&1 &
   decoys="$decoys $!"
