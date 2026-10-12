@@ -47,3 +47,10 @@ test("split sub-issues inherit ready in the designer and the orchestrator skill"
   assert.ok(!skill.includes("wait for the owner to tag each split sub-issue"));
   assert.ok(!skill.includes("into unlabelled sub-issues, stop"));
 });
+
+test("issue-orchestrator SKILL.md step 3 routes the implementer model", () => {
+  const skill = path.join(__dirname, "..", "plugins", "callum-flow", "skills", "issue-orchestrator", "SKILL.md");
+  const text = fs.readFileSync(skill, "utf8").replace(/\s+/g, " ");
+  const step3 = text.slice(text.indexOf("3. **Delegate**"), text.indexOf("4. **Verify and merge**"));
+  assert.ok(step3.includes("callum-flow-implementer-route"));
+});
