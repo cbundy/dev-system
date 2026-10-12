@@ -1,0 +1,133 @@
+#!/bin/sh
+#
+# Plain-shell tests for callum-flow-merge (cbundy/dev-system#219, #403). The shared stubs
+# and real local origin live in merge-guard-lib.sh; the guard cases are in
+# merge-guard.test.sh (split out by cbundy/dev-system#480 to keep each file under 30s).
+# shellcheck disable=SC2015  # A && B || fail is the idiom here
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/merge-guard-lib.sh"
+
+# merge refuses on a worktree head mismatch (moved here from merge-guard.test.sh)
+reset
+git -C "$work" commit -q --allow-empty -m unpushed
+m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on worktree mismatch: $rc $out"; fi
+git -C "$work" reset -q --hard "$SHA"
+passed=$((passed + 1))
+
+reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - x'; m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ]; then fail "merge passes options through and refuses a closing PR on run-it: $rc $out"; fi
+passed=$((passed + 1))
+
+for mode in derived explicit skip; do
+  reset; echo epic-x > "$st/base"; echo '[]' > "$st/closing"
+  set -- --base epic-x
+  case "$mode" in
+    explicit) set -- "$@" --expect closing ;;
+    skip) skip; set -- "$@" --issue 12 ;;
+  esac
+  m 7 "$@"
+  [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
+  case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
+  if ! { [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ]; }; then
+    fail "epic merge or event missing"
+  fi
+  passed=$((passed + 1))
+done
+for rollout in run-it keep-open; do
+  reset; echo epic-x > "$st/base"; issue_brief "$rollout - x"; echo refs > "$st/linkage-actual"
+  m 7 --base epic-x
+  expect_pass "epic $rollout does not request closure"
+done
+reset; echo epic-x > "$st/base"; touch "$st/merge-refuse"; m 7 --base epic-x
+if ! { [ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ]; }; then
+  fail "refused epic merge requested closure: $rc $out"
+fi
+passed=$((passed + 1))
+
+# merge: pass
+reset; m 7
+[ "$rc" = 0 ] || fail "merge pass: exit $rc out=$out"
+[ -z "$out" ] || fail "default base should not request manual closure: $out"
+[ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
+[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
+jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+
+# merge: milestone tagging (cbundy/dev-system#403) runs once after the merge and never fails it
+[ "$(cat "$st/milestone-calls")" = "tag 7" ] || fail "tag call: $(cat "$st/milestone-calls" 2> /dev/null)"
+! grep -q 'milestone tagging failed' "$tmpdir/err" || fail "no warning expected on success: $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+reset; echo 1 > "$st/milestone-rc"; m 7
+[ "$rc" = 0 ] || fail "a failing tag must not fail the merge: $rc $out"
+grep -q '^callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
+[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
+passed=$((passed + 1))
+reset; MILESTONE_BIN="$tmpdir/does-not-exist" m 7
+MILESTONE_BIN=''
+[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" || fail "a missing helper only warns: $rc $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+# the real helper against a gh that fails every milestone call after the merge
+reset; MILESTONE_BIN="$MILESTONE_REAL" m 7
+MILESTONE_BIN=''
+[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" && [ -f "$st/gh-calls" ] || fail "a gh failure in tagging only warns: $rc $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+# guard failure and a refused merge never tag
+reset; echo '[]' > "$st/checks"; m 7
+[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a guard failure must not tag: $rc"
+reset; touch "$st/merge-refuse"; m 7
+[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a refused merge must not tag: $rc"
+passed=$((passed + 1))
+
+# merge: WARN relayed to stderr, one test_weakened event per WEAKENED line (restored ones too)
+reset; printf '%s\n%s\n' "$W1" "$W2" > "$st/weakening"; m 7
+[ "$rc" = 0 ] || fail "merge with weakening: $rc $out"
+grep -q '^GUARD test-weakening WARN ' "$tmpdir/err" || fail "WARN not relayed to stderr: $(cat "$tmpdir/err")"
+[ -f "$st/gh-calls" ] || fail "a WARN must not stop the merge"
+[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 2 ] || fail "two test_weakened events expected: $(cat "$events/o__r.jsonl")"
+jq -e -s --arg sha "$SHA" '.[] | select(.state == "test_weakened") | select(.note == ("step=ci commit=" + ($sha[0:7]) + " restored=no kinds=removed-assertion,warn-only files=tests/a.test.js,tests/b.test.sh")) | select(.pr == 7 and .issue == 12 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1")' "$events/o__r.jsonl" > /dev/null || fail "first test_weakened event: $(cat "$events/o__r.jsonl")"
+jq -e -s '.[] | select(.state == "test_weakened") | select(.note == "step=review commit=1234567 restored=yes kinds=skip files=tests/c.test.js")' "$events/o__r.jsonl" > /dev/null || fail "restored test_weakened event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+reset; printf '%s\n' "$W1" > "$st/weakening"; touch "$st/merge-refuse"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "a refused merge must log no test_weakened event: $rc $(cat "$events/o__r.jsonl" 2> /dev/null)"; fi
+reset; m 7
+[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 0 ] || fail "nothing flagged, no event"
+passed=$((passed + 1))
+
+# merge: method override, flag and env
+reset; m 7 --base main --expect closing; expect_pass "explicit default base does not request closure"
+reset; m 7 --method rebase; grep -q -- '--rebase' "$st/gh-calls" || fail "--method rebase"
+reset; CALLUM_FLOW_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
+reset; m 7 --method bogus; [ "$rc" = 2 ] || fail "bad method exits 2"
+passed=$((passed + 1))
+
+# merge: guard failure merges nothing and logs nothing
+reset; echo '[]' > "$st/checks"; m 7
+if [ "$rc" != 1 ]; then fail "merge on fail: $rc $out"; fi
+printf '%s' "$out" | grep -q '^GUARD checks FAIL' || fail "merge on fail: $out"
+if [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on fail must not merge or log"; fi
+passed=$((passed + 1))
+
+# merge: refused by GitHub, head moved
+reset; touch "$st/merge-refuse"; printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > "$st/refuse-prhead"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (head moved): $rc"; fi
+grep -q "head moved since the check (verified $(printf %.7s "$SHA"), now bbbbbbb) - re-gate" "$tmpdir/err" || fail "head moved message: $(cat "$tmpdir/err")"
+grep -q 'GraphQL: refused' "$tmpdir/err" || fail "gh stderr should still show: $(cat "$tmpdir/err")"
+passed=$((passed + 1))
+
+# merge: refused by GitHub, head unchanged but the branch fell behind
+reset; touch "$st/merge-refuse"; echo BEHIND > "$st/refuse-mss"; m 7
+if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (behind): $rc"; fi
+grep -q "GitHub refused: merge state BEHIND (branch rule) - see the guard's mergeable action" "$tmpdir/err" || fail "behind message: $(cat "$tmpdir/err")"
+grep -q 'head moved' "$tmpdir/err" && fail "unmoved head must not say head moved"
+passed=$((passed + 1))
+
+# merge: a guard failing on mergeable never calls gh pr merge
+reset; echo BEHIND > "$st/mss"; m 7
+if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on behind: $rc $out"; fi
+printf '%s' "$out" | grep -q '^GUARD mergeable FAIL behind' || fail "merge on behind: $out"
+passed=$((passed + 1))
+
+echo "merge: $passed groups passed"

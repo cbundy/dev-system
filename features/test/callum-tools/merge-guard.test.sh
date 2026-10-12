@@ -1,240 +1,13 @@
 #!/bin/sh
 #
-# Plain-shell tests for callum-flow-merge-guard and callum-flow-merge
-# (cbundy/dev-system#219). Stub gh / no-mistakes / linkage script, a real local
-# bare repo as origin so the fetch and rev-parse are real. Hermetic PATH, no
-# network, no Docker, so `npm test` runs it anywhere.
+# Plain-shell tests for callum-flow-merge-guard (cbundy/dev-system#219). The shared stubs
+# and real local origin live in merge-guard-lib.sh; the callum-flow-merge cases are in
+# merge.test.sh (split out by cbundy/dev-system#480 to keep each file under 30s).
 # shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-ROOT="$SCRIPT_DIR/../../.."
-GUARD="$ROOT/images/base/callum-flow-merge-guard"
-MERGE="$ROOT/images/base/callum-flow-merge"
-MILESTONE_REAL="$ROOT/images/base/callum-flow-milestone"
-EVENT="$ROOT/images/base/callum-flow-event"
-ROLLOUT="$ROOT/images/base/callum-flow-rollout"
-READER="$ROOT/images/base/callum-flow-issue-read"
-SHARE="$ROOT/images/base"
-
-fail() {
-  echo "FAIL: $*" >&2
-  exit 1
-}
-
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-toolbin="$tmpdir/tools"
-mkdir -p "$toolbin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep rm touch chmod hostname ls sleep; do
-  p=$(command -v "$t") || fail "$t not found"
-  ln -s "$p" "$toolbin/$t"
-done
-SH=$(command -v sh)
-
-# --- real origin with a branch ------------------------------------------------
-export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-origin="$tmpdir/origin.git"
-work="$tmpdir/work"
-git init -q --bare "$origin"
-git init -q "$work"
-(
-  cd "$work"
-  git remote add origin "$origin"
-  git commit -q --allow-empty -m base
-  git push -q origin HEAD:refs/heads/main
-  git push -q origin HEAD:refs/heads/epic-x
-  git checkout -q -b feat/issue-12-x
-  git commit -q --allow-empty -m work
-  git push -q origin feat/issue-12-x
-)
-B=feat/issue-12-x
-cd "$work"
-SHA=$(git -C "$work" rev-parse HEAD)
-
-# --- stubs: state lives in $st, one file per knob ---------------------------
-st="$tmpdir/state"
-cat > "$tmpdir/gh" <<'STUB'
-#!/bin/sh
-d=${STUB_DIR:?}
-r() { cat "$d/$1"; }
-OWNER='{"login":"cbundy","id":13131067}'
-if [ "$1" = api ]; then
-  shift
-  [ "$1" != --paginate ] || shift
-  case "$1" in
-    repos/o/r/pulls/7)
-      # the PR as REST returns it; pauthor overrides the owner
-      jq -n --argjson u "$(if [ -f "$d/pauthor" ]; then cat "$d/pauthor"; else echo "$OWNER"; fi)" '{number: 7, state: "open", title: "t", body: "b", user: $u}' ;;
-    repos/o/r/issues/12)
-      jq --argjson u "$OWNER" '{number: 12, state: "open", title: "t", body: .body, user: $u, labels: []}' "$d/issue.json" ;;
-    repos/o/r/issues/12/comments)
-      jq --argjson u "$OWNER" '.comments | to_entries | map({id: (.key + 1), user: (.value.user // $u), body: .value.body})' "$d/issue.json" ;;
-    *) echo "no fixture for $1" >&2; exit 1 ;;
-  esac
-  exit
-fi
-case "$1 $2" in
-  'pr view')
-    case "$*" in
-      *closingIssuesReferences*) jq -n --rawfile b "$d/body" --argjson c "$(r closing)" '{body:$b, closingIssuesReferences:($c | map({number:.}))}' ;;
-      *)
-        # reads counted, so a test can see how often the guard re-queried
-        n=$(( $(cat "$d/view-count" 2> /dev/null || echo 0) + 1 )); echo "$n" > "$d/view-count"
-        mss=$(r mss)
-        if [ -f "$d/mss-seq" ]; then mss=$(sed -n "${n}p" "$d/mss-seq"); [ -n "$mss" ] || mss=$(tail -n 1 "$d/mss-seq"); fi
-        printf '{"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"%s","isDraft":%s,"mergeable":"%s","mergeStateStatus":"%s"}\n' \
-          "$(r branch)" "$(r prhead)" "$(r base)" "$(r pstate)" "$(r isdraft)" "$(r pmergeable)" "$mss" ;;
-    esac ;;
-  'issue view') cat "$d/issue.json" ;;
-  'pr checks') cat "$d/checks"; [ ! -f "$d/checks-rc" ] || exit "$(r checks-rc)" ;;
-  'repo view') echo main ;;
-  'pr merge')
-    echo "$*" >> "$d/gh-calls"
-    if [ -f "$d/merge-refuse" ]; then
-      echo "GraphQL: refused" >&2
-      # the world after the refusal: a moved head and/or a new merge state
-      [ ! -f "$d/refuse-prhead" ] || cat "$d/refuse-prhead" > "$d/prhead"
-      [ ! -f "$d/refuse-mss" ] || { cat "$d/refuse-mss" > "$d/mss"; rm -f "$d/mss-seq"; }
-      exit 1
-    fi ;;
-  *) echo "unexpected gh $*" >&2; exit 1 ;;
-esac
-STUB
-# no-mistakes, replaying the real v1.84 shapes: `runs` rows carry no run id
-# (status, branch, short head, date, url, then a hint line), `axi status` from
-# a checkout whose branch has a run prints its `run:` detail, from any other
-# checkout the runs[N]{id,branch,status,head,pr} table, and `axi status --run
-# ID` the same nested `run:` detail. The watcher calls `no-mistakes` from PATH
-# (the guard's NM binary is only used for the status probe), so both resolve
-# to this stub.
-cat > "$tmpdir/nm" <<'STUB'
-#!/bin/sh
-d=${STUB_DIR:?}
-[ ! -e "$d/nm-fail" ] || exit 1
-b=$(cat "$d/branch")
-h=$(cut -c1-8 "$d/runhead")
-detail() {
-  case "$1" in
-    RUN9) printf 'run:\n  id: "RUN9"\n  branch: other/b\n  status: completed\n  head: abc12345\n  head_sha: zzz\n' ;;
-    RUN1) printf 'run:\n  id: "RUN1"\n  branch: %s\n  status: %s\n  head: %s\n  head_sha: %s\n  steps[1]{step,status}:\n    %s\nbranch_sync:\n' "$b" "$(cat "$d/runstatus")" "$h" "$(cat "$d/runhead")" "$(cat "$d/step")" ;;
-    *) return 1 ;;
-  esac
-}
-case "$1 $2" in
-  'runs --limit')
-    printf '  %-12s %s %s  2026-01-01 10:00  https://example.test/pull/1\n' completed other/b abc12345
-    [ -e "$d/norun" ] || printf '  %-12s %s %s  2026-01-02 10:00  https://example.test/pull/7\n' "$(cat "$d/runstatus")" "$b" "$h"
-    printf '\n  (1 more runs, use --limit to see more)\n' ;;
-  'axi status')
-    if [ "$3" = --run ]; then detail "$4"; exit; fi
-    if [ "$(git rev-parse --abbrev-ref HEAD)" = "$b" ] && [ ! -e "$d/table" ] && [ ! -e "$d/norun" ]; then detail RUN1; exit; fi
-    printf 'current_branch: main\nruns_on_current_branch: 0\ncount: 2 of 2 total\nruns[2]{id,branch,status,head,pr}:\n'
-    [ -e "$d/norun" ] || printf '  "RUN1",%s,%s,%s,"https://example.test/pull/7"\n' "$b" "$(cat "$d/runstatus")" "\"$h\""
-    printf '  "RUN9",other/b,completed,"069be137","https://example.test/pull/1"\nhelp[1]: ...\n' ;;
-  *) exit 1 ;;
-esac
-STUB
-cat > "$tmpdir/linkage" <<'STUB'
-#!/bin/sh
-# linkage-actual: what the PR really does (closing|refs); the stub checks it against --expect
-if [ -f "${STUB_DIR:?}/linkage-actual" ]; then
-  if [ "$3" = "$(cat "$STUB_DIR/linkage-actual")" ]; then echo "MATCH #7 issue=#12 expect=$3"; exit 0; fi
-  echo "MISMATCH #7 issue=#12 expect=$3"; exit 1
-fi
-cat "${STUB_DIR:?}/linkage"
-exit "$(cat "$STUB_DIR/linkage-rc")"
-STUB
-# the test-weakening detector (cbundy/dev-system#314): its output and exit code are set per test
-cat > "$tmpdir/weakening" <<'STUB'
-#!/bin/sh
-d=${STUB_DIR:?}
-echo "$*" > "$d/weakening-args"
-[ ! -f "$d/weakening" ] || cat "$d/weakening"
-[ ! -f "$d/weakening-rc" ] || exit "$(cat "$d/weakening-rc")"
-exit 0
-STUB
-# callum-flow-milestone (cbundy/dev-system#403): records its calls; milestone-rc sets its exit code
-cat > "$tmpdir/milestone" <<'STUB'
-#!/bin/sh
-d=${STUB_DIR:?}
-echo "$*" >> "$d/milestone-calls"
-[ ! -f "$d/milestone-rc" ] || exit "$(cat "$d/milestone-rc")"
-exit 0
-STUB
-chmod +x "$tmpdir/milestone" "$tmpdir/gh" "$tmpdir/nm" "$tmpdir/linkage" "$tmpdir/weakening"
-ln -s "$tmpdir/nm" "$toolbin/no-mistakes"
-WATCH="$ROOT/features/src/callum-tools/pipeline-watch.sh"
-
-events="$tmpdir/events"
-passed=0
-
-reset() {
-  rm -rf "$st" "$events"
-  mkdir -p "$st"
-  printf '%s\n' "$B" > "$st/branch"
-  printf '%s\n' "$SHA" > "$st/prhead"
-  printf '%s\n' main > "$st/base"
-  printf '%s\n' "$SHA" > "$st/runhead"
-  printf '%s\n' running > "$st/runstatus"
-  printf '%s\n' 'ci,completed' > "$st/step"
-  printf '%s\n' '[{"name":"ci","bucket":"pass"}]' > "$st/checks"
-  printf '%s\n' 'MATCH #7 issue=#12 expect=closing via=api actual=[12]' > "$st/linkage"
-  echo 0 > "$st/linkage-rc"
-  printf '%s\n' 'Closes #12' > "$st/body"
-  printf '%s\n' '[12]' > "$st/closing"
-  printf '%s\n' OPEN > "$st/pstate"
-  printf '%s\n' MERGEABLE > "$st/pmergeable"
-  printf '%s\n' false > "$st/isdraft"
-  printf '%s\n' CLEAN > "$st/mss"
-  # the issue: no brief, no Run it heading, so Rollout is merge
-  printf '%s\n' '{"body":"A plain bug.","comments":[]}' > "$st/issue.json"
-  ROLLOUT_BIN=''
-}
-# issue_brief <rollout-line> [body]: the issue has a design brief with that Rollout
-issue_brief() {
-  jq -n --arg r "$1" --arg b "${2-A plain bug.}" '{body:$b, comments:[{body:("## Design brief\n\n## Rollout\n" + $r + "\n\n## Open decisions\nnone")}]}' > "$st/issue.json"
-}
-
-# the real reader behind the stub gh
-export CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" CALLUM_FLOW_REPO=o/r CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 CALLUM_FLOW_EVENT_BIN="$tmpdir/noevent" CALLUM_FLOW_WEAKENING_BIN="$tmpdir/weakening"
-
-# g <args...>: run the guard; sets out, rc
-g() {
-  rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
-}
-m() {
-  rc=0
-  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/nm" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$WATCH" NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_GUARD_BIN="$GUARD" CALLUM_FLOW_MILESTONE_BIN="${MILESTONE_BIN:-$tmpdir/milestone}" \
-    CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 \
-    CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r \
-    "$SH" "$MERGE" "$@" 2> "$tmpdir/err") || rc=$?
-}
-cat > "$tmpdir/event" <<STUB
-#!/bin/sh
-PATH="$toolbin" exec "$SH" "$EVENT" "\$@"
-STUB
-chmod +x "$tmpdir/event"
-
-# expect_fail <name> <guard>...: exit 1 and exactly those GUARD lines
-expect_fail() {
-  name=$1
-  shift
-  [ "$rc" = 1 ] || fail "$name: exit $rc, out=$out"
-  [ "$(printf '%s\n' "$out" | grep -c '^GUARD ')" = "$#" ] || fail "$name: wrong line count: $out"
-  for want in "$@"; do
-    printf '%s\n' "$out" | grep -q "^GUARD $want FAIL " || fail "$name: missing $want: $out"
-  done
-  passed=$((passed + 1))
-}
-expect_pass() {
-  if [ "$rc" != 0 ] || [ -n "$out" ]; then fail "$1: exit $rc out=$out"; fi
-  passed=$((passed + 1))
-}
+. "$SCRIPT_DIR/merge-guard-lib.sh"
 
 reset; g 7; expect_pass "all pass"
 reset; g 7 --run RUN1; expect_pass "explicit run"
@@ -245,8 +18,6 @@ LOCAL=$(git -C "$work" rev-parse HEAD)
 g 7; expect_fail "worktree ahead, automatic run" head
 printf '%s' "$out" | grep -q "worktree=$LOCAL" || fail "worktree head missing: $out"
 g 7 --run RUN1; expect_fail "worktree ahead, explicit run" head
-m 7
-if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on worktree mismatch: $rc $out"; fi
 git -C "$work" reset -q --hard "$SHA"
 reset
 git -C "$work" reset -q --hard HEAD^
@@ -346,8 +117,6 @@ passed=$((passed + 1))
 
 
 # SKIP: the branch names no issue, so --issue N and the PR linkage decide
-skip() { echo 'SKIP #7 feat' > "$st/linkage"; }
-refs_issue() { issue_brief 'keep-open - one part of several'; }
 reset; skip; g 7; expect_fail "skip without --issue" linkage
 reset; skip; g 7 --issue 12; expect_pass "skip default base, closes N"
 reset; skip; echo '[13]' > "$st/closing"; g 7 --issue 12; expect_fail "skip default base, closes other" linkage
@@ -384,9 +153,6 @@ reset; ROLLOUT_BIN=/bin/false; g 7; expect_fail "derivation failure" rollout
 reset; echo 'not json' > "$st/issue.json"; g 7; expect_fail "unreadable issue" rollout
 reset; echo bogus/branch > "$st/branch"; echo 'SKIP #7 feat' > "$st/linkage"; g 7; expect_fail "no issue to derive from" rollout head
 reset; issue_brief 'run-it - x'; echo 'SKIP #7 feat' > "$st/linkage"; echo '[]' > "$st/closing"; echo 'Refs #12' > "$st/body"; g 7 --issue 12; expect_pass "--issue drives the derivation"
-reset; echo closing > "$st/linkage-actual"; issue_brief 'run-it - x'; m 7
-if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ]; then fail "merge passes options through and refuses a closing PR on run-it: $rc $out"; fi
-passed=$((passed + 1))
 
 # epic base
 reset; echo epic-x > "$st/base"; g 7; expect_fail "epic without --base" base
@@ -396,38 +162,10 @@ done
 reset; echo epic-x > "$st/base"; g 7 --base epic-x; expect_pass "epic with --base"
 reset; echo epic-x > "$st/base"; g 7 --base wrong; expect_fail "epic with incorrect --base" base
 case "$out" in *"rerun with --base epic-x"*) ;; *) fail "incorrect override recovery missing: $out" ;; esac
-for mode in derived explicit skip; do
-  reset; echo epic-x > "$st/base"; echo '[]' > "$st/closing"
-  set -- --base epic-x
-  case "$mode" in
-    explicit) set -- "$@" --expect closing ;;
-    skip) skip; set -- "$@" --issue 12 ;;
-  esac
-  m 7 "$@"
-  [ "$rc" = 0 ] || fail "epic merge failed: $rc $out"
-  case "$out" in *"Close issue #12 by hand with a comment naming merged PR #7"*) ;; *) fail "epic closure instruction missing: $out" ;; esac
-  if ! { [ -f "$st/gh-calls" ] && [ -f "$events/o__r.jsonl" ]; }; then
-    fail "epic merge or event missing"
-  fi
-  passed=$((passed + 1))
-done
-for rollout in run-it keep-open; do
-  reset; echo epic-x > "$st/base"; issue_brief "$rollout - x"; echo refs > "$st/linkage-actual"
-  m 7 --base epic-x
-  expect_pass "epic $rollout does not request closure"
-done
-reset; echo epic-x > "$st/base"; touch "$st/merge-refuse"; m 7 --base epic-x
-if ! { [ "$rc" = 1 ] && [ -z "$out" ] && [ ! -e "$events" ]; }; then
-  fail "refused epic merge requested closure: $rc $out"
-fi
-passed=$((passed + 1))
-
 # awaiting_ in free text is not a parked step
 reset; echo 'note: use awaiting_approval to park' > "$st/step"; g 7; expect_pass "awaiting_ only in free text"
 
 # test-weakening (cbundy/dev-system#314): advisory, never fails the guard
-W1="WEAKENED commit=${SHA} step=ci restored=no files=tests/a.test.js,tests/b.test.sh kinds=removed-assertion,warn-only"
-W2="WEAKENED commit=1234567890abcdef1234567890abcdef12345678 step=review restored=yes files=tests/c.test.js kinds=skip"
 reset; g 7; expect_pass "no weakening"
 [ "$(cat "$st/weakening-args")" = "--base origin/main --head $SHA" ] || fail "detector arguments: $(cat "$st/weakening-args")"
 reset; printf '%s\n' "$W1" > "$st/weakening"; g 7
@@ -454,89 +192,6 @@ for args in "7 --expect closes" "7 --bogus" "" "x"; do
   PATH="$toolbin" "$SH" "$GUARD" $args > /dev/null 2>&1 || rc=$?
   [ "$rc" = 2 ] || fail "usage '$args' should exit 2, got $rc"
 done
-passed=$((passed + 1))
-
-# merge: pass
-reset; m 7
-[ "$rc" = 0 ] || fail "merge pass: exit $rc out=$out"
-[ -z "$out" ] || fail "default base should not request manual closure: $out"
-[ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $SHA" ] || fail "merge call: $(cat "$st/gh-calls")"
-[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "one merged event expected"
-jq -e --arg sha "$SHA" '.state == "merged" and .pr == 7 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1" and .issue == 12' "$events/o__r.jsonl" > /dev/null || fail "event: $(cat "$events/o__r.jsonl")"
-passed=$((passed + 1))
-
-# merge: milestone tagging (cbundy/dev-system#403) runs once after the merge and never fails it
-[ "$(cat "$st/milestone-calls")" = "tag 7" ] || fail "tag call: $(cat "$st/milestone-calls" 2> /dev/null)"
-! grep -q 'milestone tagging failed' "$tmpdir/err" || fail "no warning expected on success: $(cat "$tmpdir/err")"
-passed=$((passed + 1))
-reset; echo 1 > "$st/milestone-rc"; m 7
-[ "$rc" = 0 ] || fail "a failing tag must not fail the merge: $rc $out"
-grep -q '^callum-flow-merge: warning: milestone tagging failed - the release reconcile step will catch it$' "$tmpdir/err" || fail "tag failure warning: $(cat "$tmpdir/err")"
-[ "$(wc -l < "$events/o__r.jsonl" | tr -d ' ')" = 1 ] || fail "merged event must still be recorded"
-passed=$((passed + 1))
-reset; MILESTONE_BIN="$tmpdir/does-not-exist" m 7
-MILESTONE_BIN=''
-[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" || fail "a missing helper only warns: $rc $(cat "$tmpdir/err")"
-passed=$((passed + 1))
-# the real helper against a gh that fails every milestone call after the merge
-reset; MILESTONE_BIN="$MILESTONE_REAL" m 7
-MILESTONE_BIN=''
-[ "$rc" = 0 ] && grep -q 'milestone tagging failed' "$tmpdir/err" && [ -f "$st/gh-calls" ] || fail "a gh failure in tagging only warns: $rc $(cat "$tmpdir/err")"
-passed=$((passed + 1))
-# guard failure and a refused merge never tag
-reset; echo '[]' > "$st/checks"; m 7
-[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a guard failure must not tag: $rc"
-reset; touch "$st/merge-refuse"; m 7
-[ "$rc" = 1 ] && [ ! -e "$st/milestone-calls" ] || fail "a refused merge must not tag: $rc"
-passed=$((passed + 1))
-
-# merge: WARN relayed to stderr, one test_weakened event per WEAKENED line (restored ones too)
-reset; printf '%s\n%s\n' "$W1" "$W2" > "$st/weakening"; m 7
-[ "$rc" = 0 ] || fail "merge with weakening: $rc $out"
-grep -q '^GUARD test-weakening WARN ' "$tmpdir/err" || fail "WARN not relayed to stderr: $(cat "$tmpdir/err")"
-[ -f "$st/gh-calls" ] || fail "a WARN must not stop the merge"
-[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 2 ] || fail "two test_weakened events expected: $(cat "$events/o__r.jsonl")"
-jq -e -s --arg sha "$SHA" '.[] | select(.state == "test_weakened") | select(.note == ("step=ci commit=" + ($sha[0:7]) + " restored=no kinds=removed-assertion,warn-only files=tests/a.test.js,tests/b.test.sh")) | select(.pr == 7 and .issue == 12 and .branch == "feat/issue-12-x" and .head == $sha and .run_id == "RUN1")' "$events/o__r.jsonl" > /dev/null || fail "first test_weakened event: $(cat "$events/o__r.jsonl")"
-jq -e -s '.[] | select(.state == "test_weakened") | select(.note == "step=review commit=1234567 restored=yes kinds=skip files=tests/c.test.js")' "$events/o__r.jsonl" > /dev/null || fail "restored test_weakened event: $(cat "$events/o__r.jsonl")"
-passed=$((passed + 1))
-reset; printf '%s\n' "$W1" > "$st/weakening"; touch "$st/merge-refuse"; m 7
-if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "a refused merge must log no test_weakened event: $rc $(cat "$events/o__r.jsonl" 2> /dev/null)"; fi
-reset; m 7
-[ "$(jq -s '[.[] | select(.state == "test_weakened")] | length' "$events/o__r.jsonl")" = 0 ] || fail "nothing flagged, no event"
-passed=$((passed + 1))
-
-# merge: method override, flag and env
-reset; m 7 --base main --expect closing; expect_pass "explicit default base does not request closure"
-reset; m 7 --method rebase; grep -q -- '--rebase' "$st/gh-calls" || fail "--method rebase"
-reset; CALLUM_FLOW_MERGE_METHOD=merge m 7; grep -q -- ' --merge ' "$st/gh-calls" || fail "env method"
-reset; m 7 --method bogus; [ "$rc" = 2 ] || fail "bad method exits 2"
-passed=$((passed + 1))
-
-# merge: guard failure merges nothing and logs nothing
-reset; echo '[]' > "$st/checks"; m 7
-if [ "$rc" != 1 ]; then fail "merge on fail: $rc $out"; fi
-printf '%s' "$out" | grep -q '^GUARD checks FAIL' || fail "merge on fail: $out"
-if [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on fail must not merge or log"; fi
-passed=$((passed + 1))
-
-# merge: refused by GitHub, head moved
-reset; touch "$st/merge-refuse"; printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' > "$st/refuse-prhead"; m 7
-if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (head moved): $rc"; fi
-grep -q "head moved since the check (verified $(printf %.7s "$SHA"), now bbbbbbb) - re-gate" "$tmpdir/err" || fail "head moved message: $(cat "$tmpdir/err")"
-grep -q 'GraphQL: refused' "$tmpdir/err" || fail "gh stderr should still show: $(cat "$tmpdir/err")"
-passed=$((passed + 1))
-
-# merge: refused by GitHub, head unchanged but the branch fell behind
-reset; touch "$st/merge-refuse"; echo BEHIND > "$st/refuse-mss"; m 7
-if [ "$rc" != 1 ] || [ -e "$events" ]; then fail "refused merge (behind): $rc"; fi
-grep -q "GitHub refused: merge state BEHIND (branch rule) - see the guard's mergeable action" "$tmpdir/err" || fail "behind message: $(cat "$tmpdir/err")"
-grep -q 'head moved' "$tmpdir/err" && fail "unmoved head must not say head moved"
-passed=$((passed + 1))
-
-# merge: a guard failing on mergeable never calls gh pr merge
-reset; echo BEHIND > "$st/mss"; m 7
-if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge on behind: $rc $out"; fi
-printf '%s' "$out" | grep -q '^GUARD mergeable FAIL behind' || fail "merge on behind: $out"
 passed=$((passed + 1))
 
 # the dry-run guard never merges or logs
