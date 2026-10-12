@@ -164,7 +164,7 @@ test("CLI: --image rejects a prerelease or build suffix publish-base-image.yml w
   for (const image of ["2.29.0-rc.1", "2.29.0+build.5"]) {
     const r = cli(root, ["4.0.0", "--image", image]);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, new RegExp(`release-bump: '${image.replace(/[.+]/g, "\\$&")}' .*expected MAJOR\\.MINOR\\.PATCH`));
+    assert.match(r.stderr, new RegExp(`release-bump: '${image.replace(/[.+]/g, "\\$&")}' .*expected MAJOR\\.MINOR\\.PATCH, as images/base/VERSION requires`));
     assert.equal(read(root, "images/base/VERSION"), "2.28.0\n");
     assert.equal(JSON.parse(read(root, "package.json")).version, "1.0.0");
   }

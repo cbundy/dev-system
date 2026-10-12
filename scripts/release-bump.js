@@ -120,7 +120,7 @@ function runUpdate(root) {
 // With `image`, also sets images/base/VERSION to it; without, leaves that file alone.
 function bump(version, { root = REPO_ROOT, update = runUpdate, log = console.log, image } = {}) {
   validate(version);
-  if (image !== undefined) validate(image, IMAGE_SEMVER, "MAJOR.MINOR.PATCH, e.g. 2.29.0");
+  if (image !== undefined) validate(image, IMAGE_SEMVER, `MAJOR.MINOR.PATCH, as ${IMAGE_VERSION_FILE} requires`);
   for (const entry of versionedFiles(root)) {
     writeVersion(root, entry, version);
     log(`release-bump: bumped ${entry.file}`);
