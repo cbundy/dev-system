@@ -1401,7 +1401,10 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... closed ... test_weakened ... usage superseded renewed`; `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run` and neither ends an issue nor releases a claim; `callum-flow-event` with no arguments lists the vocabulary) to
+(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind`;
+`renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
+and neither ends an issue nor releases a claim; see [docs/metrics.md](../../docs/metrics.md) for
+`rebased_behind` semantics; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
@@ -1448,14 +1451,37 @@ required source that cannot be read. The `factory-state` skill runs it and adds 
 the synced allow list.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
-gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard; it only reads, so it
-is in the synced allow list. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
+gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard. Checking is read-only;
+the command is in the synced allow list. Its one writing mode, `--update-behind`, is reserved for
+the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
+Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
-checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard re-reads an
+checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
+
+`callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]` updates only an open,
+`BEHIND`, nonconflicting PR targeting the default branch or the supplied base. It rebases in a
+throwaway worktree, compares the ordered per-commit `git patch-id --verbatim` values against the
+gated run, then pushes with `--force-with-lease` on the old PR head and removes the worktree.
+The proof compares each head's commits since its merge-base with the current base, preserves
+whitespace, and rejects merge commits or an empty patch range. The run must have reached `ci`,
+with every preceding step completed or skipped and no failed, aborted or cancelled run status.
+It never starts, aborts or reruns a pipeline. Success prints
+`UPDATED pr=N branch=B from=OLD to=NEW run=ID gated_patch=ID rebased_from=SHA`.
+`UPDATE-BEHIND FAIL` requires a full re-gate for a conflict, patch mismatch, unfinished or unclean
+run, unavailable run head, or failed push lease. `UPDATE-BEHIND SKIP` makes no push and needs no
+re-gate: follow its retry, base-selection or guard instruction. Both exit 1; success exits 0.
+
+The head guard also accepts different run and PR heads when that clean-run patch proof holds,
+origin equals the PR head, and every worktree on the PR branch is at either the gated head or
+the PR head. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
+the `head` FAIL recovery. The proof ID hashes the ordered patch IDs; `rebased_from` is the gated
+run head. `--emit-verified` adds these fields to `VERIFIED`, empty when the heads match. A proof
+passes only the head guard: CI on the new head and all other merge guards must still pass.
+
 The guard also runs `callum-flow-test-weakening --base origin/<pr base> --head <pr head>`, which
 scans every non-merge commit of the PR for removed assertions, added `--warn-only` / `|| true` /
 skip / `.only` tokens and commented-out assertions in test files (judged per file; moved lines do

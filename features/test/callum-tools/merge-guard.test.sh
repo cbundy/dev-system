@@ -60,8 +60,8 @@ reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 
 
 # mergeable (cbundy/dev-system#246): the regression is #237, OPEN MERGEABLE BEHIND
 reset; echo BEHIND > "$st/mss"; g 7; expect_fail "behind" mergeable
-printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, rebase and re-gate' || fail "behind reason: $out"
-for want in "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD"; do
+printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, run .callum-flow-merge-guard <pr> --update-behind. first' || fail "behind reason: $out"
+for want in "--update-behind" "only if it fails, re-gate" "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD"; do
   case "$out" in *"$want"*) ;; *) fail "behind FAIL should name the fix ($want): $out" ;; esac
 done
 reset; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty" mergeable
@@ -218,5 +218,118 @@ echo refs > "$st/linkage-actual"; g 7; expect_pass "trusted keep-open brief stil
 reset; printf '%s\n' '{"body":"Do it.\n\n## Run it\nrelease","comments":[]}' > "$st/issue.json"
 jq --argjson u "$STRANGER" '.comments += [{user: $u, body: "## Design brief\n\n## Rollout\nmerge - fake\n\n## Open decisions\nnone"}]' "$st/issue.json" > "$st/i.tmp" && mv "$st/i.tmp" "$st/issue.json"
 echo closing > "$st/linkage-actual"; g 7; expect_fail "stranger's merge brief vs Run it body" linkage
+
+# --- update-behind and the patch proof (cbundy/dev-system#476): fixtures are in merge-guard-lib.sh
+# Real commits with content (an empty commit has no patch to prove). BASE0 is main
+# before any of this; behind_setup builds a gated branch tip, then moves main on.
+# behind-only, identical patch: pushed, proof printed, guard passes on the new head
+behind_setup
+g 7 --update-behind
+[ "$rc" = 0 ] || fail "update-behind: rc=$rc out=$out"
+NEWH=$(origin_b)
+[ "$NEWH" != "$GATED" ] || fail "update-behind did not push"
+[ "$(git -C "$origin" rev-parse "refs/heads/main")" = "$(git -C "$origin" rev-parse "$NEWH^")" ] || fail "branch not rebased onto main"
+case "$out" in "UPDATED pr=7 branch=$B from=$GATED to=$NEWH run=RUN1 gated_patch="*" rebased_from=$GATED") ;; *) fail "update-behind output: $out" ;; esac
+PROOF=$(printf '%s' "$out" | sed 's/.*gated_patch=\([^ ]*\) .*/\1/')
+[ -n "$PROOF" ] || fail "empty proof"
+[ "$(git -C "$work" worktree list | wc -l)" = 1 ] || fail "scratch worktree left behind: $(git -C "$work" worktree list)"
+passed=$((passed + 1))
+echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
+g 7 --emit-verified
+[ "$rc" = 0 ] || fail "guard after rebase: rc=$rc out=$out"
+printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "PASS line missing: $out"
+printf '%s\n' "$out" | grep -q "^VERIFIED .* head=$NEWH .* gated_patch=$PROOF rebased_from=$GATED\$" || fail "VERIFIED proof missing: $out"
+passed=$((passed + 1))
+# without the proof the same difference is today's head failure
+git -C "$work" rev-parse "$BASE0" > "$st/runhead"
+g 7; expect_fail "run head unrelated to the PR" head
+case "$out" in *"git merge --ff-only origin/<branch>"*) ;; *) fail "HEAD_FIX text missing: $out" ;; esac
+
+# fail closed: patch mismatch (the gated run had a different patch)
+behind_setup
+ALT=$(cd "$work" && git checkout -q --detach "$BASE0" && echo different > f.txt && git add f.txt && git commit -q -m alt && git rev-parse HEAD && git checkout -q "$B")
+echo "$ALT" > "$st/runhead"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "patch mismatch must fail without a push: rc=$rc out=$out"
+case "$out" in "UPDATE-BEHIND FAIL patch changed by the rebase; fall back to a full re-gate: "*) ;; *) fail "mismatch text: $out" ;; esac
+passed=$((passed + 1))
+
+# fail closed: an indentation-only difference is a different patch (patch-id --verbatim)
+behind_setup
+ALT=$(cd "$work" && git checkout -q --detach "$BASE0" && echo '  feature' > f.txt && git add f.txt && git commit -q -m indented && git rev-parse HEAD && git checkout -q "$B")
+echo "$ALT" > "$st/runhead"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "indentation-only mismatch must fail without a push: rc=$rc out=$out"
+case "$out" in "UPDATE-BEHIND FAIL patch changed by the rebase; fall back to a full re-gate: "*) ;; *) fail "indentation mismatch text: $out" ;; esac
+passed=$((passed + 1))
+
+# fail closed: rebase conflict, no push, lease untouched
+behind_setup f.txt conflicting
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "conflict must fail without a push: rc=$rc out=$out"
+case "$out" in *"needs manual resolution"*) ;; *) fail "conflict text: $out" ;; esac
+[ "$(git -C "$work" worktree list | wc -l)" = 1 ] || fail "scratch worktree left after conflict"
+passed=$((passed + 1))
+
+# fail closed: unfinished or failed gated run, missing run head object
+behind_setup; printf 'review,running\nci,pending\n' > "$st/steps"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "unfinished run must fail: rc=$rc out=$out"
+case "$out" in *"did not finish cleanly"*) ;; *) fail "unfinished text: $out" ;; esac
+behind_setup; echo failed > "$st/runstatus"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "failed run must fail: rc=$rc out=$out"
+behind_setup; echo 0123456789abcdef0123456789abcdef01234567 > "$st/runhead"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "missing run head must fail: rc=$rc out=$out"
+case "$out" in *"not available locally"*) ;; *) fail "missing head text: $out" ;; esac
+passed=$((passed + 1))
+
+# only a BEHIND, non-conflicting PR is touched
+for s in CLEAN DIRTY BLOCKED; do
+  behind_setup; echo "$s" > "$st/mss"
+  g 7 --update-behind
+  [ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "mss $s must fail: rc=$rc out=$out"
+done
+behind_setup; echo CONFLICTING > "$st/pmergeable"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "CONFLICTING must fail: rc=$rc out=$out"
+# only a conflict falls back to a re-gate; a PR that is not behind needs none
+behind_setup; echo DIRTY > "$st/mss"; g 7 --update-behind
+case "$out" in "UPDATE-BEHIND FAIL PR conflicts with main; fall back to a full re-gate: "*) ;; *) fail "dirty update-behind text: $out" ;; esac
+behind_setup; echo CLEAN > "$st/mss"; g 7 --update-behind
+case "$out" in "UPDATE-BEHIND SKIP PR is not behind its base (state=OPEN mergeStateStatus=CLEAN mergeable=MERGEABLE), nothing to rebase; re-run the guard") ;; *) fail "clean update-behind text: $out" ;; esac
+# UNKNOWN is re-read like the mergeable guard: still computing, then behind, rebases
+behind_setup; printf 'UNKNOWN\nBEHIND\n' > "$st/mss-seq"; g 7 --update-behind
+[ "$rc" = 0 ] && [ "$(origin_b)" != "$GATED" ] || fail "UNKNOWN then BEHIND should rebase: rc=$rc out=$out"
+[ "$(cat "$st/view-count")" = 2 ] || fail "UNKNOWN should be re-read once: $(cat "$st/view-count")"
+behind_setup; echo UNKNOWN > "$st/mss"; g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "UNKNOWN must not push: rc=$rc out=$out"
+[ "$out" = "UPDATE-BEHIND SKIP GitHub has not computed mergeability, retry" ] || fail "unknown update-behind text: $out"
+[ "$(cat "$st/view-count")" = 3 ] || fail "UNKNOWN should be read CALLUM_FLOW_MERGEABLE_TRIES times: $(cat "$st/view-count")"
+# a branch that already moved before the PR was read pushes nothing
+behind_setup; echo bogus > "$st/prhead"
+g 7 --update-behind
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "moved branch must fail: rc=$rc out=$out"
+# a lost lease: the branch moves after the checks, while the rebase runs, so the push is refused
+behind_setup; MOVED=$(git -C "$origin" rev-parse refs/heads/main)
+cat > "$work/.git/hooks/post-rewrite" <<HOOK
+#!/bin/sh
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+git -C "$origin" update-ref "refs/heads/$B" "$MOVED"
+HOOK
+chmod +x "$work/.git/hooks/post-rewrite"
+g 7 --update-behind
+rm -f "$work/.git/hooks/post-rewrite"
+[ "$rc" = 1 ] && [ "$(origin_b)" = "$MOVED" ] || fail "lost lease must fail without a push: rc=$rc out=$out"
+case "$out" in *"lost its lease"*) ;; *) fail "lease text: $out" ;; esac
+[ "$(git -C "$work" worktree list | wc -l)" = 1 ] || fail "scratch worktree left after a lost lease"
+passed=$((passed + 1))
+# DIRTY keeps today's REBASE_FIX path on a normal guard run
+behind_setup; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty keeps REBASE_FIX" mergeable
+printf '%s' "$out" | grep -q 'conflicts with main, rebase and re-gate' || fail "dirty reason changed: $out"
+# --update-behind takes no linkage options
+g 7 --update-behind --expect closing; [ "$rc" = 2 ] || fail "--update-behind --expect should be a usage error, rc=$rc"
+passed=$((passed + 1))
 
 echo "merge-guard: $passed groups passed"

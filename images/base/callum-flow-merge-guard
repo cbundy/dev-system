@@ -1,25 +1,35 @@
 #!/bin/sh
 #
-# callum-flow-merge-guard: check, without changing anything, that a PR is safe
-# to merge (cbundy/dev-system#219). It only reads: callum-flow-merge is the
-# separate command that merges, so allowing this one in the synced permission
-# list cannot let a worktree sub-agent merge.
+# callum-flow-merge-guard: check that a PR is safe to merge (cbundy/dev-system#219).
+# Checking is read-only; callum-flow-merge is the separate command that merges.
+# --update-behind is the guard's one writing mode: only the orchestrator runs it,
+# implementers and fixers never do. The mode reference is in images/base/README.md.
 #
 # Usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID]
 #          [--base BRANCH] [--issue N] [--emit-verified]
+#        callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]
+#   --update-behind is the one mode that writes (cbundy/dev-system#476): for a PR that is
+#   only BEHIND its base it rebases the branch in a throwaway worktree, proves the patch
+#   is unchanged against the gated run's head, and pushes with a lease on the old head.
+#   It never starts, aborts or reruns a no-mistakes run. See the 'update-behind' section.
 #   Without --expect, the linkage expectation comes from the issue's Rollout
 #   (callum-flow-rollout): merge means closing, run-it and keep-open mean refs
 #   (cbundy/dev-system#239). Pass --expect only to assert it; a value that
 #   contradicts the Rollout fails the rollout guard.
 #
-# Guards (every one is evaluated and reported, none short-circuits, except that a
+# Checking guards (--update-behind exits separately; every guard is evaluated and
+# reported, none short-circuits, except that a
 # PR by an untrusted author is read no further: rollout and linkage are skipped):
 #   author   the PR was opened by a trusted author (callum-flow-issue-read,
 #          cbundy/dev-system#310); an untrusted or unverifiable author fails
 #   rollout  the issue's Rollout was derived (or agrees with --expect); a
 #          conflict or a failure to derive fails closed, never to closing
 #   head     the run's head_sha equals a fresh origin/<branch>, the PR head,
-#          and HEAD in every worktree checked out on the PR branch
+#          and HEAD in every worktree checked out on the PR branch. A rebase-only
+#          difference also passes (cbundy/dev-system#476): the run finished cleanly
+#          and git patch-id --verbatim over its commits equals the PR's, in order. The
+#          guard then prints
+#            GUARD head PASS gated_patch=<id> rebased_from=<run head>
 #   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
 #          name) --issue N is required and the PR must link #N as --expect says
 #   checks   at least one CI check, all pass or skipping
@@ -32,7 +42,7 @@
 #          commits that delete or weaken tests; each one it cannot see restored
 #          prints a WARN line (below). A detector error is also a WARN.
 #
-# Output: nothing when every guard passes; otherwise one line per failed guard,
+# Checking output: a head PASS line on a patch proof, plus one line per failed guard,
 #   GUARD <name> FAIL <reason>
 # Advisory lines can appear with exit 0 and never change the exit code:
 #   GUARD test-weakening WARN <sha7> step=<s> files=<f> kinds=<k> - <what to do>
@@ -41,11 +51,13 @@
 # --emit-verified adds, on success only, the detector's WEAKENED lines verbatim
 # (restored ones included, for the test_weakened event) and then one line for
 # callum-flow-merge:
-#   VERIFIED pr=N branch=B head=SHA run=ID issue=N close_issue=N
+#   VERIFIED pr=N branch=B head=SHA run=ID issue=N close_issue=N gated_patch=ID rebased_from=SHA
+# gated_patch and rebased_from are empty unless the head passed on the patch proof.
 # close_issue is the issue to close manually for a closing PR on a non-default
 # base; it is empty otherwise.
 #
-# Exit codes: 0 all guards pass, 1 at least one guard failed, 2 usage error.
+# Exit codes: 0 all guards pass or update succeeds, 1 a guard fails or update fails
+# or skips, 2 usage error.
 #
 # Recovery guidance for head, base and mergeable failures is in their FAIL lines.
 #
@@ -56,8 +68,9 @@
 # (callum-flow-issue-read), CALLUM_FLOW_WEAKENING_BIN
 # (callum-flow-test-weakening).
 # Tuning: GitHub computes mergeability lazily and reports UNKNOWN meanwhile, so
-# the mergeable guard re-reads (read-only) CALLUM_FLOW_MERGEABLE_TRIES times
-# (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
+# the mergeable guard and --update-behind re-read (read-only) CALLUM_FLOW_MERGEABLE_TRIES
+# times (default 5) CALLUM_FLOW_MERGEABLE_SLEEP seconds apart (default 2).
+# shellcheck disable=SC2015  # A && B || fail is the idiom here
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
@@ -71,15 +84,16 @@ WEAKENING=${CALLUM_FLOW_WEAKENING_BIN:-$here/callum-flow-test-weakening}
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-merge-guard: $1" >&2
-  echo "usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID] [--base BRANCH] [--issue N] [--emit-verified]" >&2
+  echo "usage: callum-flow-merge-guard <pr> [--expect closing|refs] [--run ID] [--base BRANCH] [--issue N] [--emit-verified] | <pr> --update-behind [--run ID] [--base BRANCH]" >&2
   exit 2
 }
 
-pr='' expect='' run='' base='' issue='' emit=
+pr='' expect='' run='' base='' issue='' emit='' update_behind=
 while [ $# -gt 0 ]; do
   case "$1" in
     -h | --help) usage ;;
     --emit-verified) emit=1 ;;
+    --update-behind) update_behind=1 ;;
     --expect | --run | --base | --issue)
       [ $# -ge 2 ] || usage "$1 needs a value"
       case "$1" in
@@ -100,6 +114,7 @@ case "$pr" in *[!0-9]*) usage "<pr> must be a number" ;; esac
 case "$expect" in "" | closing | refs) ;; *) usage "--expect must be closing or refs" ;; esac
 case "$issue" in *[!0-9]*) usage "--issue must be a number" ;; esac
 command -v jq > /dev/null 2>&1 || usage "jq not found"
+[ -z "$update_behind" ] || { [ -z "$emit" ] && [ -z "$expect" ] && [ -z "$issue" ]; } || usage "--update-behind takes only --run and --base"
 
 failed=0
 fail() {
@@ -111,6 +126,44 @@ fail() {
 one_line() { tr '\n' ' ' | sed 's/[[:space:]]*$//'; }
 clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
 field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
+
+# run_clean: the run reached ci and every step before it finished (completed or
+# skipped), and the run itself is not failed, aborted or cancelled (#476). Reads
+# the 'step,status' rows of `axi status`.
+run_clean() {
+  case "$(field "$1" status)" in '' | *failed* | *aborted* | *cancel*) return 1 ;; esac
+  printf '%s\n' "$1" | awk '
+    /^[[:space:]]+[a-z][a-z_-]*,[a-z_]+/ {
+      sub(/^[[:space:]]+/, ""); split($0, f, ",")
+      if (f[1] == "ci") { seen = 1; exit }
+      if (f[2] != "completed" && f[2] != "skipped") bad = 1
+    }
+    END { exit (seen && !bad) ? 0 : 1 }'
+}
+
+# patch_ids <base> <head>: the verbatim patch id of every commit in base..head, oldest
+# first. Fails on a merge commit or an empty range (nothing to prove).
+patch_ids() {
+  [ -z "$(git rev-list --merges "$1..$2" 2> /dev/null)" ] || return 1
+  _ids=$(git log -p --reverse "$1..$2" 2> /dev/null | git patch-id --verbatim | cut -d' ' -f1)
+  [ -n "$_ids" ] || return 1
+  printf '%s\n' "$_ids"
+}
+
+# patch_proof <run head> <new head> <base>: sets proof_id when git patch-id --verbatim over
+# <run head>'s commits (from its merge-base with origin/<base>) equals the same over
+# <new head>'s, in order. Sets proof_why and fails closed otherwise (#476).
+proof_id='' proof_why=''
+patch_proof() {
+  proof_id='' proof_why=''
+  git fetch --quiet origin "+refs/heads/$3:refs/remotes/origin/$3" 2> /dev/null || { proof_why="cannot fetch origin/$3"; return 1; }
+  git cat-file -e "$1^{commit}" 2> /dev/null || git fetch --quiet origin "$1" 2> /dev/null || true
+  git cat-file -e "$1^{commit}" 2> /dev/null || { proof_why="run head $1 is not available locally"; return 1; }
+  _ob=$(git merge-base "$1" "origin/$3" 2> /dev/null) && _nb=$(git merge-base "$2" "origin/$3" 2> /dev/null) || { proof_why="no merge-base with origin/$3"; return 1; }
+  _oi=$(patch_ids "$_ob" "$1") && _ni=$(patch_ids "$_nb" "$2") || { proof_why="cannot compute patch ids (merge commit or no commits)"; return 1; }
+  [ "$_oi" = "$_ni" ] || { proof_why="patch changed by the rebase"; return 1; }
+  proof_id=$(printf '%s\n' "$_oi" | git hash-object --stdin) || return 1
+}
 
 branch='' pr_head='' pr_base='' pj=''
 if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus 2> /dev/null); then
@@ -137,6 +190,79 @@ fi
 # Recovery instructions belong in the head and mergeable FAIL lines below.
 HEAD_FIX="fix: if only a worktree lags the branch (the run already equals origin), run 'git merge --ff-only origin/<branch>' there; while a gate is parked and a correction is needed, prefer backgrounded 'no-mistakes axi respond --action fix' with instructions so the pipeline stays the sole writer on the run's own head; use an external fixer only when the pipeline cannot write the correction from instructions or the run is done; only for a commit made outside the pipeline, rebase onto origin/<branch> keeping the pipeline's commits, 'no-mistakes axi abort', start a fresh backgrounded 'axi run --intent ...' and prove its head equals the new commit ('rerun' re-gates the OLD head and 'axi run' on a live run only attaches to it)"
 REBASE_FIX="in a fresh slot on the branch run 'git rebase origin/<base>' keeping the pipeline's commits, then 'no-mistakes axi abort', a fresh backgrounded 'axi run --intent ...', and prove the new run's head equals the rebased HEAD (the no-mistakes CI monitor does not rebase a PR that is only behind)"
+BEHIND_FIX="run 'callum-flow-merge-guard <pr> --update-behind' first (a clean rebase with an unchanged patch needs no new run); only if it fails, re-gate: $REBASE_FIX"
+
+mtries=${CALLUM_FLOW_MERGEABLE_TRIES:-5}
+msleep=${CALLUM_FLOW_MERGEABLE_SLEEP:-2}
+case "$mtries" in '' | *[!0-9]*) mtries=5 ;; esac
+case "$msleep" in '' | *[!0-9.]*) msleep=2 ;; esac
+[ "$mtries" -ge 1 ] || mtries=1
+
+# --- update-behind -----------------------------------------------------------
+# The one writing mode (cbundy/dev-system#476). A PR that is only BEHIND its base
+# keeps its gated work, so rebase it and prove that instead of paying a full re-gate.
+# Fails closed (exit 1, nothing pushed) to a full re-gate (UPDATE-BEHIND FAIL) on: a
+# conflicting PR, an unfinished or unclean run, a missing run head, a rebase conflict,
+# a patch mismatch, or a lost lease. A PR that cannot be read, targets another base,
+# is not behind, or whose merge state GitHub has not computed (re-read like the
+# mergeable guard) pushes nothing either but needs no re-gate (UPDATE-BEHIND SKIP).
+# Never touches the no-mistakes run.
+if [ -n "$update_behind" ]; then
+  ub_fail() { printf 'UPDATE-BEHIND FAIL %s; fall back to a full re-gate: %s\n' "$1" "$REBASE_FIX"; exit 1; }
+  ub_skip() { printf 'UPDATE-BEHIND SKIP %s\n' "$1"; exit 1; }
+  [ -n "$branch" ] || ub_skip "cannot read PR #$pr, retry"
+  default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
+  [ "$pr_base" = "$default_branch" ] || [ "$pr_base" = "$base" ] || ub_skip "PR targets $pr_base, not the default branch${base:+ or --base $base}; pass --base $pr_base if that is intended"
+  ub_j=$pj
+  ub_try=1
+  while :; do
+    ub_state=$(printf '%s' "$ub_j" | jq -r '.state // empty' 2> /dev/null)
+    ub_mss=$(printf '%s' "$ub_j" | jq -r '.mergeStateStatus // empty' 2> /dev/null)
+    ub_merge=$(printf '%s' "$ub_j" | jq -r '.mergeable // empty' 2> /dev/null)
+    case "$ub_state:$ub_mss:$ub_merge" in
+      :*) ;;
+      OPEN:*:CONFLICTING | OPEN:DIRTY:*) ub_fail "PR conflicts with $pr_base" ;;
+      OPEN:BEHIND:*) break ;;
+      OPEN::* | OPEN:UNKNOWN:*) ;;
+      *) ub_skip "PR is not behind its base (state=$ub_state mergeStateStatus=$ub_mss mergeable=$ub_merge), nothing to rebase; re-run the guard" ;;
+    esac
+    [ "$ub_try" -lt "$mtries" ] || ub_skip "GitHub has not computed mergeability, retry"
+    ub_try=$((ub_try + 1))
+    sleep "$msleep"
+    ub_j=$($GH pr view "$pr" --json state,isDraft,mergeable,mergeStateStatus 2> /dev/null) || ub_j=''
+  done
+  [ -n "$status_out" ] || ub_fail "no pipeline run found for $branch"
+  run_clean "$status_out" || ub_fail "run $run did not finish cleanly"
+  ub_run_sha=$(field "$status_out" head_sha)
+  [ -n "$ub_run_sha" ] || ub_fail "run $run reports no head_sha"
+  git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2> /dev/null || ub_fail "cannot fetch origin/$branch"
+  [ "$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" = "$pr_head" ] || ub_fail "origin/$branch is not the PR head $pr_head"
+  git fetch --quiet origin "+refs/heads/$pr_base:refs/remotes/origin/$pr_base" 2> /dev/null || ub_fail "cannot fetch origin/$pr_base"
+  git cat-file -e "$ub_run_sha^{commit}" 2> /dev/null || git fetch --quiet origin "$ub_run_sha" 2> /dev/null || true
+  git cat-file -e "$ub_run_sha^{commit}" 2> /dev/null || ub_fail "run head $ub_run_sha is not available locally"
+  ub_dir=$(mktemp -d) || ub_fail "cannot make a scratch directory"
+  git worktree add --quiet --detach "$ub_dir/wt" "$pr_head" > /dev/null 2>&1 || { rm -rf "$ub_dir"; ub_fail "cannot create a scratch worktree"; }
+  ub_done() { git worktree remove --force "$ub_dir/wt" > /dev/null 2>&1; rm -rf "$ub_dir"; git worktree prune > /dev/null 2>&1; }
+  if ! git -C "$ub_dir/wt" rebase --quiet "origin/$pr_base" > /dev/null 2>&1; then
+    git -C "$ub_dir/wt" rebase --abort > /dev/null 2>&1
+    ub_done
+    ub_fail "the rebase onto origin/$pr_base needs manual resolution"
+  fi
+  ub_new=$(git -C "$ub_dir/wt" rev-parse HEAD)
+  # the worktree shares this repo's object store, so the proof runs from here
+  if ! patch_proof "$ub_run_sha" "$ub_new" "$pr_base"; then
+    ub_why=$proof_why
+    ub_done
+    ub_fail "$ub_why"
+  fi
+  if ! git -C "$ub_dir/wt" push --quiet "--force-with-lease=refs/heads/$branch:$pr_head" origin "HEAD:refs/heads/$branch" > /dev/null 2>&1; then
+    ub_done
+    ub_fail "the push lost its lease on $pr_head (the branch moved)"
+  fi
+  ub_done
+  printf 'UPDATED pr=%s branch=%s from=%s to=%s run=%s gated_patch=%s rebased_from=%s\n' "$pr" "$branch" "$pr_head" "$ub_new" "$run" "$proof_id" "$ub_run_sha"
+  exit 0
+fi
 
 # --- head --------------------------------------------------------------------
 if [ -z "$branch" ]; then
@@ -155,16 +281,26 @@ else
   ' | while IFS= read -r path; do
     git -C "$path" rev-parse --verify --quiet 'HEAD^{commit}' 2> /dev/null || printf '%s\n' unknown
   done)
+  # A rebase-only difference (#476): origin is the PR head, the run finished cleanly
+  # and the patch is the same, so the gated work is what would merge.
+  gated_patch='' rebased_from=''
+  if [ -n "$run_sha" ] && [ -n "$pr_base" ] && [ "$run_sha" != "$pr_head" ] && [ "$origin_sha" = "$pr_head" ] &&
+    run_clean "$status_out" && patch_proof "$run_sha" "$pr_head" "$pr_base"; then
+    gated_patch=$proof_id rebased_from=$run_sha
+  fi
   head_mismatch=
   worktree_detail=
   for worktree_sha in $worktree_heads; do
     worktree_detail="$worktree_detail worktree=$worktree_sha"
-    [ "$run_sha" = "$worktree_sha" ] || head_mismatch=1
+    [ "$run_sha" = "$worktree_sha" ] || { [ -n "$gated_patch" ] && [ "$worktree_sha" = "$origin_sha" ]; } || head_mismatch=1
   done
-  if [ -z "$run_sha" ] || [ "$run_sha" != "$origin_sha" ] || [ "$run_sha" != "$pr_head" ] || [ -n "$head_mismatch" ]; then
+  if [ -n "$gated_patch" ] && [ -z "$head_mismatch" ]; then
+    printf 'GUARD head PASS gated_patch=%s rebased_from=%s\n' "$gated_patch" "$rebased_from"
+  elif [ -z "$run_sha" ] || [ "$run_sha" != "$origin_sha" ] || [ "$run_sha" != "$pr_head" ] || [ -n "$head_mismatch" ]; then
     fail head "run=${run_sha:-unknown} origin=$origin_sha pr=${pr_head:-unknown}$worktree_detail (run $run); $HEAD_FIX"
   fi
 fi
+gated_patch=${gated_patch-} rebased_from=${rebased_from-}
 
 default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
 
@@ -322,11 +458,6 @@ fi
 # --- mergeable ---------------------------------------------------------------
 # mergeStateStatus, not mergeable: a BEHIND PR still reports MERGEABLE, yet
 # strict branch protection refuses it (cbundy/dev-system#246).
-mtries=${CALLUM_FLOW_MERGEABLE_TRIES:-5}
-msleep=${CALLUM_FLOW_MERGEABLE_SLEEP:-2}
-case "$mtries" in '' | *[!0-9]*) mtries=5 ;; esac
-case "$msleep" in '' | *[!0-9.]*) msleep=2 ;; esac
-[ "$mtries" -ge 1 ] || mtries=1
 mbase=${pr_base:-its base}
 mj=$pj
 mtry=1
@@ -349,7 +480,7 @@ while :; do
       mverdict=fail mreason="conflicts with $mbase, rebase and re-gate: $REBASE_FIX"
     else
       case "$mmss" in
-        BEHIND) mverdict=fail mreason="behind $mbase, rebase and re-gate: $REBASE_FIX" ;;
+        BEHIND) mverdict=fail mreason="behind $mbase, $BEHIND_FIX" ;;
         BLOCKED) mverdict=fail mreason="branch rules not met (required checks or reviews); read which rule is unmet, never use --admin" ;;
         CLEAN | UNSTABLE | HAS_HOOKS) mverdict=pass ;;
       esac
@@ -373,6 +504,6 @@ if [ -n "$emit" ]; then
     close_issue=$issue
   fi
   [ -z "$weakened" ] || printf '%s\n' "$weakened"
-  printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s close_issue=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue" "$close_issue"
+  printf 'VERIFIED pr=%s branch=%s head=%s run=%s issue=%s close_issue=%s gated_patch=%s rebased_from=%s\n' "$pr" "$branch" "$pr_head" "$run" "$issue" "$close_issue" "$gated_patch" "$rebased_from"
 fi
 exit 0

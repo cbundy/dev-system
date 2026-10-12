@@ -130,4 +130,13 @@ if [ "$rc" != 1 ] || [ -f "$st/gh-calls" ] || [ -e "$events" ]; then fail "merge
 printf '%s' "$out" | grep -q '^GUARD mergeable FAIL behind' || fail "merge on behind: $out"
 passed=$((passed + 1))
 
+# merge after --update-behind (cbundy/dev-system#476): the rebased head merges on the patch proof
+behind_setup
+g 7 --update-behind; [ "$rc" = 0 ] || fail "update-behind for merge: rc=$rc out=$out"
+NEWH=$(origin_b); echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
+m 7
+if [ "$rc" != 0 ] || ! grep -q -- "--match-head-commit $NEWH" "$st/gh-calls"; then fail "merge after update-behind: $rc $out"; fi
+jq -e --arg sha "$NEWH" '.state == "merged" and .head == $sha' "$events/o__r.jsonl" > /dev/null || fail "merged event should carry the new head: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+
 echo "merge: $passed groups passed"
