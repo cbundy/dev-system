@@ -140,7 +140,7 @@ gone() {
 }
 
 # ---------------------------------------------------------------------------
-# Stubs shared with watchers.test.sh: gh (queue list) and no-mistakes (runs).
+# Stubs shared with watchers-lib.sh: gh (queue list) and no-mistakes (runs).
 cat > "$fakebin/no-mistakes" <<'EOF'
 #!/bin/sh
 d=$(dirname "$0")
