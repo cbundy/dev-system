@@ -719,7 +719,7 @@ unknown count) for plugin and tool drift, and a `WARN` for a stale image or imag
 the container's image is older than the base image that ships it. Rebuild the container
 (`dev-restart-self`, or Rebuild Container in a desktop dev container); do not install the
 tool by hand, because the install is lost on the next rebuild and hides the real problem.
-(`event-push-loop`, `nm-push-loop` and `nm-export` are deliberately not on PATH; run them by
+(`event-push-loop`, `nm-push-loop`, `nm-export`, `heartbeat-loop` and `heartbeat-state` are deliberately not on PATH; run them by
 their path under `/usr/local/share/dev-system/`.)
 
 The callum-flow plugin reaches containers whose image is too old to warn about itself, so it
@@ -1596,6 +1596,31 @@ for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
 the last push time and whether activity is newer than the checkpoint; it fails when a URL
 is configured but the loop is stopped.
 
+`heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat), with the same URL rules
+as `event-push-loop`. Every `DEV_HEARTBEAT_INTERVAL` seconds (default 60; an integer of at least 10, else 60 with a
+log line) it upserts: identity and the four versions from `dev-version --local --snapshot`, the full version
+document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-latest.json`, refreshed in the
+background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
+`push` (when events, the no-mistakes mirror and agentsview last pushed), `critical_failures` and the busy state.
+`last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
+intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
+`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL is sent with the
+first beat of the process and after a failed beat. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
+(log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) and `dev-doctor` prints the last beat and state, and
+fails when a configured URL has no running loop. `heartbeat-loop --once` makes one beat.
+
+`state` is `busy` when this device has an issue in flight, a no-mistakes run is not finished, or a prompt was typed
+in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
+and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
+unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
+`reclaimed`; noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
+that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`,
+`agentsview_push_not_running` (a push loop whose lock is free), `versions_snapshot_missing`, and
+`latest_lookup_failing` (the background lookup has failed for over an hour). On TERM, INT or HUP the loop writes one
+last beat with `state = 'stopped'` and exits 0; `heartbeat-loop --final` signals the running loop through its
+pidfile (waiting up to 8 s) or, with none running, writes that beat itself. A desktop stop has no hook, so its row
+goes `stale` after three intervals. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
+
 `/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
 without connecting to PostgreSQL. `--mark N` selects an incremental export;
 `--mark-out FILE` writes the resulting `{ "mark": N, "rows": N }` metadata.
@@ -1759,6 +1784,7 @@ copy the `dev-system-secrets` mount into it (see [Extending the image](#extendin
 | `AGENTSVIEW_PG_URL` | unset | The URL as an environment variable, which takes precedence over the file. For a one-off; the file keeps it out of `docker inspect`. |
 | `DEV_SECRETS_DIR` | `/run/secrets/dev-system` | Where the secret file is read from. |
 | `AGENTSVIEW_PG_SCHEMA` | `agentsview` | Schema name. |
+| `DEV_HEARTBEAT_INTERVAL` | `60` | Seconds between worker heartbeats (`factory.workers`); an integer of at least 10. |
 
 `dev-init` then starts the push in the background (log: `/tmp/dev-agentsview-push.log`,
 plus agentsview's own `/persist/agentsview/pg-watch.log`), and `dev-doctor` reports

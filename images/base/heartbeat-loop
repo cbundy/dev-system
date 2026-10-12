@@ -1,0 +1,379 @@
+#!/bin/bash
+#
+# heartbeat-loop: every DEV_HEARTBEAT_INTERVAL seconds, upserts this device's
+# row in factory.workers in the agentsview PostgreSQL (cbundy/dev-system#339),
+# so the fleet can see which workers are alive, what they run, whether they
+# are busy, and whether their push loops work.
+#
+# dev-init starts this in the background, under a container-local flock, when a
+# PostgreSQL URL is configured (agentsview.sh: the same secret and rules as
+# event-push-loop). The URL is read again on every pass and reaches only psql
+# (split into PG* variables in its environment, never its argv); all psql output
+# is masked. When the URL goes away the loop stops.
+#
+# Row: identity and versions come from `dev-version --local --snapshot`
+# ($DEV_VERSIONS_FILE); `versions` is that document plus the cached `latest`
+# lookup (`dev-version --json`, which uses the network). The lookup runs in the
+# background, at most every 15 minutes, under a lock, and a beat only reads the
+# cache. busy / idle and in_flight come from heartbeat-state (one call per beat).
+# last_seen is the database's now(), never this container's clock. Readers use
+# the view factory.workers_status (age, stale), never their own rule.
+#
+# critical_failures is a JSON array of check codes, [] when all is well:
+#   events_push_not_running, nm_push_not_running, agentsview_push_not_running
+#       (a push loop whose lock is free; the loop is configured because this
+#       loop runs only with a URL)
+#   versions_snapshot_missing   (no readable snapshot after dev-version)
+#   latest_lookup_failing       (the background lookup has failed for over an hour)
+#
+# The DDL (guarded by catalog checks, so a repeat takes no exclusive lock) is
+# sent with the first beat of each process and again after a failed beat.
+# SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' (bounded
+# by `timeout 5`) and exit 0. SIGUSR1 beats at once.
+#
+# Usage: heartbeat-loop [--once | --final]
+#   --once   one beat, exit 0 on success and 1 on failure (tests)
+#   --final  signal the running loop (pidfile) and wait up to 8 s for it to
+#            exit; with no loop running but a URL configured, write the
+#            'stopped' beat itself. Always exits 0.
+# Environment: DEV_HEARTBEAT_INTERVAL seconds (default 60; an integer of at
+#   least 10), DEV_VERSIONS_FILE, DEV_HEARTBEAT_DIR (pid, state and latest
+#   cache; default /tmp), CALLUM_EVENTS_DIR, AGENTSVIEW_DATA_DIR.
+set -u
+
+SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
+# shellcheck source=agentsview.sh
+. "$SHARE/agentsview.sh"
+
+HB_DIR="${DEV_HEARTBEAT_DIR:-/tmp}"
+PIDFILE="$HB_DIR/dev-heartbeat.pid"
+STATEFILE="$HB_DIR/dev-heartbeat.state"
+LATEST="$HB_DIR/dev-heartbeat-latest.json"
+LATEST_LOCK="$HB_DIR/dev-heartbeat-latest.lock"
+LATEST_TRY="$HB_DIR/dev-heartbeat-latest.attempt"
+LATEST_FAIL="$HB_DIR/dev-heartbeat-latest.failing"
+LATEST_EVERY=900
+LATEST_FAIL_AFTER=3600
+EVENT_LOCK="${HEARTBEAT_EVENT_LOCK:-/tmp/dev-event-push.lock}"
+NM_LOCK="${HEARTBEAT_NM_LOCK:-/tmp/dev-nm-push.lock}"
+AV_LOCK="${HEARTBEAT_AV_LOCK:-/tmp/dev-agentsview-push.lock}"
+EVENTS_DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
+AV_DIR="${AGENTSVIEW_DATA_DIR:-/persist/agentsview}"
+VERSIONS_FILE="${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}"
+SELF=$(readlink -f -- "$0" 2>/dev/null || echo "$0")
+
+INTERVAL="${DEV_HEARTBEAT_INTERVAL:-60}"
+case "$INTERVAL" in
+  '' | *[!0-9]*) bad=1 ;;
+  *) if [ "$INTERVAL" -lt 10 ]; then bad=1; else bad=0; fi ;;
+esac
+if [ "$bad" = 1 ]; then
+  echo "heartbeat-loop: DEV_HEARTBEAT_INTERVAL='${DEV_HEARTBEAT_INTERVAL:-}' is not an integer of at least 10 - using 60" >&2
+  INTERVAL=60
+fi
+
+read -r -d '' DDL <<'SQL'
+CREATE SCHEMA IF NOT EXISTS factory;
+CREATE TABLE IF NOT EXISTS factory.workers (
+  device text PRIMARY KEY,
+  repo text,
+  role text,
+  ring text,
+  runtime text,
+  coder_workspace text,
+  base_image text,
+  dev_image text,
+  template_version text,
+  plugin_version text,
+  versions jsonb,
+  state text,
+  in_flight jsonb NOT NULL DEFAULT '[]'::jsonb,
+  chat_active_at timestamptz,
+  critical_failures jsonb NOT NULL DEFAULT '[]'::jsonb,
+  push jsonb,
+  interval_s int,
+  started_at timestamptz,
+  last_seen timestamptz
+);
+DO $cols$
+DECLARE
+  c record;
+BEGIN
+  FOR c IN SELECT * FROM (VALUES
+    ('repo', 'text'), ('role', 'text'), ('ring', 'text'), ('runtime', 'text'), ('coder_workspace', 'text'),
+    ('base_image', 'text'), ('dev_image', 'text'), ('template_version', 'text'), ('plugin_version', 'text'),
+    ('versions', 'jsonb'), ('state', 'text'), ('in_flight', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
+    ('chat_active_at', 'timestamptz'), ('critical_failures', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
+    ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz')
+  ) AS v(name, type) LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
+                   AND attname = c.name AND NOT attisdropped) THEN
+      PERFORM pg_advisory_xact_lock(hashtext('factory.workers migration'));
+      EXECUTE format('ALTER TABLE factory.workers ADD COLUMN IF NOT EXISTS %I %s', c.name, c.type);
+    END IF;
+  END LOOP;
+END
+$cols$;
+DO $view$
+BEGIN
+  IF (SELECT count(*) FROM pg_attribute WHERE attrelid = to_regclass('factory.workers_status')
+        AND attnum > 0 AND NOT attisdropped) IS DISTINCT FROM
+     (SELECT count(*) + 2 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
+        AND attnum > 0 AND NOT attisdropped) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.workers view'));
+    DROP VIEW IF EXISTS factory.workers_status;
+    CREATE VIEW factory.workers_status AS
+      SELECT w.*, now() - w.last_seen AS age,
+        (now() - w.last_seen) > make_interval(secs => 3 * coalesce(w.interval_s, 60)) AS stale
+      FROM factory.workers w;
+  END IF;
+END
+$view$;
+DO $notify$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'workers_notify'
+                 AND pronamespace = 'factory'::regnamespace) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.workers notify'));
+    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'workers_notify'
+                   AND pronamespace = 'factory'::regnamespace) THEN
+      EXECUTE $fn$
+        CREATE FUNCTION factory.workers_notify() RETURNS trigger LANGUAGE plpgsql AS $body$
+        BEGIN
+          PERFORM pg_notify('factory_workers', NEW.device);
+          RETURN NULL;
+        END
+        $body$
+      $fn$;
+    END IF;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'workers_notify'
+                 AND tgrelid = 'factory.workers'::regclass AND NOT tgisinternal) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.workers notify'));
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'workers_notify'
+                   AND tgrelid = 'factory.workers'::regclass AND NOT tgisinternal) THEN
+      CREATE TRIGGER workers_notify AFTER INSERT OR UPDATE ON factory.workers
+        FOR EACH ROW EXECUTE FUNCTION factory.workers_notify();
+    END IF;
+  END IF;
+END
+$notify$;
+SQL
+
+read -r -d '' UPSERT <<'SQL'
+INSERT INTO factory.workers (device, repo, role, ring, runtime, coder_workspace, base_image, dev_image,
+  template_version, plugin_version, versions, state, in_flight, chat_active_at, critical_failures, push,
+  interval_s, started_at, last_seen)
+VALUES (:'device', NULLIF(:'repo', ''), NULLIF(:'role', ''), NULLIF(:'ring', ''), NULLIF(:'runtime', ''),
+  NULLIF(:'coder_workspace', ''), NULLIF(:'base_image', ''), NULLIF(:'dev_image', ''),
+  NULLIF(:'template_version', ''), NULLIF(:'plugin_version', ''), :'versions'::jsonb, :'state',
+  :'in_flight'::jsonb, NULLIF(:'chat_active_at', '')::timestamptz, :'critical_failures'::jsonb,
+  :'push'::jsonb, :'interval_s'::int, NULLIF(:'started_at', '')::timestamptz, now())
+ON CONFLICT (device) DO UPDATE SET
+  repo = EXCLUDED.repo, role = EXCLUDED.role, ring = EXCLUDED.ring, runtime = EXCLUDED.runtime,
+  coder_workspace = EXCLUDED.coder_workspace, base_image = EXCLUDED.base_image, dev_image = EXCLUDED.dev_image,
+  template_version = EXCLUDED.template_version, plugin_version = EXCLUDED.plugin_version,
+  versions = EXCLUDED.versions, state = EXCLUDED.state, in_flight = EXCLUDED.in_flight,
+  chat_active_at = EXCLUDED.chat_active_at, critical_failures = EXCLUDED.critical_failures,
+  push = EXCLUDED.push, interval_s = EXCLUDED.interval_s, started_at = EXCLUDED.started_at,
+  last_seen = now();
+SQL
+
+DDL_SENT=0
+
+# mtime FILE...: the newest mtime in epoch seconds, empty when none exists.
+newest_mtime() {
+  local best='' m f
+  for f in "$@"; do
+    [ -e "$f" ] || continue
+    m=$(stat -c %Y "$f" 2>/dev/null) || continue
+    if [ -z "$best" ] || [ "$m" -gt "$best" ]; then best=$m; fi
+  done
+  printf '%s' "$best"
+}
+
+# container_start: ISO time PID 1 started (its start time plus the boot time).
+container_start() {
+  local stat ticks btime hz
+  stat=$(cat /proc/1/stat 2>/dev/null) || return 0
+  stat=${stat##*) }
+  # fields after the command: state is #1, starttime is #20
+  # shellcheck disable=SC2086
+  set -- $stat
+  ticks=${20:-}
+  btime=$(sed -n 's/^btime //p' /proc/stat 2>/dev/null)
+  hz=$(getconf CLK_TCK 2>/dev/null || echo 100)
+  case "$ticks$btime$hz" in '' | *[!0-9]*) return 0 ;; esac
+  date -u -d "@$((btime + ticks / hz))" +%Y-%m-%dT%H:%M:%SZ
+}
+
+repo_of() { # owner/name from a git URL, empty when it has none
+  printf '%s\n' "$1" | sed -nE 's#.*[:/]([^/:]+)/([^/]+)/?$#\1/\2#p' | sed -E 's#\.git$##' | tr '[:upper:]' '[:lower:]'
+}
+
+workers_repo() {
+  local url=${DEV_REPO_URL:-} dir
+  if [ -z "$url" ]; then
+    dir=${DEV_WORKSPACE:-}
+    [ -n "$dir" ] && [ -d "$dir" ] && url=$(git -C "$dir" remote get-url origin 2>/dev/null)
+  fi
+  [ -z "$url" ] || repo_of "$url"
+}
+
+# refresh_latest: starts the background lookup when the cache is older than
+# LATEST_EVERY. Never waits for it.
+refresh_latest() {
+  local now try
+  now=$(date +%s)
+  try=$(stat -c %Y "$LATEST_TRY" 2>/dev/null || echo 0)
+  [ $((now - try)) -ge "$LATEST_EVERY" ] || return 0
+  flock -n "$LATEST_LOCK" true 2>/dev/null || return 0
+  : > "$LATEST_TRY" 2>/dev/null || return 0
+  (
+    exec 9> "$LATEST_LOCK"
+    flock -n 9 || exit 0
+    tmp=$(mktemp "$HB_DIR/.dev-heartbeat-latest.XXXXXX") || exit 0
+    timeout 120 dev-version --json > "$tmp" 2>/dev/null
+    if jq -e 'type == "object" and ([.components[]? | select(.latest != null)] | length > 0)' "$tmp" >/dev/null 2>&1; then
+      chmod 644 "$tmp"
+      mv -f "$tmp" "$LATEST"
+      rm -f "$LATEST_FAIL"
+    else
+      rm -f "$tmp"
+      [ -e "$LATEST_FAIL" ] || : > "$LATEST_FAIL"
+    fi
+  ) > /dev/null 2>&1 < /dev/null &
+}
+
+is_running() { # LOCKFILE: 0 when something holds the lock
+  ! flock -n "$1" true 2>/dev/null
+}
+
+critical_failures() { # prints a JSON array
+  local out='' now age
+  is_running "$EVENT_LOCK" || out="$out events_push_not_running"
+  is_running "$NM_LOCK" || out="$out nm_push_not_running"
+  if ! is_running "$AV_LOCK"; then
+    # a watcher of another container sharing the data dir also counts
+    if ! { [ -e "$AV_DIR/pg-watch.lock" ] && is_running "$AV_DIR/pg-watch.lock"; }; then
+      out="$out agentsview_push_not_running"
+    fi
+  fi
+  jq -e 'type == "object"' "$VERSIONS_FILE" >/dev/null 2>&1 || out="$out versions_snapshot_missing"
+  if [ -e "$LATEST_FAIL" ]; then
+    now=$(date +%s)
+    age=$((now - $(stat -c %Y "$LATEST_FAIL" 2>/dev/null || echo "$now")))
+    [ "$age" -le "$LATEST_FAIL_AFTER" ] || out="$out latest_lookup_failing"
+  fi
+  # shellcheck disable=SC2086
+  jq -nc '$ARGS.positional' --args $out
+}
+
+push_json() {
+  local ev_w ev_p nm av nmstate
+  ev_w=$(newest_mtime "$EVENTS_DIR"/*.jsonl)
+  ev_p=$(newest_mtime "$EVENTS_DIR"/.pushed/*)
+  nmstate="$(nm_push_state_dir 2>/dev/null)/state"
+  nm=$(sed -n 's/^last_push=//p' "$nmstate" 2>/dev/null | sed -n 1p)
+  case "$nm" in '' | *[!0-9]*) nm='' ;; esac
+  av=$(newest_mtime "$AV_DIR/pg-watch.log")
+  jq -nc --arg ew "$ev_w" --arg ep "$ev_p" --arg nm "$nm" --arg av "$av" '
+    def t: if . == "" then null else (tonumber | todate) end;
+    {events: {last_write: ($ew | t), last_push: ($ep | t)}, nm: {last_push: ($nm | t)}, agentsview: {last_push: ($av | t)}}'
+}
+
+# beat: one upsert. Returns 0 on success, 1 when psql failed, 2 when the URL is gone.
+beat() {
+  local url snap latest_json versions state_json state in_flight chat_at out device
+  if ! url=$(agentsview_pg_url); then
+    echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
+    return 2
+  fi
+  timeout 60 dev-version --local --snapshot > /dev/null 2>&1 || true
+  snap='{}'
+  if jq -e 'type == "object"' "$VERSIONS_FILE" >/dev/null 2>&1; then snap=$(cat "$VERSIONS_FILE"); fi
+  refresh_latest
+  versions=$snap
+  if latest_json=$(jq -ec 'select(type == "object")' "$LATEST" 2>/dev/null); then
+    versions=$(jq -c --argjson l "$latest_json" '. + {latest: $l}' <<< "$snap")
+  fi
+  state_json=$(timeout 20 "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
+  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
+  state=$(jq -r '.state // "idle"' <<< "$state_json")
+  [ -z "${HEARTBEAT_STATE_OVERRIDE:-}" ] || state=$HEARTBEAT_STATE_OVERRIDE
+  in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
+  chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
+  device=$(jq -r '.device // empty' <<< "$snap")
+  [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
+  g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
+  if ! out=$({ [ "$DDL_SENT" = 1 ] || printf '%s\n' "$DDL"; printf '%s\n' "$UPSERT"; } | run_psql "$url" \
+    -v "device=$device" -v "repo=$(workers_repo)" -v "role=$(g role)" -v "ring=$(g ring)" \
+    -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)" \
+    -v "dev_image=$(g dev_image)" -v "template_version=$(g template_version)" \
+    -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state" \
+    -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "critical_failures=$(critical_failures)" \
+    -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)" 2>&1); then
+    DDL_SENT=0
+    printf '%s\n' "$out" | mask_secrets >&2
+    echo "heartbeat-loop: beat failed, retrying next pass" >&2
+    return 1
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
+  DDL_SENT=1
+  printf 'last_beat=%s\nstate=%s\n' "$(date +%s)" "$state" > "$STATEFILE.tmp" 2>/dev/null \
+    && mv -f "$STATEFILE.tmp" "$STATEFILE" 2>/dev/null
+  return 0
+}
+
+stopped_beat() { HEARTBEAT_STATE_OVERRIDE=stopped timeout 5 "$SELF" --once; }
+
+case "${1-}" in
+  --once)
+    beat
+    rc=$?
+    [ "$rc" -ne 2 ] || rc=1
+    exit "$rc"
+    ;;
+  --final)
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    case "$pid" in '' | *[!0-9]*) pid='' ;; esac
+    if [ -n "$pid" ] && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q heartbeat-loop; then
+      kill -TERM "$pid" 2>/dev/null
+      i=0
+      while [ "$i" -lt 80 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.1
+        i=$((i + 1))
+      done
+      kill -0 "$pid" 2>/dev/null || exit 0
+      echo "heartbeat-loop: the loop did not exit in 8 s - writing the stopped beat here" >&2
+    fi
+    if agentsview_pg_url > /dev/null 2>&1; then stopped_beat || true; fi
+    exit 0
+    ;;
+  '') ;;
+  *)
+    echo "usage: heartbeat-loop [--once | --final]" >&2
+    exit 2
+    ;;
+esac
+
+printf '%s\n' "$$" > "$PIDFILE" 2>/dev/null
+cleanup() { [ "$(cat "$PIDFILE" 2>/dev/null)" != "$$" ] || rm -f "$PIDFILE"; }
+trap cleanup EXIT
+on_stop() {
+  trap '' TERM INT HUP
+  [ -z "${sleeper:-}" ] || kill "$sleeper" 2>/dev/null
+  if agentsview_pg_url > /dev/null 2>&1; then stopped_beat || true; fi
+  exit 0
+}
+trap on_stop TERM INT HUP
+trap ':' USR1
+
+sleeper=''
+while :; do
+  beat
+  [ $? -ne 2 ] || exit 0
+  sleep "$INTERVAL" &
+  sleeper=$!
+  wait "$sleeper"
+  sleeper=''
+done

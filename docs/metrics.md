@@ -372,6 +372,23 @@ ORDER BY repo, issue;
 Totals and the call: sum the columns; `sum(dispatcher_bound_other_idle) / sum(pipeline_bound +
 dispatcher_bound)` above 0.5 means option B.
 
+## Workers
+
+`heartbeat-loop` (base image) upserts one row per device into `factory.workers` every
+`DEV_HEARTBEAT_INTERVAL` seconds (default 60). Read it through `factory.workers_status`, which adds
+`age = now() - last_seen` and `stale = age > 3 * interval_s`. `state` is `idle`, `busy` or `stopped`;
+`in_flight` lists the issues and runs that make a worker busy; `critical_failures` is a JSON array of check
+codes (empty when healthy). `LISTEN factory_workers` delivers the device on every beat.
+
+Fleet status:
+
+```sql
+SELECT device, state, stale, age, base_image, dev_image, plugin_version,
+       jsonb_array_length(in_flight) AS in_flight_count, critical_failures
+FROM factory.workers_status
+ORDER BY stale, device;
+```
+
 ## Linking pipeline runs to issues
 
 `run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have
