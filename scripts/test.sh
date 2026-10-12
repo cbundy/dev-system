@@ -32,7 +32,8 @@ features/test/callum-tools/orchestrator-watch.test.sh
 SERIAL=""
 
 results=$(mktemp -d) || exit 1
-trap 'rm -rf "$results"' EXIT
+. ./scripts/test-sandbox.sh
+trap 'test_sandbox_clean; rm -rf "$results"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -44,6 +45,7 @@ mkdir "$results/tmp" || exit 1
 TEST_RESULTS_DIR=$results
 TMPDIR=$results/tmp
 export TEST_RESULTS_DIR TMPDIR
+test_sandbox_setup || exit 1
 
 failed=0
 
@@ -109,6 +111,9 @@ case $pool_status in
   *) exit "$pool_status" ;; # fast failure (bad TEST_JOBS) or an interrupt
 esac
 [ -f "$results/failed" ] && failed=$((failed + $(cat "$results/failed")))
+
+# Isolation: nothing may have written into the sandboxed shared-state directories.
+test_sandbox_check || failed=$((failed + 1))
 
 if [ "$failed" -gt 0 ]; then
   echo "test: $failed failed" >&2
