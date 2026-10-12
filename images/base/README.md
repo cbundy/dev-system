@@ -595,7 +595,8 @@ container never fails to start because of it.
    agentsview session push (see
    [Central session history](#central-session-history-agentsview)). A secret file it
    cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the event and
-   no-mistakes push loops (see [Factory event log](#factory-event-log)).
+   no-mistakes push loops (see [Factory event log](#factory-event-log)) and the
+   [worker heartbeat](#worker-heartbeat).
 9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
 10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
@@ -661,7 +662,8 @@ on every failure:
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
-- event and no-mistakes push status (see [Factory event log](#factory-event-log));
+- event and no-mistakes push status (see [Factory event log](#factory-event-log)), and
+  [worker heartbeat status](#worker-heartbeat);
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
   with the count when some would be removed, `OK` when there are none, nothing when the
   workspace has no bridge worktrees;
@@ -1622,31 +1624,6 @@ for a single pass. `DEV_NM_PUSH_INTERVAL` sets the delay (default 60 s).
 the last push time and whether activity is newer than the checkpoint; it fails when a URL
 is configured but the loop is stopped.
 
-`heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat), with the same URL rules
-as `event-push-loop`. Every `DEV_HEARTBEAT_INTERVAL` seconds (default 60; an integer of at least 10, else 60 with a
-log line) it upserts: identity and the four versions from `dev-version --local --snapshot`, the full version
-document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-latest.json`, refreshed in the
-background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
-`push` (when events, the no-mistakes mirror and agentsview last pushed), `critical_failures` and the busy state.
-`last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
-intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
-`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL is sent with the
-first beat of the process and after a failed beat. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
-(log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) and `dev-doctor` prints the last beat and state, and
-fails when a configured URL has no running loop. `heartbeat-loop --once` makes one beat.
-
-`state` is `busy` when this device has an issue in flight, a no-mistakes run is not finished, or a prompt was typed
-in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
-and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
-unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
-`reclaimed`; noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
-that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`,
-`agentsview_push_not_running` (a push loop whose lock is free), `versions_snapshot_missing`, and
-`latest_lookup_failing` (the background lookup has failed for over an hour). On TERM, INT or HUP the loop writes one
-last beat with `state = 'stopped'` and exits 0; `heartbeat-loop --final` signals the running loop through its
-pidfile (waiting up to 8 s) or, with none running, writes that beat itself. A desktop stop has no hook, so its row
-goes `stale` after three intervals. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
-
 `/usr/local/share/dev-system/nm-export <state.sqlite>` prints the mirror DDL and upserts
 without connecting to PostgreSQL. `--mark N` selects an incremental export;
 `--mark-out FILE` writes the resulting `{ "mark": N, "rows": N }` metadata.
@@ -1654,6 +1631,39 @@ without connecting to PostgreSQL. `--mark N` selects an incremental export;
 it does not change the push loop's checkpoint path. `--waiting` prints `yes` when the
 newest touch timestamp exceeds `--mark` (zero when omitted), otherwise `no`, then exits
 without emitting SQL. Export selection rules are in the linked metrics reference.
+
+### Worker heartbeat
+
+`heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat), with the same URL rules
+as `event-push-loop`. Between beats it waits `DEV_HEARTBEAT_INTERVAL` seconds (see the
+[configuration table](#central-session-history-agentsview)); an invalid value falls back to the default
+with a log line. It upserts: identity and the four versions from `dev-version --local --snapshot`, the full version
+document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-latest.json`, refreshed in the
+background at most every 15 minutes, never waited for), `repo`, `started_at` (the container start, from PID 1),
+`push` (event file and push-marker modification times, the no-mistakes mirror's recorded last push, and
+agentsview's watcher-log modification time), `critical_failures` and the busy state.
+`last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
+intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
+`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL is sent with the
+first beat of the process and after a failed beat. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
+(log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) and `dev-doctor` prints the last beat and state, and
+fails when a configured URL has no running loop.
+`/usr/local/share/dev-system/heartbeat-loop --once` makes one beat.
+
+`in_flight` lists the issues and runs that make the worker busy, with `repo`, `issue`, `run_id`,
+`branch` and `state` for each entry; unavailable identifiers are null.
+`state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
+`completed`, `failed` or `cancelled`, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
+and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
+unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
+`reclaimed`; noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
+that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`,
+`agentsview_push_not_running` (a push loop whose lock is free), `versions_snapshot_missing`, and
+`latest_lookup_failing` (the background lookup has failed for over an hour). On TERM, INT or HUP the loop writes one
+last beat with `state = 'stopped'` on a best-effort basis, bounded to 5 seconds, and exits 0;
+`/usr/local/share/dev-system/heartbeat-loop --final` signals the running loop through its
+pidfile (waiting up to 8 s) or, with none running, writes that beat itself. A desktop stop has no hook, so its row
+goes `stale` after three intervals. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
 ## dev-query
 
