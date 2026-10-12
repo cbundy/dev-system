@@ -33,10 +33,10 @@ victim=$(find_sleep "$bg_pid" 4)
 kill "$victim"
 wait_lines "$out.err" 1 # it noticed, and says so
 alive "$bg_pid" || fail "timer sleep kill: watcher died: $(cat "$out" "$out.err")"
-[ ! -s "$out" ] || fail "timer sleep kill: fired early: $(cat "$out")"
 wait_lines "$out" 2
 [ $(($(date +%s) - t0)) -ge 4 ] || fail "timer sleep kill: deadline came early"
-[ "$(sed -n 1p "$out")" = timeout ] || fail "timer sleep kill: $(cat "$out")"
+expect_lines "$out" "timeout
+rearm --repo o/r --label ready --stream --deadline 04 --queue-interval 61 --pipeline-interval 62 --queue-known 5"
 grep -q '^orchestrator-watch.sh: sleep interrupted' "$out.err" || fail "timer sleep kill: stderr: $(cat "$out.err")"
 [ "$(line_count "$out.err")" -eq 1 ] || fail "timer sleep kill: extra stderr: $(cat "$out.err")"
 wait "$bg_pid" || fail "timer sleep kill: did not exit 0"

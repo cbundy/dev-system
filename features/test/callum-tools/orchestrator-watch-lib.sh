@@ -261,8 +261,10 @@ queue_seq() {
 g() { git -c user.name=t -c user.email=t@t -c init.defaultBranch=main "$@"; }
 g init -q "$tmpdir/repo"
 repo="$tmpdir/repo"
-# Fake children for the lifecycle scenarios: record the pid and a sleeping
-# grandchild's pid, then stay quiet (writing one stderr line if asked).
+# Fake children for the lifecycle scenarios: record the pid, write one stderr
+# line, record a sleeping grandchild's pid, then stay quiet on stdout while
+# adding a line to <name>-beats once a second (the progress that bounds their
+# negative windows).
 # FAKE_MODE: quiet | exit0 | error
 cat > "$tmpdir/fake/child.sh" <<'FAKE'
 #!/bin/sh
@@ -275,8 +277,12 @@ case "${FAKE_MODE:-quiet}" in
   error) echo "watcher-error boom"; exit 1 ;;
 esac
 sleep 300 &
+echo x >> "$d/$name-beats"
 echo $! > "$d/$name-sleep-pid"
-wait
+while :; do
+  sleep 1
+  echo x >> "$d/$name-beats"
+done
 FAKE
 cat > "$tmpdir/fake/queue.sh" <<FAKE
 #!/bin/sh

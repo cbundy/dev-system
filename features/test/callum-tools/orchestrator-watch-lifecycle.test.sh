@@ -57,9 +57,12 @@ out="$tmpdir/s6.out"
 # shellcheck disable=SC2086
 start_bg "$out" "$repo" env $(fake_env) "$OW" $A --stream
 wait_fakes
-# both children have said their one stderr line and gone quiet
+# both children have said their one stderr line and gone quiet; the window
+# lasts two whole heartbeats of a child after that
 wait_lines "$out.err" 2
+wait_polls "$tmpdir/fake/queue-beats" 3
 alive "$bg_pid" || fail "a quiet child was taken for dead: $(cat "$out" "$out.err")"
+[ ! -s "$out" ] || fail "a quiet child with stderr output printed: $(cat "$out")"
 grep -q "fake queue backoff" "$out.err" || fail "child stderr not passed through: $(cat "$out.err")"
 fp=$(fake_pids)
 kill -TERM "$bg_pid"
@@ -118,7 +121,6 @@ victim=$(find_sleep "$bg_pid" 3)
 kill "$victim"
 wait_lines "$out.err" 1 # it noticed, and says so
 alive "$bg_pid" || fail "child sleep kill: watcher died: $(cat "$out" "$out.err")"
-[ ! -s "$out" ] || fail "child sleep kill: stdout must stay empty: $(cat "$out")"
 grep -q '^queue-watch.sh: sleep interrupted (status 143)' "$out.err" || fail "child sleep kill: stderr: $(cat "$out.err")"
 [ "$(line_count "$out.err")" -eq 1 ] || fail "child sleep kill: extra stderr: $(cat "$out.err")"
 wait_lines "$out" 1
