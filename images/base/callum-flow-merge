@@ -40,6 +40,8 @@ GH=${CALLUM_FLOW_GH_BIN:-gh}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 GUARD=${CALLUM_FLOW_GUARD_BIN:-$here/callum-flow-merge-guard}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+# Only the orchestrator runs this, so its events carry its actor.
+export CALLUM_FLOW_ACTOR="${CALLUM_FLOW_ACTOR:-orchestrator}"
 MILESTONE=${CALLUM_FLOW_MILESTONE_BIN:-$here/callum-flow-milestone}
 method=${CALLUM_FLOW_MERGE_METHOD:-squash}
 

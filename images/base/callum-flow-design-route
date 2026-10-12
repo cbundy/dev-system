@@ -31,6 +31,8 @@ set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
+# Only the orchestrator runs this, so its events carry its actor.
+export CALLUM_FLOW_ACTOR="${CALLUM_FLOW_ACTOR:-orchestrator}"
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 PCT=${CALLUM_FLOW_DESIGN_SESSION_PCT:-0}
 

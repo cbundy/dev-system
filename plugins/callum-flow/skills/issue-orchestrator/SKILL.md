@@ -90,6 +90,7 @@ from the main checkout (its lock refuses a second copy; the header has the argum
 
 Replacing a branch or run for the same issue (`-v2`, restart): log `callum-flow-event superseded --issue <N> --run <old run> --note "by <new branch>"`, not `abandoned`.
 Stopping work on it (paused, split, dropped): log `callum-flow-event abandoned --issue <N>`, with `--run <id>` and `--branch <b>` when known.
+Every `callum-flow-event` you run yourself takes `--actor orchestrator` (the claim, merge and design-route scripts set it), so readers can find your session.
 
 ## Upgrading the workspace you run in
 To pick up a new image or template, run `dev-restart-self` (`--restart` forces the

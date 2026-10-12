@@ -190,7 +190,7 @@ calls | grep -qx 'issue edit 7 --add-label In development --remove-label ready -
 jq -e '.[-1].body == "claimed-by: devA at 2026-10-08T12:00:00Z lease: 120\n<!-- callum-flow-claim -->"' "$d/comments-7.json" >/dev/null ||
   fail "fresh: comment format: $(jq -r '.[-1].body' "$d/comments-7.json")"
 [ "$(events | wc -l)" = 1 ] || fail "fresh: event: $(events)"
-events | jq -e '.state == "claimed" and .issue == 7 and .device == "devA" and .note == "lease: 120"' >/dev/null || fail "fresh: event: $(events)"
+events | jq -e '.state == "claimed" and .issue == 7 and .device == "devA" and .note == "lease: 120" and .actor == "orchestrator"' >/dev/null || fail "fresh: event: $(events)"
 
 # lease override
 reset

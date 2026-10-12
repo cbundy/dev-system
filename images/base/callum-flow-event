@@ -40,9 +40,12 @@
 #
 # No network, one jq call, one O_APPEND write of a single short line (atomic
 # between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
-# the hostname), session_id (CLAUDE_SESSION_ID, else the newest transcript of
-# the working directory's Claude project, else null), actor
-# (--actor, CALLUM_FLOW_ACTOR, else "agent"), v (2), the running versions
+# the hostname), session_id (CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID -
+# the top-level Claude session, which its sub-agents and background commands
+# inherit - else the newest transcript of the working directory's Claude
+# project, a guess that can name another session, else null), actor
+# (--actor, CALLUM_FLOW_ACTOR, else "agent"; the orchestrator's own events say
+# "orchestrator", the watchers "watcher", the sweep "sweep"), v (2), the running versions
 # base_image, dev_image, template_version and plugin_version (read from the
 # snapshot dev-init keeps at ${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}, the
 # same local data `dev-version --local` reads; null when it is missing or
@@ -149,7 +152,7 @@ device=${DEV_MACHINE_NAME:-}
 [ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
 [ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
 
-session=${CLAUDE_SESSION_ID:-}
+session=${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}
 if [ -z "$session" ]; then
   pdir=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')
   if [ -d "$pdir" ]; then
