@@ -1657,8 +1657,8 @@ fails when a configured URL has no running loop.
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
-`briefed`, `design_routed` or `delegated` reopens the issue; replayed run facts such as `failed` or `head_mismatch`
-do not. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
+`briefed`, `design_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
+run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
