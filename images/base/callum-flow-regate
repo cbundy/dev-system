@@ -1,0 +1,256 @@
+#!/bin/sh
+#
+# callum-flow-regate: leave a branch ready for a fresh `no-mistakes axi run` on the same
+# name after a deliberate rebase of a branch that already had a run (cbundy/dev-system#489).
+# no-mistakes keeps a "private mirror" of the branch in its gate repo; after a rebase that
+# mirror holds pipeline commits the branch no longer has, and a fresh run refuses
+# ("preserved recovery evidence cannot be used safely", "refusing to reconcile private
+# mirror ref"). This helper archives what would be lost, then clears the obstacle.
+#
+# Usage: callum-flow-regate --issue <N> [--accept-dropped <sha>[,<sha>]] [--new-branch]
+#          [--base BRANCH]
+#   Run it in the worktree, on the branch, after the rebase. It never starts the run: the
+#   caller owns the --intent and the TEST POLICY sentence.
+#   --accept-dropped  names a pipeline commit (subject 'no-mistakes(...)') that the rebase
+#                     dropped and that may be lost. Without it such a commit blocks.
+#   --new-branch      skip the same-branch path and move to <branch>-v<N>.
+#   --base            the base branch (default main).
+#
+# Output (stdout, one line): REGATE ready branch=B head=SHA archived=REF[,REF]|none
+#   or, in new-branch mode: REGATE new-branch branch=NEW old_branch=B old_run=ID
+#   followed by a 'next:' line. A refusal prints 'REGATE FAIL <reason> fix: ...' and exits 1.
+#   Preflight and dropped-commit refusals change nothing; a later one (a run that did not
+#   stop, a refused lease push) may leave the run aborted, recovered or the gate ref deleted,
+#   with the archive refs kept. Exit 2 is a usage error.
+#
+# Safety: a dropped commit is one in the run head, the gate ref or origin/<branch> that is
+# not in origin/<base> and has no patch-id equivalent in HEAD. Every one is archived under
+# refs/heads/archive/<branch>-<kind>-<sha8>. Nothing is deleted, pushed or recovered before
+# the dropped-commit check passes. The gate ref delete and the origin push are leased on the
+# tips that check saw, so a commit a live run adds before it stops makes the helper refuse.
+#
+# Environment (for tests): CALLUM_FLOW_NM_BIN (no-mistakes), CALLUM_FLOW_EVENT_BIN
+# (callum-flow-event), CALLUM_FLOW_REGATE_TRIES / CALLUM_FLOW_REGATE_SLEEP (waits for an
+# aborted run to turn terminal, default 15 x 2s).
+# shellcheck disable=SC2015  # A && B || fail is the idiom here
+set -u
+
+NM=${CALLUM_FLOW_NM_BIN:-no-mistakes}
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+EVENT=${CALLUM_FLOW_EVENT_BIN:-$here/callum-flow-event}
+tries=${CALLUM_FLOW_REGATE_TRIES:-15}
+nap=${CALLUM_FLOW_REGATE_SLEEP:-2}
+case "$tries" in '' | *[!0-9]*) tries=15 ;; esac
+case "$nap" in '' | *[!0-9.]*) nap=2 ;; esac
+
+usage() {
+  [ -z "${1-}" ] || echo "callum-flow-regate: $1" >&2
+  echo "usage: callum-flow-regate --issue <N> [--accept-dropped <sha>[,<sha>]] [--new-branch] [--base BRANCH]" >&2
+  exit 2
+}
+
+issue='' accept='' newbranch='' base=main
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help) usage ;;
+    --new-branch) newbranch=1 ;;
+    --issue | --accept-dropped | --base)
+      [ $# -ge 2 ] || usage "$1 needs a value"
+      case "$1" in
+        --issue) issue=$2 ;;
+        --accept-dropped) accept="$accept,$2" ;;
+        --base) base=$2 ;;
+      esac
+      shift
+      ;;
+    *) usage "unexpected argument '$1'" ;;
+  esac
+  shift
+done
+[ -n "$issue" ] || usage "--issue is required"
+case "$issue" in *[!0-9]*) usage "--issue must be a number" ;; esac
+
+fail() {
+  printf 'REGATE FAIL %s fix: %s\n' "$1" "$2"
+  exit 1
+}
+
+clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
+field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
+is_anc() { git merge-base --is-ancestor "$1" "$2" 2> /dev/null; }
+short() { printf '%.8s' "$1"; }
+
+# --- preflight: read-only checks that change nothing -------------------------------
+git rev-parse --git-dir > /dev/null 2>&1 || fail "not a git work tree" "run it inside the worktree"
+b=$(git symbolic-ref -q --short HEAD) || fail "HEAD is detached" "check out the branch first"
+[ "$b" != "$base" ] || fail "HEAD is the base branch $base" "run it on the feature branch"
+[ -z "$(git status --porcelain 2> /dev/null)" ] || fail "the working tree is dirty" "commit or discard the changes first"
+git fetch -q origin "+refs/heads/$base:refs/remotes/origin/$base" 2> /dev/null || fail "cannot fetch origin/$base" "check the origin remote and network"
+head=$(git rev-parse HEAD)
+is_anc "origin/$base" "$head" || fail "HEAD does not contain origin/$base" "rebase the branch onto origin/$base first"
+
+has_gate=''
+git remote get-url no-mistakes > /dev/null 2>&1 && has_gate=1
+ref="refs/heads/$b"
+
+gate_tip() { [ -n "$has_gate" ] && git ls-remote no-mistakes "$ref" 2> /dev/null | awk '{print $1}' | sed -n 1p; }
+origin_tip() { git ls-remote origin "$ref" 2> /dev/null | awk '{print $1}' | sed -n 1p; }
+# have <sha>: the commit is available locally, fetching it from the gate when needed
+have() {
+  git cat-file -e "$1^{commit}" 2> /dev/null && return 0
+  [ -n "$has_gate" ] || return 1
+  git fetch -q --no-tags --upload-pack='git -c uploadpack.allowAnySHA1InWant=true upload-pack' no-mistakes "$1" 2> /dev/null
+  git cat-file -e "$1^{commit}" 2> /dev/null && return 0
+  git fetch -q --no-tags origin "$1" 2> /dev/null
+  git cat-file -e "$1^{commit}" 2> /dev/null
+}
+
+# --- the run on this branch --------------------------------------------------------
+status_out=$($NM axi status 2> /dev/null | clean) || status_out=''
+run_id=$(field "$status_out" id)
+run_status=$(field "$status_out" status)
+live=''
+case "$run_status" in '' | failed | aborted | cancelled | canceled | completed) ;; *) live=1 ;; esac
+
+# --- sources of commits that the rebase may have dropped ----------------------------
+sync_out=$($NM axi sync --check 2> /dev/null | clean) || sync_out=''
+run_head=$(field "$sync_out" current_head)
+[ -n "$run_head" ] || run_head=$(field "$status_out" head_sha)
+gate_sha=$(gate_tip)
+orig_sha=$(origin_tip)
+
+srcs='' # "kind sha" lines, only those not already in HEAD
+add_src() {
+  [ -n "$2" ] || return 0
+  if ! have "$2"; then
+    [ -z "$newbranch" ] || return 0
+    fail "cannot read $1 commit $(short "$2")" "its objects are not reachable, so it cannot be archived; use --new-branch"
+  fi
+  is_anc "$2" "$head" && return 0
+  case "
+$srcs" in *" $2"*) return 0 ;; esac
+  srcs="$srcs
+$1 $2"
+}
+add_src mirror "$gate_sha"
+add_src run "$run_head"
+add_src remote "$orig_sha"
+
+dropped=''
+for s in $(printf '%s\n' "$srcs" | awk 'NF{print $2}'); do
+  for c in $(git cherry "$head" "$s" 2> /dev/null | awk '$1=="+"{print $2}'); do
+    is_anc "$c" "origin/$base" && continue
+    case "
+$dropped" in *"$c"*) continue ;; esac
+    dropped="$dropped
+$c"
+  done
+done
+blocked=''
+accepted=$(printf '%s' "$accept" | tr ',' '\n' | awk 'NF')
+for c in $dropped; do
+  [ -n "$c" ] || continue
+  subj=$(git log -1 --format=%s "$c")
+  printf 'REGATE dropped %s %s\n' "$(short "$c")" "$subj" >&2
+  case "$subj" in
+    'no-mistakes('*)
+      ok=''
+      for a in $accepted; do
+        full=$(git rev-parse --verify -q "$a^{commit}" 2> /dev/null) && [ "$full" = "$c" ] && ok=1
+      done
+      [ -n "$ok" ] || blocked="$blocked $(short "$c")"
+      ;;
+  esac
+done
+[ -z "$blocked" ] || fail "the rebase dropped pipeline commit(s):$blocked" "check whether the rebased branch already has their changes, then pass --accept-dropped <sha> for each; otherwise redo the rebase keeping them"
+
+# --- archive, then act -------------------------------------------------------------
+archived=''
+archive_all() {
+  for line in $(printf '%s\n' "$srcs" | awk 'NF{print $1 ":" $2}'); do
+    kind=${line%%:*} sha=${line#*:}
+    aref="refs/heads/archive/$b-$kind-$(short "$sha")"
+    git update-ref "$aref" "$sha" || fail "cannot archive $(short "$sha")" "nothing was changed; check the repository"
+    archived="${archived:+$archived,}${aref#refs/heads/}"
+  done
+}
+archive_all
+
+new_branch() {
+  n=2
+  while git show-ref --verify -q "refs/heads/$b-v$n" ||
+    [ -n "$(git ls-remote origin "refs/heads/$b-v$n" 2> /dev/null)" ] ||
+    { [ -n "$has_gate" ] && [ -n "$(git ls-remote no-mistakes "refs/heads/$b-v$n" 2> /dev/null)" ]; }; do
+    n=$((n + 1))
+  done
+  nb="$b-v$n"
+  git switch -q -c "$nb" "$head" || fail "cannot create $nb" "check the working tree"
+  "$EVENT" superseded --issue "$issue" --run "${run_id:-unknown}" --branch "$nb" --note "by $nb" > /dev/null 2>&1 || true
+  printf 'REGATE new-branch branch=%s old_branch=%s old_run=%s\n' "$nb" "$b" "${run_id:-unknown}"
+  printf 'next: once the new PR exists, close the old PR for %s as superseded by %s\n' "$b" "$nb"
+  exit 0
+}
+
+if [ -n "$live" ]; then
+  $NM axi abort > /dev/null 2>&1 || true
+  i=0
+  while :; do
+    st=$($NM axi status 2> /dev/null | clean | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | sed -n 1p | tr -d '"')
+    case "$st" in '' | failed | aborted | cancelled | canceled | completed) break ;; esac
+    i=$((i + 1))
+    [ "$i" -lt "$tries" ] || fail "the live run $run_id did not stop" "run 'no-mistakes axi abort' and retry"
+    sleep "$nap"
+  done
+fi
+
+[ -z "$newbranch" ] || new_branch
+
+sync_code() {
+  sync_out=$($NM axi sync --check 2> /dev/null | clean) || sync_out=''
+  code=$(field "$sync_out" code)
+}
+sync_code
+case "$code" in
+  run_pipeline | user_owned) ;;
+  '') [ -n "$run_id" ] && new_branch ;;
+  recover_custody)
+    cmd=$(field "$sync_out" command)
+    case "$cmd" in
+      'no-mistakes axi sync --recover'*) ;;
+      *) new_branch ;;
+    esac
+    # shellcheck disable=SC2086  # the CLI's own command, split on purpose
+    $NM ${cmd#no-mistakes } > /dev/null 2>&1 || new_branch
+    ;;
+  inspect_and_reconcile_manually)
+    $NM axi sync --recover --keep-local > /dev/null 2>&1 || new_branch
+    ;;
+  adopt_published)
+    [ "$orig_sha" = "$head" ] || new_branch
+    $NM axi sync --adopt-published > /dev/null 2>&1 || new_branch
+    ;;
+  *) new_branch ;;
+esac
+if [ -n "$code" ] && [ "$code" != run_pipeline ] && [ "$code" != user_owned ]; then
+  sync_code
+  case "$code" in run_pipeline | user_owned | '') ;; *) new_branch ;; esac
+  [ "$(git rev-parse HEAD)" = "$head" ] || new_branch
+fi
+
+# stale mirror: clear a gate ref that HEAD does not contain (its content is archived)
+gate_now=$(gate_tip)
+if [ -n "$gate_now" ] && ! is_anc "$gate_now" "$head"; then
+  [ "$gate_now" = "$gate_sha" ] || fail "the gate ref for $b moved to $(short "$gate_now") after the check" "rerun callum-flow-regate so the new commits are checked and archived"
+  git push -q --force-with-lease="$ref:$gate_sha" no-mistakes --delete "$b" > /dev/null 2>&1 || new_branch
+  [ -z "$(gate_tip)" ] || new_branch
+fi
+
+# diverged remote branch: lease-push so the pipeline's rebase does not meet the old commit
+orig_now=$(origin_tip)
+if [ -n "$orig_now" ] && ! is_anc "$orig_now" "$head"; then
+  git push -q --force-with-lease="$ref:$orig_sha" origin "HEAD:$ref" > /dev/null 2>&1 ||
+    fail "origin/$b moved after the check or refused the lease push" "rerun callum-flow-regate so the new commits are checked and archived, or use --new-branch"
+fi
+
+[ -z "$run_id" ] || "$EVENT" superseded --issue "$issue" --run "$run_id" --branch "$b" --note "re-gate on $b" > /dev/null 2>&1 || true
+printf 'REGATE ready branch=%s head=%s archived=%s\n' "$b" "$head" "${archived:-none}"

@@ -255,6 +255,12 @@ tests would otherwise have missed:
   only correct for a gate that is PARKED awaiting a decision and needs no new
   commit of yours; it does not gate a new commit against a run that is still
   live.
+- Before a fresh `axi run` on a branch that already had a run (after the
+  deliberate rebase), run `callum-flow-regate --issue <N>` in the worktree. It
+  archives what the rebase dropped, clears the stale gate state and prints one
+  `REGATE` line: act on it (`ready` means start the run; `new-branch` means the
+  worktree is now on `<branch>-v<N>`; `FAIL` says what to fix). Never hand-roll
+  gate ref deletes or `sync --recover` choices. It never starts the run itself.
 - Do NOT merge. Merging is the delegator's decision, not yours, unless your
   brief explicitly says otherwise.
 

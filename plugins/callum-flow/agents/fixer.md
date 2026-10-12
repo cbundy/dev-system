@@ -24,5 +24,7 @@ never gates your new commit, so use `abort` and a fresh `axi run`. `axi respond`
 acts on the run of the branch your current directory has checked out, so run it
 from a slot you have just checked out on the run's branch and read its log.
 
+After the rebase and before a fresh `axi run` on a branch that already had a run, run `callum-flow-regate --issue <N>` and act on its `REGATE` line; never hand-roll gate ref deletes or `sync --recover` choices.
+
 When you start a fresh run, end its `--intent` with this sentence, verbatim:
 "TEST POLICY: never delete, skip or weaken an existing test or assertion (no --warn-only, || true, skip/only, commented-out asserts) to make a gate pass; fix the code or the environment instead. Remove a test only if it is clearly and absolutely not required, and never as an auto-fix: raise it as ask-user with the justification so the adjudicator can judge it."

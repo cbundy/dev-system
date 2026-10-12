@@ -61,7 +61,7 @@ reset; echo main-ish > "$st/base"; echo 'MATCH #7 issue=#12' > "$st/linkage"; g 
 # mergeable (cbundy/dev-system#246): the regression is #237, OPEN MERGEABLE BEHIND
 reset; echo BEHIND > "$st/mss"; g 7; expect_fail "behind" mergeable
 printf '%s' "$out" | grep -q 'GUARD mergeable FAIL behind main, run .callum-flow-merge-guard <pr> --update-behind. first' || fail "behind reason: $out"
-for want in "--update-behind" "only if it fails, re-gate" "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD"; do
+for want in "--update-behind" "only if it fails, re-gate" "git rebase origin/<base>" "axi abort" "fresh backgrounded 'axi run" "head equals the rebased HEAD" "callum-flow-regate --issue <N>"; do
   case "$out" in *"$want"*) ;; *) fail "behind FAIL should name the fix ($want): $out" ;; esac
 done
 reset; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; g 7; expect_fail "dirty" mergeable
