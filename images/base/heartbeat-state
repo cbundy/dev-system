@@ -151,7 +151,7 @@ function main() {
   for (const r of readRuns(process.env.NO_MISTAKES_HOME || '/persist/no-mistakes')) {
     let { repo, issue } = runIssue.get(String(r.id)) || {};
     if (issue === undefined) {
-      const m = /issue-(\d+)/.exec(r.branch || '');
+      const m = /(?:^|\/)issue-([0-9]{1,9})(?:-|$)/.exec(r.branch || '');
       repo = repoOfUrl(r.upstream_url);
       issue = m ? Number(m[1]) : null;
     }
