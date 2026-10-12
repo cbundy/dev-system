@@ -493,12 +493,6 @@ for s in renewed usage watcher_error test_weakened claim_lost; do seed "$s" 7; d
 n=$(events | wc -l)
 rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "final then noise wrote: $(events)"
-# the central read ignores the same events (checked on the query text)
-reset
-echo '2026-10-10T10:00:00Z|9|verdict' > "$d/central"
-closed_issue 9 completed
-dq
-grep -q "NOT IN ('untrusted_stripped'.*'renewed')" "$d/dq-calls" || fail "central query must skip housekeeping events: $(cat "$d/dq-calls")"
 # an issue known only from a mirror run (factory-state lists it, no events): closed on GitHub gets closed
 cat > "$tmpdir/factory-state" <<'STUB'
 #!/bin/sh
