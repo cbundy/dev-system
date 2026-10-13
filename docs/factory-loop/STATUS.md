@@ -5,6 +5,8 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
 
 ## What needs to happen next (owner)
 
+The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
+
 1. **Review the spec and the seven owner calls** in [DECISIONS.md](DECISIONS.md):
    - the merge review stays with the model;
    - no new event state;
@@ -23,9 +25,10 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
    drop out of its diff once merged:
    - the heartbeat-loop flake ([PR #524](https://github.com/cbundy/dev-system/pull/524));
    - the leaked test processes ([PR #527](https://github.com/cbundy/dev-system/pull/527)).
-4. **When you resume the factory**, the shadow keeps comparing itself with the live
-   orchestrator. Regenerate the comparison as [SHADOW-REPORT.md](SHADOW-REPORT.md) says. Stop
-   it with `coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
+4. **The shadow is comparing itself with the live orchestrator on #522**, the one issue you
+   released this morning (its directive mirrors "522 only"). The comparison goes into
+   [SHADOW-REPORT.md](SHADOW-REPORT.md) when #522 merges. Stop it with
+   `coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
 
 Nothing is blocked on anyone else.
 
