@@ -223,7 +223,7 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 | `heartbeatEveryMs`, `sweepEveryMs` | 1 200 000, 1 800 000 | rules `H1`, `H2` |
 | `slowGapMs` | 600 000 | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | `null` | an optional cap on this device's live issues |
+| `maxInFlightIssues` | 10 | a cap on this device's live issues (owner, 2026-10-13). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for fixers and re-drives |
 | `reviewFixCap` | 3 | review fix rounds per run (I-48) |
 | `guardRecheckMs`, `guardTtlMs` | 180 000, 1 800 000 | guard freshness (rule `M1`) |
