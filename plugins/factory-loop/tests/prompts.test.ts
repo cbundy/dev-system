@@ -5,7 +5,7 @@
 // reference and no brief content may get through.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CHECKOUT_RULE, descriptionOf, nameOf, neutral, promptOf } from '../hooks/prompts'
+import { CHECKOUT_RULE, FOREGROUND_RULE, descriptionOf, nameOf, neutral, promptOf } from '../hooks/prompts'
 import type { AgentAction, PromptEnv } from '../hooks/prompts'
 import { DESIGNER_RESULT, HANDOFF_RESULT } from '../hooks/replies'
 import type { AdjudicatorPurpose, FixerPurpose } from '../hooks/types'
@@ -218,6 +218,12 @@ describe('the main checkout (testbed, 2026-10-13)', () => {
   test('every agent is told never to move or change the main checkout', () => {
     const actions = [adjudicator(BENIGN, 'gate'), adjudicator(BENIGN, 'merge'), adjudicator(BENIGN, 'weakening')]
     for (const action of actions) expect(promptOf(action, ENV)).toContain(CHECKOUT_RULE)
+  })
+
+  test('agents that start sub-agents are told to run them in the foreground; the adjudicator starts none', () => {
+    expect(promptOf(designer(BENIGN), ENV)).toContain(FOREGROUND_RULE)
+    expect(promptOf(fixer(BENIGN, 'conflict'), ENV)).toContain(FOREGROUND_RULE)
+    expect(promptOf(adjudicator(BENIGN, 'gate'), ENV)).not.toContain(FOREGROUND_RULE)
   })
 })
 

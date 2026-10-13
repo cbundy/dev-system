@@ -110,12 +110,19 @@ function briefLines(repo: string | null, brief: string | null, n: number | null)
 }
 
 function readFirst(type: AgentType): string {
-  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first. ${CHECKOUT_RULE}`
+  // the adjudicator starts no sub-agents (its tools have no Agent)
+  const foreground = type === 'adjudicator' ? '' : ` ${FOREGROUND_RULE}`
+  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first. ${CHECKOUT_RULE}${foreground}`
 }
 
 // Agents start in the session's directory, the factory's main checkout, which the loop and every
 // other agent read from. On the testbed a read-only adjudicator ran `git checkout` there and left
 // it detached on another issue's branch, so every agent is told plainly.
+// The loop reads an agent's first final message as its answer. On the testbed a designer started
+// its explorer in the background and ended its turn to wait, so its answer was a wait note.
+export const FOREGROUND_RULE =
+  'Run any sub-agent you start in the foreground and wait for it there: your turn ends only with your final message, the one that ends with the line asked for below.'
+
 export const CHECKOUT_RULE =
   'You start in the factory\'s main checkout: never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`, and do any work in a worktree of your own.'
 
