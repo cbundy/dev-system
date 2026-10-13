@@ -81,6 +81,10 @@ issue you release is another comparison, read the same way.
 8. **Tests**: executors against the testing kit's mocks (canned CLI output, fake agents through
    `agent.spawn` and `turn.complete` hooks), and driver tests in act mode end to end. The
    properties in `plan.test.ts` stay green.
+9. **The owner's first review** (2026-10-13), in code: the counts-only title (D-23), one memory
+   file per agent type (D-22), trackers inside `only` (D-35), and follow-ups for hand merges
+   (D-29, rule `M7`). Plus whatever the open review threads settle (D-05, D-09, D-14, D-15,
+   D-24, D-28 and the `/loop` name).
 
 - **Done when**: act mode passes its tests, the shadow (still in observe mode) keeps agreeing
   with the live orchestrator, and STATUS lists what is still untested.

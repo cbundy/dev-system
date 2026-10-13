@@ -245,7 +245,8 @@ type Control = {
   noNewWork: boolean              // wind-down or drain: no start and no develop actions
   skip: number[]                  // never claim these
   priority: number[]              // claim these first, in this order
-  only: number[]                  // claim only these, in this order (empty: no limit); work in flight goes on
+  only: number[]                  // claim only these, in this order (empty: no limit); a tracker stands for its
+                                  //   open sub-issues; work in flight goes on
   serial: boolean                 // one issue in flight at a time (a drain in order)
   usageOverride: { untilPct: number; expiresAt: Ms } | null   // run past a threshold (I-19)
   resumed: { subject: string; at: Ms }[]  // holds the owner released: 'issue:<N>' or 'run:<id>'
@@ -450,7 +451,7 @@ sends it to `judge(guard-fail)`).
 
 Each spawn's prompt comes from a template in `hooks/prompts.ts`. Templates carry only issue
 numbers, URLs, branch names, run ids, step names, instructions from the adjudicator or the
-model, owner notes, pointers (CLAUDE.md, the memory file, the `implement-issue` skill), a
+model, owner notes, pointers (CLAUDE.md, the agent type's own memory file under `.claude/agent-memory/`, the `implement-issue` skill), a
 per-issue scratch subdirectory (I-95), and the closing `RESULT` line the loop parses. They never
 carry a brief's content or a closing keyword (I-33), and a test checks both.
 
@@ -603,15 +604,17 @@ keep answers short: a model that cannot do what a wake asks explains at length.
 ### 9.1 The title
 
 ```text
-🔄 dev-system · act · slow 5h 65% 7d 85% · q 3 dev 2 pipe 1 merge 0 · owner 1
+🔄 dev-system (3 - 5 - 9) · owner 1
 ```
 
-The repo's short name, the mode, the tier with both windows rounded down to 5% (so the title does
-not change every minute), the counts of queued, implementing, in-pipeline-or-parked and
-ready-to-merge issues, and the number of open owner items. `blind` replaces the counts in a
-blind pass, `usage n/a` replaces the windows when usage is unavailable, and a stuck issue adds
-`stuck <n>`. It is set with `/rename` only when the text changes, and the `session.append` hook
-blanks the note the rename leaves for the model (FINDINGS check 3).
+The repo's short name and three counts (DECISIONS D-23): issues in the queue, in progress
+(designing through ready to merge), and merged in the last 6 hours. Usage is not shown. A word is
+added only when something needs attention: `owner <n>` for open owner items, `blind` (which
+replaces the counts in a blind pass), `off`, `observe` when not acting, a usage tier that holds
+work (`stop new`, `stop all`), `stuck <n>` and `gh wait`. It is set with `/rename` only when the
+text changes, and the `session.append` hook blanks the note the rename leaves for the model
+(FINDINGS check 3). The observe build running today still shows the first format (mode, tier,
+both usage windows and four stage counts); the act-half build changes it.
 
 ### 9.2 `tell`
 
@@ -714,7 +717,7 @@ One JSON line per pass in the decision log:
  "actions":[{"key":"claim:470:new","kind":"claim","class":"start","rule":"D1","issue":470,"reason":"ready, unblocked"}],
  "skipped":[{"rule":"D1","issue":340,"why":"tracker"}],
  "outcomes":[{"key":"guard:512:03a35cd:1","status":"done","ms":8123,"summary":"no FAIL"}],
- "title":"🔄 dev-system · observe · slow 5h 65% 7d 85% · q 3 dev 2 pipe 1 merge 0 · owner 1"}
+ "title":"🔄 dev-system (3 - 5 - 9) · observe · owner 1"}
 ```
 
 `digest` is a hash of the canonical state without its timestamps, so unchanged passes are easy

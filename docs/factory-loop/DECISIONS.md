@@ -274,17 +274,24 @@ The pause, drain, wind-down, priority, "only these" and skip instructions the me
 (I-90) become typed control state, set through the control tool or `/loop` (SPEC 4.3). The model
 still keeps the memory file for lessons and context.
 
-### D-22 Agent prompts point at the memory file
+### D-22 Agent prompts point at their own type's memory file
 
-Every spawn prompt points at `.claude/orchestrator-memory.md` in the main checkout, as the
-designer's does today. This is a small change for the implementer, adjudicator and fixer, whose
-prompts carried only the brief URL. The memory file holds lessons for agents (scratch
-directories, the PR appendix block).
+Each agent type has its own memory file in the consumer repo: `.claude/agent-memory/designer.md`,
+`implementer.md`, `adjudicator.md` and `fixer.md`. Each spawn prompt points only at its own
+type's file, and `.claude/orchestrator-memory.md` stays the model's. The agent lessons now in the
+orchestrator's memory file (scratch directories, the PR appendix block) move to the
+implementer's and fixer's files, and the model adds each new lesson to the file of the type it
+is for. Owner, 2026-10-13: separate files keep one agent from being confused by another's
+lessons.
 
-### D-23 The title rounds usage down to 5%
+### D-23 The title shows counts, not usage
 
-So the title, and so the `/rename`, changes a few times an hour instead of every minute. Each
-rename leaves two transcript rows, though the model's note is blanked.
+Owner, 2026-10-13: usage does not belong in the title. It reads `🔄 dev-system (3 - 5 - 9)`:
+issues in the queue, in progress (designing through ready to merge), and merged in the last 6
+hours. A word is added only when something needs attention: `owner <n>`, `blind`, `off`,
+`observe` (not acting), or a usage tier that holds work (`stop new`, `stop all`). It changes only
+when a count changes, so the `/rename` rows stay few. The running observe build still shows the
+first format until the act-half build.
 
 ### D-24 Rate caps
 
@@ -336,7 +343,11 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 ### D-35 "Only these issues" is its own directive
 
 - **Decision**: control state gains `only` (SPEC 4.3): when it is non-empty, rule `D1` claims
-  only those issues, in that order, and leaves work in flight alone. `noNewWork` still wins.
+  only those issues, in that order, and leaves work in flight alone. A tracker or epic in the
+  list stands for its open sub-issues, nested ones included, in ascending order; they come from
+  the tracker's timeline (`sub_issue_added` and `sub_issue_removed`), which
+  `callum-flow-issue-read --timeline` already returns (owner, 2026-10-13). `noNewWork` still
+  wins.
 - **Alternatives**: (a) let `priority` issues pass `noNewWork`, so "no new work" plus a priority
   means "only these"; (b) express it with `skip` on every other issue.
 - **Why**: on 2026-10-13 the owner told the live orchestrator "522 only". Mirrored as no new work
