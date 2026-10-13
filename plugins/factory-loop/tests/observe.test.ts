@@ -779,6 +779,23 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(o.commands()).toContain(`${TOOLS}/usage-check.sh`)
   })
 
+  test('a pass for another repo reads everything again: nothing cached for one repo stands in for another', async () => {
+    const h = host({ queue: { stdout: 'queue known=none now=114,470\n' } })
+    const first = await h.pass(runtime(), stored())
+    expect(first.state.queue).toEqual([114, 470])
+    // the workspace config now names another repo, with no reload: its queue is read afresh,
+    // within the queue cadence, and the old repo's issues are not read against the new one
+    h.world.queue = { stdout: 'queue known=none now=4,5\n' }
+    h.world.factory = []
+    const other = 'cbundy/dev-system-testbed'
+    const next = await h.pass(runtime({ repo: other }), stored({ queueKnown: null }), NOW + MIN)
+    expect(next.state.repo).toBe(other)
+    expect(next.state.queue).toEqual([4, 5])
+    expect(h.commands()).toContain(`${TOOLS}/queue-watch.sh --once --repo ${other} --label ready --known none`)
+    expect(h.commands().filter(c => /callum-flow-issue-read --json (114|470)$/.test(c))).toEqual([])
+    expect(h.cache.repo).toBe(other)
+  })
+
   test("runSource local: the watcher's runs, with the event log's review rounds, verdicts and supersessions", async () => {
     const h = host()
     const obs = await h.pass(runtime(), stored())

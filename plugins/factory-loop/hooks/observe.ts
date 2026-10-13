@@ -77,6 +77,8 @@ type Timed<T> = { at: number; value: T }
 
 // Cache: what survives between passes in the module (a reload starts it over).
 export type Cache = {
+  // the repo it was filled for: a pass for another repo starts it over (resetFor)
+  repo?: string
   queue?: Timed<number[]>
   github: Map<number, Timed<GithubIssue>>
   // trackers' direct open sub-issues, from their timelines (D-35)
@@ -94,6 +96,24 @@ export type Cache = {
 
 export function emptyCache(): Cache {
   return { github: new Map(), timelines: new Map() }
+}
+
+// resetFor: nothing read for one repo may stand in for another's (a queue, a milestone, issue
+// facts), so a cache filled for another repo, as when the workspace config names a new one
+// without a reload, is emptied in place before the pass reads anything.
+function resetFor(cache: Cache, repo: string) {
+  if (cache.repo === repo) return
+  delete cache.queue
+  delete cache.usage
+  delete cache.milestone
+  delete cache.factory
+  delete cache.events
+  delete cache.pool
+  delete cache.runs
+  delete cache.rebuilt
+  cache.github.clear()
+  cache.timelines.clear()
+  cache.repo = repo
 }
 
 export type Observation = {
@@ -128,6 +148,7 @@ export async function observe(
   lastTitle: string | null,
   stored?: Stored,
 ): Promise<Observation> {
+  resetFor(cache, rt.repo)
   const now = await io.now()
   const cfg = rt.config
   const commands: string[] = []
