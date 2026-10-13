@@ -81,9 +81,10 @@ issue you release is another comparison, read the same way.
    agent type (D-22), trackers inside `only` (D-35), follow-ups for hand merges (D-29, rule `M7`),
    the merge adjudicator and `judge(sequence)` (D-05, rules `M4` and `M5`), the `loop` event state
    (D-09), self-restart for updates (D-15, rule `H4`), visible rate caps with no merge cap (D-24),
-   the in-flight cap of 10 with its notice (SPEC 4.2), the heartbeat guard (D-28),
-   `task(respond-stuck)` (D-37), and the `/factory` command name. The designer's `RESULT` line in
-   `designer.md` (D-14) ships with cutover step 1.
+   the in-flight cap of 10 with its notice (SPEC 4.2), the heartbeat guard (D-28), `/factory retry`
+   (D-38), the ping-storm breaker (D-39), duration strings in the config files (SPEC 4.2), the
+   merge adjudicator's report lines (SPEC 7.3), `task(respond-stuck)` (D-37), and the `/factory`
+   command name. The designer's `RESULT` line in `designer.md` (D-14) ships with cutover step 1.
 
 - **Done when**: act mode passes its tests, the shadow (still in observe mode) keeps agreeing
   with the live orchestrator, and STATUS lists what is still untested.

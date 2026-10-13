@@ -3,8 +3,8 @@
 The issue orchestrator as one deterministic code loop inside its Claude Code session. Every
 minute it reads the factory's whole state, computes what to do with a pure `plan()` function,
 and does it: claims, heartbeats, sweeps, agents, gate responses, guards, merges and the status
-title. The model is woken only for judgment (reading a PR's fix commits before a merge, a
-re-drive, a release) and to talk to the owner.
+title. The model is woken only for judgment (sequencing a flagged merge into a release, a
+re-drive, a release) and to talk to the owner; agents read the code.
 
 - Design: [docs/factory-loop/SPEC.md](../../docs/factory-loop/SPEC.md), with the inventory of
   what it replaces ([INVENTORY.md](../../docs/factory-loop/INVENTORY.md)), the choices made

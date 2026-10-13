@@ -147,7 +147,7 @@ follow directly from the skill or the brief.
 
 ### D-18 Holds are derived, not stored
 
-- **Decision**: a hold (a pending decision, an escalation, the review cap, a merge-review `hold`)
+- **Decision**: a hold (a pending decision, an escalation, the review cap, a merge `hold`)
   is not a stored record. It is the plan finding that the fact still stands and the owner has not
   resumed that subject since. A new head, a closed issue or an owner `resume` ends it (SPEC 5).
 - **Alternatives**: a stored hold list.
@@ -313,9 +313,9 @@ lessons.
 
 ### D-23 The title shows counts, not usage
 
-Owner, 2026-10-13: usage does not belong in the title. It reads `🔄 dev-system (3 - 5 - 9)`:
-issues in the queue, in progress (designing through ready to merge), and merged in the last 6
-hours. A word is added only when something needs attention: `owner <n>`, `blind`, `off`,
+Owner, 2026-10-13: usage does not belong in the title. It reads `🔄 dev-system (Q:3 - D:5 - M:9)`:
+`Q` issues in the queue, `D` in progress (designing through ready to merge), and `M` merged in the
+last 6 hours. A word is added only when something needs attention: `owner <n>`, `blind`, `off`,
 `observe` (not acting), or a usage tier that holds work (`stop new`, `stop all`). It changes only
 when a count changes, so the `/rename` rows stay few. The running observe build still shows the
 first format until the act-half build.
@@ -404,3 +404,21 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Alternatives**: tell the owner (the first rule).
 - **Why**: owner, 2026-10-13: a notice at 3 a.m. leaves the factory stuck until morning. The
   likely causes, a hung run or a crashed daemon, are what the re-drive task already handles.
+
+### D-38 The owner can clear an issue's exhausted actions
+
+- **Decision**: `/factory retry <N>` (and the control tool) clears the issue's ledger entries
+  whose attempts ran out, so its rules can try again (SPEC 4.3, 7.1).
+- **Alternatives**: wait for the seven-day prune, or for the subject's key to change.
+- **Why**: owner, 2026-10-13. An entry blocks only its own key, but a key that never changes
+  (an issue's claim within one life, for example) would otherwise stay held for a week.
+
+### D-39 A ping storm falls back to the timer
+
+- **Decision**: passes start at least 5 seconds apart, and if pings drive more than 30 passes in
+  10 minutes the loop ignores pings for 10 minutes, runs on its 60-second timer alone, logs a
+  `loop` event and tells the owner once (SPEC 2, 11.4).
+- **Alternatives**: no limit beyond passes never overlapping.
+- **Why**: owner, 2026-10-13: something that keeps waking the loop without being handled (a
+  hook firing in a loop, an answer the parser rejects) would otherwise spin it. The timer keeps
+  the factory moving while the owner looks.

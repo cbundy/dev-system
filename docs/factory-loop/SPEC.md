@@ -37,7 +37,10 @@ every passEveryMs (60 s), or at once when pinged:
 ```
 
 - **One pass at a time.** A ping or a timer tick that arrives during a pass sets a flag, and
-  one more pass runs when the current one ends. Passes never overlap.
+  one more pass runs when the current one ends. Passes never overlap, and they start at least
+  5 seconds apart. If pings drive more than 30 passes in 10 minutes, something keeps waking the
+  loop without being handled: it ignores pings for 10 minutes and runs on the timer alone,
+  logs a `loop` event and tells the owner once (section 11.4).
 - **Start.** The loop starts from `session.start` and, as a fallback, from the first other hook
   that fires (`session.append` fires every minute with the title), so it never depends on one
   event.
@@ -152,7 +155,7 @@ how stale it is.
 | `facts` | one `dev-query --csv` call (SQL in the adapter): per live issue the latest `delegated` note; per run the `fix_requested --note review` count and its `verdict` notes; per branch the latest watcher pipeline event (for `runSource: events`) | every pass | `P1` (the cap), `P2` on a review gate |
 | `runs` | `runSource: local`: `pipeline-watch.sh --once` from the main checkout (new mode, 3.4). `runSource: events`: the mirror's stage refined by the watcher's events (`derive.ts`): the newest run the watcher saw for the issue, a park with no answer in the log, and merge-ready, head-mismatch, conflict, ci-stalled and cancelled | every pass | the `P` and `M` rules |
 | `queue` | `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (new mode, 3.4) | every `queueEveryMs` (120 s) | rule `D1` |
-| `github` | `callum-flow-issue-read --json <N>` per issue (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for this device's designing issues, to find the latest `## Design brief` comment | per issue every `githubEveryMs` (5 min), and at once for a new queue member | rule `D1`; `D2` (an existing brief) |
+| `github` | `callum-flow-issue-read --json <N>` per issue (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for this device's designing issues, to find the latest `## Design brief` comment, and `--timeline` for a tracker named in `only`, to list its sub-issues | per issue every `githubEveryMs` (5 min), and at once for a new queue member | rule `D1`; `D2` (an existing brief) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
 | `pool` | `treehouse status --json` from the main checkout | every pass | rule `D1` capacity, rule `H3` |
 | `agents` | `$.agent.list()`, filtered to the ids in the ledger | every pass | lost-agent detection (7.3) |
@@ -217,26 +220,30 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
 | `runSource` | `local` | `local` (pipeline-watch) or `events` (shadow and replay) |
 | `shadowDevice` | `null` | observe mode only: observe as this device (the live orchestrator's), so its claims count as the loop's own and the shadow plan can be compared with what it did |
-| `passEveryMs` | 60 000 | the timer |
-| `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | 120 000, 300 000, 300 000, 600 000 | observe cadences |
-| `usageStaleMs` | 900 000 | an older reading counts as unavailable |
-| `heartbeatEveryMs`, `sweepEveryMs` | 1 200 000, 1 800 000 | rules `H1`, `H2` |
-| `slowGapMs` | 600 000 | Slow: the least time between two claims |
+| `passEveryMs` | `60s` | the timer |
+| `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
+| `usageStaleMs` | `15m` | an older reading counts as unavailable |
+| `heartbeatEveryMs`, `sweepEveryMs` | `20m`, `30m` | rules `H1`, `H2` |
+| `slowGapMs` | `10m` | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
 | `maxInFlightIssues` | 10 | a cap on this device's live issues (owner, 2026-10-13). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for fixers and re-drives |
 | `reviewFixCap` | 3 | review fix rounds per run (I-48) |
-| `guardRecheckMs`, `guardTtlMs` | 180 000, 1 800 000 | guard freshness (rule `M1`) |
-| `respondSettleMs` | 900 000 | a respond that leaves the gate unmoved this long is retried once |
-| `updateBehindRetryMs`, `updateBehindRetries` | 300 000, 3 | `UPDATE-BEHIND SKIP` handling |
-| `ciStallRecheckMs` | 900 000 | how long after a reopen a second stall counts |
-| `blindNoticeAfterMs` | 900 000 | blind this long tells the owner |
-| `agentTimeoutMs` | designer 3 600 000, implementer 7 200 000, adjudicator 1 800 000, fixer 7 200 000 | then `stop-agent` (rule `A1`) |
+| `guardRecheckMs`, `guardTtlMs` | `3m`, `30m` | guard freshness (rule `M1`) |
+| `respondSettleMs` | `15m` | a respond that leaves the gate unmoved this long is retried once |
+| `updateBehindRetryMs`, `updateBehindRetries` | `5m`, 3 | `UPDATE-BEHIND SKIP` handling |
+| `ciStallRecheckMs` | `15m` | how long after a reopen a second stall counts |
+| `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
+| `agentTimeoutMs` | designer `1h`, implementer `2h`, adjudicator `30m`, fixer `2h` | then `stop-agent` (rule `A1`) |
 | `maxAttempts` | claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, respond 2, merge 2, fix-linkage 2, CLI writes 3 | then the owner hears of it |
-| `retryBackoffMs` | 120 000 | doubled per attempt |
-| `wakeTimeoutMs` | judge 1 800 000, task 21 600 000, tell 1 800 000 | section 8 |
+| `retryBackoffMs` | `2m` | doubled per attempt |
+| `wakeTimeoutMs` | judge `30m`, task `6h`, tell `30m` | section 8 |
 | `rateCaps` | starts 30, spawns 40, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (11.4) |
 | `recordStates` | `true` in observe, `false` in act | write each changed `State` for replay |
+
+Time settings take a duration in the files: `60s`, `5m`, `2h`, with the key's `Ms` dropped
+(`passEvery: "60s"`). A plain number still reads as milliseconds. The loader converts them, so
+the code keeps the `Ms` names and works in milliseconds (owner, 2026-10-13).
 
 ### 4.3 Control state (owner directives)
 
@@ -260,7 +267,7 @@ type Control = {
 They live in `<loop dir>/control.json`. The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
 and the owner can type `/factory <op>` from any client (named so to stay clear of Claude Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`, `pause <N>`, `unpause <N>`,
 `skip <N>`, `noskip <N>`, `priority <N...>`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct>
-<hours>`, `resume <N|run>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
+<hours>`, `resume <N|run>`, `retry <N>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
 loop and is logged. Today these directives are free text in the memory file (I-90).
 
 ## 5. Plan: the decision table
@@ -481,13 +488,15 @@ type LedgerEntry = {
 }
 ```
 
-The ledger lives in `$.store` under `ledger:<repo>`. Entries are pruned 7 days after they end;
+`/factory retry <N>` clears the issue's exhausted entries, so its rules can try again
+(owner, 2026-10-13); the decision log names the key behind any such hold. The ledger lives in
+`$.store` under `ledger:<repo>`. Entries are pruned 7 days after they end;
 running entries are never pruned. The store's 4 MiB limit holds about 10 000 entries, far above
 a week of factory work (the dev-system orchestrator logged about 1 600 events in 7 days).
 
 ### 7.2 Designer `RESULT` line
 
-The designer prompt asks it to end its return with exactly one line:
+The designer's definition ends its return with exactly one line (D-14; until that ships, the loop's prompt asks for it):
 
 ```text
 RESULT brief=<comment URL|none> created=<n1,n2|none> pending_decision=<yes|no>
@@ -502,7 +511,9 @@ Its agent definition already fixes the contract: verdict lines `<VERDICT>: <reas
 `VERDICT` one of `CORRECT`, `WRONG`, `NIT`, `ENV`, `DUP`, then exactly one `ACTION:` line. The
 parser rejects any other line and any reply without exactly one `ACTION:` line. Each verdict
 line is logged as `callum-flow-event verdict --issue --run --branch --note "<line>"` when the
-outcome is recorded.
+outcome is recorded. For purpose `merge` (rule `M4`) the reply also carries three lines the
+parser requires: `SUMMARY: <what changes for users, one line>`, `BUMP: <patch|minor|major>
+<reason>` and `FLAGS: <image,template,restart,run-it, or none>`.
 
 ### 7.4 Events the loop logs
 
@@ -542,7 +553,8 @@ idle. Its first line is machine-shaped; any further lines carry the details the 
 plain text:
 
 ```text
-JUDGE merge-review id=w41 pr=512 issue=507 run=01M4RQ9K31 head=03a35cd brief=https://github.com/cbundy/dev-system/issues/507#issuecomment-6130415725
+JUDGE sequence id=w41 pr=512 issue=507 head=03a35cd flags=image bump=minor
+SUMMARY: the dev image gains a PostgreSQL 17 server
 TASK run-it id=w42 issue=406
 TELL review-cap id=w43 issue=470 run=01M4RW4A0G brief=https://github.com/cbundy/dev-system/issues/470#issuecomment-1
 CORRECT: review-1 moved HEAD after recovery must not be accepted
@@ -562,13 +574,11 @@ The model answers with a block in its final message, read in the main loop's `tu
 
 ```text
 ANSWER w41 merge
-reason: the two review fix commits keep every acceptance criterion
-bump: minor
-bumpReason: a new --once mode
+reason: nothing else waits for the next release, so the image change can join it
 ```
 
 The first line is `ANSWER <id> <decision>`; each following `key: value` line (until a blank line)
-is a field (`reason`, `instructions`, `bump`, `bumpReason`, or `fields` as one line of JSON).
+is a field (`reason`, `instructions`, or `fields` as one line of JSON).
 The loop checks the id is open and the decision is allowed for its kind. As an alternative the
 model may call `mcp__factory-loop__answer` with the same fields, which the mod registers; the wake
 probe showed the tool works while the mod is stable, but a turn that starts during a reload does
@@ -610,14 +620,14 @@ keep answers short: a model that cannot do what a wake asks explains at length.
 ### 9.1 The title
 
 ```text
-🔄 dev-system (3 - 5 - 9) · owner 1
+🔄 dev-system (Q:3 - D:5 - M:9) · owner 1
 ```
 
-The repo's short name and three counts (DECISIONS D-23): issues in the queue, in progress
-(designing through ready to merge), and merged in the last 6 hours. Usage is not shown. A word is
+The repo's short name and three counts (DECISIONS D-23): `Q` issues in the queue, `D` in
+progress (designing through ready to merge), and `M` merged in the last 6 hours. Usage is not shown. A word is
 added only when something needs attention: `owner <n>` for open owner items, `blind` (which
 replaces the counts in a blind pass), `off`, `observe` when not acting, a usage tier that holds
-work (`stop new`, `stop all`), `stuck <n>` and `gh wait`. It is set with `/rename` only when the
+work (`stop new`, `stop all`), `stuck <n>`, `at cap`, `capped <class>` and `gh wait`. It is set with `/rename` only when the
 text changes, and the `session.append` hook blanks the note the rename leaves for the model
 (FINDINGS check 3). The observe build running today still shows the first format (mode, tier,
 both usage windows and four stage counts); the act-half build changes it.
@@ -628,7 +638,7 @@ A `tell` is a wake whose turn writes one line to the owner in the conversation, 
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). Kinds: `decision`, `escalate`, `review-cap`, `no-ci`,
 `ci-triggers`, `untrusted-pr`, `rollout`, `base`, `update-behind`, `merge-refused`,
-`merge-hold`, `drain-slow`, `heartbeat-other`, `linkage`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`.
+`merge-hold`, `drain-slow`, `heartbeat-other`, `at-cap`, `linkage`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`.
 Each is sent once per key, and the title counts the open ones.
 
 ## 10. Failure handling
@@ -703,7 +713,8 @@ Plan counts the ledger's token-spending actions (claims, spawns, merges, wakes) 
 past its `rateCaps` entry is dropped, and the class stays closed until the window clears. A drop
 is visible in the pass that makes it: the decision log names it (`rate cap: <class> <n>/<cap>`),
 the title adds `capped <class>`, a `loop` event records it, and `tell(runaway)` goes out once. Three consecutive failures of one executor kind close that kind for 30 minutes and tell
-the owner.
+the owner. A ping storm (more than 30 ping-driven passes in 10 minutes) switches the loop to its
+timer alone for 10 minutes and tells the owner once (section 2).
 
 ### 11.5 Scope of every action
 
@@ -729,7 +740,7 @@ One JSON line per pass in the decision log:
  "actions":[{"key":"claim:470:new","kind":"claim","class":"start","rule":"D1","issue":470,"reason":"ready, unblocked"}],
  "skipped":[{"rule":"D1","issue":340,"why":"tracker"}],
  "outcomes":[{"key":"guard:512:03a35cd:1","status":"done","ms":8123,"summary":"no FAIL"}],
- "title":"🔄 dev-system (3 - 5 - 9) · observe · owner 1"}
+ "title":"🔄 dev-system (Q:3 - D:5 - M:9) · observe · owner 1"}
 ```
 
 `digest` is a hash of the canonical state without its timestamps, so unchanged passes are easy

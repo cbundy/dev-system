@@ -38,7 +38,7 @@ Nothing is blocked on anyone else.
 - [INVENTORY.md](INVENTORY.md): 98 orchestrator responsibilities, each with its new home. Every
   skill line maps to a row.
 - [SPEC.md](SPEC.md): the decision table (40 rules) and everything around it.
-- [DECISIONS.md](DECISIONS.md): 36 decisions with their alternatives.
+- [DECISIONS.md](DECISIONS.md): 39 decisions with their alternatives.
 - `plan.ts`: one pure function, tested.
 
 **Then your steps 1 to 3:**
