@@ -15,6 +15,8 @@ export const DESIGNER_RESULT = 'RESULT brief=<comment URL|none> created=<n1,n2|n
 export const HANDOFF_RESULT = 'RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>'
 
 const VERDICT_LINE = /^(CORRECT|WRONG|NIT|ENV|DUP):\s*\S/
+// a contract word with decoration around it (`- WRONG:`, `**ACTION**:`, `` `NIT`: ``), then its colon
+const MISSHAPEN_LINE = /^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\W*:/
 const BUMPS: readonly Bump[] = ['patch', 'minor', 'major']
 const FLAGS: readonly MergeFlag[] = ['image', 'template', 'restart', 'run-it']
 
@@ -78,12 +80,14 @@ export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): A
   let bump: { bump: Bump; reason: string } | null = null
   let flags: MergeFlag[] | null = null
   // prose before the contract is skipped (agents often open with a sentence of context, as the
-  // testbed showed), but a contract line in the wrong shape (a bulleted verdict, a fenced block)
-  // is not prose; from the first contract line on, any other line makes the reply unparseable
+  // testbed showed), but a contract line in the wrong shape (a bulleted or bold verdict, a fenced
+  // block) is not prose; from the first contract line on, any other line makes the reply
+  // unparseable. Only a contract word followed by its colon is a contract line: a sentence that
+  // merely opens with one ("CORRECT is not warranted", "CORRECT/WRONG judgments:") is prose.
   let started = false
   for (const line of lines(answer)) {
     if (!started && !VERDICT_LINE.test(line) && !/^(ACTION|SUMMARY|BUMP|FLAGS):/.test(line)) {
-      if (/^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\b/.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return null
+      if (MISSHAPEN_LINE.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return null
       continue
     }
     started = true

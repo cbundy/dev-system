@@ -247,6 +247,24 @@ describe('parseAdjudicator (SPEC 7.3)', () => {
     })
     expect(parseAdjudicator('Here is my verdict:\n- CORRECT: review-1 real.\nACTION: fix --findings review-1', 'gate')).toBeNull()
     expect(parseAdjudicator('Here it is:\n```\nACTION: approve\n```', 'gate')).toBeNull()
+    expect(parseAdjudicator('My verdict:\n**WRONG**: review-1 out of scope.\nACTION: approve', 'gate')).toBeNull()
+    expect(parseAdjudicator('My verdict:\n`ACTION`: approve', 'gate')).toBeNull()
+  })
+
+  test('prose that opens with a verdict word is still prose (testbed run 2, issue 33, #546)', () => {
+    const verdicts = [
+      'WRONG: documentation-scope - the brief forbids README.md edits.',
+      'WRONG: lint-documentation-scope - the brief names the lint gap a follow-up.',
+    ]
+    for (const opener of ['CORRECT is not warranted for either one.', 'CORRECT/WRONG judgments:', 'CORRECT/WRONG: judged as WRONG for both.']) {
+      const reply = ['Both findings conflict with the brief.', '', opener, '', ...verdicts, 'ACTION: approve --reason the brief forbids both edits'].join('\n')
+      expect(parseAdjudicator(reply, 'gate')).toEqual({
+        kind: 'adjudicator',
+        verdicts,
+        action: { type: 'approve', reason: 'the brief forbids both edits' },
+        report: null,
+      })
+    }
   })
 
   test('unparseable: other lines, not exactly one ACTION, a bad report', () => {
