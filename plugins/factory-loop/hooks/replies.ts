@@ -77,7 +77,16 @@ export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): A
   let summary: string | null = null
   let bump: { bump: Bump; reason: string } | null = null
   let flags: MergeFlag[] | null = null
+  // prose before the contract is skipped (agents often open with a sentence of context, as the
+  // testbed showed), but a contract line in the wrong shape (a bulleted verdict, a fenced block)
+  // is not prose; from the first contract line on, any other line makes the reply unparseable
+  let started = false
   for (const line of lines(answer)) {
+    if (!started && !VERDICT_LINE.test(line) && !/^(ACTION|SUMMARY|BUMP|FLAGS):/.test(line)) {
+      if (/^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\b/.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return null
+      continue
+    }
+    started = true
     if (VERDICT_LINE.test(line)) {
       verdicts.push(line)
       continue

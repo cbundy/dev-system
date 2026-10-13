@@ -733,3 +733,13 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   the workspace's plugin folders, so each review step the pipeline ran started its own loop.
   They stayed in observe only because the main session held the act lock; one could have taken
   it whenever that lease lapsed, and each ran the observe reads every minute for nothing.
+
+
+### D-62 Prose before an adjudicator's contract is skipped
+
+- **Decision**: the adjudicator parser skips lines before the first contract line, unless one
+  looks like a misshapen contract line; after it, the contract stays strict (SPEC 7.3).
+- **Alternatives**: the strict parse of SPEC 7.3 as first written, where any other line fails.
+- **Why**: on the testbed on 2026-10-13, adjudicators twice opened with a sentence of context
+  before correct verdict and ACTION lines. The strict parse failed both attempts, so a correct
+  escalation became an agent-failed notice and cost a second adjudicator run.

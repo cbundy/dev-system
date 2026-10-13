@@ -232,9 +232,26 @@ describe('parseAdjudicator (SPEC 7.3)', () => {
     expect(parseAdjudicator(`ACTION: fixer: add the screenshot${report}`, 'merge')?.action).toEqual({ type: 'fixer', instructions: 'add the screenshot' })
   })
 
+  test('prose before the contract is skipped, as a testbed adjudicator wrote it; a misshapen contract line is not prose', () => {
+    const reply = [
+      'The test failure is environmental: baseline `npm test` passed 8 of 8.',
+      '',
+      'ENV: The test step failed on a codex 401 from api.openai.com; the code is not at fault.',
+      'ACTION: escalate: the codex credentials are missing in the pipeline environment.',
+    ].join('\n')
+    expect(parseAdjudicator(reply, 'gate')).toEqual({
+      kind: 'adjudicator',
+      verdicts: ['ENV: The test step failed on a codex 401 from api.openai.com; the code is not at fault.'],
+      action: { type: 'escalate', why: 'the codex credentials are missing in the pipeline environment.' },
+      report: null,
+    })
+    expect(parseAdjudicator('Here is my verdict:\n- CORRECT: review-1 real.\nACTION: fix --findings review-1', 'gate')).toBeNull()
+    expect(parseAdjudicator('Here it is:\n```\nACTION: approve\n```', 'gate')).toBeNull()
+  })
+
   test('unparseable: other lines, not exactly one ACTION, a bad report', () => {
     const bad: [string, 'gate' | 'merge'][] = [
-      ['Here is my verdict:\nCORRECT: review-1 real.\nACTION: fix --findings review-1', 'gate'],
+      ['CORRECT: review-1 real.\nThat is my verdict.\nACTION: fix --findings review-1', 'gate'],
       ['- CORRECT: review-1 real.\nACTION: fix --findings review-1', 'gate'],
       ['```\nACTION: approve\n```', 'gate'],
       ['CORRECT: review-1 real.', 'gate'],

@@ -684,8 +684,10 @@ model the saved report's path and asks for the fields.
 ### 7.3 Adjudicator reply
 
 Its agent definition already fixes the contract: verdict lines `<VERDICT>: <reason>` with
-`VERDICT` one of `CORRECT`, `WRONG`, `NIT`, `ENV`, `DUP`, then exactly one `ACTION:` line. The
-parser rejects any other line and any reply without exactly one `ACTION:` line. Each verdict
+`VERDICT` one of `CORRECT`, `WRONG`, `NIT`, `ENV`, `DUP`, then exactly one `ACTION:` line. Prose
+before the first contract line is skipped, unless a line there looks like a misshapen contract
+line (a bulleted verdict, an all-caps `WORD:`, a code fence). From the first contract line on, the
+parser rejects any other line, and it rejects any reply without exactly one `ACTION:` line (D-62). Each verdict
 line is logged as `callum-flow-event verdict --issue --run --branch --note "<line>"` when the
 outcome is recorded. For purpose `merge` (rule `M4`) the reply also carries three lines the
 parser requires: `SUMMARY: <what changes for users, one line>`, `BUMP: <patch|minor|major>

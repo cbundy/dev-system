@@ -479,7 +479,7 @@ describe('onAgentAnswer', () => {
   })
 
   test('an unparseable adjudicator reply is a failed attempt (rule P2 retries); nothing is logged', async () => {
-    const { result, events, files } = await answered(gate, 'I looked at the run and it seems fine.\nACTION: approve')
+    const { result, events, files } = await answered(gate, 'CORRECT: review-1 is real.\nI looked at the run and it seems fine.\nACTION: approve')
     expect(result).toEqual({ status: 'failed', summary: 'adjudicator #470: the gate reply does not parse' })
     expect(events).toHaveLength(0)
     expect(files.has(answerPath(LOOP, gate.key))).toBe(true)
