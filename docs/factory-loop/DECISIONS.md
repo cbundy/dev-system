@@ -743,3 +743,14 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Why**: on the testbed on 2026-10-13, adjudicators twice opened with a sentence of context
   before correct verdict and ACTION lines. The strict parse failed both attempts, so a correct
   escalation became an agent-failed notice and cost a second adjudicator run.
+
+### D-63 One writer per branch
+
+- **Decision**: while an implementer or fixer of an issue runs (by the ledger, or by the agent
+  list for one a stop did not end), no other action that writes the issue's branch or its PR's
+  head starts: another implementer or fixer, a respond, an update-behind, a merge. Only one such
+  writer is kept per issue per pass.
+- **Alternatives**: rely on each action's own key, as the first build did.
+- **Why**: found on the testbed on 2026-10-13: a guard-failure fixer and then a conflict fixer
+  started on the same PR a pass apart, once earlier merges made the branch conflict. Two agents
+  committing to one branch race each other and the pipeline.

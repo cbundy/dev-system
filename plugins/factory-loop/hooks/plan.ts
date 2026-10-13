@@ -1719,6 +1719,24 @@ function breakerOpen(ctx: Ctx, kind: ActionKind): number | null {
   return ctx.state.now - at < BREAKER_MS ? at : null
 }
 
+// writesBranch: an action that changes an issue's branch or its PR's head: an implementer or a
+// fixer, a respond (the pipeline commits on the run's head), an update-behind, a merge.
+function writesBranch(action: Action): boolean {
+  if (action.kind === 'spawn') return action.agent === 'fixer'
+  return action.kind === 'delegate' || action.kind === 'respond' || action.kind === 'update-behind' || action.kind === 'merge'
+}
+
+// agentWriting: an implementer or fixer of this issue still runs, by the ledger, or by the agent
+// list for one whose entry ended while the agent went on (a stop that did not take, SPEC 13).
+function agentWriting(ctx: Ctx, issue: number): boolean {
+  return ctx.state.ledger.some(
+    e =>
+      e.issue === issue &&
+      (e.kind === 'delegate' || (e.kind === 'spawn' && e.agent === 'fixer')) &&
+      (e.status === 'running' || (e.agentId !== undefined && agentLive(ctx, e.agentId))),
+  )
+}
+
 function admit(ctx: Ctx): Action[] {
   const { state, config, tier } = ctx
   const control = state.control
@@ -1739,6 +1757,7 @@ function admit(ctx: Ctx): Action[] {
   const breakers = new Map<ActionKind, number>()
   const backoff = state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil
   const kept: Action[] = []
+  const writing = new Set<number>()
   for (const action of ctx.out) {
     const issue = action.issue
     if (issue !== null && control.paused.includes(issue) && action.kind !== 'heartbeat') {
@@ -1752,6 +1771,16 @@ function admit(ctx: Ctx): Action[] {
     ) {
       skip(ctx, action.rule, issue, `owner: dropped (${action.kind})`)
       continue
+    }
+    // one writer per branch: while an implementer or fixer of the issue still works (or one was
+    // kept this pass), nothing else that writes its branch starts (found on the testbed: a guard
+    // fixer and a conflict fixer on one PR at once)
+    if (issue !== null && writesBranch(action)) {
+      if (writing.has(issue) || agentWriting(ctx, issue)) {
+        skip(ctx, action.rule, issue, `an agent already works the branch of #${issue} (${action.kind})`)
+        continue
+      }
+      if (action.kind === 'delegate' || action.kind === 'spawn') writing.add(issue)
     }
     if (control.noNewWork && (action.class === 'start' || action.class === 'develop')) {
       skip(ctx, action.rule, issue, `owner: no new work (${action.kind})`)

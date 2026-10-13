@@ -566,6 +566,19 @@ describe('M: merge', () => {
     expect((find(r, 'fixer:conflict:550:head50') as Extract<Action, { agent: 'fixer' }>).instructions).toContain('Keep both sides')
   })
 
+  test('one writer per branch: no conflict fixer, respond or merge while a fixer of the issue works (testbed, 2026-10-13)', () => {
+    const conflict = guarded([{ name: 'mergeable', reason: 'conflicts with main, rebase and re-gate' }])
+    const working = entry('fixer:guard:550:head50', 'spawn', { agent: 'fixer', issue: 50, pr: 550, status: 'running', endedAt: null, agentId: 'a-fix' })
+    const r = plan(mergeReady([conflict, working]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M2', issue: 50, why: 'an agent already works the branch of #50 (spawn)' })
+    // the merge waits too, and goes ahead once the fixer has ended
+    const ready = mergeReady([guarded(), reviewed(), working])
+    expect(keys(plan(ready, CFG))).toEqual([])
+    const ended = { ...working, status: 'done' as const, endedAt: NOW - MIN }
+    expect(keys(plan(mergeReady([guarded(), reviewed(), ended]), CFG))).toEqual(['merge:550:head50'])
+  })
+
   test('pending CI waits for the recheck; a failed check goes to the model (SKILL:139)', () => {
     const pending = [{ name: 'checks', reason: 'ci=pending' }]
     expect(keys(plan(mergeReady([guarded(pending)]), CFG))).toEqual([])
