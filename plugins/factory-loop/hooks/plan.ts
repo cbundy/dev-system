@@ -15,6 +15,7 @@ import type {
   GuardFail,
   IssueView,
   LedgerEntry,
+  Ms,
   Outcome,
   PlanResult,
   RunView,
@@ -239,6 +240,16 @@ function lastDone(ctx: Ctx, kind: ActionKind): LedgerEntry | undefined {
   return last
 }
 
+function lastClaimAt(ctx: Ctx, n: number): Ms {
+  let at = 0
+  for (const entry of ctx.state.ledger) {
+    if (entry.kind !== 'claim' || entry.issue !== n || entry.status !== 'done' || entry.endedAt === null) continue
+    if (entry.outcome?.kind === 'claim' && entry.outcome.result !== 'claimed') continue
+    at = Math.max(at, entry.endedAt)
+  }
+  return at
+}
+
 function resumes(ctx: Ctx, subject: string, after = Number.NEGATIVE_INFINITY) {
   return ctx.state.control.resumed.filter(r => r.subject === subject && r.at > after).length
 }
@@ -315,14 +326,18 @@ function blindPass(ctx: Ctx) {
 
 function housekeeping(ctx: Ctx) {
   const { state, config } = ctx
-  const holdsLive = state.issues.some(issue => mine(ctx, issue) && isLive(issue))
+  const held = state.issues.filter(issue => mine(ctx, issue) && isLive(issue))
   const beat = lastDone(ctx, 'heartbeat')
-  if (holdsLive) {
-    const afterLoad = beat !== undefined && (beat.endedAt ?? 0) >= state.loadedAt
-    if (!afterLoad || state.now - (beat?.endedAt ?? 0) >= config.heartbeatEveryMs) {
+  if (held.length > 0) {
+    // A claim starts its own lease, so each held issue was last renewed by the later of its
+    // claim and the last heartbeat. The stalest of those decides.
+    const beatAt = beat?.endedAt ?? 0
+    const stalest = Math.min(...held.map(issue => Math.max(beatAt, lastClaimAt(ctx, issue.number))))
+    const afterLoad = stalest >= state.loadedAt
+    if (!afterLoad || state.now - stalest >= config.heartbeatEveryMs) {
       want(ctx, {
         kind: 'heartbeat',
-        key: `heartbeat:${beat?.endedAt ?? 0}`,
+        key: `heartbeat:${beatAt}`,
         class: 'free',
         rule: 'H1',
         reason: afterLoad ? 'lease renewal due' : 'first pass after load',
@@ -380,6 +395,13 @@ function currentRuns(ctx: Ctx): RunView[] {
 
 // --- P: pipeline gates ----------------------------------------------------------------
 
+// gateOf: one gate of one run. Without a step (the event log has none), the park's time tells
+// two parks on one head apart, as when a run parks at review and then at test.
+function gateOf(run: RunView): string {
+  const gate = run.step ?? (run.state === 'parked' && run.since !== null ? `park@${run.since}` : null)
+  return `${run.run}:${gate}:${run.head}`
+}
+
 function pipelineGates(ctx: Ctx, runs: RunView[]) {
   const { state, config } = ctx
   for (const run of runs) {
@@ -393,7 +415,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
     if (run.state === 'parked' || (run.state === 'failed' && run.run !== 'unknown')) {
       const resumed = resumes(ctx, `run:${run.run}`)
       const suffix = resumed > 0 ? `:r${resumed}` : ''
-      const at = `${run.run}:${run.step}:${run.head}`
+      const at = gateOf(run)
       if (run.step === 'review') {
         const rounds = Math.max(run.reviewFixRounds, ledgerReviewFixes(ctx, run.run))
         if (rounds >= config.reviewFixCap + resumed) {
@@ -572,7 +594,7 @@ function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
   if (retry === undefined) {
     want(ctx, make(retryKey, false))
   } else if (state.now - (retry.endedAt ?? 0) >= config.respondSettleMs) {
-    want(ctx, wake('tell', 'respond-stuck', `tell:respond-stuck:${run.run}:${run.step}:${run.head}`, 'P3a', n, { issue: n, run: run.run, step: run.step }))
+    want(ctx, wake('tell', 'respond-stuck', `tell:respond-stuck:${gateOf(run)}`, 'P3a', n, { issue: n, run: run.run, step: run.step }))
   }
 }
 
@@ -1104,8 +1126,9 @@ function claims(ctx: Ctx) {
   }
   if (state.pool === null) return
   const control = state.control
-  const priority = control.priority.filter(n => state.queue.includes(n))
-  const order = [...priority, ...[...state.queue].filter(n => !priority.includes(n)).sort((a, b) => a - b)]
+  // `only` names the issues that may be claimed, in its order; `priority` orders the rest.
+  const listed = (control.only.length > 0 ? control.only : control.priority).filter(n => state.queue.includes(n))
+  const order = [...listed, ...[...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)]
   const myLive = state.issues.filter(issue => mine(ctx, issue) && isLive(issue)).length
   // An issue in design takes a worktree as soon as its implementer starts.
   const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length
@@ -1121,6 +1144,7 @@ function claims(ctx: Ctx) {
     }
     let limit: string | null = null
     if (control.noNewWork) limit = 'owner: no new work'
+    else if (control.only.length > 0 && !control.only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
     else if (tier === 'stop-new' || tier === 'stop-all') limit = `tier ${tier}`
     else if (state.pool.free - myDesigning - started <= config.worktreeReserve) limit = 'no free worktree'
     else if (config.maxInFlightIssues !== null && myLive + started >= config.maxInFlightIssues) limit = 'in-flight cap'

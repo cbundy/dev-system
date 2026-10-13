@@ -163,6 +163,24 @@ describe('H: housekeeping', () => {
     expect(keys(plan(due, CFG))).toEqual([`heartbeat:${NOW - 21 * MIN}`])
   })
 
+  test('a claim starts its own lease: the next heartbeat is due 20 minutes after it (shadow, #522)', () => {
+    const claimed = (n: number, at: number) =>
+      entry(`claim:${n}:x`, 'claim', { class: 'start', issue: n, startedAt: at, endedAt: at, outcome: { kind: 'claim', result: 'claimed' } })
+    const beat = entry('heartbeat:1', 'heartbeat', { endedAt: NOW - 12 * 60 * MIN })
+    const sweep = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
+    const fresh = state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, claimed(9, NOW - MIN)] })
+    expect(keys(plan(fresh, CFG))).toEqual([])
+    const old = { ...fresh, ledger: [beat, sweep, claimed(9, NOW - 21 * MIN)] }
+    expect(keys(plan(old, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
+    // the stalest lease decides
+    const two = { ...fresh, issues: [mine(9, 'implementing'), mine(10, 'implementing')], ledger: [beat, sweep, claimed(9, NOW - MIN)] }
+    expect(keys(plan(two, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
+    // a claim made since the last load counts as renewed since it; a lost claim renews nothing
+    expect(keys(plan({ ...fresh, loadedAt: NOW - 10 * MIN }, CFG))).toEqual([])
+    const lost = entry('claim:9:y', 'claim', { class: 'start', issue: 9, endedAt: NOW - MIN, outcome: { kind: 'claim', result: 'lost' } })
+    expect(keys(plan({ ...fresh, ledger: [beat, sweep, lost] }, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
+  })
+
   test('no live claim, no heartbeat; the sweep runs every 30 minutes regardless (SKILL:62-63)', () => {
     const s = state({ loadedAt: NOW - MIN, ledger: [entry('sweep:9', 'sweep', { endedAt: NOW - 31 * MIN })] })
     expect(keys(plan(s, CFG))).toEqual([`sweep:${NOW - 31 * MIN}`])
@@ -493,6 +511,21 @@ describe('D: design and delegation', () => {
     ])
     const busy = { ...s, issues: [...s.issues, mine(9, 'implementing')], control: control({ serial: true }) }
     expect(keys(plan(busy, CFG))).toEqual([])
+  })
+
+  test('only: just the listed issues are claimed, in its order; no new work still wins (shadow, #522)', () => {
+    const s = state({ queue: [1, 2, 3, 4], issues: [issue(1), issue(2), issue(3), issue(4)] })
+    const only = plan({ ...s, control: control({ only: [4, 2], priority: [1] }) }, CFG)
+    expect(keys(only)).toEqual([`claim:4:${NOW - 30 * MIN}`, `claim:2:${NOW - 30 * MIN}`])
+    expect(only.skipped.filter(k => k.issue === 1 || k.issue === 3).map(k => k.why)).toEqual([
+      'owner: only #4 #2',
+      'owner: only #4 #2',
+    ])
+    const winding = plan({ ...s, control: control({ only: [4], noNewWork: true }) }, CFG)
+    expect(keys(winding)).toEqual([])
+    // work in flight on an unlisted issue goes on
+    const inFlight = parkedReview({ queue: [7], control: control({ only: [8] }) })
+    expect(keys(plan({ ...inFlight, issues: [...inFlight.issues, issue(7)] }, CFG))).toEqual([`adjudicate:${AT45}`])
   })
 
   test('the worktree pool bounds new work (SKILL:103-104)', () => {

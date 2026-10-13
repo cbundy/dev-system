@@ -1,7 +1,7 @@
 {
  "args": {
   "stepMinutes": "2",
-  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay-evening",
+  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay5-evening",
   "skipLabels": "parked",
   "repo": "cbundy/dev-system",
   "device": "coder-dev-system-orchestrator",
@@ -18,6 +18,8 @@
    "leadMinutes": 1,
    "planBefore": [
     "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000",
     "claim:507:1791830355000"
    ],
    "skippedBefore": []
@@ -30,8 +32,9 @@
    "agreed": true,
    "leadMinutes": 1,
    "planBefore": [
-    "heartbeat:1791816715000",
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -43,8 +46,9 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "heartbeat:1791816715000",
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -56,8 +60,9 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "heartbeat:1791816715000",
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -69,7 +74,6 @@
    "agreed": true,
    "leadMinutes": 1,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000"
    ],
    "skippedBefore": []
@@ -84,9 +88,8 @@
    "agreed": true,
    "leadMinutes": 0,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000",
-    "adjudicate:01M4RQ1143SJGAX217A1SN9KB6:null:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c"
+    "adjudicate:01M4RQ1143SJGAX217A1SN9KB6:park@1791830879000:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c"
    ],
    "skippedBefore": []
   },
@@ -98,7 +101,6 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000"
    ],
    "skippedBefore": []
@@ -111,10 +113,10 @@
    "parkedAt": 1791831104000,
    "at": "2026-10-12T18:52:12.000Z",
    "agreed": true,
-   "leadMinutes": 4,
+   "leadMinutes": 0,
    "planBefore": [
-    "heartbeat:1791816715000",
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ1143SJGAX217A1SN9KB6:park@1791831104000:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c"
    ],
    "skippedBefore": []
   },
@@ -128,9 +130,8 @@
    "agreed": true,
    "leadMinutes": 0,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:f9ac07be2980bad307cf1220e853fcc2fcb214cc"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831203000:f9ac07be2980bad307cf1220e853fcc2fcb214cc"
    ],
    "skippedBefore": []
   },
@@ -143,7 +144,6 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000"
    ],
    "skippedBefore": []
@@ -153,9 +153,9 @@
    "ts": 1791831606000,
    "at": "2026-10-12T19:00:06.000Z",
    "agreed": true,
-   "leadMinutes": 20,
+   "leadMinutes": null,
+   "lagSeconds": 15,
    "planBefore": [
-    "heartbeat:1791816715000",
     "sweep:1791816059000"
    ],
    "skippedBefore": []
@@ -165,11 +165,14 @@
    "ts": 1791832806000,
    "at": "2026-10-12T19:20:06.000Z",
    "agreed": true,
-   "leadMinutes": 40,
+   "leadMinutes": null,
+   "lagSeconds": 15,
    "planBefore": [
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:03a35cd99459934a027ad40644f9759ba03ddbe0",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -182,8 +185,10 @@
    "leadMinutes": null,
    "planBefore": [
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:03a35cd99459934a027ad40644f9759ba03ddbe0",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -196,8 +201,10 @@
    "leadMinutes": null,
    "planBefore": [
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:03a35cd99459934a027ad40644f9759ba03ddbe0",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -210,8 +217,10 @@
    "leadMinutes": null,
    "planBefore": [
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:03a35cd99459934a027ad40644f9759ba03ddbe0",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -223,11 +232,13 @@
    "parkedAt": 1791831484000,
    "at": "2026-10-12T19:21:28.000Z",
    "agreed": true,
-   "leadMinutes": 28,
+   "leadMinutes": 1,
    "planBefore": [
     "sweep:1791816059000",
-    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:null:03a35cd99459934a027ad40644f9759ba03ddbe0",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -241,7 +252,9 @@
    "leadMinutes": 18,
    "planBefore": [
     "sweep:1791816059000",
-    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1"
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -255,7 +268,9 @@
    "leadMinutes": 6,
    "planBefore": [
     "sweep:1791816059000",
-    "guard:512:03a35cd99459934a027ad40644f9759ba03ddbe0:1"
+    "guard:512:03a35cd99459934a027ad40644f9759ba03ddbe0:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -267,7 +282,9 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -276,10 +293,12 @@
    "ts": 1791834018000,
    "at": "2026-10-12T19:40:18.000Z",
    "agreed": true,
-   "leadMinutes": 58,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:1791832811000",
-    "sweep:1791816059000"
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -293,8 +312,10 @@
    "agreed": true,
    "leadMinutes": 1,
    "planBefore": [
-    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:null:71d50a79194600ff2d3015b1935ba3bd972fdb46",
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835076000:71d50a79194600ff2d3015b1935ba3bd972fdb46",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -307,8 +328,10 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:null:71d50a79194600ff2d3015b1935ba3bd972fdb46",
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835076000:71d50a79194600ff2d3015b1935ba3bd972fdb46",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -317,9 +340,12 @@
    "ts": 1791835205000,
    "at": "2026-10-12T20:00:05.000Z",
    "agreed": true,
-   "leadMinutes": 60,
+   "leadMinutes": null,
+   "lagSeconds": 30,
    "planBefore": [
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -331,10 +357,12 @@
    "parkedAt": 1791835242000,
    "at": "2026-10-12T20:01:07.000Z",
    "agreed": true,
-   "leadMinutes": 3,
+   "leadMinutes": 0,
    "planBefore": [
-    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:null:f4029b7a97d9e049a55565df5c63ca6756197bb6",
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835242000:f4029b7a97d9e049a55565df5c63ca6756197bb6",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -347,6 +375,8 @@
    "leadMinutes": 0,
    "planBefore": [
     "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000",
     "claim:515:1791835483000"
    ],
    "skippedBefore": []
@@ -359,7 +389,9 @@
    "agreed": true,
    "leadMinutes": 0,
    "planBefore": [
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -371,7 +403,9 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -383,7 +417,9 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -396,7 +432,9 @@
    "agreed": true,
    "leadMinutes": 14,
    "planBefore": [
-    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1"
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -411,7 +449,9 @@
    "leadMinutes": 0,
    "planBefore": [
     "sweep:1791834045000",
-    "adjudicate:01M4RW4A0GWEVB80KHSW6JNAMG:null:6578711ffef619034098fb90c475ec43e3e85a05"
+    "adjudicate:01M4RW4A0GWEVB80KHSW6JNAMG:park@1791836221000:6578711ffef619034098fb90c475ec43e3e85a05",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -420,9 +460,12 @@
    "ts": 1791836405000,
    "at": "2026-10-12T20:20:05.000Z",
    "agreed": true,
-   "leadMinutes": 40,
+   "leadMinutes": null,
+   "lagSeconds": 15,
    "planBefore": [
-    "sweep:1791834045000"
+    "sweep:1791834045000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -434,8 +477,12 @@
    "parkedAt": 1791836407000,
    "at": "2026-10-12T20:20:49.000Z",
    "agreed": true,
-   "leadMinutes": 4,
-   "planBefore": [],
+   "leadMinutes": 0,
+   "planBefore": [
+    "adjudicate:01M4RW4A0GWEVB80KHSW6JNAMG:park@1791836407000:6578711ffef619034098fb90c475ec43e3e85a05",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
    "skippedBefore": []
   },
   {
@@ -447,7 +494,9 @@
    "agreed": true,
    "leadMinutes": 1,
    "planBefore": [
-    "guard:517:0e32c76ab2e2844a60e48e04c0e61808fa70b7c0:1"
+    "guard:517:0e32c76ab2e2844a60e48e04c0e61808fa70b7c0:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -456,9 +505,12 @@
    "ts": 1791837604000,
    "at": "2026-10-12T20:40:04.000Z",
    "agreed": true,
-   "leadMinutes": 60,
+   "leadMinutes": null,
+   "lagSeconds": 15,
    "planBefore": [
-    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1"
+    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   },
@@ -471,7 +523,9 @@
    "agreed": true,
    "leadMinutes": 17,
    "planBefore": [
-    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1"
+    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
    ],
    "skippedBefore": []
   }
@@ -482,6 +536,28 @@
    "kind": "sweep",
    "rule": "H2",
    "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791829800000,
+   "at": "2026-10-12T18:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "claim:467:1791780905000",
+   "kind": "claim",
+   "rule": "D1",
+   "issue": 467,
+   "run": null,
+   "pr": null,
+   "t": 1791829800000,
+   "at": "2026-10-12T18:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "claim:468:1791782115000",
+   "kind": "claim",
+   "rule": "D1",
+   "issue": 468,
    "run": null,
    "pr": null,
    "t": 1791829800000,

@@ -250,7 +250,7 @@ restart is judgment.
 
 ### D-16 Owner directives become control state
 
-The pause, drain, wind-down, priority and skip instructions the memory file holds as free text
+The pause, drain, wind-down, priority, "only these" and skip instructions the memory file holds as free text
 (I-90) become typed control state, set through the control tool or `/loop` (SPEC 4.3). The model
 still keeps the memory file for lessons and context.
 
@@ -289,7 +289,10 @@ compared against an empty pid. The fix is its own PR
 [#523](https://github.com/cbundy/dev-system/issues/523)), cherry-picked here so this branch's
 gates are honest. It drops out of this diff once #524 merges.
 
-### D-32 The shadow run cannot judge claims
+### D-32 The shadow run cannot judge claims (superseded)
+
+Superseded at 22:32 UTC on 2026-10-12, when the owner approved a GitHub login for the spike
+workspace: the shadow now reads labels, blockers and sub-issues live. The original note:
 
 The spike workspace has no `gh` login, so its loop runs with GitHub off and rule `D1` sees no
 labels or blockers. It then claims nothing, which can neither agree nor disagree with the live
@@ -310,3 +313,24 @@ Rule `H1` heartbeats on the first pass after a load (I-93). A shadow watches ano
 its own load says nothing about when that session restarted. While shadowing, the load time
 counts as unknown, and only real lease timing drives heartbeats. The driver test caught this.
 
+### D-35 "Only these issues" is its own directive
+
+- **Decision**: control state gains `only` (SPEC 4.3): when it is non-empty, rule `D1` claims
+  only those issues, in that order, and leaves work in flight alone. `noNewWork` still wins.
+- **Alternatives**: (a) let `priority` issues pass `noNewWork`, so "no new work" plus a priority
+  means "only these"; (b) express it with `skip` on every other issue.
+- **Why**: on 2026-10-13 the owner told the live orchestrator "522 only". Mirrored as no new work
+  plus a priority, the shadow would have claimed nothing, #522 included (SHADOW-REPORT, #522).
+  Option (a) matches how the owner used a priority in the 2026-10-12 drain, but makes a wind-down
+  claim whatever an old priority list still names. Option (b) misses issues labelled later. An
+  explicit list says what the owner said.
+
+### D-36 A claim counts as its own lease's renewal
+
+- **Decision**: rule `H1` takes each held issue's last renewal as the later of its claim and the
+  last heartbeat, and renews when the stalest is 20 minutes old (or older than the last load).
+- **Alternatives**: the first rule, which counted heartbeats only.
+- **Why**: after an idle spell the first rule heartbeated on the pass after every claim, a
+  minute into a fresh two-hour lease. The shadow did that on #522, where the live orchestrator
+  did not. With the change, the evening replay's six live renewals each fall within 30 seconds of
+  the loop's.

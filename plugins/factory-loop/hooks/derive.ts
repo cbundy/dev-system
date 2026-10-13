@@ -118,7 +118,8 @@ const RUN_STATE: Record<string, RunState> = {
 // runsFromEvents: each live issue's current run as plan sees it, from the mirror's stage
 // refined by the watcher's events: merge-ready, head-mismatch, conflict, ci-stalled and
 // cancelled, which the mirror cannot tell apart, and a park not yet answered, which the mirror
-// can miss. The step is unknown here: the log does not record it.
+// can miss. The step is unknown here: the log does not record it, so a parked run's `since` is
+// its park's time, which tells its gates apart (plan's gateOf).
 export function runsFromEvents(factory: Factory, facts: Facts): RunView[] {
   const runs: RunView[] = []
   for (const issue of factory.issues) {
@@ -149,7 +150,7 @@ export function runsFromEvents(factory: Factory, facts: Facts): RunView[] {
       step: null,
       detail: state === 'ci-stalled' || state === 'head-mismatch' ? (last?.note ?? null) : null,
       pr: issue.pr,
-      since: last?.ts ?? issue.stageSince,
+      since: (state === 'parked' ? lastPark?.ts : undefined) ?? last?.ts ?? issue.stageSince,
       reviewFixRounds: facts.reviewFixes.get(run) ?? 0,
       verdicts: facts.verdicts.get(run) ?? [],
       superseded: facts.superseded.has(run),
@@ -270,7 +271,7 @@ export function deriveLedger(events: FactoryEvent[], factory: Factory, facts: Fa
       const action: AdjudicatorAction = fixed
         ? { type: 'fix', findings: null, instructions: null, addFinding: null }
         : { type: 'approve', reason: null }
-      const at = `${park.run}:null:${park.head}`
+      const at = `${park.run}:park@${park.ts}:${park.head}`
       const answeredAt = (verdicts[verdicts.length - 1] as FactoryEvent).ts
       const common = { ...base, issue: park.issue, run: park.run, head: park.head, startedAt: park.ts, endedAt: answeredAt }
       put({

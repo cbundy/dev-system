@@ -43,6 +43,10 @@ const HOOKS = path.join(ROOT, "plugins", "factory-loop", "hooks");
 const FACTORY_STATE = path.join(ROOT, "images", "base", "callum-flow-factory-state");
 const MIN = 60_000;
 const LOOKBACK = 60 * MIN;
+// A heartbeat is periodic, so it matches only when the loop planned one within BEAT_BEFORE of the
+// live renewal, or would have within BEAT_AFTER from the state a second before it.
+const BEAT_BEFORE = 5 * MIN;
+const BEAT_AFTER = 2 * MIN;
 
 const USAGE_SQL = `select to_char(ts at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as ts, note
 from factory.events
@@ -96,6 +100,17 @@ function issueRead(argv) {
   }
 }
 
+// closedAt: when an issue closed, read once. A timeline's blocker can say "closed" with no
+// closed_at, so the blocker's own record decides.
+const closedCache = new Map();
+function closedAt(n) {
+  if (!closedCache.has(n)) {
+    const read = issueRead([String(n)]);
+    closedCache.set(n, read.issue?.closed_at ?? null);
+  }
+  return closedCache.get(n);
+}
+
 // github: an issue's state at any past moment, from its current state and its timeline.
 function githubHistory(repo, n) {
   const now = issueRead([String(n)]);
@@ -104,7 +119,7 @@ function githubHistory(repo, n) {
     .filter((e) => typeof e.created_at === "string")
     .map((e) => ({ ...e, at: Date.parse(e.created_at) }))
     .sort((a, b) => a.at - b.at);
-  const closedAt = now.issue?.closed_at ? Date.parse(now.issue.closed_at) : null;
+  const closed = now.issue?.closed_at ? Date.parse(now.issue.closed_at) : null;
   return {
     untrusted: false,
     at(t) {
@@ -115,7 +130,10 @@ function githubHistory(repo, n) {
         if (e.at > t) break;
         if (e.event === "labeled" && e.label?.name) labels.add(e.label.name);
         if (e.event === "unlabeled" && e.label?.name) labels.delete(e.label.name);
-        if (e.event === "blocked_by_added" && e.blocked_by?.number) blockers.set(e.blocked_by.number, e.blocked_by.closed_at);
+        if (e.event === "blocked_by_added" && e.blocked_by?.number) {
+          const b = e.blocked_by;
+          blockers.set(b.number, b.closed_at ?? (b.state === "closed" ? closedAt(b.number) : null));
+        }
         if (e.event === "blocked_by_removed" && e.blocked_by?.number) blockers.delete(e.blocked_by.number);
         if (e.event === "sub_issue_added" && e.sub_issue?.number) subs.add(e.sub_issue.number);
         if (e.event === "sub_issue_removed" && e.sub_issue?.number) subs.delete(e.sub_issue.number);
@@ -123,7 +141,7 @@ function githubHistory(repo, n) {
       const openBlockers = [...blockers.values()].filter((c) => c === null || c === undefined || Date.parse(c) > t).length;
       return {
         title: now.issue?.title ?? "",
-        open: closedAt === null || closedAt > t,
+        open: closed === null || closed > t,
         labels: [...labels].sort(),
         blockedBy: openBlockers,
         subIssues: subs.size,
@@ -217,6 +235,7 @@ async function main() {
   };
 
   const results = [];
+  const states = new Map();
   if (a.decisions) {
     // a shadow run's own log: one line per pass, already planned
     for (const line of fs.readFileSync(a.decisions, "utf8").split("\n")) {
@@ -264,6 +283,7 @@ async function main() {
       trackerTitle: config.trackerTitle,
     });
     const result = plan(state, config);
+    states.set(t, state);
     results.push({
       t,
       at: iso(t),
@@ -278,17 +298,31 @@ async function main() {
   }
   process.stderr.write("\n");
 
+  // A heartbeat the loop would plan soon after a sample: the seconds until it is due, if within BEAT_AFTER.
+  const beatLag = (r, ts) => {
+    const state = r && states.get(r.t);
+    if (!state) return null;
+    for (const s of [15, 30, 60, 90, 120].filter((x) => x * 1000 <= BEAT_AFTER)) {
+      const later = plan({ ...state, now: ts + s * 1000 }, config);
+      if (later.actions.some((x) => x.kind === "heartbeat")) return s;
+    }
+    return null;
+  };
   // Each live decision: the earliest sample within the lookback where the loop planned it.
   const compared = decisions
     .filter((d) => d.ts >= from && d.ts <= to)
     .map((d) => {
-      const hit = results.find((r) => r.t >= d.ts - LOOKBACK && r.t < d.ts && r.actions.some((x) => matches(x, d)));
+      // an adjudication matches a plan made after its own park, not an earlier park of the run
+      const since = Math.max(d.ts - (d.type === "heartbeat" ? BEAT_BEFORE : LOOKBACK), d.parkedAt ?? -Infinity);
+      const hit = results.find((r) => r.t >= since && r.t < d.ts && r.actions.some((x) => matches(x, d)));
       const before = [...results].reverse().find((r) => r.t < d.ts);
+      const lag = hit === undefined && d.type === "heartbeat" ? beatLag(before, d.ts) : null;
       return {
         ...d,
         at: iso(d.ts),
-        agreed: hit !== undefined,
+        agreed: hit !== undefined || lag !== null,
         leadMinutes: hit ? Math.round((d.ts - hit.t) / MIN) : null,
+        ...(lag !== null ? { lagSeconds: lag } : {}),
         planBefore: before ? before.actions.map((x) => x.key) : [],
         skippedBefore: before ? before.skipped.filter((s) => s.issue === d.issue) : [],
       };
@@ -297,7 +331,10 @@ async function main() {
   const first = new Map();
   for (const r of results) for (const x of r.actions) if (!first.has(x.key)) first.set(x.key, { ...x, t: r.t, at: r.at });
   const extras = [...first.values()]
-    .filter((x) => !decisions.some((d) => d.ts > x.t && d.ts <= x.t + LOOKBACK && matches(x, d)))
+    .filter((x) => {
+      const ahead = x.kind === "heartbeat" ? config.heartbeatEveryMs : LOOKBACK;
+      return !decisions.some((d) => d.ts > x.t && d.ts <= x.t + ahead && matches(x, d));
+    })
     .map((x) => ({ ...x, liveLater: decisions.filter((d) => matches(x, d)).map((d) => iso(d.ts)) }));
 
   fs.mkdirSync(a.out, { recursive: true });

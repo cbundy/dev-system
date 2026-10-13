@@ -8,20 +8,18 @@ what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
 
 - **On the draft PR** ([#528](https://github.com/cbundy/dev-system/pull/528), branch
   `feat/factory-loop`): the design (inventory, spec, decisions), the pure plan, the observe half,
-  the replay harness, the wake probe, and 91 plugin tests.
+  the replay harness, the wake probe, and 93 plugin tests.
 - **Running**: the shadow, in `spike-reconcile-mod`, in observe mode, compared live with the
-  dev-system orchestrator. It is following #522, which you released to the orchestrator alone.
+  dev-system orchestrator, with your "522 only" directive (`only: [522]`).
 - **Not built**: anything that acts. The loop changes nothing anywhere yet.
 
-## Stage A: finish the #522 comparison
+## Stage A: finish the #522 comparison (done)
 
-- **Who**: the agent. **Waits on**: #522 merging (the orchestrator is working it now).
-- **Do**: run the shadow comparison (`scripts/factory-loop-replay.js --decisions`, SHADOW-REPORT
-  "Read it again") over 08:50 UTC to the merge, and add a "#522" section to
-  [SHADOW-REPORT.md](SHADOW-REPORT.md). Cover each gate (park, adjudication, respond), the merge
-  flow, and whether the orchestrator renewed its claim. Its audit tick has been off since the
-  wind-down; the shadow plans a heartbeat, and the claim lapses at about 10:53 UTC without one.
-- **Done when**: every live #522 decision is matched or explained.
+Done on 2026-10-13 ([SHADOW-REPORT](SHADOW-REPORT.md#522-the-first-real-work-2026-10-13)): the
+adjudication and the merge flow matched, and the two differences became rule fixes (D-35, D-36).
+The replay harness was corrected along the way and both windows re-run
+([REPLAY-REPORT](REPLAY-REPORT.md#corrections-2026-10-13)). The shadow keeps running; each new
+issue you release is another comparison, read the same way.
 
 ## Stage B: owner decisions
 
@@ -39,6 +37,9 @@ what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
   for the executors and their tests; `plan.ts` stays single-authored).
 - **Merge the two test fixes**: [#524](https://github.com/cbundy/dev-system/pull/524) and
   [#527](https://github.com/cbundy/dev-system/pull/527).
+- **Two waiting issues**: [#467](https://github.com/cbundy/dev-system/issues/467) and
+  [#468](https://github.com/cbundy/dev-system/issues/468) are ready and unblocked, and the live
+  orchestrator has not picked them up. Release them or not.
 
 ## Stage C: build the act half
 
@@ -124,7 +125,8 @@ what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
 ## Housekeeping along the way
 
 - **Fixes the comparisons found**: a watcher change so every park is logged, including a second
-  park on the same head; and the live orchestrator's claim-renewal gap while its audit is off.
+  park on the same head; the live orchestrator's claim-renewal gap while its audit is off; and
+  its idle mode never re-reading the queue, so an issue whose blocker closes is not picked up.
   These are improvements to the released factory, each its own issue.
 - **When the spike is done**: delete `spike-reconcile-mod` and revoke the GitHub token made for
   it; it holds the shadow, the clone and the device login.
@@ -140,9 +142,9 @@ what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
   `claude plugin test plugins/factory-loop` inside `npm test`. No-mistakes was off for the
   2026-10-12 run, at your instruction.
 - **The shadow**: config in `/persist/claude/factory-loop/config.json`, directives in
-  `.../cbundy__dev-system/control.json` (now `{"noNewWork": true, "priority": [522]}`, matching
-  "522 only"), decision logs beside them. It loads from the clone
-  `/persist/claude/loop/dev-system`: a `git pull` there reloads it live. Changing
+  `.../cbundy__dev-system/control.json` (now `{"only": [522]}`, matching "522 only"), decision
+  logs beside them. It loads from the clone `/persist/claude/loop/dev-system`: a `git pull`
+  there reloads it live. Changing
   `CLAUDE_CODE_PLUGIN_DIRS` needs a `coder restart spike-reconcile-mod`.
 - **Live factory rules**:
   - never touch an `-orchestrator` workspace;

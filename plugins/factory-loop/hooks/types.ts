@@ -95,6 +95,7 @@ export type Control = {
   noNewWork: boolean
   skip: number[]
   priority: number[]
+  only: number[]
   serial: boolean
   usageOverride: { untilPct: number; expiresAt: Ms } | null
   resumed: { subject: string; at: Ms }[]

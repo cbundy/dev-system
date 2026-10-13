@@ -1,7 +1,7 @@
 {
  "args": {
   "stepMinutes": "3",
-  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay-drain",
+  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay5-drain",
   "skipLabels": "parked",
   "repo": "cbundy/dev-system",
   "device": "coder-dev-system-orchestrator",
@@ -21,11 +21,11 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QAKV9GV3155GNENY427W99:park@1791787529000:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -40,11 +40,11 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QAKV9GV3155GNENY427W99:park@1791787529000:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
     "guard:490:e416328896d21fb66d9b83147218c44114ecc4aa:1"
    ],
    "skippedBefore": []
@@ -60,10 +60,10 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -79,11 +79,11 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:bd91534530e421f51a73152d309e5e758f725796",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:park@1791798419000:bd91534530e421f51a73152d309e5e758f725796",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -98,11 +98,11 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:bd91534530e421f51a73152d309e5e758f725796",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:park@1791798419000:bd91534530e421f51a73152d309e5e758f725796",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -114,15 +114,15 @@
    "parkedAt": 1791799117000,
    "at": "2026-10-12T09:58:45.000Z",
    "agreed": true,
-   "leadMinutes": 12,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:null:3b7f1e23eae1fc9cb65ceeafa94dfa442bc19030",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4QQVDWVKZHWM649Q3B0CGCC:park@1791799117000:3b7f1e23eae1fc9cb65ceeafa94dfa442bc19030",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -137,10 +137,10 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791796023000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -154,10 +154,10 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -172,10 +172,10 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791799584000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
     "guard:493:c87d85009599a44728b21b67eea13621512e1ee2:1"
    ],
    "skippedBefore": []
@@ -190,9 +190,9 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -205,9 +205,9 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -220,9 +220,9 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a"
    ],
    "skippedBefore": []
   },
@@ -238,10 +238,10 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
-    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:43851fb8eb72591e786a870669fe624878e6b463"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:park@1791805095000:43851fb8eb72591e786a870669fe624878e6b463"
    ],
    "skippedBefore": []
   },
@@ -256,10 +256,10 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
-    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:43851fb8eb72591e786a870669fe624878e6b463"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:park@1791805095000:43851fb8eb72591e786a870669fe624878e6b463"
    ],
    "skippedBefore": []
   },
@@ -271,14 +271,14 @@
    "parkedAt": 1791805703000,
    "at": "2026-10-12T11:48:29.000Z",
    "agreed": true,
-   "leadMinutes": 10,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
-    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:2113dd85a275936d23ffc289f1529b07b1aa1884",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:park@1791805703000:2113dd85a275936d23ffc289f1529b07b1aa1884",
     "guard:494:81c774d8f933b0db286ec42d3bb041c34318e915:1"
    ],
    "skippedBefore": []
@@ -294,9 +294,9 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
     "guard:494:81c774d8f933b0db286ec42d3bb041c34318e915:1"
    ],
    "skippedBefore": []
@@ -312,8 +312,8 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62"
    ],
    "skippedBefore": []
   },
@@ -325,13 +325,13 @@
    "parkedAt": 1791806356000,
    "at": "2026-10-12T11:59:29.000Z",
    "agreed": true,
-   "leadMinutes": 21,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
     "sweep:1791803154000",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:null:5043c25e1ec334b60b085de91fac4cfd89e0da4d"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4QXW8CJRAQPFWMD2M1Q8WTY:park@1791806356000:5043c25e1ec334b60b085de91fac4cfd89e0da4d"
    ],
    "skippedBefore": []
   },
@@ -345,8 +345,8 @@
    "leadMinutes": null,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62"
    ],
    "skippedBefore": []
   },
@@ -361,9 +361,9 @@
    "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4R04A1NQ0EP2Q8RNE3CF8YF:null:be0baa91a4f6b23ef032e57bb2115920c95c58b2"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R04A1NQ0EP2Q8RNE3CF8YF:park@1791807051000:be0baa91a4f6b23ef032e57bb2115920c95c58b2"
    ],
    "skippedBefore": []
   },
@@ -378,8 +378,8 @@
    "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
     "adjudicate:01M4QZC1ECQJGFBJYXTP2AXGXR:null:85cd566fc98a45d69d82f94768ec89190d1c18cd"
    ],
    "skippedBefore": []
@@ -395,9 +395,9 @@
    "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4R0H1C0B2NGS910AAP7HFA7:null:4cc90f318e8aeb4ddd9cee40f3a0259f9b9e443c"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R0H1C0B2NGS910AAP7HFA7:park@1791807512000:4cc90f318e8aeb4ddd9cee40f3a0259f9b9e443c"
    ],
    "skippedBefore": []
   },
@@ -409,11 +409,12 @@
    "parkedAt": 1791808174000,
    "at": "2026-10-12T12:29:44.000Z",
    "agreed": true,
-   "leadMinutes": 11,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R0H1C0B2NGS910AAP7HFA7:park@1791808174000:4cc90f318e8aeb4ddd9cee40f3a0259f9b9e443c"
    ],
    "skippedBefore": []
   },
@@ -427,8 +428,8 @@
    "leadMinutes": 3,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
     "guard:499:1ecf12c0c13fb1abe8c650b2ee2460ccaaf4a41a:1"
    ],
    "skippedBefore": []
@@ -444,9 +445,9 @@
    "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
-    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:5cf18209e41b43778c97068cb0dcf4791b315dff"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:park@1791808946000:5cf18209e41b43778c97068cb0dcf4791b315dff"
    ],
    "skippedBefore": []
   },
@@ -458,11 +459,12 @@
    "parkedAt": 1791809590000,
    "at": "2026-10-12T12:53:21.000Z",
    "agreed": true,
-   "leadMinutes": 11,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:0",
-    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62"
+    "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+    "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
+    "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:park@1791809590000:5cf18209e41b43778c97068cb0dcf4791b315dff"
    ],
    "skippedBefore": []
   },
@@ -494,7 +496,7 @@
     "heartbeat:0",
     "sweep:1791808606000",
     "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:f4b49787dda8b142eb0b490e948ef67526703458",
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:park@1791810735000:f4b49787dda8b142eb0b490e948ef67526703458",
     "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252"
    ],
    "skippedBefore": []
@@ -511,7 +513,7 @@
     "heartbeat:0",
     "sweep:1791808606000",
     "judge:cancelled:01M4QA52FYQBVPSJWVHG9TY326:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
-    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:f4b49787dda8b142eb0b490e948ef67526703458",
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:park@1791810735000:f4b49787dda8b142eb0b490e948ef67526703458",
     "adjudicate:01M4R1PXSTK9RPJ9GRVE7ET8YX:null:e4d516d03a3de802043c73847774cbd42d02f252"
    ],
    "skippedBefore": []
@@ -542,7 +544,7 @@
    "planBefore": [
     "heartbeat:0",
     "sweep:1791808606000",
-    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:496d5341c11a6be5b69341e35bbd116aea70a394"
+    "adjudicate:01M4R3R90RFWMV87CF6BW981EY:park@1791810826000:496d5341c11a6be5b69341e35bbd116aea70a394"
    ],
    "skippedBefore": []
   },
@@ -551,7 +553,7 @@
    "ts": 1791811216000,
    "at": "2026-10-12T13:20:16.000Z",
    "agreed": true,
-   "leadMinutes": 59,
+   "leadMinutes": 2,
    "planBefore": [
     "heartbeat:0",
     "sweep:1791808606000"
@@ -568,7 +570,7 @@
    "agreed": true,
    "leadMinutes": 0,
    "planBefore": [
-    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:932c138fd6eeca20854d6a27185ddc51b35ee059"
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:park@1791811551000:932c138fd6eeca20854d6a27185ddc51b35ee059"
    ],
    "skippedBefore": []
   },
@@ -581,7 +583,7 @@
    "agreed": false,
    "leadMinutes": null,
    "planBefore": [
-    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:932c138fd6eeca20854d6a27185ddc51b35ee059"
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:park@1791811551000:932c138fd6eeca20854d6a27185ddc51b35ee059"
    ],
    "skippedBefore": []
   },
@@ -606,7 +608,7 @@
    "agreed": true,
    "leadMinutes": 0,
    "planBefore": [
-    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:park@1791811731000:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
     "guard:502:2c5389e2407994ba0f45558ee89185368c2dd2a4:1"
    ],
    "skippedBefore": []
@@ -615,10 +617,10 @@
    "type": "heartbeat",
    "ts": 1791812140000,
    "at": "2026-10-12T13:35:40.000Z",
-   "agreed": true,
-   "leadMinutes": 60,
+   "agreed": false,
+   "leadMinutes": null,
    "planBefore": [
-    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726"
+    "adjudicate:01M4R48QV0XHZPKK7D735SF00M:park@1791811731000:d53dd1321e70de3eb5554f735b5da51c1cd0f726"
    ],
    "skippedBefore": []
   },
@@ -640,7 +642,7 @@
    "ts": 1791813370000,
    "at": "2026-10-12T13:56:10.000Z",
    "agreed": true,
-   "leadMinutes": 59,
+   "leadMinutes": 0,
    "planBefore": [
     "heartbeat:1791812145000",
     "sweep:1791811245000",
@@ -681,7 +683,7 @@
    ]
   },
   {
-   "key": "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:null:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
+   "key": "adjudicate:01M4QA52FYQBVPSJWVHG9TY326:park@1791793910000:c8a778d14f124d88bd7dff79e4c4a22be84ba679",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -693,7 +695,7 @@
    "liveLater": []
   },
   {
-   "key": "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:null:0b45bde50145650d42760302065f843b47881b62",
+   "key": "adjudicate:01M4Q9H798ZTXA4T4T27CBDMFA:park@1791787711000:0b45bde50145650d42760302065f843b47881b62",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -705,7 +707,7 @@
    "liveLater": []
   },
   {
-   "key": "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:null:a9a1f806291e71e894a5362a81cc100b60c5401f",
+   "key": "adjudicate:01M4Q9CGPPQY5A44Y0383KM772:park@1791787746000:a9a1f806291e71e894a5362a81cc100b60c5401f",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -717,7 +719,7 @@
    "liveLater": []
   },
   {
-   "key": "adjudicate:01M4QAKV9GV3155GNENY427W99:null:f42d5e4a2241b20d5497963ac442391ee2f1755d",
+   "key": "adjudicate:01M4QAKV9GV3155GNENY427W99:park@1791787529000:f42d5e4a2241b20d5497963ac442391ee2f1755d",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -729,7 +731,7 @@
    "liveLater": []
   },
   {
-   "key": "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:null:facb31c4883ec5738872ad4eec5a94237a2c302a",
+   "key": "adjudicate:01M4Q9GSZ4BDGKCD09AKF49HZ7:park@1791787779000:facb31c4883ec5738872ad4eec5a94237a2c302a",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -778,7 +780,7 @@
    ]
   },
   {
-   "key": "adjudicate:01M4QST4M8H4M4H3CQESVRBF19:null:c13a40ccacbfb70769fe54573cb6c3fbee50d625",
+   "key": "adjudicate:01M4QST4M8H4M4H3CQESVRBF19:park@1791800340000:c13a40ccacbfb70769fe54573cb6c3fbee50d625",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -893,7 +895,7 @@
    ]
   },
   {
-   "key": "adjudicate:01M4R3R90RFWMV87CF6BW981EY:null:496d5341c11a6be5b69341e35bbd116aea70a394",
+   "key": "adjudicate:01M4R3R90RFWMV87CF6BW981EY:park@1791810826000:496d5341c11a6be5b69341e35bbd116aea70a394",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -907,7 +909,7 @@
    ]
   },
   {
-   "key": "adjudicate:01M4R48QV0XHZPKK7D735SF00M:null:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
+   "key": "adjudicate:01M4R48QV0XHZPKK7D735SF00M:park@1791811731000:d53dd1321e70de3eb5554f735b5da51c1cd0f726",
    "kind": "spawn",
    "agent": "adjudicator",
    "rule": "P2",
@@ -930,6 +932,23 @@
    "t": 1791813060000,
    "at": "2026-10-12T13:51:00.000Z",
    "liveLater": []
+  },
+  {
+   "key": "heartbeat:1791813372000",
+   "kind": "heartbeat",
+   "rule": "H1",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791814680000,
+   "at": "2026-10-12T14:18:00.000Z",
+   "liveLater": [
+    "2026-10-12T13:20:16.000Z",
+    "2026-10-12T13:35:40.000Z",
+    "2026-10-12T13:56:10.000Z",
+    "2026-10-12T14:40:56.000Z",
+    "2026-10-12T14:51:55.000Z"
+   ]
   },
   {
    "key": "sweep:1791813379000",

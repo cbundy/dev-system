@@ -89,7 +89,7 @@ describe('driver', () => {
     expect(appends).toHaveLength(1)
     const line = JSON.parse(appends[0]!.stdin ?? '{}')
     expect(line).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
-    expect(line.actions.map((a: { key: string }) => a.key)).toEqual(['adjudicate:R45:null:h1'])
+    expect(line.actions.map((a: { key: string }) => a.key)).toEqual([`adjudicate:R45:park@${NOW - 600_000}:h1`])
     expect(appends[0]!.argv.at(-1)).toBe(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink

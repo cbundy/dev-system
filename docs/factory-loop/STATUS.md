@@ -23,12 +23,19 @@ The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
    of about six to eight agents for the executors and their tests, if you opt in.
 3. **Merge two small test fixes** when convenient. Both are cherry-picked onto this branch and
    drop out of its diff once merged:
-   - the heartbeat-loop flake ([PR #524](https://github.com/cbundy/dev-system/pull/524));
+   - the heartbeat-loop flake ([PR #524](https://github.com/cbundy/dev-system/pull/524)), which
+     parked this morning's routing-help fix ([#522](https://github.com/cbundy/dev-system/issues/522))
+     once;
    - the leaked test processes ([PR #527](https://github.com/cbundy/dev-system/pull/527)).
-4. **The shadow is comparing itself with the live orchestrator on #522**, the one issue you
-   released this morning (its directive mirrors "522 only"). The comparison goes into
-   [SHADOW-REPORT.md](SHADOW-REPORT.md) when #522 merges. Stop it with
-   `coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
+4. **Say whether two waiting issues should be worked**: the heartbeat clean-stop beat
+   ([#467](https://github.com/cbundy/dev-system/issues/467)) and its follow-up
+   ([#468](https://github.com/cbundy/dev-system/issues/468)) have been `ready` and unblocked since
+   14:04 UTC yesterday. The live orchestrator has not picked them up: in its idle mode nothing
+   re-reads the queue when a blocker closes. The loop would have claimed them at once.
+
+The #522 comparison is done ([SHADOW-REPORT.md](SHADOW-REPORT.md#522-the-first-real-work-2026-10-13)).
+The shadow keeps running with your "522 only" directive, now said as `only: [522]`. Stop it with
+`coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
 
 Nothing is blocked on anyone else.
 
@@ -38,7 +45,7 @@ Nothing is blocked on anyone else.
 - [INVENTORY.md](INVENTORY.md): 98 orchestrator responsibilities, each with its new home. Every
   skill line maps to a row.
 - [SPEC.md](SPEC.md): the decision table (40 rules) and everything around it.
-- [DECISIONS.md](DECISIONS.md): 34 decisions with their alternatives.
+- [DECISIONS.md](DECISIONS.md): 36 decisions with their alternatives.
 - `plan.ts`: one pure function, tested.
 
 **Then your steps 1 to 3:**
@@ -58,10 +65,18 @@ Nothing is blocked on anyone else.
   It runs a pass a minute with all sources reading and only reads executed. The live event log
   holds nothing from it, and the plan matches (the live orchestrator is idle, and so is the
   shadow).
+- **The first real work shadowed** (2026-10-13,
+  [SHADOW-REPORT.md](SHADOW-REPORT.md#522-the-first-real-work-2026-10-13)). On #522 the shadow
+  matched the adjudication and the merge flow, each within a minute. Its two differences were
+  gaps in the loop's rules, now fixed: "only these issues" is its own directive (D-35), and a
+  claim counts as its lease's renewal (D-36). A second look at the replay found three faults in
+  the harness and one more gap in the plan (two parks on one head were one gate), all fixed. The
+  replays were re-run; the evening still matches 24 of 35, now on stricter terms
+  ([REPLAY-REPORT.md](REPLAY-REPORT.md#corrections-2026-10-13)).
 - **Gates**:
   - `npm run lint` clean;
   - `npm test` 607 node tests, 46 shell suites, 2 mods, all passing;
-  - the plugin's own suite 91 tests;
+  - the plugin's own suite 93 tests;
   - a strict `tsc` against the engine's 2.1.296 declarations clean.
 
 ## Found along the way
@@ -72,6 +87,9 @@ Nothing is blocked on anyone else.
   with zero findings is approved without verdict lines. Neither is visible in the event log,
   which limits shadowing, not the loop. A watcher fix to log every park would help the factory's
   metrics too.
+- **The orchestrator's idle mode misses unblocked issues.** With only the label watcher armed, an
+  issue labelled `ready` while blocked is never picked up once its blocker closes (#467 and #468,
+  since 14:04 on 2026-10-12).
 - **Owner directives live as free text** in the memory file. The loop makes them a control
   file (`noNewWork`, `paused`, `serial`, `priority`, `skip`).
 - **Test hygiene**: the heartbeat-loop test flaked under load (a `mawk` scan aborted on a vanished
@@ -105,7 +123,9 @@ SPEC section 14:
 - **22:43 to 22:58**: the wake probe.
 - **23:00 to 23:35**: the observe half and two replays.
 - **23:41**: the shadow went live.
-- **Usage**: the five-hour window went from 60% to 84%, the weekly one from 86% to 88%.
+- **2026-10-13, 08:52 to 09:47**: the shadow followed #522 to its merge at 09:17; the comparison,
+  two rule fixes, three harness fixes and one more plan fix.
+- **Usage**: overnight the five-hour window went from 60% to 84%, the weekly one from 86% to 88%.
 - **Live factory**: untouched throughout. No orchestrator workspace was modified or restarted,
   no `ready` label was added, and no pipeline run or agent was started. The orchestrator's memory
   file was read once, read-only. The spike workspace (the brief's throwaway) was restarted twice

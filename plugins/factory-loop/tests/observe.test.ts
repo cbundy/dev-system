@@ -229,8 +229,8 @@ describe('derive', () => {
     expect(keys).toEqual([
       [`claim:60:derived:${NOW - 30 * MIN}`, 'done'],
       [`design:60:${NOW - 30 * MIN}`, 'running'],
-      ['adjudicate:R45:null:h1', 'done'],
-      ['respond:R45:null:h1:fix', 'done'],
+      [`adjudicate:R45:park@${NOW - 25 * MIN}:h1`, 'done'],
+      [`respond:R45:park@${NOW - 25 * MIN}:h1:fix`, 'done'],
       ['sweep:derived', 'done'],
       ['heartbeat:derived', 'done'],
       ['merge:550:m1', 'done'],
@@ -276,6 +276,11 @@ describe('state', () => {
     expect(plan(s, config()).actions.filter(a => a.kind !== 'title').map(a => a.key)).toEqual([])
     // a park the log shows no answer for is adjudicated
     const fresh = buildState({ ...observed, ledger: [] })
-    expect(plan(fresh, config()).actions.map(a => a.key)).toContain('adjudicate:R45:null:h1')
+    expect(plan(fresh, config()).actions.map(a => a.key)).toContain(`adjudicate:R45:park@${NOW - 6 * MIN}:h1`)
+    // parked again on the same head, at the next gate: a new gate to adjudicate (2026-10-12, #506)
+    const again = [...events, ev({ state: 'parked', ts: NOW - MIN })]
+    const facts2 = factsOf(again)
+    const second = buildState({ ...observed, facts: facts2, ledger: deriveLedger(again, factory, facts2, DEVICE) })
+    expect(plan(second, config()).actions.map(a => a.key)).toContain(`adjudicate:R45:park@${NOW - MIN}:h1`)
   })
 })

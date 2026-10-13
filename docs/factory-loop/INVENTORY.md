@@ -157,7 +157,7 @@ Row 0 is the skill's frontmatter (`SKILL:1-10`). It is replaced by the new judge
 
 | # | Responsibility | Where today | Trigger | Who today | New home |
 |---|---|---|---|---|---|
-| I-90 | Owner directives: pause a set of issues (no responds, merges or dispatches), drain one at a time in a given order, "pick up nothing new", wind down, priorities, start after a usage reset | MEM 06:45, 08:50, wind-down | owner chat | model keeps them as free text | control `paused`, `noNewWork`, `serial`, `priority`, `skip` (SPEC 4.3), set through `mcp__factory-loop__control` or `/loop`, read by rule `G4` |
+| I-90 | Owner directives: pause a set of issues (no responds, merges or dispatches), drain one at a time in a given order, "pick up nothing new", wind down, priorities, start after a usage reset | MEM 06:45, 08:50, wind-down | owner chat | model keeps them as free text | control `paused`, `noNewWork`, `serial`, `priority`, `only`, `skip` (SPEC 4.3), set through `mcp__factory-loop__control` or `/loop`, read by rule `G4` |
 | I-91 | Trackers (issues with sub-issues) are never claimed | MEM 2026-10-12 owner rule | candidate | model | rule `D1`: `sub_issues_summary.total > 0` excludes it (from `callum-flow-issue-read --json`) |
 | I-92 | Owner-parked issues carry a `parked` label | MEM 2026-10-12 | candidate | model | config `skipLabels` (repo-local, for example `["parked"]`); rule `D1` excludes them |
 | I-93 | Run `callum-flow-claim --heartbeat` first thing after any restart or compaction | MEM 05:03 lesson | restart | model | rule `H1` fires on the first pass after a load whenever this device holds a live claim |

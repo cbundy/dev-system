@@ -55,6 +55,7 @@ export const EMPTY_CONTROL: Control = {
   noNewWork: false,
   skip: [],
   priority: [],
+  only: [],
   serial: false,
   usageOverride: null,
   resumed: [],

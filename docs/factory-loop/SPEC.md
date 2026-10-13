@@ -245,6 +245,7 @@ type Control = {
   noNewWork: boolean              // wind-down or drain: no start and no develop actions
   skip: number[]                  // never claim these
   priority: number[]              // claim these first, in this order
+  only: number[]                  // claim only these, in this order (empty: no limit); work in flight goes on
   serial: boolean                 // one issue in flight at a time (a drain in order)
   usageOverride: { untilPct: number; expiresAt: Ms } | null   // run past a threshold (I-19)
   resumed: { subject: string; at: Ms }[]  // holds the owner released: 'issue:<N>' or 'run:<id>'
@@ -255,7 +256,7 @@ type Control = {
 
 They live in `<loop dir>/control.json`. The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
 and the owner can type `/loop <op>` from any client: `status`, `pause <N>`, `unpause <N>`,
-`skip <N>`, `noskip <N>`, `priority <N...>`, `serial on|off`, `new on|off`, `override <pct>
+`skip <N>`, `noskip <N>`, `priority <N...>`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct>
 <hours>`, `resume <N|run>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
 loop and is logged. Today these directives are free text in the memory file (I-90).
 
@@ -287,7 +288,7 @@ action before it is kept.
 | G1 | mode `off`, or the kill switch exists | The driver does not observe or plan. Title: `loop off`. (Driver, not plan.) |
 | G2 | `sources.factory.ok` is false | Blind pass: no actions except `title`, and `tell(blind)` once the factory source has been failing for `blindNoticeAfterMs`. When `runs` failed, the `P` and `M` rules emit nothing; when `queue`, `github` or `pool` failed, `D1` emits nothing |
 | G3 | always | `tier = tierOf(usage, config, control.usageOverride, now)`: the higher of `fiveHour` and `sevenDay` (a window whose reset has passed counting as zero) against the thresholds; Normal when unavailable (flagged); an unexpired override keeps the tier Normal below its `untilPct` |
-| G4 | always | Control filters: an action on a `paused` issue is dropped (except `heartbeat` and `title`); `noNewWork` drops the `start` and `develop` classes; `skip` removes issues from `D1`; `priority` orders `D1`; `serial` allows a claim only while this device has no live issue |
+| G4 | always | Control filters: an action on a `paused` issue is dropped (except `heartbeat` and `title`); `noNewWork` drops the `start` and `develop` classes; `skip` removes issues from `D1`; `priority` orders `D1`; a non-empty `only` limits `D1` to its issues, in its order (`noNewWork` still wins); `serial` allows a claim only while this device has no live issue |
 
 **Tier and class matrix** (each action kind has one class, section 6):
 
@@ -303,7 +304,7 @@ action before it is kept.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| H1 | this device holds a live-stage issue, and its last `heartbeat` ended before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
+| H1 | this device holds a live-stage issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
 | H2 | the last `sweep` ended at least `sweepEveryMs` ago, or never | `sweep` | `sweep:<last done endedAt or 0>` |
 | H3 | a pool slot is not busy, is clean, sits on a branch whose issue is `merged` or `closed without merge`, and no running agent of the loop names that issue | `release-worktree` | `release:<path>:<branch>` |
 
@@ -356,7 +357,7 @@ outcome, so `M2` handles it on the next pass.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| D1 | for each queue member, in `priority` order and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` and no tracker title (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts) and this pass's claims, above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
+| D1 | for each queue member, in `only` order (or else `priority` order) and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` and no tracker title (not a tracker, I-91), stage `queued` or unknown to the database, not skipped or paused, and the last claim attempt did not lose to a still-live claim; capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts) and this pass's claims, above `worktreeReserve`, and under `maxInFlightIssues` | `claim` | `claim:<N>:<stageSince or 'new'>` |
 | D2 | mine, stage `designing`, no brief newer than `stageSince`, no designer entry for this life | `spawn(designer)` with the issue's model label | `design:<N>:<stageSince>[:r<n>]` |
 | D3 | the designer entry is `done` | by its `RESULT` line: `pending_decision=yes` gives a hold plus `tell(decision)` until resumed (then `D2` again with `:r<n>` and the owner's notes); `created=<list>` gives `release-parent` (and `A2` if an implementer is running); a brief with no pending decision goes to `D4`; no `RESULT` line gives `judge(report)` | `tell:decision:<N>:<brief>`, `release-parent:<N>`, `judge:report:<entry key>` |
 | D4 | mine, stage `designing` (not yet delegated), a brief for this life (`briefOf`), no pending decision | `delegate` (route, `delegated` event, `spawn(implementer)`) | `delegate:<N>:<brief>` |

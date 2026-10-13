@@ -1,10 +1,11 @@
-# Factory loop: shadow run, first report
+# Factory loop: shadow run
 
 Phase 4 of the [conversion brief](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md).
 The loop runs in observe mode in the throwaway `spike-reconcile-mod` workspace, in the
 orchestrators' exact launch mode. It shadows the live dev-system orchestrator, planning as that
-device from the same database and GitHub. This first report covers the start, on 2026-10-12 from
-23:41 UTC.
+device from the same database and GitHub. This report covers the start, on 2026-10-12 from
+23:41 UTC, and the first real work it shadowed: [#522](https://github.com/cbundy/dev-system/issues/522)
+on 2026-10-13 ([below](#522-the-first-real-work-2026-10-13)).
 
 ## Headline
 
@@ -16,8 +17,9 @@ The shadow is live and safe:
   nothing but a sweep. The orchestrator is wound down on your instruction, and the shadow runs
   with the same "no new work" directive.
 
-The comparison with real work comes when you resume the factory. The evidence about decisions so
-far is the [replay](REPLAY-REPORT.md).
+On the first real work, #522 the next morning, it matched the adjudication and the merge flow,
+and its two differences led to two rule fixes ([below](#522-the-first-real-work-2026-10-13)).
+The wider evidence about decisions is the [replay](REPLAY-REPORT.md).
 
 ## Setup
 
@@ -66,6 +68,65 @@ Verified from its own log and from outside:
 - **Live orchestrator over the same window**: no decision events since 21:30 UTC (wound down).
 - **Comparison** (`scripts/factory-loop-replay.js --decisions`): 0 live decisions, 1 planned action
   (the sweep): no disagreement.
+
+## #522: the first real work (2026-10-13)
+
+The owner labelled [#522](https://github.com/cbundy/dev-system/issues/522) (implementer routing
+help exits 2) `ready` at 08:44 UTC and told the live orchestrator to work "522 only". It was
+claimed at 08:53, parked once, and merged as [PR #529](https://github.com/cbundy/dev-system/pull/529)
+at 09:17. The shadow matched both decisions it can see, the adjudication and the merge flow,
+within a minute each. Its two differences were real gaps in the loop's rules, both now fixed:
+the owner's "522 only" could not be said in control state, and a fresh claim set off a heartbeat.
+The one park was the flaky heartbeat-loop test that
+[PR #524](https://github.com/cbundy/dev-system/pull/524) fixes.
+
+| Live (UTC) | Shadow | Verdict |
+|---|---|---|
+| 08:53:18 claim | 08:53:01 proposed #467 | directive lag, and a gap in control state (below) |
+| 08:54:23 delegate (brief at 08:54:11) | 08:54:01 waited on the designer it counts in flight | not comparable: a designer's return is not logged, and this one came between two passes |
+| 08:59:30 park, 09:02:04 verdict (`FLAKY: heartbeat-loop.test.sh ... rerun passed`) | 09:00:01 to 09:02:01 adjudicator for run `01M4T7J9`, head `b5df2ed4`; dropped at 09:03:01 | matched, the first pass after the park |
+| gate answered, run pushed 09:03:15 | | not comparable: observe mode cannot see an adjudicator's answer |
+| 09:17:43 merge (watcher `merge_ready` 09:17:13) | 09:17:01 guard for PR #529 at `813dd499` | matched, 42 s ahead |
+| no heartbeat | heartbeat from 08:54:01 | a rule gap, fixed (below) |
+
+Raw data: [`replay/shadow-522/`](replay/shadow-522/) (the comparison and the shadow's decision
+lines from 08:45 to 09:25) and [`replay/morning-522/`](replay/morning-522/) (the window replayed
+with the fixed rules).
+
+**The claim.** At 08:52 the owner had lifted "no new work" on the shadow, and the "522 only"
+directive reached it only at 09:00. So at 08:53 it had no directive and proposed the
+lowest-numbered ready, unblocked issue, #467, as rule `D1` should. The directive it then got was
+wrong as well. Re-planning the shadow's own 08:53 state under three directives:
+
+- **No directive**: claim #467 (what it did).
+- **No new work plus priority 522** (how it was mirrored at 09:00): claim nothing. "No new work"
+  blocks #522 too.
+- **`only: [522]`**, new: claim #522, as the live orchestrator did.
+
+"Work only these" is now its own directive (DECISIONS D-35), and the shadow runs with
+`{"only": [522]}`.
+
+**The heartbeat.** The live orchestrator's last renewal was at 21:00 the night before, so the
+first rule asked for one on the pass after the claim, a minute into a fresh two-hour lease. A
+claim now counts as its own lease's renewal (D-36). Replayed, the loop's first heartbeat falls at
+09:14, 20 minutes after the claim. The live orchestrator renewed nothing: its audit tick has been
+off since the wind-down, and #522's claim would have lapsed at 10:53 had the work run long.
+
+**The park.** The adjudicator found the heartbeat-loop test failing, unrelated, and passing on a
+rerun. Its note ("SIGUSR1 sleep race") matches the flake
+[#523](https://github.com/cbundy/dev-system/issues/523) records, the interrupted-sleep check
+after `SIGUSR1`, which PR #524 fixes. It cost this issue a park, an adjudicator and about three
+minutes.
+
+**Also seen.** In the shadow's view, #467 and #468 have been ready and unblocked since their
+blocker closed at 14:04 on 2026-10-12. The live orchestrator has not picked them up: in its idle
+mode only the label watcher runs, and nothing re-reads the queue when a blocker closes
+([REPLAY-REPORT](REPLAY-REPORT.md#corrections-2026-10-13)). The loop reads the queue every two
+minutes.
+
+**Limit of this run.** `usage-check.sh` has no token in the spike workspace
+(`oauth:no-token`), so the shadow uses its session's own reading: weekly 88%, Slow, the tier the
+live orchestrator was in (89%).
 
 ## Known limits of shadowing
 
