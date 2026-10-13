@@ -74,13 +74,19 @@ export type SpawnOptions = {
   model: string | null
   modelOverride: string | null
   inFlight: InFlight[]
+  notes?: readonly string[]
+}
+
+// notesOf: the owner's notes for an issue, and those for every issue, oldest first (SPEC 4.3).
+export function notesOf(state: State, issue: number | null): string[] {
+  return state.control.notes.filter(note => note.issue === null || note.issue === issue).map(note => note.text)
 }
 
 // spawnInputOf: what $.agent.spawn gets: the named callum-flow agent, its prompt, and the issue
 // in the description and name (D-11). No model leaves the agent's frontmatter model in charge.
 export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInput {
   const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
-  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight }
+  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [] }
   const input: SpawnInput = {
     subagentType: `callum-flow:${type}`,
     prompt: promptOf(action, env),
@@ -276,7 +282,7 @@ const spawn: Executor = async (ctx, action) => {
   if (action.kind !== 'spawn') return refused(`the spawn executor got a ${action.kind} action`)
   if (action.issue === null) return refused(`${action.key} names no issue`)
   const inFlight = action.agent === 'designer' ? inFlightOf(ctx.state, action.issue) : []
-  return start(ctx, action, action.model, { modelOverride: action.model, inFlight })
+  return start(ctx, action, action.model, { modelOverride: action.model, inFlight, notes: notesOf(ctx.state, action.issue) })
 }
 
 // delegate: `callum-flow-implementer-route <N>`, then `callum-flow-event delegated --issue <N>
@@ -306,7 +312,7 @@ const delegate: Executor = async (ctx, action) => {
   } catch (err) {
     return eventFailure('delegated', err)
   }
-  return start(ctx, action, model, { modelOverride: modelLabelOf(ctx.state, n), inFlight: [] })
+  return start(ctx, action, model, { modelOverride: modelLabelOf(ctx.state, n), inFlight: [], notes: notesOf(ctx.state, n) })
 }
 
 // Exit 2 is the route's usage error, a loop bug never retried (SPEC 10.1).

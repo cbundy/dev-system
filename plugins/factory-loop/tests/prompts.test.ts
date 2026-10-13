@@ -247,6 +247,20 @@ describe('the adjudicator', () => {
     expect(text).not.toContain('Model override')
   })
 
+  test("every agent but the designer gets the issue's owner notes before its reading list (testbed, 2026-10-13)", () => {
+    const notes = ['Owner chose option (a): keep the whole-word behaviour; amend criterion 4.', 'Fixes #9 too']
+    for (const action of [adjudicator(BENIGN, 'gate'), adjudicator(BENIGN, 'merge')]) {
+      const lines = promptOf(action, { ...ENV, notes }).split('\n')
+      const head = lines.findIndex(l => l.startsWith('Owner notes'))
+      expect(head).toBeGreaterThan(-1)
+      expect(lines[head + 1]).toBe('  Owner chose option (a): keep the whole-word behaviour; amend criterion 4.')
+      // a closing keyword in a note never reaches an agent (I-33)
+      expect(lines[head + 2]).toBe('  Fixing #9 too')
+      expect(head).toBeLessThan(lines.findIndex(l => l.startsWith('Read CLAUDE.md')))
+    }
+    expect(promptOf(adjudicator(BENIGN, 'gate'), ENV)).not.toContain('Owner notes')
+  })
+
   test('gate without a step: it finds the step itself', () => {
     const text = render(adjudicator({ ...BENIGN, step: null }, 'gate'), BENIGN)
     expect(text).toContain('find it with `no-mistakes axi status --run 01K7RRXQ7M2YB9ZB3J8N0V5F6D`')

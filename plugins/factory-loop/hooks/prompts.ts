@@ -24,6 +24,9 @@ export type PromptEnv = {
   modelOverride: string | null
   // the designer only: other issues' branches in flight
   inFlight: InFlight[]
+  // the owner's notes for this issue (control notes, SPEC 4.3, 6.3): every agent but the
+  // designer, whose action carries them already, gets them before its reading list
+  notes?: readonly string[]
 }
 
 // A free-text value longer than this is cut: a prompt points, it does not carry documents.
@@ -138,7 +141,19 @@ export function promptOf(action: AgentAction, env: PromptEnv): string {
   else if (action.agent === 'designer') out = designer(repo, n, action.notes, env)
   else if (action.agent === 'adjudicator') out = adjudicator(repo, n, action)
   else out = fixer(repo, n, action, env.modelOverride)
+  if (action.kind === 'delegate' || action.agent !== 'designer') out = withNotes(out, env.notes ?? [])
   return out.join('\n')
+}
+
+// withNotes: the owner's notes go in before the agent's reading list. They are the owner's
+// decisions for the issue, so they win where the brief disagrees (found on the testbed: an
+// adjudicator without the owner's answer asked the same question again).
+function withNotes(out: string[], notes: readonly string[]): string[] {
+  const lines = block("Owner notes (the owner's decisions for this issue; where they differ from the brief, they win):", notes)
+  if (lines.length === 0) return out
+  const at = out.findIndex(l => l.startsWith('Read CLAUDE.md'))
+  const i = at === -1 ? out.length : at
+  return [...out.slice(0, i), ...lines, ...out.slice(i)]
 }
 
 function designer(repo: string | null, n: number | null, notes: readonly string[], env: PromptEnv): string[] {
