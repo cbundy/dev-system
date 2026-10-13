@@ -9,6 +9,7 @@ import { EMPTY_CONTROL, controlFrom } from '../hooks/config'
 import {
   CONTROL_TOOL,
   FACTORY_COMMAND,
+  MEANING,
   OPS,
   USAGE,
   applyOp,
@@ -17,6 +18,7 @@ import {
   controlTool,
   directives,
   formatOp,
+  helpText,
   loadControl,
   parseOp,
   retryText,
@@ -174,6 +176,18 @@ describe('parseOp', () => {
     expect(pct.ok ? '' : pct.error).toBe('override: the percentage is above 0 and at most 100. Usage: override <pct> <hours>|off')
   })
 
+  test('help reads like a command\'s --help: usage, every op with its arguments and meaning, in one aligned column', () => {
+    const lines = helpText().split('\n')
+    expect(lines[0]).toBe('Usage: /factory <op> [arguments]')
+    const rows = lines.filter(l => l.startsWith('  '))
+    expect(rows).toHaveLength(OPS.length + 1)
+    for (const name of OPS) expect(rows.some(r => r.startsWith(`  ${USAGE[name]} `) && r.endsWith(MEANING[name]))).toBe(true)
+    // every meaning starts in the same column
+    const meanings = [...OPS.map(name => MEANING[name]), 'this list']
+    expect(new Set(rows.map((r, i) => r.indexOf(meanings[i] ?? ''))).size).toBe(1)
+    expect(helpText()).not.toContain('\u2014')
+  })
+
   test('an unknown op lists the ops; help lists them too', () => {
     const unknown = parseOp('frobnicate 5')
     expect(unknown.ok).toBe(false)
@@ -182,7 +196,8 @@ describe('parseOp', () => {
       for (const name of OPS) expect(unknown.error).toContain(USAGE[name])
     }
     const help = parseOp('help')
-    expect(help.ok ? '' : help.error.startsWith('Ops: status, pause <N>')).toBe(true)
+    expect(help.ok ? '' : help.error).toBe(helpText())
+    expect(parseOp('--help')).toEqual(help)
   })
 
   test('formatOp is canonical text that parses back to the same op', () => {

@@ -48,6 +48,44 @@ export const USAGE: Record<OpName, string> = {
   mode: 'mode off|observe|act',
 }
 
+// What each op does, one line each, for `/factory help` (SPEC 4.3).
+export const MEANING: Record<OpName, string> = {
+  status: "show the loop's last pass and the owner directives in force",
+  pause: 'take no action on issue N (its claim still renews)',
+  unpause: 'undo pause',
+  skip: 'never claim issue N',
+  noskip: 'undo skip',
+  priority: 'claim these first, in this order; off clears it',
+  only: 'claim only these, in this order (a tracker stands for its open sub-issues); off clears it',
+  serial: 'on: one issue in flight at a time',
+  new: 'off: claim and start nothing new (work in flight goes on)',
+  override: 'run past a usage tier up to <pct> for <hours>; off ends it',
+  resume: 'release a hold that waits on you (an issue, or a run by its id)',
+  retry: "clear issue N's used-up actions, so its rules try again",
+  update: 'an update is due: drain, then restart the workspace; off cancels it',
+  drop: 'abandon issue N: its agents stop and its claim is released',
+  note: "an instruction for issue N's agents (for every issue without N)",
+  mode: 'off runs nothing, observe plans and logs only, act does the work',
+}
+
+// helpText: `/factory help`, in the shape of a command's --help, built from the same table the
+// parser checks, so the two cannot drift.
+export function helpText(): string {
+  const rows: [string, string][] = [...OPS.map(name => [USAGE[name], MEANING[name]] as [string, string]), ['help', 'this list']]
+  const width = Math.max(...rows.map(([usage]) => usage.length)) + 2
+  return [
+    'Usage: /factory <op> [arguments]',
+    '',
+    'Owner controls for the factory loop. A change is logged, wakes the loop, and applies on its next pass.',
+    '',
+    'Ops:',
+    ...rows.map(([usage, meaning]) => `  ${usage.padEnd(width)}${meaning}`),
+    '',
+    'N is an issue number, with or without #; a list takes spaces or commas. In chat, the model sets',
+    'the same ops through mcp__factory-loop__control with { "op": "<op>" }.',
+  ].join('\n')
+}
+
 // One op, parsed. An empty priority or only list clears it.
 export type Op =
   | { op: 'status' }
@@ -104,8 +142,10 @@ export function parseOp(text: string): Parsed {
   const args = words.slice(1)
   const rest = args.join(' ')
   const word = args.length === 1 ? args[0]?.toLowerCase() : undefined
-  if (head === 'help') return { ok: false, error: `Ops: ${allUsage()}` }
-  if (!(OPS as readonly string[]).includes(head)) return { ok: false, error: `Unknown op "${(words[0] ?? '').slice(0, 40)}". Ops: ${allUsage()}` }
+  if (head === 'help' || head === '--help' || head === '-h') return { ok: false, error: helpText() }
+  if (!(OPS as readonly string[]).includes(head)) {
+    return { ok: false, error: `Unknown op "${(words[0] ?? '').slice(0, 40)}". Ops: ${allUsage()}. /factory help explains each.` }
+  }
   const name = head as OpName
 
   switch (name) {
