@@ -723,3 +723,13 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Alternatives**: one end-to-end test inside the host.
 - **Why**: the host never returns an agent id from `$.agent.spawn` (probed: the subagent type
   arrives empty too), so a spawn there always fails. Only the testbed closes that gap (SPEC 13).
+
+### D-61 Only an interactive session runs the loop
+
+- **Decision**: a session whose `session.start` says it is not interactive (a `-p` run, the
+  SDK) never runs a pass or handles a hook (SPEC 2).
+- **Alternatives**: rely on the act lock alone, so extra copies only observe.
+- **Why**: found on the testbed on 2026-10-13. The plugin loads in every Claude process that sees
+  the workspace's plugin folders, so each review step the pipeline ran started its own loop.
+  They stayed in observe only because the main session held the act lock; one could have taken
+  it whenever that lease lapsed, and each ran the observe reads every minute for nothing.

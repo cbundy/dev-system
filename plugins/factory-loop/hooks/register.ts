@@ -83,6 +83,10 @@ const DEFAULT_TOOLS_DIR = '/usr/local/share/callum-tools'
 const lastPassRef = { plugin: 'factory-loop', key: 'lastPass' } as const
 
 let started: Promise<void> | undefined
+// a session no person reaches (a `-p` run, the SDK) never runs the loop: every Claude process in
+// the workspace loads the plugin, the pipeline's own review runs included, and only the
+// interactive session may observe or act (D-61)
+let headless = false
 let loadedAt = 0
 let cwd = '.'
 let passNo = 0
@@ -515,6 +519,7 @@ function stale(n: Notice, memory: RailMemory | null, now: Ms): boolean {
 // request: a timer tick or a ping asks for a pass; the scheduler decides when it starts. The
 // pass runs with the $ of whoever asked (a timer's closure, a hook's own).
 async function request($: EngineInterface, source: PassSource) {
+  if (headless) return
   sched = requestPass(sched, source, await $.clock.now())
   await step($)
 }
@@ -945,6 +950,7 @@ function hook(work: () => Promise<void>): Promise<void> {
 // loaded: by this module already, or now (an answer that comes before the first pass after a
 // reload).
 async function ledgerFor($: EngineInterface): Promise<Runtime | null> {
+  if (headless) return null
   const rt = lastRt ?? (await runtime($).catch(() => null))
   if (rt === null || rt.repo === '' || rt.mode !== 'act' || (await killed($))) return null
   if (live.loaded && live.repo === rt.repo) return rt
@@ -1122,14 +1128,15 @@ export const register: Register = (on, opts) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     cwd = e.cwd
-    await ensure($)
+    if (!e.isInteractive) headless = true
+    else await ensure($)
     return result
   })
 
   // The note /rename leaves for the model is blanked as it is stored, so a title costs the
   // conversation about 3 tokens (FINDINGS check 3). Any row also starts the loop if needed.
   on('session.append', async ($, e, next) => {
-    void ensure($)
+    if (!headless) void ensure($)
     const isRenameNote =
       e.door === 'prompt' && e.origin.kind === 'plugin' && JSON.stringify(e.message.content ?? '').includes('named this session')
     return next(isRenameNote ? { ...e, message: { ...e.message, content: [] } } : e)

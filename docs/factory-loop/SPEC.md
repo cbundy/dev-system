@@ -47,7 +47,9 @@ every passEveryMs (60 s), or at once when pinged:
   logs a `loop` event and tells the owner once (section 11.4).
 - **Start.** The loop starts from `session.start` and, as a fallback, from `session.append`
   (which fires every minute with the title), so it never depends on one event. The first pass
-  runs 5 seconds after the module loads.
+  runs 5 seconds after the module loads. It runs only in an interactive session: a session whose
+  `session.start` says it is not (a `-p` run or the SDK, such as the pipeline's own review runs,
+  which load the plugin from the workspace environment) never observes or acts (D-61).
 - **Pings.** An agent of the loop finished (`turn.complete` with its `agentId`), the model
   answered a wake (the answer tool or the main loop's `turn.complete`), or an owner control
   arrived (`/factory` or the control tool). A detached respond does not ping: it settles by the

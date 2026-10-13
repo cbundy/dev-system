@@ -167,6 +167,17 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.passes()).toHaveLength(1)
   })
 
+  test('a session no person reaches (a -p run, such as a pipeline review) never runs the loop, whatever its rows (D-61)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, mode: 'act' } })
+    mock.session(on)
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+    await $.session.append(row({ kind: 'composer' }, 'review this diff', 'u1'))
+    await clock.advance(5 * 60_000)
+    expect(h.seen).toEqual([])
+    expect(h.titles).toEqual([])
+  })
+
   test('the note /rename leaves for the model is blanked as it is stored; other rows are kept (SPEC 9.1, FINDINGS check 3)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     shadow(on)
