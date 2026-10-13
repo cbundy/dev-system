@@ -64,7 +64,8 @@ export type EventFields = {
 }
 
 // An extra done entry an executor records beside its own: a guard FAIL that `merge` printed
-// is a guard outcome for its PR and head, so rule M2 handles it next pass (SPEC 5.5).
+// is a guard outcome for its PR and head, so rule M2 handles it next pass (SPEC 5.5), while the
+// merge itself counts as a failed attempt that plan retries once the guard is clean.
 export type ExtraEntry = {
   key: string
   kind: ActionKind
@@ -85,7 +86,7 @@ export type ExtraEntry = {
 // rateLimited: stderr showed a GitHub rate limit; the driver sets githubBackoffUntil (SPEC 10.2).
 export type Exec =
   | { status: 'done'; outcome?: Outcome; summary: string; extra?: ExtraEntry[] }
-  | { status: 'failed'; outcome?: Outcome; summary: string; noRetry?: boolean; rateLimited?: boolean }
+  | { status: 'failed'; outcome?: Outcome; summary: string; noRetry?: boolean; rateLimited?: boolean; extra?: ExtraEntry[] }
   | { status: 'running'; agentId?: string; wakeId?: string; outcome?: Outcome; summary: string }
   | { status: 'skipped'; summary: string }
 
@@ -103,3 +104,18 @@ export function rateLimited(stderr: string): boolean {
 export function detailOf(r: RunResult): string {
   return (r.stderr.trim() || r.stdout.trim()).slice(0, 2000)
 }
+
+// Where an agent's raw answer is kept (act-agents.ts writes it), so a judge(report) or
+// judge(handoff) wake points the model at the file instead of pasting the report (SPEC 7.2).
+export function answerPath(loopDir: string, key: string): string {
+  return `${loopDir}/answers/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`
+}
+
+// The detached respond's log (act-merge.ts writes it; task(respond-stuck) names it): one per
+// ledger key and attempt, so a retry or a later gate of the same run never overwrites it.
+export function respondLogPath(loopDir: string, key: string, attempt: number): string {
+  return `${loopDir}/respond/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}-${attempt}.log`
+}
+
+// The last line of every wake prompt (skills/judge/SKILL.md answers by it).
+export const WAKE_POINTER = 'Answer with the factory-loop:judge skill.'

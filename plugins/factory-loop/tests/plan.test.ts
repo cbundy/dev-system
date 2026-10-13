@@ -192,7 +192,7 @@ describe('H: housekeeping', () => {
   test('a clean slot on a merged branch is returned; a dirty or busy one is not (SKILL:150, I-76)', () => {
     const slot = (path: string, over = {}) => ({ path, branch: 'feat/issue-12-x', state: 'leased', dirty: false, busy: false, ...over })
     // merged by the loop, so its rollout follow-ups are its merge's (M7)
-    const merged = entry('merge:512:h12', 'merge', { issue: 12, pr: 512, outcome: { kind: 'merge', result: 'merged', rollout: null, closeIssue: null, line: 'merged' } })
+    const merged = entry('merge:512:h12', 'merge', { issue: 12, pr: 512, outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' } })
     const s = withLedger(
       state({
         issues: [issue(12, { stage: 'merged', holder: DEVICE })],
@@ -975,6 +975,20 @@ describe('M7: follow-ups for hand merges (D-29)', () => {
       outcome: review({ type: 'merge' }, { bump: 'minor', bumpReason: 'a new mode' }),
     })
     expect(find(plan(withLedger(s, [read('merge'), reported]), CFG), 'expect:minor:570')).toMatchObject({ bump: 'minor', why: 'a new mode' })
+  })
+
+  test('a loop merge whose rollout read failed has it read again, then followed up once', () => {
+    const unread = entry('merge:570:h7', 'merge', {
+      issue: 70,
+      pr: 570,
+      head: 'h7',
+      endedAt: NOW - 5 * MIN,
+      outcome: { kind: 'merge', result: 'merged', rollout: null, closeIssue: null, line: 'merged' },
+    })
+    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, expected: 'patch' } })
+    expect(keys(plan(withLedger(s, [unread]), CFG))).toEqual(['rollout:70'])
+    const read = entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } })
+    expect(keys(plan(withLedger(s, [unread, read]), CFG))).toEqual(['milestone-later:70', 'task:run-it:70'])
   })
 })
 

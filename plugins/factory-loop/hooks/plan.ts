@@ -1199,19 +1199,27 @@ type Merged = { issue: number; pr: number | null; key: string; rollout: Rollout 
 // mergedIssues: every merge with its rollout: the loop's own merges, and the rollouts read for
 // hand merges (D-29).
 function mergedIssues(ctx: Ctx): Merged[] {
-  const out: Merged[] = []
+  const byIssue = new Map<number, Merged>()
+  const rollouts: LedgerEntry[] = []
   for (const entry of ctx.byKey.values()) {
     if (entry.status !== 'done' || entry.issue === null) continue
     const merge = outcome(entry, 'merge')
-    const roll = outcome(entry, 'rollout')
     if (merge?.result === 'merged') {
-      out.push({ issue: entry.issue, pr: entry.pr, key: entry.key, rollout: merge.rollout, closeIssue: merge.closeIssue })
-    } else if (roll !== undefined) {
-      const pr = entry.pr ?? ctx.issues.get(entry.issue)?.pr ?? null
-      out.push({ issue: entry.issue, pr, key: entry.key, rollout: roll.rollout, closeIssue: roll.closeIssue })
+      byIssue.set(entry.issue, { issue: entry.issue, pr: entry.pr, key: entry.key, rollout: merge.rollout, closeIssue: merge.closeIssue })
+    } else if (outcome(entry, 'rollout') !== undefined) {
+      rollouts.push(entry)
     }
   }
-  return out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  // a rollout read stands in for a hand merge, or fills in a merge whose own read failed
+  for (const entry of rollouts) {
+    const roll = outcome(entry, 'rollout')
+    const n = entry.issue as number
+    const merged = byIssue.get(n)
+    if (roll === undefined || (merged !== undefined && merged.rollout !== null)) continue
+    const pr = merged?.pr ?? entry.pr ?? ctx.issues.get(n)?.pr ?? null
+    byIssue.set(n, { issue: n, pr, key: merged?.key ?? entry.key, rollout: roll.rollout, closeIssue: merged?.closeIssue ?? roll.closeIssue })
+  }
+  return [...byIssue.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
 }
 
 // latestReport: the report of the last merge answer for a PR, whatever its head (a rebase-only
@@ -1241,6 +1249,19 @@ function handMerges(ctx: Ctx) {
     )
     if (ownMerge) continue
     want(ctx, { kind: 'rollout', key: `rollout:${n}`, class: 'free', rule: 'M7', reason: 'merged by hand: read its rollout', issue: n, pr: issue.pr })
+  }
+  // A merge of the loop's own whose rollout read failed right after it: read it again, or its
+  // follow-ups (the Run it, the milestone) would be lost.
+  const unread = state.ledger
+    .filter(e => e.kind === 'merge' && e.issue !== null && e.status === 'done' && state.now - (e.endedAt ?? 0) <= ROLLOUT_WITHIN_MS)
+    .filter(e => {
+      const merged = outcome(e, 'merge')
+      return merged?.result === 'merged' && merged.rollout === null
+    })
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+  for (const e of unread) {
+    const n = e.issue as number
+    want(ctx, { kind: 'rollout', key: `rollout:${n}`, class: 'free', rule: 'M7', reason: 'merged, rollout unread', issue: n, pr: e.pr })
   }
 }
 

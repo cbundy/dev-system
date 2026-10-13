@@ -34,7 +34,7 @@ Answer each wake with the least that does the job: short answers are the rule (S
 A wake is a message from the factory-loop plugin:
 - first line `<JUDGE|TASK|TELL> <name> id=<id> key=value ...`, no spaces inside values;
 - then detail lines in plain text;
-- last, a line naming this skill (`factory-loop:judge`), to reload it after compaction.
+- last, the line `Answer with the factory-loop:judge skill.` (`factory-loop:judge`), to reload it after compaction.
 
 One wake is open at a time (D-26): answer the one in this prompt, never an older id.
 `reminder=1` means the loop found no answer last turn: send only the answer block now. After
@@ -202,6 +202,9 @@ Notices:
   hour for in-flight work. Owner waits, or `update off`.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
+- `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this
+  repo, so the released orchestrator is still driving and the loop stays in observe (SPEC
+  11.2). Owner stops that watcher or the old session.
 - `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
   checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop

@@ -1,0 +1,358 @@
+// The agent executors (SPEC 6.1): `spawn` (designer, adjudicator, fixer) and `delegate` (route,
+// the `delegated` event, then the implementer), and onAgentAnswer, which reads an agent's
+// answer from its turn.complete into the outcome plan reads next pass. They decide nothing
+// (plan did): the prompt comes from prompts.ts and the reading of the reply from replies.ts,
+// both pure, and readAnswer below is pure too, so tests and the replay harness drive them
+// without the engine. Every answer is saved whole first (exec.ts answerPath), so a
+// judge(report) or judge(handoff) wake points the model at the file (SPEC 7.2).
+import { answerPath, detailOf, rateLimited } from './exec'
+import type { AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunResult, SpawnInput } from './exec'
+import { descriptionOf, nameOf, promptOf } from './prompts'
+import type { AgentAction, InFlight, PromptEnv } from './prompts'
+import { isBriefUrl, parseAdjudicator, parseDesigner, parseHandoff } from './replies'
+import type { ActionKind, AdjudicatorPurpose, AgentType, LedgerEntry, State } from './types'
+
+// callum-flow-implementer-route's timeout (SPEC 6.1: route 60 s).
+export const ROUTE_TIMEOUT_MS = 60_000
+// The exit recorded for a command that never exited (it could not start, or timed out).
+const NO_EXIT = -1
+const SUMMARY_MAX = 200
+const PURPOSES: readonly AdjudicatorPurpose[] = ['gate', 'weakening', 'merge']
+const MODEL = /^[A-Za-z0-9._-]+$/
+
+// --- pure helpers ------------------------------------------------------------------------------
+
+// agentOf: the agent an entry ran: its spawn's type; a delegate's is the implementer.
+export function agentOf(entry: LedgerEntry): AgentType | null {
+  if (entry.kind === 'delegate') return 'implementer'
+  return entry.kind === 'spawn' ? (entry.agent ?? null) : null
+}
+
+// purposeOfKey: an adjudicator's purpose, from plan's key families (adjudicate:,
+// adjudicate-weakening:, adjudicate-merge:).
+export function purposeOfKey(key: string): AdjudicatorPurpose | null {
+  if (key.startsWith('adjudicate-merge:')) return 'merge'
+  if (key.startsWith('adjudicate-weakening:')) return 'weakening'
+  if (key.startsWith('adjudicate:')) return 'gate'
+  return null
+}
+
+// routedModel: callum-flow-implementer-route prints exactly one line, the model alias the
+// implementer runs on (images/base/callum-flow-implementer-route); anything else is null.
+export function routedModel(stdout: string): string | null {
+  const lines = stdout
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l !== '')
+  const only = lines.length === 1 ? lines[0] : undefined
+  return only !== undefined && MODEL.test(only) ? only : null
+}
+
+// modelLabelOf: the issue's `model:<alias>` label (lower-cased, the first in sorted order, as
+// plan reads it), which the implementer passes on to the sub-agents it spawns.
+export function modelLabelOf(state: State, issue: number | null): string | null {
+  const labels = (state.issues.find(i => i.number === issue)?.labels ?? [])
+    .map(l => l.toLowerCase())
+    .filter(l => l.startsWith('model:'))
+    .sort()
+  const first = labels[0]?.slice('model:'.length)
+  return first !== undefined && MODEL.test(first) ? first : null
+}
+
+// inFlightOf: the other issues' current branches, for the designer (orchestrator skill step 2).
+export function inFlightOf(state: State, issue: number | null): InFlight[] {
+  return state.runs
+    .filter(r => !r.superseded && r.issue !== issue)
+    .map(r => ({ branch: r.branch, issue: r.issue }))
+    .sort((a, b) => (a.branch < b.branch ? -1 : a.branch > b.branch ? 1 : 0))
+}
+
+export type SpawnOptions = {
+  repo: string
+  attempt: number
+  // the model to run on: the issue's label for a spawn, the route's answer for a delegate
+  model: string | null
+  modelOverride: string | null
+  inFlight: InFlight[]
+}
+
+// spawnInputOf: what $.agent.spawn gets: the named callum-flow agent, its prompt, and the issue
+// in the description and name (D-11). No model leaves the agent's frontmatter model in charge.
+export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInput {
+  const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
+  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight }
+  const input: SpawnInput = {
+    subagentType: `callum-flow:${type}`,
+    prompt: promptOf(action, env),
+    description: descriptionOf(action),
+    name: nameOf(action, opts.attempt),
+  }
+  if (opts.model !== null && MODEL.test(opts.model)) input.model = opts.model
+  return input
+}
+
+// --- what a spawn leaves for its answer -----------------------------------------------------------
+
+// The spawn record: written before the spawn, read back with the answer. It holds what the
+// ledger entry has no field for: the branch the spawn named (the adjudicator's verdict events
+// carry it; a fixer that reports another one supersedes the old run) and the adjudicator's
+// purpose. The prompt is kept for the owner, beside the answer.
+export type SpawnRecord = {
+  key: string
+  attempt: number
+  agent: AgentType
+  purpose: AdjudicatorPurpose | null
+  issue: number | null
+  run: string | null
+  branch: string | null
+  subagentType: string
+  model: string | null
+  prompt: string
+}
+
+export function spawnRecordPath(loopDir: string, key: string): string {
+  return `${loopDir}/spawns/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.json`
+}
+
+function recordOf(action: AgentAction, input: SpawnInput, attempt: number): SpawnRecord {
+  const spawn = action.kind === 'spawn' ? action : null
+  const branch = spawn !== null && spawn.agent !== 'designer' && spawn.branch !== '' ? spawn.branch : null
+  return {
+    key: action.key,
+    attempt,
+    agent: action.kind === 'delegate' ? 'implementer' : action.agent,
+    purpose: spawn?.agent === 'adjudicator' ? spawn.purpose : null,
+    issue: action.issue,
+    run: spawn !== null && spawn.agent !== 'designer' ? spawn.run : null,
+    branch,
+    subagentType: input.subagentType,
+    model: input.model ?? null,
+    prompt: input.prompt,
+  }
+}
+
+// parseRecord: a saved spawn record's branch and purpose, or null when it does not read.
+export function parseRecord(text: string | null): Pick<SpawnRecord, 'branch' | 'purpose'> | null {
+  if (text === null) return null
+  try {
+    const v: unknown = JSON.parse(text)
+    if (v === null || typeof v !== 'object') return null
+    const r = v as Record<string, unknown>
+    return {
+      branch: typeof r.branch === 'string' && r.branch !== '' ? r.branch : null,
+      purpose: PURPOSES.find(p => p === r.purpose) ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+// --- reading an answer --------------------------------------------------------------------------
+
+export type AgentEvent = { state: string; fields: EventFields }
+export type AnswerInfo = {
+  repo: string
+  // the branch the spawn named (spawn record, else the run's branch in the state)
+  branch: string | null
+  // the spawn record's purpose, when the key does not say
+  purpose: AdjudicatorPurpose | null
+}
+export type AnswerRead = { exec: Exec; events: AgentEvent[] }
+
+// readAnswer: an agent's answer as an Exec, and the events its outcome logs (SPEC 7.3, 7.4):
+// - a turn that ended in error, aborted or refused is a failed attempt (SPEC 10.4);
+// - the designer's report is done, parsed or { unparsed: true } (rule D3 sends that one to the
+//   model);
+// - the adjudicator's reply is done with its verdict lines, each logged as a `verdict` event,
+//   or a failed attempt when it does not parse (rule P2 retries);
+// - an implementer's or fixer's handoff is done with its fields, or failed when it does not
+//   parse; a fixer that reports a branch other than the one it was sent to supersedes the old
+//   run (I-39).
+export function readAnswer(entry: LedgerEntry, answer: AgentAnswer, info: AnswerInfo): AnswerRead {
+  const type = agentOf(entry)
+  const who = `${type ?? entry.kind} #${entry.issue ?? '?'}`
+  const failed = (summary: string, noRetry = false): AnswerRead => ({
+    exec: noRetry ? { status: 'failed', summary: clip(summary), noRetry } : { status: 'failed', summary: clip(summary) },
+    events: [],
+  })
+  if (type === null) return failed(`${entry.key}: no agent entry`, true)
+  if (answer.reason !== 'answer') return failed(`${who}: its turn ended: ${answer.reason}`)
+  if (type === 'designer') {
+    const outcome = parseDesigner(answer.answer, info.repo, entry.issue)
+    const summary =
+      'unparsed' in outcome
+        ? `${who}: no RESULT line; the report is saved for judge(report)`
+        : `${who}: brief ${outcome.brief ?? 'none'}, created ${outcome.created.join(',') || 'none'}, pending decision ${outcome.pendingDecision ? 'yes' : 'no'}`
+    return { exec: { status: 'done', outcome, summary: clip(summary) }, events: [] }
+  }
+  if (type === 'adjudicator') {
+    const purpose = purposeOfKey(entry.key) ?? info.purpose
+    if (purpose === null) return failed(`${who}: ${entry.key} names no adjudicator purpose`, true)
+    const outcome = parseAdjudicator(answer.answer, purpose)
+    if (outcome === null) return failed(`${who}: the ${purpose} reply does not parse`)
+    const events = outcome.verdicts.map(line => ({
+      state: 'verdict',
+      fields: { issue: entry.issue, run: entry.run, branch: info.branch, note: line },
+    }))
+    const report = outcome.report === null ? '' : `, bump ${outcome.report.bump}, flags ${outcome.report.flags.join(',') || 'none'}`
+    const summary = `${who} (${purpose}): ACTION ${outcome.action.type}, ${outcome.verdicts.length} verdict line${outcome.verdicts.length === 1 ? '' : 's'}${report}`
+    return { exec: { status: 'done', outcome, summary: clip(summary) }, events }
+  }
+  const named = type === 'fixer' ? info.branch : null
+  const outcome = parseHandoff(answer.answer, named)
+  if (outcome === null) return failed(`${who}: the handoff has no RESULT line and does not say NOT GATED`)
+  const events: AgentEvent[] = []
+  if (type === 'fixer' && outcome.newBranch !== null && named !== null && entry.run !== null) {
+    events.push({ state: 'superseded', fields: { issue: entry.issue, run: entry.run, note: `by ${outcome.newBranch}` } })
+  }
+  const parts = [`run ${outcome.run ?? 'none'}`, `head ${outcome.head ?? 'none'}`]
+  if (outcome.notGated) parts.push('NOT GATED')
+  if (outcome.newBranch !== null) parts.push(`branch ${outcome.newBranch}`)
+  return { exec: { status: 'done', outcome, summary: clip(`${who}: ${parts.join(', ')}`) }, events }
+}
+
+// onAgentAnswer: an agent of the loop finished (its turn.complete). The answer is saved whole,
+// then read, and the events its outcome logs go out; the driver records the Exec. A failed save
+// or event is noted in the summary but keeps the reading: re-running an agent costs far more.
+export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<Exec> {
+  const notes: string[] = []
+  try {
+    await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), answer.answer)
+  } catch (err) {
+    notes.push(`answer not saved: ${message(err)}`)
+  }
+  let record: Pick<SpawnRecord, 'branch' | 'purpose'> | null = null
+  try {
+    record = parseRecord(await ctx.io.readFile(spawnRecordPath(ctx.rt.loopDir, entry.key)))
+  } catch {
+    // no record: the run's branch in the state stands in
+  }
+  const branch = record?.branch ?? (entry.run === null ? null : (ctx.state.runs.find(r => r.run === entry.run)?.branch ?? null))
+  const read = readAnswer(entry, answer, { repo: ctx.rt.repo, branch, purpose: record?.purpose ?? null })
+  let missed = 0
+  for (const e of read.events) {
+    try {
+      await ctx.event(e.state, e.fields)
+    } catch {
+      missed += 1
+    }
+  }
+  if (missed > 0) notes.push(`${missed} of ${read.events.length} events not logged`)
+  return notes.length === 0 ? read.exec : { ...read.exec, summary: clip(`${read.exec.summary}; ${notes.join('; ')}`) }
+}
+
+// --- the executors --------------------------------------------------------------------------------
+
+function refused(why: string): Exec {
+  return { status: 'failed', summary: clip(`refused: ${why}`), noRetry: true }
+}
+
+// start: write the spawn record, then spawn. A deny, a throw or a start with no agent id is a
+// failed attempt; a started agent runs on, and its turn.complete ends the entry.
+async function start(ctx: ExecCtx, action: AgentAction, model: string | null, env: Omit<PromptEnv, 'repo'>): Promise<Exec> {
+  const input = spawnInputOf(action, { repo: ctx.rt.repo, attempt: ctx.entry.attempts, model, ...env })
+  let saved = true
+  try {
+    const record = recordOf(action, input, ctx.entry.attempts)
+    await ctx.io.writeFile(spawnRecordPath(ctx.rt.loopDir, action.key), JSON.stringify(record, null, 2))
+  } catch {
+    saved = false
+  }
+  let r: { agentId?: string; deny?: string }
+  try {
+    r = await ctx.io.spawnAgent(input)
+  } catch (err) {
+    return { status: 'failed', summary: clip(`${input.subagentType}: the spawn threw: ${message(err)}`) }
+  }
+  if (typeof r.deny === 'string') return { status: 'failed', summary: clip(`${input.subagentType} denied: ${r.deny}`) }
+  if (r.agentId === undefined || r.agentId === '') return { status: 'failed', summary: `${input.subagentType}: started with no agent id` }
+  const on = input.model === undefined ? '' : ` (${input.model})`
+  const note = saved ? '' : '; spawn record not saved'
+  return { status: 'running', agentId: r.agentId, summary: clip(`${input.subagentType}${on} started for #${action.issue}: ${r.agentId}${note}`) }
+}
+
+// spawn: the designer, an adjudicator or a fixer, on the issue's model label when it has one.
+const spawn: Executor = async (ctx, action) => {
+  if (action.kind !== 'spawn') return refused(`the spawn executor got a ${action.kind} action`)
+  if (action.issue === null) return refused(`${action.key} names no issue`)
+  const inFlight = action.agent === 'designer' ? inFlightOf(ctx.state, action.issue) : []
+  return start(ctx, action, action.model, { modelOverride: action.model, inFlight })
+}
+
+// delegate: `callum-flow-implementer-route <N>`, then `callum-flow-event delegated --issue <N>
+// --note "brief <url>"`, then the implementer on the routed model (SPEC 6.1, I-32). A route
+// that fails, or prints no model, ends it before anything is logged.
+const delegate: Executor = async (ctx, action) => {
+  if (action.kind !== 'delegate') return refused(`the delegate executor got a ${action.kind} action`)
+  const n = action.issue
+  if (n === null) return refused(`${action.key} names no issue`)
+  // a brief travels as its URL only (I-33); anything else here is a loop bug
+  if (!isBriefUrl(action.brief, ctx.rt.repo)) return refused(`${action.key}: the brief is not a comment URL on ${ctx.rt.repo}`)
+  const argv = ['callum-flow-implementer-route', String(n)]
+  let r: RunResult
+  try {
+    r = await ctx.cmd(argv, { timeoutMs: ROUTE_TIMEOUT_MS })
+  } catch (err) {
+    return { status: 'failed', outcome: { kind: 'cli', exit: NO_EXIT, detail: message(err).slice(0, 2000) }, summary: clip(`${argv[0]}: ${message(err)}`) }
+  }
+  if (r.exitCode !== 0) return routeFailure(r)
+  const model = routedModel(r.stdout)
+  if (model === null) {
+    const detail = `printed no model: ${JSON.stringify(r.stdout.trim().slice(0, 200))}`
+    return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail }, summary: clip(`${argv[0]} ${detail}`) }
+  }
+  try {
+    await ctx.event('delegated', { issue: n, note: `brief ${action.brief}` })
+  } catch (err) {
+    return eventFailure('delegated', err)
+  }
+  return start(ctx, action, model, { modelOverride: modelLabelOf(ctx.state, n), inFlight: [] })
+}
+
+// Exit 2 is the route's usage error, a loop bug never retried (SPEC 10.1).
+function routeFailure(r: RunResult): Exec {
+  const line = lastLine(r.stderr) || lastLine(r.stdout)
+  const exec: Extract<Exec, { status: 'failed' }> = {
+    status: 'failed',
+    outcome: { kind: 'cli', exit: r.exitCode, detail: detailOf(r) },
+    summary: clip(`callum-flow-implementer-route: exit ${r.exitCode}${line === '' ? '' : `: ${line}`}`),
+  }
+  if (r.exitCode === 2) exec.noRetry = true
+  if (rateLimited(r.stderr)) exec.rateLimited = true
+  return exec
+}
+
+// callum-flow-event exits non-zero only on a usage error (exit 2), never retried.
+function eventFailure(state: string, err: unknown): Exec {
+  const code = typeof err === 'object' && err !== null ? (err as { exitCode?: unknown }).exitCode : undefined
+  const exit = typeof code === 'number' ? code : NO_EXIT
+  const exec: Extract<Exec, { status: 'failed' }> = {
+    status: 'failed',
+    outcome: { kind: 'cli', exit, detail: message(err).slice(0, 2000) },
+    summary: clip(`event ${state}: ${message(err)}`),
+  }
+  if (exit === 2) exec.noRetry = true
+  return exec
+}
+
+export const agentExecutors: Partial<Record<ActionKind, Executor>> = { spawn, delegate }
+
+// --- small text helpers ---------------------------------------------------------------------
+
+function lastLine(text: string): string {
+  return (
+    text
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l !== '')
+      .pop() ?? ''
+  )
+}
+
+function clip(text: string): string {
+  return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 3)}...` : text
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
