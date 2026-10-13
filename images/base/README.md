@@ -1620,12 +1620,17 @@ exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of 
 lower-cased, mod 100). The `implementer:` salt keeps it independent of the design split above, and the hash means a
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
-pipeline keep their own models, so a difference between the groups comes from the implementer. Each call logs an
+pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
 `implementer_routed` event (`model=.. reason=label|default|hash|fallback bucket=.. pct=..`), and it is in the synced
 allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
 `.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
 share), keep the share fixed while it runs, and read the result with the
 [implementer model comparison](../../docs/metrics.md#8-implementer-model-comparison) query.
+
+With exactly one argument, `-h` or `--help` prints `usage: callum-flow-implementer-route <issue>` on stdout,
+writes nothing to stderr, exits 0 and logs no event, even when `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` is invalid.
+Help is handled before percentage validation. Usage errors (a missing, empty or nonnumeric issue, an invalid
+percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
 
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
