@@ -45,7 +45,7 @@ Built in three waves, each committed with its tests, then reviewed:
   ([a170cb4](https://github.com/cbundy/dev-system/commit/a170cb4)): the counts-only title, the
   merge adjudicator with `judge(sequence)`, self-restart for an update with its drain,
   follow-ups for hand merges, trackers inside `only`, `task(respond-stuck)`, visible rate caps
-  with no merge cap, the in-flight cap of 10, duration strings in the config, labels compared
+  with no merge cap, the in-flight cap of 10 (5 since the testbed run), duration strings in the config, labels compared
   without regard to case. `pipeline-watch.sh` and `queue-watch.sh` gained their `--once` modes,
   `callum-flow-event` gained the `loop` state, and every reader of the event log now treats it
   as bookkeeping. The judge skill is drafted.

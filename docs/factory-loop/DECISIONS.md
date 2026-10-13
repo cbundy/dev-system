@@ -586,7 +586,7 @@ first format until the act-half build.
 
 ### D-24 Rate caps
 
-Starts 30, spawns 40 and wakes 20 per rolling hour, plus 6 actions of one kind on one issue.
+Starts 30, spawns 120 and wakes 20 per rolling hour, plus 6 actions of one kind on one issue.
 There is no global cap on merges (owner, 2026-10-13): a PR merges only once, after a guard and a
 review, so merges cannot run away. The busiest hours on dev-system in the week to 2026-10-12 had 14 claims (a burst of
 tracker re-claims after a lapse), 7 delegations, 7 adjudicated runs, 4 review fix rounds and 4
@@ -594,6 +594,12 @@ merges, so the caps sit about twice above real peaks. The per-issue cap catches 
 bug, a key that keeps changing for the same subject, long before the global caps would. A capped
 action is visible in the pass that drops it: the decision log names it, the title adds
 `capped <class>`, a `loop` event records it, and the owner is told once (owner, 2026-10-13).
+
+The first testbed run (2026-10-13) hit the first spawn cap of 40 in 31 minutes: the loop claimed
+ten issues within two passes and each issue uses four to five agents (designer, implementer, gate
+and merge adjudicators, sometimes a fixer), so a full batch passes 40 within its first hour even
+with nothing going wrong. The owner lowered the in-flight cap to 5 and raised spawns to 120, so
+the spawn cap is runaway protection again rather than a limit on normal work.
 
 ### D-27 Stuck rules show in the title only
 

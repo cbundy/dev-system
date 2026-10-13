@@ -1292,13 +1292,13 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
   })
 
   test('the in-flight cap holds claims back, shows in the title, and tells the owner once per reach (SPEC 4.2)', () => {
-    const live = Array.from({ length: 10 }, (_, i) => mine(100 + i, 'implementing'))
+    const live = Array.from({ length: 5 }, (_, i) => mine(100 + i, 'implementing'))
     const s = state({ queue: [1], issues: [issue(1), ...live], pool: { free: 16, total: 16, slots: [] } })
     const r = plan(s, CFG)
     expect(keys(r)).toEqual(['tell:at-cap:0'])
     expect(r.atCap).toBe(true)
-    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 1, why: 'in-flight cap: 10 of 10' })
-    expect(r.title).toBe('🔄 dev-system (Q:1 - D:10 - M:0) · observe · at cap')
+    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 1, why: 'in-flight cap: 5 of 5' })
+    expect(r.title).toBe('🔄 dev-system (Q:1 - D:5 - M:0) · observe · at cap')
     // a notice, not an owner item
     expect(r.owner).toBe(0)
     const told = withLedger(s, [entry('tell:at-cap:0', 'tell', { wake: 'at-cap' })])
@@ -1306,7 +1306,7 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
     // a claim since then starts the count over: reaching the cap again is told again
     const claimed = withLedger(told, [entry('claim:99:x', 'claim', { class: 'start', issue: 99, endedAt: NOW - 3 * MIN, outcome: { kind: 'claim', result: 'claimed' } })])
     expect(keys(plan(claimed, CFG))).toEqual([`tell:at-cap:${NOW - 3 * MIN}`])
-    expect(plan({ ...s, issues: s.issues.slice(0, 10) }, CFG).atCap).toBe(false)
+    expect(plan({ ...s, issues: s.issues.slice(0, 5) }, CFG).atCap).toBe(false)
   })
 
   test('retry counts follow SPEC 6.1: a close and reopen once, a slot return twice', () => {
@@ -1405,7 +1405,7 @@ const SCENARIOS: [string, State][] = [
   // a busy hour: 30 claims and 40 spawns already, so claims and spawns wait for it to clear
   ['busy-hour', withLedger(state({ queue: [1], issues: [issue(1), mine(60, 'designing')] }), [
     ...hourOld(30, i => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN })),
-    ...hourOld(40, i => entry(`design:${300 + i}:x`, 'spawn', { agent: 'designer', class: 'develop', issue: 300 + i, startedAt: NOW - 30 * MIN })),
+    ...hourOld(120, i => entry(`design:${300 + i}:x`, 'spawn', { agent: 'designer', class: 'develop', issue: 300 + i, startedAt: NOW - 30 * MIN })),
   ])],
 ]
 
@@ -1421,7 +1421,7 @@ describe('properties', () => {
     expect(why).toContain('one wake per pass')
     expect(why).toContain('claims per pass')
     expect(why).toContain('rate cap: start 30/30')
-    expect(why).toContain('rate cap: spawn 40/40')
+    expect(why).toContain('rate cap: spawn 120/120')
     expect(keys(plan(SCENARIOS.find(([n]) => n === 'wakes')?.[1] ?? state(), CFG))).toEqual(['tell:review-cap:01M4RQ0045AAAA:3'])
   })
 

@@ -26,7 +26,7 @@ export const DEFAULT_CONFIG: Config = {
   sweepEveryMs: 30 * MIN,
   slowGapMs: 10 * MIN,
   maxStartsPerPass: 4,
-  maxInFlightIssues: 10,
+  maxInFlightIssues: 5,
   worktreeReserve: 2,
   reviewFixCap: 3,
   guardRecheckMs: 3 * MIN,
@@ -64,7 +64,7 @@ export const DEFAULT_CONFIG: Config = {
     tell: 1,
   },
   retryBackoffMs: 2 * MIN,
-  rateCaps: { start: 30, spawn: 40, wake: 20, perIssueKind: 6 },
+  rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
   allowActOutsideOrchestrator: false,
 }
 

@@ -277,7 +277,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `heartbeatEveryMs`, `sweepEveryMs` | `20m`, `30m` | rules `H1`, `H2` |
 | `slowGapMs` | `10m` | Slow: the least time between two claims |
 | `maxStartsPerPass` | 4 | claims per pass in Normal |
-| `maxInFlightIssues` | 10 | a cap on this device's live issues (owner, 2026-10-13). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
+| `maxInFlightIssues` | 5 | a cap on this device's live issues (owner, 2026-10-13; lowered from 10 after the testbed run). Reaching it shows: the decision log names each claim it holds back, the title adds `at cap`, a `loop` event records it, and the owner is told once each time it is reached |
 | `worktreeReserve` | 2 | free slots kept for fixers and re-drives |
 | `reviewFixCap` | 3 | review fix rounds per run (I-48) |
 | `guardRecheckMs`, `guardTtlMs` | `3m`, `30m` | guard freshness (rule `M1`) |
@@ -289,7 +289,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `maxAttempts` | claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, respond 2, merge 2, fix-linkage 2, guard 3, release-worktree 2, pr-reopen 1, stop-agent 1, restart-self 1, judge, task and tell 1 (one reminder inside the attempt); heartbeat 3 and sweep 3; any other kind 3; `update-behind` runs `updateBehindRetries` + 1 times | then the owner hears of it (`tell(agent-failed)`, `tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
 | `retryBackoffMs` | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
 | `wakeTimeoutMs` | judge `30m`, task `6h`, tell `30m` | section 8 |
-| `rateCaps` | starts 30, spawns 40, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (11.4) |
+| `rateCaps` | starts 30, spawns 120, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (11.4) |
 
 Time settings take a duration in the files: `60s`, `5m`, `2h`, with the key's `Ms` dropped
 (`passEvery: "60s"`). A plain number still reads as milliseconds. The loader converts them, so

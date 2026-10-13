@@ -455,7 +455,7 @@ describe('config (SPEC 4.2)', () => {
     })
     expect(c.readyLabel).toBe('Go')
     expect(c.maxInFlightIssues).toBe(4)
-    expect(c.rateCaps).toEqual({ start: 10, spawn: 40, wake: 20, perIssueKind: 6 })
+    expect(c.rateCaps).toEqual({ start: 10, spawn: 120, wake: 20, perIssueKind: 6 })
     expect(c.maxAttempts.claim).toBe(5)
     expect(c.maxAttempts.respond).toBe(2)
     expect(c.skipLabels).toEqual(['parked'])
@@ -478,8 +478,8 @@ describe('config (SPEC 4.2)', () => {
   test('the defaults the owner set on 2026-10-13', () => {
     expect(DEFAULT_CONFIG).toMatchObject({
       inDevLabel: 'in development',
-      maxInFlightIssues: 10,
-      rateCaps: { start: 30, spawn: 40, wake: 20, perIssueKind: 6 },
+      maxInFlightIssues: 5,
+      rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
       passEveryMs: 60_000,
       queueEveryMs: 120_000,
       githubEveryMs: 300_000,
