@@ -250,15 +250,25 @@ describe('argv (SPEC 6.1)', () => {
       '--instructions=fix it',
       `--add-finding=${json}`,
     ])
-    expect(respondArgv(A.respond({ action: 'approve', findings: null, approveReason: 'the brief allows removing the old flag', logReview: false }))).toEqual([
+    // no-mistakes takes --reason only on the test step (the testbed's #11 hit exit 2 on review)
+    expect(respondArgv(A.respond({ action: 'approve', step: 'test', findings: null, approveReason: 'the brief allows removing the old flag', logReview: false }))).toEqual([
+      'no-mistakes',
+      'axi',
+      'respond',
+      '--action',
+      'approve',
+      '--step=test',
+      '--reason=the brief allows removing the old flag',
+    ])
+    expect(respondArgv(A.respond({ action: 'approve', findings: null, approveReason: 'the reviewer was wrong', logReview: false }))).toEqual([
       'no-mistakes',
       'axi',
       'respond',
       '--action',
       'approve',
       '--step=review',
-      '--reason=the brief allows removing the old flag',
     ])
+    expect(respondArgv(A.respond({ action: 'approve', step: null, findings: null, approveReason: 'x', logReview: false }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve'])
     expect(respondArgv(A.respond({ action: 'approve', findings: null }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--step=review'])
     expect(respondArgv(A.respond({ action: 'skip', findings: null }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'skip', '--step=review'])
     // a fix flag never rides on another action, and an empty value is left out
@@ -289,7 +299,8 @@ describe('argv (SPEC 6.1)', () => {
       const pool: Pool = { free: 3, total: 16, slots: [slot(SLOT, action.branch, 'in-use')] }
       const { result, calls } = await exec(action, [{ stdout: 'run: R\n' }], { pool })
       expect(result).toMatchObject({ status: 'done', summary: `respond --action approve on its gate launched in ${SLOT}` })
-      expect(calls[0]?.argv.slice(7)).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--reason=a false positive'])
+      // with no step name nothing says it is the test step, the only one that takes --reason
+      expect(calls[0]?.argv.slice(7)).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve'])
     }
   })
 

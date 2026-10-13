@@ -454,12 +454,24 @@ step_of() {
   printf '%s' "${s:-unknown}"
 }
 
+# park_step: the step a parked run waits at. A step awaiting the agent or an approval says so;
+# otherwise it is the first step not completed, skipped or pending, since a review that parked
+# with fixes to decide reads fix_review (seen on the testbed, no-mistakes v1.84).
+park_step() {
+  s=$(step_of 'awaiting_agent|awaiting_approval')
+  [ "$s" != unknown ] || s=$(printf '%s\n' "$out" | awk '
+    /^[[:space:]]*steps\[[0-9]+\]\{step,status/ { t = 1; next }
+    t && split($1, f, ",") >= 2 { if (f[2] !~ /^(completed|skipped|pending)$/) { print f[1]; exit } next }
+    { t = 0 }')
+  printf '%s' "${s:-unknown}"
+}
+
 # once_detail <state>: what --once adds to a line's detail (see the header):
 # " step=<step>" for parked and failed, then " pr=<n>" when the run has a PR,
 # from its status (a URL) or else its runs row ($rpr).
 once_detail() {
   case "$1" in
-    parked) printf ' step=%s' "$(step_of 'awaiting_agent|awaiting_approval')" ;;
+    parked) printf ' step=%s' "$(park_step)" ;;
     failed) printf ' step=%s' "$(step_of failed)" ;;
   esac
   p=$(field "$out" pr | sed -n 's#^.*/pull/\([0-9][0-9]*\).*$#\1#p; s#^\([0-9][0-9]*\)$#\1#p' | sed -n 1p)

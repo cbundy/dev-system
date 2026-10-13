@@ -228,6 +228,16 @@ once > /dev/null || fail "replay: new head did not exit 0"
 grep -q 'step=' "$evlog" && fail "replay: the log must carry the watch modes' note: $(cat "$evlog")"
 ok # repeated --once calls do not replay events
 
+# 4. A review parked with fixes to decide reads fix_review, not awaiting_approval: its step is
+# still named (the testbed's #11 run, no-mistakes v1.84).
+run_state RUNI feat/issue-201-i parked 7777777777777777777777777777777777777777
+# as the real status shows it: the run awaits the agent, its review step reads fix_review
+sed -i 's/review,awaiting_approval,/review,fix_review,/; s/^  status: running$/  status: running\n  awaiting_agent: parked 1m50s/' "$fakebin/runs/RUNI.txt"
+res=$(once) || fail "fix_review: did not exit 0"
+[ "$res" = "parked feat/issue-201-i RUNI step=review head=7777777777777777777777777777777777777777" ] ||
+  fail "fix_review: $res"
+ok # a park in fix_review names its step
+
 # 4. Fatal: exit 1, the reason on stderr, nothing on stdout, and no event (a failed source the
 # caller reports itself).
 cat > "$fakebin/callum-flow-event" <<'EOF'
