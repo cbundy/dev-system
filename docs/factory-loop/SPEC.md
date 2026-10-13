@@ -21,7 +21,8 @@ lines (section 8), doing the few tasks that stay model work (re-drives, releases
 and talking to the owner.
 
 Out of scope: changing the CLIs' logic (the loop calls them; two get a one-shot mode,
-section 3.3), changing the agents' definitions, releasing, and restarting the workspace.
+section 3.3), changing the agents' definitions, and releasing. Restarting the workspace is in
+scope only for an update, once nothing is in flight (rule `H4`, DECISIONS D-15).
 
 ## 2. Architecture
 
@@ -42,7 +43,7 @@ every passEveryMs (60 s), or at once when pinged:
   event.
 - **Pings.** An agent of the loop finished (`turn.complete` with its `agentId`), the model
   answered a wake (the answer tool or the main loop's `turn.complete`), an owner control
-  arrived (`/loop` or the control tool), or a detached command's log changed.
+  arrived (`/factory` or the control tool), or a detached command's log changed.
 - **Plan is the heart.** `plan` lives in `plugins/factory-loop/hooks/plan.ts` and imports
   types only. Everything it needs, the time included, arrives in `State`. Actions already
   running or done are in the state's ledger, so re-planning an unchanged state yields no new
@@ -234,7 +235,7 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 | `maxAttempts` | claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, respond 2, merge 2, fix-linkage 2, CLI writes 3 | then the owner hears of it |
 | `retryBackoffMs` | 120 000 | doubled per attempt |
 | `wakeTimeoutMs` | judge 1 800 000, task 21 600 000, tell 1 800 000 | section 8 |
-| `rateCaps` | starts 30, spawns 40, merges 10, wakes 20 per rolling hour, and 6 actions of one kind on one issue | runaway protection (11.4) |
+| `rateCaps` | starts 30, spawns 40, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (11.4) |
 | `recordStates` | `true` in observe, `false` in act | write each changed `State` for replay |
 
 ### 4.3 Control state (owner directives)
@@ -249,6 +250,7 @@ type Control = {
                                   //   open sub-issues; work in flight goes on
   serial: boolean                 // one issue in flight at a time (a drain in order)
   usageOverride: { untilPct: number; expiresAt: Ms } | null   // run past a threshold (I-19)
+  updateDue: { reason: string; at: Ms } | null   // the reconciler says an update is due (rule H4)
   resumed: { subject: string; at: Ms }[]  // holds the owner released: 'issue:<N>' or 'run:<id>'
   dropped: { issue: number; at: Ms }[]     // issues the owner dropped: abandon them (rule D6)
   notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents
@@ -256,7 +258,7 @@ type Control = {
 ```
 
 They live in `<loop dir>/control.json`. The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
-and the owner can type `/loop <op>` from any client: `status`, `pause <N>`, `unpause <N>`,
+and the owner can type `/factory <op>` from any client (named so to stay clear of Claude Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`, `pause <N>`, `unpause <N>`,
 `skip <N>`, `noskip <N>`, `priority <N...>`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct>
 <hours>`, `resume <N|run>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
 loop and is logged. Today these directives are free text in the memory file (I-90).
@@ -308,6 +310,7 @@ action before it is kept.
 | H1 | this device holds a live-stage issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
 | H2 | the last `sweep` ended at least `sweepEveryMs` ago, or never | `sweep` | `sweep:<last done endedAt or 0>` |
 | H3 | a pool slot is not busy, is clean, sits on a branch whose issue is `merged` or `closed without merge`, and no running agent of the loop names that issue | `release-worktree` | `release:<path>:<branch>` |
+| H4 | `control.updateDue` is set. While it is, the loop drains: `start`, `develop` and `drive` actions are dropped. Once the safe state holds (no loop agent running, no wake open, no command in flight, every current run parked, merge-ready or done) | `restart-self`; a drain longer than 60 minutes gives `tell(drain-slow)` once | `restart:<updateDue.at>`, `tell:drain-slow:<updateDue.at>` |
 
 ### 5.4 Pipeline gates (P)
 
@@ -325,7 +328,7 @@ For each current run, issue not paused:
 | P1 | `parked` or `failed`, `step = review`, and `reviewFixRounds >= reviewFixCap + resumes of run:<id>` | no adjudicator; `tell(review-cap)` with the brief URL and the run's verdict lines | `tell:review-cap:<run>:<rounds>` |
 | P2 | `parked`, or `failed` with a known run id (the step when known: the adjudicator finds it otherwise); not `P1`; on a review gate only when `facts` is ok | `spawn(adjudicator, purpose gate)` with run, branch, step, brief URL and the issue's model label | `adjudicate:<run>:<step>:<head>[:r<n>]` |
 | P3 | the `P2` entry is `done`, and the run is still at that step and head | by its `ACTION`: `approve`, `fix`, `skip` give `respond`; `escalate` gives `tell(escalate)` and a hold until resumed (then `P2` again with `:r<n>`) or the head moves; `fixer` gives `spawn(fixer, purpose gate)`; an unparseable reply counts as a failed attempt of `P2` | `respond:<run>:<step>:<head>:<action>`, `tell:escalate:<run>:<step>:<head>`, `fixer:gate:<run>:<step>:<head>` |
-| P3a | a `respond` entry is `done`, the run is still at that step and head `respondSettleMs` after it ended | `respond` once more; after that `tell(respond-stuck)` | `respond:...:retry`, `tell:respond-stuck:<run>:<step>:<head>` |
+| P3a | a `respond` entry is `done`, the run is still at that step and head `respondSettleMs` after it ended | `respond` once more; after that `task(respond-stuck)`: the model reads the run's log and `daemon.log`, then re-drives or reports (DECISIONS D-37) | `respond:...:retry`, `task:respond-stuck:<run>:<step>:<head>` |
 | P4 | `failed` with run id `unknown` | `task(redrive)` for the model (I-57) | `task:redrive:<branch>:<head>` |
 | P4a | `failed` or `cancelled` while the loop's own fixer or re-drive for the issue runs or ended under 30 minutes ago | nothing: that work's handoff or new run comes next | none |
 | P5 | `cancelled` | `judge(cancelled)`; answer `redrive` gives `task(redrive)`, `drop` gives `abandon` | `judge:cancelled:<run>:<head>` |
@@ -344,12 +347,12 @@ For each current run in `merge-ready`, `head-mismatch` or `conflict` with a PR, 
 | M2a | an `update-behind` outcome is `FAIL` | `spawn(fixer, purpose regate)` with the line's re-gate instruction | `fixer:regate:<pr>:<head>` |
 | M2b | an `update-behind` outcome is `SKIP` | `update-behind` again after `updateBehindRetryMs`, at most `updateBehindRetries` times; then hold plus `tell(update-behind)` | `update-behind:<pr>:<head>` (its attempts) |
 | M3 | the guard passed with `test-weakening WARN` lines and no `pr-comment` for this head yet | `spawn(adjudicator, purpose weakening)` with the lines; `approve` or `skip` gives `pr-comment` with the justification, then `M4`; `fixer` or `fix` gives `spawn(fixer, purpose weakening)`; `escalate` gives a hold plus `tell(escalate)` | `adjudicate-weakening:<pr>:<head>`, `pr-comment:<pr>:<head>` |
-| M4 | the guard passed, every WARN is resolved for this head, and no `merge` answer carries over (M5) | `judge(merge-review)`: read the pipeline's fix commits against the brief, the PR body, and UI evidence when it applies | `judge:merge-review:<pr>:<head>` |
-| M5 | the merge review answered `merge` for this head, or for the head an `update-behind` of this PR rebased from (its patch is proven unchanged, so the review carries over), and the run is still mergeable at this head | `merge` | `merge:<pr>:<head>` |
-| M5a | the merge review answered `hold` | hold until the head moves; the model told the owner in the same turn, so no `tell` is sent, and the title counts it | none |
-| M5b | the merge review answered `fixer` | `spawn(fixer, purpose review)` with the instructions | `fixer:review:<pr>:<head>` |
+| M4 | the guard passed, every WARN is resolved for this head, and no `merge` answer carries over (M5) | `spawn(adjudicator, purpose merge)`, seeded with ids and pointers only (DECISIONS D-05). It checks the pipeline's fix commits after the handoff head against the brief, the PR body's linkage, and UI evidence for a visual change, and returns `ACTION merge`, `hold` or `fixer`, a one-line summary, the bump with a reason, and sequencing flags | `adjudicate-merge:<pr>:<head>` |
+| M5 | the merge adjudicator answered `merge` for this head, or for the head an `update-behind` of this PR rebased from (its patch is proven unchanged, so the answer carries over); the run is still mergeable at this head; and no sequencing rule holds it: a `run-it` PR waits while another merged `run-it` issue waits for its release, and a flag that needs a call (a major bump, a `run-it` rollout, a base image or template change) first gets `judge(sequence)` with the report's lines, never the diff | `merge`, after `judge(sequence)` answers `merge` when one was needed | `merge:<pr>:<head>`, `judge:sequence:<pr>:<head>` |
+| M5a | the merge adjudicator answered `hold`, or `judge(sequence)` answered `hold` | hold until the head moves or the owner resumes; `tell(merge-hold)` with the reason | `tell:merge-hold:<pr>:<head>` |
+| M5b | the merge adjudicator answered `fixer` | `spawn(fixer, purpose review)` with its instructions | `fixer:review:<pr>:<head>` |
 | M6 | `merge` failed because GitHub or the harness refused it (not a guard FAIL) | hold, `tell(merge-refused)` with the PR link and the guard lines | `tell:merge-refused:<pr>:<head>` |
-| M7 | a `merge` entry is `done`, or an issue this device held reached `merged` without one (a hand merge, which the sweep logs) | by the merged issue's rollout (the merge executor reads `callum-flow-rollout`): `merge` with `close_issue` gives `close-issue`; `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the merge-review answer above the milestone's `Expected` gives `milestone-expect` | `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
+| M7 | a `merge` entry is `done`, or an issue this device held reached `merged` without one (a hand merge, which the sweep logs) | by the merged issue's rollout (the merge executor reads `callum-flow-rollout`): `merge` with `close_issue` gives `close-issue`; `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the merge adjudicator's report above the milestone's `Expected` gives `milestone-expect` | `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
 
 A guard FAIL that `merge` itself prints (the guard runs again inside it) is recorded as a guard
 outcome, so `M2` handles it on the next pass.
@@ -411,7 +414,7 @@ mode's environment (section 11.1).
 | `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
 | `spawn` designer | develop | `$.agent.spawn({ subagentType: 'callum-flow:designer', model?, description, name, prompt })` | `agentTimeoutMs` | 2 | parsed `RESULT` line (7.2) |
 | `delegate` | develop | `callum-flow-implementer-route <N>`, then `callum-flow-event delegated --issue <N> --note "brief <url>"`, then spawn `callum-flow:implementer` with the routed model | route 60 s, agent `agentTimeoutMs` | 2 | handoff fields (run id, head, `NOT GATED`) |
-| `spawn` adjudicator | drive | spawn `callum-flow:adjudicator` (gate or weakening purpose) | 30 min | 2 | verdict lines and one `ACTION` (7.3); the handler logs each verdict |
+| `spawn` adjudicator | drive | spawn `callum-flow:adjudicator` (gate, weakening or merge purpose) | 30 min | 2 | verdict lines and one `ACTION` (7.3); the handler logs each verdict |
 | `spawn` fixer | drive | spawn `callum-flow:fixer` with instructions and the brief URL | 120 min | 2 | handoff fields; `superseded` logged when it names a new branch |
 | `respond` | drive | `no-mistakes axi respond --action <a> [--findings] [--instructions] [--add-finding] [--reason]`, detached, in the leased slot on the run's branch (a fresh slot is leased when none has it) | launch 30 s | 2 (P3a) | launched; settles by the run moving (P3a); a review `fix` logs `fix_requested --note review` |
 | `guard` | free | `callum-flow-merge-guard <pr> --run <id>` | 300 s | refreshable (M1) | parsed `GUARD` lines (6.2) |
@@ -426,6 +429,7 @@ mode's environment (section 11.1).
 | `pr-reopen` | free | `gh pr close <pr>`, then `gh pr reopen <pr>` | 60 s | 1 | exit codes |
 | `pr-comment` | free | `gh pr comment <pr> --body-file -` (text from the adjudicator's verdicts) | 60 s | 3 | exit code |
 | `release-worktree` | free | `treehouse return <path>` | 120 s | 2 | exit code, then `treehouse status` shows it available |
+| `restart-self` | free | `dev-restart-self`, only from rule `H4` | 600 s | 1 | the session restarts, and the loop resumes on load (7.5) |
 | `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', ... })` for one of the loop's own agents | 30 s | 1 | stopped or not supported (section 13) |
 | `judge` | drive | `$.prompt.submit` with a `JUDGE` line (section 8) | `wakeTimeoutMs.judge` | 1 reminder | the answer |
 | `task` | drive | `$.prompt.submit` with a `TASK` line | `wakeTimeoutMs.task` | none | `done`, `failed`, `hold` |
@@ -506,7 +510,9 @@ Most transitions are already logged by the CLIs the executors call (`claimed`, `
 `renewed`, `reclaimed`, `closed`, `implementer_routed`, `merged`, `test_weakened`, and the
 pipeline and queue states through the `--once` modes). The loop adds only what the model logs by
 hand today: `delegated` (with the brief URL), `verdict`, `fix_requested --note review`,
-`rebased_behind`, `abandoned` and `superseded`. It adds no new event state (DECISIONS D-09).
+`rebased_behind`, `abandoned` and `superseded`. And it logs one new state, `loop`, with
+`kind=... key=... status=...` in its note, for its own transitions: agent starts and ends, wakes
+and their answers (with the wake's cause), owner notices and rate-cap holds (DECISIONS D-09).
 
 ### 7.5 Restart and re-derivation
 
@@ -522,10 +528,10 @@ keeps (FINDINGS check 5). On load:
    posted brief, a delegation event).
 3. Rule `H1` heartbeats on the first pass (I-93).
 
-If the store itself is lost (a new device, a wiped config), the loop rebuilds what matters
-from observations: claims and stages from `callum-flow-factory-state`, briefs from the issue
-comments, delegations and review rounds from the event log. Only cheap, harmless repeats remain
-possible: a second adjudicator for a gate already judged, or a repeated owner notice.
+If the store itself is lost (a new device, a wiped config), the loop rebuilds the ledger from
+the event log: its own `loop` events give every agent, wake and answer, including pending
+decisions, escalations and holds, and the CLIs' events give claims, delegations and review
+rounds. Claims and stages also come from `callum-flow-factory-state`.
 
 ## 8. Waking the model
 
@@ -570,12 +576,12 @@ not get it, so the text block is the primary channel.
 
 | Wake | Allowed decisions | Timeout falls back to |
 |---|---|---|
-| `judge merge-review` | `merge`; `hold` (reason, and the model tells the owner in the same turn); `fixer` (instructions); optional `bump` | hold plus the title's owner count |
+| `judge sequence` | `merge`; `hold` (reason) | hold |
 | `judge guard-fail` | `fixer` (instructions); `wait`; `hold` (reason) | hold |
 | `judge cancelled` | `redrive`; `drop` (reason) | hold |
 | `judge handoff` | `ok`; `fixer` (instructions); `hold` (reason) | hold |
 | `judge report` | `parsed` (`fields`: `brief`, `created`, `pendingDecision`); `hold` | hold |
-| `task redrive`, `task run-it`, `task release` | `done`; `failed` (reason); `hold` | `tell(task-timeout)` |
+| `task redrive`, `task run-it`, `task release`, `task respond-stuck` | `done`; `failed` (reason); `hold` | `tell(task-timeout)` |
 | `tell <kind>` | none: delivered when the turn completes | dropped after the timeout |
 
 A turn that ends without an answer gets one reminder line (`JUDGE ... reminder=1`); then the
@@ -583,8 +589,8 @@ timeout applies. Only one wake is open at a time (rule `O2`).
 
 ### 8.3 What stays model work
 
-- **Merge review** (I-71, I-73, I-79): reading the pipeline's fix commits against the brief, the
-  PR body, and UI evidence.
+- **Release sequencing** for a flagged merge (D-05): from the merge adjudicator's summary, bump
+  and flags, never the diff. The code reading itself is the adjudicator's (rule `M4`).
 - **Guard FAIL lines no rule maps**, failed CI checks, and unparseable designer reports.
 - **Re-drives** (I-57, I-61): `daemon.log`, rebase, `callum-flow-regate`, a fresh `axi run`.
 - **Releases and Run its** (I-36, I-85), with the owner, through the `release` skill.
@@ -622,7 +628,7 @@ A `tell` is a wake whose turn writes one line to the owner in the conversation, 
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). Kinds: `decision`, `escalate`, `review-cap`, `no-ci`,
 `ci-triggers`, `untrusted-pr`, `rollout`, `base`, `update-behind`, `merge-refused`,
-`respond-stuck`, `linkage`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`.
+`merge-hold`, `drain-slow`, `heartbeat-other`, `linkage`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`.
 Each is sent once per key, and the title counts the open ones.
 
 ## 10. Failure handling
@@ -679,7 +685,12 @@ Act mode needs all of:
   finds a live lease and stays in observe;
 - `DEV_ROLE=orchestrator`, unless the repo-local config sets `allowActOutsideOrchestrator`;
 - no live `orchestrator-watch.sh` lock for the repo. If the old watcher is armed, the released
-  skill is still driving: the loop stays in observe and tells the owner.
+  skill is still driving: the loop stays in observe and tells the owner;
+- no other device with role `orchestrator` and the same repo seen in `factory.workers` in the
+  last 120 seconds. The check runs at the start of every pass, before any action; while it
+  fails the loop stays in observe, tells the owner once (`tell(heartbeat-other)`), and acts again
+  after 120 seconds of quiet (DECISIONS D-28). It covers two workspaces on one repo, which the
+  per-workspace act lock cannot see.
 
 ### 11.3 The kill switch
 
@@ -689,8 +700,9 @@ the next pass, with no restart. Removing it resumes the configured mode.
 ### 11.4 Runaway protection
 
 Plan counts the ledger's token-spending actions (claims, spawns, merges, wakes) per class, and per kind and issue, in the last hour. An action
-past its `rateCaps` entry is dropped, the class stays closed until the window clears, and `tell(runaway)` goes out
-once. Three consecutive failures of one executor kind close that kind for 30 minutes and tell
+past its `rateCaps` entry is dropped, and the class stays closed until the window clears. A drop
+is visible in the pass that makes it: the decision log names it (`rate cap: <class> <n>/<cap>`),
+the title adds `capped <class>`, a `loop` event records it, and `tell(runaway)` goes out once. Three consecutive failures of one executor kind close that kind for 30 minutes and tell
 the owner.
 
 ### 11.5 Scope of every action
@@ -747,8 +759,9 @@ changed is also written in full under `states/`, which the replay harness reads.
 
 1. **Shadow** (phase 4): observe mode in the spike workspace, `runSource: events`, compared with
    the live dev-system orchestrator's events.
-2. **Prerequisites to ship**: the two `--once` modes released in the base image; the plugin in the
-   marketplace; the judge skill reviewed; the Orchestrator template's start prompt changed from
+2. **Prerequisites to ship**: the two `--once` modes released in the base image; the `loop` event
+   state (D-09); the designer's `RESULT` line in its agent definition (D-14); the plugin in the
+   marketplace as a replacement for the released orchestrator (D-02); the judge skill reviewed; the Orchestrator template's start prompt changed from
    `/callum-flow:issue-orchestrator` to the judge skill, and its resume prompt from "re-arm the
    watcher" to "the loop resumes by itself".
 3. **Act on `dev-system-testbed`** with a few owner-made test issues that walk every path: claim,

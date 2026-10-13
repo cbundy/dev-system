@@ -64,7 +64,7 @@ The two claims the loop would not have made then:
 - **#406 at 19:20:** it had two open blockers. The orchestrator claimed it anyway, to keep a
   run-it issue whose release was due from being dispatched again (memory file, 2026-10-12). That
   is judgment the loop does not copy: a blocked issue is not actionable (SKILL:30-31). You would
-  say it with a `/loop priority` or `skip` directive.
+  say it with a `/factory priority` or `skip` directive.
 
 Not comparable from the log: a designer's return is not logged, so the replay cannot see when a
 brief is ready. In every sample between a claim and its delegation, the loop correctly waited:

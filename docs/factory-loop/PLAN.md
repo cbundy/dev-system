@@ -25,14 +25,10 @@ issue you release is another comparison, read the same way.
 
 - **Who**: you. Nothing below is blocked on them: each is in force as recorded, and cheap to
   change later.
-- **The seven calls** ([DECISIONS.md](DECISIONS.md), marked "owner call"):
-  - D-05: merge review by the model (rather than the adjudicator);
-  - D-09: no new event state;
-  - D-13: re-drives as model tasks;
-  - D-25: owner notices through the model;
-  - D-02: the plugin unlisted until cutover;
-  - D-28: act mode only in an orchestrator workspace;
-  - D-07: the Slow-tier claim gap, 10 minutes, where the replay suggests 5.
+- **The owner calls** ([DECISIONS.md](DECISIONS.md)): reviewed on 2026-10-13. The merge review
+  moved to the adjudicator (D-05), the `loop` event state was added (D-09), D-28 gained a
+  heartbeat guard, and D-02, D-13 and D-25 stand. One is still open: D-07, the Slow-tier claim
+  gap, 10 minutes where the replay suggests 5.
 - **Go-ahead for stage C**, and whether to build it with a workflow (about six to eight agents
   for the executors and their tests; `plan.ts` stays single-authored).
 - **Merge the two test fixes**: [#524](https://github.com/cbundy/dev-system/pull/524) and
@@ -71,7 +67,7 @@ issue you release is another comparison, read the same way.
      action;
    - a test that reads every argv template and fails on `--yes`, `rerun`, `abort`, `coder`, a
      broad kill, or a PR-body edit.
-5. **Owner controls**: `/loop <op>` and `mcp__factory-loop__control`, writing `control.json`
+5. **Owner controls**: `/factory <op>` and `mcp__factory-loop__control`, writing `control.json`
    (SPEC 4.3), and the optional answer tool.
 6. **Prompt templates** (SPEC 6.3), with a test that no template carries a brief's content or a
    closing keyword.
@@ -81,10 +77,13 @@ issue you release is another comparison, read the same way.
 8. **Tests**: executors against the testing kit's mocks (canned CLI output, fake agents through
    `agent.spawn` and `turn.complete` hooks), and driver tests in act mode end to end. The
    properties in `plan.test.ts` stay green.
-9. **The owner's first review** (2026-10-13), in code: the counts-only title (D-23), one memory
-   file per agent type (D-22), trackers inside `only` (D-35), and follow-ups for hand merges
-   (D-29, rule `M7`). Plus whatever the open review threads settle (D-05, D-09, D-14, D-15,
-   D-24, D-28 and the `/loop` name).
+9. **The owner's review** (2026-10-13), in code: the counts-only title (D-23), one memory file
+   per agent type (D-22), trackers inside `only` (D-35), follow-ups for hand merges (D-29, rule
+   `M7`), the merge adjudicator and `judge(sequence)` (D-05, rules `M4` and `M5`), the `loop`
+   event state (D-09), self-restart for updates (D-15, rule `H4`), visible rate caps with no
+   merge cap (D-24), the heartbeat guard (D-28), `task(respond-stuck)` (D-37), and the
+   `/factory` command name. The designer's `RESULT` line in `designer.md` (D-14) ships with
+   cutover step 1.
 
 - **Done when**: act mode passes its tests, the shadow (still in observe mode) keeps agreeing
   with the live orchestrator, and STATUS lists what is still untested.

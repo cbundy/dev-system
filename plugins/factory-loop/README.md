@@ -26,7 +26,7 @@ nothing in any mode (act mode says so in its log). The plugin is not listed in t
 | Observe adapters and the pass driver | `hooks/observe.ts`, `hooks/register.ts` | done; running as a shadow in `spike-reconcile-mod` |
 | Tests | `tests/plan.test.ts`, `tests/observe.test.ts`, `tests/driver.test.ts` | 93 scenario, property, parser and driver tests |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
-| Executors, `--once` watcher modes, `/loop`, judge skill | | next (the act half) |
+| Executors, `--once` watcher modes, `/factory`, judge skill | | next (the act half) |
 
 ## Run it in observe mode
 

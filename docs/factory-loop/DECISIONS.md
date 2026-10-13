@@ -7,32 +7,41 @@ follow directly from the skill or the brief.
 
 ## Owner calls
 
-### D-05 The merge review stays with the main model (owner call)
+### D-05 The adjudicator reviews each merge; the model only sequences releases (owner call)
 
-- **Decision**: before each merge the loop wakes the main model with `JUDGE merge-review`, which
-  reads the pipeline's fix commits against the brief, checks the PR body and any UI evidence, and
-  answers `merge`, `hold` or `fixer` (SPEC M4).
-- **Alternatives**: (a) give it to the adjudicator agent, which would cost the main context
-  nothing; (b) skip the review when a run has no `no-mistakes(...)` fix commits.
-- **Why**: the skill gives this reading to the orchestrator itself (SKILL:141-145), and FINDINGS
-  names it as the model's judgment. It is one short turn per merge, much less than the model
-  spends today. Moving it to an agent is a one-line change in rule `M4` if the owner prefers.
+- **Decision**: before each merge the loop spawns the adjudicator with purpose `merge` (SPEC M4).
+  It is seeded with ids and pointers only: the issue and brief URL, the PR, run and head, the
+  implementer's handoff head, the guard output for that head and the run's verdict lines. It
+  checks that the pipeline's fix commits after the handoff head keep every acceptance criterion
+  and owner requirement in the brief, add nothing unrelated and weaken no test, that the PR body
+  links the issue the right way, and that a visual change has UI evidence. It returns
+  `ACTION merge`, `hold` or `fixer`, one line on what changes for users, the bump with a reason,
+  and sequencing flags (base image or template touched, a restart needed, a `run-it` rollout).
+  The loop merges on `merge` unless a sequencing rule holds it (SPEC M5); the model is woken only
+  when a flag needs a release-sequencing call, with the report's lines, never the diff.
+- **Alternatives**: (a) the first decision: the main model reads the fix commits
+  (`JUDGE merge-review`); (b) skip the review when the pipeline added no fix commits.
+- **Why**: owner, 2026-10-13. The main model has read no more than an adjudicator would, so it
+  brings no extra judgment, and reading code would bloat its context and slow it down. What it
+  does need is a high-level view of what is changing, to sequence releases. The review runs on
+  every merge, because its summary, bump and flags feed release planning; with no pipeline fix
+  commits it skips that check. Its answer is logged as a `loop` event (D-09).
 
-### D-09 No new event state for loop-only transitions (owner call)
+### D-09 One new event state, `loop`, for the loop's own transitions (owner call)
 
-- **Decision**: the ledger lives in `$.store`, which survives restarts. The loop logs only events
-  the model logs by hand today (`delegated`, `verdict`, `fix_requested`, `rebased_behind`,
-  `abandoned`, `superseded`). It adds no event state for "adjudicator spawned", "wake sent" or
-  "notice sent" (SPEC 7.4, 7.5).
-- **Alternatives**: add one `loop` state to `callum-flow-event`'s closed vocabulary, with a
-  `kind=... key=... status=...` note, so the fleet can see every loop transition and a lost store
-  can be rebuilt exactly.
-- **Why**: a new state changes a closed vocabulary that metrics, `callum-flow-factory-state` and
-  the evaluate tool read, which is a bigger change than the brief needs. Losing the store costs
-  only harmless repeats (a second adjudicator or a repeated notice), because plan re-derives its
-  work from observations. The brief asks that "a restart re-derives the ledger from the event
-  log": the store plus observations meet that intent without the vocabulary change. If the owner
-  wants fleet-wide visibility of loop actions, the `loop` state is the way, and it is additive.
+- **Decision**: `callum-flow-event` gains one state, `loop`, with `kind=... key=... status=...`
+  in its note. The loop logs it for agent starts and ends, wakes and their answers (with the
+  wake's cause), owner notices and rate-cap holds. CLI work already logs its own events and gets
+  no `loop` event. The ledger still lives in `$.store`, and a lost store is rebuilt exactly from
+  these events (SPEC 7.4, 7.5).
+- **Alternatives**: no new state; the loop logs only what the model logs by hand today (the
+  first decision). A lost store then costs harmless repeats.
+- **Why**: owner, 2026-10-13. Someone watching or debugging the factory must see when an
+  adjudicator started, and when and why the model was woken, without the loop's local files. The
+  state gives start-to-verdict timings, the re-drive trail D-13 asks for, and exact holds after a
+  lost store (D-18). It only adds to the vocabulary; each reader of the event log
+  (`callum-flow-factory-state`, metrics, the evaluate tool) is checked to ignore it, or use it,
+  when the state ships.
 
 ### D-13 Re-drives stay model tasks (owner call)
 
@@ -81,6 +90,12 @@ follow directly from the skill or the brief.
 
 - **Decision**: act mode also needs `DEV_ROLE=orchestrator` and refuses while an
   `orchestrator-watch.sh` lock for the repo is live (SPEC 11.2).
+- **Heartbeat guard** (owner, 2026-10-13): act mode also waits while another device with role
+  `orchestrator` and the same repo has a heartbeat in `factory.workers` from the last 120
+  seconds. The check runs at the start of every pass, before any action, tells the owner once,
+  and lets the loop act after 120 seconds of quiet. It covers two workspaces on one repo, which
+  the per-workspace act lock cannot see. A heartbeat means the workspace is up, not that it is
+  driving, so an idle old orchestrator blocks the loop too: the safe side during cutover.
 - **Alternatives**: rely on the mode option alone.
 - **Why**: two drivers on one repo would double every action. The old watcher's lock is the
   clearest sign that the released skill is still driving. The role check stops a desktop session
@@ -196,14 +211,18 @@ follow directly from the skill or the brief.
   effect. One environment variable keeps all of them out of the live event log without touching
   their code, and the sink file is itself evidence of what the shadow run read.
 
-### D-14 The designer's result is parsed from a `RESULT` line the prompt asks for
+### D-14 The designer's definition owns its `RESULT` line
 
-- **Decision**: the loop's designer prompt asks for a closing
-  `RESULT brief=... created=... pending_decision=...` line (SPEC 7.2).
-- **Alternatives**: change `designer.md` to require it; parse its prose.
-- **Why**: the brief forbids changing the released skill's behaviour, and the live orchestrators
-  share the agent definitions. The prompt is the loop's own. A missing line goes to the model
-  (`judge(report)`), never a guess.
+- **Decision**: the designer's agent definition (`designer.md`) ends every return with one
+  `RESULT brief=... created=... pending_decision=...` line (SPEC 7.2), as the adjudicator's
+  definition already owns its verdict lines and `ACTION`. It ships with cutover step 1; until
+  then the loop's prompt asks for the line as a fallback.
+- **Alternatives**: the first decision, where only the loop's prompt asks for it; parsing the
+  designer's prose.
+- **Why**: owner, 2026-10-13: optimise for the end state, where the loop replaces the released
+  orchestrator. An output contract belongs to the agent that produces it, not to each caller's
+  prompt. Adding the line early is safe, since the released orchestrator ignores an extra last
+  line. A missing line still goes to the model (`judge(report)`), never a guess.
 
 ### D-19 `blocked_by` comes from the issue's dependency summary
 
@@ -262,16 +281,24 @@ Skill step 3 spawns the implementer with `OTEL_RESOURCE_ATTRIBUTES=issue=<N>,dev
 set it per agent. The issue number goes in the spawn's `description` and `name` instead. If
 per-issue telemetry matters, that needs an engine feature or a wrapper agent.
 
-### D-15 The loop never restarts its workspace
+### D-15 The loop restarts its own workspace for an update, once nothing is in flight
 
-`dev-restart-self` stays a model or owner action (I-41). A restart kills every in-process agent
-(the memory file shows the owner holding releases for exactly that reason), so deciding when to
-restart is judgment.
+- **Decision**: when an update is due, the loop drains: it starts no new claims, agents or
+  wakes. Once the safe state holds (no loop agent running, no wake open, no command in flight,
+  every current pipeline run parked, merge-ready or done) it runs `dev-restart-self` and resumes
+  by itself after the restart (SPEC H4). The reconciler says an update is due through control
+  state (`updateDue`): it owns which versions are wanted, and the loop owns when it is safe to
+  switch. A drain longer than an hour tells the owner.
+- **Alternatives**: the first decision, where restarting stays a model or owner action (I-41);
+  the reconciler filing an issue for the orchestrator to update itself.
+- **Why**: owner, 2026-10-13: the safe moment can be computed, so waiting for a person is
+  needless. Pipeline runs are the real risk: the 2026-10-12 restart crashed the no-mistakes
+  daemon and failed three runs, so the drain waits for them too.
 
 ### D-16 Owner directives become control state
 
 The pause, drain, wind-down, priority, "only these" and skip instructions the memory file holds as free text
-(I-90) become typed control state, set through the control tool or `/loop` (SPEC 4.3). The model
+(I-90) become typed control state, set through the control tool or `/factory` (SPEC 4.3). The model
 still keeps the memory file for lessons and context.
 
 ### D-22 Agent prompts point at their own type's memory file
@@ -295,11 +322,14 @@ first format until the act-half build.
 
 ### D-24 Rate caps
 
-Starts 30, spawns 40, merges 10 and wakes 20 per rolling hour, plus 6 actions of one kind on one
-issue. The busiest hours on dev-system in the week to 2026-10-12 had 14 claims (a burst of
+Starts 30, spawns 40 and wakes 20 per rolling hour, plus 6 actions of one kind on one issue.
+There is no global cap on merges (owner, 2026-10-13): a PR merges only once, after a guard and a
+review, so merges cannot run away. The busiest hours on dev-system in the week to 2026-10-12 had 14 claims (a burst of
 tracker re-claims after a lapse), 7 delegations, 7 adjudicated runs, 4 review fix rounds and 4
 merges, so the caps sit about twice above real peaks. The per-issue cap catches the likeliest plan
-bug, a key that keeps changing for the same subject, long before the global caps would.
+bug, a key that keeps changing for the same subject, long before the global caps would. A capped
+action is visible in the pass that drops it: the decision log names it, the title adds
+`capped <class>`, a `loop` event records it, and the owner is told once (owner, 2026-10-13).
 
 ### D-27 Stuck rules show in the title only
 
@@ -332,7 +362,7 @@ events to compare claims.
 and run source, and `<loop dir>/control.json` holds the owner directives (SPEC 4.1, 4.3). The
 plugin options stay as defaults. The first plan put control state in `$.store`; files are easier
 to inspect and set from a shell (the shadow run is configured that way), they survive restarts on
-`/persist` just as well, and the `/loop` command and the control tool write the same file.
+`/persist` just as well, and the `/factory` command and the control tool write the same file.
 
 ### D-34 A shadow run does not heartbeat on its own restarts
 
@@ -365,3 +395,12 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   minute into a fresh two-hour lease. The shadow did that on #522, where the live orchestrator
   did not. With the change, the evening replay's six live renewals each fall within 30 seconds of
   the loop's.
+
+### D-37 A stuck respond becomes a model task
+
+- **Decision**: when a respond leaves its gate unmoved, is retried once and still has not moved,
+  rule `P3a` gives `task(respond-stuck)`: the model reads the run's log and `daemon.log`, then
+  re-drives the run or reports what it found (SPEC P3a).
+- **Alternatives**: tell the owner (the first rule).
+- **Why**: owner, 2026-10-13: a notice at 3 a.m. leaves the factory stuck until morning. The
+  likely causes, a hung run or a crashed daemon, are what the re-drive task already handles.

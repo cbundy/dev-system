@@ -7,17 +7,10 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
 
 The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
 
-1. **Review the spec and the seven owner calls** in [DECISIONS.md](DECISIONS.md):
-   - the merge review stays with the model;
-   - no new event state;
-   - re-drives stay model tasks;
-   - owner notices go through the model;
-   - the plugin stays unlisted;
-   - act mode only runs in an orchestrator workspace;
-   - the Slow-tier claim gap (10 minutes, where the replay suggests 5).
-
-   Each is in force as recorded and cheap to change.
-2. **Decide on the act half**: the executors, the two `--once` watcher modes, `/loop` and the
+1. **One owner call is left**: the Slow-tier claim gap (D-07), 10 minutes where the replay
+   suggests 5. You reviewed the rest on 2026-10-13, and [DECISIONS.md](DECISIONS.md) records each
+   verdict.
+2. **Decide on the act half**: the executors, the two `--once` watcher modes, `/factory` and the
    control tool, the prompt templates and the judge skill. Then act mode on
    `dev-system-testbed` with a few test issues you make. The earlier offer stands: a workflow
    of about six to eight agents for the executors and their tests, if you opt in.
@@ -99,7 +92,10 @@ Nothing is blocked on anyone else.
 
 ## Not done
 
-- **The act half**: executors, the `--once` watcher modes with shell tests, `/loop` and the
+- **The owner's review in code**: `plan.ts` still follows the first decisions where the review
+  of 2026-10-13 changed them (merge review, title, `loop` events, self-restart and the rest). The
+  spec and decisions are updated; the code follows in stage C, step 9 of [PLAN.md](PLAN.md).
+- **The act half**: executors, the `--once` watcher modes with shell tests, `/factory` and the
   control tool, prompt templates, the judge skill, and act mode on the testbed.
 - **Untested**: `stop-agent` through `TaskStop`, and long-running agents spawned by a mod.
   Observe mode spawns nothing.
