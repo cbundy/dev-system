@@ -214,7 +214,7 @@ The loop keeps `known` in its store, so the `ready` events keep arriving as they
 
 | Key | Default | Meaning |
 |---|---|---|
-| `readyLabel`, `inDevLabel` | `ready`, `In development` | the queue and claim labels (I-03) |
+| `readyLabel`, `inDevLabel` | `ready`, `in development` | the queue and claim labels (I-03). Labels are lower case for now, and every label comparison ignores case, so `in development` matches GitHub's existing `In development` (owner, 2026-10-13) |
 | `skipLabels` | `[]` | labels that keep an issue out of `D1` (I-92) |
 | `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
@@ -257,7 +257,7 @@ type Control = {
                                   //   open sub-issues; work in flight goes on
   serial: boolean                 // one issue in flight at a time (a drain in order)
   usageOverride: { untilPct: number; expiresAt: Ms } | null   // run past a threshold (I-19)
-  updateDue: { reason: string; at: Ms } | null   // the reconciler says an update is due (rule H4)
+  updateDue: { reason: string; at: Ms } | null   // an update is due (rule H4): set by the reconciler or `/factory update`
   resumed: { subject: string; at: Ms }[]  // holds the owner released: 'issue:<N>' or 'run:<id>'
   dropped: { issue: number; at: Ms }[]     // issues the owner dropped: abandon them (rule D6)
   notes: { issue: number | null; text: string; at: Ms }[]     // owner instructions for agents
@@ -267,7 +267,7 @@ type Control = {
 They live in `<loop dir>/control.json`. The model sets them with the `mcp__factory-loop__control` tool when the owner says so in chat,
 and the owner can type `/factory <op>` from any client (named so to stay clear of Claude Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`, `pause <N>`, `unpause <N>`,
 `skip <N>`, `noskip <N>`, `priority <N...>`, `only <N...>|off`, `serial on|off`, `new on|off`, `override <pct>
-<hours>`, `resume <N|run>`, `retry <N>`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
+<hours>`, `resume <N|run>`, `retry <N>`, `update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change pings the
 loop and is logged. Today these directives are free text in the memory file (I-90).
 
 ## 5. Plan: the decision table

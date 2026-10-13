@@ -26,6 +26,7 @@ follow directly from the skill or the brief.
   does need is a high-level view of what is changing, to sequence releases. The review runs on
   every merge, because its summary, bump and flags feed release planning; with no pipeline fix
   commits it skips that check. Its answer is logged as a `loop` event (D-09).
+- **Owner (2026-10-13)**: an adjudicator on every merge is OK for now.
 
 ### D-09 One new event state, `loop`, for the loop's own transitions (owner call)
 
@@ -117,7 +118,8 @@ follow directly from the skill or the brief.
 - **Replay evidence** ([REPLAY-REPORT.md](REPLAY-REPORT.md), window 1): in a Slow stretch the live
   orchestrator spaced claims 4 and 6 minutes apart, so a 10-minute gap would have delayed one
   claim (#498) by about 4 minutes. A 5-minute gap matches the live pace more closely. It is one
-  number in config, and the conservative value stays until the owner picks.
+  number in config.
+- **Owner (2026-10-13)**: no preference, so the conservative 10 minutes stands.
 
 ### D-08 Stop new also holds the designer and implementer of an already-claimed issue
 
@@ -288,7 +290,8 @@ per-issue telemetry matters, that needs an engine feature or a wrapper agent.
   every current pipeline run parked, merge-ready or done) it runs `dev-restart-self` and resumes
   by itself after the restart (SPEC H4). The reconciler says an update is due through control
   state (`updateDue`): it owns which versions are wanted, and the loop owns when it is safe to
-  switch. A drain longer than an hour tells the owner.
+  switch. Until the reconciler exists, and whenever the owner wants one, `/factory update` sets
+  it by hand (owner, 2026-10-13). A drain longer than an hour tells the owner.
 - **Alternatives**: the first decision, where restarting stays a model or owner action (I-41);
   the reconciler filing an issue for the orchestrator to update itself.
 - **Why**: owner, 2026-10-13: the safe moment can be computed, so waiting for a person is

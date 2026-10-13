@@ -7,9 +7,10 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
 
 The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
 
-1. **One owner call is left**: the Slow-tier claim gap (D-07), 10 minutes where the replay
-   suggests 5. You reviewed the rest on 2026-10-13, and [DECISIONS.md](DECISIONS.md) records each
-   verdict.
+1. **The owner calls are all settled** (2026-10-13); [DECISIONS.md](DECISIONS.md) records each
+   verdict. Two follow-ups are filed: a `stuck` label
+   ([#531](https://github.com/cbundy/dev-system/issues/531)) and an `in design` label
+   ([#532](https://github.com/cbundy/dev-system/issues/532)).
 2. **Decide on the act half**: the executors, the two `--once` watcher modes, `/factory` and the
    control tool, the prompt templates and the judge skill. Then act mode on
    `dev-system-testbed` with a few test issues you make. The earlier offer stands: a workflow

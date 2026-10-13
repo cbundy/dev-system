@@ -25,10 +25,12 @@ issue you release is another comparison, read the same way.
 
 - **Who**: you. Nothing below is blocked on them: each is in force as recorded, and cheap to
   change later.
-- **The owner calls** ([DECISIONS.md](DECISIONS.md)): reviewed on 2026-10-13. The merge review
+- **The owner calls** ([DECISIONS.md](DECISIONS.md)): all settled on 2026-10-13. The merge review
   moved to the adjudicator (D-05), the `loop` event state was added (D-09), D-28 gained a
-  heartbeat guard, and D-02, D-13 and D-25 stand. One is still open: D-07, the Slow-tier claim
-  gap, 10 minutes where the replay suggests 5.
+  heartbeat guard, D-07 keeps its 10-minute gap, and D-02, D-13 and D-25 stand. Two follow-ups
+  were filed: a `stuck` label for issues waiting on the owner
+  ([#531](https://github.com/cbundy/dev-system/issues/531)) and an `in design` label
+  ([#532](https://github.com/cbundy/dev-system/issues/532)).
 - **Go-ahead for stage C**, and whether to build it with a workflow (about six to eight agents
   for the executors and their tests; `plan.ts` stays single-authored).
 - **Merge the two test fixes**: [#524](https://github.com/cbundy/dev-system/pull/524) and
@@ -83,7 +85,8 @@ issue you release is another comparison, read the same way.
    (D-09), self-restart for updates (D-15, rule `H4`), visible rate caps with no merge cap (D-24),
    the in-flight cap of 10 with its notice (SPEC 4.2), the heartbeat guard (D-28), `/factory retry`
    (D-38), the ping-storm breaker (D-39), duration strings in the config files (SPEC 4.2), the
-   merge adjudicator's report lines (SPEC 7.3), `task(respond-stuck)` (D-37), and the `/factory`
+   merge adjudicator's report lines (SPEC 7.3), `/factory update` (D-15), lower-case labels
+   compared without regard to case (SPEC 4.2), `task(respond-stuck)` (D-37), and the `/factory`
    command name. The designer's `RESULT` line in `designer.md` (D-14) ships with cutover step 1.
 
 - **Done when**: act mode passes its tests, the shadow (still in observe mode) keeps agreeing
