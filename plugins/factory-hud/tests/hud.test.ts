@@ -98,7 +98,13 @@ describe('format', () => {
 // world: the engine beneath the plugin, answered from fixtures; returns what was drawn.
 function world(on: On, factory: string | null = FACTORY) {
   const clock = mock.clock(on, { now: NOW })
-  const drawn = { status: [] as (string | undefined)[], toasts: [] as string[], runs: [] as string[], clock }
+  const drawn = {
+    status: [] as (string | undefined)[],
+    toasts: [] as string[],
+    runs: [] as string[],
+    writes: [] as string[],
+    clock,
+  }
   const ran = (stdout: string, exitCode = 0) => ({
     value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   })
@@ -123,6 +129,11 @@ function world(on: On, factory: string | null = FACTORY) {
   }))
   on('session.version', () => ({ value: { version: '2.1.296' } }))
   on('fs.read', () => ({ value: SNAPSHOT }))
+  on('fs.write', ($, e) => {
+    drawn.writes.push(`${e.path} ${e.text}`)
+    return { value: undefined }
+  })
+  on('session.id', () => ({ value: 's1' }))
   on('process.run', ($, e) => {
     drawn.runs.push(e.argv.join(' '))
     if (e.argv[0] === 'git') return ran('git@github.com:cbundy/dev-system.git\n')
@@ -212,5 +223,15 @@ describe('in a session', () => {
     expect(drawn.toasts.at(-1)).toBe('HUD hidden in this conversation')
     await $.command.run(HUD)
     expect(drawn.status.at(-1)).toContain('ctx 20%')
+  })
+
+  test('records the context window per session for the heartbeat, once per change', async ($, on) => {
+    mock.env(on, { DEV_ROLE: 'dev', TZ: 'UTC', DEV_CONTEXT_WINDOW_DIR: '/w' })
+    const drawn = world(on)
+    await $.session.start(START)
+    const measured = (window: number) => ({ context: { window, percent: 5 }, rateLimits: [], changed: ['context' as const] })
+    await $.session.measure(measured(200_000))
+    await $.session.measure(measured(1_000_000))
+    expect(drawn.writes).toEqual(['/w/s1 200000\n', '/w/s1 1000000\n'])
   })
 })

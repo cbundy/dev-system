@@ -15,7 +15,9 @@
 # ($DEV_VERSIONS_FILE); `versions` is that document plus the cached `latest`
 # lookup (`dev-version --json`, which uses the network). The lookup runs in the
 # background, at most every 15 minutes, under a lock, and a beat only reads the
-# cache. busy / idle and in_flight come from heartbeat-state (one call per beat).
+# cache. busy / idle, in_flight and sessions (the live Claude sessions and
+# sub-agents, with their context window when known) come from heartbeat-state
+# (one call per beat).
 # last_seen is the database's now(), never this container's clock. Readers use
 # the view factory.workers_status (age, stale), never their own rule.
 #
@@ -95,6 +97,7 @@ CREATE TABLE IF NOT EXISTS factory.workers (
   state text,
   in_flight jsonb NOT NULL DEFAULT '[]'::jsonb,
   chat_active_at timestamptz,
+  sessions jsonb NOT NULL DEFAULT '[]'::jsonb,
   critical_failures jsonb NOT NULL DEFAULT '[]'::jsonb,
   push jsonb,
   interval_s int,
@@ -109,7 +112,7 @@ BEGIN
     ('repo', 'text'), ('role', 'text'), ('ring', 'text'), ('runtime', 'text'), ('coder_workspace', 'text'),
     ('base_image', 'text'), ('dev_image', 'text'), ('template_version', 'text'), ('plugin_version', 'text'),
     ('versions', 'jsonb'), ('state', 'text'), ('in_flight', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
-    ('chat_active_at', 'timestamptz'), ('critical_failures', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
+    ('chat_active_at', 'timestamptz'), ('sessions', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'), ('critical_failures', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
     ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
@@ -167,19 +170,19 @@ SQL
 
 read -r -d '' UPSERT <<'SQL'
 INSERT INTO factory.workers (device, repo, role, ring, runtime, coder_workspace, base_image, dev_image,
-  template_version, plugin_version, versions, state, in_flight, chat_active_at, critical_failures, push,
-  interval_s, started_at, last_seen)
+  template_version, plugin_version, versions, state, in_flight, chat_active_at, sessions, critical_failures,
+  push, interval_s, started_at, last_seen)
 VALUES (:'device', NULLIF(:'repo', ''), NULLIF(:'role', ''), NULLIF(:'ring', ''), NULLIF(:'runtime', ''),
   NULLIF(:'coder_workspace', ''), NULLIF(:'base_image', ''), NULLIF(:'dev_image', ''),
   NULLIF(:'template_version', ''), NULLIF(:'plugin_version', ''), :'versions'::jsonb, :'state',
-  :'in_flight'::jsonb, NULLIF(:'chat_active_at', '')::timestamptz, :'critical_failures'::jsonb,
+  :'in_flight'::jsonb, NULLIF(:'chat_active_at', '')::timestamptz, :'sessions'::jsonb, :'critical_failures'::jsonb,
   :'push'::jsonb, :'interval_s'::int, NULLIF(:'started_at', '')::timestamptz, now())
 ON CONFLICT (device) DO UPDATE SET
   repo = EXCLUDED.repo, role = EXCLUDED.role, ring = EXCLUDED.ring, runtime = EXCLUDED.runtime,
   coder_workspace = EXCLUDED.coder_workspace, base_image = EXCLUDED.base_image, dev_image = EXCLUDED.dev_image,
   template_version = EXCLUDED.template_version, plugin_version = EXCLUDED.plugin_version,
   versions = EXCLUDED.versions, state = EXCLUDED.state, in_flight = EXCLUDED.in_flight,
-  chat_active_at = EXCLUDED.chat_active_at, critical_failures = EXCLUDED.critical_failures,
+  chat_active_at = EXCLUDED.chat_active_at, sessions = EXCLUDED.sessions, critical_failures = EXCLUDED.critical_failures,
   push = EXCLUDED.push, interval_s = EXCLUDED.interval_s, started_at = EXCLUDED.started_at,
   last_seen = now();
 SQL
@@ -287,7 +290,7 @@ push_json() {
 
 # beat: one upsert. Returns 0 on success, 1 when psql failed, 2 when the URL is gone.
 beat() {
-  local url snap latest_json versions state_wait state_json state in_flight chat_at out device
+  local url snap latest_json versions state_wait state_json state in_flight chat_at sessions out device
   if ! url=$(agentsview_pg_url); then
     echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
     return 2
@@ -303,11 +306,13 @@ beat() {
   state_wait=20
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state_wait=2
   state_json=$(timeout "$state_wait" "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
-  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null}'
+  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null,"sessions":[]}'
   state=$(jq -r '.state // "idle"' <<< "$state_json")
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state=stopped
   in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
   chat_at=$(jq -r '.chat_active_at // ""' <<< "$state_json")
+  sessions=$(jq -c '.sessions // []' <<< "$state_json")
+  [ -z "${HEARTBEAT_STOPPING:-}" ] || sessions='[]'
   device=$(jq -r '.device // empty' <<< "$snap")
   [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
   g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
@@ -316,7 +321,7 @@ beat() {
     -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)" \
     -v "dev_image=$(g dev_image)" -v "template_version=$(g template_version)" \
     -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state" \
-    -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "critical_failures=$(critical_failures)" \
+    -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "sessions=$sessions" -v "critical_failures=$(critical_failures)" \
     -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)" 2>&1); then
     DDL_SENT=0
     printf '%s\n' "$out" | mask_secrets >&2
