@@ -368,6 +368,8 @@ describe('derive', () => {
       ['sweep:derived', 'done'],
       ['heartbeat:derived', 'done'],
       ['merge:550:m1', 'done'],
+      // the merging device ran its follow-ups, so a rebuilt merge is never read again (M7)
+      ['rollout:50', 'done'],
       ['rollout:51', 'done'],
     ])
   })

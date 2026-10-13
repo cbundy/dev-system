@@ -248,6 +248,20 @@ export function deriveLedger(events: FactoryEvent[], factory: Factory, facts: Fa
         endedAt: e.ts,
         outcome: { kind: 'merge', result: 'merged', rollout: null, closeIssue: null, line: 'derived' },
       })
+      // the event carries no rollout, but the device that merged ran its follow-ups then, so it
+      // counts as read: rule M7 must not take a rebuilt merge for one whose rollout read failed
+      if (e.issue !== null) {
+        put({
+          ...base,
+          key: `rollout:${e.issue}`,
+          kind: 'rollout',
+          issue: e.issue,
+          pr: e.pr,
+          startedAt: e.ts,
+          endedAt: e.ts,
+          outcome: { kind: 'rollout', rollout: null, closeIssue: null },
+        })
+      }
     } else if (e.state === 'merged' && e.issue !== null) {
       // a merge noted with no PR (the owner's hand merge, logged by the device): the device saw
       // it, so its rollout counts as handled (rule M7)
