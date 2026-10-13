@@ -88,6 +88,7 @@ The one park was the flaky heartbeat-loop test that
 | gate answered, run pushed 09:03:15 | | not comparable: observe mode cannot see an adjudicator's answer |
 | 09:17:43 merge (watcher `merge_ready` 09:17:13) | 09:17:01 guard for PR #529 at `813dd499` | matched, 42 s ahead |
 | no heartbeat | heartbeat from 08:54:01 | a rule gap, fixed (below) |
+| no release by 09:50 | from 09:20:01, wake the model to run the release (rule `O3`) | open (below) |
 
 Raw data: [`replay/shadow-522/`](replay/shadow-522/) (the comparison and the shadow's decision
 lines from 08:45 to 09:25) and [`replay/morning-522/`](replay/morning-522/) (the window replayed
@@ -117,6 +118,12 @@ rerun. Its note ("SIGUSR1 sleep race") matches the flake
 [#523](https://github.com/cbundy/dev-system/issues/523) records, the interrupted-sleep check
 after `SIGUSR1`, which PR #524 fixes. It cost this issue a park, an adjudicator and about three
 minutes.
+
+**The release.** After the merge, the `Next release` milestone held only #522 and PR #529, both
+closed, with no bump set. The skill says a release is ready then: tell the owner and follow the
+release process (SKILL "Releases"). The live orchestrator has not, perhaps because "522 only"
+meant nothing further. The loop leaves that judgment where it is today: it wakes the model with
+`TASK release`, and the model weighs the owner's directive.
 
 **Also seen.** In the shadow's view, #467 and #468 have been ready and unblocked since their
 blocker closed at 14:04 on 2026-10-12. The live orchestrator has not picked them up: in its idle
