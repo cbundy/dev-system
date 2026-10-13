@@ -8,10 +8,11 @@ what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
 
 - **On the draft PR** ([#528](https://github.com/cbundy/dev-system/pull/528), branch
   `feat/factory-loop`): the design (inventory, spec, decisions), the pure plan, the observe half,
-  the replay harness, the wake probe, and 93 plugin tests.
+  the replay harness, the wake probe, and since stage C the act half, with 546 plugin tests.
 - **Running**: the shadow, in `spike-reconcile-mod`, in observe mode, compared live with the
   dev-system orchestrator, with your "522 only" directive (`only: [522]`).
-- **Not built**: anything that acts. The loop changes nothing anywhere yet.
+- **Not yet done**: acting anywhere. The act half is built and tested, but it has run only in
+  tests; stage D is its first real run.
 
 ## Stage A: finish the #522 comparison (done)
 
@@ -21,83 +22,70 @@ The replay harness was corrected along the way and both windows re-run
 ([REPLAY-REPORT](REPLAY-REPORT.md#corrections-2026-10-13)). The shadow keeps running; each new
 issue you release is another comparison, read the same way.
 
-## Stage B: owner decisions
+## Stage B: owner decisions (done, two small asks left)
 
-- **Who**: you. Nothing below is blocked on them: each is in force as recorded, and cheap to
-  change later.
+- **Who**: you. The owner calls and the go-ahead for stage C are settled; the two test fixes and
+  the two waiting issues below are still yours, and nothing waits on them.
 - **The owner calls** ([DECISIONS.md](DECISIONS.md)): all settled on 2026-10-13. The merge review
   moved to the adjudicator (D-05), the `loop` event state was added (D-09), D-28 gained a
   heartbeat guard, D-07 keeps its 10-minute gap, and D-02, D-13 and D-25 stand. Two follow-ups
   were filed: a `stuck` label for issues waiting on the owner
   ([#531](https://github.com/cbundy/dev-system/issues/531)) and an `in design` label
   ([#532](https://github.com/cbundy/dev-system/issues/532)).
-- **Go-ahead for stage C**, and whether to build it with a workflow (about six to eight agents
-  for the executors and their tests; `plan.ts` stays single-authored).
+- **Go-ahead for stage C**: given; it was built with a workflow of agents in three waves.
 - **Merge the two test fixes**: [#524](https://github.com/cbundy/dev-system/pull/524) and
   [#527](https://github.com/cbundy/dev-system/pull/527).
 - **Two waiting issues**: [#467](https://github.com/cbundy/dev-system/issues/467) and
   [#468](https://github.com/cbundy/dev-system/issues/468) are ready and unblocked, and the live
   orchestrator has not picked them up. Release them or not.
 
-## Stage C: build the act half
+## Stage C: build the act half (done, 2026-10-13)
 
-- **Who**: the agent, or a workflow if you opt in. All of it lands on `feat/factory-loop`.
-  Order matters: each step's tests pass before the next starts.
+Built by a workflow of agents in three waves on `feat/factory-loop`, each wave committed with its
+tests, then reviewed. What landed: the owner's review in the pure plan (the counts-only title,
+the merge adjudicator with `judge(sequence)`, self-restart for updates, hand-merge follow-ups,
+trackers inside `only` and the rest); the two `--once` watcher modes with shell tests; the
+`loop` event state, with every reader of the event log treating it as bookkeeping; the ledger in
+the store; every executor (commands, guard and merge, the detached respond, agent spawns with
+their prompts and reply parsers, `stop-agent`, wakes and the answer tool); the safety rails;
+`/factory` and the control tool; the judge skill draft; and act mode wired into the driver.
+Three reviewers raised 50 findings; 49 are fixed with tests, and the last leaves only the
+observe-mode event sink unpruned. The choices made without the owner are D-40 to D-60, and
+[STATUS.md](STATUS.md) has the detail.
 
-1. **The two `--once` watcher modes** (SPEC 3.4) in `features/src/callum-tools/pipeline-watch.sh`
-   and `queue-watch.sh`, with shell tests beside the existing ones. `--once` prints every branch
-   with `step=` and `pr=`, and logs as a first sight. These change the image's scripts, so their
-   container evidence is PR CI.
-2. **The ledger in the store** (SPEC 7): entries, retries and attempts, a seven-day prune, and the
-   merge with the derived ledger after a lost store (`derive.ts` already builds that half).
-3. **Executors** (`hooks/act.ts`, SPEC 6.1), each with its key, timeout, retries and outcome:
-   - CLI executors: heartbeat, sweep, claim, guard (parsed by `classifyFail`), update-behind,
-     fix-linkage, merge (plus rollout), label edits, the milestone, pr-reopen, pr-comment and
-     treehouse return;
-   - `respond`, run detached in the slot that has the run's branch, with its log read back (the
-     memory file's lesson: no `--run`);
-   - agent spawns, with the parsers for the designer's `RESULT` line, the adjudicator's contract
-     and implementer and fixer handoffs;
-   - `stop-agent` through `TaskStop`;
-   - wakes: `JUDGE`, `TASK` and `TELL` lines with detail lines, `ANSWER` parsing in
-     `turn.complete`, one reminder, then the timeout's fallback.
-4. **Safety rails** (SPEC 11):
-   - the act lock;
-   - `DEV_ROLE` and the old-watcher lock check;
-   - the kill switch (already done);
-   - executors that pre-check usage against `$.session.usage()` before each token-spending
-     action;
-   - a test that reads every argv template and fails on `--yes`, `rerun`, `abort`, `coder`, a
-     broad kill, or a PR-body edit.
-5. **Owner controls**: `/factory <op>` and `mcp__factory-loop__control`, writing `control.json`
-   (SPEC 4.3), and the optional answer tool.
-6. **Prompt templates** (SPEC 6.3), with a test that no template carries a brief's content or a
-   closing keyword.
-7. **The judge skill draft** (`plugins/factory-loop/skills/judge/SKILL.md`): how to answer each
-   `JUDGE` and `TASK` line, and how to write each `TELL` line. Short answers are the rule. The
-   released `issue-orchestrator` skill stays untouched.
-8. **Tests**: executors against the testing kit's mocks (canned CLI output, fake agents through
-   `agent.spawn` and `turn.complete` hooks), and driver tests in act mode end to end. The
-   properties in `plan.test.ts` stay green.
-9. **The owner's review** (2026-10-13), in code: the counts-only title (D-23), one memory file per
-   agent type (D-22), trackers inside `only` (D-35), follow-ups for hand merges (D-29, rule `M7`),
-   the merge adjudicator and `judge(sequence)` (D-05, rules `M4` and `M5`), the `loop` event state
-   (D-09), self-restart for updates (D-15, rule `H4`), visible rate caps with no merge cap (D-24),
-   the in-flight cap of 10 with its notice (SPEC 4.2), the heartbeat guard (D-28), `/factory retry`
-   (D-38), the ping-storm breaker (D-39), duration strings in the config files (SPEC 4.2), the
-   merge adjudicator's report lines (SPEC 7.3), `/factory update` (D-15), lower-case labels
-   compared without regard to case (SPEC 4.2), `task(respond-stuck)` (D-37), and the `/factory`
-   command name. The designer's `RESULT` line in `designer.md` (D-14) ships with cutover step 1.
-
-- **Done when**: act mode passes its tests, the shadow (still in observe mode) keeps agreeing
-  with the live orchestrator, and STATUS lists what is still untested.
+- **Done when**, checked:
+  - act mode passes its tests: yes. The plugin's 546 tests, `npm test` and `npm run lint` all
+    pass; the image changes get their container evidence only from the PR's CI, since there is no
+    Docker here;
+  - the shadow (still in observe mode) keeps agreeing with the live orchestrator: yes so far.
+    On this build its first pass planned what the observe-only build planned (a sweep and the
+    release task after #522), once a rebuilt merge stopped reading as an unread rollout
+    (1297e9b). The live factory is idle, so the next real issue is the fuller comparison;
+  - STATUS lists what is still untested: yes, under "Not yet proven".
 
 ## Stage D: act mode on `dev-system-testbed`
 
-- **Who**: you make the test issues; the agent runs and reports. **Waits on**: stage C.
-- **Setup**: load the plugin in the testbed workspace through `CLAUDE_CODE_PLUGIN_DIRS` (as the
-  shadow is loaded today), set `mode: act`, and leave the released skill's watcher unarmed (the
-  loop refuses act mode while it is armed).
+- **Who**: the agent filed the test issues (owner's go-ahead, 2026-10-13): one path each, as
+  sub-issues of [dev-system-testbed#12](https://github.com/cbundy/dev-system-testbed/issues/12),
+  none labelled `ready`. The agent sets up the workspace, runs and reports. Nothing orchestrates
+  the testbed today; its only worker is `spike-reconcile-mod`, which already loads the plugin.
+  **Waits on**: your review of the draft PR and your go-ahead (stage C is built).
+- **Setup** in the testbed workspace:
+  - load the plugin from a checkout of `feat/factory-loop` through `CLAUDE_CODE_PLUGIN_DIRS`, as
+    the shadow is loaded today;
+  - until a base image release carries the `--once` modes and the `loop` state, point the loop
+    at that checkout's own tools in `${CLAUDE_CONFIG_DIR}/factory-loop/config.json`: `toolsDir` at
+    its `features/src/callum-tools` and `binDir` at its `images/base` (SPEC 4.1, D-42). For
+    example
+    `{ "mode": "act", "repo": "<owner>/dev-system-testbed", "checkout": "<testbed checkout>",
+    "toolsDir": "<branch checkout>/features/src/callum-tools", "binDir": "<branch checkout>/images/base" }`;
+  - the role: run the session with `DEV_ROLE=orchestrator`, or set
+    `"allowActOutsideOrchestrator": true` in the testbed checkout's `.claude/factory-loop.json`;
+  - keep the released orchestrator's watcher unarmed: the loop stays in observe while an
+    `orchestrator-watch.sh` lock for the repo is live, and for 10 minutes after it goes;
+  - the rest the rails check: the checkout's `origin` is the testbed repo, the workspace has a
+    `DEV_MACHINE_NAME`, and no other orchestrator workspace on the testbed repo is up. The
+    decision log's `rails` field names whatever still holds act mode back.
 - **Test issues**, one path each:
   - a plain merge;
   - a split into sub-issues;
@@ -111,8 +99,9 @@ issue you release is another comparison, read the same way.
   - each rollout (merge, run-it, keep-open);
   - a cancelled run;
   - a restart mid-run (`dev-restart-self`).
-- **Retires the open risks**: long-running agents from a mod, several at once, `TaskStop`, and
-  heartbeats across a restart.
+- **Retires the open risks**: agent ids from a mod's spawns, long-running agents, several at
+  once, `TaskStop`, wakes in a busy session, the act lease across two sessions, and heartbeats
+  across a restart: the "Not yet proven" list in [STATUS.md](STATUS.md).
 - **Done when**: every path ran as SPEC 5 says, with the decision log and the factory events as
   evidence in a TESTBED-REPORT.
 
@@ -151,7 +140,8 @@ issue you release is another comparison, read the same way.
 - **The shadow**: config in `/persist/claude/factory-loop/config.json`, directives in
   `.../cbundy__dev-system/control.json` (now `{"only": [522]}`, matching "522 only"), decision
   logs beside them. It loads from the clone `/persist/claude/loop/dev-system`: a `git pull`
-  there reloads it live. Changing
+  there reloads it live, which is how it moves to the act-half build (it stays in observe mode).
+  Changing
   `CLAUDE_CODE_PLUGIN_DIRS` needs a `coder restart spike-reconcile-mod`.
 - **Live factory rules**:
   - never touch an `-orchestrator` workspace;

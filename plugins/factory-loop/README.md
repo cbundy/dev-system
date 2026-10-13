@@ -14,19 +14,29 @@ re-drive, a release) and to talk to the owner; agents read the code.
 
 ## State of this build
 
-This build runs the **observe half**: every minute it reads the factory, plans, logs its
-decisions and shows its status in the session title. It has **no executors**, so it changes
-nothing in any mode (act mode says so in its log). The plugin is not listed in the marketplace
-(DECISIONS D-02).
+Both halves are built. In **observe mode** (the default) every pass reads the factory, plans,
+logs its decisions and shows its status in the session title, and executes nothing: every event
+its commands cause goes to a local sink. In **act mode**, once every safety rail passes (SPEC
+11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
+through its executor, spawns the `callum-flow` agents, and wakes the model for judgment. Act
+mode has run only in tests so far; its first real run is on `dev-system-testbed` (PLAN stage
+D). The plugin is not listed in the marketplace (DECISIONS D-02).
 
 | Piece | File | State |
 |---|---|---|
 | The decision table | `hooks/plan.ts` | done, pure |
 | Parsers, event derivation, state assembly | `hooks/parse.ts`, `hooks/derive.ts`, `hooks/state.ts` | done, pure |
-| Observe adapters and the pass driver | `hooks/observe.ts`, `hooks/register.ts` | done; running as a shadow in `spike-reconcile-mod` |
-| Tests | `tests/plan.test.ts`, `tests/observe.test.ts`, `tests/driver.test.ts` | 93 scenario, property, parser and driver tests |
+| Observe adapters | `hooks/observe.ts` | done; running as a shadow in `spike-reconcile-mod` |
+| The pass driver: the store, the scheduler, the decision log, the hooks | `hooks/register.ts` | done |
+| The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
+| Executors: commands, guard and merge, respond, agent spawns, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/act-agents.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done; not yet run against real agents |
+| Wakes and the answer tool | `hooks/wake.ts` | done |
+| Safety rails | `hooks/rails.ts` | done |
+| `/factory` and the control tool | `hooks/control.ts` | done |
+| The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
+| `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
+| Tests | `tests/*.test.ts` (14 files) | 546 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, and one issue from claim to merge |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
-| Executors, `--once` watcher modes, `/factory`, judge skill | | next (the act half) |
 
 ## Run it in observe mode
 
@@ -39,8 +49,60 @@ Load the folder with `claude --plugin-dir plugins/factory-loop`, or name it in
 ```
 
 Decisions go to `${CLAUDE_CONFIG_DIR}/factory-loop/<owner>__<repo>/decisions-YYYY-MM-DD.jsonl`.
-Owner directives go in `control.json` beside them (for example `{"noNewWork": true}`). Create
+Owner directives go in `control.json` beside them, best set with `/factory` (below). Create
 `${CLAUDE_CONFIG_DIR}/factory-loop/OFF` to stop it within a minute.
+
+## Run it in act mode
+
+Act mode replaces the released orchestrator; never run both on one repo. Load the plugin as
+above and set the workspace file:
+
+```json
+{ "mode": "act", "repo": "<owner>/<repo>", "checkout": "/path/to/the/repo",
+  "toolsDir": "/path/to/dev-system/features/src/callum-tools",
+  "binDir": "/path/to/dev-system/images/base" }
+```
+
+`toolsDir` and `binDir` point at a checkout of this branch until a base image release carries the
+`--once` modes and the `loop` event state; without them the loop uses the image's tools. Then
+every pass checks, before it acts:
+
+- the checkout's `origin` is `repo`;
+- `DEV_ROLE=orchestrator`, or `"allowActOutsideOrchestrator": true` in the repo's
+  `.claude/factory-loop.json` (for a testbed);
+- no `orchestrator-watch.sh` is armed for the repo, and none has been for 10 minutes;
+- no other orchestrator workspace on the repo has sent a heartbeat in the last 2 minutes, and
+  this one has a `DEV_MACHINE_NAME`;
+- no other session in this workspace holds the act lock.
+
+While any fails, the pass runs as observe mode does, the title says `observe`, and the decision
+log's `rails` field says why (`executed` says whether a pass acted). An armed old watcher or
+another orchestrator's heartbeat is also told to you, once each time it starts. `/factory mode
+observe` or the `OFF` file stops act mode at the next pass.
+
+## The `/factory` command
+
+`/factory <op>` sets the loop's owner directives from any client, at once, even during a long
+wake turn; in chat, the model does the same through `mcp__factory-loop__control` when you ask.
+Each change is logged and asks for a pass at once. The ops:
+
+- `status` (or no op): the last pass and the directives in force; `help` lists the ops;
+- `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
+- `skip <N>` / `noskip <N>`: never claim N;
+- `priority <N...>|off`: claim these first, in order;
+- `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
+- `serial on|off`: one issue in flight at a time;
+- `new on|off`: off starts no new claims, designs or implementations;
+- `override <pct> <hours>|off`: run past the usage tiers up to pct, for up to 168 hours;
+- `resume <N|run id>`: release a hold on an issue (a pending decision) or a run (an escalation,
+  a merge hold, the review cap);
+- `retry <N>`: let N's exhausted actions run again;
+- `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
+- `drop <N>`: abandon N and stop its agents;
+- `note [<N>] <text>`: an instruction the next agent prompts carry, for N or for all;
+- `mode off|observe|act`: written to the workspace file, from the next pass.
+
+A malformed op changes nothing and answers with its usage.
 
 ## Pinned Claude Code version
 
@@ -60,6 +122,10 @@ between releases. Before running the loop on a newer Claude Code:
 
 ## Develop it
 
-`npm test` runs the plugin's tests through `claude plugin test`, and
-`tests/factory-loop-plan.test.js` (repo root) checks that `plan.ts` stays pure. `plan.ts` also
-imports under plain Node, which the replay harness uses.
+`npm test` runs the plugin's tests through `claude plugin test`, and six node tests at the repo
+root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
+`factory-loop-safety.test.js` scans every string in `hooks/` for a forbidden command;
+`factory-loop-judge-skill.test.js` checks the judge skill covers every wake, TELL kind and op;
+and `factory-loop-respond-launch.test.js`, `factory-loop-prune.test.js` and
+`factory-loop-loop-events.test.js` run the respond launch, the daily prune and every `loop` note
+for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.

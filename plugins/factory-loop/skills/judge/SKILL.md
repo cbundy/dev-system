@@ -153,7 +153,7 @@ No ANSWER block. Write exactly one line, then end the turn (the phone shows it, 
   `[INFO]` (nothing needed), then who acts first and what happens next.
 - Name each issue or PR by what the work does, then link it:
   `([#507](https://github.com/<repo>/issues/507))`, `/pull/N` for a PR, `<repo>` being the
-  session checkout's GitHub origin. Never a bare `#N`, never a number as the subject.
+  wake line's `repo=` field. Never a bare `#N`, never a number as the subject.
 - At most one read: the title (`callum-flow-issue-read --json <N>`), or the brief for a
   decision (`--comment <url>`).
 - Example: `[DECISION] Owner: pick SQLite or Postgres for the settings store

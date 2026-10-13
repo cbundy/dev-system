@@ -170,6 +170,146 @@ follow directly from the skill or the brief.
   release planning. GitHub, through the mirror and the sweep, says what merged, so no local merge
   log is needed.
 
+### D-47 Retries and their counts
+
+- **Decision**: heartbeat and sweep are never used up: they retry at their cadence, and three
+  failures in a row tell the owner once. `pr-reopen`, `stop-agent` and `restart-self` get one
+  attempt, `release-worktree` two, `guard` three, and each wake one (with its one reminder). A
+  `lost` entry is retried at once. Exit 2 is a never-retried usage error only for the image's
+  own CLIs (SPEC 4.2, 6.1, 10.1).
+- **Alternatives**: one count for every CLI write; every exit 2 a usage error.
+- **Why**: a heartbeat that ran out of attempts would stop renewing claims for a week, and
+  another device would reclaim the work. The smaller counts are SPEC 6.1's. A lost entry did not
+  fail: its process died with the session. `gh` exits 2 when a command is cancelled and 1 on bad
+  usage, so its exit 2 is worth another try.
+
+### D-49 A respond is done once launched
+
+- **Decision**: a respond runs detached under `nohup` in the pool slot on the run's branch, or
+  one leased for it, with `--step` so it answers only the gate plan judged (left out when the
+  step is not known), and its log is read back after 5 seconds. A clean launch is `done`; rule
+  `P3a` judges `respondSettleMs` later whether the gate moved. Each attempt has its own log
+  (SPEC 6.1, P3a).
+- **Alternatives**: keep the entry `running` until the run moves; no `--step`; one log per run.
+- **Why**: `P3a` reads a done respond's launch time, and the `H4` drain waits on running
+  entries, so a respond left running would never be retried and would hold an update forever.
+  Without `--step`, a run that moved on between observing and launching would get the answer
+  meant for the gate before. One log per run let a retry or a later gate overwrite the evidence
+  `task(respond-stuck)` reads.
+
+### D-50 Merges follow through on the loop's own bookkeeping
+
+- **Decision**: an `update-behind` that pushed a new PR head makes older guards stale, and the
+  next update is keyed by the head it pushed. A merge its own guard refused is a failed attempt,
+  retried once rule `M2` clears the FAIL; only a refusal by GitHub or the harness tells the
+  owner. A merge whose rollout read failed has it read again. A hand-merged closing PR on an
+  epic base closes its issue (SPEC M1, M2b, M6, M7).
+- **Alternatives**: guards fresh until their TTL, one update key per run head, every refused
+  merge to the owner, and follow-ups only from a merge's own rollout read.
+- **Why**: each was a way a PR stalled or lost its follow-ups. The watcher keeps printing the
+  run's old head after an update, so one key per run head blocked every later update. A
+  transient FAIL inside the merge would have parked a mergeable PR until the owner looked. A lost
+  rollout read loses the Run it and the milestone placement. GitHub registers no closing
+  reference for a PR on a non-default base, as `callum-flow-merge` already says.
+
+### D-51 A resume starts a fresh review round
+
+- **Decision**: after an escalated test-weakening review (`M3`) or a merge hold (`M5a`), the
+  owner's `resume <run>` asks for a fresh adjudication, with `:r<n>` on its keys, as `P2` does.
+  A `judge(sequence)` that times out counts as a hold a resume releases, and the merge
+  adjudicator's `escalate` is read as `hold`.
+- **Alternatives**: only a new head ends the hold.
+- **Why**: the owner decides by resuming, and an `M3` escalation otherwise had no way out short
+  of a new commit. The merge adjudicator's definition offers `escalate`, so refusing it would
+  waste an attempt on an answer that means the same as `hold`.
+
+### D-52 A held Run it holds the next run-it merge
+
+- **Decision**: the judge skill answers `task(run-it)` and `task(release)` with `hold` while the
+  release waits on the owner, then finishes in chat. A `run-it` PR waits while another merged
+  `run-it` issue's Run it is unfinished: its task not answered `done`, the issue open, and the
+  owner has not resumed that issue since (SPEC M5).
+- **Alternatives**: keep the task open until the release is out; count any answered task as a
+  finished Run it.
+- **Why**: one wake is open at a time (D-26), so a task held open for hours would block every
+  other wake. Counting the `hold` answer as finished would let a second `run-it` change merge
+  before the first one's release, which the skill forbids.
+
+### D-53 The update drain ends at the next load
+
+- **Decision**: the drain's safe state also waits for `pending` and `ci-stalled` runs of any
+  device, and for the runs source to read; the restart goes only in a pass with nothing else
+  planned, after the title. Once `dev-restart-self` returns, the module acts no more, and the
+  drain ends only when the next load finds the restart lost, or done before it loaded. A failed
+  restart is not retried: the owner is told and the drain holds (SPEC H4).
+- **Alternatives**: end the drain when the restart reports done; retry a failed restart.
+- **Why**: `dev-restart-self` returns once Coder accepts the build, minutes before the
+  container is replaced, so ending there starts new work in a container about to go. A
+  `ci-stalled` run's CI step still polls in the daemon the restart kills, the risk D-15 drains
+  for. A restart that failed once usually needs a person.
+
+### D-54 The agent list decides what still runs
+
+- **Decision**: only a successful agent-list read marks agents lost or failed; an agent first
+  listed completed counts as running for that pass, and so does one whose answer is being
+  handled. An agent that failed, timed out or was lost but is still listed at work blocks its
+  rule's retry, and a failed `A1` stop tells the owner. `A2` stops tell the owner why. A turn
+  that ends in `refusal` is a failed attempt, a spawn that does not start within 60 seconds
+  fails, and a designer that posted its brief before it failed is not spawned again: the brief
+  goes to `judge(report)` (SPEC 5.1, A1, A2, D2, 7.5, 10.4).
+- **Alternatives**: trust any list read; retry by attempts alone; spawn a new designer whenever
+  the last one did not answer.
+- **Why**: a failed read that returned nothing would mark every agent lost and spawn them all
+  again, and an answer still on its way would be thrown away. A retry beside an agent a stop
+  could not end puts two agents on one key. A posted brief is the designer's work done.
+
+### D-55 Wakes never spend an attempt the engine dropped
+
+- **Decision**: a wake's submit gets 5 seconds; a prompt still waiting then counts as queued, so
+  a busy session never holds a pass. A prompt refused or dropped within that time is skipped
+  with no attempt counted, and a later drop marks the wake lost with its attempt given back.
+  Every first line carries `repo=`. The one reminder repeats why an answer was refused, and an
+  aborted or refused turn gets it too. A wake another session submitted ends at load by its
+  fallback (SPEC 7.5, 8.1, 8.2).
+- **Alternatives**: wait for the submit to resolve; count a dropped prompt as the wake's attempt.
+- **Why**: a wake gets one attempt, so a prompt the model never saw must not use it up. Waiting
+  on a busy session would stall every other action for as long as its turn runs. `repo=` saves a
+  read for every link the model writes. A wake from a session that ended can never be answered,
+  and would hold every other wake until its timeout.
+
+### D-56 Prompts rewrite closing keywords; handoffs end in a RESULT line
+
+- **Decision**: in a prompt's free text, a closing keyword before an issue reference becomes its
+  `-ing` form ("Fixes #12" reads "Fixing #12") instead of being refused, and every id must have
+  its shape. The designer's prompt lists in-flight branch names only. Spawns are named with
+  their purpose and, from the second attempt, the attempt. Implementers and fixers end their
+  handoff with `RESULT run= head= commit= gated= branch= pr=`, and a head that is not the commit
+  is not gated. Each spawn's prompt and each answer are kept in the loop dir (SPEC 6.1, 6.3).
+- **Alternatives**: refuse any text with the bare words; list the in-flight branches' files;
+  read the handoff's prose.
+- **Why**: a ban on the words would garble adjudicator instructions ("Fix the timeout") and
+  branch names. The designer finds the shared files itself, which keeps the loop out of diffs. A
+  name with its attempt never clashes with an agent still winding down. A fixed line can be
+  checked, and implement-issue says never to explain a head mismatch away. The kept prompts show
+  the owner exactly what each agent was told.
+
+### D-57 Plan details settled in code
+
+- **Decision**: `at cap` shows only when the cap actually held a claim back; `blind` replaces the
+  title's counts; a claim still running counts against every claim limit, and merge work still
+  running counts as "merging first" in Slow; hand-merge follow-ups stop after 24 hours; a review
+  carries over a rebase-only update only on a head's first round; a `restart` flag alone needs no
+  sequencing call; an ACTION a rule does not expect plans nothing and is logged; an issue `only`
+  names that is not in the queue is named in the skip reasons; trackers are followed three
+  levels deep (SPEC 5).
+- **Alternatives**: `at cap` whenever live issues equal the cap; a claim counted only once done;
+  no bound on hand-merge follow-ups.
+- **Why**: a cap reached with an empty queue is no news. Checking the plan properties on every
+  plan call showed that planning again while a claim ran claimed again (SPEC 5.9, property 2).
+  `callum-flow-factory-state` lists a merged issue for 24 hours, well inside the ledger's
+  seven-day prune, so a follow-up can never fire twice. SPEC M5 names a major bump, a run-it
+  rollout and a base image or template change as the calls; a restart is rule `H4`'s.
+
 ## Architecture
 
 ### D-03 Plan does not know the mode
@@ -268,6 +408,127 @@ follow directly from the skill or the brief.
   released `issue-orchestrator` skill is not touched.
 - **Why**: the brief forbids changing the released skill. A separate skill can be reviewed and
   shipped on its own.
+
+### D-40 The ledger lives in memory, with one writer
+
+- **Decision**: the module loads the ledger from the store once per load (and again when it
+  takes over another session's expired lease), keeps it in memory, and saves it after every
+  change: an action's running entry before its command, spawn or wake starts, and every
+  transition before its `loop` event. It writes back only while the act lock names this session
+  or still stands as it did at the load. The lease lasts at least 15 minutes, is renewed before
+  every action and on a timer during a pass, and each write of it is a compare-and-set under
+  `flock`. A store that cannot be read, or that refuses a save, starts nothing (SPEC 7.1, 10.10,
+  11.2).
+- **Alternatives**: re-read the ledger from the store every pass; a lease renewed once a pass and
+  written plainly; fall back to the event log when the store cannot be read.
+- **Why**: hooks change the ledger between passes and during them (an answer arriving
+  mid-pass), so a re-read would race with them. A once-a-pass lease could lapse inside a long
+  merge and let a second session in, and two sessions that both read the lock free could both
+  take it. Saving before acting means a restart at any point finds what already started.
+  Falling back to the event log would overwrite the real ledger, holds included, at the next
+  save.
+
+### D-41 Act mode reads through the --once watchers and a week of events
+
+- **Decision**: act mode reads the queue with `queue-watch.sh --once`, its `known` list kept in
+  the store, so `ready` events keep arriving; observe mode keeps the plain reader, so a shadow
+  logs none of its own. A lost store is rebuilt from 7 days of events (the facts window is 3),
+  and the rebuilt ledger is kept and saved; a merge rebuilt from the log counts as having had its
+  rollout read, since the merging device ran the follow-ups then. A GitHub rate limit is remembered in the store for
+  15 minutes, and once an executor meets one, the rest of the pass's GitHub writes are skipped
+  with no attempt counted (SPEC 3.3, 7.5, 10.2).
+- **Alternatives**: one reader in both modes; rebuild from the facts window; let each later
+  write in the pass meet the limit itself.
+- **Why**: a shadow must not log the events the live orchestrator also logs. A hold such as a
+  pending decision can be older than three days, and the ledger keeps entries for seven. The
+  `merged` event carries no rollout, so without that rule every recent merge would read as one
+  whose rollout read failed, and its follow-ups would run twice. Each write after a limit only
+  meets it again and spends an attempt.
+
+### D-42 A testbed runs a checkout's own tools
+
+- **Decision**: the workspace file takes `toolsDir` (where the watchers and `usage-check.sh`
+  live; default the base image's `/usr/local/share/callum-tools`) and `binDir` (put ahead of
+  `PATH`). Every command also gets the configured labels as `CALLUM_FLOW_READY_LABEL` and
+  `CALLUM_FLOW_IN_DEV_LABEL` (SPEC 4.1).
+- **Alternatives**: wait for a base image release before any act-mode test; fixed image paths.
+- **Why**: the `--once` modes and the `loop` state ship in the image, and no release carries
+  them yet; pointing at a checkout's `features/src/callum-tools` and `images/base` lets the
+  testbed start now. Without the label variables, `callum-flow-claim` and `callum-flow-sweep`
+  would use their own defaults rather than the repo's settings.
+
+### D-43 The safety rails fail safe
+
+- **Decision**: act mode is also refused when the checkout's origin is not the configured repo.
+  The old-watcher rail blocks on a lock directory with no readable pid or a probe that fails,
+  waits 10 minutes after the lock goes before acting, and tells the owner once per spell (a new
+  `old-watcher` notice). The heartbeat guard blocks on a failed query and on a device with no
+  name, and counts a stopping device's heartbeat. A session the role check refuses tells
+  nothing. The usage pre-check, by contrast, fails open. A pass a rail refuses plans exactly as
+  observe mode does (SPEC 10.7, 11.2).
+- **Alternatives**: read a check that cannot run as "nothing there"; act as soon as the
+  watcher's lock is gone; tell the owner from every session.
+- **Why**: each rail guards against two drivers on one repo, where doubt should keep the loop in
+  observe. The released skill's single-shot watcher drops its lock between turns, so one pass
+  without it proves nothing. The checkout check closes a gap the lock cannot see: the CLIs act on
+  the checkout's origin and the `gh` executors on the configured repo. A session the role check
+  refuses can never act, so its notices would be noise. The pre-check fails open because plan's
+  tier does (the skill: usage unavailable is Normal).
+
+### D-44 Notices from outside plan wait for the open wake
+
+- **Decision**: the rails' notices (`heartbeat-other`, `old-watcher`), the ping breaker's
+  (`breaker kind=ping`) and three throwing passes (`pass-error`, new) go out through the wake
+  executor, keyed by when their spell began, and only while no wake is open, outside plan's
+  one-wake choice. Rail and breaker notices wait in the store, are dropped when their spell ends
+  first, and go again if the engine dropped the prompt. `stopped` now says why (SPEC 9.2).
+- **Alternatives**: hand these notices to plan as state; send them whatever wake is open.
+- **Why**: they come from the driver, not the factory's state, so plan never sees them, and one
+  wake at a time (D-26) still holds. The owner needs to hear once why act mode is held back or
+  failing, not every pass.
+
+### D-45 The --once modes and the loop event, as built
+
+- **Decision**: `--once` takes only its own options, exits 1 also when `gh` is missing or
+  `no-mistakes runs` fails, and logs no `watcher_error`. `pending` also covers a failed probe and
+  a run no source can name (id `unknown`), and `step=unknown` mirrors `head=unknown`.
+  `callum-flow-event loop` refuses a note without `kind=`, `key=` and `status=`, `--if-changed`
+  skips `loop` lines, and every event-log reader (factory-state, evaluate, heartbeat-state, the
+  sweep) treats `loop` as bookkeeping. Loop notes leave out free text and guard outcomes
+  (SPEC 3.4, 7.4).
+- **Alternatives**: accept and ignore other options; log a `watcher_error` for each failure;
+  let `loop` events count as activity.
+- **Why**: a failed listing must never read as "no runs". The loop polls every minute and
+  reports a failed source itself, so a broken tool would otherwise log an error event a minute.
+  Without the reader changes, a `loop` event after a close looked like the issue's latest event
+  and the sweep logged a second `closed`, and a bookkeeping line made a repeated watcher event
+  look new. Free text is not needed for a rebuild and would overflow the note.
+
+### D-46 The loop's files stay bounded
+
+- **Decision**: once a day the loop deletes the spawn records, saved answers, respond logs,
+  recorded states and decision logs older than 7 days. Recorded states are written in observe
+  mode only, at most 288 a day. The stored ledger keeps within 3 MiB by dropping the entries
+  that ended longest ago, never a running one (SPEC 7.1, 11.6).
+- **Alternatives**: keep everything; a size limit on each file.
+- **Why**: nothing reads past the ledger's own week, and the store refuses a whole save over its
+  4 MiB limit, which would lose every change since the last one. A busy synthetic week stays
+  under 2 MiB, so the ledger cap is a valve, not a working limit. The observe-mode event sink,
+  one append-only file, is not pruned yet: it needs trimming, not deleting by age.
+
+### D-48 Executors keep their writes narrow
+
+- **Decision**: every `gh` command carries `--repo`. `abandon` and `release-parent` remove the
+  label before they log `abandoned`. `release-worktree` gives `treehouse return` empty stdin,
+  never `--force`, and is done only when the slot reads `available`. `milestone-expect` puts its
+  reason on one line. `stop-agent` refuses any agent the ledger does not hold running
+  (SPEC 6.1).
+- **Alternatives**: rely on `CALLUM_FLOW_REPO`, which `gh` does not read; log the event first;
+  force the return.
+- **Why**: a write can then reach only the configured repo. With the label off first, the event
+  records a release that happened and a retry repeats only the label edit; logged first, a failed
+  edit would leave the label on an issue `D6` then skips. A slot that turned dirty after plan
+  looked keeps its work. The milestone CLI refuses a reason with a line break.
 
 ## Numbers and small choices
 
@@ -425,3 +686,40 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Why**: owner, 2026-10-13: something that keeps waking the loop without being handled (a
   hook firing in a loop, an answer the parser rejects) would otherwise spin it. The timer keeps
   the factory moving while the owner looks.
+
+### D-58 Owner controls as built
+
+- **Decision**: `priority off` and `override off` sit beside `only off` and `update off`; `help`
+  lists the ops; dropping a dropped issue does nothing. Input has limits (an override up to 100%
+  and 168 hours, a reason up to 300 characters, a note up to 2 000, and an all-digit run id
+  needs `run:`), refused rather than cut. A control.json that does not parse is never
+  overwritten. The control tool refuses every op but `status` from inside an agent. `retry`
+  sets the exhausted entries' attempts to 0 rather than removing them, and clears the notices
+  they raised (SPEC 4.3, 7.1).
+- **Alternatives**: SPEC's first op list alone; cut long input; remove retried entries.
+- **Why**: nothing else could lift a priority or cancel an override. A second drop would plan a
+  second abandon. A cut directive is a different directive. Directives the owner could still
+  recover must not be lost to a write. The loop's agents act on their own issue only. Removing
+  a retried entry broke `D4b`, which re-delegates from the last delegate entry.
+
+### D-59 The judge skill's own choices
+
+- **Decision**: a TELL line opens with `[DECISION]`, `[ACTION]` or `[INFO]`; every TASK answer
+  carries a reason, `done` included; a handoff may be confirmed gated with
+  `git merge-base --is-ancestor`; a re-drive finds the brief through the issue's comments; a
+  wake name the skill does not list gets `hold` (a TELL is relayed as it stands). The skill is
+  one file of about 260 lines.
+- **Alternatives**: no tags; a reason only for `failed`; the TELL kinds in a second file.
+- **Why**: the tag says at a glance on the phone whether the owner must act. D-13 asks for a
+  trail of when and why the model was involved. A cheap factual read is not a diff read. Holding
+  is the safe default. A second file would cost a read on every TELL.
+
+### D-60 The claim-to-merge test runs beside the engine's test host
+
+- **Decision**: `tests/act.test.ts` drives the real observe and act-step functions through ten
+  passes, from claim to merge and the run-it follow-ups, with a recording fake;
+  `tests/driver.test.ts` tests the driver's own wiring in the engine's test host, with agents
+  seeded in the store.
+- **Alternatives**: one end-to-end test inside the host.
+- **Why**: the host never returns an agent id from `$.agent.spawn` (probed: the subagent type
+  arrives empty too), so a spawn there always fails. Only the testbed closes that gap (SPEC 13).
