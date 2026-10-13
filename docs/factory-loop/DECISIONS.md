@@ -47,6 +47,10 @@ follow directly from the skill or the brief.
   18 of those 21 were history (their issue was superseded, merged or abandoned afterwards), and
   the loop acts only on an issue's current run (SPEC 5.4), so about one wake every two days
   remains. A CLI is the better long-term home once the steps are stable.
+- **Owner (2026-10-13)**: accepted for now, likely to be revisited. Every re-drive must leave a
+  clear trail of when and why the model was involved, so that frequency and causes can justify
+  another approach later (for example, resetting the issue to an earlier stage with extra
+  instructions).
 
 ### D-25 Owner notices wake the model (owner call)
 
@@ -59,6 +63,7 @@ follow directly from the skill or the brief.
   phone shows only the conversation, the title and push notifications (FINDINGS section 1).
   Notices are rare and important, so a short turn each is worth it. Push notifications were not
   tested from a mod.
+- **Owner (2026-10-13)**: fine for now.
 
 ### D-02 The plugin stays out of the marketplace until cutover (owner call)
 
@@ -68,6 +73,9 @@ follow directly from the skill or the brief.
 - **Alternatives**: list it now as opt-in, like factory-hud.
 - **Why**: the brief says do not ship. A listed plugin would reach every workspace with the next
   release. Listing it is cutover step 2 (SPEC 14).
+- **Owner (2026-10-13)**: keep it out of the marketplace until the build is further along. When it
+  goes to other containers for testing, it ships as a replacement for the released orchestrator,
+  never alongside it.
 
 ### D-28 Act mode needs the orchestrator role and no old watcher (owner call)
 
@@ -131,13 +139,19 @@ follow directly from the skill or the brief.
 - **Why**: one less piece of state to keep in step. A hold ends by itself when its subject moves
   on, which is the behaviour the skill describes ("wait").
 
-### D-29 Rollout follow-ups only for merges the loop made
+### D-29 Rollout follow-ups for every merge of an issue the loop drove
 
-- **Decision**: `M7` acts on the loop's own `merge` entries. A PR the owner merged by hand gets no
-  `milestone-later` or `task(run-it)` from the loop.
-- **Alternatives**: read the rollout of every newly merged issue.
-- **Why**: a hand merge means the owner is driving that issue. The model hears of it in chat and
-  can do the follow-up.
+- **Decision**: `M7` acts on every merged PR whose issue this device held, whether the loop merged
+  it or the owner did by hand. A hand merge is found from the factory state: the sweep already
+  logs it (`merged`, actor `sweep`), and the issue shows stage `merged` with no loop `merge`
+  entry. It gets the same follow-ups as a loop merge: the issue closed when its rollout says so,
+  its milestone placement, and `task(run-it)` for a run-it rollout. So it joins release planning
+  like any other merge.
+- **Alternatives**: act only on the loop's own merges (the first decision).
+- **Why**: the owner sometimes merges a PR the loop brought to merge-ready but could not merge
+  itself (owner, 2026-10-13). Leaving those out would lose their rollout and drop them from
+  release planning. GitHub, through the mirror and the sweep, says what merged, so no local merge
+  log is needed.
 
 ## Architecture
 
@@ -151,12 +165,18 @@ follow directly from the skill or the brief.
 
 ### D-04 The model answers with a text block, the tool as an alternative
 
-- **Decision**: an `ANSWER <id> <decision>` block with optional `key: value` lines, read in the
-  main loop's `turn.complete`. The `mcp__factory-loop__answer` tool is accepted as well (SPEC 8.2).
+- **Decision**: when the loop wakes the model with a `JUDGE` or `TASK` line, the model answers by
+  ending its reply with a short block the loop reads: `ANSWER <id> <decision>`, then optional
+  `key: value` lines such as `reason:`. Calling the `mcp__factory-loop__answer` tool works too,
+  but nothing depends on it (SPEC 8.2).
+- **What it means for you**: every answer the model gives the loop is plain text in the
+  conversation, so you see it in the transcript and on your phone, and nothing is hidden. A
+  missing or malformed answer gets one reminder, then the wake's safe fallback, which is always a
+  hold and never a guess.
 - **Alternatives**: the tool only, as first planned.
-- **Why**: the wake probe showed both work, but the tool goes missing for a turn that starts
-  while the mod reloads, and the text block costs least. The first plan (tool first) changed on
-  that evidence.
+- **Why**: the wake probe showed both channels work, but a turn that starts while the mod reloads
+  (during a deploy, for example) does not see the tool, and the text block costs the fewest
+  tokens. The first plan, tool first, changed on that evidence.
 
 ### D-06 Usage comes from `usage-check.sh` every 5 minutes plus the session's own figures
 

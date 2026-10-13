@@ -348,7 +348,7 @@ For each current run in `merge-ready`, `head-mismatch` or `conflict` with a PR, 
 | M5a | the merge review answered `hold` | hold until the head moves; the model told the owner in the same turn, so no `tell` is sent, and the title counts it | none |
 | M5b | the merge review answered `fixer` | `spawn(fixer, purpose review)` with the instructions | `fixer:review:<pr>:<head>` |
 | M6 | `merge` failed because GitHub or the harness refused it (not a guard FAIL) | hold, `tell(merge-refused)` with the PR link and the guard lines | `tell:merge-refused:<pr>:<head>` |
-| M7 | a `merge` entry is `done` | by the merged issue's rollout (the merge executor reads `callum-flow-rollout`): `merge` with `close_issue` gives `close-issue`; `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the merge-review answer above the milestone's `Expected` gives `milestone-expect` | `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
+| M7 | a `merge` entry is `done`, or an issue this device held reached `merged` without one (a hand merge, which the sweep logs) | by the merged issue's rollout (the merge executor reads `callum-flow-rollout`): `merge` with `close_issue` gives `close-issue`; `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the merge-review answer above the milestone's `Expected` gives `milestone-expect` | `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
 
 A guard FAIL that `merge` itself prints (the guard runs again inside it) is recorded as a guard
 outcome, so `M2` handles it on the next pass.
