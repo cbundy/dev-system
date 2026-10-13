@@ -133,4 +133,7 @@ node scripts/factory-loop-replay.js --repo cbundy/dev-system --device coder-dev-
   --from 2026-10-12T18:30:00Z --to 2026-10-12T20:50:00Z --step-minutes 2 --out /tmp/replay
 ```
 
-It reads the database and GitHub only, and writes only into `--out`.
+It reads the database and GitHub only, and writes only into `--out`. The issue reader logs an
+`untrusted_stripped` event as a side effect of filtering; the harness sends those to a scratch
+sink. The first runs on 2026-10-12 did not, and left nine such events in the factory log under
+device `coder-devsystem` (23:12 to 23:29 UTC).

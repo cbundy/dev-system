@@ -63,12 +63,22 @@ function args(argv) {
 
 const iso = (ms) => new Date(ms).toISOString();
 
+// The reader logs an untrusted_stripped event as a side effect of filtering; those writes go to a
+// scratch sink, never to the factory's event log (the replay writes nothing outside --out).
+const SINK = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "factory-loop-replay-sink-"));
+
 // run: one read-only command; a failure is retried twice (the database host has been seen to
 // drop a DNS lookup), and an exit the caller handles (the reader's exit 3) is not retried.
 function run(cmd, argv, input) {
   for (let attempt = 1; ; attempt++) {
     try {
-      return execFileSync(cmd, argv, { input, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
+      return execFileSync(cmd, argv, {
+        input,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, CALLUM_EVENTS_DIR: SINK },
+      });
     } catch (err) {
       if (err.status === 3 || attempt >= 3) throw err;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000 * attempt);
