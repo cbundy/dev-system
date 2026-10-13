@@ -166,7 +166,8 @@ gone() {
 # (newest first) - "  <status>  <branch> <short-head>  <date>[  <pr-url>]", no run id;
 # `axi status` with no --run prints the newest run of the cwd's branch, or,
 # when that branch has none, the runs[N]{id,branch,status,head,pr} table.
-# Every call fails while an nm-fail marker exists (a transient failure).
+# Every call fails while an nm-fail marker exists (a transient failure), and
+# `axi status --run <id>` alone while an nm-status-fail-<id> marker does.
 # Every `runs` call is logged to nm-polls first, even a failing one.
 cat > "$fakebin/no-mistakes" <<'EOF'
 #!/bin/sh
@@ -188,7 +189,10 @@ case "$1 ${2-} ${3-}" in
       printf '  %-12s %s %s  2026-10-06 21:00%s\n' "$2" "$1" "$3" "${4:+  $4}"
     done
     ;;
-  "axi status --run") cat "$d/runs/$4.txt" 2>/dev/null ;;
+  "axi status --run")
+    [ ! -e "$d/nm-status-fail-$4" ] || exit 1
+    cat "$d/runs/$4.txt" 2>/dev/null
+    ;;
   "axi status ")
     cur=$(git rev-parse --abbrev-ref HEAD)
     for id in $order; do

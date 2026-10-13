@@ -13,18 +13,21 @@ const SECOND = 1_000
 const MINUTE = 60_000
 const PROBE_TIMEOUT_MS = 10_000
 const QUERY_TIMEOUT_MS = 30_000
+// flock waits 5 s for another session's write of the lock; the whole write is well inside this
+const LOCK_TIMEOUT_MS = 15_000
 
 // What a rail reads and runs: the ledger-free part of ActIo and ExecCtx, since the rails run at
 // the start of a pass, before any action has an entry.
-export type LockIo = Pick<ActIo, 'readFile' | 'writeFile'>
-export type RailIo = LockIo & { cmd: ExecCtx['cmd'] }
+export type LockIo = Pick<ActIo, 'readFile'> & { cmd: ExecCtx['cmd'] }
+export type RailIo = LockIo
 
 // --- the act lock (SPEC 11.2) ---------------------------------------------------------------
 
-// A lease lasts a few passes and never under five minutes, so one long pass (a slow guard or
-// merge) cannot outlive it and let a second session in mid-pass.
+// A lease lasts a few passes and never under fifteen minutes: longer than the longest single step
+// (a merge, 600 s, then its rollout read), so a step can never outlive it and let a second session
+// in. The driver also renews it before every action and on a timer while a pass runs.
 export const LEASE_PASSES = 5
-export const LEASE_MIN_MS = 5 * MINUTE
+export const LEASE_MIN_MS = 15 * MINUTE
 
 export type Lease = { session: string; renewedAt: Ms; expiresAt: Ms }
 
@@ -37,7 +40,7 @@ export function leaseMsOf(config: Config): Ms {
 }
 
 // parseLease: the lock file's lease; null for a missing, empty or malformed file, which any
-// session may take (a torn write is the likeliest cause, and every writer reads its write back).
+// session may take (every write is a compare-and-set, so two cannot both take it).
 export function parseLease(text: string | null): Lease | null {
   if (text === null) return null
   try {
@@ -85,15 +88,51 @@ function heldBy(lease: Lease): string {
   return `act lock: session ${lease.session} holds it until ${new Date(lease.expiresAt).toISOString()}`
 }
 
-// holdActLock: acquire or renew the lease, once per pass. The file is read back after the
-// write, so of two sessions that raced for a free lock the one whose write did not land refuses.
+// The lock file's one writer: a compare-and-set under flock(1), the kernel lock a dying process
+// lets go of. $1 the lock, $2 its text as this session read it (empty when missing), the new
+// lease on stdin. It writes only while the file still holds what was read, and lands by rename,
+// so of two sessions that both read the lock free one writes and the other gets exit 3, and no
+// reader ever sees half a lease. Exit 2: the file cannot be written; 4: flock timed out.
+export const LOCK_CAS_SCRIPT = [
+  'mkdir -p -- "${1%/*}" || exit 2',
+  'exec 9>>"$1.flock" || exit 2',
+  'flock -w 5 9 || exit 4',
+  'cur=$(cat -- "$1" 2>/dev/null)',
+  '[ "$cur" = "$2" ] || exit 3',
+  'cat > "$1.$$" && mv -f -- "$1.$$" "$1" || exit 2',
+].join('\n')
+
+// lockCasArgv: the compare-and-set of one lease; `read` is the file's text as read (null: none).
+// The shell's $(cat) drops trailing newlines, so the expected text is compared without them.
+export function lockCasArgv(path: string, read: string | null): string[] {
+  return ['sh', '-c', LOCK_CAS_SCRIPT, 'act-lock', path, (read ?? '').replace(/\n+$/, '')]
+}
+
+// writeLease: the lease written over the text read, or why not.
+async function writeLease(io: LockIo, path: string, read: string | null, lease: Lease): Promise<'written' | 'changed' | string> {
+  const r = await io.cmd(lockCasArgv(path, read), { stdin: leaseText(lease), timeoutMs: LOCK_TIMEOUT_MS })
+  if (r.exitCode === 0) return 'written'
+  if (r.exitCode === 3) return 'changed'
+  const why = r.stderr.trim().split('\n').pop() ?? ''
+  return `act lock: ${path} not written (exit ${r.exitCode}${why === '' ? '' : `: ${why.slice(0, 200)}`})`
+}
+
+// holdActLock: acquire or renew the lease. The write is a compare-and-set (LOCK_CAS_SCRIPT), so a
+// lease that changed since it was read is never written over: whoever holds it now decides.
 export async function holdActLock(io: LockIo, path: string, session: string, now: Ms, leaseMs: Ms): Promise<LockResult> {
   if (session === '') return { held: false, reason: 'act lock: this session has no id' }
   try {
-    const d = decideLock(await io.readFile(path), session, now, leaseMs)
+    const read = await io.readFile(path)
+    const d = decideLock(read, session, now, leaseMs)
     if (!d.hold) return { held: false, reason: heldBy(d.holder) }
-    await io.writeFile(path, leaseText(d.lease))
+    const wrote = await writeLease(io, path, read, d.lease)
     const back = parseLease(await io.readFile(path))
+    if (wrote === 'changed') {
+      // another session took it meanwhile, or this one renewed it from elsewhere (still ours)
+      if (back !== null && back.session === session && now < back.expiresAt) return { held: true, lease: back, took: null }
+      return { held: false, reason: back === null ? `act lock: ${path} changed while it was taken` : heldBy(back) }
+    }
+    if (wrote !== 'written') return { held: false, reason: wrote }
     if (back === null) return { held: false, reason: `act lock: ${path} did not read back` }
     if (back.session !== session) return { held: false, reason: heldBy(back) }
     return { held: true, lease: d.lease, took: d.took }
@@ -105,10 +144,10 @@ export async function holdActLock(io: LockIo, path: string, session: string, now
 // releaseActLock: at session.end, expire this session's lease so the next session acts at once.
 export async function releaseActLock(io: LockIo, path: string, session: string, now: Ms): Promise<boolean> {
   try {
-    const released = releasedLease(await io.readFile(path), session, now)
+    const read = await io.readFile(path)
+    const released = releasedLease(read, session, now)
     if (released === null) return false
-    await io.writeFile(path, leaseText(released))
-    return true
+    return (await writeLease(io, path, read, released)) === 'written'
   } catch {
     return false
   }
@@ -172,13 +211,19 @@ export type WatcherCheck = { kind: 'none' } | { kind: 'live'; pid: string; path:
 
 // findWatcher: a live orchestrator-watch.sh lock for the repo, as given and lower-cased (the
 // skill's REPO and the origin URL may differ in case). The pid reaches each command as an
-// argument, never inside a shell string.
+// argument, never inside a shell string. A lock directory with no readable decimal pid blocks
+// (fail safe): its owner may be between mkdir and writing its pid, and a stale one is the
+// watcher's own to take over.
 export async function findWatcher(io: RailIo, env: RailEnv, repo: string): Promise<WatcherCheck> {
   const paths = [...new Set([watcherLockPath(env, repo), watcherLockPath(env, repo.toLowerCase())])]
   for (const path of paths) {
     try {
       const pid = pidOf(await io.readFile(`${path}/pid`))
-      if (pid === null) continue
+      if (pid === null) {
+        const dir = await io.cmd(['test', '-d', path], { timeoutMs: PROBE_TIMEOUT_MS })
+        if (dir.exitCode === 1) continue
+        return { kind: 'error', reason: `old watcher: ${path} ${dir.exitCode === 0 ? 'exists with no readable pid' : `cannot be checked (exit ${dir.exitCode})`}` }
+      }
       // signal 0 delivers nothing: it only asks whether the pid exists
       const probe = await io.cmd(['sh', '-c', 'kill -0 "$1" 2>/dev/null', 'sh', pid], { timeoutMs: PROBE_TIMEOUT_MS })
       if (probe.exitCode === 1) continue
@@ -270,9 +315,15 @@ export async function heartbeatGuard(io: RailIo, repo: string, device: string, p
 
 // --- the rails together (SPEC 11.2) ------------------------------------------------------------
 
+// The released skill's single-shot watcher exits on every event and is armed again at the end of
+// the model's turn, so its lock comes and goes while that skill drives. The loop acts only after
+// the lock has been gone this long, which outlasts a turn's handling of an event.
+export const WATCHER_QUIET_MS = 10 * MINUTE
+
 // What the rails remember between passes, so each blocking spell is told once. Plain JSON: the
 // driver keeps it beside the ledger in the store, so a reload does not tell a spell again.
-export type WatcherSpell = { since: Ms; pid: string }
+// seenAt: the last pass that saw the watcher's lock, for its quiet window.
+export type WatcherSpell = { since: Ms; pid: string; seenAt: Ms }
 export type RailMemory = { heartbeat: Spell | null; watcher: WatcherSpell | null }
 export const EMPTY_RAIL_MEMORY: RailMemory = { heartbeat: null, watcher: null }
 
@@ -288,6 +339,8 @@ export type RailInput = {
   env: RailEnv
   now: Ms
   memory: RailMemory
+  // refusals the driver found itself (the checkout's repo), named first; they keep the lease alone
+  refusals?: string[]
 }
 
 // act: every rail passed and this session holds the lease. reasons: each refusal, in the fixed
@@ -300,7 +353,7 @@ export type RailResult = { act: boolean; reasons: string[]; notices: RailNotice[
 // pass. A session that fails the role check can never act, so it tells nothing.
 export async function checkRails(io: RailIo, input: RailInput): Promise<RailResult> {
   const { config, env, now, memory } = input
-  const reasons: string[] = []
+  const reasons: string[] = [...(input.refusals ?? [])]
   const notices: RailNotice[] = []
 
   const role = roleProblem(env.DEV_ROLE, config)
@@ -310,12 +363,13 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
   let watcherSpell = memory.watcher
   if (watcher.kind === 'live') {
     reasons.push(`old watcher: orchestrator-watch.sh holds ${watcher.path} (pid ${watcher.pid})`)
-    if (watcherSpell === null) {
-      watcherSpell = { since: now, pid: watcher.pid }
-      notices.push({ kind: 'old-watcher', pid: watcher.pid, since: now })
-    }
+    if (watcherSpell === null) notices.push({ kind: 'old-watcher', pid: watcher.pid, since: now })
+    watcherSpell = { since: watcherSpell?.since ?? now, pid: watcher.pid, seenAt: now }
   } else if (watcher.kind === 'error') {
     reasons.push(watcher.reason)
+  } else if (watcherSpell !== null && now - watcherSpell.seenAt < WATCHER_QUIET_MS) {
+    // gone between two of the released skill's turns, perhaps: the spell holds until it is quiet
+    reasons.push(`old watcher: its lock was seen ${new Date(watcherSpell.seenAt).toISOString()}; acting after ${WATCHER_QUIET_MS / MINUTE} minutes without it`)
   } else {
     watcherSpell = null
   }

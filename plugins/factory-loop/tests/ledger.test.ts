@@ -158,6 +158,11 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     const wake = start([], judge, NOW).entry
     expect(wake).toMatchObject({ wake: 'sequence', pr: null, head: null, class: 'drive' })
     expect(wake.agent).toBeUndefined()
+    // a wake records the session submitting it, and the store keeps it (SPEC 7.5); nothing else does
+    const sessioned = start([], judge, NOW, 'session-1').entry
+    expect(sessioned.session).toBe('session-1')
+    expect(fromStored(JSON.parse(JSON.stringify(toStored([sessioned], NOW))))?.[0]?.session).toBe('session-1')
+    expect(start([], claim(7), NOW, 'session-1').entry.session).toBeUndefined()
   })
 
   test('a retry keeps the key, counts the attempt and clears the last outcome and agent', () => {
@@ -484,6 +489,9 @@ describe('/factory retry (D-38)', () => {
       [ended('j', 'judge', 'timed-out', 1), true],
       [ended('r', 'rollout', 'failed', 3), true],
       [ended('r', 'rollout', 'failed', 2), false],
+      // heartbeat and sweep retry at their cadence however often they failed (SPEC 6.1)
+      [ended('h', 'heartbeat', 'failed', 9), false],
+      [ended('s', 'sweep', 'failed', 3), false],
       [ended('x', 'claim', 'running', 9), false],
       [ended('x', 'claim', 'done', 9), false],
     ]

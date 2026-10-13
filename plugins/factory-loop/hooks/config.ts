@@ -48,10 +48,16 @@ export const DEFAULT_CONFIG: Config = {
     merge: 2,
     'fix-linkage': 2,
     guard: 3,
+    // heartbeat and sweep are never used up (they retry at their cadence, SPEC 6.1): this many
+    // failures in a row tells the owner once
     heartbeat: 3,
     sweep: 3,
     // a restart is tried once; the owner hears if it fails (SPEC 6.1)
     'restart-self': 1,
+    // SPEC 6.1: a close and reopen once, a stop once, a slot's return twice
+    'pr-reopen': 1,
+    'stop-agent': 1,
+    'release-worktree': 2,
     // a wake is asked once (with one reminder inside the attempt); then its fallback holds
     judge: 1,
     task: 1,

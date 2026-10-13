@@ -31,8 +31,9 @@ import {
 import { respondLogPath } from '../hooks/exec'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
+import { plan } from '../hooks/plan'
 import type { Action, ActionKind, LedgerEntry, Pool, Slot } from '../hooks/types'
-import { DEVICE, NOW, config, entry, state } from './fixtures'
+import { DEVICE, NOW, config, entry, mine, review, run, state, withLedger } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
@@ -106,6 +107,8 @@ function runtime(): Runtime {
     cwd: '/workspaces/dev-system',
     loopDir: LOOP_DIR,
     sink: null,
+    env: { CALLUM_FLOW_REPO: REPO },
+    toolsDir: '/usr/local/share/callum-tools',
     config: config(),
     configProblems: [],
   }
@@ -261,8 +264,33 @@ describe('argv (SPEC 6.1)', () => {
     // a fix flag never rides on another action, and an empty value is left out
     expect(respondArgv(A.respond({ action: 'skip', findings: 'f1', approveReason: 'x' }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'skip', '--step=review'])
     expect(respondArgv(A.respond({ findings: '  ', instructions: '' }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'fix', '--step=review'])
-    // a park seen only in the event log has no step name: respond takes the step awaiting approval
-    expect(respondArgv(A.respond({ step: 'park@1760324400000' }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'fix', '--findings=review-1,review-3'])
+    // a gate with no step name (a park seen only in the event log): respond takes the step awaiting approval
+    expect(respondArgv(A.respond({ step: null }))).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'fix', '--findings=review-1,review-3'])
+  })
+
+  test('the respond plan builds for a gate with no step name launches without --step (a park from the event log, a failed run)', async () => {
+    const parkedAt = NOW - 10 * 60_000
+    const runs = [
+      run(45, 'parked', { step: null, since: parkedAt }),
+      run(45, 'failed', { step: null }),
+    ]
+    for (const r of runs) {
+      const gate = r.state === 'parked' ? `park@${parkedAt}` : 'null'
+      const adjudicated = entry(`adjudicate:${r.run}:${gate}:${r.head}`, 'spawn', {
+        agent: 'adjudicator',
+        class: 'drive',
+        issue: 45,
+        outcome: review({ type: 'approve', reason: 'a false positive' }),
+      })
+      const s = withLedger(state({ issues: [mine(45, r.state === 'parked' ? 'parked' : 'in pipeline', { pr: 545 })], runs: [r] }), [adjudicated])
+      const action = plan(s, config()).actions.find(a => a.kind === 'respond')
+      expect(action).toMatchObject({ kind: 'respond', step: null, key: `respond:${r.run}:${gate}:${r.head}:approve` })
+      if (action?.kind !== 'respond') throw new Error('plan built no respond')
+      const pool: Pool = { free: 3, total: 16, slots: [slot(SLOT, action.branch, 'in-use')] }
+      const { result, calls } = await exec(action, [{ stdout: 'run: R\n' }], { pool })
+      expect(result).toMatchObject({ status: 'done', summary: `respond --action approve on its gate launched in ${SLOT}` })
+      expect(calls[0]?.argv.slice(7)).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--reason=a false positive'])
+    }
   })
 
   test('a value that looks like a flag stays inside its own entry', () => {
@@ -276,7 +304,7 @@ describe('argv (SPEC 6.1)', () => {
     expect(launchArgv(SLOT, BRANCH, LOG, respond)).toEqual(['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', SLOT, BRANCH, LOG, ...respond])
     expect(LAUNCH_SCRIPT).toContain('nohup')
     expect(LAUNCH_SCRIPT).toContain('< /dev/null &')
-    expect(LAUNCH_SCRIPT).toContain(`sleep ${RESPOND_SETTLE_S}`)
+    expect(LAUNCH_SCRIPT).toContain(`sleep "\${FACTORY_LOOP_RESPOND_SETTLE_S:-${RESPOND_SETTLE_S}}"`)
     // the settle stays well inside the launch timeout
     expect(RESPOND_SETTLE_S * 1000).toBeLessThan(MERGE_TIMEOUT_MS.respond / 2)
     expect(LEASE_ARGV).toEqual(['treehouse', 'get', '--lease', '--lease-holder', 'factory-loop'])
@@ -638,7 +666,7 @@ describe('respond (rules P3, P3a; SPEC 6.1, I-51 to I-53, I-94)', () => {
   const onBranch: Pool = { free: 3, total: 16, slots: [slot(OTHER_SLOT, 'feat/issue-51-other'), slot(SLOT, BRANCH, 'in-use')] }
   const settled = { stdout: 'run: 01M4RQ0050AAAA\nstep: review\naction: fix\n' }
 
-  test('in the slot on the run\'s branch: one detached launch, running with the slot and log', async () => {
+  test('in the slot on the run\'s branch: one detached launch, done with the slot and log (P3a reads it once settled)', async () => {
     const { result, calls, events } = await exec(A.respond(), [settled], { pool: onBranch })
     expect(calls).toEqual([{ argv: launchArgv(SLOT, BRANCH, LOG, respondArgv(A.respond())), init: { timeoutMs: 30_000 } }])
     expect(result).toEqual({

@@ -104,6 +104,8 @@ export function lineSummary(first: string): string {
 
 // The executor for judge, task and tell (SPEC 6.1): submit the prompt and run on until the
 // answer, the delivery or the timeout. Submit starts a turn of its own once the session is idle.
+// A prompt the engine refused or dropped started no turn, so it is skipped, no attempt counted,
+// and plan asks again next pass (a wake gets one attempt, which a drop must not use up).
 const wake: Executor = async (ctx, action) => {
   if (!isWakeAction(action)) return { status: 'failed', summary: `not a wake: ${action.kind}`, noRetry: true }
   const id = ctx.wakeId()
@@ -112,7 +114,7 @@ const wake: Executor = async (ctx, action) => {
   try {
     await ctx.io.submit(wakePrompt(first, details))
   } catch (err) {
-    return { status: 'failed', summary: `submit failed: ${String(err).slice(0, 200)}` }
+    return { status: 'skipped', summary: `submit failed: ${String(err).slice(0, 200)}` }
   }
   return { status: 'running', wakeId: id, summary: lineSummary(first) }
 }
@@ -400,9 +402,21 @@ function duration(ms: Ms): string {
   return `${Math.round(ms / 1000)}s`
 }
 
-// expireWakes: the open wakes past config.wakeTimeoutMs for their kind, counted from the
-// submit. The fallback never acts: a judge is done with decision hold (plan holds on it), a
-// task is timed-out (plan tells the owner, task-timeout), a tell is timed-out (dropped).
+// fallback: an open wake that will get no answer, ended as its timeout ends it. It never acts: a
+// judge is done with decision hold (plan holds on it), a task is timed-out (plan tells the owner,
+// task-timeout), a tell is timed-out (dropped). why: what ended it; undelivered: the same for a tell.
+function fallback(e: LedgerEntry, kind: WakeKind, why: string, undelivered: string): WakeUpdate {
+  if (kind === 'judge') {
+    const reason = `${why}, so the loop holds`
+    const outcome: Outcome = { kind: 'wake', decision: 'hold', reason, instructions: null, bump: null, bumpReason: null, fields: {} }
+    return { key: e.key, status: 'done', outcome, summary: `timed out: ${reason}` }
+  }
+  if (kind === 'task') return { key: e.key, status: 'timed-out', summary: `timed out: ${why}` }
+  return { key: e.key, status: 'timed-out', summary: `dropped: ${undelivered}` }
+}
+
+// expireWakes: the open wakes past config.wakeTimeoutMs for their kind, counted from the submit,
+// ended by their fallback.
 export function expireWakes(ledger: readonly LedgerEntry[], now: Ms, config: Config): WakeUpdate[] {
   const out: WakeUpdate[] = []
   for (const e of ledger) {
@@ -410,16 +424,21 @@ export function expireWakes(ledger: readonly LedgerEntry[], now: Ms, config: Con
     if (kind === null || e.status !== 'running') continue
     const limit = config.wakeTimeoutMs[kind]
     if (now - e.startedAt < limit) continue
-    const after = `no answer within ${duration(limit)}`
-    if (kind === 'judge') {
-      const reason = `${after}, so the loop holds`
-      const outcome: Outcome = { kind: 'wake', decision: 'hold', reason, instructions: null, bump: null, bumpReason: null, fields: {} }
-      out.push({ key: e.key, status: 'done', outcome, summary: `timed out: ${reason}` })
-    } else if (kind === 'task') {
-      out.push({ key: e.key, status: 'timed-out', summary: `timed out: ${after}` })
-    } else {
-      out.push({ key: e.key, status: 'timed-out', summary: `dropped: not delivered within ${duration(limit)}` })
-    }
+    out.push(fallback(e, kind, `no answer within ${duration(limit)}`, `not delivered within ${duration(limit)}`))
+  }
+  return out
+}
+
+// orphanedWakes: the open wakes another session submitted (SPEC 7.5): their prompt went with that
+// session, so each ends by its fallback at once rather than holding every other wake (O2) until
+// its timeout. A module reload within one session keeps its wakes; a wake with no session (an
+// older build, or rebuilt from the event log) is left to its timeout.
+export function orphanedWakes(ledger: readonly LedgerEntry[], session: string): WakeUpdate[] {
+  const out: WakeUpdate[] = []
+  for (const e of ledger) {
+    const kind = wakeKind(e.kind)
+    if (kind === null || e.status !== 'running' || e.session === undefined || session === '' || e.session === session) continue
+    out.push(fallback(e, kind, 'its session ended', 'its session ended before it was delivered'))
   }
   return out
 }

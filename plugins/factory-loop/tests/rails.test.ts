@@ -13,12 +13,14 @@ import {
   HEARTBEAT_QUIET_MS,
   HEARTBEAT_SQL,
   LEASE_MIN_MS,
+  LOCK_CAS_SCRIPT,
   PASS_GAP_MS,
   PRECHECKED,
   STORM_PASSES,
   STORM_QUIET_MS,
   STORM_WINDOW_MS,
   TIER_CLASSES,
+  WATCHER_QUIET_MS,
   actLockPath,
   checkRails,
   decideLock,
@@ -46,9 +48,10 @@ import {
   watcherAlive,
   watcherLockPath,
 } from '../hooks/rails'
-import type { BreakerNotice, Lease, PassSource, RailEnv, RailInput, RailIo, Scheduler, UsageReading } from '../hooks/rails'
+import type { BreakerNotice, Lease, LockIo, PassSource, RailEnv, RailInput, RailIo, Scheduler, UsageReading } from '../hooks/rails'
 import type { Action, ActionClass, Tier } from '../hooks/types'
 import { DEVICE, MIN, NOW, OTHER, config, issue, mine, run, state } from './fixtures'
+import { lockCas } from './host'
 
 const CFG = config()
 const REPO = 'cbundy/dev-system'
@@ -63,18 +66,25 @@ const beats = (...rows: [string, number][]) => `device,age_s\n${rows.map(([d, a]
 type Call = { argv: string[]; init: RunInit }
 type Handler = (argv: string[]) => Partial<RunResult> | Error
 
-// fakeIo: files in a map, commands answered by `handler`, every command and write recorded.
+// over: a files record as lockCas reads and writes it.
+const over = (files: Record<string, string>) => ({ get: (p: string) => files[p], set: (p: string, t: string) => (files[p] = t) })
+
+// fakeIo: files in a map, commands answered by `handler` (the act lock's compare-and-set by
+// lockCas, as the shell runs it), every command and lease write recorded.
 function fakeIo(files: Record<string, string> = {}, handler: Handler = world()) {
   const calls: Call[] = []
   const writes: { path: string; text: string }[] = []
   const io: RailIo = {
     readFile: async path => files[path] ?? null,
-    writeFile: async (path, text) => {
-      writes.push({ path, text })
-      files[path] = text
-    },
     cmd: async (argv, init) => {
       calls.push({ argv, init })
+      // a lock directory exists when a file is under it
+      if (argv[0] === 'test' && argv[1] === '-d') return { exitCode: Object.keys(files).some(p => p.startsWith(`${argv[2]}/`)) ? 0 : 1, stdout: '', stderr: '' }
+      const cas = lockCas(over(files), argv, init.stdin)
+      if (cas !== undefined) {
+        if (cas.exitCode === 0) writes.push({ path: argv[4] ?? '', text: init.stdin ?? '' })
+        return cas
+      }
       const reply = handler(argv)
       if (reply instanceof Error) throw reply
       return { exitCode: 0, stdout: '', stderr: '', ...reply }
@@ -110,14 +120,16 @@ const lease = (session: string, expiresAt: number, renewedAt = expiresAt - 5 * M
 // --- the act lock -------------------------------------------------------------------------------
 
 describe('the act lock (SPEC 11.2)', () => {
-  test('a free lock is taken and written as a JSON lease of a few passes, never under five minutes', async () => {
+  test('a free lock is taken and written as a JSON lease of a few passes, never under fifteen minutes', async () => {
     const { io, files } = fakeIo()
     const r = await holdActLock(io, LOCK, 'session-a', NOW, leaseMsOf(CFG))
-    expect(r).toEqual({ held: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + 5 * MIN }, took: null })
-    expect(JSON.parse(files[LOCK] ?? '')).toEqual({ session: 'session-a', renewedAt: NOW, expiresAt: NOW + 5 * MIN })
+    expect(r).toEqual({ held: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + 15 * MIN }, took: null })
+    expect(JSON.parse(files[LOCK] ?? '')).toEqual({ session: 'session-a', renewedAt: NOW, expiresAt: NOW + 15 * MIN })
     expect(actLockPath(LOOP_DIR)).toBe(LOCK)
-    expect(leaseMsOf(config({ passEveryMs: 2 * MIN }))).toBe(10 * MIN)
+    expect(leaseMsOf(config({ passEveryMs: 4 * MIN }))).toBe(20 * MIN)
     expect(leaseMsOf(config({ passEveryMs: 10_000 }))).toBe(LEASE_MIN_MS)
+    // longer than the longest step: a merge (600 s) and its rollout read (60 s)
+    expect(LEASE_MIN_MS).toBeGreaterThan(660_000)
   })
 
   test('the holder renews it each pass; another session refuses while it is live', async () => {
@@ -147,31 +159,53 @@ describe('the act lock (SPEC 11.2)', () => {
     expect(decideLock('{"sess', 'session-a', NOW, MIN)).toEqual({ hold: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + MIN }, took: null })
   })
 
-  test('of two sessions racing for a free lock, the one whose write did not land refuses', async () => {
+  test('of two sessions that both read the lock free, only the first write lands: the other refuses (SPEC 11.2)', async () => {
+    // A reads free, B reads free, A writes and reads back, B writes and reads back
     const files: Record<string, string> = {}
-    const io: RailIo = {
-      readFile: async path => files[path] ?? null,
-      // session-b's write lands right after this one's
-      writeFile: async path => {
-        files[path] = leaseText(lease('session-b', NOW + 5 * MIN))
-      },
-      cmd: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    const a = await holdActLock(fakeIo(files).io, LOCK, 'session-a', NOW, 5 * MIN)
+    expect(a.held).toBe(true)
+    let first = true
+    const stale: LockIo = {
+      // session-b read the lock before session-a's write landed
+      readFile: async path => (first ? ((first = false), null) : (files[path] ?? null)),
+      cmd: async (argv, init) => lockCas(over(files), argv, init.stdin) ?? { exitCode: 0, stdout: '', stderr: '' },
     }
-    const r = await holdActLock(io, LOCK, 'session-a', NOW, 5 * MIN)
-    expect(r).toEqual({ held: false, reason: `act lock: session session-b holds it until ${new Date(NOW + 5 * MIN).toISOString()}` })
+    const b = await holdActLock(stale, LOCK, 'session-b', NOW, 5 * MIN)
+    expect(b).toEqual({ held: false, reason: `act lock: session session-a holds it until ${new Date(NOW + 5 * MIN).toISOString()}` })
+    expect(parseLease(files[LOCK] ?? null)?.session).toBe('session-a')
+    // the write is one compare-and-set under flock, landing by rename
+    expect(LOCK_CAS_SCRIPT).toContain('flock -w 5 9')
+    expect(LOCK_CAS_SCRIPT).toContain('[ "$cur" = "$2" ] || exit 3')
+    expect(LOCK_CAS_SCRIPT).toContain('mv -f -- "$1.$$" "$1"')
+  })
+
+  test('a lease this session renewed from elsewhere meanwhile still counts as held', async () => {
+    const files: Record<string, string> = { [LOCK]: leaseText(lease('session-a', NOW + MIN)) }
+    let first = true
+    const io: LockIo = {
+      readFile: async path => files[path] ?? null,
+      cmd: async (argv, init) => {
+        // another of this session's renewals lands first
+        if (first) {
+          first = false
+          files[LOCK] = leaseText(lease('session-a', NOW + 10 * MIN, NOW))
+        }
+        return lockCas(over(files), argv, init.stdin) ?? { exitCode: 0, stdout: '', stderr: '' }
+      },
+    }
+    expect(await holdActLock(io, LOCK, 'session-a', NOW, 5 * MIN)).toEqual({ held: true, lease: lease('session-a', NOW + 10 * MIN, NOW), took: null })
   })
 
   test('a lock that cannot be written, or a session with no id, refuses (fail safe)', async () => {
     const io: RailIo = {
       readFile: async () => null,
-      writeFile: async () => {
-        throw new Error('EACCES: permission denied')
-      },
-      cmd: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      cmd: async () => ({ exitCode: 2, stdout: '', stderr: 'sh: cannot create /cfg/factory-loop/x/act.lock.12: Permission denied' }),
     }
     const r = await holdActLock(io, LOCK, 'session-a', NOW, 5 * MIN)
     expect(r.held).toBe(false)
-    expect(r.held ? '' : r.reason).toBe('act lock: Error: EACCES: permission denied')
+    expect(r.held ? '' : r.reason).toBe(`act lock: ${LOCK} not written (exit 2: sh: cannot create /cfg/factory-loop/x/act.lock.12: Permission denied)`)
+    const throws: RailIo = { readFile: async () => null, cmd: async () => Promise.reject(new Error('EACCES: permission denied')) }
+    expect(await holdActLock(throws, LOCK, 'session-a', NOW, 5 * MIN)).toEqual({ held: false, reason: 'act lock: Error: EACCES: permission denied' })
     expect(await holdActLock(fakeIo().io, LOCK, '', NOW, 5 * MIN)).toEqual({ held: false, reason: 'act lock: this session has no id' })
   })
 
@@ -247,10 +281,10 @@ describe('the old watcher (SPEC 11.2, D-28)', () => {
     expect(calls.every(c => c.init.timeoutMs > 0 && c.init.stdin === undefined)).toBe(true)
   })
 
-  test('no pid file, a stale pid, or a pid reused by another program is no watcher', async () => {
+  test('no lock, a stale pid, or a pid reused by another program is no watcher', async () => {
     const none = fakeIo({}, world({ kill: 0 }))
     expect(await findWatcher(none.io, ENV, REPO)).toEqual({ kind: 'none' })
-    expect(none.calls).toEqual([])
+    expect(none.calls.map(c => c.argv)).toEqual([['test', '-d', WATCH_LOCK]])
 
     const stale = fakeIo({ [`${WATCH_LOCK}/pid`]: '4242\n' }, world({ kill: 1 }))
     expect(await findWatcher(stale.io, ENV, REPO)).toEqual({ kind: 'none' })
@@ -259,9 +293,17 @@ describe('the old watcher (SPEC 11.2, D-28)', () => {
     const reused = fakeIo({ [`${WATCH_LOCK}/pid`]: '4242\n' }, world({ kill: 0, cmdline: 'sleep\x0030\x00' }))
     expect(await findWatcher(reused.io, ENV, REPO)).toEqual({ kind: 'none' })
 
-    const garbage = fakeIo({ [`${WATCH_LOCK}/pid`]: '$(reboot)\n' }, world({ kill: 0 }))
-    expect(await findWatcher(garbage.io, ENV, REPO)).toEqual({ kind: 'none' })
-    expect(garbage.calls).toEqual([])
+  })
+
+  test('a lock directory with no readable decimal pid blocks (fail safe), and its pid is never probed', async () => {
+    for (const pid of ['$(reboot)\n', '', '\n']) {
+      const odd = fakeIo({ [`${WATCH_LOCK}/pid`]: pid }, world({ kill: 0 }))
+      expect(await findWatcher(odd.io, ENV, REPO)).toEqual({ kind: 'error', reason: `old watcher: ${WATCH_LOCK} exists with no readable pid` })
+      expect(odd.calls.map(c => c.argv)).toEqual([['test', '-d', WATCH_LOCK]])
+    }
+    // a directory whose pid file cannot be read at all (readFile gives null), or is not written yet
+    const unreadable = fakeIo({ [`${WATCH_LOCK}/.keep`]: '' }, world({ kill: 0 }))
+    expect(await findWatcher(unreadable.io, ENV, REPO)).toEqual({ kind: 'error', reason: `old watcher: ${WATCH_LOCK} exists with no readable pid` })
   })
 
   test('where the cmdline cannot be read, kill -0 alone decides, as the watcher does', async () => {
@@ -361,9 +403,11 @@ describe('checkRails (SPEC 11.2)', () => {
       reasons: [],
       notices: [],
       memory: { heartbeat: null, watcher: null },
-      lock: { held: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + 5 * MIN }, took: null },
+      lock: { held: true, lease: { session: 'session-a', renewedAt: NOW, expiresAt: NOW + 15 * MIN }, took: null },
     })
-    expect(calls.map(c => c.argv[0])).toEqual(['dev-query'])
+    // no watcher's lock directory, the heartbeat query, then the lease's one compare-and-set
+    expect(calls.map(c => c.argv[0])).toEqual(['test', 'dev-query', 'sh'])
+    expect(calls[2]?.argv.slice(0, 5)).toEqual(['sh', '-c', LOCK_CAS_SCRIPT, 'act-lock', LOCK])
     expect(parseLease(files[LOCK] ?? null)?.session).toBe('session-a')
   })
 
@@ -391,15 +435,34 @@ describe('checkRails (SPEC 11.2)', () => {
       { kind: 'old-watcher', pid: '4242', since: NOW },
       { kind: 'heartbeat-other', device: OTHER, since: NOW },
     ])
-    expect(first.memory).toEqual({ heartbeat: { since: NOW, device: OTHER }, watcher: { since: NOW, pid: '4242' } })
+    expect(first.memory).toEqual({ heartbeat: { since: NOW, device: OTHER }, watcher: { since: NOW, pid: '4242', seenAt: NOW } })
 
     const second = await checkRails(fakeIo(files, busy).io, input({ now: NOW + MIN, memory: first.memory }))
     expect(second.notices).toEqual([])
     expect(second.reasons).toHaveLength(2)
-    expect(second.memory).toEqual(first.memory)
+    expect(second.memory).toEqual({ ...first.memory, watcher: { since: NOW, pid: '4242', seenAt: NOW + MIN } })
 
-    const quiet = await checkRails(fakeIo({}, world({ csv: beats([OTHER, 125]) })).io, input({ now: NOW + 5 * MIN, memory: second.memory }))
+    const quiet = await checkRails(fakeIo({}, world({ csv: beats([OTHER, 125]) })).io, input({ now: NOW + 12 * MIN, memory: second.memory }))
     expect(quiet).toMatchObject({ act: true, reasons: [], notices: [], memory: { heartbeat: null, watcher: null } })
+  })
+
+  test("the old watcher's lock must stay gone ten minutes: the released skill arms it again each turn (SPEC 11.2, D-28)", async () => {
+    const armed = { [`${WATCH_LOCK}/pid`]: '4242\n' }
+    const seen = await checkRails(fakeIo(armed, world({ kill: 0 })).io, input())
+    expect(seen.act).toBe(false)
+    // between two events the lock is gone: still the released skill's spell
+    const gap = await checkRails(fakeIo({}, world()).io, input({ now: NOW + 10_000, memory: seen.memory }))
+    expect(gap.act).toBe(false)
+    expect(gap.reasons).toEqual([`old watcher: its lock was seen ${new Date(NOW).toISOString()}; acting after 10 minutes without it`])
+    expect(gap.memory.watcher).toEqual(seen.memory.watcher)
+    expect(gap.notices).toEqual([])
+    // armed again with a new pid: the same spell, told once, seen later
+    const again = await checkRails(fakeIo({ [`${WATCH_LOCK}/pid`]: '4300\n' }, world({ kill: 0 })).io, input({ now: NOW + 3 * MIN, memory: gap.memory }))
+    expect(again.notices).toEqual([])
+    expect(again.memory.watcher).toEqual({ since: NOW, pid: '4300', seenAt: NOW + 3 * MIN })
+    expect((await checkRails(fakeIo({}, world()).io, input({ now: NOW + 12 * MIN, memory: again.memory }))).act).toBe(false)
+    expect((await checkRails(fakeIo({}, world()).io, input({ now: NOW + 13 * MIN, memory: again.memory }))).act).toBe(true)
+    expect(WATCHER_QUIET_MS).toBe(10 * MIN)
   })
 
   test("another session's live lease keeps this one in observe", async () => {

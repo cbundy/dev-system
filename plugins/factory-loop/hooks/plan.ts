@@ -220,37 +220,63 @@ function attemptsKind(action: Action): ActionKind | AgentType {
   return action.kind
 }
 
+// cadenceOf: the interval of a kind that runs on a cadence. Heartbeat and sweep retry at their
+// next due time (SPEC 6.1), so they are never used up: past their attempts they wait at most one
+// interval between tries, and the owner hears once (agent-failed). null: any other kind.
+function cadenceOf(config: Config, kind: ActionKind | AgentType): Ms | null {
+  if (kind === 'heartbeat') return config.heartbeatEveryMs
+  if (kind === 'sweep') return config.sweepEveryMs
+  return null
+}
+
 // gate: whether the action under this key may run now (SPEC 5.1 "blocked").
 function gate(ctx: Ctx, key: string, kind: ActionKind | AgentType): Gate {
   const entry = ctx.byKey.get(key)
   if (entry === undefined) return 'go'
   if (entry.status === 'running') return 'running'
   if (entry.status === 'done') return 'done'
-  if (entry.attempts >= maxAttempts(ctx.config, kind)) return 'exhausted'
+  // an agent that failed, timed out (a stop that did not take, SPEC 13) or was lost is retried
+  // only once the agent list shows it ended, so two never work one key (SPEC A1, 10.4)
+  if (entry.agentId !== undefined && agentLive(ctx, entry.agentId)) return 'running'
+  const cadence = cadenceOf(ctx.config, kind)
+  if (cadence === null && entry.attempts >= maxAttempts(ctx.config, kind)) return 'exhausted'
   if (entry.status === 'lost') return 'go'
-  const backoff =
-    kind === 'update-behind'
-      ? ctx.config.updateBehindRetryMs
-      : ctx.config.retryBackoffMs * 2 ** Math.max(0, entry.attempts - 1)
+  const doubled = ctx.config.retryBackoffMs * 2 ** Math.max(0, entry.attempts - 1)
+  const backoff = kind === 'update-behind' ? ctx.config.updateBehindRetryMs : cadence === null ? doubled : Math.min(doubled, cadence)
   if (entry.endedAt !== null && ctx.state.now - entry.endedAt < backoff) return 'wait'
   return 'go'
 }
 
 // want: emit the action unless its key is blocked. A notice counts toward the title's owner
 // items whether or not it goes out this pass, so the count stays while the issue stands. An
-// exhausted key is named in the decision log: it is what `/factory retry` clears (D-38).
+// exhausted key is named in the decision log: it is what `/factory retry` clears (D-38). A
+// cadenced kind that failed its attempts in a row tells the owner once, and keeps trying.
 function want(ctx: Ctx, action: Action): Gate {
   if (action.kind === 'tell' && OWNER_TELLS.includes(action.wake)) ctx.owner.add(action.key)
   const kind = attemptsKind(action)
   const g = gate(ctx, action.key, kind)
   if (g === 'go') ctx.out.push(action)
+  const entry = ctx.byKey.get(action.key)
+  if (g === 'running' && entry !== undefined && entry.status !== 'running') {
+    skip(ctx, action.rule, action.issue, `${action.key}: its agent ${entry.agentId} still runs`)
+  }
   if (g === 'exhausted') {
     skip(ctx, action.rule, action.issue, `exhausted: ${action.key}`)
     if (action.kind === 'task') ctx.exhausted.push(action.key)
     else if (WAKES.includes(action.kind)) ctx.owner.add(action.key)
     else ctx.exhausted.push(action.key)
+  } else if (cadenceOf(ctx.config, kind) !== null) {
+    if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttempts(ctx.config, kind)) {
+      ctx.exhausted.push(action.key)
+    }
   }
   return g
+}
+
+// agentLive: the session's agent list shows this agent still at work.
+function agentLive(ctx: Ctx, agentId: string): boolean {
+  const seen = ctx.state.agents.find(a => a.id === agentId)
+  return seen !== undefined && seen.status !== 'completed' && seen.status !== 'failed' && seen.status !== 'killed'
 }
 
 function done(ctx: Ctx, key: string): LedgerEntry | undefined {
@@ -390,6 +416,12 @@ function housekeeping(ctx: Ctx) {
   if (due !== null && holding.length > 0 && state.now - due.at >= DRAIN_SLOW_MS) {
     want(ctx, wake('tell', 'drain-slow', `tell:drain-slow:${due.at}`, 'H4', null, { since: due.at }, [`update: ${due.reason}`, `waiting on: ${holding.join(', ')}`]))
   }
+  // a restart that failed is used up (restart-self runs once): the owner hears, since the drain
+  // holds every start, develop and drive action until the update is re-issued or turned off
+  if (due !== null && gate(ctx, `restart:${due.at}`, 'restart-self') === 'exhausted') {
+    skip(ctx, 'H4', null, `exhausted: restart:${due.at}`)
+    ctx.exhausted.push(`restart:${due.at}`)
+  }
   if (!state.sources.pool.ok || state.pool === null) return
   for (const slot of [...state.pool.slots].sort((a, b) => a.path.localeCompare(b.path))) {
     if (slot.state === 'available' || slot.busy || slot.dirty !== false || slot.branch === null) continue
@@ -412,13 +444,16 @@ function housekeeping(ctx: Ctx) {
 }
 
 // drainBlockers: what keeps the safe state for a restart from holding (rule H4, D-15): any
-// running ledger entry (an agent, a wake, a command), and any pipeline run still running or
-// pending, of any device, since the workspace's daemon serves them all. Empty: safe.
+// running ledger entry (an agent, a wake, a command), and any pipeline run still running,
+// pending or ci-stalled (its CI step still polls in the daemon), of any device, since the
+// workspace's daemon serves them all. Empty: safe.
 function drainBlockers(ctx: Ctx): string[] {
   const { state } = ctx
   if (!state.sources.runs.ok) return ['the runs source']
   const entries = state.ledger.filter(e => e.status === 'running').map(e => e.key)
-  const runs = state.runs.filter(r => r.state === 'running' || r.state === 'pending').map(r => `run ${r.run} ${r.state}`)
+  const runs = state.runs
+    .filter(r => r.state === 'running' || r.state === 'pending' || r.state === 'ci-stalled')
+    .map(r => `run ${r.run} ${r.state}`)
   return [...entries.sort(), ...runs.sort()].slice(0, 6)
 }
 
@@ -436,9 +471,8 @@ function restartWhenDrained(ctx: Ctx, kept: Action[]): Action | null {
     return null
   }
   const key = `restart:${due.at}`
-  const g = gate(ctx, key, 'restart-self')
-  if (g === 'exhausted') skip(ctx, 'H4', null, `exhausted: ${key}`)
-  if (g !== 'go') return null
+  // an exhausted restart was named, and told, by housekeeping
+  if (gate(ctx, key, 'restart-self') !== 'go') return null
   return { kind: 'restart-self', key, class: 'free', rule: 'H4', reason: 'update due, nothing in flight', issue: null, why: due.reason, at: due.at }
 }
 
@@ -652,7 +686,7 @@ function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
     issue: n,
     run: run.run,
     branch: run.branch,
-    step: run.step as string,
+    step: run.step,
     head: run.head as string,
     action: action.type,
     findings: action.type === 'fix' ? action.findings : null,
@@ -758,9 +792,13 @@ function merges(ctx: Ctx, runs: RunView[]) {
     }
     const result = outcome(latest, 'guard')
     if (result === undefined) continue
+    // a repair on this PR since the guard makes it stale: a fix-linkage, or an update-behind that
+    // pushed a new PR head (the run's head, which the watcher prints, stays where it was)
     const lastRepair = Math.max(
       0,
-      ...state.ledger.filter(e => e.kind === 'fix-linkage' && e.pr === pr && e.status === 'done').map(e => e.endedAt ?? 0),
+      ...state.ledger
+        .filter(e => e.pr === pr && e.status === 'done' && (e.kind === 'fix-linkage' || outcome(e, 'update-behind')?.result === 'updated'))
+        .map(e => e.endedAt ?? 0),
     )
     const age = state.now - (latest.endedAt ?? 0)
     const transientOnly = result.fails.length > 0 && result.fails.every(f => classifyFail(f) === 'transient')
@@ -865,10 +903,25 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number) {
   }
 }
 
+// prHead: the PR's head as this loop's own updates left it. update-behind pushes a new PR head
+// but never touches the run, whose head the watcher keeps printing, so the head an UPDATED pushed
+// is where the next update starts from, and its key (SPEC M2b).
+function prHead(ctx: Ctx, pr: number, runHead: string): string {
+  const seen = new Set<string>([runHead])
+  let head = runHead
+  for (;;) {
+    const entry = ctx.byKey.get(`update-behind:${pr}:${head}`)
+    const moved = outcome(entry?.status === 'done' ? entry : undefined, 'update-behind')
+    if (moved?.result !== 'updated' || moved.to === null || seen.has(moved.to)) return head
+    seen.add(moved.to)
+    head = moved.to
+  }
+}
+
 function updateBehind(ctx: Ctx, run: RunView, fixer: (p: 'regate', k: string, i: string) => Action) {
   const n = run.issue as number
   const pr = run.pr as number
-  const head = run.head as string
+  const head = prHead(ctx, pr, run.head as string)
   const key = `update-behind:${pr}:${head}`
   const entry = ctx.byKey.get(key)
   const result = outcome(entry, 'update-behind')
@@ -1217,9 +1270,23 @@ function mergedIssues(ctx: Ctx): Merged[] {
     const merged = byIssue.get(n)
     if (roll === undefined || (merged !== undefined && merged.rollout !== null)) continue
     const pr = merged?.pr ?? entry.pr ?? ctx.issues.get(n)?.pr ?? null
-    byIssue.set(n, { issue: n, pr, key: merged?.key ?? entry.key, rollout: roll.rollout, closeIssue: merged?.closeIssue ?? roll.closeIssue })
+    const closeIssue = merged?.closeIssue ?? roll.closeIssue ?? (roll.rollout === 'merge' && epicBase(ctx, pr) ? n : null)
+    byIssue.set(n, { issue: n, pr, key: merged?.key ?? entry.key, rollout: roll.rollout, closeIssue })
   }
   return [...byIssue.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+}
+
+// epicBase: the PR's latest guard failed `base` because the PR targets a branch other than the
+// default. A closing PR merged there by hand gets no closing reference from GitHub, so its issue
+// is closed as callum-flow-merge would have said to (D-29); callum-flow-rollout reads no base.
+function epicBase(ctx: Ctx, pr: number | null): boolean {
+  if (pr === null) return false
+  let latest: LedgerEntry | undefined
+  for (const e of ctx.state.ledger) {
+    if (e.kind !== 'guard' || e.pr !== pr || e.status !== 'done' || outcome(e, 'guard') === undefined) continue
+    if (latest === undefined || e.startedAt > latest.startedAt) latest = e
+  }
+  return outcome(latest, 'guard')?.fails.some(f => f.name === 'base' && f.reason.startsWith('PR targets ')) ?? false
 }
 
 // latestReport: the report of the last merge answer for a PR, whatever its head (a rebase-only
@@ -1324,8 +1391,12 @@ function design(ctx: Ctx) {
       want(ctx, wake('judge', 'report', reportKey, 'D3', n, { issue: n, agent: 'designer', entry: key }))
       continue
     }
-    if (result === null && entry === undefined && resumed === 0 && issue.brief !== null && issue.brief.at >= life) {
-      // A brief this life with no designer record (the loop restarted while it ran).
+    // no designer at work and none that answered: none ever started, or it failed, timed out or
+    // was lost (SPEC 10.4: a retry re-checks D2, whose 'no brief newer than stageSince' fails)
+    const settled = entry === undefined || (entry.status !== 'running' && entry.status !== 'done')
+    if (result === null && settled && resumed === 0 && issue.brief !== null && issue.brief.at >= life) {
+      // A brief this life with no designer record (the loop restarted while it ran), or one its
+      // designer posted before it ended without a RESULT line.
       const briefKey = `judge:report:brief:${n}:${issue.brief.url}`
       const answer = outcome(done(ctx, briefKey), 'wake')
       if (answer === undefined) {
@@ -1484,9 +1555,12 @@ function claims(ctx: Ctx) {
   // An issue in design takes a worktree as soon as its implementer starts.
   const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length
   const lastClaim = Math.max(0, ...state.ledger.filter(e => e.kind === 'claim').map(e => e.startedAt))
-  const mergeWork = ctx.out.some(a => a.rule.startsWith('M'))
+  // merge work this pass plans, or that still runs from an earlier one
+  const mergeWork = ctx.out.some(a => a.rule.startsWith('M')) || state.ledger.some(e => e.status === 'running' && e.rule.startsWith('M'))
   const cap = config.maxInFlightIssues
-  let started = 0
+  // a claim still running counts as started: it takes its worktree, its place under the caps and
+  // its share of the pass, so planning again while it runs adds no claim (SPEC 5.9 idempotence)
+  let started = state.ledger.filter(e => e.kind === 'claim' && e.status === 'running').length
   for (const n of order) {
     const issue = ctx.issues.get(n)
     const why = candidateProblem(ctx, issue, n)
@@ -1494,6 +1568,9 @@ function claims(ctx: Ctx) {
       skip(ctx, 'D1', n, why)
       continue
     }
+    const key = `claim:${n}:${issue?.stageSince ?? 'new'}`
+    // its claim is in flight (counted as started above)
+    if (ctx.byKey.get(key)?.status === 'running') continue
     let limit: string | null = null
     if (control.noNewWork) limit = 'owner: no new work'
     else if (control.only.length > 0 && !only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
@@ -1510,7 +1587,6 @@ function claims(ctx: Ctx) {
       skip(ctx, 'D1', n, limit)
       continue
     }
-    const key = `claim:${n}:${issue?.stageSince ?? 'new'}`
     const prior = outcome(done(ctx, key), 'claim')
     if (prior?.result === 'lost') {
       skip(ctx, 'D1', n, 'another device holds it')
@@ -1575,19 +1651,28 @@ function agents(ctx: Ctx) {
     if (entry.issue === null) continue
     const issue = ctx.issues.get(entry.issue)
     if (issue === undefined || state.control.paused.includes(entry.issue)) continue
+    const stopped = (why: string) => wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why })
     if (issue.open === false || (issue.stage !== null && ENDED.includes(issue.stage))) {
-      want(ctx, stop(`issue ${issue.open === false ? 'closed' : issue.stage}`))
+      const why = issue.open === false ? 'closed' : (issue.stage as Stage)
+      want(ctx, stop(`issue ${why}`))
+      want(ctx, stopped(why))
     } else if (issue.holder !== null && issue.holder !== state.device && isLive(issue)) {
       want(ctx, stop(`claimed by ${issue.holder}`))
       want(ctx, wake('tell', 'claim-lost', `tell:claim-lost:${entry.issue}:${issue.holder}`, 'A2', entry.issue, { issue: entry.issue, holder: issue.holder }))
     } else if (state.control.dropped.some(d => d.issue === entry.issue)) {
       want(ctx, stop('owner dropped it'))
+      want(ctx, stopped('dropped'))
     } else if (agent === 'implementer' && splitAfter(ctx, entry.issue, entry.startedAt)) {
       want(ctx, stop('issue split while implementing'))
-      want(ctx, wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why: 'split' }))
+      want(ctx, stopped('split'))
     }
   }
-  for (const key of ctx.exhausted) {
+  // SPEC 13: a stop of rule A1 that failed leaves the agent running, marked timed-out (ledger.ts
+  // finish); its rule waits for the agent list (gate), and the owner hears once
+  for (const e of state.ledger) {
+    if (e.kind === 'stop-agent' && e.rule === 'A1' && e.status === 'failed') ctx.exhausted.push(e.key)
+  }
+  for (const key of new Set(ctx.exhausted)) {
     const entry = ctx.byKey.get(key)
     const name = entry?.kind === 'task' ? 'task-timeout' : 'agent-failed'
     want(ctx, wake('tell', name, `tell:${name}:${key}`, 'A1', entry?.issue ?? null, { key, kind: entry?.kind ?? null }))

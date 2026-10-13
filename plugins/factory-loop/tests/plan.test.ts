@@ -3,8 +3,9 @@
 // memory file (MEM), not from the code. docs/factory-loop/SPEC.md section 5 is the table.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { classifyFail, issueFromBranch, plan, sameLabel, tierOf } from '../hooks/plan'
-import type { Action, AdjudicatorAction, IssueView, LedgerEntry, MergeReport, State } from '../hooks/types'
+import { start } from '../hooks/ledger'
+import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf } from '../hooks/plan'
+import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, State } from '../hooks/types'
 import {
   DEVICE,
   MIN,
@@ -28,6 +29,76 @@ import {
 } from './fixtures'
 
 const CFG = config()
+
+// --- the properties every plan keeps (SPEC 5.9), checked on every plan this file makes ----------
+
+const HOUR = 60 * MIN
+const TIER_READINGS = [
+  { fiveHour: 10, sevenDay: 10 },
+  { fiveHour: 10, sevenDay: 86 },
+  { fiveHour: 10, sevenDay: 91 },
+  { fiveHour: 96, sevenDay: 10 },
+]
+const ALLOWED_CLASSES: Record<string, string[]> = {
+  normal: ['free', 'owner', 'drive', 'develop', 'start'],
+  slow: ['free', 'owner', 'drive', 'develop', 'start'],
+  'stop-new': ['free', 'owner', 'drive'],
+  'stop-all': ['free', 'owner'],
+}
+const isWake = (kind: ActionKind) => kind === 'judge' || kind === 'task' || kind === 'tell'
+// a rate cap's bucket, as SPEC 11.4 counts: claims, spawns (a delegate spawns), wakes
+const bucketOf = (kind: ActionKind, klass: string) => (klass === 'start' ? 'start' : kind === 'spawn' || kind === 'delegate' ? 'spawn' : isWake(kind) ? 'wake' : null)
+
+// startedAll: the ledger once every planned action started, as ledger.ts start() starts it.
+function startedAll(s: State, r: PlanResult): State {
+  let ledger = s.ledger
+  for (const a of r.actions) if (a.kind !== 'title') ledger = start(ledger, a, s.now).ledger
+  return { ...s, ledger, lastTitle: r.title }
+}
+
+// properties: what SPEC 5.9 asks of every plan, for one state and config.
+function properties(s: State, cfg: Config, r: PlanResult) {
+  // 1. determinism
+  expect(planOf(JSON.parse(JSON.stringify(s)), cfg)).toEqual(r)
+  // 2. idempotence: every planned action running, a second plan adds nothing
+  expect(['idempotence', planOf(startedAll(s, r), cfg).actions.filter(a => a.kind !== 'title').map(a => a.key)]).toEqual(['idempotence', []])
+  // 4. tier safety, at every tier
+  for (const w of TIER_READINGS) {
+    const t = planOf({ ...s, usage: { ...w, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false } }, cfg)
+    expect(['tier', t.tier, t.actions.filter(a => !(ALLOWED_CLASSES[t.tier] ?? []).includes(a.class)).map(a => a.key)]).toEqual(['tier', t.tier, []])
+  }
+  // 5. control safety: nothing names a paused issue but the heartbeat; no start or develop work without new work
+  const paused = [...new Set([...s.issues.map(i => i.number), ...s.queue, ...s.control.dropped.map(d => d.issue)])]
+  const p = planOf({ ...s, control: { ...s.control, paused } }, cfg)
+  expect(['paused', p.actions.filter(a => a.issue !== null && paused.includes(a.issue) && a.kind !== 'heartbeat').map(a => a.key)]).toEqual(['paused', []])
+  const n = planOf({ ...s, control: { ...s.control, noNewWork: true } }, cfg)
+  expect(['no new work', n.actions.filter(a => a.class === 'start' || a.class === 'develop').map(a => a.key)]).toEqual(['no new work', []])
+  // 6. bounded: one wake, maxStartsPerPass claims, and no bucket nor kind on one issue past its rate cap
+  expect(['wakes', r.actions.filter(a => isWake(a.kind)).length <= 1]).toEqual(['wakes', true])
+  expect(['claims', r.actions.filter(a => a.kind === 'claim').length <= cfg.maxStartsPerPass]).toEqual(['claims', true])
+  const hour = s.ledger.filter(e => e.startedAt > s.now - HOUR)
+  // the runaway and breaker notices are what tell the owner a cap or breaker tripped (SPEC 11.4)
+  const kept = r.actions.filter(a => !(a.kind === 'tell' && (a.wake === 'runaway' || a.wake === 'breaker')))
+  const caps: Record<string, number> = cfg.rateCaps
+  for (const bucket of ['start', 'spawn', 'wake']) {
+    const had = hour.filter(e => bucketOf(e.kind, e.class) === bucket).length
+    const added = kept.filter(a => bucketOf(a.kind, a.class) === bucket).length
+    expect(['rate cap', bucket, added === 0 || had + added <= (caps[bucket] ?? 0)]).toEqual(['rate cap', bucket, true])
+  }
+  for (const a of kept) {
+    if (a.issue === null || bucketOf(a.kind, a.class) === null) continue
+    const had = hour.filter(e => e.kind === a.kind && e.issue === a.issue && bucketOf(e.kind, e.class) !== null).length
+    const added = kept.filter(b => b.kind === a.kind && b.issue === a.issue).length
+    expect(['rate cap', `${a.kind}:${a.issue}`, had + added <= cfg.rateCaps.perIssueKind]).toEqual(['rate cap', `${a.kind}:${a.issue}`, true])
+  }
+}
+
+// plan: plan.ts's plan, with every property checked on the way (SPEC 5.9: on every fixture).
+function plan(s: State, cfg: Config): PlanResult {
+  const r = planOf(s, cfg)
+  properties(s, cfg, r)
+  return r
+}
 
 // A parked review gate on #45, its brief posted, and the adjudicator's outcome for it.
 function parkedReview(over: Partial<State> = {}, rounds = 0) {
@@ -182,6 +253,28 @@ describe('H: housekeeping', () => {
     expect(keys(plan({ ...fresh, loadedAt: NOW - 10 * MIN }, CFG))).toEqual([])
     const lost = entry('claim:9:y', 'claim', { class: 'start', issue: 9, endedAt: NOW - MIN, outcome: { kind: 'claim', result: 'lost' } })
     expect(keys(plan({ ...fresh, ledger: [beat, sweep, lost] }, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
+  })
+
+  test('heartbeat and sweep are never used up: past their attempts they retry at their cadence, and the owner hears once (SPEC 6.1)', () => {
+    const failed = (key: string, kind: 'heartbeat' | 'sweep', attempts: number, endedAt: number) =>
+      entry(key, kind, { status: 'failed', attempts, startedAt: endedAt - 1000, endedAt })
+    const told = (key: string) => entry(`tell:agent-failed:${key}`, 'tell', { wake: 'agent-failed', class: 'owner' })
+    const sweep = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
+    const holding = (beat: LedgerEntry, extra: LedgerEntry[] = []) => state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, ...extra] })
+    // three failures in a few minutes: the owner hears once; the next try waits its backoff
+    expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 3, NOW - MIN)), CFG))).toEqual(['tell:agent-failed:heartbeat:0'])
+    expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 3, NOW - MIN), [told('heartbeat:0')]), CFG))).toEqual([])
+    expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 3, NOW - 9 * MIN), [told('heartbeat:0')]), CFG))).toEqual(['heartbeat:0'])
+    // a long spell of failures still tries every heartbeat interval, days later too
+    for (const ago of [21 * MIN, 6 * 60 * MIN, 3 * 24 * 60 * MIN]) {
+      expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 9, NOW - ago), [told('heartbeat:0')]), CFG))).toEqual(['heartbeat:0'])
+    }
+    expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 9, NOW - 19 * MIN), [told('heartbeat:0')]), CFG))).toEqual([])
+    // the sweep likewise, at its 30-minute cadence
+    const quiet = (s: LedgerEntry, extra: LedgerEntry[] = []) => state({ ledger: [entry('heartbeat:0', 'heartbeat', { endedAt: NOW - MIN }), s, ...extra] })
+    expect(keys(plan(quiet(failed('sweep:0', 'sweep', 3, NOW - MIN)), CFG))).toEqual(['tell:agent-failed:sweep:0'])
+    expect(keys(plan(quiet(failed('sweep:0', 'sweep', 9, NOW - 29 * MIN), [told('sweep:0')]), CFG))).toEqual([])
+    expect(keys(plan(quiet(failed('sweep:0', 'sweep', 9, NOW - 31 * MIN), [told('sweep:0')]), CFG))).toEqual(['sweep:0'])
   })
 
   test('no live claim, no heartbeat; the sweep runs every 30 minutes regardless (SKILL:62-63)', () => {
@@ -410,7 +503,6 @@ describe('M: merge', () => {
         outcome: { kind: 'update-behind', result, from: 'head50', to: result === 'updated' ? 'head51' : null, line: `UPDATE-BEHIND ${result}` },
         ...over,
       })
-    expect(keys(plan(mergeReady([guarded(behind), ub('updated')]), CFG))).toEqual([])
     expect(find(plan(mergeReady([guarded(behind), ub('fail')]), CFG), 'fixer:regate:550:head50')).toMatchObject({
       purpose: 'regate',
       instructions: 'UPDATE-BEHIND fail',
@@ -419,6 +511,40 @@ describe('M: merge', () => {
     expect(keys(plan(mergeReady([guarded(behind), skipped]), CFG))).toEqual(['update-behind:550:head50'])
     const exhausted = ub('skip', { status: 'failed', attempts: 4, endedAt: NOW - 6 * MIN })
     expect(keys(plan(mergeReady([guarded(behind), exhausted]), CFG))).toEqual(['tell:update-behind:550:head50'])
+  })
+
+  test('a behind-only update moves the PR head, not the run head: the guard runs again, and the next update keys by the pushed head (SPEC M1, M2b)', () => {
+    // pipeline-watch keeps printing the run's head (head50) after the update pushed head51
+    const behind = [{ name: 'mergeable', reason: 'behind main, run update-behind first' }]
+    const updated = (from: string, to: string, endedAt: number) =>
+      entry(`update-behind:550:${from}`, 'update-behind', {
+        issue: 50,
+        pr: 550,
+        head: from,
+        startedAt: endedAt - 30_000,
+        endedAt,
+        outcome: { kind: 'update-behind', result: 'updated', from, to, line: `UPDATED pr=550 from=${from} to=${to}` },
+      })
+    // the update ended after the guard that asked for it: that guard is stale
+    const first = mergeReady([guarded(behind), updated('head50', 'head51', NOW - 30_000)], { runs: [run(50, 'head-mismatch')] })
+    expect(keys(plan(first, CFG))).toEqual(['guard:550:head50:2'])
+    // main moved again: the guard after the update says behind, so the PR is updated again from the head it now has
+    const again = guarded(behind, [], 2, { startedAt: NOW - 20_000, endedAt: NOW - 10_000 })
+    const second = withLedger(first, [again])
+    const r = plan(second, CFG)
+    expect(keys(r)).toEqual(['update-behind:550:head51'])
+    expect(find(r, 'update-behind:550:head51')).toMatchObject({ pr: 550, head: 'head51', run: '01M4RQ0050AAAA' })
+    // that one runs out of SKIPs: the owner hears under the head it was keyed by
+    const skips = entry('update-behind:550:head51', 'update-behind', {
+      issue: 50,
+      pr: 550,
+      head: 'head51',
+      status: 'failed',
+      attempts: 4,
+      endedAt: NOW - 6 * MIN,
+      outcome: { kind: 'update-behind', result: 'skip', from: null, to: null, line: 'UPDATE-BEHIND SKIP busy' },
+    })
+    expect(keys(plan(withLedger(second, [skips]), CFG))).toEqual(['tell:update-behind:550:head51'])
   })
 
   test('after a rebase-only update the review carries over to the new head (SKILL:130, SPEC M5)', () => {
@@ -662,6 +788,20 @@ describe('D: design and delegation', () => {
     expect(keys(plan(s, CFG))).toEqual([`judge:report:brief:60:${brief(60)}`])
   })
 
+  test('a designer that failed, was lost or timed out after posting its brief is not redesigned (SPEC D2, 10.4)', () => {
+    const life = NOW - 70 * MIN
+    const posted = (at: number) => state({ issues: [mine(60, 'designing', { stageSince: life, brief: { url: brief(60), at } })] })
+    for (const status of ['failed', 'lost', 'timed-out'] as const) {
+      const ended = entry(`design:60:${life}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status, attempts: 1, endedAt: NOW - 5 * MIN })
+      expect([status, keys(plan(withLedger(posted(NOW - 10 * MIN), [ended]), CFG))]).toEqual([status, [`judge:report:brief:60:${brief(60)}`]])
+      // a brief from before this life is not this design's: the designer is retried
+      expect([status, keys(plan(withLedger(posted(life - MIN), [ended]), CFG))]).toEqual([status, [`design:60:${life}`]])
+    }
+    // while the designer runs, its own RESULT line comes first
+    const running = entry(`design:60:${life}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', endedAt: null, startedAt: NOW - 10 * MIN, agentId: 'a60' })
+    expect(keys(plan(withLedger(posted(NOW - 5 * MIN), [running]), CFG))).toEqual([])
+  })
+
   test('a handoff that says NOT GATED goes to the model (implement-issue section 8)', () => {
     const handoff = entry('delegate:61:x', 'delegate', {
       issue: 61,
@@ -674,6 +814,19 @@ describe('D: design and delegation', () => {
   test('an issue the owner dropped is abandoned (SKILL:92)', () => {
     const s = state({ issues: [mine(62, 'implementing')], control: control({ dropped: [{ issue: 62, at: NOW - MIN }] }) })
     expect(keys(plan(s, CFG))).toEqual([`abandon:62:${NOW - MIN}`])
+  })
+
+  test('a dropped issue gets only its abandon, the stop of its agents and a tell: no guard, review or merge (SPEC G4, D6)', () => {
+    const dropped = control({ dropped: [{ issue: 50, at: NOW - MIN }] })
+    const fixer = entry('fixer:review:550:head50', 'spawn', { agent: 'fixer', class: 'drive', issue: 50, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'a50' })
+    for (const extra of [[], [guarded()], [guarded(), reviewed()]]) {
+      const r = plan(mergeReady([...extra, fixer], { control: dropped }), CFG)
+      expect(keys(r)).toEqual([`abandon:50:${NOW - MIN}`, 'stop:a50', 'tell:stopped:a50'])
+      expect(r.skipped.some(k => k.issue === 50 && k.why.startsWith('owner: dropped ('))).toBe(true)
+    }
+    // a parked run is not adjudicated either
+    const parked = parkedReview({ control: control({ dropped: [{ issue: 45, at: NOW - MIN }] }) })
+    expect(keys(plan(parked, CFG))).toEqual([`abandon:45:${NOW - MIN}`])
   })
 })
 
@@ -688,9 +841,47 @@ describe('A: agents', () => {
 
   test('an issue closed, or claimed by another device, stops its agents (SPEC A2)', () => {
     const closed = state({ issues: [mine(70, 'implementing', { open: false })] })
-    expect(keys(plan({ ...closed, ledger: [...closed.ledger, agentEntry({})] }, CFG))).toEqual(['stop:a70'])
+    expect(keys(plan({ ...closed, ledger: [...closed.ledger, agentEntry({})] }, CFG))).toEqual(['stop:a70', 'tell:stopped:a70'])
     const taken = state({ issues: [issue(70, { stage: 'implementing', holder: OTHER })] })
     expect(keys(plan({ ...taken, ledger: [...taken.ledger, agentEntry({})] }, CFG))).toEqual(['stop:a70', `tell:claim-lost:70:${OTHER}`])
+  })
+
+  test('an agent stopped for a closed, merged or dropped issue is told to the owner (SPEC A2)', () => {
+    const r = plan(withLedger(state({ issues: [mine(70, 'implementing', { open: false })] }), [agentEntry({})]), CFG)
+    expect(find(r, 'tell:stopped:a70')).toMatchObject({ kind: 'tell', wake: 'stopped', rule: 'A2', fields: { issue: '70', why: 'closed' } })
+    const merged = plan(withLedger(state({ issues: [mine(70, 'merged')] }), [agentEntry({})]), CFG)
+    expect(find(merged, 'tell:stopped:a70')).toMatchObject({ fields: { issue: '70', why: 'merged' } })
+    const dropped = state({ issues: [mine(70, 'implementing')], control: control({ dropped: [{ issue: 70, at: NOW - MIN }] }) })
+    const d = plan(withLedger(dropped, [agentEntry({})]), CFG)
+    expect(keys(d)).toEqual([`abandon:70:${NOW - MIN}`, 'stop:a70', 'tell:stopped:a70'])
+    expect(find(d, 'tell:stopped:a70')).toMatchObject({ fields: { issue: '70', why: 'dropped' } })
+  })
+
+  test('a stop that failed leaves its agent marked timed-out: its rule waits while the agent still runs, and the owner hears (SPEC A1, 13)', () => {
+    const life = NOW - 70 * MIN
+    const key = `design:60:${life}`
+    const s = state({ issues: [mine(60, 'designing', { stageSince: life })] })
+    const timedOut = entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'timed-out', attempts: 1, agentId: 'a60', endedAt: NOW - 5 * MIN })
+    const stopFailed = entry('stop:a60', 'stop-agent', { rule: 'A1', issue: 60, status: 'failed', attempts: 1, endedAt: NOW - 5 * MIN })
+    const listed = (status: 'running' | 'killed' | 'completed') => ({ ...s, agents: [{ id: 'a60', type: 'callum-flow:designer', status }] })
+    const r = plan(withLedger(listed('running'), [timedOut, stopFailed]), CFG)
+    expect(keys(r)).toEqual(['tell:agent-failed:stop:a60'])
+    expect(find(r, 'tell:agent-failed:stop:a60')).toMatchObject({ rule: 'A1', issue: 60, fields: { key: 'stop:a60', kind: 'stop-agent' } })
+    expect(r.skipped).toContainEqual({ rule: 'D2', issue: 60, why: `${key}: its agent a60 still runs` })
+    // told once; the designer is retried only once the list shows the old agent ended
+    const told = entry('tell:agent-failed:stop:a60', 'tell', { wake: 'agent-failed', class: 'owner', issue: 60 })
+    expect(keys(plan(withLedger(listed('running'), [timedOut, stopFailed, told]), CFG))).toEqual([])
+    for (const status of ['killed', 'completed'] as const) {
+      expect(keys(plan(withLedger(listed(status), [timedOut, stopFailed, told]), CFG))).toEqual([key])
+    }
+    expect(keys(plan(withLedger(s, [timedOut, stopFailed, told]), CFG))).toEqual([key])
+    // a stop is tried once (SPEC 6.1): a failed A2 stop is told, not repeated
+    const closed = state({ issues: [mine(70, 'implementing', { open: false })] })
+    const a2 = entry('stop:a70', 'stop-agent', { rule: 'A2', issue: 70, status: 'failed', attempts: 1, endedAt: NOW - 5 * MIN })
+    expect(keys(plan(withLedger(closed, [agentEntry({}), a2]), CFG))).toEqual(['tell:stopped:a70'])
+    expect(keys(plan(withLedger(closed, [agentEntry({}), a2, entry('tell:stopped:a70', 'tell', { wake: 'stopped', class: 'owner', issue: 70 })]), CFG))).toEqual([
+      'tell:agent-failed:stop:a70',
+    ])
   })
 
   test('an agent whose attempts ran out is reported to the owner (SPEC A1)', () => {
@@ -848,8 +1039,26 @@ describe('H4: restart for an update (D-15)', () => {
     // one restart per request: done, or exhausted and named
     expect(keys(plan(withLedger(state({ control: due(at) }), [entry(`restart:${at}`, 'restart-self')]), CFG))).toEqual([])
     const failed = plan(withLedger(state({ control: due(at) }), [entry(`restart:${at}`, 'restart-self', { status: 'failed' })]), CFG)
-    expect(keys(failed)).toEqual([])
+    expect(keys(failed)).toEqual([`tell:agent-failed:restart:${at}`])
     expect(failed.skipped).toContainEqual({ rule: 'H4', issue: null, why: `exhausted: restart:${at}` })
+  })
+
+  test('a restart that failed tells the owner once, so the drain never holds in silence (SPEC H4, 6.1)', () => {
+    const at = NOW - 10 * MIN
+    const failed = entry(`restart:${at}`, 'restart-self', { rule: 'H4', status: 'failed', summary: 'dev-restart-self: exit 1: refusing' })
+    const r = plan(withLedger(state({ control: due(at) }), [failed]), CFG)
+    expect(keys(r)).toEqual([`tell:agent-failed:restart:${at}`])
+    expect(find(r, `tell:agent-failed:restart:${at}`)).toMatchObject({ kind: 'tell', class: 'owner', fields: { key: `restart:${at}`, kind: 'restart-self' } })
+    const told = entry(`tell:agent-failed:restart:${at}`, 'tell', { wake: 'agent-failed', class: 'owner' })
+    expect(keys(plan(withLedger(state({ control: due(at) }), [failed, told]), CFG))).toEqual([])
+  })
+
+  test('a ci-stalled run holds the restart: its CI step is still live in the daemon (SPEC H4, D-15)', () => {
+    const at = NOW - 10 * MIN
+    const stalled = state({ control: due(at), issues: [mine(48, 'in pipeline', { pr: 548 })], runs: [run(48, 'ci-stalled', { detail: 'reason=no-workflow' })] })
+    const r = plan(withLedger(stalled, [entry('tell:no-ci:01M4RQ0048AAAA', 'tell', { wake: 'no-ci', issue: 48 })]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'H4', issue: null, why: 'update due: draining, waiting on run 01M4RQ0048AAAA ci-stalled' })
   })
 
   test('a drain past an hour tells the owner once, with what it waits on (SPEC H4)', () => {
@@ -977,6 +1186,21 @@ describe('M7: follow-ups for hand merges (D-29)', () => {
     expect(find(plan(withLedger(s, [read('merge'), reported]), CFG), 'expect:minor:570')).toMatchObject({ bump: 'minor', why: 'a new mode' })
   })
 
+  test('a hand merge of a closing PR onto an epic base closes its issue, as callum-flow-merge would have said (D-29)', () => {
+    const read = entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout: 'merge', closeIssue: null } })
+    const guard = (fails: { name: string; reason: string }[], startedAt: number) =>
+      entry(`guard:570:h7:${startedAt}`, 'guard', { issue: 70, pr: 570, head: 'h7', startedAt, endedAt: startedAt + 1000, outcome: { kind: 'guard', fails, warns: [] } })
+    const base = [{ name: 'base', reason: 'PR targets epic/loop, default branch is main; if the PR intentionally targets an epic/integration branch, confirm that with the brief and rerun with --base epic/loop' }]
+    const s = state({ issues: [handMerged()] })
+    expect(keys(plan(withLedger(s, [read, guard(base, NOW - 60 * MIN)]), CFG))).toEqual(['close:70'])
+    // the latest guard decides: a PR retargeted to the default branch closes its issue by itself
+    expect(keys(plan(withLedger(s, [read, guard(base, NOW - 60 * MIN), guard([], NOW - 40 * MIN)]), CFG))).toEqual([])
+    // a base that could not be read says nothing; a run-it or keep-open rollout leaves the issue open
+    expect(keys(plan(withLedger(s, [read, guard([{ name: 'base', reason: 'cannot read the PR base' }], NOW - 60 * MIN)]), CFG))).toEqual([])
+    const keepOpen = entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout: 'keep-open', closeIssue: null } })
+    expect(keys(plan(withLedger(s, [keepOpen, guard(base, NOW - 60 * MIN)]), CFG))).toEqual([])
+  })
+
   test('a loop merge whose rollout read failed has it read again, then followed up once', () => {
     const unread = entry('merge:570:h7', 'merge', {
       issue: 70,
@@ -1072,6 +1296,18 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
     expect(plan({ ...s, issues: s.issues.slice(0, 10) }, CFG).atCap).toBe(false)
   })
 
+  test('retry counts follow SPEC 6.1: a close and reopen once, a slot return twice', () => {
+    const stalled = state({ issues: [mine(48, 'in pipeline', { pr: 548 })], runs: [run(48, 'ci-stalled', { detail: 'reason=no-checks' })] })
+    const reopen = entry('reopen:548:01M4RQ0048AAAA', 'pr-reopen', { issue: 48, pr: 548, status: 'failed', attempts: 1, endedAt: NOW - 10 * MIN })
+    expect(keys(plan(withLedger(stalled, [reopen]), CFG))).toEqual(['tell:agent-failed:reopen:548:01M4RQ0048AAAA'])
+    const slot = { path: '/t/1', branch: 'feat/issue-12-x', state: 'leased', dirty: false, busy: false }
+    const merged = state({ issues: [issue(12, { stage: 'merged', holder: OTHER })], pool: { free: 8, total: 16, slots: [slot] } })
+    const returned = (attempts: number) => entry('release:/t/1:feat/issue-12-x', 'release-worktree', { issue: 12, status: 'failed', attempts, endedAt: NOW - 10 * MIN })
+    expect(keys(plan(withLedger(merged, [returned(1)]), CFG))).toEqual(['release:/t/1:feat/issue-12-x'])
+    expect(keys(plan(withLedger(merged, [returned(2)]), CFG))).toEqual(['tell:agent-failed:release:/t/1:feat/issue-12-x'])
+    expect(CFG.maxAttempts).toMatchObject({ 'pr-reopen': 1, 'stop-agent': 1, 'release-worktree': 2 })
+  })
+
   test('an exhausted key is named, so the log shows what /factory retry would clear (D-38)', () => {
     const failedTwice = entry(`design:60:${NOW - 20 * MIN}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'failed', attempts: 2 })
     const r = plan(withLedger(state({ issues: [mine(60, 'designing', { stageSince: NOW - 20 * MIN })] }), [failedTwice]), CFG)
@@ -1112,7 +1348,9 @@ describe('parsing helpers', () => {
 })
 
 // --- properties every plan keeps (SPEC 5.9), over every scenario state above ----------------
+// plan() checks all of them on every call in this file; these states also put each bound to work.
 
+const hourOld = (n: number, make: (i: number) => LedgerEntry) => Array.from({ length: n }, (_, i) => make(i))
 const SCENARIOS: [string, State][] = [
   ['quiet', state()],
   ['blind', failing(state({ queue: [7], issues: [issue(7)] }), 'factory', NOW - 20 * MIN)],
@@ -1143,58 +1381,45 @@ const SCENARIOS: [string, State][] = [
     runs: [run(45, 'parked'), run(50, 'merge-ready'), run(48, 'ci-stalled', { detail: 'reason=no-checks' })],
     milestone: { open: 0, closed: 3, expected: null },
   })],
+  // six claimable issues: four claims, the rest wait for the next pass
+  ['queue-six', state({ queue: [1, 2, 3, 4, 5, 6], issues: [1, 2, 3, 4, 5, 6].map(n => issue(n)), pool: { free: 16, total: 16, slots: [] } })],
+  // three wakes wanted at once: the review-cap tell, a cancelled run's judge, the release task
+  ['wakes', state({
+    issues: [mine(45, 'parked', { pr: 545 }), mine(46, 'in pipeline', { pr: 546 })],
+    runs: [run(45, 'parked', { reviewFixRounds: 3 }), run(46, 'cancelled')],
+    milestone: { open: 0, closed: 3, expected: null },
+  })],
+  // a busy hour: 30 claims and 40 spawns already, so claims and spawns wait for it to clear
+  ['busy-hour', withLedger(state({ queue: [1], issues: [issue(1), mine(60, 'designing')] }), [
+    ...hourOld(30, i => entry(`claim:${200 + i}:x`, 'claim', { class: 'start', issue: 200 + i, startedAt: NOW - 30 * MIN })),
+    ...hourOld(40, i => entry(`design:${300 + i}:x`, 'spawn', { agent: 'designer', class: 'develop', issue: 300 + i, startedAt: NOW - 30 * MIN })),
+  ])],
 ]
-const TIERS = [
-  { fiveHour: 10, sevenDay: 10 },
-  { fiveHour: 10, sevenDay: 86 },
-  { fiveHour: 10, sevenDay: 91 },
-  { fiveHour: 96, sevenDay: 10 },
-]
-const ALLOWED: Record<string, string[]> = {
-  normal: ['free', 'owner', 'drive', 'develop', 'start'],
-  slow: ['free', 'owner', 'drive', 'develop', 'start'],
-  'stop-new': ['free', 'owner', 'drive'],
-  'stop-all': ['free', 'owner'],
-}
 
 describe('properties', () => {
-  test('determinism: the same state gives the same plan', () => {
-    for (const [, s] of SCENARIOS) expect(plan(JSON.parse(JSON.stringify(s)), CFG)).toEqual(plan(s, CFG))
-  })
-
-  test('idempotence: once every planned action is running, re-planning adds nothing', () => {
-    for (const [name, s] of SCENARIOS) {
-      const first = plan(s, CFG)
-      const again = plan(running(s, first), CFG)
-      expect([name, keys(again)]).toEqual([name, []])
+  test('every scenario keeps every property, at every tier (SPEC 5.9)', () => {
+    for (const [, s] of SCENARIOS) {
+      for (const w of TIER_READINGS) plan({ ...s, usage: { ...w, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false } }, CFG)
     }
   })
 
-  test('tier safety: no action of a class the tier forbids, in any scenario', () => {
-    for (const [name, s] of SCENARIOS) {
-      for (const w of TIERS) {
-        const r = plan({ ...s, usage: { ...w, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false } }, CFG)
-        const bad = r.actions.filter(a => !ALLOWED[r.tier]!.includes(a.class)).map(a => a.key)
-        expect([name, r.tier, bad]).toEqual([name, r.tier, []])
-      }
-    }
+  test('the bounds are put to work: one wake per pass, claims per pass, and the start and spawn caps', () => {
+    const why = SCENARIOS.flatMap(([, s]) => plan(s, CFG).skipped.map(k => k.why))
+    expect(why).toContain('one wake per pass')
+    expect(why).toContain('claims per pass')
+    expect(why).toContain('rate cap: start 30/30')
+    expect(why).toContain('rate cap: spawn 40/40')
+    expect(keys(plan(SCENARIOS.find(([n]) => n === 'wakes')?.[1] ?? state(), CFG))).toEqual(['tell:review-cap:01M4RQ0045AAAA:3'])
   })
 
-  test('control safety: nothing on a paused issue but the heartbeat; no claim without new work', () => {
+  test('control safety is checked for each directive alone: paused, and no new work (SPEC 5.9 item 5)', () => {
     for (const [name, s] of SCENARIOS) {
       const paused = s.issues.map(i => i.number)
-      const r = plan({ ...s, control: control({ paused, noNewWork: true }) }, CFG)
-      const bad = r.actions.filter(a => (a.issue !== null && paused.includes(a.issue)) || a.class === 'start' || a.class === 'develop')
-      expect([name, bad.map(a => a.key)]).toEqual([name, []])
-    }
-  })
-
-  test('bounded: at most one wake and at most maxStartsPerPass claims per pass', () => {
-    for (const [name, s] of SCENARIOS) {
-      const r = plan(s, CFG)
-      const wakes = r.actions.filter(a => a.kind === 'judge' || a.kind === 'task' || a.kind === 'tell').length
-      const claims = r.actions.filter(a => a.kind === 'claim').length
-      expect([name, wakes <= 1, claims <= CFG.maxStartsPerPass]).toEqual([name, true, true])
+      const p = planOf({ ...s, control: control({ paused }) }, CFG)
+      expect([name, p.actions.filter(a => a.issue !== null && paused.includes(a.issue) && a.kind !== 'heartbeat').map(a => a.key)]).toEqual([name, []])
+      const n = planOf({ ...s, control: control({ noNewWork: true }) }, CFG)
+      expect([name, n.actions.filter(a => a.class === 'start' || a.class === 'develop').map(a => a.key)]).toEqual([name, []])
     }
   })
 })
+

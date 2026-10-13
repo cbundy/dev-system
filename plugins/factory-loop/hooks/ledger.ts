@@ -49,8 +49,8 @@ export type Started = { ledger: LedgerEntry[]; entry: LedgerEntry; prev: LedgerE
 // n + 1, its last outcome, agent and wake cleared. A done key started again (only the title,
 // which plan compares rather than keys) starts its count over: success resets it. The subject's
 // fields come from the action. prev is the entry as it stood, so a pre-check that refuses the
-// attempt can put it back (finish with status skipped).
-export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms): Started {
+// attempt can put it back (finish with status skipped). A wake records the session submitting it.
+export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, session = ''): Started {
   const prev = ledger.find(e => e.key === action.key) ?? null
   const entry: LedgerEntry = {
     key: action.key,
@@ -69,7 +69,10 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms): 
   // a delegate spawns the implementer, so its entry is that agent's (plan reads it so)
   if (action.kind === 'spawn') entry.agent = action.agent
   else if (action.kind === 'delegate') entry.agent = 'implementer'
-  if (action.kind === 'judge' || action.kind === 'task' || action.kind === 'tell') entry.wake = action.wake
+  if (action.kind === 'judge' || action.kind === 'task' || action.kind === 'tell') {
+    entry.wake = action.wake
+    if (session !== '') entry.session = session
+  }
   return { ledger: put(ledger, entry), entry, prev }
 }
 
@@ -322,9 +325,11 @@ function noticesOf(entry: LedgerEntry): string[] {
 }
 
 // exhausted: plan's rule exactly (gate in plan.ts): a failed, timed-out or lost entry whose
-// attempts reached the maximum for its kind or agent.
+// attempts reached the maximum for its kind or agent. Heartbeat and sweep never are: they retry
+// at their cadence (plan.ts cadenceOf, SPEC 6.1).
 export function exhausted(entry: LedgerEntry, config: Config): boolean {
   if (entry.status === 'running' || entry.status === 'done') return false
+  if (entry.kind === 'heartbeat' || entry.kind === 'sweep') return false
   return entry.attempts >= maxAttemptsOf(config, attemptsKindOf(entry))
 }
 
@@ -418,6 +423,7 @@ function entryOf(raw: unknown): LedgerEntry | null {
   if (typeof o.wakeId === 'string') entry.wakeId = o.wakeId
   if (typeof o.turnId === 'string') entry.turnId = o.turnId
   if (typeof o.reminded === 'boolean') entry.reminded = o.reminded
+  if (typeof o.session === 'string') entry.session = o.session
   if (typeof o.summary === 'string') entry.summary = o.summary
   const outcome = record(o.outcome)
   if (outcome !== null && typeof outcome.kind === 'string') entry.outcome = outcome as Outcome

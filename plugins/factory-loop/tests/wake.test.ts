@@ -15,6 +15,7 @@ import {
   answerTool,
   checkAnswer,
   expireWakes,
+  orphanedWakes,
   lineSummary,
   onTurnComplete,
   onTurnStart,
@@ -41,6 +42,8 @@ function runtime(): Runtime {
     cwd: '/workspaces/dev-system',
     loopDir: LOOP_DIR,
     sink: null,
+    env: { CALLUM_FLOW_REPO: REPO },
+    toolsDir: '/usr/local/share/callum-tools',
     config: CFG,
     configProblems: [],
   }
@@ -225,9 +228,9 @@ describe('the prompt (SPEC 8.1)', () => {
     ])
   })
 
-  test('a submit that fails fails the attempt; a non-wake action is a loop bug', async () => {
+  test('a submit that fails started no turn: skipped, so it uses no attempt; a non-wake action is a loop bug', async () => {
     const h = harness([], new Error('session closed'))
-    expect(await h.exec(w('tell', 'blind', { since: 'never' }))).toEqual({ status: 'failed', summary: 'submit failed: Error: session closed' })
+    expect(await h.exec(w('tell', 'blind', { since: 'never' }))).toEqual({ status: 'skipped', summary: 'submit failed: Error: session closed' })
     expect(h.prompts).toEqual([])
     const executor = wakeExecutors.judge
     if (executor === undefined) throw new Error('no judge executor')
@@ -519,6 +522,20 @@ describe('turns: answers, the one reminder, tells delivered (SPEC 8.2, 10.8, D-2
 
 describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
   const at = (minutesAgo: number) => NOW - minutesAgo * MIN
+
+  test("a wake another session submitted ends by its fallback at once; this session's and a sessionless one wait (SPEC 7.5)", () => {
+    const open = (key: string, kind: WakeKind, session?: string) =>
+      entry(key, kind, { wake: 'x', status: 'running', startedAt: at(1), endedAt: null, wakeId: key, ...(session === undefined ? {} : { session }) })
+    const ledger = [open('j', 'judge', 'old'), open('t', 'task', 'old'), open('l', 'tell', 'old'), open('mine', 'judge', 'now'), open('older-build', 'task')]
+    const updates = orphanedWakes(ledger, 'now')
+    expect(updates.map(u => [u.key, u.status, u.summary])).toEqual([
+      ['j', 'done', 'timed out: its session ended, so the loop holds'],
+      ['t', 'timed-out', 'timed out: its session ended'],
+      ['l', 'timed-out', 'dropped: its session ended before it was delivered'],
+    ])
+    expect(updates[0]?.outcome).toMatchObject({ kind: 'wake', decision: 'hold' })
+    expect(orphanedWakes(ledger, '')).toEqual([])
+  })
 
   test('a judge past its timeout is done with hold; a task and a tell time out', () => {
     const ledger = [

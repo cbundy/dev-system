@@ -35,7 +35,8 @@ export const MERGE_TIMEOUT_MS = {
 export const NO_EXIT = -1
 
 // How long the respond launch waits before it reads its log back: long enough for "no active
-// run to respond to" or a usage error, well inside the 30 s launch timeout.
+// run to respond to" or a usage error, well inside the 30 s launch timeout. The environment's
+// FACTORY_LOOP_RESPOND_SETTLE_S overrides it (the launch script's test runs it for real).
 export const RESPOND_SETTLE_S = 5
 
 // The lease holder recorded on a slot the loop leases for a respond (treehouse get --lease).
@@ -79,8 +80,8 @@ export function respondArgv(a: RespondAction): string[] {
     if (value !== null && value.trim() !== '') argv.push(`--${name}=${value}`)
   }
   // the gate plan judged: if the run moved on meanwhile, respond refuses rather than answer the
-  // next gate (a park seen only in the event log has no step name)
-  if (!a.step.startsWith('park@')) flag('step', a.step)
+  // next gate (a gate with no step name is the one awaiting approval)
+  flag('step', a.step)
   if (a.action === 'fix') {
     flag('findings', a.findings)
     flag('instructions', a.instructions)
@@ -119,7 +120,7 @@ export const LAUNCH_SCRIPT = [
   'if [ "$head" != "$branch" ]; then echo "factory-loop: the slot is on ${head:-a detached HEAD}, not $branch"; exit 3; fi',
   'mkdir -p -- "${log%/*}" || exit 3',
   `nohup sh -c '"$@"; echo "factory-loop: respond exited $?"' respond "$@" > "$log" 2>&1 < /dev/null &`,
-  `sleep ${RESPOND_SETTLE_S}`,
+  `sleep "\${FACTORY_LOOP_RESPOND_SETTLE_S:-${RESPOND_SETTLE_S}}"`,
   'cat -- "$log"',
 ].join('\n')
 
@@ -414,7 +415,7 @@ const respond: Executor = async (ctx, action) => {
   // a review fix counts toward the review cap through this event (rule P1, I-52)
   const logged = action.logReview ? await event(ctx, 'fix_requested', { issue: action.issue, run: action.run, branch: action.branch, note: 'review' }) : ''
   const where = found === null ? `leased ${slot}` : slot
-  return { status: 'done', outcome, summary: clip(`respond --action ${action.action} on ${action.step} launched in ${where}${logged}`) }
+  return { status: 'done', outcome, summary: clip(`respond --action ${action.action} on ${action.step ?? 'its gate'} launched in ${where}${logged}`) }
 }
 
 // leaseSlot: a fresh slot on the run's branch, or why there is none. A slot leased but not

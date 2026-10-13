@@ -90,8 +90,26 @@ once_status
 mv "$fakebin/gh.off" "$fakebin/gh"
 if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "no gh: exit $st, out $(cat "$out")"; fi
 grep -qx "queue-watch.sh: gh not on PATH" "$out.err" || fail "no gh: $(cat "$out.err")"
+# a reader reply of another shape (no issues list) is a failed read too
+printf '%s\n' '#!/bin/sh' 'echo "{\"issues\": \"not a list\", \"stripped\": 0}"' > "$tmpdir/odd-reader"
+chmod +x "$tmpdir/odd-reader"
+once_status CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/odd-reader" --known 305
+if [ "$st" -ne 1 ] || [ -s "$out" ]; then fail "odd reply: exit $st, out $(cat "$out")"; fi
+grep -qx "queue-watch.sh: cannot read the queue" "$out.err" || fail "odd reply: $(cat "$out.err")"
 [ ! -s "$calls" ] || fail "a failed --once logged: $(cat "$calls")"
 ok # failures exit 1 with the reason, never an empty queue
+
+# A missing --repo or --label is a usage error (exit 2), and reads nothing.
+: > "$fakebin/gh-calls"
+for args in "--label ready --once" "--repo o/r --once"; do
+  st=0
+  # shellcheck disable=SC2086 # $args are options and their values
+  (in_dir "$tmpdir" timeout 10 "$QUEUE_WATCH" $args) > "$out" 2> "$out.err" || st=$?
+  [ "$st" -eq 2 ] || fail "missing option ($args): exit $st"
+  grep -q "^usage: queue-watch.sh --repo owner/name --label label" "$out.err" || fail "missing option ($args): $(cat "$out.err")"
+done
+[ ! -s "$fakebin/gh-calls" ] || fail "a usage error read the queue"
+ok # a missing --repo or --label is a usage error
 
 # 5. The real event log: repeated reads log each new member once.
 real_event_log

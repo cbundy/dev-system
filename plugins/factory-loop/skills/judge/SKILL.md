@@ -194,8 +194,9 @@ Notices:
 - `task-timeout` (key): a task went unanswered and is not retried. Owner says whether to redo
   it.
 - `claim-lost` (issue, holder): another device took the issue; the loop stopped its agents.
-- `stopped` (issue, why): the loop stopped an agent (`split`: the issue became a tracker, its
-  sub-issues join the queue).
+- `stopped` (issue, why): the loop stopped an agent: `closed` or `merged` (its issue ended),
+  `dropped` (the owner dropped it), `split` (the issue became a tracker, its sub-issues join the
+  queue).
 - `at-cap` (live, cap): this device holds its cap of live issues, so claims wait. Raising it is
   `maxInFlightIssues` in `.claude/factory-loop.json`.
 - `drain-slow` (since; detail: the update, what it waits on): an update has waited over an
@@ -203,8 +204,8 @@ Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this
-  repo, so the released orchestrator is still driving and the loop stays in observe (SPEC
-  11.2). Owner stops that watcher or the old session.
+  repo, so the released orchestrator is still driving and the loop stays in observe until its
+  lock has been gone ten minutes (SPEC 11.2). Owner stops that watcher or the old session.
 - `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
   checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop
@@ -212,6 +213,8 @@ Notices:
 - `breaker` (kind): one kind of action failed three times running and is closed for 30
   minutes (`ping`: pings kept waking the loop, which runs on its timer alone for 10 minutes).
   Owner checks that tool (login, rate limit, outage).
+- `pass-error` (passes; detail: the last error): that many passes in a row threw, and the title
+  shows `error`. Owner reads the decision log; the loop tries again every pass.
 
 ## Owner chat
 Owner directives are control state, not memory text (D-16). Turn each instruction into one op

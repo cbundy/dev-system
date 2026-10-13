@@ -29,6 +29,8 @@ function runtime(): Runtime {
     cwd: '/workspaces/dev-system',
     loopDir: '/cfg/factory-loop/cbundy__dev-system',
     sink: null,
+    env: { CALLUM_FLOW_REPO: REPO },
+    toolsDir: '/usr/local/share/callum-tools',
     config: config(),
     configProblems: [],
   }

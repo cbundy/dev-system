@@ -1,7 +1,7 @@
 // Pure parsers for what observe reads: each turns one command's output into typed values,
 // or reports that it could not. No I/O here, so the tests and the replay harness (plain
 // Node) drive them directly. Types only are imported.
-import type { Bump, Milestone, Pool, Stage, Usage } from './types'
+import type { Bump, Milestone, Pool, RunState, Stage, Usage } from './types'
 
 const STAGES: readonly Stage[] = [
   'queued',
@@ -215,6 +215,115 @@ export function parseQueue(json: string): number[] | null {
   } catch {
     return null
   }
+}
+
+// --- queue-watch.sh --once ------------------------------------------------------------------
+
+// parseQueueOnce: the one line `queue-watch.sh --once` prints (SPEC 3.4),
+// `queue known=<n1,n2|none> now=<n1,n2|none>`, as ascending issue numbers; null for anything
+// else, so a garbled read is a failed source, never an empty queue.
+export function parseQueueOnce(text: string): { known: number[]; now: number[] } | null {
+  const m = /^queue known=(none|[1-9]\d*(?:,[1-9]\d*)*) now=(none|[1-9]\d*(?:,[1-9]\d*)*)$/.exec(text.trim())
+  if (m?.[1] === undefined || m[2] === undefined) return null
+  const list = (v: string) => (v === 'none' ? [] : [...new Set(v.split(',').map(Number))].sort((a, b) => a - b))
+  return { known: list(m[1]), now: list(m[2]) }
+}
+
+// --- pipeline-watch.sh --once ---------------------------------------------------------------
+
+// One branch's newest run that is not completed, as `pipeline-watch.sh --once` reports it.
+export type PipelineRun = {
+  state: RunState
+  branch: string
+  // a ULID, or 'unknown' for a run no source knows the id of
+  run: string
+  head: string | null
+  // the gate a parked run waits at, or the step a failed run failed (null: not known)
+  step: string | null
+  // the state's own detail, as the watcher logs it in its event's note: head-mismatch's
+  // 'run=<sha> branch=<sha>[ worktree=<sha>]', ci-stalled's 'reason=<r>'
+  detail: string | null
+  pr: number | null
+}
+
+const RUN_STATES: readonly RunState[] = [
+  'merge-ready',
+  'head-mismatch',
+  'conflict',
+  'ci-stalled',
+  'parked',
+  'failed',
+  'cancelled',
+  'running',
+  'pending',
+]
+const ULID = /^[0-9A-HJKMNP-TV-Z]{26}$/i
+const SHA = /^[0-9a-f]{4,64}$/i
+
+// parsePipelineLine: one line, `<state> <branch> <run-id>[ key=value...] head=<sha>`, split on
+// single spaces. The pairs come in a fixed order: the state's own detail (head-mismatch:
+// run=, branch= and an optional worktree=; ci-stalled: reason=no-workflow|no-checks), then
+// step= (parked and failed only), then an optional pr=. A SHA or step of 'unknown' reads as
+// null. Null for a line that breaks any of it: a watcher the loop does not understand must not
+// be read as some other state.
+export function parsePipelineLine(line: string): PipelineRun | null {
+  const tokens = line.split(' ')
+  if (tokens.length < 4 || tokens.includes('')) return null
+  const [state, branch, run] = tokens as [string, string, string]
+  const last = tokens[tokens.length - 1] as string
+  const kind = RUN_STATES.find(s => s === state)
+  if (kind === undefined || (run !== 'unknown' && !ULID.test(run)) || !last.startsWith('head=')) return null
+  const sha = (v: string | undefined) => (v === undefined ? undefined : v === 'unknown' ? null : SHA.test(v) ? v : undefined)
+  const head = sha(last.slice('head='.length))
+  if (head === undefined) return null
+
+  const pairs = tokens.slice(3, -1)
+  let at = 0
+  // take: the next pair's value when its key is `key`, else undefined (the pair stays)
+  const take = (key: string) => {
+    const pair = pairs[at]
+    if (pair === undefined || !pair.startsWith(`${key}=`) || pair.length === key.length + 1) return undefined
+    at++
+    return pair.slice(key.length + 1)
+  }
+  let detail: string | null = null
+  if (kind === 'head-mismatch') {
+    const own = [take('run'), take('branch')]
+    const worktree = take('worktree')
+    if (worktree !== undefined) own.push(worktree)
+    if (own.some(v => sha(v) === undefined)) return null
+    detail = pairs.slice(0, at).join(' ')
+  } else if (kind === 'ci-stalled') {
+    const reason = take('reason')
+    if (reason !== 'no-workflow' && reason !== 'no-checks') return null
+    detail = `reason=${reason}`
+  }
+  let step: string | null = null
+  if (kind === 'parked' || kind === 'failed') {
+    const value = take('step')
+    if (value === undefined) return null
+    step = value === 'unknown' ? null : value
+  }
+  const pr = take('pr')
+  if (pr !== undefined && !/^[1-9]\d*$/.test(pr)) return null
+  // anything left over is a pair this grammar does not have
+  if (at !== pairs.length) return null
+  return { state: kind, branch, run, head, step, detail, pr: pr === undefined ? null : Number(pr) }
+}
+
+// parsePipelineOnce: every line of one `pipeline-watch.sh --once` poll, and the lines that
+// broke the grammar (observe fails the source on any: SPEC 3.3). A branch it does not print
+// has no run in flight.
+export function parsePipelineOnce(text: string): { runs: PipelineRun[]; bad: string[] } {
+  const runs: PipelineRun[] = []
+  const bad: string[] = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    const parsed = parsePipelineLine(line)
+    if (parsed === null) bad.push(line)
+    else runs.push(parsed)
+  }
+  return { runs, bad }
 }
 
 // --- usage-check.sh -------------------------------------------------------------------------

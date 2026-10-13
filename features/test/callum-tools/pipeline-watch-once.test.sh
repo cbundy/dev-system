@@ -107,7 +107,9 @@ echo "CONFLICTING DIRTY" > "$fakebin/pr-status.txt"
 res=$(once --branches feat/b) || fail "conflict: did not exit 0"
 echo "MERGEABLE CLEAN" > "$fakebin/pr-status.txt"
 [ "$res" = "conflict feat/b RUNB pr=12 head=$b_head" ] || fail "conflict: $res"
-ok # pending while mergeability is unknown, conflict with its PR
+[ "$(tail -n 1 "$calls")" = "conflict --branch feat/b --run RUNB --head $b_head --note  --if-changed --actor watcher" ] ||
+  fail "conflict event: $(tail -n 1 "$calls")"
+ok # pending while mergeability is unknown, conflict with its PR, logged as a first sight
 
 # A head-mismatch keeps its SHAs ahead of pr=.
 g clone -q "$tmpdir/origin.git" "$tmpdir/wt-b" 2>/dev/null
@@ -117,7 +119,22 @@ wt_head=$(g -C "$tmpdir/wt-b" rev-parse HEAD)
 res=$(once --branches feat/b --worktree "feat/b=$tmpdir/wt-b") || fail "head-mismatch: did not exit 0"
 [ "$res" = "head-mismatch feat/b RUNB run=$b_head branch=$b_head worktree=$wt_head pr=12 head=$b_head" ] ||
   fail "head-mismatch: $res"
-ok # head-mismatch detail, then pr=
+[ "$(tail -n 1 "$calls")" = "head_mismatch --branch feat/b --run RUNB --head $b_head --note run=$b_head branch=$b_head worktree=$wt_head --if-changed --actor watcher" ] ||
+  fail "head-mismatch event: $(tail -n 1 "$calls")"
+ok # head-mismatch detail, then pr=, logged as a first sight
+
+# A head-mismatch on a branch no worktree has: no worktree= in its detail.
+g -C "$repo" branch feat/n
+g -C "$repo" push -q origin feat/n
+mkdir -p "$nm_home/logs/RUNN"
+run_state RUNN feat/n running 7777777777777777777777777777777777777777
+run_pr RUNN 18
+echo "all CI checks passed" > "$nm_home/logs/RUNN/ci.log"
+runs_order RUNN RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
+res=$(once --branches feat/n) || fail "head-mismatch, no worktree: did not exit 0"
+[ "$res" = "head-mismatch feat/n RUNN run=7777777777777777777777777777777777777777 branch=$b_head pr=18 head=7777777777777777777777777777777777777777" ] ||
+  fail "head-mismatch, no worktree: $res"
+ok # head-mismatch with no worktree has no worktree=
 
 # A ci-stalled run keeps its reason ahead of pr=.
 mkdir -p "$nm_home/logs/RUNS"
@@ -129,7 +146,70 @@ runs_order RUNS RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
 res=$(in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --once --branches feat/s) ||
   fail "ci-stalled: did not exit 0"
 [ "$res" = "ci-stalled feat/s RUNS reason=no-workflow pr=16 head=$b_head" ] || fail "ci-stalled: $res"
-ok # ci-stalled reason, then pr=
+[ "$(tail -n 1 "$calls")" = "ci_stalled --branch feat/s --run RUNS --head $b_head --note reason=no-workflow --if-changed --actor watcher" ] ||
+  fail "ci-stalled event: $(tail -n 1 "$calls")"
+# workflows exist, yet none ran for this PR
+echo 1 > "$fakebin/gh-workflows"
+res=$(in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --once --branches feat/s) ||
+  fail "ci-stalled no-checks: did not exit 0"
+rm "$fakebin/gh-workflows"
+[ "$res" = "ci-stalled feat/s RUNS reason=no-checks pr=16 head=$b_head" ] || fail "ci-stalled no-checks: $res"
+ok # ci-stalled reason (no-workflow, no-checks), then pr=, logged as a first sight
+
+# A head that cannot be read prints as unknown; a run whose own status cannot be read is pending.
+mkdir -p "$nm_home/logs/RUNQ"
+run_state RUNQ feat/q running
+runs_order RUNQ RUNS RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
+res=$(once --branches feat/q) || fail "unknown head: did not exit 0"
+[ "$res" = "running feat/q RUNQ head=unknown" ] || fail "unknown head: $res"
+touch "$fakebin/nm-status-fail-RUNR"
+res=$(once --branches feat/r) || fail "failing probe: did not exit 0"
+rm "$fakebin/nm-status-fail-RUNR"
+# (its runs row's short head, rrr, is not hex, so it reads as unknown too)
+[ "$res" = "pending feat/r unknown head=unknown" ] || fail "failing probe: $res"
+ok # head=unknown, and pending when a probe fails
+
+# 2b. The plugin reads every line --once prints (plugins/factory-loop/hooks/parse.ts
+# parsePipelineOnce; SPEC 3.3: a line it cannot read fails the runs source): ULID run ids and full
+# SHAs, as the real watcher prints them, one run in each state.
+command -v node > /dev/null || fail "node not found"
+u() { printf '01K7S1%019d%s' 0 "$1"; }
+for k in 1 2 3 4 5 6 7 8; do mkdir -p "$nm_home/logs/$(u "$k")"; done
+h1=1111111111111111111111111111111111111111
+run_state "$(u 1)" feat/issue-1-p parked "$h1"
+run_pr "$(u 1)" 21
+run_state "$(u 2)" feat/issue-2-c failed "$h1"
+fail_step "$(u 2)" test
+run_state "$(u 3)" feat/issue-3-x running "$h1"
+set_status "$(u 3)" cancelled
+run_state "$(u 4)" feat/issue-4-r running "$h1"
+run_state "$(u 5)" feat/b running "$b_head"
+run_pr "$(u 5)" 25
+echo "all CI checks passed" > "$nm_home/logs/$(u 5)/ci.log"
+run_state "$(u 6)" feat/s running "$b_head"
+printf '%s\n' "no CI checks reported yet, waiting for checks to register..." > "$nm_home/logs/$(u 6)/ci.log"
+touch -d "@$(($(date +%s) - 120))" "$nm_home/logs/$(u 6)/ci.log"
+run_state "$(u 7)" feat/n running "$h1"
+run_pr "$(u 7)" 27
+echo "all CI checks passed" > "$nm_home/logs/$(u 7)/ci.log"
+run_state "$(u 8)" feat/issue-8-q running "$h1"
+touch "$fakebin/nm-status-fail-$(u 8)"
+run_state RUNF2 feat/issue-9-f failed "$h1" # failed at launch: no log directory
+runs_order RUNF2 "$(u 8)" "$(u 7)" "$(u 6)" "$(u 5)" "$(u 4)" "$(u 3)" "$(u 2)" "$(u 1)"
+(in_dir "$repo" timeout 10 env PIPELINE_WATCH_CI_GRACE=60 "$PIPELINE_WATCH" --once) > "$tmpdir/once.txt" || fail "parse: did not exit 0"
+rm "$fakebin/nm-status-fail-$(u 8)"
+[ "$(cut -d' ' -f1 "$tmpdir/once.txt" | tr '\n' ' ')" = "failed pending head-mismatch ci-stalled merge-ready running cancelled failed parked " ] ||
+  fail "parse: not one line per state: $(cat "$tmpdir/once.txt")"
+PARSE="$SCRIPT_DIR/../../../plugins/factory-loop/hooks/parse.ts"
+read=$(node --no-warnings --input-type=module -e "
+  import { readFileSync } from 'node:fs'
+  const { parsePipelineOnce } = await import(process.argv[1])
+  const r = parsePipelineOnce(readFileSync(process.argv[2], 'utf8'))
+  console.log(r.runs.length + ' ' + JSON.stringify(r.bad))
+" "$PARSE" "$tmpdir/once.txt") || fail "parse: node failed: $read"
+[ "$read" = "9 []" ] || fail "parse: parse.ts read $read of: $(cat "$tmpdir/once.txt")"
+runs_order RUNN RUNU RUNF RUNM RUNX RUNC RUNR RUNB RUNA
+ok # parse.ts reads every --once line
 
 # 3. The real event log: a repeated --once adds nothing, a new head is logged again.
 real_event_log

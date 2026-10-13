@@ -45,6 +45,8 @@ function runtime(): Runtime {
     cwd: '/workspaces/dev-system',
     loopDir: LOOP,
     sink: null,
+    env: { CALLUM_FLOW_REPO: REPO },
+    toolsDir: '/usr/local/share/callum-tools',
     config: config(),
     configProblems: [],
   }

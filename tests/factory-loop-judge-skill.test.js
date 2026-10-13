@@ -2,8 +2,8 @@
 
 // The factory loop's judge skill (plugins/factory-loop/skills/judge/SKILL.md) is what the model
 // answers wakes by, so it must cover every wake the loop sends and every answer the loop
-// accepts (docs/factory-loop/SPEC.md 8, 9.2, 4.3). This reads the skill, the SPEC, plan.ts and
-// exec.ts as text, since plugin tests cannot read files; wake.ts's own tests
+// accepts (docs/factory-loop/SPEC.md 8, 9.2, 4.3). This reads the skill, the SPEC and the hooks
+// as text, since plugin tests cannot read files; wake.ts's own tests
 // (plugins/factory-loop/tests/wake.test.ts) check the code against the same SPEC table.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -14,8 +14,15 @@ const ROOT = path.join(__dirname, "..");
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), "utf8");
 const SKILL = read("plugins/factory-loop/skills/judge/SKILL.md");
 const SPEC = read("docs/factory-loop/SPEC.md");
-const PLAN = read("plugins/factory-loop/hooks/plan.ts");
-const EXEC = read("plugins/factory-loop/hooks/exec.ts");
+const HOOKS = path.join(ROOT, "plugins/factory-loop/hooks");
+const SOURCES = Object.fromEntries(
+  fs
+    .readdirSync(HOOKS)
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => [f, fs.readFileSync(path.join(HOOKS, f), "utf8")]),
+);
+const PLAN = SOURCES["plan.ts"];
+const EXEC = SOURCES["exec.ts"];
 
 // section: the text from a heading line to the next heading of the same or a higher level.
 function section(doc, heading) {
@@ -92,9 +99,24 @@ test("every JUDGE and TASK wake of SPEC 8.2 has its bullet, naming each decision
   }
 });
 
-test("every wake plan.ts emits is in the skill under its kind", () => {
-  const emitted = [...PLAN.matchAll(/wake\('(judge|task|tell)', '([^']+)'/g)].map((m) => ({ kind: m[1], name: m[2] }));
-  assert.ok(emitted.length >= 30, `read only ${emitted.length} wake( calls from plan.ts`);
+// wakesOf: every wake a hooks source builds: plan.ts's wake('<kind>', '<name>', ...), an action
+// literal's `kind: '<kind>', wake: '<name>'` (act.ts's pass-error), and rails.ts's notice tells,
+// tell('<name>', `tell:...`).
+function wakesOf(src) {
+  return [
+    ...[...src.matchAll(/\bwake\('(judge|task|tell)', '([^']+)'/g)].map((m) => ({ kind: m[1], name: m[2] })),
+    ...[...src.matchAll(/kind: '(judge|task|tell)',\s*wake: '([^']+)'/g)].map((m) => ({ kind: m[1], name: m[2] })),
+    ...[...src.matchAll(/\btell\('([^']+)', `tell:/g)].map((m) => ({ kind: "tell", name: m[1] })),
+  ];
+}
+
+test("every wake the hooks emit is in the skill under its kind", () => {
+  const emitted = Object.values(SOURCES).flatMap(wakesOf);
+  assert.ok(wakesOf(PLAN).length >= 30, `read only ${wakesOf(PLAN).length} wake( calls from plan.ts`);
+  // the wakes built outside plan.ts: failing passes (act.ts) and the rails' notices (rails.ts)
+  for (const name of ["pass-error", "heartbeat-other", "old-watcher", "breaker"]) {
+    assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from the hooks outside plan.ts`);
+  }
   for (const { kind, name } of emitted) {
     if (kind === "judge") assert.notEqual(bullet(JUDGE, name), null, `SKILL.md JUDGE has no bullet for ${name}`);
     else if (kind === "task") assert.notEqual(bullet(TASK, name), null, `SKILL.md TASK has no bullet for ${name}`);

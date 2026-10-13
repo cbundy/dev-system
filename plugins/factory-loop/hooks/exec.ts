@@ -119,3 +119,18 @@ export function respondLogPath(loopDir: string, key: string, attempt: number): s
 
 // The last line of every wake prompt (skills/judge/SKILL.md answers by it).
 export const WAKE_POINTER = 'Answer with the factory-loop:judge skill.'
+
+// The loop dir's files that only grow (SPEC 11.6): spawn records, saved answers, respond logs,
+// recorded states and the decision logs, kept as long as the ledger keeps entries (7 days).
+export const LOOP_FILES_KEEP_DAYS = 7
+
+// pruneArgvs: the commands that delete those files once older than `days`, then the day
+// directories of states/ left empty. Everything else in the loop dir (the act lock, control.json,
+// the event sink) is never touched.
+export function pruneArgvs(loopDir: string, days: number): string[][] {
+  const under = (dir: string) => ['-path', `${loopDir}/${dir}/*`]
+  return [
+    ['find', loopDir, '-mindepth', '1', '-type', 'f', '(', ...under('spawns'), '-o', ...under('answers'), '-o', ...under('respond'), '-o', ...under('states'), '-o', '-name', 'decisions-*.jsonl', ')', '-mmin', `+${days * 24 * 60}`, '-delete'],
+    ['find', `${loopDir}/states`, '-mindepth', '1', '-type', 'd', '-empty', '-delete'],
+  ]
+}

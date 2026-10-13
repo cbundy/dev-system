@@ -205,10 +205,12 @@ export type LedgerEntry = {
   endedAt: Ms | null
   agentId?: string
   outcome?: Outcome
-  // a wake's id (SPEC 8.1 `id=`), the turn it started, and whether its reminder went out
+  // a wake's id (SPEC 8.1 `id=`), the turn it started, whether its reminder went out, and the
+  // session that submitted it (a restart ends the wakes of the session before, SPEC 7.5)
   wakeId?: string
   turnId?: string
   reminded?: boolean
+  session?: string
   // the executor's last few words, for the decision log
   summary?: string
 }
@@ -323,7 +325,9 @@ export type Action =
       kind: 'respond'
       run: string
       branch: string
-      step: string
+      // the gate's step name; null when unknown (a park seen only in the event log, a failed run
+      // the watcher printed no step for): respond then takes the step awaiting approval
+      step: string | null
       head: string
       action: 'approve' | 'fix' | 'skip'
       findings: string | null
