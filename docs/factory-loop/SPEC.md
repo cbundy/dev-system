@@ -736,8 +736,9 @@ changed is also written in full under `states/`, which the replay harness reads.
   the main conversation and wakes the model (FINDINGS check 4). The loop must then stay in bypass.
 - **The mod API is early access**: the plugin pins Claude Code 2.1.296 in its README, and the
   spike's checks are re-run before each upgrade.
-- **GitHub reads in the shadow workspace**: it has no `gh` login, so shadow runs use
-  `--github off` and cannot judge claims (`D1` needs labels and blockers).
+- **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
+  shadow reads labels, blockers and sub-issues live, so it can judge claims (DECISIONS D-32 is
+  superseded).
 
 ## 14. Cutover plan (not executed)
 
