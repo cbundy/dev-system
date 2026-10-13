@@ -3,8 +3,8 @@
 // memory file (MEM), not from the code. docs/factory-loop/SPEC.md section 5 is the table.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { classifyFail, issueFromBranch, plan, tierOf } from '../hooks/plan'
-import type { Action, LedgerEntry, State } from '../hooks/types'
+import { classifyFail, issueFromBranch, plan, sameLabel, tierOf } from '../hooks/plan'
+import type { Action, AdjudicatorAction, IssueView, LedgerEntry, MergeReport, State } from '../hooks/types'
 import {
   DEVICE,
   MIN,
@@ -19,6 +19,7 @@ import {
   issue,
   keys,
   mine,
+  review,
   run,
   running,
   state,
@@ -38,14 +39,14 @@ function parkedReview(over: Partial<State> = {}, rounds = 0) {
 }
 const AT45 = '01M4RQ0045AAAA:review:head45'
 
-function adjudicated(action: Extract<LedgerEntry['outcome'], { kind: 'adjudicator' }>['action'], key = `adjudicate:${AT45}`) {
+function adjudicated(action: AdjudicatorAction, key = `adjudicate:${AT45}`) {
   return entry(key, 'spawn', {
     agent: 'adjudicator',
     class: 'drive',
     issue: 45,
     run: '01M4RQ0045AAAA',
     head: 'head45',
-    outcome: { kind: 'adjudicator', verdicts: ['CORRECT: review-1 a real gap'], action },
+    outcome: review(action, null, ['CORRECT: review-1 a real gap']),
   })
 }
 
@@ -69,14 +70,16 @@ function guarded(fails: { name: string; reason: string }[] = [], warns: string[]
     ...over,
   })
 }
-function reviewed(decision: string, head = 'head50', over = {}) {
-  return entry(`judge:merge-review:550:${head}`, 'judge', {
-    wake: 'merge-review',
+// The merge adjudicator's answer for PR 550 at a head (SPEC M4), with its report.
+function reviewed(action: AdjudicatorAction = { type: 'merge' }, head = 'head50', report: Partial<MergeReport> | null = {}, over: Partial<LedgerEntry> = {}) {
+  return entry(`adjudicate-merge:550:${head}`, 'spawn', {
+    agent: 'adjudicator',
     class: 'drive',
     issue: 50,
     pr: 550,
     head,
-    outcome: wakeAnswer(decision, over),
+    outcome: review(action, report),
+    ...over,
   })
 }
 
@@ -123,7 +126,7 @@ describe('G: gates', () => {
   test('Stop all launches nothing, not even an adjudicator, but free work like a merge proceeds (SKILL:43-44)', () => {
     const usage = { fiveHour: 96, sevenDay: 60, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false }
     expect(keys(plan(parkedReview({ usage }), CFG))).toEqual([])
-    const r = plan(mergeReady([guarded(), reviewed('merge')], { usage }), CFG)
+    const r = plan(mergeReady([guarded(), reviewed()], { usage }), CFG)
     expect(keys(r)).toEqual(['merge:550:head50'])
   })
 
@@ -188,10 +191,15 @@ describe('H: housekeeping', () => {
 
   test('a clean slot on a merged branch is returned; a dirty or busy one is not (SKILL:150, I-76)', () => {
     const slot = (path: string, over = {}) => ({ path, branch: 'feat/issue-12-x', state: 'leased', dirty: false, busy: false, ...over })
-    const s = state({
-      issues: [issue(12, { stage: 'merged', holder: DEVICE })],
-      pool: { free: 8, total: 16, slots: [slot('/t/1'), slot('/t/2', { dirty: true }), slot('/t/3', { busy: true })] },
-    })
+    // merged by the loop, so its rollout follow-ups are its merge's (M7)
+    const merged = entry('merge:512:h12', 'merge', { issue: 12, pr: 512, outcome: { kind: 'merge', result: 'merged', rollout: null, closeIssue: null, line: 'merged' } })
+    const s = withLedger(
+      state({
+        issues: [issue(12, { stage: 'merged', holder: DEVICE })],
+        pool: { free: 8, total: 16, slots: [slot('/t/1'), slot('/t/2', { dirty: true }), slot('/t/3', { busy: true })] },
+      }),
+      [merged],
+    )
     expect(keys(plan(s, CFG))).toEqual(['release:/t/1:feat/issue-12-x'])
   })
 })
@@ -271,14 +279,20 @@ describe('P: pipeline gates', () => {
     expect(find(fixer, `fixer:gate:${AT45}`)).toMatchObject({ agent: 'fixer', instructions: 'rewrite the parser', brief: brief(45) })
   })
 
-  test('a respond that leaves the gate unmoved is tried once more, then the owner hears (MEM respond lesson, SPEC P3a)', () => {
+  test('a respond that leaves the gate unmoved is tried once more, then the model takes it as a task (D-37, SPEC P3a)', () => {
     const adj = adjudicated({ type: 'approve', reason: null })
     const sent = entry(`respond:${AT45}:approve`, 'respond', { run: '01M4RQ0045AAAA', endedAt: NOW - 20 * MIN })
     expect(keys(plan(withLedger(parkedReview(), [adj, sent]), CFG))).toEqual([`respond:${AT45}:approve:retry`])
     const retried = entry(`respond:${AT45}:approve:retry`, 'respond', { run: '01M4RQ0045AAAA', endedAt: NOW - 16 * MIN })
-    expect(keys(plan(withLedger(parkedReview(), [adj, sent, retried]), CFG))).toEqual([
-      'tell:respond-stuck:01M4RQ0045AAAA:review:head45',
-    ])
+    const stuck = plan(withLedger(parkedReview(), [adj, sent, retried]), CFG)
+    expect(keys(stuck)).toEqual(['task:respond-stuck:01M4RQ0045AAAA:review:head45'])
+    expect(find(stuck, 'task:respond-stuck:01M4RQ0045AAAA:review:head45')).toMatchObject({
+      kind: 'task',
+      class: 'drive',
+      fields: { issue: '45', run: '01M4RQ0045AAAA', branch: 'feat/issue-45-work', step: 'review', head: 'head45' },
+    })
+    // a task for the model, not a notice the owner must act on
+    expect(stuck.owner).toBe(0)
     const fresh = entry(`respond:${AT45}:approve`, 'respond', { run: '01M4RQ0045AAAA', endedAt: NOW - 2 * MIN })
     expect(keys(plan(withLedger(parkedReview(), [adj, fresh]), CFG))).toEqual([])
   })
@@ -338,22 +352,42 @@ describe('M: merge', () => {
     expect(keys(plan(mergeReady([guarded([], [], 1, { status: 'running', endedAt: null })]), CFG))).toEqual([])
   })
 
-  test('a passing guard asks the model to read the fix commits before merging (SKILL:141-145)', () => {
-    const r = plan(mergeReady([guarded()]), CFG)
-    expect(keys(r)).toEqual(['judge:merge-review:550:head50'])
-    expect(find(r, 'judge:merge-review:550:head50')).toMatchObject({
-      kind: 'judge',
-      wake: 'merge-review',
-      fields: { pr: '550', issue: '50', head: 'head50', brief: brief(50) },
+  test('a passing guard sends the PR to the merge adjudicator, with pointers only (D-05, SPEC M4)', () => {
+    const handoff = entry(`delegate:50:${brief(50)}`, 'delegate', {
+      class: 'develop',
+      issue: 50,
+      outcome: { kind: 'handoff', notGated: false, run: '01M4RQ0050AAAA', head: 'h0', newBranch: null },
     })
+    const s = mergeReady([guarded(), handoff], { runs: [run(50, 'merge-ready', { verdicts: ['NIT: x'] })] })
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual(['adjudicate-merge:550:head50'])
+    expect(find(r, 'adjudicate-merge:550:head50')).toMatchObject({
+      kind: 'spawn',
+      agent: 'adjudicator',
+      purpose: 'merge',
+      class: 'drive',
+      rule: 'M4',
+      pr: 550,
+      head: 'head50',
+      brief: brief(50),
+      handoffHead: 'h0',
+      verdicts: ['NIT: x'],
+      guard: [],
+    })
+    // the model is not woken for the review itself
+    expect(r.actions.some(a => a.kind === 'judge')).toBe(false)
   })
 
-  test('the review answer decides: merge, a fixer, or a hold the owner sees (SKILL:139-145)', () => {
-    expect(keys(plan(mergeReady([guarded(), reviewed('merge')]), CFG))).toEqual(['merge:550:head50'])
-    const fixer = plan(mergeReady([guarded(), reviewed('fixer', 'head50', { instructions: 'restore the requirement' })]), CFG)
-    expect(find(fixer, 'fixer:review:550:head50')).toMatchObject({ purpose: 'review', instructions: 'restore the requirement' })
-    const hold = plan(mergeReady([guarded(), reviewed('hold', 'head50', { reason: 'needs owner' })]), CFG)
-    expect(keys(hold)).toEqual([])
+  test('the merge adjudicator decides: merge, a fixer, or a hold the owner is told of (D-05, SPEC M5, M5a, M5b)', () => {
+    const merged = plan(mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { bump: 'minor', bumpReason: 'new mode' })]), CFG)
+    expect(keys(merged)).toEqual(['merge:550:head50'])
+    expect(find(merged, 'merge:550:head50')).toMatchObject({ bump: 'minor', bumpReason: 'new mode' })
+    const fixer = plan(mergeReady([guarded(), reviewed({ type: 'fixer', instructions: 'restore the requirement' })]), CFG)
+    expect(keys(fixer)).toEqual(['fixer:review:550:head50'])
+    expect(find(fixer, 'fixer:review:550:head50')).toMatchObject({ purpose: 'review', rule: 'M5b', instructions: 'restore the requirement' })
+    const hold = plan(mergeReady([guarded(), reviewed({ type: 'hold', reason: 'the brief asked for a flag' })]), CFG)
+    expect(keys(hold)).toEqual(['tell:merge-hold:550:head50'])
+    expect(find(hold, 'tell:merge-hold:550:head50')).toMatchObject({ rule: 'M5a', context: ['the brief asked for a flag'] })
     expect(hold.owner).toBe(1)
   })
 
@@ -394,7 +428,7 @@ describe('M: merge', () => {
       outcome: { kind: 'update-behind', result: 'updated', from: 'head50', to: 'head51', line: 'UPDATED' },
     })
     const s = mergeReady(
-      [reviewed('merge', 'head50'), moved, entry('guard:550:head51:1', 'guard', { pr: 550, head: 'head51', endedAt: NOW - MIN, outcome: { kind: 'guard', fails: [], warns: [] } })],
+      [reviewed({ type: 'merge' }, 'head50'), moved, entry('guard:550:head51:1', 'guard', { pr: 550, head: 'head51', endedAt: NOW - MIN, outcome: { kind: 'guard', fails: [], warns: [] } })],
       { runs: [run(50, 'head-mismatch', { head: 'head51' })] },
     )
     expect(keys(plan(s, CFG))).toEqual(['merge:550:head51'])
@@ -425,12 +459,29 @@ describe('M: merge', () => {
     expect(keys(plan(mergeReady([guarded([], warn)]), CFG))).toEqual(['adjudicate-weakening:550:head50'])
     const judged = entry('adjudicate-weakening:550:head50', 'spawn', {
       agent: 'adjudicator',
-      outcome: { kind: 'adjudicator', verdicts: ['WRONG: || true is in a new file'], action: { type: 'approve', reason: 'new file' } },
+      outcome: review({ type: 'approve', reason: 'new file' }, null, ['WRONG: || true is in a new file']),
     })
     const r = plan(mergeReady([guarded([], warn), judged]), CFG)
     expect(keys(r)).toEqual(['pr-comment:550:head50'])
     const commented = entry('pr-comment:550:head50', 'pr-comment', { pr: 550, endedAt: NOW - 30_000 })
-    expect(keys(plan(mergeReady([guarded([], warn), judged, commented]), CFG))).toEqual(['judge:merge-review:550:head50'])
+    const after = plan(mergeReady([guarded([], warn), judged, commented]), CFG)
+    expect(keys(after)).toEqual(['adjudicate-merge:550:head50'])
+    // the merge adjudicator sees the WARN lines among the guard's
+    expect(find(after, 'adjudicate-merge:550:head50')).toMatchObject({ guard: warn })
+  })
+
+  test('an escalated test-weakening review holds until the owner resumes the run, which asks again (SPEC M3)', () => {
+    const warn = ['GUARD test-weakening WARN 89eff63 step=none files=t.sh kinds=or-true - have the adjudicator judge it']
+    const escalated = entry('adjudicate-weakening:550:head50', 'spawn', {
+      agent: 'adjudicator',
+      endedAt: NOW - 10 * MIN,
+      outcome: review({ type: 'escalate', why: 'the brief does not say' }),
+    })
+    const told = entry('tell:escalate:pr:550:head50', 'tell', { wake: 'escalate', issue: 50 })
+    const s = mergeReady([guarded([], warn), escalated, told])
+    expect(keys(plan(s, CFG))).toEqual([])
+    const resumed = { ...s, control: control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - MIN }] }) }
+    expect(keys(plan(resumed, CFG))).toEqual(['adjudicate-weakening:550:head50:r1'])
   })
 
   test('a refused merge goes to the owner with the guard output (SKILL:148-149)', () => {
@@ -439,7 +490,7 @@ describe('M: merge', () => {
       head: 'head50',
       outcome: { kind: 'merge', result: 'refused', rollout: null, closeIssue: null, line: 'GitHub refused: branch rules' },
     })
-    expect(keys(plan(mergeReady([guarded(), reviewed('merge'), refused]), CFG))).toEqual(['tell:merge-refused:550:head50'])
+    expect(keys(plan(mergeReady([guarded(), reviewed(), refused]), CFG))).toEqual(['tell:merge-refused:550:head50'])
   })
 
   test('after a merge, the rollout decides the follow-up (SKILL:84-89, 165)', () => {
@@ -459,8 +510,10 @@ describe('M: merge', () => {
     expect(keys(plan(base(merged('merge', 50)), CFG))).toEqual(['close:50'])
     expect(keys(plan(base(merged('run-it')), CFG))).toEqual(['milestone-later:50', 'task:run-it:50'])
     expect(keys(plan(base(merged('keep-open')), CFG))).toEqual(['milestone-later:50'])
-    const bumped = plan(base(merged('merge'), [reviewed('merge', 'head50', { bump: 'minor', bumpReason: 'new mode' })]), CFG)
+    const bumped = plan(base(merged('merge'), [reviewed({ type: 'merge' }, 'head50', { bump: 'minor', bumpReason: 'new mode' })]), CFG)
     expect(find(bumped, 'expect:minor:550')).toMatchObject({ bump: 'minor', why: 'new mode' })
+    // a bump no higher than the milestone's Expected changes nothing
+    expect(keys(plan(base(merged('merge'), [reviewed({ type: 'merge' }, 'head50', { bump: 'patch' })]), CFG))).toEqual([])
   })
 
   test('a guard older than 30 minutes is run again (SPEC M1)', () => {
@@ -670,17 +723,38 @@ describe('O: owner and report', () => {
     expect(keys(plan(state({ milestone: { open: 1, closed: 2, expected: 'minor' } }), CFG))).toEqual([])
   })
 
-  test('the title: repo, mode, tier with windows rounded down to 5%, counts, owner items (SKILL:171-173)', () => {
+  test('the title: counts of queue, in progress and merged in 6 hours, no usage (D-23, SPEC 9.1)', () => {
     const s = state({
       usage: { fiveHour: 67, sevenDay: 86, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false },
       queue: [1, 2, 3],
-      issues: [issue(1), issue(2), issue(3), mine(9, 'implementing'), mine(10, 'designing', { brief: null }), mine(11, 'parked')],
+      issues: [
+        issue(1),
+        issue(2),
+        issue(3),
+        mine(9, 'implementing'),
+        mine(10, 'designing'),
+        mine(11, 'parked'),
+        issue(12, { stage: 'ready to merge', holder: OTHER }),
+        issue(13, { stage: 'merged', stageSince: NOW - 5 * 60 * MIN }),
+        issue(14, { stage: 'merged', stageSince: NOW - 7 * 60 * MIN }),
+        issue(15, { stage: 'closed without merge', stageSince: NOW - MIN }),
+      ],
     })
-    expect(plan({ ...s, issues: s.issues.filter(i => i.number !== 10) }, CFG).title).toBe(
-      '🔄 dev-system · observe · slow 5h 65% 7d 85% · q 3 dev 1 pipe 1 merge 0',
-    )
-    const na = plan(state({ usage: { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true } }), CFG)
-    expect(na.title).toBe('🔄 dev-system · observe · normal usage n/a · q 0 dev 0 pipe 0 merge 0')
+    // Slow holds no work, so it adds no word; usage is never shown
+    expect(plan(s, CFG).title).toBe('🔄 dev-system (Q:3 - D:4 - M:1) · observe')
+    expect(plan(s, config({ mode: 'act' })).title).toBe('🔄 dev-system (Q:3 - D:4 - M:1)')
+  })
+
+  test('the title adds a word only for what needs attention (D-23, SPEC 9.1)', () => {
+    const u = (fiveHour: number) => ({ fiveHour, sevenDay: 10, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: false })
+    expect(plan(state({ usage: u(91) }), CFG).title).toBe('🔄 dev-system (Q:0 - D:0 - M:0) · observe · stop new')
+    expect(plan(state({ usage: u(96) }), CFG).title).toBe('🔄 dev-system (Q:0 - D:0 - M:0) · observe · stop all')
+    const stuck = state({ issues: [mine(9, 'implementing', { stuck: 'S3' })], githubBackoffUntil: NOW + MIN })
+    expect(plan(stuck, CFG).title).toBe('🔄 dev-system (Q:0 - D:1 - M:0) · observe · stuck 1 · gh wait')
+    // a blind pass has no counts: blind takes their place
+    expect(plan(failing(state({ queue: [7] }), 'factory', NOW - 5 * MIN), CFG).title).toBe('🔄 dev-system · observe · blind')
+    const owner = plan(parkedReview({}, 3), CFG)
+    expect(owner.title).toBe('🔄 dev-system (Q:0 - D:1 - M:0) · observe · owner 1')
   })
 
   test('the title is set only when it changes (FINDINGS check 3)', () => {
@@ -699,10 +773,11 @@ describe('O: owner and report', () => {
     })
     const timedOut = entry('task:run-it:50', 'task', { wake: 'run-it', status: 'timed-out', attempts: 1, class: 'drive', issue: 50 })
     expect(keys(plan(withLedger(state(), [merged, timedOut]), CFG))).toEqual(['tell:task-timeout:task:run-it:50'])
-    const judgeOut = entry('judge:merge-review:550:head50', 'judge', { wake: 'merge-review', status: 'timed-out', attempts: 1, pr: 550, head: 'head50' })
-    const r = plan(mergeReady([guarded(), judgeOut]), CFG)
+    const judgeOut = entry('judge:sequence:550:head50', 'judge', { wake: 'sequence', status: 'timed-out', attempts: 1, pr: 550, head: 'head50' })
+    const r = plan(mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { flags: ['image'] }), judgeOut]), CFG)
     expect(keys(r)).toEqual([])
     expect(r.owner).toBe(1)
+    expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'exhausted: judge:sequence:550:head50' })
   })
 
   test('free rechecks never trip the per-issue cap (SPEC 11.4)', () => {
@@ -731,6 +806,275 @@ describe('O: owner and report', () => {
     const r = plan(s, CFG)
     expect(keys(r)).toEqual([])
     expect(r.title).toContain('gh wait')
+  })
+})
+
+describe('H4: restart for an update (D-15)', () => {
+  const due = (at = NOW - 10 * MIN) => control({ updateDue: { reason: 'base image 1.2.3', at } })
+  const designer = entry(`design:60:${NOW - 30 * MIN}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', endedAt: null, agentId: 'a60' })
+
+  test('while an update is due the loop drains: no claim, no agent, no wake that drives work (SPEC H4)', () => {
+    const s = withLedger(parkedReview({ queue: [7], control: due() }), [designer])
+    const r = plan({ ...s, issues: [...s.issues, issue(7), mine(60, 'designing')] }, CFG)
+    expect(keys(r)).toEqual([])
+    const why = r.skipped.map(x => x.why)
+    expect(why).toContain('update due: draining (spawn)')
+    expect(why).toContain('update due: draining (claim)')
+    expect(why).toContain(`update due: draining, waiting on design:60:${NOW - 30 * MIN}`)
+    // free work goes on, so a reviewed PR still merges, and the restart waits for it
+    const merging = plan(mergeReady([guarded(), reviewed()], { control: due() }), CFG)
+    expect(keys(merging)).toEqual(['merge:550:head50'])
+    expect(merging.skipped).toContainEqual({ rule: 'H4', issue: null, why: 'update due: this pass has other actions to finish first' })
+  })
+
+  test('once nothing is in flight it restarts, after every other action (SPEC H4)', () => {
+    const at = NOW - 10 * MIN
+    const r = plan(state({ control: due(at) }), CFG)
+    expect(keys(r)).toEqual([`restart:${at}`])
+    expect(find(r, `restart:${at}`)).toMatchObject({ kind: 'restart-self', class: 'free', rule: 'H4', why: 'base image 1.2.3', at })
+    expect(r.actions.map(a => a.kind)).toEqual(['title', 'restart-self'])
+    // parked and merge-ready runs are safe; a running or pending one, of any device, is not
+    const parked = state({ control: due(at), issues: [mine(45, 'parked')], runs: [run(45, 'parked')] })
+    expect(keys(plan(parked, CFG))).toContain(`restart:${at}`)
+    for (const live of ['running', 'pending'] as const) {
+      const busy = state({ control: due(at), issues: [issue(80, { stage: 'in pipeline', holder: OTHER })], runs: [run(80, live)] })
+      const held = plan(busy, CFG)
+      expect(keys(held)).toEqual([])
+      expect(held.skipped).toContainEqual({ rule: 'H4', issue: null, why: `update due: draining, waiting on run 01M4RQ0080AAAA ${live}` })
+    }
+    // an open wake, or runs that cannot be seen, hold it too
+    expect(keys(plan(withLedger(state({ control: due(at) }), [entry('tell:x', 'tell', { status: 'running', endedAt: null })]), CFG))).toEqual([])
+    expect(keys(plan(failing(state({ control: due(at) }), 'runs', NOW - MIN), CFG))).toEqual([])
+    // one restart per request: done, or exhausted and named
+    expect(keys(plan(withLedger(state({ control: due(at) }), [entry(`restart:${at}`, 'restart-self')]), CFG))).toEqual([])
+    const failed = plan(withLedger(state({ control: due(at) }), [entry(`restart:${at}`, 'restart-self', { status: 'failed' })]), CFG)
+    expect(keys(failed)).toEqual([])
+    expect(failed.skipped).toContainEqual({ rule: 'H4', issue: null, why: `exhausted: restart:${at}` })
+  })
+
+  test('a drain past an hour tells the owner once, with what it waits on (SPEC H4)', () => {
+    const slow = withLedger(state({ control: due(NOW - 61 * MIN), issues: [mine(60, 'designing')] }), [designer])
+    const r = plan(slow, CFG)
+    expect(keys(r)).toEqual([`tell:drain-slow:${NOW - 61 * MIN}`])
+    expect(find(r, `tell:drain-slow:${NOW - 61 * MIN}`)).toMatchObject({
+      class: 'owner',
+      context: ['update: base image 1.2.3', `waiting on: design:60:${NOW - 30 * MIN}`],
+    })
+    expect(r.owner).toBe(0)
+    expect(keys(plan({ ...slow, control: due(NOW - 59 * MIN) }, CFG))).toEqual([])
+  })
+})
+
+describe('M5: release sequencing of a reviewed merge (D-05)', () => {
+  test('a flag that needs a call asks the model to sequence it, from the report lines and never the diff (SPEC M5)', () => {
+    const report = { summary: 'the dev image gains a PostgreSQL 17 server', bump: 'minor' as const, bumpReason: 'a new server', flags: ['image' as const] }
+    const r = plan(mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', report)]), CFG)
+    expect(keys(r)).toEqual(['judge:sequence:550:head50'])
+    expect(find(r, 'judge:sequence:550:head50')).toMatchObject({
+      kind: 'judge',
+      wake: 'sequence',
+      rule: 'M5',
+      fields: { pr: '550', issue: '50', head: 'head50', flags: 'image', bump: 'minor' },
+      context: ['SUMMARY: the dev image gains a PostgreSQL 17 server', 'BUMP: minor a new server', 'FLAGS: image'],
+    })
+    // a major bump, a run-it rollout and a template change need the call too; a restart alone does not
+    const calls: Partial<MergeReport>[] = [{ bump: 'major' }, { flags: ['run-it'] }, { flags: ['template'] }]
+    for (const c of calls) expect(keys(plan(mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', c)]), CFG))).toEqual(['judge:sequence:550:head50'])
+    expect(keys(plan(mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { flags: ['restart'] })]), CFG))).toEqual(['merge:550:head50'])
+  })
+
+  test('the sequencing answer merges or holds (SPEC M5, M5a)', () => {
+    const flagged = reviewed({ type: 'merge' }, 'head50', { flags: ['image'] })
+    const answer = (d: string, reason: string | null = null) =>
+      entry('judge:sequence:550:head50', 'judge', { wake: 'sequence', issue: 50, pr: 550, head: 'head50', outcome: wakeAnswer(d, { reason }) })
+    expect(keys(plan(mergeReady([guarded(), flagged, answer('merge')]), CFG))).toEqual(['merge:550:head50'])
+    const held = plan(mergeReady([guarded(), flagged, answer('hold', 'wait for the image release')]), CFG)
+    expect(keys(held)).toEqual(['tell:merge-hold:550:head50'])
+    expect(find(held, 'tell:merge-hold:550:head50')).toMatchObject({ context: ['wait for the image release'] })
+    expect(held.owner).toBe(1)
+  })
+
+  test('a hold lasts until the head moves or the owner resumes the run, which asks for a fresh review (SPEC M5a)', () => {
+    const hold = reviewed({ type: 'hold', reason: 'scope creep' })
+    const told = entry('tell:merge-hold:550:head50', 'tell', { wake: 'merge-hold', issue: 50 })
+    const s = mergeReady([guarded(), hold, told])
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.owner).toBe(1)
+    // a resume from before the hold does not release it
+    const early = { ...s, control: control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - 20 * MIN }] }) }
+    expect(keys(plan(early, CFG))).toEqual([])
+    const resumed = { ...s, control: control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - MIN }] }) }
+    expect(keys(plan(resumed, CFG))).toEqual(['adjudicate-merge:550:head50:r1'])
+    // a new head is a new review
+    const moved = mergeReady([guarded([], [], 1, { key: 'guard:550:head51:1', head: 'head51' }), hold, told], {
+      runs: [run(50, 'merge-ready', { head: 'head51' })],
+    })
+    expect(keys(plan(moved, CFG))).toEqual(['adjudicate-merge:550:head51'])
+  })
+
+  test('a run-it PR waits while another merged run-it issue waits for its Run it (SPEC M5)', () => {
+    const other = entry('merge:560:head60', 'merge', {
+      issue: 60,
+      pr: 560,
+      head: 'head60',
+      outcome: { kind: 'merge', result: 'merged', rollout: 'run-it', closeIssue: null, line: 'merged' },
+    })
+    const runIt = reviewed({ type: 'merge' }, 'head50', { flags: ['run-it'] })
+    const r = plan(mergeReady([guarded(), runIt, other]), CFG)
+    expect(keys(r)).toEqual(['task:run-it:60'])
+    expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'run-it: waits for the Run it of #60' })
+    const ran = entry('task:run-it:60', 'task', { wake: 'run-it', issue: 60, outcome: wakeAnswer('done') })
+    expect(keys(plan(mergeReady([guarded(), runIt, other, ran]), CFG))).toEqual(['judge:sequence:550:head50'])
+    // a Run it held for the owner's release approval still holds the next run-it PR, until the
+    // owner resumes the issue
+    const held = entry('task:run-it:60', 'task', { wake: 'run-it', issue: 60, endedAt: NOW - 10 * MIN, outcome: wakeAnswer('hold') })
+    const waiting = mergeReady([guarded(), runIt, other, held])
+    expect(keys(plan(waiting, CFG))).toEqual([])
+    const resumed = { ...waiting, control: control({ resumed: [{ subject: 'issue:60', at: NOW - MIN }] }) }
+    expect(keys(plan(resumed, CFG))).toEqual(['judge:sequence:550:head50'])
+  })
+
+  test('an ACTION that does not answer a merge review is not acted on (SPEC 7.3)', () => {
+    const r = plan(mergeReady([guarded(), reviewed({ type: 'approve', reason: null })]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M4', issue: 50, why: 'merge adjudicator: ACTION approve does not answer a merge review' })
+  })
+})
+
+describe('M7: follow-ups for hand merges (D-29)', () => {
+  const handMerged = (over: Partial<IssueView> = {}) => mine(70, 'merged', { stageSince: NOW - 30 * MIN, pr: 570, ...over })
+  const loopMerge = (result: 'merged' | 'refused') =>
+    entry('merge:570:h7', 'merge', { issue: 70, pr: 570, head: 'h7', outcome: { kind: 'merge', result, rollout: 'merge', closeIssue: null, line: result } })
+
+  test('an issue this device held that merged with no merge of the loop has its rollout read', () => {
+    const r = plan(state({ issues: [handMerged()] }), CFG)
+    expect(keys(r)).toEqual(['rollout:70'])
+    expect(find(r, 'rollout:70')).toMatchObject({ kind: 'rollout', class: 'free', rule: 'M7', issue: 70, pr: 570 })
+    // the loop's own merge has its follow-ups already; another device's is not ours; a day-old one is history
+    expect(keys(plan(withLedger(state({ issues: [handMerged()] }), [loopMerge('merged')]), CFG))).toEqual([])
+    expect(keys(plan(state({ issues: [handMerged({ holder: OTHER })] }), CFG))).toEqual([])
+    expect(keys(plan(state({ issues: [handMerged({ stageSince: NOW - 25 * 60 * MIN })] }), CFG))).toEqual([])
+    // GitHub refused the loop's merge and the owner merged it by hand: it is followed up
+    expect(keys(plan(withLedger(state({ issues: [handMerged()] }), [loopMerge('refused')]), CFG))).toEqual(['rollout:70'])
+  })
+
+  test('the rollout outcome gives the same follow-ups as a merge (SPEC M7)', () => {
+    const read = (rollout: 'merge' | 'run-it' | 'keep-open', closeIssue: number | null = null) =>
+      entry('rollout:70', 'rollout', { issue: 70, pr: 570, outcome: { kind: 'rollout', rollout, closeIssue } })
+    const s = state({ issues: [handMerged()], milestone: { open: 2, closed: 1, expected: 'patch' } })
+    expect(keys(plan(withLedger(s, [read('merge', 70)]), CFG))).toEqual(['close:70'])
+    expect(keys(plan(withLedger(s, [read('run-it')]), CFG))).toEqual(['milestone-later:70', 'task:run-it:70'])
+    expect(keys(plan(withLedger(s, [read('keep-open')]), CFG))).toEqual(['milestone-later:70'])
+    // the merge report the loop had before the owner merged sets the milestone's Expected
+    const reported = entry('adjudicate-merge:570:h7', 'spawn', {
+      agent: 'adjudicator',
+      issue: 70,
+      pr: 570,
+      head: 'h7',
+      outcome: review({ type: 'merge' }, { bump: 'minor', bumpReason: 'a new mode' }),
+    })
+    expect(find(plan(withLedger(s, [read('merge'), reported]), CFG), 'expect:minor:570')).toMatchObject({ bump: 'minor', why: 'a new mode' })
+  })
+})
+
+describe('D1: trackers inside only (D-35)', () => {
+  test('a tracker in only stands for its open sub-issues, ascending', () => {
+    const s = state({
+      queue: [41, 43, 44],
+      issues: [
+        issue(40, { subIssues: 3, labels: ['enhancement'], subIssueList: [41, 42, 43] }),
+        issue(41),
+        issue(42, { labels: ['enhancement'] }),
+        issue(43),
+        issue(44),
+      ],
+      control: control({ only: [40] }),
+    })
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual([`claim:41:${NOW - 30 * MIN}`, `claim:43:${NOW - 30 * MIN}`])
+    const why = Object.fromEntries(r.skipped.filter(x => x.rule === 'D1').map(x => [x.issue, x.why]))
+    expect(why).toEqual({ 42: 'owner: only names it, but it is not in the ready queue', 44: 'owner: only #40' })
+  })
+
+  test('a tracker whose sub-issues are not read yet stands for nothing, and says so', () => {
+    const s = state({ queue: [41], issues: [issue(40, { subIssues: 2 }), issue(41)], control: control({ only: [40] }) })
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 40, why: 'owner: only names this tracker, whose sub-issues are not read yet' })
+  })
+
+  test('an epic by its title is a tracker too; a plain issue in only stands for itself, in only order', () => {
+    const s = state({
+      queue: [45, 51, 52],
+      issues: [issue(45), issue(50, { epic: true, subIssueList: [52, 51] }), issue(51), issue(52)],
+      control: control({ only: [50, 45] }),
+    })
+    expect(keys(plan(s, CFG))).toEqual([52, 51, 45].map(n => `claim:${n}:${NOW - 30 * MIN}`))
+  })
+})
+
+describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
+  test('a tripped rate cap is named in the log and the title, and the owner is told once (SPEC 11.4)', () => {
+    const claims = Array.from({ length: 30 }, (_, i) => entry(`claim:${100 + i}:x`, 'claim', { class: 'start', startedAt: NOW - 30 * MIN }))
+    const r = plan(withLedger(state({ queue: [1], issues: [issue(1)] }), claims), CFG)
+    expect(r.capped).toEqual(['start'])
+    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 1, why: 'rate cap: start 30/30' })
+    expect(r.title).toBe('🔄 dev-system (Q:1 - D:0 - M:0) · observe · capped start')
+  })
+
+  test('the per-issue cap names its kind and issue (SPEC 11.4)', () => {
+    const spawns = Array.from({ length: 6 }, (_, i) =>
+      entry(`design:60:old${i}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'lost', startedAt: NOW - 40 * MIN }),
+    )
+    const r = plan(withLedger(state({ issues: [mine(60, 'designing')] }), spawns), CFG)
+    expect(r.capped).toEqual(['spawn:60'])
+    expect(r.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'rate cap: spawn on #60 6/6' })
+    expect(r.title).toContain('capped spawn:60')
+  })
+
+  test('merges are never capped (D-24)', () => {
+    const merges = Array.from({ length: 12 }, (_, i) => entry(`merge:${600 + i}:h`, 'merge', { pr: 600 + i, startedAt: NOW - 20 * MIN }))
+    const r = plan(mergeReady([guarded(), reviewed(), ...merges]), CFG)
+    expect(keys(r)).toEqual(['merge:550:head50'])
+    expect(r.capped).toEqual([])
+  })
+
+  test('the in-flight cap holds claims back, shows in the title, and tells the owner once per reach (SPEC 4.2)', () => {
+    const live = Array.from({ length: 10 }, (_, i) => mine(100 + i, 'implementing'))
+    const s = state({ queue: [1], issues: [issue(1), ...live], pool: { free: 16, total: 16, slots: [] } })
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual(['tell:at-cap:0'])
+    expect(r.atCap).toBe(true)
+    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 1, why: 'in-flight cap: 10 of 10' })
+    expect(r.title).toBe('🔄 dev-system (Q:1 - D:10 - M:0) · observe · at cap')
+    // a notice, not an owner item
+    expect(r.owner).toBe(0)
+    const told = withLedger(s, [entry('tell:at-cap:0', 'tell', { wake: 'at-cap' })])
+    expect(keys(plan(told, CFG))).toEqual([])
+    // a claim since then starts the count over: reaching the cap again is told again
+    const claimed = withLedger(told, [entry('claim:99:x', 'claim', { class: 'start', issue: 99, endedAt: NOW - 3 * MIN, outcome: { kind: 'claim', result: 'claimed' } })])
+    expect(keys(plan(claimed, CFG))).toEqual([`tell:at-cap:${NOW - 3 * MIN}`])
+    expect(plan({ ...s, issues: s.issues.slice(0, 10) }, CFG).atCap).toBe(false)
+  })
+
+  test('an exhausted key is named, so the log shows what /factory retry would clear (D-38)', () => {
+    const failedTwice = entry(`design:60:${NOW - 20 * MIN}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'failed', attempts: 2 })
+    const r = plan(withLedger(state({ issues: [mine(60, 'designing', { stageSince: NOW - 20 * MIN })] }), [failedTwice]), CFG)
+    expect(r.skipped).toContainEqual({ rule: 'D2', issue: 60, why: `exhausted: design:60:${NOW - 20 * MIN}` })
+  })
+})
+
+describe('labels (SPEC 4.2)', () => {
+  test('labels are compared without regard to case: ready, skip labels and the model: prefix', () => {
+    expect(sameLabel('In development', 'in development')).toBe(true)
+    const s = state({ queue: [1, 2], issues: [issue(1, { labels: ['Ready'] }), issue(2, { labels: ['ready', 'Parked'] })] })
+    const r = plan(s, config({ skipLabels: ['parked'] }))
+    expect(keys(r)).toEqual([`claim:1:${NOW - 30 * MIN}`])
+    expect(r.skipped).toContainEqual({ rule: 'D1', issue: 2, why: 'label Parked' })
+    const p = parkedReview()
+    const labelled = { ...p, issues: [{ ...p.issues[0]!, labels: ['In development', 'Model:Opus'] }] }
+    expect(find(plan(labelled, CFG), `adjudicate:${AT45}`)).toMatchObject({ model: 'opus' })
   })
 })
 
@@ -763,9 +1107,21 @@ const SCENARIOS: [string, State][] = [
   ['approved', withLedger(parkedReview(), [adjudicated({ type: 'approve', reason: null })])],
   ['merge-ready', mergeReady()],
   ['guarded', mergeReady([guarded()])],
-  ['reviewed', mergeReady([guarded(), reviewed('merge')])],
+  ['reviewed', mergeReady([guarded(), reviewed()])],
   ['queue', state({ queue: [1, 2, 3], issues: [issue(1), issue(2), issue(3)], loadedAt: NOW - MIN })],
   ['designing', state({ issues: [mine(60, 'designing')], loadedAt: NOW - MIN })],
+  ['draining', withLedger(parkedReview({ control: control({ updateDue: { reason: 'x', at: NOW - 70 * MIN } }) }), [
+    entry('design:9:x', 'spawn', { agent: 'designer', class: 'develop', issue: 9, status: 'running', endedAt: null }),
+  ])],
+  ['restart', state({ control: control({ updateDue: { reason: 'x', at: NOW - MIN } }) })],
+  ['flagged', mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { flags: ['image'] })])],
+  ['hand-merge', state({ issues: [mine(70, 'merged', { stageSince: NOW - 30 * MIN, pr: 570 })] })],
+  ['tracker-only', state({
+    queue: [41, 43],
+    issues: [issue(40, { subIssues: 2, subIssueList: [41, 43] }), issue(41), issue(43)],
+    control: control({ only: [40] }),
+  })],
+  ['at-cap', state({ queue: [1], issues: [issue(1), ...Array.from({ length: 10 }, (_, i) => mine(100 + i, 'implementing'))] })],
   ['busy', state({
     loadedAt: NOW - MIN,
     queue: [1, 2],

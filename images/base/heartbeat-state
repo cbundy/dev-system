@@ -13,7 +13,9 @@
 //     callum-flow-factory-state; after any of the idle states the replayed run facts failed,
 //     head_mismatch, conflict and ci_stalled never count. Noise
 //     states never count for or against busy (callum-flow-issue-read logs
-//     untrusted_stripped on any read; renewed is the claim heartbeat).
+//     untrusted_stripped on any read; renewed is the claim heartbeat; loop is
+//     the factory loop's bookkeeping, DECISIONS D-09, logged for an issue in
+//     any stage, a queued one included).
 //   - a no-mistakes run whose status is not completed, failed or cancelled,
 //     unless a superseded event on this device names it
 //   - a typed prompt (classifyWake kind 'owner', not a sidechain) in a Claude
@@ -29,7 +31,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed']);
+const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed', 'loop']);
 const isNoise = (s) => NOISE.has(s) || /^(upgrade|drain)/.test(s);
 const DONE = new Set(['merged', 'abandoned', 'claim_lost', 'owner_wait', 'closed', 'ready', 'reclaimed']);
 const TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);

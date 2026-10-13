@@ -6,7 +6,7 @@
 // mode by design, and in act mode too until the act half is built (it says so in the log).
 import type { EngineInterface, Register } from 'claude-code'
 
-import { DEFAULT_CONFIG } from './config'
+import { loadConfig } from './config'
 import { emptyCache, observe } from './observe'
 import type { Io, Runtime } from './observe'
 import { issueFromBranch, plan } from './plan'
@@ -72,8 +72,9 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
-  const repoLocal = json(await text($, `${checkout}/.claude/factory-loop.json`))
-  const config: Config = { ...DEFAULT_CONFIG, ...repoLocal, mode } as Config
+  // the repo-local settings, durations and all (SPEC 4.2); what they get wrong is logged
+  const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)))
+  const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = `${base}/${repo.replace('/', '__')}`
   return {
     mode,
@@ -85,6 +86,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     loopDir,
     sink: mode === 'act' ? null : `${loopDir}/sink-events`,
     config,
+    configProblems: loaded.problems,
   }
 }
 

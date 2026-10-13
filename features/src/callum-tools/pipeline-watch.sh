@@ -3,7 +3,8 @@
 # Wait until a watched no-mistakes pipeline reaches an actionable state,
 # print one line - "<state> <branch> <run-id>[ <detail>] head=<sha>" - and
 # exit (single-shot, the default). With --stream it never exits on an event:
-# see "Stream mode" below. States:
+# see "Stream mode" below. With --once it polls once and prints every branch:
+# see "--once" below. States:
 #
 #   merge-ready  all local steps passed, the run's ci.log records a
 #                GitHub CI pass, the run's head is the branch's real
@@ -153,10 +154,37 @@
 # event and never prints a watcher state line. It takes no option except
 # --worktree. This is the one place the branch-to-run lookup lives:
 # callum-flow-merge-guard asks the watcher instead of parsing anything itself.
+#
+# --once (docs/factory-loop/SPEC.md 3.4, DECISIONS D-20) is one poll for the
+# factory loop, not a watch: it classifies every watched branch's newest run as
+# above, prints one line per branch whose newest run is not completed, in the
+# line format above, and exits 0. Besides the actionable states it prints
+#
+#   running      in flight, nothing to report (what the watch modes stay quiet on)
+#   pending      not yet known: green but GitHub's mergeability is UNKNOWN or
+#                `gh` failed, a probe failed, or no source knows the run's id
+#
+# A run id no source knows prints as "unknown". After the state's own detail,
+# the detail carries " step=<step>" for parked and failed (the step awaiting an
+# agent or approval, or the failed one; "unknown" when the run's status has no
+# step table), then " pr=<n>" for every run with a PR (from its status, else its
+# `no-mistakes runs` row), e.g.
+#
+#   parked feat/issue-7-x 01K... step=review pr=12 head=<sha>
+#   head-mismatch feat/issue-8-y 01K... run=<sha> branch=<sha> pr=13 head=<sha>
+#
+# Actionable lines are logged as a first sight (--if-changed) with the note the
+# watch modes log, so the event log keeps the same transitions; running and
+# pending are not logged. Fatal, with exit 1, the reason on stderr and no
+# watcher_error event (the caller polls every minute and reports a failed source
+# itself): `no-mistakes` or `gh` missing from PATH, not inside a git repository,
+# or `no-mistakes runs` failing, which is a failed source, never "no runs". It
+# takes no option except --branches and --worktree.
 set -eu
 
 stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
+once=
 reported=
 seen= # branches this process has set_known for: their transitions were observed
 
@@ -199,7 +227,8 @@ nap_cleanup() {
 # watcher-error line on stdout, the event channel.
 fatal() {
   [ -z "$stream" ] || echo "watcher-error $*"
-  record_event watcher_error --note "pipeline-watch: $*"
+  # --once runs every pass and its caller reports a failed source: no watcher_error each minute
+  [ -n "$once" ] || record_event watcher_error --note "pipeline-watch: $*"
   echo "pipeline-watch.sh: $*" >&2
   reported=1
   exit 1
@@ -225,7 +254,8 @@ usage() {
   echo "usage: pipeline-watch.sh [--branches branch[,branch...]]" \
     "[--stream | --deadline seconds] [--interval seconds]" \
     "[--worktree branch=path]... [--known branch=state:sha]..." \
-    "| --resolve branch [--worktree branch=path]..." >&2
+    "| --resolve branch [--worktree branch=path]..." \
+    "| --once [--branches branch[,branch...]] [--worktree branch=path]..." >&2
   reported=1
   exit 2
 }
@@ -237,6 +267,7 @@ ci_grace=${PIPELINE_WATCH_CI_GRACE:-300}
 worktrees=
 known=
 resolve_branch=
+interval_set=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --resolve)
@@ -246,8 +277,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --branches) branches=${2-}; shift 2 || usage ;;
     --deadline) deadline=${2-}; shift 2 || usage ;;
-    --interval) interval=${2-}; shift 2 || usage ;;
+    --interval) interval=${2-}; interval_set=1; shift 2 || usage ;;
     --stream) shift ;;
+    --once) once=1; shift ;;
     --worktree)
       case "${2-}" in ?*=?*) ;; *) usage ;; esac
       worktrees="$worktrees$2
@@ -263,6 +295,11 @@ while [ "$#" -gt 0 ]; do
     *) usage ;;
   esac
 done
+if [ -n "$once" ]; then
+  if [ -n "$known$stream$resolve_branch$interval_set" ] || [ "$deadline" != 0 ]; then
+    usage "--once takes no option except --branches and --worktree"
+  fi
+fi
 if [ -n "$resolve_branch" ]; then
   if [ -n "$branches$known$stream" ] || [ "$deadline" != 0 ]; then
     usage "--resolve takes no option except --worktree"
@@ -386,15 +423,48 @@ field() {
 }
 
 # run_rows: the newest run per branch, newest first, one
-# "<branch> <status> <short-head>" line each ("-" for a head the row does
-# not show). Fails if `no-mistakes runs` does: a transient failure skips the
-# cycle. Real rows carry a date, which also skips the "no runs yet" hint.
+# "<branch> <status> <short-head> <pr>" line each ("-" for a head or PR the
+# row does not show; a row with a PR ends with its URL). Fails if
+# `no-mistakes runs` does: a transient failure skips the cycle. Real rows
+# carry a date, which also skips the "no runs yet" hint.
 run_rows() {
   all=$(no-mistakes runs --limit 200 2>/dev/null) || return 1
   printf '%s\n' "$all" | clean | awk '
     /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ && NF >= 3 && !seen[$2]++ {
-      print $2, $1, ($3 ~ /^[0-9a-f]+$/ ? $3 : "-")
+      pr = "-"
+      if ($NF ~ /\/pull\/[0-9]+$/) { pr = $NF; sub(/.*\/pull\//, "", pr) }
+      print $2, $1, ($3 ~ /^[0-9a-f]+$/ ? $3 : "-"), pr
     }'
+}
+
+# row_sha <short-head>: the full SHA of a runs row's head, the short head
+# itself when git does not know it, or nothing for "-".
+row_sha() {
+  [ "$1" != - ] || return 0
+  git rev-parse --verify --quiet "$1^{commit}" 2>/dev/null || printf '%s' "$1"
+}
+
+# step_of <status-regex>: the first step in $out's
+# "steps[N]{step,status,...}" table whose status matches, else "unknown".
+step_of() {
+  s=$(printf '%s\n' "$out" | awk -v want="^($1)\$" '
+    /^[[:space:]]*steps\[[0-9]+\]\{step,status/ { t = 1; next }
+    t && split($1, f, ",") >= 2 { if (f[2] ~ want) { print f[1]; exit } next }
+    { t = 0 }')
+  printf '%s' "${s:-unknown}"
+}
+
+# once_detail <state>: what --once adds to a line's detail (see the header):
+# " step=<step>" for parked and failed, then " pr=<n>" when the run has a PR,
+# from its status (a URL) or else its runs row ($rpr).
+once_detail() {
+  case "$1" in
+    parked) printf ' step=%s' "$(step_of 'awaiting_agent|awaiting_approval')" ;;
+    failed) printf ' step=%s' "$(step_of failed)" ;;
+  esac
+  p=$(field "$out" pr | sed -n 's#^.*/pull/\([0-9][0-9]*\).*$#\1#p; s#^\([0-9][0-9]*\)$#\1#p' | sed -n 1p)
+  [ -n "$p" ] || [ "$rpr" = - ] || p=$rpr
+  [ -z "$p" ] || printf ' pr=%s' "$p"
 }
 
 # try_run <id> <branch>: probe one run; on success sets out (the cleaned
@@ -491,12 +561,14 @@ if [ -n "$resolve_branch" ]; then
   row=$(printf '%s\n' "$rows" | awk -v b="$resolve_branch" '$1 == b { print; exit }')
   [ -n "$row" ] || exit 1
   rest=${row#* }
+  rstatus=${rest%% *}
+  rest=${rest#* }
   auto_worktrees=$(git worktree list --porcelain 2>/dev/null | awk '
     /^worktree / { p = substr($0, 10) }
     /^branch refs\/heads\// { print substr($0, 19) "=" p }') || auto_worktrees=
   table_loaded=
   dirs_scanned=
-  resolve "$resolve_branch" "${rest%% *}" "${rest#* }" || exit 1
+  resolve "$resolve_branch" "$rstatus" "${rest%% *}" || exit 1
   [ -n "$id" ] || exit 1
   printf '%s\n' "$id"
   exit 0
@@ -504,7 +576,11 @@ fi
 
 # poll: one cycle over every watched branch's newest run.
 poll() {
-  rows=$(run_rows) || return 0
+  rows=$(run_rows) || {
+    # to --once's caller a failed listing is a failed source, never "no runs"
+    [ -z "$once" ] || fatal "no-mistakes runs failed"
+    return 0
+  }
   auto_worktrees=$(git worktree list --porcelain 2>/dev/null | awk '
     /^worktree / { p = substr($0, 10) }
     /^branch refs\/heads\// { print substr($0, 19) "=" p }') || auto_worktrees=
@@ -518,21 +594,29 @@ poll() {
     branch=${row%% *}
     rest=${row#* }
     rstatus=${rest%% *}
-    rhead=${rest#* }
+    rest=${rest#* }
+    rhead=${rest%% *}
+    rpr=${rest#* }
     if [ -n "$branches" ]; then
       case ",$branches," in *",$branch,"*) ;; *) continue ;; esac
     fi
     state=
     quiet= # set when the run is plainly not actionable, as opposed to not yet known
+    ended= # set when the run is completed: --once prints nothing for it
     detail=
+    run_sha=
     if [ "$rstatus" = completed ]; then
       quiet=1 # merged or closed - nothing left for the orchestrator
+      ended=1
     elif resolve "$branch" "$rstatus" "$rhead"; then
       run_sha=$(field "$out" head_sha)
       status=$(field "$out" status)
       case "$status" in
         failed | cancelled) state=$status ;;
-        completed) quiet=1 ;;
+        completed)
+          quiet=1
+          ended=1
+          ;;
         *)
           if printf '%s\n' "$out" | grep -q 'awaiting_agent\|,awaiting_approval,'; then
             state=parked
@@ -557,8 +641,7 @@ poll() {
         failed | cancelled)
           state=$rstatus
           id=unknown
-          run_sha=
-          [ "$rhead" = - ] || run_sha=$(git rev-parse --verify --quiet "$rhead^{commit}" 2>/dev/null) || run_sha=$rhead
+          run_sha=$(row_sha "$rhead")
           ;;
       esac
     fi
@@ -586,7 +669,9 @@ poll() {
       [ "$(known_fingerprint "$branch")" = "$fingerprint" ] && state=
     fi
     if [ -n "$state" ]; then
-      printf '%s %s %s%s head=%s\n' "$state" "$branch" "$id" "$detail" "${run_sha:-unknown}"
+      extra=
+      [ -z "$once" ] || extra=$(once_detail "$state")
+      printf '%s %s %s%s%s head=%s\n' "$state" "$branch" "$id" "$detail" "$extra" "${run_sha:-unknown}"
       # the watcher's states are the log's, with _ for - ("cancelled" is a failed run).
       # A branch this process has not yet watched change (no fingerprint of its own,
       # only a missing or stale --known) is a first sight: the event is logged only
@@ -601,14 +686,31 @@ $branch
         cancelled) record_event failed --branch "$branch" --run "$id" --head "${run_sha:-}" --note "cancelled" $first ;;
         *) record_event "$(printf '%s' "$state" | tr - _)" --branch "$branch" --run "$id" --head "${run_sha:-}" --note "${detail# }" $first ;;
       esac
-      [ -n "$stream" ] || exit 0
-      set_known "$branch" "$fingerprint"
+      [ -n "$stream$once" ] || exit 0
+      [ -z "$stream" ] || set_known "$branch" "$fingerprint"
+    elif [ -n "$once" ]; then
+      # --once also reports a run in flight: running when the watch modes stay
+      # quiet on it, pending while its state is not yet known
+      if [ -z "$ended" ]; then
+        if [ -n "$quiet" ]; then state=running; else state=pending; fi
+        [ -n "$run_sha" ] || run_sha=$(row_sha "$rhead")
+        printf '%s %s %s%s head=%s\n' "$state" "$branch" "${id:-unknown}" "$(once_detail "$state")" "${run_sha:-unknown}"
+      fi
     elif [ -n "$stream" ] && [ -n "$quiet" ]; then
       set_known "$branch" none
     fi
   done
   IFS=$old_ifs
 }
+
+# --once: one poll over every watched branch (see the header), then exit 0.
+if [ -n "$once" ]; then
+  command -v no-mistakes >/dev/null 2>&1 || fatal "no-mistakes not on PATH"
+  command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
+  git rev-parse --git-dir >/dev/null 2>&1 || fatal "not inside a git repository"
+  poll
+  exit 0
+fi
 
 while :; do
   if [ -n "$stream" ]; then

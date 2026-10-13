@@ -49,8 +49,8 @@ test("plan.ts reads no clock and calls nothing outside itself", () => {
   }
 });
 
-test("the observe half's pure modules read no clock and call nothing outside themselves", () => {
-  for (const file of ["parse.ts", "derive.ts", "state.ts"]) {
+test("the observe half's pure modules and the config loader read no clock and call nothing outside themselves", () => {
+  for (const file of ["parse.ts", "derive.ts", "state.ts", "config.ts"]) {
     const src = code(file);
     for (const [what, pattern] of Object.entries({
       "the clock (dates are parsed, never read)": /Date\.now|new Date\(|\bperformance\b/,

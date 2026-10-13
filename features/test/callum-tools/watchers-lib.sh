@@ -163,7 +163,7 @@ gone() {
 
 # Stub no-mistakes, modelled on the real v1.84 output: `axi status --run
 # <id>` prints runs/<id>.txt; `runs` prints one row per id in runs-order
-# (newest first) - "  <status>  <branch> <short-head>  <date>", no run id;
+# (newest first) - "  <status>  <branch> <short-head>  <date>[  <pr-url>]", no run id;
 # `axi status` with no --run prints the newest run of the cwd's branch, or,
 # when that branch has none, the runs[N]{id,branch,status,head,pr} table.
 # Every call fails while an nm-fail marker exists (a transient failure).
@@ -173,10 +173,11 @@ cat > "$fakebin/no-mistakes" <<'EOF'
 d=$(dirname "$0")
 [ "$1" != runs ] || echo x >> "$d/nm-polls"
 [ ! -e "$d/nm-fail" ] || exit 1
-# row <id>: "<branch> <status> <short-head>" of a run
+# row <id>: "<branch> <status> <short-head>[ <pr-url>]" of a run
 row() {
   awk '/^  branch: /{b=substr($0,11)} /^  status: /{s=substr($0,11)} /^  head_sha: /{h=substr($0,13,8)}
-    END{print b, s, (h==""?"-":h)}' "$d/runs/$1.txt"
+    /^  pr: /{p=substr($0,7); gsub(/"/,"",p)}
+    END{print b, s, (h==""?"-":h), p}' "$d/runs/$1.txt"
 }
 order=$(cat "$d/runs-order" 2>/dev/null)
 case "$1 ${2-} ${3-}" in
@@ -184,7 +185,7 @@ case "$1 ${2-} ${3-}" in
     [ -n "$order" ] || { echo "  no runs yet."; exit 0; }
     for id in $order; do
       set -- $(row "$id")
-      printf '  %-12s %s %s  2026-10-06 21:00\n' "$2" "$1" "$3"
+      printf '  %-12s %s %s  2026-10-06 21:00%s\n' "$2" "$1" "$3" "${4:+  $4}"
     done
     ;;
   "axi status --run") cat "$d/runs/$4.txt" 2>/dev/null ;;
@@ -277,6 +278,15 @@ run_state() {
     esac
     echo "    push,pending,0,0"
   } > "$fakebin/runs/$1.txt.next"
+  mv "$fakebin/runs/$1.txt.next" "$fakebin/runs/$1.txt"
+}
+
+# run_pr <run-id> <n>: give the run a PR, placed in its status as the real
+# `axi status` places it (the stub's `runs` row then ends with the URL, as a
+# real one does). Call it after run_state, which rewrites the file.
+run_pr() {
+  awk -v pr="  pr: \"https://github.com/o/r/pull/$2\"" '/^  steps\[/ { print pr } { print }' \
+    "$fakebin/runs/$1.txt" > "$fakebin/runs/$1.txt.next"
   mv "$fakebin/runs/$1.txt.next" "$fakebin/runs/$1.txt"
 }
 

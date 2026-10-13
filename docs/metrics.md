@@ -30,6 +30,17 @@ Its `note` is GitHub's close reason verbatim: `completed`, `not_planned` or
 throughput and lead-time queries keep counting `merged` only. Two devices sweeping before either
 has pushed can both log it, so count identical consecutive rows once.
 
+`loop` is the factory loop's own bookkeeping (`plugins/factory-loop`, see
+[DECISIONS D-09](factory-loop/DECISIONS.md)): agent starts and ends, judgment wakes and their
+answers (with the wake's cause), owner notices and rate-cap holds. Its `note` carries
+`kind=<kind> key=<idempotency key> status=<status>` (more fields may follow), and `issue` is null
+for work that names no issue (a release wake, a hold on a whole class). It shows when an agent started or the model was
+woken without the loop's local files, and rebuilds the loop's ledger after a lost store. It is
+never a stage and never progress: no query here counts it as an issue event, the stuck test below
+skips it, and `callum-flow-factory-state` and `heartbeat-state` ignore it. Only "alive" in the
+waiting split counts it, since a loop that logs is a device at work. CLI work the loop runs
+(claims, merges, the watchers' states) logs its own states, not `loop`.
+
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`, `event_id`, `base_image`, `dev_image`,
 `template_version`, `plugin_version`.
@@ -214,7 +225,7 @@ once. A **double-claim** is two devices with a live `claimed` on one issue and n
 `reclaimed`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
 logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
-`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost` and `renewed` (a heartbeat is not progress), for more than
+`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, `renewed` (a heartbeat is not progress) and `loop` (the factory loop's bookkeeping), for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 `superseded` (a run or branch replaced for the same issue, run-scoped) is none of these: it neither ends an issue nor releases a claim.
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
@@ -259,7 +270,7 @@ Each merged issue's wall-clock time from `ready` to `merged`, cut into three par
 
 A dispatcher-bound second is flagged "another device idle" when, at that moment, some device other
 than the issue's owner (the device of its first `claimed`) was alive and held no in-flight issue.
-A device is alive for 30 minutes after any event it logged (`usage` included). It holds an issue
+A device is alive for 30 minutes after any event it logged (`usage` and `loop` included). It holds an issue
 from its `claimed` until that issue's next `ready`, `reclaimed`, `merged`, `abandoned` or `closed`.
 
 **The B-or-gate rule.** Wait is pipeline-bound plus dispatcher-bound seconds. If the

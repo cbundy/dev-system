@@ -3,10 +3,12 @@
 import { DEFAULT_CONFIG, EMPTY_CONTROL } from '../hooks/config'
 import type {
   Action,
+  AdjudicatorAction,
   Config,
   Control,
   IssueView,
   LedgerEntry,
+  MergeReport,
   Outcome,
   PlanResult,
   RunState,
@@ -87,6 +89,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     blockedBy: 0,
     subIssues: 0,
     epic: false,
+    subIssueList: null,
     brief: null,
     delegatedBrief: null,
     ...over,
@@ -140,6 +143,16 @@ export function entry(key: string, kind: LedgerEntry['kind'], over: Partial<Ledg
 
 export function wakeAnswer(decision: string, over: Partial<Extract<Outcome, { kind: 'wake' }>> = {}): Outcome {
   return { kind: 'wake', decision, reason: null, instructions: null, bump: null, bumpReason: null, fields: {}, ...over }
+}
+
+// review: an adjudicator outcome; a merge review carries its report (SPEC 7.3).
+export function review(action: AdjudicatorAction, report: Partial<MergeReport> | null = null, verdicts: string[] = []): Outcome {
+  return {
+    kind: 'adjudicator',
+    verdicts,
+    action,
+    report: report === null ? null : { summary: 'a change for users', bump: 'patch', bumpReason: 'a fix', flags: [], ...report },
+  }
 }
 
 // keys: the planned actions' keys, title left out.

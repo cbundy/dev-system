@@ -32,6 +32,9 @@ export type Observed = {
   runs: RunView[] | null
   queue: number[] | null
   github: Map<number, GithubIssue>
+  // each tracker's open sub-issues, direct ones only, from its timeline (parseSubIssues): read
+  // for trackers named in control.only and nested trackers among their sub-issues (D-35)
+  timelines: Map<number, number[]>
   usage: Usage | null
   pool: Pool | null
   agents: AgentView[]
@@ -46,12 +49,38 @@ export type Observed = {
 
 const UNAVAILABLE: Usage = { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true }
 
+// How deep trackers nest under a tracker named in `only` before observe stops reading them.
+export const TRACKER_DEPTH = 3
+
+// subIssuesOf: a tracker's open sub-issues, those of nested trackers included, ascending; null
+// when its timeline was not read. Nesting is followed TRACKER_DEPTH levels deep, and a loop in
+// the links is cut.
+export function subIssuesOf(n: number, timelines: Map<number, number[]>, depth = TRACKER_DEPTH, seen: number[] = []): number[] | null {
+  const direct = timelines.get(n)
+  if (direct === undefined) return null
+  const all = new Set<number>()
+  for (const sub of direct) {
+    if (sub === n || seen.includes(sub)) continue
+    all.add(sub)
+    const nested = depth > 1 ? subIssuesOf(sub, timelines, depth - 1, [...seen, n]) : null
+    for (const m of nested ?? []) if (m !== n) all.add(m)
+  }
+  return [...all].sort((a, b) => a - b)
+}
+
 export function buildState(o: Observed): State {
   const tracker = new RegExp(o.trackerTitle, 'i')
+  // the replay harness (plain JS) may leave the timelines out
+  const timelines = o.timelines ?? new Map<number, number[]>()
   const numbers = new Set<number>()
   for (const issue of o.factory?.issues ?? []) numbers.add(issue.number)
   for (const n of o.queue ?? []) numbers.add(n)
   for (const entry of o.ledger) if (entry.issue !== null) numbers.add(entry.issue)
+  // the issues `only` names, and the sub-issues a tracker among them stands for (D-35)
+  for (const n of o.control.only) {
+    numbers.add(n)
+    for (const sub of subIssuesOf(n, timelines) ?? []) numbers.add(sub)
+  }
 
   const issues: IssueView[] = [...numbers]
     .sort((a, b) => a - b)
@@ -72,6 +101,7 @@ export function buildState(o: Observed): State {
         blockedBy: g?.facts?.blockedBy ?? null,
         subIssues: g?.facts?.subIssues ?? null,
         epic: g?.facts ? tracker.test(g.facts.title) : null,
+        subIssueList: subIssuesOf(n, timelines),
         brief: g?.brief ?? null,
         delegatedBrief: o.facts?.briefs.get(n) ?? null,
       }

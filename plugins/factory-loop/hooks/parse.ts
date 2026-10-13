@@ -173,6 +173,36 @@ export function parseBrief(json: string): { url: string; at: number } | null {
   }
 }
 
+// parseSubIssues: a tracker's open sub-issues on this repo, ascending, from its timeline
+// (`callum-flow-issue-read --json --timeline <N>`: {events, stripped}), by replaying its
+// sub_issue_added and sub_issue_removed events in order, as the replay harness does (D-35).
+// Each event carries the sub-issue as GitHub returns it now, so its state is current. Only
+// trusted actors' events reach here: the reader drops the rest.
+export function parseSubIssues(json: string, repo: string): number[] | null {
+  try {
+    const events = JSON.parse(json)?.events
+    if (!Array.isArray(events)) return null
+    const subs = new Map<number, boolean>()
+    const timed = events
+      .filter((e: { created_at?: unknown }) => isoMs(e?.created_at) !== null)
+      .sort((a: { created_at: string }, b: { created_at: string }) => (isoMs(a.created_at) ?? 0) - (isoMs(b.created_at) ?? 0))
+    for (const e of timed) {
+      const sub = e.sub_issue
+      if (typeof sub?.number !== 'number') continue
+      const where = sub.repository?.full_name
+      if (typeof where === 'string' && where.toLowerCase() !== repo.toLowerCase()) continue
+      if (e.event === 'sub_issue_added') subs.set(sub.number, sub.state === 'open')
+      else if (e.event === 'sub_issue_removed') subs.delete(sub.number)
+    }
+    return [...subs.entries()]
+      .filter(([, open]) => open)
+      .map(([n]) => n)
+      .sort((a, b) => a - b)
+  } catch {
+    return null
+  }
+}
+
 // parseQueue: the open issue numbers of `callum-flow-issue-read --json --list --label <L>`.
 export function parseQueue(json: string): number[] | null {
   try {

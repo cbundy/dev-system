@@ -188,7 +188,12 @@ function matches(action, d) {
       return action.kind === "spawn" && action.agent === "adjudicator" && action.run === d.run;
     case "merge":
     case "update-behind":
-      return ["guard", "merge", "update-behind", "judge"].includes(action.kind) && action.pr === d.pr;
+      // the merge flow: guard, update-behind, the merge adjudicator (SPEC M4), a sequencing
+      // judge (M5) and the merge itself
+      return (
+        ((["guard", "merge", "update-behind"].includes(action.kind) || action.key.startsWith("adjudicate-merge:")) && action.pr === d.pr) ||
+        (action.key.startsWith("judge:sequence:") && action.issue === d.issue)
+      );
     case "heartbeat":
       return action.kind === "heartbeat";
     case "delegate":
@@ -272,6 +277,8 @@ async function main() {
       runs: null,
       queue,
       github,
+      // trackers' timelines are read only for an `only` directive's trackers (D-35)
+      timelines: new Map(),
       usage: u ? parse.parseUsage(u.note) : null,
       pool: { free: Math.max(0, 16 - held), total: 16, slots: [] },
       agents: [],

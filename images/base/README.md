@@ -1403,15 +1403,17 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind`;
+(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
-and neither ends an issue nor releases a claim; see [docs/metrics.md](../../docs/metrics.md) for
-`rebased_behind` semantics; `callum-flow-event` with no arguments lists the vocabulary) to
+and neither ends an issue nor releases a claim; `loop` is the factory loop's own bookkeeping,
+needs a `kind=.. key=.. status=..` note, takes `--issue` optionally and is never a stage or
+progress; see [docs/metrics.md](../../docs/metrics.md) for `rebased_behind` and `loop`
+semantics; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
-`--if-changed`, which skips a line identical in state, head and note to the subject's newest one, so a
+`--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
 restart never replays old events; transitions a watcher observes are always logged.
 `callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
 `CALLUM_EVENTS_DIR` default as a write) and writes nothing.
@@ -1594,7 +1596,7 @@ label, an expired lease goes back to `ready` with a comment and a `reclaimed` ev
 issue with no claim comment is left alone. The sweep also records issues closed outside the
 factory: every issue in the event log (this device's file, plus the latest lifecycle event per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
-whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost` or `renewed`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run), and that GitHub reports closed gets a `closed`
+whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed` or `loop`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run), and that GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. A failed
 factory-state read adds no candidates; issues already logged as `closed` are excluded, while a
 listed `abandoned` issue has a new life and remains a candidate. It has no
@@ -1703,7 +1705,7 @@ and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise 
 unless its latest lifecycle event is `merged`, `abandoned`, `claim_lost`, `owner_wait`, `closed`, `ready` or
 `reclaimed`. After `merged`, `abandoned`, `closed` or `claim_lost`, only a later `ready`, `reclaimed`, `claimed`,
 `briefed`, `design_routed`, `implementer_routed` or `delegated` reopens the issue, and after any of the idle events above the replayed
-run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, ...) never count. `critical_failures` lists the checks
+run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it. Noise events (`usage`, `untrusted_stripped`, `superseded`, `renewed`, `loop`, ...) never count. `critical_failures` lists the checks
 that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and

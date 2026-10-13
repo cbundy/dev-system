@@ -36,7 +36,8 @@ const READS = ['callum-flow-factory-state', 'dev-query', 'callum-flow-issue-read
 
 type Seen = { argv: string[]; env: Record<string, string>; stdin?: string }
 
-function host(on: On, config: Record<string, unknown>) {
+// reads: canned callum-flow-issue-read output by argument list; anything else reads as no issues
+function host(on: On, config: Record<string, unknown>, reads: Record<string, string> = {}) {
   mock.env(on, { CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: 'coder-spike' })
   const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify(config)]])
   const seen: Seen[] = []
@@ -60,7 +61,7 @@ function host(on: On, config: Record<string, unknown>) {
       case 'dev-query':
         return out(EVENTS)
       case 'callum-flow-issue-read':
-        return out(JSON.stringify({ issues: [], stripped: 0 }))
+        return out(reads[argv.slice(1).join(' ')] ?? JSON.stringify({ issues: [], stripped: 0 }))
       case '/usr/local/share/callum-tools/usage-check.sh':
         return out('five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth')
       default:
@@ -84,7 +85,7 @@ describe('driver', () => {
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await clock.advance(6_000)
 
-    expect(h.titles).toEqual(['🔄 dev-system · observe · normal 5h 40% 7d 60% · q 0 dev 0 pipe 1 merge 0'])
+    expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:1 - M:0) · observe'])
     const appends = h.seen.filter(s => s.argv[0] === 'sh')
     expect(appends).toHaveLength(1)
     const line = JSON.parse(appends[0]!.stdin ?? '{}')
@@ -98,6 +99,41 @@ describe('driver', () => {
     expect(others.every(s => s.env.CALLUM_EVENTS_DIR === `${LOOP_DIR}/sink-events` && s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // the state was recorded for the replay tools
     expect([...h.files.keys()].some(p => p.startsWith(`${LOOP_DIR}/states/`))).toBe(true)
+  })
+
+  test('the repo-local settings are loaded through the config loader (SPEC 4.2)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work' })
+    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ readyLabel: 'go', queueEvery: '10m', colour: 'blue' }))
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await clock.advance(6_000)
+    expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label go')).toBe(true)
+    // the queue is read every 10 minutes now, so the next pass does not read it again
+    const before = h.seen.filter(s => s.argv.includes('--list')).length
+    await clock.advance(60_000)
+    expect(h.seen.filter(s => s.argv.includes('--list')).length).toBe(before)
+  })
+
+  test('a tracker named in only has its timeline read, then its sub-issues (D-35)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const issue40 = { issue: { number: 40, title: 'Epic: the loop', state: 'open', labels: [], sub_issues_summary: { total: 2 } }, stripped: 0 }
+    const timeline = {
+      events: [41, 42].map(n => ({ event: 'sub_issue_added', created_at: iso(NOW - 60_000 * n), sub_issue: { number: n, state: 'open' } })),
+      stripped: 0,
+    }
+    const h = host(on, { repo: REPO, runSource: 'events', shadowDevice: DEVICE, checkout: '/work' }, {
+      '--json 40': JSON.stringify(issue40),
+      '--json --timeline 40': JSON.stringify(timeline),
+    })
+    h.files.set(`${LOOP_DIR}/control.json`, JSON.stringify({ only: [40] }))
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await clock.advance(6_000)
+    const read = () => h.seen.filter(s => s.argv[0] === 'callum-flow-issue-read').map(s => s.argv.slice(1).join(' '))
+    expect(read()).toContain('--json 40')
+    expect(read()).toContain('--json --timeline 40')
+    await clock.advance(60_000)
+    expect(read()).toContain('--json 41')
+    expect(read()).toContain('--json 42')
   })
 
   test('mode off, or the kill switch, reads nothing and says so in the title', async ($, on) => {

@@ -15,9 +15,12 @@ import type {
   GuardFail,
   IssueView,
   LedgerEntry,
+  MergeFlag,
+  MergeReport,
   Ms,
   Outcome,
   PlanResult,
+  Rollout,
   RunView,
   Skip,
   Stage,
@@ -28,6 +31,14 @@ import type {
 
 const HOUR = 3_600_000
 const BREAKER_MS = 30 * 60_000
+// A drain this long tells the owner (rule H4, D-15).
+const DRAIN_SLOW_MS = HOUR
+// The title's M: issues merged in this window (D-23).
+const MERGED_WINDOW_MS = 6 * HOUR
+// A hand merge older than this gets no follow-ups (rule M7). callum-flow-factory-state lists a
+// final stage for 24 hours, and the bound keeps a merge from ever outliving the ledger's 7-day
+// prune of its `rollout:<issue>` entry, so it can never be re-triggered.
+const ROLLOUT_WITHIN_MS = 24 * HOUR
 const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
 const ENDED: readonly Stage[] = ['merged', 'closed without merge']
 const MERGEABLE_STATES = ['merge-ready', 'head-mismatch', 'conflict']
@@ -38,6 +49,7 @@ const OWNER_TELLS = [
   'escalate',
   'review-cap',
   'merge-refused',
+  'merge-hold',
   'untrusted-pr',
   'rollout',
   'base',
@@ -45,7 +57,6 @@ const OWNER_TELLS = [
   'ci-triggers',
   'update-behind',
   'linkage',
-  'respond-stuck',
 ]
 // Actions that write to GitHub (or read it heavily); held while GitHub rate-limits us.
 const GITHUB: readonly ActionKind[] = [
@@ -56,6 +67,7 @@ const GITHUB: readonly ActionKind[] = [
   'update-behind',
   'fix-linkage',
   'merge',
+  'rollout',
   'close-issue',
   'release-parent',
   'abandon',
@@ -70,7 +82,11 @@ const ALLOWED: Record<Tier, readonly ActionClass[]> = {
   'stop-new': ['free', 'owner', 'drive'],
   'stop-all': ['free', 'owner'],
 }
+// A drain for an update holds every class that starts or drives work (rule H4).
+const DRAINED: readonly ActionClass[] = ['start', 'develop', 'drive']
 const BUMP_RANK: Record<Bump, number> = { patch: 1, minor: 2, major: 3 }
+// Merge report flags that need a release-sequencing call before the merge (rule M5).
+const CALL_FLAGS: readonly MergeFlag[] = ['run-it', 'image', 'template']
 
 type Gate = 'go' | 'running' | 'done' | 'wait' | 'exhausted'
 
@@ -84,6 +100,8 @@ type Ctx = {
   exhausted: string[]
   byKey: Map<string, LedgerEntry>
   issues: Map<number, IssueView>
+  capped: string[]
+  atCap: boolean
 }
 
 // tierOf: the usage tier (SPEC rule G3). The higher of the two windows decides; a missing
@@ -119,6 +137,12 @@ export function issueFromBranch(branch: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+// sameLabel: labels are compared without regard to case, so `in development` matches GitHub's
+// `In development` (SPEC 4.2).
+export function sameLabel(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
 export function plan(state: State, config: Config): PlanResult {
   const { tier, overridden } = tierOf(state.usage, config, state.control.usageOverride, state.now)
   const byKey = new Map<string, LedgerEntry>()
@@ -133,6 +157,8 @@ export function plan(state: State, config: Config): PlanResult {
     exhausted: [],
     byKey,
     issues: new Map(state.issues.map(issue => [issue.number, issue])),
+    capped: [],
+    atCap: false,
   }
 
   const blind = !state.sources.factory.ok
@@ -147,6 +173,7 @@ export function plan(state: State, config: Config): PlanResult {
     } else {
       skip(ctx, 'P', null, 'runs source unavailable')
     }
+    handMerges(ctx)
     mergeFollowUps(ctx)
     design(ctx)
     redelegate(ctx)
@@ -158,11 +185,14 @@ export function plan(state: State, config: Config): PlanResult {
   }
 
   const actions = admit(ctx)
-  const title = titleOf(state, config, tier, overridden, ctx.owner.size, blind)
+  const restart = blind ? null : restartWhenDrained(ctx, actions)
+  const title = titleOf(state, config, tier, { owner: ctx.owner.size, blind, capped: ctx.capped, atCap: ctx.atCap })
   if (title !== state.lastTitle) {
     actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   }
-  return { tier, overridden, actions, skipped: ctx.skipped, title, owner: ctx.owner.size }
+  // the restart ends the session, so it goes after everything else, the title included
+  if (restart !== null) actions.push(restart)
+  return { tier, overridden, actions, skipped: ctx.skipped, title, owner: ctx.owner.size, capped: ctx.capped, atCap: ctx.atCap }
 }
 
 // --- helpers -------------------------------------------------------------------------
@@ -207,13 +237,15 @@ function gate(ctx: Ctx, key: string, kind: ActionKind | AgentType): Gate {
 }
 
 // want: emit the action unless its key is blocked. A notice counts toward the title's owner
-// items whether or not it goes out this pass, so the count stays while the issue stands.
+// items whether or not it goes out this pass, so the count stays while the issue stands. An
+// exhausted key is named in the decision log: it is what `/factory retry` clears (D-38).
 function want(ctx: Ctx, action: Action): Gate {
   if (action.kind === 'tell' && OWNER_TELLS.includes(action.wake)) ctx.owner.add(action.key)
   const kind = attemptsKind(action)
   const g = gate(ctx, action.key, kind)
   if (g === 'go') ctx.out.push(action)
   if (g === 'exhausted') {
+    skip(ctx, action.rule, action.issue, `exhausted: ${action.key}`)
     if (action.kind === 'task') ctx.exhausted.push(action.key)
     else if (WAKES.includes(action.kind)) ctx.owner.add(action.key)
     else ctx.exhausted.push(action.key)
@@ -255,7 +287,10 @@ function resumes(ctx: Ctx, subject: string, after = Number.NEGATIVE_INFINITY) {
 }
 
 function modelLabel(issue: IssueView | undefined): string | null {
-  const labels = (issue?.labels ?? []).filter(l => l.startsWith('model:')).sort()
+  const labels = (issue?.labels ?? [])
+    .map(l => l.toLowerCase())
+    .filter(l => l.startsWith('model:'))
+    .sort()
   const first = labels[0]
   return first === undefined ? null : first.slice('model:'.length)
 }
@@ -349,6 +384,12 @@ function housekeeping(ctx: Ctx) {
   if (sweep === undefined || state.now - (sweep.endedAt ?? 0) >= config.sweepEveryMs) {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: 'sweep due', issue: null })
   }
+  // H4: a drain that has lasted an hour tells the owner once, with what it still waits on.
+  const due = state.control.updateDue
+  const holding = due === null ? [] : drainBlockers(ctx)
+  if (due !== null && holding.length > 0 && state.now - due.at >= DRAIN_SLOW_MS) {
+    want(ctx, wake('tell', 'drain-slow', `tell:drain-slow:${due.at}`, 'H4', null, { since: due.at }, [`update: ${due.reason}`, `waiting on: ${holding.join(', ')}`]))
+  }
   if (!state.sources.pool.ok || state.pool === null) return
   for (const slot of [...state.pool.slots].sort((a, b) => a.path.localeCompare(b.path))) {
     if (slot.state === 'available' || slot.busy || slot.dirty !== false || slot.branch === null) continue
@@ -368,6 +409,37 @@ function housekeeping(ctx: Ctx) {
       branch: slot.branch,
     })
   }
+}
+
+// drainBlockers: what keeps the safe state for a restart from holding (rule H4, D-15): any
+// running ledger entry (an agent, a wake, a command), and any pipeline run still running or
+// pending, of any device, since the workspace's daemon serves them all. Empty: safe.
+function drainBlockers(ctx: Ctx): string[] {
+  const { state } = ctx
+  if (!state.sources.runs.ok) return ['the runs source']
+  const entries = state.ledger.filter(e => e.status === 'running').map(e => e.key)
+  const runs = state.runs.filter(r => r.state === 'running' || r.state === 'pending').map(r => `run ${r.run} ${r.state}`)
+  return [...entries.sort(), ...runs.sort()].slice(0, 6)
+}
+
+// H4: once the drain is complete and nothing else is planned, restart for the update.
+function restartWhenDrained(ctx: Ctx, kept: Action[]): Action | null {
+  const due = ctx.state.control.updateDue
+  if (due === null) return null
+  const holding = drainBlockers(ctx)
+  if (holding.length > 0) {
+    skip(ctx, 'H4', null, `update due: draining, waiting on ${holding.join(', ')}`)
+    return null
+  }
+  if (kept.length > 0) {
+    skip(ctx, 'H4', null, 'update due: this pass has other actions to finish first')
+    return null
+  }
+  const key = `restart:${due.at}`
+  const g = gate(ctx, key, 'restart-self')
+  if (g === 'exhausted') skip(ctx, 'H4', null, `exhausted: ${key}`)
+  if (g !== 'go') return null
+  return { kind: 'restart-self', key, class: 'free', rule: 'H4', reason: 'update due, nothing in flight', issue: null, why: due.reason, at: due.at }
 }
 
 // --- the runs the P and M rules act on (SPEC 5.4) ------------------------------------------
@@ -450,6 +522,9 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           brief,
           model,
           warns: [],
+          handoffHead: null,
+          verdicts: [],
+          guard: [],
         })
         continue
       }
@@ -482,6 +557,9 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           model,
           instructions: action.instructions,
         })
+      } else if (action.type === 'merge' || action.type === 'hold') {
+        // the merge review's answers; the parser rejects them for a gate, so this is a loop bug
+        skip(ctx, 'P3', n, `adjudicator: ACTION ${action.type} does not answer a gate`)
       } else {
         respond(ctx, run, action, `respond:${at}:${action.type}${suffix}`)
       }
@@ -560,8 +638,8 @@ function ledgerReviewFixes(ctx: Ctx, run: string) {
   return heads.size
 }
 
-// respond, then P3a: a respond that left the gate where it was is tried once more, then
-// the owner hears of it.
+// respond, then P3a: a respond that left the gate where it was is tried once more, then the
+// model reads the run's log and daemon.log and re-drives or reports (D-37).
 function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
   const { state, config } = ctx
   const n = run.issue as number
@@ -594,11 +672,20 @@ function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
   if (retry === undefined) {
     want(ctx, make(retryKey, false))
   } else if (state.now - (retry.endedAt ?? 0) >= config.respondSettleMs) {
-    want(ctx, wake('tell', 'respond-stuck', `tell:respond-stuck:${gateOf(run)}`, 'P3a', n, { issue: n, run: run.run, step: run.step }))
+    want(
+      ctx,
+      wake('task', 'respond-stuck', `task:respond-stuck:${gateOf(run)}`, 'P3a', n, {
+        issue: n,
+        run: run.run,
+        branch: run.branch,
+        step: run.step,
+        head: run.head,
+      }),
+    )
   }
 }
 
-type AdjAction = Exclude<AdjudicatorAction, { type: 'escalate' } | { type: 'fixer' }>
+type AdjAction = Exclude<AdjudicatorAction, { type: 'escalate' } | { type: 'fixer' } | { type: 'merge' } | { type: 'hold' }>
 
 // --- M: merge -------------------------------------------------------------------------
 
@@ -634,6 +721,8 @@ export function classifyFail(fail: GuardFail): FailClass {
       return 'judge'
   }
 }
+
+type GuardResult = Extract<Outcome, { kind: 'guard' }>
 
 function merges(ctx: Ctx, runs: RunView[]) {
   const { state, config } = ctx
@@ -687,7 +776,7 @@ function merges(ctx: Ctx, runs: RunView[]) {
       weakening(ctx, run, result.warns)
       continue
     }
-    mergeReview(ctx, run)
+    mergeReview(ctx, run, result)
   }
 }
 
@@ -794,6 +883,20 @@ function updateBehind(ctx: Ctx, run: RunView, fixer: (p: 'regate', k: string, i:
   want(ctx, { kind: 'update-behind', key, class: 'free', rule: 'M2', reason: 'guard: behind its base', issue: n, pr, run: run.run, head })
 }
 
+// weakeningRound: how many times the owner resumed this run after an escalated test-weakening
+// review on this PR and head; each resume asks for a fresh review (':r<n>'), as M5a does.
+function weakeningRound(ctx: Ctx, pr: number, head: string, run: string): number {
+  let round = 0
+  while (round <= ctx.state.control.resumed.length) {
+    const adj = done(ctx, `adjudicate-weakening:${pr}:${head}${roundSuffix(round)}`)
+    const type = outcome(adj, 'adjudicator')?.action.type
+    if (adj === undefined || (type !== 'escalate' && type !== 'hold')) break
+    if (resumes(ctx, `run:${run}`, adj.endedAt ?? 0) === 0) break
+    round += 1
+  }
+  return round
+}
+
 function weakening(ctx: Ctx, run: RunView, warns: string[]) {
   const n = run.issue as number
   const pr = run.pr as number
@@ -801,7 +904,8 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
   const issue = ctx.issues.get(n)
   const brief = briefOf(ctx, issue)
   const model = modelLabel(issue)
-  const key = `adjudicate-weakening:${pr}:${head}`
+  const sfx = roundSuffix(weakeningRound(ctx, pr, head, run.run))
+  const key = `adjudicate-weakening:${pr}:${head}${sfx}`
   const verdict = outcome(done(ctx, key), 'adjudicator')
   if (verdict === undefined) {
     want(ctx, {
@@ -821,6 +925,9 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
       brief,
       model,
       warns,
+      handoffHead: null,
+      verdicts: [],
+      guard: [],
     })
     return
   }
@@ -836,15 +943,18 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
       pr,
       body: ['Test-weakening warning accepted after adjudication:', '', ...warns, '', ...verdict.verdicts].join('\n'),
     })
-  } else if (action.type === 'escalate') {
-    want(ctx, wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}`, 'M3', n, { issue: n, pr, brief }, [action.why, ...warns]))
+  } else if (action.type === 'escalate' || action.type === 'hold') {
+    const why = action.type === 'escalate' ? action.why : action.reason
+    want(ctx, wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}${sfx}`, 'M3', n, { issue: n, pr, run: run.run, brief }, [why, ...warns]))
+  } else if (action.type === 'merge') {
+    skip(ctx, 'M3', n, 'adjudicator: ACTION merge does not answer a test-weakening WARN')
   } else {
     const instructions = action.type === 'fixer' ? action.instructions : (action.instructions ?? warns.join('\n'))
     want(ctx, {
       kind: 'spawn',
       agent: 'fixer',
       purpose: 'weakening',
-      key: `fixer:weakening:${pr}:${head}`,
+      key: `fixer:weakening:${pr}:${head}${sfx}`,
       class: 'drive',
       rule: 'M3',
       reason: 'restore weakened tests',
@@ -860,87 +970,286 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
   }
 }
 
-// mergeAnswer: the merge review's answer for this head, or the `merge` answer of the head an
-// update-behind rebased from (its patch is proven unchanged, so the review carries over).
-function mergeAnswer(ctx: Ctx, pr: number, head: string) {
-  const own = outcome(done(ctx, `judge:merge-review:${pr}:${head}`), 'wake')
-  if (own !== undefined) return { answer: own, carried: false }
+type Review = Extract<Outcome, { kind: 'adjudicator' }>
+type FoundReview = { review: Review; head: string; carried: boolean }
+
+function roundSuffix(round: number) {
+  return round > 0 ? `:r${round}` : ''
+}
+
+// The done entries of one PR and head under a key family, every round: '<base>' and '<base>:r<n>'.
+function rounds(ctx: Ctx, base: string): LedgerEntry[] {
+  return [...ctx.byKey.values()]
+    .filter(e => e.status === 'done' && (e.key === base || e.key.startsWith(`${base}:r`)))
+    .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0) || (a.key < b.key ? -1 : 1))
+}
+
+// holdEnd: when a round of the merge review was held (M5a), by the adjudicator's hold or by a
+// judge(sequence) that answered hold or ran out (its timeout falls back to hold, SPEC 8.2).
+function holdEnd(ctx: Ctx, pr: number, head: string, sfx: string): Ms | null {
+  const adj = done(ctx, `adjudicate-merge:${pr}:${head}${sfx}`)
+  const type = outcome(adj, 'adjudicator')?.action.type
+  if (adj !== undefined && (type === 'hold' || type === 'escalate')) return adj.endedAt ?? 0
+  const seqKey = `judge:sequence:${pr}:${head}${sfx}`
+  const seq = ctx.byKey.get(seqKey)
+  if (seq === undefined) return null
+  const held = outcome(done(ctx, seqKey), 'wake')?.decision === 'hold' || gate(ctx, seqKey, 'judge') === 'exhausted'
+  return held ? (seq.endedAt ?? 0) : null
+}
+
+// mergeRound: how many times the owner resumed this run after a merge hold on this PR and head.
+// Each resume asks for a fresh review, whose keys end in ':r<n>' (as P2 does after a resume).
+function mergeRound(ctx: Ctx, pr: number, head: string, run: string): number {
+  let round = 0
+  while (round <= ctx.state.control.resumed.length) {
+    const held = holdEnd(ctx, pr, head, roundSuffix(round))
+    if (held === null || resumes(ctx, `run:${run}`, held) === 0) break
+    round += 1
+  }
+  return round
+}
+
+// mergeAnswer: the merge adjudicator's answer for this head and round, or, on a head's first
+// round, the `merge` answer of the head an update-behind rebased from: its patch is proven
+// unchanged, so the review carries over (M5).
+function mergeAnswer(ctx: Ctx, pr: number, head: string, sfx: string): FoundReview | undefined {
+  const own = outcome(done(ctx, `adjudicate-merge:${pr}:${head}${sfx}`), 'adjudicator')
+  if (own !== undefined) return { review: own, head, carried: false }
+  if (sfx !== '') return undefined
   for (const entry of ctx.state.ledger) {
     const moved = outcome(entry.status === 'done' && entry.pr === pr ? entry : undefined, 'update-behind')
     if (moved?.result !== 'updated' || moved.to !== head || moved.from === null) continue
-    const before = outcome(done(ctx, `judge:merge-review:${pr}:${moved.from}`), 'wake')
-    if (before?.decision === 'merge') return { answer: before, carried: true }
+    const before = rounds(ctx, `adjudicate-merge:${pr}:${moved.from}`)
+      .map(e => outcome(e, 'adjudicator'))
+      .filter(o => o?.action.type === 'merge')
+      .pop()
+    if (before !== undefined) return { review: before, head: moved.from, carried: true }
   }
   return undefined
 }
 
-function mergeReview(ctx: Ctx, run: RunView) {
+// handoffHead: the head the implementer handed off, from the issue's latest delegation.
+function handoffHead(ctx: Ctx, n: number): string | null {
+  let best: LedgerEntry | undefined
+  for (const entry of ctx.state.ledger) {
+    if (entry.kind !== 'delegate' || entry.issue !== n || entry.status !== 'done' || outcome(entry, 'handoff') === undefined) continue
+    if (best === undefined || (entry.endedAt ?? 0) > (best.endedAt ?? 0)) best = entry
+  }
+  return outcome(best, 'handoff')?.head ?? null
+}
+
+// M4, M5, M5a, M5b: the merge adjudicator reviews the PR from pointers (D-05), then the loop
+// merges, asks the model to sequence a flagged merge, holds, or spawns the fixer it asked for.
+function mergeReview(ctx: Ctx, run: RunView, guard: GuardResult) {
   const n = run.issue as number
   const pr = run.pr as number
   const head = run.head as string
   const issue = ctx.issues.get(n)
   const brief = briefOf(ctx, issue)
-  const found = mergeAnswer(ctx, pr, head)
+  const model = modelLabel(issue)
+  const sfx = roundSuffix(mergeRound(ctx, pr, head, run.run))
+  const found = mergeAnswer(ctx, pr, head, sfx)
   if (found === undefined) {
-    want(ctx, wake('judge', 'merge-review', `judge:merge-review:${pr}:${head}`, 'M4', n, { pr, issue: n, run: run.run, head, brief }))
-    return
-  }
-  const { answer } = found
-  if (answer.decision === 'merge') {
-    const key = `merge:${pr}:${head}`
-    const merged = outcome(done(ctx, key), 'merge')
-    if (merged?.result === 'refused') {
-      want(ctx, wake('tell', 'merge-refused', `tell:merge-refused:${pr}:${head}`, 'M6', n, { issue: n, pr }, [merged.line]))
-      return
-    }
-    want(ctx, {
-      kind: 'merge',
-      key,
-      class: 'free',
-      rule: 'M5',
-      reason: found.carried ? 'review carried over a rebase-only update' : 'merge review: merge',
-      issue: n,
-      pr,
-      run: run.run,
-      head,
-      bump: answer.bump,
-      bumpReason: answer.bumpReason,
-    })
-  } else if (answer.decision === 'fixer') {
     want(ctx, {
       kind: 'spawn',
-      agent: 'fixer',
-      purpose: 'review',
-      key: `fixer:review:${pr}:${head}`,
+      agent: 'adjudicator',
+      purpose: 'merge',
+      key: `adjudicate-merge:${pr}:${head}${sfx}`,
       class: 'drive',
-      rule: 'M5b',
-      reason: 'merge review asked for a fixer',
+      rule: 'M4',
+      reason: sfx === '' ? 'guard passed: review before merging' : 'owner resumed after a merge hold',
       issue: n,
       run: run.run,
       branch: run.branch,
+      step: null,
       head,
       pr,
       brief,
-      model: modelLabel(issue),
-      instructions: answer.instructions ?? '',
+      model,
+      warns: [],
+      handoffHead: handoffHead(ctx, n),
+      verdicts: run.verdicts,
+      guard: [...guard.fails.map(f => `GUARD ${f.name} FAIL ${f.reason}`), ...guard.warns],
     })
-  } else {
-    // hold: the model told the owner in the same turn; the hold lasts until the head moves.
-    ctx.owner.add(`hold:merge:${pr}:${head}`)
+    return
+  }
+  const action = found.review.action
+  switch (action.type) {
+    case 'merge':
+      mergeOrSequence(ctx, run, found, sfx)
+      return
+    case 'hold':
+    case 'escalate':
+      mergeHold(ctx, run, action.type === 'hold' ? action.reason : action.why, sfx)
+      return
+    case 'fixer':
+      want(ctx, {
+        kind: 'spawn',
+        agent: 'fixer',
+        purpose: 'review',
+        key: `fixer:review:${pr}:${head}${sfx}`,
+        class: 'drive',
+        rule: 'M5b',
+        reason: 'merge adjudicator asked for a fixer',
+        issue: n,
+        run: run.run,
+        branch: run.branch,
+        head,
+        pr,
+        brief,
+        model,
+        instructions: action.instructions,
+      })
+      return
+    default:
+      skip(ctx, 'M4', n, `merge adjudicator: ACTION ${action.type} does not answer a merge review`)
   }
 }
 
-// M7: what a merge leaves to do, by the merged issue's rollout.
+// M5a: a hold lasts until the head moves or the owner resumes run:<id> after it.
+function mergeHold(ctx: Ctx, run: RunView, reason: string, sfx: string) {
+  const n = run.issue as number
+  const pr = run.pr as number
+  const head = run.head as string
+  want(ctx, wake('tell', 'merge-hold', `tell:merge-hold:${pr}:${head}${sfx}`, 'M5a', n, { issue: n, pr, run: run.run, head }, [reason]))
+}
+
+// runItWaiting: another issue this device merged with a run-it rollout whose Run it is not done
+// yet. A second run-it PR waits for it, so two Run its never overlap (M5). The task answered
+// `hold` while its release waits on the owner, so only `done`, the issue closing, or the owner
+// resuming it ends the wait.
+function runItWaiting(ctx: Ctx, n: number): number | null {
+  let first: number | null = null
+  for (const m of mergedIssues(ctx)) {
+    if (m.issue === n || m.rollout !== 'run-it') continue
+    const task = done(ctx, `task:run-it:${m.issue}`)
+    if (outcome(task, 'wake')?.decision === 'done' || ctx.issues.get(m.issue)?.open === false) continue
+    if (task !== undefined && resumes(ctx, `issue:${m.issue}`, task.endedAt ?? 0) > 0) continue
+    if (first === null || m.issue < first) first = m.issue
+  }
+  return first
+}
+
+function mergeOrSequence(ctx: Ctx, run: RunView, found: FoundReview, sfx: string) {
+  const n = run.issue as number
+  const pr = run.pr as number
+  const head = run.head as string
+  const report = found.review.report
+  if (report?.flags.includes('run-it')) {
+    const waiting = runItWaiting(ctx, n)
+    if (waiting !== null) {
+      skip(ctx, 'M5', n, `run-it: waits for the Run it of #${waiting}`)
+      return
+    }
+  }
+  if (report !== null && (report.bump === 'major' || report.flags.some(f => CALL_FLAGS.includes(f)))) {
+    const key = `judge:sequence:${pr}:${head}${sfx}`
+    // a sequencing answer carries over a rebase-only update with the review it followed
+    const carried = found.carried
+      ? rounds(ctx, `judge:sequence:${pr}:${found.head}`)
+          .map(e => outcome(e, 'wake'))
+          .filter(o => o?.decision === 'merge')
+          .pop()
+      : undefined
+    const answer = outcome(done(ctx, key), 'wake') ?? carried
+    if (answer === undefined) {
+      const flags = report.flags.join(',') || 'none'
+      want(
+        ctx,
+        wake('judge', 'sequence', key, 'M5', n, { pr, issue: n, head, flags, bump: report.bump }, [
+          `SUMMARY: ${report.summary}`,
+          `BUMP: ${report.bump} ${report.bumpReason}`,
+          `FLAGS: ${flags}`,
+        ]),
+      )
+      return
+    }
+    if (answer.decision === 'hold') {
+      mergeHold(ctx, run, answer.reason ?? 'held for release sequencing', sfx)
+      return
+    }
+    if (answer.decision !== 'merge') {
+      skip(ctx, 'M5', n, `judge(sequence): no such decision ${answer.decision}`)
+      return
+    }
+  }
+  const key = `merge:${pr}:${head}`
+  const merged = outcome(done(ctx, key), 'merge')
+  if (merged?.result === 'refused') {
+    want(ctx, wake('tell', 'merge-refused', `tell:merge-refused:${pr}:${head}`, 'M6', n, { issue: n, pr }, [merged.line]))
+    return
+  }
+  want(ctx, {
+    kind: 'merge',
+    key,
+    class: 'free',
+    rule: 'M5',
+    reason: found.carried ? 'review carried over a rebase-only update' : 'merge adjudicator: merge',
+    issue: n,
+    pr,
+    run: run.run,
+    head,
+    bump: report?.bump ?? null,
+    bumpReason: report?.bumpReason ?? null,
+  })
+}
+
+type Merged = { issue: number; pr: number | null; key: string; rollout: Rollout | null; closeIssue: number | null }
+
+// mergedIssues: every merge with its rollout: the loop's own merges, and the rollouts read for
+// hand merges (D-29).
+function mergedIssues(ctx: Ctx): Merged[] {
+  const out: Merged[] = []
+  for (const entry of ctx.byKey.values()) {
+    if (entry.status !== 'done' || entry.issue === null) continue
+    const merge = outcome(entry, 'merge')
+    const roll = outcome(entry, 'rollout')
+    if (merge?.result === 'merged') {
+      out.push({ issue: entry.issue, pr: entry.pr, key: entry.key, rollout: merge.rollout, closeIssue: merge.closeIssue })
+    } else if (roll !== undefined) {
+      const pr = entry.pr ?? ctx.issues.get(entry.issue)?.pr ?? null
+      out.push({ issue: entry.issue, pr, key: entry.key, rollout: roll.rollout, closeIssue: roll.closeIssue })
+    }
+  }
+  return out.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+}
+
+// latestReport: the report of the last merge answer for a PR, whatever its head (a rebase-only
+// update moves the head after the review).
+function latestReport(ctx: Ctx, pr: number): MergeReport | null {
+  let best: { at: number; report: MergeReport } | undefined
+  for (const entry of ctx.byKey.values()) {
+    if (entry.status !== 'done' || !entry.key.startsWith(`adjudicate-merge:${pr}:`)) continue
+    const review = outcome(entry, 'adjudicator')
+    if (review?.action.type !== 'merge' || review.report === null) continue
+    const at = entry.endedAt ?? 0
+    if (best === undefined || at >= best.at) best = { at, report: review.report }
+  }
+  return best?.report ?? null
+}
+
+// M7 for a hand merge: an issue this device held reached merged with no merge of the loop's
+// own, so its rollout is read the way the merge executor would have (D-29).
+function handMerges(ctx: Ctx) {
+  const { state } = ctx
+  for (const issue of [...state.issues].sort((a, b) => a.number - b.number)) {
+    if (!mine(ctx, issue) || issue.stage !== 'merged' || issue.stageSince === null) continue
+    if (state.now - issue.stageSince > ROLLOUT_WITHIN_MS) continue
+    const n = issue.number
+    const ownMerge = state.ledger.some(
+      e => e.kind === 'merge' && e.issue === n && (e.status === 'running' || outcome(e.status === 'done' ? e : undefined, 'merge')?.result === 'merged'),
+    )
+    if (ownMerge) continue
+    want(ctx, { kind: 'rollout', key: `rollout:${n}`, class: 'free', rule: 'M7', reason: 'merged by hand: read its rollout', issue: n, pr: issue.pr })
+  }
+}
+
+// M7: what a merge leaves to do, by the merged issue's rollout, from a merge or a rollout outcome.
 function mergeFollowUps(ctx: Ctx) {
   const { state } = ctx
   const milestoneKnown = state.sources.milestone.ok
-  const merges = state.ledger
-    .filter(e => e.kind === 'merge' && e.status === 'done' && outcome(e, 'merge')?.result === 'merged')
-    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  for (const entry of merges) {
-    const result = outcome(entry, 'merge')
-    const n = entry.issue
-    if (result === undefined || n === null) continue
+  for (const m of mergedIssues(ctx)) {
+    const n = m.issue
     const free = (kind: 'close-issue' | 'milestone-later', key: string, issue: number, reason: string): Action => ({
       kind,
       key,
@@ -949,29 +1258,28 @@ function mergeFollowUps(ctx: Ctx) {
       reason,
       issue,
     })
-    if (result.rollout === 'merge' && result.closeIssue !== null) {
-      want(ctx, free('close-issue', `close:${result.closeIssue}`, result.closeIssue, 'epic base: close by hand'))
+    if (m.rollout === 'merge' && m.closeIssue !== null) {
+      want(ctx, free('close-issue', `close:${m.closeIssue}`, m.closeIssue, 'epic base: close by hand'))
     }
-    if ((result.rollout === 'run-it' || result.rollout === 'keep-open') && milestoneKnown && state.milestone !== null) {
-      want(ctx, free('milestone-later', `milestone-later:${n}`, n, `${result.rollout} leaves the issue open`))
+    if ((m.rollout === 'run-it' || m.rollout === 'keep-open') && milestoneKnown && state.milestone !== null) {
+      want(ctx, free('milestone-later', `milestone-later:${n}`, n, `${m.rollout} leaves the issue open`))
     }
-    if (result.rollout === 'run-it') {
-      want(ctx, wake('task', 'run-it', `task:run-it:${n}`, 'M7', n, { issue: n, pr: entry.pr }))
+    if (m.rollout === 'run-it') {
+      want(ctx, wake('task', 'run-it', `task:run-it:${n}`, 'M7', n, { issue: n, pr: m.pr }))
     }
-    const review = entry.pr !== null && entry.head !== null ? mergeAnswer(ctx, entry.pr, entry.head) : undefined
-    const bump = review?.answer.bump ?? null
-    if (bump !== null && milestoneKnown && state.milestone !== null) {
+    const report = m.pr === null ? null : latestReport(ctx, m.pr)
+    if (report !== null && milestoneKnown && state.milestone !== null) {
       const expected = state.milestone.expected
-      if (expected === null || BUMP_RANK[bump] > BUMP_RANK[expected]) {
+      if (expected === null || BUMP_RANK[report.bump] > BUMP_RANK[expected]) {
         want(ctx, {
           kind: 'milestone-expect',
-          key: `expect:${bump}:${entry.pr}`,
+          key: `expect:${report.bump}:${m.pr}`,
           class: 'free',
           rule: 'M7',
-          reason: `merge review: ${bump}`,
+          reason: `merge report: ${report.bump}`,
           issue: n,
-          bump,
-          why: review?.answer.bumpReason ?? `#${n}`,
+          bump: report.bump,
+          why: report.bumpReason || `#${n}`,
         })
       }
     }
@@ -1115,6 +1423,23 @@ function drops(ctx: Ctx) {
   }
 }
 
+// onlyIssues: control.only with each tracker in it standing for its open sub-issues, ascending
+// (D-35). A tracker whose sub-issues are not read yet stands for nothing this pass.
+function onlyIssues(ctx: Ctx): number[] {
+  const out: number[] = []
+  const add = (n: number) => {
+    if (!out.includes(n)) out.push(n)
+  }
+  for (const n of ctx.state.control.only) {
+    const issue = ctx.issues.get(n)
+    const tracker = issue !== undefined && ((issue.subIssues ?? 0) > 0 || issue.epic === true)
+    if (!tracker) add(n)
+    else if (issue.subIssueList === null) skip(ctx, 'D1', n, 'owner: only names this tracker, whose sub-issues are not read yet')
+    else issue.subIssueList.forEach(add)
+  }
+  return out
+}
+
 // D1: claim queue candidates, in priority order, as far as tier and capacity allow.
 function claims(ctx: Ctx) {
   const { state, config, tier } = ctx
@@ -1127,13 +1452,19 @@ function claims(ctx: Ctx) {
   if (state.pool === null) return
   const control = state.control
   // `only` names the issues that may be claimed, in its order; `priority` orders the rest.
-  const listed = (control.only.length > 0 ? control.only : control.priority).filter(n => state.queue.includes(n))
+  const only = onlyIssues(ctx)
+  for (const n of only) {
+    const stage = ctx.issues.get(n)?.stage ?? null
+    if (!state.queue.includes(n) && (stage === null || stage === 'queued')) skip(ctx, 'D1', n, 'owner: only names it, but it is not in the ready queue')
+  }
+  const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
   const order = [...listed, ...[...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)]
   const myLive = state.issues.filter(issue => mine(ctx, issue) && isLive(issue)).length
   // An issue in design takes a worktree as soon as its implementer starts.
   const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length
   const lastClaim = Math.max(0, ...state.ledger.filter(e => e.kind === 'claim').map(e => e.startedAt))
   const mergeWork = ctx.out.some(a => a.rule.startsWith('M'))
+  const cap = config.maxInFlightIssues
   let started = 0
   for (const n of order) {
     const issue = ctx.issues.get(n)
@@ -1144,16 +1475,17 @@ function claims(ctx: Ctx) {
     }
     let limit: string | null = null
     if (control.noNewWork) limit = 'owner: no new work'
-    else if (control.only.length > 0 && !control.only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
+    else if (control.only.length > 0 && !only.includes(n)) limit = `owner: only ${control.only.map(o => `#${o}`).join(' ')}`
     else if (tier === 'stop-new' || tier === 'stop-all') limit = `tier ${tier}`
     else if (state.pool.free - myDesigning - started <= config.worktreeReserve) limit = 'no free worktree'
-    else if (config.maxInFlightIssues !== null && myLive + started >= config.maxInFlightIssues) limit = 'in-flight cap'
+    else if (cap !== null && myLive + started >= cap) limit = `in-flight cap: ${myLive + started} of ${cap}`
     else if (control.serial && myLive + started > 0) limit = 'owner: one at a time'
     else if (tier === 'slow' && started > 0) limit = 'slow: one claim per pass'
     else if (tier === 'slow' && mergeWork) limit = 'slow: merging first'
     else if (tier === 'slow' && lastClaim > 0 && state.now - lastClaim < config.slowGapMs) limit = 'slow: too soon after the last claim'
     else if (started >= config.maxStartsPerPass) limit = 'claims per pass'
     if (limit !== null) {
+      if (limit.startsWith('in-flight cap')) ctx.atCap = true
       skip(ctx, 'D1', n, limit)
       continue
     }
@@ -1166,6 +1498,12 @@ function claims(ctx: Ctx) {
     const g = want(ctx, { kind: 'claim', key, class: 'start', rule: 'D1', reason: 'ready and unblocked', issue: n })
     if (g === 'go') started += 1
   }
+  // The in-flight cap held a claim back: the owner hears once each time it is reached, which a
+  // new claim starts over (SPEC 4.2). A notice only, not an owner item.
+  if (ctx.atCap && cap !== null) {
+    const since = lastDone(ctx, 'claim')?.endedAt ?? 0
+    want(ctx, wake('tell', 'at-cap', `tell:at-cap:${since}`, 'D1', null, { live: myLive, cap }))
+  }
 }
 
 function candidateProblem(ctx: Ctx, issue: IssueView | undefined, n: number): string | null {
@@ -1174,8 +1512,8 @@ function candidateProblem(ctx: Ctx, issue: IssueView | undefined, n: number): st
   if (issue.open !== true) return issue.open === false ? 'closed' : 'GitHub state unknown'
   if (issue.trusted !== true) return issue.trusted === false ? 'untrusted author' : 'author unknown'
   if (issue.labels === null) return 'labels unknown'
-  if (!issue.labels.includes(config.readyLabel)) return `no ${config.readyLabel} label`
-  const skipLabel = issue.labels.find(l => config.skipLabels.includes(l))
+  if (!issue.labels.some(l => sameLabel(l, config.readyLabel))) return `no ${config.readyLabel} label`
+  const skipLabel = issue.labels.find(l => config.skipLabels.some(s => sameLabel(s, l)))
   if (skipLabel !== undefined) return `label ${skipLabel}`
   if (issue.blockedBy === null) return 'blockers unknown'
   if (issue.blockedBy > 0) return `blocked by ${issue.blockedBy} open issue${issue.blockedBy > 1 ? 's' : ''}`
@@ -1252,23 +1590,15 @@ function release(ctx: Ctx) {
   want(ctx, wake('task', 'release', `task:release:${m.closed}:${m.expected ?? 'none'}`, 'O3', null, { closed: m.closed, expected: m.expected }))
 }
 
-// --- admitting actions: control, tier, GitHub backoff, breakers, caps, one wake -----------
+// --- admitting actions: control, drain, tier, GitHub backoff, breakers, caps, one wake -------
 
-type Bucket = 'start' | 'spawn' | 'merge' | 'wake'
+// Rate-cap buckets per rolling hour; merges have none (D-24).
+type Bucket = 'start' | 'spawn' | 'wake'
 
-function capBucket(action: Action): Bucket | null {
-  if (action.class === 'start') return 'start'
-  if (action.kind === 'spawn' || action.kind === 'delegate') return 'spawn'
-  if (action.kind === 'merge') return 'merge'
-  if (WAKES.includes(action.kind)) return 'wake'
-  return null
-}
-
-function entryBucket(entry: LedgerEntry): Bucket | null {
-  if (entry.class === 'start') return 'start'
-  if (entry.kind === 'spawn' || entry.kind === 'delegate') return 'spawn'
-  if (entry.kind === 'merge') return 'merge'
-  if (WAKES.includes(entry.kind)) return 'wake'
+function bucketOf(kind: ActionKind, klass: ActionClass): Bucket | null {
+  if (klass === 'start') return 'start'
+  if (kind === 'spawn' || kind === 'delegate') return 'spawn'
+  if (WAKES.includes(kind)) return 'wake'
   return null
 }
 
@@ -1288,10 +1618,10 @@ function admit(ctx: Ctx): Action[] {
   const control = state.control
   const hourAgo = state.now - HOUR
   const recent = state.ledger.filter(e => e.startedAt > hourAgo)
-  const counts: Record<Bucket, number> = { start: 0, spawn: 0, merge: 0, wake: 0 }
+  const counts: Record<Bucket, number> = { start: 0, spawn: 0, wake: 0 }
   const perIssueKind = new Map<string, number>()
   for (const entry of recent) {
-    const bucket = entryBucket(entry)
+    const bucket = bucketOf(entry.kind, entry.class)
     if (bucket !== null) counts[bucket] += 1
     if (entry.issue !== null && bucket !== null) {
       const k = `${entry.kind}:${entry.issue}`
@@ -1321,6 +1651,10 @@ function admit(ctx: Ctx): Action[] {
       skip(ctx, action.rule, issue, `owner: no new work (${action.kind})`)
       continue
     }
+    if (control.updateDue !== null && DRAINED.includes(action.class)) {
+      skip(ctx, action.rule, issue, `update due: draining (${action.kind})`)
+      continue
+    }
     if (!ALLOWED[tier].includes(action.class)) {
       skip(ctx, action.rule, issue, `tier ${tier} (${action.kind})`)
       continue
@@ -1335,26 +1669,28 @@ function admit(ctx: Ctx): Action[] {
       skip(ctx, action.rule, issue, `breaker open (${action.kind})`)
       continue
     }
-    const bucket = capBucket(action)
+    const bucket = bucketOf(action.kind, action.class)
     if (bucket !== null && counts[bucket] >= caps[bucket]) {
       tripped.add(bucket)
-      skip(ctx, action.rule, issue, `rate cap (${bucket})`)
+      skip(ctx, action.rule, issue, `rate cap: ${bucket} ${counts[bucket]}/${caps[bucket]}`)
       continue
     }
     if (issue !== null && bucket !== null) {
       const k = `${action.kind}:${issue}`
-      if ((perIssueKind.get(k) ?? 0) >= config.rateCaps.perIssueKind) {
+      const n = perIssueKind.get(k) ?? 0
+      if (n >= config.rateCaps.perIssueKind) {
         tripped.add(k)
-        skip(ctx, action.rule, issue, `rate cap (${action.kind} on #${issue})`)
+        skip(ctx, action.rule, issue, `rate cap: ${action.kind} on #${issue} ${n}/${config.rateCaps.perIssueKind}`)
         continue
       }
-      perIssueKind.set(k, (perIssueKind.get(k) ?? 0) + 1)
+      perIssueKind.set(k, n + 1)
     }
     if (bucket !== null) counts[bucket] += 1
     kept.push(action)
   }
+  ctx.capped = [...tripped].sort()
   const hour = Math.floor(state.now / HOUR)
-  for (const bucket of [...tripped].sort()) {
+  for (const bucket of ctx.capped) {
     const notice = wake('tell', 'runaway', `tell:runaway:${bucket}:${hour}`, 'O2', null, { cap: bucket })
     if (gate(ctx, notice.key, 'tell') === 'go') kept.push(notice)
   }
@@ -1385,37 +1721,31 @@ function oneWake(ctx: Ctx, actions: Action[]): Action[] {
   })
 }
 
-// --- O1: the title (SPEC 9.1) ------------------------------------------------------------
+// --- O1: the title (SPEC 9.1, D-23) --------------------------------------------------------
 
-function floor5(pct: number) {
-  return Math.floor(pct / 5) * 5
-}
+export type TitleNotes = { owner: number; blind: boolean; capped: string[]; atCap: boolean }
 
-export function titleOf(state: State, config: Config, tier: Tier, overridden: boolean, owner: number, blind: boolean): string {
+// titleOf: the repo's short name and three counts, Q (the queue), D (designing through ready
+// to merge) and M (merged in the last 6 hours), then a word for each thing that needs
+// attention. No usage numbers: a usage tier shows only when it holds work.
+export function titleOf(state: State, config: Config, tier: Tier, notes: TitleNotes): string {
   const name = state.repo.split('/')[1] ?? state.repo
-  const parts = [`🔄 ${name}`, config.mode]
-  const u = state.usage
-  const label = `${tier}${overridden ? '*' : ''}`
-  if (u.unavailable || (u.fiveHour === null && u.sevenDay === null)) {
-    parts.push(`${label} usage n/a`)
-  } else {
-    const windows = [
-      u.fiveHour === null ? null : `5h ${floor5(u.fiveHour)}%`,
-      u.sevenDay === null ? null : `7d ${floor5(u.sevenDay)}%`,
-    ].filter(w => w !== null)
-    parts.push([label, ...windows].join(' '))
-  }
-  if (blind) {
-    parts.push('blind')
-  } else {
-    const count = (stages: Stage[]) => state.issues.filter(i => i.stage !== null && stages.includes(i.stage)).length
-    parts.push(
-      `q ${state.queue.length} dev ${count(['designing', 'implementing'])} pipe ${count(['in pipeline', 'parked'])} merge ${count(['ready to merge'])}`,
-    )
+  const live = state.issues.filter(i => isLive(i)).length
+  const merged = state.issues.filter(i => i.stage === 'merged' && i.stageSince !== null && state.now - i.stageSince <= MERGED_WINDOW_MS).length
+  // a blind pass has no counts to trust: `blind` takes their place
+  const head = notes.blind ? `🔄 ${name}` : `🔄 ${name} (Q:${state.queue.length} - D:${live} - M:${merged})`
+  const words: string[] = []
+  if (config.mode !== 'act') words.push('observe')
+  if (notes.blind) words.push('blind')
+  if (tier === 'stop-new') words.push('stop new')
+  if (tier === 'stop-all') words.push('stop all')
+  if (!notes.blind) {
     const stuck = state.issues.filter(i => i.stuck !== null && isLive(i)).length
-    if (stuck > 0) parts.push(`stuck ${stuck}`)
+    if (stuck > 0) words.push(`stuck ${stuck}`)
   }
-  if (state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil) parts.push('gh wait')
-  if (owner > 0) parts.push(`owner ${owner}`)
-  return parts.join(' · ')
+  if (notes.atCap) words.push('at cap')
+  for (const c of notes.capped) words.push(`capped ${c}`)
+  if (state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil) words.push('gh wait')
+  if (notes.owner > 0) words.push(`owner ${notes.owner}`)
+  return [head, ...words].join(' · ')
 }

@@ -3,7 +3,8 @@
 # Wait until a repository's labelled-issue queue changes, print one line -
 # "queue-changed known=<n1,n2|none> now=<n1,n2|none>" - and exit
 # (single-shot, the default). With --stream it never exits on an event: see
-# "Stream mode" below.
+# "Stream mode" below. --once reads the queue once and exits: see "--once"
+# below.
 #
 # The orchestrator starts this with the queue it already knows about, so a
 # deliberately-untouched queue (blocked work, issues awaiting the owner)
@@ -57,10 +58,26 @@
 # callum-flow-event --if-changed, so it adds nothing when the log already ends
 # with that event. An issue that joins after the first poll is always logged.
 # A `watcher-error <reason>` line means it has exited: fix the cause and re-arm.
+#
+# --once (docs/factory-loop/SPEC.md 3.4, DECISIONS D-20) is one read for the
+# factory loop, not a watch: the same listing and trust filtering, no
+# debounce, then one line and exit 0, whether or not the queue changed:
+#
+#   queue known=<n1,n2|none> now=<n1,n2|none>
+#
+# --known is the caller's last `now=` (`none`, empty or left out is the empty
+# set). Every member of now that is not in known logs a `ready` event with
+# --if-changed: one read sees an issue queued, never the moment it joined.
+# Fatal, with exit 1, the reason on stderr, nothing on stdout and no
+# watcher_error event (the caller reads every few minutes and reports a failed
+# source itself): `gh` or the reader missing from PATH, or a failed read, which
+# is a failed source, never an empty queue. It takes no option except --repo,
+# --label and --known.
 set -eu
 
 stream=
 case " $* " in *" --stream "*) stream=1 ;; esac
+once=
 reported=
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 
@@ -103,7 +120,8 @@ nap_cleanup() {
 # watcher-error line on stdout, the event channel.
 fatal() {
   [ -z "$stream" ] || echo "watcher-error $*"
-  record_event watcher_error --note "queue-watch: $*"
+  # --once runs every few minutes and its caller reports a failed source: no watcher_error each time
+  [ -n "$once" ] || record_event watcher_error --note "queue-watch: $*"
   echo "queue-watch.sh: $*" >&2
   reported=1
   exit 1
@@ -127,7 +145,7 @@ usage() {
   }
   [ -z "${1-}" ] || echo "queue-watch.sh: $1" >&2
   echo "usage: queue-watch.sh --repo owner/name --label label [--known n1,n2,...]" \
-    "[--stream] [--interval seconds]" >&2
+    "[--stream | --once] [--interval seconds]" >&2
   reported=1
   exit 2
 }
@@ -136,17 +154,24 @@ repo=
 label=
 known=
 interval=${QUEUE_WATCH_INTERVAL:-120}
+interval_set=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --repo) repo=${2-}; shift 2 || usage ;;
     --label) label=${2-}; shift 2 || usage ;;
     --known) known=${2-}; shift 2 || usage ;;
-    --interval) interval=${2-}; shift 2 || usage ;;
+    --interval) interval=${2-}; interval_set=1; shift 2 || usage ;;
     --stream) shift ;;
+    --once) once=1; shift ;;
     *) usage ;;
   esac
 done
 if [ -z "$repo" ] || [ -z "$label" ]; then usage; fi
+if [ -n "$once" ] && [ -n "$stream$interval_set" ]; then
+  usage "--once takes no option except --repo, --label and --known"
+fi
+# --once is handed back its own line's now=, where the empty set reads "none"
+[ -z "$once" ] || [ "$known" != none ] || known=
 # The poll below yields a numerically sorted set; sort the baseline the same
 # way so a caller's order never fires a spurious queue-changed.
 known=$(printf '%s' "$known" | tr ',' '\n' | sed '/^$/d' | sort -nu | paste -sd, -)
@@ -163,6 +188,26 @@ else
   trap nap_cleanup EXIT
 fi
 
+# read_queue: the open, trusted issues carrying the label, sorted and comma
+# separated. Fails on a reader failure or an unexpected reply: a failed poll,
+# never an empty queue.
+read_queue() {
+  listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
+    printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null
+}
+
+# --once: one read (see the header), then exit 0.
+if [ -n "$once" ]; then
+  command -v gh >/dev/null 2>&1 || fatal "gh not on PATH"
+  command -v "$READ" >/dev/null 2>&1 || fatal "$READ not on PATH"
+  current=$(read_queue) || fatal "cannot read the queue"
+  printf 'queue known=%s now=%s\n' "${known:-none}" "${current:-none}"
+  for n in $(printf '%s' "$current" | tr ',' ' '); do
+    case ",$known," in *",$n,"*) ;; *) record_event ready --issue "$n" --if-changed ;; esac
+  done
+  exit 0
+fi
+
 # The changed set seen on the previous successful poll, waiting for a second
 # poll to confirm it; empty when there is none. A failed poll is no poll, so
 # it neither confirms nor clears a pending set.
@@ -173,8 +218,7 @@ initial=
 polled=
 while :; do
   delay=$interval
-  if listed=$(CALLUM_FLOW_REPO=$repo "$READ" --json --list --label "$label" --state open 2>/dev/null) &&
-    current=$(printf '%s' "$listed" | jq -re 'if (.issues | type) == "array" then [.issues[].number] | sort | join(",") else error("shape") end' 2>/dev/null); then
+  if current=$(read_queue); then
     if [ -z "$polled" ]; then
       polled=1
       initial=$current

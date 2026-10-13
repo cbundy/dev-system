@@ -16,6 +16,8 @@
 # The watchers use it for a transition they did not see happen (a restart's
 # first sight of a run), so a re-armed watcher never re-logs old events.
 # run_id is not compared: the same run is logged under a ULID and "unknown".
+# `loop` lines are skipped when finding the newest line: the factory loop's
+# bookkeeping is no transition of the subject, so it never makes a repeat new.
 # A missing or unreadable log counts as changed. Without the flag every call
 # writes, as before.
 #
@@ -24,7 +26,7 @@
 #
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
-#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind
+#   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop
 #   (`superseded`: a run or branch was replaced for the same issue, --run names the old run; it does not end the issue)
 #   (`rebased_behind`: see the lifecycle semantics in docs/metrics.md)
 #   (`renewed`: a claim heartbeat extended the lease; housekeeping, never a stage)
@@ -32,13 +34,17 @@
 #   is `model=.. reason=.. bucket=.. pct=..`)
 #   (`closed`: the sweep saw GitHub close the issue; the note is GitHub's close
 #   reason - completed, not_planned or duplicate)
+#   (`loop`: the factory loop's own bookkeeping (docs/factory-loop/DECISIONS.md D-09): agent
+#   starts and ends, wakes and their answers, owner notices and rate-cap holds. The note must
+#   carry `kind=.. key=.. status=..` (more fields may follow); never a stage, never progress)
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
 #      caller is never failed by logging)
-#   2  usage error: unknown state, missing or non-numeric --issue (nothing
-#      written). --issue may be left out for watcher_error and usage, and is
-#      taken from an issue-<N> branch name when --branch has one.
+#   2  usage error: unknown state, missing or non-numeric --issue, a loop
+#      note without kind=, key= and status= (nothing written). --issue may be
+#      left out for watcher_error, usage and loop, and is taken from an
+#      issue-<N> branch name when --branch has one.
 #
 # No network, one jq call, one O_APPEND write of a single short line (atomic
 # between concurrent writers). Fills ts, repo, device (DEV_MACHINE_NAME, else
@@ -63,7 +69,7 @@
 # override of /proc/sys/kernel/random/uuid).
 set -u
 
-STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind"
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop"
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
@@ -134,10 +140,20 @@ if [ -z "$issue" ]; then
   esac
 fi
 case "$state" in
-  watcher_error | usage) ;;
+  watcher_error | usage | loop) ;;
   *) [ -n "$issue" ] || usage "--issue is required for $state" ;;
 esac
 [ "$state" != superseded ] || [ -n "$run" ] || usage "--run is required for superseded (the run being replaced)"
+# a loop note is the record a lost store is rebuilt from (SPEC 7.5): its three keys are required
+if [ "$state" = loop ]; then
+  for k in kind key status; do
+    case " $note " in
+      *" $k= "*) usage "--note for loop needs kind=, key= and status= with values" ;;
+      *" $k="*) ;;
+      *) usage "--note for loop needs kind=, key= and status= with values" ;;
+    esac
+  done
+fi
 case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 
@@ -189,6 +205,7 @@ fi
 if [ -n "$if_changed" ] && [ -r "$dir/$file" ]; then
   same=$(jq -Rn --argjson new "$line" '
     [inputs | fromjson? | select(type == "object")
+     | select(.state != "loop")
      | select(if $new.branch != null then .branch == $new.branch else .issue == $new.issue end)]
     | last
     | . != null and .state == $new.state and .head == $new.head and .note == $new.note' "$dir/$file" 2>/dev/null) || same=
