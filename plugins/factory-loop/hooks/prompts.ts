@@ -110,8 +110,14 @@ function briefLines(repo: string | null, brief: string | null, n: number | null)
 }
 
 function readFirst(type: AgentType): string {
-  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first.`
+  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first. ${CHECKOUT_RULE}`
 }
+
+// Agents start in the session's directory, the factory's main checkout, which the loop and every
+// other agent read from. On the testbed a read-only adjudicator ran `git checkout` there and left
+// it detached on another issue's branch, so every agent is told plainly.
+export const CHECKOUT_RULE =
+  'You start in the factory\'s main checkout: never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`, and do any work in a worktree of your own.'
 
 function modelLine(model: string | null): string[] {
   const m = id(model, 'model')

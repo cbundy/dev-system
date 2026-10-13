@@ -5,7 +5,7 @@
 // reference and no brief content may get through.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { descriptionOf, nameOf, neutral, promptOf } from '../hooks/prompts'
+import { CHECKOUT_RULE, descriptionOf, nameOf, neutral, promptOf } from '../hooks/prompts'
 import type { AgentAction, PromptEnv } from '../hooks/prompts'
 import { DESIGNER_RESULT, HANDOFF_RESULT } from '../hooks/replies'
 import type { AdjudicatorPurpose, FixerPurpose } from '../hooks/types'
@@ -211,6 +211,13 @@ describe('every template (SPEC 6.3)', () => {
     }
     const none = render(fixer({ ...BENIGN, brief: '' }, 'conflict'), BENIGN)
     expect(none).toContain('Brief: none known. Read the issue and its comments with `callum-flow-issue-read 470 --comments` instead, and say so.')
+  })
+})
+
+describe('the main checkout (testbed, 2026-10-13)', () => {
+  test('every agent is told never to move or change the main checkout', () => {
+    const actions = [adjudicator(BENIGN, 'gate'), adjudicator(BENIGN, 'merge'), adjudicator(BENIGN, 'weakening')]
+    for (const action of actions) expect(promptOf(action, ENV)).toContain(CHECKOUT_RULE)
   })
 })
 
