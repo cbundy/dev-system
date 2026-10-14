@@ -1511,8 +1511,12 @@ path stays `callum-flow-merge-guard <pr> --update-behind`. Tests: `CALLUM_FLOW_N
 `CALLUM_FLOW_EVENT_BIN`, `CALLUM_FLOW_REGATE_TRIES`, `CALLUM_FLOW_REGATE_SLEEP`.
 
 The head guard also accepts different run and PR heads when that clean-run patch proof holds,
-origin equals the PR head, and every worktree on the PR branch is at either the gated head or
-the PR head. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
+origin equals the PR head, and every worktree on the PR branch holds no commit the gated run
+lacks: each commit it has beyond the run head, the PR head and the base must carry the
+zero-context patch ID of a run commit the worktree does not already contain and, applied to that
+run commit's parent, give exactly its tree, one worktree commit per run commit. A worktree that lags (an `--update-behind` leaves every
+worktree behind the new head) or sits on a copy of the branch from before a rebase passes; a
+commit made outside the pipeline, an empty one included, fails `head` (#627). The guard reads only each worktree's HEAD, never uncommitted changes. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
 the `head` FAIL recovery. When the proof was tried and failed, the `head` FAIL line carries its reason after `(run <id>)`, for example `proof: patch changed by the rebase`. The proof ID hashes the ordered patch IDs; `rebased_from` is the gated
 run head. `--emit-verified` adds these fields to `VERIFIED`, empty when the heads match. A proof
 passes only the head guard: CI on the new head and all other merge guards must still pass.

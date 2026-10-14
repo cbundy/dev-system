@@ -2540,6 +2540,46 @@ describe('M2: fast-forward after the loop\'s own update-behind rebased the head 
   })
 })
 
+describe('M1, M2: update-behinds in a row never send a fixer or a new branch (#627)', () => {
+  // the PR #621 incident: main kept moving, so the loop rebased the PR three times while its CI
+  // ran; the guard passes head on the patch proof each time, and only checks and mergeability
+  // on the newest head decide
+  const pending = { name: 'checks', reason: 'ci=pending' }
+  const behind = { name: 'mergeable', reason: 'behind main, run update-behind first' }
+  const hop = (from: string, to: string, n: number) =>
+    entry(`update-behind:550:${from}`, 'update-behind', {
+      issue: 50,
+      pr: 550,
+      head: from,
+      startedAt: NOW - (13 - 4 * n) * MIN,
+      endedAt: NOW - (13 - 4 * n) * MIN + 5000,
+      outcome: { kind: 'update-behind', result: 'updated', from, to, line: `UPDATED pr=550 from=${from} to=${to}` },
+    })
+  const g = (seq: number, fails: { name: string; reason: string }[]) =>
+    guarded(fails, [], seq, { startedAt: NOW - (14 - 4 * seq) * MIN, endedAt: NOW - (14 - 4 * seq) * MIN + 10_000 })
+  const chain = [g(0, [behind]), hop('head50', 'head51', 0), g(1, [pending, behind]), hop('head51', 'head52', 1), g(2, [pending, behind]), hop('head52', 'head53', 2)]
+  const world = (extra: LedgerEntry[]) => mergeReady([...chain, ...extra], { runs: [run(50, 'head-mismatch')] })
+  const drive = (r: PlanResult) => r.actions.filter(a => a.kind === 'spawn' || a.kind === 'judge' || a.kind === 'delegate')
+
+  test('behind again after a rebase: the next update-behind starts from the newest pushed head', () => {
+    const r = plan(world([g(3, [pending, behind])]), CFG)
+    expect(keys(r)).toEqual(['update-behind:550:head53'])
+    expect(drive(r)).toEqual([])
+  })
+
+  test('CI still running on the newest head: the loop waits, no fixer, judge or regate', () => {
+    const r = plan(world([g(3, [pending])]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M2', issue: 50, why: 'guard: waiting (transient)' })
+  })
+
+  test('a passing guard on the newest head goes to the merge review of the gated head', () => {
+    const r = plan(world([g(3, [])]), CFG)
+    expect(keys(r)).toEqual(['adjudicate-merge:550:head50'])
+    expect(r.actions.some(a => a.key.startsWith('fixer:') || a.key.startsWith('judge:'))).toBe(false)
+  })
+})
+
 describe('an issue closed on GitHub is finished (#556)', () => {
   // testbed run 3's first pass: run 2's issues were closed at the reset, but their failed runs are
   // still listed, the factory still shows them live (stuck), and the ledger rebuilt from the event

@@ -27,8 +27,9 @@
 #   head     the run's head_sha equals a fresh origin/<branch>, the PR head,
 #          and HEAD in every worktree checked out on the PR branch. A rebase-only
 #          difference also passes (cbundy/dev-system#476): the run finished cleanly
-#          and git patch-id --verbatim over its commits equals the PR's, in order. The
-#          guard then prints
+#          and git patch-id --verbatim over its commits equals the PR's, in order, and
+#          each worktree on the branch holds no commit the run lacks (a lagging or
+#          pre-rebase copy passes, cbundy/dev-system#627). The guard then prints
 #            GUARD head PASS gated_patch=<id> rebased_from=<run head>
 #   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
 #          name) --issue N is required and the PR must link #N as --expect says
@@ -165,6 +166,45 @@ patch_proof() {
   proof_id=$(printf '%s\n' "$_oi" | git hash-object --stdin) || return 1
 }
 
+# worktree_gated <worktree head> <run head> <origin head> <base>: after a patch proof (#627),
+# the worktree holds no commit the gated run lacks. Each commit it has that the run head,
+# origin/<branch> and origin/<base> lack must be a non-merge copy of its own run commit: one
+# the worktree does not already contain, with the same zero-context patch id (so main changing
+# lines near a gated hunk before a rebase does not count), whose change applied to that run
+# commit's parent gives exactly the run commit's tree (patch ids ignore where a change sits,
+# the tree does not), and no run commit stands for two worktree commits. A slot that lags (the
+# loop's update-behind leaves every slot behind the new head) or sits on a copy of the branch
+# from before a rebase passes; a commit made outside the pipeline, an empty one, a moved change
+# or a second copy of a gated change included, does not. Call only after patch_proof.
+u0_id() { git show -p -U0 --no-color --no-ext-diff --no-textconv --format= "$1" 2> /dev/null | git patch-id --verbatim | cut -d' ' -f1; }
+same_change() { # same_change <worktree commit> <run commit>: c applied to r^ gives r's tree
+  _t=$(git merge-tree --write-tree --merge-base "$1^" "$2^" "$1" 2> /dev/null) || return 1
+  [ "$(printf '%s\n' "$_t" | sed -n 1p)" = "$(git rev-parse --verify --quiet "$2^{tree}")" ]
+}
+worktree_gated() {
+  case "$1" in '' | unknown) return 1 ;; esac
+  _only=$(git rev-list "$1" --not "$2" "$3" "origin/$4" 2> /dev/null) || return 1
+  [ -n "$_only" ] || return 0
+  _rb=$(git merge-base "$2" "origin/$4" 2> /dev/null) && _run=$(git rev-list --no-merges "$_rb..$2" 2> /dev/null) || return 1
+  _free=''
+  for _r in $_run; do
+    git merge-base --is-ancestor "$_r" "$1" 2> /dev/null && continue
+    _id=$(u0_id "$_r")
+    [ -z "$_id" ] || _free="$_free $_id:$_r "
+  done
+  for _c in $_only; do
+    [ -z "$(git rev-list --no-walk --merges "$_c" 2> /dev/null)" ] || return 1
+    _id=$(u0_id "$_c")
+    case "$_id" in '' | *[!0-9a-f]*) return 1 ;; esac
+    _hit=''
+    for _e in $_free; do
+      [ "${_e%%:*}" = "$_id" ] && same_change "$_c" "${_e#*:}" && { _hit=$_e; break; }
+    done
+    [ -n "$_hit" ] || return 1
+    _free="${_free%%" $_hit "*} ${_free#*" $_hit "}"
+  done
+}
+
 branch='' pr_head='' pr_base='' pj=''
 if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus 2> /dev/null); then
   branch=$(printf '%s' "$pj" | jq -r '.headRefName // empty')
@@ -294,7 +334,7 @@ else
   worktree_detail=
   for worktree_sha in $worktree_heads; do
     worktree_detail="$worktree_detail worktree=$worktree_sha"
-    [ "$run_sha" = "$worktree_sha" ] || { [ -n "$gated_patch" ] && [ "$worktree_sha" = "$origin_sha" ]; } || head_mismatch=1
+    [ "$run_sha" = "$worktree_sha" ] || { [ -n "$gated_patch" ] && worktree_gated "$worktree_sha" "$run_sha" "$origin_sha" "$pr_base"; } || head_mismatch=1
   done
   if [ -n "$gated_patch" ] && [ -z "$head_mismatch" ]; then
     printf 'GUARD head PASS gated_patch=%s rebased_from=%s\n' "$gated_patch" "$rebased_from"
