@@ -83,7 +83,8 @@ const GITHUB: readonly ActionKind[] = [
 ]
 // What waits while the main checkout is off its default branch (rule G5, #544): each starts work
 // in it or reads its code (a claim leads to a designer; agents begin in it; a task is the model
-// working from it). Free commands read only the object store and remote refs, so they go on.
+// working from it). Free commands read only the object store and remote refs, so they go on (a
+// fast-forward moves pool worktrees only, never this checkout, #551).
 const CHECKOUT_HELD: readonly ActionKind[] = ['claim', 'spawn', 'delegate', 'task']
 const ALLOWED: Record<Tier, readonly ActionClass[]> = {
   normal: ['free', 'owner', 'drive', 'develop', 'start'],

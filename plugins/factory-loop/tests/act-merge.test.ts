@@ -878,6 +878,8 @@ describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
     expect(FF_SCRIPT).toContain('status --porcelain --untracked-files=no')
     expect(FF_SCRIPT).toContain('merge-base --is-ancestor "$at" "$head"')
     expect(FF_SCRIPT).toContain('if [ "$origin" != "$head" ]')
+    // the main checkout is never moved (rule G5 tells the owner instead)
+    expect(FF_SCRIPT).toContain('[ "$p" != "$main" ] || { echo "REFUSED')
     expect(FF_SCRIPT).not.toMatch(/\b(push|reset|rebase|checkout|clean|stash)\b/)
     // every check comes before the first move
     expect(FF_SCRIPT.indexOf('merge --ff-only')).toBeGreaterThan(FF_SCRIPT.indexOf('merge-base --is-ancestor'))

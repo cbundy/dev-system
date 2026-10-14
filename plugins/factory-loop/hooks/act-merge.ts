@@ -143,15 +143,18 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
 // `head`. This moves each worktree on the branch to the run's head, only when origin's branch
 // is that head (fetched fresh), the worktree's head is an ancestor of it and nothing tracked is
 // uncommitted, and only by `git merge --ff-only`, so no commit or change can be lost. Untracked
-// files stay (a fast-forward that would overwrite one fails by itself). Every worktree is checked
-// before any moves. It answers, with exit 0, a `FORWARDED <from> <to> <path>` line per worktree
-// moved, `CURRENT <head>` when none lagged, or `REFUSED <why>`; anything else is a failure.
+// files stay (a fast-forward that would overwrite one fails by itself). The main checkout (the
+// first worktree listed) is never moved (SPEC 5.2 G5): one left behind on the run's branch is
+// refused, and G5 tells the owner. Every worktree is checked before any moves. It answers, with
+// exit 0, a `FORWARDED <from> <to> <path>` line per worktree moved, `CURRENT <head>` when none
+// lagged, or `REFUSED <why>`; anything else is a failure.
 export const FF_SCRIPT = [
   'branch=$1 head=$2',
   'git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" || { echo "factory-loop: cannot fetch origin/$branch" >&2; exit 1; }',
   'origin=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")',
   'if [ "$origin" != "$head" ]; then echo "REFUSED origin/$branch is ${origin:-unknown}, not the run head $head"; exit 0; fi',
   'list=$(git worktree list --porcelain) || exit 1',
+  `main=$(printf '%s\\n' "$list" | awk '/^worktree / { print substr($0, 10); exit }')`,
   `paths=$(printf '%s\\n' "$list" | awk -v b="refs/heads/$branch" '/^worktree / { p = substr($0, 10) } /^branch / && substr($0, 8) == b { print p }')`,
   `nl=$(printf '\\n_') lag=`,
   'nl=${nl%_}',
@@ -160,6 +163,7 @@ export const FF_SCRIPT = [
   'for p in $paths; do',
   `  at=$(git -C "$p" rev-parse --verify --quiet 'HEAD^{commit}') || { echo "REFUSED cannot read the head of $p"; exit 0; }`,
   '  [ "$at" = "$head" ] && continue',
+  '  [ "$p" != "$main" ] || { echo "REFUSED $p is the main worktree, which the loop never moves"; exit 0; }',
   '  st=$(git -C "$p" status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of $p"; exit 0; }',
   '  [ -z "$st" ] || { echo "REFUSED $p has uncommitted changes"; exit 0; }',
   '  git merge-base --is-ancestor "$at" "$head" || { echo "REFUSED $p at $at has commits not on origin/$branch"; exit 0; }',

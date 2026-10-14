@@ -121,6 +121,16 @@ test("a run head that is not origin's is refused: the branch moved, so the guard
   assert.equal(git(w.wt, "rev-parse", "HEAD"), w.handoff);
 });
 
+test("the main checkout left behind on the branch is refused and left as it was: the loop never moves it (rule G5)", () => {
+  const w = world();
+  git(w.wt, "switch", "-q", "--detach");
+  git(w.main, "switch", "-q", BRANCH);
+  const r = forward(w.main, w.head);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(r.read, { result: "refused", line: `REFUSED ${w.main} is the main worktree, which the loop never moves` });
+  assert.equal(git(w.main, "rev-parse", "HEAD"), w.handoff);
+});
+
 test("a fast-forward that cannot go through (an untracked file in its way) fails, and moves nothing", () => {
   const w = world();
   fs.writeFileSync(path.join(w.wt, "c.txt"), "in the way\n");
