@@ -172,11 +172,10 @@ Owner items (the title counts them until resolved):
 - `escalate` (issue, run or pr, brief; detail: why, verdicts or WARN lines): the adjudicator
   escalated a gate or a test-weakening warning. Owner decides; you `note <N>` and
   `resume <run>`, or `drop <N>`. Tell the owner what a resume will do, as the tell's context
-  says. For a gate: with no note, an all-`ENV` escalation reruns the pipeline on the same head,
-  and anything else sends a fixer with the adjudicator's reason; a note recorded before the
-  resume always sends a fixer with that note. For a test-weakening warning, a resume asks for a
-  fresh test-weakening review. When the owner asks for a change, `note <N>` first, then
-  `resume <run>`.
+  says; the routing and resume-note eligibility are defined in
+  [SPEC 5.4](../../../../docs/factory-loop/SPEC.md#54-pipeline-gates-p) for gates and
+  [SPEC 5.5](../../../../docs/factory-loop/SPEC.md#55-merge-m) for test-weakening warnings.
+  When the owner asks for a change, record `note <N>` after the escalation, then `resume <run>`.
 - `review-cap` (issue, run, rounds, brief; detail: verdicts): the run used all its review fix
   rounds. Owner reads the verdicts: `resume <run>` allows one more round, or fix it by hand.
 - `merge-hold` (issue, pr, run, head; detail: reason): the merge review or a sequencing call
@@ -253,9 +252,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
   drain); on lifts it.
 - `override <pct> <hours>`: run past the usage tiers up to pct, for hours.
 - `resume <N|run>`: release a hold: an issue (a pending decision) or a run (an escalation, the
-  review cap, a merge or guard hold). Resuming an escalated gate reruns the same head (all `ENV`,
-  no note) or sends a fixer (a note, or any other verdict), so record `note <N>` before it when
-  the owner wants a change.
+  review cap, a merge or guard hold). For an escalation, follow the owner-item instructions above.
 - `retry <N>`: clear N's exhausted actions so the loop tries again (D-38).
 - `drop <N>`: abandon N; the loop stops its agents.
 - `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.
