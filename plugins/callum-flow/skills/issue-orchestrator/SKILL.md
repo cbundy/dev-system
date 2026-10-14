@@ -6,7 +6,7 @@ description: >-
   implementation to a sub-agent that runs the /no-mistakes pipeline in
   a treehouse worktree, then verify and merge. Also drive in-flight pipelines.
   Use when acting as an autonomous orchestrator over a `ready` issue queue.
-version: 0.37.1
+version: 0.38.0
 ---
 
 # Issue orchestrator
@@ -116,8 +116,8 @@ gate's log or the diff yourself, and never `sleep` or poll a run.
   3. Log each verdict: `callum-flow-event verdict --issue <N> --run <id>
      --branch <b> --note "<line>"`.
   4. Do the `ACTION:` line: `no-mistakes axi respond` (`approve`, `fix`, `skip`),
-     launched with `run_in_background`, since it blocks like `axi run`. A `fix`
-     on `review` also logs `fix_requested ... --note review`. `escalate:` goes to
+     launched with `run_in_background`, since it blocks like `axi run`. A `fix` puts every
+     other gate finding in `--ignore`; on `review` it also logs `fix_requested ... --note review`. `escalate:` goes to
      the owner. `fixer:` spawns `callum-flow:fixer` with the instructions and the
      brief URL, only when the pipeline cannot write the fix from instructions or the run is done.
      Never pass `--yes`. The `implement-issue` skill says how `respond` and

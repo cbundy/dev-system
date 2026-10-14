@@ -92,6 +92,7 @@ export function respondArgv(a: RespondAction): string[] {
     flag('findings', a.findings)
     flag('instructions', a.instructions)
     flag('add-finding', a.addFinding)
+    flag('ignore', a.ignore)
   } else if (a.action === 'approve' && a.step === 'test') {
     // no-mistakes takes --reason only on the test step: anywhere else it is a usage error
     flag('reason', a.approveReason)

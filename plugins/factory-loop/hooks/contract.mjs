@@ -210,7 +210,7 @@ function actionOf(raw, purpose, judged, problems) {
         else addFinding = JSON.stringify(a.addFinding)
       }
       if (findings === null && instructions === null && addFinding === null) problems.push('action fix needs findings, instructions or addFinding')
-      return { type, findings, instructions, addFinding }
+      return { type, findings, instructions, addFinding, ignore: declinedFindings([...judged.keys()], findings) }
     }
   }
   return null
@@ -218,6 +218,18 @@ function actionOf(raw, purpose, judged, problems) {
 
 // The id prefix the contract asks for a gap the reviewer missed, which the gate does not know.
 const MISSED_ID = 'missed-'
+
+// declinedFindings: the findings a fix leaves out of its selection, for respond's --ignore.
+// no-mistakes 1.90+ takes declines only when named: every finding the gate shows must be in
+// --findings or --ignore, or the respond is refused and the gate stays parked. So the loop
+// declines what the adjudicator judged and did not select, the complement no-mistakes itself
+// took before 1.90. A gap the reviewer missed (MISSED_ID) is not the gate's, so never declined.
+// null when nothing is left out.
+export function declinedFindings(judgedIds, findings) {
+  const selected = new Set((findings ?? '').split(',').filter(id => id !== ''))
+  const out = [...new Set(judgedIds)].filter(id => FINDING_ID.test(id) && !id.startsWith(MISSED_ID) && !selected.has(id))
+  return out.length > 0 ? out.join(',') : null
+}
 
 // fixIds: a fix's finding ids, each one judged above as CORRECT or ENV: a fix for a WRONG, NIT or
 // DUP finding would make the pipeline rewrite sound code (adjudicator.md). The loop has no view of

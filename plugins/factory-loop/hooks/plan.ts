@@ -988,6 +988,7 @@ function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
     findings: action.type === 'fix' ? action.findings : null,
     instructions: action.type === 'fix' ? action.instructions : null,
     addFinding: action.type === 'fix' ? action.addFinding : null,
+    ignore: action.type === 'fix' ? action.ignore : null,
     approveReason: action.type === 'approve' ? action.reason : null,
     logReview,
   })

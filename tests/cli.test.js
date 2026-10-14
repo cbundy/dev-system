@@ -67,7 +67,7 @@ function assertConfig(dir, file = ".no-mistakes.yaml") {
   assert.deepEqual(config.pr, {
     template: ".github/pull_request_template.md",
     publish_intent: "false",
-    appendix: "collapsed",
+    appendix: "minimal",
   });
   return config;
 }
@@ -141,7 +141,7 @@ test("update gives a repo scaffolded before the PR template the file and the pr 
   fs.rmSync(path.join(repo, ".callum-dev/baseline/.github"), { recursive: true });
   const withoutPr = (text) => {
     const start = text.indexOf("\n# PR description policy");
-    const end = text.indexOf("appendix: collapsed\n") + "appendix: collapsed\n".length;
+    const end = text.indexOf("appendix: minimal\n") + "appendix: minimal\n".length;
     return text.slice(0, start) + text.slice(end);
   };
   for (const file of [".no-mistakes.yaml", ".callum-dev/baseline/.no-mistakes.yaml"]) {

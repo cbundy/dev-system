@@ -26,5 +26,7 @@ from a slot you have just checked out on the run's branch and read its log.
 
 After the rebase and before a fresh `axi run` on a branch that already had a run, run `callum-flow-regate --issue <N>` and act on its `REGATE` line; never hand-roll gate ref deletes or `sync --recover` choices.
 
-When you start a fresh run, end its `--intent` with this sentence, verbatim:
+When you start a fresh run on a PR that closes its issue, pass `--closes <N>` again (an
+aborted run's closing reference does not carry over; see `implement-issue` section 7).
+End its `--intent` with this sentence, verbatim:
 "TEST POLICY: never delete, skip or weaken an existing test or assertion (no --warn-only, || true, skip/only, commented-out asserts) to make a gate pass; fix the code or the environment instead. Remove a test only if it is clearly and absolutely not required, and never as an auto-fix: raise it as ask-user with the justification so the adjudicator can judge it."

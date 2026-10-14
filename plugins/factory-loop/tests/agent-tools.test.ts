@@ -90,6 +90,23 @@ describe('checkVerdict', () => {
     expect(r).toMatchObject({ ok: true, outcome: { action: { type: 'fix', findings: null, instructions: null, addFinding: '{"title":"missed --wait bound","severity":"warning"}' } } })
   })
 
+  test('a fix declines by name the judged findings it leaves unselected (no-mistakes 1.90+ respond --ignore), never a missed gap', () => {
+    const judged = [
+      { id: 'review-1', verdict: 'CORRECT', reason: 'real' },
+      { id: 'review-2', verdict: 'NIT', reason: 'naming' },
+      { id: 'review-3', verdict: 'WRONG', reason: 'the brief asks for it' },
+      { id: 'missed-1', verdict: 'CORRECT', reason: 'no bound on --wait' },
+    ]
+    const r = checkVerdict({ findings: judged, action: { type: 'fix', findings: ['review-1'], addFinding: { title: 'bound --wait' } } }, 'gate')
+    expect(r).toMatchObject({ ok: true, outcome: { action: { type: 'fix', findings: 'review-1', ignore: 'review-2,review-3' } } })
+    // instructions alone select nothing, so every judged gate finding is declined, as before 1.90
+    const all = checkVerdict({ findings: judged.slice(0, 2), action: { type: 'fix', instructions: 'tidy up' } }, 'gate')
+    expect(all).toMatchObject({ ok: true, outcome: { action: { findings: null, ignore: 'review-1,review-2' } } })
+    // nothing left out: no --ignore at all
+    const none = checkVerdict({ findings: judged.slice(0, 1), action: { type: 'fix', findings: ['review-1'] } }, 'gate')
+    expect(none).toMatchObject({ ok: true, outcome: { action: { ignore: null } } })
+  })
+
   test("a missed gap's own id is never named in a fix: the gate has no such finding, so it goes in addFinding", () => {
     const missed = { id: 'missed-1', verdict: 'CORRECT', reason: 'no bound on --wait' }
     expect(problems(checkVerdict({ findings: [{ id: 'review-1', verdict: 'CORRECT', reason: 'real' }, missed], action: { type: 'fix', findings: ['review-1', 'missed-1'] } }, 'gate'))).toEqual([

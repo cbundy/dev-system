@@ -84,5 +84,8 @@ nothing else - no log excerpts, no diff content, no preamble:
 Every verdict carries a proposed action through that single line: `CORRECT` -> `fix`
 or `fixer:`, `WRONG` -> `approve` with the evidence as `--reason`, `NIT` -> `approve`
 or `skip`, `ENV` -> `fix` instructions, `fixer:` or `escalate:`, `DUP` -> `skip`.
-When findings mix, propose `fix` for the `CORRECT` ones. Every verdict line is one of
+When findings mix, propose `fix` for the `CORRECT` ones. Judge every finding the gate
+shows: a `fix` declines by name each judged finding it leaves out of `--findings`
+(`axi respond --ignore`), and no-mistakes refuses a fix that leaves a gate finding
+unaccounted for, so the gate stays parked. Every verdict line is one of
 the five tokens and no other text precedes it.

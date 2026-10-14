@@ -102,17 +102,43 @@ RUN npm install -g @openai/codex \
   && codex --version \
   && find "$(npm prefix -g)/lib/node_modules/@openai/codex" -name codex-code-mode-host -type f -perm -u+x | grep -q .
 
-# no-mistakes and treehouse: the binaries land under ~/.no-mistakes/bin and
-# ~/.local/bin. The no-mistakes installer also starts a
-# daemon and writes state into its default home; that state belongs in
-# /persist at run time, so everything but the binary is dropped here, with
-# the systemd user unit that daemon start leaves behind (for the build-time
-# home, and no systemd runs here anyway).
-RUN curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh \
-  && no-mistakes --version \
-  && find /home/node/.no-mistakes -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} + \
-  && rm -rf /home/node/.config/systemd \
-  && ln -s /persist/no-mistakes/logs /home/node/.no-mistakes/logs
+# no-mistakes: pinned by version and checksum (cbundy/dev-system#572), never the
+# upstream install.sh, which takes whatever GitHub marks "latest" at build time.
+# Upstream marks every release after v1.84.0 a pre-release, so that installer
+# froze the fleet on v1.84.0 without anyone choosing it. A bump is a deliberate
+# change here: read the upstream release notes for anything the callum-flow
+# skills, the factory loop or the image scripts drive (axi run/respond/status/
+# logs/abort/sync, rerun, `runs`, state.sqlite columns, pr.template), then bump
+# all three ARGs together (checksums: checksums.txt in the release). The binary
+# lives under ~/.no-mistakes/bin, linked from ~/.local/bin, as the upstream
+# installer laid it out; ~/.no-mistakes/logs points into /persist, where the
+# daemon keeps its state at run time. The build fails unless the installed
+# binary reports exactly the pinned version.
+ARG NO_MISTAKES_VERSION=1.97.0
+ARG NO_MISTAKES_SHA256_AMD64=58d3a048c97754ed867ef57b7c2df7718ea848057538d0ed582234234fe1e270
+ARG NO_MISTAKES_SHA256_ARM64=9ac12b99ecf50582fe48b61db3c438ff1a482252ad1aa66d0bf48c03bf86cc80
+RUN arch=$(dpkg --print-architecture) \
+  && case "$arch" in \
+    amd64) sha256="$NO_MISTAKES_SHA256_AMD64" ;; \
+    arm64) sha256="$NO_MISTAKES_SHA256_ARM64" ;; \
+    *) echo "no-mistakes: unsupported architecture $arch" >&2; exit 1 ;; \
+  esac \
+  && tmp=$(mktemp -d) \
+  && curl -fsSL -o "$tmp/no-mistakes.tar.gz" \
+    "https://github.com/kunchenguid/no-mistakes/releases/download/v${NO_MISTAKES_VERSION}/no-mistakes-v${NO_MISTAKES_VERSION}-linux-${arch}.tar.gz" \
+  && echo "$sha256  $tmp/no-mistakes.tar.gz" | sha256sum -c - \
+  && tar -xzf "$tmp/no-mistakes.tar.gz" -C "$tmp" no-mistakes \
+  && mkdir -p /home/node/.no-mistakes/bin /home/node/.local/bin \
+  && install -m 0755 "$tmp/no-mistakes" /home/node/.no-mistakes/bin/no-mistakes \
+  && ln -sf /home/node/.no-mistakes/bin/no-mistakes /home/node/.local/bin/no-mistakes \
+  && rm -rf "$tmp" \
+  && ln -s /persist/no-mistakes/logs /home/node/.no-mistakes/logs \
+  && installed=$(no-mistakes --version) \
+  && echo "$installed" \
+  && case "$installed" in \
+    "no-mistakes version v${NO_MISTAKES_VERSION} "*) ;; \
+    *) echo "no-mistakes: wanted v${NO_MISTAKES_VERSION}, got: $installed" >&2; exit 1 ;; \
+  esac
 # treehouse uses the repo's own installer, not its upstream one: that one asks
 # api.github.com for the latest tag, and the anonymous rate limit (403) made
 # image builds flake (#356). This one reads the releases/latest redirect.
@@ -264,6 +290,7 @@ ENV CLAUDE_CONFIG_DIR=/persist/claude \
   AGENTSVIEW_DATA_DIR=/persist/agentsview \
   AGENTSVIEW_TELEMETRY_ENABLED=0 \
   AGENTSVIEW_DISABLE_UPDATE_CHECK=1 \
+  NO_MISTAKES_NO_UPDATE_CHECK=1 \
   DEV_SHARED_DIR=/shared \
   DEV_SECRETS_DIR=/run/secrets/dev-system
 
@@ -330,6 +357,7 @@ RUN mkdir -p /usr/local/share/dev-system \
     "DEV_PLUGIN_REF=${DEV_PLUGIN_REF}" \
     "AGENTSVIEW_VERSION=${AGENTSVIEW_VERSION}" \
     "CODER_VERSION=${CODER_VERSION}" \
+    "NO_MISTAKES_VERSION=${NO_MISTAKES_VERSION}" \
     > /usr/local/share/dev-system/image-release \
   && chmod 0644 /usr/local/share/dev-system/image-release
 USER node
@@ -342,4 +370,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   dev.cbundy.persist="${PERSIST_DIRS}" \
   dev.cbundy.shared="/shared" \
   dev.cbundy.secrets="/run/secrets/dev-system" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\",\"NO_MISTAKES_NO_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"
