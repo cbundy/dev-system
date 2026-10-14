@@ -24,6 +24,8 @@ cp "$(dirname "$0")/recover-no-mistakes.sh" "$DEST/recover-no-mistakes.sh"
 chmod 755 "$DEST/recover-no-mistakes.sh"
 cp "$(dirname "$0")/pin-codex-model.sh" "$DEST/pin-codex-model.sh"
 chmod 755 "$DEST/pin-codex-model.sh"
+cp "$(dirname "$0")/install-treehouse.sh" "$DEST/install-treehouse.sh"
+chmod 755 "$DEST/install-treehouse.sh"
 
 # Feature options arrive as uppercased env vars at build time only; persist
 # them for setup.sh to read at post-create time.

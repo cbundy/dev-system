@@ -34,6 +34,9 @@ jobs:
       - name: Unit test codex model pin script
         run: sh features/test/callum-tools/pin-codex-model.test.sh
 
+      - name: Unit test treehouse installer
+        run: sh features/test/callum-tools/install-treehouse.test.sh
+
       # Authenticated pulls lift Docker Hub's anonymous rate limit. Skipped (anonymous
       # pulls) when the username or token is not set, e.g. fork PRs; a rejected
       # login fails the job.
