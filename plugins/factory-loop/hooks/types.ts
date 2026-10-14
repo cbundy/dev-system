@@ -156,6 +156,9 @@ export type Outcome =
   // a worktree the pipeline's own commits left behind its branch, fast-forwarded (rules M1, M2,
   // #551): forwarded, current (nothing lagged) or refused (dirty, diverged, origin moved)
   | { kind: 'fast-forward'; result: 'forwarded' | 'current' | 'refused'; line: string }
+  // the main checkout brought up to date with origin's default branch (rule H5, #555): updated
+  // (the line names both commits), current, or refused (moved, dirty, or commits origin lacks)
+  | { kind: 'update-checkout'; result: 'updated' | 'current' | 'refused'; line: string }
   | { kind: 'merge'; result: 'merged' | 'refused'; rollout: Rollout | null; closeIssue: number | null; line: string }
   // callum-flow-rollout for a merge the loop did not make (a hand merge, rule M7, D-29)
   | { kind: 'rollout'; rollout: Rollout | null; closeIssue: number | null }
@@ -180,6 +183,7 @@ export type ActionKind =
   | 'guard'
   | 'update-behind'
   | 'fast-forward'
+  | 'update-checkout'
   | 'fix-linkage'
   | 'merge'
   | 'close-issue'
@@ -273,6 +277,8 @@ export type Config = {
   usageStaleMs: Ms
   heartbeatEveryMs: Ms
   sweepEveryMs: Ms
+  // the main checkout is brought up to date with origin at least this often (rule H5, #555)
+  checkoutEveryMs: Ms
   slowGapMs: Ms
   maxStartsPerPass: number
   // null: no cap on this device's live issues
@@ -363,6 +369,8 @@ export type Action =
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
   // the worktrees on the run's branch, moved to the run's head when it is origin's (#551)
   | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; branch: string })
+  // rule H5: the main checkout, on origin's default branch, fast-forwarded to origin's (#555)
+  | (Base & { kind: 'update-checkout'; branch: string })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
   | (Base & { kind: 'release-parent'; created: number[] })

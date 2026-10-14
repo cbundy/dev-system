@@ -24,6 +24,7 @@ export const DEFAULT_CONFIG: Config = {
   usageStaleMs: 15 * MIN,
   heartbeatEveryMs: 20 * MIN,
   sweepEveryMs: 30 * MIN,
+  checkoutEveryMs: 5 * MIN,
   slowGapMs: 10 * MIN,
   maxStartsPerPass: 4,
   maxInFlightIssues: 5,
@@ -50,10 +51,11 @@ export const DEFAULT_CONFIG: Config = {
     'fix-linkage': 2,
     guard: 3,
     'fast-forward': 2,
-    // heartbeat and sweep are never used up (they retry at their cadence, SPEC 6.1): this many
-    // failures in a row tells the owner once
+    // heartbeat, sweep and update-checkout are never used up (they retry at their cadence, SPEC
+    // 6.1): this many failures in a row tells the owner once
     heartbeat: 3,
     sweep: 3,
+    'update-checkout': 3,
     // a restart is tried once; the owner hears if it fails (SPEC 6.1)
     'restart-self': 1,
     // SPEC 6.1: a close and reopen once, a stop once, a slot's return twice
@@ -102,8 +104,8 @@ export function parseDuration(text: string): Ms | null {
 // Every action kind, for the loaders that read one from text (SPEC 6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
   'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fast-forward',
-  'fix-linkage', 'merge', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment',
-  'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+  'update-checkout', 'fix-linkage', 'merge', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect',
+  'pr-reopen', 'pr-comment', 'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
 ]
 // maxAttempts may name any action kind or agent type.
 const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']

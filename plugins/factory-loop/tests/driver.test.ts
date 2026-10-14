@@ -13,10 +13,12 @@ import { loopEventArgs } from '../hooks/derive'
 import { answerPath, pruneArgvs } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
 import { DEVICE, MIN, NOW, OTHER, entry } from './fixtures'
-import { CFG_DIR, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso } from './host'
+import { CFG_DIR, CHECKOUT_HEAD, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso } from './host'
 import type { Host, HostOptions, Seen } from './host'
 
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
+// the first pass of a life brings the main checkout up to date (rule H5), already current here
+const UPDATED = { key: 'update-checkout:0', status: 'done', ms: 0, summary: `main checkout: CURRENT ${CHECKOUT_HEAD}` }
 const ACT = { repo: REPO, mode: 'act', checkout: '/work' }
 const SINK = `${LOOP_DIR}/sink-events`
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-9001'
@@ -67,7 +69,7 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:1 - M:0) · observe'])
     expect(h.passes()).toHaveLength(1)
     expect(h.last()).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`adjudicate:R45:park@${NOW - 600_000}:h1`])
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `adjudicate:R45:park@${NOW - 600_000}:h1`])
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink
@@ -267,6 +269,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(line).toMatchObject({ mode: 'act', executed: true, ledgerSource: 'none', device: DEVICE })
     expect(line.rails).toBeUndefined()
     expect(line.outcomes).toEqual([
+      UPDATED,
       { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
       { key: 'claim:470:new', status: 'done', ms: 0, summary: 'claimed #470' },
     ])
@@ -395,7 +398,10 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
   test('a restart that returned keeps the drain and stops acting until the workspace is replaced (rule H4, D-15)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const f = factory()
-    const store = ledgerOf([entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })])
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('update-checkout:0', 'update-checkout', { status: 'done', startedAt: NOW - MIN, endedAt: NOW - MIN }),
+    ])
     const h = host(on, { config: ACT, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
     await $.session.start(START)
     await clock.advance(6_000)
@@ -509,6 +515,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
       await clock.advance(6_000)
       const line = h.last()
       expect(line.outcomes).toEqual([
+        UPDATED,
         { key: 'sweep:0', status: 'done', ms: 0, summary: 'swept' },
         { key: 'claim:470:new', status: 'skipped', ms: 0, summary: "held: the act lock is no longer this session's" },
       ])
@@ -613,6 +620,7 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     await clock.advance(6_000)
     const line = h.last()
     expect((line.outcomes as { status: string; summary: string }[]).map(o => [o.status, o.summary])).toEqual([
+      ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
       ['skipped', 'held: the ledger was not saved, so nothing starts'],
     ])
@@ -740,7 +748,8 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     // the ping: a pass 5 s after the last one, which delegates
     await clock.advance(5_000)
     expect(h.passes()).toHaveLength(2)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+    // the designer ended, so the main checkout is brought up to date before the implementer starts
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
     expect(h.commands().some(s => s.argv.join(' ') === 'callum-flow-implementer-route 470')).toBe(true)
     expect(h.events()).toContainEqual(['callum-flow-event', 'delegated', '--issue', '470', '--note', `brief ${BRIEF}`])
     expect(h.spawns.map(s => s.description)).toEqual(['Implement #470'])
@@ -786,7 +795,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
     expect(h.files.get(answerPath(LOOP_DIR, key))).toContain('RESULT brief=')
     await clock.advance(5_000)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
   })
 
   test("a stopped agent's answer with no machine line still goes to the model (#545)", async ($, on) => {
@@ -819,7 +828,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', unparsed: true } })
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
     await clock.advance(5_000)
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`judge:report:${key}`])
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `judge:report:${key}`])
   })
 
   // an adjudicator at work on a gate, whose reply will not parse
@@ -879,7 +888,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await clock.advance(6_000)
 
     // the designer's report did not parse: judge(report) wakes the model with the saved answer
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['heartbeat:0', `judge:report:${key}`])
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', 'heartbeat:0', `judge:report:${key}`])
     const wake = h.prompts[0] ?? ''
     expect(wake).toStartWith('JUDGE report id=w')
     expect(wake).toContain(`saved answer: ${answerPath(LOOP_DIR, key)}`)
@@ -1103,7 +1112,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await clock.advance(5_000)
     expect(h.passes()).toHaveLength(2)
     expect(h.last()).toMatchObject({ trigger: 'agent agent-1' })
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
   })
 
   test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', async ($, on) => {
@@ -1166,7 +1175,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     const line = h.last()
     expect(line).toMatchObject({ executed: true, device: DEVICE })
     // the other device's parked run is not this loop's to drive; the claim is this device's own
-    expect((line.actions as { key: string }[]).map(a => a.key)).toEqual(['sweep:0', 'claim:470:new'])
+    expect((line.actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', 'sweep:0', 'claim:470:new'])
     expect(h.spawns).toEqual([])
     expect(h.commands().find(s => s.argv[0] === 'callum-flow-claim')?.argv).toEqual(['callum-flow-claim', '470'])
   })

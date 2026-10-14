@@ -226,6 +226,9 @@ describe('G: gates', () => {
 })
 
 describe('H: housekeeping', () => {
+  // the main checkout brought up to date a minute ago, so rule H5 stays quiet
+  const UPDATED = entry('update-checkout:0', 'update-checkout', { endedAt: NOW - MIN })
+
   test('heartbeat first thing after a restart, then every 20 minutes (SKILL:62-63, MEM 05:03 lesson)', () => {
     const holding = state({ issues: [mine(9, 'implementing')], loadedAt: NOW - MIN })
     expect(keys(plan(holding, CFG))).toContain(`heartbeat:${NOW - 5 * MIN}`)
@@ -233,7 +236,7 @@ describe('H: housekeeping', () => {
     expect(keys(plan(settled, CFG))).toEqual([])
     const due = {
       ...settled,
-      ledger: [entry('heartbeat:1', 'heartbeat', { endedAt: NOW - 21 * MIN }), entry('sweep:0', 'sweep', { endedAt: NOW - MIN })],
+      ledger: [entry('heartbeat:1', 'heartbeat', { endedAt: NOW - 21 * MIN }), entry('sweep:0', 'sweep', { endedAt: NOW - MIN }), UPDATED],
     }
     expect(keys(plan(due, CFG))).toEqual([`heartbeat:${NOW - 21 * MIN}`])
   })
@@ -243,17 +246,17 @@ describe('H: housekeeping', () => {
       entry(`claim:${n}:x`, 'claim', { class: 'start', issue: n, startedAt: at, endedAt: at, outcome: { kind: 'claim', result: 'claimed' } })
     const beat = entry('heartbeat:1', 'heartbeat', { endedAt: NOW - 12 * 60 * MIN })
     const sweep = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
-    const fresh = state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, claimed(9, NOW - MIN)] })
+    const fresh = state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, UPDATED, claimed(9, NOW - MIN)] })
     expect(keys(plan(fresh, CFG))).toEqual([])
-    const old = { ...fresh, ledger: [beat, sweep, claimed(9, NOW - 21 * MIN)] }
+    const old = { ...fresh, ledger: [beat, sweep, UPDATED, claimed(9, NOW - 21 * MIN)] }
     expect(keys(plan(old, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
     // the stalest lease decides
-    const two = { ...fresh, issues: [mine(9, 'implementing'), mine(10, 'implementing')], ledger: [beat, sweep, claimed(9, NOW - MIN)] }
+    const two = { ...fresh, issues: [mine(9, 'implementing'), mine(10, 'implementing')], ledger: [beat, sweep, UPDATED, claimed(9, NOW - MIN)] }
     expect(keys(plan(two, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
     // a claim made since the last load counts as renewed since it; a lost claim renews nothing
     expect(keys(plan({ ...fresh, loadedAt: NOW - 10 * MIN }, CFG))).toEqual([])
     const lost = entry('claim:9:y', 'claim', { class: 'start', issue: 9, endedAt: NOW - MIN, outcome: { kind: 'claim', result: 'lost' } })
-    expect(keys(plan({ ...fresh, ledger: [beat, sweep, lost] }, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
+    expect(keys(plan({ ...fresh, ledger: [beat, sweep, UPDATED, lost] }, CFG))).toEqual([`heartbeat:${NOW - 12 * 60 * MIN}`])
   })
 
   test('heartbeat and sweep are never used up: past their attempts they retry at their cadence, and the owner hears once (SPEC 6.1)', () => {
@@ -261,7 +264,7 @@ describe('H: housekeeping', () => {
       entry(key, kind, { status: 'failed', attempts, startedAt: endedAt - 1000, endedAt })
     const told = (key: string) => entry(`tell:agent-failed:${key}`, 'tell', { wake: 'agent-failed', class: 'owner' })
     const sweep = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
-    const holding = (beat: LedgerEntry, extra: LedgerEntry[] = []) => state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, ...extra] })
+    const holding = (beat: LedgerEntry, extra: LedgerEntry[] = []) => state({ issues: [mine(9, 'implementing')], ledger: [beat, sweep, UPDATED, ...extra] })
     // three failures in a few minutes: the owner hears once; the next try waits its backoff
     expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 3, NOW - MIN)), CFG))).toEqual(['tell:agent-failed:heartbeat:0'])
     expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 3, NOW - MIN), [told('heartbeat:0')]), CFG))).toEqual([])
@@ -272,14 +275,14 @@ describe('H: housekeeping', () => {
     }
     expect(keys(plan(holding(failed('heartbeat:0', 'heartbeat', 9, NOW - 19 * MIN), [told('heartbeat:0')]), CFG))).toEqual([])
     // the sweep likewise, at its 30-minute cadence
-    const quiet = (s: LedgerEntry, extra: LedgerEntry[] = []) => state({ ledger: [entry('heartbeat:0', 'heartbeat', { endedAt: NOW - MIN }), s, ...extra] })
+    const quiet = (s: LedgerEntry, extra: LedgerEntry[] = []) => state({ ledger: [entry('heartbeat:0', 'heartbeat', { endedAt: NOW - MIN }), s, UPDATED, ...extra] })
     expect(keys(plan(quiet(failed('sweep:0', 'sweep', 3, NOW - MIN)), CFG))).toEqual(['tell:agent-failed:sweep:0'])
     expect(keys(plan(quiet(failed('sweep:0', 'sweep', 9, NOW - 29 * MIN), [told('sweep:0')]), CFG))).toEqual([])
     expect(keys(plan(quiet(failed('sweep:0', 'sweep', 9, NOW - 31 * MIN), [told('sweep:0')]), CFG))).toEqual(['sweep:0'])
   })
 
   test('no live claim, no heartbeat; the sweep runs every 30 minutes regardless (SKILL:62-63)', () => {
-    const s = state({ loadedAt: NOW - MIN, ledger: [entry('sweep:9', 'sweep', { endedAt: NOW - 31 * MIN })] })
+    const s = state({ loadedAt: NOW - MIN, ledger: [entry('sweep:9', 'sweep', { endedAt: NOW - 31 * MIN }), UPDATED] })
     expect(keys(plan(s, CFG))).toEqual([`sweep:${NOW - 31 * MIN}`])
   })
 
@@ -1618,6 +1621,90 @@ describe('G5: the main checkout (#544)', () => {
     // the merge reads only the object store and remote refs, so it goes on
     const ready = mergeReady([guarded(), reviewed()])
     expect(keys(plan({ ...told(ready, key), checkout: moved }, CFG))).toEqual(['merge:550:head50'])
+  })
+})
+
+describe('H5: the main checkout kept up to date with origin (#555)', () => {
+  // stage D run 2: the testbed's main checkout stayed at the merge of PR 47 for the whole run
+  // while origin's main moved on through eight more merges, so agents started there read code
+  // several merges stale
+  const LAST = NOW - 2 * MIN
+  const updates = (r: PlanResult) => r.actions.filter(a => a.kind === 'update-checkout')
+  const merged = (endedAt: number) =>
+    entry('merge:547:head47', 'merge', { issue: 47, pr: 547, head: 'head47', startedAt: endedAt - MIN, endedAt, outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' } })
+  const others = (s: State) => s.ledger.filter(e => e.kind !== 'update-checkout')
+
+  test('a merge brings the main checkout up to date on the next pass, a free action; so does every checkoutEveryMs', () => {
+    const r = plan(withLedger(state(), [merged(NOW - MIN)]), CFG)
+    expect(updates(r)).toEqual([
+      { kind: 'update-checkout', key: `update-checkout:${LAST}`, class: 'free', rule: 'H5', reason: 'a merge since the last update', issue: null, branch: 'main' },
+    ])
+    // a merge the last update already saw asks for nothing
+    expect(updates(plan(withLedger(state(), [merged(NOW - 3 * MIN)]), CFG))).toEqual([])
+    // with no merge, it is due every checkoutEveryMs (5 minutes), and first thing when it never ran
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs - 1 }), CFG))).toEqual([])
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), CFG)).map(a => [a.key, a.reason])).toEqual([[`update-checkout:${LAST}`, 'due']])
+    const fresh = state()
+    expect(updates(plan({ ...fresh, ledger: others(fresh) }, CFG)).map(a => [a.key, a.reason])).toEqual([['update-checkout:0', 'due']])
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), config({ checkoutEveryMs: 60 * MIN })))).toEqual([])
+    expect(CFG.checkoutEveryMs).toBe(5 * MIN)
+  })
+
+  test('a checkout off its default branch, carrying changes, detached or unread is left alone, and G5 speaks', () => {
+    const at = (checkout: State['checkout']) => plan(withLedger(state({ checkout }), [merged(NOW - MIN)]), CFG)
+    const dirty = at({ ...CLEAN, dirty: ['README.md'] })
+    expect([updates(dirty), keys(dirty)]).toEqual([[], [`tell:checkout:main@${CLEAN.head}:changed`]])
+    const switched = at({ ...CLEAN, branch: 'feat/issue-4-slugify-separator' })
+    expect([updates(switched), keys(switched)]).toEqual([[], [`tell:checkout:feat/issue-4-slugify-separator@${CLEAN.head}`]])
+    const detached = at({ ...CLEAN, branch: null })
+    expect([updates(detached), keys(detached)]).toEqual([[], [`tell:checkout:detached@${CLEAN.head}`]])
+    expect(updates(at({ error: 'exit 128' }))).toEqual([])
+    // not read (the replay harness): nothing is known, so nothing moves
+    expect(updates(at(null))).toEqual([])
+  })
+
+  test('held while a designer or adjudicator reads the checkout; an implementer or fixer, in a worktree of its own, does not hold it', () => {
+    const reader = (agent: 'designer' | 'adjudicator', over: Partial<LedgerEntry> = {}) =>
+      entry(`${agent}:60`, 'spawn', { agent, class: agent === 'designer' ? 'develop' : 'drive', issue: 60, status: 'running', endedAt: null, agentId: `agent-${agent}`, ...over })
+    const base = state({ issues: [mine(60, 'designing')], agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'running' }] })
+    const held = plan(withLedger(base, [merged(NOW - MIN), reader('designer')]), CFG)
+    expect(updates(held)).toEqual([])
+    expect(held.skipped).toContainEqual({ rule: 'H5', issue: null, why: 'update-checkout waits for agents reading the main checkout: designer:60' })
+    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('adjudicator')]), CFG))).toEqual([])
+    // an answer is in, but the list still shows the agent at work: it may still be reading
+    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), CFG))).toEqual([])
+    // the agent ended: the update goes ahead
+    const ended = { ...base, agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'completed' as const }] }
+    expect(updates(plan(withLedger(ended, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), CFG)).length).toBe(1)
+    const implementing = state({ issues: [mine(61, 'implementing')], agents: [{ id: 'agent-impl', type: 'callum-flow:implementer', status: 'running' }] })
+    const delegated = entry(`delegate:61:${brief(61)}`, 'delegate', { class: 'develop', issue: 61, status: 'running', endedAt: null, agentId: 'agent-impl' })
+    expect(updates(plan(withLedger(implementing, [merged(NOW - MIN), delegated]), CFG)).length).toBe(1)
+  })
+
+  test('a refused update, the checkout carrying commits origin lacks, tells the owner once with the checkout notice', () => {
+    const line = `REFUSED the main checkout at ${CLEAN.head} has commits not on origin/main`
+    const refused = (s: State) => ({
+      ...s,
+      ledger: [...others(s), entry('update-checkout:0', 'update-checkout', { startedAt: LAST, endedAt: LAST, outcome: { kind: 'update-checkout', result: 'refused', line } })],
+    })
+    const key = `tell:checkout:main@${CLEAN.head}:refused`
+    const r = plan(refused(state()), CFG)
+    expect(keys(r)).toEqual([key])
+    expect(find(r, key)).toMatchObject({ kind: 'tell', wake: 'checkout', class: 'owner', rule: 'H5', fields: { branch: 'main', head: CLEAN.head, default: 'main' }, context: [line] })
+    // told once; the update is tried again at its cadence, not every pass
+    const told = withLedger(refused(state()), [entry(key, 'tell', { class: 'owner', wake: 'checkout' })])
+    expect(keys(plan(told, CFG))).toEqual([])
+    // an update that went through ends it
+    expect(keys(plan(state(), CFG))).toEqual([])
+  })
+
+  test('an update that keeps failing is never used up: it retries at its cadence, and the owner hears once', () => {
+    const failing = (attempts: number, endedAt: number) =>
+      withLedger(state(), [merged(NOW - MIN), entry(`update-checkout:${LAST}`, 'update-checkout', { status: 'failed', attempts, startedAt: endedAt, endedAt })])
+    expect(keys(plan(failing(1, NOW - MIN), CFG))).toEqual([])
+    expect(keys(plan(failing(1, NOW - 3 * MIN), CFG))).toEqual([`update-checkout:${LAST}`])
+    expect(keys(plan(failing(3, NOW - MIN), CFG))).toEqual([`tell:agent-failed:update-checkout:${LAST}`])
+    expect(keys(plan(failing(9, NOW - CFG.checkoutEveryMs), CFG))).toContain(`update-checkout:${LAST}`)
   })
 })
 

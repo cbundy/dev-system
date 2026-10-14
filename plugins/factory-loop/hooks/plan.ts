@@ -88,7 +88,8 @@ const GITHUB: readonly ActionKind[] = [
 // What waits while the main checkout is off its default branch (rule G5, #544): each starts work
 // in it or reads its code (a claim leads to a designer; agents begin in it; a task is the model
 // working from it). Free commands read only the object store and remote refs, so they go on (a
-// fast-forward moves pool worktrees only, never this checkout, #551).
+// fast-forward moves pool worktrees only, #551, and rule H5 moves this checkout only while it is
+// clean on its default branch, #555).
 const CHECKOUT_HELD: readonly ActionKind[] = ['claim', 'spawn', 'delegate', 'task']
 const ALLOWED: Record<Tier, readonly ActionClass[]> = {
   normal: ['free', 'owner', 'drive', 'develop', 'start'],
@@ -191,6 +192,7 @@ export function plan(state: State, config: Config): PlanResult {
     blindPass(ctx)
   } else {
     checkout(ctx)
+    updateCheckout(ctx)
     housekeeping(ctx)
     if (state.sources.runs.ok) {
       const runs = currentRuns(ctx)
@@ -249,12 +251,14 @@ function attemptsKind(action: Action): ActionKind | AgentType {
   return action.kind
 }
 
-// cadenceOf: the interval of a kind that runs on a cadence. Heartbeat and sweep retry at their
-// next due time (SPEC 6.1), so they are never used up: past their attempts they wait at most one
-// interval between tries, and the owner hears once (agent-failed). null: any other kind.
+// cadenceOf: the interval of a kind that runs on a cadence. Heartbeat, sweep and update-checkout
+// retry at their next due time (SPEC 6.1), so they are never used up: past their attempts they
+// wait at most one interval between tries, and the owner hears once (agent-failed). null: any
+// other kind.
 function cadenceOf(config: Config, kind: ActionKind | AgentType): Ms | null {
   if (kind === 'heartbeat') return config.heartbeatEveryMs
   if (kind === 'sweep') return config.sweepEveryMs
+  if (kind === 'update-checkout') return config.checkoutEveryMs
   return null
 }
 
@@ -446,8 +450,8 @@ export function checkoutMoved(state: State): string | null {
 }
 
 // A moved checkout tells the owner once per sight (its branch, commit and whether it carries
-// changes), and admit holds what starts in it until it is back. The loop never moves it itself:
-// an agent may be using it.
+// changes), and admit holds what starts in it until it is back. The loop never puts it back
+// itself: an agent may be using it.
 function checkout(ctx: Ctx) {
   const why = checkoutMoved(ctx.state)
   const c = ctx.state.checkout
@@ -551,6 +555,57 @@ function restartWhenDrained(ctx: Ctx, kept: Action[]): Action | null {
   // an exhausted restart was named, and told, by housekeeping
   if (gate(ctx, key, 'restart-self') !== 'go') return null
   return { kind: 'restart-self', key, class: 'free', rule: 'H4', reason: 'update due, nothing in flight', issue: null, why: due.reason, at: due.at }
+}
+
+// --- H5: the main checkout kept up to date with origin (#555) --------------------------------
+
+// Agents begin in the main checkout and designers read its code, so it follows origin's default
+// branch: after a merge (the loop's own, or a hand merge's rollout read) and at least every
+// checkoutEveryMs, it is fast-forwarded, only while G5 finds it on its default branch and clean
+// (the executor checks again and refuses commits origin lacks). It waits while a designer or
+// adjudicator is at work, as files changing under them would change mid-read. Implementers and
+// fixers work in a worktree of their own, so they do not hold it: they run for hours, and would
+// keep it stale all run. A refusal G5 cannot see, such as commits origin lacks, tells the owner
+// once per sight with G5's notice.
+function updateCheckout(ctx: Ctx) {
+  const { state, config } = ctx
+  const c = state.checkout
+  if (c === null || 'error' in c || checkoutMoved(state) !== null) return
+  const last = lastDone(ctx, 'update-checkout')
+  const refused = outcome(last, 'update-checkout')
+  if (refused?.result === 'refused') {
+    const key = `tell:checkout:${c.branch ?? 'detached'}@${c.head ?? 'unknown'}:refused`
+    want(ctx, wake('tell', 'checkout', key, 'H5', null, { branch: c.branch, head: c.head, default: c.defaultBranch }, [refused.line]))
+  }
+  const since = last?.startedAt ?? Number.NEGATIVE_INFINITY
+  const merged = state.ledger.some(
+    e => e.status === 'done' && (e.endedAt ?? 0) > since && (outcome(e, 'merge')?.result === 'merged' || outcome(e, 'rollout') !== undefined),
+  )
+  if (!merged && last !== undefined && state.now - (last.endedAt ?? 0) < config.checkoutEveryMs) return
+  const readers = checkoutReaders(ctx)
+  if (readers.length > 0) {
+    skip(ctx, 'H5', null, `update-checkout waits for agents reading the main checkout: ${readers.join(', ')}`)
+    return
+  }
+  want(ctx, {
+    kind: 'update-checkout',
+    key: `update-checkout:${last?.endedAt ?? 0}`,
+    class: 'free',
+    rule: 'H5',
+    reason: merged ? 'a merge since the last update' : 'due',
+    issue: null,
+    branch: c.defaultBranch,
+  })
+}
+
+// checkoutReaders: the loop's designers and adjudicators still at work, by the ledger or by the
+// agent list (one whose answer is in may read on).
+function checkoutReaders(ctx: Ctx): string[] {
+  return ctx.state.ledger
+    .filter(e => e.kind === 'spawn' && (e.agent === 'designer' || e.agent === 'adjudicator'))
+    .filter(e => e.status === 'running' || (e.agentId !== undefined && agentLive(ctx, e.agentId)))
+    .map(e => e.key)
+    .sort()
 }
 
 // --- the runs the P and M rules act on (SPEC 5.4) ------------------------------------------

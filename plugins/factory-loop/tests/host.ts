@@ -25,12 +25,15 @@ function origin(argv: readonly string[]): Reply | undefined {
   return argv.join(' ') === 'git remote get-url origin' ? { stdout: `https://github.com/${REPO}.git\n` } : undefined
 }
 
-// checkout: the main checkout on its default branch with nothing changed (#544), unless a test
-// answers git itself.
+export const CHECKOUT_HEAD = '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff'
+
+// checkout: the main checkout on its default branch with nothing changed (#544), and as current
+// as origin when the loop updates it (#555), unless a test answers git itself.
 export function checkout(argv: readonly string[]): Reply | undefined {
   const line = argv.join(' ')
   if (line === 'git symbolic-ref --quiet --short refs/remotes/origin/HEAD') return { stdout: 'origin/main\n' }
-  if (line.startsWith('git --no-optional-locks status ')) return { stdout: '# branch.oid 5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff\n# branch.head main\n' }
+  if (line.startsWith('git --no-optional-locks status ')) return { stdout: `# branch.oid ${CHECKOUT_HEAD}\n# branch.head main\n` }
+  if (argv[0] === 'sh' && argv[3] === 'factory-loop-update-checkout') return { stdout: `CURRENT ${CHECKOUT_HEAD}\n` }
   return undefined
 }
 

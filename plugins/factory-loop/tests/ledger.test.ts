@@ -358,6 +358,18 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(tries.map(e => e.key)).toEqual(['fast-forward:550:head50:3'])
     const moved = forward(forward([], 1, 'forwarded', NOW - 20 * MIN), 2, 'forwarded', NOW - 10 * MIN)
     expect(moved.map(e => e.key)).toEqual(['fast-forward:550:head50:1', 'fast-forward:550:head50:2'])
+    // the main checkout's update every 5 minutes (#555): a week of CURRENT at one commit keeps one
+    // entry; an update that moved it stays beside the ones before and after
+    const up = (n: number): Action => ({ kind: 'update-checkout', key: `update-checkout:${n}`, class: 'free', rule: 'H5', reason: 'due', issue: null, branch: 'main' })
+    const said = (ledger: LedgerEntry[], n: number, line: string, at: number) =>
+      finish(start(ledger, up(n), at).ledger, up(n).key, { status: 'done', outcome: { kind: 'update-checkout', result: line.startsWith('UPDATED') ? 'updated' : 'current', line }, summary: line }, at + 1000)
+    let updates: LedgerEntry[] = []
+    for (let n = 1; n <= 7 * 288; n++) updates = said(updates, n, 'CURRENT c1', NOW - 7 * DAY + n * 5 * MIN)
+    expect(updates.map(e => e.key)).toEqual([`update-checkout:${7 * 288}`])
+    updates = said(updates, 9000, 'UPDATED c1 c2', NOW + MIN)
+    updates = said(updates, 9001, 'CURRENT c2', NOW + 6 * MIN)
+    updates = said(updates, 9002, 'CURRENT c2', NOW + 11 * MIN)
+    expect(updates.map(e => e.key)).toEqual([`update-checkout:${7 * 288}`, 'update-checkout:9000', 'update-checkout:9002'])
   })
 
   test('a stop of rule A1 marks the agent timed-out, even when TaskStop failed (SPEC A1, 13)', () => {
@@ -597,6 +609,8 @@ describe('/factory retry (D-38)', () => {
       ledger = finish(ledger, key, { status: 'failed', summary: 'aborted' }, at + MIN)
     }
     expect(only(ledger, key).attempts).toBe(2)
+    // the main checkout was brought up to date a minute before (rule H5)
+    ledger = [...ledger, entry('update-checkout:1', 'update-checkout', { startedAt: NOW + 11 * MIN, endedAt: NOW + 11 * MIN })]
     expect(keys(plan({ ...s, now: NOW + 12 * MIN, ledger }, CFG))).toEqual([`tell:agent-failed:${key}`])
   })
 
