@@ -73,7 +73,7 @@ check "dev-init and dev-doctor flag a repo git refuses (dubious ownership)" bash
 # args, and the command and its dev-doctor summary degrade to UNKNOWN offline.
 check "the image carries a release stamp with non-empty keys" in_image '
   f=/usr/local/share/dev-system/image-release; cat "$f"
-  for k in IMAGE VERSION REVISION CREATED AGENTSVIEW_VERSION CODER_VERSION; do
+  for k in IMAGE VERSION REVISION CREATED AGENTSVIEW_VERSION CODER_VERSION NO_MISTAKES_VERSION; do
     [ -n "$(sed -n "s/^$k=//p" "$f")" ] || { echo "empty $k"; exit 1; }
   done
   [ "$(sed -n "s/^IMAGE=//p" "$f")" = ghcr.io/cbundy/dev-system/base ]' --entrypoint ""

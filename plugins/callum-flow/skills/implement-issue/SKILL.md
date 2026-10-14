@@ -189,9 +189,10 @@ tests would otherwise have missed:
 - Run `/no-mistakes` end to end: rebase -> review -> test -> document -> lint
   -> push -> PR -> CI.
 - Launch it detached from the first command, never through `tail`: `nohup
-  no-mistakes axi run --intent "<goal>" > /tmp/no-mistakes-<branch>.log
-  2>&1 &`. Then make exactly one `no-mistakes status` read to capture the run
-  id and confirm its `head` equals your commit SHA. Recording it with
+  no-mistakes axi run --intent "<goal>" --closes <N> >
+  /tmp/no-mistakes-<branch>.log 2>&1 &`, with `--closes <N>` only when the PR
+  closes the issue (section 7). Then make exactly one `no-mistakes status`
+  read to capture the run id and confirm its `head` equals your commit SHA. Recording it with
   `callum-flow-event run_started --issue <N> --run <id> --branch <branch>
   --head <sha>` is optional: nothing depends on it, because pipeline facts
   (run start, status, parked time, PR) come from the no-mistakes mirror, which
@@ -219,8 +220,10 @@ tests would otherwise have missed:
   can describe rather than something you must write yourself, drive the
   existing run instead of committing around it: `no-mistakes axi respond
   --action fix --findings <ids>`, `--add-finding '<json finding>'`, and/or
-  `--instructions "<what to do>"` - never `--yes`. This commits on the run's
-  own head in the run's own worktree, so there is no second writer on the
+  `--instructions "<what to do>"` - never `--yes`. Every finding the gate
+  shows must be in `--findings` or `--ignore <ids>` (the ones you decline):
+  no-mistakes refuses a fix that leaves one out, and the gate stays parked.
+  This commits on the run's own head in the run's own worktree, so there is no second writer on the
   branch and none of the rebase/abort rules below apply. `axi respond` targets
   the run of whatever branch the CURRENT directory has checked out: if another
   agent has taken over that slot it fails with "no active run to respond to",
@@ -265,9 +268,16 @@ tests would otherwise have missed:
   brief explicitly says otherwise.
 
 ## 7. Issue linkage (what you write)
-- Read the brief's `## Rollout`. Write `Closes #<N>` in the PR body when it is
-  `merge`, and `Refs #<N>` for `run-it` and `keep-open`. Keep instructions *about* the keyword out of
-  the `--intent` text (section 6); the delegator checks linkage at merge.
+- Read the brief's `## Rollout`. When it is `merge`, start every run with
+  `axi run --closes <N>`; for `run-it` and `keep-open`, never pass `--closes`
+  and write `Refs #<N>` in the PR body. no-mistakes neutralizes closing
+  keywords in every PR text it drafts (a `Closes #<N>` the agent writes
+  becomes ``Closes `#<N>` ``, which closes nothing), so `--closes` is the only
+  way a pipeline PR closes its issue: it adds one `Closes #<N>` line in the
+  body's `## Issues` section. `rerun` keeps a run's `--closes`; a fresh
+  `axi run` after an abort needs it again. Keep instructions *about* the
+  keyword out of the `--intent` text (section 6); the delegator checks linkage
+  at merge.
 - NEVER write close/closes/fixes/resolves immediately before an issue number
   you do not mean to close - GitHub's parser ignores negation and surrounding
   context, so `"must NOT close #93"` still registers as a closing reference.
@@ -277,8 +287,10 @@ tests would otherwise have missed:
   the delegation brief, internal hostnames or secrets, and sometimes describes
   an unrelated task. Keep hosts, credentials and instructions about other
   agents out of `--intent`. The delegator rewrites the human-facing part with
-  `gh pr edit` before merge and keeps the generated `## Pipeline` section
-  verbatim: split it off with `sed -n '/^## Pipeline/,$p'` and re-append it. Grep
+  `gh pr edit` before merge and keeps the generated appendix verbatim (from
+  the `<!-- no-mistakes-pr-appendix:v1` line to its closing marker, or from a
+  `## Pipeline` heading on in a body without one): no-mistakes checks its
+  integrity, so edit only the text around it. Grep
   the new body for private hosts and stray closing keywords first.
 - Linkage verification is the delegator's job, not yours - but writing it
   correctly the first time avoids a stalled downstream dependency.

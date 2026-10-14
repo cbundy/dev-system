@@ -112,12 +112,14 @@ describe('parseAction: the ACTION line grammar (adjudicator.md)', () => {
       findings: 'review-1,review-3',
       instructions: 'keep the recovery path; assert HEAD is unchanged',
       addFinding: null,
+      ignore: null,
     })
     expect(parseAction('fix --instructions restore the assertion in tests/x.test.ts --findings review-2')).toEqual({
       type: 'fix',
       findings: 'review-2',
       instructions: 'restore the assertion in tests/x.test.ts',
       addFinding: null,
+      ignore: null,
     })
     const added = parseAction(`fix --add-finding '{"title": "missed --wait bound", "severity": "warning", "file": "a.ts"}' --instructions "add it"`)
     expect(added).toEqual({
@@ -125,20 +127,23 @@ describe('parseAction: the ACTION line grammar (adjudicator.md)', () => {
       findings: null,
       instructions: 'add it',
       addFinding: '{"title":"missed --wait bound","severity":"warning","file":"a.ts"}',
+      ignore: null,
     })
     expect(parseAction('fix --add-finding {"title":"a } in a string","n":[1,2]}')).toEqual({
       type: 'fix',
       findings: null,
       instructions: null,
       addFinding: '{"title":"a } in a string","n":[1,2]}',
+      ignore: null,
     })
     // ids spaced out after their commas come back as the list respond takes
-    expect(parseAction('fix --findings review-1, review-2')).toEqual({ type: 'fix', findings: 'review-1,review-2', instructions: null, addFinding: null })
+    expect(parseAction('fix --findings review-1, review-2')).toEqual({ type: 'fix', findings: 'review-1,review-2', instructions: null, addFinding: null, ignore: null })
     expect(parseAction('fix --findings=review-4 --instructions="escaped \\"quote\\" kept"')).toEqual({
       type: 'fix',
       findings: 'review-4',
       instructions: 'escaped "quote" kept',
       addFinding: null,
+      ignore: null,
     })
   })
 
@@ -197,9 +202,22 @@ describe('parseAdjudicator (SPEC 7.3)', () => {
         'CORRECT: review-1 moved HEAD after recovery must not be accepted; reproduced with a two-commit branch.',
         'WRONG: review-6 comma form of --accept-dropped is required by the brief.',
       ],
-      action: { type: 'fix', findings: 'review-1', instructions: 'reject a moved HEAD after recovery and add a regression test', addFinding: null },
+      action: { type: 'fix', findings: 'review-1', instructions: 'reject a moved HEAD after recovery and add a regression test', addFinding: null, ignore: 'review-6' },
       report: null,
     })
+  })
+
+  test('a fix declines the findings its verdict lines name and it leaves unselected; a line led by prose names none', () => {
+    const reply = [
+      'CORRECT: review-1 moved HEAD after recovery must not be accepted.',
+      'NIT: review-2: naming only.',
+      'DUP: review-3, review-1 covers it.',
+      'WRONG: The reviewer misread the brief.',
+      'CORRECT: missed-1 no bound on --wait.',
+      `ACTION: fix --findings review-1 --add-finding '{"title":"bound --wait"}'`,
+    ].join('\n')
+    expect(parseAdjudicator(reply, 'gate')?.action).toMatchObject({ type: 'fix', findings: 'review-1', ignore: 'review-2,review-3' })
+    expect(parseAdjudicator('CORRECT: review-1 real.\nACTION: fix --findings review-1', 'gate')?.action).toMatchObject({ ignore: null })
   })
 
   test('a zero-finding review approves with no verdict lines', () => {

@@ -558,7 +558,7 @@ describe('onAgentAnswer', () => {
       outcome: {
         kind: 'adjudicator',
         verdicts: ['CORRECT: review-1 moved HEAD after recovery must not be accepted.', 'NIT: review-2 naming.'],
-        action: { type: 'fix', findings: 'review-1', instructions: 'reject a moved HEAD', addFinding: null },
+        action: { type: 'fix', findings: 'review-1', instructions: 'reject a moved HEAD', addFinding: null, ignore: 'review-2' },
         report: null,
       },
       summary: 'adjudicator #470 (gate): ACTION fix, 2 verdict lines',

@@ -139,7 +139,9 @@ export type GuardFail = { name: string; reason: string }
 // merge only (rule M4, D-05).
 export type AdjudicatorAction =
   | { type: 'approve'; reason: string | null }
-  | { type: 'fix'; findings: string | null; instructions: string | null; addFinding: string | null }
+  // ignore: the judged findings the fix leaves unselected, declined by name (respond --ignore,
+  // which no-mistakes 1.90+ requires); null when none
+  | { type: 'fix'; findings: string | null; instructions: string | null; addFinding: string | null; ignore: string | null }
   | { type: 'skip' }
   | { type: 'escalate'; why: string }
   | { type: 'fixer'; instructions: string }
@@ -382,6 +384,7 @@ export type Action =
       findings: string | null
       instructions: string | null
       addFinding: string | null
+      ignore: string | null
       approveReason: string | null
       logReview: boolean
     })

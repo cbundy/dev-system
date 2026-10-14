@@ -620,7 +620,7 @@ describe('the loop event (SPEC 7.4, 7.5, D-09)', () => {
     ['designer', entry('design:60:5', 'spawn', { agent: 'designer', class: 'develop', issue: 60, agentId: 'a1', outcome: { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/60#issuecomment-1060', created: [61, 62], pendingDecision: true } })],
     ['designer unparsed', entry('design:61:5', 'spawn', { agent: 'designer', class: 'develop', issue: 61, outcome: { kind: 'designer', unparsed: true } })],
     ['adjudicator hold', entry('adjudicate-merge:550:head50', 'spawn', { ...base, agent: 'adjudicator', class: 'drive', outcome: review({ type: 'hold', reason: '' }, { summary: '', bumpReason: '', bump: 'major', flags: ['image', 'run-it'] }) })],
-    ['adjudicator gate', entry('adjudicate:R:review:h', 'spawn', { ...base, agent: 'adjudicator', class: 'drive', outcome: review({ type: 'fix', findings: null, instructions: null, addFinding: null }) })],
+    ['adjudicator gate', entry('adjudicate:R:review:h', 'spawn', { ...base, agent: 'adjudicator', class: 'drive', outcome: review({ type: 'fix', findings: null, instructions: null, addFinding: null, ignore: null }) })],
     ['handoff', entry('delegate:63:u', 'delegate', { class: 'develop', issue: 63, agent: 'implementer', outcome: { kind: 'handoff', notGated: true, run: 'R63', head: 'h63', newBranch: 'feat/issue-63-x-v2' } })],
     ['update-behind', entry('update-behind:550:head50', 'update-behind', { ...base, outcome: { kind: 'update-behind', result: 'updated', from: 'head50', to: 'head51', line: '' } })],
     ['merge', entry('merge:550:head50', 'merge', { ...base, outcome: { kind: 'merge', result: 'merged', rollout: 'run-it', closeIssue: null, line: '' } })],

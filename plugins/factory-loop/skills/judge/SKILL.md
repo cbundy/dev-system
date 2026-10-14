@@ -127,7 +127,8 @@ of when and why the model was involved (D-13).
      out), `git fetch`, rebase onto the base, run `callum-flow-regate --issue <N>` and act on
      its `REGATE` line.
   3. Start a fresh `no-mistakes axi run --intent "<the brief's acceptance criteria>"`, detached,
-     ending with the TEST POLICY sentence from `implement-issue`. The brief is the latest
+     ending with the TEST POLICY sentence from `implement-issue`, with `--closes <N>` when the
+     brief's Rollout is `merge`. The brief is the latest
      `## Design brief` comment (`callum-flow-issue-read --comments <N>`). Never `--yes`, never
      `rerun`.
   4. On `REGATE new-branch`, log `callum-flow-event superseded --issue <N> --run <old run>
