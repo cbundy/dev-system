@@ -476,3 +476,26 @@ ver_workers() {
   [ "$(psql_av "select count(*) from factory.workers where device = 'hb-beat'")" = 1 ] || { echo "a second beat must update, not insert"; return 1; }
 }
 check "factory.workers: the DDL is idempotent, the view marks stale, LISTEN hears insert and update, a real beat lands" ver_workers
+
+# A clean docker stop writes the worker's final row (#467): state 'stopped', last_seen after the stop began.
+ver_stopped() {
+  local n=stp467 t
+  docker run -d --label "$RUN_ID" --name "$RUN_ID-$n" --network "$net" \
+    -e "AGENTSVIEW_PG_URL=postgres://av:$SECRET@$RUN_ID-pg:5432/agentsview?sslmode=require" \
+    -e DEV_MACHINE_NAME=hb-stop467 -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
+    -v "$avdata:/persist/agentsview" -v "$avclaude:/persist/claude" \
+    "$IMAGE" sleep infinity >/dev/null || return 1
+  for _ in $(seq 1 60); do
+    [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop467'")" = 1 ] && break
+    sleep 1
+  done
+  [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop467'")" = 1 ] || { echo "no beat before the stop"; return 1; }
+  t=$(psql_av "select clock_timestamp()")
+  docker stop -t 30 "$RUN_ID-$n" >/dev/null || return 1
+  [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop467' and state = 'stopped' and last_seen >= '$t'")" = 1 ] || {
+    psql_av "select device, state, last_seen from factory.workers where device = 'hb-stop467'"
+    echo "no stopped row after $t"
+    return 1
+  }
+}
+check "factory.workers: a clean docker stop leaves a stopped row with last_seen after the stop began" ver_stopped
