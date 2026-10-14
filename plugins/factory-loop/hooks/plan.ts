@@ -801,7 +801,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
               continue
             }
           } else if (recorded || notes.length > 0) {
-            const instructions = [...notes, ...(recorded ? [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts] : [])]
+            const instructions = [...notes.map(text => `Owner note: ${text}`), ...(recorded ? [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts] : [])]
             want(ctx, {
               kind: 'spawn',
               agent: 'fixer',

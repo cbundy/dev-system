@@ -579,7 +579,7 @@ describe('P: pipeline gates', () => {
         purpose: 'resume',
         rule: 'P2b',
         class: 'drive',
-        instructions: expect.stringMatching(/^cut the PR body to the summary\nand drop the table\nAdjudicator's reason: shorten the PR body/),
+        instructions: expect.stringMatching(/^Owner note: cut the PR body to the summary\nOwner note: and drop the table\nAdjudicator's reason: shorten the PR body\nENV: pr-1 the PR body is over the provider budget$/),
       })
     })
 
@@ -605,7 +605,7 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(withLedger(failedTest({ control: ctl([], NOW - MIN) }), [rebuilt]), CFG))).toEqual([`adjudicate:${AT}:r1`])
       const r = plan(withLedger(failedTest({ control: ctl([note('old', NOW - 55 * MIN), note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [rebuilt]), CFG)
       expect(keys(r)).toEqual([`fixer:resume:${AT}:r1`])
-      expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({ instructions: 'shorten' })
+      expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({ instructions: 'Owner note: shorten' })
     })
 
     test('a resume of a gate no adjudicator escalated asks the adjudicator, whatever notes the issue has', () => {
