@@ -90,6 +90,17 @@ describe('checkVerdict', () => {
     expect(r).toMatchObject({ ok: true, outcome: { action: { type: 'fix', findings: null, instructions: null, addFinding: '{"title":"missed --wait bound","severity":"warning"}' } } })
   })
 
+  test("a missed gap's own id is never named in a fix: the gate has no such finding, so it goes in addFinding", () => {
+    const missed = { id: 'missed-1', verdict: 'CORRECT', reason: 'no bound on --wait' }
+    expect(problems(checkVerdict({ findings: [{ id: 'review-1', verdict: 'CORRECT', reason: 'real' }, missed], action: { type: 'fix', findings: ['review-1', 'missed-1'] } }, 'gate'))).toEqual([
+      'action.findings: missed-1 is a gap the reviewer missed, which the gate does not know: put it in action.addFinding',
+    ])
+    // the tool's own words say where a missed gap goes
+    const schema = VERDICT_TOOL.inputSchema as { properties: { findings: { items: { properties: { id: { description: string } } } }; action: { properties: { findings: { description: string } } } } }
+    expect(schema.properties.findings.items.properties.id.description).toContain('missed-1 and on, and goes in action.addFinding, never action.findings')
+    expect(schema.properties.action.properties.findings.description).toContain("the reviewer's CORRECT or ENV findings")
+  })
+
   test("a merge review: its summary, bump and flags, as its lines give them", () => {
     const r = checkVerdict({ findings: [], action: { type: 'merge' }, summary: 'Agents answer through a tool.', bump: { level: 'minor', reason: 'new capability' }, flags: ['image', 'image'] }, 'merge')
     const text = parseAdjudicator('ACTION: merge\nSUMMARY: Agents answer through a tool.\nBUMP: minor new capability\nFLAGS: image', 'merge')

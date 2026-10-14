@@ -41,7 +41,10 @@ export const VERDICT_TOOL: ToolSpec = {
         items: {
           type: 'object',
           properties: {
-            id: { type: 'string', description: "the finding's id (review-1), or one of your own for a gap the reviewer missed" },
+            id: {
+              type: 'string',
+              description: "the reviewer's finding id (review-1); a gap the reviewer missed takes an id of your own, missed-1 and on, and goes in action.addFinding, never action.findings",
+            },
             verdict: { type: 'string', enum: [...VERDICTS] },
             reason: { type: 'string', description: 'one sentence with the evidence' },
           },
@@ -54,7 +57,7 @@ export const VERDICT_TOOL: ToolSpec = {
         properties: {
           type: { type: 'string', enum: ['approve', 'fix', 'skip', 'fixer', 'escalate', 'merge', 'hold'] },
           reason: { type: 'string', description: 'approve: the evidence, optional; hold: why the owner must decide' },
-          findings: { type: 'array', items: { type: 'string' }, description: 'fix: ids of CORRECT or ENV findings above for the pipeline to fix' },
+          findings: { type: 'array', items: { type: 'string' }, description: "fix: ids of the reviewer's CORRECT or ENV findings above for the pipeline to fix" },
           instructions: { type: 'string', description: 'fix: what the pipeline should change; fixer: what the fixer agent should do' },
           addFinding: { type: 'object', description: 'fix: a finding the reviewer missed, as no-mistakes takes it' },
           why: { type: 'string', description: 'escalate: what the owner must decide' },
@@ -272,9 +275,13 @@ function actionOf(raw: unknown, purpose: AdjudicatorPurpose, judged: ReadonlyMap
   return null
 }
 
-// fixIds: a fix's finding ids, each one judged above as CORRECT or ENV (the loop has no view of
-// the gate's own list, so the call's findings are the ones that are real): a fix for a WRONG,
-// NIT or DUP finding would make the pipeline rewrite sound code (adjudicator.md).
+// The id prefix the tool asks for a gap the reviewer missed, which the gate does not know.
+const MISSED_ID = 'missed-'
+
+// fixIds: a fix's finding ids, each one judged above as CORRECT or ENV: a fix for a WRONG, NIT or
+// DUP finding would make the pipeline rewrite sound code (adjudicator.md). The loop has no view of
+// the gate's own list, so an id the agent made up for a missed gap (MISSED_ID) is the one it can
+// tell is not the gate's: respond would name a finding the gate does not have.
 function fixIds(raw: unknown, judged: ReadonlyMap<string, Verdict>, problems: string[]): string | null {
   if (raw === undefined || raw === null) return null
   if (!Array.isArray(raw) || raw.length === 0 || !raw.every(id => typeof id === 'string')) {
@@ -285,6 +292,7 @@ function fixIds(raw: unknown, judged: ReadonlyMap<string, Verdict>, problems: st
   for (const id of ids) {
     const verdict = judged.get(id)
     if (!FINDING_ID.test(id)) problems.push(`action.findings: ${clip(id)} is not a finding id`)
+    else if (id.startsWith(MISSED_ID)) problems.push(`action.findings: ${id} is a gap the reviewer missed, which the gate does not know: put it in action.addFinding`)
     else if (verdict === undefined) problems.push(`action.findings: ${id} is not one of the findings above`)
     else if (verdict !== 'CORRECT' && verdict !== 'ENV') problems.push(`action.findings: ${id} is judged ${verdict}, and a fix is for CORRECT or ENV findings`)
   }
