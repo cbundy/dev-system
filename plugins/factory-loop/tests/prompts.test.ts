@@ -353,7 +353,7 @@ describe('the fixer and the implementer', () => {
     const text = render(fixer(BENIGN, 'resume'), BENIGN)
     expect(text.split('\n')[0]).toContain('the owner resumed an escalated gate')
     expect(text).not.toContain('the adjudicator judged a gate')
-    expect(text.split('\n')[0]).toContain("an owner note there wins over the brief; with none, act on the adjudicator's reason within the brief")
+    expect(text.split('\n')[0]).toContain("a line starting 'Owner note:' is the owner's word and wins over the brief; with none, act on the adjudicator's reason within the brief")
     expect(text).toContain('Instructions:\n  Restore the assertion in tests/guard.test.ts and re-gate.')
   })
 
