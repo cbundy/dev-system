@@ -168,14 +168,19 @@ patch_proof() {
 
 # worktree_gated <worktree head> <run head> <origin head> <base>: after a patch proof (#627),
 # the worktree holds no commit the gated run lacks. Each commit it has that the run head,
-# origin/<branch> and origin/<base> lack must be a non-merge commit that is a copy of its own
-# run commit: one the worktree does not already contain, with the same zero-context patch id
-# (zero context, so main changing lines near a gated hunk before a rebase does not count), and
-# no run commit stands for two worktree commits. A slot that lags (the loop's update-behind
-# leaves every slot behind the new head) or sits on a copy of the branch from before a rebase
-# passes; a commit made outside the pipeline, an empty one or a second copy of a gated change
-# included, does not. Call only after patch_proof.
+# origin/<branch> and origin/<base> lack must be a non-merge copy of its own run commit: one
+# the worktree does not already contain, with the same zero-context patch id (so main changing
+# lines near a gated hunk before a rebase does not count), whose change applied to that run
+# commit's parent gives exactly the run commit's tree (patch ids ignore where a change sits,
+# the tree does not), and no run commit stands for two worktree commits. A slot that lags (the
+# loop's update-behind leaves every slot behind the new head) or sits on a copy of the branch
+# from before a rebase passes; a commit made outside the pipeline, an empty one, a moved change
+# or a second copy of a gated change included, does not. Call only after patch_proof.
 u0_id() { git show -p -U0 --no-color --no-ext-diff --no-textconv --format= "$1" 2> /dev/null | git patch-id --verbatim | cut -d' ' -f1; }
+same_change() { # same_change <worktree commit> <run commit>: c applied to r^ gives r's tree
+  _t=$(git merge-tree --write-tree --merge-base "$1^" "$2^" "$1" 2> /dev/null) || return 1
+  [ "$(printf '%s\n' "$_t" | sed -n 1p)" = "$(git rev-parse --verify --quiet "$2^{tree}")" ]
+}
 worktree_gated() {
   case "$1" in '' | unknown) return 1 ;; esac
   _only=$(git rev-list "$1" --not "$2" "$3" "origin/$4" 2> /dev/null) || return 1
@@ -185,13 +190,18 @@ worktree_gated() {
   for _r in $_run; do
     git merge-base --is-ancestor "$_r" "$1" 2> /dev/null && continue
     _id=$(u0_id "$_r")
-    [ -z "$_id" ] || _free="$_free $_id "
+    [ -z "$_id" ] || _free="$_free $_id:$_r "
   done
   for _c in $_only; do
     [ -z "$(git rev-list --no-walk --merges "$_c" 2> /dev/null)" ] || return 1
     _id=$(u0_id "$_c")
     case "$_id" in '' | *[!0-9a-f]*) return 1 ;; esac
-    case "$_free" in *" $_id "*) _free="${_free%%" $_id "*} ${_free#*" $_id "}" ;; *) return 1 ;; esac
+    _hit=''
+    for _e in $_free; do
+      [ "${_e%%:*}" = "$_id" ] && same_change "$_c" "${_e#*:}" && { _hit=$_e; break; }
+    done
+    [ -n "$_hit" ] || return 1
+    _free="${_free%%" $_hit "*} ${_free#*" $_hit "}"
   done
 }
 

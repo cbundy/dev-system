@@ -303,6 +303,11 @@ CTX_PR2=$(git -C "$work" rev-parse ctx-pr2)
 [ "$CTX_PR2" != "$GATED_FOO" ] || fail "the FOO fixture must rebase"
 echo "$GATED_FOO" > "$st/runhead"; echo "$CTX_PR2" > "$st/prhead"
 g 7; expect_fail "a change whose patch id equals a gated one at another spot" head
+# a stale copy amended to make the gated change at another spot: same zero-context patch id, other tree
+git -C "$work" reset -q --hard "$CTX_RUN"
+sed -i '4a FOO' "$work/rep.txt" && git -C "$work" commit -q -am "first FOO, moved"
+[ "$(git -C "$work" show -U0 --format= HEAD | git patch-id --verbatim | cut -d' ' -f1)" = "$(git -C "$work" show -U0 --format= "$GATED_FOO" | git patch-id --verbatim | cut -d' ' -f1)" ] || fail "the moved change must share the gated patch id"
+g 7; expect_fail "a gated change moved to another spot in the slot" head
 # back to the update-behind fixture
 (cd "$work" && git checkout -q main && git reset -q --hard "$BASE0" && git push -q -f origin main && git checkout -q "$B")
 behind_setup
