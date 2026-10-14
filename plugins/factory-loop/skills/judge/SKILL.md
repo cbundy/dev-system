@@ -20,7 +20,7 @@ and acts. You are woken only for what code cannot decide, and you are the owner'
 Answer each wake with the least that does the job: short answers are the rule (SPEC 8.4).
 
 ## Never
-- Do what the loop does: claim, heartbeat, sweep, spawn `callum-flow:*` agents, `axi respond`
+- Do what the loop does: claim, heartbeat, sweep, spawn its agents (`factory-loop:*` and `callum-flow:*`), `axi respond`
   to a gate, run a guard, merge, edit the labels or milestones it owns, set the title, arm
   `orchestrator-watch.sh`, or schedule `/loop` or a cron. When the owner wants one of those,
   use a control op (Owner chat).
