@@ -72,6 +72,8 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 `*.test.sh` under `features/test/callum-tools/`, `coder/test/` and `images/base/test/`
 forms a shell job, and each mod's validation and tests form a job. See
 [mod testing](../plugins/factory-hud/README.md#develop-it) for Claude Code requirements.
+The Coder stop-path job also runs `terraform test` with mock providers when Terraform
+is on PATH; otherwise it skips that part unless `TEST_REQUIRE_TERRAFORM=1`, as CI sets.
 `scripts/test-pool.sh` runs these jobs through `scripts/test-job.sh` with at most
 `TEST_JOBS` active jobs. For example, `TEST_JOBS=2 npm test` limits the pool to two;
 this does not limit Node's internal test concurrency. The default is the CPU count
