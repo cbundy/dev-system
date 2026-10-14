@@ -240,6 +240,15 @@ g 7 --emit-verified
 printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "PASS line missing: $out"
 printf '%s\n' "$out" | grep -q "^VERIFIED .* head=$NEWH .* gated_patch=$PROOF rebased_from=$GATED\$" || fail "VERIFIED proof missing: $out"
 passed=$((passed + 1))
+# a worktree on the branch at an ancestor of the run head still fails head (the loop fast-forwards it, #595)
+git -C "$work" reset -q --hard "$GATED^"
+g 7; expect_fail "worktree behind the run head after a rebase" head
+case "$out" in *"worktree=$(git -C "$work" rev-parse HEAD)"*) ;; *) fail "lagging worktree not printed: $out" ;; esac
+# the loop's fast-forward moves it to the run head, and the patch proof passes head again
+git -C "$work" merge -q --ff-only "$GATED"
+g 7
+printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "PASS after fast-forward missing: $out"
+passed=$((passed + 1))
 # without the proof the same difference is today's head failure
 git -C "$work" rev-parse "$BASE0" > "$st/runhead"
 g 7; expect_fail "run head unrelated to the PR" head
@@ -252,6 +261,13 @@ echo "$ALT" > "$st/runhead"
 g 7 --update-behind
 [ "$rc" = 1 ] && [ "$(origin_b)" = "$GATED" ] || fail "patch mismatch must fail without a push: rc=$rc out=$out"
 case "$out" in "UPDATE-BEHIND FAIL patch changed by the rebase; fall back to a full re-gate: "*) ;; *) fail "mismatch text: $out" ;; esac
+# the guard's own head FAIL names why the patch proof failed (the reason used to be dropped)
+behind_setup
+g 7 --update-behind
+[ "$rc" = 0 ] || fail "update-behind for the proof reason case: rc=$rc out=$out"
+origin_b > "$st/prhead"; echo CLEAN > "$st/mss"; echo "$ALT" > "$st/runhead"
+g 7; expect_fail "rebased head with a changed patch" head
+case "$out" in *"(run RUN1); proof: patch changed by the rebase; "*) ;; *) fail "proof reason missing from the head FAIL: $out" ;; esac
 passed=$((passed + 1))
 
 # fail closed: an indentation-only difference is a different patch (patch-id --verbatim)

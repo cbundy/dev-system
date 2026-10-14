@@ -1156,7 +1156,7 @@ function waitsFor(ctx: Ctx, run: RunView, g: { key: string; gate: Gate } | undef
   return `PR #${pr} waits for its head to move or its next guard in ${Math.ceil(due / 1000)}s (${g.key} is done)`
 }
 
-function fastForward(run: RunView, key: string): Action {
+function fastForward(run: RunView, key: string, origin: string): Action {
   return {
     kind: 'fast-forward',
     key,
@@ -1167,27 +1167,29 @@ function fastForward(run: RunView, key: string): Action {
     pr: run.pr as number,
     run: run.run,
     head: run.head as string,
+    origin,
     branch: run.branch,
   }
 }
 
 // worktreeLag: a guard `head` FAIL whose only problem is a worktree elsewhere on the branch: the
-// run, origin and PR heads are all this head, and every worktree's head was read (the guard
+// run head is `head`, origin and PR heads are both `origin` (the run head, or the head the loop's own
+// update-behind pushed, #595), a worktree is at neither, and every worktree's head was read (the guard
 // prints `run= origin= pr=` and a `worktree=` per worktree). That the worktree is behind, clean
-// and has nothing origin lacks is the fast-forward's to prove (#551).
-export function worktreeLag(fail: GuardFail, head: string): boolean {
+// and has nothing the run head lacks is the fast-forward's to prove (#551, #595).
+export function worktreeLag(fail: GuardFail, head: string, origin: string): boolean {
   if (fail.name !== 'head') return false
   const m = /^run=(\S+) origin=(\S+) pr=(\S+)((?: worktree=\S+)*) \(run /.exec(fail.reason)
-  if (m === null || m[1] !== head || m[2] !== head || m[3] !== head) return false
+  if (m === null || m[1] !== head || m[2] !== origin || m[3] !== origin) return false
   const worktrees = (m[4] ?? '').split(' worktree=').filter(w => w !== '')
-  return worktrees.some(w => w !== head) && !worktrees.includes('unknown')
+  return worktrees.some(w => w !== head && w !== origin) && !worktrees.includes('unknown')
 }
 
 // lagForward: rule M2 for a worktree that lags the run's head (#551): the fast-forward, once per
 // guard, unless one already went through, or found nothing lagging, before this guard ran (the
 // lag came back, so the judge looks). 'acting' while it is wanted; else the line of a refusal,
 // for the judge, or null.
-function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' | string | null {
+function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms, origin: string): 'acting' | string | null {
   const pr = run.pr as number
   const head = run.head as string
   const went = ctx.state.ledger.some(
@@ -1202,7 +1204,7 @@ function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' 
   }
   // one that ran out of attempts is no owner notice: the judge hears of the lag instead
   if (gate(ctx, key, 'fast-forward') === 'exhausted') return null
-  want(ctx, fastForward(run, key))
+  want(ctx, fastForward(run, key, origin))
   return 'acting'
 }
 
@@ -1315,8 +1317,9 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number, g
       }
       // a worktree the pipeline's own commits left behind is fast-forwarded, not judged (#551)
       const context = [...lines]
-      if (fails.some(f => worktreeLag(f, head))) {
-        const forward = lagForward(ctx, run, seq, guardAt)
+      const originHead = prHead(ctx, pr, head)
+      if (fails.some(f => worktreeLag(f, head, originHead))) {
+        const forward = lagForward(ctx, run, seq, guardAt, originHead)
         if (forward === 'acting') return
         if (forward !== null) context.push(`FAST-FORWARD ${forward}`)
       }
