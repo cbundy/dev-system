@@ -3,6 +3,7 @@
 // memory file (MEM), not from the code. docs/factory-loop/SPEC.md section 5 is the table.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { entryFromLoop, loopNote } from '../hooks/derive'
 import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
@@ -471,10 +472,12 @@ describe('P: pipeline gates', () => {
       })
     })
 
-    test('a code failure is never rerun: any other verdict, no verdict, or no escalation asks the adjudicator again', () => {
+    test('a code failure is never rerun: any other verdict, or none, sends the P2b fixer; a non-escalation asks the adjudicator again', () => {
       for (const verdicts of [[ENV, 'CORRECT: slugify drops the trailing dash'], ['WRONG: x'], ['NIT: x'], ['DUP: x'], ['CORRECT: x'], []]) {
         const s = withLedger(failedTest({ control: resumedAt(NOW - MIN) }), [escalated(verdicts), told()])
-        expect({ verdicts, keys: keys(plan(s, CFG)) }).toEqual({ verdicts, keys: [`adjudicate:${AT}:r1`] })
+        const r = plan(s, CFG)
+        expect({ verdicts, keys: keys(r) }).toEqual({ verdicts, keys: [`fixer:resume:${AT}:r1`] })
+        expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({ agent: 'fixer', purpose: 'resume', rule: 'P2b', instructions: expect.stringContaining('environment') })
       }
       // an ENV verdict the adjudicator answered with a fix is a respond, never a rerun
       const fix = entry(`adjudicate:${AT}`, 'spawn', {
@@ -499,7 +502,7 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(s(NOW - 2 * MIN, NOW - 5 * MIN), CFG))).toEqual([])
       const again = plan(s(NOW - 16 * MIN, NOW - 20 * MIN), CFG)
       expect(keys(again)).toEqual([`tell:escalate:${AT}:r1`])
-      expect(find(again, `tell:escalate:${AT}:r1`)).toMatchObject({ rule: 'P2a', context: [expect.stringContaining('run again'), ENV] })
+      expect(find(again, `tell:escalate:${AT}:r1`)).toMatchObject({ rule: 'P2a', context: [expect.stringContaining('run again'), expect.stringContaining('resume alone runs the pipeline again'), ENV] })
       expect(again.owner).toBe(1)
       const second = withLedger(s(NOW - 16 * MIN, NOW - 20 * MIN, NOW - MIN), [told(`tell:escalate:${AT}:r1`)])
       expect(keys(plan(second, CFG))).toEqual([`env-retry:${AT}:r2`])
@@ -523,6 +526,7 @@ describe('P: pipeline gates', () => {
         rule: 'P2a',
         context: [
           'the pipeline could not be run again on this head after the resume (launch: exit 1: no slot on feat/issue-45-work); resuming the run tries once more',
+          expect.stringContaining('resume alone runs the pipeline again'),
           ENV,
         ],
       })
@@ -548,6 +552,95 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(s, CFG))).toEqual([`adjudicate:${RERUN}:test:head45`])
       const again = withLedger(s, [escalated([ENV], `adjudicate:${RERUN}:test:head45`)])
       expect(keys(plan(again, CFG))).toEqual([`tell:escalate:${RERUN}:test:head45`])
+    })
+  })
+
+  // #596, found on #533: the owner noted what to change and resumed an all-ENV escalation; the loop
+  // reran the same head and never sent a fixer.
+  describe('P2b: the owner resumed an escalated gate (#596)', () => {
+    const RUN45 = '01M4RQ0045AAAA'
+    const AT = `${RUN45}:test:head45`
+    const ENV = 'ENV: pr-1 the PR body is over the provider budget'
+    const failedTest = (over: Partial<State> = {}) =>
+      state({ issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: RUN45, pr: 545 })], runs: [run(45, 'failed', { step: 'test' })], ...over })
+    const escalated = (verdicts: string[]) =>
+      entry(`adjudicate:${AT}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: RUN45, head: 'head45', startedAt: NOW - 60 * MIN, endedAt: NOW - 50 * MIN, outcome: review({ type: 'escalate', why: 'shorten the PR body' }, null, verdicts) })
+    const told = entry(`tell:escalate:${AT}`, 'tell', { wake: 'escalate', class: 'owner', issue: 45 })
+    const ctl = (notes: { issue: number | null; text: string; at: number }[], ...ats: number[]) =>
+      control({ resumed: ats.map(at => ({ subject: `run:${RUN45}`, at })), notes })
+    const note = (text: string, at: number, issue: number | null = 45) => ({ issue, text, at })
+
+    test('regression (#533): all ENV, a note, then a resume: one fixer with the note, no env-retry', () => {
+      const s = withLedger(failedTest({ control: ctl([note('cut the PR body to the summary', NOW - 5 * MIN), note('and drop the table', NOW - 4 * MIN)], NOW - MIN) }), [escalated([ENV]), told])
+      const r = plan(s, CFG)
+      expect(keys(r)).toEqual([`fixer:resume:${AT}:r1`])
+      expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({
+        agent: 'fixer',
+        purpose: 'resume',
+        rule: 'P2b',
+        class: 'drive',
+        instructions: expect.stringMatching(/^Owner note: cut the PR body to the summary\nOwner note: and drop the table\nAdjudicator's reason: shorten the PR body\nENV: pr-1 the PR body is over the provider budget$/),
+      })
+    })
+
+    test('the same without a note reruns (P2a); a note from before the escalation or for every issue is no resume note', () => {
+      for (const notes of [[], [note('old', NOW - 55 * MIN)], [note('all', NOW - 5 * MIN, null)], [note('other', NOW - 5 * MIN, 46)], [note('late', NOW + MIN)]]) {
+        const s = withLedger(failedTest({ control: ctl(notes, NOW - MIN) }), [escalated([ENV]), told])
+        expect(keys(plan(s, CFG))).toEqual([`env-retry:${AT}:r1`])
+      }
+    })
+
+    test('once per resume: a done fixer plans nothing more until the next resume', () => {
+      const done = entry(`fixer:resume:${AT}:r1`, 'spawn', { agent: 'fixer', class: 'drive', issue: 45, endedAt: NOW - 20 * MIN })
+      const n1 = note('shorten', NOW - 35 * MIN)
+      const s = withLedger(failedTest({ control: ctl([n1], NOW - 30 * MIN) }), [escalated([ENV]), told, done])
+      expect(keys(plan(s, CFG)).filter(k => k.startsWith('fixer:') || k.startsWith('env-retry:'))).toEqual([])
+      const again = withLedger(failedTest({ control: ctl([n1, note('again', NOW - 2 * MIN)], NOW - 30 * MIN, NOW - MIN) }), [escalated([ENV]), told, done])
+      expect(keys(plan(again, CFG))).toEqual([`fixer:resume:${AT}:r2`])
+    })
+
+    test('an escalation rebuilt from the event log, its reason and verdicts lost: no note asks the adjudicator, a note sends the fixer', () => {
+      const rebuilt = entryFromLoop({ ts: NOW, state: 'loop', issue: 45, run: RUN45, branch: null, pr: null, head: 'head45', note: loopNote(escalated([ENV])), actor: 'agent', device: DEVICE })
+      if (rebuilt === null) throw new Error('the escalation did not come back from its loop event')
+      expect(keys(plan(withLedger(failedTest({ control: ctl([], NOW - MIN) }), [rebuilt]), CFG))).toEqual([`adjudicate:${AT}:r1`])
+      const r = plan(withLedger(failedTest({ control: ctl([note('old', NOW - 55 * MIN), note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [rebuilt]), CFG)
+      expect(keys(r)).toEqual([`fixer:resume:${AT}:r1`])
+      expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({ instructions: 'Owner note: shorten' })
+    })
+
+    test('a resume of a gate no adjudicator escalated asks the adjudicator, whatever notes the issue has', () => {
+      const notes = [note('use the second option', NOW - 3 * HOUR), note('shorten the PR body', NOW - 2 * MIN)]
+      expect(keys(plan(failedTest({ control: ctl(notes, NOW - MIN) }), CFG))).toEqual([`adjudicate:${AT}:r1`])
+      // the review cap: the resume allows one more round, judged by the adjudicator (P1, P2)
+      const capped = parkedReview({ control: ctl(notes, NOW - MIN) }, CFG.reviewFixCap)
+      expect(keys(plan(capped, CFG))).toEqual([`adjudicate:${AT45}:r1`])
+    })
+
+    test('the escalate tell says what a plain resume will do, in both variants', () => {
+      const tell = (verdicts: string[]) => {
+        const r = plan(withLedger(failedTest(), [escalated(verdicts)]), CFG)
+        return find(r, `tell:escalate:${AT}`)
+      }
+      expect(tell([ENV])).toMatchObject({ context: ['shorten the PR body', expect.stringContaining('resume alone runs the pipeline again on the same head'), ENV] })
+      expect(tell(['CORRECT: x'])).toMatchObject({ context: ['shorten the PR body', expect.stringContaining('resume sends a fixer'), 'CORRECT: x'] })
+    })
+
+    test('with no known head, the all-ENV tell says a plain resume asks the adjudicator again, which it does', () => {
+      const at = `${RUN45}:test:null`
+      const headless = (over: Partial<State> = {}) =>
+        state({ issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: RUN45, pr: 545 })], runs: [run(45, 'failed', { step: 'test', head: null })], ...over })
+      const esc = entry(`adjudicate:${at}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: RUN45, head: null, startedAt: NOW - 60 * MIN, endedAt: NOW - 50 * MIN, outcome: review({ type: 'escalate', why: 'shorten the PR body' }, null, [ENV]) })
+      expect(find(plan(withLedger(headless(), [esc]), CFG), `tell:escalate:${at}`)).toMatchObject({
+        context: ['shorten the PR body', expect.stringContaining('resume alone asks the adjudicator again'), ENV],
+      })
+      const told = entry(`tell:escalate:${at}`, 'tell', { wake: 'escalate', class: 'owner', issue: 45 })
+      expect(keys(plan(withLedger(headless({ control: ctl([], NOW - MIN) }), [esc, told]), CFG))).toEqual([`adjudicate:${at}:r1`])
+    })
+
+    test('a running resume fixer is not spawned again for the same resume (P2b)', () => {
+      const running = entry(`fixer:resume:${AT}:r1`, 'spawn', { agent: 'fixer', class: 'drive', issue: 45, status: 'running', endedAt: null })
+      const s = withLedger(failedTest({ control: ctl([note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [escalated([ENV]), told, running])
+      expect(keys(plan(s, CFG)).filter(k => k.startsWith('fixer:') || k.startsWith('env-retry:') || k.startsWith('task:'))).toEqual([])
     })
   })
 
@@ -798,6 +891,10 @@ describe('M: merge', () => {
     const told = entry('tell:escalate:pr:550:head50', 'tell', { wake: 'escalate', issue: 50 })
     const s = mergeReady([guarded([], warn), escalated, told])
     expect(keys(plan(s, CFG))).toEqual([])
+    expect(find(plan(mergeReady([guarded([], warn), escalated]), CFG), 'tell:escalate:pr:550:head50')).toMatchObject({
+      rule: 'M3',
+      context: ['the brief does not say', 'a resume asks the adjudicator for a fresh test-weakening review', ...warn],
+    })
     const resumed = { ...s, control: control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - MIN }] }) }
     expect(keys(plan(resumed, CFG))).toEqual(['adjudicate-weakening:550:head50:r1'])
   })

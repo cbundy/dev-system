@@ -412,6 +412,21 @@ function resumes(ctx: Ctx, subject: string, after = Number.NEGATIVE_INFINITY) {
   return ctx.state.control.resumed.filter(r => r.subject === subject && r.at > after).length
 }
 
+function latestResumeAt(ctx: Ctx, subject: string): Ms {
+  let at = Number.NEGATIVE_INFINITY
+  for (const r of ctx.state.control.resumed) if (r.subject === subject) at = Math.max(at, r.at)
+  return at
+}
+
+// issueNotes: the owner's notes for this issue alone (a note for every issue does not count),
+// recorded after `after` and no later than `until`, oldest first.
+function issueNotes(ctx: Ctx, n: number, after: Ms, until: Ms): string[] {
+  return ctx.state.control.notes
+    .filter(note => note.issue === n && note.at > after && note.at <= until)
+    .sort((a, b) => a.at - b.at)
+    .map(note => note.text)
+}
+
 function modelLabel(issue: IssueView | undefined): string | null {
   const labels = (issue?.labels ?? [])
     .map(l => l.toLowerCase())
@@ -770,13 +785,43 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           continue
         }
       }
-      // P2a (#537): a resume of an escalation whose verdicts were all ENV is the owner's word that
-      // the environment is fixed, so the same head is rerun rather than a new adjudicator asked
-      // about the stale failure
-      const envEscalation = resumed > 0 && run.head !== null ? envOnlyEscalation(ctx, run, at, resumed) : undefined
-      if (envEscalation !== undefined) {
-        envRetry(ctx, run, at, suffix, envEscalation)
-        continue
+      // P2a (#537) and P2b (#596): a resume of an escalated gate. A resume note, or any verdict
+      // but ENV, sends a fixer (P2b); a resume of an all-ENV escalation with no note is the
+      // owner's word that the environment is fixed, so the same head is rerun (P2a) rather than
+      // a new adjudicator asked about the stale failure. A ledger rebuilt from the event log keeps
+      // an escalation but not its reason or verdicts: only a resume note sends the fixer then.
+      if (resumed > 0 && done(ctx, `adjudicate:${at}${suffix}`) === undefined) {
+        const esc = latestEscalation(ctx, run, at, resumed)
+        if (esc !== undefined) {
+          const notes = issueNotes(ctx, n, esc.endedAt, latestResumeAt(ctx, `run:${run.run}`))
+          const recorded = esc.why !== ''
+          if (recorded && notes.length === 0 && envOnly(esc.verdicts)) {
+            if (run.head !== null) {
+              envRetry(ctx, run, at, suffix, esc.verdicts)
+              continue
+            }
+          } else if (recorded || notes.length > 0) {
+            const instructions = [...notes.map(text => `Owner note: ${text}`), ...(recorded ? [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts] : [])]
+            want(ctx, {
+              kind: 'spawn',
+              agent: 'fixer',
+              purpose: 'resume',
+              key: `fixer:resume:${at}${suffix}`,
+              class: 'drive',
+              rule: 'P2b',
+              reason: 'owner resumed an escalated gate',
+              issue: n,
+              run: run.run,
+              branch: run.branch,
+              head: run.head,
+              pr: run.pr,
+              brief,
+              model,
+              instructions: instructions.join('\n'),
+            })
+            continue
+          }
+        }
       }
       const adjKey = `adjudicate:${at}${suffix}`
       const adj = done(ctx, adjKey)
@@ -812,6 +857,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           ctx,
           wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
             action.why,
+            resumeEffect(verdict.verdicts, run.head),
             ...verdict.verdicts,
           ]),
         )
@@ -893,20 +939,34 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
   }
 }
 
-// envOnlyEscalation: the verdict lines of this gate's latest adjudication, when it escalated with
-// every verdict ENV and the owner resumed the run after it; undefined otherwise. A round with no
-// adjudication is an env-retry's, so a second resume after a rerun looks back past it. Any other
-// verdict (a code failure), or none, is never rerun.
-function envOnlyEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): string[] | undefined {
+// latestEscalation: this gate's latest adjudication, when it escalated and the owner resumed the
+// run after it: its reason and verdict lines (both empty when rebuilt from the event log, which
+// carries neither) and its end. undefined otherwise: the latest one asked for something else, the
+// owner has not resumed since, or the gate has none (a resume of the review cap). A round with no
+// adjudication is a fixer's or an env-retry's, so a second resume looks back past it.
+function latestEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): { why: string; verdicts: string[]; endedAt: Ms } | undefined {
   for (let round = resumed - 1; round >= 0; round--) {
     const adj = done(ctx, `adjudicate:${at}${round > 0 ? `:r${round}` : ''}`)
     if (adj === undefined) continue
     const verdict = outcome(adj, 'adjudicator')
     if (verdict === undefined || verdict.action.type !== 'escalate') return undefined
-    if (verdict.verdicts.length === 0 || !verdict.verdicts.every(v => /^ENV:/.test(v))) return undefined
-    return resumes(ctx, `run:${run.run}`, adj.endedAt ?? Number.POSITIVE_INFINITY) > 0 ? verdict.verdicts : undefined
+    const endedAt = adj.endedAt ?? Number.POSITIVE_INFINITY
+    if (resumes(ctx, `run:${run.run}`, endedAt) === 0) return undefined
+    return { why: verdict.action.why, verdicts: verdict.verdicts, endedAt }
   }
   return undefined
+}
+
+// resumeEffect: the context line of an escalate tell, saying what a plain resume will do.
+function resumeEffect(verdicts: string[], head: string | null): string {
+  if (!envOnly(verdicts)) return "a resume sends a fixer with the adjudicator's reason above, plus any `note <N>` added before it"
+  return head === null
+    ? 'a resume alone asks the adjudicator again, as the run has no known head to run again on; add a `note <N>` before the resume to send a fixer instead'
+    : 'a resume alone runs the pipeline again on the same head; add a `note <N>` before the resume to send a fixer instead'
+}
+
+function envOnly(verdicts: string[]): boolean {
+  return verdicts.length > 0 && verdicts.every(v => /^ENV:/.test(v))
 }
 
 // envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
@@ -933,7 +993,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
   if (g === 'exhausted') {
     const why = ctx.byKey.get(key)?.summary
     const line = `the pipeline could not be run again on this head after the resume${why === undefined ? '' : ` (${why})`}; resuming the run tries once more`
-    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, ...verdicts]))
+    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, resumeEffect(verdicts, run.head), ...verdicts]))
     return
   }
   const ran = g === 'done' ? done(ctx, key) : undefined
@@ -942,6 +1002,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
     ctx,
     wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [
       'the pipeline was run again on this head after the resume, and the run is still at this gate',
+      resumeEffect(verdicts, run.head),
       ...verdicts,
     ]),
   )
@@ -1492,7 +1553,14 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
     })
   } else if (action.type === 'escalate' || action.type === 'hold') {
     const why = action.type === 'escalate' ? action.why : action.reason
-    want(ctx, wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}${sfx}`, 'M3', n, { issue: n, pr, run: run.run, brief }, [why, ...warns]))
+    want(
+      ctx,
+      wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}${sfx}`, 'M3', n, { issue: n, pr, run: run.run, brief }, [
+        why,
+        'a resume asks the adjudicator for a fresh test-weakening review',
+        ...warns,
+      ]),
+    )
   } else if (action.type === 'merge') {
     skip(ctx, 'M3', n, 'adjudicator: ACTION merge does not answer a test-weakening WARN')
   } else {
