@@ -1056,9 +1056,10 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await agentDone($, h, 'agent-1', 'Recorded through the tool; done.')
     expect(h.lines()).toHaveLength(logged)
     expect(h.sends).toEqual([])
-    // the ping: the next pass delegates
+    // the ping: the next pass delegates, its trigger the agent as for a text answer (#552)
     await clock.advance(5_000)
     expect(h.passes()).toHaveLength(2)
+    expect(h.last()).toMatchObject({ trigger: 'agent agent-1' })
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
   })
 
