@@ -1048,3 +1048,21 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   agent's running shell tasks as its loop exits, and the process groups of a loop that does not
   settle after the kill, so the loop needs no process access of its own. A process that detached
   from its shell (setsid, a daemon) outlives the stop; the owner's notice names the agent.
+
+### D-76 A resumed escalation sends a fixer unless it is all ENV with no note
+
+- **Decision** (the agent's choice, 2026-10-14; #596, amends D-64): the planner routes a resume of an
+  escalated gate (`parked`, or `failed` with a known run id) by what the owner said. A resume note
+  (a control note for the issue alone, recorded after the escalating adjudication ended and no
+  later than the latest resume), or any verdict but `ENV`, plans `spawn(fixer, purpose resume)`
+  under rule `P2b`, key `fixer:resume:<run>:<step>:<head>:r<n>`, once per resume. Its instructions
+  are the notes, then the adjudicator's reason. An all-`ENV` escalation with no note still gets
+  D-64's `env-retry`; with no adjudication recorded (a ledger rebuild) and no note, a fresh
+  adjudicator. Every escalate tell carries a line saying what a plain resume will do, and the
+  judge skill records `note <N>` before `resume <run>` when the owner asks for a change.
+- **Why**: on #533 every verdict was `ENV` (the PR body was over the provider budget), the owner
+  noted the change and resumed, and D-64's rule reran the same head and then escalated again; no
+  fixer was ever planned. A code-failure escalation resumed with no note previously asked a new
+  adjudicator the same question.
+- **Alternatives**: read the notes inside `env-retry` (the rerun cannot change the PR body); a
+  `task` for the model on every resume (a model wake for a decision the planner can make).

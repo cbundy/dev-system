@@ -412,6 +412,21 @@ function resumes(ctx: Ctx, subject: string, after = Number.NEGATIVE_INFINITY) {
   return ctx.state.control.resumed.filter(r => r.subject === subject && r.at > after).length
 }
 
+function latestResumeAt(ctx: Ctx, subject: string): Ms {
+  let at = Number.NEGATIVE_INFINITY
+  for (const r of ctx.state.control.resumed) if (r.subject === subject) at = Math.max(at, r.at)
+  return at
+}
+
+// issueNotes: the owner's notes for this issue alone (a note for every issue does not count),
+// recorded after `after` and no later than `until`, oldest first.
+function issueNotes(ctx: Ctx, n: number, after: Ms, until: Ms): string[] {
+  return ctx.state.control.notes
+    .filter(note => note.issue === n && note.at > after && note.at <= until)
+    .sort((a, b) => a.at - b.at)
+    .map(note => note.text)
+}
+
 function modelLabel(issue: IssueView | undefined): string | null {
   const labels = (issue?.labels ?? [])
     .map(l => l.toLowerCase())
@@ -770,13 +785,41 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           continue
         }
       }
-      // P2a (#537): a resume of an escalation whose verdicts were all ENV is the owner's word that
-      // the environment is fixed, so the same head is rerun rather than a new adjudicator asked
-      // about the stale failure
-      const envEscalation = resumed > 0 && run.head !== null ? envOnlyEscalation(ctx, run, at, resumed) : undefined
-      if (envEscalation !== undefined) {
-        envRetry(ctx, run, at, suffix, envEscalation)
-        continue
+      // P2a (#537) and P2b (#596): a resume of an escalated gate. A resume note, or any verdict
+      // but ENV, sends a fixer (P2b); a resume of an all-ENV escalation with no note is the
+      // owner's word that the environment is fixed, so the same head is rerun (P2a) rather than
+      // a new adjudicator asked about the stale failure.
+      if (resumed > 0 && done(ctx, `adjudicate:${at}${suffix}`) === undefined) {
+        const esc = latestEscalation(ctx, run, at, resumed)
+        if (esc !== 'other') {
+          const notes = issueNotes(ctx, n, esc?.endedAt ?? Number.NEGATIVE_INFINITY, latestResumeAt(ctx, `run:${run.run}`))
+          if (esc !== undefined && notes.length === 0 && esc.verdicts.length > 0 && esc.verdicts.every(v => /^ENV:/.test(v))) {
+            if (run.head !== null) {
+              envRetry(ctx, run, at, suffix, esc.verdicts)
+              continue
+            }
+          } else if (esc !== undefined || notes.length > 0) {
+            const instructions = [...notes, ...(esc === undefined ? [] : [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts])]
+            want(ctx, {
+              kind: 'spawn',
+              agent: 'fixer',
+              purpose: 'resume',
+              key: `fixer:resume:${at}${suffix}`,
+              class: 'drive',
+              rule: 'P2b',
+              reason: 'owner resumed an escalated gate',
+              issue: n,
+              run: run.run,
+              branch: run.branch,
+              head: run.head,
+              pr: run.pr,
+              brief,
+              model,
+              instructions: instructions.join('\n'),
+            })
+            continue
+          }
+        }
       }
       const adjKey = `adjudicate:${at}${suffix}`
       const adj = done(ctx, adjKey)
@@ -812,6 +855,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           ctx,
           wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
             action.why,
+            resumeEffect(verdict.verdicts.length > 0 && verdict.verdicts.every(v => /^ENV:/.test(v))),
             ...verdict.verdicts,
           ]),
         )
@@ -893,20 +937,34 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
   }
 }
 
-// envOnlyEscalation: the verdict lines of this gate's latest adjudication, when it escalated with
-// every verdict ENV and the owner resumed the run after it; undefined otherwise. A round with no
-// adjudication is an env-retry's, so a second resume after a rerun looks back past it. Any other
-// verdict (a code failure), or none, is never rerun.
-function envOnlyEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): string[] | undefined {
+// latestEscalation: this gate's latest adjudication, when the owner resumed the run after it and
+// it escalated: its reason and verdict lines. undefined when none is recorded (a ledger rebuild
+// loses them); 'other' when the latest one asked for something else, or the owner has not resumed
+// since. A round with no adjudication is a fixer's or an env-retry's, so a second resume looks
+// back past it.
+function latestEscalation(
+  ctx: Ctx,
+  run: RunView,
+  at: string,
+  resumed: number,
+): { why: string; verdicts: string[]; endedAt: Ms } | undefined | 'other' {
   for (let round = resumed - 1; round >= 0; round--) {
     const adj = done(ctx, `adjudicate:${at}${round > 0 ? `:r${round}` : ''}`)
     if (adj === undefined) continue
     const verdict = outcome(adj, 'adjudicator')
-    if (verdict === undefined || verdict.action.type !== 'escalate') return undefined
-    if (verdict.verdicts.length === 0 || !verdict.verdicts.every(v => /^ENV:/.test(v))) return undefined
-    return resumes(ctx, `run:${run.run}`, adj.endedAt ?? Number.POSITIVE_INFINITY) > 0 ? verdict.verdicts : undefined
+    if (verdict === undefined || verdict.action.type !== 'escalate') return 'other'
+    const endedAt = adj.endedAt ?? Number.POSITIVE_INFINITY
+    if (resumes(ctx, `run:${run.run}`, endedAt) === 0) return 'other'
+    return { why: verdict.action.why, verdicts: verdict.verdicts, endedAt }
   }
   return undefined
+}
+
+// resumeEffect: the context line of an escalate tell, saying what a plain resume will do.
+function resumeEffect(envOnly: boolean): string {
+  return envOnly
+    ? 'a resume alone runs the pipeline again on the same head; add a `note <N>` before the resume to send a fixer instead'
+    : "a resume sends a fixer with the adjudicator's reason above, plus any `note <N>` added before it"
 }
 
 // envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
@@ -933,7 +991,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
   if (g === 'exhausted') {
     const why = ctx.byKey.get(key)?.summary
     const line = `the pipeline could not be run again on this head after the resume${why === undefined ? '' : ` (${why})`}; resuming the run tries once more`
-    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, ...verdicts]))
+    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, resumeEffect(true), ...verdicts]))
     return
   }
   const ran = g === 'done' ? done(ctx, key) : undefined
@@ -942,6 +1000,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
     ctx,
     wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [
       'the pipeline was run again on this head after the resume, and the run is still at this gate',
+      resumeEffect(true),
       ...verdicts,
     ]),
   )

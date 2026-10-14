@@ -380,7 +380,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn,
 
 type FixerSpawn = Extract<SpawnAction, { agent: 'fixer' }>
 
-// Why the fixer was sent, by its purpose (the rules that spawn it: P3, M2, M2a, M3, M5b, D5).
+// Why the fixer was sent, by its purpose (the rules that spawn it: P2b, P3, M2, M2a, M3, M5b, D5).
 const WHY: Record<FixerPurpose, string> = {
   gate: 'the adjudicator judged a gate of the run and asked for a change the pipeline cannot write from instructions alone, or the run is done.',
   conflict: 'the PR conflicts with its base. Rebase onto the base keeping both sides of colliding additions, then re-gate with a fresh run.',
@@ -388,6 +388,7 @@ const WHY: Record<FixerPurpose, string> = {
   weakening: 'the merge guard warned that a commit weakened tests, and the adjudicator judged it unjustified. Restore the tests as the instructions say.',
   review: 'the merge review asked for a change before the PR merges.',
   guard: 'the merge guard printed a FAIL that was judged to need a fixer.',
+  resume: "the owner resumed an escalated gate and gave an instruction. Follow the owner's instruction below (it wins over the brief), re-enter the branch, make the change and start a fresh gated run. A branch head that differs from the run's head does not stop you.",
   handoff: "the implementer's commit was not gated by its pipeline run. Get it gated as the instructions say.",
 }
 

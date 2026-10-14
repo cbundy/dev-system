@@ -130,7 +130,7 @@ export type Control = {
 
 export type AgentType = 'designer' | 'implementer' | 'adjudicator' | 'fixer'
 export type AdjudicatorPurpose = 'gate' | 'weakening' | 'merge'
-export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff'
+export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff' | 'resume'
 export type Rollout = 'merge' | 'run-it' | 'keep-open'
 
 export type GuardFail = { name: string; reason: string }
