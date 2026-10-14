@@ -2184,6 +2184,15 @@ function agents(ctx: Ctx) {
     // running would hold the checkout or its branch up to its timeout (#587). The owner hears
     // once what it was and how the list showed it.
     if (entry.status === 'done') {
+      // an implementer or fixer may wait on the pipeline it launched in the background (`axi run`
+      // and `axi respond` block until the next gate): stopping it would end that driver and
+      // strand the run, so it is left alone while a run of its issue is running or pending, and
+      // keeps its branch meanwhile (heldBy); once the run parks, the driver has returned
+      const driving = (agent === 'implementer' || agent === 'fixer') && entry.issue !== null && runMoving(ctx, entry.issue)
+      if (driving) {
+        skip(ctx, 'A2', entry.issue, `${entry.key}: its agent works on past its answer while a run of #${entry.issue} moves; not stopped`)
+        continue
+      }
       const listed = state.agents.find(a => a.id === agentId)?.status ?? null
       want(ctx, stop('worked on past its answer'))
       want(ctx, wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why: 'answered', agent, status: listed, entry: entry.key }))
@@ -2218,6 +2227,12 @@ function agents(ctx: Ctx) {
     const name = entry?.kind === 'task' ? 'task-timeout' : 'agent-failed'
     want(ctx, wake('tell', name, `tell:${name}:${key}`, 'A1', entry?.issue ?? null, { key, kind: entry?.kind ?? null }))
   }
+}
+
+// runMoving: a current run of the issue is running or pending: a pipeline driver may still
+// wait on it (#587).
+function runMoving(ctx: Ctx, issue: number): boolean {
+  return ctx.state.runs.some(r => r.issue === issue && !r.superseded && (r.state === 'running' || r.state === 'pending'))
 }
 
 function splitAfter(ctx: Ctx, issue: number, since: number) {

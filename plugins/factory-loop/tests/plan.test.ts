@@ -1229,6 +1229,20 @@ describe('A: agents', () => {
       expect(r.skipped).toContainEqual({ rule: 'P3', issue: 45, why: 'an agent already works the branch of #45 (respond)' })
       const next = plan(gate([lingering('agent-impl-45', 'callum-flow:implementer')], stopped('agent-impl-45', 45)), CFG)
       expect(keys(next)).toEqual([`respond:${AT45}:approve`])
+      // a run of the issue still moving: the agent may wait on the pipeline driver it launched in
+      // the background (`axi run` blocks until the next gate), so it is not stopped, which would
+      // strand the run; it keeps its branch, and is stopped once the run parks
+      for (const state of ['running', 'pending'] as const) {
+        const moving = withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:implementer')], runs: [run(45, state)] }), [handedOff])
+        const m = plan(moving, CFG)
+        expect(keys(m)).toEqual([])
+        expect(m.skipped).toContainEqual({ rule: 'A2', issue: 45, why: `delegate:45:${brief(45)}: its agent works on past its answer while a run of #45 moves; not stopped` })
+      }
+      const fixerMoving = { ...handedOff, key: 'fixer:guard:545:head45', kind: 'spawn' as const, agent: 'fixer' as const }
+      expect(keys(plan(withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:fixer')], runs: [run(45, 'running')] }), [fixerMoving]), CFG))).toEqual([])
+      // a superseded run is not the issue's run
+      const superseded = withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:implementer')], runs: [run(45, 'parked'), run(45, 'running', { run: 'OLD', superseded: true })] }), [handedOff])
+      expect(keys(plan(superseded, CFG))).toEqual(expect.arrayContaining(['stop:agent-impl-45', 'tell:stopped:agent-impl-45']))
     })
 
     test('an answered adjudicator and an answered fixer are stopped the same way', () => {

@@ -1036,15 +1036,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   revises D-71, which kept such an agent under A1 and A2 only for their usual reasons.
 - **Alternatives**: (a) never count an answered agent as a reader or writer, without stopping it;
   (b) let what it held go in the same pass as the stop; (c) a process-group kill of the agent's
-  shells from the loop, besides TaskStop.
+  shells from the loop, besides TaskStop; (d) stop an implementer or fixer also while a run of
+  its issue is running or pending.
 - **Why**: on the first day the loop ran the real repo, three stalls came from one cause: a
   designer left `claude remote-control --help` running in the main checkout, and two
   implementers left `until ! pgrep -f ...` wait loops that matched themselves, so the list kept
   them at work and held the checkout update, every adjudicator behind it and two gate responses
   for 20 to 60 minutes, up to the 60 and 120 minute timeouts. The answer is applied and saved
   before the entry is done, so the stop discards nothing; an entry still awaiting an answer or a
-  repair reply is running and never counts. (a) would leave the shells running for hours. (b)
+  repair reply is running and never counts. (d) would end a pipeline driver the agent launched
+  in the background (`axi run` and `axi respond` block until the next gate) and strand the run;
+  while the run moves nothing else needs its branch, and once it parks the driver has returned,
+  so what is left is stopped then. (a) would leave the shells running for hours. (b)
   plans the checkout update before the stop runs, under a shell that may still be in it. (c)
-  TaskStop already ends the background shells an agent owns: Claude Code kills an agent's
-  running shell tasks as its loop exits, and the process groups of a loop that does not settle
-  after the kill, so the loop needs no process access of its own.
+  TaskStop is expected to end the background shells an agent owns: Claude Code 2.1.296 kills an
+  agent's running shell tasks as its loop exits, and the process groups of a loop that does not
+  settle after the kill, so the loop needs no process access of its own. A process that detached
+  from its shell (setsid, a daemon) outlives the stop; the owner's notice names the agent.
