@@ -9,7 +9,7 @@
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake.
 import { cliExecutors } from './act-cli'
-import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey } from './act-agents'
+import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey, scriptPlaceOf } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
@@ -445,31 +445,35 @@ export type Repair = (agentId: string, text: string, type: AgentType) => Promise
 
 // What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
 // out before it), 'repair' (unreadable, so the agent was asked once more), 'waiting' (interim),
-// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry; undelivered:
-// why its repair message was not delivered, whole, for the decision log (the entry's summary
-// keeps a clipped copy, #559).
+// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry; via: how an
+// applied answer came (the answer script's file, #561, or its text); scriptProblem: what kept a
+// file it recorded out; undelivered: why its repair message was not delivered, whole, for the
+// decision log (the entry's summary keeps a clipped copy, #559).
 export type Answered = {
   result: 'applied' | 'repair' | 'waiting' | 'recorded' | 'dropped' | 'not ours'
   why?: string
   key?: string
   repaired?: boolean
+  via?: 'script' | 'text'
+  scriptProblem?: string
   undelivered?: string
 }
 
 // agentAnswered: an agent of the loop finished (its turn.complete): its answer is read into the
-// outcome (act-agents.ts onAgentAnswer, which logs its verdict and superseded events) and its
-// entry finished. 'applied' asks for a pass. An agent the ledger never held is 'not ours'; an
-// answer for an entry that no longer runs (an A1 stop timed it out, a retry replaced it) is
-// logged and dropped, never applied, and the closing words of an agent whose tool already
-// answered change nothing. An interim answer (no machine line, #545) from an agent atWork finds
-// still at work leaves its entry running for its next answer, up to its timeout (rule A1); atWork
-// is asked only then. A final answer with no machine line first gets one repair message to the
-// same agent, naming what was wrong (#548): the entry runs on with its attempt unspent, and only
-// an answer still unreadable after it, or a message that could not be delivered, fails the
-// attempt (or sends the designer's report to the model, rule D3) as before. A tool call is
-// answered outside the hook queue (#558), so it may finish the entry while this answer is read:
-// the entry is checked again just before each change, with no await between, and an entry its
-// tool finished meanwhile is 'recorded', the text never read over it.
+// outcome (act-agents.ts onAgentAnswer: the file it recorded with the answer script, else its
+// text; it logs the verdict and superseded events) and its entry finished. 'applied' asks for a
+// pass. An agent the ledger never held is 'not ours'; an answer for an entry that no longer runs
+// (an A1 stop timed it out, a retry replaced it) is logged and dropped, never applied, and the
+// closing words of an agent whose tool already answered change nothing. An interim answer (no
+// machine line, #545) from an agent atWork finds still at work leaves its entry running for its
+// next answer, up to its timeout (rule A1); atWork is asked only then. A final answer with no
+// machine line first gets one repair message to the same agent, naming what was wrong and asking
+// again on the channel its spawn was asked on (#548, #561): the entry runs on with its attempt
+// unspent, and only an answer still unreadable after it, or a message that could not be
+// delivered, fails the attempt (or sends the designer's report to the model, rule D3) as before.
+// A tool call is answered outside the hook queue (#558), so it may finish the entry while this
+// answer is read: the entry is checked again just before each change, with no await between, and
+// an entry its tool finished meanwhile is 'recorded', the text never read over it.
 export async function agentAnswered(
   env: ActEnv,
   state: State,
@@ -514,7 +518,10 @@ export async function agentAnswered(
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
-      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem, env.rt.config.answerTools), type)
+      // the channel the spawn's prompt asked for (its record), else the setting's
+      const channel = read.channel ?? env.rt.config.answerChannel
+      const script = channel === 'script' ? scriptPlaceOf(env.rt, entry) : null
+      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem, channel, script), type)
       if (undelivered === null) {
         // listed idle or completed until the message resumes it, which the list may show late: the
         // passes take it as at work for a while, then count that listing afresh
@@ -530,7 +537,10 @@ export async function agentAnswered(
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()
     await logLoop(env, moved)
-    return refused === undefined ? { result: 'applied', key: entry.key, repaired } : { result: 'applied', key: entry.key, repaired, undelivered: refused }
+    const applied: Answered = { result: 'applied', key: entry.key, repaired, via: read.via }
+    if (read.scriptProblem !== undefined) applied.scriptProblem = read.scriptProblem
+    if (refused !== undefined) applied.undelivered = refused
+    return applied
   } finally {
     between.answering.delete(id)
   }

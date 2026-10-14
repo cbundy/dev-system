@@ -12,23 +12,29 @@ import {
   agentOf,
   inFlightOf,
   interim,
+  jobOf,
   modelLabelOf,
   onAgentAnswer,
   parseRecord,
   purposeOfKey,
   readAnswer,
+  readScriptAnswer,
   routedModel,
+  SCRIPT_RECORD,
   SUBAGENT_OF,
+  scriptPlaceOf,
   spawnInputOf,
   spawnRecordPath,
   stillAtWork,
 } from '../hooks/act-agents'
 import { TOOL_OF } from '../hooks/agent-tools'
-import { answerPath } from '../hooks/exec'
+import { answerText, jobPathOf, jobText } from '../hooks/contract.mjs'
+import type { Job } from '../hooks/contract.mjs'
+import { answerPath, scriptAnswerPath } from '../hooks/exec'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, Config, LedgerEntry, State } from '../hooks/types'
-import { DEVICE, NOW, config, entry, issue, run, state } from './fixtures'
+import { DEVICE, NOW, PLUGIN_ROOT, config, entry, issue, run, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const LOOP = '/cfg/factory-loop/cbundy__dev-system'
@@ -51,6 +57,7 @@ function runtime(over: Partial<Config> = {}): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: '/usr/local/share/callum-tools',
+    pluginRoot: PLUGIN_ROOT,
     config: config(over),
     configProblems: [],
   }
@@ -256,9 +263,10 @@ describe('the pure helpers', () => {
     expect(types).toEqual(['factory-loop:designer', 'factory-loop:adjudicator', 'factory-loop:adjudicator', 'callum-flow:fixer', 'callum-flow:implementer'])
   })
 
-  test('parseRecord: the branch and purpose a spawn record holds', () => {
-    expect(parseRecord(JSON.stringify({ branch: BRANCH, purpose: 'merge' }))).toEqual({ branch: BRANCH, purpose: 'merge' })
-    expect(parseRecord(JSON.stringify({ branch: '', purpose: 'other' }))).toEqual({ branch: null, purpose: null })
+  test('parseRecord: the branch, purpose and answer channel a spawn record holds; a record from before the channel names none', () => {
+    expect(parseRecord(JSON.stringify({ branch: BRANCH, purpose: 'merge', channel: 'script' }))).toEqual({ branch: BRANCH, purpose: 'merge', channel: 'script' })
+    expect(parseRecord(JSON.stringify({ branch: BRANCH, purpose: 'merge' }))).toEqual({ branch: BRANCH, purpose: 'merge', channel: null })
+    expect(parseRecord(JSON.stringify({ branch: '', purpose: 'other', channel: 'answerTools' }))).toEqual({ branch: null, purpose: null, channel: null })
     expect(parseRecord('not json')).toBeNull()
     expect(parseRecord(null)).toBeNull()
   })
@@ -299,28 +307,66 @@ describe('spawn (SPEC 6.1)', () => {
     expect(input.prompt).toContain('feat/issue-12-work, for issue 12')
     expect(input.prompt).not.toContain('feat/issue-470-work')
     expect(input.prompt).toContain('Model override: opus')
-    // the spawn record goes first, so the answer can never arrive before it
+    // the answer script's job file and the spawn record go first, so the answer can never arrive
+    // before them
     const path = spawnRecordPath(LOOP, 'design:470:1000')
-    expect(log).toEqual([`write ${path}`, 'spawn factory-loop:designer'])
-    expect(JSON.parse(files.get(path) ?? '{}')).toMatchObject({ key: 'design:470:1000', agent: 'designer', purpose: null, branch: null, issue: 470, prompt: input.prompt })
+    const place = scriptPlaceOf({ pluginRoot: PLUGIN_ROOT, loopDir: LOOP }, entry('under-test', 'spawn', { status: 'running', endedAt: null }))
+    expect(log).toEqual([`write ${jobPathOf(place.file)}`, `write ${path}`, 'spawn factory-loop:designer'])
+    expect(JSON.parse(files.get(path) ?? '{}')).toMatchObject({ key: 'design:470:1000', agent: 'designer', purpose: null, branch: null, issue: 470, channel: 'script', answerFile: place.file, prompt: input.prompt })
   })
 
-  test('each spawn asks for its answer tool only with config answerTools on; off, the default, it asks for its machine line alone (#560)', async () => {
-    const actions: [Action, string][] = [
-      [A.designer(), TOOL_OF.designer],
-      [A.adjudicator('gate'), TOOL_OF.adjudicator],
-      [A.adjudicator('merge'), TOOL_OF.adjudicator],
-      [A.fixer(), TOOL_OF.fixer],
-      [A.delegate(), TOOL_OF.implementer],
-    ]
-    for (const [action, tool] of actions) {
+  // the actions under test, the tool each answers with, and the job its answer is checked against
+  const answering = (): [Action, string, Job][] => [
+    [A.designer(), TOOL_OF.designer, { contract: 'design', purpose: null, repo: REPO, issue: 470, branch: null }],
+    [A.adjudicator('gate'), TOOL_OF.adjudicator, { contract: 'verdict', purpose: 'gate', repo: REPO, issue: 470, branch: null }],
+    [A.adjudicator('weakening'), TOOL_OF.adjudicator, { contract: 'verdict', purpose: 'weakening', repo: REPO, issue: 470, branch: null }],
+    [A.adjudicator('merge'), TOOL_OF.adjudicator, { contract: 'verdict', purpose: 'merge', repo: REPO, issue: 470, branch: null }],
+    [A.fixer(), TOOL_OF.fixer, { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: BRANCH }],
+    [A.delegate(), TOOL_OF.implementer, { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: null }],
+  ]
+
+  test('the script channel (the default, #561): each spawn writes the job its answer is checked against beside an answer file unique to its attempt, and its prompt names the script and that file', async () => {
+    for (const [action, tool, job] of answering()) {
       const replies = action.kind === 'delegate' ? [{ stdout: 'opus\n' }] : []
-      const off = await exec(action, { replies })
-      expect(off.spawns[0]?.prompt).not.toContain(tool)
-      expect(off.spawns[0]?.prompt).not.toContain('ToolSearch')
-      const on = await exec(action, { replies, config: { answerTools: true } })
-      expect(on.spawns[0]?.prompt).toContain(`calling ${tool}`)
+      const attempt = entry(action.key, action.kind, { status: 'running', endedAt: null, attempts: 2, startedAt: NOW + 7 })
+      const r = await exec(action, { replies, entry: attempt })
+      const place = scriptPlaceOf({ pluginRoot: PLUGIN_ROOT, loopDir: LOOP }, attempt)
+      expect(place).toEqual({ bin: `${PLUGIN_ROOT}/bin/factory-answer`, file: scriptAnswerPath(LOOP, attempt) })
+      expect(place.file).toEndWith(`.a2.${NOW + 7}.answer.json`)
+      expect(r.files.get(jobPathOf(place.file) ?? '')).toBe(jobText(job))
+      const prompt = r.spawns[0]?.prompt ?? ''
+      expect(prompt).toContain(`  ${place.bin} --to ${place.file} <<'JSON'`)
+      expect(prompt).not.toContain(tool)
+      expect(JSON.parse(r.files.get(spawnRecordPath(LOOP, action.key)) ?? '{}')).toMatchObject({ channel: 'script', answerFile: place.file, attempt: 2 })
     }
+  })
+
+  test('the tool and text channels write no job file: the tool channel asks for the agent\'s tool first, the text channel for its machine line alone (#548, #560)', async () => {
+    for (const [action, tool] of answering()) {
+      const replies = action.kind === 'delegate' ? [{ stdout: 'opus\n' }] : []
+      const tools = await exec(action, { replies, config: { answerChannel: 'tool' } })
+      expect(tools.spawns[0]?.prompt).toContain(`calling ${tool}`)
+      expect(tools.spawns[0]?.prompt).not.toContain('answer script')
+      const text = await exec(action, { replies, config: { answerChannel: 'text' } })
+      expect(text.spawns[0]?.prompt).not.toMatch(/mcp__factory-loop__|ToolSearch|answer script|factory-answer/)
+      for (const [r, channel] of [[tools, 'tool'], [text, 'text']] as const) {
+        expect([...r.files.keys()].filter(p => p.endsWith('.job.json'))).toEqual([])
+        expect(JSON.parse(r.files.get(spawnRecordPath(LOOP, action.key)) ?? '{}')).toMatchObject({ channel, answerFile: null })
+      }
+    }
+  })
+
+  test('on the script channel, a job file that cannot be written, or a plugin root a prompt may not carry, asks for text instead', async () => {
+    const failing = await exec(A.adjudicator('gate'), { writeFails: true })
+    expect(failing.result.status).toBe('running')
+    expect(failing.spawns[0]?.prompt).not.toMatch(/answer script|factory-answer/)
+    expect((failing.spawns[0]?.prompt ?? '').split('\n').pop()).toBe('Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    const h = harness()
+    h.ctx.rt = { ...h.ctx.rt, pluginRoot: '/home/some one/plugins/factory-loop' }
+    await executor('spawn')(h.ctx, A.adjudicator('gate'))
+    expect(h.spawns[0]?.prompt).not.toMatch(/answer script|factory-answer/)
+    expect([...h.files.keys()].filter(p => p.endsWith('.job.json'))).toEqual([])
+    expect(JSON.parse(h.files.get(spawnRecordPath(LOOP, A.adjudicator('gate').key)) ?? '{}')).toMatchObject({ channel: 'text', answerFile: null })
   })
 
   test('an adjudicator and a fixer: the record keeps the branch and the purpose the answer needs', async () => {
@@ -372,9 +418,11 @@ describe('delegate (SPEC 6.1, I-32)', () => {
       replies: [{ stdout: 'opus\n', stderr: '' }],
       state: { issues: [issue(470, { labels: ['model:opus'] })] },
     })
+    const place = scriptPlaceOf({ pluginRoot: PLUGIN_ROOT, loopDir: LOOP }, entry('under-test', 'spawn', { status: 'running', endedAt: null }))
     expect(log).toEqual([
       'cmd callum-flow-implementer-route 470',
       'event delegated',
+      `write ${jobPathOf(place.file)}`,
       `write ${spawnRecordPath(LOOP, `delegate:470:${BRIEF}`)}`,
       'spawn callum-flow:implementer',
     ])
@@ -617,5 +665,104 @@ describe('onAgentAnswer', () => {
     const a = readAnswer(gate, answer('DUP: review-3 handled in round 1.\nACTION: skip'), info)
     expect(a).toEqual(readAnswer(gate, answer('DUP: review-3 handled in round 1.\nACTION: skip'), info))
     expect(a.events).toEqual([{ state: 'verdict', fields: { issue: 470, run: RUN, branch: BRANCH, note: 'DUP: review-3 handled in round 1.' } }])
+  })
+})
+
+// --- the answer script's file (#561) ------------------------------------------------------------
+
+describe('onAgentAnswer: the file recorded with the answer script', () => {
+  const gate = running(`adjudicate:${RUN}:review:3f2a9c1d`, 'spawn', 'adjudicator', { run: RUN, head: '3f2a9c1d', attempts: 1, startedAt: NOW - 600_000 })
+  const merge = running('adjudicate-merge:512:3f2a9c1d', 'spawn', 'adjudicator', { run: RUN, pr: 512, head: '3f2a9c1d', attempts: 1, startedAt: NOW - 600_000 })
+  const fileOf = (e: LedgerEntry) => scriptAnswerPath(LOOP, e)
+  const job = { contract: 'verdict' as const, purpose: 'gate' as const, repo: REPO, issue: 470, branch: null }
+  const VERDICT = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
+  // the file as the script writes it (contract.mjs answerText: the same function it calls)
+  const written = (input: unknown) => {
+    const body = answerText(job, input)
+    if (!body.ok) throw new Error(body.problems.join('; '))
+    return body.outcome
+  }
+  const record = (e: LedgerEntry, channel = 'script') => ({ [spawnRecordPath(LOOP, e.key)]: JSON.stringify({ branch: BRANCH, purpose: null, channel }) })
+
+  test('a valid file at the path issued for this attempt is read first and checked again: done through the script, its verdicts logged, the text and the record saved together', async () => {
+    const body = written(VERDICT)
+    const r = await answered(gate, 'I judged it; the answer is recorded.', { files: { [fileOf(gate)]: body, ...record(gate) } })
+    expect(r.result).toEqual({
+      status: 'done',
+      outcome: { kind: 'adjudicator', verdicts: ['WRONG: review-1: the timeout is handled in parse.ts'], action: { type: 'approve', reason: 'a false positive' }, report: null },
+      summary: 'adjudicator #470 (gate, script): ACTION approve, 1 verdict line',
+    })
+    expect(r.problem).toBeNull()
+    expect(r.events).toEqual([{ state: 'verdict', fields: { issue: 470, run: RUN, branch: BRANCH, note: 'WRONG: review-1: the timeout is handled in parse.ts' } }])
+    expect(r.files.get(answerPath(LOOP, gate.key))).toBe(`I judged it; the answer is recorded.\n\n${SCRIPT_RECORD}\n\n${body}`)
+    const taken = await onAgentAnswer(harness({ entry: gate, files: { [fileOf(gate)]: body, ...record(gate) } }).ctx, gate, answer('done'))
+    expect(taken).toMatchObject({ via: 'script', channel: 'script' })
+    // a turn that ended in error after the answer was recorded keeps the answer
+    expect((await answered(gate, '', { reason: 'error', files: { [fileOf(gate)]: body } })).result).toMatchObject({ status: 'done', outcome: { action: { type: 'approve' } } })
+  })
+
+  test('only the path issued for this attempt is read: another attempt\'s file, another entry\'s or a stale one is never taken', async () => {
+    const body = written(VERDICT)
+    const others = [
+      scriptAnswerPath(LOOP, { ...gate, attempts: 2 }),
+      scriptAnswerPath(LOOP, { ...gate, startedAt: gate.startedAt - 1 }),
+      scriptAnswerPath(LOOP, merge),
+      `${LOOP}/answers/anything.answer.json`,
+    ]
+    for (const other of others) {
+      const r = await answered(gate, 'All good.', { files: { [other]: body } })
+      expect(r.result).toMatchObject({ status: 'failed' })
+      expect(r.problem).toBe('no ACTION line')
+    }
+  })
+
+  test('with no file, the text is read as before', async () => {
+    const r = await answered(gate, 'WRONG: review-1 handled.\nACTION: approve')
+    expect(r.result).toMatchObject({ status: 'done', summary: 'adjudicator #470 (gate): ACTION approve, 1 verdict line' })
+    expect((await onAgentAnswer(harness({ entry: gate }).ctx, gate, answer('ACTION: approve'))).via).toBe('text')
+  })
+
+  test('a file that fails its checks is refused: the text is read instead, and when that fails too the problem names both', async () => {
+    const broken = JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'merge' } } })
+    const both = await onAgentAnswer(harness({ entry: gate, files: { [fileOf(gate)]: broken } }).ctx, gate, answer('All good.'))
+    expect(both.via).toBe('text')
+    expect(both.exec.status).toBe('failed')
+    const refusal =
+      'the answer recorded with the answer script does not pass its checks: action must be { type, ... } with type one of approve, fix, skip, fixer, escalate: a gate review takes no other'
+    expect(both.scriptProblem).toBe(refusal)
+    expect(both.problem).toBe(`${refusal}; and the reply: no ACTION line`)
+    // the text is sound: it is taken, and the refused file is still named for the decision log
+    const text = await onAgentAnswer(harness({ entry: gate, files: { [fileOf(gate)]: broken } }).ctx, gate, answer('WRONG: review-1 handled.\nACTION: approve'))
+    expect(text).toMatchObject({ via: 'text', problem: null, scriptProblem: refusal, exec: { status: 'done' } })
+    // a file the script did not write, or one of another contract
+    const files: [string, string][] = [
+      ['not json', 'the answer file is not JSON'],
+      [JSON.stringify(VERDICT), 'the answer file is not in the shape the answer script writes'],
+      [JSON.stringify({ v: 1, contract: 'design', answer: {} }), 'the answer file holds a "design" answer, and this agent answers with verdict'],
+    ]
+    for (const [body, why] of files) {
+      const r = await onAgentAnswer(harness({ entry: gate, files: { [fileOf(gate)]: body } }).ctx, gate, answer('All good.'))
+      expect(r.scriptProblem).toBe(`the answer recorded with the answer script does not pass its checks: ${why}`)
+    }
+  })
+
+  test('the loop checks a file against what it knows, never the job file beside it: a merge review needs its report whatever a job file says', async () => {
+    const lying = { [jobPathOf(fileOf(merge)) ?? '']: jobText({ ...job, purpose: 'gate' }) }
+    const gateShaped = JSON.stringify({ v: 1, contract: 'verdict', answer: VERDICT })
+    const r = await onAgentAnswer(harness({ entry: merge, files: { ...lying, [fileOf(merge)]: gateShaped } }).ctx, merge, answer('All good.'))
+    expect(r.via).toBe('text')
+    expect(r.scriptProblem).toContain('action must be { type, ... } with type one of merge, hold, fixer, escalate: a merge review takes no other')
+  })
+
+  test('readScriptAnswer is pure, and each agent\'s file is checked against its own job (jobOf)', () => {
+    const info = { repo: REPO, branch: BRANCH, purpose: null }
+    const body = written(VERDICT)
+    expect(readScriptAnswer(gate, body, info)).toEqual(readScriptAnswer(gate, body, info))
+    expect(jobOf(gate, 'adjudicator', info)).toEqual(job)
+    expect(jobOf(merge, 'adjudicator', info)).toEqual({ ...job, purpose: 'merge' })
+    expect(jobOf(running('adjudicate-x:1', 'spawn', 'adjudicator'), 'adjudicator', info)).toBeNull()
+    expect(jobOf(running('fixer:conflict:512:h', 'spawn', 'fixer'), 'fixer', info)).toEqual({ contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: BRANCH })
+    expect(jobOf(running(`delegate:470:${BRIEF}`, 'delegate', 'implementer'), 'implementer', info)).toEqual({ contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: null })
+    expect(jobOf(running('design:470:1', 'spawn', 'designer'), 'designer', info)).toEqual({ contract: 'design', purpose: null, repo: REPO, issue: 470, branch: null })
   })
 })

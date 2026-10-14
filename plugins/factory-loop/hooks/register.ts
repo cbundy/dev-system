@@ -7,8 +7,9 @@
 // (the default), or while a rail holds act mode back, it executes nothing and every command's
 // event writes go to a sink (SPEC 11.1). Each pass appends one decision-log line and sets the
 // session title. This is the only module that holds $: it builds the engine calls the others
-// make, and wires the hooks that feed the ledger between passes (agents' answers, in text or
-// through their answer tools, and their repair messages; wake turns) and the owner's controls
+// make, and wires the hooks that feed the ledger between passes (agents' answers, recorded with
+// the answer script, in text or through their answer tools, and their repair messages; wake
+// turns) and the owner's controls
 // (/factory, the control and answer tools), and keeps the loop's own agent types (agents/) from
 // the model.
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
@@ -199,7 +200,8 @@ type Options = { mode?: unknown; repo?: unknown; shadowDevice?: unknown; runSour
 let options: Options = {}
 
 // The settings of SPEC 4.2 the workspace file may also set, over the repo's file (SPEC 4.1).
-const WORKSPACE_SETTINGS = ['trace', 'answerTools'] as const
+// answerTools, which answerChannel replaced (#561), is passed on only to be named as replaced.
+const WORKSPACE_SETTINGS = ['trace', 'answerChannel', 'answerTools'] as const
 
 async function text($: EngineInterface, path: string): Promise<string | null> {
   try {
@@ -243,7 +245,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
   // the repo-local settings, durations and all (SPEC 4.2), then the few the workspace file may set
-  // over them: trace, which /factory trace writes (#552), and answerTools (#560). What either
+  // over them: trace, which /factory trace writes (#552), and answerChannel (#561). What either
   // gets wrong is logged.
   const over = Object.fromEntries(WORKSPACE_SETTINGS.filter(key => key in file).map(key => [key, file[key]]))
   const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
@@ -269,6 +271,8 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,
+    // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
+    pluginRoot: $.plugin.root,
     config,
     configProblems: loaded.problems,
   }
@@ -1281,16 +1285,26 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
   if (r.result === 'applied') ping(`agent ${e.agentId}`)
 }
 
-// answerLine: the path an agent's answer in text took, for its decision-log line: read ('text',
-// with how its entry ended), or asked again ('repair', with why); afterRepair marks an answer
-// that came after the repair message, and repairRefused is why one was not delivered, whole
-// (#559). The tool's path is agentTool's line.
+// answerLine: the path an agent's answer at its turn's end took, for its decision-log line: read
+// from the file it recorded with the answer script ('script', #561) or from its text ('text'),
+// with how its entry ended, or asked again ('repair', with why); scriptRefused is what kept a
+// recorded file out of a text answer, afterRepair marks an answer that came after the repair
+// message, and repairRefused is why one was not delivered, whole (#559). The tool's path is
+// agentTool's line.
 function answerLine(r: Answered): Record<string, unknown> | null {
   if (r.key === undefined) return null
   if (r.result === 'repair') return { key: r.key, answer: 'repair', why: r.why }
   if (r.result !== 'applied') return null
   const e = live.ledger.find(x => x.key === r.key)
-  return { key: r.key, answer: 'text', status: e?.status, summary: e?.summary, afterRepair: r.repaired === true ? true : undefined, repairRefused: r.undelivered }
+  return {
+    key: r.key,
+    answer: r.via ?? 'text',
+    status: e?.status,
+    summary: e?.summary,
+    scriptRefused: r.scriptProblem,
+    afterRepair: r.repaired === true ? true : undefined,
+    repairRefused: r.undelivered,
+  }
 }
 
 // repairTo: the one repair message to an agent of the loop, which resumes it with its transcript

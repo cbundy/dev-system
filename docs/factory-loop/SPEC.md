@@ -262,9 +262,10 @@ as they do today.
   `binDir` (put ahead of `PATH` for every command, so the loop runs a checkout's own CLIs before
   a base image release carries them), `trace` (`true` or `false`): trace mode for this
   workspace's loop (12.1), over the repo's `trace`; `/factory trace on|off` writes it, as
-  `/factory mode` writes `mode`; and `answerTools` (`true` or `false`, 4.2), over the repo's. A
-  bad value of either is left out and named in the decision log, as the repo's are. It is plain
-  JSON, easy to read and set from a shell, which the shadow run uses (DECISIONS D-33). A testbed
+  `/factory mode` writes `mode`; and `answerChannel` (`script`, `tool` or `text`, 4.2), over the
+  repo's. A bad value of either is left out and named in the decision log, as the repo's are; so
+  is `answerTools`, the switch `answerChannel` replaced, named as replaced and not read. It is
+  plain JSON, easy to read and set from a shell, which the shadow run uses (DECISIONS D-33). A testbed
   points `toolsDir` at a checkout's `features/src/callum-tools` and `binDir` at its
   `images/base` (DECISIONS D-42).
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 4.2.
@@ -287,7 +288,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (11.2) |
 | `trace` | `false` | trace mode (12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
-| `answerTools` | `false` | the spawn prompts and the repair message ask agents to answer through their tools first, with the text contract as the fallback (6.3, 7.3a). Off, they ask for the text contract alone; the tools stay registered and served either way. Off by default because on Claude Code 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook (13, DECISIONS D-73). The workspace file's `answerTools` overrides it |
+| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (6.3, 7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. The text contract stays the fallback of the other two, and the tools stay registered and served whatever it says. `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13, DECISIONS D-73, D-74). It goes back to `tool` once the timer-spawn probe passes (13). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
 | `usageStaleMs` | `15m` | an older reading counts as unavailable |
@@ -645,8 +646,8 @@ Each spawn's prompt comes from a template in `hooks/prompts.ts`. Templates carry
 numbers, URLs, branch names, run ids, heads, step names, instructions from the adjudicator or
 the model, owner notes, pointers (CLAUDE.md, the agent type's own memory file under
 `.claude/agent-memory/`, the `implement-issue` skill), a per-issue scratch subdirectory (I-95),
-the answer tool to call (with `answerTools` on, 4.2) and the closing `RESULT` line the loop
-parses. The designer's also lists other issues' branches in flight (names only), and a prompt
+how to answer on the channel `answerChannel` names (the answer script with its answer file, or
+the answer tool, 4.2) and the closing `RESULT` line the loop parses. The designer's also lists other issues' branches in flight (names only), and a prompt
 for an issue with a `model:` label says to pass that model to the agent's own sub-agents.
 
 - **No brief content.** A brief travels as its comment URL only; anything else in its place is
@@ -656,13 +657,26 @@ for an issue with a `model:` label says to pass that model to the agent's own su
   `GH-N`, `owner/repo#N`, a URL), or at the end of the value, becomes its `-ing` form ("Fixes
   #12" reads "Fixing #12"), so an agent that copies it into a PR body closes nothing (I-33).
   Every id (branch, run, head, step, model, repo) must have its shape, or it shows as not known.
-- **Answer tools first, when `answerTools` is on** (4.2, #560). Off, the default, each prompt
-  asks for its machine lines alone and names no tool. On, each prompt first asks the agent to
-  answer through its tool (7.3a): the adjudicator `mcp__factory-loop__verdict`, the designer
+- **The answer channel** (4.2 `answerChannel`). With `script`, the default and a temporary
+  workaround (7.3a, 13, #561), each prompt asks the agent to record its answer once with the
+  answer script, at the moment the tool would be called: the adjudicator once it has judged every
+  finding (the merge review once it has checked all three), the designer once the brief is
+  posted, the implementer and fixer after the `implement-issue` handoff. It names the script by
+  its absolute path under the plugin's root (`$.plugin.root`) and an answer file unique to the
+  ledger entry and attempt, and shows the call as a here-document with an example of the JSON
+  (`<script> --to <file> <<'JSON'`), so no quote in an answer trips the shell. It says what
+  each field means, that the script records the answer and changes nothing else (the
+  adjudicator is otherwise read-only), to correct the JSON and run it again when it prints
+  problems, and to end the turn once it says the answer is recorded. The words stay neutral: the
+  prompt never says why the script stands in. A path a prompt may not carry (anything but
+  letters, digits and `._/-`, or a `..`), or a job file that cannot be written, gives that spawn
+  the text channel instead. With `tool`, each prompt first asks the agent to answer through its
+  tool (7.3a): the adjudicator `mcp__factory-loop__verdict`, the designer
   `mcp__factory-loop__design` (once the brief is posted), the implementer and fixer
-  `mcp__factory-loop__handoff` (after the `implement-issue` handoff). The prompt says to load the
-  tool with ToolSearch if it is listed by name only, to correct the call and call again on an
-  error, and to end the turn once it is recorded. The machine line stays the fallback, last.
+  `mcp__factory-loop__handoff` (after the `implement-issue` handoff); it says to load the tool
+  with ToolSearch if it is listed by name only, to correct the call and call again on an error,
+  and to end the turn once it is recorded. On either, the machine line stays the fallback, last.
+  With `text` (#560), each prompt asks for its machine lines alone, naming no tool and no script.
   The designer's, implementer's and fixer's
   prompts also say to run any sub-agent in the foreground and wait for it there: "your turn ends
   only with your final answer, given as asked below."
@@ -677,9 +691,12 @@ for an issue with a `model:` label says to pass that model to the agent's own su
   backticks reads the same; the adjudicator's reply stays strict, but for notes after a complete
   contract (7.3).
 - **Records.** Before each spawn the loop writes `<loop dir>/spawns/<key>.json` (the branch the
-  spawn named, its purpose, model and the exact prompt); each answer is saved whole at
-  `<loop dir>/answers/<key>.txt`, which `judge(report)` and `judge(handoff)` point the model at.
-  An answer through a tool is saved at `answers/<key>.txt` as JSON `{ tool, input }`. The reply
+  spawn named, its purpose, model, the channel its prompt asked for with the answer file it
+  named, and the exact prompt) and, on the script channel, the job file beside the answer file
+  (7.3a); each answer is saved whole at `<loop dir>/answers/<key>.txt`, which `judge(report)` and
+  `judge(handoff)` point the model at. An answer through a tool is saved at `answers/<key>.txt` as
+  JSON `{ tool, input }`; an answer recorded with the script follows the agent's final message
+  there, under the line `--- the answer recorded with the answer script ---`. The reply
   to a repair message goes after the answer it repairs, under the line
   `--- the reply to the factory loop's repair message ---`, never over it; a new attempt starts
   the file over.
@@ -802,7 +819,7 @@ still listed so. A list that cannot be read within 10 s proves nothing, and the 
 as final. An agent that has stopped is read at once: its missing line first gets the repair
 message (7.3a), and a designer's still missing after it goes to `judge(report)` (rule `D3`).
 
-### 7.3a Answer tools and the repair message (#548)
+### 7.3a Answer tools, the answer script and the repair message (#548, #561)
 
 1. **Tools.** The mod registers `mcp__factory-loop__verdict` (`findings`
    `[{ id, verdict CORRECT|WRONG|NIT|ENV|DUP, reason }]`, `action { type, reason?, findings?,
@@ -810,9 +827,46 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    and `flags`), `mcp__factory-loop__design` (`{ brief: URL|null, created: int[],
    pendingDecision }`) and `mcp__factory-loop__handoff` (`{ run, head, commit, gated, branch,
    pr }`). Each tool's input schema is its agent's text contract. All wait behind ToolSearch.
-   They are registered and served whatever `answerTools` says (4.2); the setting decides only
-   whether the prompts and the repair message ask for them (6.3). Off, the default, an agent that
-   calls its tool anyway is answered as below.
+   They are the intended answer channel. They are registered and served whatever
+   `answerChannel` says (4.2); the setting decides only whether the prompts and the repair
+   message ask for them (6.3). On another channel, an agent that calls its tool anyway is
+   answered as below.
+
+   **The answer script, a temporary workaround** (#561, DECISIONS D-74). On Claude Code 2.1.296
+   and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook (13),
+   so no tool call of the loop's agents can work, while their Bash does. Until the probe in 13
+   passes, `answerChannel` is `script` and agents answer through `bin/factory-answer` instead:
+   - **One contract.** The script and the loop check an answer with one plain-JS module,
+     `hooks/contract.mjs`, which the TypeScript hooks import and plain `node` runs (it uses
+     nothing of Node or the engine). The tool hook, the script and the loop's re-check all call
+     its `checkAnswer(job, input)`, so a script answer is checked exactly as the same input
+     through the tool (item 3). A table of cases (`tests/answer-cases.mjs`) holds both ends to the
+     same problems: `tests/answer-contract.test.ts` reads each through the loop, and the root test
+     `tests/factory-loop-answer.test.js` runs the script on each for real.
+   - **The paths.** Before the spawn the loop writes a job file
+     (`<loop dir>/answers/<key>.a<attempt>.<started ms>.job.json`: the contract, the review's
+     purpose, the repo and issue a brief must be on, the branch a fixer was sent to), and the
+     prompt names the answer file beside it (the same name ending `.answer.json`), unique to the
+     ledger entry and attempt, and the script by its absolute path under `$.plugin.root`.
+   - **The script.** `factory-answer --to <answer file> '<json>'`, or the JSON on standard input.
+     It writes that one file and only where the loop issued it: an absolute plain path whose name
+     ends `.answer.json`, in `<CLAUDE_CONFIG_DIR or ~/.claude>/factory-loop/<owner>__<repo>/answers/`,
+     every directory on the way a real one (no link out), with the job file beside it; any other
+     path is refused before anything is written. It checks the JSON against the job's contract
+     and prints every problem, exit 1; a usage error exits 2. On success it writes
+     `{ v: 1, contract, answer }` atomically (a new temp file in the same directory, flushed, then
+     renamed over the answer file), prints that it is recorded, and exits 0. It runs from any
+     directory under plain node, as a CommonJS script or an ES module alike.
+   - **Reading.** At the agent's `turn.complete` the loop reads the answer file at the path it
+     issued for that entry and attempt, and nowhere else: who answered is the path. It checks the
+     answer again against what it knows itself (the entry, its spawn record and the runtime),
+     never the job file. A valid file finishes the entry with the outcome and events the same
+     answer in text or through the tool gives, its summary marked `(script)`, whatever the turn's
+     closing words say and however the turn ended. With no file there, or one that fails its
+     checks, the text is read as before (item 5); a refused file is named in the decision log and
+     in the repair message.
+   - **Switching back.** Once the probe passes, `answerChannel` goes to `tool`; the script and
+     its job files then rest, and nothing else changes.
 2. **Matching.** A call is tied to the running `spawn` or `delegate` entry whose `agentId` is the
    call's `tool.call` `agentId`. Refused: the main conversation, an agent the ledger does not
    hold (an agent's own sub-agents among them), an entry that no longer runs ("already recorded"
@@ -836,13 +890,16 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    The agent's later closing words are not read. An agent still listed at work 60 s after its
    accepted call stays under rules A1 and A2 (5.7); one listed `idle` or `completed` has ended
    its turn (7.5) and does not.
-5. **Text.** An agent that ends without calling the tool is parsed as before (6.3, 7.2, 7.3).
+5. **Text.** An agent that ends without calling the tool, and with no valid answer file of its
+   attempt, is parsed as before (6.3, 7.2, 7.3).
 6. **Repair.** A final answer with no machine line (an adjudicator reply that does not parse, a
    handoff with no `RESULT` or `NOT GATED`, a designer report with no `RESULT` line), from an
    agent that is not still at work, first gets one message to the same agent via
    `$.session.send`, which resumes a finished agent from its transcript. The message names what
-   was wrong (the parser's reason, quoting the line) and asks for the machine lines again; with
-   `answerTools` on, for the tool first, with the machine lines as the fallback. The entry stays
+   was wrong (the parser's reason, quoting the line, after what kept a recorded answer file out)
+   and asks again on the channel its spawn was asked on (its spawn record, else the setting): the
+   answer script with the same answer file, or the tool, first, with the machine lines as the
+   fallback; on the text channel, the machine lines alone. The entry stays
    running with its attempt unspent and is marked `reminded` before the send. While the send is
    on its way the agent counts as at work, its answer being handled. Once delivered, the loop
    waits on its reply: the agent counts as at work while still listed with its turn ended
@@ -1234,7 +1291,8 @@ set its directives.
   all (12.1);
 - recorded states (`states/YYYY-MM-DD/<pass>.json`): observe mode only, one per changed digest,
   at most 288 a day and each under 3.5 MB, for the replay harness;
-- `spawns/` (each spawn's record and prompt), `answers/` (each agent's answer) and `respond/`
+- `spawns/` (each spawn's record and prompt), `answers/` (each agent's answer, and on the
+  script channel each spawn's job file and the answer file its agent records, 7.3a) and `respond/`
   (each detached respond's log);
 - the observe-mode event sink (`sink-events/`);
 - the act lock (`act.lock`, with its `act.lock.flock`).
@@ -1276,8 +1334,10 @@ notices from outside plan sent this pass), `config` (what the repo-local setting
 `problems` (a loop event not logged, a store write refused, the act lease lost mid-pass).
 `commands` lists every command the pass ran, observe's and the executors'. Other lines share the
 file: an owner op (`control`, with its answer), a turn's or an agent's answer problems, an
-agent's answer (`{ agent, key, answer: "text", status, summary, afterRepair? }`,
-`{ agent, key, answer: "repair", why }`, and per tool call
+agent's answer at its turn's end (`{ agent, key, answer: "script" | "text", status, summary,
+scriptRefused?, afterRepair? }`: `script` when read from the file it recorded with the answer
+script, `scriptRefused` what kept a recorded file out of a text answer;
+`{ agent, key, answer: "repair", why }`), and per tool call
 `{ agent, tool, key, answer: "tool", afterRepair? }` or
 `{ agent, tool, key?, answer: "tool refused", why }`, 7.3a), and a pass that threw (`error`,
 with `failures` in a row).
@@ -1401,14 +1461,28 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
   `$` call does not. The `.catch` refusal never reached the agents in run 3. The loop's 2 s bound
   (7.3a) keeps well inside it; only the testbed proves the live answer times.
 - **Agents spawned from the loop's timer cannot reach its tools** (#560): on Claude Code
-  2.1.299 a probe mod's `$.agent.spawn` made from a `$.clock.after` callback started an agent
-  whose call to the mod's own tool failed in milliseconds with `<plugin> registered the tool ...
-  but no tool.call hook answered this call`, and the hook never ran. The same spawn made inside a
-  `command.run` hook worked. The loop's passes run from its timer, so every agent it spawns is
-  in the failing case: this, not only the deadline above, was the cause of testbed run 3's 80
-  and more failed tool calls. So `answerTools` is off (4.2, DECISIONS D-73) and agents are asked
-  for text; the tools stay served, and the setting goes on once the engine lets a timer-spawned
-  agent reach them, which a probe on each upgrade checks.
+  2.1.296 and 2.1.299 a probe mod's `$.agent.spawn` made from a `$.clock.after` callback started
+  an agent whose call to the mod's own tool failed in milliseconds with `<plugin> registered the
+  tool ... but no tool.call hook answered this call`, and the hook never ran. The same spawn made
+  inside a `command.run` hook worked. The loop's passes run from its timer, so every agent it
+  spawns is in the failing case: this, not only the deadline above, was the cause of testbed run
+  3's 80 and more failed tool calls. Built-in tools are not affected, and agents use Bash freely.
+  So the loop's agents answer through the checked answer script (`answerChannel` `script`, 4.2,
+  7.3a, DECISIONS D-74), a temporary workaround standing in for the tools, the intended design;
+  the tools stay served. The probe lives in `docs/factory-loop/probes/timer-spawn-probe`: load
+  it in a throwaway session (`claude --plugin-dir docs/factory-loop/probes/timer-spawn-probe`)
+  and run `/timer-spawn-probe`, which spawns one agent inside its command hook and one from a
+  timer, each calling the probe's tool, and logs each call and reply to
+  `${CLAUDE_CONFIG_DIR:-~/.claude}/timer-spawn-probe/log.jsonl`. Run it on each Claude Code
+  upgrade. When the timer agent's call reaches the hook (a `called` line for it, and its reply
+  `pong`), set `answerChannel` to `tool` (the default in `hooks/config.ts`, or a repo's or the
+  workspace's file to try it first) and retire the script.
+- **The answer script** (#561) is proven only by tests and by hand so far: only the testbed shows
+  that agents run it as their prompts ask, that the `CLAUDE_CONFIG_DIR` their Bash sees is the one
+  the loop's engine reads (the script refuses any other config directory's answers, and the
+  agent then answers in text), that the script's absolute path under `$.plugin.root` runs where
+  the plugin is installed, and that a read-only adjudicator records its answer when the prompt
+  says the script changes nothing else.
 - **The repair message** (#559): probe mods on 2.1.299 proved that `$.session.send` to an agent
   after its `turn.complete` is delivered and resumes it: sent at once, after 60 ms of hook work,
   20 s later, and from a hook held 12 s past its budget. The list shows the agent `idle` once its

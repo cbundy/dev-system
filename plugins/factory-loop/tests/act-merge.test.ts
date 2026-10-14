@@ -41,7 +41,7 @@ import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } 
 import type { Runtime } from '../hooks/observe'
 import { plan } from '../hooks/plan'
 import type { Action, ActionKind, LedgerEntry, Pool, Slot } from '../hooks/types'
-import { CLEAN, DEVICE, NOW, config, entry, mine, review, run, state, withLedger } from './fixtures'
+import { CLEAN, DEVICE, NOW, PLUGIN_ROOT, config, entry, mine, review, run, state, withLedger } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
@@ -117,6 +117,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: '/usr/local/share/callum-tools',
+    pluginRoot: PLUGIN_ROOT,
     config: config(),
     configProblems: [],
   }

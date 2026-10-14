@@ -319,11 +319,15 @@ export type Config = {
   trace: boolean
   // the trace files' total size: the oldest go first, and today's is cut short past it
   traceMaxBytes: number
-  // the prompts and the repair message ask agents to answer through their tools first (#548);
-  // off, they ask for the text contract alone, and the tools stay served (#560). The workspace
-  // file's own `answerTools` overrides the repo's
-  answerTools: boolean
+  // how the prompts and the repair message ask agents to answer (SPEC 4.2): through the checked
+  // answer script (script, the default: a workaround until a timer-spawned agent reaches the
+  // loop's tool hook, #560, #561), through their answer tools (tool, the intended design, #548),
+  // or in text alone; text stays every channel's fallback. The workspace file's own
+  // `answerChannel` overrides the repo's
+  answerChannel: AnswerChannel
 }
+
+export type AnswerChannel = 'script' | 'tool' | 'text'
 
 export type WakeKind = 'judge' | 'task' | 'tell'
 

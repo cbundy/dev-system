@@ -1,7 +1,8 @@
 "use strict";
 
 // The factory loop's second safety net (docs/factory-loop/SPEC.md 6.1, 11): no string literal in
-// plugins/factory-loop/hooks/*.ts may carry what no executor may ever do: pass --yes, run
+// plugins/factory-loop/hooks/*.ts, its shared answer contract (hooks/*.mjs) or its answer script
+// (bin/factory-answer, #561) may carry what no executor may ever do: pass --yes, run
 // `no-mistakes rerun` or `abort`, merge through anything but callum-flow-merge, edit a PR body,
 // add a label, run a `coder` command or kill a process by name. The first net,
 // plugins/factory-loop/tests/safety.test.ts, runs every action kind through the dispatcher and
@@ -171,7 +172,9 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
   return found;
 }
 
-const files = fs.readdirSync(HOOKS).filter((f) => f.endsWith(".ts")).sort();
+// the answer script, by its path from the hooks directory, which problems() reads from
+const SCRIPT = path.join("..", "bin", "factory-answer");
+const files = [...fs.readdirSync(HOOKS).filter((f) => f.endsWith(".ts") || f.endsWith(".mjs")).sort(), SCRIPT];
 
 test("the literal scanner reads the hooks' commands and skips comments and regular expressions", () => {
   const cli = literals(fs.readFileSync(path.join(HOOKS, "act-cli.ts"), "utf8")).map((l) => l.text);
@@ -246,8 +249,33 @@ test("the one rerun is env-retry's argv: declared once in act-merge.ts, used onl
 
 test("no hook literal passes --yes, reruns, aborts, merges or edits a PR, adds a label, runs coder or kills by name", () => {
   assert.ok(files.length >= 15, `hooks found: ${files.join(", ")}`);
+  assert.ok(files.includes("contract.mjs") && files.includes(SCRIPT), "the answer contract and the answer script are scanned (#561)");
   const found = files.flatMap((f) => problems(f));
   assert.deepEqual(found, []);
+});
+
+// The answer script (#561) writes the one answer file it is given and nothing else: one temp file
+// it creates itself (exclusively), renamed over the answer file, and removed again if anything
+// fails. It runs no command. tests/factory-loop-answer.test.js runs it against every path it
+// must refuse; this reads its source, so a new write call cannot slip in unseen.
+test("the answer script's only writes are its own temp file and the rename over the answer file, and it runs no command", () => {
+  const src = fs
+    .readFileSync(path.join(HOOKS, SCRIPT), "utf8")
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+  const WRITES = /^(writeFile|appendFile|write|open|rename|unlink|rm|rmdir|mkdir|mkdtemp|copyFile|cp|symlink|link|chmod|chown|truncate|utimes|lchown|lutimes)$/;
+  // each write call by its name and first argument: the temp file, then the body into it
+  const writes = [...src.matchAll(/\b(?:fs|handle)\.(\w+)\(([^,)]*)/g)].filter((m) => WRITES.test(m[1])).map((m) => `${m[1]}(${m[2]}`);
+  assert.deepEqual(writes, ["open(tmp", "writeFile(body", "rename(tmp", "unlink(tmp"]);
+  assert.ok(src.includes("await fs.open(tmp, 'wx', 0o644)"), "the temp file is created exclusively, never opened over another");
+  assert.ok(src.includes("await fs.rename(tmp, path.join(dir, name))"), "the rename lands on the answer file placeOf checked");
+  assert.doesNotMatch(src, /child_process|\bspawn\(|\bexec(File)?(Sync)?\(|\bfork\(/);
+  // the modules it loads: node's own, and the contract beside the hooks
+  const imports = [...src.matchAll(/\bimport\((['"][^'"]+['"])\)/g)].map((m) => m[1]);
+  assert.deepEqual(imports, ["'node:fs/promises'", "'node:path'", "'node:os'", "'node:crypto'", "'node:url'"]);
+  assert.equal([...src.matchAll(/\bimport\(/g)].length, imports.length + 1);
+  assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
 });
 
 // The act step holds GitHub writes for the rest of a pass that met a rate limit, as plan holds

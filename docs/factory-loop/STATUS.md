@@ -196,6 +196,12 @@ Only a real session can show these. Run 3 on the testbed must prove each of them
   entry is already done, and the list then shows it killed so its branch frees up; that a pass
   started by an accepted call (trigger `agent <id>`) behaves as in the test host; and what
   `no-mistakes axi respond` does with a finding id the gate does not have.
+- **The answer script** (#561, a temporary workaround for the tools above): that adjudicators
+  (gate, weakening and merge), designers, implementers and fixers run `bin/factory-answer` as
+  their prompts ask, the read-only adjudicator included, and correct their JSON when it names a
+  problem; that the `CLAUDE_CONFIG_DIR` their Bash sees is the one the loop's engine reads, and
+  the script's path under `$.plugin.root` runs where the plugin is loaded; and that the decision
+  log then shows `answer: "script"` for each, with no "reply does not parse" failures.
 - **Trace mode with a real clock** (#552): action and wake times line up only off the test
   host, whose clock is frozen; the 100 MiB cap and the cut line against a real loop dir on
   `/persist`, including the `tail -c` read of a file near the cap across a real module reload;

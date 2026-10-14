@@ -9,8 +9,9 @@
 # The check is `shellcheck -x -s <shell>` (config in the root .shellcheckrc) when shellcheck
 # is on PATH - it is in the base image and on CI's runners. Without it, the check falls
 # back to a syntax-only `sh -n` / `bash -n` and says so; CI still runs shellcheck.
-# JavaScript gets `node --check`, including extensionless files with a node shebang under
-# the directories above (images/base/callum-flow-evaluate).
+# JavaScript gets `node --check`, ES modules (.mjs) included, and so do extensionless files with
+# a node shebang under the directories above (images/base/callum-flow-evaluate,
+# plugins/factory-loop/bin/factory-answer).
 #
 # It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
 # and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
@@ -20,7 +21,7 @@ set -u
 
 cd "$(dirname "$0")/.." || exit 1
 
-SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks coder scripts"
+SHELL_DIRS="images/base features/src/callum-tools features/test plugins/callum-flow/hooks plugins/factory-loop/bin coder scripts"
 JS_DIRS="images/base bin plugins scripts"
 
 failures=0
@@ -95,7 +96,7 @@ while IFS= read -r file; do
 done < "$list"
 
 # shellcheck disable=SC2086 # word-splitting the directory list is intended
-find $JS_DIRS -type f -name '*.js' | sort > "$list"
+find $JS_DIRS -type f \( -name '*.js' -o -name '*.mjs' \) | sort > "$list"
 while IFS= read -r file; do
   checked=$((checked + 1))
   if ! out=$(node --check "$file" 2>&1); then

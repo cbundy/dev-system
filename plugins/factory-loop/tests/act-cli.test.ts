@@ -9,7 +9,7 @@ import { CLI_TIMEOUT_MS, NO_EXIT, byCheck, cliExecutors, commandFailure, eventFa
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, AgentView, LedgerEntry } from '../hooks/types'
-import { DEVICE, NOW, config, entry, state } from './fixtures'
+import { DEVICE, NOW, PLUGIN_ROOT, config, entry, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const IN_DEV = 'in development'
@@ -32,6 +32,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: '/usr/local/share/callum-tools',
+    pluginRoot: PLUGIN_ROOT,
     config: config(),
     configProblems: [],
   }

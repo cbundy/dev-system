@@ -9,8 +9,10 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { SCRIPT_RECORD } from '../hooks/act-agents'
+import { answerText } from '../hooks/contract.mjs'
 import { loopEventArgs } from '../hooks/derive'
-import { answerPath, pruneArgvs } from '../hooks/exec'
+import { answerPath, pruneArgvs, scriptAnswerPath } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
 import { DEVICE, MIN, NOW, OTHER, entry } from './fixtures'
 import { CFG_DIR, CHECKOUT_HEAD, LOCK, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, agentDone, factoryDoc, host, iso } from './host'
@@ -916,36 +918,90 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.sends).toHaveLength(1)
   })
 
-  // config answerTools (#560): a spawn from the loop's timer cannot reach its tool hook on Claude
-  // Code 2.1.299, so the repair message asks for text unless the setting is on
+  // config answerChannel (#561): the answer script by default, a workaround for the registered
+  // tools, which a spawn from the loop's timer cannot reach on Claude Code 2.1.296 and 2.1.299
+  // (#560); the tools, or text alone, when the setting says so
   const CONTRACT_LINE = 'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
+  const lower = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`
+  const GATE_FILE = scriptAnswerPath(LOOP_DIR, { key: 'adjudicate:R470:review:abc1234', attempts: 1, startedAt: NOW - 10 * MIN })
+  const GATE_JOB = { contract: 'verdict' as const, purpose: 'gate' as const, repo: REPO, issue: 470, branch: null }
 
-  test('answerTools off by default: the repair message asks for the text contract alone, and a bad value in either file is named (#560)', async ($, on) => {
+  test("the script channel by default: the repair message asks again for the answer script, this attempt's answer file named, text as the fallback (#561)", async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerTools: 1 })
-    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerTools: 'yes' }))
-    await $.session.start(START)
-    await clock.advance(6_000)
-    expect(h.last().config).toEqual(['answerTools: "yes" is not true or false', 'answerTools: 1 is not true or false'])
-    await agentDone($, h, 'agent-1', 'All good.')
-    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
-    const text = h.sends[0]?.text ?? ''
-    expect(text).toContain('The factory loop could not read your answer: no ACTION line.')
-    expect(text).not.toContain('mcp__factory-loop__verdict')
-    expect(text.split('\n').pop()).toBe(CONTRACT_LINE)
-  })
-
-  test("answerTools on in the workspace file, over the repo's: the repair message asks for the tool again, text as the fallback (#560)", async ($, on) => {
-    const clock = mock.clock(on, { now: NOW })
-    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerTools: true })
-    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerTools: false }))
+    const { h } = gateAt(on, undefined, undefined)
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.last().config).toBeUndefined()
     await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
+    const text = h.sends[0]?.text ?? ''
+    expect(text).toContain('The factory loop could not read your answer: no ACTION line.')
+    expect(text).toMatch(new RegExp(`Record the answer you reached now with the answer script, its JSON on standard input as your prompt showed: \`/\\S+/bin/factory-answer --to ${GATE_FILE.replace(/[.]/g, '\\.')}\``))
+    expect(text).not.toContain('mcp__factory-loop__verdict')
+    expect(text.split('\n').pop()).toBe(`If the script cannot record your answer, ${lower(CONTRACT_LINE)}`)
+  })
+
+  test("answerChannel text in the workspace file, over the repo's tool: the repair message asks for the text contract alone; a bad value and the old answerTools are named (#560, #561)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'text', answerTools: true })
+    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'tool' }))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last().config).toEqual(['answerTools: replaced by answerChannel (script, tool or text), and ignored'])
+    await agentDone($, h, 'agent-1', 'All good.')
+    const text = h.sends[0]?.text ?? ''
+    expect(text).not.toMatch(/mcp__factory-loop__verdict|answer script/)
+    expect(text.split('\n').pop()).toBe(CONTRACT_LINE)
+  })
+
+  test("answerChannel tool in the workspace file: the repair message asks for the tool again, text as the fallback; a bad value in the repo's file is named (#548)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'tool' })
+    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'yes' }))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last().config).toEqual(['answerChannel: "yes" is not script, tool or text'])
+    await agentDone($, h, 'agent-1', 'All good.')
     const text = h.sends[0]?.text ?? ''
     expect(text).toContain('Call mcp__factory-loop__verdict now with the answer you reached')
-    expect(text.split('\n').pop()).toBe(`If you cannot call it, ${CONTRACT_LINE.charAt(0).toLowerCase()}${CONTRACT_LINE.slice(1)}`)
+    expect(text.split('\n').pop()).toBe(`If you cannot call it, ${lower(CONTRACT_LINE)}`)
+  })
+
+  test('an answer recorded with the answer script is read at the agent\'s turn.complete, from the file issued for its attempt alone: recorded, its verdict logged, the decision log says script, a pass follows (#561)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = gateAt(on, undefined, undefined)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const passes = h.passes().length
+    // the file the script writes (contract.mjs answerText, the function it calls), beside a file
+    // at another attempt's path that must never be read
+    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
+    const written = answerText(GATE_JOB, input)
+    if (!written.ok) throw new Error(written.problems.join('; '))
+    h.files.set(scriptAnswerPath(LOOP_DIR, { key, attempts: 2, startedAt: NOW - 10 * MIN }), JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'escalate', why: 'stale' } } }))
+    h.files.set(GATE_FILE, written.outcome)
+    await agentDone($, h, 'agent-1', 'Recorded my verdict with the script.')
+    expect(h.sends).toEqual([])
+    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adjudicator', action: { type: 'approve', reason: 'a false positive' } }, summary: 'adjudicator #470 (gate, script): ACTION approve, 1 verdict line' })
+    expect(h.events()).toContainEqual(['callum-flow-event', 'verdict', '--issue', '470', '--run', 'R470', '--note', 'WRONG: review-1: the timeout is handled in parse.ts'])
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'script', status: 'done', summary: 'adjudicator #470 (gate, script): ACTION approve, 1 verdict line' }))
+    expect(h.files.get(answerPath(LOOP_DIR, key))).toContain(`Recorded my verdict with the script.\n\n${SCRIPT_RECORD}\n\n`)
+    await clock.advance(5_000)
+    expect(h.passes().length).toBe(passes + 1)
+    expect(h.last().trigger).toBe('agent agent-1')
+  })
+
+  test('a recorded answer that fails its checks is refused: the text is read, and the decision log names what kept the file out (#561)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = gateAt(on, undefined, undefined)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    h.files.set(GATE_FILE, JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'merge' } } }))
+    await agentDone($, h, 'agent-1', 'WRONG: review-1 is out of scope.\nACTION: approve')
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'adjudicator', action: { type: 'approve' } } })
+    expect(h.lines()).toContainEqual(
+      expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', scriptRefused: expect.stringContaining('a gate review takes no other') }),
+    )
   })
 
   test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", async ($, on) => {

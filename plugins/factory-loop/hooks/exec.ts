@@ -111,6 +111,19 @@ export function answerPath(loopDir: string, key: string): string {
   return `${loopDir}/answers/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.txt`
 }
 
+// The answer script under the plugin's root (#561): agents record their answer with it while the
+// registered answer tools cannot be reached (config answerChannel `script`, a workaround).
+export const ANSWER_SCRIPT = 'bin/factory-answer'
+
+// Where an agent records its answer with the answer script: a path unique to the ledger entry and
+// its attempt (the attempt's number and start), so the loop reads only what this attempt's agent
+// wrote, never a stale or another agent's file. The job file beside it (contract.mjs jobPathOf)
+// is the loop's; the name has contract.mjs's ANSWER_NAME shape.
+export function scriptAnswerPath(loopDir: string, entry: Pick<LedgerEntry, 'key' | 'attempts' | 'startedAt'>): string {
+  const key = entry.key.replace(/[^A-Za-z0-9._-]+/g, '_')
+  return `${loopDir}/answers/${key}.a${entry.attempts}.${Math.trunc(entry.startedAt)}.answer.json`
+}
+
 // The detached respond's log (act-merge.ts writes it; task(respond-stuck) names it): one per
 // ledger key and attempt, so a retry or a later gate of the same run never overwrites it.
 export function respondLogPath(loopDir: string, key: string, attempt: number): string {

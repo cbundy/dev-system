@@ -1,21 +1,23 @@
 // The agent executors (SPEC 6.1): `spawn` (designer, adjudicator, fixer) and `delegate` (route,
 // the `delegated` event, then the implementer), and onAgentAnswer and onToolAnswer, which read
-// an agent's answer, from its turn.complete or its answer tool (#548), into the outcome plan
-// reads next pass. They decide nothing (plan did): the prompt comes from prompts.ts and the
-// reading of the reply from replies.ts and agent-tools.ts, all pure, and readAnswer and
-// readToolAnswer below are pure too, so tests and the replay harness drive them without the
-// engine. Every answer in text is saved whole first (exec.ts answerPath), so a judge(report) or
-// judge(handoff) wake points the model at the file (SPEC 7.2); a tool call's input is saved once
-// the call has its answer (#558).
-import { TOOL_OF, checkDesign, checkHandoff, checkVerdict } from './agent-tools'
-import type { ToolCheck } from './agent-tools'
-import { answerPath, detailOf, rateLimited } from './exec'
+// an agent's answer, from its turn.complete (the file it recorded with the answer script, #561,
+// else its text) or its answer tool (#548), into the outcome plan reads next pass. They decide
+// nothing (plan did): the prompt comes from prompts.ts and the reading of the answer from
+// replies.ts and contract.mjs, all pure, and readAnswer, readScriptAnswer and readToolAnswer
+// below are pure too, so tests and the replay harness drive them without the engine. Every
+// answer in text is saved whole first (exec.ts answerPath), so a judge(report) or judge(handoff)
+// wake points the model at the file (SPEC 7.2); a tool call's input is saved once the call has
+// its answer (#558).
+import { TOOL_OF } from './agent-tools'
+import { CONTRACT_OF, checkAnswer, jobPathOf, jobText, parseAnswer } from './contract.mjs'
+import type { AnswerOutcome, Check, Job } from './contract.mjs'
+import { ANSWER_SCRIPT, answerPath, detailOf, rateLimited, scriptAnswerPath } from './exec'
 import type { AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunResult, SpawnInput } from './exec'
-import { descriptionOf, nameOf, promptOf } from './prompts'
-import type { AgentAction, InFlight, PromptEnv } from './prompts'
+import type { Runtime } from './observe'
+import { descriptionOf, nameOf, promptOf, scriptShaped } from './prompts'
+import type { AgentAction, InFlight, PromptEnv, ScriptPlace } from './prompts'
 import { isBriefUrl, readAdjudicator, readDesigner, readHandoff } from './replies'
-import type { AdjudicatorOutcome, DesignResult, HandoffOutcome } from './replies'
-import type { ActionKind, AdjudicatorPurpose, AgentStatus, AgentType, LedgerEntry, State } from './types'
+import type { ActionKind, AdjudicatorPurpose, AgentStatus, AgentType, AnswerChannel, LedgerEntry, State } from './types'
 
 // callum-flow-implementer-route's timeout (SPEC 6.1: route 60 s).
 export const ROUTE_TIMEOUT_MS = 60_000
@@ -23,6 +25,7 @@ export const ROUTE_TIMEOUT_MS = 60_000
 const NO_EXIT = -1
 const SUMMARY_MAX = 200
 const PURPOSES: readonly AdjudicatorPurpose[] = ['gate', 'weakening', 'merge']
+const CHANNELS: readonly AnswerChannel[] = ['script', 'tool', 'text']
 const MODEL = /^[A-Za-z0-9._-]+$/
 
 // --- pure helpers ------------------------------------------------------------------------------
@@ -80,8 +83,10 @@ export type SpawnOptions = {
   modelOverride: string | null
   inFlight: InFlight[]
   notes?: readonly string[]
-  // config answerTools: the prompt asks for the agent's answer tool first (#560)
-  answerTools?: boolean
+  // the channel the prompt asks for (config answerChannel), and for the script channel the
+  // script and this attempt's answer file (#561)
+  channel?: AnswerChannel
+  script?: ScriptPlace | null
 }
 
 // notesOf: the owner's notes for an issue, and those for every issue, oldest first (SPEC 4.3).
@@ -105,7 +110,7 @@ export const SUBAGENT_OF: Record<AgentType, string> = {
 // description and name (D-11). No model leaves the agent's frontmatter model in charge.
 export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInput {
   const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
-  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [], answerTools: opts.answerTools === true }
+  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [], channel: opts.channel ?? 'text', script: opts.script ?? null }
   const input: SpawnInput = {
     subagentType: SUBAGENT_OF[type],
     prompt: promptOf(action, env),
@@ -120,8 +125,10 @@ export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInpu
 
 // The spawn record: written before the spawn, read back with the answer. It holds what the
 // ledger entry has no field for: the branch the spawn named (the adjudicator's verdict events
-// carry it; a fixer that reports another one supersedes the old run) and the adjudicator's
-// purpose. The prompt is kept for the owner, beside the answer.
+// carry it; a fixer that reports another one supersedes the old run), the adjudicator's purpose,
+// and the channel the prompt asked for, with the answer file it named for the script (#561), so
+// a repair message asks again the way the agent was first asked. The prompt is kept for the
+// owner, beside the answer.
 export type SpawnRecord = {
   key: string
   attempt: number
@@ -132,6 +139,8 @@ export type SpawnRecord = {
   branch: string | null
   subagentType: string
   model: string | null
+  channel: AnswerChannel
+  answerFile: string | null
   prompt: string
 }
 
@@ -139,9 +148,8 @@ export function spawnRecordPath(loopDir: string, key: string): string {
   return `${loopDir}/spawns/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}.json`
 }
 
-function recordOf(action: AgentAction, input: SpawnInput, attempt: number): SpawnRecord {
+function recordOf(action: AgentAction, input: SpawnInput, attempt: number, script: ScriptPlace | null, channel: AnswerChannel): SpawnRecord {
   const spawn = action.kind === 'spawn' ? action : null
-  const branch = spawn !== null && spawn.agent !== 'designer' && spawn.branch !== '' ? spawn.branch : null
   return {
     key: action.key,
     attempt,
@@ -149,15 +157,24 @@ function recordOf(action: AgentAction, input: SpawnInput, attempt: number): Spaw
     purpose: spawn?.agent === 'adjudicator' ? spawn.purpose : null,
     issue: action.issue,
     run: spawn !== null && spawn.agent !== 'designer' ? spawn.run : null,
-    branch,
+    branch: namedBranchOf(action),
     subagentType: input.subagentType,
     model: input.model ?? null,
+    channel,
+    answerFile: script?.file ?? null,
     prompt: input.prompt,
   }
 }
 
-// parseRecord: a saved spawn record's branch and purpose, or null when it does not read.
-export function parseRecord(text: string | null): Pick<SpawnRecord, 'branch' | 'purpose'> | null {
+// namedBranchOf: the branch a spawn names (an adjudicator's or fixer's), or null.
+function namedBranchOf(action: AgentAction): string | null {
+  const spawn = action.kind === 'spawn' ? action : null
+  return spawn !== null && spawn.agent !== 'designer' && spawn.branch !== '' ? spawn.branch : null
+}
+
+// parseRecord: a saved spawn record's branch, purpose and channel, or null when it does not read.
+// A record from before the channel was kept names none.
+export function parseRecord(text: string | null): (Pick<SpawnRecord, 'branch' | 'purpose'> & { channel: AnswerChannel | null }) | null {
   if (text === null) return null
   try {
     const v: unknown = JSON.parse(text)
@@ -166,6 +183,7 @@ export function parseRecord(text: string | null): Pick<SpawnRecord, 'branch' | '
     return {
       branch: typeof r.branch === 'string' && r.branch !== '' ? r.branch : null,
       purpose: PURPOSES.find(p => p === r.purpose) ?? null,
+      channel: CHANNELS.find(c => c === r.channel) ?? null,
     }
   } catch {
     return null
@@ -181,10 +199,13 @@ export type AnswerInfo = {
   branch: string | null
   // the spawn record's purpose, when the key does not say
   purpose: AdjudicatorPurpose | null
+  // the channel the spawn's prompt asked for (its record), null when not known
+  channel?: AnswerChannel | null
 }
 // problem: what kept an answer from being read (no machine line), for the repair message (#548)
 export type AnswerRead = { exec: Exec; events: AgentEvent[]; problem: string | null }
-type AgentOutcome = DesignResult | AdjudicatorOutcome | HandoffOutcome
+// How an answer came: recorded with the answer script, through the tool, or in text.
+export type AnswerVia = 'script' | 'tool' | 'text'
 
 // readAnswer: an agent's answer as an Exec, and the events its outcome logs (SPEC 7.3, 7.4):
 // - a turn that ended in error, aborted or refused is a failed attempt (SPEC 10.4);
@@ -222,6 +243,17 @@ export function readAnswer(entry: LedgerEntry, answer: AgentAnswer, info: Answer
   return typeof r === 'string' ? failed(`${who}: the handoff does not parse: ${r}`, r) : doneRead(entry, type, r, info, 'text')
 }
 
+// jobOf: what checking this entry's answer needs, from what the loop knows itself (the entry, its
+// spawn record and the runtime): the contract of its agent, the review's purpose, the repo and
+// issue a brief must be on, the branch a fixer was sent to. Every structured answer is checked
+// against it (contract.mjs checkAnswer), never against anything the agent wrote; null when the
+// loop cannot tell which review an adjudicator's is.
+export function jobOf(entry: LedgerEntry, type: AgentType, info: AnswerInfo): Job | null {
+  const purpose = type === 'adjudicator' ? (purposeOfKey(entry.key) ?? info.purpose) : null
+  if (type === 'adjudicator' && purpose === null) return null
+  return { contract: CONTRACT_OF[type], purpose, repo: info.repo, issue: entry.issue, branch: type === 'fixer' ? info.branch : null }
+}
+
 // readToolAnswer: an agent's answer through its tool (agent-tools.ts), read as readAnswer reads
 // its text: the same outcome and events, or why the call is refused (another agent's tool, an
 // input that breaks the contract), which the agent reads and corrects. Pure.
@@ -229,21 +261,31 @@ export function readToolAnswer(entry: LedgerEntry, tool: string, input: unknown,
   const type = agentOf(entry)
   if (type === null) return { refused: `${entry.key} ran no agent` }
   if (tool !== TOOL_OF[type]) return { refused: `${tool} is not the answer of a ${type}: call ${TOOL_OF[type]} instead` }
-  let check: ToolCheck<AgentOutcome>
-  if (type === 'designer') check = checkDesign(input, info.repo, entry.issue)
-  else if (type === 'adjudicator') {
-    const purpose = purposeOfKey(entry.key) ?? info.purpose
-    if (purpose === null) return { refused: 'the loop cannot tell which review this is: reply in your output contract instead' }
-    check = checkVerdict(input, purpose)
-  } else check = checkHandoff(input, type === 'fixer' ? info.branch : null)
+  const job = jobOf(entry, type, info)
+  if (job === null) return { refused: 'the loop cannot tell which review this is: reply in your output contract instead' }
+  const check = checkAnswer(job, input)
   return check.ok ? doneRead(entry, type, check.outcome, info, 'tool') : { refused: `${check.problems.join('; ')}. Correct the call and call ${tool} again` }
 }
 
-// doneRead: a read outcome as a done Exec and the events it logs, whichever channel gave it; a
-// tool answer says so in its summary.
-function doneRead(entry: LedgerEntry, type: AgentType, outcome: AgentOutcome, info: AnswerInfo, via: 'text' | 'tool'): AnswerRead {
+// readScriptAnswer: the file an agent recorded with the answer script (#561), read and checked
+// again against the job the loop knows (jobOf), never the job file beside it, so it means exactly
+// what the same answer through the tool or in text means: the same outcome and events, or what
+// is wrong with it, for the repair message. Pure.
+export function readScriptAnswer(entry: LedgerEntry, body: string, info: AnswerInfo): AnswerRead | { problem: string } {
+  const type = agentOf(entry)
+  if (type === null) return { problem: `${entry.key} ran no agent` }
+  const job = jobOf(entry, type, info)
+  if (job === null) return { problem: 'the factory loop cannot tell which review this is' }
+  const file = parseAnswer(body, job.contract)
+  const check: Check<AnswerOutcome> = file.ok ? checkAnswer(job, file.outcome) : file
+  return check.ok ? doneRead(entry, type, check.outcome, info, 'script') : { problem: `the answer recorded with the answer script does not pass its checks: ${check.problems.join('; ')}` }
+}
+
+// doneRead: a read outcome as a done Exec and the events it logs, whichever channel gave it; an
+// answer through the tool or the script says so in its summary.
+function doneRead(entry: LedgerEntry, type: AgentType, outcome: AnswerOutcome, info: AnswerInfo, via: AnswerVia): AnswerRead {
   const who = (inner: string[]) => {
-    const all = via === 'tool' ? [...inner, 'tool'] : inner
+    const all = via === 'text' ? inner : [...inner, via]
     return `${type} #${entry.issue ?? '?'}${all.length === 0 ? '' : ` (${all.join(', ')})`}`
   }
   const done = (summary: string, events: AgentEvent[] = []): AnswerRead => ({ exec: { status: 'done', outcome, summary: clip(summary) }, events, problem: null })
@@ -296,25 +338,75 @@ export function stillAtWork(agents: readonly ListedLoop[], id: string): boolean 
 
 // What goes between an answer and the reply to its repair message in the saved file.
 export const REPAIR_REPLY = "--- the reply to the factory loop's repair message ---"
+// What goes between an agent's final message and the answer it recorded with the answer script.
+export const SCRIPT_RECORD = '--- the answer recorded with the answer script ---'
 
-// onAgentAnswer: an agent of the loop finished (its turn.complete). The answer is saved whole,
-// then read, and the events its outcome logs go out; the driver records the Exec, or first sends
-// the agent the repair message for the problem (act.ts agentAnswered). The reply to a repair goes
-// after the answer it repairs, never over it: a designer's report is what judge(report) reads
-// (rule D3), and the reply is a line at most. A failed save or event is noted in the summary but
-// keeps the reading: re-running an agent costs far more.
-export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<{ exec: Exec; problem: string | null }> {
+// scriptPlaceOf: the answer script and the answer file of an entry's attempt (#561): the paths a
+// spawn's prompt names, and the only answer file read for that attempt.
+export function scriptPlaceOf(rt: Pick<Runtime, 'pluginRoot' | 'loopDir'>, entry: Pick<LedgerEntry, 'key' | 'attempts' | 'startedAt'>): ScriptPlace {
+  return { bin: `${rt.pluginRoot}/${ANSWER_SCRIPT}`, file: scriptAnswerPath(rt.loopDir, entry) }
+}
+
+// What an agent's turn.complete gave: the Exec to record, the problem for the repair message,
+// how the answer came (via: the answer script's file, else its text), what kept a recorded file
+// out (scriptProblem, for the decision log), and the channel its spawn was asked on (null: not
+// known, so the setting's).
+export type AnswerTaken = { exec: Exec; problem: string | null; via: 'script' | 'text'; scriptProblem?: string; channel: AnswerChannel | null }
+
+// onAgentAnswer: an agent of the loop finished (its turn.complete). Its text is saved whole
+// first. Then the answer it recorded with the answer script (#561) is read, only at the path
+// issued for this attempt (scriptPlaceOf), and checked again; with none there, or one that fails
+// its checks, its text is read as before. The events the outcome logs go out; the driver records
+// the Exec, or first sends the agent the repair message for the problem (act.ts agentAnswered).
+// An answer from the script follows the text in the saved file, under SCRIPT_RECORD. The reply
+// to a repair goes after the answer it repairs, never over it: a designer's report is what
+// judge(report) reads (rule D3), and the reply is a line at most. A failed save or event is
+// noted in the summary but keeps the reading: re-running an agent costs far more.
+export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<AnswerTaken> {
   const notes: string[] = []
   const path = answerPath(ctx.rt.loopDir, entry.key)
+  let said: string | null = null
   try {
     const before = entry.reminded === true ? await ctx.io.readFile(path) : null
-    await ctx.io.writeFile(path, before === null ? answer.answer : `${before.replace(/\n*$/, '')}\n\n${REPAIR_REPLY}\n\n${answer.answer}`)
+    said = before === null ? answer.answer : `${before.replace(/\n*$/, '')}\n\n${REPAIR_REPLY}\n\n${answer.answer}`
+    await ctx.io.writeFile(path, said)
   } catch (err) {
     notes.push(`answer not saved: ${message(err)}`)
   }
-  const read = readAnswer(entry, answer, await answerInfoOf(ctx, entry))
+  const info = await answerInfoOf(ctx, entry)
+  const recorded = await scriptAnswerOf(ctx, entry)
+  const script = recorded === null ? null : readScriptAnswer(entry, recorded.body, info)
+  const channel = info.channel ?? null
+  if (recorded !== null && script !== null && 'exec' in script) {
+    if (said !== null) {
+      try {
+        await ctx.io.writeFile(path, `${said.replace(/\n*$/, '')}\n\n${SCRIPT_RECORD}\n\n${recorded.body.replace(/\n*$/, '')}\n`)
+      } catch (err) {
+        notes.push(`recorded answer not saved: ${message(err)}`)
+      }
+    }
+    notes.push(...(await logEvents(ctx, script.events)))
+    return { exec: noted(script.exec, notes), problem: null, via: 'script', channel }
+  }
+  const read = readAnswer(entry, answer, info)
   notes.push(...(await logEvents(ctx, read.events)))
-  return { exec: noted(read.exec, notes), problem: read.problem }
+  const scriptProblem = script !== null && !('exec' in script) ? script.problem : undefined
+  const problem = read.problem === null || scriptProblem === undefined ? read.problem : `${scriptProblem}; and the reply: ${read.problem}`
+  const out: AnswerTaken = { exec: noted(read.exec, notes), problem, via: 'text', channel }
+  if (scriptProblem !== undefined) out.scriptProblem = scriptProblem
+  return out
+}
+
+// scriptAnswerOf: the answer file at the path issued for this attempt, or null when there is none
+// (the agent recorded nothing, or was asked on another channel). Nothing at any other path is
+// read: who answered is the path.
+async function scriptAnswerOf(ctx: ExecCtx, entry: LedgerEntry): Promise<{ body: string } | null> {
+  try {
+    const body = await ctx.io.readFile(scriptPlaceOf(ctx.rt, entry).file)
+    return body === null ? null : { body }
+  } catch {
+    return null
+  }
 }
 
 // onToolAnswer: an agent of the loop called its answer tool, read against its spawn record. A
@@ -345,14 +437,14 @@ export async function onToolAnswer(
 // answerInfoOf: what reading an answer needs beside the entry: the branch and purpose its spawn
 // record names. With no record, the run's branch in the state stands in.
 async function answerInfoOf(ctx: ExecCtx, entry: LedgerEntry): Promise<AnswerInfo> {
-  let record: Pick<SpawnRecord, 'branch' | 'purpose'> | null = null
+  let record: ReturnType<typeof parseRecord> = null
   try {
     record = parseRecord(await ctx.io.readFile(spawnRecordPath(ctx.rt.loopDir, entry.key)))
   } catch {
     // no record
   }
   const branch = record?.branch ?? (entry.run === null ? null : (ctx.state.runs.find(r => r.run === entry.run)?.branch ?? null))
-  return { repo: ctx.rt.repo, branch, purpose: record?.purpose ?? null }
+  return { repo: ctx.rt.repo, branch, purpose: record?.purpose ?? null, channel: record?.channel ?? null }
 }
 
 // logEvents: the events an outcome logs; a note when some could not be.
@@ -378,13 +470,37 @@ function refused(why: string): Exec {
   return { status: 'failed', summary: clip(`refused: ${why}`), noRetry: true }
 }
 
-// start: write the spawn record, then spawn. A deny, a throw or a start with no agent id is a
-// failed attempt; a started agent runs on, and its turn.complete ends the entry.
+// scriptFor: on the script channel (config answerChannel, the default), the answer script and
+// this attempt's answer file, once the job file the script checks against stands beside it; null
+// when the channel is another, or the paths are not ones a prompt may carry, or the job file
+// cannot be written, and the prompt then asks for text. The script channel is a TEMPORARY
+// WORKAROUND (#561, DECISIONS D-74) for the registered answer tools (#548), which an agent the
+// loop spawns from its timer cannot reach on Claude Code 2.1.296 and 2.1.299 (#560).
+async function scriptFor(ctx: ExecCtx, action: AgentAction): Promise<ScriptPlace | null> {
+  if (ctx.rt.config.answerChannel !== 'script') return null
+  const place = scriptPlaceOf(ctx.rt, ctx.entry)
+  const job = jobPathOf(place.file)
+  if (job === null || !scriptShaped(place)) return null
+  const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
+  const purpose = action.kind === 'spawn' && action.agent === 'adjudicator' ? action.purpose : null
+  try {
+    await ctx.io.writeFile(job, jobText({ contract: CONTRACT_OF[type], purpose, repo: ctx.rt.repo, issue: action.issue, branch: type === 'fixer' ? namedBranchOf(action) : null }))
+  } catch {
+    return null
+  }
+  return place
+}
+
+// start: write the answer script's job file (on the script channel) and the spawn record, then
+// spawn. A deny, a throw or a start with no agent id is a failed attempt; a started agent runs on,
+// and its turn.complete ends the entry.
 async function start(ctx: ExecCtx, action: AgentAction, model: string | null, env: Omit<PromptEnv, 'repo'>): Promise<Exec> {
-  const input = spawnInputOf(action, { repo: ctx.rt.repo, attempt: ctx.entry.attempts, model, answerTools: ctx.rt.config.answerTools, ...env })
+  const script = await scriptFor(ctx, action)
+  const channel: AnswerChannel = script !== null ? 'script' : ctx.rt.config.answerChannel === 'tool' ? 'tool' : 'text'
+  const input = spawnInputOf(action, { repo: ctx.rt.repo, attempt: ctx.entry.attempts, model, channel, script, ...env })
   let saved = true
   try {
-    const record = recordOf(action, input, ctx.entry.attempts)
+    const record = recordOf(action, input, ctx.entry.attempts, script, channel)
     await ctx.io.writeFile(spawnRecordPath(ctx.rt.loopDir, action.key), JSON.stringify(record, null, 2))
   } catch {
     saved = false

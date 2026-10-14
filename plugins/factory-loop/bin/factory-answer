@@ -1,0 +1,231 @@
+#!/usr/bin/env node
+// factory-answer: an agent of the factory loop records its answer with this checked script
+// (SPEC 7.3a, #561).
+//
+// A TEMPORARY WORKAROUND. The loop's registered answer tools (hooks/agent-tools.ts, #548) are the
+// intended answer channel, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from
+// its timer never reaches the loop's own tool.call hook (#560; SPEC 13 has the probe), while its
+// Bash works. So this script gives back what the tool was for: it checks the answer against the
+// same contract (hooks/contract.mjs, which the loop and the tools share), names every problem so
+// the agent corrects it in the same turn, and on success writes the answer file the loop reads,
+// and checks again, when the agent's turn ends. Once the probe shows a timer-spawned agent
+// reaching the tool hook, the setting answerChannel goes back to `tool` and this script rests.
+//
+//   factory-answer --to <answer file> '<json>'
+//   factory-answer --to <answer file> <<'JSON'
+//   { ... }
+//   JSON
+//
+// It writes that one file and nothing else, and only where the loop issued it: a name ending in
+// .answer.json, in <CLAUDE_CONFIG_DIR, else ~/.claude>/factory-loop/<owner>__<repo>/answers/,
+// beside the job file (.job.json) the loop wrote there before the spawn, which says what the
+// answer must hold. The write is atomic: a new temp file in the same directory, then a rename
+// over the answer file. Exit 0: recorded; 1: not recorded (the answer, the path or the write);
+// 2: usage.
+//
+// Plain node, from any directory: the file reads the same as a CommonJS script and as an ES
+// module (no require, no import statement, no top-level await), so it runs however node takes an
+// extensionless file, and it loads node's modules and the contract by dynamic import, the
+// contract relative to this file.
+'use strict'
+
+const NAME = 'factory-answer'
+const USAGE = `usage: ${NAME} --to <answer file> [<json>]
+  Records your answer for the factory loop, once it passes the checks of its contract.
+  --to <answer file>  the answer file your prompt names: an absolute path ending in .answer.json
+  <json>              your answer as one JSON object; without it, the JSON is read from standard input
+  Exit 0: recorded. 1: not recorded, with every problem named. 2: usage.`
+
+// Refused: a reason the answer was not recorded (exit 1), as opposed to a usage error (exit 2).
+class Refused extends Error {
+  constructor(problems) {
+    super(problems.join('; '))
+    this.problems = problems
+  }
+}
+
+class Usage extends Error {}
+
+// argsOf: the answer file and the JSON argument, if any; --help asks for the usage.
+function argsOf(argv) {
+  let to = null
+  let json = null
+  let options = true
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (options && (a === '-h' || a === '--help')) return { help: true }
+    if (options && a === '--') options = false
+    else if (options && a === '--to') {
+      if (i + 1 >= argv.length) throw new Usage('--to needs the answer file')
+      if (to !== null) throw new Usage('--to is given twice')
+      to = argv[++i]
+    } else if (options && a.startsWith('--to=')) {
+      if (to !== null) throw new Usage('--to is given twice')
+      to = a.slice('--to='.length)
+    } else if (options && a.startsWith('-') && a !== '-') throw new Usage(`unknown option ${a}`)
+    else {
+      if (json !== null) throw new Usage('give the JSON once, as one argument (quote it) or on standard input')
+      json = a
+    }
+  }
+  if (to === null || to === '') throw new Usage('--to <answer file> is required')
+  return { help: false, to, json }
+}
+
+// How long standard input may take to end: a here-document or a pipe ends at once, and a stdin
+// left open with nothing coming must not hold the agent's shell.
+const STDIN_WAIT_MS = 10_000
+
+// readStdin: all of standard input, or null when it is a terminal (nothing was piped in) or does
+// not end within STDIN_WAIT_MS.
+function readStdin() {
+  if (process.stdin.isTTY) return Promise.resolve(null)
+  return new Promise(resolve => {
+    const chunks = []
+    const timer = setTimeout(() => {
+      process.stdin.destroy()
+      resolve(null)
+    }, STDIN_WAIT_MS)
+    process.stdin.on('data', chunk => chunks.push(chunk))
+    process.stdin.on('end', () => {
+      clearTimeout(timer)
+      resolve(Buffer.concat(chunks).toString('utf8'))
+    })
+    process.stdin.on('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+  })
+}
+
+// realOf: a path's real path, or null when it leads nowhere.
+async function realOf(fs, p) {
+  try {
+    return await fs.realpath(p)
+  } catch {
+    return null
+  }
+}
+
+async function lstatOf(fs, p) {
+  try {
+    return await fs.lstat(p)
+  } catch {
+    return null
+  }
+}
+
+// placeOf: where the answer goes, once the path is one the loop issued: the answers directory of
+// a loop dir under this config's factory-loop directory, every part of it a real directory (no
+// link that leads elsewhere), an answer file's name, and its job file beside it. Anything else is
+// refused before a byte is written.
+async function placeOf(to, mods, contract) {
+  const { fs, path, os } = mods
+  const where = 'give the answer file your prompt names'
+  if (!path.isAbsolute(to)) throw new Refused([`${to} is not an absolute path: ${where}`])
+  if (path.normalize(to) !== to) throw new Refused([`${to} is not a plain path (no ., .. or doubled /): ${where}`])
+  const name = path.basename(to)
+  if (!contract.ANSWER_NAME.test(name)) throw new Refused([`${name} is not an answer file, whose name ends in ${contract.ANSWER_SUFFIX}: ${where}`])
+  const dir = path.dirname(to)
+  const loopDir = path.dirname(dir)
+  const config = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude')
+  const base = path.join(config, 'factory-loop')
+  const outside = `${to} is not in an answers directory of the factory loop (${base}/<owner>__<repo>/answers/): ${where}`
+  if (path.basename(dir) !== 'answers' || !contract.LOOP_DIR_NAME.test(path.basename(loopDir))) throw new Refused([outside])
+  const real = await realOf(fs, base)
+  if (real === null || (await realOf(fs, path.dirname(loopDir))) !== real) throw new Refused([outside])
+  for (const [p, want] of [
+    [loopDir, path.join(real, path.basename(loopDir))],
+    [dir, path.join(real, path.basename(loopDir), 'answers')],
+  ]) {
+    const st = await lstatOf(fs, p)
+    if (st === null || !st.isDirectory() || (await realOf(fs, p)) !== want) throw new Refused([outside])
+  }
+  const jobPath = contract.jobPathOf(to)
+  const jobSt = jobPath === null ? null : await lstatOf(fs, jobPath)
+  if (jobPath === null || jobSt === null || !jobSt.isFile()) throw new Refused([`the factory loop issued no answer file at ${to} (it has no job file beside it): ${where}`])
+  const job = contract.parseJob(await fs.readFile(jobPath, 'utf8'))
+  if (typeof job === 'string') throw new Refused([`${job}: ${jobPath}`])
+  const st = await lstatOf(fs, to)
+  if (st !== null && !st.isFile()) throw new Refused([`${to} is there and is not a plain file, so it is left alone`])
+  return { dir, name, job }
+}
+
+// summaryOf: a few words on what was recorded, so the agent sees the loop will read what it meant.
+function summaryOf(contract, input) {
+  const o = input !== null && typeof input === 'object' ? input : {}
+  if (contract === 'verdict') {
+    const n = Array.isArray(o.findings) ? o.findings.length : 0
+    return `action ${o.action?.type}, ${n} finding${n === 1 ? '' : 's'}`
+  }
+  if (contract === 'design') return `brief ${o.brief ?? 'none'}, created ${(o.created ?? []).join(',') || 'none'}, pending decision ${o.pendingDecision ? 'yes' : 'no'}`
+  return `run ${o.run ?? 'none'}, head ${o.head ?? 'none'}, gated ${o.gated ? 'yes' : 'no'}`
+}
+
+// writeAtomically: the body to a new temp file beside the target, flushed, then renamed over it,
+// so the loop reads the whole answer or none. The temp file starts with a dot, so it never has
+// an answer file's name; one left by a failure is removed.
+async function writeAtomically(mods, dir, name, body) {
+  const { fs, path, crypto } = mods
+  const tmp = path.join(dir, `.${name}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`)
+  let handle = null
+  try {
+    handle = await fs.open(tmp, 'wx', 0o644)
+    await handle.writeFile(body, 'utf8')
+    await handle.sync()
+    await handle.close()
+    handle = null
+    await fs.rename(tmp, path.join(dir, name))
+  } catch (err) {
+    if (handle !== null) await handle.close().catch(() => undefined)
+    await fs.unlink(tmp).catch(() => undefined)
+    throw new Refused([`the answer file could not be written: ${err instanceof Error ? err.message : String(err)}`])
+  }
+}
+
+async function main(argv) {
+  const args = argsOf(argv)
+  if (args.help) {
+    process.stdout.write(`${USAGE}\n`)
+    return 0
+  }
+  const [fs, path, os, crypto, url] = await Promise.all([import('node:fs/promises'), import('node:path'), import('node:os'), import('node:crypto'), import('node:url')])
+  const mods = { fs, path, os, crypto }
+  // the contract, relative to this file's real place (bin/ beside hooks/)
+  const self = await fs.realpath(process.argv[1])
+  const contract = await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)
+  const raw = args.json ?? (await readStdin())
+  if (raw === null || raw.trim() === '') throw new Usage('no answer given: pass the JSON as one argument, or on standard input')
+  const place = await placeOf(args.to, mods, contract)
+  let input
+  try {
+    input = JSON.parse(raw)
+  } catch (err) {
+    throw new Refused([`the answer is not JSON: ${err instanceof Error ? err.message : String(err)}`])
+  }
+  const body = contract.answerText(place.job, input)
+  if (!body.ok) throw new Refused(body.problems)
+  await writeAtomically(mods, place.dir, place.name, body.outcome)
+  process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${summaryOf(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
+  return 0
+}
+
+main(process.argv.slice(2)).then(
+  code => {
+    process.exitCode = code
+  },
+  err => {
+    if (err instanceof Usage) {
+      process.stderr.write(`${NAME}: ${err.message}\n${USAGE}\n`)
+      process.exitCode = 2
+    } else if (err instanceof Refused) {
+      const n = err.problems.length
+      const lines = err.problems.map(p => `  - ${p}`).join('\n')
+      process.stderr.write(`${NAME}: not recorded: ${n} problem${n === 1 ? '' : 's'}:\n${lines}\nCorrect them and run ${NAME} again.\n`)
+      process.exitCode = 1
+    } else {
+      process.stderr.write(`${NAME}: not recorded: ${err instanceof Error ? err.message : String(err)}\n`)
+      process.exitCode = 1
+    }
+  },
+)
