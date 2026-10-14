@@ -94,11 +94,20 @@ done
 FAKE_LATEST=https://github.com/kunchenguid/treehouse/releases/tag/v3.1.3
 FAKE_DOWNLOAD=fail
 export FAKE_DOWNLOAD
+mkdir "$tmpdir/dl"
+echo existing > "$tmpdir/dl/treehouse"
 run "$tmpdir/dl"
 [ "$rc" -ne 0 ] || fail "failed download should exit non-zero"
 grep -q '^treehouse:' "$tmpdir/err" || fail "no treehouse: message for failed download"
-[ ! -e "$tmpdir/dl/treehouse" ] || fail "partial binary left behind"
+[ "$(cat "$tmpdir/dl/treehouse")" = existing ] || fail "existing binary was changed"
+[ ! -e "$tmpdir/dl/treehouse.new" ] || fail "partial binary left behind"
 unset FAKE_DOWNLOAD
+
+# (d2) install dir cannot be created.
+: > "$tmpdir/notadir"
+run "$tmpdir/notadir/bin"
+[ "$rc" -ne 0 ] || fail "uncreatable install dir should fail"
+grep -q '^treehouse:.*could not create' "$tmpdir/err" || fail "no treehouse: message for install dir"
 
 # (e) unsupported arch.
 mkdir "$tmpdir/bin"
