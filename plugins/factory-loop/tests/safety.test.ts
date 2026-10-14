@@ -13,7 +13,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
-import { ENV_RETRY_ARGV, LAUNCH_SCRIPT } from '../hooks/act-merge'
+import { ENV_RETRY_ARGV, FF_SCRIPT, LAUNCH_SCRIPT } from '../hooks/act-merge'
 import { ACTION_KINDS } from '../hooks/config'
 import { respondLogPath } from '../hooks/exec'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
@@ -242,6 +242,22 @@ function envRetryLaunch(argv: readonly string[], action: Action | undefined): bo
   return ENV_RETRY_ARGV.length === 2 && argv[7] === 'no-mistakes' && argv[8] === 'rerun' && ENV_RETRY_ARGV.every((a, i) => argv[7 + i] === a)
 }
 
+// scriptGit: each git command in a shell script that is neither a read nor the fast-forward of a
+// worktree (#551), the one git write a script may make. An allowlist, so a new verb is banned
+// until it is listed here; any option before the verb but `-C <path>` is unknown, so banned too.
+const SCRIPT_GIT_READS = ['fetch', 'rev-parse', 'status', 'merge-base', 'symbolic-ref']
+function scriptGit(script: string): string[] {
+  const out: string[] = []
+  for (const m of script.matchAll(/\bgit((?:[ \t]+[^\s;|&()]+){1,4})/g)) {
+    const words = (m[1] ?? '').trim().split(/\s+/)
+    const at = words[0] === '-C' ? 2 : 0
+    const [verb = '', next = ''] = words.slice(at)
+    const ok = SCRIPT_GIT_READS.includes(verb) || (verb === 'worktree' && next === 'list') || (verb === 'merge' && next === '--ff-only')
+    if (!ok) out.push(`a shell script that runs git ${words.slice(0, at + 2).join(' ')}`)
+  }
+  return out
+}
+
 function bans(argv: readonly string[], action?: Action): string[] {
   // the rerun's launch is held to every other ban, its two-word command left out
   if (envRetryLaunch(argv, action)) return bans(argv.slice(0, 7))
@@ -258,9 +274,7 @@ function bans(argv: readonly string[], action?: Action): string[] {
     if (/\b(pkill|killall|coder)\b/.test(script)) out.push('a shell script with a broad kill or coder')
     if (/\bkill\b/.test(script) && script !== PROBE) out.push('a shell script that kills')
     if (/(^|\s)--yes\b|\brerun\b|\babort\b/.test(script)) out.push('a shell script with --yes, rerun or abort')
-    // the one git write a script may make is the fast-forward of a worktree (#551)
-    if (/\bgit(?:\s+-C\s+\S+)?\s+(?:push|reset|rebase|checkout|clean|stash|commit)(?=\s|$)/.test(script)) out.push('a shell script that writes git history or discards work')
-    if (/\bgit(?:\s+-C\s+\S+)?\s+merge(?=\s|$)(?!\s+--ff-only)/.test(script)) out.push('a shell script that merges but by fast-forward')
+    out.push(...scriptGit(script))
   }
   if (cmd === 'gh') {
     if (args[0] === 'pr' && (args[1] === 'edit' || args[1] === 'merge')) out.push(`gh pr ${args[1]}`)
@@ -306,6 +320,16 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['sh', '-c', 'git -C "$1" merge "$2"', 'sh', '/w', 'main'],
       ['sh', '-c', 'git -C "$1" reset --hard "$2"', 'sh', '/w', 'abc1234'],
       ['sh', '-c', 'git push origin HEAD'],
+      // a script's git is an allowlist: none of these discards work or writes history and passes
+      ['sh', '-c', 'git -C "$p" switch --discard-changes x'],
+      ['sh', '-c', 'git restore .'],
+      ['sh', '-c', 'git branch -f x y'],
+      ['sh', '-c', 'git update-ref refs/heads/x y'],
+      ['sh', '-c', 'git worktree remove --force /w'],
+      ['sh', '-c', 'git -c k=v reset --hard'],
+      ['sh', '-c', 'git -c k=v merge --ff-only x'],
+      ['sh', '-c', 'st=$(git --git-dir=/w/.git status)'],
+      ['sh', '-c', 'x=1; git -C "$p" merge --squash y'],
     ]
     for (const argv of bad) expect({ argv, banned: bans(argv).length > 0 }).toEqual({ argv, banned: true })
     expect(bans(['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'])).toContain('the readyLabel')
@@ -319,6 +343,8 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
       ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
       ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
+      ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', '/w', 'b', '/l'],
+      ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
