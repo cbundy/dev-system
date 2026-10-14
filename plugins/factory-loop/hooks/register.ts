@@ -1034,15 +1034,15 @@ async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string
   const at = String(record.at)
   const day = at.slice(0, 10)
   const cap = rt.config.traceMaxBytes
-  const today = `${day}:${cap}`
+  const dayCap = `${day}:${cap}`
   const line = JSON.stringify(record) + '\n'
   const files = (await $.fs.list(rt.loopDir)).filter(e => e.kind === 'file')
   const path = `${rt.loopDir}/${traceName(day)}`
-  if (traceCut !== today && traceChecked !== today) {
-    if (files.some(f => f.name === traceName(day) && f.size > 0) && (await endsCut($, path, cap))) traceCut = today
-    traceChecked = today
+  if (traceCut !== dayCap && traceChecked !== dayCap) {
+    if (files.some(f => f.name === traceName(day) && f.size > 0) && (await endsCut($, path, cap))) traceCut = dayCap
+    traceChecked = dayCap
   }
-  const room = traceRoom(files, day, byteLength(line), cap, traceCut === today)
+  const room = traceRoom(files, day, byteLength(line), cap, traceCut === dayCap)
   if (room.remove.length > 0) {
     const r = await $.process.run(['rm', '-f', '--', ...room.remove.map(name => `${rt.loopDir}/${name}`)], { timeoutMs: 10_000 })
     if (r.exitCode !== 0) return
@@ -1050,7 +1050,7 @@ async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string
   if (room.write === 'record') await append($, path, line)
   if (room.write === 'cut') {
     await append($, path, cutLine(at, cap))
-    traceCut = today
+    traceCut = dayCap
   }
 }
 
