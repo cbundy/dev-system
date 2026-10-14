@@ -95,7 +95,8 @@ Decide from the wake itself, plus only the reads named. Every judge times out to
   - `drop` (reason): the owner stopped it on purpose (memory, the conversation), or the work is
     no longer wanted. The loop abandons the issue.
 - **`handoff`** (`issue entry run head`; detail: the implementer's or fixer's handoff saying
-  `NOT GATED`): its commit may be in no pipeline run.
+  `NOT GATED`, or its `mcp__factory-loop__handoff` call saved as JSON `{ tool, input }`): its
+  commit may be in no pipeline run.
   - `ok`: it is gated after all: the agent drove the run with `axi respond` and made no commit,
     or the run's head contains the commit (`git fetch`, then
     `git merge-base --is-ancestor <commit> <head>` in the main checkout).
@@ -247,6 +248,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `update [<reason>]` / `update off`: drain, then restart this workspace for an update once
   nothing is in flight (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.
+- `trace on|off`: each pass's timing to a local trace file, for troubleshooting (SPEC 12.1).
 
 Releases: to make one wait for an issue, `callum-flow-milestone plan <N> next` when the owner
 says so; answer "what is planned" from `callum-flow-milestone show`.
