@@ -5,6 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { WAKE_POINTER, answerPath } from '../hooks/exec'
 import type { ActIo, Exec, ExecCtx } from '../hooks/exec'
+import { exhausted, finish } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import { plan } from '../hooks/plan'
 import type { Action, LedgerEntry, State, WakeKind } from '../hooks/types'
@@ -523,18 +524,35 @@ describe('turns: answers, the one reminder, tells delivered (SPEC 8.2, 10.8, D-2
 describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
   const at = (minutesAgo: number) => NOW - minutesAgo * MIN
 
-  test("a wake another session submitted ends by its fallback at once; this session's and a sessionless one wait (SPEC 7.5)", () => {
-    const open = (key: string, kind: WakeKind, session?: string) =>
-      entry(key, kind, { wake: 'x', status: 'running', startedAt: at(1), endedAt: null, wakeId: key, ...(session === undefined ? {} : { session }) })
-    const ledger = [open('j', 'judge', 'old'), open('t', 'task', 'old'), open('l', 'tell', 'old'), open('mine', 'judge', 'now'), open('older-build', 'task')]
-    const updates = orphanedWakes(ledger, 'now')
-    expect(updates.map(u => [u.key, u.status, u.summary])).toEqual([
-      ['j', 'done', 'timed out: its session ended, so the loop holds'],
-      ['t', 'timed-out', 'timed out: its session ended'],
-      ['l', 'timed-out', 'dropped: its session ended before it was delivered'],
+  test("a wake another session submitted, or a sessionless one open before this load, is lost at once with its attempt given back; this session's waits (SPEC 7.5)", () => {
+    const open = (key: string, kind: WakeKind, startedAt: number, session?: string) =>
+      entry(key, kind, { wake: 'x', status: 'running', startedAt, endedAt: null, wakeId: key, ...(session === undefined ? {} : { session }) })
+    const loadedAt = at(2)
+    const ledger = [
+      open('j', 'judge', at(1), 'old'),
+      open('t', 'task', at(5), 'old'),
+      open('l', 'tell', at(1), 'old'),
+      // a reload within this session keeps its wake, however old
+      open('mine', 'judge', at(5), 'now'),
+      // rebuilt from the event log, or an older build: no session, so its start decides
+      open('rebuilt', 'judge', at(13)),
+      open('since-load', 'tell', at(1)),
+      entry('done', 'judge', { wake: 'x', status: 'done', startedAt: at(13), endedAt: at(12) }),
+    ]
+    const updates = orphanedWakes(ledger, 'now', loadedAt)
+    expect(updates).toEqual([
+      { key: 'j', status: 'lost', attempts: 0, summary: 'lost: its session ended' },
+      { key: 't', status: 'lost', attempts: 0, summary: 'lost: its session ended' },
+      { key: 'l', status: 'lost', attempts: 0, summary: 'lost: its session ended' },
+      { key: 'rebuilt', status: 'lost', attempts: 0, summary: 'lost: it was open before this load' },
     ])
-    expect(updates[0]?.outcome).toMatchObject({ kind: 'wake', decision: 'hold' })
-    expect(orphanedWakes(ledger, '')).toEqual([])
+    // the rule that raised it may raise it again: gone from the ledger it holds no wake (O2), and its key is not used up
+    let after: LedgerEntry[] = ledger
+    for (const u of updates) after = finish(after, u.key, u, NOW)
+    expect(after.find(e => e.key === 'rebuilt')).toMatchObject({ status: 'lost', attempts: 0, endedAt: NOW })
+    expect(exhausted(after.find(e => e.key === 'rebuilt') as LedgerEntry, CFG)).toBe(false)
+    // with no session id of its own, a recorded session cannot be judged: only the sessionless rule applies
+    expect(orphanedWakes(ledger, '', loadedAt).map(u => u.key)).toEqual(['rebuilt'])
   })
 
   test('a judge past its timeout is done with hold; a task and a tell time out', () => {
@@ -623,6 +641,16 @@ describe('plan reads what wakes leave behind', () => {
     // answered merge instead, the loop merges
     const turn = onTurnComplete(ledger, { turnId: 't1', reason: 'answer', answer: 'ANSWER w1 merge' }, REPO)
     expect(keys(plan({ ...s, ledger: apply(ledger, turn.updates) }, CFG))).toEqual(['merge:550:head50'])
+  })
+
+  test('a judge an earlier session left open is asked again once it is lost; held open, it blocks every wake (SPEC 7.5, O2)', async () => {
+    const s = flagged()
+    const { ledger } = await started(s, 'judge:sequence:550:head50')
+    const old = ledger.map(e => (e.key === 'judge:sequence:550:head50' ? { ...e, session: 'session-before' } : e))
+    expect(keys(plan({ ...s, ledger: old }, CFG))).toEqual([])
+    let lost = old
+    for (const u of orphanedWakes(old, 'session-now', NOW + MIN)) lost = finish(lost, u.key, u, NOW + MIN)
+    expect(keys(plan({ ...s, ledger: lost }, CFG))).toEqual(['judge:sequence:550:head50'])
   })
 
   test('a task that timed out is told to the owner; a tell that timed out is dropped, not sent again', () => {

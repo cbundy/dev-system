@@ -414,13 +414,20 @@ async function loadLedger($: EngineInterface, rt: Runtime, problems: string[]): 
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
   // running commands died with the old module; wakes another session submitted went with it
-  const session = await $.session.id()
   const moved = transition(live, l => onLoad(l, now))
-  for (const u of orphanedWakes(live.ledger, session)) moved.push(...transition(live, l => finish(l, u.key, u, now)))
+  moved.push(...closeOrphans(await $.session.id(), now))
   await persist($, rt)
   await logLoop(env, moved)
   problems.push(...env.problems)
   return true
+}
+
+// closeOrphans: the live ledger's wakes no one can answer any more lost at once (wake.ts
+// orphanedWakes, SPEC 7.5); the entries it moved, for the loop events.
+function closeOrphans(session: string, now: Ms): LedgerEntry[] {
+  const moved: LedgerEntry[] = []
+  for (const u of orphanedWakes(live.ledger, session, loadedAt)) moved.push(...transition(live, l => finish(l, u.key, u, now)))
+  return moved
 }
 
 // persist: write the live ledger, one save at a time; whether it was written. save prunes it, and
@@ -770,7 +777,10 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a lost store, rebuilt from the event log, becomes the ledger the loop keeps
       if (observed.ledgerSource === 'events' && live.ledger.length === 0 && state.ledger.length > 0) {
         live.ledger = [...state.ledger]
+        // a wake it rebuilt was open in an earlier session, which took its prompt along
+        const moved = closeOrphans(sid, state.now)
         await persist($, rt)
+        await logLoop(env, moved)
       }
       // the restart for an update ran: the update is done, so the drain ends (rule H4)
       if (updateDone(live.ledger, state.control, loadedAt) && (await clearUpdate($, rt, state.control.updateDue?.at ?? null))) {
