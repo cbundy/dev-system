@@ -195,6 +195,25 @@ check "restore: a supervisor restart does not restore again" bash -c "
   [ \"\$(docker exec '$c' grep -c -- '--resume $RESTORE_SID' /tmp/claude-starts)\" = 1 ]"
 docker rm -f "$c" >/dev/null
 
+# With DEV_REMOTE_CONTROL_RESUME=1, another Remote Control session in the workspace whose
+# transcript is the newest one is left to the restore: the supervisor resumes its own older
+# conversation, and the other session comes back once, in claude-restored, under its own name.
+OWN_SID=88888888-2222-4222-8222-888888888888 OTHER_SID=99999999-3333-4333-8333-999999999999
+c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
+  $(transcript $OWN_SID real '1 hour ago') &&
+  $(transcript $OTHER_SID real) &&
+  mkdir -p /persist/claude/sessions &&
+  printf '{\"pid\":999998,\"procStart\":\"1\",\"sessionId\":\"$OTHER_SID\",\"cwd\":\"/tmp\",\"kind\":\"interactive\",\"name\":\"other-name\",\"tmux\":\"dev:@1.%%1\",\"bridgeSessionId\":\"session_o\",\"updatedAt\":%s}' \$((\$(date +%s) * 1000)) > /persist/claude/sessions/999998.json &&
+  touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
+check "resume and restore: the supervisor resumes its own conversation, not a newer session the restore brings back" bash -c "
+  for _ in \$(seq 20); do docker exec '$c' grep -q -- '--resume $OTHER_SID' /tmp/claude-starts && break; sleep 1; done
+  docker exec '$c' cat /tmp/claude-starts
+  docker exec '$c' grep -qxF -- '/tmp --remote-control rc-test --resume $OWN_SID The workspace restarted: carry on.' /tmp/claude-starts &&
+  docker exec '$c' grep -qxF -- '/tmp --resume $OTHER_SID --remote-control other-name' /tmp/claude-starts &&
+  [ \"\$(docker exec '$c' grep -c -- '--resume $OTHER_SID' /tmp/claude-starts)\" = 1 ] &&
+  docker exec '$c' tmux has-session -t claude-restored"
+docker rm -f "$c" >/dev/null
+
 c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
   $(transcript 44444444-dddd-4ddd-8ddd-444444444444 stub) &&
   touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
