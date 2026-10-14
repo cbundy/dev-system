@@ -82,7 +82,8 @@ expect_calls dev-system dev-system /icon/docker.svg \
   remote_control_default_skip_permissions=false \
   remote_control_prompt= \
   remote_control_resume_prompt= \
-  remote_control_name_format=
+  remote_control_name_format= \
+  default_plugins=
 
 # 2. orchestrator: session mode, resumed, the skill as the startup prompt, the resume
 # nudge (its comma survives coder's CSV parsing because the field is quoted), and an
@@ -95,9 +96,25 @@ expect_calls orchestrator Orchestrator /emojis/1f504.png \
   remote_control_default_skip_permissions=false \
   remote_control_prompt=/callum-flow:issue-orchestrator \
   'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.' \
-  'remote_control_name_format=🔄 {name} orchestrator'
+  'remote_control_name_format=🔄 {name} orchestrator' \
+  default_plugins=
 
-# 3. Anything else is refused before any call.
+# 3. orchestrator-loop: the same session, starting the judge skill, with callum-flow and
+# factory-loop both pinned to this checkout's package version.
+ref=v$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$TEMPLATE_DIR/../../package.json")
+[ "$ref" != v ] || fail "cannot read the version in package.json"
+run orchestrator-loop
+expect_calls orchestrator-loop 'Orchestrator (loop)' /emojis/1f3ed.png \
+  role=orchestrator \
+  remote_control_default_mode=session \
+  remote_control_default_resume=true \
+  remote_control_default_skip_permissions=false \
+  remote_control_prompt=/factory-loop:judge \
+  'remote_control_resume_prompt=The workspace restarted and this conversation was resumed. The factory loop resumes by itself; answer its wakes as its judge.' \
+  'remote_control_name_format=🏭 {name} loop' \
+  "default_plugins=callum-flow@callum=cbundy/dev-system#$ref factory-loop@callum=cbundy/dev-system#$ref"
+
+# 4. Anything else is refused before any call.
 for args in '' dev-system-next 'dev-system orchestrator'; do
   # shellcheck disable=SC2086 # split on purpose: each case is a list of arguments
   run $args

@@ -22,12 +22,14 @@ Remote Control mode default and the long-lived session's settings:
 |---|---|---|---|
 | `dev-system` | dev-system (Docker icon) | `auto`: `server` with a repo, else `session` | Working on a repo, one worktree per claude.ai session |
 | `orchestrator` | Orchestrator (🔄) | `session`, resumed on every start | One long-running interactive Claude running the issue orchestrator. See [Orchestrator workspace](#orchestrator-workspace). |
+| `orchestrator-loop` | Orchestrator (loop) (🏭) | `session`, resumed on every start | The same session, with the repo run by the factory loop instead of the issue-orchestrator skill. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 
 From the repo root, with the `coder` CLI logged in as a template admin:
 
 ```bash
 coder/push.sh dev-system
 coder/push.sh orchestrator
+coder/push.sh orchestrator-loop
 ```
 
 [`coder/push.sh`](../push.sh) holds each template's name, display name, icon,
@@ -36,7 +38,7 @@ CLI reads each `--variable` as a CSV record, so `push.sh` quotes every `name=val
 one field, which keeps commas, emoji and spaces in a value intact. The site's
 values for the variables below are committed in [`terraform.tfvars`](terraform.tfvars),
 which `coder templates push` reads from this directory on every push, so no push can drop
-one. To change a value, edit that file and push both templates again. A `--variable` flag
+one. To change a value, edit that file and push every template again. A `--variable` flag
 on a hand-run `coder templates push` still overrides the file for that push.
 Every push is named `<git describe>-<UTC timestamp>` (for example
 `v0.34.0-2-gb3ae3f3-20261012-200455`) by [`coder/version-name.sh`](../version-name.sh), so a
@@ -53,13 +55,14 @@ privacy defaults are in
 |---|---|---|
 | `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
-| `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of both templates. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
+| `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of every template. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
 | `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
 | `remote_control_default_resume` | `false` | Default of the `remote_control_resume` parameter. Set per template by `push.sh` (`true` for `orchestrator`). |
 | `remote_control_default_skip_permissions` | `false` | Default of the `remote_control_skip_permissions` parameter. Set per template by `push.sh` (`false` for both, for now). |
 | `remote_control_prompt` | empty | `session` mode: the first message of a fresh conversation (`DEV_REMOTE_CONTROL_PROMPT`). Set per template by `push.sh` (`/callum-flow:issue-orchestrator` for `orchestrator`). |
 | `remote_control_resume_prompt` | empty | `session` mode: the message sent when the conversation is resumed (`DEV_REMOTE_CONTROL_RESUME_PROMPT`). Set per template by `push.sh` (for `orchestrator`, a nudge to re-read its memory file and re-arm its loop). |
 | `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🔄 {name} orchestrator` for `orchestrator`). |
+| `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system` and `orchestrator`; for `orchestrator-loop`, callum-flow and factory-loop pinned to the pushing checkout's package version. |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `gh_volume_name` | empty (off) | Named Docker volume mounted at `/persist/gh` in every workspace, so all workspaces using the name share one gh login. Empty keeps each workspace's gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
@@ -91,7 +94,7 @@ Terraform state, template variables or workspace parameters:
    registry_auth_config = "/etc/coder/registry/config.json"
    ```
 
-   Set it in `terraform.tfvars` (the line is there, commented out) and push both templates
+   Set it in `terraform.tfvars` (the line is there, commented out) and push every template
    again.
 
 Only the path is stored in the template; the file is read on each build. It covers the
@@ -238,6 +241,25 @@ workspace (both volumes are deleted with it, the memory file's checkout included
 compaction can lose detail. Keep the orchestrator's durable state in its memory file and
 on GitHub, so a lossy compaction or a lost transcript costs little.
 
+## Loop orchestrator workspace
+
+The `orchestrator-loop` template is the [Orchestrator workspace](#orchestrator-workspace) with
+one difference: the repo is run by the [factory loop](../../plugins/factory-loop/README.md), a
+plugin that claims, gates and merges issues in code each minute and wakes Claude only for
+judgment calls. The session starts with `/factory-loop:judge` and, on a resume, is told the loop
+carries on by itself: there is no watcher to re-arm.
+
+- **Plugins**: `push.sh` pins callum-flow and factory-loop to the package version of the
+  checkout it pushes from, so push it from main after a release. A repo whose
+  `.claude/settings.json` pins the `callum` marketplace to an older release wins over that pin
+  and has no factory-loop to install: bring the repo up to date (`npx callum-dev update`) first.
+- **Mode**: the loop starts in observe mode, reading the repo the checkout's `origin` names and
+  executing nothing. Act mode is set in `${CLAUDE_CONFIG_DIR}/factory-loop/config.json`, and only
+  acts while its safety rails pass (the plugin README's "Run it in act mode"); never run it beside
+  an `orchestrator` workspace on the same repo.
+- **Stop**: create `/persist/claude/factory-loop/OFF` in the workspace; the loop stops within a
+  minute.
+
 ## What the template does
 
 - **Storage.** Two Docker volumes per workspace, named after the workspace ID so a rename
@@ -327,7 +349,7 @@ and `coder ssh <ws> -- dev-login <code>` finishes Claude's login.
 
 By default each workspace keeps its own gh login. Leaving `gh_volume_name` empty adds no
 mount and causes no plan change for existing workspaces. Set it in `terraform.tfvars`
-(e.g. `gh_volume_name = "dev-system-gh"`) and push both templates. Workspaces using the
+(e.g. `gh_volume_name = "dev-system-gh"`) and push every template. Workspaces using the
 updated template mount that Docker volume at `/persist/gh`, so one gh login on the
 **Log in** page serves them all. Update existing workspaces to that template version and
 start them to apply the mount. Sharing is limited to workspaces using the same volume
@@ -368,7 +390,7 @@ before a workspace builds.
 ## Changing the template
 
 Keep it generic: no site-specific hosts or addresses in `main.tf`, only in
-`terraform.tfvars`. A change reaches both templates, so push both.
+`terraform.tfvars`. A change reaches every template, so push them all.
 Provider versions are pinned, with `.terraform.lock.hcl` beside the template; after a
 version bump, run `terraform init -upgrade` here and commit the lock file. `npm run lint`
 from the repo root runs `terraform fmt -check`, `init -lockfile=readonly` and `validate`
