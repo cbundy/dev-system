@@ -18,7 +18,8 @@ what to dispatch and what to judge. Each script's header and `--help` say how to
 call it, and each guard's FAIL message names its fix.
 
 ## Parameters (adjust per repo)
-- `REPO`, `READY_LABEL` (`ready`), `PRIORITY_LABEL` (`priority`: its `ready` issues go first, then ascending; order only), `IN_DEV_LABEL` (`In development`).
+- `REPO`, `READY_LABEL` (`ready`), `IN_DEV_LABEL` (`In development`),
+  `PRIORITY_LABEL` (`priority`: its `ready` issues go first, then ascending; order only).
 - `USAGE_SLOW_PCT` (default `85`), `USAGE_STOP_NEW_PCT` (`90`),
   `USAGE_STOP_ALL_PCT` (`95`).
 
