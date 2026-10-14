@@ -365,7 +365,9 @@ export function ownAgent(ledger: readonly LedgerEntry[], agentId: string, agents
 }
 
 // stop-agent: TaskStop through ActIo, for one of the loop's own agents (rules A1, A2). A stop
-// that is not supported is recorded as failed with the reason (SPEC 13).
+// that is not supported is recorded as failed with the reason (SPEC 13). TaskStop also ends the
+// background shells the agent left running, which is what keeps an agent at work past its
+// answer (#587, D-75): the engine kills an agent's running shell tasks as its loop exits.
 const stopAgent: Executor = async (ctx, action) => {
   if (action.kind !== 'stop-agent') return refused(`the stop-agent executor got a ${action.kind} action`)
   if (!ownAgent(ctx.state.ledger, action.agentId, ctx.state.agents)) return refused(`agent ${action.agentId} is not a running agent of the loop`)

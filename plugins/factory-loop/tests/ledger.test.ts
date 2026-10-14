@@ -385,6 +385,18 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(only(a2, 'design:70:a70').status).toBe('running')
   })
 
+  test('a stop of an agent that worked on past its answer, done or failed, keeps its answer; so does the list showing it killed after (#587)', () => {
+    const outcome: Outcome = { kind: 'designer', brief: 'https://github.com/cbundy/dev-system/issues/70#issuecomment-1', created: [], pendingDecision: false }
+    const answered = entry('design:70:x', 'spawn', { agent: 'designer', class: 'develop', issue: 70, status: 'done', endedAt: NOW - 20 * MIN, agentId: 'a70', outcome, summary: 'brief posted' })
+    const past: Action = { ...stop('a70', 'A2'), reason: 'worked on past its answer' }
+    for (const result of [{ status: 'done' as const, summary: 'stopped a70' }, { status: 'failed' as const, summary: 'not stopped a70: TaskStop failed' }]) {
+      const after = finish(started([past], NOW, [answered]), 'stop:a70', result, NOW)
+      expect(only(after, 'design:70:x')).toEqual(answered)
+      expect(only(after, 'stop:a70')).toMatchObject({ status: result.status, rule: 'A2' })
+      expect(only(reconcileAgents(after, [{ id: 'a70', status: 'killed' }], NOW + MIN), 'design:70:x')).toEqual(answered)
+    }
+  })
+
   test('a key the ledger no longer holds is left alone', () => {
     const ledger = started([claim(7)], NOW)
     expect(finish(ledger, 'claim:9:new', { status: 'done', summary: 'late' }, NOW)).toEqual(ledger)

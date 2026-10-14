@@ -1100,9 +1100,11 @@ describe('A: agents', () => {
     // listed idle, its turn has ended (Claude Code 2.1.299 lists it so for 20 s or more before
     // completed, #560): no stop of an agent past its turn, and the merge goes
     for (const status of ['completed', 'killed', 'idle'] as const) expect(keys(plan(mergeReady([guarded(), reviewed(), answered()], listed(status)), CFG))).toEqual(['merge:550:head50'])
-    // within its timeout it works on, except where an A2 stop applies: the owner dropped the issue
+    // within its timeout it is stopped too, once the grace after its answer is out (rule A2, #587)
     const young = answered({ startedAt: NOW - 30 * MIN, endedAt: NOW - 20 * MIN })
-    expect(keys(plan(mergeReady([guarded(), reviewed(), young], listed('running')), CFG))).toEqual([])
+    const early = plan(mergeReady([guarded(), reviewed(), young], listed('running')), CFG)
+    expect(keys(early)).toEqual(['stop:a-fix', 'tell:stopped:a-fix'])
+    expect(find(early, 'stop:a-fix')).toMatchObject({ rule: 'A2', reason: 'worked on past its answer' })
     const dropped = control({ dropped: [{ issue: 50, at: NOW - MIN }] })
     expect(keys(plan(mergeReady([guarded(), reviewed(), young], { ...listed('running'), control: dropped }), CFG))).toEqual([`abandon:50:${NOW - MIN}`, 'stop:a-fix', 'tell:stopped:a-fix'])
     // an answer just in: the list has not yet marked the agent completed, so nothing is stopped
@@ -1126,6 +1128,128 @@ describe('A: agents', () => {
     const r = plan(mergeReady([guarded(), reviewed(), repairing], { agents: [{ id: 'a-fix', type: 'callum-flow:fixer', status: 'idle' }] }), CFG)
     expect(keys(r)).toEqual([])
     expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'an agent already works the branch of #50 (merge)' })
+  })
+
+  // the dev-system loop, 2026-10-14: an agent recorded its answer but left a background shell that
+  // never ends (`claude remote-control --help`, or an `until ! pgrep -f ...` wait that matches
+  // itself), so the list kept it at work and the loop counted it as live up to its timeout
+  describe('an agent at work past its answer is stopped once the grace is out, and then holds nothing (#587)', () => {
+    const ACT = config({ mode: 'act' })
+    const LIFE = NOW - 30 * MIN
+    const merged = entry('merge:547:head47', 'merge', { issue: 47, pr: 547, head: 'head47', startedAt: NOW - 2 * MIN, endedAt: NOW - MIN, outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' } })
+    const lingering = (id: string, type: string) => ({ id, type, status: 'waiting' as const })
+    const designer = (over: Partial<LedgerEntry> = {}) =>
+      entry(`design:533:${LIFE}`, 'spawn', {
+        agent: 'designer',
+        class: 'develop',
+        issue: 533,
+        startedAt: LIFE,
+        endedAt: NOW - 22 * MIN,
+        agentId: 'agent-designer',
+        outcome: { kind: 'designer', brief: brief(533), created: [], pendingDecision: false },
+        ...over,
+      })
+    const implementing = entry(`delegate:533:${brief(533)}`, 'delegate', { class: 'develop', issue: 533, status: 'running', startedAt: NOW - 21 * MIN, endedAt: null, agentId: 'agent-impl-533' })
+    // the designer of #533 answered 22 minutes ago and its implementer works; #45's review gate
+    // is parked, so an adjudicator is due, and a merge since the last update makes rule H5 due
+    const designed = (agents: State['agents'], extra: LedgerEntry[]) =>
+      withLedger(
+        state({
+          issues: [mine(533, 'implementing', { delegatedBrief: brief(533) }), mine(45, 'parked', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
+          runs: [run(45, 'parked')],
+          agents: [{ id: 'agent-impl-533', type: 'callum-flow:implementer', status: 'running' }, ...agents],
+        }),
+        [merged, implementing, ...extra],
+      )
+    const stopped = (agentId: string, issue: number) => [
+      entry(`stop:${agentId}`, 'stop-agent', { rule: 'A2', issue, endedAt: NOW - 30_000 }),
+      entry(`tell:stopped:${agentId}`, 'tell', { wake: 'stopped', class: 'owner', issue, endedAt: NOW - 30_000 }),
+    ]
+    const updates = (r: PlanResult) => keys(r).filter(k => k.startsWith('update-checkout:'))
+
+    test('an answered designer is stopped (rule A2), the owner told what it was; the checkout update and the adjudicators it held go on the next pass', () => {
+      const r = plan(designed([lingering('agent-designer', 'factory-loop:designer')], [designer()]), ACT)
+      expect(find(r, 'stop:agent-designer')).toMatchObject({ kind: 'stop-agent', rule: 'A2', reason: 'worked on past its answer', issue: 533, agentId: 'agent-designer', entry: `design:533:${LIFE}` })
+      expect(find(r, 'tell:stopped:agent-designer')).toMatchObject({
+        kind: 'tell',
+        wake: 'stopped',
+        rule: 'A2',
+        issue: 533,
+        fields: { issue: '533', why: 'answered', agent: 'designer', status: 'waiting', entry: `design:533:${LIFE}` },
+      })
+      // this pass the stop is still to run, so the update and the readers it holds wait
+      expect(updates(r)).toEqual([])
+      expect(r.skipped).toContainEqual({ rule: 'H5', issue: null, why: `update-checkout waits for work reading the main checkout: design:533:${LIFE}` })
+      expect(r.skipped).toContainEqual({ rule: 'P2', issue: 45, why: "waits for the main checkout's update (adjudicator)" })
+      // the stop tried: the update runs and the adjudicator starts after it, while the list still
+      // shows the agent (the engine marks it killed a little later) and once it shows it killed
+      for (const status of ['waiting', 'killed'] as const) {
+        const next = plan(designed([{ ...lingering('agent-designer', 'factory-loop:designer'), status }], [designer(), ...stopped('agent-designer', 533)]), ACT)
+        expect(updates(next)).toEqual([`update-checkout:${NOW - 2 * MIN}`])
+        expect(keys(next).some(k => k.startsWith('adjudicate:01M4RQ0045AAAA:review:'))).toBe(true)
+        expect(keys(next)).not.toContain('stop:agent-designer')
+      }
+      // a stop that failed is not tried again (SPEC 6.1) and holds nothing either: the owner hears
+      const failed = [{ ...stopped('agent-designer', 533)[0]!, status: 'failed' as const }, stopped('agent-designer', 533)[1]!]
+      const after = plan(designed([lingering('agent-designer', 'factory-loop:designer')], [designer(), ...failed]), ACT)
+      expect(updates(after)).toEqual([`update-checkout:${NOW - 2 * MIN}`])
+      expect(keys(after)).toContain('tell:agent-failed:stop:agent-designer')
+    })
+
+    test('within the grace an answered agent is neither stopped nor let go: the list may not yet show its turn ended', () => {
+      const r = plan(designed([lingering('agent-designer', 'factory-loop:designer')], [designer({ endedAt: NOW - 30_000 })]), ACT)
+      expect(keys(r).filter(k => k.startsWith('stop:') || k.startsWith('tell:stopped:'))).toEqual([])
+      expect(updates(r)).toEqual([])
+      expect(r.skipped).toContainEqual({ rule: 'H5', issue: null, why: `update-checkout waits for work reading the main checkout: design:533:${LIFE}` })
+    })
+
+    test('an entry still running is no answer: an agent awaited, or sent a repair message, is never stopped as answered', () => {
+      const r = plan(designed([lingering('agent-designer', 'factory-loop:designer')], [designer({ status: 'running', endedAt: null, reminded: true })]), ACT)
+      expect(keys(r).filter(k => k.startsWith('stop:') || k.startsWith('tell:stopped:'))).toEqual([])
+      expect(updates(r)).toEqual([])
+    })
+
+    test('an answered implementer is stopped, and the gate response it held (one writer per branch) goes on the next pass', () => {
+      // #45's implementer recorded its handoff 25 minutes ago and left a wait loop running; the
+      // adjudicator has answered the parked review gate, so a respond is due on #45's branch
+      const handedOff = entry(`delegate:45:${brief(45)}`, 'delegate', {
+        class: 'develop',
+        issue: 45,
+        startedAt: NOW - 50 * MIN,
+        endedAt: NOW - 25 * MIN,
+        agentId: 'agent-impl-45',
+        outcome: { kind: 'handoff', notGated: false, run: '01M4RQ0045AAAA', head: 'head45', newBranch: null },
+      })
+      const gate = (agents: State['agents'], extra: LedgerEntry[]) =>
+        withLedger(parkedReview({ agents }), [handedOff, adjudicated({ type: 'approve', reason: 'NIT only' }), ...extra])
+      const r = plan(gate([lingering('agent-impl-45', 'callum-flow:implementer')], []), CFG)
+      expect(keys(r)).toEqual(['stop:agent-impl-45', 'tell:stopped:agent-impl-45'])
+      expect(find(r, 'stop:agent-impl-45')).toMatchObject({ rule: 'A2', reason: 'worked on past its answer', entry: `delegate:45:${brief(45)}` })
+      expect(find(r, 'tell:stopped:agent-impl-45')).toMatchObject({ fields: { issue: '45', why: 'answered', agent: 'implementer', status: 'waiting' } })
+      expect(r.skipped).toContainEqual({ rule: 'P3', issue: 45, why: 'an agent already works the branch of #45 (respond)' })
+      const next = plan(gate([lingering('agent-impl-45', 'callum-flow:implementer')], stopped('agent-impl-45', 45)), CFG)
+      expect(keys(next)).toEqual([`respond:${AT45}:approve`])
+    })
+
+    test('an answered adjudicator and an answered fixer are stopped the same way', () => {
+      const adjudicator = adjudicated({ type: 'approve', reason: 'NIT only' })
+      const answered = { ...adjudicator, startedAt: NOW - 10 * MIN, endedAt: NOW - 5 * MIN, agentId: 'agent-adj' }
+      const r = plan(withLedger(parkedReview({ agents: [lingering('agent-adj', 'factory-loop:adjudicator')] }), [answered]), CFG)
+      expect(keys(r)).toEqual([`respond:${AT45}:approve`, 'stop:agent-adj', 'tell:stopped:agent-adj'])
+      expect(find(r, 'tell:stopped:agent-adj')).toMatchObject({ fields: { why: 'answered', agent: 'adjudicator' } })
+      const fixer = entry('fixer:guard:550:head50', 'spawn', {
+        agent: 'fixer',
+        class: 'drive',
+        issue: 50,
+        startedAt: NOW - 30 * MIN,
+        endedAt: NOW - 20 * MIN,
+        agentId: 'a-fix',
+        outcome: { kind: 'handoff', notGated: false, run: 'R50', head: 'head50', newBranch: null },
+      })
+      const f = plan(mergeReady([guarded(), reviewed(), fixer], { agents: [lingering('a-fix', 'callum-flow:fixer')] }), CFG)
+      expect(keys(f)).toEqual(['stop:a-fix', 'tell:stopped:a-fix'])
+      expect(keys(plan(mergeReady([guarded(), reviewed(), fixer, ...stopped('a-fix', 50)], { agents: [lingering('a-fix', 'callum-flow:fixer')] }), CFG))).toEqual(['merge:550:head50'])
+    })
   })
 
   test('an agent whose attempts ran out is reported to the owner (SPEC A1)', () => {

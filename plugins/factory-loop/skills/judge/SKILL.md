@@ -207,7 +207,8 @@ Notices:
 - `claim-lost` (issue, holder): another device took the issue; the loop stopped its agents.
 - `stopped` (issue, why): the loop stopped an agent: `closed` or `merged` (its issue ended),
   `dropped` (the owner dropped it), `split` (the issue became a tracker, its sub-issues join the
-  queue).
+  queue), `answered` (its answer was recorded but it stayed at work, usually on a background
+  command it left running; agent, status and entry say which, and its answer stands).
 - `at-cap` (live, cap): this device holds its cap of live issues, so claims wait. Raising it is
   `maxInFlightIssues` in `.claude/factory-loop.json`.
 - `worktree-dirty` (path, branch; detail: how the issue ended): the issue is finished, but its

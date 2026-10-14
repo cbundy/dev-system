@@ -42,7 +42,8 @@ const JUDGE_REMIND_MS = 30 * 60_000
 // The title's M: issues merged in this window (D-23).
 const MERGED_WINDOW_MS = 6 * HOUR
 // An agent still listed at work this long after its answer was recorded did not end its turn:
-// the list marks one that did idle or completed within seconds (answeredLive, turnEnded).
+// the list marks one that did idle or completed within seconds (answeredLive, turnEnded). Rule
+// A2 then stops it (#587).
 const ANSWERED_GRACE_MS = 60_000
 // A hand merge older than this gets no follow-ups (rule M7). callum-flow-factory-state lists a
 // final stage for 24 hours, and the bound keeps a merge from ever outliving the ledger's 7-day
@@ -353,12 +354,29 @@ export function turnEnded(status: AgentStatus): boolean {
 
 // answeredLive: an agent entry that is done, while the list still shows its agent at work
 // ANSWERED_GRACE_MS after the answer. An answer through the tool ends the entry before the
-// agent's turn does (SPEC 7.3a.4), and an agent that works on, or waits on background work,
-// still holds its branch (agentWriting), so rules A1 and A2 keep covering it. The grace leaves
-// alone an agent the list has not yet marked idle or completed (turnEnded).
+// agent's turn does (SPEC 7.3a.4), and an agent that works on, or waits on background work it
+// left running (a server, a wait loop that never ends), is listed at work up to its timeout, so
+// rule A2 stops it once the grace is out (#587, D-75). The grace leaves alone an agent the list has
+// not yet marked idle or completed (turnEnded). Only a done entry counts: its answer is applied
+// and saved (act.ts agentAnswered), so a stop discards nothing; an entry awaiting an answer, or
+// a repair reply, runs.
 function answeredLive(agents: readonly AgentView[], e: LedgerEntry, now: Ms): boolean {
   if (e.status !== 'done' || e.agentId === undefined || e.endedAt === null || (e.kind !== 'spawn' && e.kind !== 'delegate')) return false
   return now - e.endedAt > ANSWERED_GRACE_MS && listedLive(agents, e.agentId)
+}
+
+// heldBy: an agent entry whose agent still holds what it works on (the main checkout for rule
+// H5, its branch for one writer per branch): its entry running, or its agent listed at work. An
+// agent answered past the grace stops holding once its stop (rule A2) has been tried, done or
+// failed, so what it held goes on the next pass, after the stop: what it left running is
+// stopped with it or, if the stop failed, told to the owner, never waited on to its timeout
+// (#587).
+function heldBy(ctx: Ctx, e: LedgerEntry): boolean {
+  if (e.status === 'running') return true
+  if (e.agentId === undefined || !agentLive(ctx, e.agentId)) return false
+  if (!answeredLive(ctx.state.agents, e, ctx.state.now)) return true
+  const stop = ctx.byKey.get(`stop:${e.agentId}`)
+  return stop === undefined || stop.status === 'running'
 }
 
 function done(ctx: Ctx, key: string): LedgerEntry | undefined {
@@ -677,11 +695,12 @@ function readsCheckout(kind: ActionKind, agent: AgentType | undefined): boolean 
 }
 
 // checkoutReaders: the loop's designers and adjudicators still at work, by the ledger or by the
-// agent list (one whose answer is in may read on), and its running tasks.
+// agent list (one whose answer is in may read on, until rule A2 has stopped it: heldBy), and its
+// running tasks.
 function checkoutReaders(ctx: Ctx): string[] {
   return ctx.state.ledger
     .filter(e => readsCheckout(e.kind, e.agent))
-    .filter(e => e.status === 'running' || (e.agentId !== undefined && agentLive(ctx, e.agentId)))
+    .filter(e => heldBy(ctx, e))
     .map(e => e.key)
     .sort()
 }
@@ -2161,6 +2180,15 @@ function agents(ctx: Ctx) {
       want(ctx, stop('timed out'))
       continue
     }
+    // its answer is in and the grace is out, yet the list shows it at work: whatever it left
+    // running would hold the checkout or its branch up to its timeout (#587). The owner hears
+    // once what it was and how the list showed it.
+    if (entry.status === 'done') {
+      const listed = state.agents.find(a => a.id === agentId)?.status ?? null
+      want(ctx, stop('worked on past its answer'))
+      want(ctx, wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why: 'answered', agent, status: listed, entry: entry.key }))
+      continue
+    }
     if (entry.issue === null) continue
     const issue = ctx.issues.get(entry.issue)
     if (issue === undefined || state.control.paused.includes(entry.issue)) continue
@@ -2241,14 +2269,10 @@ function writesBranch(action: Action): boolean {
 }
 
 // agentWriting: an implementer or fixer of this issue still runs, by the ledger, or by the agent
-// list for one whose entry ended while the agent went on (a stop that did not take, SPEC 13).
+// list for one whose entry ended while the agent went on (a stop that did not take, SPEC 13; an
+// answer, until rule A2 has stopped it: heldBy).
 function agentWriting(ctx: Ctx, issue: number): boolean {
-  return ctx.state.ledger.some(
-    e =>
-      e.issue === issue &&
-      (e.kind === 'delegate' || (e.kind === 'spawn' && e.agent === 'fixer')) &&
-      (e.status === 'running' || (e.agentId !== undefined && agentLive(ctx, e.agentId))),
-  )
+  return ctx.state.ledger.some(e => e.issue === issue && (e.kind === 'delegate' || (e.kind === 'spawn' && e.agent === 'fixer')) && heldBy(ctx, e))
 }
 
 function admit(ctx: Ctx): Action[] {
