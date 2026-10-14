@@ -57,6 +57,7 @@ function run() {
       NO_MISTAKES_HOME: path.join(tmp, "nm"),
       CLAUDE_CONFIG_DIR: path.join(tmp, "claude"),
       DEV_MACHINE_NAME: DEV,
+      DEV_CONTEXT_WINDOW_DIR: path.join(tmp, "windows"),
       HEARTBEAT_NOW_MS: String(NOW),
     },
   });
@@ -190,7 +191,7 @@ test("missing files give idle and no throw", () => {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
   const { out } = run();
-  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null });
+  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [] });
 });
 
 test("an unreadable state.sqlite degrades to the other sources and reports on stderr", () => {
@@ -249,3 +250,41 @@ for (const idle of ["ready", "reclaimed", "owner_wait"]) {
     assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[5, "run_started"]]);
   });
 }
+
+// A sessions/<pid>.json registration as Claude Code writes it. This test process is
+// the live pid; procStart is its real start time unless given.
+function registerSession(id, { pid = process.pid, procStart } = {}) {
+  const stat = () => fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+  const start = procStart ?? stat().slice(stat().lastIndexOf(")") + 2).split(" ")[19];
+  fs.mkdirSync(path.join(tmp, "claude", "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(tmp, "claude", "sessions", `${pid}.json`), JSON.stringify({ pid, sessionId: id, procStart: start }));
+}
+function writeSubagent(parent, agent, last) {
+  const dir = path.join(tmp, "claude", "projects", "p", parent, "subagents");
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = [{ type: "user", message: { role: "user", content: "task" } }, last, { type: "system", content: "x" }];
+  fs.writeFileSync(path.join(dir, `agent-${agent}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+}
+
+test("sessions: a live registered session, its running sub-agents and the window its status line wrote", () => {
+  registerSession("s1");
+  writeSubagent("s1", "a1", { type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [] } });
+  writeSubagent("s1", "a2", { type: "assistant", message: { role: "assistant", stop_reason: "end_turn", content: [] } });
+  writeSubagent("s1", "a3", { type: "user", message: { role: "user", content: [{ type: "tool_result" }] } });
+  fs.mkdirSync(path.join(tmp, "windows"));
+  fs.writeFileSync(path.join(tmp, "windows", "s1"), "1000000\n");
+  const { out } = run();
+  assert.deepEqual(out.sessions, [
+    { session_id: "s1", parent_session_id: null, context_window: 1000000 },
+    { session_id: "agent-a1", parent_session_id: "s1", context_window: null },
+    { session_id: "agent-a3", parent_session_id: "s1", context_window: null },
+  ]);
+});
+
+test("sessions: a registration whose pid was reused by another process, or whose pid is gone, is not live", () => {
+  registerSession("s1", { procStart: "1" });
+  assert.deepEqual(run().out.sessions, []);
+  fs.rmSync(path.join(tmp, "claude", "sessions"), { recursive: true });
+  registerSession("s2", { pid: 2 ** 22 + 7, procStart: "1" });
+  assert.deepEqual(run().out.sessions, []);
+});

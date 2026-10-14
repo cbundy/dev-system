@@ -152,6 +152,22 @@ reset; route 506 69; first=$out; : > "$d/events"; route 506 69; [ "$out" = "$fir
 reset; REPO=CBundy/Dev-System route 506 69; expect opus hash 68 69 "upper-case repo"; REPO=''
 reset; REPO=none route 506 69; expect opus hash 68 69 "repo from gh when CALLUM_FLOW_REPO is unset"; REPO=''
 
+# -h and --help print the usage line on stdout and exit 0, log nothing, and win
+# over an invalid CALLUM_FLOW_IMPLEMENTER_OPUS_PCT
+help_ok() {
+  [ "$rc" = 0 ] || fail "$1: exit $rc, wanted 0"
+  [ "$out" = "usage: callum-flow-implementer-route <issue>" ] || fail "$1: printed '$out'"
+  [ ! -s "$tmpdir/err" ] || fail "$1: wrote to stderr: $(cat "$tmpdir/err")"
+  [ ! -s "$d/events" ] || fail "$1: logged on help"
+}
+reset; route --help 50; help_ok "--help"
+reset; route -h 50; help_ok "-h"
+reset; route --help abc; help_ok "--help with invalid pct"
+reset; route -h; help_ok "-h with pct unset"
+reset
+set +e; PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_EVENT_BIN="$tmpdir/event" CALLUM_FLOW_REPO=o/r "$SH" "$ROUTE" --help 506 >"$tmpdir/out" 2>/dev/null; rc=$?; set -e
+out=$(cat "$tmpdir/out"); usage_err "--help with a second argument"
+
 # usage errors log nothing
 reset; route 506 abc; usage_err "pct abc"
 grep -q CALLUM_FLOW_IMPLEMENTER_OPUS_PCT "$tmpdir/err" || fail "usage message must name the variable"

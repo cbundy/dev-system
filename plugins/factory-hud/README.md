@@ -17,7 +17,9 @@ A Claude Code mod that keeps a one-line readout on screen:
 On usage measurements, it shows a toast once per conversation for each threshold: context
 at 85% or more, 5-hour usage at 90% or more, and 7-day usage at 90% or more.
 
-It only draws. Nothing it shows reaches the conversation, and it never calls a model.
+It only draws, apart from one local file: the session's context window size, which the worker
+heartbeat pushes to the fleet (`sessions` in `factory.workers`). Nothing it shows reaches the
+conversation, and it never calls a model.
 
 Unlike [`dev-statusline`](../../images/base/README.md#dev-statusline), which only the
 terminal draws, a mod is drawn by every client the session shows on: the terminal, the

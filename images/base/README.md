@@ -1622,12 +1622,17 @@ exits 2) sends that percentage of issues to `opus` by a stable hash (`cksum` of 
 lower-cased, mod 100). The `implementer:` salt keeps it independent of the design split above, and the hash means a
 re-delegation, a resumed orchestrator or a second device keeps the issue on the same model. An unknown repo or unreadable
 labels print `sonnet` with a warning. Only the implementer is routed: fixers, the designer, the adjudicator and the
-pipeline keep their own models, so a difference between the groups comes from the implementer. Each call logs an
+pipeline keep their own models, so a difference between the groups comes from the implementer. Each routing decision logs an
 `implementer_routed` event (`model=.. reason=label|default|hash|fallback bucket=.. pct=..`), and it is in the synced
 allow list. To run the comparison, add `"env": { "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT": "50" }` to the repo's
 `.claude/settings.json` (the template defines no `env`, so `callum-dev update` keeps it, and every device reads the same
 share), keep the share fixed while it runs, and read the result with the
 [implementer model comparison](../../docs/metrics.md#8-implementer-model-comparison) query.
+
+With exactly one argument, `-h` or `--help` prints `usage: callum-flow-implementer-route <issue>` on stdout,
+writes nothing to stderr, exits 0 and logs no event, even when `CALLUM_FLOW_IMPLEMENTER_OPUS_PCT` is invalid.
+Help is handled before percentage validation. Usage errors (a missing, empty or nonnumeric issue, an invalid
+percentage, or extra arguments, including `--help <issue>`) print to stderr, exit 2 and log no event.
 
 `event-push-loop` ships the lines to `factory.events` in the agentsview PostgreSQL, using
 the same URL as the session push (`agentsview-pg-url` secret or `AGENTSVIEW_PG_URL`; off
@@ -1699,6 +1704,13 @@ fails when a configured URL has no running loop.
 
 `in_flight` lists the issues and runs that make the worker busy, with `repo`, `issue`, `run_id`,
 `branch` and `state` for each entry; unavailable identifiers are null.
+`sessions` lists the Claude sessions live on the device at this beat, each with `session_id` (as in
+`agentsview.sessions.id`), `parent_session_id` (null for a top-level session) and `context_window` (null when
+unknown). A top-level session is one Claude Code registers in `$CLAUDE_CONFIG_DIR/sessions/<pid>.json` whose
+process still runs; a sub-agent (`agent-<id>`) is one of its transcripts whose last message is not a finished
+turn. `context_window` is the size the [factory-hud](../../plugins/factory-hud/README.md) mod last wrote to
+`DEV_CONTEXT_WINDOW_DIR/<session_id>` (default `/tmp/dev-context-window`), so it is null without that mod and
+for sub-agents. A session is live while it is listed in a row that is not `stale`; the stopped beat lists none.
 `state` is `busy` when this device has an issue in flight, a no-mistakes run has a status other than
 `completed`, `failed` or `cancelled` and no `superseded` event on this device names it, or a prompt was typed in a Claude transcript in the last 5 minutes (`heartbeat-state` decides, from `/persist/events`, `state.sqlite`
 and the transcripts, using `classifyWake` of `callum-flow-evaluate`); otherwise `idle`. An issue is in flight

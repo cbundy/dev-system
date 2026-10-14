@@ -6,6 +6,7 @@
 # stable and exact, so it is computed, never asked of a model.
 #
 # Usage: callum-flow-implementer-route <issue>
+#        callum-flow-implementer-route -h | --help
 #
 # Prints exactly one line, the model alias the orchestrator passes as `model`
 # on the callum-flow:implementer call. Order of decision:
@@ -30,7 +31,8 @@
 #   callum-flow-event implementer_routed --issue N --note "model=.. reason=.. bucket=.. pct=.."
 # A logging failure never changes the output or the exit code.
 #
-# Exit codes: 0 routed (including the fallback), 2 usage error (bad issue, or
+# Exit codes: 0 routed (including the fallback) or -h | --help (usage on stdout,
+# nothing logged, whatever the environment), 2 usage error (bad issue, or
 # CALLUM_FLOW_IMPLEMENTER_OPUS_PCT not a number from 0 to 100); nothing is logged.
 #
 # Environment: CALLUM_FLOW_IMPLEMENTER_OPUS_PCT (default 0), CALLUM_FLOW_REPO
@@ -51,7 +53,13 @@ usage() {
   echo "usage: callum-flow-implementer-route <issue>" >&2
   exit 2
 }
+help() {
+  echo "usage: callum-flow-implementer-route <issue>"
+  exit 0
+}
 err() { echo "callum-flow-implementer-route: $*" >&2; }
+
+[ $# -ne 1 ] || case "$1" in -h | --help) help ;; esac
 
 case "$PCT" in
   '' | *[!0-9]*) usage "CALLUM_FLOW_IMPLEMENTER_OPUS_PCT must be a number from 0 to 100" ;;

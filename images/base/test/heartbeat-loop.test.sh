@@ -76,7 +76,7 @@ cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
 [ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 60
-echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null}'
+echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}]}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
@@ -124,7 +124,7 @@ once > "$tmpdir/once.out" 2>&1 || fail "--once should succeed: $(cat "$tmpdir/on
 [ "$(calls)" = 1 ] || fail "one psql call expected"
 sql="$fakebin/psql-sql-1"
 cols=$(tr '\n' ' ' < "$sql" | sed -n 's/.*INSERT INTO factory\.workers (\([^)]*\)).*/\1/p' | tr -d ' ')
-[ "$cols" = device,repo,role,ring,runtime,coder_workspace,base_image,dev_image,template_version,plugin_version,versions,state,in_flight,chat_active_at,critical_failures,push,interval_s,started_at,last_seen ] ||
+[ "$cols" = device,repo,role,ring,runtime,coder_workspace,base_image,dev_image,template_version,plugin_version,versions,state,in_flight,chat_active_at,sessions,critical_failures,push,interval_s,started_at,last_seen ] ||
   fail "the INSERT must name exactly the workers columns, got: $cols"
 grep -q 'ON CONFLICT (device) DO UPDATE' "$sql" || fail "upsert expected"
 grep -q 'last_seen = now()' "$sql" || fail "last_seen must be now()"
@@ -134,6 +134,7 @@ for kv in device=dev-box repo=acme/widgets role=worker ring=canary runtime=coder
 done
 grep -q '^started_at=20' "$fakebin/psql-args-1" || fail "started_at should be the container start: $(tr '\n' ' ' < "$fakebin/psql-args-1")"
 grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "in_flight from heartbeat-state missing"
+grep -q '^sessions=\[{"session_id":"s1"' "$fakebin/psql-args-1" || fail "sessions from heartbeat-state missing"
 grep -q '^push={"events"' "$fakebin/psql-args-1" || fail "push document missing"
 if grep -q 's3cret\|postgres:' "$fakebin/psql-args-1" "$tmpdir/once.out"; then fail "the URL leaked into argv or output"; fi
 [ -e "$hbdir/dev-heartbeat.state" ] && grep -q '^state=busy$' "$hbdir/dev-heartbeat.state" || fail "the state file should be written after a beat"
@@ -268,6 +269,7 @@ reset
 hb env "$BASH" "$LOOP" --final || fail "--final with no loop must exit 0"
 [ "$(calls)" = 1 ] && has_arg 1 state=stopped || fail "--final with no loop writes the stopped beat"
 grep -q '^in_flight=\[{"issue":1' "$fakebin/psql-args-1" || fail "the stopped beat carries in_flight from heartbeat-state"
+has_arg 1 'sessions=[]' || fail "the stopped beat lists no live sessions"
 has_arg 1 base_image=2.29.0 || fail "the stopped beat reuses the versions snapshot"
 [ ! -e "$fakebin/dver-local-calls" ] || fail "the stopped beat must not run dev-version"
 grep -q 'CREATE TABLE IF NOT EXISTS factory.workers' "$fakebin/psql-sql-1" || fail "a stopped beat from a process that sent no DDL sends it"

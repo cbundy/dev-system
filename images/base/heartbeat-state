@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// heartbeat-state: prints {state, in_flight, chat_active_at} as JSON for
-// heartbeat-loop (cbundy/dev-system#339). One call per beat.
+// heartbeat-state: prints {state, in_flight, chat_active_at, sessions} as JSON
+// for heartbeat-loop (cbundy/dev-system#339). One call per beat.
 //
 // busy when any of these holds, otherwise idle:
 //   - an issue on THIS device whose latest lifecycle event is not merged,
@@ -20,12 +20,25 @@
 //     unless a superseded event on this device names it
 //   - a typed prompt (classifyWake kind 'owner', not a sidechain) in a Claude
 //     transcript within the last 5 minutes
+//
+// sessions lists the Claude sessions live on this device now, one
+// {session_id, parent_session_id, context_window} each:
+//   - a top-level session is one Claude Code registers in
+//     $CLAUDE_CONFIG_DIR/sessions/<pid>.json whose process is still running
+//     (the pid's start time matches the file's procStart, so a reused pid after
+//     a restart does not count); parent_session_id is null
+//   - a sub-agent is a subagents/agent-<id>.jsonl transcript of a live
+//     top-level session whose last message is not a finished turn (stop_reason
+//     end_turn); its session_id is agent-<id>, as agentsview names it, and its
+//     parent_session_id the top-level session
+//   - context_window is the window size the session's status line last wrote
+//     to $DEV_CONTEXT_WINDOW_DIR/<session_id> (the factory-hud mod), else null
 // Any read error degrades to the remaining sources and goes to stderr; this
 // never fails the beat.
 //
 // Environment: CALLUM_EVENTS_DIR, NO_MISTAKES_HOME, CLAUDE_CONFIG_DIR,
-//   DEV_MACHINE_NAME, HEARTBEAT_EVALUATE (path of callum-flow-evaluate),
-//   HEARTBEAT_NOW_MS (tests).
+//   DEV_MACHINE_NAME, DEV_CONTEXT_WINDOW_DIR (default /tmp/dev-context-window),
+//   HEARTBEAT_EVALUATE (path of callum-flow-evaluate), HEARTBEAT_NOW_MS (tests).
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -154,6 +167,69 @@ function chatActiveAt(claudeDir) {
   return newest ? new Date(newest).toISOString() : null;
 }
 
+// procStart: a process's start time in clock ticks (field 22 of /proc/<pid>/stat),
+// as Claude Code records it in sessions/<pid>.json; null when the pid is gone.
+function procStart(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19] || null;
+  } catch { return null; }
+}
+
+// lastMessage: the last user or assistant line of a transcript, read from its tail.
+function lastMessage(file) {
+  const st = fs.statSync(file);
+  const start = Math.max(0, st.size - TAIL_BYTES);
+  const fd = fs.openSync(file, 'r');
+  const buf = Buffer.alloc(st.size - start);
+  try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+  const lines = buf.toString('utf8').split('\n');
+  if (start > 0) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let o;
+    try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (o && (o.type === 'user' || o.type === 'assistant')) return o;
+  }
+  return null;
+}
+
+function contextWindow(dir, id) {
+  try {
+    const n = Number(fs.readFileSync(path.join(dir, id), 'utf8').trim());
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch { return null; }
+}
+
+function liveSessions(claudeDir, windowDir) {
+  const sessions = [];
+  let names = [];
+  try { names = fs.readdirSync(path.join(claudeDir, 'sessions')).filter((n) => /^[0-9]+\.json$/.test(n)); } catch { return sessions; }
+  let projects = [];
+  try { projects = fs.readdirSync(path.join(claudeDir, 'projects')); } catch { /* no transcripts yet */ }
+  for (const n of names) {
+    let s;
+    try { s = JSON.parse(fs.readFileSync(path.join(claudeDir, 'sessions', n), 'utf8')); } catch (e) { warn(`${n}: ${e.message}`); continue; }
+    if (!s || typeof s.sessionId !== 'string' || !/^[\w-]+$/.test(s.sessionId)) continue;
+    const started = procStart(s.pid);
+    if (started === null || (s.procStart !== undefined && String(s.procStart) !== started)) continue;
+    sessions.push({ session_id: s.sessionId, parent_session_id: null, context_window: contextWindow(windowDir, s.sessionId) });
+    for (const p of projects) {
+      const dir = path.join(claudeDir, 'projects', p, s.sessionId, 'subagents');
+      let agents = [];
+      try { agents = fs.readdirSync(dir).filter((f) => /^agent-[\w-]+\.jsonl$/.test(f)); } catch { continue; }
+      for (const f of agents) {
+        try {
+          const last = lastMessage(path.join(dir, f));
+          if (last && last.message && last.message.stop_reason === 'end_turn') continue;
+          const id = f.slice(0, -'.jsonl'.length);
+          sessions.push({ session_id: id, parent_session_id: s.sessionId, context_window: contextWindow(windowDir, id) });
+        } catch (e) { warn(`${f}: ${e.message}`); }
+      }
+    }
+  }
+  return sessions;
+}
+
 function main() {
   const dev = device();
   const inFlight = [];
@@ -191,10 +267,15 @@ function main() {
   try { chat = chatActiveAt(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')); } catch (e) { warn(`chat: ${e.message}`); }
   const chatBusy = chat !== null && now - Date.parse(chat) <= CHAT_WINDOW_MS;
   const state = inFlight.length > 0 || chatBusy ? 'busy' : 'idle';
-  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat })}\n`);
+  let sessions = [];
+  try {
+    sessions = liveSessions(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
+      process.env.DEV_CONTEXT_WINDOW_DIR || '/tmp/dev-context-window');
+  } catch (e) { warn(`sessions: ${e.message}`); }
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions })}\n`);
 }
 
 try { main(); } catch (e) {
   warn(e.message);
-  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null })}\n`);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [] })}\n`);
 }

@@ -501,6 +501,15 @@ FROM factory.workers_status
 ORDER BY stale, device;
 ```
 
+Live Claude sessions and sub-agents, with the context window when known:
+
+```sql
+SELECT w.device, s->>'session_id' AS session_id, s->>'parent_session_id' AS parent_session_id,
+       (s->>'context_window')::int AS context_window
+FROM factory.workers_status w, jsonb_array_elements(w.sessions) s
+WHERE NOT w.stale AND w.state <> 'stopped';
+```
+
 ## Linking pipeline runs to issues
 
 `run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have
