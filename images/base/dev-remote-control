@@ -36,7 +36,7 @@
 #   (dev-prune-worktrees --delete: orphaned, clean, pushed, idle 72h+;
 #   cbundy/dev-system#93);
 # - once per container start, resumes the other Remote Control sessions that
-#   were live when it stopped, in the tmux session `claude-restored`, without
+#   were live when it stopped, in the tmux session `rc-restored`, without
 #   sending them a message (dev-remote-sessions, cbundy/dev-system#533), and
 #   records the live ones about every minute and on SIGTERM so a graceful stop
 #   is remembered too;
@@ -256,13 +256,13 @@ restore_sessions() {
 # its Remote Control session), then removes the tmux session.
 stop_claude() {
   local pid _
-  pid=$(tmux display-message -p -t "$SESSION" '#{pane_pid}' 2>/dev/null) || return 0
+  pid=$(tmux display-message -p -t "=$SESSION" '#{pane_pid}' 2>/dev/null) && [ -n "$pid" ] || return 0
   kill -TERM -- "-$pid" 2>/dev/null
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     kill -0 "$pid" 2>/dev/null || break
     sleep 0.5
   done
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux kill-session -t "=$SESSION" 2>/dev/null || true
 }
 
 on_signal() {
@@ -282,7 +282,7 @@ supervise() {
 
   # A session left over from an earlier supervisor that was killed outright
   # is replaced, so exactly one Claude runs.
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  tmux kill-session -t "=$SESSION" 2>/dev/null || true
 
   # Which Remote Control sessions to bring back is decided now, before the
   # worktree prune below, which must not remove their working directories.
@@ -362,8 +362,10 @@ supervise() {
       bash "$status_file" "${args[@]}" 9>&-; then
       log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
       restore_sessions
-      last_snapshot=$(date +%s)
-      while tmux has-session -t "$SESSION" 2>/dev/null; do
+      # The first snapshot comes soon, so the new conversation is known as the
+      # supervisor's even if the container is killed within the minute.
+      last_snapshot=$(($(date +%s) - 50))
+      while tmux has-session -t "=$SESSION" 2>/dev/null; do
         pause 2
         if [ $(($(date +%s) - last_snapshot)) -ge 60 ]; then
           snapshot_sessions

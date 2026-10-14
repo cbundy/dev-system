@@ -170,7 +170,7 @@ docker rm -f "$c" >/dev/null
 
 # Restoring the other Remote Control sessions (cbundy/dev-system#533): a stale session record
 # (its process is gone, as after a container stop) with a transcript is resumed in tmux
-# session claude-restored, once, in its own cwd with its recorded effort and bypass mode; the
+# session rc-restored, once, in its own cwd with its recorded effort and bypass mode; the
 # supervisor's own session is not duplicated and a supervisor restart does not restore again.
 RESTORE_SID=77777777-1111-4111-8111-777777777777
 c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_NAME=rc-test "$IMAGE" bash -c "
@@ -178,26 +178,31 @@ c=$(run_bg -w /tmp -e STUB="$STUB" -e DEV_REMOTE_CONTROL_NAME=rc-test "$IMAGE" b
   printf '%s\\n' '{\"type\":\"permission-mode\",\"permissionMode\":\"bypassPermissions\"}' '{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}' '{\"type\":\"assistant\",\"effort\":\"high\",\"message\":{\"model\":\"claude-test-model\"}}' > /persist/claude/projects/-tmp-restored-ws/$RESTORE_SID.jsonl &&
   printf '{\"pid\":999999,\"procStart\":\"1\",\"sessionId\":\"$RESTORE_SID\",\"cwd\":\"/tmp/restored-ws\",\"kind\":\"interactive\",\"name\":\"restored-name\",\"tmux\":\"x:@1.%%1\",\"bridgeSessionId\":\"session_x\",\"updatedAt\":%s}' \$((\$(date +%s) * 1000)) > /persist/claude/sessions/999999.json &&
   touch /tmp/logged-in && $WITH_STUB exec dev-remote-control")
-check "restore: a stale Remote Control session is resumed in claude-restored with its cwd, effort, model and bypass flags" bash -c "
+check "restore: a stale Remote Control session is resumed in rc-restored with its cwd, effort, model and bypass flags" bash -c "
   for _ in \$(seq 20); do docker exec '$c' grep -q -- '--resume $RESTORE_SID' /tmp/claude-starts && break; sleep 1; done
   docker exec '$c' cat /tmp/claude-starts
   docker exec '$c' grep -qF -- '/tmp/restored-ws --resume $RESTORE_SID --remote-control restored-name --dangerously-skip-permissions --settings {\"skipDangerousModePermissionPrompt\":true} --effort high --model claude-test-model' /tmp/claude-starts &&
-  docker exec '$c' tmux has-session -t claude-restored &&
+  docker exec '$c' tmux has-session -t =rc-restored &&
   [ \"\$(docker exec '$c' grep -c -- '--resume' /tmp/claude-starts)\" = 1 ] &&
   docker exec '$c' jq -e '.projects[\"/tmp/restored-ws\"].hasTrustDialogAccepted == true' /persist/claude/.claude.json"
 check "restore: the supervisor's own tmux session is left alone and the record is ledgered" bash -c "
-  docker exec '$c' tmux has-session -t claude &&
+  docker exec '$c' tmux has-session -t =claude &&
   docker exec '$c' test -e /persist/dev-restart-self/remote-sessions/ledger/999999-1"
-docker exec "$c" touch /tmp/claude-exit
-check "restore: a supervisor restart does not restore again" bash -c "
+# Only the supervisor's Claude ends: the restored session in rc-restored keeps running and must
+# not pass for the supervisor's tmux session, so the supervisor starts Claude again.
+docker exec "$c" tmux kill-session -t =claude
+check "restore: with a restored session still running, the supervisor restarts its Claude and does not restore again" bash -c "
   for _ in \$(seq 20); do [ \"\$(docker exec '$c' grep -vc -- '--resume' /tmp/claude-starts)\" -ge 2 ] && break; sleep 1; done
   sleep 3
+  docker exec '$c' cat /tmp/claude-starts
+  [ \"\$(docker exec '$c' grep -vc -- '--resume' /tmp/claude-starts)\" -ge 2 ] &&
+  docker exec '$c' tmux has-session -t =rc-restored &&
   [ \"\$(docker exec '$c' grep -c -- '--resume $RESTORE_SID' /tmp/claude-starts)\" = 1 ]"
 docker rm -f "$c" >/dev/null
 
 # With DEV_REMOTE_CONTROL_RESUME=1, another Remote Control session in the workspace whose
 # transcript is the newest one is left to the restore: the supervisor resumes its own older
-# conversation, and the other session comes back once, in claude-restored, under its own name.
+# conversation, and the other session comes back once, in rc-restored, under its own name.
 OWN_SID=88888888-2222-4222-8222-888888888888 OTHER_SID=99999999-3333-4333-8333-999999999999
 c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "
   $(transcript $OWN_SID real '1 hour ago') &&
@@ -211,7 +216,7 @@ check "resume and restore: the supervisor resumes its own conversation, not a ne
   docker exec '$c' grep -qxF -- '/tmp --remote-control rc-test --resume $OWN_SID The workspace restarted: carry on.' /tmp/claude-starts &&
   docker exec '$c' grep -qxF -- '/tmp --resume $OTHER_SID --remote-control other-name' /tmp/claude-starts &&
   [ \"\$(docker exec '$c' grep -c -- '--resume $OTHER_SID' /tmp/claude-starts)\" = 1 ] &&
-  docker exec '$c' tmux has-session -t claude-restored"
+  docker exec '$c' tmux has-session -t =rc-restored"
 docker rm -f "$c" >/dev/null
 
 c=$(run_bg -w /tmp -e STUB="$STUB" "${RESUME_ENV[@]}" "$IMAGE" bash -c "

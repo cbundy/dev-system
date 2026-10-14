@@ -1058,8 +1058,8 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   transcript, and marks the cwd as trusted. The session returns to the same claude.ai
   session (same `bridgeSessionId`) under its name, with its full history, and is sent no
   message: it waits for you.
-- They run in the tmux session `claude-restored`, one window per session (not in the
-  supervisor's `claude` session): `tmux attach -t claude-restored`.
+- They run in the tmux session `rc-restored`, one window per session (not in the
+  supervisor's `claude` session): `tmux attach -t rc-restored`.
 - Never restored: the supervisor's own sessions, sessions without a `bridgeSessionId`,
   non-interactive sessions, sessions with no transcript, and sessions last updated more
   than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
@@ -1074,7 +1074,11 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   snapshot records the session ID of the supervisor's Claude (or Remote Control server)
   process, the one in the first window of tmux session `claude`, and those IDs are never
   restored. Other sessions are restored even when their record names tmux session
-  `claude` (another window there, or a session the server spawned).
+  `claude` (another window there, or a session the server spawned). The first snapshot
+  after each Claude start comes about 10 seconds in. On the first start before any
+  snapshot has run (the first start of an image with this feature), session mode instead
+  treats the stale records in tmux session `claude` as the supervisor's, so its last
+  conversation is not restored and `DEV_REMOTE_CONTROL_RESUME` can resume it.
 
 This relies on Claude Code's `sessions/*.json` format, which is not documented; unreadable
 records are skipped with a log line. A server-spawned session is treated like any other

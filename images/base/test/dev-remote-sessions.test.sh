@@ -156,8 +156,8 @@ rm -f "$TMUX_LOG.session"
 "$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
 [ "$(grep -c '^new-session' "$TMUX_LOG")" = 1 ] || fail "restore: expected one new-session: $(cat "$TMUX_LOG")"
 [ "$(grep -c '^new-window' "$TMUX_LOG")" = 2 ] || fail "restore: expected two new-windows: $(cat "$TMUX_LOG")"
-grep -q -- '-s claude-restored' "$TMUX_LOG" || fail "restore: not in the claude-restored session"
-grep -v 'claude-restored' "$TMUX_LOG" | grep -qv '^has-session' && fail "restore touched another tmux session: $(cat "$TMUX_LOG")"
+grep -q -- '-s rc-restored' "$TMUX_LOG" || fail "restore: not in the rc-restored session"
+grep -v 'rc-restored' "$TMUX_LOG" | grep -qv '^has-session' && fail "restore touched another tmux session: $(cat "$TMUX_LOG")"
 la=$(grep -- "--resume $A" "$TMUX_LOG") || fail "A was not resumed: $(cat "$TMUX_LOG")"
 for w in "-c $cwd_a" "--remote-control A name" "--dangerously-skip-permissions --settings {\"skipDangerousModePermissionPrompt\":true}" "--effort high" "--model claude-opus-x"; do
   printf '%s\n' "$la" | grep -qF -- "$w" || fail "A launch lacks '$w': $la"
@@ -236,8 +236,12 @@ got=$("$HELPER" taken 2>/dev/null | sort -u | tr '\n' ' ')
 # --- the supervisor's own session is told apart by its process, not by its tmux session ------------
 # The supervisor's pane runs a shell whose child is Claude. X was spawned by the server and inherited
 # the supervisor's pane; Y ran in another window of tmux session claude. Both come back; S never does.
+# An earlier snapshot already identified a supervisor session (E), so no record is adopted by tmux name.
 rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
 rm -f "$tmp/cfg/sessions/"*.json
+E=f0000000-0000-4000-8000-000000000000
+mkdir -p "$tmp/state/remote-sessions/supervisor"
+: > "$tmp/state/remote-sessions/supervisor/$E"
 bash -c 'sleep 600; :' 2>/dev/null &
 pane_pid=$!
 pids="$pids $pane_pid"
@@ -259,12 +263,57 @@ transcript $Y "$cwd_c" default high m
 grep -q -- "--resume $X" "$TMUX_LOG" || fail "a server-spawned session in the supervisor's pane was not restored: $(cat "$TMUX_LOG")"
 grep -q -- "--resume $Y" "$TMUX_LOG" || fail "a session in another window of tmux session claude was not restored: $(cat "$TMUX_LOG")"
 TMUX_PANE_PID=$pane_pid "$HELPER" snapshot 2>/dev/null
-[ "$(ls "$tmp/state/remote-sessions/supervisor")" = "$S" ] || fail "snapshot: supervisor sessions are '$(ls "$tmp/state/remote-sessions/supervisor")', want $S"
+[ "$(cd "$tmp/state/remote-sessions/supervisor" && printf '%s ' *)" = "$E $S " ] || fail "snapshot: supervisor sessions are '$(ls "$tmp/state/remote-sessions/supervisor")', want $E and $S"
 kill "$sup_pid"
 wait "$pane_pid" 2>/dev/null || :
 rm -f "$tmp/mark"/*
 [ -z "$("$HELPER" pending 2>/dev/null)" ] || fail "the supervisor's own session is a restore candidate: $("$HELPER" pending 2>/dev/null)"
 rm -f "$tmp/state/remote-sessions/supervisor/$S"
 "$HELPER" pending 2>/dev/null | grep -q "$S" || fail "S is not a candidate once it is not the supervisor's: the exclusion above proves nothing"
+
+# --- first start of the image: no supervisor session known yet -------------------------------------
+# Session mode adopts the stale records in tmux session claude as the supervisor's (the last
+# boot's main session); server mode restores them (its spawned sessions).
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+M=f4444444-7777-4777-8777-777777777777
+rec 501 $M "$cwd_a" "claude:@0.%0" session_M interactive 1 "$dead_pid" 8001
+rec 502 $B "$cwd_b" "dev:@2.%2" session_B interactive 1 "$dead_pid" 8002
+transcript $M "$cwd_a" default high m
+"$HELPER" plan 2>/dev/null
+got=$(ids < "$tmp/state/remote-sessions/pending.json")
+[ "$got" = "$B " ] || fail "first start, session mode: pending '$got', want only $B"
+[ "$(ls "$tmp/state/remote-sessions/supervisor")" = "$M" ] || fail "first start: the main session was not adopted as the supervisor's"
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+DEV_REMOTE_CONTROL_MODE=server "$HELPER" plan 2>/dev/null
+got=$(ids < "$tmp/state/remote-sessions/pending.json")
+[ "$got" = "$B $M " ] || fail "first start, server mode: pending '$got', want $B and $M"
+
+# --- the supervisor's tmux session is matched exactly, never by name prefix --------------------------
+# Real tmux on a private socket: a session whose name starts with "claude" is not the supervisor's.
+sock="dev-remote-sessions-test-$$"
+real_path=${PATH#"$tmp/bin:"}
+trap 'PATH=$real_path tmux -L "$sock" kill-server 2>/dev/null || :; for p in $pids; do kill "$p" 2>/dev/null || :; done; rm -rf "$tmp"' EXIT
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+# start_pane <session> <sid> <file>: a pane whose child is a live "Claude" with a session record
+start_pane() {
+  local pane child
+  PATH=$real_path tmux -L "$sock" new-session -d -s "$1" "bash -c 'sleep 600; :'"
+  pane=$(PATH=$real_path tmux -L "$sock" display-message -p -t "=$1:^" '#{pane_pid}')
+  child=""
+  for _ in $(seq 25); do child=$(pgrep -P "$pane") && break; sleep 0.2; done
+  [ -n "$child" ] || fail "no process in tmux session $1"
+  rec "$3" "$2" "$cwd_a" "$1:@0.%0" "session_$3" interactive 0 "$child" "$(sed 's/.*) //' "/proc/$child/stat" | cut -d' ' -f20)"
+}
+P=f5555555-8888-4888-8888-888888888888 Q=f6666666-9999-4999-8999-999999999999
+start_pane claude-other $P 601
+PATH=$real_path DEV_REMOTE_SESSIONS_SOCKET=$sock "$HELPER" plan 2>/dev/null
+PATH=$real_path DEV_REMOTE_SESSIONS_SOCKET=$sock "$HELPER" restore 2>/dev/null
+PATH=$real_path DEV_REMOTE_SESSIONS_SOCKET=$sock "$HELPER" snapshot 2>/dev/null
+[ ! -e "$tmp/state/remote-sessions/supervisor/$P" ] || fail "a session in tmux session claude-other was taken for the supervisor's"
+start_pane claude $Q 602
+PATH=$real_path DEV_REMOTE_SESSIONS_SOCKET=$sock "$HELPER" snapshot 2>/dev/null
+[ "$(ls "$tmp/state/remote-sessions/supervisor")" = "$Q" ] || fail "the supervisor's session in tmux session claude was not recorded: $(ls "$tmp/state/remote-sessions/supervisor")"
 
 echo "dev-remote-sessions: ok"
