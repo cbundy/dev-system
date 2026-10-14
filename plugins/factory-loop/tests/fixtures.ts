@@ -130,10 +130,11 @@ export function run(n: number, state: RunState, over: Partial<RunView> = {}): Ru
   }
 }
 
-// slot: a leased pool slot on a branch, clean, as observe leaves it (#563): a detached one has
-// branch null and the lease's branch from its reflog.
+// slot: a leased pool slot on a branch, as observe leaves it (#563): a detached one has branch
+// null and the lease's branch from its reflog, and its tree is not read (dirty null) unless a
+// test says so, as observe reads it only for a finished issue.
 export function slot(path: string, branch: string | null, over: Partial<Slot> = {}): Slot {
-  return { path, branch, state: 'leased', dirty: false, busy: false, lease: `lease${path}`, leasedAt: NOW - 60 * MIN, leaseBranch: branch, ...over }
+  return { path, branch, state: 'leased', dirty: null, busy: false, lease: `lease${path}`, leasedAt: NOW - 60 * MIN, leaseBranch: branch, ...over }
 }
 
 export function entry(key: string, kind: LedgerEntry['kind'], over: Partial<LedgerEntry> = {}): LedgerEntry {

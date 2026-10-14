@@ -821,6 +821,10 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   goes to the judge. Untracked files stay: `--ff-only` never deletes one and refuses to
   overwrite one. Plan cannot see worktree heads, so gating the first-guard run on the pool saves
   a command per head where nothing could lag.
+- **Note** (2026-10-14, #563): rule `M1`'s first-guard run is removed. Observe reads a slot's
+  tree only for a finished issue, and an implementer detaches its slot once the pipeline holds
+  the branch, so it never ran. `M2`'s run on a `head` FAIL covers the lag, at the cost of one
+  guard.
 
 ### D-67 An agent's own `running` status is no proof it is still at work
 

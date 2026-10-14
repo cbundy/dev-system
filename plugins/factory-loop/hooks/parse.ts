@@ -383,14 +383,16 @@ export function parsePool(json: string, maxTrees: number): Pool | null {
 // count: the lease's agent moved there itself (its `checkout -b` or `switch`, which its later
 // detach leaves behind), while a branch the slot only moved from may be an earlier lease's, left
 // checked out when this one began. A detached HEAD and a commit id are no branch, and entries
-// before the lease are an earlier lease's (#563). null when a line does not read.
+// before the lease are an earlier lease's (#563), allowing REFLOG_SLACK_S: `treehouse get --lease
+// -b` checks the branch out before it records `leased_at`. null when a line does not read.
+const REFLOG_SLACK_S = 2
 export function parseReflog(text: string, since: number): string[] | null {
   const branches: string[] = []
   for (const line of text.split('\n')) {
     if (line.trim() === '') continue
     const m = line.match(/^HEAD@\{(\d+)\}\t(.*)$/)
     if (m === null) return null
-    if (Number(m[1]) < Math.floor(since / 1000)) continue
+    if (Number(m[1]) < Math.floor(since / 1000) - REFLOG_SLACK_S) continue
     const subject = m[2] ?? ''
     const to = subject.match(/^checkout: moving from \S+ to (\S+)$/)?.[1] ?? subject.match(/ returning to refs\/heads\/(\S+)$/)?.[1]
     if (to !== undefined && to !== 'HEAD' && !/^[0-9a-f]{7,64}$/.test(to)) branches.push(to)
@@ -409,11 +411,17 @@ function changedPath(line: string): string | null | undefined {
   return line.split(' ').slice(fields).join(' ').split('\t')[0] ?? ''
 }
 
-// parseDirty: whether `git status --porcelain=v2 --untracked-files=no` lists a tracked change
-// (a pool slot's tree, rule H3); null when a line does not read.
+// parseDirty: whether `git status --porcelain=v2 --untracked-files=normal` lists a tracked change
+// or an untracked file (a pool slot's tree, rule H3): `treehouse return` counts both as uncommitted
+// changes and keeps the slot, but not an ignored one (`!`, listed only with --ignored). null when
+// a line does not read.
 export function parseDirty(status: string): boolean | null {
   let dirty = false
   for (const line of status.split('\n')) {
+    if (line.startsWith('? ')) {
+      dirty = true
+      continue
+    }
     const path = changedPath(line)
     if (path === undefined) return null
     if (path !== null) dirty = true

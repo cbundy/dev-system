@@ -202,13 +202,21 @@ describe('parse', () => {
     expect(parseReflog(text, 1791964500_000)).toEqual(['feat/issue-12-x', 'feat/issue-12-x'])
     expect(parseReflog(text, 0)).toEqual(['feat/issue-12-x', 'feat/issue-12-x', 'feat/issue-7-prev'])
     expect(parseReflog('', 0)).toEqual([])
+    // `treehouse get --lease -b` checks the branch out before it records leased_at, so an entry up
+    // to 2 s before the lease is still the lease's
+    const branched = `HEAD@{1791964499}\tcheckout: moving from ${'0'.repeat(40)} to feat/issue-12-x\n`
+    expect(parseReflog(branched, 1791964500_900)).toEqual(['feat/issue-12-x'])
+    expect(parseReflog(branched, 1791964502_000)).toEqual([])
     expect(parseReflog('fatal: your current branch has no commits\n', 0)).toBeNull()
   })
 
-  test("a slot's tree: tracked changes only; untracked files are no change", () => {
+  test("a slot's tree: a tracked change or an untracked file, as treehouse return counts them; an ignored file is none (#563)", () => {
     expect(parseDirty('')).toBe(false)
-    expect(parseDirty('? node_modules/\n')).toBe(false)
     expect(parseDirty('1 .M N... 100644 100644 100644 abc abc src/x.ts\n')).toBe(true)
+    // treehouse v3.1.2 keeps a slot with an untracked file (exit 3, empty stdin), and returns one
+    // whose only extra files are gitignored, such as node_modules (listed `!` only with --ignored)
+    expect(parseDirty('? scratch.txt\n')).toBe(true)
+    expect(parseDirty('! node_modules/\n')).toBe(false)
     expect(parseDirty('not porcelain\n')).toBeNull()
   })
 
@@ -1150,21 +1158,25 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const reads = () => h.commands().filter(c => c.startsWith('git -C '))
     expect(reads()).toEqual([
       'git -C /t/1 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
-      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=no',
+      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=normal',
       'git -C /t/2 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
       'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
     ])
-    expect(plan(first.state, config()).actions.map(a => a.key)).toContain('release:/t/1:feat/issue-12-x')
+    expect(plan(first.state, config()).actions.map(a => a.key)).toContain('release:/t/1:l1')
 
     // the next pass: a lease's branch, once found, is not read again; the tree is
     h.world.slots['/t/1 status'] = { stdout: '1 .M N... 100644 100644 100644 abc abc src/x.ts\n' }
     const second = await h.pass(runtime(), stored(), NOW + MIN)
     expect(reads()).toEqual([
-      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=no',
+      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=normal',
       'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
     ])
     expect(second.state.pool?.slots[0]).toMatchObject({ leaseBranch: 'feat/issue-12-x', dirty: true })
-    expect(plan(second.state, config()).actions.map(a => a.key)).toContain('tell:worktree-dirty:/t/1:feat/issue-12-x')
+    expect(plan(second.state, config()).actions.map(a => a.key)).toContain('tell:worktree-dirty:/t/1:l1')
+
+    // an untracked file is a change too: treehouse return would keep the slot
+    h.world.slots['/t/1 status'] = { stdout: '? scratch.txt\n' }
+    expect((await h.pass(runtime(), stored(), NOW + 90_000)).state.pool?.slots[0]).toMatchObject({ dirty: true })
 
     // a read that fails leaves the slot unknown, so it is kept
     h.world.slots['/t/1 status'] = { exitCode: 128, stderr: 'fatal: not a git repository' }

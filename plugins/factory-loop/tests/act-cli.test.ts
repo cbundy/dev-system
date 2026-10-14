@@ -14,6 +14,7 @@ import { DEVICE, NOW, config, entry, state } from './fixtures'
 const REPO = 'cbundy/dev-system'
 const IN_DEV = 'in development'
 const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/2/dev-system'
+const LEASE = 'b7e18f7e5e03e9d009121bfed17e0c33'
 const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
 
 type Call = { argv: string[]; init: RunInit }
@@ -127,7 +128,7 @@ const A = {
   reopen: (): Action => ({ ...base, kind: 'pr-reopen', key: 'reopen:512:01RUN', rule: 'P6a', issue: 470, pr: 512 }),
   prClose: (): Action => ({ ...base, kind: 'pr-close', key: 'pr-close:44', rule: 'M8', issue: 32, pr: 44, run: '01RUN', newBranch: 'feat/issue-32-slug-v2', by: 50 }),
   comment: (): Action => ({ ...base, kind: 'pr-comment', key: 'pr-comment:512:h1', rule: 'M3', issue: 470, pr: 512, body: 'Accepted:\n\nCORRECT: x' }),
-  release: (): Action => ({ ...base, kind: 'release-worktree', key: `release:${SLOT}:feat/issue-470-x`, rule: 'H3', issue: 470, path: SLOT, branch: 'feat/issue-470-x' }),
+  release: (): Action => ({ ...base, kind: 'release-worktree', key: `release:${SLOT}:${LEASE}`, rule: 'H3', issue: 470, path: SLOT, branch: 'feat/issue-470-x', lease: LEASE }),
   restart: (rule = 'H4'): Action => ({ ...base, kind: 'restart-self', key: 'restart:1', rule, issue: null, why: 'image 1.2.3', at: 1 }),
   stop: (agentId = 'a1'): Action => ({ ...base, kind: 'stop-agent', key: `stop:${agentId}`, rule: 'A1', reason: 'timed out', issue: 470, agentId, entry: 'design:470:1' }),
   title: (text = '🔄 dev-system (Q:1 - D:2 - M:0)'): Action => ({ ...base, kind: 'title', key: 'title', rule: 'O1', issue: null, text }),
@@ -137,7 +138,9 @@ const STATUS_RETURNED = JSON.stringify([
   { name: '1', path: '/workspaces/dev-system/.treehouse/dev-system-22f535/1/dev-system', status: 'leased', branch: 'feat/factory-loop', processes: [] },
   { name: '2', path: SLOT, status: 'available', branch: '', detached: true, processes: [] },
 ])
-const STATUS_HELD = STATUS_RETURNED.replace('"available"', '"in-use"')
+// the slot still under the lease the return was pinned to, then under another one (re-leased)
+const STATUS_HELD = STATUS_RETURNED.replace('"available"', `"leased","lease_id":"${LEASE}"`)
+const STATUS_RELEASED = STATUS_RETURNED.replace('"available"', '"leased","lease_id":"0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"')
 
 describe('stepsOf: the argv templates (SPEC 6.1)', () => {
   const argv = (a: Action) => {
@@ -165,7 +168,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
       ['gh', 'pr', 'view', '50', '--repo', REPO, '--json', 'state,headRefName'],
       ['gh', 'pr', 'close', '44', '--repo', REPO, '--comment', 'Superseded by #50: this work moved to `feat/issue-32-slug-v2`. Closed by the factory loop.'],
     ])
-    expect(argv(A.release())).toEqual([['treehouse', 'return', SLOT], ['treehouse', 'status', '--json']])
+    expect(argv(A.release())).toEqual([['treehouse', 'return', SLOT, '--if-lease-id', LEASE], ['treehouse', 'status', '--json']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
   })
 
@@ -462,15 +465,15 @@ describe('the milestone', () => {
 describe('release-worktree', () => {
   test('returned, and treehouse status shows the slot available', async () => {
     const { result, calls } = await exec(A.release(), [{}, { stdout: STATUS_RETURNED }])
-    expect(calls.map(c => c.argv)).toEqual([['treehouse', 'return', SLOT], ['treehouse', 'status', '--json']])
+    expect(calls.map(c => c.argv)).toEqual([['treehouse', 'return', SLOT, '--if-lease-id', LEASE], ['treehouse', 'status', '--json']])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `returned ${SLOT}` })
   })
 
   test('exit 0 but the slot is still held, or not listed: failed', async () => {
     expect((await exec(A.release(), [{}, { stdout: STATUS_HELD }])).result).toEqual({
       status: 'failed',
-      outcome: { kind: 'cli', exit: 0, detail: `${SLOT} is in-use after treehouse return` },
-      summary: `${SLOT} is in-use after treehouse return`,
+      outcome: { kind: 'cli', exit: 0, detail: `${SLOT} is leased after treehouse return` },
+      summary: `${SLOT} is leased after treehouse return`,
     })
     expect((await exec(A.release(), [{}, { stdout: '[]' }])).result).toMatchObject({ status: 'failed', outcome: { detail: `${SLOT} is not listed after treehouse return` } })
   })
@@ -480,6 +483,27 @@ describe('release-worktree', () => {
     expect(calls).toHaveLength(1)
     expect(result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 2 } })
     expect('noRetry' in result).toBe(false)
+    // a slot that turned dirty, an untracked file included, declines the discard prompt (exit 3)
+    const dirty = await exec(A.release(), [{ exitCode: 3, stderr: 'worktree not returned: it has uncommitted changes and the confirmation could not be answered (stdin reached EOF)' }])
+    expect(dirty.calls).toHaveLength(1)
+    expect(dirty.result).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 3 } })
+  })
+
+  test('a slot leased again since the plan fails the lease condition and is left alone, done (#563)', async () => {
+    // treehouse v3.1.2's answer to --if-lease-id with another lease on the slot
+    const mismatch = { exitCode: 1, stderr: `failed to return worktree: lease precondition failed: lease identity does not match worktree ${SLOT}\n` }
+    const { result, calls } = await exec(A.release(), [mismatch, { stdout: STATUS_RELEASED }])
+    expect(calls.map(c => c.argv[1])).toEqual(['return', 'status'])
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `left ${SLOT} alone: its lease changed since the plan` })
+    // handed to a plain treehouse get, it carries no lease: not this one either
+    const plain = STATUS_RETURNED.replace('"available"', '"in-use"')
+    expect((await exec(A.release(), [mismatch, { stdout: plain }])).result).toMatchObject({ status: 'done', summary: `left ${SLOT} alone: its lease changed since the plan` })
+    // an exit 1 with the lease still on the slot is a failed return, its own line the summary
+    expect((await exec(A.release(), [{ exitCode: 1, stderr: 'could not verify worktree processes stop' }, { stdout: STATUS_HELD }])).result).toMatchObject({
+      status: 'failed',
+      outcome: { kind: 'cli', exit: 1 },
+      summary: 'treehouse return: exit 1: could not verify worktree processes stop',
+    })
   })
 
   test('a failed status read is failed', async () => {
@@ -637,7 +661,7 @@ describe('guards and pure readers', () => {
 
   test('slotState reads treehouse status --json', () => {
     expect(slotState(STATUS_RETURNED, SLOT)).toBe('available')
-    expect(slotState(STATUS_HELD, SLOT)).toBe('in-use')
+    expect(slotState(STATUS_HELD, SLOT)).toBe('leased')
     expect(slotState('[]', SLOT)).toBeNull()
     expect(slotState('not json', SLOT)).toBeNull()
   })

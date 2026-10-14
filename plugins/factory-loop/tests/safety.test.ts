@@ -205,7 +205,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'milestone-expect', key: 'expect:minor:512', class: 'free', rule: 'M7', bump: 'minor', why: 'a new\ncapability' },
   { ...base, kind: 'pr-close', key: 'pr-close:511', class: 'free', rule: 'M8', pr: 511, run: RUN, newBranch: 'issue-470-x-v2', by: 512 },
   { ...base, kind: 'pr-comment', key: `pr-comment:512:${HEAD}`, class: 'free', rule: 'M3', pr: 512, body: 'Test change justified: --body edits are not ours' },
-  { ...base, kind: 'release-worktree', key: `release:${SLOT}:issue-470-x`, class: 'free', rule: 'H3', path: SLOT, branch: 'issue-470-x' },
+  { ...base, kind: 'release-worktree', key: `release:${SLOT}:lease-2`, class: 'free', rule: 'H3', path: SLOT, branch: 'issue-470-x', lease: 'lease-2' },
   { ...base, issue: null, kind: 'restart-self', key: 'restart:7', class: 'free', rule: 'H4', why: 'image', at: 7 },
   { ...base, kind: 'rollout', key: 'rollout:470', class: 'free', rule: 'M7', pr: 512 },
   { ...base, kind: 'stop-agent', key: 'stop:agent-own', class: 'free', rule: 'A1', agentId: 'agent-own', entry: 'design:470:1' },

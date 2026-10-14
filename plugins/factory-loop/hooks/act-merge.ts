@@ -140,7 +140,7 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
   return ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', slot, branch, log, ...respond]
 }
 
-// The fast-forward (rules M1, M2, #551), run with `sh -c` from the main checkout: $1 the run's
+// The fast-forward (rule M2, #551), run with `sh -c` from the main checkout: $1 the run's
 // branch, $2 the run's head. The pipeline commits in its own checkout and pushes, so the
 // implementer's worktree sits behind the branch by exactly those commits and the guard fails
 // `head`. This moves each worktree on the branch to the run's head, only when origin's branch
@@ -436,7 +436,7 @@ const updateBehind: Executor = async (ctx, action) => {
   return { status: 'done', outcome, summary: clip(`rebased PR #${action.pr} ${short(u.from)} -> ${short(u.to)}${logged}`) }
 }
 
-// fast-forward (rules M1, M2, #551): FORWARDED, CURRENT and REFUSED are answers, logged with
+// fast-forward (rule M2, #551): FORWARDED, CURRENT and REFUSED are answers, logged with
 // both heads; a refusal goes to the judge (plan reads it). Only a sha and a branch the loop
 // works reach the script.
 const fastForward: Executor = async (ctx, action) => {

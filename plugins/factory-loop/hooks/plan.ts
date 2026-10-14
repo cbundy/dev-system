@@ -542,9 +542,12 @@ function housekeeping(ctx: Ctx) {
 }
 
 // H3: a leased slot goes back to the pool once the issue its lease worked is finished and no
-// agent of it is at work, its tree clean of tracked changes. The issue comes from the lease's
-// branch, which observe reads from the slot's reflog once the agent has detached it (#563).
-// Every slot kept says why; a dirty one tells the owner once.
+// agent of it is at work, its tree clean (no tracked change or untracked file, which `treehouse
+// return` would keep). The issue comes from the lease's branch, which observe reads from the
+// slot's reflog once the agent has detached it (#563). The return is pinned to the lease, so a
+// slot leased again since is left alone, and its keys follow the lease, so a later lease on the
+// same path and branch (a reopened issue) is returned too. Every slot kept says why; a dirty one
+// tells the owner once per lease.
 function returnSlot(ctx: Ctx, slot: Slot) {
   const kept = (issue: number | null, why: string) => skip(ctx, 'H3', issue, `slot ${slot.path} kept: ${why}`)
   const branch = slot.leaseBranch
@@ -561,21 +564,24 @@ function returnSlot(ctx: Ctx, slot: Slot) {
   if (agentRunning) return kept(n, `an agent of #${n} is at work`)
   const why = endedWhy(issue)
   const ended = why === 'closed' ? 'closed on GitHub' : why
+  const lease = slot.lease
+  if (lease === null) return kept(n, `#${n} ${ended}, no lease to pin the return to`)
   if (slot.dirty === null) return kept(n, `#${n} ${ended}, its tree not read`)
   if (slot.dirty) {
-    kept(n, `#${n} ${ended}, its tree has tracked changes`)
-    want(ctx, wake('tell', 'worktree-dirty', `tell:worktree-dirty:${slot.path}:${branch}`, 'H3', n, { path: slot.path, branch }, [`#${n} ${ended}`]))
+    kept(n, `#${n} ${ended}, its tree has uncommitted changes`)
+    want(ctx, wake('tell', 'worktree-dirty', `tell:worktree-dirty:${slot.path}:${lease}`, 'H3', n, { path: slot.path, branch }, [`#${n} ${ended}`]))
     return
   }
   want(ctx, {
     kind: 'release-worktree',
-    key: `release:${slot.path}:${branch}`,
+    key: `release:${slot.path}:${lease}`,
     class: 'free',
     rule: 'H3',
     reason: `${ended}, slot clean`,
     issue: n,
     path: slot.path,
     branch,
+    lease,
   })
 }
 
@@ -1055,11 +1061,9 @@ function merges(ctx: Ctx, runs: RunView[]) {
       run: run.run,
       head,
     })
-    // M1: a fresh guard outcome for this PR and head, or a guard run. Before a head's first guard,
-    // a clean slot on its branch is fast-forwarded to the run's head first (it runs first in the
-    // pass), so a worktree the pipeline's own commits left behind does not fail `head` (#551).
+    // M1: a fresh guard outcome for this PR and head, or a guard run. A worktree the pipeline's own
+    // commits left behind fails the guard's `head`, and M2 fast-forwards it (#551).
     if (latest === undefined) {
-      if (cleanSlotOn(ctx, run.branch)) want(ctx, fastForward(run, `fast-forward:${pr}:${head}`, 'M1'))
       want(ctx, guardAction(1))
       continue
     }
@@ -1106,8 +1110,8 @@ function merges(ctx: Ctx, runs: RunView[]) {
 
 // repaired: a done entry that changed a PR or its worktree, after which its guard is stale (M1).
 // Rule M2's fast-forward that answers CURRENT counts too: the lag its guard saw is gone (the slot
-// was reused or moved), so a re-guard, not the judge, looks again. M1's runs before the first
-// guard, so its CURRENT says nothing about that guard (#551).
+// was reused or moved), so a re-guard, not the judge, looks again. An M1 one, which an older
+// build ran before the first guard (#563 removed it), says nothing about that guard (#551).
 function repaired(e: LedgerEntry): boolean {
   if (e.status !== 'done') return false
   if (e.kind === 'fix-linkage' || (e.kind === 'spawn' && e.agent === 'fixer')) return true
@@ -1132,18 +1136,13 @@ function waitsFor(ctx: Ctx, run: RunView, g: { key: string; gate: Gate } | undef
   return `PR #${pr} waits for its head to move or its next guard in ${Math.ceil(due / 1000)}s (${g.key} is done)`
 }
 
-// cleanSlotOn: a pool slot has the branch checked out and nothing uncommitted (#551).
-function cleanSlotOn(ctx: Ctx, branch: string): boolean {
-  return ctx.state.sources.pool.ok && (ctx.state.pool?.slots ?? []).some(s => s.branch === branch && s.dirty === false)
-}
-
-function fastForward(run: RunView, key: string, rule: 'M1' | 'M2'): Action {
+function fastForward(run: RunView, key: string): Action {
   return {
     kind: 'fast-forward',
     key,
     class: 'free',
-    rule,
-    reason: rule === 'M1' ? 'before the first guard of a head' : 'guard: a worktree lags the run head',
+    rule: 'M2',
+    reason: 'guard: a worktree lags the run head',
     issue: run.issue as number,
     pr: run.pr as number,
     run: run.run,
@@ -1183,7 +1182,7 @@ function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' 
   }
   // one that ran out of attempts is no owner notice: the judge hears of the lag instead
   if (gate(ctx, key, 'fast-forward') === 'exhausted') return null
-  want(ctx, fastForward(run, key, 'M2'))
+  want(ctx, fastForward(run, key))
   return 'acting'
 }
 

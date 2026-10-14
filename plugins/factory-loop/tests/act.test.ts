@@ -863,7 +863,7 @@ function world(now: () => number) {
         return { stdout: args.join(' ') === '--json 470' ? ISSUE_470 : JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
         // the merged issue's clean slot goes back to the pool (rule H3)
-        if (args[0] === 'return' && args[1] === SLOT) w.slotState = 'available'
+        if (args[0] === 'return' && args[1] === SLOT && args[2] === '--if-lease-id' && args[3] === 'lease-2') w.slotState = 'available'
         return {
           stdout: JSON.stringify([
             { path: SLOT, branch: w.slotBranch ?? '', status: w.slotState, lease_id: 'lease-2', leased_at: w.leasedAt === null ? null : iso(w.leasedAt), processes: [] },
@@ -1114,9 +1114,9 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     at(240)
     await h.pass()
     const updated = h.live.ledger.find(e => e.kind === 'update-checkout' && e.key !== 'update-checkout:0')
-    expect(h.keys()).toEqual([updated?.key, `release:${SLOT}:${BRANCH}`, 'milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
+    expect(h.keys()).toEqual([updated?.key, `release:${SLOT}:lease-2`, 'milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
     expect(updated).toMatchObject({ rule: 'H5', status: 'done', outcome: { kind: 'update-checkout', result: 'current' } })
-    expect(h.entry(`release:${SLOT}:${BRANCH}`)).toMatchObject({ rule: 'H3', status: 'done', summary: `returned ${SLOT}` })
+    expect(h.entry(`release:${SLOT}:lease-2`)).toMatchObject({ rule: 'H3', status: 'done', summary: `returned ${SLOT}` })
     expect(h.ran('callum-flow-milestone').filter(s => s.argv[1] !== 'show').map(s => s.argv)).toEqual([
       ['callum-flow-milestone', 'plan', '470', 'later'],
       ['callum-flow-milestone', 'expect', 'minor', 'a new capability'],

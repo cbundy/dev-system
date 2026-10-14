@@ -127,9 +127,16 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
     }
     case 'release-worktree':
       // Empty stdin: were the slot dirty after all, treehouse's discard prompt reads end of
-      // input and keeps the work. The status read proves the slot is back (SPEC 6.1).
+      // input and keeps the work (exit 3). The return is pinned to the lease the plan saw: a slot
+      // leased again since fails the condition with exit 1, and the status read, which proves
+      // the slot is back (SPEC 6.1), tells that apart from a failed return (#563).
       return [
-        { argv: ['treehouse', 'return', action.path], timeoutMs: CLI_TIMEOUT_MS['release-worktree'], stdin: '' },
+        {
+          argv: ['treehouse', 'return', action.path, '--if-lease-id', action.lease],
+          timeoutMs: CLI_TIMEOUT_MS['release-worktree'],
+          stdin: '',
+          ok: [0, 1],
+        },
         { argv: ['treehouse', 'status', '--json'], timeoutMs: CLI_TIMEOUT_MS['release-worktree'] },
       ]
     case 'restart-self':
@@ -224,7 +231,11 @@ export function byCheck(action: Extract<Action, { kind: 'pr-close' }>, json: str
 // slotState: the pool's word for the slot at this path in `treehouse status --json`
 // ('available' once returned), or null when the listing is unreadable or lacks the slot.
 export function slotState(json: string, path: string): string | null {
-  return parsePool(json, 0)?.slots.find(s => s.path === path)?.state ?? null
+  return slotAt(json, path)?.state ?? null
+}
+
+function slotAt(json: string, path: string) {
+  return parsePool(json, 0)?.slots.find(s => s.path === path)
 }
 
 // finish: what the steps' output says once every step passed (SPEC 6.1 "Outcome recorded").
@@ -259,8 +270,13 @@ export function finish(action: Action, results: RunResult[]): Exec {
       return ok(`commented on PR #${action.pr}${url === '' ? '' : `: ${url}`}`)
     }
     case 'release-worktree': {
-      const state = last === undefined ? null : slotState(last.stdout, action.path)
+      const slot = last === undefined ? undefined : slotAt(last.stdout, action.path)
+      const state = slot?.state ?? null
       if (state === 'available') return ok(`returned ${action.path}`)
+      // leased again since the plan: another agent's slot now, left alone (#563)
+      if (slot !== undefined && slot.lease !== action.lease) return ok(`left ${action.path} alone: its lease changed since the plan`)
+      const back = results[0]
+      if (back !== undefined && back.exitCode !== 0) return commandFailure(['treehouse', 'return', action.path], back)
       const detail = `${action.path} is ${state ?? 'not listed'} after treehouse return`
       return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail }, summary: clip(detail) }
     }

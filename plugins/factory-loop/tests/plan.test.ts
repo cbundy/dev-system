@@ -294,19 +294,19 @@ describe('H: housekeeping', () => {
   const kept = (issue: number | null, path: string, why: string) => ({ rule: 'H3', issue, why: `slot ${path} kept: ${why}` })
 
   test('a clean slot on a merged branch is returned; a dirty or busy one is not (SKILL:150, I-76)', () => {
-    const slot = (path: string, over = {}) => slotOf(path, 'feat/issue-12-x', over)
+    const slot = (path: string, over = {}) => slotOf(path, 'feat/issue-12-x', { dirty: false, ...over })
     const r = plan(pooled([slot('/t/1'), slot('/t/2', { dirty: true }), slot('/t/3', { busy: true })]), CFG)
-    expect(keys(r)).toEqual(['release:/t/1:feat/issue-12-x', 'tell:worktree-dirty:/t/2:feat/issue-12-x'])
+    expect(keys(r)).toEqual(['release:/t/1:lease/t/1', 'tell:worktree-dirty:/t/2:lease/t/2'])
     expect(r.skipped).toContainEqual(kept(12, '/t/3', 'processes run in it'))
   })
 
   test('a slot the agent detached is returned once its issue is finished, by the branch of its lease (#563)', () => {
     // the implementer detached its slot once the pipeline held the branch: treehouse reports no
     // branch, and observe reads the lease's branch from the slot's reflog
-    const detached = slotOf('/t/4', null, { leaseBranch: 'feat/issue-12-x' })
+    const detached = slotOf('/t/4', null, { leaseBranch: 'feat/issue-12-x', dirty: false })
     const r = plan(pooled([detached]), CFG)
-    expect(keys(r)).toEqual(['release:/t/4:feat/issue-12-x'])
-    expect(find(r, 'release:/t/4:feat/issue-12-x')).toMatchObject({ rule: 'H3', issue: 12, path: '/t/4', branch: 'feat/issue-12-x', reason: 'merged, slot clean' })
+    expect(keys(r)).toEqual(['release:/t/4:lease/t/4'])
+    expect(find(r, 'release:/t/4:lease/t/4')).toMatchObject({ rule: 'H3', issue: 12, path: '/t/4', branch: 'feat/issue-12-x', lease: 'lease/t/4', reason: 'merged, slot clean' })
     // returned, the slot is available and says nothing more
     expect(plan(pooled([{ ...detached, state: 'available', lease: null, leasedAt: null, leaseBranch: null }]), CFG).skipped.filter(s => s.rule === 'H3')).toEqual([])
   })
@@ -332,18 +332,36 @@ describe('H: housekeeping', () => {
   test('a dirty slot of a finished issue is kept and told to the owner once; one not read is kept (#563)', () => {
     const dirty = slotOf('/t/2', null, { leaseBranch: 'feat/issue-12-x', dirty: true })
     const r = plan(pooled([dirty]), CFG)
-    expect(keys(r)).toEqual(['tell:worktree-dirty:/t/2:feat/issue-12-x'])
-    expect(find(r, 'tell:worktree-dirty:/t/2:feat/issue-12-x')).toMatchObject({ rule: 'H3', issue: 12, fields: { path: '/t/2', branch: 'feat/issue-12-x' } })
-    expect(r.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has tracked changes'))
+    expect(keys(r)).toEqual(['tell:worktree-dirty:/t/2:lease/t/2'])
+    expect(find(r, 'tell:worktree-dirty:/t/2:lease/t/2')).toMatchObject({ rule: 'H3', issue: 12, fields: { path: '/t/2', branch: 'feat/issue-12-x' } })
+    expect(r.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has uncommitted changes'))
     // told once: the slot stays kept, and says so every pass
-    const told = withLedger(pooled([dirty]), [entry('tell:worktree-dirty:/t/2:feat/issue-12-x', 'tell', { wake: 'worktree-dirty', issue: 12 })])
+    const told = withLedger(pooled([dirty]), [entry('tell:worktree-dirty:/t/2:lease/t/2', 'tell', { wake: 'worktree-dirty', issue: 12 })])
     const again = plan(told, CFG)
     expect(keys(again)).toEqual([])
-    expect(again.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has tracked changes'))
+    expect(again.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has uncommitted changes'))
     // a tree observe could not read is never returned
     const unread = plan(pooled([{ ...dirty, dirty: null }]), CFG)
     expect(keys(unread)).toEqual([])
     expect(unread.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree not read'))
+  })
+
+  test('the keys follow the lease: a later lease on the same path and branch is returned and told too (#563)', () => {
+    // the issue was reopened and worked again in the same slot, on the same branch
+    const first = slotOf('/t/1', null, { leaseBranch: 'feat/issue-12-x', dirty: false, lease: 'l1' })
+    const second = { ...first, lease: 'l2' }
+    const returned = entry('release:/t/1:l1', 'release-worktree', { issue: 12 })
+    const r = plan(withLedger(pooled([second]), [returned]), CFG)
+    expect(keys(r)).toEqual(['release:/t/1:l2'])
+    expect(find(r, 'release:/t/1:l2')).toMatchObject({ path: '/t/1', branch: 'feat/issue-12-x', lease: 'l2' })
+    const told = entry('tell:worktree-dirty:/t/1:l1', 'tell', { wake: 'worktree-dirty', issue: 12 })
+    expect(keys(plan(withLedger(pooled([{ ...second, dirty: true }]), [told]), CFG))).toEqual(['tell:worktree-dirty:/t/1:l2'])
+  })
+
+  test('a slot with no lease is kept: its return could not be pinned to the lease the plan saw (#563)', () => {
+    const r = plan(pooled([slotOf('/t/1', 'feat/issue-12-x', { state: 'in-use', lease: null, dirty: false })]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual(kept(12, '/t/1', '#12 merged, no lease to pin the return to'))
   })
 })
 
@@ -1576,11 +1594,11 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
     const stalled = state({ issues: [mine(48, 'in pipeline', { pr: 548 })], runs: [run(48, 'ci-stalled', { detail: 'reason=no-checks' })] })
     const reopen = entry('reopen:548:01M4RQ0048AAAA', 'pr-reopen', { issue: 48, pr: 548, status: 'failed', attempts: 1, endedAt: NOW - 10 * MIN })
     expect(keys(plan(withLedger(stalled, [reopen]), CFG))).toEqual(['tell:agent-failed:reopen:548:01M4RQ0048AAAA'])
-    const slot = slotOf('/t/1', 'feat/issue-12-x')
+    const slot = slotOf('/t/1', 'feat/issue-12-x', { dirty: false })
     const merged = state({ issues: [issue(12, { stage: 'merged', holder: OTHER })], pool: { free: 8, total: 16, slots: [slot] } })
-    const returned = (attempts: number) => entry('release:/t/1:feat/issue-12-x', 'release-worktree', { issue: 12, status: 'failed', attempts, endedAt: NOW - 10 * MIN })
-    expect(keys(plan(withLedger(merged, [returned(1)]), CFG))).toEqual(['release:/t/1:feat/issue-12-x'])
-    expect(keys(plan(withLedger(merged, [returned(2)]), CFG))).toEqual(['tell:agent-failed:release:/t/1:feat/issue-12-x'])
+    const returned = (attempts: number) => entry('release:/t/1:lease/t/1', 'release-worktree', { issue: 12, status: 'failed', attempts, endedAt: NOW - 10 * MIN })
+    expect(keys(plan(withLedger(merged, [returned(1)]), CFG))).toEqual(['release:/t/1:lease/t/1'])
+    expect(keys(plan(withLedger(merged, [returned(2)]), CFG))).toEqual(['tell:agent-failed:release:/t/1:lease/t/1'])
     expect(CFG.maxAttempts).toMatchObject({ 'pr-reopen': 1, 'stop-agent': 1, 'release-worktree': 2 })
   })
 
@@ -2180,22 +2198,20 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
     // the lag is back on that re-guard: the judge looks, not another round
     const again = guarded([LAG], [], 2, { startedAt: NOW - 15_000, endedAt: NOW - 10_000 })
     expect(plan(mergeReady([guarded([LAG]), current, again]), CFG).actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
-    // M1's CURRENT before the first guard says nothing about it: a lag that guard saw is forwarded
+    // an older build's M1 CURRENT before the first guard says nothing about it: a lag that guard
+    // saw is forwarded
     const before = fastForward('fast-forward:550:head50', 'current', { rule: 'M1', startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
     expect(keys(plan(mergeReady([before, guarded([LAG])]), CFG))).toEqual(['fast-forward:550:head50:1'])
   })
 
-  test('before the first guard of a head, a clean slot on the branch is fast-forwarded first', () => {
-    const slot = slotOf('/w/slot-3', 'feat/issue-50-work')
-    const pool = (s: typeof slot) => ({ pool: { free: 10, total: 16, slots: [s] } })
-    expect(keys(plan(mergeReady([], pool(slot)), CFG))).toEqual(['fast-forward:550:head50', 'guard:550:head50:1'])
-    // a dirty slot is left to the guard (and the judge), and no slot means nothing to forward
-    expect(keys(plan(mergeReady([], pool({ ...slot, dirty: true })), CFG))).toEqual(['guard:550:head50:1'])
+  test('the first guard of a head runs alone, even with a clean slot on the branch: a lag it finds is M2\'s (#563)', () => {
+    const slot = slotOf('/w/slot-3', 'feat/issue-50-work', { dirty: false })
+    expect(keys(plan(mergeReady([], { pool: { free: 10, total: 16, slots: [slot] } }), CFG))).toEqual(['guard:550:head50:1'])
     expect(keys(plan(mergeReady(), CFG))).toEqual(['guard:550:head50:1'])
-    // the fast-forward that ran just before the first guard does not make that guard stale
-    const ff = fastForward('fast-forward:550:head50', 'forwarded', { startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
+    // an older build's fast-forward just before the first guard does not make that guard stale
+    const ff = fastForward('fast-forward:550:head50', 'forwarded', { rule: 'M1', startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
     const g = guarded([], [], 1, { startedAt: NOW - 3 * MIN + 600, endedAt: NOW - 2 * MIN })
-    expect(keys(plan(mergeReady([ff, g], pool(slot)), CFG))).toEqual(['adjudicate-merge:550:head50'])
+    expect(keys(plan(mergeReady([ff, g]), CFG))).toEqual(['adjudicate-merge:550:head50'])
   })
 
   test('no fast-forward while an agent works the issue\'s branch', () => {
@@ -2291,12 +2307,12 @@ describe('an issue closed on GitHub is finished (#556)', () => {
   })
 
   test("a clean pool slot on a closed issue's branch is returned (SPEC H3)", () => {
-    const slot = slotOf('/t/1', 'feat/issue-40-work')
+    const slot = slotOf('/t/1', 'feat/issue-40-work', { dirty: false })
     const s = (open: boolean) => state({ issues: [mine(40, 'parked', { open })], pool: { free: 8, total: 16, slots: [slot] } })
     expect(keys(plan(s(true), CFG))).toEqual([])
     const r = plan(s(false), CFG)
-    expect(keys(r)).toEqual(['release:/t/1:feat/issue-40-work'])
-    expect(find(r, 'release:/t/1:feat/issue-40-work')).toMatchObject({ rule: 'H3', reason: 'closed on GitHub, slot clean' })
+    expect(keys(r)).toEqual(['release:/t/1:lease/t/1'])
+    expect(find(r, 'release:/t/1:lease/t/1')).toMatchObject({ rule: 'H3', reason: 'closed on GitHub, slot clean' })
     // an agent that answered but still works there keeps it until rule A2 has stopped it
     const answered = entry('fixer:gate:x', 'spawn', { agent: 'fixer', class: 'drive', issue: 40, agentId: 'a40', endedAt: NOW - 5 * MIN })
     const working = { ...withLedger(s(false), [answered]), agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'running' as const }] }
@@ -2304,7 +2320,7 @@ describe('an issue closed on GitHub is finished (#556)', () => {
     expect(keys(held)).toEqual(['stop:a40', 'tell:stopped:a40'])
     expect(held.skipped).toContainEqual({ rule: 'H3', issue: 40, why: 'slot /t/1 kept: an agent of #40 is at work' })
     const stopped = { ...working, agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'killed' as const }] }
-    expect(keys(plan(stopped, CFG))).toEqual(['release:/t/1:feat/issue-40-work'])
+    expect(keys(plan(stopped, CFG))).toEqual(['release:/t/1:lease/t/1'])
   })
 
   test('an agent of the loop working an issue that closes is stopped, and the decision log says why (SPEC A2)', () => {

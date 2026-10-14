@@ -93,8 +93,8 @@ export type Checkout = { branch: string | null; head: string | null; defaultBran
 // A treehouse pool slot (#563): the branch checked out (null when detached), and the lease's
 // id, start and branch: the branch it has checked out, else the newest issue branch its HEAD
 // reflog shows checked out since the lease began (an implementer detaches its slot once the
-// pipeline holds the branch). dirty: tracked changes, read only for a slot rule H3 might return
-// (null: not read).
+// pipeline holds the branch). dirty: uncommitted changes, untracked files included, read only for
+// a slot rule H3 might return (null: not read).
 export type Slot = {
   path: string
   branch: string | null
@@ -167,7 +167,7 @@ export type Outcome =
   | { kind: 'handoff'; notGated: boolean; run: string | null; head: string | null; newBranch: string | null }
   | { kind: 'guard'; fails: GuardFail[]; warns: string[] }
   | { kind: 'update-behind'; result: 'updated' | 'fail' | 'skip'; from: string | null; to: string | null; line: string }
-  // a worktree the pipeline's own commits left behind its branch, fast-forwarded (rules M1, M2,
+  // a worktree the pipeline's own commits left behind its branch, fast-forwarded (rule M2,
   // #551): forwarded, current (nothing lagged) or refused (dirty, diverged, origin moved)
   | { kind: 'fast-forward'; result: 'forwarded' | 'current' | 'refused'; line: string }
   // the main checkout brought up to date with origin's default branch (rule H5, #555): updated
@@ -398,7 +398,8 @@ export type Action =
   | (Base & { kind: 'pr-comment'; pr: number; body: string })
   // rule M8: the PR of a superseded run, and the PR on the branch its work moved to (#553)
   | (Base & { kind: 'pr-close'; pr: number; run: string; newBranch: string; by: number })
-  | (Base & { kind: 'release-worktree'; path: string; branch: string })
+  // rule H3: the slot, the branch its lease worked, and the lease the return is pinned to (#563)
+  | (Base & { kind: 'release-worktree'; path: string; branch: string; lease: string })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
   | (Base & { kind: 'restart-self'; why: string; at: Ms })
   // rule M7 for a hand merge: read the merged issue's rollout

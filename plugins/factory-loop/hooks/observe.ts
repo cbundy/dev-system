@@ -418,8 +418,8 @@ export async function observe(
   // pipeline holds the branch, so a leased slot on no branch is matched to its issue by the newest
   // issue branch its HEAD reflog shows checked out since the lease began (git's own record, per
   // worktree, whoever leased it and whenever the loop loaded); a slot of a finished issue then has
-  // its tree read for tracked changes. A failed read leaves the slot unknown, which H3 keeps.
-  // Available and busy slots are not read.
+  // its tree read for changes, untracked files too, as `treehouse return` counts them. A failed
+  // read leaves the slot unknown, which H3 keeps. Available and busy slots are not read.
   const finishedIssue = (n: number) => {
     const f = factory?.issues.find(i => i.number === n)
     const open = cache.github.get(n)?.value.facts?.open ?? f?.github?.open ?? null
@@ -452,7 +452,7 @@ export async function observe(
       let dirty: boolean | null = null
       if (n !== null && finishedIssue(n)) {
         try {
-          const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'status', '--porcelain=v2', '--untracked-files=no'], undefined, 30_000)
+          const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'status', '--porcelain=v2', '--untracked-files=normal'], undefined, 30_000)
           dirty = r.exitCode === 0 ? parseDirty(r.stdout) : null
         } catch {
           // not read: H3 keeps the slot and says so

@@ -211,8 +211,8 @@ Notices:
 - `at-cap` (live, cap): this device holds its cap of live issues, so claims wait. Raising it is
   `maxInFlightIssues` in `.claude/factory-loop.json`.
 - `worktree-dirty` (path, branch; detail: how the issue ended): the issue is finished, but its
-  pool slot has tracked changes, so the loop keeps the slot instead of returning it. Owner keeps
-  or discards the changes, and the loop then returns the slot.
+  pool slot has uncommitted changes or untracked files, so the loop keeps the slot instead of
+  returning it. Owner keeps or discards the changes, and the loop then returns the slot.
 - `drain-slow` (since; detail: the update, what it waits on): an update has waited over an
   hour for in-flight work. Owner waits, or `update off`.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop
