@@ -1056,7 +1056,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   (a control note for the issue alone, recorded after the escalating adjudication ended and no
   later than the latest resume), or any verdict but `ENV`, plans `spawn(fixer, purpose resume)`
   under rule `P2b`, key `fixer:resume:<run>:<step>:<head>:r<n>`, once per resume. Its instructions
-  are the notes, each an `Owner note:` line, then the adjudicator's reason. An all-`ENV` escalation with no note still gets
+  are the notes, each an `Owner note:` line, then the adjudicator's reason and verdict lines. An all-`ENV` escalation with no note still gets
   D-64's `env-retry`; one whose reason and verdicts a ledger rebuild lost, with no note, a fresh
   adjudicator. A resume of a gate no adjudicator escalated (the review cap) is never one. Every escalate tell carries a line saying what a plain resume will do, and the
   judge skill records `note <N>` before `resume <run>` when the owner asks for a change.

@@ -637,7 +637,7 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(withLedger(headless({ control: ctl([], NOW - MIN) }), [esc, told]), CFG))).toEqual([`adjudicate:${at}:r1`])
     })
 
-    test('the fixer counts as the issue\'s writer: a failed run stays quiet (P4) while it runs', () => {
+    test('a running resume fixer is not spawned again for the same resume (P2b)', () => {
       const running = entry(`fixer:resume:${AT}:r1`, 'spawn', { agent: 'fixer', class: 'drive', issue: 45, status: 'running', endedAt: null })
       const s = withLedger(failedTest({ control: ctl([note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [escalated([ENV]), told, running])
       expect(keys(plan(s, CFG)).filter(k => k.startsWith('fixer:') || k.startsWith('env-retry:') || k.startsWith('task:'))).toEqual([])
