@@ -26,7 +26,7 @@ import {
   wakeLine,
 } from '../hooks/wake'
 import type { WakeAction, WakeUpdate } from '../hooks/wake'
-import { DEVICE, MIN, NOW, OTHER, brief, config, entry, find, keys, mine, review, run, state, withLedger } from './fixtures'
+import { DEVICE, MIN, NOW, OTHER, PLUGIN_ROOT, brief, config, entry, find, keys, mine, review, run, state, withLedger } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
@@ -45,6 +45,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: '/usr/local/share/callum-tools',
+    pluginRoot: PLUGIN_ROOT,
     config: CFG,
     configProblems: [],
   }

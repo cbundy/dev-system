@@ -352,8 +352,9 @@ follow directly from the skill or the brief.
 - **Why**: the wake probe showed both channels work, but a turn that starts while the mod reloads
   (during a deploy, for example) does not see the tool, and the text block costs the fewest
   tokens. The first plan, tool first, changed on that evidence.
-- **Note** (2026-10-14): the loop's agents answer through their own tools first (D-68); wakes
-  keep the text block as primary.
+- **Note** (2026-10-14): the loop's agents answer through their own tools first (D-68), or,
+  while those cannot be reached, through a checked script (D-73, D-74); wakes keep the text block
+  as primary.
 
 ### D-06 Usage comes from `usage-check.sh` every 5 minutes plus the session's own figures
 
@@ -973,3 +974,45 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   work. (d) is more surface for a switch that changes only with an engine release; the file,
   read every pass, is enough. The workspace file wins, as `trace` does, so a testbed can try the
   tools without touching the repo's checked-in file.
+- **Note** (2026-10-14, #561): `answerTools` is replaced by `answerChannel`, whose default,
+  `script`, has agents answer through a checked script until the tools can be reached; `text` is
+  what `answerTools` off was, and `tool` what it was on (D-74).
+
+### D-74 Agents answer through a checked script until a timer-spawned agent reaches the loop's tools
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #561): a temporary workaround
+  for the answer tools of D-68, which no agent the loop spawns can reach (D-73). The plugin ships
+  `bin/factory-answer`; each prompt names it by its absolute path under `$.plugin.root` and an
+  answer file unique to the ledger entry and attempt (`answers/<key>.a<attempt>.<started ms>.answer.json`),
+  and asks the agent to run it once with its answer as JSON. The script checks the JSON against
+  the same contract the tools use, names every problem (exit 1; usage exit 2), and on success
+  writes the file atomically. It writes only where the loop issued a path: beside the job file
+  the loop writes before the spawn, in the loop's own `answers/` directory, every directory on
+  the way a real one. At the agent's `turn.complete` the loop reads that one path, checks the
+  answer again against its own ledger, and records it with `answer: "script"` in the decision
+  log; with no valid file it reads the text, then sends the repair message, which asks for the
+  script again. The contract is one plain-JS module, `hooks/contract.mjs`, imported by the
+  TypeScript hooks and by the script under plain node, with its types in `contract.d.mts`; a
+  shared table of cases holds the loop and the script, run for real, to the same problems. The
+  setting `answerChannel` (`script`, the default; `tool`; `text`) replaces #560's `answerTools`,
+  which is named as replaced and not read. Prompts never say why the script stands in. It goes
+  back to `tool` once the timer-spawn probe (SPEC 13) passes (SPEC 4.2, 6.3, 7.3a, 11.6, 12, 13).
+- **Alternatives**: (a) stay on text with the repair message, as #560 left it; (b) write the
+  contract in TypeScript and run the script with node's type stripping; (c) a JSON schema plus a
+  small validator; (d) pass the purpose, repo and issue as flags on the script's command line;
+  (e) read whatever answer file the agent wrote, or the newest; (f) keep `answerTools` as an
+  alias of `answerChannel`.
+- **Why**: unreadable text answers were the most frequent failure in all three testbed runs, and
+  built-in tools work for timer-spawned agents, so a script the agent runs gives back what the
+  tool was for: a structured answer, checked while the agent can still correct it. (b) needs
+  Node 22.6 with a flag or 23.6 by default, and the hooks' extensionless imports need a loader
+  under plain node; the engine loads an `.mjs` a hook imports and `claude plugin validate`
+  accepts it, so one plain module serves both with no build step. (c) cannot hold the rules that
+  are code: a fix names only findings judged `CORRECT` or `ENV`, a brief is on the designed
+  issue, gated needs a run. With one module the checking cannot drift; the case table catches
+  drift in what is around it. (d) gives agents a longer command to get right, and the script could
+  not tell a path the loop issued; with the job file, `--to` is the only argument and any other
+  path is refused. (e) would let a stale file or another agent's answer stand in: the path is
+  who answered. (f) `answerTools` lived for a day on the unreleased branch, and an alias needs
+  precedence rules against the new key; naming it as replaced is enough. Text stays every
+  prompt's fallback, so an agent whose script call is refused still answers.

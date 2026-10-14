@@ -24,7 +24,7 @@ import type { Io, Runtime } from '../hooks/observe'
 import { plan } from '../hooks/plan'
 import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
 import type { Action, AdjudicatorPurpose, FixerPurpose, LedgerEntry, State } from '../hooks/types'
-import { DEVICE, MIN, NOW, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
+import { DEVICE, MIN, NOW, PLUGIN_ROOT, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
@@ -48,6 +48,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: READY, CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
+    pluginRoot: PLUGIN_ROOT,
     config: config({ readyLabel: READY }),
     configProblems: [],
   }
@@ -85,10 +86,10 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
   return {}
 }
 
-type Recorded = { argvs: string[][]; spawns: SpawnInput[]; prompts: string[]; titles: string[]; stops: string[] }
+type Recorded = { argvs: string[][]; spawns: SpawnInput[]; prompts: string[]; titles: string[]; stops: string[]; writes: string[] }
 
 function recorder(): { io: ActIo; seen: Recorded } {
-  const seen: Recorded = { argvs: [], spawns: [], prompts: [], titles: [], stops: [] }
+  const seen: Recorded = { argvs: [], spawns: [], prompts: [], titles: [], stops: [], writes: [] }
   const io: ActIo = {
     now: async () => NOW,
     run: async (argv: string[], _init: RunInit & { cwd: string; env: Record<string, string> }) => {
@@ -107,7 +108,7 @@ function recorder(): { io: ActIo; seen: Recorded } {
     rename: async text => void seen.titles.push(text),
     usage: async () => ({ fiveHour: 10, sevenDay: 10 }),
     readFile: async () => null,
-    writeFile: async () => undefined,
+    writeFile: async path => void seen.writes.push(path),
   }
   return { io, seen }
 }
@@ -404,6 +405,28 @@ describe('the argv safety net (SPEC 6.1)', () => {
     const nm = all.filter(a => a.includes('no-mistakes'))
     expect(nm.every(a => a[0] === 'sh' && a[2] === LAUNCH_SCRIPT && (a.includes('respond') || a.slice(7).join(' ') === 'no-mistakes rerun'))).toBe(true)
     expect(nm.filter(a => a.includes('rerun')).length).toBe(2)
+  })
+
+  test("every file an executor writes is the loop's own, in its loop dir: spawn records, and only the answer script's job files in answers/, never an answer file (#561)", async () => {
+    const writes: string[] = []
+    for (const action of ACTIONS) writes.push(...(await run(action)).writes)
+    const agents = ACTIONS.filter(a => a.kind === 'spawn' || a.kind === 'delegate')
+    // one job file and one spawn record per agent the loop starts, on the default script channel
+    expect(writes.filter(p => p.endsWith('.job.json'))).toHaveLength(agents.length)
+    expect(writes.filter(p => p.startsWith(`${LOOP_DIR}/spawns/`))).toHaveLength(agents.length)
+    for (const p of writes) {
+      const own = p.startsWith(`${LOOP_DIR}/spawns/`) || (p.startsWith(`${LOOP_DIR}/answers/`) && p.endsWith('.job.json')) || p.startsWith(`${LOOP_DIR}/respond/`)
+      expect({ path: p, own }).toEqual({ path: p, own: true })
+      expect(p.split('/')).not.toContain('..')
+    }
+    // the answer script is named only from the plugin's own root, with this attempt's file
+    for (const action of agents) {
+      const prompt = (await run(action)).spawns[0]?.prompt ?? ''
+      const named = [...prompt.matchAll(/(\S+\/bin\/factory-answer) --to (\S+)/g)]
+      expect(named).toHaveLength(1)
+      expect(named[0]?.[1]).toBe(`${PLUGIN_ROOT}/bin/factory-answer`)
+      expect(named[0]?.[2]).toStartWith(`${LOOP_DIR}/answers/`)
+    }
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {

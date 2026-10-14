@@ -24,6 +24,8 @@ export const NOW = Date.UTC(2026, 9, 13, 3, 0)
 export const MIN = 60_000
 export const DEVICE = 'coder-dev-system-orchestrator'
 export const OTHER = 'coder-plant-console-orchestrator'
+// where the plugin is loaded from ($.plugin.root): the answer script is under it (#561)
+export const PLUGIN_ROOT = '/plugins/factory-loop'
 
 // the main checkout on its default branch with nothing changed: where agents may start (#544)
 export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [] }

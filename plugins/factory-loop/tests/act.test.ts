@@ -32,17 +32,18 @@ import {
   wakeStarted,
 } from '../hooks/act'
 import type { ActEnv, Acted, Between, Live } from '../hooks/act'
-import { REPAIR_REPLY } from '../hooks/act-agents'
+import { REPAIR_REPLY, spawnRecordPath } from '../hooks/act-agents'
 import { ACTION_KINDS } from '../hooks/config'
+import { answerText, jobPathOf, parseJob } from '../hooks/contract.mjs'
 import { controlText } from '../hooks/control'
-import { answerPath } from '../hooks/exec'
+import { answerPath, scriptAnswerPath } from '../hooks/exec'
 import type { ActIo, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import { finish } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import { plan } from '../hooks/plan'
 import type { Action, AgentStatus, LedgerEntry } from '../hooks/types'
-import { DEVICE, MIN, NOW, config, control, entry, mine, run as runOf, state } from './fixtures'
+import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, mine, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, checkout, factoryDoc, iso } from './host'
 import type { Seen } from './host'
 
@@ -60,6 +61,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: 'ready', CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
+    pluginRoot: PLUGIN_ROOT,
     config: config({ mode: 'act' }),
     configProblems: [],
   }
@@ -434,7 +436,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toEqual(implementer)
     expect(f.saves).toEqual([])
     // the final answer has its machine line: recorded without asking the agent list
-    expect(await said('RESULT run=R1 head=abc1234 commit=abc1234 gated=yes branch=feat/issue-60-x pr=none')).toEqual({ result: 'applied', key: implementer.key, repaired: false })
+    expect(await said('RESULT run=R1 head=abc1234 commit=abc1234 gated=yes branch=feat/issue-60-x pr=none')).toEqual({ result: 'applied', key: implementer.key, repaired: false, via: 'text' })
     expect(asked).toEqual(['agent-1'])
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'done', outcome: { kind: 'handoff', run: 'R1' } })
 
@@ -443,7 +445,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     f.env.live.ledger = [again]
     working = false
     // no repair message goes from here, and the answer says why
-    expect(await said('I could not finish.')).toEqual({ result: 'applied', key: implementer.key, repaired: false, undelivered: 'the loop sends no messages from here' })
+    expect(await said('I could not finish.')).toEqual({ result: 'applied', key: implementer.key, repaired: false, via: 'text', undelivered: 'the loop sends no messages from here' })
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'failed' })
   })
 
@@ -464,9 +466,11 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(sent[0]?.to).toBe('agent-1')
     // the type it runs as, which the engine must offer to resume it (#559)
     expect(sent[0]?.type).toBe('adjudicator')
-    // in text, with the answer tools off by default (config answerTools, #560)
+    // through the answer script, the default channel (config answerChannel, #561), at the file
+    // issued for this attempt, with the text contract as the fallback; no tool (#560)
     expect(sent[0]?.text).not.toContain('mcp__factory-loop__verdict')
-    expect(sent[0]?.text).toContain('Reply in your output contract and nothing else')
+    expect(sent[0]?.text).toContain(`\`${PLUGIN_ROOT}/bin/factory-answer --to ${scriptAnswerPath(LOOP_DIR, gate)}\``)
+    expect(sent[0]?.text).toContain('If the script cannot record your answer, reply in your output contract and nothing else')
     expect(sent[0]?.text).toContain('I checked the run and it looks fine.')
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'running', attempts: 1, agentId: 'agent-1', reminded: true })
     // the pass after does not take the agent's completed listing before the resume as its end
@@ -766,6 +770,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
       result: 'applied',
       key: gate.key,
       repaired: false,
+      via: 'text',
       undelivered: 'the agent is gone',
     })
     expect(sent).toEqual(['agent-1'])
@@ -1020,7 +1025,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=design:470:${claimedAt} status=running`))).toBe(true)
 
     // its answer: pass 3 delegates (route, the delegated event, the implementer on the routed model)
-    expect(await h.answer('agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)).toEqual({ result: 'applied', key: `design:470:${claimedAt}`, repaired: false })
+    expect(await h.answer('agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)).toEqual({ result: 'applied', key: `design:470:${claimedAt}`, repaired: false, via: 'text' })
     expect(h.entry(`design:470:${claimedAt}`)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF } })
     at(65)
     await h.pass()
@@ -1108,6 +1113,86 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     const loops = h.events().filter(e => e[1] === 'loop').map(e => e.join(' '))
     expect(loops).toEqual([...new Set(loops)])
     expect(loops.filter(l => l.includes(`key=judge:sequence:512:${HEAD} `)).map(l => /status=(\S+)/.exec(l)?.[1])).toEqual(['running', 'done'])
+  })
+
+  // #561: the answer script, the default channel and a workaround for the answer tools a
+  // timer-spawned agent cannot reach (#560). Each agent's prompt names the script and a file of
+  // its own; the agent runs the script, which checks its JSON against the job file the loop wrote
+  // and writes the file (here: contract.mjs answerText, the function the script calls); the loop
+  // reads that file at the agent's turn.complete, whatever its closing words say.
+  test('every agent answers through the answer script: spawn, the script writes, turn.complete, the answer recorded, and the issue goes on (#561)', async () => {
+    let clock = NOW
+    const { w, run } = world(() => clock)
+    const h = harness(run)
+    const at = (s: number) => {
+      clock = NOW + s * 1000
+      h.at(s)
+    }
+    // what an agent does with its prompt: runs the script on the file it names, with its answer
+    const record = (prompt: string, input: unknown) => {
+      const m = /^ {2}(\S+\/bin\/factory-answer) --to (\S+) <<'JSON'$/m.exec(prompt)
+      if (m === null) throw new Error(`no answer script in ${JSON.stringify(prompt)}`)
+      const [, bin = '', file = ''] = m
+      expect(bin).toBe(`${PLUGIN_ROOT}/bin/factory-answer`)
+      const job = parseJob(h.files.get(jobPathOf(file) ?? '') ?? '')
+      if (typeof job === 'string') throw new Error(job)
+      const written = answerText(job, input)
+      if (!written.ok) throw new Error(written.problems.join('; '))
+      h.files.set(file, written.outcome)
+      return { file, job }
+    }
+
+    at(5)
+    await h.pass()
+    const claimedAt = w.since
+    at(60)
+    await h.pass()
+    const design = `design:470:${claimedAt}`
+    // the designer's job: the issue its brief must be on
+    const d = record(h.spawns[0]?.prompt ?? '', { brief: BRIEF, created: [], pendingDecision: false })
+    expect(d.job).toEqual({ contract: 'design', purpose: null, repo: REPO, issue: 470, branch: null })
+    expect(d.file).toBe(scriptAnswerPath(LOOP_DIR, h.entry(design) ?? { key: design, attempts: 0, startedAt: 0 }))
+    expect(JSON.parse(h.files.get(spawnRecordPath(LOOP_DIR, design)) ?? '{}')).toMatchObject({ channel: 'script', answerFile: d.file })
+    expect(await h.answer('agent-1', 'Brief posted; my answer is recorded.')).toEqual({ result: 'applied', key: design, repaired: false, via: 'script' })
+    expect(h.entry(design)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF }, summary: expect.stringContaining('designer #470 (script)') })
+
+    at(65)
+    await h.pass()
+    expect(h.keys()).toEqual([`delegate:470:${BRIEF}`])
+    w.stage = 'parked'
+    w.run = RUN
+    w.pr = 512
+    w.watch = `parked ${BRANCH} ${RUN} step=review pr=512 head=${HEAD}\n`
+    const i = record(h.spawns[1]?.prompt ?? '', { run: RUN, head: HEAD, commit: HEAD, gated: true, branch: BRANCH, pr: 512 })
+    expect(i.job.contract).toBe('handoff')
+    // closing words with a line of their own that would read otherwise change nothing
+    expect(await h.answer('agent-2', 'Done. NOT GATED, I think.')).toMatchObject({ result: 'applied', via: 'script' })
+    expect(h.entry(`delegate:470:${BRIEF}`)).toMatchObject({ status: 'done', outcome: { kind: 'handoff', notGated: false, run: RUN, head: HEAD } })
+
+    at(70)
+    await h.pass()
+    expect(h.keys()).toEqual([`adjudicate:${RUN}:review:${HEAD}`])
+    const a = record(h.spawns[2]?.prompt ?? '', { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the retry is bounded already' }], action: { type: 'approve' } })
+    expect(a.job).toEqual({ contract: 'verdict', purpose: 'gate', repo: REPO, issue: 470, branch: null })
+    expect(await h.answer('agent-3', 'Judged; recorded.')).toMatchObject({ result: 'applied', via: 'script' })
+    expect(h.events()).toContainEqual(['callum-flow-event', 'verdict', '--issue', '470', '--run', RUN, '--branch', BRANCH, '--note', 'WRONG: review-1: the retry is bounded already'])
+    at(75)
+    await h.pass()
+    expect(h.keys()).toEqual([`respond:${RUN}:review:${HEAD}:approve`])
+
+    // the merge review: its report through the script too
+    at(120)
+    await h.pass()
+    at(180)
+    await h.pass()
+    expect(h.keys()).toEqual([`adjudicate-merge:512:${HEAD}`])
+    const m = record(h.spawns[3]?.prompt ?? '', { findings: [], action: { type: 'merge' }, summary: 'the loop acts on the factory', bump: { level: 'minor', reason: 'a new capability' }, flags: [] })
+    expect(m.job.purpose).toBe('merge')
+    expect(await h.answer('agent-4', 'Reviewed; recorded.')).toMatchObject({ result: 'applied', via: 'script' })
+    expect(h.entry(`adjudicate-merge:512:${HEAD}`)).toMatchObject({ status: 'done', outcome: { action: { type: 'merge' }, report: { bump: 'minor', flags: [] } } })
+    at(185)
+    await h.pass()
+    expect(h.keys()).toEqual([`merge:512:${HEAD}`])
   })
 
   // #537, as on the testbed: codex was logged out, so the run failed at test and the adjudicator

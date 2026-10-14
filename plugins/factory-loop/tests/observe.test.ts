@@ -29,7 +29,7 @@ import { plan } from '../hooks/plan'
 import { buildState, runsFromWatch, seenRuns, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
-import { DEVICE, NOW, MIN, OTHER, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
+import { DEVICE, NOW, MIN, OTHER, PLUGIN_ROOT, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -498,11 +498,19 @@ describe('config (SPEC 4.2)', () => {
     expect(loadConfig(null, 'x').problems).toEqual(['settings: not a JSON object'])
   })
 
-  test('answerTools: off by default; true or false in either file, the later layer winning; a bad value is named and left out (#560)', () => {
-    expect(DEFAULT_CONFIG.answerTools).toBe(false)
-    expect(loadConfig({ answerTools: true }).config.answerTools).toBe(true)
-    expect(loadConfig({ answerTools: true }, { answerTools: false }).config.answerTools).toBe(false)
-    expect(loadConfig({ answerTools: 'on' })).toMatchObject({ config: { answerTools: false }, problems: ['answerTools: "on" is not true or false'] })
+  test('answerChannel: script by default (the workaround, #561); script, tool or text in either file, the later layer winning; a bad value is named and left out', () => {
+    expect(DEFAULT_CONFIG.answerChannel).toBe('script')
+    for (const channel of ['script', 'tool', 'text'] as const) expect(loadConfig({ answerChannel: channel })).toEqual({ config: { ...DEFAULT_CONFIG, answerChannel: channel }, problems: [] })
+    expect(loadConfig({ answerChannel: 'tool' }, { answerChannel: 'text' }).config.answerChannel).toBe('text')
+    expect(loadConfig({ answerChannel: 'tools' })).toMatchObject({ config: { answerChannel: 'script' }, problems: ['answerChannel: "tools" is not script, tool or text'] })
+    expect(loadConfig({ answerChannel: true }).problems).toEqual(['answerChannel: true is not script, tool or text'])
+  })
+
+  test("answerTools, #560's switch, is replaced by answerChannel: named as replaced, and read as nothing (#561)", () => {
+    for (const value of [true, false, 'on']) {
+      expect(loadConfig({ answerTools: value })).toEqual({ config: DEFAULT_CONFIG, problems: ['answerTools: replaced by answerChannel (script, tool or text), and ignored'] })
+    }
+    expect('answerTools' in DEFAULT_CONFIG).toBe(false)
   })
 
   test('the defaults the owner set on 2026-10-13', () => {
@@ -787,6 +795,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     sink: null,
     env: ENV,
     toolsDir: TOOLS,
+    pluginRoot: PLUGIN_ROOT,
     config: config(),
     configProblems: [],
     ...over,

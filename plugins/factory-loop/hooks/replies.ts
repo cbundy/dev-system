@@ -5,33 +5,23 @@
 // says instead what kept a reply from parsing, for the one repair message (#548). A reply that
 // is not the contract is unparseable, never guessed: act-agents.ts records it as a failed
 // attempt, except the designer's, which goes to the model as judge(report) (rule D3). The same
-// contracts as tool inputs are agent-tools.ts's.
+// contracts as structured answers (the answer tools and the answer script) are contract.mjs's,
+// whose words and shapes the lines here share.
+import { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, gatedWithoutRun, handoffOutcome, isBriefUrl } from './contract.mjs'
+import type { AdjudicatorOutcome, DesignResult, HandoffFields, HandoffOutcome } from './contract.mjs'
 import type { AdjudicatorAction, AdjudicatorPurpose, Bump, MergeFlag, MergeReport, Outcome } from './types'
 
+export { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, VERDICTS, gatedWithoutRun, handoffOutcome, isBriefUrl } from './contract.mjs'
+export type { AdjudicatorOutcome, DesignResult, HandoffFields, HandoffOutcome }
 export type DesignerOutcome = Extract<Outcome, { kind: 'designer' }>
-export type DesignResult = Exclude<DesignerOutcome, { unparsed: true }>
-export type AdjudicatorOutcome = Extract<Outcome, { kind: 'adjudicator' }>
-export type HandoffOutcome = Extract<Outcome, { kind: 'handoff' }>
 
 // The machine lines, as the prompts ask for them (prompts.ts quotes these).
 export const DESIGNER_RESULT = 'RESULT brief=<comment URL|none> created=<n1,n2|none> pending_decision=<yes|no>'
 export const HANDOFF_RESULT = 'RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>'
 
-export const VERDICTS = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'] as const
 const VERDICT_LINE = /^(CORRECT|WRONG|NIT|ENV|DUP):\s*\S/
 // a contract word with decoration around it (`- WRONG:`, `**ACTION**:`, `` `NIT`: ``), then its colon
 const MISSHAPEN_LINE = /^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\W*:/
-export const BUMPS: readonly Bump[] = ['patch', 'minor', 'major']
-export const FLAGS: readonly MergeFlag[] = ['image', 'template', 'restart', 'run-it']
-
-// The ACTIONs that answer each purpose. A gate or a test-weakening review never merges or
-// holds (types.ts, D-05); a merge review never drives the run's gate. escalate stays open to
-// the merge review: its definition offers it, and plan holds on it as on `hold` (rule M5a).
-export const ACTIONS_FOR: Record<AdjudicatorPurpose, readonly AdjudicatorAction['type'][]> = {
-  gate: ['approve', 'fix', 'skip', 'fixer', 'escalate'],
-  weakening: ['approve', 'fix', 'skip', 'fixer', 'escalate'],
-  merge: ['merge', 'hold', 'fixer', 'escalate'],
-}
 
 // A reply's lines, trimmed, blank ones left out.
 function lines(text: string): string[] {
@@ -52,13 +42,6 @@ function quote(line: string): string {
 }
 
 const parsed = <T>(r: T | string): T | null => (typeof r === 'string' ? null : r)
-
-// isBriefUrl: a brief comment's URL on an issue of this repo (on that issue, when given).
-export function isBriefUrl(url: string, repo: string, issue: number | null = null): boolean {
-  const m = url.match(/^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)#issuecomment-\d+$/)
-  if (m === null || (m[1] ?? '').toLowerCase() !== repo.toLowerCase()) return false
-  return issue === null || Number(m[2]) === issue
-}
 
 // --- the designer (SPEC 7.2) -----------------------------------------------------------------
 
@@ -194,7 +177,6 @@ function parseFlags(value: string): MergeFlag[] | null {
 }
 
 const FIX_FLAGS = ['--findings', '--instructions', '--add-finding'] as const
-export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/
 const APPROVE_FLAGS = ['--reason'] as const
 
 // parseAction: what follows `ACTION:`, by the definition's contract: `approve [--reason <text>]`,
@@ -327,11 +309,6 @@ function jsonEnd(text: string, i: number): number | null {
 
 const HANDOFF_LINE = /^RESULT\s+run=(\S+)\s+head=(\S+)\s+commit=(\S+)\s+gated=(yes|no)\s+branch=(\S+)\s+pr=(\S+)$/
 
-export type HandoffFields = { run: string | null; head: string | null; commit: string | null; gated: boolean; branch: string | null; pr: number | null }
-
-// The shape of each handoff id, as a RESULT line or the handoff tool gives it.
-export const HANDOFF_SHAPES = { run: /^[A-Za-z0-9_-]+$/, sha: /^[0-9a-f]{7,40}$/i, branch: /^[A-Za-z0-9._/-]+$/ }
-
 // handoffFields: one RESULT line's fields, each checked for its shape, or null.
 function handoffFields(line: string): HandoffFields | null {
   const m = bare(line).match(HANDOFF_LINE)
@@ -356,11 +333,6 @@ function handoffFields(line: string): HandoffFields | null {
   }
 }
 
-// One SHA may be the other's short form.
-function sameSha(a: string, b: string): boolean {
-  return a.startsWith(b) || b.startsWith(a)
-}
-
 // parseHandoff: the last RESULT line of an implementer's or fixer's handoff. It is not gated
 // when it says so, or when the run's head is not the agent's commit (implement-issue section 8:
 // never rationalise a mismatch away). newBranch is the branch it reports when that is not the
@@ -382,24 +354,4 @@ export function readHandoff(answer: string, namedBranch: string | null): Handoff
   }
   if (gatedWithoutRun(fields)) return 'the RESULT line says gated=yes with run=none, and with no pipeline run nothing is gated: name the run, or say gated=no'
   return handoffOutcome(fields, namedBranch)
-}
-
-// gatedWithoutRun: a handoff that says gated but names no run, as an agent that gave up and
-// committed nothing may. Read as done, no rule would act on it (D4b retries only a delegate that
-// failed, D5 only one not gated), so its issue would stall: it is unreadable instead.
-export function gatedWithoutRun(fields: Pick<HandoffFields, 'run' | 'gated'>): boolean {
-  return fields.gated && fields.run === null
-}
-
-// handoffOutcome: what a handoff's fields mean, from either channel.
-export function handoffOutcome(fields: HandoffFields, namedBranch: string | null): HandoffOutcome {
-  const mismatch = fields.head !== null && fields.commit !== null && !sameSha(fields.head, fields.commit)
-  const named = namedBranch === null || namedBranch === '' ? null : namedBranch
-  return {
-    kind: 'handoff',
-    notGated: !fields.gated || mismatch,
-    run: fields.run,
-    head: fields.head,
-    newBranch: fields.branch !== null && fields.branch !== named ? fields.branch : null,
-  }
 }

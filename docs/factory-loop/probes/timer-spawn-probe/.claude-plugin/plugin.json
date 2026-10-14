@@ -1,0 +1,8 @@
+{
+  "name": "timer-spawn-probe",
+  "version": "0.1.0",
+  "description": "Throwaway probe for the factory loop: can an agent a mod spawns from a timer call that mod's own tool?",
+  "author": {
+    "name": "Callum Bundy"
+  }
+}

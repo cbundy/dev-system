@@ -32,12 +32,13 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
 | Executors: commands, guard and merge, respond, agent spawns, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/act-agents.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done; not yet run against real agents |
 | Wakes and the answer tool | `hooks/wake.ts` | done |
-| The agents' answer tools and the repair message | `hooks/agent-tools.ts`, `agents/` (the loop's adjudicator and designer, D-70) | done |
+| The agents' answer tools and the repair message | `hooks/agent-tools.ts`, `agents/` (the loop's adjudicator and designer, D-70) | done; no agent can reach the tools yet (SPEC 13) |
+| The answer script and the contract it shares with the loop (a temporary workaround, D-74) | `bin/factory-answer`, `hooks/contract.mjs` | done; not yet run by real agents |
 | Safety rails | `hooks/rails.ts` | done |
 | `/factory` and the control tool | `hooks/control.ts` | done |
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
 | `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
-| Tests | `tests/*.test.ts` (16 files) | 680 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, and one issue from claim to merge |
+| Tests | `tests/*.test.ts` (17 files) | 753 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
 
 ## Run it in observe mode
@@ -118,13 +119,24 @@ times, the wakes' latencies, and what each issue waits on and since when. The tr
 kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
 fills the cap is cut short. SPEC 12.1 explains each field, with `jq` examples.
 
-## Answer tools
+## How agents answer
 
-The loop's agents can answer through validated tools (`mcp__factory-loop__verdict`, `design`
-and `handoff`), but on Claude Code 2.1.299 an agent the loop spawns from its timer never reaches
-them (SPEC 13). So the prompts and the repair message ask for the text contract alone, unless
-`"answerTools": true` is set in the repo's `.claude/factory-loop.json` or in the workspace file
-(which wins). The tools stay registered and served either way (DECISIONS D-73).
+The intended design is that the loop's agents answer through validated tools
+(`mcp__factory-loop__verdict`, `design` and `handoff`). But on Claude Code 2.1.296 and 2.1.299
+an agent the loop spawns from its timer never reaches them (SPEC 13). So, as a **temporary
+workaround**, agents record their answer with a checked script, `bin/factory-answer`: each
+prompt names the script and an answer file for that one attempt, the script checks the JSON
+against the same contract the tools use (`hooks/contract.mjs`) and names every problem, and the
+loop reads the file when the agent's turn ends (SPEC 7.3a, DECISIONS D-74). Text stays the
+fallback, and the decision log says which way each answer came (`script`, `tool`, `text`,
+`repair`).
+
+`answerChannel` picks the channel, in the repo's `.claude/factory-loop.json` or in the
+workspace file (which wins): `script` (the default, the workaround), `tool` (the tools), or
+`text` (the text contract alone). The tools stay registered and served whatever it says. Run the
+timer-spawn probe (`docs/factory-loop/probes/timer-spawn-probe`) on each Claude Code upgrade;
+once its timer-spawned agent reaches the tool, set `answerChannel` to `tool` and retire the
+script. `answerTools`, the setting it replaced, is no longer read.
 
 ## Pinned Claude Code version
 
@@ -141,14 +153,21 @@ between releases. Before running the loop on a newer Claude Code:
 3. Re-run the spike's five checks in a throwaway workspace (load, timer, title through
    `/rename`, agents in bypass mode, restart), as its README describes, and the wake probe
    (`docs/factory-loop/probes/wake-probe/`), which proves the judgment wake and its answers.
+4. Run the timer-spawn probe (`docs/factory-loop/probes/timer-spawn-probe/`, its header says
+   how): once an agent spawned from a timer reaches the probe's tool, the answer script can give
+   way to the tools (above).
 
 ## Develop it
 
-`npm test` runs the plugin's tests through `claude plugin test`, and eight node tests at the repo
+`npm test` runs the plugin's tests through `claude plugin test`, and nine node tests at the repo
 root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
 `factory-loop-agents.test.js` checks that every agent the loop spawns lists its answer tool, and
 that the loop's adjudicator and designer stay the callum-flow definitions but for `tools:`;
-`factory-loop-safety.test.js` scans every string in `hooks/` for a forbidden command;
+`factory-loop-safety.test.js` scans every string in `hooks/` and the answer script for a
+forbidden command, and the script's source for any write but its one answer file;
+`factory-loop-answer.test.js` runs the answer script for real: its exit codes, every problem it
+names (held to the same table of cases as the loop's own reading, `tests/answer-cases.mjs`), its
+atomic write and every path it must refuse;
 `factory-loop-judge-skill.test.js` checks the judge skill covers every wake, TELL kind and op;
 and `factory-loop-respond-launch.test.js`, `factory-loop-fast-forward.test.js`,
 `factory-loop-prune.test.js` and `factory-loop-loop-events.test.js` run the respond launch, the

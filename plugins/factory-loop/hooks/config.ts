@@ -1,7 +1,7 @@
 // Default settings (SPEC 4.2), and the pure loaders for the settings files and the control
 // state. The repo-local .claude/factory-loop.json overrides any setting; the plugin ships no
 // repo-specific values. Types only are imported, so plan.ts and the replay can use this too.
-import type { ActionKind, AgentType, Config, Control, Ms } from './types'
+import type { ActionKind, AgentType, AnswerChannel, Config, Control, Ms } from './types'
 
 const MIN = 60_000
 
@@ -74,10 +74,15 @@ export const DEFAULT_CONFIG: Config = {
   trace: false,
   // 100 MiB in all (owner, #552)
   traceMaxBytes: 100 * 1024 * 1024,
-  // off: a spawn from the loop's timer never reaches its tool hook on Claude Code 2.1.299, so
-  // agents are asked for text until the engine lets it (#560, D-73)
-  answerTools: false,
+  // script: a TEMPORARY WORKAROUND (#561, D-74). The registered answer tools (`tool`, #548) are
+  // the intended channel, but on Claude Code 2.1.296 and 2.1.299 an agent spawned from the loop's
+  // timer never reaches the loop's tool hook (#560, SPEC 13), while Bash works: agents record
+  // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
+  // once the probe shows a timer-spawned agent reaching the tool hook.
+  answerChannel: 'script',
 }
+
+export const ANSWER_CHANNELS: readonly AnswerChannel[] = ['script', 'tool', 'text']
 
 export const EMPTY_CONTROL: Control = {
   paused: [],
@@ -152,7 +157,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       const short = !(raw in defaults) && `${raw}Ms` in defaults
       const key = short ? `${raw}Ms` : raw
       const base = defaults[key]
-      if (!(key in defaults)) {
+      if (raw === 'answerTools') {
+        // #560's switch, replaced by answerChannel (#561) and not read
+        problems.push('answerTools: replaced by answerChannel (script, tool or text), and ignored')
+      } else if (!(key in defaults)) {
         problems.push(`${raw}: unknown setting`)
       } else if ((TIME_MAPS as readonly string[]).includes(key) || (COUNT_MAPS as readonly string[]).includes(key)) {
         if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -189,6 +197,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'skipLabels') {
         if (Array.isArray(value) && value.every(v => typeof v === 'string')) out[key] = [...value]
         else bad(raw, value, 'a list of labels')
+      } else if (key === 'answerChannel') {
+        const channel = ANSWER_CHANNELS.find(c => c === value)
+        if (channel !== undefined) out[key] = channel
+        else bad(raw, value, 'script, tool or text')
       } else if (key === 'trackerTitle') {
         if (typeof value === 'string' && compiles(value)) out[key] = value
         else bad(raw, value, 'a regular expression')

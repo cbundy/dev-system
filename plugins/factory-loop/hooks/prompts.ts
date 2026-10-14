@@ -6,13 +6,14 @@
 // and anything else in its place is dropped. Never a GitHub closing keyword before an issue
 // reference (I-33): the template text uses none of the words, every id is checked for its
 // shape, and free text (notes, instructions, guard and verdict lines) is neutralized. Each agent
-// is asked for its machine line; with the setting answerTools on, first to answer through its
-// tool (agent-tools.ts, #548), the machine line then the fallback (#560). The one repair message
-// for an answer the loop could not read is here too. Pure, so tests/prompts.test.ts renders
-// every template with hostile inputs.
+// is asked to answer on the channel the setting answerChannel names (askOf): through the checked
+// answer script (the default, #561), through its answer tool (agent-tools.ts, #548), or with its
+// machine line alone (#560); the machine line stays the fallback of the other two. The one
+// repair message for an answer the loop could not read is here too. Pure, so
+// tests/prompts.test.ts renders every template with hostile inputs.
 import { DESIGN, HANDOFF, TOOL_OF, VERDICT } from './agent-tools'
 import { DESIGNER_RESULT, HANDOFF_RESULT, isBriefUrl } from './replies'
-import type { Action, AdjudicatorPurpose, AgentType, FixerPurpose } from './types'
+import type { Action, AdjudicatorPurpose, AgentType, AnswerChannel, FixerPurpose } from './types'
 
 export type SpawnAction = Extract<Action, { kind: 'spawn' }>
 export type DelegateAction = Extract<Action, { kind: 'delegate' }>
@@ -31,10 +32,16 @@ export type PromptEnv = {
   // the owner's notes for this issue (control notes, SPEC 4.3, 6.3): every agent but the
   // designer, whose action carries them already, gets them before its reading list
   notes?: readonly string[]
-  // config answerTools (SPEC 4.2, #560): ask for the answer tool first; absent is off, the
-  // setting's default
-  answerTools?: boolean
+  // config answerChannel (SPEC 4.2): the channel the agent is asked to answer on; absent is
+  // text alone
+  channel?: AnswerChannel
+  // the answer script and this attempt's answer file, for the script channel (#561)
+  script?: ScriptPlace | null
 }
+
+// Where an agent records its answer with the answer script: the script, and the answer file
+// unique to its ledger entry and attempt (exec.ts scriptAnswerPath), both absolute.
+export type ScriptPlace = { bin: string; file: string }
 
 // A free-text value longer than this is cut: a prompt points, it does not carry documents.
 const TEXT_MAX = 4000
@@ -143,36 +150,99 @@ function scratch(n: number | null): string {
   return `Scratch: keep temporary files in the ${dir} subdirectory of your scratchpad directory, never at its top level: other agents share the scratchpad.`
 }
 
+// --- the answer channel (SPEC 4.2 answerChannel) --------------------------------------------------
+
+// The channel a prompt asks for, with what it needs.
+export type Ask = { kind: 'script'; place: ScriptPlace } | { kind: 'tool' } | { kind: 'text' }
+
+// An absolute path with nothing in it a shell or a closing keyword could use: no space, quote,
+// `$`, `#` or `..`.
+const PATH = /^\/[A-Za-z0-9._/-]+$/
+
+// scriptShaped: both paths of a script place have the shape a prompt may carry.
+export function scriptShaped(place: ScriptPlace): boolean {
+  return [place.bin, place.file].every(p => PATH.test(p) && !p.split('/').includes('..'))
+}
+
+// askOf: the channel a prompt asks for. `script` is a TEMPORARY WORKAROUND (#561, DECISIONS D-74):
+// the registered answer tools (`tool`, #548) are the intended design, but on Claude Code 2.1.296
+// and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook (#560,
+// SPEC 13), while its Bash works. The words agents read stay neutral: they name the script and
+// what it does, never why. Script only with both paths in their shape, else text.
+export function askOf(channel: AnswerChannel | undefined, script: ScriptPlace | null | undefined): Ask {
+  if (channel === 'script') return script !== undefined && script !== null && scriptShaped(script) ? { kind: 'script', place: script } : { kind: 'text' }
+  return channel === 'tool' ? { kind: 'tool' } : { kind: 'text' }
+}
+
 // toolAsk: the answer through the agent's tool (agent-tools.ts), which checks it while the agent
 // can still correct it; the machine line after it stays the fallback.
 function toolAsk(ask: string): string {
   return `${ask} (load it with ToolSearch first if it is listed by name only). If it returns an error, correct the call and call it again; once it is recorded, end your turn.`
 }
 
-// answerAsk: how an agent is asked for its answer, given the tool ask and the text ask (lower
-// case, as it follows "If you cannot call it, "). With the answer tools off (config answerTools,
-// #560) the text ask alone, capitalized; on, the tool first and the text ask as its fallback.
-function answerAsk(tools: boolean, tool: string, text: string): string[] {
-  return tools ? [toolAsk(tool), `If you cannot call it, ${text}`] : [capital(text)]
+// scriptAsk: the answer recorded with the answer script (bin/factory-answer), which checks it
+// against the contract while the agent can still correct it: the command with an example of its
+// JSON, given as a here-document so no quote in the answer trips the shell, then what each field
+// means. The machine line after it stays the fallback.
+function scriptAsk(place: ScriptPlace, lead: string, example: string, fields: string): string[] {
+  return [
+    `${lead}, record your answer with the factory loop's answer script, once, its JSON on standard input:`,
+    `  ${place.bin} --to ${place.file} <<'JSON'`,
+    `  ${example}`,
+    '  JSON',
+    `${fields} The script records your answer for the factory loop and changes nothing else. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.`,
+  ]
+}
+
+const SCRIPT_FALLBACK = 'If the script cannot record your answer, '
+const TOOL_FALLBACK = 'If you cannot call it, '
+
+// What one template offers each channel: the script's ask, the tool's ask, and the text ask
+// (lower case, as it follows a fallback's "If ..., "); alone: the text ask on the text channel,
+// the text ask capitalized when not given.
+type Asks = { script: (place: ScriptPlace) => string[]; tool: string; text: string; alone?: string }
+
+// answerLines: how an agent is asked for its answer on its channel: the script's or the tool's
+// ask, then the text ask as their fallback; on the text channel, the text ask alone.
+function answerLines(ask: Ask, asks: Asks): string[] {
+  if (ask.kind === 'script') return [...asks.script(ask.place), `${SCRIPT_FALLBACK}${asks.text}`]
+  if (ask.kind === 'tool') return [toolAsk(asks.tool), `${TOOL_FALLBACK}${asks.text}`]
+  return [asks.alone ?? capital(asks.text)]
 }
 
 function capital(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
+// The JSON each contract takes (contract.mjs), shown by example and explained field by field.
+const VERDICT_EXAMPLE = '{"findings": [{"id": "review-1", "verdict": "WRONG", "reason": "<the evidence, one sentence>"}], "action": {"type": "approve", "reason": "<the evidence>"}}'
+const VERDICT_FIELDS =
+  'findings: one { id, verdict, reason } per finding you judged, verdict one of CORRECT, WRONG, NIT, ENV, DUP ([] when there is nothing to report); a gap the reviewer missed takes an id of your own, missed-1 and on, and goes in action.addFinding. action: your one ACTION line as an object: type is its first word, and its options are its fields: reason, findings (a list of ids of the CORRECT or ENV findings above), instructions, addFinding (an object) and why.'
+const MERGE_EXAMPLE = '{"findings": [], "action": {"type": "merge"}, "summary": "<what changes for users, one line>", "bump": {"level": "patch", "reason": "<why>"}, "flags": []}'
+const MERGE_FIELDS =
+  'findings: one { id, verdict, reason } per verdict line ([] for none). action: {"type": "merge"}, {"type": "hold", "reason": ...}, {"type": "fixer", "instructions": ...} or {"type": "escalate", "why": ...}. summary, bump ({ level, reason }) and flags (a list, [] for none): as the SUMMARY, BUMP and FLAGS lines below say.'
+const DESIGN_FIELDS = "brief: the brief comment's URL, or null. created: the issue numbers you created ([] for none). pendingDecision: true when the brief waits on an owner decision."
+const HANDOFF_EXAMPLE = '{"run": "<run id>", "head": "<head SHA>", "commit": "<your commit SHA>", "gated": true, "branch": "<branch>", "pr": null}'
+
+function designExample(repo: string | null, n: number | null): string {
+  return `{"brief": "https://github.com/${repo ?? '<owner>/<repo>'}/issues/${n ?? '<N>'}#issuecomment-<id>", "created": [], "pendingDecision": false}`
+}
+
 // What each field of the handoff's machine line (replies.ts parseHandoff) means.
 const HANDOFF_FIELDS =
   'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only with a run, when its head equals your commit or you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none.'
 
-// handoffAsk: the handoff's machine line after implement-issue section 8; with tools, its tool
-// first and the line as the fallback.
-function handoffAsk(tools: boolean): string[] {
+// handoffAsk: the handoff after implement-issue section 8, on the agent's channel, with what its
+// fields mean; the machine line last, the fallback of the script and the tool.
+function handoffAsk(ask: Ask): string[] {
+  const after = 'After the implement-issue handoff (its section 8)'
   const line = 'end your final message with the line below, exactly once and last, filled in.'
-  if (!tools) return [`After the implement-issue handoff (its section 8), ${line}`, HANDOFF_FIELDS, HANDOFF_RESULT]
+  if (ask.kind === 'text') return [`${after}, ${line}`, HANDOFF_FIELDS, HANDOFF_RESULT]
+  if (ask.kind === 'script') return [...scriptAsk(ask.place, after, HANDOFF_EXAMPLE, `${HANDOFF_FIELDS} In the JSON, none is null and yes is true.`), `${SCRIPT_FALLBACK}${line}`, HANDOFF_RESULT]
   return [
-    toolAsk(`After the implement-issue handoff (its section 8), answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
+    toolAsk(`${after}, answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
     `${HANDOFF_FIELDS} In the tool, none is null and yes is true.`,
-    `If you cannot call it, ${line}`,
+    `${TOOL_FALLBACK}${line}`,
     HANDOFF_RESULT,
   ]
 }
@@ -186,12 +256,12 @@ const CONTRACT = 'reply in your output contract and nothing else: verdict lines,
 export function promptOf(action: AgentAction, env: PromptEnv): string {
   const repo = id(env.repo, 'repo')
   const n = issueNo(action.issue)
-  const tools = env.answerTools === true
+  const ask = askOf(env.channel, env.script)
   let out: string[]
-  if (action.kind === 'delegate') out = implementer(repo, n, action.brief, env.modelOverride, tools)
-  else if (action.agent === 'designer') out = designer(repo, n, action.notes, env, tools)
-  else if (action.agent === 'adjudicator') out = adjudicator(repo, n, action, tools)
-  else out = fixer(repo, n, action, env.modelOverride, tools)
+  if (action.kind === 'delegate') out = implementer(repo, n, action.brief, env.modelOverride, ask)
+  else if (action.agent === 'designer') out = designer(repo, n, action.notes, env, ask)
+  else if (action.agent === 'adjudicator') out = adjudicator(repo, n, action, ask)
+  else out = fixer(repo, n, action, env.modelOverride, ask)
   if (action.kind === 'delegate' || action.agent !== 'designer') out = withNotes(out, env.notes ?? [])
   return out.join('\n')
 }
@@ -207,7 +277,7 @@ function withNotes(out: string[], notes: readonly string[]): string[] {
   return [...out.slice(0, i), ...lines, ...out.slice(i)]
 }
 
-function designer(repo: string | null, n: number | null, notes: readonly string[], env: PromptEnv, tools: boolean): string[] {
+function designer(repo: string | null, n: number | null, notes: readonly string[], env: PromptEnv, ask: Ask): string[] {
   const seen = new Set<string>()
   const branches: string[] = []
   for (const f of env.inFlight) {
@@ -224,19 +294,19 @@ function designer(repo: string | null, n: number | null, notes: readonly string[
     ...block('Owner notes:', notes),
     ...modelLine(env.modelOverride),
     scratch(n),
-    ...(tools
-      ? [
-          toolAsk(`Once the brief is posted, answer by calling ${DESIGN} with brief, created and pendingDecision`),
-          'If you cannot call it, end your return with the line below, exactly once and last, filled in.',
-        ]
-      : ['Once the brief is posted, end your return with the line below, exactly once and last, filled in.']),
+    ...answerLines(ask, {
+      script: place => scriptAsk(place, 'Once the brief is posted', designExample(repo, n), DESIGN_FIELDS),
+      tool: `Once the brief is posted, answer by calling ${DESIGN} with brief, created and pendingDecision`,
+      text: 'end your return with the line below, exactly once and last, filled in.',
+      alone: 'Once the brief is posted, end your return with the line below, exactly once and last, filled in.',
+    }),
     DESIGNER_RESULT,
   ]
 }
 
 type AdjudicatorSpawn = Extract<SpawnAction, { agent: 'adjudicator' }>
 
-function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn, tools: boolean): string[] {
+function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn, ask: Ask): string[] {
   const run = id(a.run, 'run')
   const branch = id(a.branch, 'branch')
   const head = id(a.head, 'head')
@@ -244,7 +314,11 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn,
   const where = [run === null ? null : `run ${run}`, branch === null ? null : `branch ${branch}`, head === null ? null : `head ${head}`]
     .filter(w => w !== null)
     .join(', ')
-  const contract = answerAsk(tools, `Answer by calling ${VERDICT} once, with your findings and one action`, CONTRACT)
+  const contract = answerLines(ask, {
+    script: place => scriptAsk(place, 'Once you have judged every finding', VERDICT_EXAMPLE, VERDICT_FIELDS),
+    tool: `Answer by calling ${VERDICT} once, with your findings and one action`,
+    text: CONTRACT,
+  })
   if (a.purpose === 'gate') {
     const step = id(a.step, 'step')
     return [
@@ -287,7 +361,11 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn,
     `  2. the PR body links the issue as the brief's Rollout says${issueNo(a.pr) === null ? '' : ` (\`gh pr view ${a.pr} --json body,closingIssuesReferences\`)`}: merge needs a closing reference to the issue, run-it and keep-open a plain reference that leaves it open;`,
     '  3. a visible (UI) change has screenshot or video evidence in the PR body.',
     scratch(n),
-    ...answerAsk(tools, `Answer by calling ${VERDICT} once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags`, 'reply with exactly these lines and nothing else:'),
+    ...answerLines(ask, {
+      script: place => scriptAsk(place, 'Once you have checked all three', MERGE_EXAMPLE, MERGE_FIELDS),
+      tool: `Answer by calling ${VERDICT} once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags`,
+      text: 'reply with exactly these lines and nothing else:',
+    }),
     '  verdict lines `<VERDICT>: <reason>` for what you find, VERDICT one of CORRECT, WRONG, NIT, ENV, DUP (none when there is nothing to report);',
     '  one ACTION line: `ACTION: merge`, `ACTION: hold <reason>` when the owner must decide, or `ACTION: fixer: <instructions>` when a change is needed before the merge;',
     '  `SUMMARY: <what changes for users, one line>`;',
@@ -309,7 +387,7 @@ const WHY: Record<FixerPurpose, string> = {
   handoff: "the implementer's commit was not gated by its pipeline run. Get it gated as the instructions say.",
 }
 
-function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: string | null, tools: boolean): string[] {
+function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: string | null, ask: Ask): string[] {
   const branch = id(a.branch, 'branch')
   const run = id(a.run, 'run')
   const head = id(a.head, 'head')
@@ -328,11 +406,11 @@ function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: stri
     readFirst('fixer'),
     ...modelLine(model),
     scratch(n),
-    ...handoffAsk(tools),
+    ...handoffAsk(ask),
   ]
 }
 
-function implementer(repo: string | null, n: number | null, brief: string, model: string | null, tools: boolean): string[] {
+function implementer(repo: string | null, n: number | null, brief: string, model: string | null, ask: Ask): string[] {
   return [
     `Implement ${issueRef(repo, n)}.`,
     ...briefLines(repo, brief, n),
@@ -340,29 +418,41 @@ function implementer(repo: string | null, n: number | null, brief: string, model
     readFirst('implementer'),
     ...modelLine(model),
     scratch(n),
-    ...handoffAsk(tools),
+    ...handoffAsk(ask),
   ]
 }
 
 // --- the repair message (#548) -----------------------------------------------------------------
 
 // repairPrompt: the one message the loop sends an agent whose final answer it could not read:
-// what was wrong, then the ask again (its machine lines; with tools, the setting answerTools, its
-// tool first and the machine lines as the fallback), so the same agent answers with what it
-// already found instead of a fresh agent redoing the work. The problem may quote the agent's own
-// line, so it is neutralized like any free text.
-export function repairPrompt(type: AgentType, purpose: AdjudicatorPurpose | null, problem: string, tools = false): string {
+// what was wrong, then the ask again on the channel its spawn was asked on (the answer script or
+// its tool first, its machine lines as the fallback; on the text channel the machine lines
+// alone), so the same agent answers with what it already found instead of a fresh agent redoing
+// the work. The problem may quote the agent's own line, so it is neutralized like any free text.
+export function repairPrompt(
+  type: AgentType,
+  purpose: AdjudicatorPurpose | null,
+  problem: string,
+  channel: AnswerChannel = 'text',
+  script: ScriptPlace | null = null,
+): string {
   const reply =
     type !== 'adjudicator'
       ? 'reply with only the line below, filled in.'
       : purpose === 'merge'
         ? 'reply with only your verdict lines, one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.'
         : CONTRACT
-  const ask = tools
-    ? answerAsk(true, `Do not redo the work. Call ${TOOL_OF[type]} now with the answer you reached`, reply)
-    : ['Do not redo the work: give the answer you reached.', capital(reply)]
+  const ask = askOf(channel, script)
+  const lines = answerLines(ask, {
+    script: place => [
+      `Do not redo the work. Record the answer you reached now with the answer script, its JSON on standard input as your prompt showed: \`${place.bin} --to ${place.file}\`. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.`,
+    ],
+    tool: `Do not redo the work. Call ${TOOL_OF[type]} now with the answer you reached`,
+    text: reply,
+  })
+  const head = ask.kind === 'text' ? ['Do not redo the work: give the answer you reached.'] : []
   const line = type === 'adjudicator' ? [] : [type === 'designer' ? DESIGNER_RESULT : HANDOFF_RESULT]
-  return [`The factory loop could not read your answer: ${neutral(problem)}.`, ...ask, ...line].join('\n')
+  return [`The factory loop could not read your answer: ${neutral(problem)}.`, ...head, ...lines, ...line].join('\n')
 }
 
 // --- the spawn's description and name (D-11: the issue goes in both) -------------------------------

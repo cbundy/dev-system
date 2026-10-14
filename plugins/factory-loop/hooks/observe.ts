@@ -58,6 +58,8 @@ export type Runtime = {
   env: Record<string, string>
   // where pipeline-watch.sh, queue-watch.sh and usage-check.sh live (workspace config toolsDir)
   toolsDir: string
+  // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
+  pluginRoot: string
   config: Config
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
