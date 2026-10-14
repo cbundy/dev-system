@@ -126,7 +126,7 @@ function briefLines(repo: string | null, brief: string | null, n: number | null)
 function readFirst(type: AgentType): string {
   // the adjudicator starts no sub-agents (its tools have no Agent)
   const foreground = type === 'adjudicator' ? '' : ` ${FOREGROUND_RULE}`
-  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first. ${CHECKOUT_RULE}${foreground}`
+  return `Read CLAUDE.md and your memory file .claude/agent-memory/${type}.md first. ${CHECKOUT_RULE}${foreground} ${COMMAND_RULE}`
 }
 
 // Agents start in the session's directory, the factory's main checkout, which the loop and every
@@ -139,6 +139,11 @@ export const FOREGROUND_RULE =
 
 export const CHECKOUT_RULE =
   'You start in the factory\'s main checkout: never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`, and do any work in a worktree of your own.'
+
+// Two incidents on 2026-10-14: an agent ran `claude remote-control --help`, which starts a session
+// and never exits, and others waited with `until ! pgrep -f <pattern>`, which matches its own shell.
+export const COMMAND_RULE =
+  'Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. The one exception is the detached no-mistakes pipeline run (`axi run` or `axi respond`) that the implement-issue skill launches. Wait on a PID you recorded or on the tool\'s own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.'
 
 function modelLine(model: string | null): string[] {
   const m = id(model, 'model')

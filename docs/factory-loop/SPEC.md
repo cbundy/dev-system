@@ -644,12 +644,18 @@ only `pending` buckets is transient, any other bucket is a failure; `no checks r
 
 Each spawn's prompt comes from a template in `hooks/prompts.ts`. Templates carry only issue
 numbers, URLs, branch names, run ids, heads, step names, instructions from the adjudicator or
-the model, owner notes, pointers (CLAUDE.md, the agent type's own memory file under
-`.claude/agent-memory/`, the `implement-issue` skill), a per-issue scratch subdirectory (I-95),
+the model, owner notes, shared command restrictions, pointers (CLAUDE.md, the agent type's own
+memory file under `.claude/agent-memory/`, the `implement-issue` skill), a per-issue scratch subdirectory (I-95),
 how to answer on the channel `answerChannel` names (the answer script with its answer file, or
 the answer tool, 4.2) and the closing `RESULT` line the loop parses. The designer's also lists other issues' branches in flight (names only), and a prompt
 for an issue with a `model:` label says to pass that model to the agent's own sub-agents.
 
+- **Command restrictions.** Every role's opening instructions include `COMMAND_RULE` from
+  [hooks/prompts.ts](../../plugins/factory-loop/hooks/prompts.ts), the authoritative wording
+  for command bounds, prohibited processes and handoff cleanup. This includes all three
+  adjudicator purposes. `tests/prompts.test.ts` checks its presence in every role prompt;
+  the root `tests/factory-loop-agents.test.js` checks that the loop's agent definitions
+  retain the same paragraph.
 - **No brief content.** A brief travels as its comment URL only; anything else in its place is
   dropped and the prompt says to read the issue instead.
 - **No closing keyword.** The template text uses none of the words. In free text (owner notes,
