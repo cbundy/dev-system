@@ -904,8 +904,9 @@ function merges(ctx: Ctx, runs: RunView[]) {
     const result = outcome(latest, 'guard')
     if (result === undefined) continue
     // a repair on this PR since the guard makes it stale: a fixer that ended done, with a commit
-    // or without one (#550), a fix-linkage, a fast-forward that moved a worktree (#551), or an
-    // update-behind that pushed a new PR head (the run's head, which the watcher prints, stays)
+    // or without one (#550), a fix-linkage, a fast-forward that moved a worktree or found none
+    // lagging any more (#551), or an update-behind that pushed a new PR head (the run's head,
+    // which the watcher prints, stays)
     const lastRepair = Math.max(0, ...state.ledger.filter(e => e.pr === pr && repaired(e)).map(e => e.endedAt ?? 0))
     const age = state.now - (latest.endedAt ?? 0)
     const transientOnly = result.fails.length > 0 && result.fails.every(f => classifyFail(f) === 'transient')
@@ -934,10 +935,14 @@ function merges(ctx: Ctx, runs: RunView[]) {
 }
 
 // repaired: a done entry that changed a PR or its worktree, after which its guard is stale (M1).
+// Rule M2's fast-forward that answers CURRENT counts too: the lag its guard saw is gone (the slot
+// was reused or moved), so a re-guard, not the judge, looks again. M1's runs before the first
+// guard, so its CURRENT says nothing about that guard (#551).
 function repaired(e: LedgerEntry): boolean {
   if (e.status !== 'done') return false
   if (e.kind === 'fix-linkage' || (e.kind === 'spawn' && e.agent === 'fixer')) return true
-  return outcome(e, 'update-behind')?.result === 'updated' || outcome(e, 'fast-forward')?.result === 'forwarded'
+  const forward = outcome(e, 'fast-forward')?.result
+  return outcome(e, 'update-behind')?.result === 'updated' || forward === 'forwarded' || (forward === 'current' && e.rule === 'M2')
 }
 
 // waitsFor: what a PR no rule acted on this pass waits for, from the last action it wanted that
@@ -990,8 +995,9 @@ export function worktreeLag(fail: GuardFail, head: string): boolean {
 }
 
 // lagForward: rule M2 for a worktree that lags the run's head (#551): the fast-forward, once per
-// guard, unless one already went through before this guard ran (the lag came back, so the judge
-// looks). 'acting' while it is wanted; else the line of a refusal, for the judge, or null.
+// guard, unless one already went through, or found nothing lagging, before this guard ran (the
+// lag came back, so the judge looks). 'acting' while it is wanted; else the line of a refusal,
+// for the judge, or null.
 function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' | string | null {
   const pr = run.pr as number
   const head = run.head as string

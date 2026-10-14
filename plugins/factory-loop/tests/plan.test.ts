@@ -1865,6 +1865,18 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
     expect(r.actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
   })
 
+  test('a fast-forward that finds nothing lagging any more makes the guard stale: guarded again, no judge', () => {
+    // the slot was reused on another branch between the guard and the fast-forward
+    const current = fastForward('fast-forward:550:head50:1', 'current', { rule: 'M2', startedAt: NOW - 30_000, endedAt: NOW - 20_000 })
+    expect(keys(plan(mergeReady([guarded([LAG]), current]), CFG))).toEqual(['guard:550:head50:2'])
+    // the lag is back on that re-guard: the judge looks, not another round
+    const again = guarded([LAG], [], 2, { startedAt: NOW - 15_000, endedAt: NOW - 10_000 })
+    expect(plan(mergeReady([guarded([LAG]), current, again]), CFG).actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+    // M1's CURRENT before the first guard says nothing about it: a lag that guard saw is forwarded
+    const before = fastForward('fast-forward:550:head50', 'current', { rule: 'M1', startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
+    expect(keys(plan(mergeReady([before, guarded([LAG])]), CFG))).toEqual(['fast-forward:550:head50:1'])
+  })
+
   test('before the first guard of a head, a clean slot on the branch is fast-forwarded first', () => {
     const slot = { path: '/w/slot-3', branch: 'feat/issue-50-work', state: 'leased', dirty: false, busy: false }
     const pool = (s: typeof slot) => ({ pool: { free: 10, total: 16, slots: [s] } })
