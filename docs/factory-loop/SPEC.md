@@ -294,7 +294,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `ciStallRecheckMs` | `15m` | how long after a reopen a second stall counts |
 | `blindNoticeAfterMs` | `15m` | blind this long tells the owner |
 | `agentTimeoutMs` | designer `1h`, implementer `2h`, adjudicator `30m`, fixer `2h` | then `stop-agent` (rule `A1`) |
-| `maxAttempts` | claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, respond 2, merge 2, fix-linkage 2, guard 3, fast-forward 2, release-worktree 2, pr-reopen 1, stop-agent 1, restart-self 1, judge, task and tell 1 (one reminder inside the attempt); heartbeat 3 and sweep 3; any other kind 3; `update-behind` runs `updateBehindRetries` + 1 times; `env-retry` runs once per owner resume, whatever the setting (#537) | then the owner hears of it (`tell(agent-failed)`, `tell(task-timeout)` for a task). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
+| `maxAttempts` | claim 3, designer 2, implementer 2, adjudicator 2, fixer 2, respond 2, merge 2, fix-linkage 2, guard 3, fast-forward 2, release-worktree 2, pr-reopen 1, stop-agent 1, restart-self 1, judge, task and tell 1 (one reminder inside the attempt); heartbeat 3 and sweep 3; any other kind 3; `update-behind` runs `updateBehindRetries` + 1 times; `env-retry` runs once per owner resume, whatever the setting (#537) | then the owner hears of it (`tell(agent-failed)`, `tell(task-timeout)` for a task; an `env-retry` gives `tell(escalate)`, rule `P2a`). Heartbeat and sweep are never used up: that many failures in a row tells the owner once, and they keep trying at their cadence (DECISIONS D-47) |
 | `retryBackoffMs` | `2m` | doubled per attempt; for heartbeat and sweep at most their cadence. A `lost` entry is retried at once |
 | `wakeTimeoutMs` | judge `30m`, task `6h`, tell `30m` | section 8 |
 | `rateCaps` | starts 30, spawns 120, wakes 20 per rolling hour, and 6 actions of one kind on one issue; no global cap on merges (DECISIONS D-24) | runaway protection (11.4) |
@@ -443,7 +443,7 @@ For each current run, issue not paused:
 |---|---|---|---|
 | P1 | `parked` or `failed`, `step = review`, and `reviewFixRounds >= reviewFixCap + resumes of run:<id>` | no adjudicator; `tell(review-cap)` with the brief URL and the run's verdict lines | `tell:review-cap:<run>:<rounds>` |
 | P2 | `parked`, or `failed` with a known run id (the step when known: the adjudicator finds it otherwise); not `P1` or `P2a`; on a review gate only when `facts` is ok | `spawn(adjudicator, purpose gate)` with run, branch, step, brief URL and the issue's model label | `adjudicate:<run>:<step>:<head>[:r<n>]` |
-| P2a | the owner resumed `run:<id>` after this gate's latest adjudication, which escalated with every verdict `ENV` (at least one verdict; any other verdict or none never qualifies); the run still at that step and head (a known head) | `env-retry` once for this resume (no new adjudicator). A clean launch starts a new run, which the `P` rules judge afresh, so a repeat failure escalates again. If this run is still at the gate `respondSettleMs` after the launch, `tell(escalate)` again with the verdicts; a launch that failed is not retried and gives `tell(agent-failed)`. A later resume reruns once more (#537) | `env-retry:<run>:<step>:<head>:r<n>`, `tell:escalate:<run>:<step>:<head>:r<n>` |
+| P2a | the owner resumed `run:<id>` after this gate's latest adjudication, which escalated with every verdict `ENV` (at least one verdict; any other verdict or none never qualifies); the run still at that step and head (a known head) | `env-retry` once for this resume (no new adjudicator). A clean launch starts a new run, which the `P` rules judge afresh, so a repeat failure escalates again. If this run is still at the gate `respondSettleMs` after the launch, `tell(escalate)` again with the verdicts; a launch that failed or was lost is not retried and gives `tell(escalate)` under the same round key, saying the rerun could not launch (with the executor's summary) and that resuming the run tries once more; never `tell(agent-failed)`, which `/factory retry` could not clear. A later resume reruns once more (#537) | `env-retry:<run>:<step>:<head>:r<n>`, `tell:escalate:<run>:<step>:<head>:r<n>` |
 | P3 | the `P2` entry is `done`, and the run is still at that step and head | by its `ACTION`: `approve`, `fix`, `skip` give `respond`; `escalate` gives `tell(escalate)` and a hold until resumed (then `P2a` when every verdict was `ENV`, else `P2` again with `:r<n>`) or the head moves; `fixer` gives `spawn(fixer, purpose gate)`; an unparseable reply counts as a failed attempt of `P2` | `respond:<run>:<step>:<head>:<action>`, `tell:escalate:<run>:<step>:<head>`, `fixer:gate:<run>:<step>:<head>` |
 | P3a | a `respond` entry is `done`, the run is still at that step and head `respondSettleMs` after it ended | `respond` once more; after that `task(respond-stuck)`: the model reads the run's log and `daemon.log`, then re-drives or reports (DECISIONS D-37) | `respond:...:retry`, `task:respond-stuck:<run>:<step>:<head>` |
 | P4 | `failed` with run id `unknown` | `task(redrive)` for the model (I-57) | `task:redrive:<branch>:<head>` |
@@ -459,8 +459,8 @@ For each current run in `merge-ready`, `head-mismatch` or `conflict` with a PR, 
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| M1 | no fresh guard outcome for this PR and head: none at all, or the last one ended before a repair on this PR (a fixer that ended `done`, with or without a commit, #550; a `fix-linkage`; a `fast-forward` that moved a worktree; or an `update-behind` that pushed a new PR head), or it saw only transient failures and is older than `guardRecheckMs`, or it is older than `guardTtlMs`. A guard that failed or was lost runs again under its key. Before a head's first guard, when a clean pool slot has the run's branch checked out, `fast-forward` runs first, in the same pass (#551) | `fast-forward` (first guard only), `guard` | `fast-forward:<pr>:<head>`, `guard:<pr>:<head>:<n>`, n counting this PR and head's guard entries |
-| M2 | the latest guard outcome for this PR and head has FAIL lines | the first match, in this order: `author` gives hold plus `tell(untrusted-pr)`; `rollout` gives `tell(rollout)`; `base` gives `tell(base)`; `gates` waits (the `P` rules own it); `mergeable` with "PR is merged/closed" waits for observe; `mergeable` conflict, or the run state `conflict`, gives `spawn(fixer, purpose conflict)`; `mergeable` behind gives `update-behind`; `linkage` gives `fix-linkage` once per head, and a second linkage FAIL after it tells the owner (`tell(linkage)`); `checks` where every bad check is `pending`, `mergeable` "not computed" or "branch rules" waits for the recheck; `checks` with a failed check, `head`, or any line no rule names gives `judge(guard-fail)`; but first, a `head` FAIL whose run, origin and PR heads are all this head, with every worktree's head read and some worktree elsewhere (a worktree the pipeline's own commits left behind, #551), gives `fast-forward`, once per guard. `FORWARDED` makes the guard stale (`M1`). `REFUSED` (dirty, diverged, origin moved, the main checkout), `CURRENT`, used-up attempts, or a lag that is back after a fast-forward went through give the judge, with the refusal as a `FAST-FORWARD REFUSED <why>` detail line. The judge is asked once per failure: its key follows the PR, the head and a digest of the FAIL lines, not the guard's number, so a re-check that fails the same way wakes no one. A new round `:r<n>` comes when the owner resumes the run after the last round, or 30 minutes after a `wait` (or after the fixer a `fixer` answer asked for ended) if the same failure still stands (#550). Its `fixer` answer gives `spawn(fixer, purpose guard)` keyed like its round, and its `hold` holds until the owner resumes the run | `fixer:conflict:<pr>:<head>`, `update-behind:<pr>:<prhead>`, `fix-linkage:<pr>:<head>`, `tell:linkage:<pr>:<head>`, `fast-forward:<pr>:<head>:<n>`, `judge:guard-fail:<pr>:<head>:<digest>[:r<n>]`, `fixer:guard:<pr>:<head>:<digest>[:r<n>]` |
+| M1 | no fresh guard outcome for this PR and head: none at all, or the last one ended before a repair on this PR (a fixer that ended `done`, with or without a commit, #550; a `fix-linkage`; a `fast-forward` that moved a worktree, or rule M2's that answered `CURRENT`; or an `update-behind` that pushed a new PR head), or it saw only transient failures and is older than `guardRecheckMs`, or it is older than `guardTtlMs`. A guard that failed or was lost runs again under its key. Before a head's first guard, when a clean pool slot has the run's branch checked out, `fast-forward` runs first, in the same pass (#551) | `fast-forward` (first guard only), `guard` | `fast-forward:<pr>:<head>`, `guard:<pr>:<head>:<n>`, n one past the highest guard key of this PR and head (a re-check folded into the guard before it leaves a gap, 7.1) |
+| M2 | the latest guard outcome for this PR and head has FAIL lines | the first match, in this order: `author` gives hold plus `tell(untrusted-pr)`; `rollout` gives `tell(rollout)`; `base` gives `tell(base)`; `gates` waits (the `P` rules own it); `mergeable` with "PR is merged/closed" waits for observe; `mergeable` conflict, or the run state `conflict`, gives `spawn(fixer, purpose conflict)`; `mergeable` behind gives `update-behind`; `linkage` gives `fix-linkage` once per head, and a second linkage FAIL after it tells the owner (`tell(linkage)`); `checks` where every bad check is `pending`, `mergeable` "not computed" or "branch rules" waits for the recheck; `checks` with a failed check, `head`, or any line no rule names gives `judge(guard-fail)`; but first, a `head` FAIL whose run, origin and PR heads are all this head, with every worktree's head read and some worktree elsewhere (a worktree the pipeline's own commits left behind, #551), gives `fast-forward`, once per guard. `FORWARDED`, or `CURRENT` (the lag cleared before the fast-forward ran: the slot was reused or moved), makes the guard stale (`M1`), so the next pass guards again. `REFUSED` (dirty, diverged, origin moved, the main checkout), used-up attempts, or a lag that is back after a fast-forward went through or answered `CURRENT` give the judge, with the refusal as a `FAST-FORWARD REFUSED <why>` detail line. The judge is asked once per failure: its key follows the PR, the head and a digest of the FAIL lines, not the guard's number, so a re-check that fails the same way wakes no one. A new round `:r<n>` comes when the owner resumes the run after the last round, or 30 minutes after a `wait` (or after the fixer a `fixer` answer asked for ended) if the same failure still stands (#550). Its `fixer` answer gives `spawn(fixer, purpose guard)` keyed like its round, and its `hold` holds until the owner resumes the run | `fixer:conflict:<pr>:<head>`, `update-behind:<pr>:<prhead>`, `fix-linkage:<pr>:<head>`, `tell:linkage:<pr>:<head>`, `fast-forward:<pr>:<head>:<n>`, `judge:guard-fail:<pr>:<head>:<digest>[:r<n>]`, `fixer:guard:<pr>:<head>:<digest>[:r<n>]` |
 | M2a | an `update-behind` outcome is `FAIL` | `spawn(fixer, purpose regate)` with the line's re-gate instruction | `fixer:regate:<pr>:<prhead>` |
 | M2b | an `update-behind` outcome is `SKIP` (a failed attempt) | `update-behind` again after `updateBehindRetryMs`, at most `updateBehindRetries` times; then hold plus `tell(update-behind)` | `update-behind:<pr>:<prhead>` (its attempts) |
 | M3 | the guard passed with `test-weakening WARN` lines and no `pr-comment` for this head yet | `spawn(adjudicator, purpose weakening)` with the lines; `approve` or `skip` gives `pr-comment` with the WARN and verdict lines, then `M4`; `fixer` or `fix` gives `spawn(fixer, purpose weakening)`; `escalate` (or `hold`) gives a hold plus `tell(escalate)` until the head moves or the owner resumes the run, which asks for a fresh review with `:r<n>` | `adjudicate-weakening:<pr>:<head>[:r<n>]`, `pr-comment:<pr>:<head>`, `tell:escalate:pr:<pr>:<head>[:r<n>]`, `fixer:weakening:<pr>:<head>[:r<n>]` |
@@ -470,7 +470,7 @@ For each current run in `merge-ready`, `head-mismatch` or `conflict` with a PR, 
 | M5b | the merge adjudicator answered `fixer` | `spawn(fixer, purpose review)` with its instructions | `fixer:review:<pr>:<head>[:r<n>]` |
 | M6 | `merge` ended `done` with a refusal by GitHub or the harness (the head moved, a branch rule) | hold, `tell(merge-refused)` with the refusal line | `tell:merge-refused:<pr>:<head>` |
 | M7 | a `merge` entry is `done` with its rollout; or an issue this device held reached `merged` in the last 24 hours with no merge of the loop's own running or merged (a hand merge, which the sweep logs); or a loop merge in the last 24 hours whose rollout read failed | a hand merge or an unread rollout gives `rollout` (`callum-flow-rollout`). Then by the merged issue's rollout: `merge` with `close_issue` gives `close-issue`, and so does a hand-merged `merge` rollout whose PR's latest guard failed `base` with "PR targets ..." (an epic base, where GitHub registers no closing reference); `run-it` gives `milestone-later` (when opted in) and `task(run-it)`; `keep-open` gives `milestone-later`. A `bump` in the PR's latest merge report above the milestone's `Expected` gives `milestone-expect` | `rollout:<issue>`, `close:<issue>`, `milestone-later:<issue>`, `task:run-it:<issue>`, `expect:<bump>:<pr>` |
-| M8 | a done fixer entry with a run and a PR whose handoff names a new branch (the run it was sent to is superseded, I-39); the watcher does not show the old run unmarked; and the newest branch down the chain (a later fixer sent to the new run counts as the next link, with its PR) has a PR other than the old one | `pr-close` of the old PR, linking that newest PR. While no such PR exists it waits, and the decision log says `PR #N superseded: waiting for the PR of <branch>` (live issues only) (#553) | `pr-close:<old pr>` |
+| M8 | a superseded run (I-39) with a PR, from either source: (a) a done fixer entry with a run and a PR whose handoff names a new branch of the same issue (a branch of another issue moves nothing; the decision log says `PR #N left open: <branch> is not a branch of #<issue>`, live issues only); or (b) a run the event log marks superseded with no fixer move for its PR (task(redrive)'s `REGATE new-branch`), once a run of the same issue on its `<branch>-v<n>`, not superseded itself, has a PR other than the old one. In both, the watcher does not show the old run unmarked, and the newest branch down the chain (a later fixer of the same issue sent to the new run counts as the next link, with its PR) has a PR of a run of the same issue, other than the old one. The run id a fixer reports never picks the replacement by itself | `pr-close` of the old PR, linking that newest PR. While no such PR exists it waits, and the decision log says `PR #N superseded: waiting for the PR of <branch>` (live issues only) (#553) | `pr-close:<old pr>` |
 
 A merge-ready PR that no rule acts on in a pass leaves a skip line in the decision log saying
 what it waits for: a guard, wake or agent still running, a retry backoff, an owner notice, a
@@ -502,8 +502,8 @@ GitHub or the harness is `M6`.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| A1 | a `running` agent entry is older than its `agentTimeoutMs` | `stop-agent`; when the stop ends, stopped or not, the agent's entry becomes `timed-out`. A stop that failed leaves the agent marked `timed-out` and tells the owner (`tell(agent-failed)` for its `stop:` key); its rule waits until the agent list shows the agent ended, so a second agent never starts beside it. A `failed`, `timed-out` or `lost` agent is retried by its own rule while attempts remain; once exhausted, `tell(agent-failed)` (`tell(task-timeout)` for a task) | `stop:<agentId>`, `tell:agent-failed:<key>`, `tell:task-timeout:<key>` |
-| A2 | a running agent's issue is not paused, and it closed or ended (`merged`, `closed without merge`), was claimed by another device, was dropped by the owner, or was split while its implementer runs | `stop-agent`, and `tell(claim-lost)` for another device's claim, else `tell(stopped)` with why (`closed`, `merged`, `closed without merge`, `dropped` or `split`). The stopped agent's entry ends with its own `turn.complete` or the agent list | `stop:<agentId>`, `tell:claim-lost:<N>:<holder>`, `tell:stopped:<agentId>` |
+| A1 | a `running` agent entry, or a `done` one whose agent the agent list still shows at work more than 60 s after its answer (an answer through the tool ends the entry before the agent's turn, 7.3a.4), is older than its `agentTimeoutMs` | `stop-agent`; when the stop ends, stopped or not, the agent's entry becomes `timed-out`. A stop for a done entry leaves its outcome as it is; the entry is not marked `timed-out`. A stop that failed leaves the agent marked `timed-out` and tells the owner (`tell(agent-failed)` for its `stop:` key); its rule waits until the agent list shows the agent ended, so a second agent never starts beside it. A `failed`, `timed-out` or `lost` agent is retried by its own rule while attempts remain; once exhausted, `tell(agent-failed)` (`tell(task-timeout)` for a task) | `stop:<agentId>`, `tell:agent-failed:<key>`, `tell:task-timeout:<key>` |
+| A2 | a running agent's issue (or that of a done entry whose agent is still at work, as in A1) is not paused, and it closed or ended (`merged`, `closed without merge`), was claimed by another device, was dropped by the owner, or was split while its implementer runs | `stop-agent`, and `tell(claim-lost)` for another device's claim, else `tell(stopped)` with why (`closed`, `merged`, `closed without merge`, `dropped` or `split`). The stopped agent's entry ends with its own `turn.complete` or the agent list | `stop:<agentId>`, `tell:claim-lost:<N>:<holder>`, `tell:stopped:<agentId>` |
 
 ### 5.8 Owner and report (O)
 
@@ -543,9 +543,9 @@ only reach the configured repo.
 | `heartbeat` | free | `callum-flow-claim --heartbeat` | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
 | `sweep` | free | `callum-flow-sweep` | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
 | `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
-| `spawn` designer | develop | `$.agent.spawn({ subagentType: 'callum-flow:designer', model?, description, name, prompt })` | start 60 s, agent `agentTimeoutMs` | 2 | parsed `RESULT` line (7.2) |
+| `spawn` designer | develop | `$.agent.spawn({ subagentType: 'factory-loop:designer', model?, description, name, prompt })` | start 60 s, agent `agentTimeoutMs` | 2 | parsed `RESULT` line (7.2) |
 | `delegate` | develop | `callum-flow-implementer-route <N>`, then `callum-flow-event delegated --issue <N> --note "brief <url>"`, then spawn `callum-flow:implementer` with the routed model. A brief that is not a comment URL on the repo is refused | route 60 s, start 60 s, agent `agentTimeoutMs` | 2 | handoff fields (6.3) |
-| `spawn` adjudicator | drive | spawn `callum-flow:adjudicator` (gate, weakening or merge purpose) | start 60 s, agent 30 min | 2 | verdict lines and one `ACTION` (7.3); the handler logs each verdict |
+| `spawn` adjudicator | drive | spawn `factory-loop:adjudicator` (gate, weakening or merge purpose) | start 60 s, agent 30 min | 2 | verdict lines and one `ACTION` (7.3); the handler logs each verdict |
 | `spawn` fixer | drive | spawn `callum-flow:fixer` with instructions and the brief URL | start 60 s, agent 120 min | 2 | handoff fields; `superseded` logged when it reports a branch other than the one it was sent to |
 | `respond` | drive | `no-mistakes axi respond --action <a> [--step=<step>] [--findings=] [--instructions=] [--add-finding=] [--reason=]`, each value one argv entry, launched detached with `nohup` from the pool slot that has the run's branch checked out (else a slot leased with `treehouse get --lease --lease-holder factory-loop` and `git switch <branch>`, returned at once if the switch fails). `--step` is left out when the step is not known. The launch reads its log back after 5 s | launch 30 s | 2 (P3a) | done once launched cleanly: the slot and the log (`<loop dir>/respond/<key>-<attempt>.log`); failed when the log shows "no active run to respond to", respond already exited non-zero, or the slot is not on the branch. A review `fix` logs `fix_requested --note review` |
 | `env-retry` | drive | `no-mistakes rerun`, with no other argument, only from rule `P2a`. Launched detached exactly as `respond` is (the same launch script, from the pool slot on the run's branch or a leased one, log `<loop dir>/respond/<key>-<attempt>.log`). Refused before any command for another rule, a key with no `:r<n>` round, or a second attempt | launch 30 s | 1, whatever `maxAttempts` says; `/factory retry` never clears it (once per resume) | done once launched cleanly: the slot and the log; failed when the launch exits non-zero or the rerun already exited non-zero |
@@ -562,14 +562,21 @@ only reach the configured repo.
 | `milestone-expect` | free | `callum-flow-milestone expect <bump> "<reason>"`, the reason on one line | 60 s | 3 | exit code |
 | `pr-reopen` | free | `gh pr close <pr> --repo <R>`, then `gh pr reopen <pr> --repo <R>` | 60 s | 1 | exit codes |
 | `pr-comment` | free | `gh pr comment <pr> --repo <R> --body-file -` (the WARN lines and the adjudicator's verdicts on stdin) | 60 s | 3 | exit code |
-| `pr-close` | free | `gh pr view <pr> --repo <R> --json state,headRefName`, then, only for an `OPEN` PR whose head is a branch of its issue other than the new branch, ``gh pr close <pr> --repo <R> --comment "Superseded by #<new>: a conflict fix moved this work to `<branch>`. Closed by the factory loop."``; never `--delete-branch` (rule `M8`, #553) | 60 s | 3 | closed; done and left alone when already merged or closed; refused, never retried, for any other head |
+| `pr-close` | free | `gh pr view <pr> --repo <R> --json state,headRefName`, then the same for `<new>`, then, only for an `OPEN` PR whose head is a branch of its issue other than the new branch and a `<new>` PR that is `OPEN` or `MERGED` on a branch of the same issue, ``gh pr close <pr> --repo <R> --comment "Superseded by #<new>: this work moved to `<branch>`. Closed by the factory loop."``; never `--delete-branch` (rule `M8`, #553) | 60 s | 3 | closed; done and left alone when already merged or closed; refused, never retried, for any other head, or for a `<new>` PR closed unmerged or not on a branch of the issue; a read of `<new>` that fails or does not parse is a failed attempt |
 | `release-worktree` | free | `treehouse return <path>` with empty stdin and never `--force` (a slot that turned dirty keeps its work), then `treehouse status --json` | 120 s | 2 | done only when the slot shows `available` |
 | `restart-self` | free | `dev-restart-self`, only from rule `H4` | 600 s | 1 | the session restarts, and the loop resumes on load (7.5) |
-| `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', task_id })`, only for an agent the ledger holds running | 30 s | 1 | stopped, or failed with the reason (section 13) |
+| `stop-agent` | free | `$.tool.call({ tool: 'TaskStop', task_id })`, only for an agent the ledger holds on a running entry, or on a done agent entry whose agent the agent list shows at work | 30 s | 1 | stopped, or failed with the reason (section 13) |
 | `judge` | drive | `$.prompt.submit` with a `JUDGE` line (section 8) | `wakeTimeoutMs.judge` | 1 reminder | the answer |
 | `task` | drive | `$.prompt.submit` with a `TASK` line | `wakeTimeoutMs.task` | 1 reminder | `done`, `failed`, `hold` |
 | `tell` | owner | `$.prompt.submit` with a `TELL` line | `wakeTimeoutMs.tell` | none | delivered when its turn says something |
 | `title` | free | `$.command.run({ command: 'rename', args })` | 10 s | next pass | the text set |
+
+The adjudicator and designer are the loop's own copies of the callum-flow definitions
+(`plugins/factory-loop/agents/`). Each copy is word for word the same except its `tools:` line,
+which also lists ToolSearch and the agent's answer tool, since an agent calls nothing its list
+leaves out. `tests/factory-loop-agents.test.js` keeps the copies in step. An `agent.offer` hook
+keeps the copies out of the model's agent listing. The implementer and fixer are callum-flow's
+and inherit every tool.
 
 A spawn is named `<type>-<N>[-<purpose>][-<attempt>]` (`adjudicator-470-merge`,
 `fixer-470-regate-2`: the attempt from the second on, so a retry never shares a name with an
@@ -639,13 +646,17 @@ says to pass that model to the agent's own sub-agents.
   `RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>`.
   A handoff is not gated when it says `gated=no` or its head is not its commit (short and full
   SHAs compare by prefix); with no such line, the words `NOT GATED` still count; anything else
-  is unparseable, a failed attempt once its repair (7.3a) has been tried. A designer's or a
-  handoff's `RESULT` line wrapped in backticks reads the same; the adjudicator's reply stays
-  strict (7.3).
+  is unparseable, a failed attempt once its repair (7.3a) has been tried. A handoff that says
+  gated with no run (`run=none gated=yes`, or `gated: true` with `run: null`) is unparseable:
+  with no pipeline run nothing is gated. A designer's or a handoff's `RESULT` line wrapped in
+  backticks reads the same; the adjudicator's reply stays strict (7.3).
 - **Records.** Before each spawn the loop writes `<loop dir>/spawns/<key>.json` (the branch the
   spawn named, its purpose, model and the exact prompt); each answer is saved whole at
   `<loop dir>/answers/<key>.txt`, which `judge(report)` and `judge(handoff)` point the model at.
-  An answer through a tool is saved at `answers/<key>.txt` as JSON `{ tool, input }`.
+  An answer through a tool is saved at `answers/<key>.txt` as JSON `{ tool, input }`. The reply
+  to a repair message goes after the answer it repairs, under the line
+  `--- the reply to the factory loop's repair message ---`, never over it; a new attempt starts
+  the file over.
 
 `tests/prompts.test.ts` renders every template with hostile inputs and checks for brief content
 and closing keywords.
@@ -689,7 +700,10 @@ executor's result: its status, outcome (the last one kept when the result carrie
 summary. A `skipped` result (the usage pre-check, a dropped prompt) counts no attempt: the entry
 goes back as it stood, or goes when it was new. A usage error (exit 2) uses up the attempts at
 once. An executor may record extra done entries beside its own (a guard outcome a merge
-printed). A finished `stop-agent` of rule `A1` marks the agent's entry `timed-out`. Agents end
+printed). A done guard whose outcome is exactly that of the guard before it on the same PR and
+head replaces that entry, and so does a refused fast-forward after an identical refused one, so
+a PR held on one failure keeps one entry, not one per `guardTtlMs` re-check (#550). Guards are
+numbered past the highest key, so a folded number is never reused. A finished `stop-agent` of rule `A1` marks the agent's entry `timed-out`. Agents end
 by their `turn.complete` (matched by agent id) and wakes by their answer, delivery or timeout,
 outside the pass.
 
@@ -773,15 +787,20 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
 3. **Checks, beyond the schema** (the handler trusts no engine check). The action must be one the
    purpose takes (`ACTIONS_FOR`), with only that action's fields; `fix` needs `findings`,
    `instructions` or `addFinding`. A fix's finding ids must be findings judged in the same call as
-   `CORRECT` or `ENV` (the loop has no view of the gate's own list). A merge review needs
-   `summary`, `bump` and `flags`; a gate or weakening review takes none. Free text is one line of
-   at most 4 000 characters. Finding ids must have the `FINDING_ID` shape. A brief must be a
-   comment URL on the designed issue of this repo; a design result with no brief, no created
-   issues and no pending decision is refused. Handoff ids must have their shapes. Every problem is
-   named at once in the deny text, which the model reads and corrects in the same turn.
+   `CORRECT` or `ENV`, and never a `missed-` id. The tool asks for a gap the reviewer missed under
+   an id of the agent's own (`missed-1` and on). That gap goes in `action.addFinding`, never in
+   `action.findings`, since the gate has no such finding. The loop has no view of the gate's own
+   list, so an invented id of another shape still passes. A merge review needs `summary`, `bump`
+   and `flags`; a gate or weakening review takes none. Free text is one line of at most 4 000
+   characters. Finding ids must have the `FINDING_ID` shape. A brief must be a comment URL on the
+   designed issue of this repo; a design result with no brief, no created issues and no pending
+   decision is refused. Handoff ids must have their shapes, and gated with `run` null is refused.
+   Every problem is named at once in the deny text, which the model reads and corrects in the
+   same turn.
 4. **Recording.** An accepted call finishes the entry at once with the outcome and events the same
    text gives (verdict lines read `<VERDICT>: <id>: <reason>`). Its summary is marked `(tool)`.
-   The agent's later closing words are not read.
+   The agent's later closing words are not read. An agent still listed at work 60 s after its
+   accepted call stays under rules A1 and A2 (5.7).
 5. **Text.** An agent that ends without calling the tool is parsed as before (6.3, 7.2, 7.3).
 6. **Repair.** A final answer with no machine line (an adjudicator reply that does not parse, a
    handoff with no `RESULT` or `NOT GATED`, a designer report with no `RESULT` line), from an
@@ -789,10 +808,12 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    `$.session.send`, which resumes a finished agent from its transcript. The message names what
    was wrong (the parser's reason, quoting the line) and asks for the tool, with the machine lines
    as the fallback. The entry stays running with its attempt unspent and is marked `reminded`
-   before the send; the agent's next `completed` listing is counted afresh. One per attempt, only
-   to agents the ledger holds, only in act mode with no kill switch and no restart pending. A
-   second unreadable answer, or a message not delivered within 10 s, fails the attempt (the
-   designer's goes to `judge(report)`, rule `D3`) as before.
+   before the send; the agent counts as at work while still listed completed, for 5 minutes
+   after the message or until its next `turn.complete`. After that its next `completed` listing
+   is counted afresh: one pass of grace, then lost. One per attempt, only to agents the ledger
+   holds, only in act mode with no kill switch and no restart pending. A second unreadable answer,
+   or a message not delivered within 10 s, fails the attempt (the designer's goes to
+   `judge(report)`, rule `D3`) as before.
 
 ### 7.4 Events the loop logs
 
@@ -1134,7 +1155,8 @@ The loop acts only on its configured repo (every `gh` command carries `--repo`, 
 needs the checkout's origin to be that repo, 11.2), only on issues and PRs by trusted authors
 (`callum-flow-issue-read` filters them, and the guard's `author` check runs before any merge),
 and only on branches named `issue-<N>`. Runs on other branches are owner work and are left
-alone. It stops only agents it spawned, and only the main conversation can answer its wakes or
+alone. It stops only agents it spawned (an agent the ledger holds on a running entry, or on a done
+agent entry whose agent the agent list shows at work), and only the main conversation can answer its wakes or
 set its directives.
 
 ### 11.6 Where its files live
@@ -1254,7 +1276,9 @@ The trace files stay within `traceMaxBytes` (100 MiB) in all. Before each write,
 files are deleted first, by the day in their names, until the record fits. When today's file
 alone leaves no room, it is cut short with one last line
 (`{"v":1,"at":...,"cut":"the trace cap (<n> bytes) is reached: nothing more is traced today"}`),
-and nothing more goes in it that day unless the cap changes. A record that cannot be written
+and nothing more goes in it that day unless the cap changes. The first trace write of each
+module load reads the last 256 bytes of today's file (`tail -c`), so a cut made before a reload
+holds. A record that cannot be written
 never fails the pass. A pass that throws writes no record; its decision-log error line has
 `trigger` and `ms`.
 
@@ -1292,15 +1316,16 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
 - **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
   shadow reads labels, blockers and sub-issues live, so it can judge claims (DECISIONS D-32 is
   superseded).
-- **Agents' tools**: the callum-flow adjudicator (`tools: Read, Grep, Glob, Bash, WebFetch`) and
-  designer (adds `Agent`) restrict their tools, so they reach neither
-  `mcp__factory-loop__verdict` / `mcp__factory-loop__design` nor ToolSearch until their
-  definitions list them. Until then they answer in text, with the repair as the net (7.3a). The
-  implementer and fixer inherit every tool.
+- **Agents' tools**: the loop spawns its own adjudicator and designer (6.1), so both list their
+  answer tool and ToolSearch. Only the testbed can prove three things: that a mod-registered tool
+  named in a plugin agent's `tools:` line is reachable through ToolSearch; that the call carries
+  the agent's `agentId`; and that hiding a type with `agent.offer` leaves the loop's own
+  `$.agent.spawn` of it working.
 - **Mod tool schemas**: whether the engine checks a mod tool's input against its schema is
   unproven (the test kit does not); the handler checks every field (7.3a).
 - **The repair message**: whether `$.session.send` reaches an agent at its own `turn.complete`
-  and resumes it is proven only on the testbed.
+  and resumes it is proven only on the testbed. An agent the list still shows completed 5
+  minutes after its repair message is taken as never resumed.
 
 ## 14. Cutover plan (not executed)
 
@@ -1308,7 +1333,9 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
    the live dev-system orchestrator's events.
 2. **Prerequisites to ship**: the two `--once` modes released in the base image; the `loop` event
    state (D-09), with the event-log readers that ignore it, in the same release; the designer's
-   `RESULT` line in its agent definition (D-14); the plugin in the
+   `RESULT` line in its agent definition (D-14), and copied to
+   `plugins/factory-loop/agents/designer.md`, keeping that file's tools line (the root test fails
+   until both match); the plugin in the
    marketplace as a replacement for the released orchestrator (D-02); the judge skill reviewed; the Orchestrator template's start prompt changed from
    `/callum-flow:issue-orchestrator` to the judge skill, and its resume prompt from "re-arm the
    watcher" to "the loop resumes by itself".

@@ -851,6 +851,10 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   needs, and the API takes no `anyOf` at a tool schema's top level. Finishing at the call removes
   any wait on text. The same agent already holds its judgement, so one message costs a fraction
   of a new agent. One repair bounds a model that cannot comply.
+- **Note** (2026-10-14): three changes after review. A handoff that says gated with no run is
+  refused in both channels, the tool and the `RESULT` line. A repair reply is appended to the
+  saved answer, under a separator, never written over it. A fix refuses `missed-` ids in its
+  findings: a gap the reviewer missed goes in `addFinding` (SPEC 6.3, 7.3a).
 
 ### D-69 Trace mode: one switch in two files, a size cap, and skip ages kept in memory
 
@@ -872,3 +876,33 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   milliseconds would read as 0 or 1. A countdown in a skip's words changes every pass, so an age
   keyed by the words would never grow; keyed by issue and rule, run 2's 30-minute guard wait
   shows as a growing number. The 100 MiB is the owner's.
+
+### D-70 The loop owns copies of the adjudicator and designer definitions
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #548):
+  `plugins/factory-loop/agents/{adjudicator,designer}.md` are the callum-flow definitions word
+  for word, plus ToolSearch and the answer tool on `tools:`. A root test
+  (`tests/factory-loop-agents.test.js`) keeps them in step, and `agent.offer` hides them from the
+  model (SPEC 6.1).
+- **Alternatives**: (a) edit the callum-flow `tools:` lines, which changes the released
+  orchestrator's agents, and #548 keeps the instruction out of the shared definitions; (b)
+  `$.agent.register` at load from the released plugin's agent file, but no engine API finds
+  another plugin's files, and the plugin cache layout (`installed_plugins.json`,
+  `cache/<marketplace>/<plugin>/<version>`) is internal; (c) answer in text only.
+- **Why**: the engine refuses any call outside an agent's allowlist, so without this the
+  adjudicator and designer could never use their tools. A copy kept identical by a test cannot
+  drift unnoticed.
+
+### D-71 After an answer: supervision and repair grace
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #548): a done agent entry whose
+  agent is still listed at work 60 s after its answer stays under rules A1 and A2, and
+  `stop-agent` accepts that agent as the loop's own. The 60 s grace leaves alone an agent the list
+  has not yet marked completed. A repaired agent counts as at work for 5 minutes while still
+  listed completed, or until its next `turn.complete`, instead of the full A1 timeout, so an agent
+  that never resumes is lost quietly within minutes (SPEC 5.7, 7.3a).
+- **Alternatives**: keep a repaired agent at work for the full A1 timeout.
+- **Why**: an answer through the tool ends the entry before the agent's turn ends, and an agent
+  that works on still holds its branch, so it must stay supervised. The alternative would hold
+  the issue for up to 2 h and end in a failed stop of a completed agent with a spurious owner
+  tell.

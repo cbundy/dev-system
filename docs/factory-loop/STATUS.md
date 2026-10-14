@@ -82,17 +82,21 @@ Integrated on `v01/wave2`, on top of wave 1:
   writes one timing record per pass: phases, every command, cache use, actions, wake latencies
   and what each issue waits on and since when, under a 100 MiB cap (#552, SPEC 12.1, D-69).
 
-**Follow-up needed** before the adjudicator and designer can use their tools: the callum-flow
-`adjudicator.md` and `designer.md` `tools:` lines must list `mcp__factory-loop__verdict` and
-`mcp__factory-loop__design` (and ToolSearch, unless the engine sends a deferred tool's schema to
-an agent without it). Until then those two answer in text, with the repair as the net; the
-implementer and fixer inherit every tool already. That is a change to the released plugin, so it
-is separate from this branch.
+The adjudicator and designer reach their tools through the loop's own copies of their
+definitions (plugins/factory-loop/agents/, D-70); callum-flow is unchanged.
 
-The choices made without you are D-68 and D-69. Gates on `v01/wave2`: `npm run lint` (151
-files), `npm test` (633 node tests, 48 shell suites, 2 mods) and the plugin's own suite (659
-tests across 16 files) all pass, with the strict type check clean. None of it has run on the
-testbed yet.
+Fixed after review:
+
+- The reply to a repair message is kept beside the report it repairs, not written over it.
+- A handoff that says gated with no run is refused.
+- An agent that works on after its answer is still timed out and stopped (D-71).
+- A trace file the cap cut short stays closed across reloads.
+- An agent sent the repair message gets 5 minutes to resume before it counts as lost (D-71).
+
+The choices made without you are D-68 to D-71. Gates on `v01/release`, with both waves and
+their review fixes: `npm run lint` (151 files), `npm test` (637 node tests, 48 shell suites, 2
+mods) and the plugin's own suite (680 tests across 16 files) all pass; the strict type check was
+clean on `v01/wave2`. None of it has run on the testbed yet.
 
 ## Stage C: the act half (2026-10-13)
 
@@ -136,7 +140,7 @@ unchanged: it still executes nothing, and every event it causes goes to a sink.
 
 ## Not yet proven
 
-Only a real session can show these; stage D on the testbed is where each gets proven.
+Only a real session can show these. Run 3 on the testbed must prove each of them.
 
 - **Agents from a mod**: that `$.agent.spawn` returns an agent id (the engine's test host never
   does), that each agent's `turn.complete` carries it, and how the agent list shows an agent
@@ -149,7 +153,8 @@ Only a real session can show these; stage D on the testbed is where each gets pr
   the wait for the agent list, and what a stopped agent's late `turn.complete` looks like.
 - **A restart for an update**: the ledger saved before it, running entries lost on load,
   `updateDue` cleared only once the new session loads, the first-pass heartbeat, and agents
-  reconciled against a fresh list.
+  reconciled against a fresh list. On a ledger rebuilt from the event log across a session
+  restart, a lost orphaned wake is logged once and no `loop` event is logged twice (#549, #536).
 - **Wakes in a busy session**: a prompt taken as queued after the 5-second grace, drops inside
   and after it, the resend of a dropped wake or notice, and whether a wake's turn text carries an
   engine frame before its first line.
@@ -158,18 +163,43 @@ Only a real session can show these; stage D on the testbed is where each gets pr
 - **The rails against the real thing**: the heartbeat guard against real `factory.workers` rows,
   the old-watcher check and its 10-minute quiet window against an armed `orchestrator-watch.sh`
   re-arming between turns, and the checkout check in a real consumer checkout.
+- **Claims and guards on live timing**: a finished claim held against the real factory state's
+  lag (#538, #547); on a live merge-ready PR, the 5-minute guard expiry, one judge per failure and
+  the 30-minute reminder (#550); and guard re-checks folded over a real PR held for days: the
+  store's size, that nothing outside plan, the ledger and act-merge relied on the older guard
+  entries, and the replay harness against a real recorded ledger.
 - **The respond launch** in a real treehouse slot with the real `no-mistakes axi respond` (tested
   with a stub in a scratch worktree), and the same launch of `env-retry`'s `no-mistakes rerun`
-  (#537).
-- **The fast-forward** against real pool worktrees behind a real pipeline (tested against
-  scratch git repos, #551), and the main checkout read of rule `G5` in a consumer's real
-  checkout (#544).
-- **The agents' answer tools and the repair message** (#548): that an agent reaches a mod tool
-  through ToolSearch and the call carries its `agentId`, whether the engine checks the input
-  against the schema, and that `$.session.send` at an agent's own `turn.complete` reaches it and
-  resumes it with its transcript.
+  with a real escalated run (#537). The `env-retry` escalate notice as the judge skill renders it
+  to the owner, and the owner's resume then launching the next round (`env-retry:...:r2`).
+- **The fast-forward** against real pool worktrees behind a real pipeline push (tested against
+  scratch git repos, #551), including its refusal of the main worktree in a consumer's real
+  layout; an `M2` fast-forward that answers `CURRENT` after a real slot was reused or switched
+  between the guard and the fast-forward, then the re-guard passing; and the main checkout read
+  of rule `G5` (`git symbolic-ref` and `git --no-optional-locks status`) in a consumer's real
+  checkout, with its owner notice reaching the phone (#544).
+- **Superseded PRs** (rule `M8`, #553): `pr-close` against a real superseded PR; on the redrive
+  path end to end, that the watcher keeps listing the superseded run with its old PR beside the
+  regated `<branch>-v2` run and its new PR, and that the real `gh pr view` of the replacement
+  reads as the executor expects; and that in the events-only runs view, where every run shows the
+  issue's current PR, it never closes anything.
+- **The agents' answer tools and the repair message** (#548): that the engine loads
+  `plugins/factory-loop/agents/*.md` for a plugin loaded with `--plugin-dir` and resolves
+  `factory-loop:adjudicator` and `factory-loop:designer` for `$.agent.spawn`; that an agent whose
+  `tools:` line names a mod tool and ToolSearch can load the deferred tool and call it, and that
+  the call carries its `agentId`; that `agent.offer` hides the loop's types from the model without
+  blocking the loop's own spawn of them, and that the designer copy can still spawn
+  `callum-flow:explorer`; whether the engine checks a tool's input against its schema; that
+  `$.session.send` at an agent's own `turn.complete` reaches it and resumes it with its
+  transcript, how soon the list shows it resumed (so whether the 5-minute grace is ample), and
+  how its next `turn.complete` and `completed` listing look; that `TaskStop` stops an agent whose
+  entry is already done, and the list then shows it killed so its branch frees up; that a pass
+  started by an accepted call (trigger `agent <id>`) behaves as in the test host; and what
+  `no-mistakes axi respond` does with a finding id the gate does not have.
 - **Trace mode with a real clock** (#552): action and wake times line up only off the test
-  host, whose clock is frozen; the 100 MiB cap and the cut line against a real loop dir.
+  host, whose clock is frozen; the 100 MiB cap and the cut line against a real loop dir on
+  `/persist`, including the `tail -c` read of a file near the cap across a real module reload;
+  and the trigger merging across real timer and ping races.
 - **The judge skill** against real wakes, including the new `pass-error` and `old-watcher`
   notices, and those notices reaching the phone.
 - **Engine details**: a hot reload while a pass or command is in flight (whether the old
@@ -182,8 +212,8 @@ Only a real session can show these; stage D on the testbed is where each gets pr
 
 Known gaps, small: the observe-mode event sink is never pruned; the cap of 288 recorded states a
 day has no test; `/factory status` does not say why act mode is held back (the decision log's
-`rails` does); the designer's `RESULT` line moves into its agent definition at cutover (D-14),
-and until then the loop's prompt asks for it.
+`rails` does); the designer's `RESULT` line moves into its agent definition, and the loop's
+copy of it, at cutover (D-14); until then the loop's prompt asks for it.
 
 ## Done before stage C
 

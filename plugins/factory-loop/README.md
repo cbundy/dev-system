@@ -18,7 +18,8 @@ Both halves are built. In **observe mode** (the default) every pass reads the fa
 logs its decisions and shows its status in the session title, and executes nothing: every event
 its commands cause goes to a local sink. In **act mode**, once every safety rail passes (SPEC
 11.2), it also carries the plan out: it keeps a ledger of what it started, runs each action
-through its executor, spawns the `callum-flow` agents, and wakes the model for judgment. Act
+through its executor, spawns its agents (its own copies of the callum-flow adjudicator and
+designer, and callum-flow's implementer and fixer), and wakes the model for judgment. Act
 mode has run only in tests so far; its first real run is on `dev-system-testbed` (PLAN stage
 D). The plugin is not listed in the marketplace (DECISIONS D-02).
 
@@ -31,12 +32,12 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
 | Executors: commands, guard and merge, respond, agent spawns, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/act-agents.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done; not yet run against real agents |
 | Wakes and the answer tool | `hooks/wake.ts` | done |
-| The agents' answer tools and the repair message | `hooks/agent-tools.ts` | done; the adjudicator and designer reach their tools once their definitions list them |
+| The agents' answer tools and the repair message | `hooks/agent-tools.ts`, `agents/` (the loop's adjudicator and designer, D-70) | done |
 | Safety rails | `hooks/rails.ts` | done |
 | `/factory` and the control tool | `hooks/control.ts` | done |
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
 | `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
-| Tests | `tests/*.test.ts` (14 files) | 546 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, and one issue from claim to merge |
+| Tests | `tests/*.test.ts` (16 files) | 680 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, and one issue from claim to merge |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
 
 ## Run it in observe mode
@@ -135,10 +136,12 @@ between releases. Before running the loop on a newer Claude Code:
 
 ## Develop it
 
-`npm test` runs the plugin's tests through `claude plugin test`, and six node tests at the repo
+`npm test` runs the plugin's tests through `claude plugin test`, and eight node tests at the repo
 root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
+`factory-loop-agents.test.js` checks that every agent the loop spawns lists its answer tool, and
+that the loop's adjudicator and designer stay the callum-flow definitions but for `tools:`;
 `factory-loop-safety.test.js` scans every string in `hooks/` for a forbidden command;
 `factory-loop-judge-skill.test.js` checks the judge skill covers every wake, TELL kind and op;
-and `factory-loop-respond-launch.test.js`, `factory-loop-prune.test.js` and
-`factory-loop-loop-events.test.js` run the respond launch, the daily prune and every `loop` note
-for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.
+and `factory-loop-respond-launch.test.js`, `factory-loop-fast-forward.test.js`,
+`factory-loop-prune.test.js` and `factory-loop-loop-events.test.js` run the respond launch, the
+fast-forward, the daily prune and every `loop` note for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.
