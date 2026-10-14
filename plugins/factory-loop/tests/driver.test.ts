@@ -950,7 +950,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     const f = factory({ beats: `device,age_s\n${OTHER},30\n` })
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9' }),
+      entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run: f.run, store })
     await $.session.start(START)
@@ -1000,7 +1000,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     const { run } = factory()
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-      entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9' }),
+      entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run, store })
     await $.session.start(START)
@@ -1047,7 +1047,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('heartbeat:0', 'heartbeat', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(`design:470:${since}`, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'failed', attempts: 2, startedAt: since, endedAt: NOW - 10 * MIN }),
-      entry(judge, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 31 * MIN, endedAt: null, wakeId: 'w9' }),
+      entry(judge, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - 31 * MIN, endedAt: null, wakeId: 'w9', session: SESSION }),
     ])
     const h = host(on, { config: ACT, run, store })
     await $.session.start(START)
@@ -1079,6 +1079,30 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(keys.filter(k => k.startsWith('design:') || k.startsWith('tell:decision:'))).toEqual([])
     expect(h.spawns).toEqual([])
     expect(h.prompts).toEqual([])
+  })
+
+  test('a wake the event log rebuilds from an earlier session is lost at once, so the next pass can wake (SPEC 7.5, O2)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 60 * MIN
+    // run 1 left a guard-fail judge open and a designer out of attempts; run 2 starts with the store cleared
+    const designer = entry(`design:470:${since}`, 'spawn', {
+      agent: 'designer', class: 'develop', rule: 'D2', issue: 470, status: 'failed', attempts: 2, startedAt: since, endedAt: NOW - 20 * MIN, agentId: 'agent-1',
+    })
+    const judge = 'judge:guard-fail:512:abc1234'
+    const open = entry(judge, 'judge', { wake: 'guard-fail', class: 'drive', rule: 'M2', issue: 470, pr: 512, status: 'running', startedAt: NOW - 13 * MIN, endedAt: null })
+    const row = (e: LedgerEntry) => `${iso(e.endedAt ?? e.startedAt)},loop,470,,,,,"${loopEventArgs(e).at(-1)}",loop,${DEVICE}`
+    const events = [NO_EVENTS.trim(), row(designer), row(open)].join('\n') + '\n'
+    const { run } = factory({ issue: { stage: 'designing', since }, run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : undefined) })
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last()).toMatchObject({ executed: true, ledgerSource: 'events' })
+    // nobody can answer it: lost with its attempt given back, so its rule decides again
+    expect(h.entry(judge)).toMatchObject({ status: 'lost', attempts: 0, summary: 'lost: it was open before this load' })
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=lost`))).toBe(true)
+    // and it holds no other wake: the owner hears about the designer in the same pass
+    expect(h.prompts.filter(p => p.startsWith('TELL agent-failed id=w'))).toHaveLength(1)
+    expect(h.last().skipped).not.toContainEqual(expect.stringContaining('a wake is open'))
   })
 
   test('usage that crosses Stop all mid-pass skips the next token-spending action, with no attempt counted (SPEC 10.7)', async ($, on) => {
@@ -1229,7 +1253,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.prompts.filter(p => p.startsWith('TELL heartbeat-other'))).toHaveLength(2)
   })
 
-  test("a wake another session submitted ends with its session; one this session's reload left open stays (SPEC 7.5)", async ($, on) => {
+  test("a wake another session submitted is lost with its session; one this session's reload left open stays (SPEC 7.5)", async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
     const store = ledgerOf([
@@ -1241,9 +1265,11 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     const h = host(on, { config: ACT, run, store })
     await $.session.start(START)
     await clock.advance(6_000)
-    expect(h.entry('task:redrive:issue-470-x:abc')).toMatchObject({ status: 'timed-out', summary: 'timed out: its session ended' })
-    expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'hold' } })
-    expect(h.entry('tell:blind:0')).toMatchObject({ status: 'timed-out' })
+    // each with its attempt given back, so its rule decides again rather than holding on a fallback
+    expect(h.entry('task:redrive:issue-470-x:abc')).toMatchObject({ status: 'lost', attempts: 0, summary: 'lost: its session ended' })
+    expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'lost', attempts: 0 })
+    expect(h.entry('judge:sequence:512:abc1234')?.outcome).toBeUndefined()
+    expect(h.entry('tell:blind:0')).toMatchObject({ status: 'lost', attempts: 0 })
     // none holds the one open wake any longer (rule O2)
     expect(h.ledger().filter(e => e.status === 'running')).toEqual([])
   })
@@ -1268,7 +1294,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
       const judge = 'judge:sequence:512:abc1234'
       const store = ledgerOf([
         entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
-        entry(judge, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', summary: 'JUDGE sequence id=w9 repo=cbundy/dev-system pr=512' }),
+        entry(judge, 'judge', { wake: 'sequence', class: 'drive', issue: 470, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9', session: SESSION, summary: 'JUDGE sequence id=w9 repo=cbundy/dev-system pr=512' }),
       ])
       const h = host(on, { config: ACT, run, store })
       await $.session.start(START)

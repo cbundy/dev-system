@@ -40,6 +40,8 @@ export type WakeUpdate = {
   wakeId?: string
   turnId?: string
   reminded?: boolean
+  // an attempt given back (orphanedWakes)
+  attempts?: number
 }
 
 export function isWakeAction(action: Action): action is WakeAction {
@@ -429,16 +431,19 @@ export function expireWakes(ledger: readonly LedgerEntry[], now: Ms, config: Con
   return out
 }
 
-// orphanedWakes: the open wakes another session submitted (SPEC 7.5): their prompt went with that
-// session, so each ends by its fallback at once rather than holding every other wake (O2) until
-// its timeout. A module reload within one session keeps its wakes; a wake with no session (an
-// older build, or rebuilt from the event log) is left to its timeout.
-export function orphanedWakes(ledger: readonly LedgerEntry[], session: string): WakeUpdate[] {
+// orphanedWakes: the open wakes no one can answer any more (SPEC 7.5): one another session
+// submitted, or one that records no session (an older build, or rebuilt from the event log) and
+// started before this load. Its prompt went with that session, so it is lost at once with its
+// attempt given back, as a late drop is (D-55): it holds no other wake (O2) until its timeout,
+// and its rule decides again next pass. A module reload within one session keeps its wakes.
+export function orphanedWakes(ledger: readonly LedgerEntry[], session: string, loadedAt: Ms): WakeUpdate[] {
   const out: WakeUpdate[] = []
   for (const e of ledger) {
-    const kind = wakeKind(e.kind)
-    if (kind === null || e.status !== 'running' || e.session === undefined || session === '' || e.session === session) continue
-    out.push(fallback(e, kind, 'its session ended', 'its session ended before it was delivered'))
+    if (wakeKind(e.kind) === null || e.status !== 'running') continue
+    const gone = e.session === undefined ? e.startedAt < loadedAt : session !== '' && e.session !== session
+    if (!gone) continue
+    const why = e.session === undefined ? 'it was open before this load' : 'its session ended'
+    out.push({ key: e.key, status: 'lost', attempts: Math.max(0, e.attempts - 1), summary: `lost: ${why}` })
   }
   return out
 }

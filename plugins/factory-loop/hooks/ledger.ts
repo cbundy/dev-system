@@ -86,6 +86,8 @@ export type Completion = {
   wakeId?: string
   turnId?: string
   reminded?: boolean
+  // the count to keep: an orphaned wake gives its attempt back (wake.ts orphanedWakes)
+  attempts?: number
 }
 
 export type FinishOptions = {
@@ -125,6 +127,7 @@ export function finish(
   if ('wakeId' in result && result.wakeId !== undefined) next.wakeId = result.wakeId
   if ('turnId' in result && result.turnId !== undefined) next.turnId = result.turnId
   if ('reminded' in result && result.reminded !== undefined) next.reminded = result.reminded
+  if ('attempts' in result && result.attempts !== undefined) next.attempts = result.attempts
   if (result.status === 'failed' && 'noRetry' in result && result.noRetry === true) {
     next.attempts = Math.max(next.attempts, maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, attemptsKindOf(next)))
   }
