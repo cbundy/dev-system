@@ -1049,7 +1049,8 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
 
 - `dev-remote-control` records the live sessions (`dev-remote-sessions snapshot`) about
   every minute and on SIGTERM, and `dev-restart-self` does the same before it requests a
-  stop or start build, so a session that ends gracefully is remembered too.
+  stop or start build, so a session that ends gracefully is remembered too. Until this
+  container start's restore has run, the previous snapshot is kept.
 - Once per container start, after the main Claude has started, it resumes each candidate
   with `claude --resume <session id> --remote-control <name>` in the recorded cwd, with the
   permission mode (`bypassPermissions` uses `--dangerously-skip-permissions --settings
@@ -1061,10 +1062,13 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   supervisor's `claude` session): `tmux attach -t claude-restored`.
 - Never restored: the supervisor's own session, sessions without a `bridgeSessionId`,
   non-interactive sessions, sessions with no transcript, and sessions last updated more
-  than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session is restored once: every record
-  considered goes in a ledger under `$DEV_RESTART_SELF_DIR/remote-sessions/`, so a session
-  you later exit does not come back on the following restart. A failure restoring one
-  session is logged and never delays the supervisor.
+  than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running (the
+  conversation the supervisor resumed, or one still live) is not started a second time,
+  and the supervisor never resumes a session that is already running. A session is
+  restored once: every record considered goes in a ledger under
+  `$DEV_RESTART_SELF_DIR/remote-sessions/`, so a session you later exit does not come back
+  on the following restart. A failure restoring one session is logged and never delays
+  the supervisor.
 - `dev-prune-worktrees` keeps the worktree of a live session or of one pending restore.
 
 This relies on Claude Code's `sessions/*.json` format, which is not documented; unreadable

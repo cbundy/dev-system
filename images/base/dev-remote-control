@@ -145,14 +145,19 @@ session_name() {
 # holds a user message. Claude names that directory after the path with every
 # character other than a letter or digit replaced by "-". A transcript
 # without a user message is a start nobody wrote to (only Remote Control
-# bookkeeping) and is skipped. The ID is passed to --resume rather than using --continue,
+# bookkeeping) and is skipped, and so is a session that is already running
+# (a restored one, say). The ID is passed to --resume rather than using --continue,
 # which picks the newest transcript even when it is such an empty one. Prints
 # nothing and fails when there is nothing to resume.
 resume_session() {
-  local dir f
+  local dir f live=""
   dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/${1//[^a-zA-Z0-9]/-}"
   [ -d "$dir" ] || return 1
+  if command -v dev-remote-sessions >/dev/null 2>&1; then
+    live=$(timeout 20 dev-remote-sessions live 9>&- 2>/dev/null)
+  fi
   while IFS= read -r f; do
+    grep -qxF -- "${f%.jsonl}" <<< "$live" && continue
     if grep -q '"type":"user"' "$dir/$f" 2>/dev/null; then
       echo "${f%.jsonl}"
       return 0
@@ -240,10 +245,13 @@ snapshot_sessions() {
 }
 
 # Starts the sessions that were live when the container last stopped, once per
-# container start, in the background so the supervisor never waits on it.
+# container start, in the background so the supervisor never waits on it. $1 is
+# the conversation the main Claude resumed (if any), never started twice.
 restore_sessions() {
   command -v dev-remote-sessions >/dev/null 2>&1 || return 0
-  (timeout 300 dev-remote-sessions restore 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2) &
+  local -a skip=()
+  [ -z "${1:-}" ] || skip=(--skip "$1")
+  (timeout 300 dev-remote-sessions restore "${skip[@]}" 2>&1 | sed 's/^/dev-remote-control: /' >&2) 9>&- &
   return 0
 }
 
@@ -301,6 +309,7 @@ supervise() {
       prepare_claude_config "$ws"
     fi
     name=$(session_name "$ws")
+    session=""
     if [ "$MODE" = server ]; then
       # An explicit --spawn worktree outside a git repo is an error, which
       # would only restart in a loop until a repo is cloned there.
@@ -356,7 +365,7 @@ supervise() {
       bash -c 'f=$1; shift; . /usr/local/share/dev-system/telemetry.sh; claude "$@"; echo $? > "$f"' \
       bash "$status_file" "${args[@]}" 9>&-; then
       log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
-      restore_sessions
+      restore_sessions "$session"
       last_snapshot=$(date +%s)
       while tmux has-session -t "$SESSION" 2>/dev/null; do
         pause 2

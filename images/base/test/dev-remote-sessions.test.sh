@@ -121,25 +121,31 @@ grep -q "skipping" "$tmp/err" || fail "malformed records were not logged"
 grep -q "no transcript" "$tmp/err" || fail "a session without a transcript was not logged"
 
 # RESTORE_HOURS=0 turns it off; 48 brings the 30h one back.
-! DEV_REMOTE_CONTROL_RESTORE_HOURS=0 "$HELPER" cwds | grep -q pending || fail "RESTORE_HOURS=0 still lists pending sessions"
+! DEV_REMOTE_CONTROL_RESTORE_HOURS=0 "$HELPER" cwds 2>/dev/null | grep -q pending || fail "RESTORE_HOURS=0 still lists pending sessions"
 DEV_REMOTE_CONTROL_RESTORE_HOURS=48 "$HELPER" pending 2>/dev/null | grep -q e4444444 || fail "RESTORE_HOURS=48 did not include a 30h-old session"
 
 # --- cwds: live and pending directories ---------------------------------------------------------
 cw=$("$HELPER" cwds 2>/dev/null)
 printf '%s\n' "$cw" | grep -qxF "$(printf 'live\t%s' "$cwd_c")" || fail "cwds: no live line: $cw"
 printf '%s\n' "$cw" | grep -qxF "$(printf 'pending\t%s' "$cwd_a")" || fail "cwds: no pending line: $cw"
+DEV_REMOTE_CONTROL_RESTORE_HOURS=1 "$HELPER" cwds 2>/dev/null | grep -qF "$cwd_b" && fail "cwds before plan: a session outside the window is pending"
 
-# --- snapshot: a no-op until plan ran this boot -------------------------------------------------
-"$HELPER" snapshot
+# --- live: the sessionIds of the live sessions ----------------------------------------------------
+[ "$("$HELPER" live 2>/dev/null)" = e5555555-0000-4000-8000-000000000005 ] || fail "live: wrong sessionIds: $("$HELPER" live 2>&1)"
+
+# --- snapshot: a no-op until restore ran this boot ----------------------------------------------
+"$HELPER" snapshot 2>/dev/null
 [ ! -e "$tmp/state/remote-sessions/snapshot" ] || fail "snapshot wrote before plan"
 
-# --- plan freezes the candidates, once per boot; a graceful exit is remembered by snapshot --------
+# --- plan freezes the candidates, once per boot -------------------------------------------------
 "$HELPER" plan 2>/dev/null || fail "plan failed"
 [ "$(wc -l < "$tmp/state/remote-sessions/pending.json")" = 3 ] || fail "plan: expected 3 pending lines"
 "$HELPER" plan 2>/dev/null && fail "a second plan in the same boot did not exit 3"
-"$HELPER" snapshot
-[ -e "$tmp/state/remote-sessions/snapshot/${live_pid}-${live_start}.json" ] || fail "snapshot did not record the live session"
-[ "$(find "$tmp/state/remote-sessions/snapshot" -type f | wc -l)" = 1 ] || fail "snapshot holds more than the live session"
+"$HELPER" snapshot 2>/dev/null
+[ ! -e "$tmp/state/remote-sessions/snapshot" ] || fail "snapshot wrote before restore"
+# A planned session keeps its directory even once it ages out of the window.
+DEV_REMOTE_CONTROL_RESTORE_HOURS=1 "$HELPER" cwds 2>/dev/null | grep -qxF "$(printf 'pending\t%s' "$cwd_b")" ||
+  fail "cwds after plan: a planned session's directory is not held"
 
 # --- restore: argv, cwd, flags; no message; ledger; once per boot ---------------------------------
 : > "$TMUX_LOG"
@@ -166,6 +172,11 @@ for k in 101-1111 102-2222 103-3333; do
 done
 [ ! -e "$tmp/state/remote-sessions/pending.json" ] || fail "pending.json was not consumed"
 "$HELPER" restore 2>/dev/null && fail "a second restore in the same boot did not exit 3"
+
+# --- snapshot, once restore ran: a graceful exit is remembered ------------------------------------
+"$HELPER" snapshot 2>/dev/null
+[ -e "$tmp/state/remote-sessions/snapshot/${live_pid}-${live_start}.json" ] || fail "snapshot did not record the live session"
+[ "$(find "$tmp/state/remote-sessions/snapshot" -type f | wc -l)" = 1 ] || fail "snapshot holds more than the live session"
 
 # --- next boot: the ledger stops a second restore of the same records ---------------------------
 rm -f "$tmp/mark"/*
@@ -194,5 +205,24 @@ grep -q "$B\|-c $cwd_b" "$TMUX_LOG" || fail "B was not started after A failed to
 grep -q "no longer exists" "$tmp/err" || fail "a missing cwd was not logged"
 grep -q "could not start" "$tmp/err" || fail "a failing launch was not logged"
 [ -e "$tmp/state/remote-sessions/ledger/$dead_pid-5001" ] || fail "a failed launch was not ledgered"
+
+# --- restore never starts a session that is already running ---------------------------------------
+# A is the conversation the supervisor resumed (--skip); C came back to life after plan.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"2[0-9][0-9].json
+rec 301 $A "$cwd_a" "dev:@1.%1" session_A interactive 1 "$dead_pid" 6001
+rec 302 $B "$cwd_b" "dev:@2.%2" session_B interactive 1 "$dead_pid" 6002
+rec 303 $C "$cwd_c" "dev:@3.%3" session_C interactive 1 "$dead_pid" 6003
+transcript $C "$cwd_c" default high m
+"$HELPER" plan 2>/dev/null
+[ "$(wc -l < "$tmp/state/remote-sessions/pending.json")" = 3 ] || fail "skip: expected 3 pending lines"
+rec 304 $C "$cwd_c" "dev:@4.%4" session_C interactive 0 "$live_pid" "$live_start"
+: > "$TMUX_LOG"
+"$HELPER" restore --skip $A 2>"$tmp/err" || fail "restore --skip failed: $(cat "$tmp/err")"
+grep -q -- "--resume $A" "$TMUX_LOG" && fail "restore started the conversation the supervisor resumed"
+grep -q -- "--resume $C" "$TMUX_LOG" && fail "restore started a session that is live"
+grep -q -- "--resume $B" "$TMUX_LOG" || fail "restore --skip did not start the other session: $(cat "$TMUX_LOG")"
+[ "$(grep -c "already running" "$tmp/err")" = 2 ] || fail "skipped running sessions were not logged: $(cat "$tmp/err")"
+[ -e "$tmp/state/remote-sessions/ledger/$dead_pid-6001" ] || fail "a skipped session was not ledgered"
 
 echo "dev-remote-sessions: ok"
