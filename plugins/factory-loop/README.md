@@ -92,7 +92,7 @@ Each change is logged and asks for a pass at once. The ops:
 - `status` (or no op): the last pass and the directives in force; `help` lists the ops;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order, ahead of `priority`-labelled issues (the `priorityLabel` setting), which go ahead of the rest;
+- `priority <N...>|off`: set or clear the owner list used in [claim ordering](#claim-ordering);
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;
@@ -107,6 +107,21 @@ Each change is logged and asks for a pass at once. The ops:
 - `trace on|off`: trace mode (below), written to the workspace file, from the next pass.
 
 A malformed op changes nothing and answers with its usage.
+
+### Claim ordering
+
+A non-empty owner `only` list limits claims to that list, in its order. Otherwise, eligible
+issues in the owner `/factory priority` list come first, in its order, followed by issues
+carrying `priorityLabel` in ascending issue-number order, then the rest ascending. Issues
+whose labels are unknown sort with the rest.
+
+The label is distinct from the owner `/factory priority` command. Set `priorityLabel` in
+the repo's `.claude/factory-loop.json`. See [SPEC 4.2](../../docs/factory-loop/SPEC.md#42-settings-and-defaults)
+for its default and case-insensitive matching.
+The label only orders eligible ready issues: blocked issues, trackers, `skipLabels`, owner
+skip/pause/drop and trust checks still exclude issues. It never overrides `only`, `noNewWork`,
+usage tiers or capacity. [SPEC D1](../../docs/factory-loop/SPEC.md#56-design-and-delegation-d)
+defines the detailed claim guards.
 
 ## Trace mode
 
