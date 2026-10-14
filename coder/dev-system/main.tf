@@ -133,6 +133,16 @@ variable "remote_control_resume_prompt" {
   type        = string
 }
 
+# The Claude plugins every workspace of the template gets (DEV_DEFAULT_PLUGINS, the
+# image's plugins.sh format: <plugin>@<marketplace>=<source>#<ref>, whitespace
+# separated). Empty keeps the image's default (callum-flow at the image's release);
+# coder/push.sh sets it for orchestrator-loop, which also needs factory-loop.
+variable "default_plugins" {
+  default     = ""
+  description = "The Claude plugins every workspace gets (DEV_DEFAULT_PLUGINS), e.g. 'callum-flow@callum=cbundy/dev-system#v0.37.0 factory-loop@callum=cbundy/dev-system#v0.37.0'. Empty keeps the image's default."
+  type        = string
+}
+
 variable "remote_control_name_format" {
   default     = ""
   description = "Session mode: the Remote Control session name, with {name} replaced by the default name (DEV_REMOTE_CONTROL_NAME_FORMAT), e.g. '🔄 {name} orchestrator'. Empty keeps the default name."
@@ -458,6 +468,7 @@ resource "coder_agent" "main" {
     var.remote_control_prompt != "" ? { DEV_REMOTE_CONTROL_PROMPT = var.remote_control_prompt } : {},
     var.remote_control_resume_prompt != "" ? { DEV_REMOTE_CONTROL_RESUME_PROMPT = var.remote_control_resume_prompt } : {},
     var.remote_control_name_format != "" ? { DEV_REMOTE_CONTROL_NAME_FORMAT = var.remote_control_name_format } : {},
+    var.default_plugins != "" ? { DEV_DEFAULT_PLUGINS = var.default_plugins } : {},
   )
 
   # One line, e.g. "claude: in, codex: out (optional), gh: out". The text form

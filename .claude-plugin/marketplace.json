@@ -13,6 +13,11 @@
       "name": "factory-hud",
       "source": "./plugins/factory-hud",
       "description": "Opt-in mod: a status entry with the time, context fill, plan usage, factory counts and tool versions on every surface, including mobile and desktop through Remote Control."
+    },
+    {
+      "name": "factory-loop",
+      "source": "./plugins/factory-loop",
+      "description": "The issue orchestrator as a deterministic loop: claims, gates and merges a repo's ready issues in code and wakes Claude only for judgment calls. For orchestrator workspaces (the orchestrator-loop Coder template); not enabled by default."
     }
   ]
 }
