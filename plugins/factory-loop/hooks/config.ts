@@ -68,6 +68,10 @@ export const DEFAULT_CONFIG: Config = {
   retryBackoffMs: 2 * MIN,
   rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
   allowActOutsideOrchestrator: false,
+  // off: the decision log alone carries each pass's time and trigger (#552)
+  trace: false,
+  // 100 MiB in all (owner, #552)
+  traceMaxBytes: 100 * 1024 * 1024,
 }
 
 export const EMPTY_CONTROL: Control = {

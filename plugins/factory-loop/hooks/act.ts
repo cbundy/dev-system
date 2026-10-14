@@ -189,8 +189,9 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
 
 // --- one pass's actions ------------------------------------------------------------------------
 
-// One action's result, for the decision log (SPEC 12).
-export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string }
+// One action's result, for the decision log (SPEC 12); at: when it started, for the trace (#552),
+// absent for an action held before it started.
+export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms }
 
 export type ActReport = {
   outcomes: ActOutcome[]
@@ -228,7 +229,7 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
   const t0 = await env.io.now()
   const done = async (exec: Exec) => {
     const ms = (await env.io.now()) - t0
-    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary) } }
+    return { exec, outcome: { key: action.key, kind: action.kind, status: exec.status, ms, summary: clip(exec.summary), at: t0 } }
   }
   if (action.kind === 'title') return done(await dispatch(ctxOf(env, state, start([], action, t0).entry), action))
 
@@ -380,7 +381,9 @@ export type Between = { answering: Set<string>; completedSeen: Map<string, Ms> }
 // The pass's agent list: only a read that worked may mark agents lost.
 export type Listed = { ok: boolean; agents: ListedAgent[] }
 
-export type Acted = { state: State; result: PlanResult; report: ActReport }
+// planned: when plan handed its actions over and how long it took (performance.now()), for the
+// trace (#552)
+export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number } }
 
 // actPass: the act-mode pass once the rails passed and observe read the factory: what the agent
 // list proves (SPEC 3.3, 10.4) and wakes past their timeout (SPEC 8.2) go into the ledger first,
@@ -398,9 +401,11 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     await logLoop(env, moved)
   }
   const state = { ...observed, ledger: env.live.ledger }
+  const from = performance.now()
   const result = plan(state, env.rt.config)
+  const planned = { ms: performance.now() - from, at: await env.io.now() }
   const report = await runActions(env, state, result.actions)
-  return { state, result, report }
+  return { state, result, report, planned }
 }
 
 // --- between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4) ----------------------------
