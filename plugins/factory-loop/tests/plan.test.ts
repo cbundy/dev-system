@@ -981,6 +981,37 @@ describe('A: agents', () => {
     ])
   })
 
+  test('an agent that works on after its answer is recorded (its tool answers before its turn ends) is still timed out and stopped, so its branch is not held for good (SPEC A1, A2, #548)', () => {
+    // a fixer answered through its tool an hour in, then went on (or sat waiting on a job)
+    const answered = (over: Partial<LedgerEntry> = {}) =>
+      entry('fixer:guard:550:head50', 'spawn', {
+        agent: 'fixer',
+        class: 'drive',
+        issue: 50,
+        status: 'done',
+        startedAt: NOW - 3 * HOUR,
+        endedAt: NOW - 2 * HOUR,
+        agentId: 'a-fix',
+        outcome: { kind: 'handoff', notGated: false, run: 'R50', head: 'head50', newBranch: null },
+        ...over,
+      })
+    const listed = (status: 'running' | 'waiting' | 'completed' | 'killed') => ({ agents: [{ id: 'a-fix', type: 'callum-flow:fixer', status }] })
+    const r = plan(mergeReady([guarded(), reviewed(), answered()], listed('waiting')), CFG)
+    expect(keys(r)).toEqual(['stop:a-fix'])
+    expect(find(r, 'stop:a-fix')).toMatchObject({ rule: 'A1', reason: 'timed out', entry: 'fixer:guard:550:head50' })
+    // the merge waits on it meanwhile, and goes once the list shows it ended
+    expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'an agent already works the branch of #50 (merge)' })
+    for (const status of ['completed', 'killed'] as const) expect(keys(plan(mergeReady([guarded(), reviewed(), answered()], listed(status)), CFG))).toEqual(['merge:550:head50'])
+    // within its timeout it works on, except where an A2 stop applies: the owner dropped the issue
+    const young = answered({ startedAt: NOW - 30 * MIN, endedAt: NOW - 20 * MIN })
+    expect(keys(plan(mergeReady([guarded(), reviewed(), young], listed('running')), CFG))).toEqual([])
+    const dropped = control({ dropped: [{ issue: 50, at: NOW - MIN }] })
+    expect(keys(plan(mergeReady([guarded(), reviewed(), young], { ...listed('running'), control: dropped }), CFG))).toEqual([`abandon:50:${NOW - MIN}`, 'stop:a-fix', 'tell:stopped:a-fix'])
+    // an answer just in: the list has not yet marked the agent completed, so nothing is stopped
+    const fresh = answered({ endedAt: NOW - 5_000 })
+    expect(keys(plan(mergeReady([guarded(), reviewed(), fresh], listed('running')), CFG))).toEqual([])
+  })
+
   test('an agent whose attempts ran out is reported to the owner (SPEC A1)', () => {
     const failedTwice = entry(`design:60:${NOW - 20 * MIN}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'failed', attempts: 2 })
     const s = state({ issues: [mine(60, 'designing', { stageSince: NOW - 20 * MIN })] })

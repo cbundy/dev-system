@@ -1063,6 +1063,26 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
   })
 
+  test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 3 * 60 * MIN
+    const { run } = factory({ issue: { stage: 'implementing', since } })
+    const key = `delegate:470:${BRIEF}`
+    const handoff = { kind: 'handoff', notGated: false, run: 'R470', head: 'abc1234', newBranch: 'feat/issue-470-x' } as const
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      // answered through its tool an hour in, and still waiting on a job of its own
+      entry(key, 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'done', startedAt: since, endedAt: since + 60 * MIN, agentId: 'agent-1', outcome: handoff }),
+    ])
+    const h = host(on, { config: ACT, run, store })
+    h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'waiting', description: 'Implement #470' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.stops).toEqual(['agent-1'])
+    expect(h.entry('stop:agent-1')).toMatchObject({ status: 'done', rule: 'A1' })
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: handoff })
+  })
+
   test("the loop's own adjudicator and designer types are never offered to the model; the callum-flow ones are (#548)", async ($, on) => {
     host(on, { config: ACT })
     const offer = (agent: string) => $.agent.offer({ agent, description: 'an agent', source: 'plugin', provider: { plugin: agent.split(':')[0] ?? '', tier: 'user' } })

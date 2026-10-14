@@ -10,6 +10,7 @@ import type {
   ActionKind,
   AdjudicatorAction,
   AgentType,
+  AgentView,
   Bump,
   Config,
   GuardFail,
@@ -38,6 +39,9 @@ const DRAIN_SLOW_MS = HOUR
 const JUDGE_REMIND_MS = 30 * 60_000
 // The title's M: issues merged in this window (D-23).
 const MERGED_WINDOW_MS = 6 * HOUR
+// An agent still listed at work this long after its answer was recorded did not end its turn:
+// the list marks one that did completed within seconds (answeredLive).
+const ANSWERED_GRACE_MS = 60_000
 // A hand merge older than this gets no follow-ups (rule M7). callum-flow-factory-state lists a
 // final stage for 24 hours, and the bound keeps a merge from ever outliving the ledger's 7-day
 // prune of its `rollout:<issue>` entry, so it can never be re-triggered.
@@ -293,8 +297,23 @@ function want(ctx: Ctx, action: Action): Gate {
 
 // agentLive: the session's agent list shows this agent still at work.
 function agentLive(ctx: Ctx, agentId: string): boolean {
-  const seen = ctx.state.agents.find(a => a.id === agentId)
+  return listedLive(ctx.state.agents, agentId)
+}
+
+// listedLive: an agent list shows this agent still at work (the stop-agent executor asks too).
+export function listedLive(agents: readonly AgentView[], agentId: string): boolean {
+  const seen = agents.find(a => a.id === agentId)
   return seen !== undefined && seen.status !== 'completed' && seen.status !== 'failed' && seen.status !== 'killed'
+}
+
+// answeredLive: an agent entry that is done, while the list still shows its agent at work
+// ANSWERED_GRACE_MS after the answer. An answer through the tool ends the entry before the
+// agent's turn does (SPEC 7.3a.4), and an agent that works on, or waits on background work,
+// still holds its branch (agentWriting), so rules A1 and A2 keep covering it. The grace leaves
+// alone an agent the list has not yet marked completed.
+function answeredLive(agents: readonly AgentView[], e: LedgerEntry, now: Ms): boolean {
+  if (e.status !== 'done' || e.agentId === undefined || e.endedAt === null || (e.kind !== 'spawn' && e.kind !== 'delegate')) return false
+  return now - e.endedAt > ANSWERED_GRACE_MS && listedLive(agents, e.agentId)
 }
 
 function done(ctx: Ctx, key: string): LedgerEntry | undefined {
@@ -1937,8 +1956,9 @@ function candidateProblem(ctx: Ctx, issue: IssueView | undefined, n: number): st
 
 function agents(ctx: Ctx) {
   const { state, config } = ctx
+  // a running agent entry, or a done one whose agent works on past its answer
   const running = state.ledger
-    .filter(e => e.status === 'running' && e.agentId !== undefined && (e.kind === 'spawn' || e.kind === 'delegate'))
+    .filter(e => (e.status === 'running' && e.agentId !== undefined && (e.kind === 'spawn' || e.kind === 'delegate')) || answeredLive(state.agents, e, state.now))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
   for (const entry of running) {
     const agentId = entry.agentId as string

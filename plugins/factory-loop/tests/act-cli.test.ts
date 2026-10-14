@@ -8,7 +8,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, prCloseCheck, slotState, stepsOf, usageError } from '../hooks/act-cli'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
-import type { Action, ActionKind, LedgerEntry } from '../hooks/types'
+import type { Action, ActionKind, AgentView, LedgerEntry } from '../hooks/types'
 import { DEVICE, NOW, config, entry, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
@@ -38,6 +38,7 @@ function runtime(): Runtime {
 
 type Over = {
   ledger?: LedgerEntry[]
+  agents?: AgentView[]
   stop?: (agentId: string) => Promise<{ stopped: boolean; error?: string }>
   rename?: (title: string) => Promise<void>
   event?: (state: string, fields: EventFields) => Promise<void>
@@ -73,7 +74,7 @@ function harness(replies: Reply[] = [], over: Over = {}) {
   const ctx: ExecCtx = {
     io,
     rt: runtime(),
-    state: state(over.ledger === undefined ? {} : { ledger: over.ledger }),
+    state: state({ ...(over.ledger === undefined ? {} : { ledger: over.ledger }), ...(over.agents === undefined ? {} : { agents: over.agents }) }),
     entry: entry('under-test', 'heartbeat', { status: 'running', endedAt: null }),
     cmd: async (argv, init) => {
       calls.push({ argv, init })
@@ -512,10 +513,25 @@ describe('stop-agent: only the loop\'s own running agents', () => {
     expect(threw.result).toEqual({ status: 'failed', summary: 'not stopped a1: tool call failed' })
   })
 
-  test('ownAgent reads running entries only', () => {
-    expect(ownAgent([running('a1')], 'a1')).toBe(true)
-    expect(ownAgent([running('a1')], 'a2')).toBe(false)
-    expect(ownAgent([{ ...running('a1'), status: 'timed-out' }], 'a1')).toBe(false)
+  test('ownAgent reads running entries, and done agent entries whose agent the list shows at work', () => {
+    const listed = (status: AgentView['status']) => [{ id: 'a1', type: 'factory-loop:designer', status }]
+    expect(ownAgent([running('a1')], 'a1', [])).toBe(true)
+    expect(ownAgent([running('a1')], 'a2', listed('running'))).toBe(false)
+    expect(ownAgent([{ ...running('a1'), status: 'timed-out' }], 'a1', listed('running'))).toBe(false)
+    const answered = { ...running('a1'), status: 'done' as const, endedAt: NOW }
+    expect(ownAgent([answered], 'a1', listed('waiting'))).toBe(true)
+    for (const status of ['completed', 'killed', 'failed'] as const) expect(ownAgent([answered], 'a1', listed(status))).toBe(false)
+    expect(ownAgent([answered], 'a1', [])).toBe(false)
+  })
+
+  test('an agent that works on after its answer is recorded is stopped; one the list shows ended is not (#548)', async () => {
+    const answered = { ...running('a1'), status: 'done' as const, endedAt: NOW }
+    const { result, stops } = await exec(A.stop('a1'), [], { ledger: [answered], agents: [{ id: 'a1', type: 'callum-flow:fixer', status: 'waiting' }] })
+    expect(stops).toEqual(['a1'])
+    expect(result).toEqual({ status: 'done', summary: 'stopped a1 (timed out)' })
+    const ended = await exec(A.stop('a1'), [], { ledger: [answered], agents: [{ id: 'a1', type: 'callum-flow:fixer', status: 'completed' }] })
+    expect(ended.stops).toEqual([])
+    expect(ended.result).toMatchObject({ status: 'failed', noRetry: true })
   })
 })
 

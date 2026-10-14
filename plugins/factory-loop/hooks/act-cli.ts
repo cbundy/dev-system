@@ -7,8 +7,8 @@
 import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { parsePool } from './parse'
-import { issueFromBranch } from './plan'
-import type { Action, ActionKind, LedgerEntry } from './types'
+import { issueFromBranch, listedLive } from './plan'
+import type { Action, ActionKind, AgentView, LedgerEntry } from './types'
 
 const SEC = 1000
 const SUMMARY_MAX = 200
@@ -312,17 +312,21 @@ const prClose: Executor = async (ctx, action) => {
   return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: clip(`closed PR #${action.pr}, superseded by #${action.by}`) }
 }
 
-// ownAgent: the ledger holds a running entry for this agent id, so the loop spawned it. An
-// agent the loop did not spawn is never stopped (SPEC 6.1).
-export function ownAgent(ledger: readonly LedgerEntry[], agentId: string): boolean {
-  return ledger.some(e => e.status === 'running' && e.agentId === agentId)
+// ownAgent: the ledger holds this agent id, so the loop spawned it: on an entry still running, or
+// on an agent entry that is done while the list shows the agent at work (an answer through its
+// tool ends the entry before the agent's turn ends, #548; plan.ts answeredLive). An agent the
+// loop did not spawn is never stopped (SPEC 6.1).
+export function ownAgent(ledger: readonly LedgerEntry[], agentId: string, agents: readonly AgentView[]): boolean {
+  return ledger.some(
+    e => e.agentId === agentId && (e.status === 'running' || (e.status === 'done' && (e.kind === 'spawn' || e.kind === 'delegate') && listedLive(agents, agentId))),
+  )
 }
 
 // stop-agent: TaskStop through ActIo, for one of the loop's own agents (rules A1, A2). A stop
 // that is not supported is recorded as failed with the reason (SPEC 13).
 const stopAgent: Executor = async (ctx, action) => {
   if (action.kind !== 'stop-agent') return refused(`the stop-agent executor got a ${action.kind} action`)
-  if (!ownAgent(ctx.state.ledger, action.agentId)) return refused(`agent ${action.agentId} is not a running agent of the loop`)
+  if (!ownAgent(ctx.state.ledger, action.agentId, ctx.state.agents)) return refused(`agent ${action.agentId} is not a running agent of the loop`)
   let r: { stopped: boolean; error?: string }
   try {
     r = await ctx.io.stopAgent(action.agentId)

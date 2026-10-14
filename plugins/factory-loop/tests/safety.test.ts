@@ -216,9 +216,19 @@ const ACTIONS: Action[] = [
 
 function world(): { state: State; ledger: LedgerEntry[] } {
   const own = entry('design:470:1', 'spawn', { agent: 'designer', status: 'running', endedAt: null, agentId: 'agent-own', startedAt: NOW - MIN })
-  const ledger = [own]
+  // agents whose answer is in (#548): one still at work, one ended
+  const answered = entry('fixer:guard:471:h', 'spawn', { agent: 'fixer', issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
+  const ended = entry('fixer:guard:472:h', 'spawn', { agent: 'fixer', issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
+  const ledger = [own, answered, ended]
   const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false }] }
-  return { state: state({ ledger, pool }), ledger }
+  const agents = [
+    { id: 'agent-own', type: 'factory-loop:designer', status: 'running' as const },
+    { id: 'agent-answered', type: 'callum-flow:fixer', status: 'waiting' as const },
+    { id: 'agent-ended', type: 'callum-flow:fixer', status: 'completed' as const },
+    // the model's own agent, at work: listed, but never the loop's
+    { id: 'the-models-own-agent', type: 'general-purpose', status: 'running' as const },
+  ]
+  return { state: state({ ledger, pool, agents }), ledger }
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles
@@ -398,10 +408,12 @@ describe('the argv safety net (SPEC 6.1)', () => {
     for (const argv of [...own, ...seen]) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 
-  test('stop-agent stops only an agent the ledger holds running; any other is refused before TaskStop', async () => {
+  test('stop-agent stops only an agent the ledger holds running, or one whose answer is in that the list shows at work; any other is refused before TaskStop', async () => {
     const own = await run({ ...base, kind: 'stop-agent', key: 'stop:agent-own', class: 'free', rule: 'A1', agentId: 'agent-own', entry: 'design:470:1' })
     expect(own).toMatchObject({ status: 'done', stops: ['agent-own'] })
-    for (const agentId of ['agent-stranger', 'the-models-own-agent']) {
+    const answered = await run({ ...base, kind: 'stop-agent', key: 'stop:agent-answered', class: 'free', rule: 'A1', agentId: 'agent-answered', entry: 'fixer:guard:471:h' })
+    expect(answered).toMatchObject({ status: 'done', stops: ['agent-answered'] })
+    for (const agentId of ['agent-stranger', 'the-models-own-agent', 'agent-ended']) {
       const other = await run({ ...base, kind: 'stop-agent', key: `stop:${agentId}`, class: 'free', rule: 'A2', agentId, entry: 'design:470:1' })
       expect(other).toMatchObject({ status: 'failed', stops: [], summary: `refused: agent ${agentId} is not a running agent of the loop` })
     }
