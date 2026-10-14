@@ -1309,6 +1309,56 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
     expect(plan({ ...s, issues: s.issues.slice(0, 5) }, CFG).atCap).toBe(false)
   })
 
+  // finished: the ledger after each claim the plan made ended this long after it started
+  const finished = (s: State, r: PlanResult, tookMs: number): State => ({
+    ...running(s, r),
+    ledger: running(s, r).ledger.map(e =>
+      e.kind === 'claim' && e.status === 'running'
+        ? { ...e, status: 'done' as const, endedAt: s.now + tookMs, outcome: { kind: 'claim' as const, result: 'claimed' as const } }
+        : e,
+    ),
+  })
+
+  test('a fresh claim counts toward the in-flight cap until the factory shows it live (testbed run 2, #547)', () => {
+    // four live, cap five: one pass claims #35, the next 13 s later still sees #35 queued
+    const live = Array.from({ length: 4 }, (_, i) => mine(100 + i, 'implementing'))
+    const first = state({ queue: [35, 36], issues: [issue(35), issue(36), ...live], pool: { free: 16, total: 16, slots: [] } })
+    const r1 = plan(first, CFG)
+    expect(keys(r1)).toEqual([`claim:35:${NOW - 30 * MIN}`, 'tell:at-cap:0'])
+    const second = { ...finished(first, r1, 5_000), now: NOW + 13_000 }
+    const r2 = plan(second, CFG)
+    expect(keys(r2).filter(k => k.startsWith('claim:'))).toEqual([])
+    expect(r2.skipped).toContainEqual({ rule: 'D1', issue: 36, why: 'in-flight cap: 5 of 5' })
+    expect(r2.atCap).toBe(true)
+    // once observed live the claim is counted there, not twice
+    const seen = { ...second, queue: [36], issues: [mine(35, 'designing', { stageSince: NOW + 3_000 }), issue(36), ...live] }
+    expect(plan(seen, CFG).skipped).toContainEqual({ rule: 'D1', issue: 36, why: 'in-flight cap: 5 of 5' })
+    // a claim the factory never shows stops counting after one heartbeat interval
+    const later = { ...second, now: NOW + CFG.heartbeatEveryMs + 6_000, ledger: second.ledger.map(e => (e.kind === 'heartbeat' || e.kind === 'sweep' ? { ...e, endedAt: NOW } : e)) }
+    expect(keys(plan(later, CFG))).toContain(`claim:36:${NOW - 30 * MIN}`)
+    // a worktree too: the claimed issue will be in design
+    const tight = { ...second, issues: [issue(35), issue(36)], pool: { free: 3, total: 16, slots: [] } }
+    expect(plan(tight, CFG).skipped).toContainEqual({ rule: 'D1', issue: 36, why: 'no free worktree' })
+  })
+
+  test('no second claim when the claim event lands after ready (testbed issue 11, #538)', () => {
+    // the first pass claims #11 before the factory knows it; the ready event lands first
+    const first = state({ queue: [11], issues: [issue(11, { stage: null, stageSince: null })] })
+    const r1 = plan(first, CFG)
+    expect(keys(r1)).toEqual(['claim:11:new'])
+    const claimed = { ...finished(first, r1, 4_000), now: NOW + 29_000 }
+    const late = { ...claimed, issues: [issue(11, { stageSince: NOW + 1_000 })] }
+    const r2 = plan(late, CFG)
+    expect(keys(r2)).toEqual([])
+    expect(r2.skipped).toContainEqual({ rule: 'D1', issue: 11, why: 'claimed; the factory state has not caught up' })
+    // queued again after the claim ended (released, then made ready again): claimed again
+    const again = { ...claimed, issues: [issue(11, { stageSince: NOW + 20_000 })] }
+    expect(keys(plan(again, CFG))).toEqual([`claim:11:${NOW + 20_000}`])
+    // a claim that lost never holds the issue back
+    const lost = { ...late, ledger: late.ledger.map(e => (e.kind === 'claim' ? { ...e, outcome: { kind: 'claim' as const, result: 'lost' as const } } : e)) }
+    expect(keys(plan(lost, CFG))).toEqual([`claim:11:${NOW + 1_000}`])
+  })
+
   test('retry counts follow SPEC 6.1: a close and reopen once, a slot return twice', () => {
     const stalled = state({ issues: [mine(48, 'in pipeline', { pr: 548 })], runs: [run(48, 'ci-stalled', { detail: 'reason=no-checks' })] })
     const reopen = entry('reopen:548:01M4RQ0048AAAA', 'pr-reopen', { issue: 48, pr: 548, status: 'failed', attempts: 1, endedAt: NOW - 10 * MIN })
