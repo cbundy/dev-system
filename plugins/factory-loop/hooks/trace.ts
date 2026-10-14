@@ -124,6 +124,11 @@ async function timed<T>(tr: Tracer, cmd: string, work: () => Promise<T>, read: (
   }
 }
 
+// called: an engine call the driver makes itself (the pass's agent list), recorded.
+export function called<T>(tr: Tracer | null, cmd: string, work: () => Promise<T>, read?: (r: T) => Partial<Command>): Promise<T> {
+  return tr === null ? work() : timed(tr, cmd, work, read)
+}
+
 const ran = (r: RunResult): Partial<Command> => ({ exit: r.exitCode, bytes: byteLength(r.stdout) })
 
 // sourceOf: the State source an observe command reads (observe.ts), from its program.

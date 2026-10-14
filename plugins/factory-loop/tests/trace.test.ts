@@ -144,6 +144,7 @@ describe('trace on', () => {
     for (const key of ['persistMs', 'eventsMs', 'lockMs']) expect(typeof t1[key]).toBe('number')
 
     // every command of the pass, each with the source it read, its time, exit and bytes
+    expect(commandsOf(t1)[0]).toMatchObject({ phase: 'setup', cmd: 'agent.list' })
     const factory = commandsOf(t1).find(c => c.cmd.startsWith('callum-flow-factory-state'))
     expect(factory).toMatchObject({ phase: 'observe', source: 'factory', exit: 0, bytes: factoryDoc([]).length })
     expect(factory?.t).toBeGreaterThanOrEqual(0)
@@ -273,6 +274,7 @@ describe('act mode, traced', () => {
     const store = ledgerOf([
       SWEPT,
       entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
+      entry('tell:agent-failed:9', 'tell', { wake: 'agent-failed', class: 'owner', status: 'done', startedAt: NOW - 40 * MIN, endedAt: NOW - 30 * MIN }),
     ])
     const h = host(on, { config: { ...ACT, trace: true }, run: world(issues), store })
     await $.session.start(START)
@@ -282,6 +284,8 @@ describe('act mode, traced', () => {
     const queued = NOW + 5_000
     const row = (r: Rec) => (r.wakes as Rec[]).find(w => w.key === `judge:report:${key}`)
     expect(row(h.traces()[0] as Rec)).toMatchObject({ wake: 'report', status: 'running', queued: iso(queued), delivered: null, ended: null })
+    // a wake that ended before this load is not news
+    expect(((h.traces()[0] as Rec).wakes as Rec[]).map(w => w.key)).toEqual([`judge:report:${key}`])
 
     // the pass ran 5 s in; the clock stands at 6 s
     await clock.advance(2_000)

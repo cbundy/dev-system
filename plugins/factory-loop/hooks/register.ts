@@ -66,6 +66,7 @@ import {
   attemptOf,
   begin,
   byteLength,
+  called,
   carve,
   cutLine,
   lockTimed,
@@ -725,7 +726,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // trace mode (#552): the pass's phases, every engine call it makes and its totals; null when off
   const tr = rt.config.trace ? newTracer(() => performance.now(), t0, now) : null
   const keys = keysOf(rt.repo)
-  const listed = await listAgents($)
+  const listed = await called(tr, 'agent.list', () => listAgents($), r => (r.ok ? {} : { error: 'not read' }))
   const commands: string[] = []
   const problems: string[] = []
   const aio = tr === null ? actIo($) : tracedActIo(tr, actIo($))
@@ -984,7 +985,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   })
   const ledger = act ? live.ledger : state.ledger
   if (tr !== null) {
-    const wakes = wakeRows(ledger, delivered, reportedWakes, prevPassAt)
+    // ended wakes since the last pass, or since this module loaded: not the ledger's whole week
+    const wakes = wakeRows(ledger, delivered, reportedWakes, Math.max(prevPassAt, loadedAt))
     for (const attempt of wakes.reported) reportedWakes.add(attempt)
     const record = traceRecord({
       tr,
