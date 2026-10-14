@@ -16,6 +16,8 @@ import {
   commandOf,
   eventArgv,
   eventOf,
+  logLoop,
+  loggedOf,
   openWake,
   reconcilable,
   runActions,
@@ -357,6 +359,23 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(moved.map(e => e.key)).toEqual(['b'])
     expect(live.ledger[0]).toBe(a)
   })
+
+  test('a loop event is logged once per change of what it says; a loaded entry counts as logged, a dropped key is forgotten (#536)', async () => {
+    const open = entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', status: 'running', endedAt: null, wakeId: 'w0' })
+    const f = fake([open])
+    f.env.live.logged = loggedOf([open])
+    const statuses = () => f.calls.map(c => /status=(\S+)/.exec(c.argv.at(-1) ?? '')?.[1])
+    // its turn taking its id, then its reminder: the event would say the same, so none is logged
+    await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', turnId: 't1' }, NOW)))
+    await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'running', reminded: true }, NOW)))
+    expect(statuses()).toEqual([])
+    await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
+    await logLoop(f.env, transition(f.env.live, l => finish(l, open.key, { status: 'done', summary: 'answered' }, NOW)))
+    expect(statuses()).toEqual(['done'])
+    f.env.live.ledger = []
+    await logLoop(f.env, [])
+    expect(f.env.live.logged?.size).toBe(0)
+  })
 })
 
 // --- one issue from claim to merge, in the engine's test host ------------------------------------
@@ -650,6 +669,11 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.seen.every(s => s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // and nothing is left running but the run-it task the model now holds
     expect(h.live.ledger.filter(e => e.status === 'running').map(e => e.key)).toEqual(['task:run-it:470'])
+    // and each transition logged one loop event: none twice, the judge's turn taking its id
+    // included (#536)
+    const loops = h.events().filter(e => e[1] === 'loop').map(e => e.join(' '))
+    expect(loops).toEqual([...new Set(loops)])
+    expect(loops.filter(l => l.includes(`key=judge:sequence:512:${HEAD} `)).map(l => /status=(\S+)/.exec(l)?.[1])).toEqual(['running', 'done'])
   })
 
   test('an agent that answers after its entry ended is dropped, and one the loop never spawned is not its own', async () => {
