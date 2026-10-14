@@ -352,6 +352,8 @@ follow directly from the skill or the brief.
 - **Why**: the wake probe showed both channels work, but a turn that starts while the mod reloads
   (during a deploy, for example) does not see the tool, and the text block costs the fewest
   tokens. The first plan, tool first, changed on that evidence.
+- **Note** (2026-10-14): the loop's agents answer through their own tools first (D-68); wakes
+  keep the text block as primary.
 
 ### D-06 Usage comes from `usage-check.sh` every 5 minutes plus the session's own figures
 
@@ -831,3 +833,42 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   engine may too before it marks the agent completed. Counting `running` would hold every
   stopped agent's missing line until the `A1` timeout, so a designer's missing `RESULT` would no
   longer reach the model at once.
+
+### D-68 Agents answer through validated tools; one repair message before an attempt is spent
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #548): three tools
+  (`mcp__factory-loop__verdict`, `mcp__factory-loop__design`, `mcp__factory-loop__handoff`),
+  each schema its agent's contract, behind ToolSearch. The handler re-checks every field plus
+  what a schema cannot, and names all problems at once. Fix ids must be judged `CORRECT` or `ENV`
+  in the same call. An accepted call ends the entry at once. Text stays the fallback. One repair
+  message per attempt via `$.session.send`, marked on the entry (`reminded`) before it goes out,
+  before a failed attempt or `judge(report)`. The decision log records each answer's path
+  (SPEC 7.3a, 12).
+- **Alternatives**: one tool with a union schema; holding a tool answer until `turn.complete`;
+  retrying with a fresh agent (the old way); several repairs.
+- **Why**: run 2 refused four sound approvals of one gate over a line of prose, and each refusal
+  spent an attempt on a fresh adjudicator. A per-agent schema says exactly what each answer
+  needs, and the API takes no `anyOf` at a tool schema's top level. Finishing at the call removes
+  any wait on text. The same agent already holds its judgement, so one message costs a fraction
+  of a new agent. One repair bounds a model that cannot comply.
+
+### D-69 Trace mode: one switch in two files, a size cap, and skip ages kept in memory
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #552; the per-repo switch and
+  the 100 MiB cap are the owner's): trace mode is the setting `trace`, in the repo's
+  `.claude/factory-loop.json` and in the workspace file, which wins. `/factory trace on|off`
+  writes the workspace file, as `/factory mode` does. The trace files share one cap,
+  `traceMaxBytes` (100 MiB): the oldest files go first, and today's is cut short with a closing
+  line. Times inside a pass come from `performance.now()`. The decision log's `trigger` and `ms`
+  are always written. A skip's age is kept in the module's memory from pass to pass, by issue and
+  rule (SPEC 12, 12.1).
+- **Alternatives**: `/factory trace` writes the repo's file; `control.json`; `$.clock.now()` for
+  every timing; a skip's age keyed by its exact words; per-file caps, or deleting by age alone.
+- **Why**: the owner asked for it per repo in the config, and switchable mid-run. The repo's file
+  is checked in, so writing it would dirty the consumer's checkout, which nothing may do
+  (SPEC 11.6). `control.json` holds owner directives that plan obeys, and trace is not one. The
+  workspace file is read every pass, so a write applies at the next one without a reload, and a
+  repo can still turn it on. Each `$.clock.now()` reading is an engine call, and plan's few
+  milliseconds would read as 0 or 1. A countdown in a skip's words changes every pass, so an age
+  keyed by the words would never grow; keyed by issue and rule, run 2's 30-minute guard wait
+  shows as a growing number. The 100 MiB is the owner's.

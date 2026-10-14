@@ -66,6 +66,34 @@ Gates on `v01/wave1`: `npm run lint` (151 files), `npm test` (633 node tests, 48
 2 mods) and the plugin's own suite (609 tests across 14 files) all pass, with the strict type
 check clean. None of it has run on the testbed yet.
 
+## Release v0.1, wave 2 (2026-10-14)
+
+Integrated on `v01/wave2`, on top of wave 1:
+
+- The loop's agents answer through tools the loop checks: the adjudicator through
+  `mcp__factory-loop__verdict`, the designer through `mcp__factory-loop__design`, the
+  implementer and fixer through `mcp__factory-loop__handoff`. A call that breaks the contract is
+  refused with every problem named, so the agent corrects it in the same turn; an accepted one
+  records the answer at once. Text stays the fallback, and an answer the loop cannot read gets
+  one repair message to the same agent before an attempt is spent (#548, SPEC 7.3a, D-68). Run 2
+  spent four adjudicators on one gate over a line of prose; this is the fix.
+- Every decision-log line says what triggered its pass and how long it took (`trigger`, `ms`).
+  Trace mode, off by default and switched with `/factory trace on|off` or `trace` in the config,
+  writes one timing record per pass: phases, every command, cache use, actions, wake latencies
+  and what each issue waits on and since when, under a 100 MiB cap (#552, SPEC 12.1, D-69).
+
+**Follow-up needed** before the adjudicator and designer can use their tools: the callum-flow
+`adjudicator.md` and `designer.md` `tools:` lines must list `mcp__factory-loop__verdict` and
+`mcp__factory-loop__design` (and ToolSearch, unless the engine sends a deferred tool's schema to
+an agent without it). Until then those two answer in text, with the repair as the net; the
+implementer and fixer inherit every tool already. That is a change to the released plugin, so it
+is separate from this branch.
+
+The choices made without you are D-68 and D-69. Gates on `v01/wave2`: `npm run lint` (151
+files), `npm test` (633 node tests, 48 shell suites, 2 mods) and the plugin's own suite (659
+tests across 16 files) all pass, with the strict type check clean. None of it has run on the
+testbed yet.
+
 ## Stage C: the act half (2026-10-13)
 
 Built in three waves, each committed with its tests, then reviewed:
@@ -136,6 +164,12 @@ Only a real session can show these; stage D on the testbed is where each gets pr
 - **The fast-forward** against real pool worktrees behind a real pipeline (tested against
   scratch git repos, #551), and the main checkout read of rule `G5` in a consumer's real
   checkout (#544).
+- **The agents' answer tools and the repair message** (#548): that an agent reaches a mod tool
+  through ToolSearch and the call carries its `agentId`, whether the engine checks the input
+  against the schema, and that `$.session.send` at an agent's own `turn.complete` reaches it and
+  resumes it with its transcript.
+- **Trace mode with a real clock** (#552): action and wake times line up only off the test
+  host, whose clock is frozen; the 100 MiB cap and the cut line against a real loop dir.
 - **The judge skill** against real wakes, including the new `pass-error` and `old-watcher`
   notices, and those notices reaching the phone.
 - **Engine details**: a hot reload while a pass or command is in flight (whether the old

@@ -252,9 +252,11 @@ as they do today.
 - **The workspace file** `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/config.json` overrides the
   options and adds `checkout` (the consumer's main checkout, when it is not the session's
   directory), `poolSize` (default 16), `toolsDir` (where `pipeline-watch.sh`, `queue-watch.sh`
-  and `usage-check.sh` live; default `/usr/local/share/callum-tools`, the base image's copy) and
+  and `usage-check.sh` live; default `/usr/local/share/callum-tools`, the base image's copy),
   `binDir` (put ahead of `PATH` for every command, so the loop runs a checkout's own CLIs before
-  a base image release carries them). It is plain JSON, easy to read and set from a shell, which
+  a base image release carries them) and `trace` (`true` or `false`): trace mode for this
+  workspace's loop (12.1), over the repo's `trace`; `/factory trace on|off` writes it, as
+  `/factory mode` writes `mode`. It is plain JSON, easy to read and set from a shell, which
   the shadow run uses (DECISIONS D-33). A testbed points `toolsDir` at a checkout's
   `features/src/callum-tools` and `binDir` at its `images/base` (DECISIONS D-42).
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 4.2.
@@ -275,6 +277,8 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `trackerTitle` | `^(Epic\|Tracker)\b` | a title that marks a tracker, like sub-issues do (I-91) |
 | `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` | 85, 90, 95 | the tiers (I-12 to I-16) |
 | `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (11.2) |
+| `trace` | `false` | trace mode (12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
+| `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
 | `passEveryMs` | `60s` | the timer |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
 | `usageStaleMs` | `15m` | an older reading counts as unavailable |
@@ -327,7 +331,7 @@ in chat, and the owner can type `/factory <op>` from any client (named so to sta
 Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`,
 `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`, `priority <N...>|off`, `only <N...>|off`,
 `serial on|off`, `new on|off`, `override <pct> <hours>|off`, `resume <N|run id>`, `retry <N>`,
-`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`. Each change
+`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`, `trace on|off`. Each change
 pings the loop and gets its own decision-log line (`control`). Today these directives are free
 text in the memory file (I-90).
 
@@ -339,8 +343,8 @@ text in the memory file (I-90).
   hours above 0 and at most 168; an update's reason at most 300 characters; a note at most
   2 000.
 - `drop` of an issue already dropped does nothing (a second entry would plan a second abandon).
-  `retry` works through the ledger (section 7.1). `mode` is written to the workspace file (4.1)
-  and applies from the next pass.
+  `retry` works through the ledger (section 7.1). `mode` and `trace` are written to the
+  workspace file (4.1) and apply from the next pass.
 - A malformed op changes nothing and answers with its usage. An op that changes nothing
   (pausing a paused issue) says so and writes nothing.
 - A control.json that is not a JSON object is never overwritten: every changing op is refused
@@ -611,9 +615,9 @@ Each spawn's prompt comes from a template in `hooks/prompts.ts`. Templates carry
 numbers, URLs, branch names, run ids, heads, step names, instructions from the adjudicator or
 the model, owner notes, pointers (CLAUDE.md, the agent type's own memory file under
 `.claude/agent-memory/`, the `implement-issue` skill), a per-issue scratch subdirectory (I-95),
-and the closing `RESULT` line the loop parses. The designer's also lists other issues' branches
-in flight (names only), and a prompt for an issue with a `model:` label says to pass that model
-to the agent's own sub-agents.
+the answer tool to call and the closing `RESULT` line the loop parses. The designer's also lists
+other issues' branches in flight (names only), and a prompt for an issue with a `model:` label
+says to pass that model to the agent's own sub-agents.
 
 - **No brief content.** A brief travels as its comment URL only; anything else in its place is
   dropped and the prompt says to read the issue instead.
@@ -622,16 +626,26 @@ to the agent's own sub-agents.
   `GH-N`, `owner/repo#N`, a URL), or at the end of the value, becomes its `-ing` form ("Fixes
   #12" reads "Fixing #12"), so an agent that copies it into a PR body closes nothing (I-33).
   Every id (branch, run, head, step, model, repo) must have its shape, or it shows as not known.
+- **Answer tools first.** Each prompt first asks the agent to answer through its tool (7.3a):
+  the adjudicator `mcp__factory-loop__verdict`, the designer `mcp__factory-loop__design` (once
+  the brief is posted), the implementer and fixer `mcp__factory-loop__handoff` (after the
+  `implement-issue` handoff). The prompt says to load the tool with ToolSearch if it is listed by
+  name only, to correct the call and call again on an error, and to end the turn once it is
+  recorded. The machine line stays the fallback, last. The designer's, implementer's and fixer's
+  prompts also say to run any sub-agent in the foreground and wait for it there: "your turn ends
+  only with your final answer, given as asked below."
 - **The lines the loop parses.** The designer ends with the `RESULT` line of section 7.2.
   The implementer and the fixer end their handoff with
   `RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>`.
   A handoff is not gated when it says `gated=no` or its head is not its commit (short and full
   SHAs compare by prefix); with no such line, the words `NOT GATED` still count; anything else
-  is unparseable, a failed attempt. A designer's or a handoff's `RESULT` line wrapped in
-  backticks reads the same; the adjudicator's reply stays strict (7.3).
+  is unparseable, a failed attempt once its repair (7.3a) has been tried. A designer's or a
+  handoff's `RESULT` line wrapped in backticks reads the same; the adjudicator's reply stays
+  strict (7.3).
 - **Records.** Before each spawn the loop writes `<loop dir>/spawns/<key>.json` (the branch the
   spawn named, its purpose, model and the exact prompt); each answer is saved whole at
   `<loop dir>/answers/<key>.txt`, which `judge(report)` and `judge(handoff)` point the model at.
+  An answer through a tool is saved at `answers/<key>.txt` as JSON `{ tool, input }`.
 
 `tests/prompts.test.ts` renders every template with hostile inputs and checks for brief content
 and closing keywords.
@@ -659,7 +673,8 @@ type LedgerEntry = {
   agentId?: string                // spawns and delegates
   wakeId?: string                 // judge, task, tell (section 8.1 `id=`)
   turnId?: string                 // the turn the wake started
-  reminded?: boolean              // its one reminder went out
+  reminded?: boolean              // its one reminder went out (a wake's reminder; an agent's one
+                                  //   repair message, 7.3a)
   session?: string                // the session that submitted the wake (7.5)
   outcome?: Outcome               // parsed result, per kind
   summary?: string                // the executor's last few words, for the decision log
@@ -712,8 +727,9 @@ RESULT brief=<comment URL|none> created=<n1,n2|none> pending_decision=<yes|no>
 ```
 
 The parser reads the report's last line and accepts only that shape, with a brief URL on the
-designed issue of this repo. Anything else is an unparseable report: `judge(report)` hands the
-model the saved report's path and asks for the fields.
+designed issue of this repo. Anything else is an unparseable report: once its repair message
+(7.3a) has been tried, `judge(report)` hands the model the saved report's path and asks for the
+fields.
 
 ### 7.3 Adjudicator reply
 
@@ -729,7 +745,7 @@ parser requires: `SUMMARY: <what changes for users, one line>`, `BUMP: <patch|mi
 review takes `approve`, `fix`, `skip`, `fixer` or `escalate`; a merge review takes `merge`,
 `hold <reason>`, `fixer` or `escalate` (which plan reads as a hold). Any other `ACTION`, a flag
 the loop does not know, or an option `respond` does not take (such as `--yes`) makes the reply
-unparseable, a failed attempt of its rule.
+unparseable, a failed attempt of its rule once its repair (7.3a) has been tried.
 
 **Interim answers (#545).** An answer with no machine line (no designer `RESULT`, an
 adjudicator reply that does not parse, a handoff with no `RESULT` or `NOT GATED`) from an agent
@@ -738,8 +754,45 @@ by `parentId`, pending, running or waiting) is interim: the entry stays running,
 log notes it, and the agent's next answer is the one read, up to its timeout (rule `A1`). The
 agent's own `running` at its `turn.complete` is no proof, since an agent that just ended is
 still listed so. A list that cannot be read within 10 s proves nothing, and the answer is read
-as final. An agent that has stopped is read at once, so a designer's missing line still goes to
-`judge(report)` (rule `D3`).
+as final. An agent that has stopped is read at once: its missing line first gets the repair
+message (7.3a), and a designer's still missing after it goes to `judge(report)` (rule `D3`).
+
+### 7.3a Answer tools and the repair message (#548)
+
+1. **Tools.** The mod registers `mcp__factory-loop__verdict` (`findings`
+   `[{ id, verdict CORRECT|WRONG|NIT|ENV|DUP, reason }]`, `action { type, reason?, findings?,
+   instructions?, addFinding?, why? }`, and for a merge review `summary`, `bump { level, reason }`
+   and `flags`), `mcp__factory-loop__design` (`{ brief: URL|null, created: int[],
+   pendingDecision }`) and `mcp__factory-loop__handoff` (`{ run, head, commit, gated, branch,
+   pr }`). Each tool's input schema is its agent's text contract. All wait behind ToolSearch.
+2. **Matching.** A call is tied to the running `spawn` or `delegate` entry whose `agentId` is the
+   call's `tool.call` `agentId`. Refused: the main conversation, an agent the ledger does not
+   hold (an agent's own sub-agents among them), an entry that no longer runs ("already recorded"
+   once done), another agent type's tool, and any session without the ledger (observe mode, the
+   kill switch).
+3. **Checks, beyond the schema** (the handler trusts no engine check). The action must be one the
+   purpose takes (`ACTIONS_FOR`), with only that action's fields; `fix` needs `findings`,
+   `instructions` or `addFinding`. A fix's finding ids must be findings judged in the same call as
+   `CORRECT` or `ENV` (the loop has no view of the gate's own list). A merge review needs
+   `summary`, `bump` and `flags`; a gate or weakening review takes none. Free text is one line of
+   at most 4 000 characters. Finding ids must have the `FINDING_ID` shape. A brief must be a
+   comment URL on the designed issue of this repo; a design result with no brief, no created
+   issues and no pending decision is refused. Handoff ids must have their shapes. Every problem is
+   named at once in the deny text, which the model reads and corrects in the same turn.
+4. **Recording.** An accepted call finishes the entry at once with the outcome and events the same
+   text gives (verdict lines read `<VERDICT>: <id>: <reason>`). Its summary is marked `(tool)`.
+   The agent's later closing words are not read.
+5. **Text.** An agent that ends without calling the tool is parsed as before (6.3, 7.2, 7.3).
+6. **Repair.** A final answer with no machine line (an adjudicator reply that does not parse, a
+   handoff with no `RESULT` or `NOT GATED`, a designer report with no `RESULT` line), from an
+   agent that is not still at work, first gets one message to the same agent via
+   `$.session.send`, which resumes a finished agent from its transcript. The message names what
+   was wrong (the parser's reason, quoting the line) and asks for the tool, with the machine lines
+   as the fallback. The entry stays running with its attempt unspent and is marked `reminded`
+   before the send; the agent's next `completed` listing is counted afresh. One per attempt, only
+   to agents the ledger holds, only in act mode with no kill switch and no restart pending. A
+   second unreadable answer, or a message not delivered within 10 s, fails the attempt (the
+   designer's goes to `judge(report)`, rule `D3`) as before.
 
 ### 7.4 Events the loop logs
 
@@ -1089,6 +1142,8 @@ set its directives.
 `<loop dir>` is `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/<owner>__<repo>/`:
 
 - the decision logs (`decisions-YYYY-MM-DD.jsonl`) and `control.json`;
+- the trace files (`trace-YYYY-MM-DD.jsonl`), in trace mode only, kept under `traceMaxBytes` in
+  all (12.1);
 - recorded states (`states/YYYY-MM-DD/<pass>.json`): observe mode only, one per changed digest,
   at most 288 a day and each under 3.5 MB, for the replay harness;
 - `spawns/` (each spawn's record and prompt), `answers/` (each agent's answer) and `respond/`
@@ -1098,7 +1153,7 @@ set its directives.
 
 Once a day the loop deletes the spawn records, answers, respond logs, recorded states and
 decision logs older than 7 days (the ledger's own life), and the state day directories left
-empty. The act lock, `control.json` and the event sink are never touched. Nothing goes in the
+empty. The trace files are not pruned by age: their cap keeps them bounded. The act lock, `control.json` and the event sink are never touched. Nothing goes in the
 repository.
 
 ## 12. Observability
@@ -1107,7 +1162,8 @@ One JSON line per pass in the decision log:
 
 ```json
 {"v":1,"at":"2026-10-13T03:12:00.000Z","pass":184,"loaded":"2026-10-13T00:01:12.000Z",
- "mode":"act","executed":true,"device":"coder-dev-system-orchestrator","tier":"slow",
+ "trigger":"timer","ms":5210,"mode":"act","executed":true,
+ "device":"coder-dev-system-orchestrator","tier":"slow",
  "digest":"9f2c41d0","sources":{"factory":"ok","runs":"ok","queue":"ok","github":"ok"},
  "counts":{"queued":3,"dev":2,"pipeline":1,"merge":0,"owner":1},
  "actions":[{"key":"claim:470:new","kind":"claim","class":"start","rule":"D1","issue":470,"reason":"ready and unblocked"}],
@@ -1117,15 +1173,26 @@ One JSON line per pass in the decision log:
  "title":"🔄 dev-system (Q:3 - D:5 - M:9) · owner 1"}
 ```
 
-`loaded` tells module loads apart, since pass numbers start over at each. `executed` says
+`loaded` tells module loads apart, since pass numbers start over at each. `trigger` says what
+asked for the pass: `first` (the first pass after the module loaded: a session start or a
+reload), `timer`, `agent <id>` (an agent of the loop answered, in text or through its answer
+tool), `wake <id>` (a wake was answered, by the answer tool or by its own turn; `turn <id>` when
+the answering turn was no wake's own), or `owner <op>` (a `/factory` op or the control tool).
+Requests that arrive while a pass runs, or waits out its gap, join the next pass's trigger,
+separated by commas. A ping the breaker ignores is left out. `ms` is the pass's time from its
+start to this line. The error line of a pass that threw carries both. `executed` says
 whether the pass acted. Act mode adds, when they apply: `outcomes` (each action's status, time
 and summary; the title's left out), `ledgerSource` (`store`, `events` or `none`), `rails` (why
 act mode was held back), `capped` and `atCap`, `breaker` (the ping breaker opened), `told` (the
 notices from outside plan sent this pass), `config` (what the repo-local settings got wrong) and
 `problems` (a loop event not logged, a store write refused, the act lease lost mid-pass).
 `commands` lists every command the pass ran, observe's and the executors'. Other lines share the
-file: an owner op (`control`, with its answer), a turn's or an agent's answer problems, and a
-pass that threw (`error`, with `failures` in a row).
+file: an owner op (`control`, with its answer), a turn's or an agent's answer problems, an
+agent's answer (`{ agent, key, answer: "text", status, summary, afterRepair? }`,
+`{ agent, key, answer: "repair", why }`, and per tool call
+`{ agent, tool, key, answer: "tool", afterRepair? }` or
+`{ agent, tool, key?, answer: "tool refused", why }`, 7.3a), and a pass that threw (`error`,
+with `failures` in a row).
 
 `digest` is a hash of the canonical state without its timestamps, so unchanged passes are easy
 to spot. Appends go through one `$.process.run` per pass (`sh -c 'cat >> "$1"'` with the lines on
@@ -1133,6 +1200,74 @@ stdin), because `$.fs.write` rewrites whole files. In observe mode each state wh
 changed is also written in full under `states/` (11.6), which the replay harness reads. The last
 pass's summary (mode, whether it acted, the rails, tier, title, action and owner counts) is also
 kept in plugin state, for `/factory status`.
+
+### 12.1 Trace mode
+
+Off by default. It is turned on by config `trace`: in the repo's `.claude/factory-loop.json`, or
+in the workspace file, which wins. `/factory trace on|off` writes the workspace file, so it
+applies from the next pass without a reload. When on, every pass also appends one JSON record to
+`<loop dir>/trace-YYYY-MM-DD.jsonl`, so a stall can be traced, or the loop measured, without
+reading any other file. When off, only the decision log's `trigger` and `ms` are written, and the
+pass's own time does not change measurably.
+
+A record's fields (times in ms, to a tenth of a millisecond; `t`, `queued`, `started` and `ended`
+are ms into the pass):
+
+- `v`, `at`, `pass`, `loaded`, `mode`, `executed`, `trigger`: as on the pass's decision-log line,
+  so the two join on `at` and `pass`.
+- `start`, `end`, `ms`: when the pass started and ended, and the time between. `ms` runs to the
+  trace's own write, so it is a little more than the decision log's.
+- `phases`: `setup` (the settings, the kill switch, the agent list), `rails` (act mode's checks
+  and taking the act lock), `observe`, `plan`, `act` (the actions, the title, the notices and the
+  store writes after them) and `log` (the decision-log line, a recorded state, the daily prune).
+  They follow one another and add up to `ms`.
+- `persistMs`, `eventsMs`, `lockMs`: the pass's time in store writes (the ledger's saves and the
+  other keys), event writes (`callum-flow-event`) and the act lock's writes (its flock wait
+  included), whichever phase they fell in.
+- `sources`: each State source and the main checkout (`checkout`): `ok`; `cached` (no command of
+  its own ran this pass, so its data came from the observe cache; GitHub when no issue was due);
+  `reads` (its commands); `ms` (their total time); `ageMs` (how old State says its data is); and
+  `error`.
+- `commands`: every command and engine call the pass made, in the order they started: `phase`;
+  `source` (for an observe read); `cmd` (the argv, or the engine call such as `agent.list`,
+  `agent.spawn <name>`, `prompt.submit <first line>`, `fs.read <path>` or `act lock`, at most 160
+  characters); `t`; `ms`; `exit`; `bytes` (what it printed, read or wrote); and `error` (a throw
+  or a refusal).
+- `actions`: each action an acting pass ran: `key`, `kind`, `status`; `queued` (when plan handed
+  it over); `started` and `ended` (null for one held before it started); and `ms`. A spawn's `ms`
+  is its time to start, since it returns once the agent started; its `agent.spawn` command is the
+  engine's share of that time.
+- `wakes`: every open wake, plus each wake that ended since the previous pass (reported once):
+  `key`, `wake`, `status`; `queued` (its submit); `delivered` (its turn started; null when not
+  seen, as across a reload); `ended`; `deliverMs` (queued to delivered); and `answerMs`
+  (delivered to ended).
+- `waiting`: what each issue waits on, one row each: `issue` (null for what holds the whole pass,
+  such as a source being down), `stage`, `rule`, `on`, `since` and `forMs`. A row is one of three
+  things. A skip plan gave: `on` is its reason, and `since` is when that issue's skip under that
+  rule was first seen in an unbroken run of passes, so a stall like a guard waiting out its expiry
+  shows as a growing `forMs` even while its words change. A running ledger entry: `on` is
+  `<key> running`, since the entry started. Or a live issue of this device that nothing names and
+  nothing acts on: `on` is `no rule acts on it`, since its stage began. Skip ages start over when
+  the module reloads.
+
+The trace files stay within `traceMaxBytes` (100 MiB) in all. Before each write, the oldest trace
+files are deleted first, by the day in their names, until the record fits. When today's file
+alone leaves no room, it is cut short with one last line
+(`{"v":1,"at":...,"cut":"the trace cap (<n> bytes) is reached: nothing more is traced today"}`),
+and nothing more goes in it that day unless the cap changes. A record that cannot be written
+never fails the pass. A pass that throws writes no record; its decision-log error line has
+`trigger` and `ms`.
+
+Examples, from the loop dir:
+
+```sh
+# the ten slowest passes, with their phases
+jq -sc 'map(select(.pass)) | sort_by(.ms) | reverse | .[:10][] | {start, pass, trigger, ms, phases}' trace-*.jsonl
+# the ten slowest commands
+jq -sc '[.[] | .pass as $p | .commands[]? | {pass: $p, phase, source, cmd, ms}] | sort_by(.ms) | reverse | .[:10][]' trace-*.jsonl
+# the longest waits at the last pass
+jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[] | {issue, rule, on, since, forMs}' trace-*.jsonl
+```
 
 ## 13. Known gaps and risks
 
@@ -1157,6 +1292,15 @@ kept in plugin state, for `/factory status`.
 - **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
   shadow reads labels, blockers and sub-issues live, so it can judge claims (DECISIONS D-32 is
   superseded).
+- **Agents' tools**: the callum-flow adjudicator (`tools: Read, Grep, Glob, Bash, WebFetch`) and
+  designer (adds `Agent`) restrict their tools, so they reach neither
+  `mcp__factory-loop__verdict` / `mcp__factory-loop__design` nor ToolSearch until their
+  definitions list them. Until then they answer in text, with the repair as the net (7.3a). The
+  implementer and fixer inherit every tool.
+- **Mod tool schemas**: whether the engine checks a mod tool's input against its schema is
+  unproven (the test kit does not); the handler checks every field (7.3a).
+- **The repair message**: whether `$.session.send` reaches an agent at its own `turn.complete`
+  and resumes it is proven only on the testbed.
 
 ## 14. Cutover plan (not executed)
 
