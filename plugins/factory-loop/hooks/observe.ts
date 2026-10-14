@@ -290,10 +290,12 @@ export async function observe(
   // GitHub per issue, oldest reads first, and first of all the issues the loop may act on or
   // counts as live, so a closed one is known before plan drives it (#556): those of its running
   // work (an entry running, or an agent at work past its answer), this device's issues and every
-  // issue in a live stage. A run is driven only for an issue this device holds, so the watcher's
+  // issue in a live stage, and those of a merged Run it that has not answered `done` (its closing
+  // ends rule M5's wait). A run is driven only for an issue this device holds, so the watcher's
   // runs add none. Then the queue, and the issues `only` names with the sub-issues their trackers
   // stand for (D-35). An issue known closed is not read again unless the queue, which lists open
-  // issues only, names it; a failed read keeps the last value.
+  // issues only, names it, or this device holds it (it may be reopened); a failed read keeps the
+  // last value.
   const control = await readControl(io, rt)
   const tracker = new RegExp(cfg.trackerTitle, 'i')
   const isTracker = (n: number) => {
@@ -327,11 +329,15 @@ export async function observe(
       .filter(e => e.status === 'running' || (e.agentId !== undefined && listedLive(agents, e.agentId)))
       .flatMap(e => (e.issue === null ? [] : [e.issue]))
     const live = (factory?.issues ?? []).filter(i => !i.ended && LIVE.includes(i.stage)).map(i => i.number)
-    const wanted = [...new Set([...working, ...mine.map(i => i.number), ...live, ...queue, ...control.only, ...subIssues])]
+    const runIts = ledger
+      .filter(e => e.key.startsWith('task:run-it:') && !(e.status === 'done' && e.outcome?.kind === 'wake' && e.outcome.decision === 'done'))
+      .flatMap(e => (e.issue === null ? [] : [e.issue]))
+    const held = mine.map(i => i.number)
+    const wanted = [...new Set([...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
     const due = wanted
       .filter(n => {
         const c = cache.github.get(n)
-        if (c !== undefined && c.value.facts?.open === false && !queue.includes(n)) return false
+        if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n)) return false
         return c === undefined || now - c.at >= cfg.githubEveryMs
       })
       .sort((a, b) => (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))

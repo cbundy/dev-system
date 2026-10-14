@@ -2179,6 +2179,28 @@ describe('an issue closed on GitHub is finished (#556)', () => {
     expect(unknown.title).toBe('🔄 dev-system (Q:1 - D:2 - M:0) · observe · stuck 2 · at cap')
   })
 
+  test('while GitHub fails, an issue whose state is not read gets no agent: a backoff after a reload, or a pass a rate limit cut short', () => {
+    const blind = failing(leftovers(null), 'github', NOW - 10 * MIN)
+    const r = plan(blind, CAP2)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'P3', issue: 40, why: 'GitHub state not read (spawn)' })
+    expect(r.skipped).toContainEqual({ rule: 'P2', issue: 41, why: 'GitHub state not read (spawn)' })
+    // a state read before the failure still counts: an open issue is driven
+    expect(keys(plan(failing(leftovers(true), 'github', NOW - 10 * MIN), CAP2))).toEqual([`fixer:gate:${R40}:review:head40`, `adjudicate:${R41}:review:head41`])
+    // and so is a delegation
+    const failedDelegate = entry('delegate:61:x', 'delegate', { class: 'develop', issue: 61, status: 'failed', attempts: 1, endedAt: NOW - 20 * MIN })
+    const s = (open: boolean | null) => failing(withLedger(state({ issues: [mine(61, 'implementing', { open })] }), [failedDelegate]), 'github', NOW - 10 * MIN)
+    expect(keys(plan(s(true), CFG))).toEqual(['delegate:61:x'])
+    expect(plan(s(null), CFG).skipped).toContainEqual({ rule: 'D4', issue: 61, why: 'GitHub state not read (delegate)' })
+  })
+
+  test('a closed designing issue leaves its worktree free for a claim (SPEC D1)', () => {
+    // 3 free with a reserve of 2: an issue in design would take the one left
+    const s = (open: boolean) => state({ queue: [60], issues: [mine(40, 'designing', { open, stageSince: NOW - 10 * MIN }), issue(60)], pool: { free: 3, total: 16, slots: [] } })
+    expect(plan(s(true), CFG).skipped).toContainEqual({ rule: 'D1', issue: 60, why: 'no free worktree' })
+    expect(keys(plan(s(false), CFG))).toEqual([`claim:60:${NOW - 30 * MIN}`])
+  })
+
   test('a closed issue gets no designer, delegation, handoff judge or lease renewal', () => {
     const life = NOW - 20 * MIN
     const failedDelegate = entry('delegate:61:x', 'delegate', { class: 'develop', issue: 61, status: 'failed', attempts: 1, endedAt: NOW - 20 * MIN })
@@ -2206,6 +2228,12 @@ describe('an issue closed on GitHub is finished (#556)', () => {
     const r = plan(s(false), CFG)
     expect(keys(r)).toEqual(['release:/t/1:feat/issue-40-work'])
     expect(find(r, 'release:/t/1:feat/issue-40-work')).toMatchObject({ rule: 'H3', reason: 'closed on GitHub, slot clean' })
+    // an agent that answered but still works there keeps it until rule A2 has stopped it
+    const answered = entry('fixer:gate:x', 'spawn', { agent: 'fixer', class: 'drive', issue: 40, agentId: 'a40', endedAt: NOW - 5 * MIN })
+    const working = { ...withLedger(s(false), [answered]), agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'running' as const }] }
+    expect(keys(plan(working, CFG))).toEqual(['stop:a40', 'tell:stopped:a40'])
+    const stopped = { ...working, agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'killed' as const }] }
+    expect(keys(plan(stopped, CFG))).toEqual(['release:/t/1:feat/issue-40-work'])
   })
 
   test('an agent of the loop working an issue that closes is stopped, and the decision log says why (SPEC A2)', () => {

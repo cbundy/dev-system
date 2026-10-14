@@ -62,7 +62,9 @@ function shadow(on: Parameters<typeof host>[0], reads: Record<string, string> = 
 describe('observe mode (SPEC 11.1)', () => {
   test('one pass reads, plans, logs and titles, and runs only reads, their events to the sink', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const h = shadow(on)
+    // 45 is read open: an issue whose state a failed read leaves unknown gets no agent (#556)
+    const issue45 = { issue: { number: 45, title: 'Work', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
+    const h = shadow(on, { '--json 45': JSON.stringify(issue45) })
     await $.session.start(START)
     await clock.advance(6_000)
 

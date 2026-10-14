@@ -528,7 +528,8 @@ function housekeeping(ctx: Ctx) {
     const n = issueFromBranch(slot.branch)
     const issue = n === null ? undefined : ctx.issues.get(n)
     if (issue === undefined || !finished(issue)) continue
-    const agentRunning = state.ledger.some(e => e.status === 'running' && e.issue === n && e.agentId !== undefined)
+    // an agent of the issue still at work, its entry running or answered (rule A2 stops it first)
+    const agentRunning = state.ledger.some(e => e.issue === n && e.agentId !== undefined && (e.status === 'running' || agentLive(ctx, e.agentId)))
     if (agentRunning) continue
     const why = endedWhy(issue)
     want(ctx, {
@@ -2251,6 +2252,12 @@ function admit(ctx: Ctx): Action[] {
       !['abandon', 'stop-agent', 'tell'].includes(action.kind)
     ) {
       skip(ctx, action.rule, issue, `owner: dropped (${action.kind})`)
+      continue
+    }
+    // GitHub failing (a backoff, or a read that failed) and the issue's state not read: it may be
+    // closed, so no agent starts on it until it is read (#556)
+    if (issue !== null && (action.kind === 'spawn' || action.kind === 'delegate') && !state.sources.github.ok && (ctx.issues.get(issue)?.open ?? null) === null) {
+      skip(ctx, action.rule, issue, `GitHub state not read (${action.kind})`)
       continue
     }
     if (moved !== null && CHECKOUT_HELD.includes(action.kind)) {

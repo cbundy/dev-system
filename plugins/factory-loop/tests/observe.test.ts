@@ -1114,9 +1114,14 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(r.actions.filter(a => a.kind === 'spawn').map(a => a.key)).toEqual([])
     expect(r.title).toContain('(Q:12 - D:0 - M:0)')
 
-    // a closed issue is not read again; the rest of the queue is, then the oldest reads
-    await h.pass(runtime(), kept, NOW + 6 * MIN)
-    expect(issueReads(h)).toEqual([...queue.slice(9), ...queue.slice(0, 9)].map(String))
+    // a closed issue is not read again, unless this device holds it: 40 and 41 are read again
+    // with the oldest reads, after the rest of the queue; 32, another device's, is not
+    h.world.issues['--json 40'] = { stdout: ISSUE(40) }
+    const second = await h.pass(runtime(), kept, NOW + 6 * MIN)
+    expect(issueReads(h)).toEqual(['69', '70', '71', '40', '41', ...queue.slice(0, 7).map(String)])
+    // 40 was reopened: held and open, it is driven again (its lease renewed with it, rule H1)
+    expect(second.state.issues.find(i => i.number === 40)?.open).toBe(true)
+    expect(plan(second.state, config()).actions.filter(a => a.kind === 'spawn' && a.issue === 40).map(a => a.rule)).toEqual(['P3'])
   })
 
   test('an issue with a running agent of the loop is read too; a failed read keeps the last state; a closed issue back in the queue is read again (#556)', async () => {
@@ -1141,6 +1146,19 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const back = await h.pass(runtime(), kept, NOW + 12 * MIN)
     expect(issueReads(h)).toContain('77')
     expect(back.state.issues.find(i => i.number === 77)?.open).toBe(true)
+  })
+
+  test("a merged Run it not answered done is read until it closes, so the owner closing it ends rule M5's wait (#556)", async () => {
+    const task = (n: number, decision: string) => entry(`task:run-it:${n}`, 'task', { wake: 'run-it', class: 'drive', issue: n, outcome: wakeAnswer(decision) })
+    const kept = stored({ ledger: [...(stored().ledger ?? []), task(50, 'hold'), task(51, 'done')] })
+    const h = host({ issues: { '--json 50': CLOSED(50) } })
+    const first = await h.pass(runtime(), kept)
+    // 50 held for the owner is read; 51's Run it is done, so it is not
+    expect(issueReads(h)).toEqual(['45', '50', '114', '470'])
+    expect(first.state.issues.find(i => i.number === 50)?.open).toBe(false)
+    // closed, it is not read again
+    await h.pass(runtime(), kept, NOW + 6 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {
