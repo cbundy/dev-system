@@ -625,6 +625,18 @@ describe('P: pipeline gates', () => {
       expect(tell(['CORRECT: x'])).toMatchObject({ context: ['shorten the PR body', expect.stringContaining('resume sends a fixer'), 'CORRECT: x'] })
     })
 
+    test('with no known head, the all-ENV tell says a plain resume asks the adjudicator again, which it does', () => {
+      const at = `${RUN45}:test:null`
+      const headless = (over: Partial<State> = {}) =>
+        state({ issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: RUN45, pr: 545 })], runs: [run(45, 'failed', { step: 'test', head: null })], ...over })
+      const esc = entry(`adjudicate:${at}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: RUN45, head: null, startedAt: NOW - 60 * MIN, endedAt: NOW - 50 * MIN, outcome: review({ type: 'escalate', why: 'shorten the PR body' }, null, [ENV]) })
+      expect(find(plan(withLedger(headless(), [esc]), CFG), `tell:escalate:${at}`)).toMatchObject({
+        context: ['shorten the PR body', expect.stringContaining('resume alone asks the adjudicator again'), ENV],
+      })
+      const told = entry(`tell:escalate:${at}`, 'tell', { wake: 'escalate', class: 'owner', issue: 45 })
+      expect(keys(plan(withLedger(headless({ control: ctl([], NOW - MIN) }), [esc, told]), CFG))).toEqual([`adjudicate:${at}:r1`])
+    })
+
     test('the fixer counts as the issue\'s writer: a failed run stays quiet (P4) while it runs', () => {
       const running = entry(`fixer:resume:${AT}:r1`, 'spawn', { agent: 'fixer', class: 'drive', issue: 45, status: 'running', endedAt: null })
       const s = withLedger(failedTest({ control: ctl([note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [escalated([ENV]), told, running])
