@@ -249,6 +249,7 @@ describe('act mode, traced', () => {
     expect(t).toMatchObject({ mode: 'act', executed: true })
     const actions = t.actions as Rec[]
     expect(actions.map(a => [a.key, a.kind, a.status])).toEqual([
+      ['update-checkout:0', 'update-checkout', 'done'],
       ['sweep:0', 'sweep', 'done'],
       ['claim:470:new', 'claim', 'done'],
       ['title', 'title', 'done'],

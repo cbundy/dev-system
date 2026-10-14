@@ -1,5 +1,5 @@
 // The gate and merge executors (SPEC 5.5, 6.1, 6.2, 7.4): guard, update-behind, fast-forward
-// (#551), fix-linkage, merge (then callum-flow-rollout), rollout for a hand merge (D-29), respond,
+// (#551), update-checkout (#555), fix-linkage, merge (then callum-flow-rollout), rollout for a hand merge (D-29), respond,
 // which drives a parked gate with a detached `no-mistakes axi respond`, and env-retry, the one
 // detached rerun (#537). They decide nothing (plan did): each runs its catalogue row's commands
 // through ctx.cmd and reads the CLI's own lines and exit codes (images/base/callum-flow-merge-guard,
@@ -17,6 +17,7 @@ const SUMMARY_MAX = 200
 // The action shapes these executors read (a member's kind can be shared, so by its fields).
 export type GateAction = Extract<Action, { kind: 'guard' | 'update-behind' }>
 export type FastForwardAction = Extract<Action, { kind: 'fast-forward' }>
+export type UpdateCheckoutAction = Extract<Action, { kind: 'update-checkout' }>
 export type MergeAction = Extract<Action, { kind: 'merge' }>
 export type RespondAction = Extract<Action, { kind: 'respond' }>
 
@@ -27,6 +28,7 @@ export const MERGE_TIMEOUT_MS = {
   guard: 300 * SEC,
   'update-behind': 300 * SEC,
   'fast-forward': 120 * SEC,
+  'update-checkout': 120 * SEC,
   'fix-linkage': 120 * SEC,
   merge: 600 * SEC,
   rollout: 60 * SEC,
@@ -182,6 +184,31 @@ export function fastForwardArgv(branch: string, head: string): string[] {
   return ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', branch, head]
 }
 
+// The main checkout's update (rule H5, #555), run with `sh -c` from the main checkout: $1 origin's
+// default branch. Agents begin there, so it follows origin: fetched fresh, and moved only by
+// `git merge --ff-only`, only while it is on that branch with nothing tracked uncommitted and its
+// head an ancestor of origin's, so no commit or change can be lost. Untracked files stay, as in
+// the fast-forward. It answers, with exit 0, `UPDATED <from> <to>`, `CURRENT <head>`, or
+// `REFUSED <why>` (plan tells the owner); anything else is a failure.
+export const CHECKOUT_SCRIPT = [
+  'default=$1',
+  'git fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" || { echo "factory-loop: cannot fetch origin/$default" >&2; exit 1; }',
+  'origin=$(git rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}") || { echo "factory-loop: cannot read origin/$default" >&2; exit 1; }',
+  'branch=$(git symbolic-ref --quiet --short HEAD) || { echo "REFUSED the main checkout is detached"; exit 0; }',
+  '[ "$branch" = "$default" ] || { echo "REFUSED the main checkout is on $branch, not $default"; exit 0; }',
+  `at=$(git rev-parse --verify --quiet 'HEAD^{commit}') || { echo "REFUSED cannot read the head of the main checkout"; exit 0; }`,
+  '[ "$at" != "$origin" ] || { echo "CURRENT $at"; exit 0; }',
+  'st=$(git status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of the main checkout"; exit 0; }',
+  '[ -z "$st" ] || { echo "REFUSED the main checkout has uncommitted changes"; exit 0; }',
+  'git merge-base --is-ancestor "$at" "$origin" || { echo "REFUSED the main checkout at $at has commits not on origin/$default"; exit 0; }',
+  'git merge --ff-only --quiet "$origin" >&2 || { echo "factory-loop: the fast-forward of the main checkout failed" >&2; exit 1; }',
+  'echo "UPDATED $at $origin"',
+].join('\n')
+
+export function updateCheckoutArgv(branch: string): string[] {
+  return ['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', branch]
+}
+
 // argvsOf: every command an action of these kinds can run, in order, for the argv safety test
 // (SPEC 6.1) and the replay; null for a kind this module does not run. A respond lists both the
 // slot it found and the lease path, with `<slot>` standing for the leased slot's path.
@@ -193,6 +220,8 @@ export function argvsOf(action: Action, loopDir: string, attempt = 1): string[][
       return [updateBehindArgv(action)]
     case 'fast-forward':
       return [fastForwardArgv(action.branch, action.head)]
+    case 'update-checkout':
+      return [updateCheckoutArgv(action.branch)]
     case 'fix-linkage':
       return [fixLinkageArgv(action)]
     case 'merge':
@@ -266,6 +295,16 @@ export function parseFastForward(text: string): FastForward | null {
   const one = said.find(l => l.startsWith('CURRENT ') || l.startsWith('REFUSED '))
   if (one === undefined) return null
   return { result: one.startsWith('CURRENT ') ? 'current' : 'refused', line: one }
+}
+
+export type UpdateCheckout = { result: 'updated' | 'current' | 'refused'; line: string }
+
+// parseUpdateCheckout: the main checkout update's one answer line (CHECKOUT_SCRIPT); null when it
+// printed none.
+export function parseUpdateCheckout(text: string): UpdateCheckout | null {
+  const line = lines(text).find(l => /^(UPDATED|CURRENT|REFUSED) /.test(l))
+  if (line === undefined) return null
+  return { result: line.startsWith('UPDATED ') ? 'updated' : line.startsWith('CURRENT ') ? 'current' : 'refused', line }
 }
 
 export type Linkage = { result: 'match' | 'skip' | 'repaired' | 'mismatch'; line: string }
@@ -402,6 +441,19 @@ const fastForward: Executor = async (ctx, action) => {
   const f = parseFastForward(r.stdout)
   if (r.exitCode !== 0 || f === null) return failure(argv, r)
   return { status: 'done', outcome: { kind: 'fast-forward', result: f.result, line: f.line }, summary: clip(`PR #${action.pr}: ${f.line}`) }
+}
+
+// update-checkout (rule H5, #555): UPDATED, CURRENT and REFUSED are answers, logged with both
+// commits; plan tells the owner of a refusal. Only a branch name reaches the script.
+const updateCheckout: Executor = async (ctx, action) => {
+  if (action.kind !== 'update-checkout') return wrongKind('update-checkout', action)
+  if (!validBranch(action.branch)) return refused(`branch ${JSON.stringify(action.branch)} is not one to update`)
+  const argv = updateCheckoutArgv(action.branch)
+  const r = await run(ctx, argv, MERGE_TIMEOUT_MS['update-checkout'])
+  if (!('exitCode' in r)) return r
+  const u = parseUpdateCheckout(r.stdout)
+  if (r.exitCode !== 0 || u === null) return failure(argv, r)
+  return { status: 'done', outcome: { kind: 'update-checkout', result: u.result, line: u.line }, summary: clip(`main checkout: ${u.line}`) }
 }
 
 // fix-linkage (rule M2): MATCH, SKIP and REPAIRED end it; a repair that still does not verify
@@ -562,6 +614,7 @@ export const mergeExecutors: Partial<Record<ActionKind, Executor>> = {
   guard,
   'update-behind': updateBehind,
   'fast-forward': fastForward,
+  'update-checkout': updateCheckout,
   'fix-linkage': fixLinkage,
   merge,
   rollout,
@@ -640,7 +693,7 @@ function fields(line: string): Map<string, string> {
 }
 
 function label(argv: readonly string[]): string {
-  if (argv[0] === 'sh') return argv[3] === 'factory-loop-fast-forward' ? 'fast-forward' : 'respond launch'
+  if (argv[0] === 'sh') return argv[3] === 'factory-loop-fast-forward' ? 'fast-forward' : argv[3] === 'factory-loop-update-checkout' ? 'update-checkout' : 'respond launch'
   return argv.slice(0, argv[0] === 'treehouse' || argv[0] === 'git' ? 2 : 1).join(' ')
 }
 

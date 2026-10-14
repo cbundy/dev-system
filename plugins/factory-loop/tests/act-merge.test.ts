@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  CHECKOUT_SCRIPT,
   ENV_RETRY_ARGV,
   FF_SCRIPT,
   LAUNCH_SCRIPT,
@@ -27,18 +28,20 @@ import {
   parseGuard,
   parseRollout,
   parseUpdateBehind,
+  parseUpdateCheckout,
   respondArgv,
   respondProblem,
   slotFor,
+  updateCheckoutArgv,
   validBranch,
 } from '../hooks/act-merge'
-import type { FastForwardAction } from '../hooks/act-merge'
+import type { FastForwardAction, UpdateCheckoutAction } from '../hooks/act-merge'
 import { respondLogPath } from '../hooks/exec'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import { plan } from '../hooks/plan'
 import type { Action, ActionKind, LedgerEntry, Pool, Slot } from '../hooks/types'
-import { DEVICE, NOW, config, entry, mine, review, run, state, withLedger } from './fixtures'
+import { CLEAN, DEVICE, NOW, config, entry, mine, review, run, state, withLedger } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const LOOP_DIR = '/cfg/factory-loop/cbundy__dev-system'
@@ -831,7 +834,7 @@ describe('env-retry (rule P2a, #537)', () => {
 
 describe('every executor', () => {
   test('mergeExecutors covers exactly its kinds, and each refuses another kind', async () => {
-    expect(Object.keys(mergeExecutors).sort()).toEqual(['env-retry', 'fast-forward', 'fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind'])
+    expect(Object.keys(mergeExecutors).sort()).toEqual(['env-retry', 'fast-forward', 'fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind', 'update-checkout'])
     for (const kind of Object.keys(mergeExecutors) as ActionKind[]) {
       const h = harness()
       const other: Action = kind === 'guard' ? A.linkage() : A.guard()
@@ -923,5 +926,80 @@ describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
     if (action === undefined) throw new Error('plan built no fast-forward')
     const { result } = await exec(action, [{ stdout: `FORWARDED ${HANDOFF} ${GATED} ${WT}\n` }])
     expect(result).toMatchObject({ status: 'done', outcome: { result: 'forwarded' } })
+  })
+})
+
+// --- update-checkout (rule H5, #555) -------------------------------------------------------------
+
+describe('update-checkout: the main checkout kept up to date with origin (#555)', () => {
+  const ORIGIN = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00'
+  const up = (over: Partial<UpdateCheckoutAction> = {}): UpdateCheckoutAction => ({
+    ...base,
+    issue: null,
+    kind: 'update-checkout',
+    key: 'update-checkout:0',
+    rule: 'H5',
+    branch: 'main',
+    ...over,
+  })
+
+  test('one sh -c from the main checkout, with origin\'s default branch as its argument', async () => {
+    expect(argvsOf(up(), LOOP_DIR)).toEqual([['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main']])
+    expect(updateCheckoutArgv('main')).toEqual(['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main'])
+    const { calls } = await exec(up(), [{ stdout: `CURRENT ${ORIGIN}\n` }])
+    expect(calls).toEqual([{ argv: updateCheckoutArgv('main'), init: { timeoutMs: MERGE_TIMEOUT_MS['update-checkout'] } }])
+  })
+
+  test('the script moves the checkout only by a fast-forward, after its branch, tree and ancestry are checked', () => {
+    expect(CHECKOUT_SCRIPT).toContain('merge --ff-only')
+    expect(CHECKOUT_SCRIPT).toContain('[ "$branch" = "$default" ] || { echo "REFUSED')
+    expect(CHECKOUT_SCRIPT).toContain('status --porcelain --untracked-files=no')
+    expect(CHECKOUT_SCRIPT).toContain('merge-base --is-ancestor "$at" "$origin"')
+    // (its words name "the main checkout", so the verbs are matched after git)
+    expect(CHECKOUT_SCRIPT).not.toMatch(/\bgit\s+(\S+\s+)?(push|reset|rebase|checkout|clean|stash|switch|commit)\b/)
+    for (const check of ['symbolic-ref', 'status --porcelain', 'merge-base --is-ancestor']) {
+      expect(CHECKOUT_SCRIPT.indexOf('merge --ff-only')).toBeGreaterThan(CHECKOUT_SCRIPT.indexOf(check))
+    }
+  })
+
+  test('UPDATED, CURRENT and REFUSED are answers; the decision log carries both commits', async () => {
+    const moved = await exec(up(), [{ stdout: `UPDATED ${CLEAN.head} ${ORIGIN}\n` }])
+    expect(moved.result).toEqual({
+      status: 'done',
+      outcome: { kind: 'update-checkout', result: 'updated', line: `UPDATED ${CLEAN.head} ${ORIGIN}` },
+      summary: `main checkout: UPDATED ${CLEAN.head} ${ORIGIN}`,
+    })
+    const current = await exec(up(), [{ stdout: `CURRENT ${ORIGIN}\n` }])
+    expect(current.result).toMatchObject({ status: 'done', outcome: { kind: 'update-checkout', result: 'current' } })
+    const ahead = `REFUSED the main checkout at ${CLEAN.head} has commits not on origin/main`
+    const refused = await exec(up(), [{ stdout: `${ahead}\n` }])
+    expect(refused.result).toMatchObject({ status: 'done', outcome: { kind: 'update-checkout', result: 'refused', line: ahead } })
+    expect(parseUpdateCheckout('nothing\n')).toBeNull()
+  })
+
+  test('a fetch or a fast-forward that fails is a failed attempt; a bad branch is refused before any command', async () => {
+    const failed = await exec(up(), [{ exitCode: 1, stderr: 'factory-loop: cannot fetch origin/main\n' }])
+    expect(failed.result).toMatchObject({ status: 'failed', summary: 'update-checkout: exit 1: factory-loop: cannot fetch origin/main' })
+    expect((await exec(up(), [{ exitCode: 0, stdout: 'nothing said\n' }])).result).toMatchObject({ status: 'failed' })
+    for (const bad of [up({ branch: '--upload-pack=x' }), up({ branch: 'main; id' })]) {
+      const r = await exec(bad)
+      expect(r.result).toMatchObject({ status: 'failed', noRetry: true })
+      expect(r.calls).toEqual([])
+    }
+  })
+
+  test('plan\'s update after a merge runs as is', async () => {
+    const merged = entry('merge:550:head50', 'merge', {
+      issue: 50,
+      pr: 550,
+      startedAt: NOW - 60_000,
+      endedAt: NOW - 30_000,
+      outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' },
+    })
+    const action = plan(withLedger(state(), [merged]), config()).actions.find(a => a.kind === 'update-checkout')
+    expect(action).toMatchObject({ rule: 'H5', branch: 'main' })
+    if (action === undefined) throw new Error('plan built no update-checkout')
+    const { result } = await exec(action, [{ stdout: `UPDATED ${CLEAN.head} ${ORIGIN}\n` }])
+    expect(result).toMatchObject({ status: 'done', outcome: { result: 'updated' } })
   })
 })

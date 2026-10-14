@@ -679,7 +679,8 @@ function world(now: () => number) {
           w.since = now()
           w.watch = `merge-ready ${BRANCH} ${RUN} pr=512 head=${HEAD}\n`
         }
-        return {}
+        // the main checkout's update finds it current (rule H5)
+        return checkout(argv) ?? {}
       case 'callum-flow-merge-guard':
         return { stdout: 'GUARD author PASS\nGUARD gates PASS\nGUARD linkage PASS\n' }
       case 'callum-flow-merge':
@@ -793,10 +794,10 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
       h.at(s)
     }
 
-    // pass 1: the sweep, and the claim of the ready issue
+    // pass 1: the main checkout's first update, the sweep, and the claim of the ready issue
     at(5)
     await h.pass()
-    expect(h.keys()).toEqual(['sweep:0', 'claim:470:new'])
+    expect(h.keys()).toEqual(['update-checkout:0', 'sweep:0', 'claim:470:new'])
     expect(h.entry('claim:470:new')).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'claimed' } })
     const claimed = h.ran('callum-flow-claim')[0]
     expect(claimed?.argv).toEqual(['callum-flow-claim', '470'])
@@ -839,7 +840,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     at(75)
     await h.pass()
     expect(h.keys()).toEqual([`respond:${RUN}:review:${HEAD}:approve`])
-    const launch = h.ran('sh')[0]
+    const launch = h.ran('sh').find(s => s.argv[3] === 'factory-loop-respond')
     expect(launch?.argv.slice(3, 6)).toEqual(['factory-loop-respond', SLOT, BRANCH])
     expect(launch?.argv.slice(7)).toEqual(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--step=review'])
     expect(h.entry(`respond:${RUN}:review:${HEAD}:approve`)).toMatchObject({ status: 'done' })
@@ -876,10 +877,13 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.ran('callum-flow-rollout').map(s => s.argv)).toEqual([['callum-flow-rollout', '470']])
     expect(h.entry(`merge:512:${HEAD}`)).toMatchObject({ status: 'done', outcome: { kind: 'merge', result: 'merged', rollout: 'run-it' } })
 
-    // pass 10: the run-it rollout's follow-ups, and the bump above the milestone's Expected
+    // pass 10: the main checkout brought up to date after the merge (#555), the run-it rollout's
+    // follow-ups, and the bump above the milestone's Expected
     at(240)
     await h.pass()
-    expect(h.keys()).toEqual(['milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
+    const updated = h.live.ledger.find(e => e.kind === 'update-checkout' && e.key !== 'update-checkout:0')
+    expect(h.keys()).toEqual([updated?.key, 'milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
+    expect(updated).toMatchObject({ rule: 'H5', status: 'done', outcome: { kind: 'update-checkout', result: 'current' } })
     expect(h.ran('callum-flow-milestone').filter(s => s.argv[1] !== 'show').map(s => s.argv)).toEqual([
       ['callum-flow-milestone', 'plan', '470', 'later'],
       ['callum-flow-milestone', 'expect', 'minor', 'a new capability'],

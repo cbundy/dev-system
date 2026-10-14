@@ -14,7 +14,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { SUBAGENT_OF } from '../hooks/act-agents'
-import { ENV_RETRY_ARGV, FF_SCRIPT, LAUNCH_SCRIPT } from '../hooks/act-merge'
+import { CHECKOUT_SCRIPT, ENV_RETRY_ARGV, FF_SCRIPT, LAUNCH_SCRIPT } from '../hooks/act-merge'
 import { ACTION_KINDS } from '../hooks/config'
 import { respondLogPath } from '../hooks/exec'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
@@ -64,6 +64,7 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
     case 'callum-flow-fix-linkage':
       return { stdout: 'REPAIRED PR #512: Closes #470\n' }
     case 'sh':
+      if (args[2] === 'factory-loop-update-checkout') return { stdout: `UPDATED 1f08432 ${HEAD}\n` }
       return args[2] === 'factory-loop-fast-forward' ? { stdout: `FORWARDED 1f08432 ${HEAD} ${SLOT}\n` } : {}
     case 'callum-flow-merge':
       return { stdout: 'merged\nClose issue #470 by hand: the PR targets epic/x\n' }
@@ -194,6 +195,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, branch: 'issue-470-x' },
+  { ...base, issue: null, kind: 'update-checkout', key: 'update-checkout:0', class: 'free', rule: 'H5', branch: 'main' },
   { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
   { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
   { ...base, kind: 'merge', key: `merge:512:${HEAD}`, class: 'free', rule: 'M5', pr: 512, run: RUN, head: HEAD, bump: 'minor', bumpReason: 'new' },
@@ -253,9 +255,10 @@ function envRetryLaunch(argv: readonly string[], action: Action | undefined): bo
   return ENV_RETRY_ARGV.length === 2 && argv[7] === 'no-mistakes' && argv[8] === 'rerun' && ENV_RETRY_ARGV.every((a, i) => argv[7 + i] === a)
 }
 
-// scriptGit: each git command in a shell script that is neither a read nor the fast-forward of a
-// worktree (#551), the one git write a script may make. An allowlist, so a new verb is banned
-// until it is listed here; any option before the verb but `-C <path>` is unknown, so banned too.
+// scriptGit: each git command in a shell script that is neither a read nor a fast-forward (of a
+// worktree, #551, or of the main checkout, #555), the one git write a script may make. An
+// allowlist, so a new verb is banned until it is listed here; any option before the verb but
+// `-C <path>` is unknown, so banned too.
 const SCRIPT_GIT_READS = ['fetch', 'rev-parse', 'status', 'merge-base', 'symbolic-ref']
 function scriptGit(script: string): string[] {
   const out: string[] = []
@@ -356,6 +359,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
       ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', '/w', 'b', '/l'],
       ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h'],
+      ['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })

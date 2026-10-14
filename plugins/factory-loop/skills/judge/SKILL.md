@@ -195,7 +195,9 @@ Owner items (the title counts them until resolved):
 - `checkout` (branch, head, default; detail: what is wrong): the session's main checkout is
   detached, on another branch, carrying changes, or cannot be read, so no claim, agent or task
   starts until it is back on its default branch and clean. Owner makes sure no agent is using
-  it, then puts it back; never move it yourself, and the loop never does either.
+  it, then puts it back; never move it yourself, and the loop never puts it back either. The
+  loop only fast-forwards a clean checkout on its default branch to origin's; a refusal of that
+  (commits origin lacks) comes as this notice too, its detail the refusal, and holds nothing.
 
 Notices:
 - `agent-failed` (key, kind): an agent or command used every attempt. `retry <N>` or

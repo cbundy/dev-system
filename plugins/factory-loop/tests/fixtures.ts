@@ -57,9 +57,11 @@ export function state(over: Partial<State> = {}): State {
     agents: [],
     milestone: null,
     ledger: [
-      // a recent heartbeat and sweep, so housekeeping stays quiet unless a test says otherwise
+      // a recent heartbeat, sweep and checkout update, so housekeeping stays quiet unless a test
+      // says otherwise
       entry('heartbeat:0', 'heartbeat', { startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry('sweep:0', 'sweep', { startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('update-checkout:0', 'update-checkout', { startedAt: NOW - 2 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'update-checkout', result: 'current', line: `CURRENT ${CLEAN.head}` } }),
     ],
     control: control(),
     lastTitle: null,

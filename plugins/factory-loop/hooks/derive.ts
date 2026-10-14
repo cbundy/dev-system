@@ -415,8 +415,10 @@ function outcomeTokens(o: Outcome | undefined): string[] {
     case 'guard':
     case 'respond':
     case 'fast-forward':
-      // a lost guard re-runs (M1), a respond settles by the run moving (P3a), and a guard after
-      // a fast-forward shows whether the worktree caught up (M2)
+    case 'update-checkout':
+      // a lost guard re-runs (M1), a respond settles by the run moving (P3a), a guard after a
+      // fast-forward shows whether the worktree caught up (M2), and the next update reads the
+      // checkout afresh (H5)
       return []
     case 'update-behind':
       return ['out=update-behind', `result=${o.result}`, `from=${opt(o.from)}`, `to=${opt(o.to)}`]
