@@ -388,7 +388,7 @@ const WHY: Record<FixerPurpose, string> = {
   weakening: 'the merge guard warned that a commit weakened tests, and the adjudicator judged it unjustified. Restore the tests as the instructions say.',
   review: 'the merge review asked for a change before the PR merges.',
   guard: 'the merge guard printed a FAIL that was judged to need a fixer.',
-  resume: "the owner resumed an escalated gate and gave an instruction. Follow the owner's instruction below (it wins over the brief), re-enter the branch, make the change and start a fresh gated run. A branch head that differs from the run's head does not stop you.",
+  resume: "the owner resumed an escalated gate. Make the change the instructions below call for: an owner note there wins over the brief; with none, act on the adjudicator's reason within the brief. Re-enter the branch, make the change and start a fresh gated run. A branch head that differs from the run's head does not stop you.",
   handoff: "the implementer's commit was not gated by its pipeline run. Get it gated as the instructions say.",
 }
 
