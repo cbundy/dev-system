@@ -880,8 +880,9 @@ Claude, in its own working directory, with its stdout untouched and its exit sta
 passed through (128+signal when a signal killed it, so 143 when TERM kills it), so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
 root (`--user root`), it skips `dev-init`, so nothing root-owned lands in `/persist`.
 `tini` as PID 1 forwards `docker stop` / pod deletion to the entrypoint at once and reaps
-orphaned processes; the entrypoint forwards TERM, INT and HUP to the command and waits until it has
-really exited. After any command exit, when not root and the heartbeat script is executable, it runs
+orphaned processes; the entrypoint forwards TERM, INT and HUP to the active initialization child
+or command and waits until it has really exited. A stop during initialization skips launching
+the command. On exit, including a stop during initialization, when not root and the heartbeat script is executable, it runs
 `/usr/local/share/dev-system/heartbeat-loop --final` under a 10s `timeout` (report on stderr)
 to attempt the worker's `stopped` row. This is best effort and preserves the command's exit
 status. Allow time for the command to exit and up to 10s for the final heartbeat before the
