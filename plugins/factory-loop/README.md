@@ -38,7 +38,7 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | `/factory` and the control tool | `hooks/control.ts` | done |
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
 | `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
-| Tests | `tests/*.test.ts` (17 files) | 753 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
+| Tests | [tests/](tests/) | scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
 
 ## Run it in observe mode

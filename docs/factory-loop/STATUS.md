@@ -79,8 +79,8 @@ The first wave of the "loop rewrite v0.1" fixes, from the two testbed runs
 - A main checkout an agent moved holds new claims, agents and tasks and tells the owner once
   (rule `G5`, #544); the PR of a superseded run is closed with a link to its successor (rule
   `M8`, #553).
-- A resumed escalation whose verdicts were all `ENV` reruns the same head once (`env-retry`,
-  rule `P2a`, #537, D-64).
+- Environment escalation retry was introduced (#537, D-64); current resume routing is defined
+  in [SPEC 5.4](SPEC.md#54-pipeline-gates-p), as amended by D-76.
 - A repair re-guards at once, a guard failure is judged once rather than at every re-check, and
   the guard expires after 5 minutes, not 30 (#550, D-65); a worktree the pipeline's own commits
   left behind is fast-forwarded rather than judged (#551, D-66). The fast-forward never moves
