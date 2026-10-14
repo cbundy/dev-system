@@ -19,6 +19,7 @@ import {
   capKey,
   commandOf,
   logLoop,
+  loggedOf,
   passErrorTell,
   retried,
   sendNotice,
@@ -408,6 +409,7 @@ async function loadLedger($: EngineInterface, rt: Runtime, problems: string[]): 
     return false
   }
   live.ledger = stored ?? []
+  live.logged = loggedOf(live.ledger)
   live.loaded = true
   live.repo = rt.repo
   live.basis = may.basis
@@ -770,6 +772,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a lost store, rebuilt from the event log, becomes the ledger the loop keeps
       if (observed.ledgerSource === 'events' && live.ledger.length === 0 && state.ledger.length > 0) {
         live.ledger = [...state.ledger]
+        live.logged = loggedOf(live.ledger)
         await persist($, rt)
       }
       // the restart for an update ran: the update is done, so the drain ends (rule H4)

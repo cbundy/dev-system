@@ -777,10 +777,6 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await $.turn.start({ text: `The factory-loop plugin sent a message:\n${wake}`, turnId: 'turn-1' })
     await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the report.', reason: 'answer', durationMs: 900, isAborted: false })
     await clock.settle()
-    // the turns' loop events are real ones in act mode: none goes to the sink (SPEC 7.4, D-09)
-    const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
-    expect(hooked.length).toBeGreaterThan(0)
-    expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
     expect(h.prompts[1]).toStartWith(`JUDGE report id=${id}`)
     expect(h.prompts[1]?.split('\n')[0]).toEndWith('reminder=1')
     expect(h.entry(`judge:report:${key}`)).toMatchObject({ status: 'running', turnId: 'turn-1', reminded: true })
@@ -790,8 +786,80 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     const fields = JSON.stringify({ brief: BRIEF, created: [], pendingDecision: false })
     await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} parsed\nfields: ${fields}`, reason: 'answer', durationMs: 900, isAborted: false })
     expect(h.entry(`judge:report:${key}`)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'parsed' } })
+    // the turns' loop event (the wake's end; its turn taking its id and its reminder change nothing
+    // an event says) is a real one in act mode: none goes to the sink (SPEC 7.4, D-09)
+    const hooked = h.seen.slice(before).filter(s => s.argv[0] === 'callum-flow-event')
+    expect(hooked.length).toBeGreaterThan(0)
+    expect(hooked.every(s => s.env.CALLUM_EVENTS_DIR === undefined)).toBe(true)
     await clock.advance(5_000)
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+  })
+
+  // run 2 (#536): a wake's turn starts inside its submit, as the engine starts it, and its one
+  // start was logged twice, by turn.start and by the executor's finish
+  const loopStatuses = (h: Host, kind: string) =>
+    h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith(`kind=${kind} `)).map(n => /status=(\S+)/.exec(n)?.[1])
+
+  test('each ledger transition logs one loop event: a judge whose turns start inside their submits, its reminder included', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 20 * MIN
+    const { run } = factory({ issue: { stage: 'designing', since } })
+    const key = `design:470:${since}`
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'done', startedAt: NOW - 15 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'designer', unparsed: true } }),
+    ])
+    let turns = 0
+    const h = host(on, { config: ACT, run, store, submit: text => void $.turn.start({ text, turnId: `turn-${++turns}` }) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+
+    // the pass wakes the model for the report; its turn says nothing, so it is reminded
+    const judgeKey = `judge:report:${key}`
+    expect(h.entry(judgeKey)).toMatchObject({ status: 'running', turnId: 'turn-1' })
+    expect(loopStatuses(h, 'judge')).toEqual(['running'])
+    await $.turn.complete({ turnId: 'turn-1', answer: 'Looking at the report.', reason: 'answer', durationMs: 900, isAborted: false })
+    await clock.settle()
+    expect(h.entry(judgeKey)).toMatchObject({ status: 'running', reminded: true, turnId: 'turn-2' })
+    // the reminder's turn answers
+    const id = /id=(\S+)/.exec(h.prompts[0] ?? '')?.[1] ?? ''
+    const fields = JSON.stringify({ brief: BRIEF, created: [], pendingDecision: false })
+    await $.turn.complete({ turnId: 'turn-2', answer: `ANSWER ${id} parsed\nfields: ${fields}`, reason: 'answer', durationMs: 900, isAborted: false })
+    expect(h.entry(judgeKey)).toMatchObject({ status: 'done' })
+    expect(loopStatuses(h, 'judge')).toEqual(['running', 'done'])
+  })
+
+  test("each ledger transition logs one loop event: a rail's tell whose turn starts inside its submit", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory({ beats: `device,age_s\n${OTHER},30\n` })
+    let turns = 0
+    const h = host(on, { config: ACT, run, submit: text => void $.turn.start({ text, turnId: `turn-${++turns}` }) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.entry(`tell:heartbeat-other:${NOW + 5_000}`)).toMatchObject({ status: 'running', turnId: 'turn-1' })
+    expect(loopStatuses(h, 'tell')).toEqual(['running'])
+    await $.turn.complete({ turnId: 'turn-1', answer: '[ACTION] Owner: stop the other orchestrator.', reason: 'answer', durationMs: 900, isAborted: false })
+    await clock.advance(60_000)
+    expect(h.entry(`tell:heartbeat-other:${NOW + 5_000}`)).toMatchObject({ status: 'done' })
+    expect(loopStatuses(h, 'tell')).toEqual(['running', 'done'])
+  })
+
+  test('each ledger transition logs one loop event: a wake a reload left open logs nothing when its turn starts, then its end', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const key = 'task:redrive:issue-470-x:abc'
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(key, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
+    ])
+    const h = host(on, { config: ACT, run, store })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await $.turn.start({ text: 'TASK redrive id=w1 repo=cbundy/dev-system issue=470', turnId: 'turn-1' })
+    expect(h.entry(key)).toMatchObject({ status: 'running', turnId: 'turn-1' })
+    expect(loopStatuses(h, 'task')).toEqual([])
+    await $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
+    expect(loopStatuses(h, 'task')).toEqual(['done'])
   })
 
   test('each wake gets its own id, pass after pass (SPEC 8.1)', async ($, on) => {

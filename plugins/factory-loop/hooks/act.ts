@@ -3,7 +3,7 @@
 // wakes past their timeout, plan, then plan's actions in order: start each ledger entry,
 // pre-check usage for a token-spending class, run the executor, finish the entry with what it
 // reported), and what the hooks between passes do to the ledger (an agent's answer, a wake's
-// turn, the answer tool, `/factory retry`). Every entry that moves gets its `loop` event.
+// turn, the answer tool, `/factory retry`). Every entry that moves gets its `loop` event, once.
 // register.ts holds $, builds the ActIo and keeps the store; everything here works through the
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake.
@@ -110,7 +110,19 @@ export function eventOf(cmd: ExecCtx['cmd']): ExecCtx['event'] {
 // The ledger as the driver holds it: one array, replaced whole by every transition. The pass and
 // the hooks that fire during it (an agent's answer, a wake's turn) apply their transitions to the
 // array as it is then, with no await between the read and the write, so neither loses the other's.
-export type Live = { ledger: LedgerEntry[] }
+// logged: the loop event last logged for each key (logLoop); a ledger loaded from the store or the
+// event log starts it with loggedOf, since each of its entries was logged as it got there.
+export type Live = { ledger: LedgerEntry[]; logged?: Map<string, string> }
+
+// loggedOf: the loop event each entry of a loaded ledger already logged.
+export function loggedOf(ledger: readonly LedgerEntry[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const entry of ledger) {
+    const argv = loopEvent(entry)
+    if (argv !== null) out.set(entry.key, JSON.stringify(argv))
+  }
+  return out
+}
 
 // transition: apply fn to the live ledger; the entries it changed, for their loop events.
 export function transition(live: Live, fn: (ledger: LedgerEntry[]) => LedgerEntry[]): LedgerEntry[] {
@@ -148,12 +160,20 @@ export function ctxOf(env: ActEnv, state: State, entry: LedgerEntry): ExecCtx {
 }
 
 // logLoop: the `loop` event of each entry a transition moved that logs one: agents, wakes and
-// owner notices (D-09, ledger.ts loopEvent). A failed log is noted, never retried.
-export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'problems'>, entries: readonly LedgerEntry[]): Promise<void> {
+// owner notices (D-09, ledger.ts loopEvent), one per transition: an entry whose event would say
+// just what its key's last one said is not logged again. A wake's turn taking its id, its
+// reminder going out, and a turn that starts inside its submit (so turn.start moves the entry
+// before the executor finishes it) each change the entry but not its event (run 2, #536). A
+// failed log is noted, never retried.
+export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'problems' | 'live'>, entries: readonly LedgerEntry[]): Promise<void> {
   const cmd = commandOf(env.io, env.rt, env.commands)
+  const logged = (env.live.logged ??= new Map())
   for (const entry of entries) {
     const argv = loopEvent(entry)
     if (argv === null) continue
+    const said = JSON.stringify(argv)
+    if (logged.get(entry.key) === said) continue
+    logged.set(entry.key, said)
     try {
       const r = await cmd(argv, { timeoutMs: EVENT_TIMEOUT_MS })
       if (r.exitCode !== 0) env.problems.push(clip(`loop event ${entry.key}: exit ${r.exitCode}`))
@@ -161,6 +181,9 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
       env.problems.push(clip(`loop event ${entry.key}: ${message(err)}`))
     }
   }
+  // a key the ledger no longer holds (pruned, or a notice a retry cleared) is forgotten
+  const held = new Set(env.live.ledger.map(e => e.key))
+  for (const key of logged.keys()) if (!held.has(key)) logged.delete(key)
 }
 
 // --- one pass's actions ------------------------------------------------------------------------
