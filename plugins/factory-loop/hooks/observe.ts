@@ -25,6 +25,7 @@ import {
   parseUsage,
 } from './parse'
 import type { Factory } from './parse'
+import { LIVE, listedLive } from './plan'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
@@ -245,8 +246,54 @@ export async function observe(
     mark('queue', true, cache.queue.at)
   }
 
-  // GitHub per issue: the queue, this device's live issues, and the issues `only` names with
-  // the sub-issues their trackers stand for (D-35), oldest reads first
+  // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
+  // store's whenever it holds one; when it holds none, the ledger is rebuilt from a week of
+  // events (the facts window would lose older holds). An empty store after a rebuild that found
+  // nothing is simply empty: the week is not read again every pass. Read before GitHub, which
+  // reads the issues of the loop's running work.
+  let chosen: { ledger: LedgerEntry[]; source: LedgerSource }
+  if (stored === undefined) {
+    chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, factory, facts, rt.device) : null)
+  } else if (stored.ledger !== null && stored.ledger.length > 0) {
+    // the store holds it, so a later loss is rebuilt again
+    cache.rebuilt = undefined
+    chosen = choose(stored.ledger, null)
+  } else if (cache.rebuilt?.value === 0) {
+    chosen = choose(stored.ledger, null)
+  } else {
+    let derived: LedgerEntry[] | null = null
+    let problem = 'the factory source failed'
+    if (factory !== null) {
+      try {
+        const r = await run(eventsSince(REBUILD_DAYS), EVENTS_SQL)
+        if (r.exitCode === 0) {
+          const week = eventsFromRows(parseCsv(r.stdout))
+          derived = deriveLedger(week, factory, factsOf(week), rt.device)
+          cache.rebuilt = { at: now, value: derived.length }
+        } else {
+          problem = fail(r)
+        }
+      } catch (err) {
+        problem = String(err)
+      }
+    }
+    chosen = choose(stored.ledger, derived)
+    // a lost ledger the log could not rebuild: the event log is what failed, so say so there,
+    // and plan holds what needs it; the rebuild runs again next pass
+    if (derived === null) mark('facts', false, sources.facts.at, `the store holds no ledger and the event log could not rebuild it: ${problem}`)
+  }
+  const ledger = chosen.ledger
+  const agents = (await io.agents())
+    .filter(a => ledger.some(e => e.agentId === a.id))
+    .map(a => ({ id: a.id, type: a.type, status: a.status }))
+
+  // GitHub per issue, oldest reads first, and first of all the issues the loop may act on or
+  // counts as live, so a closed one is known before plan drives it (#556): those of its running
+  // work (an entry running, or an agent at work past its answer), this device's issues and every
+  // issue in a live stage. A run is driven only for an issue this device holds, so the watcher's
+  // runs add none. Then the queue, and the issues `only` names with the sub-issues their trackers
+  // stand for (D-35). An issue known closed is not read again unless the queue, which lists open
+  // issues only, names it; a failed read keeps the last value.
   const control = await readControl(io, rt)
   const tracker = new RegExp(cfg.trackerTitle, 'i')
   const isTracker = (n: number) => {
@@ -275,10 +322,16 @@ export async function observe(
     mark('github', false, ats.length > 0 ? Math.max(...ats) : null, waiting)
   } else {
     const { subIssues } = walkTrackers()
-    const wanted = [...new Set([...(cache.queue?.value ?? []), ...mine.map(i => i.number), ...control.only, ...subIssues])]
+    const queue = cache.queue?.value ?? []
+    const working = ledger
+      .filter(e => e.status === 'running' || (e.agentId !== undefined && listedLive(agents, e.agentId)))
+      .flatMap(e => (e.issue === null ? [] : [e.issue]))
+    const live = (factory?.issues ?? []).filter(i => !i.ended && LIVE.includes(i.stage)).map(i => i.number)
+    const wanted = [...new Set([...working, ...mine.map(i => i.number), ...live, ...queue, ...control.only, ...subIssues])]
     const due = wanted
       .filter(n => {
         const c = cache.github.get(n)
+        if (c !== undefined && c.value.facts?.open === false && !queue.includes(n)) return false
         return c === undefined || now - c.at >= cfg.githubEveryMs
       })
       .sort((a, b) => (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
@@ -395,46 +448,6 @@ export async function observe(
     }
   }
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
-
-  // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
-  // store's whenever it holds one; when it holds none, the ledger is rebuilt from a week of
-  // events (the facts window would lose older holds). An empty store after a rebuild that found
-  // nothing is simply empty: the week is not read again every pass.
-  let chosen: { ledger: LedgerEntry[]; source: LedgerSource }
-  if (stored === undefined) {
-    chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, factory, facts, rt.device) : null)
-  } else if (stored.ledger !== null && stored.ledger.length > 0) {
-    // the store holds it, so a later loss is rebuilt again
-    cache.rebuilt = undefined
-    chosen = choose(stored.ledger, null)
-  } else if (cache.rebuilt?.value === 0) {
-    chosen = choose(stored.ledger, null)
-  } else {
-    let derived: LedgerEntry[] | null = null
-    let problem = 'the factory source failed'
-    if (factory !== null) {
-      try {
-        const r = await run(eventsSince(REBUILD_DAYS), EVENTS_SQL)
-        if (r.exitCode === 0) {
-          const week = eventsFromRows(parseCsv(r.stdout))
-          derived = deriveLedger(week, factory, factsOf(week), rt.device)
-          cache.rebuilt = { at: now, value: derived.length }
-        } else {
-          problem = fail(r)
-        }
-      } catch (err) {
-        problem = String(err)
-      }
-    }
-    chosen = choose(stored.ledger, derived)
-    // a lost ledger the log could not rebuild: the event log is what failed, so say so there,
-    // and plan holds what needs it; the rebuild runs again next pass
-    if (derived === null) mark('facts', false, sources.facts.at, `the store holds no ledger and the event log could not rebuild it: ${problem}`)
-  }
-  const ledger = chosen.ledger
-  const agents = (await io.agents())
-    .filter(a => ledger.some(e => e.agentId === a.id))
-    .map(a => ({ id: a.id, type: a.type, status: a.status }))
 
   // act mode holds GitHub writes while the backoff lasts, and from the pass that met a limit
   let githubBackoffUntil = backoffUntil

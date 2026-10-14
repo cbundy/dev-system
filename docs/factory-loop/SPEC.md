@@ -162,7 +162,9 @@ type Milestone = { open: number; closed: number; expected: 'patch' | 'minor' | '
 The union of: every issue `callum-flow-factory-state` lists for the repo; every issue in
 `queue`; every issue a ledger entry names; every issue `only` names, with the sub-issues a
 tracker among them stands for. GitHub fields are filled for the queue, the issues this device
-holds and those `only` names, and stay `null` for the rest.
+holds, every issue in a live stage, the issues of the loop's running work and those `only` names,
+and stay `null` for the rest. `open` is what plan reads to treat an issue closed on GitHub as
+finished (5.1); `null`, not yet read or never readable, is never taken for closed.
 
 ### 3.3 Sources
 
@@ -177,7 +179,7 @@ how stale it is. `pipeline-watch.sh`, `queue-watch.sh` and `usage-check.sh` run 
 | `facts` | one `dev-query --csv` call over 3 days of events (SQL in the adapter): per live issue the latest `delegated` note; per run the `fix_requested --note review` count and its `verdict` notes; per branch the latest watcher pipeline event (for `runSource: events`) | every pass | `P1` (the cap), `P2` on a review gate |
 | `runs` | `runSource: local`: `pipeline-watch.sh --once` from the main checkout (3.4); a failed poll, or any line the parser cannot read, is a failed source, never "no runs". `runSource: events`: the mirror's stage refined by the watcher's events (`derive.ts`): the newest run the watcher saw for the issue, a park with no answer in the log, and merge-ready, head-mismatch, conflict, ci-stalled and cancelled | every pass | the `P` and `M` rules |
 | `queue` | act mode: `queue-watch.sh --once --repo <R> --label <readyLabel> --known <last now>` (3.4), with `known` kept in the store. Observe mode: `callum-flow-issue-read --json --list --label <readyLabel>`, so a shadow logs no `ready` events of its own | every `queueEveryMs` (120 s); skipped during a GitHub backoff | rule `D1` |
-| `github` | `callum-flow-issue-read --json <N>` per issue (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for this device's designing issues, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, at most 12 reads a pass; skipped during a GitHub backoff | rule `D1`; `D2` (an existing brief) |
+| `github` | `callum-flow-issue-read --json <N>` per issue (labels, state, author trust, dependency and sub-issue summaries), plus `--comments` only for this device's designing issues, to find the latest `## Design brief` comment, and `--json --timeline <N>` for a tracker named in `only`, to list its sub-issues. First the issues the loop may act on or counts as live, so a closed one is known before plan drives it (#556): those of its running work (a ledger entry `running`, or an agent the list shows at work past its answer), this device's issues and every issue in a live stage (a run is driven only for an issue this device holds, so the watcher's runs add none); then the queue, and the issues `only` names with their trackers' sub-issues. An issue known closed is not read again unless the queue, which lists open issues only, names it; a failed read keeps the last value | per issue every `githubEveryMs` (5 min), at once for an issue not yet read, oldest first, at most 12 reads a pass; skipped during a GitHub backoff | rule `D1`; `D2` (an existing brief); an issue closed on GitHub is finished (5.1) |
 | `usage` | `usage-check.sh`, merged with `$.session.usage().rateLimits` (free, from the session's own API responses): the higher reading of each window wins | `usage-check.sh` every `usageEveryMs` (5 min); the session figures every pass | rule `G3`; missing or stale is Normal, flagged |
 | `pool` | `treehouse status --json` from the main checkout | every pass | rule `D1` capacity, rule `H3` |
 | `checkout` | `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, then `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no`, from the main checkout (it takes no index lock and ignores untracked files). A missing origin/HEAD or a failed status is `{ error }`, whose text points at `git remote set-head origin --auto` | every pass | rules `G5`, `H5` |
@@ -381,6 +383,13 @@ adjudicator answering `merge`, say) plans nothing and names itself in the skip r
 - **briefOf(i)**: the designer outcome's brief URL for the current life, else `i.brief.url`,
   else `i.delegatedBrief`, else null.
 - **live stages**: `designing`, `implementing`, `in pipeline`, `parked`, `ready to merge`.
+- **live(i)**: `i` is in a live stage and not closed on GitHub (`i.open !== false`). An issue
+  closed on GitHub is **finished**, whatever stage the factory still shows, as are `merged` and
+  `closed without merge` (#556, DECISIONS D-72): it is not counted in the title, takes no place
+  under `maxInFlightIssues`, and no rule starts work on it or on its runs, except what follows
+  the loop's own closing of it: a merge's follow-ups (`M7`, `run-it` and `keep-open` included)
+  and a superseded PR's close (`M8`). An issue whose state is not known (`open` null) is not
+  closed.
 - **resumedSince(subject, t)**: the owner released this subject after time `t`.
 
 ### 5.2 Gates (G)
@@ -418,9 +427,9 @@ counts the same way until the state shows the issue live, for at most one `heart
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| H1 | this device holds a live-stage issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
+| H1 | this device holds a live issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
 | H2 | the last `sweep` ended at least `sweepEveryMs` ago, or never | `sweep` | `sweep:<last done endedAt or 0>` |
-| H3 | a pool slot is not busy, is clean, sits on a branch whose issue is `merged` or `closed without merge`, and no running agent of the loop names that issue | `release-worktree` | `release:<path>:<branch>` |
+| H3 | a pool slot is not busy, is clean, sits on a branch whose issue is finished (`merged`, `closed without merge`, or closed on GitHub), and no running agent of the loop names that issue | `release-worktree` | `release:<path>:<branch>` |
 | H4 | `control.updateDue` is set. While it is, the loop drains: `start`, `develop` and `drive` actions are dropped. Once the safe state holds (the `runs` source reads; no ledger entry running, so no loop agent, wake or command in flight; no pipeline run of any device `running`, `pending` or `ci-stalled`) and the pass plans nothing else | `restart-self`, last, after the title. A drain longer than 60 minutes gives `tell(drain-slow)` once, with what it still waits on. A restart that fails is not tried again (`maxAttempts` 1): the owner is told (`tell(agent-failed)`) and the drain holds until the update is set again or turned off. Nothing in a blind pass | `restart:<updateDue.at>`, `tell:drain-slow:<updateDue.at>` |
 | H5 | the pass acts (an observe pass derives its ledger from the event log, where an update leaves no event, so it plans none), the main checkout was read, `G5` does not hold, and none ran since the module loaded (a reload can leave it stale), or a merge (a `merge` that merged, or a `rollout` read for a hand merge) ended after the last `update-checkout` started, or that one was `REFUSED` at another commit than the checkout's now (it changed since), or it ended at least `checkoutEveryMs` ago. It waits, with a skip line, while work reads the checkout's code: a designer or adjudicator of the loop at work (by the ledger, or by the agent list for one whose answer is in), or a running task (`G5`). Meanwhile admit drops new readers, designer and adjudicator spawns and tasks, with the reason `waits for the main checkout's update (<agent or task>)`, so the readers drain and the update runs: with several issues in flight there may otherwise never be a gap. A held adjudicator only delays a parked gate's judgment, which nothing times out. Implementers and fixers work in their own worktrees, so they do not hold it. The last update `REFUSED` while `G5` does not hold (commits origin lacks), the checkout still at the commit it was planned at, gives `tell(checkout)` once per sight, the refusal as its detail; it holds nothing (#555) | `update-checkout` with origin's default branch and the checkout's commit | `update-checkout:<last done endedAt or 0>`, `tell:checkout:<branch>@<head>:refused` |
 
@@ -435,9 +444,10 @@ it) or `done` before that load; that pass clears `updateDue` from control.json a
 The `P` and `M` rules act only on an issue's **current run**: the newest run of the issue's
 branches (ULIDs sort by creation time; an `unknown` id counts only when it is the issue's only
 run) that no `superseded` event names, on an issue that is still live. The issue must also be one this device holds: another device's run, or a run nobody claimed
-(the owner's own), is not this loop's to drive. A run on a replaced
-branch is history: 18 of the 21 cancelled runs on dev-system in the week to 2026-10-12 were
-followed by a `superseded`, `merged` or `abandoned` event on their issue.
+(the owner's own), is not this loop's to drive. A run of an issue closed on GitHub is not driven
+whatever its state, and the decision log says `closed on GitHub: its runs are not driven`
+(#556). A run on a replaced branch is history: 18 of the 21 cancelled runs on dev-system in the
+week to 2026-10-12 were followed by a `superseded`, `merged` or `abandoned` event on their issue.
 
 For each current run, issue not paused:
 
@@ -492,11 +502,11 @@ GitHub or the harness is `M6`.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| D1 | for each queue member, in `only` order (or else `priority` order) and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` and no tracker title (not a tracker, I-91), stage `queued` or unknown to the database, not skipped, paused or dropped, and the last claim attempt did not lose to a still-live claim; not claimed but unseen: an issue whose latest successful claim ended less than `heartbeatEveryMs` ago, at or after its `stageSince`, while it is still `queued` or unknown to the database, is skipped ("claimed; the factory state has not caught up", #538); capacity: `pool.free`, minus this device's issues in design (each takes a worktree once its implementer starts), its unseen claims and the claims started (this pass's and those still running), above `worktreeReserve`, and under `maxInFlightIssues`, where this device's live issues include its unseen claims (#547). A claim the in-flight cap holds back adds `at cap` to the title and `tell(at-cap)` once each time the cap is reached. An issue `only` names that is not in the ready queue is named in the skip reasons; a tracker `only` names whose sub-issues are not read yet stands for nothing that pass | `claim`; `tell(at-cap)` | `claim:<N>:<stageSince or 'new'>`, `tell:at-cap:<endedAt of the last done claim, or 0>` |
-| D2 | mine, stage `designing`, no brief newer than `stageSince`, no designer running or done for this life. A brief posted this life while no designer runs or answered (the loop restarted while it ran, or it failed, timed out or was lost after posting) goes to `judge(report)` instead of a new designer | `spawn(designer)` with the issue's model label and the owner's notes | `design:<N>:<stageSince>[:r<n>]`, `judge:report:brief:<N>:<url>` |
+| D1 | for each queue member, in `only` order (or else `priority` order) and then ascending: open, trusted, has `readyLabel`, no `skipLabels`, `blockedBy = 0`, `subIssues = 0` and no tracker title (not a tracker, I-91), stage `queued` or unknown to the database, not skipped, paused or dropped, and the last claim attempt did not lose to a still-live claim; not claimed but unseen: an issue whose latest successful claim ended less than `heartbeatEveryMs` ago, at or after its `stageSince`, while it is still `queued` or unknown to the database, is skipped ("claimed; the factory state has not caught up", #538); capacity: `pool.free`, minus this device's live issues in design (each takes a worktree once its implementer starts), its unseen claims and the claims started (this pass's and those still running), above `worktreeReserve`, and under `maxInFlightIssues`, where this device's live issues include its unseen claims (#547). A claim the in-flight cap holds back adds `at cap` to the title and `tell(at-cap)` once each time the cap is reached. An issue `only` names that is not in the ready queue is named in the skip reasons; a tracker `only` names whose sub-issues are not read yet stands for nothing that pass | `claim`; `tell(at-cap)` | `claim:<N>:<stageSince or 'new'>`, `tell:at-cap:<endedAt of the last done claim, or 0>` |
+| D2 | mine, stage `designing`, not closed on GitHub (a closed one gets the skip line `closed on GitHub`, #556), no brief newer than `stageSince`, no designer running or done for this life. A brief posted this life while no designer runs or answered (the loop restarted while it ran, or it failed, timed out or was lost after posting) goes to `judge(report)` instead of a new designer | `spawn(designer)` with the issue's model label and the owner's notes | `design:<N>:<stageSince>[:r<n>]`, `judge:report:brief:<N>:<url>` |
 | D3 | the designer entry is `done` | by its `RESULT` line: `pending_decision=yes` gives a hold plus `tell(decision)` until resumed (then `D2` again with `:r<n>` and the owner's notes); `created=<list>` gives `release-parent` (and `A2` if an implementer is running); a brief with no pending decision goes to `D4`; no `RESULT` line gives `judge(report)` | `tell:decision:<N>:<brief>`, `release-parent:<N>`, `judge:report:<entry key>` |
 | D4 | mine, stage `designing` (not yet delegated), a brief for this life (`briefOf`), no pending decision | `delegate` (route, `delegated` event, `spawn(implementer)`) | `delegate:<N>:<brief>` |
-| D4b | mine, stage `implementing`, no run at all, and the last `delegate` entry `failed`, `timed-out` or `lost` | `delegate` again under the same key while attempts remain (then `tell(agent-failed)`) | `delegate:<N>:<brief>` |
+| D4b | mine, stage `implementing`, no run at all, and the last `delegate` entry `failed`, `timed-out` or `lost`; not closed on GitHub (else the skip line `closed on GitHub`) | `delegate` again under the same key while attempts remain (then `tell(agent-failed)`) | `delegate:<N>:<brief>` |
 | D5 | an implementer or fixer entry is `done`, its issue is live, and its handoff is not gated (it says `gated=no`, its head is not its commit, or it says `NOT GATED`) | `judge(handoff)`; a `fixer` answer gives `spawn(fixer, purpose handoff)` | `judge:handoff:<entry key>`, `fixer:handoff:<entry key>` |
 | D6 | the owner dropped an issue (`control.dropped`) that is not `closed without merge` | `abandon` with its run and branch when known, then `A2` stops its agents | `abandon:<N>:<at>` |
 
@@ -505,7 +515,7 @@ GitHub or the harness is `M6`.
 | Rule | When | Then | Key |
 |---|---|---|---|
 | A1 | a `running` agent entry, or a `done` one whose agent the agent list still shows at work more than 60 s after its answer (an answer through the tool ends the entry before the agent's turn, 7.3a.4), is older than its `agentTimeoutMs` | `stop-agent`; when the stop ends, stopped or not, the agent's entry becomes `timed-out`. A stop for a done entry leaves its outcome as it is; the entry is not marked `timed-out`. A stop that failed leaves the agent marked `timed-out` and tells the owner (`tell(agent-failed)` for its `stop:` key); its rule waits until the agent list shows the agent ended, so a second agent never starts beside it. A `failed`, `timed-out` or `lost` agent is retried by its own rule while attempts remain; once exhausted, `tell(agent-failed)` (`tell(task-timeout)` for a task) | `stop:<agentId>`, `tell:agent-failed:<key>`, `tell:task-timeout:<key>` |
-| A2 | a running agent's issue (or that of a done entry whose agent is still at work, as in A1) is not paused, and it closed or ended (`merged`, `closed without merge`), was claimed by another device, was dropped by the owner, or was split while its implementer runs | `stop-agent`, and `tell(claim-lost)` for another device's claim, else `tell(stopped)` with why (`closed`, `merged`, `closed without merge`, `dropped` or `split`). The stopped agent's entry ends with its own `turn.complete` or the agent list | `stop:<agentId>`, `tell:claim-lost:<N>:<holder>`, `tell:stopped:<agentId>` |
+| A2 | a running agent's issue (or that of a done entry whose agent is still at work, as in A1) is not paused, and it is finished (closed on GitHub, `merged` or `closed without merge`; observe reads the GitHub state of every issue of the loop's running work, #556), was claimed by another device, was dropped by the owner, or was split while its implementer runs | `stop-agent` with the reason `issue <why>` in the decision log, and `tell(claim-lost)` for another device's claim, else `tell(stopped)` with why (`merged` or `closed without merge` when the factory shows it ended, else `closed`; `dropped` or `split`). The stopped agent's entry ends with its own `turn.complete` or the agent list | `stop:<agentId>`, `tell:claim-lost:<N>:<holder>`, `tell:stopped:<agentId>` |
 
 ### 5.8 Owner and report (O)
 
@@ -1000,16 +1010,16 @@ keep answers short: a model that cannot do what a wake asks explains at length.
 ```
 
 The repo's short name and three counts (DECISIONS D-23): `Q` issues in the queue, `D` in
-progress (designing through ready to merge), and `M` merged in the last 6 hours. Usage is not
-shown. A word is added only when something needs attention, in this order: `observe` when the
-pass does not act (observe mode, or act mode held back by a rail), `blind` (which replaces the
-counts in a blind pass), `checkout` (the main checkout moved, rule `G5`), a usage tier that
-holds work (`stop new`, `stop all`), `stuck <n>` (not in a blind pass), `at cap`, `capped
-<bucket>` or `capped <kind>:<issue>` for each rate cap tripped, `gh wait`, and `owner <n>` for
-open owner items. The driver sets `🔄 <name> · off` when
-the mode is off or the kill switch exists, and adds `· error` after a pass that throws, until a
-pass succeeds. The title is set with `/rename` only when the text changes, and the
-`session.append` hook blanks the note the rename leaves for the model (FINDINGS check 3).
+progress (designing through ready to merge, and not closed on GitHub, #556), and `M` merged in
+the last 6 hours. Usage is not shown. A word is added only when something needs attention, in
+this order: `observe` when the pass does not act (observe mode, or act mode held back by a
+rail), `blind` (which replaces the counts in a blind pass), `checkout` (the main checkout moved,
+rule `G5`), a usage tier that holds work (`stop new`, `stop all`), `stuck <n>` (not in a blind
+pass), `at cap`, `capped <bucket>` or `capped <kind>:<issue>` for each rate cap tripped,
+`gh wait`, and `owner <n>` for open owner items. The driver sets `🔄 <name> · off` when the mode
+is off or the kill switch exists, and adds `· error` after a pass that throws, until a pass
+succeeds. The title is set with `/rename` only when the text changes, and the `session.append`
+hook blanks the note the rename leaves for the model (FINDINGS check 3).
 
 ### 9.2 `tell`
 
@@ -1336,6 +1346,11 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
 - **The repair message**: whether `$.session.send` reaches an agent at its own `turn.complete`
   and resumes it is proven only on the testbed. An agent the list still shows completed 5
   minutes after its repair message is taken as never resumed.
+- **An issue closed on GitHub** (#556) is known closed only once observe has read it: for up to
+  `githubEveryMs` after it closes, and on the first pass after a load when more than 12 issues the
+  loop may act on are unread (they are read first, but within the pass's 12), it is driven as
+  before. An issue known closed is not read again, so one reopened is driven again only once the
+  queue lists it or the loop reloads.
 
 ## 14. Cutover plan (not executed)
 

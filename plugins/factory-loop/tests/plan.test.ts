@@ -2136,3 +2136,128 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
     expect(r.skipped).toContainEqual({ rule: 'M2', issue: 50, why: 'an agent already works the branch of #50 (fast-forward)' })
   })
 })
+
+describe('an issue closed on GitHub is finished (#556)', () => {
+  // testbed run 3's first pass: run 2's issues were closed at the reset, but their failed runs are
+  // still listed, the factory still shows them live (stuck), and the ledger rebuilt from the event
+  // log holds an adjudication of 40's run that asked for a fixer
+  const R40 = '01M4RQ0040AAAA'
+  const R41 = '01M4RQ0041AAAA'
+  const adjudicated40 = entry(`adjudicate:${R40}:review:head40`, 'spawn', {
+    agent: 'adjudicator',
+    class: 'drive',
+    issue: 40,
+    run: R40,
+    head: 'head40',
+    outcome: review({ type: 'fixer', instructions: 'add the missing test' }),
+  })
+  const leftovers = (open: boolean | null) =>
+    withLedger(
+      state({
+        queue: [60],
+        issues: [
+          mine(40, 'parked', { open, run: R40, pr: 540, stuck: 'S3' }),
+          mine(41, 'in pipeline', { open, run: R41, pr: 541, stuck: 'S3' }),
+          issue(60),
+        ],
+        runs: [run(40, 'failed'), run(41, 'failed')],
+      }),
+      [adjudicated40],
+    )
+  const CAP2 = config({ maxInFlightIssues: 2 })
+
+  test('a failed run of a closed issue gets no adjudicator or fixer, and the issue takes no in-flight slot (testbed run 3)', () => {
+    const r = plan(leftovers(false), CAP2)
+    expect(keys(r)).toEqual([`claim:60:${NOW - 30 * MIN}`])
+    expect(r.atCap).toBe(false)
+    // not live: no D count, no stuck word
+    expect(r.title).toBe('🔄 dev-system (Q:1 - D:0 - M:0) · observe')
+    expect(r.skipped).toContainEqual({ rule: 'P', issue: 40, why: 'closed on GitHub: its runs are not driven' })
+    // a state not read yet is never taken for closed: the issue is driven as before
+    const unknown = plan(leftovers(null), CAP2)
+    expect(keys(unknown)).toEqual([`fixer:gate:${R40}:review:head40`, `adjudicate:${R41}:review:head41`, 'tell:at-cap:0'])
+    expect(unknown.title).toBe('🔄 dev-system (Q:1 - D:2 - M:0) · observe · stuck 2 · at cap')
+  })
+
+  test('a closed issue gets no designer, delegation, handoff judge or lease renewal', () => {
+    const life = NOW - 20 * MIN
+    const failedDelegate = entry('delegate:61:x', 'delegate', { class: 'develop', issue: 61, status: 'failed', attempts: 1, endedAt: NOW - 20 * MIN })
+    const notGated = entry('delegate:62:y', 'delegate', { class: 'develop', issue: 62, outcome: { kind: 'handoff', notGated: true, run: 'R', head: 'H', newBranch: null } })
+    // the first pass after a load renews the leases of the live issues this device holds
+    const s = (open: boolean) =>
+      withLedger(
+        state({
+          loadedAt: NOW - MIN,
+          issues: [mine(60, 'designing', { open, stageSince: life }), mine(61, 'implementing', { open }), mine(62, 'in pipeline', { open })],
+        }),
+        [failedDelegate, notGated],
+      )
+    expect(keys(plan(s(true), CFG))).toEqual([`heartbeat:${NOW - 5 * MIN}`, `design:60:${life}`, 'delegate:61:x', 'judge:handoff:delegate:62:y'])
+    const r = plan(s(false), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'closed on GitHub' })
+    expect(r.skipped).toContainEqual({ rule: 'D4', issue: 61, why: 'closed on GitHub' })
+  })
+
+  test("a clean pool slot on a closed issue's branch is returned (SPEC H3)", () => {
+    const slot = { path: '/t/1', branch: 'feat/issue-40-work', state: 'leased', dirty: false, busy: false }
+    const s = (open: boolean) => state({ issues: [mine(40, 'parked', { open })], pool: { free: 8, total: 16, slots: [slot] } })
+    expect(keys(plan(s(true), CFG))).toEqual([])
+    const r = plan(s(false), CFG)
+    expect(keys(r)).toEqual(['release:/t/1:feat/issue-40-work'])
+    expect(find(r, 'release:/t/1:feat/issue-40-work')).toMatchObject({ rule: 'H3', reason: 'closed on GitHub, slot clean' })
+  })
+
+  test('an agent of the loop working an issue that closes is stopped, and the decision log says why (SPEC A2)', () => {
+    const fixer = entry(`fixer:gate:${R40}:review:head40`, 'spawn', {
+      agent: 'fixer',
+      class: 'drive',
+      issue: 40,
+      run: R40,
+      status: 'running',
+      agentId: 'a40',
+      startedAt: NOW - 5 * MIN,
+      endedAt: null,
+    })
+    const r = plan(withLedger(leftovers(false), [fixer]), CAP2)
+    expect(find(r, 'stop:a40')).toMatchObject({ kind: 'stop-agent', class: 'free', rule: 'A2', reason: 'issue closed', issue: 40, entry: fixer.key })
+    expect(find(r, 'tell:stopped:a40')).toMatchObject({ fields: { issue: '40', why: 'closed' } })
+    // open, it works on
+    expect(keys(plan(withLedger(leftovers(true), [fixer]), CAP2)).filter(k => k.startsWith('stop:'))).toEqual([])
+    // an issue that also ended says how: merged, not just closed
+    const merged = plan(withLedger(state({ issues: [mine(40, 'merged', { open: false })] }), [fixer]), CFG)
+    expect(find(merged, 'tell:stopped:a40')).toMatchObject({ fields: { issue: '40', why: 'merged' } })
+  })
+
+  test("the loop's own merge closed the issue: its rollout follow-ups still run, and so does a superseded PR's close (SPEC M7, M8)", () => {
+    const merged = (rollout: 'merge' | 'run-it' | 'keep-open', closeIssue: number | null = null) =>
+      entry('merge:550:head50', 'merge', { issue: 50, pr: 550, head: 'head50', outcome: { kind: 'merge', result: 'merged', rollout, closeIssue, line: 'merged' } })
+    // the factory has not caught up: still ready to merge, its run still merge-ready, but closed
+    const after = (e: LedgerEntry) =>
+      mergeReady([guarded(), reviewed({ type: 'merge' }, 'head50', { bump: 'minor', bumpReason: 'new mode' }), e], {
+        issues: [mine(50, 'ready to merge', { open: false, pr: 550 })],
+        milestone: { open: 2, closed: 1, expected: 'patch' },
+      })
+    expect(keys(plan(after(merged('run-it')), CFG))).toEqual(['milestone-later:50', 'task:run-it:50', 'expect:minor:550'])
+    expect(keys(plan(after(merged('keep-open')), CFG))).toEqual(['milestone-later:50', 'expect:minor:550'])
+    expect(keys(plan(after(merged('merge', 50)), CFG))).toEqual(['close:50', 'expect:minor:550'])
+    // a hand merge closes its issue too: its rollout is still read
+    expect(keys(plan(state({ issues: [mine(70, 'merged', { open: false, stageSince: NOW - 30 * MIN, pr: 570 })] }), CFG))).toEqual(['rollout:70'])
+    // the PR of a run superseded before the issue closed is still closed (M8)
+    const B = 'feat/issue-32-slug'
+    const moved = entry('fixer:conflict:44:h44', 'spawn', {
+      agent: 'fixer',
+      class: 'drive',
+      issue: 32,
+      run: '01M4RQ0032AAAA',
+      pr: 44,
+      head: 'h44',
+      outcome: { kind: 'handoff', notGated: false, run: '01M4RQ0032BBBB', head: 'n44', newBranch: `${B}-v2` },
+    })
+    const superseded = withLedger(
+      state({ issues: [mine(32, 'in pipeline', { open: false, pr: 50 })], runs: [run(32, 'running', { branch: `${B}-v2`, run: '01M4RQ0032BBBB', pr: 50 })] }),
+      [moved],
+    )
+    expect(keys(plan(superseded, CFG))).toEqual(['pr-close:44'])
+  })
+})

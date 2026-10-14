@@ -906,3 +906,29 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   that works on still holds its branch, so it must stay supervised. The alternative would hold
   the issue for up to 2 h and end in a failed stop of a completed agent with a spurious owner
   tell.
+
+### D-72 An issue closed on GitHub is finished, and its state is read before the queue
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #556): each pass's GitHub reads
+  start with the issues the loop may act on or counts as live: those of its running work, this
+  device's issues and every issue in a live stage, whoever holds it. The queue comes after them.
+  An issue known closed is not read again unless the queue names it. A failed read keeps the last
+  value, and an issue whose state is not known is driven as before. Plan treats a closed issue as
+  finished. It is not live: not in the title's `D` or `stuck`, not under the in-flight cap, no
+  heartbeat for it. No rule drives its runs, designs or delegates it, or judges its handoffs. A2
+  stops its agents, naming the final stage when the factory shows one, else `closed`. H3 returns
+  its clean slots. `M7`'s follow-ups and `M8`'s close still run (SPEC 3.3, 5.1, 13).
+- **Alternatives**: (a) hold every action on an issue whose state is not known, which would hold
+  a new device's whole first pass, and a run whenever one read fails; (b) add the issues the
+  watcher lists a run for: `no-mistakes` lists the newest unfinished run of every branch it ever
+  gated, so after a load the budget would go on long-closed issues while the queue waited; (c)
+  re-read closed issues on a slow cadence, to notice a reopen; (d)
+  `callum-flow-factory-state --github on`, which reads GitHub every pass outside the loop's budget
+  and backoff; (e) keep H3 to `merged` and `closed without merge`.
+- **Why**: on run 3's first pass, twelve queue reads took the whole budget, so the closed issues
+  were never read before plan drove them. Reading them first only delays the queue's reads, by a
+  pass when the budget is short, and an unread queue issue is never claimed. A run is driven only
+  for an issue this device holds, so (b) adds nothing that matters. A closed issue soon ends in
+  the factory too (the sweep logs it closed), so a reopened one comes back through the queue and a
+  new claim either way. Other devices' live issues are read because the title counts them. A clean
+  slot of a finished issue holds nothing, and A2 stops any agent there before H3 returns the slot.

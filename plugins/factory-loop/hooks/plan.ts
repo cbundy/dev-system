@@ -46,7 +46,8 @@ const ANSWERED_GRACE_MS = 60_000
 // final stage for 24 hours, and the bound keeps a merge from ever outliving the ledger's 7-day
 // prune of its `rollout:<issue>` entry, so it can never be re-triggered.
 const ROLLOUT_WITHIN_MS = 24 * HOUR
-const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+// the live stages; observe reads the GitHub state of every issue in one (#556)
+export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
 const ENDED: readonly Stage[] = ['merged', 'closed without merge']
 const MERGEABLE_STATES = ['merge-ready', 'head-mismatch', 'conflict']
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
@@ -238,8 +239,22 @@ function mine(ctx: Ctx, issue: IssueView) {
   return issue.holder !== null && issue.holder === ctx.state.device
 }
 
+// isLive: in a live stage and not closed on GitHub. An issue closed on GitHub is finished
+// (#556), whatever stage the factory still shows: it is not counted, takes no in-flight slot,
+// and no rule starts work on it or its runs, except what follows the loop's own closing of it (a
+// merge's follow-ups, rule M7, and a superseded PR's close, M8). A state not read is not closed.
 function isLive(issue: IssueView | undefined) {
-  return issue !== undefined && issue.stage !== null && LIVE.includes(issue.stage)
+  return issue !== undefined && issue.open !== false && issue.stage !== null && LIVE.includes(issue.stage)
+}
+
+// finished: merged or closed without merge, or closed on GitHub (#556).
+function finished(issue: IssueView): boolean {
+  return issue.open === false || (issue.stage !== null && ENDED.includes(issue.stage))
+}
+
+// endedWhy: how a finished issue ended: its final stage, else `closed`.
+function endedWhy(issue: IssueView): string {
+  return issue.stage !== null && ENDED.includes(issue.stage) ? issue.stage : 'closed'
 }
 
 function maxAttempts(config: Config, kind: ActionKind | AgentType) {
@@ -512,15 +527,16 @@ function housekeeping(ctx: Ctx) {
     if (slot.state === 'available' || slot.busy || slot.dirty !== false || slot.branch === null) continue
     const n = issueFromBranch(slot.branch)
     const issue = n === null ? undefined : ctx.issues.get(n)
-    if (issue === undefined || issue.stage === null || !ENDED.includes(issue.stage)) continue
+    if (issue === undefined || !finished(issue)) continue
     const agentRunning = state.ledger.some(e => e.status === 'running' && e.issue === n && e.agentId !== undefined)
     if (agentRunning) continue
+    const why = endedWhy(issue)
     want(ctx, {
       kind: 'release-worktree',
       key: `release:${slot.path}:${slot.branch}`,
       class: 'free',
       rule: 'H3',
-      reason: `${issue.stage}, slot clean`,
+      reason: `${why === 'closed' ? 'closed on GitHub' : why}, slot clean`,
       issue: n,
       path: slot.path,
       branch: slot.branch,
@@ -642,9 +658,14 @@ function currentRuns(ctx: Ctx): RunView[] {
   const current: RunView[] = []
   for (const [n, list] of [...byIssue.entries()].sort((a, b) => a[0] - b[0])) {
     const issue = ctx.issues.get(n)
-    if (issue === undefined || issue.open === false || (issue.stage !== null && ENDED.includes(issue.stage))) continue
+    if (issue === undefined || (issue.stage !== null && ENDED.includes(issue.stage))) continue
     // Another device's run, or one nobody claimed (the owner's own), is not this loop's to drive.
     if (!mine(ctx, issue)) continue
+    // closed on GitHub: finished, whatever stage the factory still shows (#556)
+    if (issue.open === false) {
+      skip(ctx, 'P', n, 'closed on GitHub: its runs are not driven')
+      continue
+    }
     const known = list.filter(r => r.run !== 'unknown').sort((a, b) => (a.run < b.run ? -1 : a.run > b.run ? 1 : 0))
     const pick = known.length > 0 ? known[known.length - 1] : list.length === 1 ? list[0] : undefined
     if (pick !== undefined) current.push(pick)
@@ -1796,6 +1817,10 @@ function design(ctx: Ctx) {
   for (const issue of [...ctx.state.issues].sort((a, b) => a.number - b.number)) {
     if (!mine(ctx, issue) || issue.stage !== 'designing') continue
     const n = issue.number
+    if (issue.open === false) {
+      skip(ctx, 'D2', n, 'closed on GitHub')
+      continue
+    }
     const life = issue.stageSince ?? 0
     const resumed = resumes(ctx, `issue:${n}`, life)
     const key = resumed > 0 ? `design:${n}:${life}:r${resumed}` : `design:${n}:${life}`
@@ -1870,6 +1895,10 @@ function redelegate(ctx: Ctx) {
       .sort((a, b) => a.startedAt - b.startedAt)
     const last = entries[entries.length - 1]
     if (last === undefined || last.status === 'done' || last.status === 'running') continue
+    if (issue.open === false) {
+      skip(ctx, 'D4', issue.number, 'closed on GitHub')
+      continue
+    }
     const brief = last.key.slice(`delegate:${issue.number}:`.length)
     want(ctx, { kind: 'delegate', key: last.key, class: 'develop', rule: 'D4', reason: `implementer ${last.status}, no run`, issue: issue.number, brief })
   }
@@ -1974,7 +2003,7 @@ function claims(ctx: Ctx) {
   const myLive = state.issues.filter(issue => mine(ctx, issue) && isLive(issue)).length + waiting
   // An issue in design takes a worktree as soon as its implementer starts; one just claimed is
   // about to be in design.
-  const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length + waiting
+  const myDesigning = state.issues.filter(issue => mine(ctx, issue) && isLive(issue) && issue.stage === 'designing').length + waiting
   const lastClaim = Math.max(0, ...state.ledger.filter(e => e.kind === 'claim').map(e => e.startedAt))
   // merge work this pass plans, or that still runs from an earlier one
   const mergeWork = ctx.out.some(a => a.rule.startsWith('M')) || state.ledger.some(e => e.status === 'running' && e.rule.startsWith('M'))
@@ -2102,8 +2131,8 @@ function agents(ctx: Ctx) {
     const issue = ctx.issues.get(entry.issue)
     if (issue === undefined || state.control.paused.includes(entry.issue)) continue
     const stopped = (why: string) => wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why })
-    if (issue.open === false || (issue.stage !== null && ENDED.includes(issue.stage))) {
-      const why = issue.open === false ? 'closed' : (issue.stage as Stage)
+    if (finished(issue)) {
+      const why = endedWhy(issue)
       want(ctx, stop(`issue ${why}`))
       want(ctx, stopped(why))
     } else if (issue.holder !== null && issue.holder !== state.device && isLive(issue)) {

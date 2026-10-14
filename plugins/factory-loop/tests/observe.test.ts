@@ -29,7 +29,7 @@ import { plan } from '../hooks/plan'
 import { buildState, runsFromWatch, seenRuns, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
-import { DEVICE, NOW, MIN, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
+import { DEVICE, NOW, MIN, OTHER, config, control, entry, review, run, state, wakeAnswer } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
 const iso = (ms: number) => new Date(ms).toISOString()
@@ -1030,8 +1030,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const h = host({ issues: { '--json 114': limit } })
     const obs = await h.pass(runtime(), stored())
     expect(obs.rateLimited).toBe(true)
-    // 114 is read first and hits the limit; 470 is not tried
-    expect(h.commands().filter(c => c.startsWith('callum-flow-issue-read'))).toEqual(['callum-flow-issue-read --json 114'])
+    // 45, this device's, is read first (#556); 114 hits the limit; 470 is not tried
+    expect(h.commands().filter(c => c.startsWith('callum-flow-issue-read'))).toEqual(['callum-flow-issue-read --json 45', 'callum-flow-issue-read --json 114'])
     expect(obs.state.sources.github).toEqual({ ok: false, at: NOW, error: 'GitHub rate limit' })
     expect(obs.state.githubBackoffUntil).toBe(NOW + GITHUB_BACKOFF_MS)
 
@@ -1068,6 +1068,79 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     h.world.originHead = { stdout: 'origin/main\n' }
     h.world.status = { exitCode: 128, stderr: 'fatal: not a git repository\n' }
     expect((await h.pass(runtime({ mode: 'observe' }), undefined, NOW + 3 * MIN)).state.checkout).toEqual({ error: 'exit 128: fatal: not a git repository' })
+  })
+
+  // an issue as the reader prints it once it is closed
+  const CLOSED = (n: number): Reply => ({
+    stdout: JSON.stringify({
+      issue: { number: n, title: 'Old work', state: 'closed', labels: [{ name: 'In development' }], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } },
+      stripped: 0,
+    }),
+  })
+  const issueReads = (h: ReturnType<typeof host>) =>
+    h.commands().flatMap(c => (c.startsWith('callum-flow-issue-read --json ') && !c.includes('--list') ? [c.slice('callum-flow-issue-read --json '.length)] : []))
+
+  test('the first pass reads the issues the loop would act on before the queue, so a closed one is never driven (testbed run 3, #556)', async () => {
+    // twelve ready issues, and run 2's issues 40 and 41, closed at the reset, still live in the
+    // factory with their failed runs listed; 32 is another device's, closed too
+    const queue = Array.from({ length: 12 }, (_, i) => 60 + i)
+    const R40 = RUN(40)
+    const R41 = RUN(41)
+    const h = host({
+      factory: [
+        fsIssue(40, 'parked', { run: R40, pr: 540, stuck: { rule: 'S3', text: 'parked for more than 30 minutes' } }),
+        fsIssue(41, 'in pipeline', { run: R41, pr: 541 }),
+        fsIssue(32, 'parked', { holder: OTHER, run: RUN(32), pr: 532 }),
+      ],
+      pipeline: { stdout: `failed feat/issue-40-x ${R40} step=review pr=540 head=${SHA(40)}\nfailed feat/issue-41-x ${R41} step=review pr=541 head=${SHA(41)}\n` },
+      queue: { stdout: `queue known=none now=${queue.join(',')}\n` },
+      issues: { '--json 40': CLOSED(40), '--json 41': CLOSED(41), '--json 32': CLOSED(32) },
+    })
+    // the ledger rebuilt from run 2's events: 40's adjudication asked for a fixer
+    const adjudicated = entry(`adjudicate:${R40}:review:${SHA(40)}`, 'spawn', {
+      agent: 'adjudicator',
+      class: 'drive',
+      issue: 40,
+      run: R40,
+      head: SHA(40),
+      outcome: review({ type: 'fixer', instructions: 'add the missing test' }),
+    })
+    const kept = stored({ ledger: [...(stored().ledger ?? []), adjudicated], queueKnown: null })
+    const first = await h.pass(runtime(), kept)
+    // the twelve reads of the pass: this device's issues, the other live one, then the queue
+    expect(issueReads(h)).toEqual(['40', '41', '32', ...queue.slice(0, 9).map(String)])
+    expect(first.state.issues.filter(i => i.open === false).map(i => i.number)).toEqual([32, 40, 41])
+    const r = plan(first.state, config())
+    expect(r.actions.filter(a => a.kind === 'spawn').map(a => a.key)).toEqual([])
+    expect(r.title).toContain('(Q:12 - D:0 - M:0)')
+
+    // a closed issue is not read again; the rest of the queue is, then the oldest reads
+    await h.pass(runtime(), kept, NOW + 6 * MIN)
+    expect(issueReads(h)).toEqual([...queue.slice(9), ...queue.slice(0, 9)].map(String))
+  })
+
+  test('an issue with a running agent of the loop is read too; a failed read keeps the last state; a closed issue back in the queue is read again (#556)', async () => {
+    const fixer = entry('fixer:gate:x', 'spawn', { agent: 'fixer', class: 'drive', issue: 77, status: 'running', agentId: 'a77', startedAt: NOW - 5 * MIN, endedAt: null })
+    const kept = stored({ ledger: [...(stored().ledger ?? []), fixer] })
+    const h = host({ issues: { '--json 77': CLOSED(77) } })
+    const first = await h.pass(runtime(), kept)
+    expect(issueReads(h)).toEqual(['77', '45', '114', '470'])
+    // the factory never saw 77, but its agent is the loop's: stopped, with the reason
+    expect(plan(first.state, config()).actions.find(a => a.key === 'stop:a77')).toMatchObject({ rule: 'A2', reason: 'issue closed' })
+
+    // 45's next read fails: it stays open as last read, never unknown or closed
+    h.world.issues['--json 45'] = { exitCode: 1, stderr: 'callum-flow-issue-read: cannot read issue #45' }
+    const later = await h.pass(runtime(), kept, NOW + 6 * MIN)
+    expect(issueReads(h)).toEqual(['45', '114', '470'])
+    expect(later.state.issues.find(i => i.number === 45)?.open).toBe(true)
+    expect(later.state.sources.github.ok).toBe(false)
+
+    // 77 reopened and made ready: the queue lists open issues only, so it is read again
+    h.world.queue = { stdout: 'queue known=114,470 now=77,114,470\n' }
+    h.world.issues['--json 77'] = { stdout: ISSUE(77) }
+    const back = await h.pass(runtime(), kept, NOW + 12 * MIN)
+    expect(issueReads(h)).toContain('77')
+    expect(back.state.issues.find(i => i.number === 77)?.open).toBe(true)
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {

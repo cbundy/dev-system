@@ -1172,6 +1172,11 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
           return { stdout: factoryDoc([{ issue: 471, stage: 'parked', entered_at: iso(NOW - 10 * MIN), holder: OTHER, run: '01K7S1AAAAAAAAAAAAAAAAAAAA', pr: 571, stuck: null, github: null }]) }
         }
         if (argv[0] === `${TOOLS}/pipeline-watch.sh`) return { stdout: `parked issue-471-other 01K7S1AAAAAAAAAAAAAAAAAAAA step=review pr=571 head=${head}\n` }
+        // a live issue is read whoever holds it (#556): it is still open
+        if (argv.join(' ') === 'callum-flow-issue-read --json 471') {
+          const issue = { number: 471, title: 'Other work', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }
+          return { stdout: JSON.stringify({ issue, stripped: 0 }) }
+        }
         return undefined
       },
     })
