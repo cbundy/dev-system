@@ -27,6 +27,20 @@ check "docker stop forwards TERM to the command and the container exits 143" bas
   echo \"exit code \$rc\"
   [ \"\$rc\" = 143 ]"
 
+check "the command reads the container's stdin" bash -c "
+  out=\$(echo stdin-reaches-the-command | docker run --rm -i '$IMAGE' cat 2>/dev/null)
+  echo \"stdout=\$out\"
+  [ \"\$out\" = stdin-reaches-the-command ]"
+
+check "INT is forwarded to a command with the default INT action and the container exits 130" bash -c "
+  c=\$(docker run -d --label '$RUN_ID' '$IMAGE' sleep infinity)
+  sleep 3
+  docker kill -s INT \"\$c\" >/dev/null
+  for _ in \$(seq 20); do [ \"\$(docker inspect -f '{{.State.Running}}' \"\$c\")\" = false ] && break; sleep 1; done
+  rc=\$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' \"\$c\")
+  echo \"state \$rc\"
+  [ \"\$rc\" = 'false 130' ]"
+
 # A heartbeat-loop --final that hangs is cut off by timeout 10: the stop still finishes, and the stub's output never reaches stdout.
 hbstub=$(mktemp -d)
 chmod 755 "$hbstub"

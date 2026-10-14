@@ -52,7 +52,7 @@ fi
 # heartbeat once it has exited (heartbeat-loop --final, #467). Stop signals are forwarded to
 # the child; bash's wait returns early when a trapped signal arrives, so loop until the
 # child has really exited.
-"$@" &
+( trap - INT QUIT; exec "$@" ) <&0 &
 child=$!
 trap 'kill -s TERM "$child" 2>/dev/null || true' TERM
 trap 'kill -s INT "$child" 2>/dev/null || true' INT
