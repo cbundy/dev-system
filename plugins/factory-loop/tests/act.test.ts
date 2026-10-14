@@ -29,6 +29,7 @@ import {
   wakeStarted,
 } from '../hooks/act'
 import type { ActEnv, Acted, Between, Live } from '../hooks/act'
+import { REPAIR_REPLY } from '../hooks/act-agents'
 import { ACTION_KINDS } from '../hooks/config'
 import { controlText } from '../hooks/control'
 import { answerPath } from '../hooks/exec'
@@ -409,6 +410,26 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(sent).toHaveLength(1)
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed', attempts: 1 })
     expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('does not parse')
+  })
+
+  test("a designer's report survives its repair round: the reply goes after it in the saved file, which judge(report) reads (#548, rule D3)", async () => {
+    const designer = entry('design:60:1', 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const files = new Map<string, string>()
+    const f = fake([designer], () => ({}), { writeFile: async (p, t) => void files.set(p, t), readFile: async p => files.get(p) ?? null })
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const s = state({ issues: [mine(60, 'designing', { stageSince: 1 })], ledger: [] })
+    const said = (answer: string) => agentAnswered(f.env, s, { agentId: 'agent-1', answer, reason: 'answer' }, between, async () => false, async () => null)
+    const report = '## Design\nThe parser drops prose before the contract.\nBrief posted on the issue.'
+    expect(await said(report)).toMatchObject({ result: 'repair', key: designer.key })
+    expect(files.get(answerPath(LOOP_DIR, designer.key))).toBe(report)
+    // the reply is still misshapen: the report goes to the model, and the file still holds it whole
+    expect(await said('RESULT brief=see-above')).toMatchObject({ result: 'applied', repaired: true })
+    expect(f.env.live.ledger.find(e => e.key === designer.key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', unparsed: true } })
+    expect(files.get(answerPath(LOOP_DIR, designer.key))).toBe(`${report}\n\n${REPAIR_REPLY}\n\nRESULT brief=see-above`)
+    // a fresh attempt's first answer replaces the file
+    f.env.live.ledger = [{ ...designer, attempts: 2 }]
+    expect(await said('RESULT brief=none created=61 pending_decision=no')).toMatchObject({ result: 'applied', repaired: false })
+    expect(files.get(answerPath(LOOP_DIR, designer.key))).toBe('RESULT brief=none created=61 pending_decision=no')
   })
 
   test('no repair goes to an agent still at work, nor to one the loop did not start (#548)', async () => {

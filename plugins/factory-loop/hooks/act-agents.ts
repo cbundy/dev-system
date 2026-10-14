@@ -291,14 +291,21 @@ export function stillAtWork(agents: readonly ListedLoop[], id: string): boolean 
   return agents.some(a => (a.id === id && a.status === 'waiting') || (a.parentId === id && AT_WORK.includes(a.status)))
 }
 
+// What goes between an answer and the reply to its repair message in the saved file.
+export const REPAIR_REPLY = "--- the reply to the factory loop's repair message ---"
+
 // onAgentAnswer: an agent of the loop finished (its turn.complete). The answer is saved whole,
 // then read, and the events its outcome logs go out; the driver records the Exec, or first sends
-// the agent the repair message for the problem (act.ts agentAnswered). A failed save or event is
-// noted in the summary but keeps the reading: re-running an agent costs far more.
+// the agent the repair message for the problem (act.ts agentAnswered). The reply to a repair goes
+// after the answer it repairs, never over it: a designer's report is what judge(report) reads
+// (rule D3), and the reply is a line at most. A failed save or event is noted in the summary but
+// keeps the reading: re-running an agent costs far more.
 export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<{ exec: Exec; problem: string | null }> {
   const notes: string[] = []
+  const path = answerPath(ctx.rt.loopDir, entry.key)
   try {
-    await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), answer.answer)
+    const before = entry.reminded === true ? await ctx.io.readFile(path) : null
+    await ctx.io.writeFile(path, before === null ? answer.answer : `${before.replace(/\n*$/, '')}\n\n${REPAIR_REPLY}\n\n${answer.answer}`)
   } catch (err) {
     notes.push(`answer not saved: ${message(err)}`)
   }
