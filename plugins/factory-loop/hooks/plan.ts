@@ -795,7 +795,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
         if (esc !== undefined) {
           const notes = issueNotes(ctx, n, esc.endedAt, latestResumeAt(ctx, `run:${run.run}`))
           const recorded = esc.why !== ''
-          if (recorded && notes.length === 0 && esc.verdicts.length > 0 && esc.verdicts.every(v => /^ENV:/.test(v))) {
+          if (recorded && notes.length === 0 && envOnly(esc.verdicts)) {
             if (run.head !== null) {
               envRetry(ctx, run, at, suffix, esc.verdicts)
               continue
@@ -857,7 +857,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           ctx,
           wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
             action.why,
-            resumeEffect(verdict.verdicts.length > 0 && verdict.verdicts.every(v => /^ENV:/.test(v))),
+            resumeEffect(verdict.verdicts, run.head),
             ...verdict.verdicts,
           ]),
         )
@@ -958,10 +958,15 @@ function latestEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): 
 }
 
 // resumeEffect: the context line of an escalate tell, saying what a plain resume will do.
-function resumeEffect(envOnly: boolean): string {
-  return envOnly
-    ? 'a resume alone runs the pipeline again on the same head; add a `note <N>` before the resume to send a fixer instead'
-    : "a resume sends a fixer with the adjudicator's reason above, plus any `note <N>` added before it"
+function resumeEffect(verdicts: string[], head: string | null): string {
+  if (!envOnly(verdicts)) return "a resume sends a fixer with the adjudicator's reason above, plus any `note <N>` added before it"
+  return head === null
+    ? 'a resume alone asks the adjudicator again, as the run has no known head to run again on; add a `note <N>` before the resume to send a fixer instead'
+    : 'a resume alone runs the pipeline again on the same head; add a `note <N>` before the resume to send a fixer instead'
+}
+
+function envOnly(verdicts: string[]): boolean {
+  return verdicts.length > 0 && verdicts.every(v => /^ENV:/.test(v))
 }
 
 // envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
@@ -988,7 +993,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
   if (g === 'exhausted') {
     const why = ctx.byKey.get(key)?.summary
     const line = `the pipeline could not be run again on this head after the resume${why === undefined ? '' : ` (${why})`}; resuming the run tries once more`
-    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, resumeEffect(true), ...verdicts]))
+    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, resumeEffect(verdicts, run.head), ...verdicts]))
     return
   }
   const ran = g === 'done' ? done(ctx, key) : undefined
@@ -997,7 +1002,7 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
     ctx,
     wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [
       'the pipeline was run again on this head after the resume, and the run is still at this gate',
-      resumeEffect(true),
+      resumeEffect(verdicts, run.head),
       ...verdicts,
     ]),
   )
