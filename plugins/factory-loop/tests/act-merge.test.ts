@@ -888,11 +888,12 @@ describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
 
   test('one sh -c from the main checkout, with the branch, the run head and the expected origin as positional arguments', async () => {
     expect(argvsOf(ff(), LOOP_DIR)).toEqual([['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED, GATED]])
+    expect(argvsOf(ff({ origin: HANDOFF }), LOOP_DIR)).toEqual([['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED, HANDOFF]])
     expect(fastForwardArgv(BRANCH, GATED, HANDOFF)).toEqual(['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED, HANDOFF])
     const rebased = await exec(ff({ origin: HANDOFF }), [{ stdout: `CURRENT ${GATED}\n` }])
     expect(rebased.calls[0]?.argv.slice(-3)).toEqual([BRANCH, GATED, HANDOFF])
     const { calls } = await exec(ff(), [{ stdout: `CURRENT ${GATED}\n` }])
-    expect(calls).toEqual([{ argv: fastForwardArgv(BRANCH, GATED), init: { timeoutMs: MERGE_TIMEOUT_MS['fast-forward'] } }])
+    expect(calls).toEqual([{ argv: fastForwardArgv(BRANCH, GATED, GATED), init: { timeoutMs: MERGE_TIMEOUT_MS['fast-forward'] } }])
   })
 
   test('the script moves a worktree only by a fast-forward, after origin, the tree and ancestry are checked', () => {

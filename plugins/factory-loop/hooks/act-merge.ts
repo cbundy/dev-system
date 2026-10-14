@@ -172,7 +172,7 @@ export const FF_SCRIPT = [
   '  [ "$p" != "$main" ] || { echo "REFUSED $p is the main worktree, which the loop never moves"; exit 0; }',
   '  st=$(git -C "$p" status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of $p"; exit 0; }',
   '  [ -z "$st" ] || { echo "REFUSED $p has uncommitted changes"; exit 0; }',
-  '  git merge-base --is-ancestor "$at" "$head" || { echo "REFUSED $p at $at has commits not on origin/$branch"; exit 0; }',
+  '  git merge-base --is-ancestor "$at" "$head" || { echo "REFUSED $p at $at is not an ancestor of the run head $head"; exit 0; }',
   '  lag=$lag$p$nl',
   'done',
   '[ -n "$lag" ] || { echo "CURRENT $head"; exit 0; }',
@@ -183,7 +183,7 @@ export const FF_SCRIPT = [
   'done',
 ].join('\n')
 
-export function fastForwardArgv(branch: string, head: string, origin: string = head): string[] {
+export function fastForwardArgv(branch: string, head: string, origin: string): string[] {
   return ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', branch, head, origin]
 }
 
@@ -229,7 +229,7 @@ export function argvsOf(action: Action, loopDir: string, attempt = 1): string[][
     case 'update-behind':
       return [updateBehindArgv(action)]
     case 'fast-forward':
-      return [fastForwardArgv(action.branch, action.head)]
+      return [fastForwardArgv(action.branch, action.head, action.origin)]
     case 'update-checkout':
       return [updateCheckoutArgv(action.branch)]
     case 'fix-linkage':

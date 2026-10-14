@@ -2419,7 +2419,7 @@ describe('M2: fast-forward after the loop\'s own update-behind rebased the head 
 
   test('worktreeLag matches the run head, the expected origin and a worktree at neither', () => {
     expect(worktreeLag(REBASED_LAG, 'head50', 'head51')).toBe(true)
-    expect(worktreeLag(REBASED_LAG, 'head50')).toBe(false)
+    expect(worktreeLag(REBASED_LAG, 'head50', 'head50')).toBe(false)
     expect(worktreeLag(headFail('head50', 'head51', 'head51', 'head51'), 'head50', 'head51')).toBe(false)
     expect(worktreeLag(headFail('head50', 'head51', 'head51', 'head50', 'head51', 'wt50'), 'head50', 'head51')).toBe(true)
   })

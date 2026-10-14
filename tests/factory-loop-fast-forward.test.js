@@ -79,7 +79,7 @@ test("a dirty worktree, a diverged one and an origin that is not the expected he
     fs.writeFileSync(path.join(f.slot, "own"), "x");
     git(f.slot, "add", "own");
     git(f.slot, "commit", "-qm", "own");
-    assert.match(ff(f.main, "b", f.r1, f.r2).stdout, /has commits not on origin/);
+    assert.match(ff(f.main, "b", f.r1, f.r2).stdout, /is not an ancestor of the run head /);
     assert.equal(git(f.slot, "log", "-1", "--format=%s"), "own");
   } finally {
     fs.rmSync(f.dir, { recursive: true, force: true });

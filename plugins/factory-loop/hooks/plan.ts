@@ -1177,7 +1177,7 @@ function fastForward(run: RunView, key: string, origin: string): Action {
 // update-behind pushed, #595), a worktree is at neither, and every worktree's head was read (the guard
 // prints `run= origin= pr=` and a `worktree=` per worktree). That the worktree is behind, clean
 // and has nothing origin lacks is the fast-forward's to prove (#551).
-export function worktreeLag(fail: GuardFail, head: string, origin: string = head): boolean {
+export function worktreeLag(fail: GuardFail, head: string, origin: string): boolean {
   if (fail.name !== 'head') return false
   const m = /^run=(\S+) origin=(\S+) pr=(\S+)((?: worktree=\S+)*) \(run /.exec(fail.reason)
   if (m === null || m[1] !== head || m[2] !== origin || m[3] !== origin) return false
