@@ -664,12 +664,13 @@ for an issue with a `model:` label says to pass that model to the agent's own su
   posted, the implementer and fixer after the `implement-issue` handoff. It names the script by
   its absolute path under the plugin's root (`$.plugin.root`) and an answer file unique to the
   ledger entry and attempt, and shows the call as a here-document with an example of the JSON
-  (`<script> --to <file> <<'JSON'`), so no quote in an answer trips the shell. It says what
+  (`<script> --to <file> <<'JSON'`), so no quote in an answer trips the shell; the command, the
+  JSON and the closing `JSON` line stand at column 0, so the block runs as copied. It says what
   each field means, that the script records the answer and changes nothing else (the
   adjudicator is otherwise read-only), to correct the JSON and run it again when it prints
   problems, and to end the turn once it says the answer is recorded. The words stay neutral: the
   prompt never says why the script stands in. A path a prompt may not carry (anything but
-  letters, digits and `._/-`, or a `..`), or a job file that cannot be written, gives that spawn
+  letters, digits and `._/-`, or a `..`, `.` or empty part), or a job file that cannot be written, gives that spawn
   the text channel instead. With `tool`, each prompt first asks the agent to answer through its
   tool (7.3a): the adjudicator `mcp__factory-loop__verdict`, the designer
   `mcp__factory-loop__design` (once the brief is posted), the implementer and fixer
@@ -850,9 +851,10 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
      ledger entry and attempt, and the script by its absolute path under `$.plugin.root`.
    - **The script.** `factory-answer --to <answer file> '<json>'`, or the JSON on standard input.
      It writes that one file and only where the loop issued it: an absolute plain path whose name
-     ends `.answer.json`, in `<CLAUDE_CONFIG_DIR or ~/.claude>/factory-loop/<owner>__<repo>/answers/`,
-     every directory on the way a real one (no link out), with the job file beside it; any other
-     path is refused before anything is written. It checks the JSON against the job's contract
+     ends `.answer.json`, in `<CLAUDE_CONFIG_DIR or ~/.claude>/factory-loop/<owner>__<repo>/answers/`
+     (`contract.mjs` `loopDirOf`, which the loop builds its loop dir with too), every directory on
+     the way a real one (no link out), with the job file beside it, for the repo whose loop dir it
+     is in; any other path is refused before anything is written. It checks the JSON against the job's contract
      and prints every problem, exit 1; a usage error exits 2. On success it writes
      `{ v: 1, contract, answer }` atomically (a new temp file in the same directory, flushed, then
      renamed over the answer file), prints that it is recorded, and exits 0. It runs from any
@@ -864,7 +866,9 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
      answer in text or through the tool gives, its summary marked `(script)`, whatever the turn's
      closing words say and however the turn ended. With no file there, or one that fails its
      checks, the text is read as before (item 5); a refused file is named in the decision log and
-     in the repair message.
+     in the repair message. An agent the agent list would mark lost (gone, or its turn ended,
+     7.5) before its `turn.complete` is read has that file read first: a valid one finishes the
+     entry as above, its summary noting it was read before its `turn.complete`.
    - **Switching back.** Once the probe passes, `answerChannel` goes to `tool`; the script and
      its job files then rest, and nothing else changes.
 2. **Matching.** A call is tied to the running `spawn` or `delegate` entry whose `agentId` is the
@@ -897,9 +901,10 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    agent that is not still at work, first gets one message to the same agent via
    `$.session.send`, which resumes a finished agent from its transcript. The message names what
    was wrong (the parser's reason, quoting the line, after what kept a recorded answer file out)
-   and asks again on the channel its spawn was asked on (its spawn record, else the setting): the
-   answer script with the same answer file, or the tool, first, with the machine lines as the
-   fallback; on the text channel, the machine lines alone. The entry stays
+   and asks again on the channel its spawn was asked on (its spawn record): the answer script
+   with the same answer file, or the tool, first, with the machine lines as the fallback; on the
+   text channel, the machine lines alone. A record that names no channel, or a script channel
+   whose job file is gone, gets the text channel. The entry stays
    running with its attempt unspent and is marked `reminded` before the send. While the send is
    on its way the agent counts as at work, its answer being handled. Once delivered, the loop
    waits on its reply: the agent counts as at work while still listed with its turn ended
@@ -985,7 +990,9 @@ keeps (FINDINGS check 5). On load:
    listed `idle` for 20 s or more before `completed`, and only the loop's own repair message
    wakes one of its agents, so the loop reads `idle` as an ended turn everywhere, like
    `completed` (#560). An agent whose answer is being handled counts as running, as does one the
-   loop awaits a repair reply from (7.3a.6). A failed read changes nothing.
+   loop awaits a repair reply from (7.3a.6). An agent about to be marked `lost` that recorded a
+   valid answer with the answer script is finished with it instead (7.3a.1). A failed read
+   changes nothing.
 4. Plan then re-derives what to do from the state, not from the lost entries. This is safe
    because every write the loop can lose midway is either idempotent at the CLI (a claim this
    device already holds is kept and nothing is posted; the heartbeat, sweep, labels and
@@ -1284,7 +1291,8 @@ set its directives.
 
 ### 11.6 Where its files live
 
-`<loop dir>` is `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/<owner>__<repo>/`:
+`<loop dir>` is `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/<owner>__<repo>/`, the config dir
+with no doubled or trailing `/` (`contract.mjs` `loopDirOf`):
 
 - the decision logs (`decisions-YYYY-MM-DD.jsonl`) and `control.json`;
 - the trace files (`trace-YYYY-MM-DD.jsonl`), in trace mode only, kept under `traceMaxBytes` in

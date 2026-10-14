@@ -335,7 +335,7 @@ describe('spawn (SPEC 6.1)', () => {
       expect(place.file).toEndWith(`.a2.${NOW + 7}.answer.json`)
       expect(r.files.get(jobPathOf(place.file) ?? '')).toBe(jobText(job))
       const prompt = r.spawns[0]?.prompt ?? ''
-      expect(prompt).toContain(`  ${place.bin} --to ${place.file} <<'JSON'`)
+      expect(prompt).toContain(`\n${place.bin} --to ${place.file} <<'JSON'\n`)
       expect(prompt).not.toContain(tool)
       expect(JSON.parse(r.files.get(spawnRecordPath(LOOP, action.key)) ?? '{}')).toMatchObject({ channel: 'script', answerFile: place.file, attempt: 2 })
     }

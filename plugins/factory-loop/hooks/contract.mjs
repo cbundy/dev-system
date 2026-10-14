@@ -342,8 +342,21 @@ export function checkAnswer(job, input) {
 export const ANSWER_SUFFIX = '.answer.json'
 export const JOB_SUFFIX = '.job.json'
 export const ANSWER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.answer\.json$/
-// The loop dir's own name: <owner>__<repo> (register.ts runtime).
+// The loop dir's own name: <owner>__<repo> (loopDirOf).
 export const LOOP_DIR_NAME = /^[A-Za-z0-9._-]+__[A-Za-z0-9._-]+$/
+
+// loopBaseOf: the factory loop's directory under a config dir (CLAUDE_CONFIG_DIR, else
+// ~/.claude), a trailing / on it dropped: its config.json, its OFF file and every repo's loop dir.
+export function loopBaseOf(configDir) {
+  return `${configDir.replace(/\/+$/, '')}/factory-loop`
+}
+
+// loopDirOf: a repo's loop dir, <config dir>/factory-loop/<owner>__<repo>: where the loop keeps
+// that repo's files (register.ts runtime), and whose answers/ directory is the only place the
+// answer script writes, for a job of that repo.
+export function loopDirOf(configDir, repo) {
+  return `${loopBaseOf(configDir)}/${repo.replace('/', '__')}`
+}
 const FILE_VERSION = 1
 
 // jobPathOf: the job file beside an answer file, or null for a path that names no answer file.

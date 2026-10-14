@@ -409,6 +409,47 @@ async function scriptAnswerOf(ctx: ExecCtx, entry: LedgerEntry): Promise<{ body:
   }
 }
 
+// scriptAnswered: the answer an agent of the loop recorded with the answer script, for an agent
+// the agent list shows ended or gone before its turn.complete was read (act.ts actPass, #561): read
+// and checked as onAgentAnswer reads it, saved under SCRIPT_RECORD (after an answer it repairs),
+// its events logged, and the Exec to finish its entry with. Null when there is none or it fails
+// its checks, and the entry is lost as before.
+export async function scriptAnswered(ctx: ExecCtx, entry: LedgerEntry): Promise<Exec | null> {
+  const recorded = await scriptAnswerOf(ctx, entry)
+  if (recorded === null) return null
+  const script = readScriptAnswer(entry, recorded.body, await answerInfoOf(ctx, entry))
+  if (!('exec' in script)) return null
+  const notes = ['read before its turn.complete']
+  const path = answerPath(ctx.rt.loopDir, entry.key)
+  try {
+    const before = entry.reminded === true ? await ctx.io.readFile(path) : null
+    const record = `${SCRIPT_RECORD}\n\n${recorded.body.replace(/\n*$/, '')}\n`
+    await ctx.io.writeFile(path, before === null ? record : `${before.replace(/\n*$/, '')}\n\n${record}`)
+  } catch (err) {
+    notes.push(`recorded answer not saved: ${message(err)}`)
+  }
+  notes.push(...(await logEvents(ctx, script.events)))
+  return noted(script.exec, notes)
+}
+
+// repairAskOf: the channel a repair message asks on (act.ts agentAnswered), with the answer
+// script's place on the script channel: the channel the spawn's record names, the script only
+// while this attempt's job file stands beside its answer file, since the script refuses an answer
+// file without one. With no channel named (no record, or one from before the channel was kept) or
+// no job file, text, the channel always read.
+export async function repairAskOf(ctx: Pick<ExecCtx, 'io' | 'rt'>, entry: LedgerEntry, channel: AnswerChannel | null): Promise<{ channel: AnswerChannel; script: ScriptPlace | null }> {
+  if (channel !== 'script') return { channel: channel ?? 'text', script: null }
+  const place = scriptPlaceOf(ctx.rt, entry)
+  const job = jobPathOf(place.file)
+  let body: string | null = null
+  try {
+    body = job === null ? null : await ctx.io.readFile(job)
+  } catch {
+    body = null
+  }
+  return body === null ? { channel: 'text', script: null } : { channel: 'script', script: place }
+}
+
 // onToolAnswer: an agent of the loop called its answer tool, read against its spawn record. A
 // call the contract refuses changes nothing. An accepted one has its input saved (as JSON) before
 // the driver records it, so a pass that acts on the answer (judge(handoff) points the model at the

@@ -17,9 +17,10 @@
 //   JSON
 //
 // It writes that one file and nothing else, and only where the loop issued it: a name ending in
-// .answer.json, in <CLAUDE_CONFIG_DIR, else ~/.claude>/factory-loop/<owner>__<repo>/answers/,
-// beside the job file (.job.json) the loop wrote there before the spawn, which says what the
-// answer must hold. The write is atomic: a new temp file in the same directory, then a rename
+// .answer.json, in <CLAUDE_CONFIG_DIR, else ~/.claude>/factory-loop/<owner>__<repo>/answers/
+// (contract.mjs loopDirOf, which the loop builds its paths with too), beside the job file
+// (.job.json) the loop wrote there before the spawn, which says what the answer must hold and
+// for which repo. The write is atomic: a new temp file in the same directory, then a rename
 // over the answer file. Exit 0: recorded; 1: not recorded (the answer, the path or the write);
 // 2: usage.
 //
@@ -129,7 +130,8 @@ async function placeOf(to, mods, contract) {
   const dir = path.dirname(to)
   const loopDir = path.dirname(dir)
   const config = process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || os.homedir(), '.claude')
-  const base = path.join(config, 'factory-loop')
+  // the loop's folder layout, from the contract the loop builds its paths with (register.ts)
+  const base = path.resolve(contract.loopBaseOf(config))
   const outside = `${to} is not in an answers directory of the factory loop (${base}/<owner>__<repo>/answers/): ${where}`
   if (path.basename(dir) !== 'answers' || !contract.LOOP_DIR_NAME.test(path.basename(loopDir))) throw new Refused([outside])
   const real = await realOf(fs, base)
@@ -146,6 +148,9 @@ async function placeOf(to, mods, contract) {
   if (jobPath === null || jobSt === null || !jobSt.isFile()) throw new Refused([`the factory loop issued no answer file at ${to} (it has no job file beside it): ${where}`])
   const job = contract.parseJob(await fs.readFile(jobPath, 'utf8'))
   if (typeof job === 'string') throw new Refused([`${job}: ${jobPath}`])
+  // and the loop dir is the one of the job's repo (its base is this config's, checked above)
+  const own = path.resolve(contract.loopDirOf(config, job.repo))
+  if (path.basename(loopDir) !== path.basename(own) || path.dirname(own) !== base) throw new Refused([`${to} is not in the answers directory of ${job.repo}, the repo its job file names (${own}/answers/): ${where}`])
   const st = await lstatOf(fs, to)
   if (st !== null && !st.isFile()) throw new Refused([`${to} is there and is not a plain file, so it is left alone`])
   return { dir, name, job }

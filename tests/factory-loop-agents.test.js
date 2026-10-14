@@ -3,7 +3,7 @@
 // Every agent the factory loop spawns must reach its answer tool (#548): an agent calls nothing its
 // definition's `tools:` list leaves out, and the callum-flow adjudicator and designer list theirs.
 // The loop spawns its own copies of those two (plugins/factory-loop/agents/), which must stay the
-// callum-flow definitions word for word but for `tools:`, so the released orchestrator's agents
+// callum-flow definitions word for word but for `tools:` and the one sentence ADDED names, so the released orchestrator's agents
 // and the loop's never drift apart. This reads the hooks and the definitions as text, since
 // plugin tests cannot read files; act-agents.test.ts checks the same mapping in the code.
 const { test } = require("node:test");
@@ -62,7 +62,14 @@ test("every agent type the loop spawns reaches its answer tool, through ToolSear
   }
 });
 
-test("the loop's own agents are the callum-flow definitions word for word but for their tools, which add only ToolSearch and the answer tool", () => {
+// The one sentence a loop copy adds to its callum-flow definition (#561): the adjudicator is
+// otherwise held to a closed list of read-only commands, and its prompt asks it to record its
+// answer with the answer script. The designer's definition forbids nothing the script does.
+const ADDED = {
+  "adjudicator.md": "\nYou may also run the `factory-answer` command your prompt names, which only records your answer.",
+};
+
+test("the loop's own agents are the callum-flow definitions word for word but for their tools, which add only ToolSearch and the answer tool, and the one sentence that allows the answer script", () => {
   const own = fs.readdirSync(path.join(ROOT, "plugins/factory-loop/agents")).filter((f) => f.endsWith(".md"));
   assert.deepEqual(own.map((f) => `factory-loop:${f.slice(0, -3)}`).sort(), Object.values(SUBAGENT_OF).filter((t) => t.startsWith("factory-loop:")).sort());
   for (const file of own) {
@@ -73,7 +80,14 @@ test("the loop's own agents are the callum-flow definitions word for word but fo
     assert.ok(base !== null, `callum-flow ${file} lists no tools: spawn it instead of a copy`);
     assert.deepEqual(toolsOf(loop), [...base, "ToolSearch", TOOL_OF[agent]], `${file}: tools are callum-flow's plus ToolSearch and ${TOOL_OF[agent]}`);
     const untooled = (text) => text.replace(/^tools:.*$/m, "tools:");
-    assert.equal(untooled(loop), untooled(released), `plugins/factory-loop/agents/${file} drifted from plugins/callum-flow/agents/${file}: copy it again and keep the tools line`);
+    const added = ADDED[file];
+    let copy = loop;
+    if (added !== undefined) {
+      assert.equal(loop.split(added).length, 2, `plugins/factory-loop/agents/${file} must add, once, the sentence: ${added.trim()}`);
+      assert.ok(!released.includes(added), `plugins/callum-flow/agents/${file} already has the sentence the loop's copy adds`);
+      copy = loop.replace(added, "");
+    }
+    assert.equal(untooled(copy), untooled(released), `plugins/factory-loop/agents/${file} drifted from plugins/callum-flow/agents/${file}: copy it again and keep the tools line${added === undefined ? "" : " and the added sentence"}`);
   }
 });
 

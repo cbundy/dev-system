@@ -159,16 +159,19 @@ between releases. Before running the loop on a newer Claude Code:
 
 ## Develop it
 
-`npm test` runs the plugin's tests through `claude plugin test`, and nine node tests at the repo
+`npm test` runs the plugin's tests through `claude plugin test`, and ten node tests at the repo
 root: `tests/factory-loop-plan.test.js` checks that `plan.ts` stays pure;
 `factory-loop-agents.test.js` checks that every agent the loop spawns lists its answer tool, and
-that the loop's adjudicator and designer stay the callum-flow definitions but for `tools:`;
+that the loop's adjudicator and designer stay the callum-flow definitions but for `tools:` and
+the one sentence that lets the adjudicator run the answer script;
 `factory-loop-safety.test.js` scans every string in `hooks/` and the answer script for a
 forbidden command, and the script's source for any write but its one answer file;
 `factory-loop-answer.test.js` runs the answer script for real: its exit codes, every problem it
 names (held to the same table of cases as the loop's own reading, `tests/answer-cases.mjs`), its
-atomic write and every path it must refuse;
+atomic write and every path it must refuse, and runs the answer block of a rendered prompt
+through bash as an agent copies it;
 `factory-loop-judge-skill.test.js` checks the judge skill covers every wake, TELL kind and op;
 and `factory-loop-respond-launch.test.js`, `factory-loop-fast-forward.test.js`,
-`factory-loop-prune.test.js` and `factory-loop-loop-events.test.js` run the respond launch, the
-fast-forward, the daily prune and every `loop` note for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.
+`factory-loop-update-checkout.test.js`, `factory-loop-prune.test.js` and
+`factory-loop-loop-events.test.js` run the respond launch, the fast-forward, the main checkout's
+update, the daily prune and every `loop` note for real, against scratch directories. `plan.ts` also imports under plain Node, which the replay harness uses.

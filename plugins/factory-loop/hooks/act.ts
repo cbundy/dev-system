@@ -9,7 +9,7 @@
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake.
 import { cliExecutors } from './act-cli'
-import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey, scriptPlaceOf } from './act-agents'
+import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey, repairAskOf, scriptAnswered } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
@@ -414,6 +414,27 @@ export type Listed = { ok: boolean; agents: ListedAgent[] }
 // trace (#552)
 export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number } }
 
+// answeredBeforeLost: the agent entries the agent list would mark lost (gone from it, or its turn
+// ended with no answer read) whose agent recorded an answer with the answer script that passes its
+// checks (#561): each is finished with that answer, as its turn.complete would have finished it
+// (act-agents.ts scriptAnswered). An entry its turn.complete finished during the read is left
+// alone.
+async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly ListedAgent[], now: Ms): Promise<LedgerEntry[]> {
+  const before = env.live.ledger
+  // reconcileAgents keeps the ledger's order, entry for entry
+  const reconciled = reconcileAgents(before, agents, now)
+  const lost = before.filter((e, i) => e.status === 'running' && reconciled[i]?.status === 'lost')
+  const moved: LedgerEntry[] = []
+  for (const was of lost) {
+    const exec = await scriptAnswered(ctxOf(env, state, was), was)
+    if (exec === null) continue
+    const current = env.live.ledger.find(e => e.key === was.key)
+    if (current?.status !== 'running' || current.agentId !== was.agentId || current.startedAt !== was.startedAt) continue
+    moved.push(...transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config })))
+  }
+  return moved
+}
+
 // actPass: the act-mode pass once the rails passed and observe read the factory: what the agent
 // list proves (SPEC 3.3, 10.4) and wakes past their timeout (SPEC 8.2) go into the ledger first,
 // then plan reads the state with that ledger, and its actions run in plan's order.
@@ -422,6 +443,7 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
   const moved: LedgerEntry[] = []
   if (listed.ok) {
     const agents = reconcilable(listed.agents, between.answering, between.completedSeen, now, between.repairing)
+    moved.push(...(await answeredBeforeLost(env, observed, agents, now)))
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
@@ -518,9 +540,9 @@ export async function agentAnswered(
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
-      // the channel the spawn's prompt asked for (its record), else the setting's
-      const channel = read.channel ?? env.rt.config.answerChannel
-      const script = channel === 'script' ? scriptPlaceOf(env.rt, entry) : null
+      // the channel the spawn's prompt asked for (its record); text when it names none, or the
+      // script's job file is gone
+      const { channel, script } = await repairAskOf(env, entry, read.channel)
       const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem, channel, script), type)
       if (undelivered === null) {
         // listed idle or completed until the message resumes it, which the list may show late: the

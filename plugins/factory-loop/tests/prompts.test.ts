@@ -366,7 +366,7 @@ describe('the answer channels and the repair message (#548, #560, #561)', () => 
   const CONTRACT_LINE = 'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
   const lower = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`
   // the lines the script channel asks with: the command with this attempt's file, then the JSON
-  const command = `  ${PLACE.bin} --to ${PLACE.file} <<'JSON'`
+  const command = `${PLACE.bin} --to ${PLACE.file} <<'JSON'`
 
   test('askOf: script only with both paths in their shape, else text; tool; and text with no channel (#561)', () => {
     expect(askOf('script', PLACE)).toEqual({ kind: 'script', place: PLACE })
@@ -374,7 +374,7 @@ describe('the answer channels and the repair message (#548, #560, #561)', () => 
     expect(askOf('text', PLACE)).toEqual({ kind: 'text' })
     expect(askOf(undefined, PLACE)).toEqual({ kind: 'text' })
     expect(askOf('script', null)).toEqual({ kind: 'text' })
-    for (const bad of ['relative/bin/factory-answer', '/home/a b/factory-answer', "/x/it's", '/x/$HOME/a', '/x/#1', '/x/../etc/passwd', '/x/a;rm']) {
+    for (const bad of ['relative/bin/factory-answer', '/home/a b/factory-answer', "/x/it's", '/x/$HOME/a', '/x/#1', '/x/../etc/passwd', '/x/a;rm', '/cfg//factory-loop/a.answer.json', '/x/./a', '/x/a/', '/x/.']) {
       expect(scriptShaped({ ...PLACE, bin: bad })).toBe(false)
       expect(scriptShaped({ ...PLACE, file: bad })).toBe(false)
       expect(askOf('script', { ...PLACE, file: bad })).toEqual({ kind: 'text' })
@@ -386,20 +386,21 @@ describe('the answer channels and the repair message (#548, #560, #561)', () => 
     for (const [name, action] of all(BENIGN)) {
       const text = render(action, BENIGN, SCRIPT)
       if (!text.includes(`${command}\n`)) throw new Error(`${name}: no script command in ${JSON.stringify(text)}`)
-      expect(text).toContain("record your answer with the factory loop's answer script, once, its JSON on standard input:")
+      expect(text).toContain("record your answer with the factory loop's answer script, once, its JSON on standard input, each line below from the start of its line and the closing JSON alone on the last:")
       expect(text).toContain('The script records your answer for the factory loop and changes nothing else. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.')
       // the words agents read stay neutral: no tool, and nothing of why the script stands in
       expect(text).not.toMatch(/mcp__factory-loop__|ToolSearch|call it|workaround|engine/)
-      // the example follows the command, then the here-document ends
+      // the example follows the command, then the here-document ends, all three at column 0 so
+      // bash ends the here-document at the line JSON as copied
       const lines = text.split('\n')
       const at = lines.indexOf(command)
-      expect(lines[at + 1]).toStartWith('  {"')
+      expect(lines[at + 1]).toStartWith('{"')
       expect(JSON.parse(lines[at + 1] ?? '')).toBeTruthy()
-      expect(lines[at + 2]).toBe('  JSON')
+      expect(lines[at + 2]).toBe('JSON')
     }
     const designerText = render(designer(BENIGN), BENIGN, SCRIPT)
     expect(designerText).toContain("Once the brief is posted, record your answer with the factory loop's answer script")
-    expect(designerText).toContain('  {"brief": "https://github.com/cbundy/dev-system/issues/470#issuecomment-<id>", "created": [], "pendingDecision": false}')
+    expect(designerText).toContain('\n{"brief": "https://github.com/cbundy/dev-system/issues/470#issuecomment-<id>", "created": [], "pendingDecision": false}')
     expect(designerText.split('\n').slice(-2)).toEqual(['If the script cannot record your answer, end your return with the line below, exactly once and last, filled in.', DESIGNER_RESULT])
     for (const purpose of ['gate', 'weakening'] as const) {
       const text = render(adjudicator(BENIGN, purpose), BENIGN, SCRIPT)

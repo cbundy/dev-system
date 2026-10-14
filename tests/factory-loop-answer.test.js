@@ -222,6 +222,8 @@ test("any other path is refused with exit 1 before anything is written: not abso
   // a job file that is not the loop's
   const badJob = issue(gate());
   fs.writeFileSync(badJob.jobPath, '{"v": 1, "contract": "anything"}');
+  // a job for another repo, in this repo's answers directory (contract.mjs loopDirOf)
+  const otherRepo = issue({ ...gate(), repo: "other/repo" });
   const before = tree(scratch);
   const refusals = [
     [path.relative(os.tmpdir(), file), "is not an absolute path"],
@@ -241,6 +243,7 @@ test("any other path is refused with exit 1 before anything is written: not abso
     [linkTarget.file, "is not a plain file"],
     [dirTarget.file, "is not a plain file"],
     [badJob.file, "the job file is not in the shape the factory loop writes"],
+    [otherRepo.file, "is not in the answers directory of other/repo, the repo its job file names"],
   ];
   for (const [to, why] of refusals) {
     const r = run(["--to", to, JSON.stringify(VALID)]);
@@ -260,4 +263,50 @@ test("without CLAUDE_CONFIG_DIR, the loop's answers are under ~/.claude, and onl
   // the config dir's own answers are not this home's
   const other = issue(gate());
   assert.equal(run(["--to", other.file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: "" } }).code, 1);
+});
+
+test("the loop and the script share one folder layout: contract.mjs loopDirOf, a trailing / on the config dir dropped", () => {
+  const loopDir = contract.loopDirOf(cfg, "cbundy/dev-system");
+  assert.equal(loopDir, path.join(cfg, "factory-loop", REPO_DIR));
+  assert.equal(path.dirname(answers), loopDir);
+  assert.equal(contract.loopDirOf(`${cfg}//`, "cbundy/dev-system"), loopDir);
+  assert.equal(contract.loopBaseOf(`${cfg}/`), path.join(cfg, "factory-loop"));
+  // a config dir given with a trailing / still finds the answers the loop issued
+  const { file } = issue(gate());
+  assert.equal(run(["--to", file, JSON.stringify(VALID)], { env: { CLAUDE_CONFIG_DIR: `${cfg}/` } }).code, 0);
+});
+
+// The block a prompt shows (prompts.ts scriptAsk), cut out of a rendered prompt as an agent copies
+// it and run by bash, records the answer: the command, its example JSON and the closing JSON line.
+// The answer file is issued under contract.mjs loopDirOf, as the loop issues it.
+test("the answer block a rendered prompt shows runs as copied: bash records the example answer", async () => {
+  const prompts = await import(path.join(PLUGIN, "hooks", "prompts.ts"));
+  const loopDir = contract.loopDirOf(cfg, "cbundy/dev-system");
+  for (const purpose of ["gate", "weakening", "merge"]) {
+    seq += 1;
+    const key = `adjudicate:R470:review:blk${seq}`;
+    const file = exec.scriptAnswerPath(loopDir, { key, attempts: 1, startedAt: 1760430000000 + seq });
+    fs.writeFileSync(contract.jobPathOf(file), contract.jobText(table.JOBS[purpose]));
+    const action = {
+      reason: "test", kind: "spawn", agent: "adjudicator", purpose, key, class: "drive", rule: "P2", issue: 470,
+      run: "R470", branch: "feat/issue-470-x", step: purpose === "gate" ? "review" : null, head: "3f2a9c1d4e", pr: 512,
+      brief: "https://github.com/cbundy/dev-system/issues/470#issuecomment-9001", model: null,
+      warns: purpose === "weakening" ? ["GUARD test-weakening WARN 3f2a9c1 removed 2 assertions"] : [],
+      handoffHead: purpose === "merge" ? "2e1d0c9b8a" : null, verdicts: [], guard: [],
+    };
+    const prompt = prompts.promptOf(action, { repo: "cbundy/dev-system", modelOverride: null, inFlight: [], channel: "script", script: { bin: SCRIPT, file } });
+    const lines = prompt.split("\n");
+    const at = lines.findIndex((l) => l.trim().startsWith(`${SCRIPT} --to ${file} `));
+    const end = lines.findIndex((l, i) => i > at && l.trim() === "JSON");
+    assert.ok(at !== -1 && end === at + 2, `${purpose}: no answer block in ${prompt}`);
+    const r = spawnSync("bash", ["-c", lines.slice(at, end + 1).join("\n")], {
+      cwd: os.tmpdir(),
+      encoding: "utf8",
+      env: { PATH: process.env.PATH, HOME: path.join(scratch, "home"), CLAUDE_CONFIG_DIR: cfg },
+      timeout: 30_000,
+    });
+    assert.equal(r.status, 0, `${purpose}: ${r.stderr}`);
+    assert.match(r.stdout, /^factory-answer: recorded your verdict answer/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).answer, JSON.parse(lines[at + 1].trim()), purpose);
+  }
 });

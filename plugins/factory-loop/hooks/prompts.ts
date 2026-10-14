@@ -156,12 +156,14 @@ function scratch(n: number | null): string {
 export type Ask = { kind: 'script'; place: ScriptPlace } | { kind: 'tool' } | { kind: 'text' }
 
 // An absolute path with nothing in it a shell or a closing keyword could use: no space, quote,
-// `$`, `#` or `..`.
+// `$` or `#`.
 const PATH = /^\/[A-Za-z0-9._/-]+$/
 
-// scriptShaped: both paths of a script place have the shape a prompt may carry.
+// scriptShaped: both paths of a script place have the shape a prompt may carry, and are plain
+// (no `..`, `.` or empty part, so no `//` or `/./`): the answer script refuses any path that is
+// not, so such a spawn is asked for text instead.
 export function scriptShaped(place: ScriptPlace): boolean {
-  return [place.bin, place.file].every(p => PATH.test(p) && !p.split('/').includes('..'))
+  return [place.bin, place.file].every(p => PATH.test(p) && p.slice(1).split('/').every(part => part !== '' && part !== '.' && part !== '..'))
 }
 
 // askOf: the channel a prompt asks for. `script` is a TEMPORARY WORKAROUND (#561, DECISIONS D-74):
@@ -183,13 +185,15 @@ function toolAsk(ask: string): string {
 // scriptAsk: the answer recorded with the answer script (bin/factory-answer), which checks it
 // against the contract while the agent can still correct it: the command with an example of its
 // JSON, given as a here-document so no quote in the answer trips the shell, then what each field
-// means. The machine line after it stays the fallback.
+// means. The command, the JSON and the closing JSON line stand at column 0, so the block runs as
+// copied: bash ends a here-document only at a line that is exactly its word. The machine line
+// after it stays the fallback.
 function scriptAsk(place: ScriptPlace, lead: string, example: string, fields: string): string[] {
   return [
-    `${lead}, record your answer with the factory loop's answer script, once, its JSON on standard input:`,
-    `  ${place.bin} --to ${place.file} <<'JSON'`,
-    `  ${example}`,
-    '  JSON',
+    `${lead}, record your answer with the factory loop's answer script, once, its JSON on standard input, each line below from the start of its line and the closing JSON alone on the last:`,
+    `${place.bin} --to ${place.file} <<'JSON'`,
+    example,
+    'JSON',
     `${fields} The script records your answer for the factory loop and changes nothing else. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.`,
   ]
 }

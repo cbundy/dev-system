@@ -9,8 +9,8 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { SCRIPT_RECORD } from '../hooks/act-agents'
-import { answerText } from '../hooks/contract.mjs'
+import { SCRIPT_RECORD, spawnRecordPath } from '../hooks/act-agents'
+import { answerText, jobPathOf, jobText } from '../hooks/contract.mjs'
 import { loopEventArgs } from '../hooks/derive'
 import { answerPath, pruneArgvs, scriptAnswerPath } from '../hooks/exec'
 import type { LedgerEntry } from '../hooks/types'
@@ -925,10 +925,17 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
   const lower = (text: string) => `${text.charAt(0).toLowerCase()}${text.slice(1)}`
   const GATE_FILE = scriptAnswerPath(LOOP_DIR, { key: 'adjudicate:R470:review:abc1234', attempts: 1, startedAt: NOW - 10 * MIN })
   const GATE_JOB = { contract: 'verdict' as const, purpose: 'gate' as const, repo: REPO, issue: 470, branch: null }
+  // what the spawn wrote: its record, naming the channel its prompt asked on, and on the script
+  // channel the job file beside its answer file
+  const spawned = (h: Host, key: string, channel: 'script' | 'tool') => {
+    h.files.set(spawnRecordPath(LOOP_DIR, key), JSON.stringify({ key, channel, answerFile: channel === 'script' ? GATE_FILE : null }))
+    if (channel === 'script') h.files.set(jobPathOf(GATE_FILE) ?? '', jobText(GATE_JOB))
+  }
 
   test("the script channel by default: the repair message asks again for the answer script, this attempt's answer file named, text as the fallback (#561)", async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h } = gateAt(on, undefined, undefined)
+    const { h, key } = gateAt(on, undefined, undefined)
+    spawned(h, key, 'script')
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.last().config).toBeUndefined()
@@ -939,6 +946,24 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(text).toMatch(new RegExp(`Record the answer you reached now with the answer script, its JSON on standard input as your prompt showed: \`/\\S+/bin/factory-answer --to ${GATE_FILE.replace(/[.]/g, '\\.')}\``))
     expect(text).not.toContain('mcp__factory-loop__verdict')
     expect(text.split('\n').pop()).toBe(`If the script cannot record your answer, ${lower(CONTRACT_LINE)}`)
+  })
+
+  test('a config dir with a doubled or trailing / gives plain paths: the loop dir is the one under the plain config dir, and the repair names its answer file (#561)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const key = 'adjudicate:R470:review:abc1234'
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+    ])
+    const h = host(on, { config: ACT, run: factory().run, store, env: { CLAUDE_CONFIG_DIR: `/${CFG_DIR}//` } })
+    h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
+    spawned(h, key, 'script')
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.sends[0]?.text).toContain(` --to ${GATE_FILE}\``)
+    expect(h.lines().length).toBeGreaterThan(0)
+    expect([...h.files.keys()].filter(p => p.includes('//'))).toEqual([])
   })
 
   test("answerChannel text in the workspace file, over the repo's tool: the repair message asks for the text contract alone; a bad value and the old answerTools are named (#560, #561)", async ($, on) => {
@@ -956,7 +981,8 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
 
   test("answerChannel tool in the workspace file: the repair message asks for the tool again, text as the fallback; a bad value in the repo's file is named (#548)", async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'tool' })
+    const { h, key } = gateAt(on, undefined, undefined, { ...ACT, answerChannel: 'tool' })
+    spawned(h, key, 'tool')
     h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerChannel: 'yes' }))
     await $.session.start(START)
     await clock.advance(6_000)

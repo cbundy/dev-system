@@ -32,9 +32,9 @@ import {
   wakeStarted,
 } from '../hooks/act'
 import type { ActEnv, Acted, Between, Live } from '../hooks/act'
-import { REPAIR_REPLY, spawnRecordPath } from '../hooks/act-agents'
+import { REPAIR_REPLY, SCRIPT_RECORD, spawnRecordPath } from '../hooks/act-agents'
 import { ACTION_KINDS } from '../hooks/config'
-import { answerText, jobPathOf, parseJob } from '../hooks/contract.mjs'
+import { answerText, jobPathOf, jobText, parseJob } from '../hooks/contract.mjs'
 import { controlText } from '../hooks/control'
 import { answerPath, scriptAnswerPath } from '../hooks/exec'
 import type { ActIo, RunInit, RunResult, SpawnInput } from '../hooks/exec'
@@ -451,7 +451,12 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
 
   test('an unreadable reply gets one repair message from the same agent, spending no attempt; a second unreadable reply fails the attempt (#548)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
-    const f = fake([gate])
+    // the spawn asked on the script channel: its record says so, and its job file stands
+    const files = new Map([
+      [spawnRecordPath(LOOP_DIR, gate.key), JSON.stringify({ channel: 'script', answerFile: scriptAnswerPath(LOOP_DIR, gate) })],
+      [jobPathOf(scriptAnswerPath(LOOP_DIR, gate)) ?? '', jobText({ contract: 'verdict', purpose: 'gate', repo: REPO, issue: 60, branch: null })],
+    ])
+    const f = fake([gate], () => ({}), { readFile: async p => files.get(p) ?? null })
     const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]), repairing: new Map() }
     const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
     const sent: { to: string; text: string; type: string }[] = []
@@ -483,6 +488,29 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(sent).toHaveLength(1)
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed', attempts: 1 })
     expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('does not parse')
+  })
+
+  test('the repair names the answer script only with a record that names the script channel and a job file beside the answer file; else it asks for text (#561)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const record = (channel: string | null) => JSON.stringify({ channel, answerFile: scriptAnswerPath(LOOP_DIR, gate) })
+    const job = jobText({ contract: 'verdict', purpose: 'gate', repo: REPO, issue: 60, branch: null })
+    const cases: [string, Map<string, string>][] = [
+      ['no spawn record', new Map()],
+      ['a record from before the channel was kept', new Map([[spawnRecordPath(LOOP_DIR, gate.key), record(null)]])],
+      ['no job file', new Map([[spawnRecordPath(LOOP_DIR, gate.key), record('script')]])],
+      ['a job file but a record naming none', new Map([[spawnRecordPath(LOOP_DIR, gate.key), record(null)], [jobPathOf(scriptAnswerPath(LOOP_DIR, gate)) ?? '', job]])],
+    ]
+    for (const [name, files] of cases) {
+      const f = fake([{ ...gate }], () => ({}), { readFile: async p => files.get(p) ?? null })
+      const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+      const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+      const sent: string[] = []
+      const r = await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, async (_to, text) => (sent.push(text), null))
+      expect(r).toMatchObject({ result: 'repair', key: gate.key })
+      expect(sent).toHaveLength(1)
+      if (sent[0]?.includes('answer script')) throw new Error(`${name}: the repair names the answer script: ${sent[0]}`)
+      expect(sent[0]?.split('\n').pop()).toBe('Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    }
   })
 
   test("a designer's report survives its repair round: the reply goes after it in the saved file, which judge(report) reads (#548, rule D3)", async () => {
@@ -554,6 +582,37 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger.find(e => e.key === gate.key)?.status).toBe('running')
     await actPass(f.env, { ...s, now: NOW + 6_000 }, listed, between)
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'lost', summary: 'lost: idle with no answer' })
+  })
+
+  test('an agent the list shows ended or gone before its turn.complete, with an answer recorded with the answer script, is finished with that answer instead of lost; one that fails its checks is lost (#561)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const job = { contract: 'verdict' as const, purpose: 'gate' as const, repo: REPO, issue: 60, branch: null }
+    const good = answerText(job, { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve' } })
+    if (!good.ok) throw new Error(good.problems.join('; '))
+    const bad = JSON.stringify({ v: 1, contract: 'verdict', answer: { findings: [], action: { type: 'merge' } } })
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    const cases: [string, string, AgentStatus | null, string][] = [
+      ['completed', good.outcome, 'completed', 'done'],
+      ['idle', good.outcome, 'idle', 'done'],
+      ['gone from the list', good.outcome, null, 'done'],
+      ['a recorded answer that fails its checks', bad, 'idle', 'lost'],
+    ]
+    for (const [name, body, seen, want] of cases) {
+      const files = new Map([[scriptAnswerPath(LOOP_DIR, gate), body]])
+      const f = fake([{ ...gate }], () => ({}), { readFile: async p => files.get(p) ?? null, writeFile: async (p, t) => void files.set(p, t) })
+      const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+      const listed = { ok: true, agents: seen === null ? [] : [{ id: 'agent-1', status: seen }] }
+      if (seen !== null) await actPass(f.env, { ...s, now: NOW }, listed, between)
+      await actPass(f.env, { ...s, now: NOW + 6_000 }, listed, between)
+      const after = f.env.live.ledger.find(e => e.key === gate.key)
+      expect([name, after?.status]).toEqual([name, want])
+      if (want === 'lost') continue
+      expect(after).toMatchObject({ outcome: { kind: 'adjudicator', action: { type: 'approve' } }, summary: 'adjudicator #60 (gate, script): ACTION approve, 1 verdict line; read before its turn.complete' })
+      expect(files.get(answerPath(LOOP_DIR, gate.key))).toBe(`${SCRIPT_RECORD}\n\n${body.replace(/\n*$/, '')}\n`)
+      expect(f.calls.map(c => c.argv)).toContainEqual(['callum-flow-event', 'verdict', '--issue', '60', '--run', 'R60', '--note', 'WRONG: review-1: the timeout is handled in parse.ts'])
+      // its turn.complete, arriving late, changes nothing
+      expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'Recorded.', reason: 'answer' }, between)).toEqual({ result: 'recorded', key: gate.key })
+    }
   })
 
   test('an agent sent its repair message stays at work while listed idle, for REPAIR_GRACE_MS, and while the message is on its way; then it is lost as when listed completed (#548, #560)', async () => {
@@ -1156,7 +1215,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     }
     // what an agent does with its prompt: runs the script on the file it names, with its answer
     const record = (prompt: string, input: unknown) => {
-      const m = /^ {2}(\S+\/bin\/factory-answer) --to (\S+) <<'JSON'$/m.exec(prompt)
+      const m = /^(\S+\/bin\/factory-answer) --to (\S+) <<'JSON'$/m.exec(prompt)
       if (m === null) throw new Error(`no answer script in ${JSON.stringify(prompt)}`)
       const [, bin = '', file = ''] = m
       expect(bin).toBe(`${PLUGIN_ROOT}/bin/factory-answer`)

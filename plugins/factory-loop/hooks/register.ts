@@ -39,6 +39,7 @@ import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, ToolAns
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
+import { loopBaseOf, loopDirOf } from './contract.mjs'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
@@ -222,8 +223,11 @@ function json(raw: string | null): Record<string, unknown> {
 
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
+// configDir: CLAUDE_CONFIG_DIR, else ~/.claude, with no doubled or trailing /: every path the loop
+// issues is built on it, and the answer script refuses a path that is not plain.
 async function configDir($: EngineInterface) {
-  return (await $.env.get('CLAUDE_CONFIG_DIR')) || `${(await $.env.get('HOME')) || '~'}/.claude`
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${(await $.env.get('HOME')) || '~'}/.claude`
+  return dir.replace(/\/{2,}/g, '/').replace(/(.)\/$/, '$1')
 }
 
 // runtime: the settings one pass runs with (SPEC 4.1): plugin options, then the workspace
@@ -232,7 +236,8 @@ async function configDir($: EngineInterface) {
 // and callum-flow-sweep read them), binDir ahead of PATH when the workspace file names one (a
 // testbed runs the branch's own CLIs), and the event sink when the mode is not act.
 async function runtime($: EngineInterface): Promise<Runtime> {
-  const base = `${await configDir($)}/factory-loop`
+  const dir = await configDir($)
+  const base = loopBaseOf(dir)
   const file = json(await text($, `${base}/config.json`))
   const pick = (key: keyof Options) => (typeof file[key] === 'string' && file[key] !== '' ? file[key] : options[key])
   const checkout = str(file.checkout) || cwd
@@ -250,7 +255,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const over = Object.fromEntries(WORKSPACE_SETTINGS.filter(key => key in file).map(key => [key, file[key]]))
   const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
-  const loopDir = `${base}/${repo.replace('/', '__')}`
+  const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
   const env: Record<string, string> = {
     CALLUM_FLOW_REPO: repo,

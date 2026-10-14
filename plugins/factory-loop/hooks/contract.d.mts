@@ -38,6 +38,8 @@ export const ANSWER_SUFFIX: '.answer.json'
 export const JOB_SUFFIX: '.job.json'
 export const ANSWER_NAME: RegExp
 export const LOOP_DIR_NAME: RegExp
+export function loopBaseOf(configDir: string): string
+export function loopDirOf(configDir: string, repo: string): string
 export function jobPathOf(answerPath: string): string | null
 export function jobText(job: Job): string
 export function parseJob(body: string): Job | string

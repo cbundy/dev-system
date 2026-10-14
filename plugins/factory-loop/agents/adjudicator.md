@@ -30,6 +30,7 @@ Read-only commands only: the `no-mistakes axi status`/`logs` reads above, `callu
 `gh pr diff` and read-only `git`. Never run `axi respond`,
 `axi run`, `axi abort` or `rerun`, and never post to GitHub (no comments, no
 reviews, no edits). You may write throwaway repro scripts only under the system temp dir.
+You may also run the `factory-answer` command your prompt names, which only records your answer.
 
 ## Judgment rules
 
