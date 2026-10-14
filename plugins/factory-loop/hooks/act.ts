@@ -540,9 +540,9 @@ export const TOOL_LATE = 'Not recorded: the factory loop could not check this an
 export type Claim = () => boolean
 
 // What an answer tool's call did: ok and the text the agent reads; key: the entry it answered;
-// after: an accepted call's follow-up, run once the call has its answer (#558): the call's input
-// saved, its events, the ledger saved and the entry's loop event, in that order; notes on what
-// failed, for the decision log.
+// after: an accepted call's follow-up, run once the call has its answer (#558): its events, the
+// ledger saved and the entry's loop event, in that order (its input was saved before the call was
+// recorded); notes on what failed, for the decision log.
 export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?: boolean; after?: (env: ActEnv) => Promise<string[]> }
 
 // agentToolAnswered: an agent's answer tool (agent-tools.ts, #548), tied to the entry that

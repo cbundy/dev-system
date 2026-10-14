@@ -614,8 +614,9 @@ function ping(why: string) {
 }
 
 // background: queue what a tool call leaves for later with the $ the loop's timers run with, as
-// ask does, made once per load (ensure).
+// ask does, made once per load (ensure); saveNow saves the ledger with that $ at once.
 let background: ((after: After) => void) | null = null
+let saveNow: ((rt: Runtime) => void) | null = null
 
 async function step($: EngineInterface) {
   const now = await $.clock.now()
@@ -1159,8 +1160,14 @@ type After = { rt: Runtime; run?: (env: ActEnv) => Promise<string[]>; line?: (pr
 
 // later: what a tool call leaves for once it has answered, in the hook queue behind the hook work
 // before it, with the $ the loop's timers run with (background), never the call's own, whose
-// dispatch has ended by then.
+// dispatch has ended by then. A call that changed the ledger has it saved at once, outside the
+// hook queue (persist keeps its own order), so a reload or a crash before its turn in the queue
+// never loses it: its entry would be marked lost and its work redone.
 function later($: EngineInterface, after: After) {
+  if (after.run !== undefined) {
+    if (saveNow !== null) saveNow(after.rt)
+    else void persist($, after.rt)
+  }
   if (background !== null) background(after)
   else void hook(() => afterwards($, after))
 }
@@ -1419,10 +1426,10 @@ const LEDGER_LOADING = 'Not recorded: the factory loop has not loaded its ledger
 
 // agentTool: an agent's answer tool (act.ts agentToolAnswered, #548), answered at once (#558):
 // refused unless this session keeps the ledger, loaded, and the caller is an agent of the loop
-// whose answer it waits on; an accepted call is recorded in the ledger in memory. What follows,
-// in the hook queue once the call has its answer: the call's input saved, its events, the ledger
-// saved and its loop event, then a decision-log line for each call (the answer's path, 'tool',
-// or why it was refused) and an accepted call's ping.
+// whose answer it waits on; an accepted call has its input saved and is recorded in the ledger in
+// memory, which goes to the store at once (later). What follows, in the hook queue once the call
+// has its answer: its events, the ledger saved and its loop event, then a decision-log line for
+// each call (the answer's path, 'tool', or why it was refused) and an accepted call's ping.
 function agentTool($: EngineInterface, tool: string, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
   const work = async (claim: Claim): Promise<OpAnswer> => {
     const rt = await held($)
@@ -1476,6 +1483,7 @@ function ensure($: EngineInterface) {
     loadedAt = await $.clock.now()
     ask = (source, why) => void request($, source, why).catch(() => undefined)
     background = after => void hook(() => afterwards($, after))
+    saveNow = rt => void persist($, rt)
     await registerControls($)
     // the first pass after a load: a session start or a reload
     $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))

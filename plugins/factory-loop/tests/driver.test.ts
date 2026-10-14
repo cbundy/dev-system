@@ -1216,7 +1216,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
   }
   const DESIGN_CALL = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false, agentId: 'agent-1' } as const
 
-  test('an answer tool call is answered at once while other hook work holds the queue; the store and the decision log follow, in hook order (#558)', async ($, on) => {
+  test('an answer tool call is answered at once while other hook work holds the queue; its input and the ledger are saved at once, its events and decision-log line follow, in hook order (#558)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key, task, release } = heldQueue(on)
     await $.session.start(START)
@@ -1235,10 +1235,13 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
     await clock.settle()
     expect(answers[1]).toEqual({ deny: 'Not recorded: your answer is already recorded; end your turn.' })
-    // what follows waits its turn behind the wake: nothing saved, logged or pinged yet
-    expect(h.entry(key)).toMatchObject({ status: 'running' })
+    // saved at once, outside the queue: its input, which a pass that acts on it points the model
+    // at, and the ledger, so a reload or a crash before the queue frees keeps the answer
+    expect(JSON.parse(h.files.get(answerPath(LOOP_DIR, key)) ?? '{}')).toMatchObject({ tool: 'mcp__factory-loop__design' })
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
+    // what follows waits its turn behind the wake: nothing logged or pinged yet
     expect(h.lines().some(l => l.tool === 'mcp__factory-loop__design')).toBe(false)
-    expect(h.files.has(answerPath(LOOP_DIR, key))).toBe(false)
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toBe(false)
 
     // the queue frees: the store takes the answer, its loop event goes out after the wake's, and the
     // decision log has a line for each call, in order
@@ -1278,7 +1281,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.events().filter(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toHaveLength(1)
   })
 
-  test("the owner's answer and control tools are answered while other hook work holds the queue; their store writes, lines and pings follow (#558)", async ($, on) => {
+  test("the owner's answer and control tools are answered while other hook work holds the queue; a wake's answer is saved at once, the events, lines and pings follow (#558)", async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { h, key, task, release } = heldQueue(on, { holding: 'designer' })
     await $.session.start(START)
@@ -1294,7 +1297,9 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await clock.settle()
     expect(answers).toEqual([{ result: expect.stringContaining('Recorded: w1 done') }, { result: expect.stringContaining('Paused #470') }])
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
-    expect(h.entry(task)).toMatchObject({ status: 'running' })
+    // the wake's answer is in the store at once; its loop event and the op's line wait their turn
+    expect(h.entry(task)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=task key=${task} status=done`))).toBe(false)
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
 
     release()

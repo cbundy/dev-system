@@ -848,9 +848,12 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    each tool hook answers from memory and never waits on the hook queue. The call is checked
    against the live ledger, the last pass's runtime and the kill switch. An accepted call
    finishes its entry in the live ledger before the hook returns, so a later `turn.complete` reads
-   `recorded` and a pass in flight keeps the change. What follows goes through the hook queue, in
-   order with other hook work: the call's input saved, its events, the ledger saved, its loop
-   event, its decision-log line (a failed save or event in `problems`) and the ping. Before the
+   `recorded` and a pass in flight keeps the change. An agent's accepted call has its input saved
+   before it is recorded, so a pass that acts on it (`judge(handoff)`) finds the saved answer. A
+   call that changed the ledger has it saved at once, outside the hook queue, so a reload before
+   the queue reaches it keeps the answer. What follows goes through the hook queue, in order with
+   other hook work: its events, the ledger saved, its loop event, its decision-log line (a failed
+   save or event in `problems`) and the ping. Before the
    first pass after a load the ledger is not loaded, so a call is refused, asking for text;
    nothing is loaded for it. A call whose own work takes more than 2 s is refused, asking for
    text, and changes nothing when that work ends. The owner's `answer` tool and `retry` change the

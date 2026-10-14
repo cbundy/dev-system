@@ -316,10 +316,12 @@ export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: Ag
 }
 
 // onToolAnswer: an agent of the loop called its answer tool, read against its spawn record. A
-// call the contract refuses changes nothing. An accepted one gives the Exec the driver records at
-// once, as for an answer in text, and `after`, what follows once the call has its answer (#558):
-// the call's input saved (as JSON) and its events logged, through the ExecCtx it is handed; notes
-// on what failed, for the decision log.
+// call the contract refuses changes nothing. An accepted one has its input saved (as JSON) before
+// the driver records it, so a pass that acts on the answer (judge(handoff) points the model at the
+// saved answer) finds it there; a call then refused for time leaves the file to the text answer,
+// which writes it again. It gives the Exec the driver records at once, as for an answer in text,
+// and `after`, what follows once the call has its answer (#558): its events logged, through the
+// ExecCtx it is handed; notes on what failed, for the decision log.
 export async function onToolAnswer(
   ctx: ExecCtx,
   entry: LedgerEntry,
@@ -328,16 +330,13 @@ export async function onToolAnswer(
 ): Promise<{ exec: Exec; after: (later: ExecCtx) => Promise<string[]> } | { refused: string }> {
   const read = readToolAnswer(entry, tool, input, await answerInfoOf(ctx, entry))
   if ('refused' in read) return read
-  const after = async (later: ExecCtx): Promise<string[]> => {
-    const notes: string[] = []
-    try {
-      await later.io.writeFile(answerPath(later.rt.loopDir, entry.key), JSON.stringify({ tool, input }, null, 2))
-    } catch (err) {
-      notes.push(`answer not saved: ${message(err)}`)
-    }
-    notes.push(...(await logEvents(later, read.events)))
-    return notes
+  const saved: string[] = []
+  try {
+    await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), JSON.stringify({ tool, input }, null, 2))
+  } catch (err) {
+    saved.push(`answer not saved: ${message(err)}`)
   }
+  const after = async (later: ExecCtx): Promise<string[]> => [...saved, ...(await logEvents(later, read.events))]
   return { exec: read.exec, after }
 }
 

@@ -531,7 +531,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger).toEqual([gate])
   })
 
-  test('the answer tool: a valid call finishes its entry in memory at once; its input, its events, the save and its loop event follow; a second call and the closing words change nothing (#548, #558)', async () => {
+  test('the answer tool: a valid call has its input saved and finishes its entry in memory at once; its events, the save and its loop event follow; a second call and the closing words change nothing (#548, #558)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const files = new Map<string, string>()
     const f = fake([gate], () => ({}), { writeFile: async (p, t) => void (f.order.push('write'), files.set(p, t)) })
@@ -550,9 +550,11 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
       attempts: 1,
       outcome: { kind: 'adjudicator', verdicts: ['WRONG: review-1: the timeout is handled in parse.ts'], action: { type: 'approve', reason: 'review-1 is a false positive' }, report: null },
     })
-    // nothing slow before the answer: no write, no event, no save
-    expect(f.order).toEqual([])
-    // then, in order: its input saved, its verdict event on the run's branch, the ledger saved, the entry's loop event
+    // before the answer, its input alone is saved, for a pass that acts on it (judge(handoff)
+    // points the model at the saved answer): no event, no save
+    expect(f.order).toEqual(['write'])
+    expect(JSON.parse(files.get(answerPath(LOOP_DIR, gate.key)) ?? '{}')).toEqual({ tool: 'mcp__factory-loop__verdict', input })
+    // then, in order: its verdict event on the run's branch, the ledger saved, the entry's loop event
     expect(await r.after?.(f.env)).toEqual([])
     expect(f.order).toEqual(['write', 'callum-flow-event', 'save', 'callum-flow-event'])
     expect(f.calls.map(c => c.argv.slice(0, 2).join(' '))).toEqual(['callum-flow-event verdict', 'callum-flow-event loop'])
@@ -596,8 +598,10 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     let release: () => void = () => undefined
     const held = new Promise<void>(resolve => (release = resolve))
-    // the text answer's file write waits on the test: its reading is in flight
-    const f = fake([gate], () => ({}), { writeFile: async () => held })
+    // the text answer's file write waits on the test: its reading is in flight (the tool call's
+    // own write, which comes after it, does not)
+    let writes = 0
+    const f = fake([gate], () => ({}), { writeFile: async () => (writes++ === 0 ? held : undefined) })
     const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ runs: [runOf(60, 'parked', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
     const reading = agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'WRONG: review-1 nothing\nACTION: escalate\nwhy: unsure', reason: 'answer' }, between)
