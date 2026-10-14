@@ -10,7 +10,7 @@ import type { AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunResult, Spaw
 import { descriptionOf, nameOf, promptOf } from './prompts'
 import type { AgentAction, InFlight, PromptEnv } from './prompts'
 import { isBriefUrl, parseAdjudicator, parseDesigner, parseHandoff } from './replies'
-import type { ActionKind, AdjudicatorPurpose, AgentType, LedgerEntry, State } from './types'
+import type { ActionKind, AdjudicatorPurpose, AgentStatus, AgentType, LedgerEntry, State } from './types'
 
 // callum-flow-implementer-route's timeout (SPEC 6.1: route 60 s).
 export const ROUTE_TIMEOUT_MS = 60_000
@@ -215,6 +215,29 @@ export function readAnswer(entry: LedgerEntry, answer: AgentAnswer, info: Answer
   if (outcome.notGated) parts.push('NOT GATED')
   if (outcome.newBranch !== null) parts.push(`branch ${outcome.newBranch}`)
   return { exec: { status: 'done', outcome, summary: clip(`${who}: ${parts.join(', ')}`) }, events }
+}
+
+// --- an interim answer (#545) ----------------------------------------------------------------
+
+// One row of the agent list as the interim check reads it.
+export type ListedLoop = { id: string; status: AgentStatus; parentId?: string }
+
+const AT_WORK: readonly AgentStatus[] = ['pending', 'running', 'waiting']
+
+// interim: an answer that ended its turn with no machine line (the designer's RESULT, the
+// adjudicator's reply, a handoff's RESULT or NOT GATED), which an agent still at work may give
+// before its final one. A turn that failed, and an answer read as a loop bug, are never interim.
+export function interim(answer: AgentAnswer, exec: Exec): boolean {
+  if (answer.reason !== 'answer') return false
+  if (exec.status === 'failed') return exec.noRetry !== true
+  return exec.status === 'done' && exec.outcome?.kind === 'designer' && 'unparsed' in exec.outcome
+}
+
+// stillAtWork: the agent list shows the agent holding background work (`waiting`), or a
+// sub-agent it started still at work. Its own `running` proves nothing at its turn.complete: an
+// agent that just ended is listed so until the engine marks it completed.
+export function stillAtWork(agents: readonly ListedLoop[], id: string): boolean {
+  return agents.some(a => (a.id === id && a.status === 'waiting') || (a.parentId === id && AT_WORK.includes(a.status)))
 }
 
 // onAgentAnswer: an agent of the loop finished (its turn.complete). The answer is saved whole,

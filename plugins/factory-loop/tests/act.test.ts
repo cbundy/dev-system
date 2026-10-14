@@ -349,6 +349,35 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(between.answering.size).toBe(0)
   })
 
+  test('an interim answer from an agent still at work leaves its entry running; its final answer is recorded; one that stopped is read at once (#545)', async () => {
+    const implementer = entry('delegate:60:b', 'delegate', { agent: 'implementer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([implementer])
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const s = state({ issues: [mine(60, 'implementing', { stageSince: 1 })], ledger: [] })
+    const asked: string[] = []
+    let working = true
+    const atWork = async (id: string) => (asked.push(id), working)
+    const said = (answer: string) => agentAnswered(f.env, s, { agentId: 'agent-1', answer, reason: 'answer' }, between, atWork)
+
+    expect(await said('Waiting on the gate run before handing off.')).toEqual({
+      result: 'waiting',
+      why: 'interim answer for delegate:60:b: the agent still works, so its final answer is awaited',
+    })
+    expect(f.env.live.ledger.find(e => e.key === implementer.key)).toEqual(implementer)
+    expect(f.saves).toEqual([])
+    // the final answer has its machine line: recorded without asking the agent list
+    expect(await said('RESULT run=R1 head=abc1234 commit=abc1234 gated=yes branch=feat/issue-60-x pr=none')).toEqual({ result: 'applied' })
+    expect(asked).toEqual(['agent-1'])
+    expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'done', outcome: { kind: 'handoff', run: 'R1' } })
+
+    // an agent that stopped: its missing line is read at once, as before
+    const again = { ...implementer, status: 'running' as const, endedAt: null }
+    f.env.live.ledger = [again]
+    working = false
+    expect(await said('I could not finish.')).toEqual({ result: 'applied' })
+    expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'failed' })
+  })
+
   test('transition reports exactly the entries it changed', () => {
     const a = entry('a', 'claim')
     const b = entry('b', 'claim')

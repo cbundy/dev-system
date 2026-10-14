@@ -8,7 +8,7 @@
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake.
 import { cliExecutors } from './act-cli'
-import { agentExecutors, onAgentAnswer } from './act-agents'
+import { agentExecutors, interim, onAgentAnswer } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
@@ -385,13 +385,16 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
 // outcome (act-agents.ts onAgentAnswer, which logs its verdict and superseded events) and its
 // entry finished. 'applied' asks for a pass. An agent the ledger never held is 'not ours'; an
 // answer for an entry that no longer runs (an A1 stop timed it out, a retry replaced it) is
-// logged and dropped, never applied.
+// logged and dropped, never applied. An interim answer (no machine line, #545) from an agent
+// atWork finds still at work leaves its entry running for its next answer, up to its timeout
+// (rule A1); atWork is asked only then.
 export async function agentAnswered(
   env: ActEnv,
   state: State,
   answer: AgentAnswer,
   between: Between,
-): Promise<{ result: 'applied' | 'not ours' | 'dropped'; why?: string }> {
+  atWork: (agentId: string) => Promise<boolean> = async () => false,
+): Promise<{ result: 'applied' | 'not ours' | 'dropped' | 'waiting'; why?: string }> {
   const id = answer.agentId
   const entry = env.live.ledger.find(e => e.agentId === id && (e.kind === 'spawn' || e.kind === 'delegate'))
   if (entry === undefined) return { result: 'not ours' }
@@ -403,6 +406,9 @@ export async function agentAnswered(
     const current = env.live.ledger.find(e => e.key === entry.key)
     if (current === undefined || current.agentId !== id || current.status !== 'running' || current.startedAt !== entry.startedAt) {
       return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
+    }
+    if (interim(answer, exec) && (await atWork(id))) {
+      return { result: 'waiting', why: `interim answer for ${entry.key}: the agent still works, so its final answer is awaited` }
     }
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()

@@ -70,7 +70,7 @@ export function host(on: On, opts: HostOptions = {}) {
   const spawns: { subagentType?: string; name?: string; model?: string; prompt: string; description?: string }[] = []
   const stops: string[] = []
   const registered: string[] = []
-  const agents: { id: string; type: string; status: 'running' | 'completed' | 'failed' | 'killed' | 'idle'; description: string }[] = []
+  const agents: { id: string; type: string; status: 'running' | 'waiting' | 'completed' | 'failed' | 'killed' | 'idle'; description: string; parentId?: string }[] = []
   let nextAgent = 0
   const h = {
     files,

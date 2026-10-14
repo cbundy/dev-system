@@ -11,6 +11,7 @@ import {
   agentExecutors,
   agentOf,
   inFlightOf,
+  interim,
   modelLabelOf,
   onAgentAnswer,
   parseRecord,
@@ -19,6 +20,7 @@ import {
   routedModel,
   spawnInputOf,
   spawnRecordPath,
+  stillAtWork,
 } from '../hooks/act-agents'
 import { answerPath } from '../hooks/exec'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult, SpawnInput } from '../hooks/exec'
@@ -241,6 +243,26 @@ describe('the pure helpers', () => {
     expect(parseRecord(JSON.stringify({ branch: '', purpose: 'other' }))).toEqual({ branch: null, purpose: null })
     expect(parseRecord('not json')).toBeNull()
     expect(parseRecord(null)).toBeNull()
+  })
+
+  test('interim: an answer with no machine line; a failed turn or a loop bug never is (#545)', () => {
+    const said = { agentId: 'agent-1', answer: 'still exploring', reason: 'answer' as const }
+    expect(interim(said, { status: 'done', outcome: { kind: 'designer', unparsed: true }, summary: '' })).toBe(true)
+    expect(interim(said, { status: 'failed', summary: 'the handoff has no RESULT line' })).toBe(true)
+    expect(interim(said, { status: 'done', outcome: { kind: 'designer', brief: null, created: [], pendingDecision: false }, summary: '' })).toBe(false)
+    expect(interim(said, { status: 'failed', summary: 'names no adjudicator purpose', noRetry: true })).toBe(false)
+    expect(interim({ ...said, reason: 'error' }, { status: 'failed', summary: 'its turn ended: error' })).toBe(false)
+  })
+
+  test('stillAtWork: holding background work, or a sub-agent of its own at work; its own running is no proof (#545)', () => {
+    expect(stillAtWork([{ id: 'a', status: 'waiting' }], 'a')).toBe(true)
+    expect(stillAtWork([{ id: 'a', status: 'running' }, { id: 'x', status: 'running', parentId: 'a' }], 'a')).toBe(true)
+    expect(stillAtWork([{ id: 'a', status: 'running' }, { id: 'x', status: 'pending', parentId: 'a' }], 'a')).toBe(true)
+    expect(stillAtWork([{ id: 'a', status: 'running' }], 'a')).toBe(false)
+    expect(stillAtWork([{ id: 'a', status: 'running' }, { id: 'x', status: 'completed', parentId: 'a' }, { id: 'y', status: 'idle', parentId: 'a' }], 'a')).toBe(false)
+    // another agent's waiting or child says nothing of this one
+    expect(stillAtWork([{ id: 'b', status: 'waiting' }, { id: 'x', status: 'running', parentId: 'b' }], 'a')).toBe(false)
+    expect(stillAtWork([], 'a')).toBe(false)
   })
 })
 
