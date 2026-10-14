@@ -1551,18 +1551,27 @@ function claims(ctx: Ctx) {
   }
   const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
   const order = [...listed, ...[...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)]
-  const myLive = state.issues.filter(issue => mine(ctx, issue) && isLive(issue)).length
-  // An issue in design takes a worktree as soon as its implementer starts.
-  const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length
+  const runningClaims = state.ledger.filter(e => e.kind === 'claim' && e.status === 'running')
+  // a claim done but not yet observed holds its place under the caps as a running one does (#547)
+  const unseen = unseenClaims(ctx)
+  const waiting = [...unseen].filter(n => !runningClaims.some(e => e.issue === n)).length
+  const myLive = state.issues.filter(issue => mine(ctx, issue) && isLive(issue)).length + waiting
+  // An issue in design takes a worktree as soon as its implementer starts; one just claimed is
+  // about to be in design.
+  const myDesigning = state.issues.filter(issue => mine(ctx, issue) && issue.stage === 'designing').length + waiting
   const lastClaim = Math.max(0, ...state.ledger.filter(e => e.kind === 'claim').map(e => e.startedAt))
   // merge work this pass plans, or that still runs from an earlier one
   const mergeWork = ctx.out.some(a => a.rule.startsWith('M')) || state.ledger.some(e => e.status === 'running' && e.rule.startsWith('M'))
   const cap = config.maxInFlightIssues
   // a claim still running counts as started: it takes its worktree, its place under the caps and
   // its share of the pass, so planning again while it runs adds no claim (SPEC 5.9 idempotence)
-  let started = state.ledger.filter(e => e.kind === 'claim' && e.status === 'running').length
+  let started = runningClaims.length
   for (const n of order) {
     const issue = ctx.issues.get(n)
+    if (unseen.has(n)) {
+      skip(ctx, 'D1', n, 'claimed; the factory state has not caught up')
+      continue
+    }
     const why = candidateProblem(ctx, issue, n)
     if (why !== null) {
       skip(ctx, 'D1', n, why)
@@ -1601,6 +1610,30 @@ function claims(ctx: Ctx) {
     const since = lastDone(ctx, 'claim')?.endedAt ?? 0
     want(ctx, wake('tell', 'at-cap', `tell:at-cap:${since}`, 'D1', null, { live: myLive, cap }))
   }
+}
+
+// unseenClaims: the issues whose latest successful claim the observed state does not show yet:
+// still queued (or unknown to the factory) and no stage entered after the claim ended. The
+// claimed event reaches the factory a few seconds after the claim, and a ready event queue-watch
+// logged first can land before it (#538). Past one heartbeat interval the observed state counts
+// again, so a claim whose event never landed holds nothing back for good.
+function unseenClaims(ctx: Ctx): Set<number> {
+  const { state, config } = ctx
+  const latest = new Map<number, Ms>()
+  for (const e of state.ledger) {
+    if (e.kind !== 'claim' || e.status !== 'done' || e.issue === null || e.endedAt === null) continue
+    if (outcome(e, 'claim')?.result !== 'claimed') continue
+    latest.set(e.issue, Math.max(latest.get(e.issue) ?? 0, e.endedAt))
+  }
+  const out = new Set<number>()
+  for (const [n, endedAt] of latest) {
+    if (state.now - endedAt >= config.heartbeatEveryMs) continue
+    const stage = ctx.issues.get(n)?.stage ?? null
+    const since = ctx.issues.get(n)?.stageSince ?? null
+    if ((stage !== null && stage !== 'queued') || (since !== null && since > endedAt)) continue
+    out.add(n)
+  }
+  return out
 }
 
 function candidateProblem(ctx: Ctx, issue: IssueView | undefined, n: number): string | null {
