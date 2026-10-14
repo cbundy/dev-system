@@ -289,6 +289,7 @@ git -C "$work" reset -q --hard "$GATED"
   git checkout -q "$B"
 )
 CTX_SLOT=$(git -C "$work" rev-parse HEAD) CTX_RUN=$(git -C "$work" rev-parse ctx-run) CTX_PR=$(git -C "$work" rev-parse ctx-pr)
+! git -C "$work" merge-base --is-ancestor "$CTX_SLOT" "$CTX_RUN" || fail "the context slot must not be an ancestor of the run head"
 echo "$CTX_RUN" > "$st/runhead"; echo "$CTX_PR" > "$st/prhead"
 g 7; [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "^GUARD head PASS .* rebased_from=$CTX_RUN\$" || fail "pre-rebase copy with changed context: rc=$rc out=$out"
 passed=$((passed + 1))
