@@ -41,9 +41,11 @@ for (const rel of [
 // reader, and the deny list covers the issue reads (bare and `*` forms).
 const settingsFiles = ["templates/.claude/settings.json", ".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"];
 
-test("the three synced settings files are byte-identical", () => {
-  const [first, ...rest] = settingsFiles.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf-8"));
-  for (const other of rest) assert.equal(other, first);
+// The template may run ahead of the repo's own copies until the release bump syncs them
+// (dev-system#571 added `attribution`), so only the permission lists must match.
+test("the three synced settings files carry identical permissions", () => {
+  const [first, ...rest] = settingsFiles.map((rel) => JSON.parse(fs.readFileSync(path.join(ROOT, rel), "utf-8")).permissions);
+  for (const other of rest) assert.deepEqual(other, first);
 });
 
 for (const rel of settingsFiles) {

@@ -43,6 +43,10 @@ reviews, no edits). You may write throwaway repro scripts only under the system 
   - `NIT` - true but not worth a round (style, preference, out of scope); approve or skip.
   - `ENV` - the failure is the environment, not the code (missing tool, network,
     flaky or unavailable service); give fix instructions or escalate.
+    A no-mistakes self-abort is `ENV` too: a run that aborted with "worktree HEAD ... is
+    not a descendant of the pipeline's recorded head" after its own fixer rewrote a commit
+    (for example `git commit --amend`) is not a code defect. Propose a fresh run:
+    `ACTION: fixer:` abort the run and start a fresh `axi run` from the branch.
   - `DUP` - the same finding already handled in an earlier round or by another
     finding; skip.
 - A review gate parks on every run, even with zero findings. Give it a real read of

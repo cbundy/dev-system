@@ -84,6 +84,10 @@ load ([plugin manifest reference](https://code.claude.com/docs/en/plugins-refere
 allow list from this synced template is the only mechanism that reaches every
 consumer repo.
 
+The template also owns `attribution.commit` (`""`), which turns off the harness's default
+Co-Authored-By commit trailer for every session and sub-agent in the repo (dev-system#571).
+PR attribution and the session trailer are unchanged.
+
 JSON has no comment syntax, so the split is documented here instead of inline:
 
 The split is by key path, compared against the pristine baseline in
