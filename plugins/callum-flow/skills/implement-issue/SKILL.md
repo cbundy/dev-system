@@ -89,6 +89,8 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   away later), or save it with `git diff > <file>` (or
   `git diff --cached > <file>` for staged changes) and restore it later with
   `git apply <file>`.
+- Never add a `Co-Authored-By` (or any other agent attribution) trailer to a commit, whatever
+  the harness's default attribution guidance says: the repo's CLAUDE.md rule wins.
 - Never touch the default tmux socket: no `tmux kill-server`, `tmux
   kill-session`, `pkill tmux` or `killall tmux`. The long-running Claude
   session (the orchestrator) lives on that socket, so killing it kills the
@@ -254,8 +256,6 @@ tests would otherwise have missed:
   commit (the run reviews, tests and pushes the branch without it, and reports
   green). Use it only to re-drive the same head after an infrastructure death.
   A commit made outside the pipeline needs `axi abort` and a fresh `axi run`.
-- Never add a `Co-Authored-By` (or any other agent attribution) trailer to a commit, whatever
-  the harness's default attribution guidance says: the repo's CLAUDE.md rule wins.
 - Only when the fix needs your own commit - code the pipeline cannot write
   from instructions alone, or the run has already completed - do the rebase
   and abort steps apply. If you are committing on a branch that already has a
