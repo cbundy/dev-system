@@ -311,7 +311,7 @@ export function deriveLedger(events: FactoryEvent[], factory: Factory, facts: Fa
       if (verdicts.length === 0) continue
       const fixed = own.find(e => e.state === 'fix_requested' && inPark(e))
       const action: AdjudicatorAction = fixed
-        ? { type: 'fix', findings: null, instructions: null, addFinding: null }
+        ? { type: 'fix', findings: null, instructions: null, addFinding: null, ignore: null }
         : { type: 'approve', reason: null }
       const at = `${park.run}:park@${park.ts}:${park.head}`
       const answeredAt = (verdicts[verdicts.length - 1] as FactoryEvent).ts
@@ -543,7 +543,7 @@ function actionOf(type: string | undefined): AdjudicatorAction | undefined {
     case 'approve':
       return { type, reason: null }
     case 'fix':
-      return { type, findings: null, instructions: null, addFinding: null }
+      return { type, findings: null, instructions: null, addFinding: null, ignore: null }
     case 'skip':
     case 'merge':
       return { type }

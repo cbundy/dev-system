@@ -8,6 +8,13 @@ echo "== 2. toolchain"
 for tool in node npm claude codex gh git no-mistakes treehouse uv uvx agentsview shellcheck psql; do
   check "$tool runs --version as node" in_image "[ \"\$(id -un)\" = node ] && $tool --version"
 done
+# no-mistakes is pinned (cbundy/dev-system#572): the binary is exactly the version the
+# image stamp records, and its background update check is off.
+check "no-mistakes is the pinned version from the image stamp, with update checks off" in_image '
+  pin=$(sed -n "s/^NO_MISTAKES_VERSION=//p" /usr/local/share/dev-system/image-release)
+  [ -n "$pin" ] && no-mistakes --version | grep -q "^no-mistakes version v$pin " &&
+  [ "$NO_MISTAKES_NO_UPDATE_CHECK" = 1 ] &&
+  [ "$(readlink /home/node/.local/bin/no-mistakes)" = /home/node/.no-mistakes/bin/no-mistakes ]'
 check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
   d=$(mktemp -d) && CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ "$(wc -l < "$d"/*.jsonl)" = 1 ] &&
   ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ]'

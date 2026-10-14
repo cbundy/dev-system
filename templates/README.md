@@ -17,8 +17,10 @@ no-mistakes pipeline config.
 - Synced: `auto_fix`, the `pr:` block (below), and the commented-out optional
   sections (`commit`, `intent`, `test.evidence`) - uncomment a copy in your repo-owned
   block if you want to opt in, rather than uncommenting the synced copy in place.
-- `pr:` (`template`, `publish_intent: false`, `appendix: collapsed`) is synced as a whole.
-  It needs no-mistakes 1.75.0 or newer. YAML allows one `pr:` key, so a repo cannot
+- `pr:` (`template`, `publish_intent: false`, `appendix: minimal`) is synced as a whole.
+  `template` needs no-mistakes 1.75.0 or newer and `appendix` 1.85.0 or newer (the base
+  image pins a version that has both). `minimal` keeps test transcripts and round history
+  out of the PR body; they stay in the run log. YAML allows one `pr:` key, so a repo cannot
   override `template` from a repo-owned block; a repo that wants different wording edits
   its own `.github/pull_request_template.md` instead (see the next section). A repo that
   already carries its own `pr:` block (mealplanning) must delete it before its next

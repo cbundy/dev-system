@@ -100,6 +100,7 @@ REVISION=aaaaaaa1111
 CREATED=2026-01-01T00:00:00Z
 AGENTSVIEW_VERSION=0.44.0
 CODER_VERSION=2.36.6
+NO_MISTAKES_VERSION=3.0.0
 STAMP
 }
 
@@ -173,10 +174,10 @@ for t in claude codex; do
 done
 reset; echo 9.9.9 > "$FIX/claude.run"; run_cmd
 expect "tool ahead of upstream is current" 0 '^dev-version: OK claude'
-for t in no-mistakes treehouse; do
-  reset; echo v9.9.9 > "$FIX/gh.$t"; run_cmd
-  expect "$t behind upstream" 1 "^dev-version: STALE $t running="
-done
+reset; echo v9.9.9 > "$FIX/gh.treehouse"; run_cmd
+expect "treehouse behind upstream" 1 "^dev-version: STALE treehouse running="
+reset; echo v9.9.9 > "$FIX/gh.no-mistakes"; run_cmd
+expect "pinned no-mistakes is never STALE" 0 '^dev-version: OK no-mistakes running=3.0.0 latest=9.9.9 pinned=3.0.0'
 reset; echo v9.9.9 > "$FIX/gh.coder"; run_cmd
 expect "a pinned tool is never STALE" 0 '^dev-version: OK coder running=2.36.6 latest=9.9.9 pinned=2.36.6'
 

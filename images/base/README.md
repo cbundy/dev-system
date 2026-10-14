@@ -23,7 +23,7 @@ them, so those scripts stay maintained.
    | Node LTS + npm | base image (`mcr.microsoft.com/devcontainers/javascript-node:24-trixie`) | image rebuild |
    | Claude Code | Anthropic's native installer, as `node` | **auto-updates in the running container** |
    | codex | `npm i -g @openai/codex`, as `node` (npm prefix is node-owned) | `npm i -g` as `node`, or image rebuild |
-   | no-mistakes | its install script, as `node` (unpinned, so each image rebuild takes the latest; the synced `pr:` block needs 1.75.0 or newer) | `no-mistakes update`, or image rebuild |
+   | no-mistakes | pinned release tarball (**v1.97.0**), checksum-verified, as `node`; the build fails unless `no-mistakes --version` is exactly the pin. Its background update check is off (`NO_MISTAKES_NO_UPDATE_CHECK=1`) | bump `NO_MISTAKES_VERSION` and both `NO_MISTAKES_SHA256_*` in the Dockerfile, after checking the upstream release notes against what the skills and scripts drive |
    | treehouse | shared repo [`install-treehouse.sh`](../../features/src/callum-tools/install-treehouse.sh), as `node`, into `/home/node/.local/bin`; latest tag from GitHub's `releases/latest` redirect, without the REST API | image rebuild |
    | uv (and `uvx`) | its install script, as `node` | `uv self update`, or image rebuild |
    | gh | official GitHub CLI apt repo | image rebuild |
@@ -121,8 +121,9 @@ environment variable set in the image.
 | `/persist/events` | callum-flow-event | `CALLUM_EVENTS_DIR` | the factory event log (`<owner>__<repo>.jsonl`) and its push progress (`.pushed/`). Created by the image and by `dev-init`. On the desktop it has its own per-repo volume (`dev-system-${devcontainerId}-events`, from the base-image template; a devcontainer without it loses the log on rebuild, and `dev-init` and `dev-doctor` warn), and with one volume for all of `/persist` (Coder, Kubernetes) it persists. |
 | `/persist/dev-restart-self` | dev-restart-self | `DEV_RESTART_SELF_DIR` | the saved autostart schedule and the last restart request, so `--resume` can finish a restart; the `--fresh` one-shot marker. |
 
-no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, and
-`no-mistakes update` replaces it there. `~/.no-mistakes/logs` is a link to
+no-mistakes keeps its binary in `~/.no-mistakes/bin`, outside `/persist`, linked from
+`~/.local/bin`. It is pinned, so do not run `no-mistakes update`: a new version arrives
+with a new image. `~/.no-mistakes/logs` is a link to
 `/persist/no-mistakes/logs`, because the callum-flow skills read run logs at that path.
 
 The same list is published as the image label
@@ -565,14 +566,14 @@ container never fails to start because of it.
    replaces the agent order for that repo. The unmarked pin older images wrote, and the
    earlier `agent_args_override` block, are replaced by the new block.
 
-   Which agent and model runs each step (no-mistakes v1.84.0):
+   Which agent and model runs each step (no-mistakes v1.97.0):
 
    | Step | Runs on | Fallback |
    |---|---|---|
    | review, review fixes | claude `REVIEW_MODEL` (`claude-opus-5-5`), effort `REVIEW_EFFORT` | none: a failing review agent (for example out of usage) fails the review step visibly |
    | test, lint repair, document, CI repair, PR, rebase conflict repair, intent | codex `CODEX_MODEL` (`gpt-6.1-sol`), effort medium | claude `CLAUDE_MODEL` (`claude-sonnet-5-5`) at `CLAUDE_EFFORT` |
 
-   v1.84.0 has no per-step agent or model key, so only two groups can differ: the review
+   v1.97.0 has no per-step agent or model key, so only two groups can differ: the review
    loop (`review_agents`, one agent per role, no fallback list) and everything else, which
    shares one ordered `agent` chain and one model per harness (`agent_config`). A non-review
    step such as lint or PR therefore cannot be given its own agent or model.
@@ -685,7 +686,7 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
 
 - the base image: the stamp the build writes to `/usr/local/share/dev-system/image-release`
   (`KEY=VALUE` lines: `IMAGE`, `VERSION`, `REVISION`, `CREATED`, `DEV_PLUGIN_REF`,
-  `AGENTSVIEW_VERSION`, `CODER_VERSION`, from the same build args as the OCI labels) is
+  `AGENTSVIEW_VERSION`, `CODER_VERSION`, `NO_MISTAKES_VERSION`, from the same build args as the OCI labels) is
   compared with the newest image published on GHCR (`base:<major>`, read through an
   anonymous pull token). `STALE` when the published `REVISION` differs: run
   `dev-restart-self` or rebuild the container;
@@ -701,9 +702,9 @@ if any line is `STALE`, 0 otherwise, 2 on bad usage:
   absolute project path no longer exists gets no line of its own; one `INFO` line counts them and says
   `dev-init --plugins` prunes them, and a plugin with no other install is `UNKNOWN` (not
   installed);
-- claude, codex, no-mistakes and treehouse (unpinned, refreshed by the weekly rebuild)
-  against their latest upstream release (npm for claude and codex, GitHub releases for the
-  others): `STALE` when upstream is newer. agentsview and coder are pinned by the image
+- claude, codex and treehouse (unpinned, refreshed by the weekly rebuild) against their
+  latest upstream release (npm for claude and codex, GitHub releases for treehouse):
+  `STALE` when upstream is newer. agentsview, coder and no-mistakes are pinned by the image
   build, so their lines show the pin (`pinned=`) and the latest release but are never
   `STALE`.
 
