@@ -224,8 +224,8 @@ later). The intended unattended settings:
 - **Auto-start**: a fresh conversation starts with `/callum-flow:issue-orchestrator`, so
   nobody has to type the first message. A resumed one gets a nudge instead, to re-read
   `.claude/orchestrator-memory.md` and re-arm its watcher and loop, since those
-  do not survive a process restart. After the first real conversation every start, a
-  crash loop included, resumes it, so the startup prompt is never sent twice.
+  do not survive a process restart. Conversation selection and exclusions follow
+  [Resuming the conversation](../../images/base/README.md#resuming-the-conversation).
 - **Name**: `🔄 <repo> orchestrator` (`remote_control_name_format`), told apart from the
   per-project sessions at a glance and stable across restarts.
 - **Auto-compact left on auto**, so the one Claude process can run indefinitely.

@@ -27,7 +27,8 @@
 #   plan      once per boot (exit 3 when already done): freeze the restore
 #             candidates into pending.json. dev-remote-control runs it before
 #             it prunes worktrees.
-#   pending   print the restore candidates (JSON lines), nothing changed.
+#   pending   recompute the current candidates (JSON lines), without changing
+#             the frozen plan in pending.json.
 #   taken     print the sessionIds the supervisor must not resume: the live
 #             sessions, the planned restores and the sessions already restored.
 #   cwds      print "live<TAB>dir" / "pending<TAB>dir" for every live session

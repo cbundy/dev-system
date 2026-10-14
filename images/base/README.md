@@ -898,7 +898,8 @@ the reason. `dev-remote-control` runs it with `--delete` before every start in s
 so a stop and start cleans up over time, and `dev-doctor` warns with the count of stale
 ones. The workspace is the one `dev-init` uses (`--workspace DIR` overrides it).
 Sessions the live server can still resume stay until that server stops; after the next
-restart they are orphaned and the 72 hour rule applies. Tested by
+restart they are orphaned, and the 72 hour rule applies unless a live session or pending
+restore holds them. Tested by
 `images/base/test/dev-prune-worktrees.test.sh` (part of `npm test`).
 
 ## Entrypoint: Claude Code with Remote Control
@@ -964,8 +965,9 @@ orphaned processes, so containers stop in well under a second instead of hitting
        in the local checkout; push them first if it needs them.
      - Ending or deleting a session in claude.ai removes its worktree and branch.
        Sessions still open when the container stops keep theirs (locked, so they can be
-       resumed). The next start does not reuse them, but `dev-remote-control` prunes the stale
-       ones (see [`dev-prune-worktrees`](#dev-prune-worktrees)).
+       resumed). For restart recovery, see
+       [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart);
+       worktree retention and cleanup are described under [`dev-prune-worktrees`](#dev-prune-worktrees).
      - Besides the open sessions, the server keeps one spare session process running,
        ready for the next session.
    In `session` mode the supervisor also decides, at every start, whether to **resume**
@@ -1008,14 +1010,17 @@ session. With `DEV_REMOTE_CONTROL_RESUME=1`, each start instead looks in the
 workspace's Claude project directory, `$CLAUDE_CONFIG_DIR/projects/<dir>/`, where
 `<dir>` is the workspace's physical path with every character other than a letter or
 digit replaced by `-` (`/workspaces/my_repo.x` becomes `-workspaces-my-repo-x`). It
-resumes the newest transcript (`*.jsonl`) there that holds a user message, with
+resumes the newest eligible transcript (`*.jsonl`) there that holds a user message, with
 `claude --remote-control <name> --resume <session id>`. A transcript with nothing but
-Remote Control bookkeeping (a start nobody wrote to) does not count, and with nothing to
-resume Claude starts fresh, so a fresh volume does not loop on the backoff.
+Remote Control bookkeeping (a start nobody wrote to) does not count. Sessions that are
+running, planned for restore or recorded in the restore ledger are also excluded (see
+[Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart)).
+With nothing eligible to resume, Claude starts fresh, so a fresh volume does not loop on
+the backoff.
 
-The decision is made again at every start: once a real conversation exists, every later
-start, a crash loop included, resumes it and sends `DEV_REMOTE_CONTROL_RESUME_PROMPT`,
-never the startup prompt again. A resumed session does not get back anything that lived
+The decision is made again at every start, a crash loop included: when an eligible
+conversation exists, it resumes it and sends `DEV_REMOTE_CONTROL_RESUME_PROMPT` instead
+of the startup prompt. A resumed session does not get back anything that lived
 only in the old process, such as a `/loop` or a scheduled task, so use the resume prompt
 to re-arm it.
 
@@ -1060,12 +1065,13 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   message: it waits for you.
 - They run in the tmux session `rc-restored`, one window per session (not in the
   supervisor's `claude` session): `tmux attach -t rc-restored`.
-- Never restored: the supervisor's own sessions, sessions without a `bridgeSessionId`,
+- Never restored: the supervisor's own sessions (including the Remote Control server
+  process), sessions without a `bridgeSessionId`,
   non-interactive sessions, sessions with no transcript, and sessions last updated more
   than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
-  started a second time, and `DEV_REMOTE_CONTROL_RESUME` never resumes a session that is
-  running, planned for restore or already restored, so each keeps its own name. A
-  session is restored once: every record considered goes in a ledger under
+  started a second time. The main conversation's selection rules are documented under
+  [Resuming the conversation](#resuming-the-conversation). A session is restored once:
+  every record considered goes in a ledger under
   `$DEV_RESTART_SELF_DIR/remote-sessions/`, so a session you later exit does not come back
   on the following restart. A failure restoring one session is logged and never delays
   the supervisor.
@@ -1086,7 +1092,9 @@ record: if it has a `bridgeSessionId` and is interactive it is resumed in its re
 (not verified against a real server-spawned session).
 Tests: `images/base/test/dev-remote-sessions.test.sh` (part of `npm test`).
 
-**Permissions.** Claude runs in its normal permission mode, so an unattended session
+**Permissions.** The main Claude and newly spawned sessions use their normal permission
+mode unless `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1`; restored sessions keep their recorded
+permission mode as described above. In a mode that requires approvals, an unattended session
 **waits for you to approve** each tool use that needs approval; approve from claude.ai or
 the Claude app (or attach locally). Set `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1` only if
 you accept Claude acting without approvals in that container.
