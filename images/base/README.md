@@ -877,13 +877,15 @@ What starts where:
 **`dev-entrypoint`** runs `dev-init` (best-effort, limited to 300s, which leaves room for a first clone, report on stderr) in
 the workspace, then runs the command as a child. With a command, that command runs instead of
 Claude, in its own working directory, with its stdout untouched and its exit status
-passed through (128+signal when a signal killed it, so 143 on a stop), so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
+passed through (128+signal when a signal killed it, so 143 when TERM kills it), so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
 root (`--user root`), it skips `dev-init`, so nothing root-owned lands in `/persist`.
 `tini` as PID 1 forwards `docker stop` / pod deletion to the entrypoint at once and reaps
 orphaned processes; the entrypoint forwards TERM, INT and HUP to the command and waits until it has
-really exited, so containers stop in well under a second instead of hitting the
-10s kill timeout. Once the command has exited, and when not root, it runs
-`heartbeat-loop --final` under a 10s `timeout` (report on stderr) to write the worker's `stopped` row.
+really exited. After any command exit, when not root and the heartbeat script is executable, it runs
+`/usr/local/share/dev-system/heartbeat-loop --final` under a 10s `timeout` (report on stderr)
+to attempt the worker's `stopped` row. This is best effort and preserves the command's exit
+status. Allow time for the command to exit and up to 10s for the final heartbeat before the
+runtime forcibly kills the container; for example, use `docker stop -t 30`.
 
 **`dev-remote-control`** is the supervisor:
 
@@ -1728,8 +1730,9 @@ push lock is free and the shared data directory's `pg-watch.lock` is absent or f
 last beat with `state = 'stopped'` on a best-effort basis, bounded to 5 seconds, and exits 0;
 `/usr/local/share/dev-system/heartbeat-loop --final` signals the running loop through its
 pidfile (waiting up to 8 s) and, if none is running or it has not exited after the wait,
-writes that beat itself when a URL is configured. The image's `dev-entrypoint` runs `--final` after the command exits on a container stop, and the
-Coder template runs it from a `run_on_stop` script inside a 30 s stop grace. A desktop stop has no hook (accepted), so readers use
+writes that beat itself when a URL is configured. See the [entrypoint stop path](#entrypoint-claude-code-with-remote-control)
+for signal forwarding and its `--final` call, and the [Coder template's stop script and grace](../../coder/dev-system/README.md#what-the-template-does)
+for Coder's stop path. A desktop stop has no hook (accepted), so readers use
 the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
 ## dev-query
