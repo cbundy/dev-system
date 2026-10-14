@@ -524,13 +524,7 @@ resource "coder_script" "heartbeat_stop" {
   display_name = "Heartbeat stop"
   icon         = "/icon/memory.svg"
   run_on_stop  = true
-  script       = <<-EOT
-    hb=/usr/local/share/dev-system/heartbeat-loop
-    if [ -x "$hb" ]; then
-      timeout 10 "$hb" --final || true
-    fi
-    exit 0
-  EOT
+  script       = file("${path.module}/heartbeat-stop.sh")
 }
 
 # dev-login's page, behind Coder's own authentication: no port is published
