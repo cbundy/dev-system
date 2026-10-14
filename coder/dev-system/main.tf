@@ -518,7 +518,8 @@ resource "coder_agent" "main" {
 
 # On a workspace stop the agent runs this before the container goes: the worker's last
 # heartbeat (state = 'stopped') is written while the network is still up. Bounded and
-# best effort, so it never holds a stop up or fails it (#467). heartbeat-loop is not on PATH.
+# best effort, so its timeout limits the stop delay and heartbeat failure cannot fail the stop
+# (#467). heartbeat-loop is not on PATH.
 resource "coder_script" "heartbeat_stop" {
   agent_id     = coder_agent.main.id
   display_name = "Heartbeat stop"
