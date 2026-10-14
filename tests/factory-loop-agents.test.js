@@ -77,9 +77,13 @@ test("the loop's own agents are the callum-flow definitions word for word but fo
   }
 });
 
-test("the model is never offered the loop's own agent types", () => {
+test("the model is never offered the loop's own agent types, but while the loop's own repair message resumes one (#559)", () => {
   const register = read(`${HOOKS}/register.ts`);
   for (const type of Object.values(SUBAGENT_OF).filter((t) => t.startsWith("factory-loop:"))) {
-    assert.match(register, new RegExp(`on\\('agent\\.offer', \\{ agent: '${type}' \\}, \\(\\) => \\(\\{ isOffered: false \\}\\)\\)`), `register.ts: ${type} is not hidden from the model`);
+    assert.match(
+      register,
+      new RegExp(`on\\('agent\\.offer', \\{ agent: '${type}' \\}, \\(\\$, e, next\\) => \\(resuming\\.has\\(e\\.agent\\) \\? next\\(e\\) : \\{ isOffered: false \\}\\)\\)`),
+      `register.ts: ${type} is not hidden from the model`,
+    );
   }
 });

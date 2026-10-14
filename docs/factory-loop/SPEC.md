@@ -590,7 +590,8 @@ The adjudicator and designer are the loop's own copies of the callum-flow defini
 (`plugins/factory-loop/agents/`). Each copy is word for word the same except its `tools:` line,
 which also lists ToolSearch and the agent's answer tool, since an agent calls nothing its list
 leaves out. `tests/factory-loop-agents.test.js` keeps the copies in step. An `agent.offer` hook
-keeps the copies out of the model's agent listing. The implementer and fixer are callum-flow's
+keeps the copies out of the model's agent listing, except while the loop's own repair message to
+one is on its way (7.3a). The implementer and fixer are callum-flow's
 and inherit every tool.
 
 A spawn is named `<type>-<N>[-<purpose>][-<attempt>]` (`adjudicator-470-merge`,
@@ -666,7 +667,8 @@ says to pass that model to the agent's own sub-agents.
   is unparseable, a failed attempt once its repair (7.3a) has been tried. A handoff that says
   gated with no run (`run=none gated=yes`, or `gated: true` with `run: null`) is unparseable:
   with no pipeline run nothing is gated. A designer's or a handoff's `RESULT` line wrapped in
-  backticks reads the same; the adjudicator's reply stays strict (7.3).
+  backticks reads the same; the adjudicator's reply stays strict, but for notes after a complete
+  contract (7.3).
 - **Records.** Before each spawn the loop writes `<loop dir>/spawns/<key>.json` (the branch the
   spawn named, its purpose, model and the exact prompt); each answer is saved whole at
   `<loop dir>/answers/<key>.txt`, which `judge(report)` and `judge(handoff)` point the model at.
@@ -768,7 +770,12 @@ Its agent definition already fixes the contract: verdict lines `<VERDICT>: <reas
 `VERDICT` one of `CORRECT`, `WRONG`, `NIT`, `ENV`, `DUP`, then exactly one `ACTION:` line. Prose
 before the first contract line is skipped, unless a line there looks like a misshapen contract
 line (a bulleted verdict, an all-caps `WORD:`, a code fence). From the first contract line on, the
-parser rejects any other line, and it rejects any reply without exactly one `ACTION:` line (D-62). Each verdict
+parser rejects any other line until the contract is complete (its `ACTION:` line and, for a merge
+review, its three report lines below). After that, the first line with no contract word and its
+colon starts notes, which are not read (testbed run 3's merge reviews added `Checks:` and `What I
+checked:` sections, #559). A line in the notes with a contract word and its colon, in any shape (a
+second `ACTION:`, a verdict, a report line, `- WRONG:`), makes the reply unparseable. It rejects
+any reply without exactly one `ACTION:` line (D-62). Each verdict
 line is logged as `callum-flow-event verdict --issue --run --branch --note "<line>"` when the
 outcome is recorded. For purpose `merge` (rule `M4`) the reply also carries three lines the
 parser requires: `SUMMARY: <what changes for users, one line>`, `BUMP: <patch|minor|major>
@@ -828,9 +835,15 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    before the send; the agent counts as at work while still listed completed, for 5 minutes
    after the message or until its next `turn.complete`. After that its next `completed` listing
    is counted afresh: one pass of grace, then lost. One per attempt, only to agents the ledger
-   holds, only in act mode with no kill switch and no restart pending. A second unreadable answer,
-   or a message not delivered within 10 s, fails the attempt (the designer's goes to
-   `judge(report)`, rule `D3`) as before.
+   holds, only in act mode with no kill switch and no restart pending. The engine resumes an agent
+   only as a type it offers the model, and asks the `agent.offer` hooks, which hide the loop's own
+   adjudicator and designer (6.1): so while the loop's repair message to one of them is on its
+   way, its type is offered. Hidden, the engine refused every repair of testbed run 3: `Agent
+   "<id>" is stopped (completed) and could not be resumed: Agent type 'factory-loop:adjudicator'
+   is not offered in this session.` (#559). A second unreadable answer, or a message not delivered
+   within 10 s, fails the attempt (the designer's goes to `judge(report)`, rule `D3`) as before. The
+   decision log's line keeps the engine's reason whole (`repairRefused`); the entry's summary keeps
+   a clipped copy.
 7. **Answered at once (#558).** The engine gives up on a tool hook that runs too long (13), so
    each tool hook answers from memory and never waits on the hook queue. The call is checked
    against the live ledger, the last pass's runtime and the kill switch. An accepted call
@@ -1365,9 +1378,14 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
   10 s of the hook's own time, in which awaiting other work (the loop's hook queue) counts and a
   `$` call does not. The `.catch` refusal never reached the agents in run 3. The loop's 2 s bound
   (7.3a) keeps well inside it; only the testbed proves the live answer times.
-- **The repair message**: whether `$.session.send` reaches an agent at its own `turn.complete`
-  and resumes it is proven only on the testbed. An agent the list still shows completed 5
-  minutes after its repair message is taken as never resumed.
+- **The repair message** (#559): probe mods on 2.1.299 proved that `$.session.send` to an agent
+  after its `turn.complete` is delivered and resumes it: sent at once, after 60 ms of hook work,
+  20 s later, and from a hook held 12 s past its budget. The list shows the agent `idle` once its
+  turn ends. The engine resumes only a type it offers: with the type hidden it refused as in run
+  3, and with it offered only while the send was on its way the agent was resumed. In that window
+  (milliseconds, 10 s at most) the model would also be offered the type if it listed agents. Only
+  the testbed proves it end to end. An agent the list still shows completed 5 minutes after its
+  repair message is taken as never resumed.
 - **An issue closed on GitHub** (#556) is known closed only once observe has read it: for up to
   `githubEveryMs` after it closes, and on the first pass after a load when more than 12 issues the
   loop may act on are unread (they are read first, but within the pass's 12), it is driven as

@@ -865,14 +865,15 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `judge:report:${key}`])
   })
 
-  // an adjudicator at work on a gate, whose reply will not parse
-  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send']) => {
+  // an adjudicator at work on a gate, whose reply will not parse; with the test's engine, a repair
+  // message resumes it as the engine does
+  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send'], engine?: HostOptions['engine']) => {
     const key = 'adjudicate:R470:review:abc1234'
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
-    const h = host(on, { config: ACT, run: factory().run, store, send })
+    const h = host(on, { config: ACT, run: factory().run, store, send, engine })
     h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
     return { h, key }
   }
@@ -887,6 +888,44 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1, reminded: true })
     expect(h.entry(key)?.summary).toContain('the repair message was not delivered: no such agent')
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed' }))
+  })
+
+  test("the repair message reaches an agent of the loop's own type, which the model is never offered: the engine resumes only a type it offers, so the loop offers it while its message is on its way (#559)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = gateAt(on, undefined, $)
+    const offer = () => $.agent.offer({ agent: 'factory-loop:adjudicator', description: 'an agent', source: 'plugin', provider: { plugin: 'factory-loop', tier: 'user' } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(await offer()).toEqual({ isOffered: false })
+
+    // its reply does not parse: the repair message goes to it, and the engine resumes it
+    await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
+    expect(h.sends[0]?.text).toContain('The factory loop could not read your answer: no ACTION line.')
+    expect(h.entry(key)).toMatchObject({ status: 'running', attempts: 1, reminded: true })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'repair', why: 'no ACTION line' }))
+    // the type is hidden from the model again once the message is delivered
+    expect(await offer()).toEqual({ isOffered: false })
+
+    // the resumed agent answers in the contract: recorded, after the repair, its attempt unspent
+    const a = h.agents.find(x => x.id === 'agent-1')
+    if (a !== undefined) a.status = 'running'
+    await agentDone($, h, 'agent-1', 'WRONG: review-1 is out of scope.\nACTION: approve')
+    expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adjudicator', action: { type: 'approve' } } })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
+    expect(h.sends).toHaveLength(1)
+  })
+
+  test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const refusal = `Agent "agent-1" is stopped (completed) and could not be resumed: ${'the transcript could not be read; '.repeat(6)}start a new agent if the work is still needed.`
+    const { h, key } = gateAt(on, () => refusal)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(h.entry(key)?.summary).toEndWith('...')
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed', repairRefused: refusal }))
   })
 
   test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt fails (#548)', async ($, on) => {

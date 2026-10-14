@@ -63,10 +63,13 @@ export type HostOptions = {
   // answers $.prompt.submit, at once or later; { drop } drops the prompt
   submit?: (text: string) => { drop?: string } | undefined | Promise<{ drop?: string } | undefined>
   // answers $.session.send (an agent's repair message), at once or later (or never): undefined
-  // delivers it, a string refuses it
+  // delivers it as the engine does, a string refuses it
   send?: (to: string, text: string) => string | undefined | Promise<string | undefined>
   // holds a file's read ($.fs.exists, $.fs.read) or write until the promise it returns resolves
   hold?: (path: string, op: 'read' | 'write') => Promise<void> | undefined
+  // the test's engine: with it, $.session.send resumes an agent as the engine does, only as a type
+  // the agent.offer hooks offer (a hook's own $ cannot ask them)
+  engine?: Engine
 }
 
 export type Host = ReturnType<typeof host>
@@ -253,6 +256,14 @@ export function host(on: On, opts: HostOptions = {}) {
   on('session.send', async ($, e) => {
     const refused = await opts.send?.(e.to, e.text)
     if (refused !== undefined) return { isDelivered: false, reason: refused }
+    // as the engine does (probed on 2.1.299, #559): an agent not running a turn is resumed, and
+    // only as a type the model is offered, which it asks the agent.offer hooks
+    const to = agents.find(a => a.id === e.to)
+    if (opts.engine !== undefined && to !== undefined && to.status !== 'running' && to.status !== 'waiting') {
+      const plugin = to.type.includes(':') ? (to.type.split(':')[0] ?? '') : 'engine'
+      const offer = await opts.engine.agent.offer({ agent: to.type, description: to.description, source: 'plugin', provider: { plugin, tier: 'user' } })
+      if (!offer.isOffered) return { isDelivered: false, reason: `Agent "${e.to}" is stopped (completed) and could not be resumed: Agent type '${to.type}' is not offered in this session.` }
+    }
     sends.push({ to: e.to, text: e.text })
     return { isDelivered: true }
   })
@@ -281,7 +292,8 @@ export function host(on: On, opts: HostOptions = {}) {
   return h
 }
 
-// agentDone: an agent of the loop finished: its turn.complete, then the agent list says so.
+// agentDone: an agent of the loop finished: its turn.complete, while the agent list shows it idle
+// as the engine does (probed on 2.1.299, #559), then the agent list says it completed.
 export async function agentDone(
   $: Engine,
   h: Host,
@@ -289,8 +301,9 @@ export async function agentDone(
   answer: string,
   reason: 'answer' | 'aborted' | 'error' = 'answer',
 ) {
-  await $.turn.complete({ agentId, answer, reason, turnId: `turn-${agentId}`, durationMs: 1000, isAborted: reason === 'aborted' })
   const a = h.agents.find(x => x.id === agentId)
+  if (a !== undefined && a.status === 'running') a.status = 'idle'
+  await $.turn.complete({ agentId, answer, reason, turnId: `turn-${agentId}`, durationMs: 1000, isAborted: reason === 'aborted' })
   if (a !== undefined) a.status = 'completed'
 }
 

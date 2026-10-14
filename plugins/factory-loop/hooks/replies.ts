@@ -90,8 +90,9 @@ export function readDesigner(answer: string, repo: string, issue: number | null)
 // --- the adjudicator (SPEC 7.3) ----------------------------------------------------------------
 
 // parseAdjudicator: verdict lines `<VERDICT>: <reason>`, exactly one `ACTION:` line, and for
-// purpose merge exactly one each of SUMMARY, BUMP and FLAGS. Any other line, an ACTION the
-// purpose does not take, or a second ACTION makes the reply unparseable (rule P2 retries it).
+// purpose merge exactly one each of SUMMARY, BUMP and FLAGS. Any other line inside the contract,
+// an ACTION the purpose does not take, or a second ACTION makes the reply unparseable (rule P2
+// retries it); notes after a complete contract are not read (#559).
 export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): AdjudicatorOutcome | null {
   return parsed(readAdjudicator(answer, purpose))
 }
@@ -108,8 +109,18 @@ export function readAdjudicator(answer: string, purpose: AdjudicatorPurpose): Ad
   // block) is not prose; from the first contract line on, any other line makes the reply
   // unparseable. Only a contract word followed by its colon is a contract line: a sentence that
   // merely opens with one ("CORRECT is not warranted", "CORRECT/WRONG judgments:") is prose.
+  // Once the contract is complete (its ACTION line and, for a merge review, its three report
+  // lines), the first line with no contract word and its colon starts notes, which are not read
+  // ("What I checked:" and its bullets, as testbed run 3's merge reviews added, #559). A line
+  // with a contract word and its colon in any shape (a second ACTION, a verdict, a report line,
+  // `- WRONG:`) is no note: in the notes it makes the reply unparseable, as before the contract.
   let started = false
+  let notes = false
   for (const line of lines(answer)) {
+    if (notes) {
+      if (MISSHAPEN_LINE.test(line)) return `a contract line after the notes that follow the contract: ${quote(line)}`
+      continue
+    }
     if (!started && !VERDICT_LINE.test(line) && !/^(ACTION|SUMMARY|BUMP|FLAGS):/.test(line)) {
       if (MISSHAPEN_LINE.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return `a contract line in the wrong shape: ${quote(line)}`
       continue
@@ -125,6 +136,11 @@ export function readAdjudicator(answer: string, purpose: AdjudicatorPurpose): Ad
       continue
     }
     const report = line.match(/^(SUMMARY|BUMP|FLAGS):\s*(.*)$/)
+    const complete = actions.length === 1 && (purpose !== 'merge' || (summary !== null && bump !== null && flags !== null))
+    if (report === null && complete && !MISSHAPEN_LINE.test(line)) {
+      notes = true
+      continue
+    }
     if (report === null) return `a line after the first contract line that is not a contract line: ${quote(line)}`
     const [, name, value = ''] = report
     if (purpose !== 'merge') return `${name} answers a merge review only, and this is a ${purpose} review`

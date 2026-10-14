@@ -279,6 +279,136 @@ describe('parseAdjudicator (SPEC 7.3)', () => {
     }
   })
 
+  test("notes after a complete contract are not read: testbed run 3's merge reviews of PRs 73, 80 and 89 (#559)", () => {
+    const pr73 = [
+      "I couldn't call the verdict tool: factory-loop registered it, but no `tool.call` hook answered. Here is the fallback answer.",
+      '',
+      'NIT: documentation-scope - The brief limits changes to `src/same-slug.js` and `test/same-slug.test.js`, so a README mention of `sameSlug` is out of scope.',
+      'NIT: lint-documentation - The CLAUDE.md lint wording mismatch was already there before this change, and the brief forbids touching `package.json`.',
+      'ACTION: merge',
+      'SUMMARY: Adds a `sameSlug(a, b)` helper that compares the slugs of two strings, plus tests.',
+      'BUMP: minor New backwards-compatible helper function.',
+      'FLAGS: none',
+      '',
+      'Checks:',
+      '- **Commits after the handoff head:** There are none, because the range you gave is empty, so I skipped that check.',
+      '- **PR diff against the brief:** Only the two permitted files change. The helper delegates to `slugify`, and the tests cover the accent case, the differing-slug case and a `TypeError` in either position.',
+      "- **Linkage:** The PR body says `Closes #61`, and `closingIssuesReferences` lists issue 61, which matches the brief's merge rollout.",
+      '- **UI evidence:** The change has no UI, so none is needed.',
+      "- **Not run:** I didn't run `npm test` or `npm run lint` myself. The PR body reports a passing test baseline and live checks.",
+      "- **Memory file:** `.claude/agent-memory/adjudicator.md` doesn't exist, so I had no memory notes to read.",
+    ].join('\n')
+    expect(parseAdjudicator(pr73, 'merge')).toEqual({
+      kind: 'adjudicator',
+      verdicts: [
+        'NIT: documentation-scope - The brief limits changes to `src/same-slug.js` and `test/same-slug.test.js`, so a README mention of `sameSlug` is out of scope.',
+        'NIT: lint-documentation - The CLAUDE.md lint wording mismatch was already there before this change, and the brief forbids touching `package.json`.',
+      ],
+      action: { type: 'merge' },
+      report: { summary: 'Adds a `sameSlug(a, b)` helper that compares the slugs of two strings, plus tests.', bump: 'minor', bumpReason: 'New backwards-compatible helper function.', flags: [] },
+    })
+    const pr80 = [
+      "I couldn't record the verdict through the tool: the factory-loop plugin has no `tool.call` hook for it and returned an error. Here is the fallback reply.",
+      '',
+      'NIT: review-1 - the lint script covering only two files is the gap the brief puts out of scope, and `npm test` still syntax-checks the new test file.',
+      "NIT: missed-1 - pipeline commit f3c9729 also edits CLAUDE.md to name the two linted files, which is outside the brief's file list, but it is accurate, docs-only and weakens nothing.",
+      'ACTION: merge',
+      'SUMMARY: slugify now throws RangeError "maxLength must be a positive integer" for any defined maxLength that is not a positive integer, even when the slug fits; the README documents it.',
+      'BUMP: patch Small validation guard that rejects previously silently-wrong inputs, with no new API.',
+      'FLAGS: none',
+      '',
+      'Checks:',
+      '1. **Post-handoff commit:** f3c9729 is the only pipeline commit on top of the validation commit. It changes the `@param` doc, the README and CLAUDE.md, and touches no tests. Every acceptance criterion holds in the diff:',
+      '   - The guard is the first statement under `maxLength !== undefined`, ahead of the trim.',
+      '   - The error message matches the brief exactly.',
+      '   - `maxLength: 1` still returns "a".',
+      '   - Omitting `maxLength` behaves as before.',
+      '   - No existing test changed.',
+      '2. **Issue link:** `closingIssuesReferences` lists #64 and the PR body says `Closes #64`, which matches the brief\'s Rollout of "merge".',
+      '3. **UI evidence:** there is no UI change, so no screenshot or video is needed.',
+      '',
+      "I read `.claude/agent-memory/adjudicator.md` first, but it doesn't exist. I only read the diff and the brief and ran no tests myself.",
+    ].join('\n')
+    expect(parseAdjudicator(pr80, 'merge')).toEqual({
+      kind: 'adjudicator',
+      verdicts: [
+        'NIT: review-1 - the lint script covering only two files is the gap the brief puts out of scope, and `npm test` still syntax-checks the new test file.',
+        "NIT: missed-1 - pipeline commit f3c9729 also edits CLAUDE.md to name the two linted files, which is outside the brief's file list, but it is accurate, docs-only and weakens nothing.",
+      ],
+      action: { type: 'merge' },
+      report: {
+        summary: 'slugify now throws RangeError "maxLength must be a positive integer" for any defined maxLength that is not a positive integer, even when the slug fits; the README documents it.',
+        bump: 'patch',
+        bumpReason: 'Small validation guard that rejects previously silently-wrong inputs, with no new API.',
+        flags: [],
+      },
+    })
+    const pr89 = [
+      "I couldn't record the verdict: the `mcp__factory-loop__verdict` tool returned an error saying no `tool.call` hook answered it. So here is the fallback reply.",
+      '',
+      'NIT: document-1 is a pre-existing `docs/api.md` Errors inaccuracy, unrelated to this PR. `docs/api.md` on this branch is identical to main.',
+      'ACTION: merge',
+      'SUMMARY: Adds `scripts/script-coverage.js`, which prints a Markdown table of slugify results for ten writing systems, plus a test and a README note.',
+      'BUMP: patch New standalone script, test and docs note; no library code change.',
+      'FLAGS: none',
+      '',
+      'What I checked:',
+      '- **Pipeline commits after the handoff head:** There are three. The first adds the script and its test. The second adds the README note and removes duplicate sections from `docs/api.md`. The third restores those sections. The net PR diff is only `README.md`, `scripts/script-coverage.js` and `test/script-coverage.test.js`. No test was weakened.',
+      "- **PR body linkage:** The body says `Refs #71`, and `closingIssuesReferences` is empty. That matches the brief's keep-open rollout.",
+      '- **UI evidence:** The change has no UI, so no screenshot is needed. The body does include the generated table and a CLI transcript.',
+      "- **Not checked:** The brief also wants the table posted as a comment on #71. I didn't confirm that, and it isn't something the diff can show.",
+    ].join('\n')
+    expect(parseAdjudicator(pr89, 'merge')).toEqual({
+      kind: 'adjudicator',
+      verdicts: ['NIT: document-1 is a pre-existing `docs/api.md` Errors inaccuracy, unrelated to this PR. `docs/api.md` on this branch is identical to main.'],
+      action: { type: 'merge' },
+      report: {
+        summary: 'Adds `scripts/script-coverage.js`, which prints a Markdown table of slugify results for ten writing systems, plus a test and a README note.',
+        bump: 'patch',
+        bumpReason: 'New standalone script, test and docs note; no library code change.',
+        flags: [],
+      },
+    })
+    // a gate review's contract is complete at its ACTION line
+    expect(parseAdjudicator('WRONG: review-1 out of scope.\nACTION: approve\n\nWhat I checked: the brief and the diff.', 'gate')).toEqual({
+      kind: 'adjudicator',
+      verdicts: ['WRONG: review-1 out of scope.'],
+      action: { type: 'approve', reason: null },
+      report: null,
+    })
+  })
+
+  test('a contract line after the notes is a second answer: unparseable, as a misshapen one before the contract is (#559)', () => {
+    const merge = 'NIT: harmless.\nACTION: merge\nSUMMARY: x\nBUMP: patch y\nFLAGS: none\n\nWhat I checked:\n- the diff.'
+    const after = [
+      'ACTION: hold the owner must decide',
+      'ACTION: merge',
+      'CORRECT: review-2 is real after all.',
+      'SUMMARY: something else',
+      'BUMP: major z',
+      'FLAGS: image',
+      '- WRONG: review-1 out of scope.',
+      '**ACTION**: hold wait',
+      '`NIT`: harmless.',
+    ]
+    for (const line of after) {
+      expect(readAdjudicator(`${merge}\n${line}`, 'merge')).toBe(`a contract line after the notes that follow the contract: ${JSON.stringify(line)}`)
+    }
+    const gate = 'CORRECT: review-1 real.\nACTION: fix --findings review-1\nChecks: I reproduced it.'
+    expect(parseAdjudicator(`${gate}\nACTION: approve`, 'gate')).toBeNull()
+    expect(parseAdjudicator(`${gate}\n- DUP: review-2 is review-1.`, 'gate')).toBeNull()
+    // a misshapen line right after the contract is no note either
+    expect(readAdjudicator('ACTION: merge\nSUMMARY: x\nBUMP: patch y\nFLAGS: none\n- NIT: harmless.', 'merge')).toBe(
+      'a line after the first contract line that is not a contract line: "- NIT: harmless."',
+    )
+    // until the contract is complete, a note is a stray line inside it
+    expect(readAdjudicator('ACTION: merge\nChecks:\nSUMMARY: x\nBUMP: patch y\nFLAGS: none', 'merge')).toBe('a line after the first contract line that is not a contract line: "Checks:"')
+    expect(readAdjudicator('ACTION: merge\nSUMMARY: x\nBUMP: patch y\nWhat I checked:\nFLAGS: none', 'merge')).toBe(
+      'a line after the first contract line that is not a contract line: "What I checked:"',
+    )
+    expect(readAdjudicator('CORRECT: review-1 real.\nWhat I checked: the run.', 'gate')).toBe('a line after the first contract line that is not a contract line: "What I checked: the run."')
+  })
+
   test('unparseable: other lines, not exactly one ACTION, a bad report', () => {
     const bad: [string, 'gate' | 'merge'][] = [
       ['CORRECT: review-1 real.\nThat is my verdict.\nACTION: fix --findings review-1', 'gate'],

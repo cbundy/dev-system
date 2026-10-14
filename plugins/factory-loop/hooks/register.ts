@@ -35,7 +35,7 @@ import {
   wakeStarted,
 } from './act'
 import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, ToolAnswered } from './act'
-import { stillAtWork } from './act-agents'
+import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
@@ -90,7 +90,7 @@ import {
   wakeRows,
 } from './trace'
 import type { Tracer } from './trace'
-import type { Action, AgentStatus, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
+import type { Action, AgentStatus, AgentType, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -173,6 +173,10 @@ let traceChecked: string | null = null
 // agents whose answer is being handled, when each was first listed completed, and when each was
 // sent its repair message (act.ts)
 const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+// the loop's own agent types with a repair message of the loop's on its way, and how many: the
+// engine resumes an agent only as a type it offers the model, so the loop offers its hidden types
+// for just that long (repairTo, #559)
+const resuming = new Map<string, number>()
 let lastWakeAt = 0
 // dev-restart-self returned (rule H4): the workspace is about to be replaced, so nothing more is
 // started in this module's life, and the next load finds the update done (act.ts updateDone)
@@ -1257,7 +1261,7 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
   if (rt === null) return
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
-  const repair: Repair = (await actsNow($, rt)) ? (id, text) => repairTo($, id, text) : async () => 'the loop starts nothing until its restart'
+  const repair: Repair = (await actsNow($, rt)) ? (id, text, type) => repairTo($, id, text, type) : async () => 'the loop starts nothing until its restart'
   const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, id => atWork($, id), repair)
   const why = r.why === undefined || r.result === 'repair' ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
   const problems = [...why, ...env.problems]
@@ -1268,23 +1272,33 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
 
 // answerLine: the path an agent's answer in text took, for its decision-log line: read ('text',
 // with how its entry ended), or asked again ('repair', with why); afterRepair marks an answer
-// that came after the repair message. The tool's path is agentTool's line.
+// that came after the repair message, and repairRefused is why one was not delivered, whole
+// (#559). The tool's path is agentTool's line.
 function answerLine(r: Answered): Record<string, unknown> | null {
   if (r.key === undefined) return null
   if (r.result === 'repair') return { key: r.key, answer: 'repair', why: r.why }
   if (r.result !== 'applied') return null
   const e = live.ledger.find(x => x.key === r.key)
-  return { key: r.key, answer: 'text', status: e?.status, summary: e?.summary, afterRepair: r.repaired === true ? true : undefined }
+  return { key: r.key, answer: 'text', status: e?.status, summary: e?.summary, afterRepair: r.repaired === true ? true : undefined, repairRefused: r.undelivered }
 }
 
 // repairTo: the one repair message to an agent of the loop, which resumes it with its transcript
-// if it has ended (#548); null once queued, else why not.
-async function repairTo($: EngineInterface, agentId: string, text: string): Promise<string | null> {
+// once its turn has ended (#548); null once queued, else why not. The engine resumes an agent only
+// as a type it offers the model, and the loop hides its own (agent.offer below), so the agent's
+// type is offered while the message is on its way: hidden, the engine refused every repair of
+// testbed run 3 ("is not offered in this session", #559).
+async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType): Promise<string | null> {
+  const subagent = SUBAGENT_OF[type]
+  resuming.set(subagent, (resuming.get(subagent) ?? 0) + 1)
   try {
     const r = await within($, REPAIR_TIMEOUT_MS, $.session.send({ to: { agentId }, text }), 'repair message')
     return r.isDelivered ? null : r.reason
   } catch (err) {
     return message(err)
+  } finally {
+    const left = (resuming.get(subagent) ?? 1) - 1
+    if (left > 0) resuming.set(subagent, left)
+    else resuming.delete(subagent)
   }
 }
 
@@ -1540,9 +1554,15 @@ export const register: Register = (on, opts) => {
   )
 
   // the loop's own agent types (act-agents.ts SUBAGENT_OF) are its spawns alone: the model is
-  // never offered them, so it keeps to the callum-flow agents it knows
-  on('agent.offer', { agent: 'factory-loop:adjudicator' }, () => ({ isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
-  on('agent.offer', { agent: 'factory-loop:designer' }, () => ({ isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
+  // never offered them, so it keeps to the callum-flow agents it knows. The engine asks too when a
+  // message resumes an agent, and resumes none of a type it does not offer: while the loop's own
+  // repair message to one is on its way (repairTo), its type is offered (#559)
+  on('agent.offer', { agent: 'factory-loop:adjudicator' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'factory-loop:designer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
 }
 
 // for the tests

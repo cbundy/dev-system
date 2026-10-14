@@ -18,7 +18,7 @@ import { plan } from './plan'
 import { repairPrompt } from './prompts'
 import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
-import type { Action, ActionKind, AgentStatus, Control, LedgerEntry, Ms, PlanResult, State } from './types'
+import type { Action, ActionKind, AgentStatus, AgentType, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { answerTool, expireWakes, onTurnComplete, onTurnStart, wakeExecutors } from './wake'
 import type { TurnEnd } from './wake'
 
@@ -435,13 +435,22 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
 
 // --- between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4) ----------------------------
 
-// The one repair message to an agent of the loop: null once delivered, else why not.
-export type Repair = (agentId: string, text: string) => Promise<string | null>
+// The one repair message to an agent of the loop, of the type it runs as: null once delivered,
+// else why not, in the engine's own words.
+export type Repair = (agentId: string, text: string, type: AgentType) => Promise<string | null>
 
 // What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
 // out before it), 'repair' (unreadable, so the agent was asked once more), 'waiting' (interim),
-// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry.
-export type Answered = { result: 'applied' | 'repair' | 'waiting' | 'recorded' | 'dropped' | 'not ours'; why?: string; key?: string; repaired?: boolean }
+// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry; undelivered:
+// why its repair message was not delivered, whole, for the decision log (the entry's summary
+// keeps a clipped copy, #559).
+export type Answered = {
+  result: 'applied' | 'repair' | 'waiting' | 'recorded' | 'dropped' | 'not ours'
+  why?: string
+  key?: string
+  repaired?: boolean
+  undelivered?: string
+}
 
 // agentAnswered: an agent of the loop finished (its turn.complete): its answer is read into the
 // outcome (act-agents.ts onAgentAnswer, which logs its verdict and superseded events) and its
@@ -494,13 +503,14 @@ export async function agentAnswered(
     if (current === null) return ended()
     const repaired = current.reminded === true
     const type = agentOf(entry)
+    let refused: string | undefined
     if (interim(answer, exec) && !repaired && type !== null) {
       const problem = read.problem ?? 'no machine line'
       // the repair is on the entry before it goes out, so a reload never sends a second one
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
-      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem))
+      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem), type)
       if (undelivered === null) {
         // listed completed until the message resumes it, which the list may show late: the passes
         // take it as at work for a while, then count that listing afresh
@@ -508,6 +518,7 @@ export async function agentAnswered(
         between.repairing.set(id, at)
         return { result: 'repair', why: problem, key: entry.key }
       }
+      refused = undelivered
       exec = { ...exec, summary: clip(`${exec.summary}; the repair message was not delivered: ${undelivered}`) }
     }
     const now = await env.io.now()
@@ -515,7 +526,7 @@ export async function agentAnswered(
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()
     await logLoop(env, moved)
-    return { result: 'applied', key: entry.key, repaired }
+    return refused === undefined ? { result: 'applied', key: entry.key, repaired } : { result: 'applied', key: entry.key, repaired, undelivered: refused }
   } finally {
     between.answering.delete(id)
   }

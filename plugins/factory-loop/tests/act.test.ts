@@ -422,7 +422,8 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const again = { ...implementer, status: 'running' as const, endedAt: null }
     f.env.live.ledger = [again]
     working = false
-    expect(await said('I could not finish.')).toEqual({ result: 'applied', key: implementer.key, repaired: false })
+    // no repair message goes from here, and the answer says why
+    expect(await said('I could not finish.')).toEqual({ result: 'applied', key: implementer.key, repaired: false, undelivered: 'the loop sends no messages from here' })
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'failed' })
   })
 
@@ -431,8 +432,8 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const f = fake([gate])
     const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]), repairing: new Map() }
     const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
-    const sent: { to: string; text: string }[] = []
-    const repair = async (to: string, text: string) => (sent.push({ to, text }), null)
+    const sent: { to: string; text: string; type: string }[] = []
+    const repair = async (to: string, text: string, type: string) => (sent.push({ to, text, type }), null)
     const said = (answer: string) => agentAnswered(f.env, s, { agentId: 'agent-1', answer, reason: 'answer' }, between, async () => false, repair)
     // run 2's shape: a sound verdict, then a line of prose inside the contract
     const prose = 'WRONG: review-1 the timeout is handled in parse.ts.\nI checked the run and it looks fine.\nACTION: approve'
@@ -441,6 +442,8 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     // the same agent is asked to answer again, told what was wrong; nothing is spent or spawned
     expect(sent).toHaveLength(1)
     expect(sent[0]?.to).toBe('agent-1')
+    // the type it runs as, which the engine must offer to resume it (#559)
+    expect(sent[0]?.type).toBe('adjudicator')
     expect(sent[0]?.text).toContain('mcp__factory-loop__verdict')
     expect(sent[0]?.text).toContain('I checked the run and it looks fine.')
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'running', attempts: 1, agentId: 'agent-1', reminded: true })
@@ -689,7 +692,13 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const sent: string[] = []
     const gone = async (to: string) => (sent.push(to), 'the agent is gone')
     const f = fake([gate])
-    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, gone)).toMatchObject({ result: 'applied' })
+    // the engine's words come back whole for the decision log (#559)
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, gone)).toEqual({
+      result: 'applied',
+      key: gate.key,
+      repaired: false,
+      undelivered: 'the agent is gone',
+    })
     expect(sent).toEqual(['agent-1'])
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed' })
     expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('the repair message was not delivered: the agent is gone')
