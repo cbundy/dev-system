@@ -18,10 +18,12 @@ import {
   purposeOfKey,
   readAnswer,
   routedModel,
+  SUBAGENT_OF,
   spawnInputOf,
   spawnRecordPath,
   stillAtWork,
 } from '../hooks/act-agents'
+import { TOOL_OF } from '../hooks/agent-tools'
 import { answerPath } from '../hooks/exec'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
@@ -225,10 +227,10 @@ describe('the pure helpers', () => {
     expect(inFlightOf(s, 470)).toEqual([{ branch: 'feat/issue-12-work', issue: 12 }])
   })
 
-  test('spawnInputOf: the named callum-flow agent, the issue in description and name, the model only when known', () => {
+  test('spawnInputOf: the agent type, the issue in description and name, the model only when known', () => {
     const opts = { repo: REPO, attempt: 1, modelOverride: null, inFlight: [] }
     const designer = spawnInputOf(A.designer() as Extract<Action, { kind: 'spawn' }>, { ...opts, model: 'opus' })
-    expect(designer.subagentType).toBe('callum-flow:designer')
+    expect(designer.subagentType).toBe('factory-loop:designer')
     expect(designer.description).toBe('Design #470')
     expect(designer.name).toBe('designer-470')
     expect(designer.model).toBe('opus')
@@ -236,6 +238,21 @@ describe('the pure helpers', () => {
     expect('model' in plain).toBe(false)
     const unsafe = spawnInputOf(A.designer() as Extract<Action, { kind: 'spawn' }>, { ...opts, model: 'opus --yes' })
     expect('model' in unsafe).toBe(false)
+  })
+
+  test('every agent is spawned as a type that reaches its answer tool: the loop owns the adjudicator and designer, whose callum-flow tools lists leave it out (#548)', () => {
+    // tests/factory-loop-agents.test.js checks each type's definition lists ToolSearch and TOOL_OF,
+    // or lists no tools at all
+    expect(SUBAGENT_OF).toEqual({
+      adjudicator: 'factory-loop:adjudicator',
+      designer: 'factory-loop:designer',
+      implementer: 'callum-flow:implementer',
+      fixer: 'callum-flow:fixer',
+    })
+    expect(Object.keys(TOOL_OF).sort()).toEqual(Object.keys(SUBAGENT_OF).sort())
+    const opts = { repo: REPO, attempt: 1, model: null, modelOverride: null, inFlight: [] }
+    const types = [A.designer(), A.adjudicator('gate'), A.adjudicator('merge'), A.fixer(), A.delegate()].map(a => spawnInputOf(a as Parameters<typeof spawnInputOf>[0], opts).subagentType)
+    expect(types).toEqual(['factory-loop:designer', 'factory-loop:adjudicator', 'factory-loop:adjudicator', 'callum-flow:fixer', 'callum-flow:implementer'])
   })
 
   test('parseRecord: the branch and purpose a spawn record holds', () => {
@@ -271,10 +288,10 @@ describe('the pure helpers', () => {
 describe('spawn (SPEC 6.1)', () => {
   test('the designer: its agent, the issue model label, the branches in flight; running with its agent id', async () => {
     const { result, spawns, files, log } = await exec(A.designer(), { state: { runs: [run(12, 'running'), run(470, 'parked')] } })
-    expect(result).toEqual({ status: 'running', agentId: 'agent-1', summary: 'callum-flow:designer (opus) started for #470: agent-1' })
+    expect(result).toEqual({ status: 'running', agentId: 'agent-1', summary: 'factory-loop:designer (opus) started for #470: agent-1' })
     expect(spawns).toHaveLength(1)
     const input = spawns[0] as SpawnInput
-    expect(input.subagentType).toBe('callum-flow:designer')
+    expect(input.subagentType).toBe('factory-loop:designer')
     expect(input.model).toBe('opus')
     expect(input.description).toBe('Design #470')
     expect(input.name).toBe('designer-470')
@@ -283,13 +300,13 @@ describe('spawn (SPEC 6.1)', () => {
     expect(input.prompt).toContain('Model override: opus')
     // the spawn record goes first, so the answer can never arrive before it
     const path = spawnRecordPath(LOOP, 'design:470:1000')
-    expect(log).toEqual([`write ${path}`, 'spawn callum-flow:designer'])
+    expect(log).toEqual([`write ${path}`, 'spawn factory-loop:designer'])
     expect(JSON.parse(files.get(path) ?? '{}')).toMatchObject({ key: 'design:470:1000', agent: 'designer', purpose: null, branch: null, issue: 470, prompt: input.prompt })
   })
 
   test('an adjudicator and a fixer: the record keeps the branch and the purpose the answer needs', async () => {
     const adj = await exec(A.adjudicator('merge'))
-    expect(adj.spawns[0]?.subagentType).toBe('callum-flow:adjudicator')
+    expect(adj.spawns[0]?.subagentType).toBe('factory-loop:adjudicator')
     expect('model' in (adj.spawns[0] ?? {})).toBe(false)
     expect(adj.spawns[0]?.name).toBe('adjudicator-470-merge')
     expect(JSON.parse(adj.files.get(spawnRecordPath(LOOP, 'adjudicate-merge:512:3f2a9c1d')) ?? '{}')).toMatchObject({ purpose: 'merge', branch: BRANCH, run: RUN })
@@ -306,17 +323,17 @@ describe('spawn (SPEC 6.1)', () => {
   })
 
   test('a deny, a throw and a start with no agent id are failed attempts', async () => {
-    const denied = await exec(A.designer(), { spawn: { deny: 'agent type callum-flow:designer not found' } })
-    expect(denied.result).toEqual({ status: 'failed', summary: 'callum-flow:designer denied: agent type callum-flow:designer not found' })
+    const denied = await exec(A.designer(), { spawn: { deny: 'agent type factory-loop:designer not found' } })
+    expect(denied.result).toEqual({ status: 'failed', summary: 'factory-loop:designer denied: agent type factory-loop:designer not found' })
     const threw = await exec(A.designer(), { spawn: new Error('session not bound') })
-    expect(threw.result).toEqual({ status: 'failed', summary: 'callum-flow:designer: the spawn threw: session not bound' })
+    expect(threw.result).toEqual({ status: 'failed', summary: 'factory-loop:designer: the spawn threw: session not bound' })
     const noId = await exec(A.designer(), { spawn: {} })
     expect(noId.result.status).toBe('failed')
   })
 
   test('a record that cannot be written does not stop the spawn', async () => {
     const { result } = await exec(A.designer(), { writeFails: true })
-    expect(result).toEqual({ status: 'running', agentId: 'agent-1', summary: 'callum-flow:designer (opus) started for #470: agent-1; spawn record not saved' })
+    expect(result).toEqual({ status: 'running', agentId: 'agent-1', summary: 'factory-loop:designer (opus) started for #470: agent-1; spawn record not saved' })
   })
 
   test('refused: another kind, or a spawn with no issue', async () => {
@@ -422,7 +439,7 @@ describe('delegate (SPEC 6.1, I-32)', () => {
   test('no argv or spawn input carries a forbidden flag or command (SPEC 6.1)', async () => {
     const { calls, spawns } = await exec(A.delegate(), { replies: [{ stdout: 'sonnet\n' }] })
     for (const c of calls) expect(c.argv.join(' ')).not.toMatch(/--yes|\brerun\b|\babort\b|\bcoder\b|\bp?kill(all)?\b|pr edit|--add-label/)
-    for (const s of spawns) expect(s.subagentType).toMatch(/^callum-flow:(designer|implementer|adjudicator|fixer)$/)
+    for (const s of spawns) expect(Object.values(SUBAGENT_OF)).toContain(s.subagentType)
   })
 })
 

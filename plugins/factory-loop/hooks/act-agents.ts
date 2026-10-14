@@ -86,13 +86,25 @@ export function notesOf(state: State, issue: number | null): string[] {
   return state.control.notes.filter(note => note.issue === null || note.issue === issue).map(note => note.text)
 }
 
-// spawnInputOf: what $.agent.spawn gets: the named callum-flow agent, its prompt, and the issue
-// in the description and name (D-11). No model leaves the agent's frontmatter model in charge.
+// The agent type each agent is spawned as. The callum-flow adjudicator and designer list their
+// tools, and an agent calls nothing its list leaves out, so they could never reach their answer
+// tools (#548): the loop spawns its own copies of them (agents/*.md), the same definitions with
+// ToolSearch and the answer tool added to `tools:`, which tests/factory-loop-agents.test.js keeps
+// in step. The implementer and fixer list no tools, so they inherit every one.
+export const SUBAGENT_OF: Record<AgentType, string> = {
+  adjudicator: 'factory-loop:adjudicator',
+  designer: 'factory-loop:designer',
+  implementer: 'callum-flow:implementer',
+  fixer: 'callum-flow:fixer',
+}
+
+// spawnInputOf: what $.agent.spawn gets: the agent's type, its prompt, and the issue in the
+// description and name (D-11). No model leaves the agent's frontmatter model in charge.
 export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInput {
   const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
   const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [] }
   const input: SpawnInput = {
-    subagentType: `callum-flow:${type}`,
+    subagentType: SUBAGENT_OF[type],
     prompt: promptOf(action, env),
     description: descriptionOf(action),
     name: nameOf(action, opts.attempt),

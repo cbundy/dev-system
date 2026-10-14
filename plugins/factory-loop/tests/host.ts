@@ -223,6 +223,8 @@ export function host(on: On, opts: HostOptions = {}) {
     if (r.agentId !== undefined) agents.push({ id: r.agentId, type: e.subagentType, status: 'running', description: e.description })
     return { model: e.model ?? 'opus', agentId: r.agentId }
   })
+  // the engine offers the model every agent type no hook hides
+  on('agent.offer', async () => ({ isOffered: true }))
   on('prompt.submit', async ($, e) => {
     prompts.push(e.text)
     const r = await opts.submit?.(e.text)

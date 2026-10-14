@@ -9,7 +9,8 @@
 // session title. This is the only module that holds $: it builds the engine calls the others
 // make, and wires the hooks that feed the ledger between passes (agents' answers, in text or
 // through their answer tools, and their repair messages; wake turns) and the owner's controls
-// (/factory, the control and answer tools).
+// (/factory, the control and answer tools), and keeps the loop's own agent types (agents/) from
+// the model.
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
@@ -1393,6 +1394,11 @@ export const register: Register = (on, opts) => {
   on('tool.call', { tool: 'mcp__factory-loop__handoff' }, async ($, e) => agentReply(await agentTool($, HANDOFF, toolInput(e), e.agentId))).catch(
     ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
   )
+
+  // the loop's own agent types (act-agents.ts SUBAGENT_OF) are its spawns alone: the model is
+  // never offered them, so it keeps to the callum-flow agents it knows
+  on('agent.offer', { agent: 'factory-loop:adjudicator' }, () => ({ isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
+  on('agent.offer', { agent: 'factory-loop:designer' }, () => ({ isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
 }
 
 // for the tests

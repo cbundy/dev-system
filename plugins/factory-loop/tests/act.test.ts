@@ -743,7 +743,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     at(60)
     await h.pass()
     expect(h.keys()).toEqual([`design:470:${claimedAt}`])
-    expect(h.spawns[0]).toMatchObject({ subagentType: 'callum-flow:designer', name: 'designer-470', description: 'Design #470' })
+    expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:designer', name: 'designer-470', description: 'Design #470' })
     expect(h.entry(`design:470:${claimedAt}`)).toMatchObject({ status: 'running', agentId: 'agent-1', attempts: 1 })
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=design:470:${claimedAt} status=running`))).toBe(true)
 
@@ -767,7 +767,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     at(70)
     await h.pass()
     expect(h.keys()).toEqual([`adjudicate:${RUN}:review:${HEAD}`])
-    expect(h.spawns[2]).toMatchObject({ subagentType: 'callum-flow:adjudicator' })
+    expect(h.spawns[2]).toMatchObject({ subagentType: 'factory-loop:adjudicator' })
 
     // the adjudicator approves: its verdict is logged, and pass 5 responds in the run's slot
     await h.answer('agent-3', 'WRONG: review-1 the retry is bounded already.\nACTION: approve')

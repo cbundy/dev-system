@@ -13,6 +13,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
+import { SUBAGENT_OF } from '../hooks/act-agents'
 import { ENV_RETRY_ARGV, LAUNCH_SCRIPT } from '../hooks/act-merge'
 import { ACTION_KINDS } from '../hooks/config'
 import { respondLogPath } from '../hooks/exec'
@@ -338,8 +339,10 @@ describe('the argv safety net (SPEC 6.1)', () => {
         expect(r.status === 'failed' ? `${action.key}: ${r.summary}` : 'ran').toBe('ran')
         all.push(...r.argvs)
         for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv, action) }).toEqual({ key: action.key, argv, bans: [] })
-        // every spawn names a callum-flow agent, with the issue in its name and description
-        for (const s of r.spawns) expect(s.subagentType).toMatch(/^callum-flow:(designer|implementer|adjudicator|fixer)$/)
+        // only spawn and delegate start an agent, each exactly its agent's type (the loop's own
+        // adjudicator and designer, the callum-flow implementer and fixer)
+        const agent = action.kind === 'delegate' ? 'implementer' : action.kind === 'spawn' ? action.agent : null
+        for (const s of r.spawns) expect(s.subagentType).toBe(agent === null ? `no spawn from ${action.kind}` : SUBAGENT_OF[agent])
       }
     }
     // the merge goes only through callum-flow-merge, which runs the guard inside it

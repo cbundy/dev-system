@@ -1063,6 +1063,15 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
   })
 
+  test("the loop's own adjudicator and designer types are never offered to the model; the callum-flow ones are (#548)", async ($, on) => {
+    host(on, { config: ACT })
+    const offer = (agent: string) => $.agent.offer({ agent, description: 'an agent', source: 'plugin', provider: { plugin: agent.split(':')[0] ?? '', tier: 'user' } })
+    expect(await offer('factory-loop:adjudicator')).toEqual({ isOffered: false })
+    expect(await offer('factory-loop:designer')).toEqual({ isOffered: false })
+    expect(await offer('callum-flow:adjudicator')).toEqual({ isOffered: true })
+    expect(await offer('callum-flow:designer')).toEqual({ isOffered: true })
+  })
+
   test('outside act mode the agent tools record nothing', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = shadow(on)
