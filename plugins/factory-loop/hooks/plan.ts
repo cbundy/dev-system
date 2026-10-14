@@ -2180,42 +2180,52 @@ function agents(ctx: Ctx) {
       want(ctx, stop('timed out'))
       continue
     }
+    const issue = entry.issue === null ? undefined : ctx.issues.get(entry.issue)
+    if (entry.issue !== null && issue !== undefined && !state.control.paused.includes(entry.issue)) {
+      const stopped = (why: string) => wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why })
+      if (finished(issue)) {
+        const why = endedWhy(issue)
+        want(ctx, stop(`issue ${why}`))
+        want(ctx, stopped(why))
+        continue
+      }
+      if (issue.holder !== null && issue.holder !== state.device && isLive(issue)) {
+        want(ctx, stop(`claimed by ${issue.holder}`))
+        want(ctx, wake('tell', 'claim-lost', `tell:claim-lost:${entry.issue}:${issue.holder}`, 'A2', entry.issue, { issue: entry.issue, holder: issue.holder }))
+        continue
+      }
+      if (state.control.dropped.some(d => d.issue === entry.issue)) {
+        want(ctx, stop('owner dropped it'))
+        want(ctx, stopped('dropped'))
+        continue
+      }
+      if (agent === 'implementer' && splitAfter(ctx, entry.issue, entry.startedAt)) {
+        want(ctx, stop('issue split while implementing'))
+        want(ctx, stopped('split'))
+        continue
+      }
+    }
+    if (entry.status !== 'done') continue
     // its answer is in and the grace is out, yet the list shows it at work: whatever it left
     // running would hold the checkout or its branch up to its timeout (#587). The owner hears
-    // once what it was and how the list showed it.
-    if (entry.status === 'done') {
-      // an implementer or fixer may wait on the pipeline it launched in the background (`axi run`
-      // and `axi respond` block until the next gate): stopping it would end that driver and
-      // strand the run, so it is left alone while a run of its issue is running or pending, and
-      // keeps its branch meanwhile (heldBy); once the run parks, the driver has returned
-      const driving = (agent === 'implementer' || agent === 'fixer') && entry.issue !== null && runMoving(ctx, entry.issue)
-      if (driving) {
+    // once what it was and how the list showed it. An implementer or fixer may wait on the
+    // pipeline it launched in the background (`axi run` and `axi respond` block until the next
+    // gate): stopping it would end that driver and strand the run, so it is left alone while a
+    // run of its issue is running or pending, or the runs source does not read, and keeps its
+    // branch meanwhile (heldBy); once the run parks, the driver has returned
+    if ((agent === 'implementer' || agent === 'fixer') && entry.issue !== null) {
+      if (!state.sources.runs.ok) {
+        skip(ctx, 'A2', entry.issue, `${entry.key}: its agent works on past its answer and the runs source did not read; not stopped`)
+        continue
+      }
+      if (runMoving(ctx, entry.issue)) {
         skip(ctx, 'A2', entry.issue, `${entry.key}: its agent works on past its answer while a run of #${entry.issue} moves; not stopped`)
         continue
       }
-      const listed = state.agents.find(a => a.id === agentId)?.status ?? null
-      want(ctx, stop('worked on past its answer'))
-      want(ctx, wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why: 'answered', agent, status: listed, entry: entry.key }))
-      continue
     }
-    if (entry.issue === null) continue
-    const issue = ctx.issues.get(entry.issue)
-    if (issue === undefined || state.control.paused.includes(entry.issue)) continue
-    const stopped = (why: string) => wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why })
-    if (finished(issue)) {
-      const why = endedWhy(issue)
-      want(ctx, stop(`issue ${why}`))
-      want(ctx, stopped(why))
-    } else if (issue.holder !== null && issue.holder !== state.device && isLive(issue)) {
-      want(ctx, stop(`claimed by ${issue.holder}`))
-      want(ctx, wake('tell', 'claim-lost', `tell:claim-lost:${entry.issue}:${issue.holder}`, 'A2', entry.issue, { issue: entry.issue, holder: issue.holder }))
-    } else if (state.control.dropped.some(d => d.issue === entry.issue)) {
-      want(ctx, stop('owner dropped it'))
-      want(ctx, stopped('dropped'))
-    } else if (agent === 'implementer' && splitAfter(ctx, entry.issue, entry.startedAt)) {
-      want(ctx, stop('issue split while implementing'))
-      want(ctx, stopped('split'))
-    }
+    const listed = state.agents.find(a => a.id === agentId)?.status ?? null
+    want(ctx, stop('worked on past its answer'))
+    want(ctx, wake('tell', 'stopped', `tell:stopped:${agentId}`, 'A2', entry.issue, { issue: entry.issue, why: 'answered', agent, status: listed, entry: entry.key }))
   }
   // SPEC 13: a stop of rule A1 that failed leaves the agent running, marked timed-out (ledger.ts
   // finish); its rule waits for the agent list (gate), and the owner hears once

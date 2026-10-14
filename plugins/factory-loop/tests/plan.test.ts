@@ -1106,7 +1106,10 @@ describe('A: agents', () => {
     expect(keys(early)).toEqual(['stop:a-fix', 'tell:stopped:a-fix'])
     expect(find(early, 'stop:a-fix')).toMatchObject({ rule: 'A2', reason: 'worked on past its answer' })
     const dropped = control({ dropped: [{ issue: 50, at: NOW - MIN }] })
-    expect(keys(plan(mergeReady([guarded(), reviewed(), young], { ...listed('running'), control: dropped }), CFG))).toEqual([`abandon:50:${NOW - MIN}`, 'stop:a-fix', 'tell:stopped:a-fix'])
+    const droppedPlan = plan(mergeReady([guarded(), reviewed(), young], { ...listed('running'), control: dropped }), CFG)
+    expect(keys(droppedPlan)).toEqual([`abandon:50:${NOW - MIN}`, 'stop:a-fix', 'tell:stopped:a-fix'])
+    expect(find(droppedPlan, 'stop:a-fix')).toMatchObject({ rule: 'A2', reason: 'owner dropped it' })
+    expect(find(droppedPlan, 'tell:stopped:a-fix')).toMatchObject({ fields: { issue: '50', why: 'dropped' } })
     // an answer just in: the list has not yet marked the agent completed, so nothing is stopped
     const fresh = answered({ endedAt: NOW - 5_000 })
     expect(keys(plan(mergeReady([guarded(), reviewed(), fresh], listed('running')), CFG))).toEqual([])
@@ -1238,6 +1241,28 @@ describe('A: agents', () => {
         expect(keys(m)).toEqual([])
         expect(m.skipped).toContainEqual({ rule: 'A2', issue: 45, why: `delegate:45:${brief(45)}: its agent works on past its answer while a run of #45 moves; not stopped` })
       }
+      // a runs source that did not read may hide a moving run: the agent is left alone the same way
+      const unread = plan(failing(withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:implementer')], runs: [] }), [handedOff]), 'runs', null), CFG)
+      expect(keys(unread)).toEqual([])
+      expect(unread.skipped).toContainEqual({ rule: 'A2', issue: 45, why: `delegate:45:${brief(45)}: its agent works on past its answer and the runs source did not read; not stopped` })
+      // the issue ended, claimed elsewhere or dropped: the agent is stopped for that, run or not
+      const ended = (over: Partial<IssueView>, extra: Partial<State> = {}) =>
+        plan(
+          withLedger(
+            parkedReview({ issues: [mine(45, 'parked', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545, ...over })], agents: [lingering('agent-impl-45', 'callum-flow:implementer')], runs: [run(45, 'running')], ...extra }),
+            [handedOff],
+          ),
+          CFG,
+        )
+      const closed = ended({ open: false })
+      expect(find(closed, 'stop:agent-impl-45')).toMatchObject({ rule: 'A2', reason: 'issue closed' })
+      expect(find(closed, 'tell:stopped:agent-impl-45')).toMatchObject({ fields: { issue: '45', why: 'closed' } })
+      const claimed = ended({ holder: 'other-device' })
+      expect(find(claimed, 'stop:agent-impl-45')).toMatchObject({ rule: 'A2', reason: 'claimed by other-device' })
+      expect(keys(claimed)).toContain('tell:claim-lost:45:other-device')
+      const owned = ended({}, { control: control({ dropped: [{ issue: 45, at: NOW - MIN }] }) })
+      expect(find(owned, 'stop:agent-impl-45')).toMatchObject({ rule: 'A2', reason: 'owner dropped it' })
+      expect(find(owned, 'tell:stopped:agent-impl-45')).toMatchObject({ fields: { issue: '45', why: 'dropped' } })
       const fixerMoving = { ...handedOff, key: 'fixer:guard:545:head45', kind: 'spawn' as const, agent: 'fixer' as const }
       expect(keys(plan(withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:fixer')], runs: [run(45, 'running')] }), [fixerMoving]), CFG))).toEqual([])
       // a superseded run is not the issue's run

@@ -1032,8 +1032,11 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   for every agent type, instead of waiting for its A1 timeout, and the owner hears once
   (`tell(stopped)` with why `answered`, the agent type and the status it was listed with). Once
   that stop has ended, done or failed, the agent no longer counts as a reader of the main
-  checkout (H5) or as the writer of its branch, so what it held goes on the next pass. This
-  revises D-71, which kept such an agent under A1 and A2 only for their usual reasons.
+  checkout (H5) or as the writer of its branch, so what it held goes on the next pass. A2's
+  issue reasons (ended, claimed elsewhere, dropped, split) still come first, with their own
+  reason and notice, and an implementer or fixer is left alone while a run of its issue moves or
+  the `runs` source does not read. This revises D-71, which kept such an agent under A1 and A2
+  only for their usual reasons.
 - **Alternatives**: (a) never count an answered agent as a reader or writer, without stopping it;
   (b) let what it held go in the same pass as the stop; (c) a process-group kill of the agent's
   shells from the loop, besides TaskStop; (d) stop an implementer or fixer also while a run of
