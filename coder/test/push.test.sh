@@ -71,6 +71,9 @@ expect_calls() {
     "templates edit $t --display-name $display --icon $icon --description "?*" --yes") ;;
     *) fail "$t: edit call wrong: $(cat "$calls")" ;;
   esac
+  # Coder refuses a template description over 128 characters (the push has already landed).
+  desc=$(sed -n '/^--description$/{n;p;}' "$calls.2")
+  [ "${#desc}" -le 128 ] || fail "$t: description is ${#desc} characters, Coder allows 128"
 }
 
 # 1. dev-system: mode auto, the docker icon, and today's behaviour for the rest.

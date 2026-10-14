@@ -68,7 +68,7 @@ case "$name" in
     role=orchestrator
     display_name='Orchestrator (loop)'
     icon=/emojis/1f3ed.png # U+1F3ED, the factory emoji
-    description='A dev-system orchestrator run by the factory loop: a deterministic plugin claims, gates and merges issues, and wakes Claude only for judgment calls'
+    description='A dev-system orchestrator run by the factory loop, a deterministic plugin that claims, gates and merges issues'
     mode=session
     resume=true
     # As for orchestrator, until the owner decides (cbundy/dev-system#164).
@@ -80,6 +80,12 @@ case "$name" in
     ;;
   *) usage ;;
 esac
+
+# Coder stores a template description in at most 128 characters.
+[ "${#description}" -le 128 ] || {
+  echo "push: the $name description is ${#description} characters; Coder allows 128" >&2
+  exit 1
+}
 
 # coder reads each --variable as a CSV record, so a value with a comma (the resume
 # prompt) would be split: quote the whole name=value as one CSV field.
