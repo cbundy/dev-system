@@ -1235,7 +1235,7 @@ describe('A: agents', () => {
       // a run of the issue still moving: the agent may wait on the pipeline driver it launched in
       // the background (`axi run` blocks until the next gate), so it is not stopped, which would
       // strand the run; it keeps its branch, and is stopped once the run parks
-      for (const state of ['running', 'pending'] as const) {
+      for (const state of ['running', 'pending', 'ci-stalled'] as const) {
         const moving = withLedger(parkedReview({ agents: [lingering('agent-impl-45', 'callum-flow:implementer')], runs: [run(45, state)] }), [handedOff])
         const m = plan(moving, CFG)
         expect(keys(m)).toEqual([])

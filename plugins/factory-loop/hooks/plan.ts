@@ -2211,7 +2211,7 @@ function agents(ctx: Ctx) {
     // once what it was and how the list showed it. An implementer or fixer may wait on the
     // pipeline it launched in the background (`axi run` and `axi respond` block until the next
     // gate): stopping it would end that driver and strand the run, so it is left alone while a
-    // run of its issue is running or pending, or the runs source does not read, and keeps its
+    // run of its issue is running, pending or ci-stalled, or the runs source does not read, and keeps its
     // branch meanwhile (heldBy); once the run parks, the driver has returned
     if ((agent === 'implementer' || agent === 'fixer') && entry.issue !== null) {
       if (!state.sources.runs.ok) {
@@ -2239,10 +2239,10 @@ function agents(ctx: Ctx) {
   }
 }
 
-// runMoving: a current run of the issue is running or pending: a pipeline driver may still
-// wait on it (#587).
+// runMoving: a current run of the issue is running, pending or ci-stalled (its CI step still
+// polls in the daemon, as drainBlockers counts it): a pipeline driver may still wait on it (#587).
 function runMoving(ctx: Ctx, issue: number): boolean {
-  return ctx.state.runs.some(r => r.issue === issue && !r.superseded && (r.state === 'running' || r.state === 'pending'))
+  return ctx.state.runs.some(r => r.issue === issue && !r.superseded && (r.state === 'running' || r.state === 'pending' || r.state === 'ci-stalled'))
 }
 
 function splitAfter(ctx: Ctx, issue: number, since: number) {

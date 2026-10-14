@@ -1040,7 +1040,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Alternatives**: (a) never count an answered agent as a reader or writer, without stopping it;
   (b) let what it held go in the same pass as the stop; (c) a process-group kill of the agent's
   shells from the loop, besides TaskStop; (d) stop an implementer or fixer also while a run of
-  its issue is running or pending.
+  its issue is running, pending or ci-stalled.
 - **Why**: on the first day the loop ran the real repo, three stalls came from one cause: a
   designer left `claude remote-control --help` running in the main checkout, and two
   implementers left `until ! pgrep -f ...` wait loops that matched themselves, so the list kept
