@@ -30,6 +30,34 @@ log() {
   echo "dev-entrypoint: $*" >&2
 }
 
+# Both initialization and the command must finish through the same stop path.
+# A heartbeat can already be running while dev-init is still reporting checks.
+# shellcheck disable=SC2317 # Invoked by the EXIT trap.
+final_heartbeat() {
+  local hb=/usr/local/share/dev-system/heartbeat-loop
+  if [ "$(id -u)" != 0 ] && [ -x "$hb" ]; then
+    timeout 10 "$hb" --final >&2 || true
+  fi
+}
+trap 'final_heartbeat' EXIT
+
+stopped=0
+run_child() {
+  local child status
+  ( trap - INT QUIT; exec "$@" ) <&0 &
+  child=$!
+  trap 'stopped=1; kill -s TERM "$child" 2>/dev/null || true' TERM
+  trap 'stopped=1; kill -s INT "$child" 2>/dev/null || true' INT
+  trap 'stopped=1; kill -s HUP "$child" 2>/dev/null || true' HUP
+  while kill -0 "$child" 2>/dev/null; do
+    wait "$child"
+  done
+  status=0
+  wait "$child" || status=$?
+  trap - TERM INT HUP
+  return "$status"
+}
+
 if [ "$(id -u)" = 0 ]; then
   # Run as root (docker run --user root), dev-init would leave root-owned
   # files in the /persist volumes that node then cannot write.
@@ -37,8 +65,12 @@ if [ "$(id -u)" = 0 ]; then
 else
   # shellcheck disable=SC2119 # the argument is optional; none means the default
   ws=$(workspace)
-  ( cd "$ws" && timeout -k 10 300 dev-init ) >&2
-  case $? in
+  # Keep the entrypoint responsive to stop signals while initialization runs.
+  # shellcheck disable=SC2016 # $1 is the workspace passed to the child bash.
+  run_child bash -c 'cd "$1" && exec timeout -k 10 300 dev-init' bash "$ws" >&2
+  status=$?
+  [ "$stopped" = 0 ] || exit "$status"
+  case "$status" in
     0) ;;
     124 | 137) log "WARNING: dev-init did not finish within 300s - continuing without it" ;;
     *) log "WARNING: dev-init failed - continuing without it" ;;
@@ -52,20 +84,6 @@ fi
 # heartbeat once it has exited (heartbeat-loop --final, #467). Stop signals are forwarded to
 # the child; bash's wait returns early (128+signal) when a trapped signal arrives, so loop
 # until the child has really exited, then take its own status from a final wait.
-( trap - INT QUIT; exec "$@" ) <&0 &
-child=$!
-trap 'kill -s TERM "$child" 2>/dev/null || true' TERM
-trap 'kill -s INT "$child" 2>/dev/null || true' INT
-trap 'kill -s HUP "$child" 2>/dev/null || true' HUP
-while kill -0 "$child" 2>/dev/null; do
-  wait "$child"
-done
-status=0
-wait "$child" || status=$?
-trap - TERM INT HUP
-
-hb=/usr/local/share/dev-system/heartbeat-loop
-if [ "$(id -u)" != 0 ] && [ -x "$hb" ]; then
-  timeout 10 "$hb" --final >&2 || true
-fi
+run_child "$@"
+status=$?
 exit "$status"
