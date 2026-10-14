@@ -524,6 +524,14 @@ describe('/factory retry (D-38)', () => {
     expect(retryIssue(keep, 60, CFG).cleared).toEqual([])
   })
 
+  test('an env-retry runs once per resume, whatever the config, and a retry never clears it (#537)', () => {
+    const spent = ended('env-retry:r:test:h:r1', 'env-retry', 'failed', 1, { issue: 60 })
+    expect(exhausted(spent, config({ maxAttempts: { ...CFG.maxAttempts, 'env-retry': 5 } }))).toBe(true)
+    expect(maxAttemptsOf(config({ maxAttempts: { 'env-retry': 5 } }), 'env-retry')).toBe(1)
+    const told = ended('tell:agent-failed:env-retry:r:test:h:r1', 'tell', 'done', 1, { wake: 'agent-failed', issue: 60 })
+    expect(retryIssue([spent, told], 60, CFG)).toEqual({ ledger: [spent, told], cleared: [], notices: [] })
+  })
+
   // Each case: plan holds the key as exhausted (and has told the owner), retry clears it, and
   // plan emits the action again.
   function crossCheck(s: State, held: LedgerEntry[], n: number, notice: string, again: string) {

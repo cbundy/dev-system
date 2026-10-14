@@ -373,6 +373,89 @@ describe('P: pipeline gates', () => {
     expect(find(fixer, `fixer:gate:${AT45}`)).toMatchObject({ agent: 'fixer', instructions: 'rewrite the parser', brief: brief(45) })
   })
 
+  // #537, found on the testbed: codex was logged out, so runs failed at the test step and every
+  // adjudicator escalated ENV. Once the owner fixed it and resumed, new adjudicators were asked
+  // about the same stale failure and escalated again; only a hand `no-mistakes rerun` moved them.
+  describe('P2a: the owner resumed an environment escalation (#537)', () => {
+    const RUN45 = '01M4RQ0045AAAA'
+    const AT = `${RUN45}:test:head45`
+    const ENV = 'ENV: codex is logged out (401 on the evidence step); the tests passed'
+    const failedTest = (over: Partial<State> = {}) =>
+      state({ issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: RUN45, pr: 545 })], runs: [run(45, 'failed', { step: 'test' })], ...over })
+    const escalated = (verdicts: string[], key = `adjudicate:${AT}`) =>
+      entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: RUN45, head: 'head45', startedAt: NOW - 60 * MIN, endedAt: NOW - 50 * MIN, outcome: review({ type: 'escalate', why: 'environment' }, null, verdicts) })
+    const told = (key = `tell:escalate:${AT}`) => entry(key, 'tell', { wake: 'escalate', class: 'owner', issue: 45 })
+    const resumedAt = (...ats: number[]) => control({ resumed: ats.map(at => ({ subject: `run:${RUN45}`, at })) })
+
+    test('every verdict ENV and the owner resumed: the same head is rerun, no new adjudicator', () => {
+      const held = withLedger(failedTest(), [escalated([ENV]), told()])
+      expect(keys(plan(held, CFG))).toEqual([])
+      const r = plan({ ...held, control: resumedAt(NOW - MIN) }, CFG)
+      expect(keys(r)).toEqual([`env-retry:${AT}:r1`])
+      expect(find(r, `env-retry:${AT}:r1`)).toMatchObject({
+        kind: 'env-retry',
+        class: 'drive',
+        rule: 'P2a',
+        issue: 45,
+        run: RUN45,
+        branch: 'feat/issue-45-work',
+        step: 'test',
+        head: 'head45',
+      })
+    })
+
+    test('a code failure is never rerun: any other verdict, no verdict, or no escalation asks the adjudicator again', () => {
+      for (const verdicts of [[ENV, 'CORRECT: slugify drops the trailing dash'], ['WRONG: x'], ['NIT: x'], ['DUP: x'], ['CORRECT: x'], []]) {
+        const s = withLedger(failedTest({ control: resumedAt(NOW - MIN) }), [escalated(verdicts), told()])
+        expect({ verdicts, keys: keys(plan(s, CFG)) }).toEqual({ verdicts, keys: [`adjudicate:${AT}:r1`] })
+      }
+      // an ENV verdict the adjudicator answered with a fix is a respond, never a rerun
+      const fix = entry(`adjudicate:${AT}`, 'spawn', {
+        agent: 'adjudicator',
+        issue: 45,
+        run: RUN45,
+        outcome: review({ type: 'fix', findings: null, instructions: 'retry', addFinding: null }, null, [ENV]),
+      })
+      expect(keys(plan(withLedger(failedTest({ control: resumedAt(NOW - MIN) }), [fix]), CFG))).toEqual([`adjudicate:${AT}:r1`])
+      // a resume from before the escalation is not the owner answering it
+      const early = withLedger(failedTest({ control: resumedAt(NOW - 55 * MIN) }), [escalated([ENV]), told()])
+      expect(keys(plan(early, CFG))).toEqual([`adjudicate:${AT}:r1`])
+    })
+
+    test('once per resume: a rerun that left the run at the gate escalates again, and a second resume reruns once more', () => {
+      const s = (ended: number, ...ats: number[]) =>
+        withLedger(failedTest({ control: resumedAt(...ats) }), [
+          escalated([ENV]),
+          told(),
+          entry(`env-retry:${AT}:r1`, 'env-retry', { class: 'drive', rule: 'P2a', issue: 45, run: RUN45, head: 'head45', endedAt: ended }),
+        ])
+      expect(keys(plan(s(NOW - 2 * MIN, NOW - 5 * MIN), CFG))).toEqual([])
+      const again = plan(s(NOW - 16 * MIN, NOW - 20 * MIN), CFG)
+      expect(keys(again)).toEqual([`tell:escalate:${AT}:r1`])
+      expect(find(again, `tell:escalate:${AT}:r1`)).toMatchObject({ rule: 'P2a', context: [expect.stringContaining('run again'), ENV] })
+      expect(again.owner).toBe(1)
+      const second = withLedger(s(NOW - 16 * MIN, NOW - 20 * MIN, NOW - MIN), [told(`tell:escalate:${AT}:r1`)])
+      expect(keys(plan(second, CFG))).toEqual([`env-retry:${AT}:r2`])
+    })
+
+    test('a rerun that could not launch is not tried again: the owner hears, no adjudicator', () => {
+      const failed = entry(`env-retry:${AT}:r1`, 'env-retry', { class: 'drive', rule: 'P2a', issue: 45, run: RUN45, status: 'failed', endedAt: NOW - 30 * MIN })
+      const s = withLedger(failedTest({ control: resumedAt(NOW - 40 * MIN) }), [escalated([ENV]), told(), failed])
+      expect(keys(plan(s, CFG))).toEqual([`tell:agent-failed:env-retry:${AT}:r1`])
+    })
+
+    test('the rerun is a new run: its gate is judged afresh, and a repeat failure escalates again', () => {
+      const RERUN = '01M4RQ0045BBBB'
+      const s = withLedger(
+        failedTest({ control: resumedAt(NOW - 20 * MIN), runs: [run(45, 'failed', { step: 'test' }), run(45, 'failed', { run: RERUN, step: 'test' })] }),
+        [escalated([ENV]), told(), entry(`env-retry:${AT}:r1`, 'env-retry', { class: 'drive', rule: 'P2a', issue: 45, run: RUN45, endedAt: NOW - 18 * MIN })],
+      )
+      expect(keys(plan(s, CFG))).toEqual([`adjudicate:${RERUN}:test:head45`])
+      const again = withLedger(s, [escalated([ENV], `adjudicate:${RERUN}:test:head45`)])
+      expect(keys(plan(again, CFG))).toEqual([`tell:escalate:${RERUN}:test:head45`])
+    })
+  })
+
   test('a respond that leaves the gate unmoved is tried once more, then the model takes it as a task (D-37, SPEC P3a)', () => {
     const adj = adjudicated({ type: 'approve', reason: null })
     const sent = entry(`respond:${AT45}:approve`, 'respond', { run: '01M4RQ0045AAAA', endedAt: NOW - 20 * MIN })

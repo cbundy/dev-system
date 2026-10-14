@@ -174,7 +174,7 @@ function extraEntry(x: ExtraEntry, parent: LedgerEntry, now: Ms): LedgerEntry {
 function classOf(kind: ActionKind, spawn: ActionClass): ActionClass {
   if (kind === 'claim') return 'start'
   if (kind === 'delegate') return 'develop'
-  if (kind === 'respond' || kind === 'judge' || kind === 'task') return 'drive'
+  if (kind === 'respond' || kind === 'env-retry' || kind === 'judge' || kind === 'task') return 'drive'
   if (kind === 'tell') return 'owner'
   return kind === 'spawn' ? spawn : 'free'
 }
@@ -311,7 +311,8 @@ export type Retried = { ledger: LedgerEntry[]; cleared: string[]; notices: strin
 // notice each one raised (agent-failed, task-timeout, update-behind) goes, unless it is still
 // open, so a retry that runs out again is told again.
 export function retryIssue(ledger: readonly LedgerEntry[], issue: number, config: Config): Retried {
-  const spent = ledger.filter(e => e.issue === issue && exhausted(e, config))
+  // an env-retry stays spent: the owner's resume, not a retry, allows the next rerun (#537)
+  const spent = ledger.filter(e => e.issue === issue && e.kind !== 'env-retry' && exhausted(e, config))
   const cleared = spent.map(e => e.key)
   const raised = new Set(spent.flatMap(noticesOf))
   const notices = ledger.filter(e => raised.has(e.key) && e.status !== 'running').map(e => e.key)
@@ -348,6 +349,8 @@ export function attemptsKindOf(entry: LedgerEntry): ActionKind | AgentType {
 // M2b); anything else its config.maxAttempts entry, 3 when it has none.
 export function maxAttemptsOf(config: Config, kind: ActionKind | AgentType): number {
   if (kind === 'update-behind') return config.updateBehindRetries + 1
+  // once per owner resume, whatever the config says (#537)
+  if (kind === 'env-retry') return 1
   return config.maxAttempts[kind] ?? 3
 }
 

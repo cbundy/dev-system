@@ -219,6 +219,8 @@ function isLive(issue: IssueView | undefined) {
 
 function maxAttempts(config: Config, kind: ActionKind | AgentType) {
   if (kind === 'update-behind') return config.updateBehindRetries + 1
+  // once per owner resume, whatever the config says (#537)
+  if (kind === 'env-retry') return 1
   return config.maxAttempts[kind] ?? 3
 }
 
@@ -575,6 +577,14 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           continue
         }
       }
+      // P2a (#537): a resume of an escalation whose verdicts were all ENV is the owner's word that
+      // the environment is fixed, so the same head is rerun rather than a new adjudicator asked
+      // about the stale failure
+      const envEscalation = resumed > 0 && run.head !== null ? envOnlyEscalation(ctx, run, at, resumed) : undefined
+      if (envEscalation !== undefined) {
+        envRetry(ctx, run, at, suffix, envEscalation)
+        continue
+      }
       const adjKey = `adjudicate:${at}${suffix}`
       const adj = done(ctx, adjKey)
       if (adj === undefined) {
@@ -688,6 +698,51 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
       }
     }
   }
+}
+
+// envOnlyEscalation: the verdict lines of this gate's latest adjudication, when it escalated with
+// every verdict ENV and the owner resumed the run after it; undefined otherwise. A round with no
+// adjudication is an env-retry's, so a second resume after a rerun looks back past it. Any other
+// verdict (a code failure), or none, is never rerun.
+function envOnlyEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): string[] | undefined {
+  for (let round = resumed - 1; round >= 0; round--) {
+    const adj = done(ctx, `adjudicate:${at}${round > 0 ? `:r${round}` : ''}`)
+    if (adj === undefined) continue
+    const verdict = outcome(adj, 'adjudicator')
+    if (verdict === undefined || verdict.action.type !== 'escalate') return undefined
+    if (verdict.verdicts.length === 0 || !verdict.verdicts.every(v => /^ENV:/.test(v))) return undefined
+    return resumes(ctx, `run:${run.run}`, adj.endedAt ?? Number.POSITIVE_INFINITY) > 0 ? verdict.verdicts : undefined
+  }
+  return undefined
+}
+
+// envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
+// starts a new run, which the P rules then judge afresh; if this run is still at the gate
+// respondSettleMs later, the owner is told again rather than the loop trying more.
+function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: string[]) {
+  const n = run.issue as number
+  const key = `env-retry:${at}${suffix}`
+  const g = want(ctx, {
+    kind: 'env-retry',
+    key,
+    class: 'drive',
+    rule: 'P2a',
+    reason: 'owner resumed an environment escalation',
+    issue: n,
+    run: run.run,
+    branch: run.branch,
+    step: run.step,
+    head: run.head as string,
+  })
+  const ran = g === 'done' ? done(ctx, key) : undefined
+  if (ran === undefined || ctx.state.now - (ran.endedAt ?? 0) < ctx.config.respondSettleMs) return
+  want(
+    ctx,
+    wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }, [
+      'the pipeline was run again on this head after the resume, and the run is still at this gate',
+      ...verdicts,
+    ]),
+  )
 }
 
 const REDRIVE_SETTLE_MS = 30 * 60_000
@@ -1830,10 +1885,11 @@ function breakerOpen(ctx: Ctx, kind: ActionKind): number | null {
 }
 
 // writesBranch: an action that changes an issue's branch or its PR's head: an implementer or a
-// fixer, a respond (the pipeline commits on the run's head), an update-behind, a merge.
+// fixer, a respond or env-retry (the pipeline commits on the run's head), an update-behind, a
+// merge.
 function writesBranch(action: Action): boolean {
   if (action.kind === 'spawn') return action.agent === 'fixer'
-  return action.kind === 'delegate' || action.kind === 'respond' || action.kind === 'update-behind' || action.kind === 'merge'
+  return action.kind === 'delegate' || action.kind === 'respond' || action.kind === 'env-retry' || action.kind === 'update-behind' || action.kind === 'merge'
 }
 
 // agentWriting: an implementer or fixer of this issue still runs, by the ledger, or by the agent

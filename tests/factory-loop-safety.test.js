@@ -7,7 +7,8 @@
 // plugins/factory-loop/tests/safety.test.ts, runs every action kind through the dispatcher and
 // checks each argv; this one reads the source, since plugin tests cannot read files, so a
 // template that no test reaches is still caught. The one signal the loop sends is rails.ts's
-// liveness probe, `kill -0` by pid, which delivers nothing.
+// liveness probe, `kill -0` by pid, which delivers nothing. The one rerun is rule P2a's env-retry
+// (#537): its argv is declared once, on ENV_RETRY's line, and only that line may hold `rerun`.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -15,6 +16,7 @@ const path = require("node:path");
 
 const HOOKS = path.join(__dirname, "..", "plugins", "factory-loop", "hooks");
 const PROBE = 'kill -0 "$1" 2>/dev/null';
+const ENV_RETRY = { file: "act-merge.ts", line: "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun']" };
 // after these, a `/` starts a regular expression rather than a division
 const REGEX_AFTER = new Set("(,=:[!&|?{};+-*%<>~^".split(""));
 const REGEX_WORDS = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await"]);
@@ -143,12 +145,14 @@ function literals(src) {
 function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
   const found = [];
   const lits = literals(src);
+  const lines = src.split("\n");
+  const envRetry = (lit) => file === ENV_RETRY.file && lit.text === "rerun" && lines[lit.line - 1] === ENV_RETRY.line;
   const flag = (lit, what) => found.push(`${file}:${lit.line}: ${what}: ${JSON.stringify(lit.text.slice(0, 80))}`);
   lits.forEach((lit, n) => {
     const t = lit.text;
     const next = lits[n + 1]?.text;
     if (/(^|[\s=])--yes\b/.test(t)) flag(lit, "--yes");
-    if (/\brerun\b/.test(t) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
+    if ((/\brerun\b/.test(t) && !envRetry(lit)) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
     if (t === "coder" || /(^|[;&|(]\s*|^\s*)coder\s/.test(t)) flag(lit, "a coder command");
     if (/\b(pkill|killall)\b/.test(t)) flag(lit, "a kill by name");
     if (/(^|[;&|(\s])kill\b/.test(t) && t !== PROBE) flag(lit, "a kill");
@@ -207,6 +211,35 @@ test("the scanner catches each forbidden form, and passes the loop's own", () =>
     "`agent ${seen}` + ' was killed' + ' (aborted)'",
   ];
   for (const body of good) assert.deepEqual(problems("good.ts", `export const argv = ${body}\n`), [], body);
+  // the env-retry exception is that one line of act-merge.ts, exactly: elsewhere, or with any
+  // change to the argv or its name, `rerun` is caught
+  assert.deepEqual(problems(ENV_RETRY.file, `${ENV_RETRY.line}\n`), []);
+  assert.notDeepEqual(problems("act-cli.ts", `${ENV_RETRY.line}\n`), []);
+  for (const line of [
+    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun', '--yes']",
+    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun', '--intent', i]",
+    "export const OTHER_ARGV: readonly string[] = ['no-mistakes', 'rerun']",
+    "const argv = ['no-mistakes', 'rerun']",
+    "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'axi', 'abort']",
+  ]) {
+    assert.notDeepEqual(problems(ENV_RETRY.file, `${line}\n`), [], line);
+  }
+});
+
+test("the one rerun is env-retry's argv: declared once in act-merge.ts, used only by its executor and argv list", () => {
+  const declared = files.flatMap((f) => fs.readFileSync(path.join(HOOKS, f), "utf8").split("\n").filter((l) => l.includes("'rerun'")).map((l) => `${f}: ${l}`));
+  assert.deepEqual(declared, [`${ENV_RETRY.file}: ${ENV_RETRY.line}`]);
+  for (const f of files.filter((x) => x !== ENV_RETRY.file)) {
+    assert.ok(!fs.readFileSync(path.join(HOOKS, f), "utf8").includes("ENV_RETRY_ARGV"), `${f} names ENV_RETRY_ARGV`);
+  }
+  const src = fs.readFileSync(path.join(HOOKS, ENV_RETRY.file), "utf8");
+  const uses = src.split("\n").filter((l) => l.includes("ENV_RETRY_ARGV") && l !== ENV_RETRY.line && !/^\s*\/\//.test(l));
+  assert.equal(uses.length, 2, uses.join("\n"));
+  // argvsOf's case and the executor's launch, each in env-retry's own code
+  const envCase = src.slice(src.indexOf("case 'env-retry': {"), src.indexOf("default:", src.indexOf("case 'env-retry': {")));
+  const executor = src.slice(src.indexOf("const envRetry: Executor"), src.indexOf("\n}\n", src.indexOf("const envRetry: Executor")));
+  assert.ok(envCase.includes("ENV_RETRY_ARGV") && executor.includes("ENV_RETRY_ARGV"), "ENV_RETRY_ARGV outside env-retry's code");
+  assert.ok(executor.includes("action.rule !== 'P2a'"), "the executor refuses any rule but P2a");
 });
 
 test("no hook literal passes --yes, reruns, aborts, merges or edits a PR, adds a label, runs coder or kills by name", () => {
