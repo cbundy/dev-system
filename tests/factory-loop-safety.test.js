@@ -7,8 +7,9 @@
 // plugins/factory-loop/tests/safety.test.ts, runs every action kind through the dispatcher and
 // checks each argv; this one reads the source, since plugin tests cannot read files, so a
 // template that no test reaches is still caught. The one signal the loop sends is rails.ts's
-// liveness probe, `kill -0` by pid, which delivers nothing. The one rerun is rule P2a's env-retry
-// (#537): its argv is declared once, on ENV_RETRY's line, and only that line may hold `rerun`.
+// liveness probe, `kill -0` by pid, which delivers nothing; `kill switch` alone is the skip reason
+// act.ts logs (#557), never a command. The one rerun is rule P2a's env-retry (#537): its argv is
+// declared once, on ENV_RETRY's line, and only that line may hold `rerun`.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -16,6 +17,7 @@ const path = require("node:path");
 
 const HOOKS = path.join(__dirname, "..", "plugins", "factory-loop", "hooks");
 const PROBE = 'kill -0 "$1" 2>/dev/null';
+const KILL_SWITCH = "kill switch";
 const ENV_RETRY = { file: "act-merge.ts", line: "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun']" };
 // after these, a `/` starts a regular expression rather than a division
 const REGEX_AFTER = new Set("(,=:[!&|?{};+-*%<>~^".split(""));
@@ -155,7 +157,7 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
     if ((/\brerun\b/.test(t) && !envRetry(lit)) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
     if (t === "coder" || /(^|[;&|(]\s*|^\s*)coder\s/.test(t)) flag(lit, "a coder command");
     if (/\b(pkill|killall)\b/.test(t)) flag(lit, "a kill by name");
-    if (/(^|[;&|(\s])kill\b/.test(t) && t !== PROBE) flag(lit, "a kill");
+    if (/(^|[;&|(\s])kill\b/.test(t) && t !== PROBE && t !== KILL_SWITCH) flag(lit, "a kill");
     if (t === "kill" && !/^-?\d/.test(next ?? "")) flag(lit, "a kill");
     if (/\bpr (edit|merge)\b/.test(t) || (t === "pr" && (next === "edit" || next === "merge"))) flag(lit, "gh pr edit or merge");
     if (/^--add-label\b/.test(t) || /\s--add-label\b/.test(t) || (t === "label" && next === "add")) flag(lit, "a label added");

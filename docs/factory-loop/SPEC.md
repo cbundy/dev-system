@@ -1150,7 +1150,9 @@ it again.
 
 `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/OFF` (any content) forces `off` at the start of
 the next pass, with no restart, and keeps the hooks between passes quiet: no answer is recorded,
-no reminder or notice goes out. Removing it resumes the configured mode.
+no reminder or notice goes out. Removing it resumes the configured mode. An acting pass also
+checks it (one stat) before each action but the title: an action already running finishes, every
+action left is skipped with the reason `kill switch` in the decision log, and the pass ends.
 
 ### 11.4 Runaway protection
 

@@ -390,6 +390,11 @@ async function appendLine($: EngineInterface, rt: Runtime, line: Record<string, 
   await append($, `${rt.loopDir}/decisions-${at.slice(0, 10)}.jsonl`, JSON.stringify({ v: 1, at, ...line }) + '\n').catch(() => undefined)
 }
 
+// offTitle: the title while the loop is off (mode off or the kill switch).
+function offTitle(rt: Runtime): string {
+  return `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`
+}
+
 async function setTitle($: EngineInterface, title: string) {
   if (title === lastTitle) return
   await $.command.run({ command: 'rename', args: title })
@@ -656,6 +661,7 @@ function hookEnv($: EngineInterface, rt: Runtime, now: Ms, session = ''): ActEnv
     session,
     save: () => persist($, rt),
     holds: async () => true,
+    killed: () => killed($),
     problems: [],
   }
 }
@@ -695,7 +701,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigge
     rearm($, rt.config.passEveryMs)
     const off = rt.mode === 'off' || (await killed($))
     if (off || rt.repo === '') {
-      await setTitle($, `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`)
+      await setTitle($, offTitle(rt))
     } else {
       passNo += 1
       await pass($, rt, breaker, trigger, t0)
@@ -834,7 +840,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     return spent(tr, 'persistMs', () => persist($, rt))
   }
   const holds = () => (act ? renew() : Promise.resolve(holding))
-  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, problems }
+  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, killed: () => killed($), problems }
 
   let report: ActReport | null = null
   let result: PlanResult
@@ -867,6 +873,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       lastState = state
       if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) restartAsked = state.now
       if (report.title !== null) lastTitle = report.title
+      // the kill switch stopped the pass between actions: the title says off now, not next pass
+      if (report.killed) await setTitle($, offTitle(rt))
       // a rate-cap hold has no entry of its own: one loop event per cap per hour (SPEC 11.4)
       const hour = `:${Math.floor(state.now / HOUR)}`
       for (const capped of result.capped) {

@@ -153,6 +153,9 @@ export type ActEnv = {
   // this session still holds the act lock, renewed now; once it does not, the pass runs nothing
   // more. Asked before every action.
   holds: () => Promise<boolean>
+  // the kill switch is set (SPEC 11.3): one stat, asked before every action but the title and
+  // before a notice goes out; once it is, the pass runs nothing more
+  killed: () => Promise<boolean>
   // what went wrong outside any one action (a loop event not logged), for the decision log
   problems: string[]
 }
@@ -201,12 +204,21 @@ export type ActReport = {
   rateLimited: boolean
   // the title the title action set, when it did
   title: string | null
+  // the kill switch stopped the pass between actions: register shows the loop off at once
+  killed: boolean
 }
 
 // runActions: plan's actions in plan's order (finish in-flight work before starting new work).
+// The kill switch is asked before each action but the title (bookkeeping only): an action
+// already running finishes, and once the switch is seen every action left is skipped (#557).
 export async function runActions(env: ActEnv, state: State, actions: readonly Action[]): Promise<ActReport> {
-  const report: ActReport = { outcomes: [], rateLimited: false, title: null }
+  const report: ActReport = { outcomes: [], rateLimited: false, title: null, killed: false }
   for (const action of actions) {
+    if (!report.killed && action.kind !== 'title' && (await env.killed())) report.killed = true
+    if (report.killed) {
+      report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'kill switch' })
+      continue
+    }
     if (!(await env.holds())) {
       report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'held: the act lock is no longer this session\'s' })
       continue
@@ -289,10 +301,10 @@ export function openWake(ledger: readonly LedgerEntry[]): LedgerEntry | undefine
 // sendNotice: a tell that comes from outside plan (a rail, the ping breaker, failing passes) goes
 // out through the wake executor under its own key, once, and only while no wake is open: a key
 // the ledger holds was sent, unless it was lost (the engine dropped it before its turn); an open
-// wake keeps it waiting (the caller keeps it pending).
+// wake keeps it waiting (the caller keeps it pending), as does the kill switch.
 export async function sendNotice(env: ActEnv, state: State, tell: Action): Promise<'sent' | 'waiting' | 'failed'> {
   if (env.live.ledger.some(e => e.key === tell.key && e.status !== 'lost')) return 'sent'
-  if (openWake(env.live.ledger) !== undefined) return 'waiting'
+  if (openWake(env.live.ledger) !== undefined || (await env.killed())) return 'waiting'
   const { exec } = await actOne(env, state, tell)
   return exec.status === 'running' || exec.status === 'done' ? 'sent' : 'failed'
 }

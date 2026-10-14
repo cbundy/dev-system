@@ -105,6 +105,7 @@ function fake(ledger: LedgerEntry[], reply: (argv: string[]) => Partial<RunResul
       return true
     },
     holds: async () => true,
+    killed: async () => false,
     problems: [],
   }
   return { env, calls, saves, order }
@@ -207,6 +208,43 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
       ['guard:512:abc1234:1', 'skipped'],
     ])
     expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
+  })
+
+  test('the kill switch set mid-pass skips every action not yet started; the running one finishes (SPEC 11.3)', async () => {
+    let off = false
+    let checks = 0
+    // the switch is created while the claim runs
+    const f = fake([], argv => {
+      if (argv[0] === 'callum-flow-claim') off = true
+      return {}
+    })
+    f.env.killed = async () => {
+      checks += 1
+      return off
+    }
+    const title: Action = { kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: 'x' }
+    const report = await runActions(f.env, state(), [claim, guard, designer, title])
+    expect(report.outcomes.map(o => [o.key, o.status, o.summary])).toEqual([
+      ['claim:470:new', 'done', 'claimed #470'],
+      ['guard:512:abc1234:1', 'skipped', 'kill switch'],
+      ['design:470:1', 'skipped', 'kill switch'],
+      ['title', 'skipped', 'kill switch'],
+    ])
+    expect(report.killed).toBe(true)
+    expect(report.title).toBeNull()
+    // one check per action until the switch is seen, then the pass ends
+    expect(checks).toBe(2)
+    expect(f.calls.map(c => c.argv[0])).toEqual(['callum-flow-claim'])
+    expect(f.env.live.ledger.map(e => [e.key, e.status])).toEqual([['claim:470:new', 'done']])
+  })
+
+  test('a notice from outside plan waits while the kill switch is set (SPEC 11.3)', async () => {
+    const f = fake([])
+    f.env.killed = async () => true
+    const tell: Action = { kind: 'tell', wake: 'pass-error', key: 'tell:pass-error:1', class: 'owner', rule: 'O2', reason: 'tell', issue: null, fields: {}, context: [] }
+    expect(await sendNotice(f.env, state(), tell)).toBe('waiting')
+    expect(f.calls).toEqual([])
+    expect(f.env.live.ledger).toEqual([])
   })
 
   test('a spawn runs on with its agent id, and its loop event is logged once', async () => {
@@ -742,7 +780,7 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
   const rt = runtime()
   const live: Live = { ledger: [] }
   const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
-  const env: ActEnv = { io, rt, live, commands: [], wakeId: () => `w${++wakes}`, session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
+  const env: ActEnv = { io, rt, live, commands: [], wakeId: () => `w${++wakes}`, session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const cache = emptyCache()
   let lastTitle: string | null = null
   let queueKnown: number[] | null = null

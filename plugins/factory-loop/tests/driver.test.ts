@@ -361,6 +361,32 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.last()).toMatchObject({ executed: true })
   })
 
+  test('the kill switch set mid-pass stops it between actions: the rest are skipped and logged (SPEC 11.3, #557)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let h: Host | undefined
+    // the owner creates the switch while the sweep runs, before the pass's claim
+    const { run } = factory({
+      queue: [470],
+      run: argv => {
+        if (argv[0] === 'callum-flow-sweep') h?.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+        return undefined
+      },
+    })
+    h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const outcomes = (h.last().outcomes ?? []) as { key: string; status: string; summary: string }[]
+    expect(outcomes.map(o => [o.key, o.status, o.summary])).toEqual([
+      ['update-checkout:0', 'done', `main checkout: CURRENT ${CHECKOUT_HEAD}`],
+      ['sweep:0', 'done', 'swept'],
+      ['claim:470:new', 'skipped', 'kill switch'],
+    ])
+    // the claim never ran nor entered the ledger, and the title says off at once
+    expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(false)
+    expect(h.ledger().map(e => e.key)).toEqual(['update-checkout:0', 'sweep:0'])
+    expect(h.titles.at(-1)).toBe('🔄 dev-system · off')
+  })
+
   test('a restart mid-action: running commands are lost, agents are reconciled against the list (SPEC 7.5)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()

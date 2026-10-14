@@ -238,7 +238,7 @@ async function run(action: Action, poolless = false, attempt = 1): Promise<Recor
   const { io, seen } = recorder()
   const w = world()
   const s = poolless ? { ...w.state, pool: { free: 10, total: 16, slots: [] } } : w.state
-  const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
+  const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const started = { ...start(w.ledger, action, NOW).entry, attempts: attempt }
   const exec = await dispatch(ctxOf(env, s, started), action)
   return { ...seen, status: exec.status, summary: exec.summary }
@@ -516,7 +516,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
     expect(wrong).toMatchObject({ status: 'failed', argvs: [] })
     const { io, seen } = recorder()
     const w = world()
-    const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
+    const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
     await runActions(env, w.state, ACTIONS)
     // the pass's one env-retry may launch its rerun; every other argv stays inside the bans
     const envRetry = ACTIONS.find(a => a.kind === 'env-retry')
