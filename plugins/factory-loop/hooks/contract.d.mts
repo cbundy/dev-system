@@ -29,6 +29,7 @@ export function isBriefUrl(url: string, repo: string, issue?: number | null): bo
 export function gatedWithoutRun(fields: Pick<HandoffFields, 'run' | 'gated'>): boolean
 export function handoffOutcome(fields: HandoffFields, namedBranch: string | null): HandoffOutcome
 
+export function declinedFindings(judgedIds: readonly string[], findings: string | null): string | null
 export function checkVerdict(input: unknown, purpose: AdjudicatorPurpose): Check<AdjudicatorOutcome>
 export function checkDesign(input: unknown, repo: string, issue: number | null): Check<DesignResult>
 export function checkHandoff(input: unknown, namedBranch: string | null): Check<HandoffOutcome>

@@ -7,7 +7,7 @@
 // attempt, except the designer's, which goes to the model as judge(report) (rule D3). The same
 // contracts as structured answers (the answer tools and the answer script) are contract.mjs's,
 // whose words and shapes the lines here share.
-import { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, gatedWithoutRun, handoffOutcome, isBriefUrl } from './contract.mjs'
+import { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, declinedFindings, gatedWithoutRun, handoffOutcome, isBriefUrl } from './contract.mjs'
 import type { AdjudicatorOutcome, DesignResult, HandoffFields, HandoffOutcome } from './contract.mjs'
 import type { AdjudicatorAction, AdjudicatorPurpose, Bump, MergeFlag, MergeReport, Outcome } from './types'
 
@@ -20,6 +20,7 @@ export const DESIGNER_RESULT = 'RESULT brief=<comment URL|none> created=<n1,n2|n
 export const HANDOFF_RESULT = 'RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>'
 
 const VERDICT_LINE = /^(CORRECT|WRONG|NIT|ENV|DUP):\s*\S/
+const VERDICT_WORD = /^(CORRECT|WRONG|NIT|ENV|DUP):/
 // a contract word with decoration around it (`- WRONG:`, `**ACTION**:`, `` `NIT`: ``), then its colon
 const MISSHAPEN_LINE = /^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\W*:/
 
@@ -148,11 +149,19 @@ export function readAdjudicator(answer: string, purpose: AdjudicatorPurpose): Ad
   const action = only.action
   if (action === null) return `the ACTION line does not read as any action the contract allows: ${quote(only.line)}`
   if (!ACTIONS_FOR[purpose].includes(action.type)) return `ACTION ${action.type} does not answer a ${purpose} review, which takes ${ACTIONS_FOR[purpose].join(', ')}`
+  if (action.type === 'fix') action.ignore = declinedFindings(verdicts.map(verdictId).filter(id => id !== null), action.findings)
   if (purpose !== 'merge') return { kind: 'adjudicator', verdicts, action, report: null }
   const missing = [summary === null ? 'SUMMARY' : '', bump === null ? 'BUMP' : '', flags === null ? 'FLAGS' : ''].filter(n => n !== '')
   if (summary === null || bump === null || flags === null) return `a merge review needs its ${missing.join(', ')} line${missing.length === 1 ? '' : 's'}`
   const report: MergeReport = { summary, bump: bump.bump, bumpReason: bump.reason, flags }
   return { kind: 'adjudicator', verdicts, action, report }
+}
+
+// verdictId: the finding id a verdict line opens its reason with (`NIT: review-2 naming` or
+// `NIT: review-2: naming`), or null when it opens with prose instead.
+function verdictId(line: string): string | null {
+  const word = line.replace(VERDICT_WORD, '').trim().split(/\s/)[0]?.replace(/[:,;.]+$/, '') ?? ''
+  return /^[A-Za-z][\w.]*-\d+$/.test(word) ? word : null
 }
 
 // `<patch|minor|major> <reason>`; a reason led by a dash or colon reads the same.
@@ -208,7 +217,7 @@ export function parseAction(text: string): AdjudicatorAction | null {
       const json = flags.get('--add-finding')
       const addFinding = json === undefined ? null : findingJson(json)
       if (addFinding === '') return null
-      return { type: 'fix', findings, instructions: flags.get('--instructions') ?? null, addFinding }
+      return { type: 'fix', findings, instructions: flags.get('--instructions') ?? null, addFinding, ignore: null }
     }
     case 'fixer':
       return rest === '' ? null : { type: 'fixer', instructions: unquote(rest) }

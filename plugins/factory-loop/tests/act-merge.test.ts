@@ -215,6 +215,7 @@ const A = {
     findings: 'review-1,review-3',
     instructions: null,
     addFinding: null,
+    ignore: null,
     approveReason: null,
     logReview: true,
     ...over,
@@ -259,6 +260,18 @@ describe('argv (SPEC 6.1)', () => {
       '--instructions=fix it',
       `--add-finding=${json}`,
     ])
+    // the judged findings left unselected are declined by name: no-mistakes 1.90+ refuses a fix that leaves one out
+    expect(respondArgv(A.respond({ findings: 'review-1', ignore: 'review-2,review-3' }))).toEqual([
+      'no-mistakes',
+      'axi',
+      'respond',
+      '--action',
+      'fix',
+      '--step=review',
+      '--findings=review-1',
+      '--ignore=review-2,review-3',
+    ])
+    expect(respondArgv(A.respond({ action: 'approve', findings: null, ignore: 'review-2', logReview: false }))).not.toContain('--ignore=review-2')
     // no-mistakes takes --reason only on the test step (the testbed's #11 hit exit 2 on review)
     expect(respondArgv(A.respond({ action: 'approve', step: 'test', findings: null, approveReason: 'the brief allows removing the old flag', logReview: false }))).toEqual([
       'no-mistakes',

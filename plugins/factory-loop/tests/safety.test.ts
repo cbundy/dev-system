@@ -134,6 +134,7 @@ function respond(action: 'approve' | 'fix' | 'skip', over: Partial<Extract<Actio
     findings: null,
     instructions: null,
     addFinding: null,
+    ignore: null,
     approveReason: null,
     logReview: false,
     ...over,

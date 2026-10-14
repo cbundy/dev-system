@@ -417,7 +417,7 @@ describe('P: pipeline gates', () => {
     expect(keys(approve)).toEqual([`respond:${AT45}:approve`])
     expect(find(approve, `respond:${AT45}:approve`)).toMatchObject({ action: 'approve', approveReason: 'NIT only', logReview: false })
     const fix = plan(
-      withLedger(parkedReview(), [adjudicated({ type: 'fix', findings: 'F1', instructions: 'do x', addFinding: null })]),
+      withLedger(parkedReview(), [adjudicated({ type: 'fix', findings: 'F1', instructions: 'do x', addFinding: null, ignore: null })]),
       CFG,
     )
     expect(find(fix, `respond:${AT45}:fix`)).toMatchObject({ action: 'fix', findings: 'F1', instructions: 'do x', logReview: true })
@@ -428,7 +428,7 @@ describe('P: pipeline gates', () => {
   test('a fix on a test gate does not count as a review round (SKILL:119-120)', () => {
     const s = parkedReview()
     const testGate = { ...s, runs: [{ ...s.runs[0]!, step: 'test' }] }
-    const ledger = [adjudicated({ type: 'fix', findings: 'T1', instructions: null, addFinding: null }, 'adjudicate:01M4RQ0045AAAA:test:head45')]
+    const ledger = [adjudicated({ type: 'fix', findings: 'T1', instructions: null, addFinding: null, ignore: null }, 'adjudicate:01M4RQ0045AAAA:test:head45')]
     expect(find(plan(withLedger(testGate, ledger), CFG), 'respond:01M4RQ0045AAAA:test:head45:fix')).toMatchObject({ logReview: false })
   })
 
@@ -481,7 +481,7 @@ describe('P: pipeline gates', () => {
         agent: 'adjudicator',
         issue: 45,
         run: RUN45,
-        outcome: review({ type: 'fix', findings: null, instructions: 'retry', addFinding: null }, null, [ENV]),
+        outcome: review({ type: 'fix', findings: null, instructions: 'retry', addFinding: null, ignore: null }, null, [ENV]),
       })
       expect(keys(plan(withLedger(failedTest({ control: resumedAt(NOW - MIN) }), [fix]), CFG))).toEqual([`adjudicate:${AT}:r1`])
       // a resume from before the escalation is not the owner answering it
