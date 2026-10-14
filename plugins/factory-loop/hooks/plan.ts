@@ -282,7 +282,8 @@ function want(ctx: Ctx, action: Action): Gate {
     skip(ctx, action.rule, action.issue, `exhausted: ${action.key}`)
     if (action.kind === 'task') ctx.exhausted.push(action.key)
     else if (WAKES.includes(action.kind)) ctx.owner.add(action.key)
-    else ctx.exhausted.push(action.key)
+    // env-retry tells the owner itself (envRetry): only a resume reruns it, never a retry
+    else if (action.kind !== 'env-retry') ctx.exhausted.push(action.key)
   } else if (cadenceOf(ctx.config, kind) !== null) {
     if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttempts(ctx.config, kind)) {
       ctx.exhausted.push(action.key)
@@ -726,10 +727,13 @@ function envOnlyEscalation(ctx: Ctx, run: RunView, at: string, resumed: number):
 
 // envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
 // starts a new run, which the P rules then judge afresh; if this run is still at the gate
-// respondSettleMs later, the owner is told again rather than the loop trying more.
+// respondSettleMs later, the owner is told again rather than the loop trying more. A launch
+// that failed or was lost is told the same way, not as agent-failed: `/factory retry` never
+// clears an env-retry, only a fresh resume reruns it.
 function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: string[]) {
   const n = run.issue as number
   const key = `env-retry:${at}${suffix}`
+  const fields = { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }
   const g = want(ctx, {
     kind: 'env-retry',
     key,
@@ -742,11 +746,17 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
     step: run.step,
     head: run.head as string,
   })
+  if (g === 'exhausted') {
+    const why = ctx.byKey.get(key)?.summary
+    const line = `the pipeline could not be run again on this head after the resume${why === undefined ? '' : ` (${why})`}; resuming the run tries once more`
+    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, ...verdicts]))
+    return
+  }
   const ran = g === 'done' ? done(ctx, key) : undefined
   if (ran === undefined || ctx.state.now - (ran.endedAt ?? 0) < ctx.config.respondSettleMs) return
   want(
     ctx,
-    wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }, [
+    wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [
       'the pipeline was run again on this head after the resume, and the run is still at this gate',
       ...verdicts,
     ]),

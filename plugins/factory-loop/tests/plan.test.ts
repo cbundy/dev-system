@@ -438,10 +438,38 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(second, CFG))).toEqual([`env-retry:${AT}:r2`])
     })
 
-    test('a rerun that could not launch is not tried again: the owner hears, no adjudicator', () => {
-      const failed = entry(`env-retry:${AT}:r1`, 'env-retry', { class: 'drive', rule: 'P2a', issue: 45, run: RUN45, status: 'failed', endedAt: NOW - 30 * MIN })
+    test('a rerun that could not launch is not tried again: the owner hears to resume, no adjudicator, no agent-failed', () => {
+      const failed = entry(`env-retry:${AT}:r1`, 'env-retry', {
+        class: 'drive',
+        rule: 'P2a',
+        issue: 45,
+        run: RUN45,
+        status: 'failed',
+        endedAt: NOW - 30 * MIN,
+        summary: 'launch: exit 1: no slot on feat/issue-45-work',
+      })
       const s = withLedger(failedTest({ control: resumedAt(NOW - 40 * MIN) }), [escalated([ENV]), told(), failed])
-      expect(keys(plan(s, CFG))).toEqual([`tell:agent-failed:env-retry:${AT}:r1`])
+      const r = plan(s, CFG)
+      // `/factory retry` never clears an env-retry, so a notice that says retry would lead nowhere
+      expect(keys(r)).toEqual([`tell:escalate:${AT}:r1`])
+      expect(find(r, `tell:escalate:${AT}:r1`)).toMatchObject({
+        rule: 'P2a',
+        context: [
+          'the pipeline could not be run again on this head after the resume (launch: exit 1: no slot on feat/issue-45-work); resuming the run tries once more',
+          ENV,
+        ],
+      })
+      expect(r.owner).toBe(1)
+      // lost on a reload: the same notice, once; told, it waits for the next resume
+      const lost = { ...failed, status: 'lost' as const, summary: undefined }
+      const fromLost = plan(withLedger(failedTest({ control: resumedAt(NOW - 40 * MIN) }), [escalated([ENV]), told(), lost]), CFG)
+      expect(fromLost.actions.flatMap(a => (a.kind === 'tell' ? [a.key, a.context[0]] : []))).toEqual([
+        `tell:escalate:${AT}:r1`,
+        'the pipeline could not be run again on this head after the resume; resuming the run tries once more',
+      ])
+      const toldOnce = withLedger(s, [told(`tell:escalate:${AT}:r1`)])
+      expect(keys(plan(toldOnce, CFG))).toEqual([])
+      expect(keys(plan({ ...toldOnce, control: resumedAt(NOW - 40 * MIN, NOW - MIN) }, CFG))).toEqual([`env-retry:${AT}:r2`])
     })
 
     test('the rerun is a new run: its gate is judged afresh, and a repeat failure escalates again', () => {
