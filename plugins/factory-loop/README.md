@@ -31,6 +31,7 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | The act step and the ledger | `hooks/act.ts`, `hooks/ledger.ts`, `hooks/exec.ts` | done |
 | Executors: commands, guard and merge, respond, agent spawns, prompts and reply parsers | `hooks/act-cli.ts`, `hooks/act-merge.ts`, `hooks/act-agents.ts`, `hooks/prompts.ts`, `hooks/replies.ts` | done; not yet run against real agents |
 | Wakes and the answer tool | `hooks/wake.ts` | done |
+| The agents' answer tools and the repair message | `hooks/agent-tools.ts` | done; the adjudicator and designer reach their tools once their definitions list them |
 | Safety rails | `hooks/rails.ts` | done |
 | `/factory` and the control tool | `hooks/control.ts` | done |
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |

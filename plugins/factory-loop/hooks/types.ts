@@ -218,8 +218,9 @@ export type LedgerEntry = {
   endedAt: Ms | null
   agentId?: string
   outcome?: Outcome
-  // a wake's id (SPEC 8.1 `id=`), the turn it started, whether its reminder went out, and the
-  // session that submitted it (a restart ends the wakes of the session before, SPEC 7.5)
+  // a wake's id (SPEC 8.1 `id=`), the turn it started, whether its reminder went out (for an
+  // agent, its one repair message, #548), and the session that submitted it (a restart ends the
+  // wakes of the session before, SPEC 7.5)
   wakeId?: string
   turnId?: string
   reminded?: boolean

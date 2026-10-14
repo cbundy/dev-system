@@ -436,8 +436,8 @@ function running(key: string, kind: 'spawn' | 'delegate', agent: LedgerEntry['ag
 
 async function answered(e: LedgerEntry, text: string, over: Over & { reason?: AgentAnswer['reason'] } = {}) {
   const h = harness({ ...over, entry: e })
-  const result = await onAgentAnswer(h.ctx, e, answer(text, over.reason))
-  return { result, ...h }
+  const { exec: result, problem } = await onAgentAnswer(h.ctx, e, answer(text, over.reason))
+  return { result, problem, ...h }
 }
 
 describe('onAgentAnswer', () => {
@@ -500,9 +500,11 @@ describe('onAgentAnswer', () => {
     })
   })
 
-  test('an unparseable adjudicator reply is a failed attempt (rule P2 retries); nothing is logged', async () => {
-    const { result, events, files } = await answered(gate, 'CORRECT: review-1 is real.\nI looked at the run and it seems fine.\nACTION: approve')
-    expect(result).toEqual({ status: 'failed', summary: 'adjudicator #470: the gate reply does not parse' })
+  test('an unparseable adjudicator reply is a failed attempt (rule P2 retries); nothing is logged; the problem names the line (#548)', async () => {
+    const { result, problem, events, files } = await answered(gate, 'CORRECT: review-1 is real.\nI looked at the run and it seems fine.\nACTION: approve')
+    const why = 'a line after the first contract line that is not a contract line: "I looked at the run and it seems fine."'
+    expect(result).toEqual({ status: 'failed', summary: `adjudicator #470: the gate reply does not parse: ${why}` })
+    expect(problem).toBe(why)
     expect(events).toHaveLength(0)
     expect(files.has(answerPath(LOOP, gate.key))).toBe(true)
   })
@@ -542,7 +544,9 @@ describe('onAgentAnswer', () => {
       summary: 'implementer #470: run none, head none, NOT GATED',
     })
     const prose = await answered(implementer, 'All done, PR opened.')
-    expect(prose.result).toEqual({ status: 'failed', summary: 'implementer #470: the handoff has no RESULT line and does not say NOT GATED' })
+    expect(prose.result).toEqual({ status: 'failed', summary: 'implementer #470: the handoff does not parse: no RESULT line, and it does not say NOT GATED' })
+    expect(prose.problem).toBe('no RESULT line, and it does not say NOT GATED')
+    expect(gated.problem).toBeNull()
   })
 
   test('a turn that ended in error, aborted or refused is failed, its answer still saved', async () => {

@@ -260,7 +260,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     const { run } = factory({ queue: [470] })
     const h = host(on, { config: ACT, run })
     await $.session.start(START)
-    expect([...h.registered].sort()).toEqual(['/factory', 'mcp__factory-loop__answer', 'mcp__factory-loop__control'])
+    expect([...h.registered].sort()).toEqual(['/factory', 'mcp__factory-loop__answer', 'mcp__factory-loop__control', 'mcp__factory-loop__design', 'mcp__factory-loop__handoff', 'mcp__factory-loop__verdict'])
     await clock.advance(6_000)
 
     const line = h.last()
@@ -806,9 +806,18 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     await $.session.start(START)
     await clock.advance(6_000)
 
-    // listed running at its own turn.complete, as every agent is as it ends: no proof it works on
+    // listed running at its own turn.complete, as every agent is as it ends: no proof it works on.
+    // Its missing line first gets the one repair message (#548), so the entry runs on
     await agentDone($, h, 'agent-1', 'I looked into it but could not settle the design.')
+    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
+    expect(h.sends[0]?.text).toContain('The factory loop could not read your answer: no RESULT line.')
+    expect(h.entry(key)).toMatchObject({ status: 'running', attempts: 1, reminded: true })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'repair', why: 'no RESULT line' }))
+    // still no line after it: the report goes to the model, as before
+    await agentDone($, h, 'agent-1', 'I still could not settle it.')
+    expect(h.sends).toHaveLength(1)
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', unparsed: true } })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
     await clock.advance(5_000)
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`judge:report:${key}`])
   })
@@ -1010,6 +1019,57 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     const r = await $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w9', decision: 'merge' })
     expect(r).toMatchObject({ result: 'Recorded: w9 merge. No ANSWER block is needed.' })
     expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'merge' } })
+  })
+
+  test("an agent's answer tool: refused for a caller the loop does not wait on, denied with what to correct, then recorded with a pass after it (#548)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 20 * MIN
+    const { run } = factory({ issue: { stage: 'designing', since } })
+    const key = `design:470:${since}`
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
+      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+    ])
+    const h = host(on, { config: ACT, run, store })
+    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.passes()).toHaveLength(1)
+    const answer = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false } as const
+
+    // the main conversation, and an agent the loop did not start (the designer's explorer)
+    expect(await $.tool.call(answer)).toMatchObject({ deny: expect.stringContaining('the main conversation is none') })
+    expect(await $.tool.call({ ...answer, agentId: 'agent-x' })).toMatchObject({ deny: expect.stringContaining('waiting on no answer from this agent') })
+    // a broken call: denied with what to correct, the entry untouched
+    expect(await $.tool.call({ tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], agentId: 'agent-1' })).toMatchObject({
+      deny: expect.stringContaining('pendingDecision must be true or false. Correct the call and call mcp__factory-loop__design again.'),
+    })
+    expect(h.entry(key)).toMatchObject({ status: 'running' })
+    // corrected in the same turn: recorded at once, and the decision log says which path each call took
+    expect(await $.tool.call({ ...answer, agentId: 'agent-1' })).toMatchObject({ result: expect.stringContaining('Recorded: designer #470 (tool): brief') })
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool refused' }))
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool' }))
+    // the turn's closing words change nothing and log nothing
+    const logged = h.lines().length
+    await agentDone($, h, 'agent-1', 'Recorded through the tool; done.')
+    expect(h.lines()).toHaveLength(logged)
+    expect(h.sends).toEqual([])
+    // the ping: the next pass delegates
+    await clock.advance(5_000)
+    expect(h.passes()).toHaveLength(2)
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+  })
+
+  test('outside act mode the agent tools record nothing', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = shadow(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const r = await $.tool.call({ tool: 'mcp__factory-loop__verdict', findings: [], action: { type: 'approve' }, agentId: 'agent-1' })
+    expect(r).toMatchObject({ deny: 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.' })
+    expect(h.store.size).toBe(0)
   })
 })
 
