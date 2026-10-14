@@ -128,7 +128,7 @@ Row 0 is the skill's frontmatter (`SKILL:1-10`). It is replaced by the new judge
 | I-73 | Check the pipeline-built PR body (implement-issue shape, issue linkage) | SKILL:145 | before merge | model | linkage: the guard's `linkage` check (CLI). Body shape: part of the merge adjudicator's check (rule `M4`) |
 | I-74 | `GUARD linkage FAIL`: run `callum-flow-fix-linkage <pr>` from the main checkout, re-run the guard | SKILL:146 | guard FAIL | model | rule `M2`, exec `fix-linkage` (cwd: the main checkout), then exec `guard` again |
 | I-75 | Park-after-green (a green run left unmerged) is yours to merge; if the harness refuses, give the owner the PR link and guard output | SKILL:148-150 | ready to merge | model | rules `M1` to `M5` apply to every merge-ready run, whatever its age; rule `M6`: refusal gives a hold plus `tell(merge-refused)` with the PR link and guard lines |
-| I-76 | Release the worktree after the merge, as `implement-issue` says | SKILL:150 | merged | model | rule `H3`, exec `release-worktree` (`treehouse return <path>` from the main checkout, only for a clean slot on the merged branch) |
+| I-76 | Release the worktree after the merge, as `implement-issue` says | SKILL:150 | merged | model | exec `release-worktree`; eligibility and safety checks: [SPEC H3](SPEC.md#53-housekeeping-h) and [G4](SPEC.md#52-gates-g) |
 
 ## Special issue types
 
