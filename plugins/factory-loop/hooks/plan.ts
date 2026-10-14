@@ -1149,12 +1149,17 @@ type Moved = { issue: number; run: string; pr: number; newRun: string | null; ne
 
 // supersededPrs: each superseded run's PR is closed once the branch its work moved to has a PR,
 // with a link to the newest one down the chain. A run the watcher still shows and the event log
-// does not mark superseded is left alone; a merged or closed PR is the executor's to leave.
+// does not mark superseded is left alone; a merged or closed PR is the executor's to leave. The
+// new branch is the fixer's own word, so one that is not a branch of the same issue moves nothing.
 function supersededPrs(ctx: Ctx) {
   const moves: Moved[] = []
   for (const e of [...ctx.byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
     const handoff = outcome(e.status === 'done' && e.kind === 'spawn' && e.agent === 'fixer' ? e : undefined, 'handoff')
     if (handoff === undefined || handoff.newBranch === null || e.issue === null || e.run === null || e.pr === null) continue
+    if (issueFromBranch(handoff.newBranch) !== e.issue) {
+      if (isLive(ctx.issues.get(e.issue))) skip(ctx, 'M8', e.issue, `PR #${e.pr} left open: ${handoff.newBranch} is not a branch of #${e.issue}`)
+      continue
+    }
     moves.push({ issue: e.issue, run: e.run, pr: e.pr, newRun: handoff.run, newBranch: handoff.newBranch })
   }
   for (const m of moves) {
@@ -1171,11 +1176,13 @@ function supersededPrs(ctx: Ctx) {
 
 // replacement: the PR the moved work has now. A new run that moved on in turn was superseded by
 // a fixer sent with its PR, so the chain is followed to its newest PR; null while the new
-// branch has none yet.
+// branch has none yet. Only a run of the same issue on the new branch counts: the run id the
+// fixer reports is its own word too, and may name another issue's run.
 function replacement(ctx: Ctx, moves: Moved[], m: Moved, seen: string[]): number | null {
-  const next = m.newRun === null ? undefined : moves.find(o => o.run === m.newRun && o.run !== m.run && !seen.includes(o.run))
+  const next =
+    m.newRun === null ? undefined : moves.find(o => o.run === m.newRun && o.issue === m.issue && o.run !== m.run && !seen.includes(o.run))
   if (next !== undefined) return replacement(ctx, moves, next, [...seen, m.run]) ?? next.pr
-  const run = ctx.state.runs.find(r => r.pr !== null && r.pr !== m.pr && (r.branch === m.newBranch || (m.newRun !== null && r.run === m.newRun)))
+  const run = ctx.state.runs.find(r => r.pr !== null && r.pr !== m.pr && r.issue === m.issue && r.branch === m.newBranch)
   return run?.pr ?? null
 }
 

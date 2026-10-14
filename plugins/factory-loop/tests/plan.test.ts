@@ -1628,6 +1628,32 @@ describe('M8: the PR of a superseded run is closed (#553, I-39)', () => {
     // the new branch's PR is the old one: nothing replaced it
     expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
   })
+
+  test('the new branch and run are the fixer\'s word: neither may name another issue\'s run or PR', () => {
+    const R38 = '01M4RQ0038AAAA'
+    const other = run(38, 'running', { branch: 'feat/issue-38-other', run: R38, pr: 52 })
+    // a fixer that worked in the wrong slot names issue 38's branch: PR 44 stays open, and says why
+    const wrongBranch = plan(at([moved(R1, 44, 'feat/issue-38-other', R38)], [other]), CFG)
+    expect(keys(wrongBranch)).toEqual([])
+    expect(wrongBranch.skipped).toContainEqual({ rule: 'M8', issue: 32, why: 'PR #44 left open: feat/issue-38-other is not a branch of #32' })
+    // the right branch, with no PR yet, and issue 38's run id: it waits for the branch's own PR
+    const wrongRun = plan(at([moved(R1, 44, `${B}-v2`, R38)], [other, live(`${B}-v2`, R2, null)]), CFG)
+    expect(keys(wrongRun)).toEqual([])
+    expect(wrongRun.skipped).toContainEqual({ rule: 'M8', issue: 32, why: `PR #44 superseded: waiting for the PR of ${B}-v2` })
+    // a chain is never followed into another issue's move
+    const theirs = entry('fixer:conflict:52:h52', 'spawn', {
+      agent: 'fixer',
+      issue: 38,
+      run: R38,
+      pr: 52,
+      outcome: { kind: 'handoff', notGated: false, run: null, head: 'n52', newBranch: 'feat/issue-38-other-v2' },
+    })
+    const chained = plan(withLedger(state({ issues: [mine(32, 'in pipeline', { pr: 57 }), mine(38, 'in pipeline', { pr: 60 })], runs: [run(38, 'running', { branch: 'feat/issue-38-other-v2', run: '01M4RQ0038BBBB', pr: 60 }), live(`${B}-v2`, R2, 50)] }), [moved(R1, 44, `${B}-v2`, R38), theirs]), CFG)
+    expect(chained.actions.flatMap(a => (a.kind === 'pr-close' ? [[a.key, a.by]] : []))).toEqual([
+      ['pr-close:44', 50],
+      ['pr-close:52', 60],
+    ])
+  })
 })
 
 // --- properties every plan keeps (SPEC 5.9), over every scenario state above ----------------
