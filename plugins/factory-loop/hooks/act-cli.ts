@@ -118,7 +118,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
       // linking that one; the executor runs the close only once both reads say so (prCloseCheck,
       // byCheck). Never --delete-branch: the old branch keeps its commits.
       const pr = String(action.pr)
-      const comment = `Superseded by #${action.by}: a conflict fix moved this work to \`${action.newBranch}\`. Closed by the factory loop.`
+      const comment = `Superseded by #${action.by}: this work moved to \`${action.newBranch}\`. Closed by the factory loop.`
       return [
         { argv: ['gh', 'pr', 'view', pr, '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
         { argv: ['gh', 'pr', 'view', String(action.by), '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },

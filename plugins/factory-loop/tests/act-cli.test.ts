@@ -162,7 +162,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
     expect(argv(A.prClose())).toEqual([
       ['gh', 'pr', 'view', '44', '--repo', REPO, '--json', 'state,headRefName'],
       ['gh', 'pr', 'view', '50', '--repo', REPO, '--json', 'state,headRefName'],
-      ['gh', 'pr', 'close', '44', '--repo', REPO, '--comment', 'Superseded by #50: a conflict fix moved this work to `feat/issue-32-slug-v2`. Closed by the factory loop.'],
+      ['gh', 'pr', 'close', '44', '--repo', REPO, '--comment', 'Superseded by #50: this work moved to `feat/issue-32-slug-v2`. Closed by the factory loop.'],
     ])
     expect(argv(A.release())).toEqual([['treehouse', 'return', SLOT], ['treehouse', 'status', '--json']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])

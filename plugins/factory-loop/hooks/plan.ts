@@ -1150,7 +1150,8 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number, g
 // --- M8: the PR of a superseded run (#553, I-39) ---------------------------------------------
 
 // A fixer sent to a run that handed off on a new branch superseded that run (act-agents.ts logs
-// `superseded`); callum-flow-regate then says "once the new PR exists, close the old PR".
+// `superseded`), and so did task(redrive) on `REGATE new-branch`; callum-flow-regate then says
+// "once the new PR exists, close the old PR".
 type Moved = { issue: number; run: string; pr: number; newRun: string | null; newBranch: string }
 
 // supersededPrs: each superseded run's PR is closed once the branch its work moved to has a PR,
@@ -1159,14 +1160,26 @@ type Moved = { issue: number; run: string; pr: number; newRun: string | null; ne
 // new branch is the fixer's own word, so one that is not a branch of the same issue moves nothing.
 function supersededPrs(ctx: Ctx) {
   const moves: Moved[] = []
+  const leftOpen = new Set<number>()
   for (const e of [...ctx.byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
     const handoff = outcome(e.status === 'done' && e.kind === 'spawn' && e.agent === 'fixer' ? e : undefined, 'handoff')
     if (handoff === undefined || handoff.newBranch === null || e.issue === null || e.run === null || e.pr === null) continue
     if (issueFromBranch(handoff.newBranch) !== e.issue) {
+      leftOpen.add(e.pr)
       if (isLive(ctx.issues.get(e.issue))) skip(ctx, 'M8', e.issue, `PR #${e.pr} left open: ${handoff.newBranch} is not a branch of #${e.issue}`)
       continue
     }
     moves.push({ issue: e.issue, run: e.run, pr: e.pr, newRun: handoff.run, newBranch: handoff.newBranch })
+  }
+  // a run the event log marks superseded with no fixer behind it (task(redrive), I-39) moved to
+  // callum-flow-regate's <branch>-v<n>: it moves once a live run of the issue on such a branch
+  // shows a PR of its own
+  for (const old of ctx.state.runs) {
+    if (!old.superseded || old.issue === null || old.pr === null || leftOpen.has(old.pr) || moves.some(m => m.pr === old.pr)) continue
+    const next = ctx.state.runs.find(
+      r => !r.superseded && r.issue === old.issue && r.pr !== null && r.pr !== old.pr && r.branch.startsWith(`${old.branch}-v`),
+    )
+    if (next !== undefined) moves.push({ issue: old.issue, run: old.run, pr: old.pr, newRun: next.run, newBranch: next.branch })
   }
   for (const m of moves) {
     const key = `pr-close:${m.pr}`

@@ -1629,6 +1629,30 @@ describe('M8: the PR of a superseded run is closed (#553, I-39)', () => {
     expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
   })
 
+  test('a run task(redrive) superseded: its PR is closed once the issue\'s run on the regated branch has a PR', () => {
+    // callum-flow-regate moved B to B-v2 and logged `superseded` for R1; no fixer was involved
+    const old = run(32, 'cancelled', { branch: B, run: R1, pr: 44, superseded: true })
+    const redrive = entry(`task:redrive:${B}:h44`, 'task', { wake: 'redrive', class: 'drive', issue: 32, run: R1, pr: 44, outcome: wakeAnswer('done') })
+    const r = plan(at([redrive], [old, live(`${B}-v2`, R2, 50)]), CFG)
+    expect(keys(r)).toEqual(['pr-close:44'])
+    expect(find(r, 'pr-close:44')).toMatchObject({ rule: 'M8', issue: 32, pr: 44, run: R1, newBranch: `${B}-v2`, by: 50 })
+    expect(keys(plan(at([redrive, closed(44)], [old, live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    // a chain links the newest PR; an older superseded run on the way is closed too
+    const mid = run(32, 'cancelled', { branch: `${B}-v2`, run: R2, pr: 50, superseded: true })
+    const chain = plan(at([], [old, mid, live(`${B}-v2-v2`, R3, 57)]), CFG)
+    expect(chain.actions.flatMap(a => (a.kind === 'pr-close' ? [[a.key, a.by]] : []))).toEqual([
+      ['pr-close:44', 57],
+      ['pr-close:50', 57],
+    ])
+    // nothing until the regated branch has a PR of its own; never a run left unmarked, a branch
+    // that is not the old one's -v<n>, another issue's run, or the old PR itself
+    expect(keys(plan(at([], [old, live(`${B}-v2`, R2, null)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [{ ...old, superseded: false }, live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, live('feat/issue-32-other', R2, 50)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, run(33, 'running', { branch: `${B}-v2`, run: R2, pr: 50 })]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
+  })
+
   test('the new branch and run are the fixer\'s word: neither may name another issue\'s run or PR', () => {
     const R38 = '01M4RQ0038AAAA'
     const other = run(38, 'running', { branch: 'feat/issue-38-other', run: R38, pr: 52 })
