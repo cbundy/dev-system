@@ -21,7 +21,7 @@ fail() {
 
 tmp=$(mktemp -d)
 pids=""
-trap 'for p in $pids; do kill "$p" 2>/dev/null; done; rm -rf "$tmp"' EXIT
+trap 'for p in $pids; do kill "$p" 2>/dev/null || :; done; rm -rf "$tmp"' EXIT
 
 mkdir -p "$tmp/bin" "$tmp/share" "$tmp/cfg/sessions" "$tmp/cfg/projects" "$tmp/state" "$tmp/mark" "$tmp/cwd-a" "$tmp/cwd-b" "$tmp/cwd-c"
 cp "$SCRIPT_DIR/../claude-config.sh" "$tmp/share/"
@@ -33,6 +33,7 @@ cat > "$tmp/bin/tmux" <<'STUB'
 printf '%s\n' "$*" >> "$TMUX_LOG"
 case $1 in
   has-session) [ -e "$TMUX_LOG.session" ] ;;
+  display-message) [ -z "${TMUX_PANE_PID:-}" ] || echo "$TMUX_PANE_PID" ;;
   new-session | new-window)
     [ -z "${TMUX_FAIL_CWD:-}" ] || case "$*" in *"-c $TMUX_FAIL_CWD "*) exit 1 ;; esac
     [ "$1" != new-session ] || : > "$TMUX_LOG.session"
@@ -91,6 +92,8 @@ transcript $B "$cwd_b" plan medium claude-sonnet-x
 rec 103 $A "$cwd_a" "dev:@3.%3" session_A interactive 1 "$dead_pid" 3333 "A name"
 # Excluded:
 rec 110 e1111111-0000-4000-8000-000000000001 "$cwd_c" "claude:@0.%0" session_S interactive 1 "$dead_pid" 1 # the supervisor's own session
+mkdir -p "$tmp/state/remote-sessions/supervisor"
+: > "$tmp/state/remote-sessions/supervisor/e1111111-0000-4000-8000-000000000001"
 transcript e1111111-0000-4000-8000-000000000001 "$cwd_c" default high m
 rec 111 e2222222-0000-4000-8000-000000000002 "$cwd_c" "dev:@4.%4" "" interactive 1 "$dead_pid" 1 # no bridgeSessionId
 transcript e2222222-0000-4000-8000-000000000002 "$cwd_c" default high m
@@ -229,5 +232,39 @@ grep -q "already running" "$tmp/err" || fail "a running session skipped by resto
 rm -f "$tmp/cfg/sessions/304.json"
 got=$("$HELPER" taken 2>/dev/null | sort -u | tr '\n' ' ')
 [ "$got" = "$A $B $C " ] || fail "taken after restore: '$got', want the restored sessions"
+
+# --- the supervisor's own session is told apart by its process, not by its tmux session ------------
+# The supervisor's pane runs a shell whose child is Claude. X was spawned by the server and inherited
+# the supervisor's pane; Y ran in another window of tmux session claude. Both come back; S never does.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+bash -c 'sleep 600; :' 2>/dev/null &
+pane_pid=$!
+pids="$pids $pane_pid"
+sup_pid=""
+for _ in $(seq 25); do sup_pid=$(pgrep -P "$pane_pid") && break; sleep 0.2; done
+[ -n "$sup_pid" ] || fail "the supervisor stand-in did not start"
+pids="$pids $sup_pid"
+sup_start=$(sed 's/.*) //' "/proc/$sup_pid/stat" | cut -d' ' -f20)
+S=f1111111-4444-4444-8444-444444444444 X=f2222222-5555-4555-8555-555555555555 Y=f3333333-6666-4666-8666-666666666666
+rec 401 $S "$cwd_a" "claude:@0.%0" session_S interactive 0 "$sup_pid" "$sup_start"
+rec 402 $X "$cwd_b" "claude:@0.%0" session_X interactive 1 "$dead_pid" 7002
+rec 403 $Y "$cwd_c" "claude:@3.%3" session_Y interactive 1 "$dead_pid" 7003
+transcript $S "$cwd_a" default high m
+transcript $X "$cwd_b" default high m
+transcript $Y "$cwd_c" default high m
+"$HELPER" plan 2>/dev/null
+: > "$TMUX_LOG"
+"$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
+grep -q -- "--resume $X" "$TMUX_LOG" || fail "a server-spawned session in the supervisor's pane was not restored: $(cat "$TMUX_LOG")"
+grep -q -- "--resume $Y" "$TMUX_LOG" || fail "a session in another window of tmux session claude was not restored: $(cat "$TMUX_LOG")"
+TMUX_PANE_PID=$pane_pid "$HELPER" snapshot 2>/dev/null
+[ "$(ls "$tmp/state/remote-sessions/supervisor")" = "$S" ] || fail "snapshot: supervisor sessions are '$(ls "$tmp/state/remote-sessions/supervisor")', want $S"
+kill "$sup_pid"
+wait "$pane_pid" 2>/dev/null || :
+rm -f "$tmp/mark"/*
+[ -z "$("$HELPER" pending 2>/dev/null)" ] || fail "the supervisor's own session is a restore candidate: $("$HELPER" pending 2>/dev/null)"
+rm -f "$tmp/state/remote-sessions/supervisor/$S"
+"$HELPER" pending 2>/dev/null | grep -q "$S" || fail "S is not a candidate once it is not the supervisor's: the exclusion above proves nothing"
 
 echo "dev-remote-sessions: ok"

@@ -1060,7 +1060,7 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   message: it waits for you.
 - They run in the tmux session `claude-restored`, one window per session (not in the
   supervisor's `claude` session): `tmux attach -t claude-restored`.
-- Never restored: the supervisor's own session, sessions without a `bridgeSessionId`,
+- Never restored: the supervisor's own sessions, sessions without a `bridgeSessionId`,
   non-interactive sessions, sessions with no transcript, and sessions last updated more
   than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
   started a second time, and `DEV_REMOTE_CONTROL_RESUME` never resumes a session that is
@@ -1070,6 +1070,11 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   on the following restart. A failure restoring one session is logged and never delays
   the supervisor.
 - `dev-prune-worktrees` keeps the worktree of a live session or of one pending restore.
+- The supervisor's own sessions are told apart by process, not by tmux session: each
+  snapshot records the session ID of the supervisor's Claude (or Remote Control server)
+  process, the one in the first window of tmux session `claude`, and those IDs are never
+  restored. Other sessions are restored even when their record names tmux session
+  `claude` (another window there, or a session the server spawned).
 
 This relies on Claude Code's `sessions/*.json` format, which is not documented; unreadable
 records are skipped with a log line. A server-spawned session is treated like any other
