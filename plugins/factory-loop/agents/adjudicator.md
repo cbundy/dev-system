@@ -32,7 +32,7 @@ Read-only commands only: the `no-mistakes axi status`/`logs` reads above, `callu
 reviews, no edits). You may write throwaway repro scripts only under the system temp dir.
 You may also run the `factory-answer` command your prompt names, which only records your answer.
 
-Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. The one exception is the detached no-mistakes pipeline run (`axi run` or `axi respond`) that the implement-issue skill launches. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.
 
 ## Judgment rules
 
