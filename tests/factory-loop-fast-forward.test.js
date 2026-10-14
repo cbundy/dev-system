@@ -33,7 +33,7 @@ const BRANCH = "issue-50-work";
 let m;
 let root;
 
-const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, stdio: "pipe", encoding: "utf8" }).trim();
+const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe", encoding: "utf8" }).trim();
 const commit = (cwd, file, text) => {
   fs.writeFileSync(path.join(cwd, file), text);
   git(cwd, "add", file);
