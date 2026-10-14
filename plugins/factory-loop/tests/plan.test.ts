@@ -899,6 +899,30 @@ describe('D: design and delegation', () => {
     expect(keys(plan({ ...inFlight, issues: [...inFlight.issues, issue(7)] }, CFG))).toEqual([`adjudicate:${AT45}`])
   })
 
+  test('priority label: labelled issues go first, case-insensitively, behind the owner list; order only', () => {
+    const lab = (n: number, l = 'priority') => issue(n, { labels: ['ready', l] })
+    const s = state({ queue: [1, 2, 3, 4], issues: [issue(1), issue(2), lab(3, 'Priority'), issue(4)] })
+    const wide = config({ maxStartsPerPass: 10, maxInFlightIssues: 10 })
+    const order = (st: typeof s, c = wide) => keys(plan(st, c)).filter(k => k.startsWith('claim:')).map(k => Number(k.split(':')[1]))
+    expect(order(s)).toEqual([3, 1, 2, 4])
+    expect(order({ ...s, control: control({ priority: [4] }) })).toEqual([4, 3, 1, 2])
+    const only = plan({ ...s, control: control({ only: [1, 3] }) }, wide)
+    expect(keys(only).map(k => k.split(':')[1])).toEqual(['1', '3'])
+    expect(only.skipped.find(k => k.issue === 2)?.why).toBe('owner: only #1 #3')
+    expect(order(s, config({ maxStartsPerPass: 10, maxInFlightIssues: 10, priorityLabel: 'urgent' }))).toEqual([1, 2, 3, 4])
+    const urgent = state({ queue: [1, 3], issues: [issue(1), lab(3, 'urgent')] })
+    expect(order(urgent, config({ priorityLabel: 'urgent' }))).toEqual([3, 1])
+  })
+
+  test('priority label never makes an ineligible issue claimable; the one free slot goes to the labelled issue', () => {
+    const lab = (n: number, over = {}) => issue(n, { labels: ['ready', 'priority'], ...over })
+    const s = state({ queue: [1, 2, 3, 4], issues: [issue(1), lab(2, { blockedBy: 1 }), lab(3, { subIssues: 2 }), lab(4, { labels: ['ready', 'priority', 'parked'] })] })
+    const r = plan(s, config({ skipLabels: ['parked'], maxStartsPerPass: 10, maxInFlightIssues: 10 }))
+    expect(keys(r).filter(k => k.startsWith('claim:'))).toEqual([`claim:1:${NOW - 30 * MIN}`])
+    const one = state({ queue: [1, 2], issues: [issue(1), lab(2)] })
+    expect(keys(plan(one, config({ maxInFlightIssues: 1 }))).filter(k => k.startsWith("claim:"))).toEqual([`claim:2:${NOW - 30 * MIN}`])
+  })
+
   test('the worktree pool bounds new work (SKILL:103-104)', () => {
     const s = state({ queue: [1, 2], issues: [issue(1), issue(2)], pool: { free: 3, total: 16, slots: [] } })
     expect(keys(plan(s, CFG))).toEqual([`claim:1:${NOW - 30 * MIN}`])

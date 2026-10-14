@@ -92,7 +92,7 @@ Each change is logged and asks for a pass at once. The ops:
 - `status` (or no op): the last pass and the directives in force; `help` lists the ops;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
-- `priority <N...>|off`: claim these first, in order;
+- `priority <N...>|off`: claim these first, in order, ahead of `priority`-labelled issues (the `priorityLabel` setting), which go ahead of the rest;
 - `only <N...>|off`: claim only these, in order (a tracker stands for its open sub-issues);
 - `serial on|off`: one issue in flight at a time;
 - `new on|off`: off starts no new claims, designs or implementations;
