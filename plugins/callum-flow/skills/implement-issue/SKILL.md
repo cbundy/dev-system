@@ -137,7 +137,11 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   server runs from the wrong tree). Verify with `readlink /proc/<pid>/cwd`.
 - Judge a process or run by its own state, not a process list: `pgrep -f
   '<pattern>'` matches the Bash tool's wrapper, which carries the pattern in its
-  argv, so it reports a phantom hit. Use `no-mistakes axi status` for a run.
+  argv, so it reports a phantom hit, and a wait loop on it never ends. Wait on a PID you
+  recorded (`wait "$pid"`, `kill -0 "$pid"`) or use `no-mistakes axi status` for a run.
+- Run only commands known to exit: bound exploratory commands with `timeout 30`, and never
+  start a never-exiting command such as `claude remote-control`. Kill or `wait` every
+  background process you started before handoff.
 
 ## 3. Verification discipline
 - Run targeted tests for the files you touched, using the repo's documented
