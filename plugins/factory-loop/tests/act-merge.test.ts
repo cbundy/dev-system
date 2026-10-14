@@ -7,6 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ENV_RETRY_ARGV,
+  FF_SCRIPT,
   LAUNCH_SCRIPT,
   LEASE_ARGV,
   MERGE_TIMEOUT_MS,
@@ -14,12 +15,14 @@ import {
   RESPOND_SETTLE_S,
   argvsOf,
   failure,
+  fastForwardArgv,
   guardKeyAfter,
   launchArgv,
   leasedPath,
   mergeExecutors,
   mergeRefusal,
   parseCloseIssue,
+  parseFastForward,
   parseFixLinkage,
   parseGuard,
   parseRollout,
@@ -29,6 +32,7 @@ import {
   slotFor,
   validBranch,
 } from '../hooks/act-merge'
+import type { FastForwardAction } from '../hooks/act-merge'
 import { respondLogPath } from '../hooks/exec'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
@@ -825,7 +829,7 @@ describe('env-retry (rule P2a, #537)', () => {
 
 describe('every executor', () => {
   test('mergeExecutors covers exactly its kinds, and each refuses another kind', async () => {
-    expect(Object.keys(mergeExecutors).sort()).toEqual(['env-retry', 'fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind'])
+    expect(Object.keys(mergeExecutors).sort()).toEqual(['env-retry', 'fast-forward', 'fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind'])
     for (const kind of Object.keys(mergeExecutors) as ActionKind[]) {
       const h = harness()
       const other: Action = kind === 'guard' ? A.linkage() : A.guard()
@@ -841,5 +845,79 @@ describe('every executor', () => {
     expect('noRetry' in failure(['git', 'switch', BRANCH], r(2))).toBe(false)
     expect('noRetry' in failure(['treehouse', 'get'], r(2))).toBe(false)
     expect(failure(['callum-flow-merge', '550'], r(1, RATE))).toMatchObject({ rateLimited: true })
+  })
+})
+
+// --- fast-forward (rules M1, M2, #551) -----------------------------------------------------------
+
+const WT = '/workspaces/dev-system/.treehouse/dev-system-22f535/3/dev-system'
+const HANDOFF = '1f08432aa1f08432aa1f08432aa1f08432aa1f08'
+
+describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
+  const ff = (over: Partial<FastForwardAction> = {}): FastForwardAction => ({
+    ...base,
+    kind: 'fast-forward',
+    key: `fast-forward:550:${GATED}:1`,
+    rule: 'M2',
+    pr: 550,
+    run: RUN,
+    head: GATED,
+    branch: BRANCH,
+    ...over,
+  })
+
+  test('one sh -c from the main checkout, with the branch and the run head as positional arguments', async () => {
+    expect(argvsOf(ff(), LOOP_DIR)).toEqual([['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED]])
+    expect(fastForwardArgv(BRANCH, GATED)).toEqual(['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED])
+    const { calls } = await exec(ff(), [{ stdout: `CURRENT ${GATED}\n` }])
+    expect(calls).toEqual([{ argv: fastForwardArgv(BRANCH, GATED), init: { timeoutMs: MERGE_TIMEOUT_MS['fast-forward'] } }])
+  })
+
+  test('the script moves a worktree only by a fast-forward, after origin, the tree and ancestry are checked', () => {
+    expect(FF_SCRIPT).toContain('merge --ff-only')
+    expect(FF_SCRIPT).toContain('status --porcelain --untracked-files=no')
+    expect(FF_SCRIPT).toContain('merge-base --is-ancestor "$at" "$head"')
+    expect(FF_SCRIPT).toContain('if [ "$origin" != "$head" ]')
+    expect(FF_SCRIPT).not.toMatch(/\b(push|reset|rebase|checkout|clean|stash)\b/)
+    // every check comes before the first move
+    expect(FF_SCRIPT.indexOf('merge --ff-only')).toBeGreaterThan(FF_SCRIPT.indexOf('merge-base --is-ancestor'))
+  })
+
+  test('FORWARDED, CURRENT and REFUSED are answers, logged with both heads', async () => {
+    const moved = await exec(ff(), [{ stdout: `FORWARDED ${HANDOFF} ${GATED} ${WT}\n` }])
+    expect(moved.result).toEqual({
+      status: 'done',
+      outcome: { kind: 'fast-forward', result: 'forwarded', line: `FORWARDED ${HANDOFF} ${GATED} ${WT}` },
+      summary: `PR #550: FORWARDED ${HANDOFF} ${GATED} ${WT}`,
+    })
+    const current = await exec(ff(), [{ stdout: `CURRENT ${GATED}\n` }])
+    expect(current.result).toMatchObject({ status: 'done', outcome: { kind: 'fast-forward', result: 'current' } })
+    const dirty = await exec(ff(), [{ stdout: `REFUSED ${WT} has uncommitted changes\n` }])
+    expect(dirty.result).toMatchObject({ status: 'done', outcome: { kind: 'fast-forward', result: 'refused', line: `REFUSED ${WT} has uncommitted changes` } })
+    expect(parseFastForward(`FORWARDED a ${GATED} /w/1\nFORWARDED b ${GATED} /w/2\n`)).toEqual({ result: 'forwarded', line: `FORWARDED a ${GATED} /w/1; FORWARDED b ${GATED} /w/2` })
+    expect(parseFastForward('')).toBeNull()
+  })
+
+  test('a fetch or a fast-forward that fails is a failed attempt; a bad branch or head is refused before any command', async () => {
+    const failed = await exec(ff(), [{ exitCode: 1, stderr: `factory-loop: the fast-forward of ${WT} failed\n` }])
+    expect(failed.result).toMatchObject({ status: 'failed', summary: `fast-forward: exit 1: factory-loop: the fast-forward of ${WT} failed` })
+    const silent = await exec(ff(), [{ exitCode: 0, stdout: 'nothing said\n' }])
+    expect(silent.result).toMatchObject({ status: 'failed' })
+    for (const bad of [ff({ branch: '--upload-pack=x' }), ff({ head: 'HEAD~1' }), ff({ head: '$(id)' })]) {
+      const r = await exec(bad)
+      expect(r.result).toMatchObject({ status: 'failed', noRetry: true })
+      expect(r.calls).toEqual([])
+    }
+  })
+
+  test('plan\'s fast-forward for a lagging worktree runs as is', async () => {
+    const lag = { name: 'head', reason: `run=${GATED} origin=${GATED} pr=${GATED} worktree=${HANDOFF} (run ${RUN}); fix: ...` }
+    const guard = entry(`guard:550:${GATED}:1`, 'guard', { issue: 50, pr: 550, head: GATED, startedAt: NOW - 120_000, endedAt: NOW - 60_000, outcome: { kind: 'guard', fails: [lag], warns: [] } })
+    const s = withLedger(state({ issues: [mine(50, 'ready to merge', { pr: 550 })], runs: [run(50, 'merge-ready', { head: GATED, branch: BRANCH, run: RUN })] }), [guard])
+    const action = plan(s, config()).actions.find(a => a.kind === 'fast-forward')
+    expect(action).toMatchObject({ key: `fast-forward:550:${GATED}:1`, head: GATED, branch: BRANCH })
+    if (action === undefined) throw new Error('plan built no fast-forward')
+    const { result } = await exec(action, [{ stdout: `FORWARDED ${HANDOFF} ${GATED} ${WT}\n` }])
+    expect(result).toMatchObject({ status: 'done', outcome: { result: 'forwarded' } })
   })
 })

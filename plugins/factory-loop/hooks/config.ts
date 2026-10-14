@@ -30,7 +30,8 @@ export const DEFAULT_CONFIG: Config = {
   worktreeReserve: 2,
   reviewFixCap: 3,
   guardRecheckMs: 3 * MIN,
-  guardTtlMs: 30 * MIN,
+  // a backstop: a repair re-guards at once, and a failure is judged once (#550)
+  guardTtlMs: 5 * MIN,
   respondSettleMs: 15 * MIN,
   updateBehindRetryMs: 5 * MIN,
   updateBehindRetries: 3,
@@ -48,6 +49,7 @@ export const DEFAULT_CONFIG: Config = {
     merge: 2,
     'fix-linkage': 2,
     guard: 3,
+    'fast-forward': 2,
     // heartbeat and sweep are never used up (they retry at their cadence, SPEC 6.1): this many
     // failures in a row tells the owner once
     heartbeat: 3,
@@ -95,8 +97,8 @@ export function parseDuration(text: string): Ms | null {
 
 // Every action kind, for the loaders that read one from text (SPEC 6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
-  'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fix-linkage', 'merge',
-  'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment',
+  'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fast-forward',
+  'fix-linkage', 'merge', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment',
   'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
 ]
 // maxAttempts may name any action kind or agent type.

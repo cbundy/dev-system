@@ -1,8 +1,8 @@
-// The gate and merge executors (SPEC 5.5, 6.1, 6.2, 7.4): guard, update-behind, fix-linkage,
-// merge (then callum-flow-rollout), rollout for a hand merge (D-29), respond, which drives a
-// parked gate with a detached `no-mistakes axi respond`, and env-retry, the one detached rerun
-// (#537). They decide nothing (plan did): each runs its catalogue row's commands through ctx.cmd
-// and reads the CLI's own lines and exit codes (images/base/callum-flow-merge-guard,
+// The gate and merge executors (SPEC 5.5, 6.1, 6.2, 7.4): guard, update-behind, fast-forward
+// (#551), fix-linkage, merge (then callum-flow-rollout), rollout for a hand merge (D-29), respond,
+// which drives a parked gate with a detached `no-mistakes axi respond`, and env-retry, the one
+// detached rerun (#537). They decide nothing (plan did): each runs its catalogue row's commands
+// through ctx.cmd and reads the CLI's own lines and exit codes (images/base/callum-flow-merge-guard,
 // callum-flow-merge, callum-flow-rollout, callum-flow-fix-linkage). The argv and the reading of
 // the output are pure functions below, so tests, the replay harness and the argv safety test use
 // them without the engine.
@@ -15,6 +15,7 @@ const SUMMARY_MAX = 200
 
 // The action shapes these executors read (a member's kind can be shared, so by its fields).
 export type GateAction = Extract<Action, { kind: 'guard' | 'update-behind' }>
+export type FastForwardAction = Extract<Action, { kind: 'fast-forward' }>
 export type MergeAction = Extract<Action, { kind: 'merge' }>
 export type RespondAction = Extract<Action, { kind: 'respond' }>
 
@@ -24,6 +25,7 @@ export type RespondAction = Extract<Action, { kind: 'respond' }>
 export const MERGE_TIMEOUT_MS = {
   guard: 300 * SEC,
   'update-behind': 300 * SEC,
+  'fast-forward': 120 * SEC,
   'fix-linkage': 120 * SEC,
   merge: 600 * SEC,
   rollout: 60 * SEC,
@@ -135,6 +137,46 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
   return ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', slot, branch, log, ...respond]
 }
 
+// The fast-forward (rules M1, M2, #551), run with `sh -c` from the main checkout: $1 the run's
+// branch, $2 the run's head. The pipeline commits in its own checkout and pushes, so the
+// implementer's worktree sits behind the branch by exactly those commits and the guard fails
+// `head`. This moves each worktree on the branch to the run's head, only when origin's branch
+// is that head (fetched fresh), the worktree's head is an ancestor of it and nothing tracked is
+// uncommitted, and only by `git merge --ff-only`, so no commit or change can be lost. Untracked
+// files stay (a fast-forward that would overwrite one fails by itself). Every worktree is checked
+// before any moves. It answers, with exit 0, a `FORWARDED <from> <to> <path>` line per worktree
+// moved, `CURRENT <head>` when none lagged, or `REFUSED <why>`; anything else is a failure.
+export const FF_SCRIPT = [
+  'branch=$1 head=$2',
+  'git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" || { echo "factory-loop: cannot fetch origin/$branch" >&2; exit 1; }',
+  'origin=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")',
+  'if [ "$origin" != "$head" ]; then echo "REFUSED origin/$branch is ${origin:-unknown}, not the run head $head"; exit 0; fi',
+  'list=$(git worktree list --porcelain) || exit 1',
+  `paths=$(printf '%s\\n' "$list" | awk -v b="refs/heads/$branch" '/^worktree / { p = substr($0, 10) } /^branch / && substr($0, 8) == b { print p }')`,
+  `nl=$(printf '\\n_') lag=`,
+  'nl=${nl%_}',
+  'IFS=$nl',
+  'set -f',
+  'for p in $paths; do',
+  `  at=$(git -C "$p" rev-parse --verify --quiet 'HEAD^{commit}') || { echo "REFUSED cannot read the head of $p"; exit 0; }`,
+  '  [ "$at" = "$head" ] && continue',
+  '  st=$(git -C "$p" status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of $p"; exit 0; }',
+  '  [ -z "$st" ] || { echo "REFUSED $p has uncommitted changes"; exit 0; }',
+  '  git merge-base --is-ancestor "$at" "$head" || { echo "REFUSED $p at $at has commits not on origin/$branch"; exit 0; }',
+  '  lag=$lag$p$nl',
+  'done',
+  '[ -n "$lag" ] || { echo "CURRENT $head"; exit 0; }',
+  'for p in $lag; do',
+  '  at=$(git -C "$p" rev-parse --verify --quiet HEAD) || exit 1',
+  '  git -C "$p" merge --ff-only --quiet "$head" >&2 || { echo "factory-loop: the fast-forward of $p failed" >&2; exit 1; }',
+  '  echo "FORWARDED $at $head $p"',
+  'done',
+].join('\n')
+
+export function fastForwardArgv(branch: string, head: string): string[] {
+  return ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', branch, head]
+}
+
 // argvsOf: every command an action of these kinds can run, in order, for the argv safety test
 // (SPEC 6.1) and the replay; null for a kind this module does not run. A respond lists both the
 // slot it found and the lease path, with `<slot>` standing for the leased slot's path.
@@ -144,6 +186,8 @@ export function argvsOf(action: Action, loopDir: string, attempt = 1): string[][
       return [guardArgv(action)]
     case 'update-behind':
       return [updateBehindArgv(action)]
+    case 'fast-forward':
+      return [fastForwardArgv(action.branch, action.head)]
     case 'fix-linkage':
       return [fixLinkageArgv(action)]
     case 'merge':
@@ -204,6 +248,19 @@ export function parseUpdateBehind(text: string): UpdateBehind | null {
     if (line.startsWith('UPDATE-BEHIND SKIP ')) return { result: 'skip', branch: null, from: null, to: null, line }
   }
   return null
+}
+
+export type FastForward = { result: 'forwarded' | 'current' | 'refused'; line: string }
+
+// parseFastForward: the fast-forward's answer (FF_SCRIPT): every FORWARDED line, joined, else
+// its one CURRENT or REFUSED line; null when it printed none.
+export function parseFastForward(text: string): FastForward | null {
+  const said = lines(text)
+  const moved = said.filter(l => l.startsWith('FORWARDED '))
+  if (moved.length > 0) return { result: 'forwarded', line: moved.join('; ') }
+  const one = said.find(l => l.startsWith('CURRENT ') || l.startsWith('REFUSED '))
+  if (one === undefined) return null
+  return { result: one.startsWith('CURRENT ') ? 'current' : 'refused', line: one }
 }
 
 export type Linkage = { result: 'match' | 'skip' | 'repaired' | 'mismatch'; line: string }
@@ -325,6 +382,21 @@ const updateBehind: Executor = async (ctx, action) => {
   // so a failed log is noted, never a failed attempt
   const logged = await event(ctx, 'rebased_behind', { issue: action.issue, run: action.run, branch: u.branch, pr: action.pr, head: u.to })
   return { status: 'done', outcome, summary: clip(`rebased PR #${action.pr} ${short(u.from)} -> ${short(u.to)}${logged}`) }
+}
+
+// fast-forward (rules M1, M2, #551): FORWARDED, CURRENT and REFUSED are answers, logged with
+// both heads; a refusal goes to the judge (plan reads it). Only a sha and a branch the loop
+// works reach the script.
+const fastForward: Executor = async (ctx, action) => {
+  if (action.kind !== 'fast-forward') return wrongKind('fast-forward', action)
+  if (!validBranch(action.branch)) return refused(`branch ${JSON.stringify(action.branch)} is not one to fast-forward`)
+  if (!/^[0-9a-f]{7,64}$/.test(action.head)) return refused(`head ${JSON.stringify(action.head)} is not a commit`)
+  const argv = fastForwardArgv(action.branch, action.head)
+  const r = await run(ctx, argv, MERGE_TIMEOUT_MS['fast-forward'])
+  if (!('exitCode' in r)) return r
+  const f = parseFastForward(r.stdout)
+  if (r.exitCode !== 0 || f === null) return failure(argv, r)
+  return { status: 'done', outcome: { kind: 'fast-forward', result: f.result, line: f.line }, summary: clip(`PR #${action.pr}: ${f.line}`) }
 }
 
 // fix-linkage (rule M2): MATCH, SKIP and REPAIRED end it; a repair that still does not verify
@@ -484,6 +556,7 @@ async function readRollout(ctx: ExecCtx, issue: number): Promise<RolloutRead> {
 export const mergeExecutors: Partial<Record<ActionKind, Executor>> = {
   guard,
   'update-behind': updateBehind,
+  'fast-forward': fastForward,
   'fix-linkage': fixLinkage,
   merge,
   rollout,
@@ -562,7 +635,7 @@ function fields(line: string): Map<string, string> {
 }
 
 function label(argv: readonly string[]): string {
-  if (argv[0] === 'sh') return 'respond launch'
+  if (argv[0] === 'sh') return argv[3] === 'factory-loop-fast-forward' ? 'fast-forward' : 'respond launch'
   return argv.slice(0, argv[0] === 'treehouse' || argv[0] === 'git' ? 2 : 1).join(' ')
 }
 
