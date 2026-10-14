@@ -375,7 +375,22 @@ export function traceName(day: string): string {
 
 // cutLine: the last line of a trace file the cap cut short (under CUT_ROOM bytes).
 export function cutLine(at: string, cap: number): string {
-  return JSON.stringify({ v: 1, at, cut: `the trace cap (${cap} bytes) is reached: nothing more is traced today` }) + '\n'
+  return JSON.stringify({ v: 1, at, cut: cutText(cap) }) + '\n'
+}
+
+function cutText(cap: number): string {
+  return `the trace cap (${cap} bytes) is reached: nothing more is traced today`
+}
+
+// isCutLine: the line is the cut line of this cap, so the file it ends stays closed today; a cut
+// under another cap does not close it (SPEC 12.1).
+export function isCutLine(line: string, cap: number): boolean {
+  try {
+    const v: unknown = JSON.parse(line)
+    return v !== null && typeof v === 'object' && (v as { cut?: unknown }).cut === cutText(cap)
+  } catch {
+    return false
+  }
 }
 
 export type Room = { remove: string[]; write: 'record' | 'cut' | 'none' }

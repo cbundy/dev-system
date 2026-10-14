@@ -132,13 +132,15 @@ export function host(on: On, opts: HostOptions = {}) {
       return line
     },
     // every command but the loop dir's own upkeep: the decision log's and the trace's appends, the
-    // act lock's writes, the daily prune of its old files and the trace cap's deletes
+    // act lock's writes, the daily prune of its old files, the trace cap's deletes and its read
+    // of today's trace file for a cut line
     commands(): Seen[] {
       return seen.filter(
         s =>
           !(s.argv[0] === 'sh' && (s.argv[2] ?? '').startsWith('mkdir -p')) &&
           !(s.argv[0] === 'find' && (s.argv[1] ?? '').startsWith(LOOP_DIR)) &&
-          !(s.argv[0] === 'rm' && (s.argv[3] ?? '').startsWith(`${LOOP_DIR}/`)),
+          !(s.argv[0] === 'rm' && (s.argv[3] ?? '').startsWith(`${LOOP_DIR}/`)) &&
+          !(s.argv[0] === 'tail' && (s.argv[4] ?? '').startsWith(`${LOOP_DIR}/`)),
       )
     },
     events(): string[][] {
@@ -208,6 +210,13 @@ export function host(on: On, opts: HostOptions = {}) {
     if (argv[0] === 'rm' && argv[1] === '-f' && argv[2] === '--') {
       for (const path of argv.slice(3)) files.delete(path)
       return done({})
+    }
+    // tail -c <n> -- <path>: a trace file's last bytes, read for its cut line
+    if (argv[0] === 'tail' && argv[1] === '-c' && argv[3] === '--') {
+      const body = files.get(argv[4] ?? '')
+      if (body === undefined) return done({ exitCode: 1, stderr: `tail: cannot open '${argv[4] ?? ''}'` })
+      const bytes = new TextEncoder().encode(body)
+      return done({ stdout: new TextDecoder().decode(bytes.slice(Math.max(0, bytes.length - Number(argv[2])))) })
     }
     // the old-watcher rail asks whether a lock directory exists: one does when a file is under it
     if (argv[0] === 'test' && argv[1] === '-d') return done({ exitCode: [...files.keys()].some(p => p.startsWith(`${argv[2]}/`)) ? 0 : 1 })

@@ -18,6 +18,7 @@ import {
   begin,
   carve,
   cutLine,
+  isCutLine,
   lockTimed,
   newTracer,
   sourceOf,
@@ -350,6 +351,28 @@ describe('the cap (default 100 MiB, traceMaxBytes)', () => {
     expect(todays()).toHaveLength(2)
     expect(h.passes()).toHaveLength(3)
   })
+
+  test("a reload finds today's file cut and keeps it closed, reading its tail once; a new cap opens it again (SPEC 12.1)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    // an earlier load wrote a big record, then cut the file under this cap
+    const cap = 20_000
+    const big = `${JSON.stringify({ v: 1, pass: 1, pad: 'x'.repeat(19_000) })}\n`
+    const cut = big + cutLine(iso(NOW - MIN), cap)
+    const h = host(on, { config: { ...OBSERVE, trace: true }, run: world(), files: { [TRACE]: cut, [REPO_FILE]: JSON.stringify({ traceMaxBytes: cap }) } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    // the quiet passes' records would fit, yet nothing goes after the cut line
+    expect(h.passes()).toHaveLength(2)
+    expect(h.files.get(TRACE)).toBe(cut)
+    expect(h.seen.filter(s => s.argv[0] === 'tail').map(s => s.argv)).toEqual([['tail', '-c', String(CUT_ROOM), '--', TRACE]])
+    // the cap changes: the file is open again
+    h.files.set(REPO_FILE, JSON.stringify({ traceMaxBytes: cap + 50_000 }))
+    await clock.advance(60_000)
+    const lines = (h.files.get(TRACE) ?? '').split('\n').filter(l => l !== '')
+    expect(lines).toHaveLength(3)
+    expect(JSON.parse(lines[2] ?? '{}')).toMatchObject({ pass: 3 })
+  })
 })
 
 // --- the pure parts (hooks/trace.ts) ----------------------------------------------------------------
@@ -379,6 +402,15 @@ describe('traceRoom: the cap', () => {
     const line = cutLine('2026-10-13T03:00:00.000Z', Number.MAX_SAFE_INTEGER)
     expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(CUT_ROOM)
     expect(JSON.parse(line)).toMatchObject({ v: 1, at: '2026-10-13T03:00:00.000Z' })
+  })
+
+  test("isCutLine: the cut line of this cap only; a record, another cap's cut or a torn line is not", () => {
+    const line = cutLine('2026-10-13T03:00:00.000Z', 1000).trimEnd()
+    expect(isCutLine(line, 1000)).toBe(true)
+    expect(isCutLine(line, 2000)).toBe(false)
+    expect(isCutLine(JSON.stringify({ v: 1, pass: 3 }), 1000)).toBe(false)
+    expect(isCutLine(line.slice(10), 1000)).toBe(false)
+    expect(isCutLine('', 1000)).toBe(false)
   })
 })
 

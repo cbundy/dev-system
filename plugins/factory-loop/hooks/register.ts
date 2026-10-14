@@ -67,12 +67,14 @@ import {
 import type { BreakerNotice, LockIo, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { digestOf } from './state'
 import {
+  CUT_ROOM,
   attemptOf,
   begin,
   byteLength,
   called,
   carve,
   cutLine,
+  isCutLine,
   lockTimed,
   newTracer,
   spent,
@@ -158,6 +160,8 @@ const delivered = new Map<string, Ms>()
 const reportedWakes = new Set<string>()
 let prevPassAt: Ms = 0
 let traceCut: string | null = null
+// the day and cap whose trace file this load has read for an earlier load's cut (writeTrace)
+let traceChecked: string | null = null
 // agents whose answer is being handled, and when each was first listed completed (act.ts)
 const between: Between = { answering: new Set(), completedSeen: new Map() }
 let lastWakeAt = 0
@@ -1022,24 +1026,38 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
 // writeTrace: the pass's trace record beside its decision log, within config traceMaxBytes
 // (trace.ts traceRoom): the oldest trace files go first, and today's is cut short rather than
-// pass the cap. A trace that cannot be written never fails the pass.
+// pass the cap. A cut stays for the day across reloads: the first write of a load reads whether
+// today's file already ends with the cut line (SPEC 12.1). A trace that cannot be written never
+// fails the pass.
 async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string, unknown>) {
   const at = String(record.at)
   const day = at.slice(0, 10)
   const cap = rt.config.traceMaxBytes
+  const today = `${day}:${cap}`
   const line = JSON.stringify(record) + '\n'
   const files = (await $.fs.list(rt.loopDir)).filter(e => e.kind === 'file')
-  const room = traceRoom(files, day, byteLength(line), cap, traceCut === `${day}:${cap}`)
+  const path = `${rt.loopDir}/${traceName(day)}`
+  if (traceCut !== today && traceChecked !== today) {
+    if (files.some(f => f.name === traceName(day) && f.size > 0) && (await endsCut($, path, cap))) traceCut = today
+    traceChecked = today
+  }
+  const room = traceRoom(files, day, byteLength(line), cap, traceCut === today)
   if (room.remove.length > 0) {
     const r = await $.process.run(['rm', '-f', '--', ...room.remove.map(name => `${rt.loopDir}/${name}`)], { timeoutMs: 10_000 })
     if (r.exitCode !== 0) return
   }
-  const path = `${rt.loopDir}/${traceName(day)}`
   if (room.write === 'record') await append($, path, line)
   if (room.write === 'cut') {
     await append($, path, cutLine(at, cap))
-    traceCut = `${day}:${cap}`
+    traceCut = today
   }
+}
+
+// endsCut: the trace file's last line is the cut line of this cap. Only its tail is read, since
+// the file may be far larger than $.fs.read takes; the cut line fits in CUT_ROOM bytes.
+async function endsCut($: EngineInterface, path: string, cap: number): Promise<boolean> {
+  const r = await $.process.run(['tail', '-c', String(CUT_ROOM), '--', path], { timeoutMs: 10_000 })
+  return r.exitCode === 0 && isCutLine(r.stdout.trimEnd().split('\n').pop() ?? '', cap)
 }
 
 function summaryOf(a: Action) {
