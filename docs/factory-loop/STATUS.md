@@ -5,37 +5,62 @@ Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reco
 
 ## What needs to happen next
 
-The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
+The full continuation plan, stage by stage, is [PLAN.md](PLAN.md). Stage D is done: the "loop
+rewrite v0.1" build is ready to merge, and cutover is next.
 
-1. **You review the draft PR** ([#528](https://github.com/cbundy/dev-system/pull/528)). The act
-   half (stage C) is built on `feat/factory-loop`: the loop can now act, but only in a session
-   whose safety rails all pass, and it has not acted anywhere yet. The choices the build made
-   without you are [DECISIONS.md](DECISIONS.md) D-40 to D-60. The ones most worth a look: the
-   ledger kept in memory with one writer under a renewed lease (D-40), the rails failing safe
-   (D-43), the update drain ending only at the next load (D-53), and merges following through
-   on the loop's own bookkeeping (D-50).
-2. **Then act mode on `dev-system-testbed`** (stage D). The test issues are filed, one path
-   each, as sub-issues of a tracker
-   ([dev-system-testbed#12](https://github.com/cbundy/dev-system-testbed/issues/12)), and none
-   is labelled `ready` yet. Nothing orchestrates the testbed today: its only worker is
-   `spike-reconcile-mod`, which already loads the plugin, so it is the natural place to run
-   them. It waits on your go-ahead, and nothing in it touches the live factory.
-3. **The shadow runs this build.** Pulled into `spike-reconcile-mod` on 2026-10-13 at 20:28, its
-   first pass planned exactly what the observe-only build planned (a sweep and the release task
-   after #522), with every source reading and nothing executed. A rebuilt merge had first been
-   taken for an unread rollout; that was fixed (1297e9b) before this run. Its session is logged
-   out of claude.ai, so Remote Control is offline there until you sign it in again.
-4. **Merge two small test fixes** when convenient. Both are still open, cherry-picked onto this
-   branch, and drop out of its diff once merged: the heartbeat-loop flake
-   ([PR #524](https://github.com/cbundy/dev-system/pull/524)) and the leaked test processes
-   ([PR #527](https://github.com/cbundy/dev-system/pull/527)).
-5. **Say whether two waiting issues should be worked**: the heartbeat clean-stop beat
-   ([#467](https://github.com/cbundy/dev-system/issues/467)) and its follow-up
-   ([#468](https://github.com/cbundy/dev-system/issues/468)) are still open and ready, and the
-   live orchestrator has not picked them up.
+1. **You merge the PR** ([#528](https://github.com/cbundy/dev-system/pull/528)). It is up to date
+   with main and its CI is green. Merging changes nothing live: the factory-loop plugin is not in
+   the marketplace, and the live factory keeps running the released orchestrator until cutover.
+2. **You release 0.36.0 with base image 2.31.0** (your decision, 2026-10-14). The image carries
+   the watcher `--once` modes and the `loop` event state the loop reads. 1.0.0 waits for the
+   cutover, because every consumer's `semver:0.x` range must change for it.
+3. **Then cutover** (stage E in [PLAN.md](PLAN.md)), one step at a time, each with your go-ahead.
 
-Nothing is blocked on anyone else. The shadow in `spike-reconcile-mod` stops with
-`coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
+Nothing is blocked on anyone else. The testbed loop in `spike-reconcile-mod` is stopped with its
+kill switch (`/persist/claude/factory-loop/OFF`), set at 13:28 UTC on 2026-10-14.
+
+Two older asks are still open, and nothing waits on them: the two small test fixes
+([PR #524](https://github.com/cbundy/dev-system/pull/524) and
+[PR #527](https://github.com/cbundy/dev-system/pull/527), cherry-picked onto this branch), and
+whether to work the heartbeat clean-stop beat
+([#467](https://github.com/cbundy/dev-system/issues/467)) and its follow-up
+([#468](https://github.com/cbundy/dev-system/issues/468)).
+
+## Stage D: act mode on the testbed (2026-10-13 and 14, done)
+
+Six runs on `cbundy/dev-system-testbed`, each a set of conflict pairs and throughput issues, each
+run's findings fixed before the next:
+
+- **Run 1** (stage C build): 5 of 8 merged in 75 minutes.
+- **Run 2** ([TESTBED-RUN2.md](TESTBED-RUN2.md)): 9 of 12 in 67 minutes; six bugs filed in the
+  "loop rewrite v0.1" milestone.
+- **Run 3** ([TESTBED-RUN3.md](TESTBED-RUN3.md)): 12 of 12, 10 in the first 47 minutes; six more
+  bugs found and fixed, among them the Claude Code engine bug behind the answer script.
+- **Runs 4 and 5** ([TESTBED-RUN5.md](TESTBED-RUN5.md)): run 4 stopped on the testbed's Codex
+  pin; run 5 merged 12 of 12 in 45 minutes, 10 of them in 13, with every answer through the
+  script, an environment re-run and an owner decision end to end.
+- **Run 6** ([TESTBED-RUN6.md](TESTBED-RUN6.md)), on a testbed updated to the 0.35.0 templates:
+  9 of 12; the last three were escalated to the owner and none is a loop bug. Usage tiering
+  paused and resumed the loop by itself.
+
+The release ([milestone "loop rewrite v0.1"](https://github.com/cbundy/dev-system/milestone/47))
+holds 21 issues: 20 built and proven, and the registered answer tools
+([#548](https://github.com/cbundy/dev-system/issues/548)) built but off until Claude Code lets a
+timer-spawned agent reach a plugin's own tools
+([#560](https://github.com/cbundy/dev-system/issues/560)). The scripted testbed reset
+([#565](https://github.com/cbundy/dev-system/issues/565)) moved out of the release. The owner
+approved every choice made without them, D-40 to D-74 ([DECISIONS.md](DECISIONS.md)).
+
+Filed for after the release: the watcher's 8 seconds a pass
+([#562](https://github.com/cbundy/dev-system/issues/562)), a factory janitor
+([#564](https://github.com/cbundy/dev-system/issues/564)), an orchestrator end-to-end suite
+([#566](https://github.com/cbundy/dev-system/issues/566)), traceability
+([#567](https://github.com/cbundy/dev-system/issues/567)), issue selection
+([#568](https://github.com/cbundy/dev-system/issues/568)), release issues that wait on the owner
+([#569](https://github.com/cbundy/dev-system/issues/569)), moving a rebased worktree without a
+fixer ([#570](https://github.com/cbundy/dev-system/issues/570)), the `Co-Authored-By` and
+no-mistakes amend abort ([#571](https://github.com/cbundy/dev-system/issues/571)) and moving the
+fleet to no-mistakes 1.95 ([#572](https://github.com/cbundy/dev-system/issues/572)).
 
 ## Release v0.1, wave 1 (2026-10-14)
 
@@ -140,7 +165,14 @@ unchanged: it still executes nothing, and every event it causes goes to a sink.
 
 ## Not yet proven
 
-Only a real session can show these. Run 3 on the testbed must prove each of them.
+Written before stage D. The testbed runs proved most of this list in practice: agents spawned
+from the mod, long-running agents several at once, wakes in a busy session, claims and guards on
+live timing, the respond launch and the environment re-run, the fast-forward, superseded PRs, the
+answer script, trace mode and the judge skill's notices. Still unproven: the registered answer
+tools (off, #560), the act lease across two live sessions, and a restart for an update during a
+run; none came up in the six runs. The paths stage D listed but no run exercised (a split into
+sub-issues, a test-weakening WARN, the review-fix cap, a cancelled run, a restart mid-run) go to
+the first real repo at cutover, with the released skill as the fallback.
 
 - **Agents from a mod**: that `$.agent.spawn` returns an agent id (the engine's test host never
   does), that each agent's `turn.complete` carries it, and how the agent list shows an agent
@@ -309,6 +341,8 @@ SPEC section 14:
 - **17:22**: wave 2: the ledger, the executors, wakes, the safety rails and the owner controls.
 - **20:16**: wave 3: act mode wired into the driver, then 49 of 50 review findings fixed.
 - **20:28**: a ledger rebuilt from the event log now counts its merges' rollouts as read.
+- **2026-10-13, 22:44 to 2026-10-14, 13:28**: stage D, testbed runs 1 to 6, with the "loop
+  rewrite v0.1" fixes built between runs. The owner approved D-40 to D-74 at 11:53.
 - **Usage**: overnight the five-hour window went from 60% to 84%, the weekly one from 86% to 88%.
 - **Live factory**: untouched throughout. No orchestrator workspace was modified or restarted,
   no `ready` label was added, and no pipeline run or agent was started. The orchestrator's memory

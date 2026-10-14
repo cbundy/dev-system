@@ -4,15 +4,17 @@ What is left to take the loop from "observes" to "runs the factory", in order, w
 what "done" means at each stage. [STATUS.md](STATUS.md) says where things stand;
 [SPEC.md](SPEC.md) is the design every stage builds against.
 
-## Where things stand (2026-10-13)
+## Where things stand (2026-10-14)
 
-- **On the draft PR** ([#528](https://github.com/cbundy/dev-system/pull/528), branch
-  `feat/factory-loop`): the design (inventory, spec, decisions), the pure plan, the observe half,
-  the replay harness, the wake probe, and since stage C the act half, with 546 plugin tests.
-- **Running**: the shadow, in `spike-reconcile-mod`, in observe mode, compared live with the
-  dev-system orchestrator, with your "522 only" directive (`only: [522]`).
-- **Not yet done**: acting anywhere. The act half is built and tested, but it has run only in
-  tests; stage D is its first real run.
+- **On the PR** ([#528](https://github.com/cbundy/dev-system/pull/528), branch
+  `feat/factory-loop`): the design, the pure plan, the observe and act halves, and the "loop
+  rewrite v0.1" fixes from the testbed runs. Ready to merge.
+- **Proven**: six act-mode runs on the testbed (stage D); the last two merged 12 of 12 and 9 of
+  12, and run 6's three left over were escalations to the owner, none a loop bug.
+- **Next**: you merge the PR and release 0.36.0 with base image 2.31.0; then cutover (stage E),
+  where 1.0.0 belongs.
+- **Running**: nothing. The testbed loop is stopped by its kill switch; the shadow of the live
+  factory ran in the same workspace and is stopped with it.
 
 ## Stage A: finish the #522 comparison (done)
 
@@ -63,59 +65,41 @@ observe-mode event sink unpruned. The choices made without the owner are D-40 to
     (1297e9b). The live factory is idle, so the next real issue is the fuller comparison;
   - STATUS lists what is still untested: yes, under "Not yet proven".
 
-## Stage D: act mode on `dev-system-testbed`
+## Stage D: act mode on `dev-system-testbed` (done, 2026-10-14)
 
-- **Who**: the agent filed the test issues (owner's go-ahead, 2026-10-13): one path each, as
-  sub-issues of [dev-system-testbed#12](https://github.com/cbundy/dev-system-testbed/issues/12),
-  none labelled `ready`. The agent sets up the workspace, runs and reports. Nothing orchestrates
-  the testbed today; its only worker is `spike-reconcile-mod`, which already loads the plugin.
-  **Waits on**: your review of the draft PR and your go-ahead (stage C is built).
-- **Setup** in the testbed workspace:
-  - load the plugin from a checkout of `feat/factory-loop` through `CLAUDE_CODE_PLUGIN_DIRS`, as
-    the shadow is loaded today;
-  - until a base image release carries the `--once` modes and the `loop` state, point the loop
-    at that checkout's own tools in `${CLAUDE_CONFIG_DIR}/factory-loop/config.json`: `toolsDir` at
-    its `features/src/callum-tools` and `binDir` at its `images/base` (SPEC 4.1, D-42). For
-    example
-    `{ "mode": "act", "repo": "<owner>/dev-system-testbed", "checkout": "<testbed checkout>",
-    "toolsDir": "<branch checkout>/features/src/callum-tools", "binDir": "<branch checkout>/images/base" }`;
-  - the role: run the session with `DEV_ROLE=orchestrator`, or set
-    `"allowActOutsideOrchestrator": true` in the testbed checkout's `.claude/factory-loop.json`;
-  - keep the released orchestrator's watcher unarmed: the loop stays in observe while an
-    `orchestrator-watch.sh` lock for the repo is live, and for 10 minutes after it goes;
-  - the rest the rails check: the checkout's `origin` is the testbed repo, the workspace has a
-    `DEV_MACHINE_NAME`, and no other orchestrator workspace on the testbed repo is up. The
-    decision log's `rails` field names whatever still holds act mode back.
-- **Test issues**, one path each:
-  - a plain merge;
-  - a split into sub-issues;
-  - a pending owner decision;
-  - each adjudicator `ACTION` (approve, fix, skip, escalate, fixer);
-  - the review-fix cap;
-  - a behind-only update;
-  - a conflict;
-  - a test-weakening WARN;
-  - a linkage FAIL;
-  - each rollout (merge, run-it, keep-open);
-  - a cancelled run;
-  - a restart mid-run (`dev-restart-self`).
-- **Retires the open risks**: agent ids from a mod's spawns, long-running agents, several at
-  once, `TaskStop`, wakes in a busy session, the act lease across two sessions, and heartbeats
-  across a restart: the "Not yet proven" list in [STATUS.md](STATUS.md).
-- **Done when**: every path ran as SPEC 5 says, with the decision log and the factory events as
-  evidence in a TESTBED-REPORT.
+Six runs in `spike-reconcile-mod`, each a mix of conflict pairs and throughput issues, with the
+findings of each fixed before the next as the "loop rewrite v0.1" milestone. The reports are
+[TESTBED-RUN2.md](TESTBED-RUN2.md), [TESTBED-RUN3.md](TESTBED-RUN3.md),
+[TESTBED-RUN5.md](TESTBED-RUN5.md) (runs 4 and 5) and [TESTBED-RUN6.md](TESTBED-RUN6.md);
+[STATUS.md](STATUS.md) sums them up.
+
+- **Done when**, checked:
+  - the loop merges a realistic batch on its own: yes. Run 5 merged 12 of 12 in 45 minutes, 10
+    of them in 13; run 6, on a testbed with current templates, merged 9 of 12 and escalated the
+    other three for reasons outside the loop;
+  - owner decisions and environment failures go through the loop, not around it: yes, both in
+    run 5;
+  - the agents' answers are read reliably: yes, every answer in runs 4 to 6 came through the
+    answer script.
+- **Not exercised**: a split into sub-issues, a test-weakening WARN, the review-fix cap, a
+  cancelled run, a restart mid-run and the act lease across two sessions. They go to the first
+  real repo, where the released skill is the fallback.
+- **Testbed reset point**: `1d1fd18` (templates at 0.35.0). Scripting the reset is
+  [#565](https://github.com/cbundy/dev-system/issues/565), outside the release.
 
 ## Stage E: cutover, one step at a time
 
 - **Who**: you approve each step; each ships through the normal release process (RELEASING.md).
 - **Steps**:
-  1. **Ship the pieces**: the `--once` modes in a base image release; the plugin listed in the
+  1. **Ship the pieces**: the `--once` modes in a base image release (2.31.0, with package
+     0.36.0, at the merge of #528); the plugin listed in the
      marketplace; the judge skill; the Orchestrator template's start prompt changed from
      `/callum-flow:issue-orchestrator` to the judge skill, and its resume prompt from "re-arm
      the watcher" to "the loop resumes by itself".
   2. **One real repo** in act mode, with the released skill as the fallback: to roll back,
      create the kill switch and start `/callum-flow:issue-orchestrator` in the session.
-  3. **The rest**, one repo at a time.
+  3. **The rest**, one repo at a time. Package 1.0.0 belongs here, with the `semver:0.x` range
+     changed in every consumer.
 - **Then retire**: the watcher-arming half of the released skill, once no repo uses it.
 
 ## Housekeeping along the way
