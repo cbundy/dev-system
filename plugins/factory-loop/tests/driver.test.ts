@@ -822,6 +822,49 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`judge:report:${key}`])
   })
 
+  // an adjudicator at work on a gate, whose reply will not parse
+  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send']) => {
+    const key = 'adjudicate:R470:review:abc1234'
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+    ])
+    const h = host(on, { config: ACT, run: factory().run, store, send })
+    h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
+    return { h, key }
+  }
+
+  test('a repair message the engine does not deliver fails the attempt at once, and the decision log says the answer was read as text (#548)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = gateAt(on, () => 'no such agent')
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.sends).toEqual([])
+    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1, reminded: true })
+    expect(h.entry(key)?.summary).toContain('the repair message was not delivered: no such agent')
+    expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'failed' }))
+  })
+
+  test('a repair message that hangs is undelivered after 10 s, so it never holds the agent\'s turn.complete: the attempt fails (#548)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = gateAt(on, () => new Promise<string | undefined>(() => undefined))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    let settled = false
+    const ended = $.turn.complete({ agentId: 'agent-1', answer: 'All good.', reason: 'answer', turnId: 'turn-agent-1', durationMs: 1000, isAborted: false }).then(r => {
+      settled = true
+      return r
+    })
+    await clock.advance(9_000)
+    expect(settled).toBe(false)
+    expect(h.entry(key)).toMatchObject({ status: 'running', reminded: true })
+    await clock.advance(1_000)
+    await ended
+    expect(h.entry(key)).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(h.entry(key)?.summary).toContain('the repair message was not delivered: repair message: no answer within 10 s')
+  })
+
   test('a wake answered through the main loop: turn.start takes the turn, an ANSWER closes it, a silent turn gets one reminder', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN

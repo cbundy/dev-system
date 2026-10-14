@@ -59,8 +59,9 @@ export type HostOptions = {
   stop?: (taskId: string) => { deny?: string } | undefined | Promise<{ deny?: string } | undefined>
   // answers $.prompt.submit, at once or later; { drop } drops the prompt
   submit?: (text: string) => { drop?: string } | undefined | Promise<{ drop?: string } | undefined>
-  // answers $.session.send (an agent's repair message): undefined delivers it, a string refuses it
-  send?: (to: string, text: string) => string | undefined
+  // answers $.session.send (an agent's repair message), at once or later (or never): undefined
+  // delivers it, a string refuses it
+  send?: (to: string, text: string) => string | undefined | Promise<string | undefined>
 }
 
 export type Host = ReturnType<typeof host>
@@ -240,7 +241,7 @@ export function host(on: On, opts: HostOptions = {}) {
     return r?.drop !== undefined ? { drop: r.drop } : { text: e.text }
   })
   on('session.send', async ($, e) => {
-    const refused = opts.send?.(e.to, e.text)
+    const refused = await opts.send?.(e.to, e.text)
     if (refused !== undefined) return { isDelivered: false, reason: refused }
     sends.push({ to: e.to, text: e.text })
     return { isDelivered: true }
