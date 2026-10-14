@@ -788,18 +788,20 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
       // P2a (#537) and P2b (#596): a resume of an escalated gate. A resume note, or any verdict
       // but ENV, sends a fixer (P2b); a resume of an all-ENV escalation with no note is the
       // owner's word that the environment is fixed, so the same head is rerun (P2a) rather than
-      // a new adjudicator asked about the stale failure.
+      // a new adjudicator asked about the stale failure. A ledger rebuilt from the event log keeps
+      // an escalation but not its reason or verdicts: only a resume note sends the fixer then.
       if (resumed > 0 && done(ctx, `adjudicate:${at}${suffix}`) === undefined) {
         const esc = latestEscalation(ctx, run, at, resumed)
-        if (esc !== 'other') {
-          const notes = issueNotes(ctx, n, esc?.endedAt ?? Number.NEGATIVE_INFINITY, latestResumeAt(ctx, `run:${run.run}`))
-          if (esc !== undefined && notes.length === 0 && esc.verdicts.length > 0 && esc.verdicts.every(v => /^ENV:/.test(v))) {
+        if (esc !== undefined) {
+          const notes = issueNotes(ctx, n, esc.endedAt, latestResumeAt(ctx, `run:${run.run}`))
+          const recorded = esc.why !== ''
+          if (recorded && notes.length === 0 && esc.verdicts.length > 0 && esc.verdicts.every(v => /^ENV:/.test(v))) {
             if (run.head !== null) {
               envRetry(ctx, run, at, suffix, esc.verdicts)
               continue
             }
-          } else if (esc !== undefined || notes.length > 0) {
-            const instructions = [...notes, ...(esc === undefined ? [] : [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts])]
+          } else if (recorded || notes.length > 0) {
+            const instructions = [...notes, ...(recorded ? [`Adjudicator's reason: ${esc.why}`, ...esc.verdicts] : [])]
             want(ctx, {
               kind: 'spawn',
               agent: 'fixer',
@@ -937,24 +939,19 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
   }
 }
 
-// latestEscalation: this gate's latest adjudication, when the owner resumed the run after it and
-// it escalated: its reason and verdict lines. undefined when none is recorded (a ledger rebuild
-// loses them); 'other' when the latest one asked for something else, or the owner has not resumed
-// since. A round with no adjudication is a fixer's or an env-retry's, so a second resume looks
-// back past it.
-function latestEscalation(
-  ctx: Ctx,
-  run: RunView,
-  at: string,
-  resumed: number,
-): { why: string; verdicts: string[]; endedAt: Ms } | undefined | 'other' {
+// latestEscalation: this gate's latest adjudication, when it escalated and the owner resumed the
+// run after it: its reason and verdict lines (both empty when rebuilt from the event log, which
+// carries neither) and its end. undefined otherwise: the latest one asked for something else, the
+// owner has not resumed since, or the gate has none (a resume of the review cap). A round with no
+// adjudication is a fixer's or an env-retry's, so a second resume looks back past it.
+function latestEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): { why: string; verdicts: string[]; endedAt: Ms } | undefined {
   for (let round = resumed - 1; round >= 0; round--) {
     const adj = done(ctx, `adjudicate:${at}${round > 0 ? `:r${round}` : ''}`)
     if (adj === undefined) continue
     const verdict = outcome(adj, 'adjudicator')
-    if (verdict === undefined || verdict.action.type !== 'escalate') return 'other'
+    if (verdict === undefined || verdict.action.type !== 'escalate') return undefined
     const endedAt = adj.endedAt ?? Number.POSITIVE_INFINITY
-    if (resumes(ctx, `run:${run.run}`, endedAt) === 0) return 'other'
+    if (resumes(ctx, `run:${run.run}`, endedAt) === 0) return undefined
     return { why: verdict.action.why, verdicts: verdict.verdicts, endedAt }
   }
   return undefined
@@ -1551,7 +1548,14 @@ function weakening(ctx: Ctx, run: RunView, warns: string[]) {
     })
   } else if (action.type === 'escalate' || action.type === 'hold') {
     const why = action.type === 'escalate' ? action.why : action.reason
-    want(ctx, wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}${sfx}`, 'M3', n, { issue: n, pr, run: run.run, brief }, [why, ...warns]))
+    want(
+      ctx,
+      wake('tell', 'escalate', `tell:escalate:pr:${pr}:${head}${sfx}`, 'M3', n, { issue: n, pr, run: run.run, brief }, [
+        why,
+        'a resume asks the adjudicator for a fresh test-weakening review',
+        ...warns,
+      ]),
+    )
   } else if (action.type === 'merge') {
     skip(ctx, 'M3', n, 'adjudicator: ACTION merge does not answer a test-weakening WARN')
   } else {

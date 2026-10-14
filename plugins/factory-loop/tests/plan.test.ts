@@ -3,6 +3,7 @@
 // memory file (MEM), not from the code. docs/factory-loop/SPEC.md section 5 is the table.
 import { describe, expect, test } from 'claude-code/testing'
 
+import { entryFromLoop, loopNote } from '../hooks/derive'
 import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
@@ -598,11 +599,21 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(again, CFG))).toEqual([`fixer:resume:${AT}:r2`])
     })
 
-    test('no recorded adjudication (ledger rebuild): no note asks the adjudicator, a note sends the fixer', () => {
-      expect(keys(plan(failedTest({ control: ctl([], NOW - MIN) }), CFG))).toEqual([`adjudicate:${AT}:r1`])
-      const r = plan(failedTest({ control: ctl([note('shorten', NOW - 2 * MIN)], NOW - MIN) }), CFG)
+    test('an escalation rebuilt from the event log, its reason and verdicts lost: no note asks the adjudicator, a note sends the fixer', () => {
+      const rebuilt = entryFromLoop({ ts: NOW, state: 'loop', issue: 45, run: RUN45, branch: null, pr: null, head: 'head45', note: loopNote(escalated([ENV])), actor: 'agent', device: DEVICE })
+      if (rebuilt === null) throw new Error('the escalation did not come back from its loop event')
+      expect(keys(plan(withLedger(failedTest({ control: ctl([], NOW - MIN) }), [rebuilt]), CFG))).toEqual([`adjudicate:${AT}:r1`])
+      const r = plan(withLedger(failedTest({ control: ctl([note('old', NOW - 55 * MIN), note('shorten', NOW - 2 * MIN)], NOW - MIN) }), [rebuilt]), CFG)
       expect(keys(r)).toEqual([`fixer:resume:${AT}:r1`])
       expect(find(r, `fixer:resume:${AT}:r1`)).toMatchObject({ instructions: 'shorten' })
+    })
+
+    test('a resume of a gate no adjudicator escalated asks the adjudicator, whatever notes the issue has', () => {
+      const notes = [note('use the second option', NOW - 3 * HOUR), note('shorten the PR body', NOW - 2 * MIN)]
+      expect(keys(plan(failedTest({ control: ctl(notes, NOW - MIN) }), CFG))).toEqual([`adjudicate:${AT}:r1`])
+      // the review cap: the resume allows one more round, judged by the adjudicator (P1, P2)
+      const capped = parkedReview({ control: ctl(notes, NOW - MIN) }, CFG.reviewFixCap)
+      expect(keys(plan(capped, CFG))).toEqual([`adjudicate:${AT45}:r1`])
     })
 
     test('the escalate tell says what a plain resume will do, in both variants', () => {
@@ -868,6 +879,10 @@ describe('M: merge', () => {
     const told = entry('tell:escalate:pr:550:head50', 'tell', { wake: 'escalate', issue: 50 })
     const s = mergeReady([guarded([], warn), escalated, told])
     expect(keys(plan(s, CFG))).toEqual([])
+    expect(find(plan(mergeReady([guarded([], warn), escalated]), CFG), 'tell:escalate:pr:550:head50')).toMatchObject({
+      rule: 'M3',
+      context: ['the brief does not say', 'a resume asks the adjudicator for a fresh test-weakening review', ...warn],
+    })
     const resumed = { ...s, control: control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - MIN }] }) }
     expect(keys(plan(resumed, CFG))).toEqual(['adjudicate-weakening:550:head50:r1'])
   })
