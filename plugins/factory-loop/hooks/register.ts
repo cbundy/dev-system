@@ -54,6 +54,7 @@ import {
   noticeTell,
   parseLease,
   passEnded,
+  pingsIgnored,
   releaseActLock,
   requestPass,
   roleProblem,
@@ -61,6 +62,25 @@ import {
 } from './rails'
 import type { BreakerNotice, LockIo, Notice, PassSource, RailEnv, RailMemory } from './rails'
 import { digestOf } from './state'
+import {
+  attemptOf,
+  begin,
+  byteLength,
+  carve,
+  cutLine,
+  lockTimed,
+  newTracer,
+  spent,
+  traceName,
+  traceRecord,
+  traceRoom,
+  tracedActIo,
+  tracedIo,
+  waitSince,
+  waitingRows,
+  wakeRows,
+} from './trace'
+import type { Tracer } from './trace'
 import type { Action, AgentStatus, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
@@ -120,6 +140,17 @@ let lastRt: Runtime | null = null
 let lastState: State | null = null
 // this session held the act lock at some pass, so session.end releases it
 let heldLock = false
+// what asked for the next pass, in the order it came: the decision log's trigger (#552)
+let asked: string[] = []
+const ASKED_MAX = 20
+// for the trace (#552): when each skip was first seen in a run of passes (trace.ts waitSince),
+// when each wake attempt's turn started, the ended wakes already reported, the last pass's start,
+// and the day and cap a trace file was cut short at
+let waits = new Map<string, Ms>()
+const delivered = new Map<string, Ms>()
+const reportedWakes = new Set<string>()
+let prevPassAt: Ms = 0
+let traceCut: string | null = null
 // agents whose answer is being handled, and when each was first listed completed (act.ts)
 const between: Between = { answering: new Set(), completedSeen: new Map() }
 let lastWakeAt = 0
@@ -184,9 +215,11 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
-  // the repo-local settings, durations and all (SPEC 4.2); what they get wrong is logged
+  // the repo-local settings, durations and all (SPEC 4.2); what they get wrong is logged. The
+  // workspace file's trace, which /factory trace writes, wins over the repo's (#552).
   const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)))
-  const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
+  const trace = typeof file.trace === 'boolean' ? file.trace : loaded.config.trace
+  const config: Config = { ...loaded.config, mode: mode as Config['mode'], trace }
   const loopDir = `${base}/${repo.replace('/', '__')}`
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
   const env: Record<string, string> = {
@@ -317,11 +350,13 @@ function fileIo($: EngineInterface): FileIo {
   return { readFile: path => text($, path), writeFile: (path, body) => $.fs.write(path, body) }
 }
 
-// lockIo: the act lock's reads and its one compare-and-set command (rails.ts LOCK_CAS_SCRIPT).
-function lockIo($: EngineInterface): LockIo {
+// lockIo: the act lock's reads and its one compare-and-set command (rails.ts LOCK_CAS_SCRIPT),
+// timed when a traced pass writes it.
+function lockIo($: EngineInterface, tr: Tracer | null = null): LockIo {
   return {
     readFile: path => text($, path),
-    cmd: (argv, init) => $.process.run(argv, init.stdin === undefined ? { timeoutMs: init.timeoutMs } : { stdin: init.stdin, timeoutMs: init.timeoutMs }),
+    cmd: (argv, init) =>
+      lockTimed(tr, () => $.process.run(argv, init.stdin === undefined ? { timeoutMs: init.timeoutMs } : { stdin: init.stdin, timeoutMs: init.timeoutMs })),
   }
 }
 
@@ -529,20 +564,24 @@ function stale(n: Notice, memory: RailMemory | null, now: Ms): boolean {
 // --- the scheduler (SPEC 2, D-39) ---------------------------------------------------------------
 
 // request: a timer tick or a ping asks for a pass; the scheduler decides when it starts. The
-// pass runs with the $ of whoever asked (a timer's closure, a hook's own).
-async function request($: EngineInterface, source: PassSource) {
+// pass runs with the $ of whoever asked (a timer's closure, a hook's own). `why` names the asker
+// for the pass's trigger; a ping the breaker ignores asks for nothing.
+async function request($: EngineInterface, source: PassSource, why: string) {
   if (headless) return
-  sched = requestPass(sched, source, await $.clock.now())
+  const now = await $.clock.now()
+  if (!(source === 'ping' && pingsIgnored(sched, now)) && !asked.includes(why) && asked.length < ASKED_MAX) asked.push(why)
+  sched = requestPass(sched, source, now)
   await step($)
 }
 
 // ask: request a pass with the $ the loop's timers run with, made once per load (ensure), so a
 // ping from a hook never runs a pass on that hook's own dispatch.
-let ask: ((source: PassSource) => void) | null = null
+let ask: ((source: PassSource, why: string) => void) | null = null
 
-// ping: an agent of the loop finished, a wake was answered, an owner control arrived.
-function ping() {
-  ask?.('ping')
+// ping: an agent of the loop finished (`agent <id>`), a wake was answered (`wake <id>`), an owner
+// control arrived (`owner <op>`).
+function ping(why: string) {
+  ask?.('ping', why)
 }
 
 async function step($: EngineInterface) {
@@ -550,7 +589,10 @@ async function step($: EngineInterface) {
   const r = nextPass(sched, now)
   sched = r.scheduler
   if (r.next.do === 'start') {
-    void runPass($, r.notice)
+    // every request since the last pass started is this one's trigger
+    const trigger = asked.length > 0 ? asked.join(', ') : 'timer'
+    asked = []
+    void runPass($, r.notice, trigger)
       .catch(() => undefined)
       .finally(() => {
         sched = passEnded(sched)
@@ -567,7 +609,7 @@ async function step($: EngineInterface) {
 function rearm($: EngineInterface, ms: Ms) {
   if (timer?.ms === ms) return
   timer?.cancel()
-  const t = $.clock.every(ms, () => void request($, 'timer').catch(() => undefined))
+  const t = $.clock.every(ms, () => void request($, 'timer', 'timer').catch(() => undefined))
   timer = { ms, cancel: () => t.cancel() }
 }
 
@@ -631,7 +673,9 @@ function bareState(rt: Runtime, now: Ms): State {
   }
 }
 
-async function runPass($: EngineInterface, breaker: BreakerNotice | null) {
+async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigger: string) {
+  // the pass's time runs from here, for the decision log and the trace (#552)
+  const t0 = performance.now()
   let rt: Runtime | undefined
   try {
     rt = await runtime($)
@@ -642,7 +686,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null) {
       await setTitle($, `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`)
     } else {
       passNo += 1
-      await pass($, rt, breaker)
+      await pass($, rt, breaker, trigger, t0)
     }
     failures = 0
     failingSince = null
@@ -652,7 +696,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null) {
     const now = await $.clock.now()
     failingSince ??= now
     if (rt !== undefined) {
-      await appendLine($, rt, { pass: passNo, error: String(err).slice(0, 500), failures })
+      await appendLine($, rt, { pass: passNo, trigger, ms: Math.round(performance.now() - t0), error: String(err).slice(0, 500), failures })
       const name = rt.repo.split('/')[1] ?? 'loop'
       const title = lastTitle === null ? `🔄 ${name} · error` : lastTitle.endsWith(' · error') ? lastTitle : `${lastTitle} · error`
       await setTitle($, title).catch(() => undefined)
@@ -676,12 +720,16 @@ async function tellError($: EngineInterface, rt: Runtime, now: Ms, error: string
   }
 }
 
-async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | null) {
+async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | null, trigger: string, t0: number) {
   const now = await $.clock.now()
+  // trace mode (#552): the pass's phases, every engine call it makes and its totals; null when off
+  const tr = rt.config.trace ? newTracer(() => performance.now(), t0, now) : null
   const keys = keysOf(rt.repo)
   const listed = await listAgents($)
   const commands: string[] = []
   const problems: string[] = []
+  const aio = tr === null ? actIo($) : tracedActIo(tr, actIo($))
+  const keepInStore = (key: string, value: unknown) => spent(tr, 'persistMs', () => storeSet($, key, value, problems))
   let railReasons: string[] = []
   let memory: RailMemory | null = null
   let book: NoticeBook = { pending: [], caps: [] }
@@ -690,8 +738,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   let sid = ''
 
   // the rails, at the start of every act-mode pass, before anything acts (SPEC 11.2)
+  begin(tr, 'rails')
   if (rt.mode === 'act') {
-    const aio = actIo($)
     sid = await $.session.id()
     const remembered = railMemoryFrom(await storeGet($, keys.rails))
     // the CLIs act on the checkout's own origin, the gh executors on rt.repo: they must be one
@@ -701,13 +749,13 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     // the rails' probes join the pass's command list; the lease's write does not
     const logged = commandOf(aio, rt, commands)
     const rails = await checkRails(
-      { cmd: (argv, init) => (argv[2] === LOCK_CAS_SCRIPT ? lockIo($).cmd(argv, init) : logged(argv, init)), readFile: aio.readFile },
+      { cmd: (argv, init) => (argv[2] === LOCK_CAS_SCRIPT ? lockIo($, tr).cmd(argv, init) : logged(argv, init)), readFile: aio.readFile },
       { repo: rt.repo, device: rt.device, session: sid, loopDir: rt.loopDir, config: rt.config, env: await railEnv($), now, memory: remembered, refusals },
     )
     memory = rails.memory
     railReasons = rails.reasons
     act = rails.act
-    if (JSON.stringify(rails.memory) !== JSON.stringify(remembered)) await storeSet($, keys.rails, rails.memory, problems)
+    if (JSON.stringify(rails.memory) !== JSON.stringify(remembered)) await keepInStore(keys.rails, rails.memory)
     if (rails.lock !== null && rails.lock.held) {
       heldLock = true
       // another session's lease ran out under it: the store holds its ledger, the truth now
@@ -730,6 +778,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
   // observe: act mode reads the store's ledger, backoff and queue list; anything else runs as
   // observe, its events to the sink
+  begin(tr, 'observe')
   const passRt = act ? rt : rt.mode === 'act' ? observing(rt) : rt
   let stored: Stored | undefined
   if (act) {
@@ -744,7 +793,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // A shadow watches another session: this module's own load says nothing about when that
   // session restarted, so the first-pass heartbeat (rule H1) is left to real lease timing.
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
-  const observed = await observe(io($, listed.agents), passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored)
+  const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored)
   let state = observed.state
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
@@ -754,7 +804,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     if (!holding) return false
     const path = actLockPath(rt.loopDir)
     // a save that found the lock another session's let the ledger go: nothing more acts on it
-    const lock = live.loaded ? await lockOp(async () => holdActLock(lockIo($), path, sid, await $.clock.now(), leaseMsOf(rt.config))) : null
+    const lock = live.loaded ? await lockOp(async () => holdActLock(lockIo($, tr), path, sid, await $.clock.now(), leaseMsOf(rt.config))) : null
     if (lock !== null && lock.held && lock.took === null) return true
     holding = false
     live.loaded = false
@@ -769,24 +819,27 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // a save writes only while this pass holds the lease, and persist checks it again
   const save = async (): Promise<boolean> => {
     if (act && !holding) return false
-    return persist($, rt)
+    return spent(tr, 'persistMs', () => persist($, rt))
   }
   const holds = () => (act ? renew() : Promise.resolve(holding))
-  const env: ActEnv = { io: actIo($), rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, problems }
+  const env: ActEnv = { io: aio, rt, live, commands, wakeId: () => wakeIdAt(state.now), session: sid, save, holds, problems }
 
   let report: ActReport | null = null
   let result: PlanResult
+  // when plan handed the actions over, for the trace
+  let queuedAt: Ms | null = null
   const told: string[] = []
   const renewal = act ? $.clock.every(rt.config.passEveryMs, () => void renew().catch(() => undefined)) : null
   try {
     if (act) {
+      begin(tr, 'act')
       // a lost store, rebuilt from the event log, becomes the ledger the loop keeps
       if (observed.ledgerSource === 'events' && live.ledger.length === 0 && state.ledger.length > 0) {
         live.ledger = [...state.ledger]
         live.logged = loggedOf(live.ledger)
         // a wake it rebuilt was open in an earlier session, which took its prompt along
         const moved = closeOrphans(sid, state.now)
-        await persist($, rt)
+        await spent(tr, 'persistMs', () => persist($, rt))
         await logLoop(env, moved)
       }
       // the restart for an update ran: the update is done, so the drain ends (rule H4)
@@ -794,6 +847,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
         state = { ...state, control: { ...state.control, updateDue: null } }
       }
       const acted = await actPass(env, state, listed, between)
+      carve(tr, 'plan', acted.planned.ms)
+      queuedAt = acted.planned.at
       state = acted.state
       result = acted.result
       report = acted.report
@@ -812,7 +867,9 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     } else {
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
+      begin(tr, 'plan')
       result = plan(state, config)
+      begin(tr, 'act')
       await setTitle($, result.title)
     }
 
@@ -837,7 +894,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
           return e === undefined || e.status === 'running' || e.status === 'lost'
         })
       }
-      if (JSON.stringify(book) !== booked) await storeSet($, keys.notices, book, problems)
+      if (JSON.stringify(book) !== booked) await keepInStore(keys.notices, book)
     }
   } finally {
     renewal?.cancel()
@@ -845,22 +902,28 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
-    if (observed.queueKnown !== null) await storeSet($, keys.known, observed.queueKnown, problems)
+    if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
     const limited = report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0
     const until = Math.max(state.githubBackoffUntil ?? 0, limited)
-    if (until > state.now) await storeSet($, keys.backoff, until, problems)
+    if (until > state.now) await keepInStore(keys.backoff, until)
   }
 
   if (act && saveProblem !== null) problems.push(`ledger: not saved, so nothing starts until a save succeeds: ${saveProblem}`)
+  // each skip keeps the time it was first seen while it lasts, for the trace's waits
+  waits = waitSince(waits, result.skipped, state.now)
   const digest = digestOf(state)
   const at = new Date(state.now).toISOString()
   const issues = state.issues
+  begin(tr, 'log')
   const line = {
     v: 1,
     at,
     pass: passNo,
     // pass numbers restart when the module reloads; the load time tells the runs apart
     loaded: new Date(loadedAt).toISOString(),
+    // what asked for the pass, and its time up to this line (#552)
+    trigger,
+    ms: Math.round(performance.now() - t0),
     mode: rt.mode,
     executed: act,
     device: rt.device,
@@ -919,8 +982,56 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     actions: line.actions.length,
     owner: result.owner,
   })
+  const ledger = act ? live.ledger : state.ledger
+  if (tr !== null) {
+    const wakes = wakeRows(ledger, delivered, reportedWakes, prevPassAt)
+    for (const attempt of wakes.reported) reportedWakes.add(attempt)
+    const record = traceRecord({
+      tr,
+      line: { at, pass: passNo, loaded: line.loaded, mode: rt.mode, executed: act, trigger },
+      state,
+      made: rt.runSource === 'events' ? ['runs', 'pool'] : [],
+      outcomes: report?.outcomes ?? [],
+      queuedAt,
+      wakes: wakes.rows,
+      waiting: waitingRows(state, result, ledger, waits),
+    })
+    await writeTrace($, rt, record).catch(() => undefined)
+  }
+  // the wake attempts a ledger let go are forgotten: the hooks time the live ledger's turns
+  if (delivered.size > 0) {
+    const held = new Set(live.ledger.map(attemptOf))
+    for (const attempt of delivered.keys()) if (!held.has(attempt)) delivered.delete(attempt)
+  }
+  if (reportedWakes.size > 0) {
+    const shown = new Set(ledger.map(attemptOf))
+    for (const attempt of reportedWakes) if (!shown.has(attempt)) reportedWakes.delete(attempt)
+  }
+  prevPassAt = state.now
   // the title says error until the store takes the ledger again (SPEC 10.9)
   if (act && saveProblem !== null) throw new Error(`ledger: not saved: ${saveProblem}`)
+}
+
+// writeTrace: the pass's trace record beside its decision log, within config traceMaxBytes
+// (trace.ts traceRoom): the oldest trace files go first, and today's is cut short rather than
+// pass the cap. A trace that cannot be written never fails the pass.
+async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string, unknown>) {
+  const at = String(record.at)
+  const day = at.slice(0, 10)
+  const cap = rt.config.traceMaxBytes
+  const line = JSON.stringify(record) + '\n'
+  const files = (await $.fs.list(rt.loopDir)).filter(e => e.kind === 'file')
+  const room = traceRoom(files, day, byteLength(line), cap, traceCut === `${day}:${cap}`)
+  if (room.remove.length > 0) {
+    const r = await $.process.run(['rm', '-f', '--', ...room.remove.map(name => `${rt.loopDir}/${name}`)], { timeoutMs: 10_000 })
+    if (r.exitCode !== 0) return
+  }
+  const path = `${rt.loopDir}/${traceName(day)}`
+  if (room.write === 'record') await append($, path, line)
+  if (room.write === 'cut') {
+    await append($, path, cutLine(at, cap))
+    traceCut = `${day}:${cap}`
+  }
 }
 
 function summaryOf(a: Action) {
@@ -990,7 +1101,10 @@ async function turnStarted($: EngineInterface, said: string, turnId: string) {
   if (!/^(JUDGE|TASK|TELL) /m.test(said)) return
   const rt = await ledgerFor($)
   if (rt === null) return
-  await wakeStarted(hookEnv($, rt, await $.clock.now()), said, turnId)
+  const now = await $.clock.now()
+  if (!(await wakeStarted(hookEnv($, rt, now), said, turnId))) return
+  // when each wake's turn first started, for its trace row (#552)
+  for (const e of live.ledger) if (e.turnId === turnId && !delivered.has(attemptOf(e))) delivered.set(attemptOf(e), now)
 }
 
 type TurnEnded = { turnId: string; answer: string; reason: 'answer' | 'aborted' | 'refusal' | 'error' }
@@ -1008,7 +1122,10 @@ async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
   }
   const problems = [...out.problems, ...env.problems]
   if (problems.length > 0) await appendLine($, rt, { turn: e.turnId, problems })
-  if (out.moved) ping()
+  if (out.moved) {
+    const ids = live.ledger.flatMap(x => (x.turnId === e.turnId && x.wakeId !== undefined ? [x.wakeId] : []))
+    ping(ids.length > 0 ? `wake ${ids.join(' ')}` : `turn ${e.turnId}`)
+  }
 }
 
 // turn.complete of an agent of the loop: its answer recorded (act.ts agentAnswered), then a ping.
@@ -1022,7 +1139,7 @@ async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: stri
   const why = r.why === undefined ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
   const problems = [...why, ...env.problems]
   if (problems.length > 0) await appendLine($, rt, { agent: e.agentId, problems })
-  if (r.result === 'applied') ping()
+  if (r.result === 'applied') ping(`agent ${e.agentId}`)
 }
 
 // atWork: the agent list shows the agent still at work (act-agents.ts stillAtWork). A list that
@@ -1086,7 +1203,7 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
     if (reply.retryIssue !== null) said = await retry($, reply.retryIssue)
     if (reply.ping) {
       await appendLine($, rt, { control: reply.logged, text: said })
-      ping()
+      ping(`owner ${reply.logged ?? ''}`)
     }
     return { ok: reply.ok, text: said }
   })
@@ -1112,7 +1229,7 @@ async function answer($: EngineInterface, input: Record<string, unknown>, agentI
     if (rt === null) return
     const r = await wakeAnswered(hookEnv($, rt, await $.clock.now()), input, agentId)
     reply = { ok: r.ok, text: r.text }
-    if (r.moved) ping()
+    if (r.moved) ping(`wake ${typeof input.id === 'string' ? input.id : '?'}`)
   })
   return reply
 }
@@ -1142,9 +1259,10 @@ async function registerControls($: EngineInterface) {
 function ensure($: EngineInterface) {
   started ??= (async () => {
     loadedAt = await $.clock.now()
-    ask = source => void request($, source).catch(() => undefined)
+    ask = (source, why) => void request($, source, why).catch(() => undefined)
     await registerControls($)
-    $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer').catch(() => undefined))
+    // the first pass after a load: a session start or a reload
+    $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))
     rearm($, DEFAULT_CONFIG.passEveryMs)
   })().catch(() => {
     started = undefined

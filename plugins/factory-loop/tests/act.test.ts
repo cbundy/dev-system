@@ -156,7 +156,7 @@ describe('runActions: the ledger around each executor (SPEC 7)', () => {
   test('start, executor, finish: a claim is done in the ledger, saved, with its outcome', async () => {
     const f = fake([])
     const report = await runActions(f.env, state(), [claim])
-    expect(report.outcomes).toEqual([{ key: 'claim:470:new', kind: 'claim', status: 'done', ms: 0, summary: 'claimed #470' }])
+    expect(report.outcomes).toEqual([{ key: 'claim:470:new', kind: 'claim', status: 'done', ms: 0, summary: 'claimed #470', at: NOW }])
     expect(f.env.live.ledger).toMatchObject([{ key: 'claim:470:new', status: 'done', attempts: 1, outcome: { kind: 'claim', result: 'claimed' } }])
     // saved running before the claim ran, then done
     expect(f.order).toEqual(['save', 'callum-flow-claim', 'save'])

@@ -100,9 +100,21 @@ Each change is logged and asks for a pass at once. The ops:
 - `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
 - `drop <N>`: abandon N and stop its agents;
 - `note [<N>] <text>`: an instruction the next agent prompts carry, for N or for all;
-- `mode off|observe|act`: written to the workspace file, from the next pass.
+- `mode off|observe|act`: written to the workspace file, from the next pass;
+- `trace on|off`: trace mode (below), written to the workspace file, from the next pass.
 
 A malformed op changes nothing and answers with its usage.
+
+## Trace mode
+
+Every decision-log line says what triggered its pass and how long it took (`trigger`, `ms`).
+For more, turn trace mode on: `/factory trace on`, `"trace": true` in the workspace file, or
+`"trace": true` in the repo's `.claude/factory-loop.json` (the workspace file wins). Each pass
+then writes one record to `trace-YYYY-MM-DD.jsonl` beside the decision log: each phase's time,
+every command with its time, exit and bytes, which sources came from the cache, each action's
+times, the wakes' latencies, and what each issue waits on and since when. The trace files are
+kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
+fills the cap is cut short. SPEC 12.1 explains each field, with `jq` examples.
 
 ## Pinned Claude Code version
 

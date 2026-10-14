@@ -3,8 +3,8 @@
 // reads it, applyOp returns the new Control (the old one is never changed) with the effects the
 // driver carries out and the one line the command or tool answers, and runOp makes the round
 // trip over ActIo's readFile and writeFile: `<loop dir>/control.json`, which observe reads each
-// pass, and the workspace config file for `mode`. Everything but runOp and its two file
-// wrappers is pure, so the tests and the replay harness drive it without the engine.
+// pass, and the workspace config file for `mode` and `trace`. Everything but runOp and its two
+// file wrappers is pure, so the tests and the replay harness drive it without the engine.
 import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
@@ -23,7 +23,7 @@ const NOTE_MAX = 2000
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode',
+  'update', 'drop', 'note', 'mode', 'trace',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -46,6 +46,7 @@ export const USAGE: Record<OpName, string> = {
   drop: 'drop <N>',
   note: 'note [<N>] <text>',
   mode: 'mode off|observe|act',
+  trace: 'trace on|off',
 }
 
 // What each op does, one line each, for `/factory help` (SPEC 4.3).
@@ -66,6 +67,7 @@ export const MEANING: Record<OpName, string> = {
   drop: 'abandon issue N: its agents stop and its claim is released',
   note: "an instruction for issue N's agents (for every issue without N)",
   mode: 'off runs nothing, observe plans and logs only, act does the work',
+  trace: "on: each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log",
 }
 
 // helpText: `/factory help`, in the shape of a command's --help, built from the same table the
@@ -91,7 +93,7 @@ export type Op =
   | { op: 'status' }
   | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop'; issue: number }
   | { op: 'priority' | 'only'; issues: number[] }
-  | { op: 'serial' | 'new'; on: boolean }
+  | { op: 'serial' | 'new' | 'trace'; on: boolean }
   // null: `override off`
   | { op: 'override'; until: { pct: number; hours: number } | null }
   // 'issue:<N>' or 'run:<id>', as plan's resumes() matches them
@@ -104,8 +106,8 @@ export type Op =
 export type Parsed = { ok: true; op: Op } | { ok: false; error: string }
 
 // What the driver carries out besides writing control.json: retryIssue through the ledger's
-// retryIssue (D-38), mode into the workspace config file (runOp does that one).
-export type Effects = { retryIssue?: number; mode?: Mode }
+// retryIssue (D-38), mode and trace into the workspace config file (runOp does those).
+export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean }
 
 export type Applied = { control: Control; effects: Effects; changed: boolean; text: string }
 
@@ -170,6 +172,7 @@ export function parseOp(text: string): Parsed {
     }
     case 'serial':
     case 'new':
+    case 'trace':
       return word === 'on' || word === 'off' ? { ok: true, op: { op: name, on: word === 'on' } } : bad(name)
     case 'override': {
       if (word === 'off') return { ok: true, op: { op: 'override', until: null } }
@@ -228,6 +231,7 @@ export function formatOp(op: Op): string {
       return `${op.op} ${op.issues.length === 0 ? 'off' : op.issues.join(' ')}`
     case 'serial':
     case 'new':
+    case 'trace':
       return `${op.op} ${op.on ? 'on' : 'off'}`
     case 'override':
       return op.until === null ? 'override off' : `override ${op.until.pct} ${op.until.hours}`
@@ -338,6 +342,13 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       )
     case 'mode':
       return keep(`Mode ${op.mode} set in the workspace config file; it applies from the next pass.`, { mode: op.mode })
+    case 'trace':
+      return keep(
+        op.on
+          ? "Trace on, in the workspace config file: from the next pass, each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log."
+          : "Trace off, in the workspace config file: from the next pass, the decision log alone carries each pass's time.",
+        { trace: op.on },
+      )
   }
 }
 
@@ -431,9 +442,10 @@ export function controlText(control: Control): string {
   return JSON.stringify(control, null, 2) + '\n'
 }
 
-// withMode: the workspace config file's text with `mode` set and every other key kept, in place.
-// A file that is not a JSON object is left alone: the owner's settings matter more than the op.
-export function withMode(text: string | null, mode: Mode): { ok: true; text: string } | { ok: false; error: string } {
+// withSetting: the workspace config file's text with one key set (`mode`, `trace`) and every
+// other key kept, in place. A file that is not a JSON object is left alone: the owner's settings
+// matter more than the op.
+export function withSetting(text: string | null, key: 'mode' | 'trace', value: Mode | boolean): { ok: true; text: string } | { ok: false; error: string } {
   let raw: unknown = {}
   if (text !== null && text.trim() !== '') {
     try {
@@ -443,7 +455,11 @@ export function withMode(text: string | null, mode: Mode): { ok: true; text: str
     }
   }
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'the workspace config file is not a JSON object' }
-  return { ok: true, text: JSON.stringify({ ...(raw as Record<string, unknown>), mode }, null, 2) + '\n' }
+  return { ok: true, text: JSON.stringify({ ...(raw as Record<string, unknown>), [key]: value }, null, 2) + '\n' }
+}
+
+export function withMode(text: string | null, mode: Mode): { ok: true; text: string } | { ok: false; error: string } {
+  return withSetting(text, 'mode', mode)
 }
 
 export type FileIo = Pick<ActIo, 'readFile' | 'writeFile'>
@@ -457,9 +473,9 @@ export async function writeControl(io: FileIo, loopDir: string, control: Control
   await io.writeFile(controlPath(loopDir), controlText(control))
 }
 
-export async function writeMode(io: FileIo, configDir: string, mode: Mode): Promise<string | null> {
+export async function writeSetting(io: FileIo, configDir: string, key: 'mode' | 'trace', value: Mode | boolean): Promise<string | null> {
   const path = configFilePath(configDir)
-  const next = withMode(await io.readFile(path), mode)
+  const next = withSetting(await io.readFile(path), key, value)
   if (!next.ok) return next.error
   await io.writeFile(path, next.text)
   return null
@@ -472,8 +488,8 @@ export type ControlPaths = { loopDir: string; configDir: string }
 // The caller: `last` for status; agentId when the tool call came from inside an agent's loop.
 export type OpFrom = { last?: PassSummary | null; agentId?: string }
 
-// What `/factory` or the tool answers. ping: something changed (control.json, the mode, or a
-// retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
+// What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
+// a retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
 // driver runs the ledger's retryIssue and may answer retryText in place of `text`.
 export type OpReply = {
   ok: boolean
@@ -520,14 +536,15 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   const applied = applyOp(loaded.control, op, now)
   try {
     if (applied.changed) await writeControl(io, paths.loopDir, applied.control)
-    if (applied.effects.mode !== undefined) {
-      const error = await writeMode(io, paths.configDir, applied.effects.mode)
+    for (const key of ['mode', 'trace'] as const) {
+      const value = applied.effects[key]
+      const error = value === undefined ? null : await writeSetting(io, paths.configDir, key, value)
       if (error !== null) return refused(`Not changed: ${error}.`, op)
     }
   } catch (err) {
     return refused(`Not changed: the write failed (${String(err).slice(0, 200)}).`, op)
   }
-  const ping = applied.changed || applied.effects.mode !== undefined || applied.effects.retryIssue !== undefined
+  const ping = applied.changed || applied.effects.mode !== undefined || applied.effects.trace !== undefined || applied.effects.retryIssue !== undefined
   return {
     ok: true,
     text: applied.text,
@@ -552,7 +569,7 @@ export async function controlTool(io: FileIo, paths: ControlPaths, input: unknow
 export const FACTORY_COMMAND: CommandSpec = {
   name: 'factory',
   description:
-    'Factory loop owner controls: status, pause, unpause, skip, noskip, priority, only, serial, new, override, resume, retry, update, drop, note, mode',
+    'Factory loop owner controls: status, pause, unpause, skip, noskip, priority, only, serial, new, override, resume, retry, update, drop, note, mode, trace',
   argumentHint: '<op>',
   immediate: true,
 }
@@ -572,7 +589,8 @@ export const CONTROL_TOOL: ToolSpec = {
     '(run past the usage tiers up to pct for hours); resume <N|run id> (release a hold on an issue or a run); ' +
     "retry <N> (clear N's exhausted actions); update [<reason>]|off (drain, then restart this workspace for an " +
     'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
-    'mode off|observe|act (only when the owner asks for that mode).',
+    "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
+    'trace file, for troubleshooting).',
   inputSchema: {
     type: 'object',
     properties: {

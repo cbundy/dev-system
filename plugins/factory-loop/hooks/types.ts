@@ -293,6 +293,11 @@ export type Config = {
   rateCaps: { start: number; spawn: number; wake: number; perIssueKind: number }
   // act mode without DEV_ROLE=orchestrator, for a testbed (SPEC 11.2)
   allowActOutsideOrchestrator: boolean
+  // one timing record per pass in trace-YYYY-MM-DD.jsonl (#552); the workspace file's own
+  // `trace`, which `/factory trace` writes, overrides the repo's
+  trace: boolean
+  // the trace files' total size: the oldest go first, and today's is cut short past it
+  traceMaxBytes: number
 }
 
 export type WakeKind = 'judge' | 'task' | 'tell'

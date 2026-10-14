@@ -92,6 +92,8 @@ export function host(on: On, opts: HostOptions = {}) {
     registered,
     agents,
     usage: [] as { kind: string; percentUsed: number }[],
+    // the directories $.fs.list read
+    listed: [] as string[],
     // the decision log's appends fail (a full disk), so every pass throws at its end
     failAppends: false,
     // $.agent.list() is refused while this is set
@@ -110,16 +112,29 @@ export function host(on: On, opts: HostOptions = {}) {
     passes(): Record<string, unknown>[] {
       return h.lines().filter(l => typeof l.digest === 'string')
     },
+    // the trace files' lines, oldest first (#552)
+    traces(): Record<string, unknown>[] {
+      return [...files.entries()]
+        .filter(([path]) => path.startsWith(`${LOOP_DIR}/trace-`))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .flatMap(([, body]) => body.split('\n').filter(l => l !== ''))
+        .map(l => JSON.parse(l) as Record<string, unknown>)
+    },
     last(): Record<string, unknown> {
       const all = h.passes()
       const line = all[all.length - 1]
       if (line === undefined) throw new Error('no pass line yet')
       return line
     },
-    // every command but the loop dir's own upkeep: the decision log's appends, the act lock's
-    // writes and the daily prune of its old files
+    // every command but the loop dir's own upkeep: the decision log's and the trace's appends, the
+    // act lock's writes, the daily prune of its old files and the trace cap's deletes
     commands(): Seen[] {
-      return seen.filter(s => !(s.argv[0] === 'sh' && (s.argv[2] ?? '').startsWith('mkdir -p')) && !(s.argv[0] === 'find' && (s.argv[1] ?? '').startsWith(LOOP_DIR)))
+      return seen.filter(
+        s =>
+          !(s.argv[0] === 'sh' && (s.argv[2] ?? '').startsWith('mkdir -p')) &&
+          !(s.argv[0] === 'find' && (s.argv[1] ?? '').startsWith(LOOP_DIR)) &&
+          !(s.argv[0] === 'rm' && (s.argv[3] ?? '').startsWith(`${LOOP_DIR}/`)),
+      )
     },
     events(): string[][] {
       return seen.filter(s => s.argv[0] === 'callum-flow-event').map(s => s.argv)
@@ -141,6 +156,19 @@ export function host(on: On, opts: HostOptions = {}) {
   on('fs.write', async ($, e) => {
     files.set(e.path, e.text)
     return { value: undefined }
+  })
+  // a directory's entries, each file with its size in bytes, as the engine lists them
+  on('fs.list', async ($, e) => {
+    h.listed.push(e.path)
+    const dir = `${e.path.replace(/\/+$/, '')}/`
+    const entries = new Map<string, { name: string; kind: 'file' | 'dir'; size: number; mtimeMs: number; isLink: boolean }>()
+    for (const [path, body] of files) {
+      if (!path.startsWith(dir)) continue
+      const [name = '', ...deeper] = path.slice(dir.length).split('/')
+      if (deeper.length > 0) entries.set(name, { name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false })
+      else entries.set(name, { name, kind: 'file', size: new TextEncoder().encode(body).length, mtimeMs: 0, isLink: false })
+    }
+    return { value: [...entries.values()] }
   })
   // $.store as the engine keeps it: values read back as their JSON round trip
   on('store.get', async ($, e) => {
@@ -169,6 +197,11 @@ export function host(on: On, opts: HostOptions = {}) {
       if (h.failAppends) return { deny: 'cat: write error: No space left on device' }
       const path = argv[4] ?? ''
       files.set(path, (files.get(path) ?? '') + (e.init?.stdin ?? ''))
+      return done({})
+    }
+    // rm -f -- <paths>: the trace cap's deletes (#552)
+    if (argv[0] === 'rm' && argv[1] === '-f' && argv[2] === '--') {
+      for (const path of argv.slice(3)) files.delete(path)
       return done({})
     }
     // the old-watcher rail asks whether a lock directory exists: one does when a file is under it
