@@ -581,9 +581,6 @@ function housekeeping(ctx: Ctx) {
 // slot leased again since is left alone, and its keys follow the lease, so a later lease on the
 // same path and branch (a reopened issue) is returned too. Every slot kept says why; a dirty one
 // tells the owner once per lease.
-// actions a dropped issue keeps: cleanup that returns the issue's resources still runs; work does not (G4)
-const DROPPED_KEEPS: string[] = ['abandon', 'stop-agent', 'tell', 'release-worktree']
-
 function returnSlot(ctx: Ctx, slot: Slot) {
   const kept = (issue: number | null, why: string) => skip(ctx, 'H3', issue, `slot ${slot.path} kept: ${why}`)
   const branch = slot.leaseBranch
@@ -2374,6 +2371,9 @@ function writesBranch(action: Action): boolean {
 function agentWriting(ctx: Ctx, issue: number): boolean {
   return ctx.state.ledger.some(e => e.issue === issue && (e.kind === 'delegate' || (e.kind === 'spawn' && e.agent === 'fixer')) && heldBy(ctx, e))
 }
+
+// actions a dropped issue keeps: cleanup that returns the issue's resources still runs; work does not (G4)
+const DROPPED_KEEPS: string[] = ['abandon', 'stop-agent', 'tell', 'release-worktree']
 
 function admit(ctx: Ctx): Action[] {
   const { state, config, tier } = ctx
