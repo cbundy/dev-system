@@ -131,14 +131,17 @@ function readFirst(type: AgentType): string {
 
 // Agents start in the session's directory, the factory's main checkout, which the loop and every
 // other agent read from. On the testbed a read-only adjudicator ran `git checkout` there and left
-// it detached on another issue's branch, so every agent is told plainly.
+// it detached on another issue's branch, so every agent is told plainly. On 2026-10-14 two
+// implementers copied the main-checkout paths a designer and explorer had cited and edited plugin
+// source there with `sed -i` and a python heredoc (#624), so the rule also forbids any write there
+// and says how paths map; callum-flow's forbid-main-checkout-write hook enforces it.
 // The loop reads an agent's first final message as its answer. On the testbed a designer started
 // its explorer in the background and ended its turn to wait, so its answer was a wait note.
 export const FOREGROUND_RULE =
   'Run any sub-agent you start in the foreground and wait for it there: your turn ends only with your final answer, given as asked below.'
 
 export const CHECKOUT_RULE =
-  'You start in the factory\'s main checkout: never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`, and do any work in a worktree of your own.'
+  'You start in the factory\'s main checkout, which the loop runs from: never edit, write or run a write command in it (no Edit or Write, `sed -i`, redirect, file-writing script, cp, mv or rm there), and never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`. Do any work in a worktree of your own: cd into it once at the start and use worktree-absolute paths from then on. Every main-checkout path in a brief or report maps to the same relative path in your worktree.'
 
 // Two incidents on 2026-10-14: an agent ran `claude remote-control --help`, which starts a session
 // and never exits, and others waited with `until ! pgrep -f <pattern>`, which matches its own shell.

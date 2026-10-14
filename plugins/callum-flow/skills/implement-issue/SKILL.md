@@ -73,6 +73,14 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   - never fall back to plain `git worktree`.
 - Do ALL work inside the worktree. Never use plain `git worktree` - always go
   through `treehouse` (directly, or via a repo's wrapper script).
+- Never edit, write or run a write command in the main checkout (the
+  directory you started in): no Edit or Write, `sed -i`, redirect,
+  file-writing script, `cp`, `mv` or `rm` there. `cd` into your worktree once,
+  right after bootstrap, and use worktree-absolute paths from then on. Every
+  main-checkout path in a brief or an explorer's report maps to the same
+  relative path in your worktree: `<main checkout>/plugins/x/a.ts` is
+  `<worktree>/plugins/x/a.ts`. A plugin-shipped hook refuses a sub-agent's
+  writes into the main checkout outside `.treehouse/`.
 - Never use `git stash`, including `list`/`show`. `refs/stash` is ONE ref
   shared by every worktree of the repo, so another agent's `git stash pop`
   can land on top of your changes, or yours can land on top of theirs - a
