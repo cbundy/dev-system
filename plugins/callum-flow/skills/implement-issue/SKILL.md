@@ -142,7 +142,8 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   works only in the call that started the process. Use `no-mistakes axi status` for a run.
 - Run only commands known to exit: bound exploratory commands with `timeout 30`, and never
   start a never-exiting command such as `claude remote-control`. Before handoff, kill every
-  background process you started, or wait for it to exit.
+  background process you started, or wait for it to exit, except the detached pipeline run
+  from section 6.
 
 ## 3. Verification discipline
 - Run targeted tests for the files you touched, using the repo's documented
