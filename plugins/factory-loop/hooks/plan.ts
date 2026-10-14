@@ -581,6 +581,9 @@ function housekeeping(ctx: Ctx) {
 // slot leased again since is left alone, and its keys follow the lease, so a later lease on the
 // same path and branch (a reopened issue) is returned too. Every slot kept says why; a dirty one
 // tells the owner once per lease.
+// actions a dropped issue keeps: cleanup that returns the issue's resources still runs; work does not (G4)
+const DROPPED_KEEPS: string[] = ['abandon', 'stop-agent', 'tell', 'release-worktree']
+
 function returnSlot(ctx: Ctx, slot: Slot) {
   const kept = (issue: number | null, why: string) => skip(ctx, 'H3', issue, `slot ${slot.path} kept: ${why}`)
   const branch = slot.leaseBranch
@@ -2403,7 +2406,7 @@ function admit(ctx: Ctx): Action[] {
     if (
       issue !== null &&
       control.dropped.some(d => d.issue === issue) &&
-      !['abandon', 'stop-agent', 'tell'].includes(action.kind)
+      !DROPPED_KEEPS.includes(action.kind)
     ) {
       skip(ctx, action.rule, issue, `owner: dropped (${action.kind})`)
       continue
