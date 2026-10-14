@@ -142,10 +142,11 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
 }
 
 // The fast-forward (rule M2, #551), run with `sh -c` from the main checkout: $1 the run's
-// branch, $2 the run's head. The pipeline commits in its own checkout and pushes, so the
+// branch, $2 the run's head, $3 the head origin's branch must be at: the run's head, or the head
+// the loop's own proven update-behind pushed over it (#595). The pipeline commits in its own checkout and pushes, so the
 // implementer's worktree sits behind the branch by exactly those commits and the guard fails
 // `head`. This moves each worktree on the branch to the run's head, only when origin's branch
-// is that head (fetched fresh), the worktree's head is an ancestor of it and nothing tracked is
+// is that expected head (fetched fresh), the worktree's head is an ancestor of the run head and nothing tracked is
 // uncommitted, and only by `git merge --ff-only`, so no commit or change can be lost. Untracked
 // files stay (a fast-forward that would overwrite one fails by itself). The merge runs none of the
 // repo's git hooks (a post-merge npm install could outlast the timeout). The main checkout (the
@@ -154,10 +155,10 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
 // exit 0, a `FORWARDED <from> <to> <path>` line per worktree moved, `CURRENT <head>` when none
 // lagged, or `REFUSED <why>`; anything else is a failure.
 export const FF_SCRIPT = [
-  'branch=$1 head=$2',
+  'branch=$1 head=$2 expect=$3',
   'git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" || { echo "factory-loop: cannot fetch origin/$branch" >&2; exit 1; }',
   'origin=$(git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")',
-  'if [ "$origin" != "$head" ]; then echo "REFUSED origin/$branch is ${origin:-unknown}, not the run head $head"; exit 0; fi',
+  'if [ "$origin" != "$expect" ]; then echo "REFUSED origin/$branch is ${origin:-unknown}, not the expected head $expect"; exit 0; fi',
   'list=$(git worktree list --porcelain) || exit 1',
   `main=$(printf '%s\\n' "$list" | awk '/^worktree / { print substr($0, 10); exit }')`,
   `paths=$(printf '%s\\n' "$list" | awk -v b="refs/heads/$branch" '/^worktree / { p = substr($0, 10) } /^branch / && substr($0, 8) == b { print p }')`,
@@ -167,7 +168,7 @@ export const FF_SCRIPT = [
   'set -f',
   'for p in $paths; do',
   `  at=$(git -C "$p" rev-parse --verify --quiet 'HEAD^{commit}') || { echo "REFUSED cannot read the head of $p"; exit 0; }`,
-  '  [ "$at" = "$head" ] && continue',
+  '  [ "$at" = "$head" ] || [ "$at" = "$origin" ] && continue',
   '  [ "$p" != "$main" ] || { echo "REFUSED $p is the main worktree, which the loop never moves"; exit 0; }',
   '  st=$(git -C "$p" status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of $p"; exit 0; }',
   '  [ -z "$st" ] || { echo "REFUSED $p has uncommitted changes"; exit 0; }',
@@ -182,8 +183,8 @@ export const FF_SCRIPT = [
   'done',
 ].join('\n')
 
-export function fastForwardArgv(branch: string, head: string): string[] {
-  return ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', branch, head]
+export function fastForwardArgv(branch: string, head: string, origin: string = head): string[] {
+  return ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', branch, head, origin]
 }
 
 // The main checkout's update (rule H5, #555), run with `sh -c` from the main checkout: $1 origin's
@@ -444,7 +445,8 @@ const fastForward: Executor = async (ctx, action) => {
   if (action.kind !== 'fast-forward') return wrongKind('fast-forward', action)
   if (!validBranch(action.branch)) return refused(`branch ${JSON.stringify(action.branch)} is not one to fast-forward`)
   if (!/^[0-9a-f]{7,64}$/.test(action.head)) return refused(`head ${JSON.stringify(action.head)} is not a commit`)
-  const argv = fastForwardArgv(action.branch, action.head)
+  if (!/^[0-9a-f]{7,64}$/.test(action.origin)) return refused(`origin head ${JSON.stringify(action.origin)} is not a commit`)
+  const argv = fastForwardArgv(action.branch, action.head, action.origin)
   const r = await run(ctx, argv, MERGE_TIMEOUT_MS['fast-forward'])
   if (!('exitCode' in r)) return r
   const f = parseFastForward(r.stdout)

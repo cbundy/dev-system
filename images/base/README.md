@@ -1513,7 +1513,7 @@ path stays `callum-flow-merge-guard <pr> --update-behind`. Tests: `CALLUM_FLOW_N
 The head guard also accepts different run and PR heads when that clean-run patch proof holds,
 origin equals the PR head, and every worktree on the PR branch is at either the gated head or
 the PR head. It prints `GUARD head PASS gated_patch=ID rebased_from=SHA`; other differences retain
-the `head` FAIL recovery. The proof ID hashes the ordered patch IDs; `rebased_from` is the gated
+the `head` FAIL recovery. When the proof was tried and failed, the `head` FAIL line carries its reason after `(run <id>)`, for example `proof: patch changed by the rebase`. The proof ID hashes the ordered patch IDs; `rebased_from` is the gated
 run head. `--emit-verified` adds these fields to `VERIFIED`, empty when the heads match. A proof
 passes only the head guard: CI on the new head and all other merge guards must still pass.
 

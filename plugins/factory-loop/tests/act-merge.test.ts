@@ -881,13 +881,16 @@ describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
     pr: 550,
     run: RUN,
     head: GATED,
+    origin: GATED,
     branch: BRANCH,
     ...over,
   })
 
-  test('one sh -c from the main checkout, with the branch and the run head as positional arguments', async () => {
-    expect(argvsOf(ff(), LOOP_DIR)).toEqual([['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED]])
-    expect(fastForwardArgv(BRANCH, GATED)).toEqual(['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED])
+  test('one sh -c from the main checkout, with the branch, the run head and the expected origin as positional arguments', async () => {
+    expect(argvsOf(ff(), LOOP_DIR)).toEqual([['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED, GATED]])
+    expect(fastForwardArgv(BRANCH, GATED, HANDOFF)).toEqual(['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', BRANCH, GATED, HANDOFF])
+    const rebased = await exec(ff({ origin: HANDOFF }), [{ stdout: `CURRENT ${GATED}\n` }])
+    expect(rebased.calls[0]?.argv.slice(-3)).toEqual([BRANCH, GATED, HANDOFF])
     const { calls } = await exec(ff(), [{ stdout: `CURRENT ${GATED}\n` }])
     expect(calls).toEqual([{ argv: fastForwardArgv(BRANCH, GATED), init: { timeoutMs: MERGE_TIMEOUT_MS['fast-forward'] } }])
   })
@@ -896,7 +899,7 @@ describe('fast-forward: a worktree the pipeline left behind (#551)', () => {
     expect(FF_SCRIPT).toContain('merge --ff-only')
     expect(FF_SCRIPT).toContain('status --porcelain --untracked-files=no')
     expect(FF_SCRIPT).toContain('merge-base --is-ancestor "$at" "$head"')
-    expect(FF_SCRIPT).toContain('if [ "$origin" != "$head" ]')
+    expect(FF_SCRIPT).toContain('if [ "$origin" != "$expect" ]')
     // the main checkout is never moved (rule G5 tells the owner instead)
     expect(FF_SCRIPT).toContain('[ "$p" != "$main" ] || { echo "REFUSED')
     expect(FF_SCRIPT).not.toMatch(/\b(push|reset|rebase|checkout|clean|stash)\b/)
