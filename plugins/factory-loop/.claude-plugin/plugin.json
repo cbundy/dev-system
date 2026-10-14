@@ -1,7 +1,7 @@
 {
   "name": "factory-loop",
   "displayName": "Factory loop",
-  "version": "0.38.0",
+  "version": "0.38.1",
   "description": "Draft, not yet shipped: the issue orchestrator as one deterministic code loop inside its Claude Code session. Every minute, or at once when an agent or the owner pings it, it reads the factory, plans, logs its decisions and shows its status in the session title. In act mode, once its safety rails pass, it claims, dispatches agents, drives pipeline gates, guards, merges and wakes the model for judgment calls; in observe mode (the default) it executes nothing.",
   "author": {
     "name": "Callum Bundy"

@@ -109,16 +109,11 @@ short summary of each under "Build decisions".
 
 ### D-64 A resumed environment escalation reruns the same head once (owner call)
 
-- **Decision**: owner, 2026-10-13, #537 option B. A narrow executor (`env-retry`, rule `P2a`)
-  runs `no-mistakes rerun` on the same head only when the owner has resumed the escalation and
-  every verdict on the failed step was `ENV`, at most once per resume. A repeat failure
-  escalates to the owner again, and a code failure is never rerun (SPEC 5.4, 6.1). To be
-  revisited if more environment-failure cases turn up. The agent's choices, 2026-10-14, approved
-  by the owner the same day: the kind is named `env-retry`, so the word `rerun` appears in the hooks only on
-  its one argv declaration; its single attempt is fixed whatever `maxAttempts` says, and
-  `/factory retry` never clears it, so only a resume allows another rerun; a rerun whose old run
-  still sits at the gate `respondSettleMs` later tells the owner again rather than asking an
-  adjudicator.
+- **Decision**: owner, 2026-10-13, #537 option B: a narrow `env-retry` executor reruns an
+  environment escalation on the same head once per resume. Amended by [D-76](#d-76-a-resumed-escalation-sends-a-fixer-unless-it-is-all-env-with-no-note)
+  for owner notes and other verdicts. Current routing lives in [SPEC 5.4](SPEC.md#54-pipeline-gates-p),
+  and the executor's launch restrictions and retry limits in [SPEC 6.1](SPEC.md#61-catalogue).
+  The agent's safety choices were approved by the owner on 2026-10-14.
 - **Alternatives**: option A, the resume becomes a `task(redrive)` for the model.
 - **Why**: on the testbed codex was logged out, so six runs failed at the test step. Every
   resume re-asked adjudicators about the stale failure, and only a hand rerun moved the runs.
@@ -1048,3 +1043,20 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   agent's running shell tasks as its loop exits, and the process groups of a loop that does not
   settle after the kill, so the loop needs no process access of its own. A process that detached
   from its shell (setsid, a daemon) outlives the stop; the owner's notice names the agent.
+
+### D-76 A resumed escalation sends a fixer unless it is all ENV with no note
+
+- **Decision** (the agent's choice, 2026-10-14; #596, amends D-64): a resumed gate escalation
+  sends a fixer for an owner instruction or recorded verdicts that are not all `ENV`, including
+  an empty verdict list. Environment retry remains available without an owner instruction;
+  missing adjudication details require a fresh adjudicator unless an owner instruction exists.
+  [SPEC rules P2, P2a and P2b](SPEC.md#54-pipeline-gates-p) own the eligibility, instruction
+  ordering and once-per-resume contract; P3 owns the notice context. The
+  [judge skill](../../plugins/factory-loop/skills/judge/SKILL.md#owner-chat)
+  owns how to record the owner's instruction before resuming.
+- **Why**: on #533 every verdict was `ENV` (the PR body was over the provider budget), the owner
+  noted the change and resumed, and D-64's rule reran the same head and then escalated again; no
+  fixer was ever planned. A code-failure escalation resumed with no note previously asked a new
+  adjudicator the same question.
+- **Alternatives**: read the notes inside `env-retry` (the rerun cannot change the PR body); a
+  `task` for the model on every resume (a model wake for a decision the planner can make).

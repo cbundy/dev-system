@@ -10,7 +10,7 @@ description: >-
   the owner). Use whenever a prompt's first line starts with JUDGE, TASK or
   TELL, when the owner gives the factory an instruction, and at the start of
   an orchestrator session the factory loop drives.
-version: 0.38.0
+version: 0.38.1
 ---
 
 # Judge
@@ -171,7 +171,11 @@ Owner items (the title counts them until resolved):
   it with `note <N> <answer>` and `resume <N>`, and the designer runs again.
 - `escalate` (issue, run or pr, brief; detail: why, verdicts or WARN lines): the adjudicator
   escalated a gate or a test-weakening warning. Owner decides; you `note <N>` and
-  `resume <run>`, or `drop <N>`.
+  `resume <run>`, or `drop <N>`. Tell the owner what a resume will do, as the tell's context
+  says; the routing and resume-note eligibility are defined in
+  [SPEC 5.4](../../../../docs/factory-loop/SPEC.md#54-pipeline-gates-p) for gates and
+  [SPEC 5.5](../../../../docs/factory-loop/SPEC.md#55-merge-m) for test-weakening warnings.
+  When the owner asks for a change, record `note <N>` after the escalation, then `resume <run>`.
 - `review-cap` (issue, run, rounds, brief; detail: verdicts): the run used all its review fix
   rounds. Owner reads the verdicts: `resume <run>` allows one more round, or fix it by hand.
 - `merge-hold` (issue, pr, run, head; detail: reason): the merge review or a sequencing call
@@ -248,7 +252,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
   drain); on lifts it.
 - `override <pct> <hours>`: run past the usage tiers up to pct, for hours.
 - `resume <N|run>`: release a hold: an issue (a pending decision) or a run (an escalation, the
-  review cap, a merge or guard hold).
+  review cap, a merge or guard hold). For an escalation, follow the owner-item instructions above.
 - `retry <N>`: clear N's exhausted actions so the loop tries again (D-38).
 - `drop <N>`: abandon N; the loop stops its agents.
 - `note [<N>] <text>`: an owner instruction the next agent prompts carry, for N or for all.

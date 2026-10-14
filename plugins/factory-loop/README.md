@@ -38,7 +38,7 @@ D). The plugin is not listed in the marketplace (DECISIONS D-02).
 | `/factory` and the control tool | `hooks/control.ts` | done |
 | The judge skill | `skills/judge/SKILL.md` | drafted; not yet tried on a real wake |
 | `--once` watcher modes, the `loop` event state | `features/src/callum-tools/`, `images/base/callum-flow-event` (repo root) | done; ship in the next base image release |
-| Tests | `tests/*.test.ts` (17 files) | 753 tests: scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
+| Tests | [tests/](tests/) | scenarios with the plan's properties on every plan, parsers, each executor, the rails, the driver in the engine's test host, the answer contract the script shares, and one issue from claim to merge |
 | Replay harness | `scripts/factory-loop-replay.js` (repo root) | done; results in `docs/factory-loop/REPLAY-REPORT.md` |
 
 ## Run it in observe mode
@@ -98,7 +98,10 @@ Each change is logged and asks for a pass at once. The ops:
 - `new on|off`: off starts no new claims, designs or implementations;
 - `override <pct> <hours>|off`: run past the usage tiers up to pct, for up to 168 hours;
 - `resume <N|run id>`: release a hold on an issue (a pending decision) or a run (an escalation,
-  a merge hold, the review cap);
+  a merge hold, the review cap). For an escalated gate, follow the notice's explanation of what
+  a plain resume will do. To request a change, record `note <N> <change>` after the escalation,
+  then `resume <run id>`; see [the gate rules](../../docs/factory-loop/SPEC.md#54-pipeline-gates-p)
+  for resume-note eligibility and routing;
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
 - `drop <N>`: abandon N and stop its agents;

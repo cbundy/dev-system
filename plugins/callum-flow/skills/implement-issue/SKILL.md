@@ -8,7 +8,7 @@ description: >-
   issue linkage, and handoff shape. Use this when you are a sub-agent that has
   been delegated a single issue to implement (as opposed to orchestrating a
   queue of issues).
-version: 0.38.0
+version: 0.38.1
 ---
 
 # Implement issue
@@ -105,6 +105,10 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   fresh slot on the run's branch.
 
 ## 2. Booting the app (only if you need it for evidence or manual checks)
+- Follow your prompt's command restrictions first. Factory-loop prompts include
+  [`COMMAND_RULE`](../../../factory-loop/hooks/prompts.ts), which prohibits starting
+  servers. In those sessions, skip the boot procedure below and report any manual
+  verification or evidence that this restriction blocks in your handoff.
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
   commands section or `scripts/` for something like `scripts/dev-server.sh`.
   A well-behaved boot script auto-selects a free port, launches the app in
@@ -137,7 +141,13 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   server runs from the wrong tree). Verify with `readlink /proc/<pid>/cwd`.
 - Judge a process or run by its own state, not a process list: `pgrep -f
   '<pattern>'` matches the Bash tool's wrapper, which carries the pattern in its
-  argv, so it reports a phantom hit. Use `no-mistakes axi status` for a run.
+  argv, so it reports a phantom hit, and a wait loop on it never ends. Wait on a PID you
+  recorded: poll `kill -0 "$pid"`, since each Bash call is a new shell and `wait "$pid"`
+  works only in the call that started the process. Use `no-mistakes axi status` for a run.
+- Run only commands known to exit: bound exploratory commands with `timeout 30`, and never
+  start a never-exiting command such as `claude remote-control`. Before handoff, kill every
+  background process you started, or wait for it to exit, except the detached pipeline run
+  from section 6.
 
 ## 3. Verification discipline
 - Run targeted tests for the files you touched, using the repo's documented
