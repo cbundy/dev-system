@@ -98,7 +98,10 @@ Each change is logged and asks for a pass at once. The ops:
 - `new on|off`: off starts no new claims, designs or implementations;
 - `override <pct> <hours>|off`: run past the usage tiers up to pct, for up to 168 hours;
 - `resume <N|run id>`: release a hold on an issue (a pending decision) or a run (an escalation,
-  a merge hold, the review cap);
+  a merge hold, the review cap). For an escalated gate, follow the notice's explanation of what
+  a plain resume will do. To request a change, record `note <N> <change>` after the escalation,
+  then `resume <run id>`; see [the gate rules](../../docs/factory-loop/SPEC.md#54-pipeline-gates-p)
+  for resume-note eligibility and routing;
 - `retry <N>`: let N's exhausted actions run again;
 - `update [<reason>]|off`: drain, then restart this workspace once nothing is in flight;
 - `drop <N>`: abandon N and stop its agents;
