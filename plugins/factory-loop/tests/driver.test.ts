@@ -1102,7 +1102,7 @@ describe('act mode: engine calls, timeouts and what may run (SPEC 4.2, 6.1, 8.2,
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=judge key=${judge} status=lost`))).toBe(true)
     // and it holds no other wake: the owner hears about the designer in the same pass
     expect(h.prompts.filter(p => p.startsWith('TELL agent-failed id=w'))).toHaveLength(1)
-    expect(h.last().skipped).not.toContainEqual(expect.stringContaining('a wake is open'))
+    expect((h.last().skipped as { why: string }[]).map(s => s.why)).not.toContain('a wake is open')
   })
 
   test('usage that crosses Stop all mid-pass skips the next token-spending action, with no attempt counted (SPEC 10.7)', async ($, on) => {
