@@ -59,6 +59,8 @@ export type HostOptions = {
   stop?: (taskId: string) => { deny?: string } | undefined | Promise<{ deny?: string } | undefined>
   // answers $.prompt.submit, at once or later; { drop } drops the prompt
   submit?: (text: string) => { drop?: string } | undefined | Promise<{ drop?: string } | undefined>
+  // answers $.session.send (an agent's repair message): undefined delivers it, a string refuses it
+  send?: (to: string, text: string) => string | undefined
 }
 
 export type Host = ReturnType<typeof host>
@@ -76,6 +78,8 @@ export function host(on: On, opts: HostOptions = {}) {
   const seen: Seen[] = []
   const titles: string[] = []
   const prompts: string[] = []
+  // the messages $.session.send delivered, to an agent's id
+  const sends: { to: string; text: string }[] = []
   const spawns: { subagentType?: string; name?: string; model?: string; prompt: string; description?: string }[] = []
   const stops: string[] = []
   const registered: string[] = []
@@ -87,6 +91,7 @@ export function host(on: On, opts: HostOptions = {}) {
     seen,
     titles,
     prompts,
+    sends,
     spawns,
     stops,
     registered,
@@ -189,6 +194,12 @@ export function host(on: On, opts: HostOptions = {}) {
     prompts.push(e.text)
     const r = await opts.submit?.(e.text)
     return r?.drop !== undefined ? { drop: r.drop } : { text: e.text }
+  })
+  on('session.send', async ($, e) => {
+    const refused = opts.send?.(e.to, e.text)
+    if (refused !== undefined) return { isDelivered: false, reason: refused }
+    sends.push({ to: e.to, text: e.text })
+    return { isDelivered: true }
   })
   on('command.run', async ($, e) => {
     if (e.command === 'rename') titles.push(e.args)

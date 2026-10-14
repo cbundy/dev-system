@@ -5,7 +5,7 @@
 // reference and no brief content may get through.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CHECKOUT_RULE, FOREGROUND_RULE, descriptionOf, nameOf, neutral, promptOf } from '../hooks/prompts'
+import { CHECKOUT_RULE, FOREGROUND_RULE, descriptionOf, nameOf, neutral, promptOf, repairPrompt } from '../hooks/prompts'
 import type { AgentAction, PromptEnv } from '../hooks/prompts'
 import { DESIGNER_RESULT, HANDOFF_RESULT } from '../hooks/replies'
 import type { AdjudicatorPurpose, FixerPurpose } from '../hooks/types'
@@ -255,7 +255,9 @@ describe('the adjudicator', () => {
     const text = render(adjudicator(BENIGN, 'gate'), BENIGN)
     expect(text).toContain('Adjudicate the review gate of run 01K7RRXQ7M2YB9ZB3J8N0V5F6D for issue #470')
     expect(text).toContain('Where: run 01K7RRXQ7M2YB9ZB3J8N0V5F6D, branch feat/issue-470-agents, head 3f2a9c1d4e, PR #512 (https://github.com/cbundy/dev-system/pull/512).')
-    expect(lastLine(text)).toBe('Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    // the verdict tool first (#548), its own output contract as the fallback, last
+    expect(text).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings and one action')
+    expect(lastLine(text)).toBe('If you cannot call it, reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
     // the adjudicator spawns nothing: no model line
     expect(text).not.toContain('Model override')
   })
@@ -344,6 +346,50 @@ describe('the fixer and the implementer', () => {
     expect(text).toContain('Load and follow the implement-issue skill for the how')
     expect(text).toContain('After the implement-issue handoff (its section 8)')
     expect(lastLine(text)).toBe(HANDOFF_RESULT)
+  })
+})
+
+describe('the answer tools and the repair message (#548)', () => {
+  test('every prompt asks for its own tool before its machine line, which stays the fallback, last', () => {
+    const designerText = render(designer(BENIGN), BENIGN)
+    expect(designerText).toContain('Once the brief is posted, answer by calling mcp__factory-loop__design with brief, created and pendingDecision (load it with ToolSearch first if it is listed by name only).')
+    expect(designerText.split('\n').slice(-2)).toEqual(['If you cannot call it, end your return with the line below, exactly once and last, filled in.', DESIGNER_RESULT])
+    const merge = render(adjudicator(BENIGN, 'merge'), BENIGN)
+    expect(merge).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags')
+    expect(merge).toContain('If you cannot call it, reply with exactly these lines and nothing else:')
+    expect(render(adjudicator(BENIGN, 'weakening'), BENIGN)).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings and one action')
+    for (const action of [delegate(BENIGN), fixer(BENIGN, 'conflict')]) {
+      const text = render(action, BENIGN)
+      expect(text).toContain('answer by calling mcp__factory-loop__handoff once, with run, head, commit, gated, branch and pr')
+      expect(text.split('\n').slice(-2)).toEqual(['If you cannot call it, end your final message with the line below, exactly once and last, filled in.', HANDOFF_RESULT])
+    }
+  })
+
+  test('repairPrompt: what was wrong, the tool again, and the machine lines as the fallback', () => {
+    expect(repairPrompt('adjudicator', 'gate', 'no ACTION line').split('\n')).toEqual([
+      'The factory loop could not read your answer: no ACTION line.',
+      'Do not redo the work. Call mcp__factory-loop__verdict now with the answer you reached (load it with ToolSearch first if it is listed by name only). If it returns an error, correct the call and call it again; once it is recorded, end your turn.',
+      'If you cannot call it, reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.',
+    ])
+    expect(repairPrompt('adjudicator', 'merge', 'a merge review needs its BUMP line')).toContain('one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.')
+    const designerText = repairPrompt('designer', null, 'no RESULT line')
+    expect(designerText).toContain('Call mcp__factory-loop__design now')
+    expect(lastLine(designerText)).toBe(DESIGNER_RESULT)
+    for (const type of ['implementer', 'fixer'] as const) {
+      const text = repairPrompt(type, null, 'no RESULT line, and it does not say NOT GATED')
+      expect(text).toContain('Call mcp__factory-loop__handoff now')
+      expect(lastLine(text)).toBe(HANDOFF_RESULT)
+    }
+  })
+
+  test('the repair message holds no closing keyword of its own, and neutralizes one the quoted line carries (I-33)', () => {
+    for (const type of ['designer', 'implementer', 'adjudicator', 'fixer'] as const) {
+      for (const purpose of [null, 'gate', 'merge'] as const) {
+        const text = repairPrompt(type, purpose, 'no RESULT line')
+        if (KEYWORD.test(text)) throw new Error(`${type} ${purpose}: ${text.match(KEYWORD)?.[0]} in ${JSON.stringify(text)}`)
+        for (const hostile of HOSTILE_TEXT) expect(repairPrompt(type, purpose, `a line that is not a contract line: "${hostile}"`)).not.toMatch(CLOSING_REF)
+      }
+    }
   })
 })
 

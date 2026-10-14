@@ -1,15 +1,19 @@
 // The agent executors (SPEC 6.1): `spawn` (designer, adjudicator, fixer) and `delegate` (route,
-// the `delegated` event, then the implementer), and onAgentAnswer, which reads an agent's
-// answer from its turn.complete into the outcome plan reads next pass. They decide nothing
-// (plan did): the prompt comes from prompts.ts and the reading of the reply from replies.ts,
-// both pure, and readAnswer below is pure too, so tests and the replay harness drive them
-// without the engine. Every answer is saved whole first (exec.ts answerPath), so a
-// judge(report) or judge(handoff) wake points the model at the file (SPEC 7.2).
+// the `delegated` event, then the implementer), and onAgentAnswer and onToolAnswer, which read
+// an agent's answer, from its turn.complete or its answer tool (#548), into the outcome plan
+// reads next pass. They decide nothing (plan did): the prompt comes from prompts.ts and the
+// reading of the reply from replies.ts and agent-tools.ts, all pure, and readAnswer and
+// readToolAnswer below are pure too, so tests and the replay harness drive them without the
+// engine. Every answer is saved whole first (exec.ts answerPath), so a judge(report) or
+// judge(handoff) wake points the model at the file (SPEC 7.2).
+import { TOOL_OF, checkDesign, checkHandoff, checkVerdict } from './agent-tools'
+import type { ToolCheck } from './agent-tools'
 import { answerPath, detailOf, rateLimited } from './exec'
 import type { AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunResult, SpawnInput } from './exec'
 import { descriptionOf, nameOf, promptOf } from './prompts'
 import type { AgentAction, InFlight, PromptEnv } from './prompts'
-import { isBriefUrl, parseAdjudicator, parseDesigner, parseHandoff } from './replies'
+import { isBriefUrl, readAdjudicator, readDesigner, readHandoff } from './replies'
+import type { AdjudicatorOutcome, DesignResult, HandoffOutcome } from './replies'
 import type { ActionKind, AdjudicatorPurpose, AgentStatus, AgentType, LedgerEntry, State } from './types'
 
 // callum-flow-implementer-route's timeout (SPEC 6.1: route 60 s).
@@ -163,7 +167,9 @@ export type AnswerInfo = {
   // the spawn record's purpose, when the key does not say
   purpose: AdjudicatorPurpose | null
 }
-export type AnswerRead = { exec: Exec; events: AgentEvent[] }
+// problem: what kept an answer from being read (no machine line), for the repair message (#548)
+export type AnswerRead = { exec: Exec; events: AgentEvent[]; problem: string | null }
+type AgentOutcome = DesignResult | AdjudicatorOutcome | HandoffOutcome
 
 // readAnswer: an agent's answer as an Exec, and the events its outcome logs (SPEC 7.3, 7.4):
 // - a turn that ended in error, aborted or refused is a failed attempt (SPEC 10.4);
@@ -174,39 +180,72 @@ export type AnswerRead = { exec: Exec; events: AgentEvent[] }
 // - an implementer's or fixer's handoff is done with its fields, or failed when it does not
 //   parse; a fixer that reports a branch other than the one it was sent to supersedes the old
 //   run (I-39).
+// A reply with no machine line says why, in its summary and in problem.
 export function readAnswer(entry: LedgerEntry, answer: AgentAnswer, info: AnswerInfo): AnswerRead {
   const type = agentOf(entry)
   const who = `${type ?? entry.kind} #${entry.issue ?? '?'}`
-  const failed = (summary: string, noRetry = false): AnswerRead => ({
+  const failed = (summary: string, problem: string | null = null, noRetry = false): AnswerRead => ({
     exec: noRetry ? { status: 'failed', summary: clip(summary), noRetry } : { status: 'failed', summary: clip(summary) },
     events: [],
+    problem,
   })
-  if (type === null) return failed(`${entry.key}: no agent entry`, true)
+  if (type === null) return failed(`${entry.key}: no agent entry`, null, true)
   if (answer.reason !== 'answer') return failed(`${who}: its turn ended: ${answer.reason}`)
   if (type === 'designer') {
-    const outcome = parseDesigner(answer.answer, info.repo, entry.issue)
-    const summary =
-      'unparsed' in outcome
-        ? `${who}: no RESULT line; the report is saved for judge(report)`
-        : `${who}: brief ${outcome.brief ?? 'none'}, created ${outcome.created.join(',') || 'none'}, pending decision ${outcome.pendingDecision ? 'yes' : 'no'}`
-    return { exec: { status: 'done', outcome, summary: clip(summary) }, events: [] }
+    const r = readDesigner(answer.answer, info.repo, entry.issue)
+    if (typeof r !== 'string') return doneRead(entry, type, r, info, 'text')
+    const exec: Exec = { status: 'done', outcome: { kind: 'designer', unparsed: true }, summary: clip(`${who}: ${r}; the report is saved for judge(report)`) }
+    return { exec, events: [], problem: r }
   }
   if (type === 'adjudicator') {
     const purpose = purposeOfKey(entry.key) ?? info.purpose
-    if (purpose === null) return failed(`${who}: ${entry.key} names no adjudicator purpose`, true)
-    const outcome = parseAdjudicator(answer.answer, purpose)
-    if (outcome === null) return failed(`${who}: the ${purpose} reply does not parse`)
+    if (purpose === null) return failed(`${who}: ${entry.key} names no adjudicator purpose`, null, true)
+    const r = readAdjudicator(answer.answer, purpose)
+    return typeof r === 'string' ? failed(`${who}: the ${purpose} reply does not parse: ${r}`, r) : doneRead(entry, type, r, info, 'text')
+  }
+  const r = readHandoff(answer.answer, type === 'fixer' ? info.branch : null)
+  return typeof r === 'string' ? failed(`${who}: the handoff does not parse: ${r}`, r) : doneRead(entry, type, r, info, 'text')
+}
+
+// readToolAnswer: an agent's answer through its tool (agent-tools.ts), read as readAnswer reads
+// its text: the same outcome and events, or why the call is refused (another agent's tool, an
+// input that breaks the contract), which the agent reads and corrects. Pure.
+export function readToolAnswer(entry: LedgerEntry, tool: string, input: unknown, info: AnswerInfo): AnswerRead | { refused: string } {
+  const type = agentOf(entry)
+  if (type === null) return { refused: `${entry.key} ran no agent` }
+  if (tool !== TOOL_OF[type]) return { refused: `${tool} is not the answer of a ${type}: call ${TOOL_OF[type]} instead` }
+  let check: ToolCheck<AgentOutcome>
+  if (type === 'designer') check = checkDesign(input, info.repo, entry.issue)
+  else if (type === 'adjudicator') {
+    const purpose = purposeOfKey(entry.key) ?? info.purpose
+    if (purpose === null) return { refused: 'the loop cannot tell which review this is: reply in your output contract instead' }
+    check = checkVerdict(input, purpose)
+  } else check = checkHandoff(input, type === 'fixer' ? info.branch : null)
+  return check.ok ? doneRead(entry, type, check.outcome, info, 'tool') : { refused: `${check.problems.join('; ')}. Correct the call and call ${tool} again` }
+}
+
+// doneRead: a read outcome as a done Exec and the events it logs, whichever channel gave it; a
+// tool answer says so in its summary.
+function doneRead(entry: LedgerEntry, type: AgentType, outcome: AgentOutcome, info: AnswerInfo, via: 'text' | 'tool'): AnswerRead {
+  const who = (inner: string[]) => {
+    const all = via === 'tool' ? [...inner, 'tool'] : inner
+    return `${type} #${entry.issue ?? '?'}${all.length === 0 ? '' : ` (${all.join(', ')})`}`
+  }
+  const done = (summary: string, events: AgentEvent[] = []): AnswerRead => ({ exec: { status: 'done', outcome, summary: clip(summary) }, events, problem: null })
+  if (outcome.kind === 'designer') {
+    return done(`${who([])}: brief ${outcome.brief ?? 'none'}, created ${outcome.created.join(',') || 'none'}, pending decision ${outcome.pendingDecision ? 'yes' : 'no'}`)
+  }
+  if (outcome.kind === 'adjudicator') {
+    const purpose = purposeOfKey(entry.key) ?? info.purpose ?? 'gate'
     const events = outcome.verdicts.map(line => ({
       state: 'verdict',
       fields: { issue: entry.issue, run: entry.run, branch: info.branch, note: line },
     }))
     const report = outcome.report === null ? '' : `, bump ${outcome.report.bump}, flags ${outcome.report.flags.join(',') || 'none'}`
-    const summary = `${who} (${purpose}): ACTION ${outcome.action.type}, ${outcome.verdicts.length} verdict line${outcome.verdicts.length === 1 ? '' : 's'}${report}`
-    return { exec: { status: 'done', outcome, summary: clip(summary) }, events }
+    const n = outcome.verdicts.length
+    return done(`${who([purpose])}: ACTION ${outcome.action.type}, ${n} verdict line${n === 1 ? '' : 's'}${report}`, events)
   }
   const named = type === 'fixer' ? info.branch : null
-  const outcome = parseHandoff(answer.answer, named)
-  if (outcome === null) return failed(`${who}: the handoff has no RESULT line and does not say NOT GATED`)
   const events: AgentEvent[] = []
   if (type === 'fixer' && outcome.newBranch !== null && named !== null && entry.run !== null) {
     events.push({ state: 'superseded', fields: { issue: entry.issue, run: entry.run, note: `by ${outcome.newBranch}` } })
@@ -214,7 +253,7 @@ export function readAnswer(entry: LedgerEntry, answer: AgentAnswer, info: Answer
   const parts = [`run ${outcome.run ?? 'none'}`, `head ${outcome.head ?? 'none'}`]
   if (outcome.notGated) parts.push('NOT GATED')
   if (outcome.newBranch !== null) parts.push(`branch ${outcome.newBranch}`)
-  return { exec: { status: 'done', outcome, summary: clip(`${who}: ${parts.join(', ')}`) }, events }
+  return done(`${who([])}: ${parts.join(', ')}`, events)
 }
 
 // --- an interim answer (#545) ----------------------------------------------------------------
@@ -241,33 +280,65 @@ export function stillAtWork(agents: readonly ListedLoop[], id: string): boolean 
 }
 
 // onAgentAnswer: an agent of the loop finished (its turn.complete). The answer is saved whole,
-// then read, and the events its outcome logs go out; the driver records the Exec. A failed save
-// or event is noted in the summary but keeps the reading: re-running an agent costs far more.
-export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<Exec> {
+// then read, and the events its outcome logs go out; the driver records the Exec, or first sends
+// the agent the repair message for the problem (act.ts agentAnswered). A failed save or event is
+// noted in the summary but keeps the reading: re-running an agent costs far more.
+export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: AgentAnswer): Promise<{ exec: Exec; problem: string | null }> {
   const notes: string[] = []
   try {
     await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), answer.answer)
   } catch (err) {
     notes.push(`answer not saved: ${message(err)}`)
   }
+  const read = readAnswer(entry, answer, await answerInfoOf(ctx, entry))
+  notes.push(...(await logEvents(ctx, read.events)))
+  return { exec: noted(read.exec, notes), problem: read.problem }
+}
+
+// onToolAnswer: an agent of the loop called its answer tool. A call the contract refuses changes
+// nothing; an accepted one is saved (the call's input, as JSON), its events go out, and the
+// driver records the Exec, as for an answer in text.
+export async function onToolAnswer(ctx: ExecCtx, entry: LedgerEntry, tool: string, input: unknown): Promise<{ exec: Exec } | { refused: string }> {
+  const read = readToolAnswer(entry, tool, input, await answerInfoOf(ctx, entry))
+  if ('refused' in read) return read
+  const notes: string[] = []
+  try {
+    await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), JSON.stringify({ tool, input }, null, 2))
+  } catch (err) {
+    notes.push(`answer not saved: ${message(err)}`)
+  }
+  notes.push(...(await logEvents(ctx, read.events)))
+  return { exec: noted(read.exec, notes) }
+}
+
+// answerInfoOf: what reading an answer needs beside the entry: the branch and purpose its spawn
+// record names. With no record, the run's branch in the state stands in.
+async function answerInfoOf(ctx: ExecCtx, entry: LedgerEntry): Promise<AnswerInfo> {
   let record: Pick<SpawnRecord, 'branch' | 'purpose'> | null = null
   try {
     record = parseRecord(await ctx.io.readFile(spawnRecordPath(ctx.rt.loopDir, entry.key)))
   } catch {
-    // no record: the run's branch in the state stands in
+    // no record
   }
   const branch = record?.branch ?? (entry.run === null ? null : (ctx.state.runs.find(r => r.run === entry.run)?.branch ?? null))
-  const read = readAnswer(entry, answer, { repo: ctx.rt.repo, branch, purpose: record?.purpose ?? null })
+  return { repo: ctx.rt.repo, branch, purpose: record?.purpose ?? null }
+}
+
+// logEvents: the events an outcome logs; a note when some could not be.
+async function logEvents(ctx: ExecCtx, events: readonly AgentEvent[]): Promise<string[]> {
   let missed = 0
-  for (const e of read.events) {
+  for (const e of events) {
     try {
       await ctx.event(e.state, e.fields)
     } catch {
       missed += 1
     }
   }
-  if (missed > 0) notes.push(`${missed} of ${read.events.length} events not logged`)
-  return notes.length === 0 ? read.exec : { ...read.exec, summary: clip(`${read.exec.summary}; ${notes.join('; ')}`) }
+  return missed > 0 ? [`${missed} of ${events.length} events not logged`] : []
+}
+
+function noted(exec: Exec, notes: readonly string[]): Exec {
+  return notes.length === 0 ? exec : { ...exec, summary: clip(`${exec.summary}; ${notes.join('; ')}`) }
 }
 
 // --- the executors --------------------------------------------------------------------------------

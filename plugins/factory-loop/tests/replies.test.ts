@@ -5,7 +5,19 @@
 // the RESULT line prompts.ts asks for. Each also against malformed ones.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { ACTIONS_FOR, isBriefUrl, parseAction, parseAdjudicator, parseDesigner, parseHandoff } from '../hooks/replies'
+import {
+  ACTIONS_FOR,
+  DESIGNER_RESULT,
+  HANDOFF_RESULT,
+  isBriefUrl,
+  parseAction,
+  parseAdjudicator,
+  parseDesigner,
+  parseHandoff,
+  readAdjudicator,
+  readDesigner,
+  readHandoff,
+} from '../hooks/replies'
 
 const REPO = 'cbundy/dev-system'
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-3301234567'
@@ -346,5 +358,36 @@ describe('parseHandoff (implement-issue section 8)', () => {
       'RESULT run=01K7S2;rm head=none commit=none gated=yes branch=feat/issue-470-x pr=none',
     ]
     for (const line of bad) expect(parseHandoff(line, null)).toBeNull()
+  })
+})
+
+describe('what kept a reply from parsing, for the repair message (#548)', () => {
+  test('readAdjudicator names the line or the missing piece', () => {
+    expect(readAdjudicator('WRONG: review-1 false positive.\nI checked the run and it looks fine.\nACTION: approve', 'gate')).toBe(
+      'a line after the first contract line that is not a contract line: "I checked the run and it looks fine."',
+    )
+    expect(readAdjudicator('- WRONG: review-1 false positive.\nACTION: approve', 'gate')).toBe('a contract line in the wrong shape: "- WRONG: review-1 false positive."')
+    expect(readAdjudicator('WRONG: review-1 false positive.', 'gate')).toBe('no ACTION line')
+    expect(readAdjudicator('ACTION: approve\nACTION: skip', 'gate')).toBe('more than one ACTION line')
+    expect(readAdjudicator('ACTION: approve --yes', 'gate')).toBe('the ACTION line does not read as any action the contract allows: "ACTION: approve --yes"')
+    expect(readAdjudicator('ACTION: merge', 'gate')).toBe('ACTION merge does not answer a gate review, which takes approve, fix, skip, fixer, escalate')
+    expect(readAdjudicator('ACTION: approve\nSUMMARY: x', 'weakening')).toBe('SUMMARY answers a merge review only, and this is a weakening review')
+    expect(readAdjudicator('ACTION: merge\nSUMMARY: x', 'merge')).toBe('a merge review needs its BUMP, FLAGS lines')
+    expect(readAdjudicator('ACTION: merge\nSUMMARY: x\nBUMP: huge\nFLAGS: none', 'merge')).toBe('the BUMP line is not patch, minor or major and its reason: "BUMP: huge"')
+    expect(readAdjudicator('ACTION: merge\nSUMMARY: x\nBUMP: patch a fix\nFLAGS: docs', 'merge')).toBe('the FLAGS line is not none or a comma list of image, template, restart, run-it: "FLAGS: docs"')
+    // what parses is the outcome parseAdjudicator gives
+    expect(readAdjudicator('DUP: review-3 handled.\nACTION: skip', 'gate')).toEqual(parseAdjudicator('DUP: review-3 handled.\nACTION: skip', 'gate'))
+  })
+
+  test('readDesigner and readHandoff say where the RESULT line went wrong', () => {
+    expect(readDesigner('Brief posted.', REPO, 470)).toBe('no RESULT line')
+    expect(readDesigner(`RESULT brief=${BRIEF} created=none pending_decision=no\nThanks!`, REPO, 470)).toBe('the RESULT line is not the last line')
+    expect(readDesigner('RESULT brief=none created=none', REPO, 470)).toBe(`the last line is not in the shape ${DESIGNER_RESULT}: "RESULT brief=none created=none"`)
+    expect(readDesigner(`RESULT brief=${BRIEF} created=none pending_decision=no`, REPO, 471)).toBe('brief= is neither none nor a comment URL on cbundy/dev-system issue 471')
+    expect(readDesigner('RESULT brief=none created=4a pending_decision=no', REPO, 470)).toBe('created= is neither none nor issue numbers joined by commas')
+    expect(readHandoff('All done.', null)).toBe('no RESULT line, and it does not say NOT GATED')
+    expect(readHandoff('RESULT run=01K7S2 head=xyz commit=none gated=yes branch=b pr=none', null)).toBe(
+      `the RESULT line is not in the shape ${HANDOFF_RESULT}: "RESULT run=01K7S2 head=xyz commit=none gated=yes branch=b pr=none"`,
+    )
   })
 })

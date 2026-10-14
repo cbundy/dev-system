@@ -11,6 +11,7 @@ import {
   GITHUB_KINDS,
   actPass,
   agentAnswered,
+  agentToolAnswered,
   capEventArgv,
   capKey,
   commandOf,
@@ -30,12 +31,13 @@ import {
 import type { ActEnv, Acted, Between, Live } from '../hooks/act'
 import { ACTION_KINDS } from '../hooks/config'
 import { controlText } from '../hooks/control'
+import { answerPath } from '../hooks/exec'
 import type { ActIo, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import { finish } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import type { Action, AgentStatus, LedgerEntry } from '../hooks/types'
-import { DEVICE, MIN, NOW, config, control, entry, mine, state } from './fixtures'
+import { DEVICE, MIN, NOW, config, control, entry, mine, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, checkout, factoryDoc, iso } from './host'
 import type { Seen } from './host'
 
@@ -369,7 +371,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toEqual(implementer)
     expect(f.saves).toEqual([])
     // the final answer has its machine line: recorded without asking the agent list
-    expect(await said('RESULT run=R1 head=abc1234 commit=abc1234 gated=yes branch=feat/issue-60-x pr=none')).toEqual({ result: 'applied' })
+    expect(await said('RESULT run=R1 head=abc1234 commit=abc1234 gated=yes branch=feat/issue-60-x pr=none')).toEqual({ result: 'applied', key: implementer.key, repaired: false })
     expect(asked).toEqual(['agent-1'])
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'done', outcome: { kind: 'handoff', run: 'R1' } })
 
@@ -377,8 +379,134 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const again = { ...implementer, status: 'running' as const, endedAt: null }
     f.env.live.ledger = [again]
     working = false
-    expect(await said('I could not finish.')).toEqual({ result: 'applied' })
+    expect(await said('I could not finish.')).toEqual({ result: 'applied', key: implementer.key, repaired: false })
     expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'failed' })
+  })
+
+  test('an unreadable reply gets one repair message from the same agent, spending no attempt; a second unreadable reply fails the attempt (#548)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([gate])
+    const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]) }
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    const sent: { to: string; text: string }[] = []
+    const repair = async (to: string, text: string) => (sent.push({ to, text }), null)
+    const said = (answer: string) => agentAnswered(f.env, s, { agentId: 'agent-1', answer, reason: 'answer' }, between, async () => false, repair)
+    // run 2's shape: a sound verdict, then a line of prose inside the contract
+    const prose = 'WRONG: review-1 the timeout is handled in parse.ts.\nI checked the run and it looks fine.\nACTION: approve'
+
+    expect(await said(prose)).toMatchObject({ result: 'repair', key: gate.key })
+    // the same agent is asked to answer again, told what was wrong; nothing is spent or spawned
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.to).toBe('agent-1')
+    expect(sent[0]?.text).toContain('mcp__factory-loop__verdict')
+    expect(sent[0]?.text).toContain('I checked the run and it looks fine.')
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'running', attempts: 1, agentId: 'agent-1', reminded: true })
+    // the pass after does not take the agent's completed listing before the resume as its end
+    expect(between.completedSeen.has('agent-1')).toBe(false)
+
+    // the repaired reply is unreadable again: now the attempt fails, with no second message
+    expect(await said(prose)).toMatchObject({ result: 'applied', key: gate.key, repaired: true })
+    expect(sent).toHaveLength(1)
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed', attempts: 1 })
+    expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('does not parse')
+  })
+
+  test('no repair goes to an agent still at work, nor to one the loop did not start (#548)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([gate])
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const s = state({ ledger: [] })
+    const sent: string[] = []
+    const repair = async (to: string) => (sent.push(to), null)
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'Still reading the logs.', reason: 'answer' }, between, async () => true, repair)).toMatchObject({ result: 'waiting' })
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-x', answer: 'Still reading the logs.', reason: 'answer' }, between, async () => false, repair)).toEqual({ result: 'not ours' })
+    expect(sent).toEqual([])
+    expect(f.env.live.ledger).toEqual([gate])
+  })
+
+  test('the answer tool: a valid call finishes its entry at once, with its events and its input saved; a second call and the closing words change nothing (#548)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const files = new Map<string, string>()
+    const f = fake([gate], () => ({}), { writeFile: async (p, t) => void files.set(p, t) })
+    const s = state({ runs: [runOf(60, 'parked', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
+    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve', reason: 'review-1 is a false positive' } }
+    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toEqual({
+      ok: true,
+      text: 'Recorded: adjudicator #60 (gate, tool): ACTION approve, 1 verdict line. End your turn now; no reply lines are needed.',
+      key: gate.key,
+      repaired: false,
+    })
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({
+      status: 'done',
+      attempts: 1,
+      outcome: { kind: 'adjudicator', verdicts: ['WRONG: review-1: the timeout is handled in parse.ts'], action: { type: 'approve', reason: 'review-1 is a false positive' }, report: null },
+    })
+    // its verdict event on the run's branch, then the entry's loop event
+    expect(f.calls.map(c => c.argv.slice(0, 2).join(' '))).toEqual(['callum-flow-event verdict', 'callum-flow-event loop'])
+    expect(f.calls[0]?.argv).toContain('feat/issue-60-x')
+    expect(JSON.parse(files.get(answerPath(LOOP_DIR, gate.key)) ?? '{}')).toEqual({ tool: 'mcp__factory-loop__verdict', input })
+    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toEqual({ ok: false, text: 'Not recorded: your answer is already recorded; end your turn.', key: gate.key })
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'I called the tool; all done.', reason: 'answer' }, between)).toEqual({ result: 'recorded', key: gate.key })
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'done', outcome: { action: { type: 'approve' } } })
+  })
+
+  test('the answer tool refuses the main conversation, an agent the loop does not wait on, another agent\'s tool and a broken contract, changing nothing (#548)', async () => {
+    const designer = entry('design:60:1', 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const stopped = entry('design:61:1', 'spawn', { agent: 'designer', class: 'develop', issue: 61, status: 'timed-out', agentId: 'agent-2' })
+    const f = fake([designer, stopped])
+    const s = state({ ledger: [] })
+    const call = (input: unknown, agentId: string | undefined, tool = 'mcp__factory-loop__design') => agentToolAnswered(f.env, s, tool, input, agentId)
+    const good = { brief: 'https://github.com/cbundy/dev-system/issues/60#issuecomment-1', created: [], pendingDecision: false }
+    expect(await call(good, undefined)).toEqual({ ok: false, text: 'Not recorded: this tool takes the answer of an agent the factory loop started, and the main conversation is none.' })
+    // the designer's own explorer, say
+    expect(await call(good, 'agent-explorer')).toEqual({ ok: false, text: 'Not recorded: the factory loop is waiting on no answer from this agent.' })
+    expect(await call(good, 'agent-2')).toEqual({ ok: false, text: 'Not recorded: the factory loop no longer waits on this agent (timed-out).', key: stopped.key })
+    expect(await call(good, 'agent-1', 'mcp__factory-loop__verdict')).toEqual({
+      ok: false,
+      text: 'Not recorded: mcp__factory-loop__verdict is not the answer of a designer: call mcp__factory-loop__design instead.',
+      key: designer.key,
+    })
+    const broken = await call({ brief: 'https://github.com/cbundy/dev-system/issues/61#issuecomment-1', created: [] }, 'agent-1')
+    expect(broken.ok).toBe(false)
+    expect(broken.text).toContain('is not a comment URL on cbundy/dev-system issue 60')
+    expect(broken.text).toContain('; pendingDecision must be true or false. Correct the call and call mcp__factory-loop__design again.')
+    expect(f.env.live.ledger).toEqual([designer, stopped])
+    expect(f.saves).toEqual([])
+    expect(f.calls).toEqual([])
+    // corrected in the same turn: recorded
+    expect(await call(good, 'agent-1')).toMatchObject({ ok: true, key: designer.key })
+    expect(f.env.live.ledger.find(e => e.key === designer.key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: good.brief }, summary: expect.stringContaining('designer #60 (tool): brief') })
+  })
+
+  test("a handoff through the tool after a repair: the fixer's new branch supersedes its run, and the answer says it followed the repair (#548)", async () => {
+    const fixer = entry('fixer:conflict:560:abc1234', 'spawn', { agent: 'fixer', class: 'drive', issue: 60, run: 'R60', pr: 560, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1', reminded: true })
+    const f = fake([fixer])
+    const s = state({ runs: [runOf(60, 'conflict', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
+    const r = await agentToolAnswered(f.env, s, 'mcp__factory-loop__handoff', { run: 'R61', head: 'abcdef1', commit: 'abcdef1', gated: true, branch: 'feat/issue-60-x-v2', pr: 561 }, 'agent-1')
+    expect(r).toMatchObject({ ok: true, repaired: true })
+    expect(f.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'handoff', notGated: false, run: 'R61', head: 'abcdef1', newBranch: 'feat/issue-60-x-v2' } })
+    expect(f.calls[0]?.argv).toEqual(['callum-flow-event', 'superseded', '--issue', '60', '--run', 'R60', '--note', 'by feat/issue-60-x-v2'])
+  })
+
+  test('a repair message that cannot be delivered fails the attempt as before; a turn that failed gets none (#548)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const sent: string[] = []
+    const gone = async (to: string) => (sent.push(to), 'the agent is gone')
+    const f = fake([gate])
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, gone)).toMatchObject({ result: 'applied' })
+    expect(sent).toEqual(['agent-1'])
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed' })
+    expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('the repair message was not delivered: the agent is gone')
+
+    const g = fake([gate])
+    const asked: string[] = []
+    const never = async (to: string) => (asked.push(to), null)
+    expect(await agentAnswered(g.env, s, { agentId: 'agent-1', answer: 'ACTION: approve', reason: 'error' }, between, async () => false, never)).toMatchObject({ result: 'applied' })
+    expect(asked).toEqual([])
+    expect(g.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed' })
   })
 
   test('transition reports exactly the entries it changed', () => {
@@ -620,7 +748,7 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=design:470:${claimedAt} status=running`))).toBe(true)
 
     // its answer: pass 3 delegates (route, the delegated event, the implementer on the routed model)
-    expect(await h.answer('agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)).toEqual({ result: 'applied' })
+    expect(await h.answer('agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)).toEqual({ result: 'applied', key: `design:470:${claimedAt}`, repaired: false })
     expect(h.entry(`design:470:${claimedAt}`)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF } })
     at(65)
     await h.pass()

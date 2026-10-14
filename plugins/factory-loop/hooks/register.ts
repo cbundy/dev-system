@@ -7,13 +7,15 @@
 // (the default), or while a rail holds act mode back, it executes nothing and every command's
 // event writes go to a sink (SPEC 11.1). Each pass appends one decision-log line and sets the
 // session title. This is the only module that holds $: it builds the engine calls the others
-// make, and wires the hooks that feed the ledger between passes (agents' answers, wake turns) and
-// the owner's controls (/factory, the control and answer tools).
+// make, and wires the hooks that feed the ledger between passes (agents' answers, in text or
+// through their answer tools, and their repair messages; wake turns) and the owner's controls
+// (/factory, the control and answer tools).
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
   actPass,
   agentAnswered,
+  agentToolAnswered,
   breakerEventArgv,
   capEventArgv,
   capKey,
@@ -29,8 +31,9 @@ import {
   wakeEnded,
   wakeStarted,
 } from './act'
-import type { ActEnv, ActReport, Between, Live } from './act'
+import type { ActEnv, ActReport, Answered, Between, Live, Repair } from './act'
 import { stillAtWork } from './act-agents'
+import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
@@ -77,6 +80,8 @@ const RENAME_TIMEOUT_MS = 10_000
 const SPAWN_TIMEOUT_MS = 60_000
 // the agent list an interim answer is checked against: a hang must not hold the hooks behind it
 const LIST_TIMEOUT_MS = 10_000
+// $.session.send resolves once the repair message is queued (#548); one that hangs is undelivered
+const REPAIR_TIMEOUT_MS = 10_000
 // $.prompt.submit resolves once its turn starts, which waits for the session to be idle: a wake
 // is taken as queued after this, so a busy session never holds a pass (a late drop still counts)
 const SUBMIT_GRACE_MS = 5_000
@@ -1012,17 +1017,43 @@ async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
 }
 
 // turn.complete of an agent of the loop: its answer recorded (act.ts agentAnswered), then a ping.
-// An interim answer is held while a fresh agent list shows the agent still at work (#545).
+// An interim answer is held while a fresh agent list shows the agent still at work (#545); an
+// unreadable one first gets its one repair message, while the loop may start things (#548). The
+// decision log says which path each answer took (answerLine).
 async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: string }) {
   const rt = await ledgerFor($)
   if (rt === null) return
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
-  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, id => atWork($, id))
-  const why = r.why === undefined ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
+  const repair: Repair = (await actsNow($, rt)) ? (id, text) => repairTo($, id, text) : async () => 'the loop starts nothing until its restart'
+  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, id => atWork($, id), repair)
+  const why = r.why === undefined || r.result === 'repair' ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
   const problems = [...why, ...env.problems]
-  if (problems.length > 0) await appendLine($, rt, { agent: e.agentId, problems })
+  const path = answerLine(r)
+  if (path !== null || problems.length > 0) await appendLine($, rt, { agent: e.agentId, ...path, problems: problems.length > 0 ? problems : undefined })
   if (r.result === 'applied') ping()
+}
+
+// answerLine: the path an agent's answer in text took, for its decision-log line: read ('text',
+// with how its entry ended), or asked again ('repair', with why); afterRepair marks an answer
+// that came after the repair message. The tool's path is agentTool's line.
+function answerLine(r: Answered): Record<string, unknown> | null {
+  if (r.key === undefined) return null
+  if (r.result === 'repair') return { key: r.key, answer: 'repair', why: r.why }
+  if (r.result !== 'applied') return null
+  const e = live.ledger.find(x => x.key === r.key)
+  return { key: r.key, answer: 'text', status: e?.status, summary: e?.summary, afterRepair: r.repaired === true ? true : undefined }
+}
+
+// repairTo: the one repair message to an agent of the loop, which resumes it with its transcript
+// if it has ended (#548); null once queued, else why not.
+async function repairTo($: EngineInterface, agentId: string, text: string): Promise<string | null> {
+  try {
+    const r = await within($, REPAIR_TIMEOUT_MS, $.session.send({ to: { agentId }, text }), 'repair message')
+    return r.isDelivered ? null : r.reason
+  } catch (err) {
+    return message(err)
+  }
 }
 
 // atWork: the agent list shows the agent still at work (act-agents.ts stillAtWork). A list that
@@ -1117,6 +1148,28 @@ async function answer($: EngineInterface, input: Record<string, unknown>, agentI
   return reply
 }
 
+// agentTool: an agent's answer tool (act.ts agentToolAnswered, #548): refused unless this session
+// keeps the ledger and the caller is an agent of the loop whose answer it waits on. Each call
+// gets a decision-log line: the answer's path ('tool'), or why it was refused.
+async function agentTool($: EngineInterface, tool: string, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
+  let reply: OpAnswer = { ok: false, text: 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.' }
+  await hook(async () => {
+    const rt = await ledgerFor($)
+    if (rt === null) return
+    const now = await $.clock.now()
+    const env = hookEnv($, rt, now)
+    const r = await agentToolAnswered(env, lastState ?? bareState(rt, now), tool, input, agentId)
+    reply = { ok: r.ok, text: r.text }
+    const path = r.ok ? { answer: 'tool', afterRepair: r.repaired === true ? true : undefined } : { answer: 'tool refused', why: r.text }
+    await appendLine($, rt, { agent: agentId, tool, key: r.key, ...path, problems: env.problems.length > 0 ? env.problems : undefined })
+    if (r.ok) ping()
+  })
+  return reply
+}
+
+const agentReply = (r: OpAnswer) => (r.ok ? { result: r.text } : { deny: r.text })
+const AGENT_TOOL_FAILED = { deny: 'factory-loop: the answer could not be recorded; reply with your text lines instead.' }
+
 // toolInput: a tool call's own arguments, without the envelope the engine adds.
 function toolInput(e: Record<string, unknown>): Record<string, unknown> {
   const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...input } = e
@@ -1128,7 +1181,8 @@ async function registerControls($: EngineInterface) {
   // own command
   const command = () =>
     $.command.register({ name: 'factory', description: FACTORY_COMMAND.description, argumentHint: FACTORY_COMMAND.argumentHint, immediate: FACTORY_COMMAND.immediate })
-  for (const register of [command, () => $.tool.register(CONTROL_TOOL), () => $.tool.register(ANSWER_TOOL)]) {
+  const agentTools = AGENT_TOOLS.map(spec => () => $.tool.register(spec))
+  for (const register of [command, () => $.tool.register(CONTROL_TOOL), () => $.tool.register(ANSWER_TOOL), ...agentTools]) {
     try {
       await register()
     } catch {
@@ -1207,6 +1261,17 @@ export const register: Register = (on, opts) => {
     const r = await answer($, toolInput(e), e.agentId)
     return r.ok ? { result: r.text } : { deny: r.text }
   }).catch(($, e, next) => (next.called ? next(e) : { deny: 'factory-loop: the answer could not be recorded.' }))
+
+  // the agents' answer tools (#548), each name written out like the others'
+  on('tool.call', { tool: 'mcp__factory-loop__verdict' }, async ($, e) => agentReply(await agentTool($, VERDICT, toolInput(e), e.agentId))).catch(
+    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
+  )
+  on('tool.call', { tool: 'mcp__factory-loop__design' }, async ($, e) => agentReply(await agentTool($, DESIGN, toolInput(e), e.agentId))).catch(
+    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
+  )
+  on('tool.call', { tool: 'mcp__factory-loop__handoff' }, async ($, e) => agentReply(await agentTool($, HANDOFF, toolInput(e), e.agentId))).catch(
+    ($, e, next) => (next.called ? next(e) : AGENT_TOOL_FAILED),
+  )
 }
 
 // for the tests

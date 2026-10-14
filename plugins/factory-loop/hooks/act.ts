@@ -2,18 +2,20 @@
 // what an act-mode pass does once observe has read the factory (what the agent list proves,
 // wakes past their timeout, plan, then plan's actions in order: start each ledger entry,
 // pre-check usage for a token-spending class, run the executor, finish the entry with what it
-// reported), and what the hooks between passes do to the ledger (an agent's answer, a wake's
-// turn, the answer tool, `/factory retry`). Every entry that moves gets its `loop` event, once.
+// reported), and what the hooks between passes do to the ledger (an agent's answer, in text or
+// through its answer tool, a wake's turn, the wake answer tool, `/factory retry`). Every entry
+// that moves gets its `loop` event, once.
 // register.ts holds $, builds the ActIo and keeps the store; everything here works through the
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
 // executor, with a recording fake.
 import { cliExecutors } from './act-cli'
-import { agentExecutors, interim, onAgentAnswer } from './act-agents'
+import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
 import type { Runtime } from './observe'
 import { plan } from './plan'
+import { repairPrompt } from './prompts'
 import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
 import type { Action, ActionKind, AgentStatus, Control, LedgerEntry, Ms, PlanResult, State } from './types'
@@ -405,42 +407,108 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
 
 // --- between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4) ----------------------------
 
+// The one repair message to an agent of the loop: null once delivered, else why not.
+export type Repair = (agentId: string, text: string) => Promise<string | null>
+
+// What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
+// out before it), 'repair' (unreadable, so the agent was asked once more), 'waiting' (interim),
+// 'recorded' (its tool already answered), 'dropped' or 'not ours'. key: its entry.
+export type Answered = { result: 'applied' | 'repair' | 'waiting' | 'recorded' | 'dropped' | 'not ours'; why?: string; key?: string; repaired?: boolean }
+
 // agentAnswered: an agent of the loop finished (its turn.complete): its answer is read into the
 // outcome (act-agents.ts onAgentAnswer, which logs its verdict and superseded events) and its
 // entry finished. 'applied' asks for a pass. An agent the ledger never held is 'not ours'; an
 // answer for an entry that no longer runs (an A1 stop timed it out, a retry replaced it) is
-// logged and dropped, never applied. An interim answer (no machine line, #545) from an agent
-// atWork finds still at work leaves its entry running for its next answer, up to its timeout
-// (rule A1); atWork is asked only then.
+// logged and dropped, never applied, and the closing words of an agent whose tool already
+// answered change nothing. An interim answer (no machine line, #545) from an agent atWork finds
+// still at work leaves its entry running for its next answer, up to its timeout (rule A1); atWork
+// is asked only then. A final answer with no machine line first gets one repair message to the
+// same agent, naming what was wrong (#548): the entry runs on with its attempt unspent, and only
+// an answer still unreadable after it, or a message that could not be delivered, fails the
+// attempt (or sends the designer's report to the model, rule D3) as before.
 export async function agentAnswered(
   env: ActEnv,
   state: State,
   answer: AgentAnswer,
   between: Between,
   atWork: (agentId: string) => Promise<boolean> = async () => false,
-): Promise<{ result: 'applied' | 'not ours' | 'dropped' | 'waiting'; why?: string }> {
+  repair: Repair = async () => 'the loop sends no messages from here',
+): Promise<Answered> {
   const id = answer.agentId
   const entry = env.live.ledger.find(e => e.agentId === id && (e.kind === 'spawn' || e.kind === 'delegate'))
   if (entry === undefined) return { result: 'not ours' }
+  if (entry.status === 'done') return { result: 'recorded', key: entry.key }
   if (entry.status !== 'running') return { result: 'dropped', why: `late answer for ${entry.key} (${entry.status})` }
   between.answering.add(id)
   try {
-    const exec = await onAgentAnswer(ctxOf(env, state, entry), entry, answer)
-    const now = await env.io.now()
-    const current = env.live.ledger.find(e => e.key === entry.key)
-    if (current === undefined || current.agentId !== id || current.status !== 'running' || current.startedAt !== entry.startedAt) {
-      return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
+    const read = await onAgentAnswer(ctxOf(env, state, entry), entry, answer)
+    let exec = read.exec
+    const still = () => {
+      const current = env.live.ledger.find(e => e.key === entry.key)
+      return current !== undefined && current.agentId === id && current.status === 'running' && current.startedAt === entry.startedAt ? current : null
     }
+    const current = still()
+    if (current === null) return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
     if (interim(answer, exec) && (await atWork(id))) {
       return { result: 'waiting', why: `interim answer for ${entry.key}: the agent still works, so its final answer is awaited` }
     }
+    const repaired = current.reminded === true
+    const type = agentOf(entry)
+    if (interim(answer, exec) && !repaired && type !== null) {
+      const problem = read.problem ?? 'no machine line'
+      // the repair is on the entry before it goes out, so a reload never sends a second one
+      const at = await env.io.now()
+      const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
+      await env.save()
+      await logLoop(env, marked)
+      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem))
+      if (undelivered === null) {
+        // listed completed until the message resumes it: the passes count that listing afresh
+        between.completedSeen.delete(id)
+        return { result: 'repair', why: problem, key: entry.key }
+      }
+      exec = { ...exec, summary: clip(`${exec.summary}; the repair message was not delivered: ${undelivered}`) }
+      if (still() === null) return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
+    }
+    const now = await env.io.now()
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()
     await logLoop(env, moved)
-    return { result: 'applied' }
+    return { result: 'applied', key: entry.key, repaired }
   } finally {
     between.answering.delete(id)
   }
+}
+
+// What an answer tool's call did: ok and the text the agent reads; key: the entry it answered.
+export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?: boolean }
+
+// agentToolAnswered: an agent's answer tool (agent-tools.ts, #548), tied to the entry that
+// spawned it by the call's agentId. Only an agent whose entry still runs may answer: the main
+// conversation, an agent the loop did not start (an implementer's own sub-agents among them) and
+// one whose answer is in are refused. A call the contract refuses changes nothing and tells the
+// agent what to correct; an accepted one finishes the entry at once, as its text would (its
+// turn's closing words are then not read). Both channels share the reading, so a tool answer
+// means exactly what the same answer in text means.
+export async function agentToolAnswered(env: ActEnv, state: State, tool: string, input: unknown, agentId: string | undefined): Promise<ToolAnswered> {
+  const no = (why: string, key?: string): ToolAnswered => (key === undefined ? { ok: false, text: `Not recorded: ${why}.` } : { ok: false, text: `Not recorded: ${why}.`, key })
+  if (agentId === undefined) return no('this tool takes the answer of an agent the factory loop started, and the main conversation is none')
+  const entry = env.live.ledger.find(e => e.agentId === agentId && (e.kind === 'spawn' || e.kind === 'delegate'))
+  if (entry === undefined) return no('the factory loop is waiting on no answer from this agent')
+  if (entry.status !== 'running') {
+    return no(entry.status === 'done' ? 'your answer is already recorded; end your turn' : `the factory loop no longer waits on this agent (${entry.status})`, entry.key)
+  }
+  const r = await onToolAnswer(ctxOf(env, state, entry), entry, tool, input)
+  if ('refused' in r) return no(r.refused, entry.key)
+  const current = env.live.ledger.find(e => e.key === entry.key)
+  if (current === undefined || current.agentId !== agentId || current.status !== 'running' || current.startedAt !== entry.startedAt) {
+    return no('the factory loop stopped waiting on this agent meanwhile', entry.key)
+  }
+  const now = await env.io.now()
+  const moved = transition(env.live, l => finish(l, entry.key, r.exec, now, { config: env.rt.config }))
+  await env.save()
+  await logLoop(env, moved)
+  return { ok: true, text: `Recorded: ${r.exec.summary}. End your turn now; no reply lines are needed.`, key: entry.key, repaired: current.reminded === true }
 }
 
 const WAKE_HEAD = /^(JUDGE|TASK|TELL) /m

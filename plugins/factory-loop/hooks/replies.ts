@@ -1,12 +1,15 @@
 // The agents' replies, parsed: the designer's RESULT line (SPEC 7.2), the adjudicator's verdict
 // and ACTION lines with the merge review's report (SPEC 7.3, plugins/callum-flow/agents/
 // adjudicator.md), and the implementer's and fixer's handoff (the RESULT line prompts.ts asks
-// for after the implement-issue handoff). Pure: text in, an Outcome or null out. A reply that is
-// not the contract is unparseable, never guessed: act-agents.ts records it as a failed attempt,
-// except the designer's, which goes to the model as judge(report) (rule D3).
+// for after the implement-issue handoff). Pure: text in, an Outcome or null out; each read*
+// says instead what kept a reply from parsing, for the one repair message (#548). A reply that
+// is not the contract is unparseable, never guessed: act-agents.ts records it as a failed
+// attempt, except the designer's, which goes to the model as judge(report) (rule D3). The same
+// contracts as tool inputs are agent-tools.ts's.
 import type { AdjudicatorAction, AdjudicatorPurpose, Bump, MergeFlag, MergeReport, Outcome } from './types'
 
 export type DesignerOutcome = Extract<Outcome, { kind: 'designer' }>
+export type DesignResult = Exclude<DesignerOutcome, { unparsed: true }>
 export type AdjudicatorOutcome = Extract<Outcome, { kind: 'adjudicator' }>
 export type HandoffOutcome = Extract<Outcome, { kind: 'handoff' }>
 
@@ -14,11 +17,12 @@ export type HandoffOutcome = Extract<Outcome, { kind: 'handoff' }>
 export const DESIGNER_RESULT = 'RESULT brief=<comment URL|none> created=<n1,n2|none> pending_decision=<yes|no>'
 export const HANDOFF_RESULT = 'RESULT run=<id|none> head=<sha|none> commit=<sha|none> gated=<yes|no> branch=<name> pr=<n|none>'
 
+export const VERDICTS = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'] as const
 const VERDICT_LINE = /^(CORRECT|WRONG|NIT|ENV|DUP):\s*\S/
 // a contract word with decoration around it (`- WRONG:`, `**ACTION**:`, `` `NIT`: ``), then its colon
 const MISSHAPEN_LINE = /^\W*(CORRECT|WRONG|NIT|ENV|DUP|ACTION|SUMMARY|BUMP|FLAGS)\W*:/
-const BUMPS: readonly Bump[] = ['patch', 'minor', 'major']
-const FLAGS: readonly MergeFlag[] = ['image', 'template', 'restart', 'run-it']
+export const BUMPS: readonly Bump[] = ['patch', 'minor', 'major']
+export const FLAGS: readonly MergeFlag[] = ['image', 'template', 'restart', 'run-it']
 
 // The ACTIONs that answer each purpose. A gate or a test-weakening review never merges or
 // holds (types.ts, D-05); a merge review never drives the run's gate. escalate stays open to
@@ -42,6 +46,13 @@ function bare(line: string): string {
   return line.length > 1 && line.startsWith('`') && line.endsWith('`') ? line.slice(1, -1).trim() : line
 }
 
+// A reply's line quoted in a problem, cut to a readable length.
+function quote(line: string): string {
+  return JSON.stringify(line.length > 120 ? `${line.slice(0, 117)}...` : line)
+}
+
+const parsed = <T>(r: T | string): T | null => (typeof r === 'string' ? null : r)
+
 // isBriefUrl: a brief comment's URL on an issue of this repo (on that issue, when given).
 export function isBriefUrl(url: string, repo: string, issue: number | null = null): boolean {
   const m = url.match(/^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)#issuecomment-\d+$/)
@@ -57,13 +68,21 @@ const DESIGNER_LINE = /^RESULT\s+brief=(\S+)\s+created=(\S+)\s+pending_decision=
 // designed issue of this repo. Anything else is { unparsed: true }: judge(report) hands the
 // model the saved report and asks for the fields.
 export function parseDesigner(answer: string, repo: string, issue: number | null): DesignerOutcome {
-  const unparsed: DesignerOutcome = { kind: 'designer', unparsed: true }
-  const last = lines(answer).pop()
+  return parsed(readDesigner(answer, repo, issue)) ?? { kind: 'designer', unparsed: true }
+}
+
+// readDesigner: parseDesigner's result, or what kept the report from parsing.
+export function readDesigner(answer: string, repo: string, issue: number | null): DesignResult | string {
+  const all = lines(answer)
+  const last = all[all.length - 1]
   const m = last === undefined ? null : bare(last).match(DESIGNER_LINE)
-  if (m === null) return unparsed
+  if (last === undefined || m === null) {
+    if (last !== undefined && /^RESULT\b/.test(bare(last))) return `the last line is not in the shape ${DESIGNER_RESULT}: ${quote(last)}`
+    return all.some(l => /^RESULT\b/.test(bare(l))) ? 'the RESULT line is not the last line' : 'no RESULT line'
+  }
   const [, briefRaw = '', createdRaw = '', pending] = m
-  if (briefRaw !== 'none' && !isBriefUrl(briefRaw, repo, issue)) return unparsed
-  if (createdRaw !== 'none' && !/^[1-9]\d*(,[1-9]\d*)*$/.test(createdRaw)) return unparsed
+  if (briefRaw !== 'none' && !isBriefUrl(briefRaw, repo, issue)) return `brief= is neither none nor a comment URL on ${repo} issue ${issue ?? '<N>'}`
+  if (createdRaw !== 'none' && !/^[1-9]\d*(,[1-9]\d*)*$/.test(createdRaw)) return 'created= is neither none nor issue numbers joined by commas'
   const created = createdRaw === 'none' ? [] : [...new Set(createdRaw.split(',').map(Number))]
   return { kind: 'designer', brief: briefRaw === 'none' ? null : briefRaw, created, pendingDecision: pending === 'yes' }
 }
@@ -74,8 +93,13 @@ export function parseDesigner(answer: string, repo: string, issue: number | null
 // purpose merge exactly one each of SUMMARY, BUMP and FLAGS. Any other line, an ACTION the
 // purpose does not take, or a second ACTION makes the reply unparseable (rule P2 retries it).
 export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): AdjudicatorOutcome | null {
+  return parsed(readAdjudicator(answer, purpose))
+}
+
+// readAdjudicator: parseAdjudicator's result, or what kept the reply from parsing.
+export function readAdjudicator(answer: string, purpose: AdjudicatorPurpose): AdjudicatorOutcome | string {
   const verdicts: string[] = []
-  const actions: (AdjudicatorAction | null)[] = []
+  const actions: { line: string; action: AdjudicatorAction | null }[] = []
   let summary: string | null = null
   let bump: { bump: Bump; reason: string } | null = null
   let flags: MergeFlag[] | null = null
@@ -87,7 +111,7 @@ export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): A
   let started = false
   for (const line of lines(answer)) {
     if (!started && !VERDICT_LINE.test(line) && !/^(ACTION|SUMMARY|BUMP|FLAGS):/.test(line)) {
-      if (MISSHAPEN_LINE.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return null
+      if (MISSHAPEN_LINE.test(line) || /^[A-Z]{2,}:/.test(line) || line.startsWith('```')) return `a contract line in the wrong shape: ${quote(line)}`
       continue
     }
     started = true
@@ -97,30 +121,37 @@ export function parseAdjudicator(answer: string, purpose: AdjudicatorPurpose): A
     }
     const act = line.match(/^ACTION:\s*(.*)$/)
     if (act !== null) {
-      actions.push(parseAction(act[1] ?? ''))
+      actions.push({ line, action: parseAction(act[1] ?? '') })
       continue
     }
-    if (purpose !== 'merge') return null
     const report = line.match(/^(SUMMARY|BUMP|FLAGS):\s*(.*)$/)
-    if (report === null) return null
+    if (report === null) return `a line after the first contract line that is not a contract line: ${quote(line)}`
     const [, name, value = ''] = report
+    if (purpose !== 'merge') return `${name} answers a merge review only, and this is a ${purpose} review`
     if (name === 'SUMMARY') {
-      if (summary !== null || value === '') return null
+      if (summary !== null) return 'more than one SUMMARY line'
+      if (value === '') return 'an empty SUMMARY line'
       summary = value
     } else if (name === 'BUMP') {
       const parsed = parseBump(value)
-      if (bump !== null || parsed === null) return null
+      if (bump !== null) return 'more than one BUMP line'
+      if (parsed === null) return `the BUMP line is not patch, minor or major and its reason: ${quote(line)}`
       bump = parsed
     } else {
       const parsed = parseFlags(value)
-      if (flags !== null || parsed === null) return null
+      if (flags !== null) return 'more than one FLAGS line'
+      if (parsed === null) return `the FLAGS line is not none or a comma list of ${FLAGS.join(', ')}: ${quote(line)}`
       flags = parsed
     }
   }
-  const action = actions.length === 1 ? actions[0] : null
-  if (action === null || action === undefined || !ACTIONS_FOR[purpose].includes(action.type)) return null
+  const only = actions.length === 1 ? actions[0] : undefined
+  if (only === undefined) return actions.length === 0 ? 'no ACTION line' : 'more than one ACTION line'
+  const action = only.action
+  if (action === null) return `the ACTION line does not read as any action the contract allows: ${quote(only.line)}`
+  if (!ACTIONS_FOR[purpose].includes(action.type)) return `ACTION ${action.type} does not answer a ${purpose} review, which takes ${ACTIONS_FOR[purpose].join(', ')}`
   if (purpose !== 'merge') return { kind: 'adjudicator', verdicts, action, report: null }
-  if (summary === null || bump === null || flags === null) return null
+  const missing = [summary === null ? 'SUMMARY' : '', bump === null ? 'BUMP' : '', flags === null ? 'FLAGS' : ''].filter(n => n !== '')
+  if (summary === null || bump === null || flags === null) return `a merge review needs its ${missing.join(', ')} line${missing.length === 1 ? '' : 's'}`
   const report: MergeReport = { summary, bump: bump.bump, bumpReason: bump.reason, flags }
   return { kind: 'adjudicator', verdicts, action, report }
 }
@@ -147,7 +178,7 @@ function parseFlags(value: string): MergeFlag[] | null {
 }
 
 const FIX_FLAGS = ['--findings', '--instructions', '--add-finding'] as const
-const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/
+export const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/
 const APPROVE_FLAGS = ['--reason'] as const
 
 // parseAction: what follows `ACTION:`, by the definition's contract: `approve [--reason <text>]`,
@@ -280,19 +311,21 @@ function jsonEnd(text: string, i: number): number | null {
 
 const HANDOFF_LINE = /^RESULT\s+run=(\S+)\s+head=(\S+)\s+commit=(\S+)\s+gated=(yes|no)\s+branch=(\S+)\s+pr=(\S+)$/
 
-type HandoffFields = { run: string | null; head: string | null; commit: string | null; gated: boolean; branch: string | null; pr: number | null }
+export type HandoffFields = { run: string | null; head: string | null; commit: string | null; gated: boolean; branch: string | null; pr: number | null }
+
+// The shape of each handoff id, as a RESULT line or the handoff tool gives it.
+export const HANDOFF_SHAPES = { run: /^[A-Za-z0-9_-]+$/, sha: /^[0-9a-f]{7,40}$/i, branch: /^[A-Za-z0-9._/-]+$/ }
 
 // handoffFields: one RESULT line's fields, each checked for its shape, or null.
 function handoffFields(line: string): HandoffFields | null {
   const m = bare(line).match(HANDOFF_LINE)
   if (m === null) return null
   const [, run = '', head = '', commit = '', gated, branch = '', pr = ''] = m
-  const sha = /^[0-9a-f]{7,40}$/i
   const shapes: [string, RegExp][] = [
-    [run, /^[A-Za-z0-9_-]+$/],
-    [head, sha],
-    [commit, sha],
-    [branch, /^[A-Za-z0-9._/-]+$/],
+    [run, HANDOFF_SHAPES.run],
+    [head, HANDOFF_SHAPES.sha],
+    [commit, HANDOFF_SHAPES.sha],
+    [branch, HANDOFF_SHAPES.branch],
     [pr, /^#?\d+$/],
   ]
   if (shapes.some(([v, shape]) => v !== 'none' && !shape.test(v))) return null
@@ -318,11 +351,24 @@ function sameSha(a: string, b: string): boolean {
 // one the spawn named (an implementer is named none). With no RESULT line, the words NOT GATED
 // still say enough for rule D5; anything else is unparseable.
 export function parseHandoff(answer: string, namedBranch: string | null): HandoffOutcome | null {
-  const found = lines(answer).map(handoffFields).filter(f => f !== null)
+  return parsed(readHandoff(answer, namedBranch))
+}
+
+// readHandoff: parseHandoff's result, or what kept the handoff from parsing.
+export function readHandoff(answer: string, namedBranch: string | null): HandoffOutcome | string {
+  const all = lines(answer)
+  const found = all.map(handoffFields).filter(f => f !== null)
   const fields = found[found.length - 1]
   if (fields === undefined) {
-    return /\bNOT GATED\b/.test(answer) ? { kind: 'handoff', notGated: true, run: null, head: null, newBranch: null } : null
+    if (/\bNOT GATED\b/.test(answer)) return { kind: 'handoff', notGated: true, run: null, head: null, newBranch: null }
+    const misshapen = all.filter(l => /^RESULT\b/.test(bare(l))).pop()
+    return misshapen === undefined ? 'no RESULT line, and it does not say NOT GATED' : `the RESULT line is not in the shape ${HANDOFF_RESULT}: ${quote(misshapen)}`
   }
+  return handoffOutcome(fields, namedBranch)
+}
+
+// handoffOutcome: what a handoff's fields mean, from either channel.
+export function handoffOutcome(fields: HandoffFields, namedBranch: string | null): HandoffOutcome {
   const mismatch = fields.head !== null && fields.commit !== null && !sameSha(fields.head, fields.commit)
   const named = namedBranch === null || namedBranch === '' ? null : namedBranch
   return {

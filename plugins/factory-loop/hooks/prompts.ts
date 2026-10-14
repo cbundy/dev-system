@@ -5,10 +5,13 @@
 // line the loop parses (replies.ts). Never a brief's content: a brief travels as its URL only,
 // and anything else in its place is dropped. Never a GitHub closing keyword before an issue
 // reference (I-33): the template text uses none of the words, every id is checked for its
-// shape, and free text (notes, instructions, guard and verdict lines) is neutralized. Pure, so
+// shape, and free text (notes, instructions, guard and verdict lines) is neutralized. Each agent
+// is asked to answer through its tool (agent-tools.ts, #548), with the machine line as the
+// fallback; the one repair message for an answer the loop could not read is here too. Pure, so
 // tests/prompts.test.ts renders every template with hostile inputs.
+import { DESIGN, HANDOFF, TOOL_OF, VERDICT } from './agent-tools'
 import { DESIGNER_RESULT, HANDOFF_RESULT, isBriefUrl } from './replies'
-import type { Action, AgentType, FixerPurpose } from './types'
+import type { Action, AdjudicatorPurpose, AgentType, FixerPurpose } from './types'
 
 export type SpawnAction = Extract<Action, { kind: 'spawn' }>
 export type DelegateAction = Extract<Action, { kind: 'delegate' }>
@@ -121,7 +124,7 @@ function readFirst(type: AgentType): string {
 // The loop reads an agent's first final message as its answer. On the testbed a designer started
 // its explorer in the background and ended its turn to wait, so its answer was a wait note.
 export const FOREGROUND_RULE =
-  'Run any sub-agent you start in the foreground and wait for it there: your turn ends only with your final message, the one that ends with the line asked for below.'
+  'Run any sub-agent you start in the foreground and wait for it there: your turn ends only with your final answer, given as asked below.'
 
 export const CHECKOUT_RULE =
   'You start in the factory\'s main checkout: never check out, switch, reset, stash or commit in it. Read another branch with `git show` or `git diff origin/<branch>`, and do any work in a worktree of your own.'
@@ -136,12 +139,23 @@ function scratch(n: number | null): string {
   return `Scratch: keep temporary files in the ${dir} subdirectory of your scratchpad directory, never at its top level: other agents share the scratchpad.`
 }
 
-// The handoff's machine line (replies.ts parseHandoff), after implement-issue section 8.
+// toolAsk: the answer through the agent's tool (agent-tools.ts), which checks it while the agent
+// can still correct it; the machine line after it stays the fallback.
+function toolAsk(ask: string): string {
+  return `${ask} (load it with ToolSearch first if it is listed by name only). If it returns an error, correct the call and call it again; once it is recorded, end your turn.`
+}
+
+// The handoff's tool and its machine line (replies.ts parseHandoff), after implement-issue
+// section 8.
 const HANDOFF_ASK = [
-  'After the implement-issue handoff (its section 8), end your final message with the line below, exactly once and last, filled in.',
-  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only when head equals commit, or when you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none.',
+  toolAsk(`After the implement-issue handoff (its section 8), answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
+  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only when head equals commit, or when you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none. In the tool, none is null and yes is true.',
+  'If you cannot call it, end your final message with the line below, exactly once and last, filled in.',
   HANDOFF_RESULT,
 ]
+
+// The adjudicator's fallback, its own output contract (a merge review's lines are its prompt's).
+const CONTRACT = 'reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
 
 // --- the templates ---------------------------------------------------------------------------
 
@@ -186,7 +200,8 @@ function designer(repo: string | null, n: number | null, notes: readonly string[
     ...block('Owner notes:', notes),
     ...modelLine(env.modelOverride),
     scratch(n),
-    'End your return with the line below, exactly once and last, filled in.',
+    toolAsk(`Once the brief is posted, answer by calling ${DESIGN} with brief, created and pendingDecision`),
+    'If you cannot call it, end your return with the line below, exactly once and last, filled in.',
     DESIGNER_RESULT,
   ]
 }
@@ -201,7 +216,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
   const where = [run === null ? null : `run ${run}`, branch === null ? null : `branch ${branch}`, head === null ? null : `head ${head}`]
     .filter(w => w !== null)
     .join(', ')
-  const contract = 'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
+  const contract = [toolAsk(`Answer by calling ${VERDICT} once, with your findings and one action`), `If you cannot call it, ${CONTRACT}`]
   if (a.purpose === 'gate') {
     const step = id(a.step, 'step')
     return [
@@ -212,7 +227,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
       ...briefLines(repo, a.brief, n),
       readFirst('adjudicator'),
       scratch(n),
-      contract,
+      ...contract,
     ]
   }
   if (a.purpose === 'weakening') {
@@ -224,7 +239,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
       ...briefLines(repo, a.brief, n),
       readFirst('adjudicator'),
       scratch(n),
-      contract,
+      ...contract,
     ]
   }
   // purpose merge (rule M4, D-05): ids and pointers, never a diff
@@ -244,7 +259,8 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
     `  2. the PR body links the issue as the brief's Rollout says${issueNo(a.pr) === null ? '' : ` (\`gh pr view ${a.pr} --json body,closingIssuesReferences\`)`}: merge needs a closing reference to the issue, run-it and keep-open a plain reference that leaves it open;`,
     '  3. a visible (UI) change has screenshot or video evidence in the PR body.',
     scratch(n),
-    'Reply with exactly these lines and nothing else:',
+    toolAsk(`Answer by calling ${VERDICT} once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags`),
+    'If you cannot call it, reply with exactly these lines and nothing else:',
     '  verdict lines `<VERDICT>: <reason>` for what you find, VERDICT one of CORRECT, WRONG, NIT, ENV, DUP (none when there is nothing to report);',
     '  one ACTION line: `ACTION: merge`, `ACTION: hold <reason>` when the owner must decide, or `ACTION: fixer: <instructions>` when a change is needed before the merge;',
     '  `SUMMARY: <what changes for users, one line>`;',
@@ -299,6 +315,26 @@ function implementer(repo: string | null, n: number | null, brief: string, model
     scratch(n),
     ...HANDOFF_ASK,
   ]
+}
+
+// --- the repair message (#548) -----------------------------------------------------------------
+
+// repairPrompt: the one message the loop sends an agent whose final answer it could not read:
+// what was wrong, then the ask again (its tool, the machine lines as the fallback), so the same
+// agent answers with what it already found instead of a fresh agent redoing the work. The
+// problem may quote the agent's own line, so it is neutralized like any free text.
+export function repairPrompt(type: AgentType, purpose: AdjudicatorPurpose | null, problem: string): string {
+  const fallback =
+    type === 'designer'
+      ? ['If you cannot call it, reply with only the line below, filled in.', DESIGNER_RESULT]
+      : type === 'adjudicator'
+        ? [`If you cannot call it, ${purpose === 'merge' ? 'reply with only your verdict lines, one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.' : CONTRACT}`]
+        : ['If you cannot call it, reply with only the line below, filled in.', HANDOFF_RESULT]
+  return [
+    `The factory loop could not read your answer: ${neutral(problem)}.`,
+    toolAsk(`Do not redo the work. Call ${TOOL_OF[type]} now with the answer you reached`),
+    ...fallback,
+  ].join('\n')
 }
 
 // --- the spawn's description and name (D-11: the issue goes in both) -------------------------------
