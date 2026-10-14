@@ -21,15 +21,6 @@
 # postStartCommand runs dev-init instead.
 set -u
 
-# Also derives (and exports) DEV_WORKSPACE from DEV_REPO_URL, for dev-init and
-# the command alike.
-# shellcheck source=workspace.sh
-. /usr/local/share/dev-system/workspace.sh
-
-log() {
-  echo "dev-entrypoint: $*" >&2
-}
-
 # Both initialization and the command must finish through the same stop path.
 # A heartbeat can already be running while dev-init is still reporting checks.
 # shellcheck disable=SC2317 # Invoked by the EXIT trap.
@@ -41,21 +32,45 @@ final_heartbeat() {
 }
 trap 'final_heartbeat' EXIT
 
-stopped=0
+# Stop signals are trapped for the whole run, so one that lands between steps still ends in
+# the EXIT trap: it is forwarded to the running child, or stops the next one from starting.
+stop_signal=
+child=
+# shellcheck disable=SC2317 # Invoked by the signal traps.
+forward() {
+  stop_signal=$1
+  [ -z "$child" ] || kill -s "$1" "$child" 2>/dev/null || true
+}
+trap 'forward TERM' TERM
+trap 'forward INT' INT
+trap 'forward HUP' HUP
+
+# Run a child, not exec, so the stop path can write the worker's final heartbeat once it has
+# exited (heartbeat-loop --final, #467). bash's wait returns early (128+signal) when a trapped
+# signal arrives, so loop until the child has really exited, then take its own status from a
+# final wait.
 run_child() {
-  local child status
+  local status
+  [ -z "$stop_signal" ] || return $((128 + $(kill -l "$stop_signal")))
   ( trap - INT QUIT; exec "$@" ) <&0 &
   child=$!
-  trap 'stopped=1; kill -s TERM "$child" 2>/dev/null || true' TERM
-  trap 'stopped=1; kill -s INT "$child" 2>/dev/null || true' INT
-  trap 'stopped=1; kill -s HUP "$child" 2>/dev/null || true' HUP
+  [ -z "$stop_signal" ] || kill -s "$stop_signal" "$child" 2>/dev/null || true
   while kill -0 "$child" 2>/dev/null; do
     wait "$child"
   done
   status=0
   wait "$child" || status=$?
-  trap - TERM INT HUP
+  child=
   return "$status"
+}
+
+# Also derives (and exports) DEV_WORKSPACE from DEV_REPO_URL, for dev-init and
+# the command alike.
+# shellcheck source=workspace.sh
+. /usr/local/share/dev-system/workspace.sh
+
+log() {
+  echo "dev-entrypoint: $*" >&2
 }
 
 if [ "$(id -u)" = 0 ]; then
@@ -69,7 +84,7 @@ else
   # shellcheck disable=SC2016 # $1 is the workspace passed to the child bash.
   run_child bash -c 'cd "$1" && exec timeout -k 10 300 dev-init' bash "$ws" >&2
   status=$?
-  [ "$stopped" = 0 ] || exit "$status"
+  [ -z "$stop_signal" ] || exit "$status"
   case "$status" in
     0) ;;
     124 | 137) log "WARNING: dev-init did not finish within 300s - continuing without it" ;;
@@ -80,10 +95,6 @@ fi
 # An empty command (a runtime that clears the image CMD) means the default.
 [ "$#" -gt 0 ] || set -- dev-remote-control
 
-# Run the command as a child, not exec, so the stop path can write the worker's final
-# heartbeat once it has exited (heartbeat-loop --final, #467). Stop signals are forwarded to
-# the child; bash's wait returns early (128+signal) when a trapped signal arrives, so loop
-# until the child has really exited, then take its own status from a final wait.
 run_child "$@"
 status=$?
 exit "$status"
