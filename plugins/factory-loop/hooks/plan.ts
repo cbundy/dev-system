@@ -149,6 +149,14 @@ export function issueFromBranch(branch: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+// guardSeq: the number a guard key ends with (guard:<pr>:<head>:<n>). The next guard of a PR and
+// head is one past the highest: a re-check that matched the guard before it replaced that entry
+// (ledger.ts foldRecheck), so the count of entries is no key.
+export function guardSeq(key: string): number {
+  const n = Number(key.slice(key.lastIndexOf(':') + 1))
+  return Number.isInteger(n) && n > 0 ? n : 0
+}
+
 // sameLabel: labels are compared without regard to case, so `in development` matches GitHub's
 // `In development` (SPEC 4.2).
 export function sameLabel(a: string, b: string): boolean {
@@ -884,6 +892,7 @@ function merges(ctx: Ctx, runs: RunView[]) {
       .filter(e => e.kind === 'guard' && e.pr === pr && e.head === head)
       .sort((a, b) => a.startedAt - b.startedAt)
     const latest = guards[guards.length - 1]
+    const next = Math.max(0, ...guards.map(e => guardSeq(e.key))) + 1
     const guardAction = (seq: number): Action => ({
       kind: 'guard',
       key: `guard:${pr}:${head}:${seq}`,
@@ -921,11 +930,11 @@ function merges(ctx: Ctx, runs: RunView[]) {
     const age = state.now - (latest.endedAt ?? 0)
     const transientOnly = result.fails.length > 0 && result.fails.every(f => classifyFail(f) === 'transient')
     if ((latest.endedAt ?? 0) < lastRepair || age >= config.guardTtlMs || (transientOnly && age >= config.guardRecheckMs)) {
-      want(ctx, guardAction(guards.length + 1))
+      want(ctx, guardAction(next))
       continue
     }
     if (result.fails.length > 0) {
-      onGuardFails(ctx, run, result.fails, guards.length, latest.startedAt)
+      onGuardFails(ctx, run, result.fails, guardSeq(latest.key), latest.startedAt)
       continue
     }
     if (result.warns.length > 0 && done(ctx, `pr-comment:${pr}:${head}`) === undefined) {

@@ -319,6 +319,47 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(keys(plan(withLedger(s, [first, ...ledger]), CFG))).toEqual(['update-behind:550:head50'])
   })
 
+  test('a re-check that finds what the one before it found replaces it: a held PR keeps one guard, not one per re-check (#550, #551)', () => {
+    // the guard's head FAIL carries its ~700-character fix; re-checked every 5 minutes for a week
+    const HEAD = { name: 'head', reason: `run=head50 origin=head50 pr=head50 worktree=wt50 (run R50); fix: ${'x'.repeat(700)}` }
+    const CI = { name: 'checks', reason: 'ci=fail' }
+    const g = (n: number): Action => ({ ...guard, key: `guard:550:head50:${n}` })
+    const found = (...fails: { name: string; reason: string }[]): Exec => ({ status: 'done', outcome: { kind: 'guard', fails, warns: [] }, summary: 'FAIL' })
+    const check = (ledger: LedgerEntry[], n: number, result: Exec, at: number) => finish(start(ledger, g(n), at).ledger, g(n).key, result, at + 1000)
+    let week: LedgerEntry[] = []
+    for (let n = 1; n <= 7 * 288; n++) week = check(week, n, found(HEAD), NOW - 7 * DAY + n * 5 * MIN)
+    expect(week.map(e => e.key)).toEqual([`guard:550:head50:${7 * 288}`])
+    expect(only(week, `guard:550:head50:${7 * 288}`)).toMatchObject({ status: 'done', startedAt: NOW, endedAt: NOW + 1000 })
+    // a changed failure is kept beside the one before it, and so is a return to an older one
+    let changes = check([], 1, found(HEAD), NOW - 30 * MIN)
+    changes = check(changes, 2, found(HEAD, CI), NOW - 20 * MIN)
+    changes = check(changes, 3, found(HEAD), NOW - 10 * MIN)
+    expect(changes.map(e => e.key)).toEqual(['guard:550:head50:1', 'guard:550:head50:2', 'guard:550:head50:3'])
+    // never across PRs or heads, nor over a guard that did not end done
+    const other = [entry('guard:551:head50:1', 'guard', { pr: 551, head: 'head50', startedAt: NOW - 20 * MIN, outcome: { kind: 'guard', fails: [HEAD], warns: [] } })]
+    expect(check(other, 1, found(HEAD), NOW - 10 * MIN).map(e => e.key)).toEqual(['guard:551:head50:1', 'guard:550:head50:1'])
+    const lost = check([], 1, found(HEAD), NOW - 20 * MIN).map(e => ({ ...e, status: 'lost' as const }))
+    expect(check(lost, 2, found(HEAD), NOW - 10 * MIN).map(e => e.key)).toEqual(['guard:550:head50:1', 'guard:550:head50:2'])
+    // a guard FAIL that merge printed folds the same way
+    const extra: Exec = {
+      status: 'done',
+      outcome: { kind: 'merge', result: 'refused', rollout: null, closeIssue: null, line: 'GUARD checks FAIL ci=fail' },
+      summary: 'guard FAIL',
+      extra: [{ key: 'guard:550:head50:2', kind: 'guard', issue: 50, run: 'R50', pr: 550, head: 'head50', outcome: { kind: 'guard', fails: [CI], warns: [] } }],
+    }
+    const merged = finish(started([merge], NOW - 3 * MIN, check([], 1, found(CI), NOW - 10 * MIN)), merge.key, extra, NOW)
+    expect(merged.filter(e => e.kind === 'guard').map(e => e.key)).toEqual(['guard:550:head50:2'])
+    // a fast-forward refused the same way again replaces the one before; one that moved stays
+    const ff = (n: number): Action => ({ kind: 'fast-forward', key: `fast-forward:550:head50:${n}`, class: 'free', rule: 'M2', reason: 'lag', issue: 50, pr: 550, run: 'R50', head: 'head50', branch: 'b' })
+    const forward = (ledger: LedgerEntry[], n: number, result: 'refused' | 'forwarded', at: number) =>
+      finish(start(ledger, ff(n), at).ledger, ff(n).key, { status: 'done', outcome: { kind: 'fast-forward', result, line: `${result.toUpperCase()} wt50 is dirty` }, summary: result }, at + 1000)
+    let tries: LedgerEntry[] = []
+    for (let n = 1; n <= 3; n++) tries = forward(tries, n, 'refused', NOW - (10 - n) * MIN)
+    expect(tries.map(e => e.key)).toEqual(['fast-forward:550:head50:3'])
+    const moved = forward(forward([], 1, 'forwarded', NOW - 20 * MIN), 2, 'forwarded', NOW - 10 * MIN)
+    expect(moved.map(e => e.key)).toEqual(['fast-forward:550:head50:1', 'fast-forward:550:head50:2'])
+  })
+
   test('a stop of rule A1 marks the agent timed-out, even when TaskStop failed (SPEC A1, 13)', () => {
     const agent = (id: string) => entry(`design:70:${id}`, 'spawn', { agent: 'designer', class: 'develop', issue: 70, status: 'running', endedAt: null, agentId: id })
     const base = [agent('a70'), agent('a71')]

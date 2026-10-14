@@ -1880,6 +1880,12 @@ describe('M1, M2: re-guard after a repair and judge a failure once (#550)', () =
     expect(CFG.guardTtlMs).toBe(5 * MIN)
     expect(keys(plan(mergeReady([guarded([], [], 1, { endedAt: NOW - 6 * MIN })]), CFG))).toEqual(['guard:550:head50:2'])
   })
+  test('a guard numbers past the highest key: a re-check folded into one entry is never a reused key (#550)', () => {
+    // guards 1 to 4 found what guard 5 found, so the ledger keeps only guard 5 (ledger.ts)
+    expect(keys(plan(mergeReady([guarded([CI_FAIL], [], 5, { endedAt: NOW - 6 * MIN })]), CFG))).toEqual(['guard:550:head50:6'])
+    // and the fast-forward is that guard's
+    expect(keys(plan(mergeReady([guarded([LAG], [], 5)]), CFG))).toEqual(['fast-forward:550:head50:5'])
+  })
 })
 
 describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () => {
