@@ -8,6 +8,7 @@
 // them without the engine.
 import { detailOf, rateLimited, respondLogPath } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, ExtraEntry, RunInit, RunResult } from './exec'
+import { guardSeq } from './plan'
 import type { Action, ActionKind, GuardFail, LedgerEntry, Outcome, Pool, Rollout, Slot } from './types'
 
 const SEC = 1000
@@ -308,10 +309,10 @@ export function mergeRefusal(stderr: string): string | null {
 }
 
 // guardKeyAfter: the key of a guard outcome recorded beside a merge: one past this PR and head's
-// guard entries, as plan numbers them (SPEC M1), and never a key the ledger already holds.
+// highest guard key, as plan numbers them (SPEC M1), and never a key the ledger already holds.
 export function guardKeyAfter(ledger: readonly LedgerEntry[], pr: number, head: string): string {
   const held = new Set(ledger.map(e => e.key))
-  let n = ledger.filter(e => e.kind === 'guard' && e.pr === pr && e.head === head).length + 1
+  let n = Math.max(0, ...ledger.filter(e => e.kind === 'guard' && e.pr === pr && e.head === head).map(e => guardSeq(e.key))) + 1
   while (held.has(`guard:${pr}:${head}:${n}`)) n++
   return `guard:${pr}:${head}:${n}`
 }

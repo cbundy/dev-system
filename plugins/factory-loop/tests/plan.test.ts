@@ -438,10 +438,38 @@ describe('P: pipeline gates', () => {
       expect(keys(plan(second, CFG))).toEqual([`env-retry:${AT}:r2`])
     })
 
-    test('a rerun that could not launch is not tried again: the owner hears, no adjudicator', () => {
-      const failed = entry(`env-retry:${AT}:r1`, 'env-retry', { class: 'drive', rule: 'P2a', issue: 45, run: RUN45, status: 'failed', endedAt: NOW - 30 * MIN })
+    test('a rerun that could not launch is not tried again: the owner hears to resume, no adjudicator, no agent-failed', () => {
+      const failed = entry(`env-retry:${AT}:r1`, 'env-retry', {
+        class: 'drive',
+        rule: 'P2a',
+        issue: 45,
+        run: RUN45,
+        status: 'failed',
+        endedAt: NOW - 30 * MIN,
+        summary: 'launch: exit 1: no slot on feat/issue-45-work',
+      })
       const s = withLedger(failedTest({ control: resumedAt(NOW - 40 * MIN) }), [escalated([ENV]), told(), failed])
-      expect(keys(plan(s, CFG))).toEqual([`tell:agent-failed:env-retry:${AT}:r1`])
+      const r = plan(s, CFG)
+      // `/factory retry` never clears an env-retry, so a notice that says retry would lead nowhere
+      expect(keys(r)).toEqual([`tell:escalate:${AT}:r1`])
+      expect(find(r, `tell:escalate:${AT}:r1`)).toMatchObject({
+        rule: 'P2a',
+        context: [
+          'the pipeline could not be run again on this head after the resume (launch: exit 1: no slot on feat/issue-45-work); resuming the run tries once more',
+          ENV,
+        ],
+      })
+      expect(r.owner).toBe(1)
+      // lost on a reload: the same notice, once; told, it waits for the next resume
+      const lost = { ...failed, status: 'lost' as const, summary: undefined }
+      const fromLost = plan(withLedger(failedTest({ control: resumedAt(NOW - 40 * MIN) }), [escalated([ENV]), told(), lost]), CFG)
+      expect(fromLost.actions.flatMap(a => (a.kind === 'tell' ? [a.key, a.context[0]] : []))).toEqual([
+        `tell:escalate:${AT}:r1`,
+        'the pipeline could not be run again on this head after the resume; resuming the run tries once more',
+      ])
+      const toldOnce = withLedger(s, [told(`tell:escalate:${AT}:r1`)])
+      expect(keys(plan(toldOnce, CFG))).toEqual([])
+      expect(keys(plan({ ...toldOnce, control: resumedAt(NOW - 40 * MIN, NOW - MIN) }, CFG))).toEqual([`env-retry:${AT}:r2`])
     })
 
     test('the rerun is a new run: its gate is judged afresh, and a repeat failure escalates again', () => {
@@ -1659,6 +1687,56 @@ describe('M8: the PR of a superseded run is closed (#553, I-39)', () => {
     // the new branch's PR is the old one: nothing replaced it
     expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
   })
+
+  test('a run task(redrive) superseded: its PR is closed once the issue\'s run on the regated branch has a PR', () => {
+    // callum-flow-regate moved B to B-v2 and logged `superseded` for R1; no fixer was involved
+    const old = run(32, 'cancelled', { branch: B, run: R1, pr: 44, superseded: true })
+    const redrive = entry(`task:redrive:${B}:h44`, 'task', { wake: 'redrive', class: 'drive', issue: 32, run: R1, pr: 44, outcome: wakeAnswer('done') })
+    const r = plan(at([redrive], [old, live(`${B}-v2`, R2, 50)]), CFG)
+    expect(keys(r)).toEqual(['pr-close:44'])
+    expect(find(r, 'pr-close:44')).toMatchObject({ rule: 'M8', issue: 32, pr: 44, run: R1, newBranch: `${B}-v2`, by: 50 })
+    expect(keys(plan(at([redrive, closed(44)], [old, live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    // a chain links the newest PR; an older superseded run on the way is closed too
+    const mid = run(32, 'cancelled', { branch: `${B}-v2`, run: R2, pr: 50, superseded: true })
+    const chain = plan(at([], [old, mid, live(`${B}-v2-v2`, R3, 57)]), CFG)
+    expect(chain.actions.flatMap(a => (a.kind === 'pr-close' ? [[a.key, a.by]] : []))).toEqual([
+      ['pr-close:44', 57],
+      ['pr-close:50', 57],
+    ])
+    // nothing until the regated branch has a PR of its own; never a run left unmarked, a branch
+    // that is not the old one's -v<n>, another issue's run, or the old PR itself
+    expect(keys(plan(at([], [old, live(`${B}-v2`, R2, null)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [{ ...old, superseded: false }, live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, live('feat/issue-32-other', R2, 50)]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, run(33, 'running', { branch: `${B}-v2`, run: R2, pr: 50 })]), CFG))).toEqual([])
+    expect(keys(plan(at([], [old, live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
+  })
+
+  test('the new branch and run are the fixer\'s word: neither may name another issue\'s run or PR', () => {
+    const R38 = '01M4RQ0038AAAA'
+    const other = run(38, 'running', { branch: 'feat/issue-38-other', run: R38, pr: 52 })
+    // a fixer that worked in the wrong slot names issue 38's branch: PR 44 stays open, and says why
+    const wrongBranch = plan(at([moved(R1, 44, 'feat/issue-38-other', R38)], [other]), CFG)
+    expect(keys(wrongBranch)).toEqual([])
+    expect(wrongBranch.skipped).toContainEqual({ rule: 'M8', issue: 32, why: 'PR #44 left open: feat/issue-38-other is not a branch of #32' })
+    // the right branch, with no PR yet, and issue 38's run id: it waits for the branch's own PR
+    const wrongRun = plan(at([moved(R1, 44, `${B}-v2`, R38)], [other, live(`${B}-v2`, R2, null)]), CFG)
+    expect(keys(wrongRun)).toEqual([])
+    expect(wrongRun.skipped).toContainEqual({ rule: 'M8', issue: 32, why: `PR #44 superseded: waiting for the PR of ${B}-v2` })
+    // a chain is never followed into another issue's move
+    const theirs = entry('fixer:conflict:52:h52', 'spawn', {
+      agent: 'fixer',
+      issue: 38,
+      run: R38,
+      pr: 52,
+      outcome: { kind: 'handoff', notGated: false, run: null, head: 'n52', newBranch: 'feat/issue-38-other-v2' },
+    })
+    const chained = plan(withLedger(state({ issues: [mine(32, 'in pipeline', { pr: 57 }), mine(38, 'in pipeline', { pr: 60 })], runs: [run(38, 'running', { branch: 'feat/issue-38-other-v2', run: '01M4RQ0038BBBB', pr: 60 }), live(`${B}-v2`, R2, 50)] }), [moved(R1, 44, `${B}-v2`, R38), theirs]), CFG)
+    expect(chained.actions.flatMap(a => (a.kind === 'pr-close' ? [[a.key, a.by]] : []))).toEqual([
+      ['pr-close:44', 50],
+      ['pr-close:52', 60],
+    ])
+  })
 })
 
 // --- properties every plan keeps (SPEC 5.9), over every scenario state above ----------------
@@ -1833,6 +1911,12 @@ describe('M1, M2: re-guard after a repair and judge a failure once (#550)', () =
     expect(CFG.guardTtlMs).toBe(5 * MIN)
     expect(keys(plan(mergeReady([guarded([], [], 1, { endedAt: NOW - 6 * MIN })]), CFG))).toEqual(['guard:550:head50:2'])
   })
+  test('a guard numbers past the highest key: a re-check folded into one entry is never a reused key (#550)', () => {
+    // guards 1 to 4 found what guard 5 found, so the ledger keeps only guard 5 (ledger.ts)
+    expect(keys(plan(mergeReady([guarded([CI_FAIL], [], 5, { endedAt: NOW - 6 * MIN })]), CFG))).toEqual(['guard:550:head50:6'])
+    // and the fast-forward is that guard's
+    expect(keys(plan(mergeReady([guarded([LAG], [], 5)]), CFG))).toEqual(['fast-forward:550:head50:5'])
+  })
 })
 
 describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () => {
@@ -1868,6 +1952,18 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
     const again = guarded([LAG], [], 2, { startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
     const r = plan(mergeReady([guarded([LAG], [], 1, { startedAt: NOW - 6 * MIN, endedAt: NOW - 5 * MIN }), moved, again]), CFG)
     expect(r.actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+  })
+
+  test('a fast-forward that finds nothing lagging any more makes the guard stale: guarded again, no judge', () => {
+    // the slot was reused on another branch between the guard and the fast-forward
+    const current = fastForward('fast-forward:550:head50:1', 'current', { rule: 'M2', startedAt: NOW - 30_000, endedAt: NOW - 20_000 })
+    expect(keys(plan(mergeReady([guarded([LAG]), current]), CFG))).toEqual(['guard:550:head50:2'])
+    // the lag is back on that re-guard: the judge looks, not another round
+    const again = guarded([LAG], [], 2, { startedAt: NOW - 15_000, endedAt: NOW - 10_000 })
+    expect(plan(mergeReady([guarded([LAG]), current, again]), CFG).actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+    // M1's CURRENT before the first guard says nothing about it: a lag that guard saw is forwarded
+    const before = fastForward('fast-forward:550:head50', 'current', { rule: 'M1', startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
+    expect(keys(plan(mergeReady([before, guarded([LAG])]), CFG))).toEqual(['fast-forward:550:head50:1'])
   })
 
   test('before the first guard of a head, a clean slot on the branch is fast-forwarded first', () => {

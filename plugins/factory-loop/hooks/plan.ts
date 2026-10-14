@@ -153,6 +153,14 @@ export function issueFromBranch(branch: string): number | null {
   return m ? Number(m[1]) : null
 }
 
+// guardSeq: the number a guard key ends with (guard:<pr>:<head>:<n>). The next guard of a PR and
+// head is one past the highest: a re-check that matched the guard before it replaced that entry
+// (ledger.ts foldRecheck), so the count of entries is no key.
+export function guardSeq(key: string): number {
+  const n = Number(key.slice(key.lastIndexOf(':') + 1))
+  return Number.isInteger(n) && n > 0 ? n : 0
+}
+
 // sameLabel: labels are compared without regard to case, so `in development` matches GitHub's
 // `In development` (SPEC 4.2).
 export function sameLabel(a: string, b: string): boolean {
@@ -286,7 +294,8 @@ function want(ctx: Ctx, action: Action): Gate {
     skip(ctx, action.rule, action.issue, `exhausted: ${action.key}`)
     if (action.kind === 'task') ctx.exhausted.push(action.key)
     else if (WAKES.includes(action.kind)) ctx.owner.add(action.key)
-    else ctx.exhausted.push(action.key)
+    // env-retry tells the owner itself (envRetry): only a resume reruns it, never a retry
+    else if (action.kind !== 'env-retry') ctx.exhausted.push(action.key)
   } else if (cadenceOf(ctx.config, kind) !== null) {
     if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttempts(ctx.config, kind)) {
       ctx.exhausted.push(action.key)
@@ -745,10 +754,13 @@ function envOnlyEscalation(ctx: Ctx, run: RunView, at: string, resumed: number):
 
 // envRetry, rule P2a: the rerun, once for this resume (one attempt, never retried). A clean launch
 // starts a new run, which the P rules then judge afresh; if this run is still at the gate
-// respondSettleMs later, the owner is told again rather than the loop trying more.
+// respondSettleMs later, the owner is told again rather than the loop trying more. A launch
+// that failed or was lost is told the same way, not as agent-failed: `/factory retry` never
+// clears an env-retry, only a fresh resume reruns it.
 function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: string[]) {
   const n = run.issue as number
   const key = `env-retry:${at}${suffix}`
+  const fields = { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }
   const g = want(ctx, {
     kind: 'env-retry',
     key,
@@ -761,11 +773,17 @@ function envRetry(ctx: Ctx, run: RunView, at: string, suffix: string, verdicts: 
     step: run.step,
     head: run.head as string,
   })
+  if (g === 'exhausted') {
+    const why = ctx.byKey.get(key)?.summary
+    const line = `the pipeline could not be run again on this head after the resume${why === undefined ? '' : ` (${why})`}; resuming the run tries once more`
+    want(ctx, wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [line, ...verdicts]))
+    return
+  }
   const ran = g === 'done' ? done(ctx, key) : undefined
   if (ran === undefined || ctx.state.now - (ran.endedAt ?? 0) < ctx.config.respondSettleMs) return
   want(
     ctx,
-    wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }, [
+    wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P2a', n, fields, [
       'the pipeline was run again on this head after the resume, and the run is still at this gate',
       ...verdicts,
     ]),
@@ -893,6 +911,7 @@ function merges(ctx: Ctx, runs: RunView[]) {
       .filter(e => e.kind === 'guard' && e.pr === pr && e.head === head)
       .sort((a, b) => a.startedAt - b.startedAt)
     const latest = guards[guards.length - 1]
+    const next = Math.max(0, ...guards.map(e => guardSeq(e.key))) + 1
     const guardAction = (seq: number): Action => ({
       kind: 'guard',
       key: `guard:${pr}:${head}:${seq}`,
@@ -923,17 +942,18 @@ function merges(ctx: Ctx, runs: RunView[]) {
     const result = outcome(latest, 'guard')
     if (result === undefined) continue
     // a repair on this PR since the guard makes it stale: a fixer that ended done, with a commit
-    // or without one (#550), a fix-linkage, a fast-forward that moved a worktree (#551), or an
-    // update-behind that pushed a new PR head (the run's head, which the watcher prints, stays)
+    // or without one (#550), a fix-linkage, a fast-forward that moved a worktree or found none
+    // lagging any more (#551), or an update-behind that pushed a new PR head (the run's head,
+    // which the watcher prints, stays)
     const lastRepair = Math.max(0, ...state.ledger.filter(e => e.pr === pr && repaired(e)).map(e => e.endedAt ?? 0))
     const age = state.now - (latest.endedAt ?? 0)
     const transientOnly = result.fails.length > 0 && result.fails.every(f => classifyFail(f) === 'transient')
     if ((latest.endedAt ?? 0) < lastRepair || age >= config.guardTtlMs || (transientOnly && age >= config.guardRecheckMs)) {
-      want(ctx, guardAction(guards.length + 1))
+      want(ctx, guardAction(next))
       continue
     }
     if (result.fails.length > 0) {
-      onGuardFails(ctx, run, result.fails, guards.length, latest.startedAt)
+      onGuardFails(ctx, run, result.fails, guardSeq(latest.key), latest.startedAt)
       continue
     }
     if (result.warns.length > 0 && done(ctx, `pr-comment:${pr}:${head}`) === undefined) {
@@ -953,10 +973,14 @@ function merges(ctx: Ctx, runs: RunView[]) {
 }
 
 // repaired: a done entry that changed a PR or its worktree, after which its guard is stale (M1).
+// Rule M2's fast-forward that answers CURRENT counts too: the lag its guard saw is gone (the slot
+// was reused or moved), so a re-guard, not the judge, looks again. M1's runs before the first
+// guard, so its CURRENT says nothing about that guard (#551).
 function repaired(e: LedgerEntry): boolean {
   if (e.status !== 'done') return false
   if (e.kind === 'fix-linkage' || (e.kind === 'spawn' && e.agent === 'fixer')) return true
-  return outcome(e, 'update-behind')?.result === 'updated' || outcome(e, 'fast-forward')?.result === 'forwarded'
+  const forward = outcome(e, 'fast-forward')?.result
+  return outcome(e, 'update-behind')?.result === 'updated' || forward === 'forwarded' || (forward === 'current' && e.rule === 'M2')
 }
 
 // waitsFor: what a PR no rule acted on this pass waits for, from the last action it wanted that
@@ -1009,8 +1033,9 @@ export function worktreeLag(fail: GuardFail, head: string): boolean {
 }
 
 // lagForward: rule M2 for a worktree that lags the run's head (#551): the fast-forward, once per
-// guard, unless one already went through before this guard ran (the lag came back, so the judge
-// looks). 'acting' while it is wanted; else the line of a refusal, for the judge, or null.
+// guard, unless one already went through, or found nothing lagging, before this guard ran (the
+// lag came back, so the judge looks). 'acting' while it is wanted; else the line of a refusal,
+// for the judge, or null.
 function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' | string | null {
   const pr = run.pr as number
   const head = run.head as string
@@ -1163,18 +1188,36 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number, g
 // --- M8: the PR of a superseded run (#553, I-39) ---------------------------------------------
 
 // A fixer sent to a run that handed off on a new branch superseded that run (act-agents.ts logs
-// `superseded`); callum-flow-regate then says "once the new PR exists, close the old PR".
+// `superseded`), and so did task(redrive) on `REGATE new-branch`; callum-flow-regate then says
+// "once the new PR exists, close the old PR".
 type Moved = { issue: number; run: string; pr: number; newRun: string | null; newBranch: string }
 
 // supersededPrs: each superseded run's PR is closed once the branch its work moved to has a PR,
 // with a link to the newest one down the chain. A run the watcher still shows and the event log
-// does not mark superseded is left alone; a merged or closed PR is the executor's to leave.
+// does not mark superseded is left alone; a merged or closed PR is the executor's to leave. The
+// new branch is the fixer's own word, so one that is not a branch of the same issue moves nothing.
 function supersededPrs(ctx: Ctx) {
   const moves: Moved[] = []
+  const leftOpen = new Set<number>()
   for (const e of [...ctx.byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
     const handoff = outcome(e.status === 'done' && e.kind === 'spawn' && e.agent === 'fixer' ? e : undefined, 'handoff')
     if (handoff === undefined || handoff.newBranch === null || e.issue === null || e.run === null || e.pr === null) continue
+    if (issueFromBranch(handoff.newBranch) !== e.issue) {
+      leftOpen.add(e.pr)
+      if (isLive(ctx.issues.get(e.issue))) skip(ctx, 'M8', e.issue, `PR #${e.pr} left open: ${handoff.newBranch} is not a branch of #${e.issue}`)
+      continue
+    }
     moves.push({ issue: e.issue, run: e.run, pr: e.pr, newRun: handoff.run, newBranch: handoff.newBranch })
+  }
+  // a run the event log marks superseded with no fixer behind it (task(redrive), I-39) moved to
+  // callum-flow-regate's <branch>-v<n>: it moves once a run of the issue on such a branch, not
+  // superseded itself, shows a PR of its own
+  for (const old of ctx.state.runs) {
+    if (!old.superseded || old.issue === null || old.pr === null || leftOpen.has(old.pr) || moves.some(m => m.pr === old.pr)) continue
+    const next = ctx.state.runs.find(
+      r => !r.superseded && r.issue === old.issue && r.pr !== null && r.pr !== old.pr && r.branch.startsWith(`${old.branch}-v`),
+    )
+    if (next !== undefined) moves.push({ issue: old.issue, run: old.run, pr: old.pr, newRun: next.run, newBranch: next.branch })
   }
   for (const m of moves) {
     const key = `pr-close:${m.pr}`
@@ -1190,11 +1233,13 @@ function supersededPrs(ctx: Ctx) {
 
 // replacement: the PR the moved work has now. A new run that moved on in turn was superseded by
 // a fixer sent with its PR, so the chain is followed to its newest PR; null while the new
-// branch has none yet.
+// branch has none yet. Only a run of the same issue on the new branch counts: the run id the
+// fixer reports is its own word too, and may name another issue's run.
 function replacement(ctx: Ctx, moves: Moved[], m: Moved, seen: string[]): number | null {
-  const next = m.newRun === null ? undefined : moves.find(o => o.run === m.newRun && o.run !== m.run && !seen.includes(o.run))
+  const next =
+    m.newRun === null ? undefined : moves.find(o => o.run === m.newRun && o.issue === m.issue && o.run !== m.run && !seen.includes(o.run))
   if (next !== undefined) return replacement(ctx, moves, next, [...seen, m.run]) ?? next.pr
-  const run = ctx.state.runs.find(r => r.pr !== null && r.pr !== m.pr && (r.branch === m.newBranch || (m.newRun !== null && r.run === m.newRun)))
+  const run = ctx.state.runs.find(r => r.pr !== null && r.pr !== m.pr && r.issue === m.issue && r.branch === m.newBranch)
   return run?.pr ?? null
 }
 

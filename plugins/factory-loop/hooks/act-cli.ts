@@ -114,13 +114,14 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
         },
       ]
     case 'pr-close': {
-      // rule M8 (#553): read the PR, then close it with a comment linking the one its work moved
-      // to; the executor runs the close only once the read says so (prCloseCheck). Never
-      // --delete-branch: the old branch keeps its commits.
+      // rule M8 (#553): read the PR and the one its work moved to, then close it with a comment
+      // linking that one; the executor runs the close only once both reads say so (prCloseCheck,
+      // byCheck). Never --delete-branch: the old branch keeps its commits.
       const pr = String(action.pr)
-      const comment = `Superseded by #${action.by}: a conflict fix moved this work to \`${action.newBranch}\`. Closed by the factory loop.`
+      const comment = `Superseded by #${action.by}: this work moved to \`${action.newBranch}\`. Closed by the factory loop.`
       return [
         { argv: ['gh', 'pr', 'view', pr, '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
+        { argv: ['gh', 'pr', 'view', String(action.by), '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
         { argv: ['gh', 'pr', 'close', pr, '--repo', repo, '--comment', comment], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
       ]
     }
@@ -176,18 +177,24 @@ export function eventFailure(state: string, err: unknown): Exec {
   return exec
 }
 
-// prCloseCheck: what `gh pr view --json state,headRefName` says about closing a superseded run's
-// PR: 'close' for an open PR on a branch of its issue other than the one the work moved to; done,
-// left alone, for one already merged or closed; refused for one on any other branch.
-export function prCloseCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
+// prView: the state and head of `gh pr view --json state,headRefName`, each unknown when the
+// output does not read.
+function prView(json: string): { state: unknown; head: unknown } {
   let pr: Record<string, unknown> = {}
   try {
     const v: unknown = JSON.parse(json)
     if (v !== null && typeof v === 'object') pr = v as Record<string, unknown>
   } catch {
-    // read below as unreadable
+    // read by the caller as unreadable
   }
-  const { state, headRefName: head } = pr
+  return { state: pr.state, head: pr.headRefName }
+}
+
+// prCloseCheck: what `gh pr view --json state,headRefName` says about closing a superseded run's
+// PR: 'close' for an open PR on a branch of its issue other than the one the work moved to; done,
+// left alone, for one already merged or closed; refused for one on any other branch.
+export function prCloseCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
+  const { state, head } = prView(json)
   if (state === 'MERGED' || state === 'CLOSED') {
     return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `PR #${action.pr} is already ${state.toLowerCase()}: left alone` }
   }
@@ -196,6 +203,20 @@ export function prCloseCheck(action: Extract<Action, { kind: 'pr-close' }>, json
   }
   if (head === action.newBranch || issueFromBranch(head) !== action.issue) {
     return refused(`PR #${action.pr} is on ${head}, not a superseded branch of #${action.issue}`)
+  }
+  return 'close'
+}
+
+// byCheck: the same read of the PR the work moved to. The plan took that PR from a fixer's
+// handoff, the agent's own word, so the old PR is closed only for one that is open or merged
+// on a branch of the same issue; one closed unmerged or on any other branch is refused.
+export function byCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
+  const { state, head } = prView(json)
+  if ((state !== 'OPEN' && state !== 'MERGED' && state !== 'CLOSED') || typeof head !== 'string') {
+    return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: json.slice(0, 2000) }, summary: `gh pr view: PR #${action.by} did not read` }
+  }
+  if (state === 'CLOSED' || issueFromBranch(head) !== action.issue) {
+    return refused(`PR #${action.by} is ${state.toLowerCase()} on ${head}, not a PR of #${action.issue} to supersede #${action.pr}`)
   }
   return 'close'
 }
@@ -296,17 +317,22 @@ function command(kind: CliKind): Executor {
   }
 }
 
-// pr-close (rule M8, #553): the read, then the close only when prCloseCheck allows it, so a PR
-// that merged or closed meanwhile, or one on another branch, is never closed.
+// pr-close (rule M8, #553): the reads, then the close only when prCloseCheck and byCheck allow
+// it, so a PR that merged or closed meanwhile, one on another branch, or one whose replacement
+// is not a live PR of the same issue, is never closed.
 const prClose: Executor = async (ctx, action) => {
   if (action.kind !== 'pr-close') return refused(`the pr-close executor got a ${action.kind} action`)
   const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel)
-  const [view, close] = typeof steps === 'string' ? [] : steps
-  if (view === undefined || close === undefined) return refused(typeof steps === 'string' ? steps : 'pr-close has no steps')
+  const [view, viewBy, close] = typeof steps === 'string' ? [] : steps
+  if (view === undefined || viewBy === undefined || close === undefined) return refused(typeof steps === 'string' ? steps : 'pr-close has no steps')
   const read = await runSteps(ctx, [view])
   if ('failed' in read) return read.failed
   const check = prCloseCheck(action, read.results[0]?.stdout ?? '')
   if (check !== 'close') return check
+  const readBy = await runSteps(ctx, [viewBy])
+  if ('failed' in readBy) return readBy.failed
+  const checkBy = byCheck(action, readBy.results[0]?.stdout ?? '')
+  if (checkBy !== 'close') return checkBy
   const closed = await runSteps(ctx, [close])
   if ('failed' in closed) return closed.failed
   return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: clip(`closed PR #${action.pr}, superseded by #${action.by}`) }

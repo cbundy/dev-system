@@ -105,6 +105,8 @@ export type FinishOptions = {
 //   it and tells the owner instead (SPEC 10.1).
 // - extra: each ExtraEntry is recorded as a done entry of its own (a guard FAIL that `merge`
 //   printed is a guard outcome, so rule M2 handles it next pass, SPEC 5.5).
+// - a guard, or a refused fast-forward, that found exactly what the one before it found
+//   replaces that one (foldRecheck).
 // - a stop-agent of rule A1 that ended, stopped or not, marks the agent it stopped timed-out
 //   (SPEC A1; SPEC 13: an agent TaskStop could not stop is left running, marked timed-out).
 // It applies whatever the entry's status; a key the ledger no longer holds (pruned, say) is left
@@ -131,8 +133,11 @@ export function finish(
   if (result.status === 'failed' && 'noRetry' in result && result.noRetry === true) {
     next.attempts = Math.max(next.attempts, maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, attemptsKindOf(next)))
   }
-  let out = put(ledger, next)
-  for (const extra of 'extra' in result ? (result.extra ?? []) : []) out = put(out, extraEntry(extra, next, now))
+  let out = foldRecheck(put(ledger, next), next)
+  for (const extra of 'extra' in result ? (result.extra ?? []) : []) {
+    const x = extraEntry(extra, next, now)
+    out = foldRecheck(put(out, x), x)
+  }
   if (next.kind === 'stop-agent' && next.rule === 'A1' && next.status !== 'running' && key.startsWith('stop:')) {
     const agentId = key.slice('stop:'.length)
     const why = next.status === 'done' ? 'timed out: stopped' : 'timed out: the stop failed, the agent may still run'
@@ -147,6 +152,24 @@ function unstart(ledger: readonly LedgerEntry[], current: LedgerEntry, prev: Led
   if (prev !== undefined && prev !== null) return put(ledger, prev)
   if (prev === null || current.attempts <= 1) return ledger.filter(e => e.key !== current.key)
   return put(ledger, ended({ ...current, attempts: current.attempts - 1 }, 'failed', now, `skipped: ${why}`))
+}
+
+// foldRecheck: a done guard whose outcome is exactly that of the guard before it on the same PR
+// and head replaces that entry, and so does a refused fast-forward after a refused one. A PR held
+// on one failure is re-checked every guardTtlMs (#550), and a lagging dirty worktree is tried
+// again each time (#551); kept one entry per re-check, a held week fills the ledger toward fit()
+// (SPEC 7.1). Plan numbers the next guard past the highest key (guardSeq), so a dropped number
+// is never reused, and reads only the newest refused fast-forward.
+function foldRecheck(ledger: LedgerEntry[], e: LedgerEntry): LedgerEntry[] {
+  const refused = (o: LedgerEntry) => o.outcome?.kind === 'fast-forward' && o.outcome.result === 'refused'
+  if (e.status !== 'done' || !(e.outcome?.kind === 'guard' || refused(e))) return ledger
+  let before: LedgerEntry | undefined
+  for (const o of ledger) {
+    if (o.kind !== e.kind || o.key === e.key || o.pr !== e.pr || o.head !== e.head || o.startedAt > e.startedAt) continue
+    if (before === undefined || o.startedAt >= before.startedAt) before = o
+  }
+  if (before?.status !== 'done' || JSON.stringify(before.outcome) !== JSON.stringify(e.outcome)) return ledger
+  return ledger.filter(o => o !== before)
 }
 
 // extraEntry: an ExtraEntry as the done entry it records, under the rule of the action that

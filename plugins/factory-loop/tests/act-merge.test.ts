@@ -426,6 +426,8 @@ describe('parsers, against the CLIs\' own lines (SPEC 6.2)', () => {
     expect(guardKeyAfter(ledger, 550, GATED)).toBe(`guard:550:${GATED}:3`)
     // a key already taken (say by an entry missing its pr) is skipped
     expect(guardKeyAfter([...ledger, entry(`guard:550:${GATED}:3`, 'guard')], 550, GATED)).toBe(`guard:550:${GATED}:4`)
+    // one past the highest key: identical re-checks folded guards 1 and 2 into guard 3 (#550)
+    expect(guardKeyAfter([g(`guard:550:${GATED}:3`, 550, GATED)], 550, GATED)).toBe(`guard:550:${GATED}:4`)
   })
 
   test('slotFor: the slot on the run\'s branch, a held one first; leasedPath: treehouse get\'s path', () => {
