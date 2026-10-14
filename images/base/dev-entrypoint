@@ -47,4 +47,25 @@ fi
 
 # An empty command (a runtime that clears the image CMD) means the default.
 [ "$#" -gt 0 ] || set -- dev-remote-control
-exec "$@"
+
+# Run the command as a child, not exec, so the stop path can write the worker's final
+# heartbeat once it has exited (heartbeat-loop --final, #467). Stop signals are forwarded to
+# the child; bash's wait returns early when a trapped signal arrives, so loop until the
+# child has really exited.
+"$@" &
+child=$!
+trap 'kill -s TERM "$child" 2>/dev/null || true' TERM
+trap 'kill -s INT "$child" 2>/dev/null || true' INT
+trap 'kill -s HUP "$child" 2>/dev/null || true' HUP
+while :; do
+  status=0
+  wait "$child" || status=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+trap - TERM INT HUP
+
+hb=/usr/local/share/dev-system/heartbeat-loop
+if [ "$(id -u)" != 0 ] && [ -x "$hb" ]; then
+  timeout 10 "$hb" --final >&2 || true
+fi
+exit "$status"
