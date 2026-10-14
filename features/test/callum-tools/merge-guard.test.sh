@@ -240,15 +240,76 @@ g 7 --emit-verified
 printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "PASS line missing: $out"
 printf '%s\n' "$out" | grep -q "^VERIFIED .* head=$NEWH .* gated_patch=$PROOF rebased_from=$GATED\$" || fail "VERIFIED proof missing: $out"
 passed=$((passed + 1))
-# a worktree on the branch at an ancestor of the run head still fails head (the loop fast-forwards it, #595)
+# after a proven rebase, a worktree on the branch fails head only for a commit the gated run
+# lacks (#627): the loop's update-behind leaves every pool slot behind the new head, and
+# the run's head is no longer the branch tip, so a slot that lags passes and checks and
+# mergeability on the new head decide.
+head_pass() { # head_pass <name>: exit 0 and the proof's head PASS line
+  [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "$1: rc=$rc out=$out"
+  passed=$((passed + 1))
+}
+# a slot at an ancestor of the run head (the PR #621 incident)
 git -C "$work" reset -q --hard "$GATED^"
-g 7; expect_fail "worktree behind the run head after a rebase" head
-case "$out" in *"worktree=$(git -C "$work" rev-parse HEAD)"*) ;; *) fail "lagging worktree not printed: $out" ;; esac
-# the loop's fast-forward moves it to the run head, and the patch proof passes head again
-git -C "$work" merge -q --ff-only "$GATED"
-g 7
-printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" || fail "PASS after fast-forward missing: $out"
+g 7; head_pass "worktree behind the run head after a rebase"
+# a slot at the run head, or at the rebased head
+git -C "$work" reset -q --hard "$GATED"; g 7; head_pass "worktree at the run head after a rebase"
+git -C "$work" reset -q --hard "$NEWH"; g 7; head_pass "worktree at the rebased head"
+# a slot left on a copy of the branch from before a rebase: same patch, not an ancestor (the PR #619 incident)
+git -C "$work" checkout -q --detach "$BASE0"
+echo feature > f.txt && git -C "$work" add f.txt && git -C "$work" commit -q -m "feature, before the pipeline's rebase"
+STALE=$(git -C "$work" rev-parse HEAD)
+git -C "$work" checkout -q -B "$B" "$STALE"
+[ "$STALE" != "$GATED" ] || fail "the stale copy must be a different commit"
+g 7; head_pass "worktree on a pre-rebase copy of the gated commits"
+# a commit made outside the pipeline still fails head: a change, an empty commit, an amended patch
+git -C "$work" reset -q --hard "$GATED"
+echo outside > g.txt && git -C "$work" add g.txt && git -C "$work" commit -q -m "outside the pipeline"
+g 7; expect_fail "worktree ahead of the run head after a rebase" head
+case "$out" in *"worktree=$(git -C "$work" rev-parse HEAD) (run RUN1); fix: "*) ;; *) fail "worktree ahead not printed: $out" ;; esac
+git -C "$work" reset -q --hard "$GATED"; git -C "$work" commit -q --allow-empty -m "empty, outside the pipeline"
+g 7; expect_fail "empty commit ahead of the run head after a rebase" head
+git -C "$work" reset -q --hard "$NEWH"; git -C "$work" commit -q --allow-empty -m "empty, on the rebased head"
+g 7; expect_fail "empty commit ahead of the rebased head" head
+git -C "$work" checkout -q --detach "$BASE0"
+echo amended > f.txt && git -C "$work" add f.txt && git -C "$work" commit -q -m feature
+git -C "$work" checkout -q -B "$B" HEAD
+g 7; expect_fail "worktree with a changed patch after a rebase" head
+git -C "$work" reset -q --hard "$GATED"
+# a second update-behind in a row: main moves again, the loop rebases the rebased head, and the
+# proof still holds against the gated run head
+(cd "$work" && git checkout -q main && git pull -q --ff-only origin main && echo again > o2.txt && git add o2.txt && git commit -q -m "main moves again" && git push -q origin main && git checkout -q "$B")
+echo "$NEWH" > "$st/prhead"; echo BEHIND > "$st/mss"
+g 7 --update-behind
+NEWH2=$(origin_b)
+case "$out" in "UPDATED pr=7 branch=$B from=$NEWH to=$NEWH2 run=RUN1 gated_patch=$PROOF rebased_from=$GATED") ;; *) fail "second update-behind: rc=$rc out=$out" ;; esac
+echo "$NEWH2" > "$st/prhead"; echo CLEAN > "$st/mss"
+git -C "$work" reset -q --hard "$GATED^"
+g 7; head_pass "worktree behind after two update-behinds"
+# CI on the new head still decides: a pending check fails the guard, the head does not
+echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"
+g 7; [ "$rc" = 1 ] && printf '%s\n' "$out" | grep -qx "GUARD head PASS gated_patch=$PROOF rebased_from=$GATED" &&
+  [ "$(printf '%s\n' "$out" | grep -c ' FAIL ')" = 1 ] && printf '%s\n' "$out" | grep -q '^GUARD checks FAIL ci=pending' || fail "pending CI after a rebase: rc=$rc out=$out"
 passed=$((passed + 1))
+echo '[{"name":"ci","bucket":"pass"}]' > "$st/checks"
+# a head moved by anyone else fails head: a commit pushed on top of the rebased head
+git -C "$work" reset -q --hard "$NEWH2"
+echo foreign > h.txt && git -C "$work" add h.txt && git -C "$work" commit -q -m foreign && git -C "$work" push -q origin "$B"
+FOREIGN=$(origin_b); echo "$FOREIGN" > "$st/prhead"
+g 7; expect_fail "a commit pushed on the rebased head" head
+case "$out" in *"origin=$FOREIGN pr=$FOREIGN"*"(run RUN1); proof: patch changed by the rebase; "*) ;; *) fail "foreign push reason: $out" ;; esac
+# a force-push that rebases the gated work onto another base (not main)
+(cd "$work" && git checkout -q -B side "$BASE0" && echo side > s.txt && git add s.txt && git commit -q -m side && git checkout -q -B "$B" "$GATED" && git rebase -q side && git push -q -f origin "$B")
+REBASED=$(origin_b); echo "$REBASED" > "$st/prhead"
+g 7; expect_fail "gated work force-pushed onto another base" head
+case "$out" in *"origin=$REBASED"*"proof: patch changed by the rebase; "*) ;; *) fail "other-base reason: $out" ;; esac
+# a run head that is unknown, or reported empty, never passes on a proof
+git -C "$work" reset -q --hard "$GATED"; git -C "$work" push -q -f origin "$B"
+echo "$GATED" > "$st/prhead"
+echo 0123456789abcdef0123456789abcdef01234567 > "$st/runhead"
+git -C "$work" reset -q --hard "$NEWH2"; git -C "$work" push -q -f origin "$B"; echo "$NEWH2" > "$st/prhead"
+g 7; expect_fail "unknown run head after a rebase" head
+case "$out" in *"proof: run head 0123456789abcdef0123456789abcdef01234567 is not available locally; "*) ;; *) fail "unknown run head reason: $out" ;; esac
+echo "$GATED" > "$st/runhead"; git -C "$work" reset -q --hard "$GATED"
 # without the proof the same difference is today's head failure
 git -C "$work" rev-parse "$BASE0" > "$st/runhead"
 g 7; expect_fail "run head unrelated to the PR" head
