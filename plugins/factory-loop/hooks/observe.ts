@@ -12,6 +12,7 @@ import { choose } from './ledger'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
+  parseReplies,
   parseCheckout,
   parseCsv,
   parseDirty,
@@ -360,7 +361,7 @@ export async function observe(
       try {
         const r = await run(['callum-flow-issue-read', '--json', String(n)])
         if (r.exitCode === 3) {
-          cache.github.set(n, { at: now, value: { facts: null, trusted: false, brief: null } })
+          cache.github.set(n, { at: now, value: { facts: null, trusted: false, brief: null, replies: [] } })
           continue
         }
         const facts = r.exitCode === 0 ? parseIssueRead(r.stdout) : null
@@ -369,11 +370,15 @@ export async function observe(
           continue
         }
         let brief = cache.github.get(n)?.value.brief ?? null
+        let replies = cache.github.get(n)?.value.replies ?? []
         if (mine.some(i => i.number === n && i.stage === 'designing')) {
           const c = await run(['callum-flow-issue-read', '--json', String(n), '--comments'])
-          if (c.exitCode === 0) brief = parseBrief(c.stdout)
+          if (c.exitCode === 0) {
+            brief = parseBrief(c.stdout)
+            replies = parseReplies(c.stdout)
+          }
         }
-        cache.github.set(n, { at: now, value: { facts, trusted: true, brief } })
+        cache.github.set(n, { at: now, value: { facts, trusted: true, brief, replies } })
       } catch {
         githubOk = false
       }

@@ -173,6 +173,30 @@ export function parseBrief(json: string): { url: string; at: number } | null {
   }
 }
 
+// parseReplies: the trusted comments of an issue that are neither a design brief nor a claim
+// comment (the owner's replies, and anyone trusted), oldest first. at is created_at, never
+// updated_at: heartbeats edit the claim comment. id: the number after '#issuecomment-' in the
+// url, else the comment's id.
+export function parseReplies(json: string): { id: string; url: string; at: number }[] {
+  try {
+    const comments = JSON.parse(json)?.comments
+    if (!Array.isArray(comments)) return []
+    const out: { id: string; url: string; at: number }[] = []
+    for (const c of comments) {
+      if (typeof c?.body !== 'string' || c.body.trimStart().startsWith('## Design brief') || c.body.includes('<!-- callum-flow-claim -->')) continue
+      const at = isoMs(c.created_at)
+      const url = typeof c.html_url === 'string' ? c.html_url : null
+      if (at === null || url === null) continue
+      const id = /#issuecomment-(\d+)$/.exec(url)?.[1] ?? (typeof c.id === 'number' ? String(c.id) : null)
+      if (id === null) continue
+      out.push({ id, url, at })
+    }
+    return out.sort((a, b) => a.at - b.at)
+  } catch {
+    return []
+  }
+}
+
 // parseSubIssues: a tracker's open sub-issues on this repo, ascending, from its timeline
 // (`callum-flow-issue-read --json --timeline <N>`: {events, stripped}), by replaying its
 // sub_issue_added and sub_issue_removed events in order, as the replay harness does (D-35).

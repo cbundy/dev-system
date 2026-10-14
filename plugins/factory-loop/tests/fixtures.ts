@@ -100,6 +100,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     epic: false,
     subIssueList: null,
     brief: null,
+    replies: [],
     delegatedBrief: null,
     ...over,
   }

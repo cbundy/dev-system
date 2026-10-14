@@ -137,6 +137,8 @@ export const WAKE_DECISIONS: Record<'judge' | 'task', Record<string, Record<stri
     cancelled: { redrive: null, drop: 'reason' },
     handoff: { ok: null, fixer: 'instructions', hold: 'reason' },
     report: { parsed: 'fields', hold: null },
+    // the owner answered a design decision on the issue: resume the designer, or wait (SPEC D3)
+    'owner-reply': { resume: 'instructions', wait: 'reason' },
   },
   task: { redrive: TASK_DECISIONS, 'run-it': TASK_DECISIONS, release: TASK_DECISIONS, 'respond-stuck': TASK_DECISIONS },
 }
@@ -409,8 +411,10 @@ function duration(ms: Ms): string {
 // task-timeout), a tell is timed-out (dropped). why: what ended it; undelivered: the same for a tell.
 function fallback(e: LedgerEntry, kind: WakeKind, why: string, undelivered: string): WakeUpdate {
   if (kind === 'judge') {
-    const reason = `${why}, so the loop holds`
-    const outcome: Outcome = { kind: 'wake', decision: 'hold', reason, instructions: null, bump: null, bumpReason: null, fields: {} }
+    // an owner-reply that got no answer waits: the hold stays and nothing is guessed
+    const decision = e.key.startsWith('judge:owner-reply:') ? 'wait' : 'hold'
+    const reason = `${why}, so the loop ${decision === 'wait' ? 'waits' : 'holds'}`
+    const outcome: Outcome = { kind: 'wake', decision, reason, instructions: null, bump: null, bumpReason: null, fields: {} }
     return { key: e.key, status: 'done', outcome, summary: `timed out: ${reason}` }
   }
   if (kind === 'task') return { key: e.key, status: 'timed-out', summary: `timed out: ${why}` }

@@ -202,6 +202,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
   { ...base, kind: 'merge', key: `merge:512:${HEAD}`, class: 'free', rule: 'M5', pr: 512, run: RUN, head: HEAD, bump: 'minor', bumpReason: 'new' },
   { ...base, kind: 'release-parent', key: 'release-parent:470', class: 'free', rule: 'D3', created: [471, 472] },
+  { ...base, kind: 'owner-resume', key: 'owner-resume:470:9001', class: 'free', rule: 'D3', text: 'use SQLite' },
   { ...base, kind: 'abandon', key: 'abandon:470:1', class: 'free', rule: 'D6', run: RUN, branch: 'issue-470-x', note: 'dropped by the owner' },
   { ...base, kind: 'abandon', key: 'abandon:470:2', class: 'free', rule: 'P5', run: null, branch: null, note: 'cancelled run dropped' },
   { ...base, kind: 'milestone-expect', key: 'expect:minor:512', class: 'free', rule: 'M7', bump: 'minor', why: 'a new\ncapability' },
@@ -416,7 +417,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
     expect(writes.filter(p => p.endsWith('.job.json'))).toHaveLength(agents.length)
     expect(writes.filter(p => p.startsWith(`${LOOP_DIR}/spawns/`))).toHaveLength(agents.length)
     for (const p of writes) {
-      const own = p.startsWith(`${LOOP_DIR}/spawns/`) || (p.startsWith(`${LOOP_DIR}/answers/`) && p.endsWith('.job.json')) || p.startsWith(`${LOOP_DIR}/respond/`)
+      const own = p.startsWith(`${LOOP_DIR}/spawns/`) || (p.startsWith(`${LOOP_DIR}/answers/`) && p.endsWith('.job.json')) || p.startsWith(`${LOOP_DIR}/respond/`) || p === `${LOOP_DIR}/control.json`
       expect({ path: p, own }).toEqual({ path: p, own: true })
       expect(p.split('/')).not.toContain('..')
     }

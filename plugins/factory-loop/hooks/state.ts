@@ -13,6 +13,7 @@ import type {
   LedgerEntry,
   Milestone,
   Pool,
+  Reply,
   RunView,
   Source,
   SourceName,
@@ -20,7 +21,7 @@ import type {
   Usage,
 } from './types'
 
-export type GithubIssue = { facts: IssueFacts | null; trusted: boolean; brief: Brief | null }
+export type GithubIssue = { facts: IssueFacts | null; trusted: boolean; brief: Brief | null; replies: Reply[] }
 
 export type Observed = {
   now: number
@@ -152,6 +153,7 @@ export function buildState(o: Observed): State {
         epic: g?.facts ? tracker.test(g.facts.title) : null,
         subIssueList: subIssuesOf(n, timelines),
         brief: g?.brief ?? null,
+        replies: g?.replies ?? [],
         delegatedBrief: o.facts?.briefs.get(n) ?? null,
       }
     })

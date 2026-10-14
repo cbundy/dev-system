@@ -1989,6 +1989,7 @@ function design(ctx: Ctx) {
     }
     if (result.pendingDecision) {
       want(ctx, wake('tell', 'decision', `tell:decision:${n}:${result.brief ?? 'none'}`, 'D3', n, { issue: n, brief: result.brief }))
+      ownerReply(ctx, issue, result.brief, entry?.endedAt ?? life)
       continue
     }
     if (result.created.length > 0) {
@@ -2007,6 +2008,36 @@ function design(ctx: Ctx) {
       want(ctx, { kind: 'delegate', key: `delegate:${n}:${result.brief}`, class: 'develop', rule: 'D4', reason: 'brief ready', issue: n, brief: result.brief })
     }
   }
+}
+
+// D3, a decision hold: the owner may answer on the issue instead of in chat. The replies are the
+// trusted comments after the brief that asked, and after the last resume (so an answered hold
+// wakes nothing). The newest one keys one judge wake: `resume` records the owner's answer as a
+// note and a resume (the same ops /factory runs), `wait` (or a timeout) leaves the hold.
+function ownerReply(ctx: Ctx, issue: IssueView, brief: string | null, endedAt: Ms) {
+  const n = issue.number
+  const asked = brief !== null && issue.brief?.url === brief ? issue.brief.at : endedAt
+  const after = Math.max(asked, latestResumeAt(ctx, `issue:${n}`))
+  const fresh = issue.replies.filter(r => r.at > after)
+  const newest = fresh[fresh.length - 1]
+  if (newest === undefined) return
+  const key = `judge:owner-reply:${n}:${newest.id}`
+  const answer = outcome(done(ctx, key), 'wake')
+  if (answer === undefined) {
+    const fields: Record<string, string | number | null> = { issue: n, brief, reply: newest.url }
+    want(ctx, wake('judge', 'owner-reply', key, 'D3', n, fields, fresh.map(r => `reply ${r.url}`)))
+    return
+  }
+  if (answer.decision !== 'resume' || answer.instructions === null || answer.instructions === '') return
+  want(ctx, {
+    kind: 'owner-resume',
+    key: `owner-resume:${n}:${newest.id}`,
+    class: 'free',
+    rule: 'D3',
+    reason: `owner replied on the issue: ${newest.url}`,
+    issue: n,
+    text: answer.instructions,
+  })
 }
 
 // D4 again for an implementing issue: its implementer failed, timed out or was lost before

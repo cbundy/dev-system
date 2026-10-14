@@ -36,6 +36,9 @@ export type Usage = {
 
 export type Brief = { url: string; at: Ms }
 
+// A trusted comment that is neither a brief nor a claim comment: what the owner replied on the issue.
+export type Reply = { id: string; url: string; at: Ms }
+
 export type IssueView = {
   number: number
   stage: Stage | null
@@ -55,6 +58,8 @@ export type IssueView = {
   // for trackers named in control.only (D-35). null: not read.
   subIssueList: number[] | null
   brief: Brief | null
+  // the issue's replies from the designing --comments read; empty when unread
+  replies: Reply[]
   delegatedBrief: string | null
 }
 
@@ -204,6 +209,7 @@ export type ActionKind =
   | 'merge'
   | 'close-issue'
   | 'release-parent'
+  | 'owner-resume'
   | 'abandon'
   | 'milestone-later'
   | 'milestone-expect'
@@ -399,6 +405,8 @@ export type Action =
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
   | (Base & { kind: 'release-parent'; created: number[] })
+  // rule D3: the owner's answer on the issue, recorded as a note and a resume (control state)
+  | (Base & { kind: 'owner-resume'; text: string })
   | (Base & { kind: 'abandon'; run: string | null; branch: string | null; note: string })
   | (Base & { kind: 'milestone-expect'; bump: Bump; why: string })
   | (Base & { kind: 'pr-comment'; pr: number; body: string })

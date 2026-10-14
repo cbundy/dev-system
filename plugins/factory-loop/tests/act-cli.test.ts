@@ -609,6 +609,43 @@ describe('title', () => {
   })
 })
 
+describe('owner-resume', () => {
+  const resume = (text = 'Use SQLite.\nNo Postgres.'): Action => ({ ...base, kind: 'owner-resume', key: 'owner-resume:470:9001', rule: 'D3', issue: 470, text })
+  const files = (initial: string | null = null) => {
+    const store = { text: initial, writes: 0 }
+    const over = {
+      readFile: async () => store.text,
+      writeFile: async (_path: string, body: string) => {
+        store.text = body
+        store.writes += 1
+      },
+    }
+    return { store, over }
+  }
+  const run = async (action: Action, f: ReturnType<typeof files>) => {
+    const h = harness()
+    h.ctx.io = { ...h.ctx.io, ...f.over }
+    return executor('owner-resume')(h.ctx, action)
+  }
+
+  test('writes one note and one resume to control.json, the answer on one line', async () => {
+    const f = files()
+    const result = await run(resume(), f)
+    expect(result).toEqual({ status: 'done', summary: 'noted and resumed #470' })
+    const control = JSON.parse(f.store.text ?? '{}')
+    expect(control.notes).toMatchObject([{ issue: 470, text: 'Use SQLite. No Postgres.' }])
+    expect(control.resumed).toMatchObject([{ subject: 'issue:470' }])
+  })
+
+  test('a control.json it cannot read fails the action and changes nothing', async () => {
+    const f = files('{not json')
+    const result = await run(resume(), f)
+    expect(result.status).toBe('failed')
+    expect(f.store.text).toBe('{not json')
+    expect(f.store.writes).toBe(0)
+  })
+})
+
 describe('guards and pure readers', () => {
   test('an executor given another kind refuses it', async () => {
     const h = harness()
@@ -626,6 +663,7 @@ describe('guards and pure readers', () => {
         'heartbeat',
         'milestone-expect',
         'milestone-later',
+        'owner-resume',
         'pr-close',
         'pr-comment',
         'pr-reopen',

@@ -1069,6 +1069,49 @@ describe('D: design and delegation', () => {
     expect(keys(plan(resumed, CFG))).toEqual([`design:60:${NOW - 20 * MIN}:r1`])
   })
 
+  describe('an owner reply on the issue (D3, #591)', () => {
+    const pending = designed({ kind: 'designer', brief: brief(60), created: [], pendingDecision: true })
+    const asked = NOW - 15 * MIN
+    const reply = (id: string, at: number) => ({ id, url: `https://github.com/cbundy/dev-system/issues/60#issuecomment-${id}`, at })
+    const held = (replies: { id: string; url: string; at: number }[], extra: LedgerEntry[] = [], over: Partial<State> = {}) => {
+      const s = state({ issues: [mine(60, 'designing', { stageSince: NOW - 20 * MIN, brief: { url: brief(60), at: asked }, replies })], ...over })
+      // the decision tell went out first (rule O2: one wake per pass, owner tells first)
+      const told = entry(`tell:decision:60:${brief(60)}`, 'tell', { wake: 'decision', issue: 60 })
+      return { ...s, ledger: [...s.ledger, pending, told, ...extra] }
+    }
+    const wakeKey = (id: string) => `judge:owner-reply:60:${id}`
+
+    test('a reply after the brief wakes the judge with its URL; no designer', () => {
+      const r = plan(held([reply('7001', NOW - 5 * MIN)]), CFG)
+      expect(find(r, wakeKey('7001'))).toMatchObject({ kind: 'judge', wake: 'owner-reply', fields: { issue: '60', brief: brief(60), reply: reply('7001', 0).url }, context: [`reply ${reply('7001', 0).url}`] })
+      expect(keys(r).some(k => k.startsWith('design:'))).toBe(false)
+    })
+
+    test('a reply older than the brief, or than the latest resume, wakes nothing', () => {
+      expect(keys(plan(held([reply('7000', asked - MIN)]), CFG))).toEqual([])
+      const resumed = held([reply('7001', NOW - 5 * MIN)], [], { control: control({ resumed: [{ subject: 'issue:60', at: NOW - MIN }] }) })
+      expect(keys(plan(resumed, CFG))).toEqual([`design:60:${NOW - 20 * MIN}:r1`])
+    })
+
+    test('resume gives owner-resume with the instructions; wait gives nothing more', () => {
+      const answered = (decision: string, instructions: string | null) =>
+        entry(wakeKey('7001'), 'judge', { wake: 'owner-reply', outcome: wakeAnswer(decision, { instructions, reason: decision === 'wait' ? 'a question' : null }) })
+      const replies = [reply('7001', NOW - 5 * MIN)]
+      const r = plan(held(replies, [answered('resume', 'Use SQLite')]), CFG)
+      expect(find(r, 'owner-resume:60:7001')).toMatchObject({ kind: 'owner-resume', class: 'free', text: 'Use SQLite' })
+      expect(keys(plan(held(replies, [answered('wait', null)]), CFG)).filter(k => k.startsWith('owner-resume') || k.startsWith('judge:owner-reply'))).toEqual([])
+    })
+
+    test('a newer comment is a new key; once resumed the hold is over and D2 designs again with the note', () => {
+      const both = [reply('7001', NOW - 6 * MIN), reply('7002', NOW - 5 * MIN)]
+      const wait = entry(wakeKey('7001'), 'judge', { wake: 'owner-reply', outcome: wakeAnswer('wait', { reason: 'a question' }) })
+      const r = plan(held(both, [wait]), CFG)
+      expect(find(r, wakeKey('7002'))).toMatchObject({ context: [`reply ${both[0]?.url}`, `reply ${both[1]?.url}`] })
+      const resumed = held(both, [], { control: control({ resumed: [{ subject: 'issue:60', at: NOW - MIN }], notes: [{ issue: 60, text: 'Use SQLite', at: NOW - MIN }] }) })
+      expect(find(plan(resumed, CFG), `design:60:${NOW - 20 * MIN}:r1`)).toMatchObject({ notes: ['Use SQLite'] })
+    })
+  })
+
   test('a split releases the parent: label off, abandoned logged (SKILL:76-78)', () => {
     const split = designed({ kind: 'designer', brief: brief(60), created: [61, 62], pendingDecision: false })
     expect(find(plan(designing([split]), CFG), 'release-parent:60')).toMatchObject({ created: [61, 62] })

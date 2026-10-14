@@ -64,7 +64,7 @@ reason: nothing else waits for the next release, so the image change can join it
   explain at length.
 
 ### JUDGE
-Decide from the wake itself, plus only the reads named. Every judge times out to `hold`.
+Decide from the wake itself, plus only the reads named. Every judge times out to `hold` (`owner-reply`: to `wait`).
 
 - **`sequence`** (`pr issue head flags bump`; detail `SUMMARY:`, `BUMP:`, `FLAGS:`): the merge
   adjudicator approved, and a major bump, a `run-it` rollout or a base image or template change
@@ -113,6 +113,16 @@ Decide from the wake itself, plus only the reads named. Every judge times out to
     a split made; `pendingDecision` true only when the brief waits on the owner.
   - `hold` (reason): neither a brief nor a split (the designer failed). The owner designs it
     again with `/factory resume <N>`.
+
+- **`owner-reply`** (`issue brief reply`; detail `reply <url>` lines): a design waits on an
+  owner decision (`brief`), and a trusted comment was posted on the issue after it. Read each
+  reply with `callum-flow-issue-read --comment <url>` and the brief's open decisions.
+  - `resume` (instructions): the replies settle the decision. Restate the owner's choice for the
+    designer as `instructions`: their answer only, never the brief's content or a closing
+    keyword. The loop records `note <N> <instructions>` and `resume <N>` itself, and the
+    designer runs again.
+  - `wait` (reason): the comment is not an answer (a question, a status remark, a partial
+    answer). The hold stays; a newer comment asks you again.
 
 ### TASK
 The work stays yours (D-13, D-37): do it in this turn, then answer `done` (finished, or
@@ -164,11 +174,12 @@ No ANSWER block. Write exactly one line, then end the turn (the phone shows it, 
   decision (`--comment <url>`).
 - Example: `[DECISION] Owner: pick SQLite or Postgres for the settings store
   ([#507](https://github.com/o/r/issues/507)); both options are in its
-  [brief](https://github.com/o/r/issues/507#issuecomment-1). Reply here and I resume it.`
+  [brief](https://github.com/o/r/issues/507#issuecomment-1). Reply here or on the issue and I resume it.`
 
 Owner items (the title counts them until resolved):
-- `decision` (issue, brief): the design waits on an owner decision. Owner replies; you record
-  it with `note <N> <answer>` and `resume <N>`, and the designer runs again.
+- `decision` (issue, brief): the design waits on an owner decision. The owner replies in chat,
+  and you record it with `note <N> <answer>` and `resume <N>`; or replies on the issue, and
+  the loop wakes you with `JUDGE owner-reply` and resumes it itself. Say both in the tell.
 - `escalate` (issue, run or pr, brief; detail: why, verdicts or WARN lines): the adjudicator
   escalated a gate or a test-weakening warning. Owner decides; you `note <N>` and
   `resume <run>`, or `drop <N>`. Tell the owner what a resume will do, as the tell's context

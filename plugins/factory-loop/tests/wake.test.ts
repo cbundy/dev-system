@@ -310,6 +310,7 @@ describe('checking an answer (SPEC 8.2)', () => {
     open('judge:mystery:1', 'judge', 'mystery', 'w6'),
     open('judge:guard-fail:550:head50:1', 'judge', 'guard-fail', 'w7', { issue: 50 }),
     open('task:redrive:b:h', 'task', 'redrive', 'w8', { issue: 46 }),
+    open('judge:owner-reply:60:7001', 'judge', 'owner-reply', 'w10', { issue: 60 }),
   ]
   const check = (id: string, decision: string, more: { reason?: string; instructions?: string; fields?: unknown } = {}) =>
     checkAnswer(ledger, { id, decision, ...more }, REPO)
@@ -321,11 +322,20 @@ describe('checking an answer (SPEC 8.2)', () => {
     expect(allowedDecisions('judge', 'cancelled')).toEqual(['redrive', 'drop'])
     expect(allowedDecisions('judge', 'handoff')).toEqual(['ok', 'fixer', 'hold'])
     expect(allowedDecisions('judge', 'report')).toEqual(['parsed', 'hold'])
+    expect(allowedDecisions('judge', 'owner-reply')).toEqual(['resume', 'wait'])
     for (const name of ['redrive', 'run-it', 'release', 'respond-stuck']) expect(allowedDecisions('task', name)).toEqual(['done', 'failed', 'hold'])
     expect(allowedDecisions('tell', 'decision')).toEqual([])
     // a name the table lacks may only hold (the skill: `reason: unknown wake <name>`)
     expect(allowedDecisions('judge', 'mystery')).toEqual(['hold'])
     expect(allowedDecisions('task', 'mystery')).toEqual(['hold'])
+  })
+
+  test('owner-reply takes resume with instructions and wait with a reason; hold is refused', () => {
+    expect(problem(check('w10', 'resume'))).not.toBeNull()
+    expect(check('w10', 'resume', { instructions: 'Use SQLite' }).ok).toBe(true)
+    expect(problem(check('w10', 'wait'))).not.toBeNull()
+    expect(check('w10', 'wait', { reason: 'a question, not an answer' }).ok).toBe(true)
+    expect(problem(check('w10', 'hold', { reason: 'x' }))).not.toBeNull()
   })
 
   test('an allowed decision closes its wake with the outcome plan reads', () => {
@@ -575,6 +585,18 @@ describe('timeouts: the fallback never acts (SPEC 8.2, 10.8)', () => {
       },
       { key: 'task:run-it:60', status: 'timed-out', summary: 'timed out: no answer within 6h' },
       { key: 'tell:decision:47:x', status: 'timed-out', summary: 'dropped: not delivered within 30m' },
+    ])
+  })
+
+  test('an owner-reply that times out waits: the hold stays', () => {
+    const ledger = [open('judge:owner-reply:60:7001', 'judge', 'owner-reply', 'w10', { startedAt: at(31) })]
+    expect(expireWakes(ledger, NOW, CFG)).toEqual([
+      {
+        key: 'judge:owner-reply:60:7001',
+        status: 'done',
+        outcome: { kind: 'wake', decision: 'wait', reason: 'no answer within 30m, so the loop waits', instructions: null, bump: null, bumpReason: null, fields: {} },
+        summary: 'timed out: no answer within 30m, so the loop waits',
+      },
     ])
   })
 

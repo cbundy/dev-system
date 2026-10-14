@@ -11,6 +11,7 @@ import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
 import {
   parseBrief,
+  parseReplies,
   parseCheckout,
   parseCsv,
   parseDirty,
@@ -128,6 +129,27 @@ describe('parse', () => {
       stripped: 0,
     })
     expect(parseBrief(json)).toEqual({ url: 'u3', at: NOW - 10 * MIN })
+  })
+
+  test('replies: trusted comments that are neither a brief nor a claim comment, by created_at (#591)', () => {
+    const u = (id: number) => `https://github.com/o/r/issues/60#issuecomment-${id}`
+    const json = JSON.stringify({
+      issue: {},
+      comments: [
+        { body: '## Design brief (designer)\n...', created_at: iso(NOW - 60 * MIN), html_url: u(1) },
+        { body: '<!-- callum-flow-claim -->\nclaimed-by: x', created_at: iso(NOW - 50 * MIN), updated_at: iso(NOW - MIN), html_url: u(2) },
+        { body: 'Go with SQLite', created_at: iso(NOW - 10 * MIN), html_url: u(4) },
+        { body: 'Earlier remark', created_at: iso(NOW - 20 * MIN), html_url: u(3) },
+        { body: 'no date', html_url: u(5) },
+        { body: 'no url', created_at: iso(NOW - 5 * MIN) },
+        null,
+      ],
+    })
+    expect(parseReplies(json)).toEqual([
+      { id: '3', url: u(3), at: NOW - 20 * MIN },
+      { id: '4', url: u(4), at: NOW - 10 * MIN },
+    ])
+    expect(parseReplies('not json')).toEqual([])
   })
 
   test('the main checkout: its branch or a detached head, its commit, changed tracked paths, the default branch (#544)', () => {

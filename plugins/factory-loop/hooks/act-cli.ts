@@ -4,6 +4,7 @@
 // failure and says what happened. They decide nothing (plan did). The steps and the reading of
 // their output are pure functions below, so tests, the replay harness and the argv safety test
 // read them without the engine.
+import { runOp } from './control'
 import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { parsePool } from './parse'
@@ -393,6 +394,21 @@ const title: Executor = async (ctx, action) => {
   return { status: 'done', summary: clip(action.text) }
 }
 
+// owner-resume (rule D3): the owner's answer on the issue, recorded the way /factory records it:
+// `note <N> <text>`, then `resume <N>`, through runOp on control.json. Done only when both took.
+// A retry after a failed resume repeats the note, which only adds the same text again.
+const ownerResume: Executor = async (ctx, action) => {
+  if (action.kind !== 'owner-resume' || action.issue === null) return refused(`the owner-resume executor got a ${action.kind} action`)
+  const paths = { loopDir: ctx.rt.loopDir, configDir: '' }
+  const text = oneLine(action.text).slice(0, 1900)
+  const n = action.issue
+  for (const op of [`note ${n} ${text}`, `resume ${n}`]) {
+    const reply = await runOp(ctx.io, paths, op, await ctx.io.now())
+    if (!reply.ok) return { status: 'failed', summary: clip(`${op.split(' ')[0]} #${n} refused: ${reply.text}`) }
+  }
+  return { status: 'done', summary: clip(`noted and resumed #${n}`) }
+}
+
 export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   heartbeat: command('heartbeat'),
   sweep: command('sweep'),
@@ -408,6 +424,7 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   'release-worktree': command('release-worktree'),
   'restart-self': command('restart-self'),
   'stop-agent': stopAgent,
+  'owner-resume': ownerResume,
   title,
 }
 
