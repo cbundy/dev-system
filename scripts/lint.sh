@@ -137,7 +137,7 @@ if command -v terraform >/dev/null 2>&1; then
   checked=$((checked + 1))
   tf_tmp=$(mktemp -d) || exit 1
   trap 'rm -f "$list"; rm -rf "$tf_tmp"' EXIT
-  cp "$TF_DIR"/*.tf "$TF_DIR"/.terraform.lock.hcl "$tf_tmp"/
+  cp "$TF_DIR"/*.tf "$TF_DIR"/*.sh "$TF_DIR"/.terraform.lock.hcl "$tf_tmp"/
   TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
   export TF_PLUGIN_CACHE_DIR
   mkdir -p "$TF_PLUGIN_CACHE_DIR"
