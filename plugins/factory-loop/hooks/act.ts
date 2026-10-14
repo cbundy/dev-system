@@ -339,19 +339,29 @@ export function breakerEventArgv(b: BreakerNotice): string[] {
 
 export type ListedAgent = { id: string; status: AgentStatus }
 
+// How long an agent sent the repair message counts as at work while the list still shows it
+// completed (reconcilable): the engine resumes it from its transcript (#548), and when the list
+// shows that is not proven. Past it, the usual one pass of grace, then lost.
+export const REPAIR_GRACE_MS = 5 * 60_000
+
 // reconcilable: the agent list as reconcileAgents should judge it. An agent whose answer is being
-// handled counts as running, listed or not, so a pass in between never marks it lost; an agent
-// first listed completed counts as running for that pass, since its turn.complete may still be
-// on its way (seen: when each id was first listed completed, updated in place).
+// handled counts as running, listed or not, so a pass in between never marks it lost; so does one
+// listed completed within REPAIR_GRACE_MS of its repair message (repairing: when each went out,
+// until its next turn.complete); an agent first listed completed counts as running for that pass,
+// since its turn.complete may still be on its way (seen: when each id was first listed completed).
+// seen and repairing are updated in place.
 export function reconcilable(
   agents: readonly ListedAgent[],
   answering: ReadonlySet<string>,
   seen: Map<string, Ms>,
   now: Ms,
+  repairing: Map<string, Ms>,
 ): ListedAgent[] {
+  for (const [id, at] of [...repairing]) if (now - at > REPAIR_GRACE_MS) repairing.delete(id)
   const out = agents.map(a => {
     if (answering.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     if (a.status !== 'completed') return a
+    if (repairing.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     const first = seen.get(a.id)
     if (first === undefined) seen.set(a.id, now)
     return first === undefined || first === now ? { id: a.id, status: 'running' as AgentStatus } : a
@@ -377,8 +387,9 @@ export function updateDone(ledger: readonly LedgerEntry[], control: Control, loa
 // --- one act-mode pass, from what observe read (SPEC 2) --------------------------------------------
 
 // What the hooks between passes share with the pass: the agents whose answer is being handled,
-// and when each agent was first listed completed (reconcilable).
-export type Between = { answering: Set<string>; completedSeen: Map<string, Ms> }
+// when each agent was first listed completed, and when each was sent its repair message
+// (reconcilable).
+export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; repairing: Map<string, Ms> }
 
 // The pass's agent list: only a read that worked may mark agents lost.
 export type Listed = { ok: boolean; agents: ListedAgent[] }
@@ -394,7 +405,7 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
   const now = observed.now
   const moved: LedgerEntry[] = []
   if (listed.ok) {
-    const agents = reconcilable(listed.agents, between.answering, between.completedSeen, now)
+    const agents = reconcilable(listed.agents, between.answering, between.completedSeen, now, between.repairing)
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
@@ -445,6 +456,7 @@ export async function agentAnswered(
   if (entry.status === 'done') return { result: 'recorded', key: entry.key }
   if (entry.status !== 'running') return { result: 'dropped', why: `late answer for ${entry.key} (${entry.status})` }
   between.answering.add(id)
+  between.repairing.delete(id)
   try {
     const read = await onAgentAnswer(ctxOf(env, state, entry), entry, answer)
     let exec = read.exec
@@ -468,8 +480,10 @@ export async function agentAnswered(
       await logLoop(env, marked)
       const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem))
       if (undelivered === null) {
-        // listed completed until the message resumes it: the passes count that listing afresh
+        // listed completed until the message resumes it, which the list may show late: the passes
+        // take it as at work for a while, then count that listing afresh
         between.completedSeen.delete(id)
+        between.repairing.set(id, at)
         return { result: 'repair', why: problem, key: entry.key }
       }
       exec = { ...exec, summary: clip(`${exec.summary}; the repair message was not delivered: ${undelivered}`) }

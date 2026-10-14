@@ -162,8 +162,9 @@ let prevPassAt: Ms = 0
 let traceCut: string | null = null
 // the day and cap whose trace file this load has read for an earlier load's cut (writeTrace)
 let traceChecked: string | null = null
-// agents whose answer is being handled, and when each was first listed completed (act.ts)
-const between: Between = { answering: new Set(), completedSeen: new Map() }
+// agents whose answer is being handled, when each was first listed completed, and when each was
+// sent its repair message (act.ts)
+const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
 let lastWakeAt = 0
 // dev-restart-self returned (rule H4): the workspace is about to be replaced, so nothing more is
 // started in this module's life, and the next load finds the update done (act.ts updateDone)

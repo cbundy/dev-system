@@ -9,6 +9,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   EXECUTORS,
   GITHUB_KINDS,
+  REPAIR_GRACE_MS,
   actPass,
   agentAnswered,
   agentToolAnswered,
@@ -309,13 +310,13 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
       { id: 'a', status: 'completed' as const },
       { id: 'b', status: 'running' as const },
     ]
-    expect(reconcilable(listed, new Set(['c']), seen, NOW)).toEqual([
+    expect(reconcilable(listed, new Set(['c']), seen, NOW, new Map())).toEqual([
       { id: 'a', status: 'running' },
       { id: 'b', status: 'running' },
       { id: 'c', status: 'running' },
     ])
-    expect(reconcilable(listed, new Set(), seen, NOW + MIN)).toEqual(listed)
-    expect(reconcilable([], new Set(), seen, NOW + 2 * MIN)).toEqual([])
+    expect(reconcilable(listed, new Set(), seen, NOW + MIN, new Map())).toEqual(listed)
+    expect(reconcilable([], new Set(), seen, NOW + 2 * MIN, new Map())).toEqual([])
     expect(seen.size).toBe(0)
   })
 
@@ -340,7 +341,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const designer = entry('design:60:1', 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     // the answer file's write waits on the test: the answer is being handled
     const f = fake([designer], () => ({}), { writeFile: async () => held, spawnAgent: async input => (spawned.push(input), { agentId: 'agent-2' }) })
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ issues: [mine(60, 'designing', { stageSince: 1 })], ledger: [] })
     const answering = agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'RESULT brief=none created=none pending_decision=no', reason: 'answer' }, between)
     // two passes meanwhile, the agent listed completed: neither marks it lost, nor spawns again
@@ -359,7 +360,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   test('an interim answer from an agent still at work leaves its entry running; its final answer is recorded; one that stopped is read at once (#545)', async () => {
     const implementer = entry('delegate:60:b', 'delegate', { agent: 'implementer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const f = fake([implementer])
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ issues: [mine(60, 'implementing', { stageSince: 1 })], ledger: [] })
     const asked: string[] = []
     let working = true
@@ -388,7 +389,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   test('an unreadable reply gets one repair message from the same agent, spending no attempt; a second unreadable reply fails the attempt (#548)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const f = fake([gate])
-    const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]) }
+    const between: Between = { answering: new Set(), completedSeen: new Map([['agent-1', NOW - MIN]]), repairing: new Map() }
     const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
     const sent: { to: string; text: string }[] = []
     const repair = async (to: string, text: string) => (sent.push({ to, text }), null)
@@ -405,9 +406,11 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'running', attempts: 1, agentId: 'agent-1', reminded: true })
     // the pass after does not take the agent's completed listing before the resume as its end
     expect(between.completedSeen.has('agent-1')).toBe(false)
+    expect(between.repairing.get('agent-1')).toBe(NOW)
 
     // the repaired reply is unreadable again: now the attempt fails, with no second message
     expect(await said(prose)).toMatchObject({ result: 'applied', key: gate.key, repaired: true })
+    expect(between.repairing.size).toBe(0)
     expect(sent).toHaveLength(1)
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'failed', attempts: 1 })
     expect(f.env.live.ledger.find(e => e.key === gate.key)?.summary).toContain('does not parse')
@@ -417,7 +420,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const designer = entry('design:60:1', 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const files = new Map<string, string>()
     const f = fake([designer], () => ({}), { writeFile: async (p, t) => void files.set(p, t), readFile: async p => files.get(p) ?? null })
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ issues: [mine(60, 'designing', { stageSince: 1 })], ledger: [] })
     const said = (answer: string) => agentAnswered(f.env, s, { agentId: 'agent-1', answer, reason: 'answer' }, between, async () => false, async () => null)
     const report = '## Design\nThe parser drops prose before the contract.\nBrief posted on the issue.'
@@ -436,7 +439,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   test('an implementer that gave up and answers the repair gated with no run fails its attempt, so rule D4b retries it, never a done entry no rule reads (#548)', async () => {
     const implementer = entry('delegate:60:b', 'delegate', { agent: 'implementer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const f = fake([implementer])
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ issues: [mine(60, 'implementing', { stageSince: 1 })], ledger: [] })
     expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'I could not finish.', reason: 'answer' }, between, async () => false, async () => null)).toMatchObject({ result: 'repair' })
     // through the tool: refused, with what to correct
@@ -451,10 +454,31 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(next.actions.map(a => a.key)).toContain(implementer.key)
   })
 
+  test('an agent sent its repair message stays at work while still listed completed, for REPAIR_GRACE_MS, since its resume may show late; then it is lost as before (#548)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([gate])
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, async () => null)).toMatchObject({ result: 'repair' })
+    const listed = { ok: true, agents: [{ id: 'agent-1', status: 'completed' as AgentStatus }] }
+    const status = () => f.env.live.ledger.find(e => e.key === gate.key)?.status
+    // passes seconds apart (pings), the agent still listed completed: it is not lost
+    for (const at of [NOW + 1_000, NOW + 6_000, NOW + REPAIR_GRACE_MS]) {
+      await actPass(f.env, { ...s, now: at }, listed, between)
+      expect([at - NOW, status()]).toEqual([at - NOW, 'running'])
+    }
+    // never resumed: past the grace it gets the usual one pass, then it is lost
+    await actPass(f.env, { ...s, now: NOW + REPAIR_GRACE_MS + 6_000 }, listed, between)
+    expect(status()).toBe('running')
+    await actPass(f.env, { ...s, now: NOW + REPAIR_GRACE_MS + 12_000 }, listed, between)
+    expect(status()).toBe('lost')
+    expect(between.repairing.size).toBe(0)
+  })
+
   test('no repair goes to an agent still at work, nor to one the loop did not start (#548)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const f = fake([gate])
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const s = state({ ledger: [] })
     const sent: string[] = []
     const repair = async (to: string) => (sent.push(to), null)
@@ -486,7 +510,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.calls[0]?.argv).toContain('feat/issue-60-x')
     expect(JSON.parse(files.get(answerPath(LOOP_DIR, gate.key)) ?? '{}')).toEqual({ tool: 'mcp__factory-loop__verdict', input })
     expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toEqual({ ok: false, text: 'Not recorded: your answer is already recorded; end your turn.', key: gate.key })
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'I called the tool; all done.', reason: 'answer' }, between)).toEqual({ result: 'recorded', key: gate.key })
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'done', outcome: { action: { type: 'approve' } } })
   })
@@ -532,7 +556,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
   test('a repair message that cannot be delivered fails the attempt as before; a turn that failed gets none (#548)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
-    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
     const sent: string[] = []
     const gone = async (to: string) => (sent.push(to), 'the agent is gone')
     const f = fake([gate])
@@ -716,7 +740,7 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
   }
   const rt = runtime()
   const live: Live = { ledger: [] }
-  const between: Between = { answering: new Set(), completedSeen: new Map() }
+  const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
   const env: ActEnv = { io, rt, live, commands: [], wakeId: () => `w${++wakes}`, session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
   const cache = emptyCache()
   let lastTitle: string | null = null
