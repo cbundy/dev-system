@@ -9,6 +9,7 @@ export const DEFAULT_CONFIG: Config = {
   mode: 'observe',
   shadowDevice: null,
   readyLabel: 'ready',
+  priorityLabel: 'priority',
   // labels are lower case for now and compared without regard to case (owner, 2026-10-13)
   inDevLabel: 'in development',
   skipLabels: [],

@@ -503,6 +503,7 @@ describe('config (SPEC 4.2)', () => {
   test('unknown keys and bad values are left out and named, the rest still applies', () => {
     const { config: c, problems } = loadConfig({
       readyLabel: 'Go',
+      priorityLabel: 'urgent',
       passEveryMs: '60s',
       sweepEvery: 'soon',
       maxInFlightIssues: 4,
@@ -513,6 +514,8 @@ describe('config (SPEC 4.2)', () => {
       colour: 'blue',
     })
     expect(c.readyLabel).toBe('Go')
+    expect(c.priorityLabel).toBe('urgent')
+    expect(DEFAULT_CONFIG.priorityLabel).toBe('priority')
     expect(c.maxInFlightIssues).toBe(4)
     expect(c.rateCaps).toEqual({ start: 10, spawn: 120, wake: 20, perIssueKind: 6 })
     expect(c.maxAttempts.claim).toBe(5)

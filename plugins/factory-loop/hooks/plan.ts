@@ -2011,7 +2011,7 @@ function onlyIssues(ctx: Ctx): number[] {
   return out
 }
 
-// D1: claim queue candidates, in priority order, as far as tier and capacity allow.
+// D1: claim queue candidates, in priority order (owner list, priority label, then ascending), as far as tier and capacity allow.
 function claims(ctx: Ctx) {
   const { state, config, tier } = ctx
   for (const source of ['queue', 'github', 'pool'] as const) {
@@ -2029,7 +2029,10 @@ function claims(ctx: Ctx) {
     if (!state.queue.includes(n) && (stage === null || stage === 'queued')) skip(ctx, 'D1', n, 'owner: only names it, but it is not in the ready queue')
   }
   const listed = (control.only.length > 0 ? only : control.priority).filter(n => state.queue.includes(n))
-  const order = [...listed, ...[...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)]
+  // then queue issues with the priority label, then the rest; each group in ascending order
+  const unlisted = [...state.queue].filter(n => !listed.includes(n)).sort((a, b) => a - b)
+  const labelled = (n: number) => ctx.issues.get(n)?.labels?.some(l => sameLabel(l, config.priorityLabel)) ?? false
+  const order = [...listed, ...unlisted.filter(labelled), ...unlisted.filter(n => !labelled(n))]
   const runningClaims = state.ledger.filter(e => e.kind === 'claim' && e.status === 'running')
   // a claim done but not yet observed holds its place under the caps as a running one does (#547)
   const unseen = unseenClaims(ctx)

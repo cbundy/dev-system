@@ -30,7 +30,7 @@ Row 0 is the skill's frontmatter (`SKILL:1-10`). It is replaced by the new judge
 |---|---|---|---|---|---|
 | I-01 | Act as tech lead: delegate design and implementation, drive pipelines, verify and merge; never write feature code | SKILL:14-16 | always | model | The loop as a whole. The model's remaining job is the judge skill (SPEC section 8) |
 | I-02 | Mechanics live in scripts and agents; each guard's FAIL line names its fix | SKILL:16-18 | any CLI call | model reads headers and FAIL lines | exec catalogue (SPEC 6), with a fixed FAIL map in rule `M2`. A FAIL line no rule maps goes to `judge(guard-fail)`, once per failure (D-65); a `head` FAIL that is only a worktree the pipeline's commits left behind is fast-forwarded first (exec `fast-forward`, D-66) |
-| I-03 | Per-repo parameters: repo, ready label, in-development label, usage thresholds 85/90/95 | SKILL:20-24 | session start | model | config `repo`, `readyLabel`, `inDevLabel`, `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` |
+| I-03 | Per-repo parameters: repo, ready label, in-development label, priority label, usage thresholds 85/90/95 | SKILL:20-24 | session start | model | config `repo`, `readyLabel`, `inDevLabel`, `priorityLabel`, `usageSlowPct`, `usageStopNewPct`, `usageStopAllPct` |
 
 ## Ticks and the usage gate
 
