@@ -123,7 +123,7 @@ function runtime(): Runtime {
 }
 
 function slot(path: string, branch: string | null, status = 'leased'): Slot {
-  return { path, branch, state: status, dirty: null, busy: false }
+  return { path, branch, state: status, dirty: null, busy: false, lease: null, leasedAt: null, leaseBranch: branch }
 }
 
 type Over = { ledger?: LedgerEntry[]; pool?: Pool | null; attempts?: number; event?: (state: string, fields: EventFields) => Promise<void> }

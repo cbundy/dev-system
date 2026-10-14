@@ -141,7 +141,8 @@ export function sourceOf(argv: readonly string[]): TraceSource | undefined {
   if (tool === 'queue-watch.sh' || (cmd === 'callum-flow-issue-read' && args.includes('--list'))) return 'queue'
   if (cmd === 'callum-flow-issue-read') return 'github'
   if (tool === 'usage-check.sh') return 'usage'
-  if (cmd === 'treehouse') return 'pool'
+  // a pool slot's reflog or tree (git -C <slot>, #563) is the pool's
+  if (cmd === 'treehouse' || (cmd === 'git' && args[0] === '-C')) return 'pool'
   if (cmd === 'git') return 'checkout'
   if (cmd === 'callum-flow-milestone') return 'milestone'
   return undefined

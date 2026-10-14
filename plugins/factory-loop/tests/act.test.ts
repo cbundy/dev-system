@@ -835,6 +835,8 @@ function world(now: () => number) {
     run: null as string | null,
     pr: null as number | null,
     slotBranch: null as string | null,
+    slotState: 'leased',
+    leasedAt: null as number | null,
     watch: '',
     queue: [470],
   }
@@ -860,7 +862,26 @@ function world(now: () => number) {
         if (args.includes('--comments')) return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
         return { stdout: args.join(' ') === '--json 470' ? ISSUE_470 : JSON.stringify({ issues: [], stripped: 0 }) }
       case 'treehouse':
-        return { stdout: JSON.stringify([{ path: SLOT, branch: w.slotBranch, status: 'leased', processes: [] }]) }
+        // the merged issue's clean slot goes back to the pool (rule H3)
+        if (args[0] === 'return' && args[1] === SLOT) w.slotState = 'available'
+        return {
+          stdout: JSON.stringify([
+            { path: SLOT, branch: w.slotBranch ?? '', status: w.slotState, lease_id: 'lease-2', leased_at: w.leasedAt === null ? null : iso(w.leasedAt), processes: [] },
+          ]),
+        }
+      case 'git': {
+        // the slot's HEAD reflog (#563): this lease's branch and its detach, after an earlier
+        // lease's issue
+        if (args[0] !== '-C' || args[1] !== SLOT || !args.includes('reflog')) return undefined
+        const leased = Math.floor((w.leasedAt ?? 0) / 1000)
+        const lines = [
+          `HEAD@{${leased + 600}}\tcheckout: moving from ${BRANCH} to HEAD`,
+          `HEAD@{${leased + 60}}\tcommit: the loop acts`,
+          `HEAD@{${leased + 30}}\tcheckout: moving from ${HEAD} to ${BRANCH}`,
+          `HEAD@{${leased - 3600}}\tcheckout: moving from feat/issue-12-old to HEAD`,
+        ]
+        return { stdout: `${lines.join('\n')}\n` }
+      }
       case 'callum-flow-milestone':
         return args[0] === 'show' ? { stdout: 'Next release (v0.36.0)\nExpected: patch\n#470 open  The loop acts\n' } : { stdout: 'ok\n' }
       case 'callum-flow-claim':
@@ -877,6 +898,7 @@ function world(now: () => number) {
           w.stage = 'implementing'
           w.since = now()
           w.slotBranch = BRANCH
+          w.leasedAt = now() - 60_000
         }
         return {}
       case 'sh':
@@ -894,6 +916,8 @@ function world(now: () => number) {
         w.stage = 'merged'
         w.since = now()
         w.watch = ''
+        // the implementer detached its slot once the pipeline held the branch (#563)
+        w.slotBranch = null
         return { stdout: `merged PR #512 at ${HEAD}\n` }
       case 'callum-flow-rollout':
         return { stdout: 'ROLLOUT run-it source=brief\n' }
@@ -1084,13 +1108,15 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.ran('callum-flow-rollout').map(s => s.argv)).toEqual([['callum-flow-rollout', '470']])
     expect(h.entry(`merge:512:${HEAD}`)).toMatchObject({ status: 'done', outcome: { kind: 'merge', result: 'merged', rollout: 'run-it' } })
 
-    // pass 10: the main checkout brought up to date after the merge (#555), the run-it rollout's
-    // follow-ups, and the bump above the milestone's Expected
+    // pass 10: the main checkout brought up to date after the merge (#555), the issue's clean
+    // slot returned to the pool (#563), the run-it rollout's follow-ups, and the bump above the
+    // milestone's Expected
     at(240)
     await h.pass()
     const updated = h.live.ledger.find(e => e.kind === 'update-checkout' && e.key !== 'update-checkout:0')
-    expect(h.keys()).toEqual([updated?.key, 'milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
+    expect(h.keys()).toEqual([updated?.key, `release:${SLOT}:${BRANCH}`, 'milestone-later:470', 'task:run-it:470', 'expect:minor:512'])
     expect(updated).toMatchObject({ rule: 'H5', status: 'done', outcome: { kind: 'update-checkout', result: 'current' } })
+    expect(h.entry(`release:${SLOT}:${BRANCH}`)).toMatchObject({ rule: 'H3', status: 'done', summary: `returned ${SLOT}` })
     expect(h.ran('callum-flow-milestone').filter(s => s.argv[1] !== 'show').map(s => s.argv)).toEqual([
       ['callum-flow-milestone', 'plan', '470', 'later'],
       ['callum-flow-milestone', 'expect', 'minor', 'a new capability'],

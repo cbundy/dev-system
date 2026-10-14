@@ -90,7 +90,21 @@ export type RunView = {
 // failed is { error }.
 export type Checkout = { branch: string | null; head: string | null; defaultBranch: string; dirty: string[] } | { error: string }
 
-export type Slot = { path: string; branch: string | null; state: string; dirty: boolean | null; busy: boolean }
+// A treehouse pool slot (#563): the branch checked out (null when detached), and the lease's
+// id, start and branch: the branch it has checked out, else the newest issue branch its HEAD
+// reflog shows checked out since the lease began (an implementer detaches its slot once the
+// pipeline holds the branch). dirty: tracked changes, read only for a slot rule H3 might return
+// (null: not read).
+export type Slot = {
+  path: string
+  branch: string | null
+  state: string
+  dirty: boolean | null
+  busy: boolean
+  lease: string | null
+  leasedAt: Ms | null
+  leaseBranch: string | null
+}
 export type Pool = { free: number; total: number; slots: Slot[] }
 
 export type AgentStatus = 'pending' | 'running' | 'waiting' | 'idle' | 'completed' | 'failed' | 'killed'

@@ -25,6 +25,7 @@ import type {
   Rollout,
   RunView,
   Skip,
+  Slot,
   Stage,
   State,
   Tier,
@@ -49,7 +50,7 @@ const ANSWERED_GRACE_MS = 60_000
 const ROLLOUT_WITHIN_MS = 24 * HOUR
 // the live stages; observe reads the GitHub state of every issue in one (#556)
 export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
-const ENDED: readonly Stage[] = ['merged', 'closed without merge']
+export const ENDED: readonly Stage[] = ['merged', 'closed without merge']
 const MERGEABLE_STATES = ['merge-ready', 'head-mismatch', 'conflict']
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 // Notices where the owner has to act or decide; they go out before any other wake (rule O2).
@@ -536,25 +537,46 @@ function housekeeping(ctx: Ctx) {
   }
   if (!state.sources.pool.ok || state.pool === null) return
   for (const slot of [...state.pool.slots].sort((a, b) => a.path.localeCompare(b.path))) {
-    if (slot.state === 'available' || slot.busy || slot.dirty !== false || slot.branch === null) continue
-    const n = issueFromBranch(slot.branch)
-    const issue = n === null ? undefined : ctx.issues.get(n)
-    if (issue === undefined || !finished(issue)) continue
-    // an agent of the issue still at work, its entry running or answered (rule A2 stops it first)
-    const agentRunning = state.ledger.some(e => e.issue === n && e.agentId !== undefined && (e.status === 'running' || agentLive(ctx, e.agentId)))
-    if (agentRunning) continue
-    const why = endedWhy(issue)
-    want(ctx, {
-      kind: 'release-worktree',
-      key: `release:${slot.path}:${slot.branch}`,
-      class: 'free',
-      rule: 'H3',
-      reason: `${why === 'closed' ? 'closed on GitHub' : why}, slot clean`,
-      issue: n,
-      path: slot.path,
-      branch: slot.branch,
-    })
+    if (slot.state !== 'available') returnSlot(ctx, slot)
   }
+}
+
+// H3: a leased slot goes back to the pool once the issue its lease worked is finished and no
+// agent of it is at work, its tree clean of tracked changes. The issue comes from the lease's
+// branch, which observe reads from the slot's reflog once the agent has detached it (#563).
+// Every slot kept says why; a dirty one tells the owner once.
+function returnSlot(ctx: Ctx, slot: Slot) {
+  const kept = (issue: number | null, why: string) => skip(ctx, 'H3', issue, `slot ${slot.path} kept: ${why}`)
+  const branch = slot.leaseBranch
+  const n = branch === null ? null : issueFromBranch(branch)
+  if (slot.busy) return kept(n, 'processes run in it')
+  if (branch === null || n === null) {
+    return kept(null, slot.branch === null ? 'its lease names no issue branch' : `on ${slot.branch}, no issue branch`)
+  }
+  const issue = ctx.issues.get(n)
+  if (issue === undefined) return kept(n, `#${n} is not in the factory state`)
+  if (!finished(issue)) return kept(n, `#${n} is ${issue.stage ?? 'in no stage'}`)
+  // an agent of the issue still at work, its entry running or answered (rule A2 stops it first)
+  const agentRunning = ctx.state.ledger.some(e => e.issue === n && e.agentId !== undefined && (e.status === 'running' || agentLive(ctx, e.agentId)))
+  if (agentRunning) return kept(n, `an agent of #${n} is at work`)
+  const why = endedWhy(issue)
+  const ended = why === 'closed' ? 'closed on GitHub' : why
+  if (slot.dirty === null) return kept(n, `#${n} ${ended}, its tree not read`)
+  if (slot.dirty) {
+    kept(n, `#${n} ${ended}, its tree has tracked changes`)
+    want(ctx, wake('tell', 'worktree-dirty', `tell:worktree-dirty:${slot.path}:${branch}`, 'H3', n, { path: slot.path, branch }, [`#${n} ${ended}`]))
+    return
+  }
+  want(ctx, {
+    kind: 'release-worktree',
+    key: `release:${slot.path}:${branch}`,
+    class: 'free',
+    rule: 'H3',
+    reason: `${ended}, slot clean`,
+    issue: n,
+    path: slot.path,
+    branch,
+  })
 }
 
 // drainBlockers: what keeps the safe state for a restart from holding (rule H4, D-15): any

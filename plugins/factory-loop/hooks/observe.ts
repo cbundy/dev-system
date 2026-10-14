@@ -14,6 +14,7 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
+  parseDirty,
   parseFactoryState,
   parseIssueRead,
   parseMilestone,
@@ -21,11 +22,12 @@ import {
   parsePool,
   parseQueue,
   parseQueueOnce,
+  parseReflog,
   parseSubIssues,
   parseUsage,
 } from './parse'
 import type { Factory } from './parse'
-import { LIVE, listedLive } from './plan'
+import { ENDED, LIVE, issueFromBranch, listedLive } from './plan'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
@@ -90,6 +92,9 @@ export type Cache = {
   factory?: Timed<Factory>
   events?: Timed<FactoryEvent[]>
   pool?: Timed<Pool>
+  // the issue branch each lease of a detached slot was found on (#563), by `<path> <lease id>`:
+  // a lease works one issue, so its reflog is read once it names one
+  leaseBranches: Map<string, string>
   // runSource local: the last poll's runs, each with when it was first seen as it is
   runs?: Timed<SeenRun[]>
   // act mode: the last ledger rebuilt from the event log, and how many entries it found
@@ -97,7 +102,7 @@ export type Cache = {
 }
 
 export function emptyCache(): Cache {
-  return { github: new Map(), timelines: new Map() }
+  return { github: new Map(), timelines: new Map(), leaseBranches: new Map() }
 }
 
 // resetFor: nothing read for one repo may stand in for another's (a queue, a milestone, issue
@@ -115,6 +120,7 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.rebuilt
   cache.github.clear()
   cache.timelines.clear()
+  cache.leaseBranches.clear()
   cache.repo = repo
 }
 
@@ -408,6 +414,57 @@ export async function observe(
   const usage = withSession(reading, await io.sessionLimits())
   mark('usage', usage !== null && !usage.unavailable, cache.usage?.at ?? null)
 
+  // the pool slots rule H3 might return (#563). An implementer detaches its slot once the
+  // pipeline holds the branch, so a leased slot on no branch is matched to its issue by the newest
+  // issue branch its HEAD reflog shows checked out since the lease began (git's own record, per
+  // worktree, whoever leased it and whenever the loop loaded); a slot of a finished issue then has
+  // its tree read for tracked changes. A failed read leaves the slot unknown, which H3 keeps.
+  // Available and busy slots are not read.
+  const finishedIssue = (n: number) => {
+    const f = factory?.issues.find(i => i.number === n)
+    const open = cache.github.get(n)?.value.facts?.open ?? f?.github?.open ?? null
+    return open === false || (f !== undefined && ENDED.includes(f.stage))
+  }
+  const readSlots = async (read: Pool): Promise<Pool> => {
+    const found = new Map<string, string>()
+    const slots: Pool['slots'] = []
+    for (const slot of read.slots) {
+      if (slot.state === 'available' || slot.busy) {
+        slots.push(slot)
+        continue
+      }
+      let leaseBranch = slot.leaseBranch
+      if (leaseBranch === null && slot.lease !== null && slot.leasedAt !== null) {
+        const id = `${slot.path} ${slot.lease}`
+        leaseBranch = cache.leaseBranches.get(id) ?? null
+        if (leaseBranch === null) {
+          try {
+            const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'reflog', 'show', '--date=unix', '--format=%gd%x09%gs', '-n', '500', 'HEAD'], undefined, 10_000)
+            const branches = r.exitCode === 0 ? parseReflog(r.stdout, slot.leasedAt) : null
+            leaseBranch = branches?.find(b => issueFromBranch(b) !== null) ?? null
+          } catch {
+            // unknown: H3 keeps the slot and says so
+          }
+        }
+        if (leaseBranch !== null) found.set(id, leaseBranch)
+      }
+      const n = leaseBranch === null ? null : issueFromBranch(leaseBranch)
+      let dirty: boolean | null = null
+      if (n !== null && finishedIssue(n)) {
+        try {
+          const r = await run(['git', '-C', slot.path, '--no-optional-locks', 'status', '--porcelain=v2', '--untracked-files=no'], undefined, 30_000)
+          dirty = r.exitCode === 0 ? parseDirty(r.stdout) : null
+        } catch {
+          // not read: H3 keeps the slot and says so
+        }
+      }
+      slots.push({ ...slot, leaseBranch, dirty })
+    }
+    // only the leases still out are remembered
+    cache.leaseBranches = found
+    return { ...read, slots }
+  }
+
   // pool: the shadow cannot see the shadowed device's pool, so it is assumed from its load
   let pool: Pool | null = null
   if (rt.runSource === 'events') {
@@ -418,6 +475,7 @@ export async function observe(
     try {
       const r = await run(['treehouse', 'status', '--json'])
       pool = r.exitCode === 0 ? parsePool(r.stdout, rt.poolSize) : null
+      if (pool !== null) pool = await readSlots(pool)
       if (pool !== null) cache.pool = { at: now, value: pool }
       mark('pool', pool !== null, cache.pool?.at ?? null, pool === null ? fail(r) : undefined)
     } catch (err) {

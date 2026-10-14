@@ -13,6 +13,7 @@ import {
   parseBrief,
   parseCheckout,
   parseCsv,
+  parseDirty,
   parseFactoryState,
   parseIssueRead,
   parseMilestone,
@@ -21,6 +22,7 @@ import {
   parsePool,
   parseQueue,
   parseQueueOnce,
+  parseReflog,
   parseSubIssues,
   parseUsage,
 } from '../hooks/parse'
@@ -171,17 +173,43 @@ describe('parse', () => {
 
   test('treehouse: slots not yet made count as free; busy slots are seen', () => {
     const json = JSON.stringify([
-      { name: '1', path: '/t/1', status: 'leased', branch: 'feat/issue-9-x', processes: [{ pid: 1, name: 'node' }] },
+      { name: '1', path: '/t/1', status: 'leased', branch: 'feat/issue-9-x', lease_id: 'l1', leased_at: '2026-10-14T08:00:00Z', processes: [{ pid: 1, name: 'node' }] },
       { name: '2', path: '/t/2', status: 'available', branch: '', detached: true },
     ])
     expect(parsePool(json, 16)).toEqual({
       free: 15,
       total: 16,
       slots: [
-        { path: '/t/1', branch: 'feat/issue-9-x', state: 'leased', dirty: null, busy: true },
-        { path: '/t/2', branch: null, state: 'available', dirty: null, busy: false },
+        { path: '/t/1', branch: 'feat/issue-9-x', state: 'leased', dirty: null, busy: true, lease: 'l1', leasedAt: Date.parse('2026-10-14T08:00:00Z'), leaseBranch: 'feat/issue-9-x' },
+        { path: '/t/2', branch: null, state: 'available', dirty: null, busy: false, lease: null, leasedAt: null, leaseBranch: null },
       ],
     })
+  })
+
+  test("a slot's reflog: the branches its checkouts moved to since the lease began, newest first (#563)", () => {
+    // the shape of `git reflog show --date=unix --format=%gd%x09%gs HEAD` in a pool slot: an
+    // earlier lease, then this one, which began on the earlier lease's branch, branched, rebased
+    // and detached
+    const text = [
+      'HEAD@{1791964800}\tcheckout: moving from feat/issue-12-x to HEAD',
+      'HEAD@{1791964700}\trebase (finish): returning to refs/heads/feat/issue-12-x',
+      'HEAD@{1791964600}\tcommit: b',
+      'HEAD@{1791964550}\tcheckout: moving from 195927b598c43132fb29cdd2be7c933d27cd8cb0 to feat/issue-12-x',
+      'HEAD@{1791964500}\tcheckout: moving from feat/issue-7-prev to 195927b598c43132fb29cdd2be7c933d27cd8cb0',
+      'HEAD@{1791960000}\tcheckout: moving from 0d1e2f3 to feat/issue-7-prev',
+      '',
+    ].join('\n')
+    expect(parseReflog(text, 1791964500_000)).toEqual(['feat/issue-12-x', 'feat/issue-12-x'])
+    expect(parseReflog(text, 0)).toEqual(['feat/issue-12-x', 'feat/issue-12-x', 'feat/issue-7-prev'])
+    expect(parseReflog('', 0)).toEqual([])
+    expect(parseReflog('fatal: your current branch has no commits\n', 0)).toBeNull()
+  })
+
+  test("a slot's tree: tracked changes only; untracked files are no change", () => {
+    expect(parseDirty('')).toBe(false)
+    expect(parseDirty('? node_modules/\n')).toBe(false)
+    expect(parseDirty('1 .M N... 100644 100644 100644 abc abc src/x.ts\n')).toBe(true)
+    expect(parseDirty('not porcelain\n')).toBeNull()
   })
 
   test('a tracker timeline: its open sub-issues on this repo, ascending, replayed in order (D-35)', () => {
@@ -709,6 +737,9 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     // the main checkout: origin's default branch, and its status
     originHead: Reply
     status: Reply
+    // the pool, and what git answers in a slot, by `<path> <reflog|status>` (#563)
+    pool: Reply
+    slots: Record<string, Reply>
   }
 
   function host(over: Partial<World> = {}) {
@@ -722,6 +753,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       files: {},
       originHead: { stdout: 'origin/main\n' },
       status: { stdout: `# branch.oid ${SHA(1)}\n# branch.head main\n` },
+      pool: { stdout: '[]' },
+      slots: {},
       ...over,
     }
     let now = NOW
@@ -747,8 +780,9 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
         case `${TOOLS}/usage-check.sh`:
           return { stdout: 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth' }
         case 'treehouse':
-          return { stdout: '[]' }
+          return world.pool
         case 'git':
+          if (args[0] === '-C') return world.slots[`${args[1]} ${args.includes('reflog') ? 'reflog' : 'status'}`] ?? { exitCode: 128 }
           if (args[0] === 'symbolic-ref') return world.originHead
           return args[1] === 'status' ? world.status : {}
         default:
@@ -1075,6 +1109,66 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     h.world.originHead = { stdout: 'origin/main\n' }
     h.world.status = { exitCode: 128, stderr: 'fatal: not a git repository\n' }
     expect((await h.pass(runtime({ mode: 'observe' }), undefined, NOW + 3 * MIN)).state.checkout).toEqual({ error: 'exit 128: fatal: not a git repository' })
+  })
+
+  test("a detached slot is matched to its issue by the lease's reflog, and a finished issue's slot has its tree read (#563)", async () => {
+    const LEASED = NOW - 60 * MIN
+    const sec = (ms: number) => Math.floor(ms / 1000)
+    const slotJson = (path: string, lease: string | null) => ({ name: path, path, status: lease === null ? 'available' : 'leased', branch: '', detached: true, lease_id: lease ?? '', leased_at: lease === null ? null : iso(LEASED), processes: [] })
+    const reflog = (...lines: [number, string][]): Reply => ({ stdout: lines.map(([at, s]) => `HEAD@{${sec(at)}}\t${s}`).join('\n') + '\n' })
+    // an earlier lease's issue, before this lease began, is never this lease's
+    const earlier: [number, string] = [LEASED - 10 * MIN, `checkout: moving from ${SHA(2)} to feat/issue-9-old`]
+    const h = host({
+      factory: [fsIssue(12, 'merged'), fsIssue(13, 'implementing')],
+      pool: { stdout: JSON.stringify([slotJson('/t/1', 'l1'), slotJson('/t/2', 'l2'), slotJson('/t/3', 'l3'), slotJson('/t/4', null)]) },
+      slots: {
+        // the implementer branched, committed, and detached once the pipeline held the branch
+        '/t/1 reflog': reflog(
+          [LEASED + 20 * MIN, 'checkout: moving from feat/issue-12-x to HEAD'],
+          [LEASED + 10 * MIN, 'commit: the fix'],
+          [LEASED + MIN, `checkout: moving from ${SHA(1)} to feat/issue-12-x`],
+          earlier,
+        ),
+        '/t/1 status': { stdout: '' },
+        '/t/2 reflog': reflog(
+          [LEASED + 5 * MIN, 'checkout: moving from feat/issue-13-y to HEAD'],
+          [LEASED + 2 * MIN, `checkout: moving from ${SHA(1)} to feat/issue-13-y`],
+          earlier,
+        ),
+        // leased, but its agent has not branched yet: the slot only left the earlier lease's branch
+        '/t/3 reflog': reflog([LEASED, `checkout: moving from feat/issue-9-old to ${SHA(1)}`], earlier),
+      },
+    })
+    const first = await h.pass(runtime(), stored())
+    expect(first.state.pool?.slots.map(s => [s.path, s.leaseBranch, s.dirty])).toEqual([
+      ['/t/1', 'feat/issue-12-x', false],
+      ['/t/2', 'feat/issue-13-y', null],
+      ['/t/3', null, null],
+      ['/t/4', null, null],
+    ])
+    // only leased slots are read, and only a finished issue's tree
+    const reads = () => h.commands().filter(c => c.startsWith('git -C '))
+    expect(reads()).toEqual([
+      'git -C /t/1 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
+      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=no',
+      'git -C /t/2 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
+      'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
+    ])
+    expect(plan(first.state, config()).actions.map(a => a.key)).toContain('release:/t/1:feat/issue-12-x')
+
+    // the next pass: a lease's branch, once found, is not read again; the tree is
+    h.world.slots['/t/1 status'] = { stdout: '1 .M N... 100644 100644 100644 abc abc src/x.ts\n' }
+    const second = await h.pass(runtime(), stored(), NOW + MIN)
+    expect(reads()).toEqual([
+      'git -C /t/1 --no-optional-locks status --porcelain=v2 --untracked-files=no',
+      'git -C /t/3 --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD',
+    ])
+    expect(second.state.pool?.slots[0]).toMatchObject({ leaseBranch: 'feat/issue-12-x', dirty: true })
+    expect(plan(second.state, config()).actions.map(a => a.key)).toContain('tell:worktree-dirty:/t/1:feat/issue-12-x')
+
+    // a read that fails leaves the slot unknown, so it is kept
+    h.world.slots['/t/1 status'] = { exitCode: 128, stderr: 'fatal: not a git repository' }
+    expect((await h.pass(runtime(), stored(), NOW + 2 * MIN)).state.pool?.slots[0]).toMatchObject({ leaseBranch: 'feat/issue-12-x', dirty: null })
   })
 
   // an issue as the reader prints it once it is closed

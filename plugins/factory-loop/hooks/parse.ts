@@ -350,19 +350,24 @@ export function parseUsage(line: string): Usage {
 
 // parsePool: the worktree pool. `treehouse status --json` lists the slots that exist; the
 // pool grows up to maxTrees (treehouse.toml), so a slot not yet made counts as free. Whether a
-// slot's tree is dirty is not in the listing: observe asks git for the slots it might release.
+// slot's tree is dirty is not in the listing, nor the branch of a lease whose slot was detached
+// (`branch: ""`): observe asks git for the slots it might release (#563).
 export function parsePool(json: string, maxTrees: number): Pool | null {
   try {
     const list = JSON.parse(json)
     if (!Array.isArray(list)) return null
     const slots = list.map(raw => {
       const w = raw as Record<string, unknown>
+      const branch = typeof w.branch === 'string' && w.branch !== '' ? w.branch : null
       return {
         path: String(w.path ?? ''),
-        branch: typeof w.branch === 'string' && w.branch !== '' ? w.branch : null,
+        branch,
         state: String(w.status ?? 'unknown'),
         dirty: null,
         busy: Array.isArray(w.processes) && w.processes.length > 0,
+        lease: typeof w.lease_id === 'string' && w.lease_id !== '' ? w.lease_id : null,
+        leasedAt: isoMs(w.leased_at),
+        leaseBranch: branch,
       }
     })
     const free = slots.filter(s => s.state === 'available').length + Math.max(0, maxTrees - slots.length)
@@ -370,6 +375,50 @@ export function parsePool(json: string, maxTrees: number): Pool | null {
   } catch {
     return null
   }
+}
+
+// parseReflog: the branches a slot's checkouts moved to since its lease began (ms), newest first,
+// from `git reflog show --date=unix --format=%gd%x09%gs HEAD`: `HEAD@{<unix seconds>}<tab>checkout:
+// moving from <a> to <b>`, or a rebase's `... returning to refs/heads/<b>`. Only destinations
+// count: the lease's agent moved there itself (its `checkout -b` or `switch`, which its later
+// detach leaves behind), while a branch the slot only moved from may be an earlier lease's, left
+// checked out when this one began. A detached HEAD and a commit id are no branch, and entries
+// before the lease are an earlier lease's (#563). null when a line does not read.
+export function parseReflog(text: string, since: number): string[] | null {
+  const branches: string[] = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    const m = line.match(/^HEAD@\{(\d+)\}\t(.*)$/)
+    if (m === null) return null
+    if (Number(m[1]) < Math.floor(since / 1000)) continue
+    const subject = m[2] ?? ''
+    const to = subject.match(/^checkout: moving from \S+ to (\S+)$/)?.[1] ?? subject.match(/ returning to refs\/heads\/(\S+)$/)?.[1]
+    if (to !== undefined && to !== 'HEAD' && !/^[0-9a-f]{7,64}$/.test(to)) branches.push(to)
+  }
+  return branches
+}
+
+// changedPath: the path of one `git status --porcelain=v2` line that is a tracked change; null for
+// a header, an untracked or ignored file or a blank line; undefined for a line that does not read.
+// Ordinary (1), renamed (2, then a score and `<path>\t<orig>`) and unmerged (u) entries carry 8,
+// 9 and 10 fields before the path.
+function changedPath(line: string): string | null | undefined {
+  if (line === '' || line.startsWith('#') || line.startsWith('? ') || line.startsWith('! ')) return null
+  const fields = line.startsWith('1 ') ? 8 : line.startsWith('2 ') ? 9 : line.startsWith('u ') ? 10 : null
+  if (fields === null) return undefined
+  return line.split(' ').slice(fields).join(' ').split('\t')[0] ?? ''
+}
+
+// parseDirty: whether `git status --porcelain=v2 --untracked-files=no` lists a tracked change
+// (a pool slot's tree, rule H3); null when a line does not read.
+export function parseDirty(status: string): boolean | null {
+  let dirty = false
+  for (const line of status.split('\n')) {
+    const path = changedPath(line)
+    if (path === undefined) return null
+    if (path !== null) dirty = true
+  }
+  return dirty
 }
 
 // --- the main checkout (#544) -------------------------------------------------------------------
@@ -388,12 +437,9 @@ export function parseCheckout(originHead: string, status: string): Checkout | nu
     const header = line.match(/^# branch\.(oid|head) (.+)$/)
     if (header?.[1] === 'head') branch = header[2] === '(detached)' ? null : (header[2] ?? null)
     else if (header?.[1] === 'oid') head = header[2] === '(initial)' ? null : (header[2] ?? null)
-    if (line === '' || line.startsWith('#') || line.startsWith('? ') || line.startsWith('! ')) continue
-    // ordinary (1), renamed (2, then a score and `<path>\t<orig>`) and unmerged (u) entries carry
-    // 8, 9 and 10 fields before the path
-    const fields = line.startsWith('1 ') ? 8 : line.startsWith('2 ') ? 9 : line.startsWith('u ') ? 10 : null
-    if (fields === null) return null
-    dirty.push(line.split(' ').slice(fields).join(' ').split('\t')[0] ?? '')
+    const path = changedPath(line)
+    if (path === undefined) return null
+    if (path !== null) dirty.push(path)
   }
   return branch === undefined ? null : { branch, head, defaultBranch, dirty }
 }

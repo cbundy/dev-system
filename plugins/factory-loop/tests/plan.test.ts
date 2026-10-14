@@ -5,7 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf } from '../hooks/plan'
-import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, State } from '../hooks/types'
+import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
 import {
   CLEAN,
   DEVICE,
@@ -24,6 +24,7 @@ import {
   review,
   run,
   running,
+  slot as slotOf,
   state,
   wakeAnswer,
   withLedger,
@@ -286,18 +287,63 @@ describe('H: housekeeping', () => {
     expect(keys(plan(s, CFG))).toEqual([`sweep:${NOW - 31 * MIN}`])
   })
 
+  // merged by the loop, so its rollout follow-ups are its merge's (M7)
+  const merged12 = entry('merge:512:h12', 'merge', { issue: 12, pr: 512, outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' } })
+  const pooled = (slots: Slot[], issues = [issue(12, { stage: 'merged', holder: DEVICE })]) =>
+    withLedger(state({ issues, pool: { free: 8, total: 16, slots } }), [merged12])
+  const kept = (issue: number | null, path: string, why: string) => ({ rule: 'H3', issue, why: `slot ${path} kept: ${why}` })
+
   test('a clean slot on a merged branch is returned; a dirty or busy one is not (SKILL:150, I-76)', () => {
-    const slot = (path: string, over = {}) => ({ path, branch: 'feat/issue-12-x', state: 'leased', dirty: false, busy: false, ...over })
-    // merged by the loop, so its rollout follow-ups are its merge's (M7)
-    const merged = entry('merge:512:h12', 'merge', { issue: 12, pr: 512, outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' } })
-    const s = withLedger(
-      state({
-        issues: [issue(12, { stage: 'merged', holder: DEVICE })],
-        pool: { free: 8, total: 16, slots: [slot('/t/1'), slot('/t/2', { dirty: true }), slot('/t/3', { busy: true })] },
-      }),
-      [merged],
-    )
-    expect(keys(plan(s, CFG))).toEqual(['release:/t/1:feat/issue-12-x'])
+    const slot = (path: string, over = {}) => slotOf(path, 'feat/issue-12-x', over)
+    const r = plan(pooled([slot('/t/1'), slot('/t/2', { dirty: true }), slot('/t/3', { busy: true })]), CFG)
+    expect(keys(r)).toEqual(['release:/t/1:feat/issue-12-x', 'tell:worktree-dirty:/t/2:feat/issue-12-x'])
+    expect(r.skipped).toContainEqual(kept(12, '/t/3', 'processes run in it'))
+  })
+
+  test('a slot the agent detached is returned once its issue is finished, by the branch of its lease (#563)', () => {
+    // the implementer detached its slot once the pipeline held the branch: treehouse reports no
+    // branch, and observe reads the lease's branch from the slot's reflog
+    const detached = slotOf('/t/4', null, { leaseBranch: 'feat/issue-12-x' })
+    const r = plan(pooled([detached]), CFG)
+    expect(keys(r)).toEqual(['release:/t/4:feat/issue-12-x'])
+    expect(find(r, 'release:/t/4:feat/issue-12-x')).toMatchObject({ rule: 'H3', issue: 12, path: '/t/4', branch: 'feat/issue-12-x', reason: 'merged, slot clean' })
+    // returned, the slot is available and says nothing more
+    expect(plan(pooled([{ ...detached, state: 'available', lease: null, leasedAt: null, leaseBranch: null }]), CFG).skipped.filter(s => s.rule === 'H3')).toEqual([])
+  })
+
+  test("a live issue's slot is kept, and so is a leased slot of no issue the loop knows, each saying why (#563)", () => {
+    const live = issue(13, { stage: 'implementing', holder: OTHER })
+    const slots = [
+      slotOf('/t/5', null, { leaseBranch: 'feat/issue-13-y' }),
+      slotOf('/t/6', null),
+      slotOf('/t/7', 'feat/factory-loop'),
+      slotOf('/t/8', null, { leaseBranch: 'feat/issue-99-z' }),
+    ]
+    const r = plan(pooled(slots, [issue(12, { stage: 'merged', holder: DEVICE }), live]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped.filter(s => s.rule === 'H3')).toEqual([
+      kept(13, '/t/5', '#13 is implementing'),
+      kept(null, '/t/6', 'its lease names no issue branch'),
+      kept(null, '/t/7', 'on feat/factory-loop, no issue branch'),
+      kept(99, '/t/8', '#99 is not in the factory state'),
+    ])
+  })
+
+  test('a dirty slot of a finished issue is kept and told to the owner once; one not read is kept (#563)', () => {
+    const dirty = slotOf('/t/2', null, { leaseBranch: 'feat/issue-12-x', dirty: true })
+    const r = plan(pooled([dirty]), CFG)
+    expect(keys(r)).toEqual(['tell:worktree-dirty:/t/2:feat/issue-12-x'])
+    expect(find(r, 'tell:worktree-dirty:/t/2:feat/issue-12-x')).toMatchObject({ rule: 'H3', issue: 12, fields: { path: '/t/2', branch: 'feat/issue-12-x' } })
+    expect(r.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has tracked changes'))
+    // told once: the slot stays kept, and says so every pass
+    const told = withLedger(pooled([dirty]), [entry('tell:worktree-dirty:/t/2:feat/issue-12-x', 'tell', { wake: 'worktree-dirty', issue: 12 })])
+    const again = plan(told, CFG)
+    expect(keys(again)).toEqual([])
+    expect(again.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree has tracked changes'))
+    // a tree observe could not read is never returned
+    const unread = plan(pooled([{ ...dirty, dirty: null }]), CFG)
+    expect(keys(unread)).toEqual([])
+    expect(unread.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree not read'))
   })
 })
 
@@ -1530,7 +1576,7 @@ describe('caps and exhausted keys (D-24, D-38, SPEC 4.2, 11.4)', () => {
     const stalled = state({ issues: [mine(48, 'in pipeline', { pr: 548 })], runs: [run(48, 'ci-stalled', { detail: 'reason=no-checks' })] })
     const reopen = entry('reopen:548:01M4RQ0048AAAA', 'pr-reopen', { issue: 48, pr: 548, status: 'failed', attempts: 1, endedAt: NOW - 10 * MIN })
     expect(keys(plan(withLedger(stalled, [reopen]), CFG))).toEqual(['tell:agent-failed:reopen:548:01M4RQ0048AAAA'])
-    const slot = { path: '/t/1', branch: 'feat/issue-12-x', state: 'leased', dirty: false, busy: false }
+    const slot = slotOf('/t/1', 'feat/issue-12-x')
     const merged = state({ issues: [issue(12, { stage: 'merged', holder: OTHER })], pool: { free: 8, total: 16, slots: [slot] } })
     const returned = (attempts: number) => entry('release:/t/1:feat/issue-12-x', 'release-worktree', { issue: 12, status: 'failed', attempts, endedAt: NOW - 10 * MIN })
     expect(keys(plan(withLedger(merged, [returned(1)]), CFG))).toEqual(['release:/t/1:feat/issue-12-x'])
@@ -2140,7 +2186,7 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
   })
 
   test('before the first guard of a head, a clean slot on the branch is fast-forwarded first', () => {
-    const slot = { path: '/w/slot-3', branch: 'feat/issue-50-work', state: 'leased', dirty: false, busy: false }
+    const slot = slotOf('/w/slot-3', 'feat/issue-50-work')
     const pool = (s: typeof slot) => ({ pool: { free: 10, total: 16, slots: [s] } })
     expect(keys(plan(mergeReady([], pool(slot)), CFG))).toEqual(['fast-forward:550:head50', 'guard:550:head50:1'])
     // a dirty slot is left to the guard (and the judge), and no slot means nothing to forward
@@ -2245,7 +2291,7 @@ describe('an issue closed on GitHub is finished (#556)', () => {
   })
 
   test("a clean pool slot on a closed issue's branch is returned (SPEC H3)", () => {
-    const slot = { path: '/t/1', branch: 'feat/issue-40-work', state: 'leased', dirty: false, busy: false }
+    const slot = slotOf('/t/1', 'feat/issue-40-work')
     const s = (open: boolean) => state({ issues: [mine(40, 'parked', { open })], pool: { free: 8, total: 16, slots: [slot] } })
     expect(keys(plan(s(true), CFG))).toEqual([])
     const r = plan(s(false), CFG)
@@ -2254,7 +2300,9 @@ describe('an issue closed on GitHub is finished (#556)', () => {
     // an agent that answered but still works there keeps it until rule A2 has stopped it
     const answered = entry('fixer:gate:x', 'spawn', { agent: 'fixer', class: 'drive', issue: 40, agentId: 'a40', endedAt: NOW - 5 * MIN })
     const working = { ...withLedger(s(false), [answered]), agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'running' as const }] }
-    expect(keys(plan(working, CFG))).toEqual(['stop:a40', 'tell:stopped:a40'])
+    const held = plan(working, CFG)
+    expect(keys(held)).toEqual(['stop:a40', 'tell:stopped:a40'])
+    expect(held.skipped).toContainEqual({ rule: 'H3', issue: 40, why: 'slot /t/1 kept: an agent of #40 is at work' })
     const stopped = { ...working, agents: [{ id: 'a40', type: 'callum-flow:fixer', status: 'killed' as const }] }
     expect(keys(plan(stopped, CFG))).toEqual(['release:/t/1:feat/issue-40-work'])
   })

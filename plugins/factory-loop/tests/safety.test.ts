@@ -222,7 +222,7 @@ function world(): { state: State; ledger: LedgerEntry[] } {
   const answered = entry('fixer:guard:471:h', 'spawn', { agent: 'fixer', issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
   const ended = entry('fixer:guard:472:h', 'spawn', { agent: 'fixer', issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
   const ledger = [own, answered, ended]
-  const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false }] }
+  const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false, lease: null, leasedAt: null, leaseBranch: 'issue-470-x' }] }
   const agents = [
     { id: 'agent-own', type: 'factory-loop:designer', status: 'running' as const },
     { id: 'agent-answered', type: 'callum-flow:fixer', status: 'waiting' as const },

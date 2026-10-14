@@ -534,6 +534,7 @@ describe('the tracer', () => {
       [['/tools/usage-check.sh'], 'usage'],
       [['treehouse', 'status', '--json'], 'pool'],
       [['git', 'symbolic-ref'], 'checkout'],
+      [['git', '-C', '/t/1', '--no-optional-locks', 'status'], 'pool'],
       [['callum-flow-milestone', 'show', 'next'], 'milestone'],
       [['callum-flow-claim', '470'], undefined],
     ]

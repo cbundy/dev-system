@@ -13,6 +13,7 @@ import type {
   PlanResult,
   RunState,
   RunView,
+  Slot,
   Source,
   SourceName,
   Stage,
@@ -127,6 +128,12 @@ export function run(n: number, state: RunState, over: Partial<RunView> = {}): Ru
     superseded: false,
     ...over,
   }
+}
+
+// slot: a leased pool slot on a branch, clean, as observe leaves it (#563): a detached one has
+// branch null and the lease's branch from its reflog.
+export function slot(path: string, branch: string | null, over: Partial<Slot> = {}): Slot {
+  return { path, branch, state: 'leased', dirty: false, busy: false, lease: `lease${path}`, leasedAt: NOW - 60 * MIN, leaseBranch: branch, ...over }
 }
 
 export function entry(key: string, kind: LedgerEntry['kind'], over: Partial<LedgerEntry> = {}): LedgerEntry {
