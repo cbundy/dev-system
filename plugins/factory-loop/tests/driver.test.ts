@@ -680,7 +680,8 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     const { run } = factory({
       issue: { stage: 'designing', since },
       run: argv => {
-        if (argv[0] === 'callum-flow-sweep') seen.sweep = h?.entry('sweep:0')?.status
+        // a held issue makes the first heartbeat the first housekeeping command (H2 waits for it, #589)
+        if (argv[0] === 'callum-flow-claim' && argv[1] === '--heartbeat') seen.sweep = h?.entry('heartbeat:0')?.status
         const note = argv[0] === 'callum-flow-event' && argv[1] === 'loop' ? (argv.at(-1) ?? '') : ''
         if (note.startsWith(`kind=spawn key=${key} `)) seen.loop = h?.entry(key)?.status
         return undefined

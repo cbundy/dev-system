@@ -234,7 +234,7 @@ describe('argv (SPEC 6.1)', () => {
       ['callum-flow-rollout', '50'],
     ])
     expect(argvsOf(A.rollout(), LOOP_DIR)).toEqual([['callum-flow-rollout', '50']])
-    expect(argvsOf({ kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', reason: 'x', issue: null }, LOOP_DIR)).toBeNull()
+    expect(argvsOf({ kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', reason: 'x', issue: null, issues: [] }, LOOP_DIR)).toBeNull()
   })
 
   test('respond: the action and only the flags its adjudicator gave, each value one argv entry', () => {

@@ -1590,7 +1590,7 @@ a reader failure: it never treats it as "no comments". Write calls are unchanged
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
 and exits 3; every exit 3 logs a `claim_lost` event), then swaps `ready` for `In development` and logs `claimed` with the note `lease: <minutes>`. `--heartbeat
-[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events. `callum-flow-sweep` releases stale
+[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended. A named issue whose claim has expired is revived (renewed all the same, printing `revived <N>`) when that claim is still the newest, no other device holds a live one, and the issue is open and still `In development`; the no-argument form never revives. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events. `callum-flow-sweep` releases stale
 `In development` labels on open and closed issues: closed issues, and open ones with a PR merged
 after the claim (matched by `issue-<N>-` branch name), just lose the
 label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an

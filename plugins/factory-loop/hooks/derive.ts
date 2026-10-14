@@ -401,7 +401,7 @@ function outcomeTokens(o: Outcome | undefined): string[] {
   if (o === undefined) return []
   switch (o.kind) {
     case 'cli':
-      return ['out=cli', `exit=${o.exit}`]
+      return ['out=cli', `exit=${o.exit}`, ...(o.revived === undefined || o.revived.length === 0 ? [] : [`revived=${list(o.revived)}`])]
     case 'claim':
       return ['out=claim', `result=${o.result}`]
     case 'designer':
@@ -493,7 +493,8 @@ function outcomeOf(f: Map<string, string>): Outcome | undefined {
   switch (f.get('out')) {
     case 'cli': {
       const exit = Number(f.get('exit'))
-      return Number.isInteger(exit) ? { kind: 'cli', exit } : undefined
+      const revived = nums(f.get('revived'))
+      return Number.isInteger(exit) ? { kind: 'cli', exit, ...(revived.length > 0 ? { revived } : {}) } : undefined
     }
     case 'claim': {
       const result = f.get('result')

@@ -435,8 +435,8 @@ counts the same way until the state shows the issue live, for at most one `heart
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| H1 | this device holds a live issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` | `heartbeat:<last done endedAt or 0>` |
-| H2 | the last `sweep` ended at least `sweepEveryMs` ago, or never | `sweep` | `sweep:<last done endedAt or 0>` |
+| H1 | this device holds a live issue, and the stalest of their leases was last renewed before `loadedAt` (the first pass after any load) or at least `heartbeatEveryMs` ago. An issue's lease was last renewed by the later of its own claim and the last `heartbeat`, so a fresh claim does not trigger one | `heartbeat` naming the held issues, ascending, so a lease that lapsed while the loop was down is revived (D-76) | `heartbeat:<last done endedAt or 0>` |
+| H2 | the last `sweep` ended at least `sweepEveryMs` ago, or never. While this device holds a live issue it waits for a `heartbeat` done since `loadedAt` (skip line: waits for the first heartbeat), so the sweep never runs between a restart and the renewal | `sweep` | `sweep:<last done endedAt or 0>` |
 | H3 | a leased pool slot is not busy, its `leaseBranch` (the branch checked out, else the newest one its reflog shows checked out since the lease, #563) names an issue that is finished (`merged`, `closed without merge`, or closed on GitHub), no agent of the loop at work names that issue (its entry running, or the agent list showing it at work past its answer, so `A2` stops it first), it carries a lease, and its tree is clean (no tracked change or untracked file). Every leased slot kept gets a skip line saying why: busy, no issue branch, an issue not in the factory state, a live issue, an agent at work, no lease, a tree not read, or uncommitted changes, which also tell the owner once per lease. Keys follow the lease, so a later lease on the same path and branch (a reopened issue) is returned too | `release-worktree`; `tell(worktree-dirty)` | `release:<path>:<lease>`, `tell:worktree-dirty:<path>:<lease>` |
 | H4 | `control.updateDue` is set. While it is, the loop drains: `start`, `develop` and `drive` actions are dropped. Once the safe state holds (the `runs` source reads; no ledger entry running, so no loop agent, wake or command in flight; no pipeline run of any device `running`, `pending` or `ci-stalled`) and the pass plans nothing else | `restart-self`, last, after the title. A drain longer than 60 minutes gives `tell(drain-slow)` once, with what it still waits on. A restart that fails is not tried again (`maxAttempts` 1): the owner is told (`tell(agent-failed)`) and the drain holds until the update is set again or turned off. Nothing in a blind pass | `restart:<updateDue.at>`, `tell:drain-slow:<updateDue.at>` |
 | H5 | the pass acts (an observe pass derives its ledger from the event log, where an update leaves no event, so it plans none), the main checkout was read, `G5` does not hold, and none ran since the module loaded (a reload can leave it stale), or a merge (a `merge` that merged, or a `rollout` read for a hand merge) ended after the last `update-checkout` started, or that one was `REFUSED` at another commit than the checkout's now (it changed since), or it ended at least `checkoutEveryMs` ago. It waits, with a skip line, while work reads the checkout's code: a designer or adjudicator of the loop at work (by the ledger, or by the agent list for one whose answer is in, until `A2` has stopped it past its answer), or a running task (`G5`). Meanwhile admit drops new readers, designer and adjudicator spawns and tasks, with the reason `waits for the main checkout's update (<agent or task>)`, so the readers drain and the update runs: with several issues in flight there may otherwise never be a gap. A held adjudicator only delays a parked gate's judgment, which nothing times out. Implementers and fixers work in their own worktrees, so they do not hold it. The last update `REFUSED` while `G5` does not hold (commits origin lacks), the checkout still at the commit it was planned at, gives `tell(checkout)` once per sight, the refusal as its detail; it holds nothing (#555) | `update-checkout` with origin's default branch and the checkout's commit | `update-checkout:<last done endedAt or 0>`, `tell:checkout:<branch>@<head>:refused` |
@@ -560,7 +560,7 @@ only reach the configured repo.
 
 | Kind | Class | Executor | Timeout | Retries | Outcome recorded |
 |---|---|---|---|---|---|
-| `heartbeat` | free | `callum-flow-claim --heartbeat` | 120 s | never used up: next due time | exit code (the CLI logs `renewed`) |
+| `heartbeat` | free | `callum-flow-claim --heartbeat <held issues...>` | 120 s | never used up: next due time | exit code (the CLI logs `renewed`); `revived <N>` stdout lines become `revived` on the outcome and name the issues in the summary |
 | `sweep` | free | `callum-flow-sweep` | 300 s | never used up: next due time | exit code (the CLI logs `reclaimed`, `closed`) |
 | `claim` | start | `callum-flow-claim <N>` | 120 s | 3, backoff | `claimed`, `lost` (exit 3) or `failed` |
 | `spawn` designer | develop | `$.agent.spawn({ subagentType: 'factory-loop:designer', model?, description, name, prompt })` | start 60 s, agent `agentTimeoutMs` | 2 | parsed `RESULT` line (7.2) |
@@ -1004,7 +1004,7 @@ keeps (FINDINGS check 5). On load:
    device already holds is kept and nothing is posted; the heartbeat, sweep, labels and
    milestone calls converge) or visible in the next observation (a merged PR, a new head, a
    posted brief, a delegation event). A `lost` entry is retried at once while attempts remain.
-5. Rule `H1` heartbeats on the first pass (I-93).
+5. Rule `H1` heartbeats on the first pass (I-93), naming the held issues so a lapsed lease is revived; rule `H2` waits for that heartbeat.
 
 If the store itself holds no ledger (a new device, a wiped config), act mode rebuilds it from 7
 days of the event log, the ledger's own life: its own `loop` events give every agent, wake and
@@ -1146,7 +1146,7 @@ A `tell` is a wake whose turn writes one line to the owner in the conversation, 
 shows, in the tick report's format: who acts first, what happens next, each issue or PR named by
 its work with a markdown link (I-88, I-89). Kinds: `decision`, `escalate`, `review-cap`, `no-ci`,
 `ci-triggers`, `untrusted-pr`, `rollout`, `base`, `update-behind`, `merge-refused`,
-`merge-hold`, `drain-slow`, `heartbeat-other`, `old-watcher`, `at-cap`, `linkage`, `checkout`,
+`merge-hold`, `revived`, `drain-slow`, `heartbeat-other`, `old-watcher`, `at-cap`, `linkage`, `checkout`,
 `worktree-dirty`, `agent-failed`, `claim-lost`, `stopped`, `blind`, `task-timeout`, `runaway`, `breaker`,
 `pass-error`. Each is sent once per key. A `stopped` notice says why: closed, merged, closed
 without merge, dropped or split. The owner items (`decision`, `escalate`, `review-cap`, `merge-refused`,

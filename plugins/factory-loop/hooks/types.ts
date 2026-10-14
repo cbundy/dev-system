@@ -158,7 +158,8 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 // model as `judge(report)` and is recorded as { unparsed: true }.
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (SPEC 10.1)
-  | { kind: 'cli'; exit: number; detail?: string }
+  // revived: the issues a heartbeat renewed after their lease had lapsed (callum-flow-claim)
+  | { kind: 'cli'; exit: number; detail?: string; revived?: number[] }
   // a detached respond or env-retry (SPEC 6.1): the slot it runs in and the log its launch was
   // read back from
   | { kind: 'respond'; slot: string; log: string }
@@ -339,7 +340,9 @@ export type WakeKind = 'judge' | 'task' | 'tell'
 type Base = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null }
 
 export type Action =
-  | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
+  // the held issues the heartbeat names, so a claim that lapsed while the loop was down is revived
+  | (Base & { kind: 'heartbeat'; issues: number[] })
+  | (Base & { kind: 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
   | (Base & { kind: 'spawn'; agent: 'designer'; model: string | null; notes: string[] })
   | (Base & {
       kind: 'spawn'

@@ -215,6 +215,9 @@ Notices:
 - `worktree-dirty` (path, branch; detail: how the issue ended): the issue is finished, but its
   pool slot has uncommitted changes or untracked files, so the loop keeps the slot instead of
   returning it. Owner keeps or discards the changes, and the loop then returns the slot.
+- `revived` (issues; detail: `#N` per issue): the loop was down past a lease, and the first heartbeat
+  after restart renewed these issues' claims before the sweep could release them. Informational: say
+  which issues were kept.
 - `drain-slow` (since; detail: the update, what it waits on): an update has waited over an
   hour for in-flight work. Owner waits, or `update off`.
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop

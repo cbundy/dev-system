@@ -242,6 +242,23 @@ describe('H: housekeeping', () => {
     expect(keys(plan(due, CFG))).toEqual([`heartbeat:${NOW - 21 * MIN}`])
   })
 
+  test('H1 names the held issues ascending; H2 waits for the first heartbeat after a load while any is held; tell(revived) once per reviving heartbeat (#589)', () => {
+    const sweepDue = entry('sweep:0', 'sweep', { endedAt: NOW - 40 * MIN })
+    const held = (over = {}) => state({ issues: [mine(10, 'implementing'), mine(9, 'implementing')], loadedAt: NOW - MIN, ledger: [sweepDue, UPDATED], ...over })
+    const first = plan(held(), CFG)
+    expect(keys(first)).toEqual([`heartbeat:0`])
+    expect(first.actions[0]).toMatchObject({ kind: 'heartbeat', issues: [9, 10] })
+    expect(first.skipped).toContainEqual({ rule: 'H2', issue: null, why: 'sweep waits for the first heartbeat after load' })
+    // a heartbeat done since the load lets the sweep run, and its revive is told once
+    const beat = entry('heartbeat:0', 'heartbeat', { endedAt: NOW - 30_000, outcome: { kind: 'cli', exit: 0, revived: [9, 10] } })
+    const after = held({ ledger: [beat, sweepDue, UPDATED] })
+    expect(keys(plan(after, CFG))).toEqual([`tell:revived:heartbeat:0:${NOW - 30_000}`, `sweep:${NOW - 40 * MIN}`])
+    const told = entry(`tell:revived:heartbeat:0:${NOW - 30_000}`, 'tell', { wake: 'revived', class: 'owner' })
+    expect(keys(plan(held({ ledger: [beat, sweepDue, UPDATED, told] }), CFG))).toEqual([`sweep:${NOW - 40 * MIN}`])
+    // nothing held: the sweep never waits
+    expect(keys(plan(state({ loadedAt: NOW - MIN, ledger: [sweepDue, UPDATED] }), CFG))).toEqual([`sweep:${NOW - 40 * MIN}`])
+  })
+
   test('a claim starts its own lease: the next heartbeat is due 20 minutes after it (shadow, #522)', () => {
     const claimed = (n: number, at: number) =>
       entry(`claim:${n}:x`, 'claim', { class: 'start', issue: n, startedAt: at, endedAt: at, outcome: { kind: 'claim', result: 'claimed' } })

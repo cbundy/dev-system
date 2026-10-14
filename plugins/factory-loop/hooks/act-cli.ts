@@ -69,7 +69,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
   })
   switch (action.kind) {
     case 'heartbeat':
-      return [{ argv: ['callum-flow-claim', '--heartbeat'], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
+      return [{ argv: ['callum-flow-claim', '--heartbeat', ...action.issues.map(String)], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
     case 'sweep':
       return [{ argv: ['callum-flow-sweep'], timeoutMs: CLI_TIMEOUT_MS.sweep }]
     case 'claim':
@@ -248,8 +248,13 @@ export function finish(action: Action, results: RunResult[]): Exec {
       return last?.exitCode === 3
         ? { status: 'done', outcome: { kind: 'claim', result: 'lost' }, summary: clip(`lost #${action.issue}: ${lastLine(last.stderr)}`) }
         : { status: 'done', outcome: { kind: 'claim', result: 'claimed' }, summary: `claimed #${action.issue}` }
-    case 'heartbeat':
-      return ok('leases renewed')
+    case 'heartbeat': {
+      // `revived <N>` lines: expired claims the heartbeat renewed (an older image prints none)
+      const revived = [...(last?.stdout ?? '').matchAll(/^revived (\d+)\s*$/gm)].map(m => Number(m[1]))
+      return revived.length === 0
+        ? ok('leases renewed')
+        : { status: 'done', outcome: { kind: 'cli', exit: 0, revived }, summary: clip(`leases renewed; revived ${revived.map(n => `#${n}`).join(', ')}`) }
+    }
     case 'sweep':
       return ok('swept')
     case 'close-issue':

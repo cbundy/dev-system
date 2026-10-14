@@ -236,7 +236,7 @@ describe('the prompt (SPEC 8.1)', () => {
     expect(h.prompts).toEqual([])
     const executor = wakeExecutors.judge
     if (executor === undefined) throw new Error('no judge executor')
-    const heartbeat: Action = { kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', reason: 'lease', issue: null }
+    const heartbeat: Action = { kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', reason: 'lease', issue: null, issues: [] }
     const ctx = { wakeId: () => 'w1' } as unknown as ExecCtx
     expect(await executor(ctx, heartbeat)).toEqual({ status: 'failed', summary: 'not a wake: heartbeat', noRetry: true })
   })

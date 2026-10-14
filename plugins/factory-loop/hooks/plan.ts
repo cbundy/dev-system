@@ -534,12 +534,26 @@ function housekeeping(ctx: Ctx) {
         rule: 'H1',
         reason: afterLoad ? 'lease renewal due' : 'first pass after load',
         issue: null,
+        // named, so callum-flow-claim also revives a lease that lapsed while the loop was down (#589)
+        issues: held.map(issue => issue.number).sort((a, b) => a - b),
       })
     }
   }
+  // H1 revive: a heartbeat that revived something is told once, keyed on its entry
+  for (const entry of ctx.state.ledger) {
+    const revived = entry.kind === 'heartbeat' && entry.status === 'done' ? outcome(entry, 'cli')?.revived : undefined
+    if (revived === undefined || revived.length === 0) continue
+    want(ctx, wake('tell', 'revived', `tell:revived:${entry.key}:${entry.endedAt ?? 0}`, 'H1', null, { issues: revived.join(',') }, revived.map(n => `#${n}`)))
+  }
   const sweep = lastDone(ctx, 'sweep')
   if (sweep === undefined || state.now - (sweep.endedAt ?? 0) >= config.sweepEveryMs) {
-    want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: 'sweep due', issue: null })
+    // H2 waits for the first heartbeat after a load while a live issue is held: the sweep would
+    // otherwise release a lease that heartbeat is about to revive (#589)
+    if (held.length > 0 && (beat?.endedAt ?? 0) < state.loadedAt) {
+      skip(ctx, 'H2', null, 'sweep waits for the first heartbeat after load')
+    } else {
+      want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: 'sweep due', issue: null })
+    }
   }
   // H4: a drain that has lasted an hour tells the owner once, with what it still waits on.
   const due = state.control.updateDue

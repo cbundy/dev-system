@@ -1048,3 +1048,22 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   agent's running shell tasks as its loop exits, and the process groups of a loop that does not
   settle after the kill, so the loop needs no process access of its own. A process that detached
   from its shell (setsid, a daemon) outlives the stop; the owner's notice names the agent.
+
+### D-76 A heartbeat names the held issues so a lapsed lease is revived
+
+- **Decision** (the agent's choice, 2026-10-14; #589): rule H1 runs `callum-flow-claim --heartbeat`
+  with the numbers of this device's held live issues. For a named issue the CLI also renews this
+  device's expired claim, printing `revived <N>`, when that claim is the newest, no other device
+  holds a live one, and the issue is open and still `In development`. Rule H2 does not run while a
+  live issue is held and no heartbeat is done since `loadedAt`, and the owner hears once
+  (`tell(revived)`) when a heartbeat revived anything. The no-argument form still renews live
+  claims only.
+- **Alternatives**: (a) revive every expired own claim in the no-argument form; (b) revive after
+  the sweep has released the issue; (c) have the loop re-claim the issue.
+- **Why**: after a restart longer than the lease, the heartbeat skipped the expired claim and
+  the sweep released the issue straight after, so the claim looked dropped while its branch and run
+  were live and a second design could start beside it. Only a caller that names the issue attests
+  the work exists, so (a) would resurrect claims nobody is working. (b) would race a second device
+  that claimed it, and (c) posts a new claim comment for work already claimed. Never reviving a
+  swept issue keeps the lease rule that holds two devices off one issue. An older image prints no
+  `revived` line, so the plugin degrades to the old behaviour.

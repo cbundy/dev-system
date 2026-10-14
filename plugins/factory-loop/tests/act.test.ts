@@ -1283,6 +1283,44 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
   // #537, as on the testbed: codex was logged out, so the run failed at test and the adjudicator
   // escalated ENV. The owner fixes it and resumes the run; the loop reruns the same head itself,
   // and the new run is the one judged from then on.
+  test('two issues in flight, the loop down 3 hours: one heartbeat revives both, the sweep waits for it, no claim is made, one tell (#589)', async () => {
+    let clock = NOW
+    const { w, run } = world(() => clock)
+    const live = (n: number) => ({ issue: n, stage: 'implementing', entered_at: iso(NOW - 4 * 60 * MIN), holder: DEVICE, run: null, pr: null, stuck: null, github: null })
+    const h = harness((argv, s) => {
+      if (argv[0] === 'callum-flow-factory-state') return { stdout: factoryDoc([live(470), live(471)], [], clock) }
+      if (argv[0] === 'callum-flow-claim') return { stdout: 'revived 470\nrevived 471\n' }
+      return run(argv, s)
+    })
+    const at = (s: number) => {
+      clock = NOW + s * 1000
+      h.at(s)
+    }
+    w.queue = []
+    const old = NOW - 3 * 60 * MIN
+    h.live.ledger.push(entry('heartbeat:0', 'heartbeat', { endedAt: old }), entry('sweep:0', 'sweep', { endedAt: old }))
+
+    at(5)
+    await h.pass()
+    expect(h.keys()).toContain(`heartbeat:${old}`)
+    expect(h.keys().some(k => k.startsWith('sweep:'))).toBe(false)
+    expect(h.ran('callum-flow-claim').map(s => s.argv)).toEqual([['callum-flow-claim', '--heartbeat', '470', '471']])
+    const beat = h.live.ledger.find(e => e.key === `heartbeat:${old}`)
+    expect(beat).toMatchObject({ status: 'done', outcome: { kind: 'cli', exit: 0, revived: [470, 471] }, summary: 'leases renewed; revived #470, #471' })
+
+    at(60)
+    await h.pass()
+    expect(h.keys().some(k => k.startsWith('sweep:'))).toBe(true)
+    expect(h.keys().filter(k => k.startsWith('tell:revived:'))).toHaveLength(1)
+    expect(h.prompts.filter(p => p.startsWith('TELL revived'))).toHaveLength(1)
+    at(120)
+    await h.pass()
+    expect(h.keys().filter(k => k.startsWith('tell:revived:'))).toHaveLength(0)
+    // no new claim comment for either issue, across the passes
+    expect(h.ran('callum-flow-claim').every(s => s.argv[1] === '--heartbeat')).toBe(true)
+    expect(h.keys().some(k => k.startsWith('claim:'))).toBe(false)
+  })
+
   test('an environment escalation the owner resumed is rerun on the same head, and the new run goes on (#537)', async () => {
     let clock = NOW
     const { w, run } = world(() => clock)
@@ -1312,7 +1350,8 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     await h.answer('agent-1', 'ENV: codex is logged out, its evidence step got a 401; the tests passed\nACTION: escalate: codex needs a login in this workspace')
     at(60)
     await h.pass()
-    expect(h.keys()).toEqual([`tell:escalate:${gate}`])
+    // the sweep waited for the first pass's heartbeat (rule H2, #589)
+    expect(h.keys()).toEqual(['sweep:0', `tell:escalate:${gate}`])
     await h.turn('turn-1', h.prompts[0] ?? '', 'Run 01K7S2 needs codex logged in; resume it once that is done.')
     at(120)
     await h.pass()

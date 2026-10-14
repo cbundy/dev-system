@@ -293,6 +293,53 @@ expect_rc 0 "heartbeat nothing"
 no_calls "heartbeat nothing"
 no_events "heartbeat nothing"
 
+# revive: a named issue whose own claim expired is renewed, and the sweep leaves it alone
+reset
+issue 7 OPEN 'In development'
+echo 7 > "$d/list.txt"
+{ brief; cm 100 devA "$STALE" "$STALE"; } | arr > "$d/comments-7.json"
+rc_of "$CLAIM" --heartbeat 7
+expect_rc 0 "revive"
+[ "$(calls)" = "PATCH 100" ] || fail "revive must PATCH the own claim: $(calls)"
+[ "$(cat "$tmpdir/out")" = "revived 7" ] || fail "revive stdout: $(cat "$tmpdir/out")"
+events | jq -e '.state == "renewed" and .issue == 7' >/dev/null || fail "revive: renewed event: $(events)"
+: > "$d/calls"
+rm -f "$tmpdir/events"/*
+rc_of "$SWEEP"
+expect_rc 0 "sweep after revive"
+no_calls "sweep after revive"
+events | grep -q reclaimed && fail "sweep after revive reclaimed: $(events)"
+
+# the cases that revive nothing
+revive_none() {
+  rc_of "$CLAIM" "$@"
+  expect_rc 0 "revive none [$*]"
+  no_calls "revive none [$*]"
+  [ ! -s "$tmpdir/out" ] || fail "revive none [$*]: stdout: $(cat "$tmpdir/out")"
+}
+reset # no-argument form
+issue 7 OPEN 'In development'
+echo 7 > "$d/list.txt"
+cm 100 devA "$STALE" "$STALE" | arr > "$d/comments-7.json"
+revive_none --heartbeat
+reset # another device's live claim
+issue 7 OPEN 'In development'
+{ cm 100 devA "$STALE" "$STALE"; cm 101 devB "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
+revive_none --heartbeat 7
+reset # a newer claim by another device, expired too
+issue 7 OPEN 'In development'
+{ cm 100 devA "$STALE" "$STALE"; cm 101 devB '2026-10-08T09:00:00Z' '2026-10-08T09:00:00Z'; } | arr > "$d/comments-7.json"
+revive_none --heartbeat 7
+reset # already swept: the label is gone
+issue 7 OPEN ready
+cm 100 devA "$STALE" "$STALE" | arr > "$d/comments-7.json"
+revive_none --heartbeat 7
+reset # closed
+issue 7 CLOSED 'In development'
+cm 100 devA "$STALE" "$STALE" | arr > "$d/comments-7.json"
+revive_none --heartbeat 7
+no_events "revive none"
+
 # --- sweep: stale claim is reclaimed ---------------------------------------------
 reset
 issue 7 OPEN 'In development'

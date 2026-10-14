@@ -23,7 +23,12 @@
 # --heartbeat: edits this device's live claim comment in place (a `renewed:`
 # line, through the comment API, never a new comment). With no issue numbers it
 # renews every live claim this device holds on an open `In development` issue.
-# Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
+# An issue named on the command line is also revived when this device's claim on it has
+# expired but nothing has overtaken it: that claim is the newest, no other device holds a live
+# one, and the issue is open and still carries `In development` (so the sweep has not released
+# it). Renewal is the same PATCH and `renewed` event, and prints `revived <N>` on stdout.
+# The no-argument form never revives. Nothing to renew is still exit 0.
+# Each claim comment actually PATCHed logs one
 # `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
 # event log, which callum-flow-factory-state reads, can see the lease is live.
 #
@@ -122,6 +127,8 @@ CLAIMS_JQ='
 if [ "$mode" = heartbeat ]; then
   rc=0
   issues="$*"
+  named=0
+  [ -z "$issues" ] || named=1
   if [ -z "$issues" ]; then
     if ! lj=$("$READ" --json --list --label "$INDEV" --state open) ||
       ! issues=$(printf '%s' "$lj" | jq -r '.issues[].number'); then
@@ -139,7 +146,24 @@ if [ "$mode" = heartbeat ]; then
     fi
     mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
       "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | last // empty')
-    [ -n "$mine" ] || continue
+    revive=0
+    if [ -z "$mine" ]; then
+      # An expired claim is renewed only for an issue the caller named: the caller attests the
+      # work still exists. It must still be this device's newest claim, with no other device
+      # holding a live one, on an open issue that still carries the label (not yet swept).
+      [ "$named" -eq 1 ] || continue
+      mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
+        "$CLAIMS_JQ"' | if length > 0 and (last.dev == $dev) and (map(select(.dev != $dev and .exp > $now)) | length == 0) then last else empty end')
+      [ -n "$mine" ] || continue
+      vj=$("$READ" --json "$n") && vrc=0 || vrc=$?
+      if [ "$vrc" -ne 0 ]; then
+        [ "$vrc" -eq 3 ] || { err "cannot read #$n"; rc=1; }
+        continue
+      fi
+      printf '%s' "$vj" | jq -e --arg l "$INDEV" \
+        '.issue | (.state | ascii_upcase) == "OPEN" and ((.labels // []) | map(.name) | index($l) != null)' >/dev/null || continue
+      revive=1
+    fi
     id=$(printf '%s' "$mine" | jq -r .id)
     body=$(printf '%s' "$mine" | jq -r --arg ts "$(iso "$now")" \
       '[(.body | split("\n") | map(select(startswith("renewed: ") | not)) | join("\n") | rtrimstr("\n")), "renewed: " + $ts] | join("\n")')
@@ -147,6 +171,7 @@ if [ "$mode" = heartbeat ]; then
       # the lease the comment itself carries, so the log matches the claim
       ll=$(printf '%s' "$mine" | jq -r .lease)
       "$EVENT" renewed --issue "$n" --note "lease: $ll" >/dev/null 2>&1 || err "warning: could not log the renewed event"
+      [ "$revive" -eq 0 ] || echo "revived $n"
     else
       err "cannot renew the claim on #$n"
       rc=1

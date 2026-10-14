@@ -142,7 +142,7 @@ function respond(action: 'approve' | 'fix' | 'skip', over: Partial<Extract<Actio
 }
 
 const ACTIONS: Action[] = [
-  { ...base, issue: null, kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1' },
+  { ...base, issue: null, kind: 'heartbeat', key: 'heartbeat:0', class: 'free', rule: 'H1', issues: [] },
   { ...base, issue: null, kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2' },
   { ...base, kind: 'claim', key: 'claim:470:new', class: 'start', rule: 'D1' },
   { ...base, kind: 'close-issue', key: 'close:470', class: 'free', rule: 'M7' },
