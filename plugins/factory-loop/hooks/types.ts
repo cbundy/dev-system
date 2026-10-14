@@ -146,6 +146,9 @@ export type Outcome =
   | { kind: 'handoff'; notGated: boolean; run: string | null; head: string | null; newBranch: string | null }
   | { kind: 'guard'; fails: GuardFail[]; warns: string[] }
   | { kind: 'update-behind'; result: 'updated' | 'fail' | 'skip'; from: string | null; to: string | null; line: string }
+  // a worktree the pipeline's own commits left behind its branch, fast-forwarded (rules M1, M2,
+  // #551): forwarded, current (nothing lagged) or refused (dirty, diverged, origin moved)
+  | { kind: 'fast-forward'; result: 'forwarded' | 'current' | 'refused'; line: string }
   | { kind: 'merge'; result: 'merged' | 'refused'; rollout: Rollout | null; closeIssue: number | null; line: string }
   // callum-flow-rollout for a merge the loop did not make (a hand merge, rule M7, D-29)
   | { kind: 'rollout'; rollout: Rollout | null; closeIssue: number | null }
@@ -168,6 +171,7 @@ export type ActionKind =
   | 'respond'
   | 'guard'
   | 'update-behind'
+  | 'fast-forward'
   | 'fix-linkage'
   | 'merge'
   | 'close-issue'
@@ -337,6 +341,8 @@ export type Action =
       logReview: boolean
     })
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
+  // the worktrees on the run's branch, moved to the run's head when it is origin's (#551)
+  | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; branch: string })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
   | (Base & { kind: 'release-parent'; created: number[] })

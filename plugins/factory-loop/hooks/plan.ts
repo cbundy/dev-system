@@ -33,6 +33,9 @@ const HOUR = 3_600_000
 const BREAKER_MS = 30 * 60_000
 // A drain this long tells the owner (rule H4, D-15).
 const DRAIN_SLOW_MS = HOUR
+// A failure the guard-fail judge answered `wait` (or `fixer`, its fixer ended) is asked about
+// again after this, if it still stands unchanged (#550): the slow reminder.
+const JUDGE_REMIND_MS = 30 * 60_000
 // The title's M: issues merged in this window (D-23).
 const MERGED_WINDOW_MS = 6 * HOUR
 // A hand merge older than this gets no follow-ups (rule M7). callum-flow-factory-state lists a
@@ -102,6 +105,8 @@ type Ctx = {
   issues: Map<number, IssueView>
   capped: string[]
   atCap: boolean
+  // the last action each issue wanted that did not go out, and why: what a PR waits for (#550)
+  gated: Map<number, { key: string; gate: Gate; rule: string }>
 }
 
 // tierOf: the usage tier (SPEC rule G3). The higher of the two windows decides; a missing
@@ -159,6 +164,7 @@ export function plan(state: State, config: Config): PlanResult {
     issues: new Map(state.issues.map(issue => [issue.number, issue])),
     capped: [],
     atCap: false,
+    gated: new Map(),
   }
 
   const blind = !state.sources.factory.ok
@@ -256,6 +262,7 @@ function want(ctx: Ctx, action: Action): Gate {
   const kind = attemptsKind(action)
   const g = gate(ctx, action.key, kind)
   if (g === 'go') ctx.out.push(action)
+  else if (action.issue !== null) ctx.gated.set(action.issue, { key: action.key, gate: g, rule: action.rule })
   const entry = ctx.byKey.get(action.key)
   if (g === 'running' && entry !== undefined && entry.status !== 'running') {
     skip(ctx, action.rule, action.issue, `${action.key}: its agent ${entry.agentId} still runs`)
@@ -760,6 +767,9 @@ type GuardResult = Extract<Outcome, { kind: 'guard' }>
 
 function merges(ctx: Ctx, runs: RunView[]) {
   const { state, config } = ctx
+  const outAt = ctx.out.length
+  const skippedAt = ctx.skipped.length
+  ctx.gated.clear()
   for (const run of runs) {
     if (!MERGEABLE_STATES.includes(run.state) || run.pr === null || run.head === null) continue
     const n = run.issue as number
@@ -780,26 +790,28 @@ function merges(ctx: Ctx, runs: RunView[]) {
       run: run.run,
       head,
     })
-    // M1: a fresh guard outcome for this PR and head, or a guard run.
+    // M1: a fresh guard outcome for this PR and head, or a guard run. Before a head's first guard,
+    // a clean slot on its branch is fast-forwarded to the run's head first (it runs first in the
+    // pass), so a worktree the pipeline's own commits left behind does not fail `head` (#551).
     if (latest === undefined) {
+      if (cleanSlotOn(ctx, run.branch)) want(ctx, fastForward(run, `fast-forward:${pr}:${head}`, 'M1'))
       want(ctx, guardAction(1))
       continue
     }
-    if (latest.status === 'running') continue
+    if (latest.status === 'running') {
+      skip(ctx, 'M1', n, `PR #${pr} waits for ${latest.key} to finish`)
+      continue
+    }
     if (latest.status !== 'done') {
       want(ctx, { ...guardAction(guards.length), key: latest.key })
       continue
     }
     const result = outcome(latest, 'guard')
     if (result === undefined) continue
-    // a repair on this PR since the guard makes it stale: a fix-linkage, or an update-behind that
-    // pushed a new PR head (the run's head, which the watcher prints, stays where it was)
-    const lastRepair = Math.max(
-      0,
-      ...state.ledger
-        .filter(e => e.pr === pr && e.status === 'done' && (e.kind === 'fix-linkage' || outcome(e, 'update-behind')?.result === 'updated'))
-        .map(e => e.endedAt ?? 0),
-    )
+    // a repair on this PR since the guard makes it stale: a fixer that ended done, with a commit
+    // or without one (#550), a fix-linkage, a fast-forward that moved a worktree (#551), or an
+    // update-behind that pushed a new PR head (the run's head, which the watcher prints, stays)
+    const lastRepair = Math.max(0, ...state.ledger.filter(e => e.pr === pr && repaired(e)).map(e => e.endedAt ?? 0))
     const age = state.now - (latest.endedAt ?? 0)
     const transientOnly = result.fails.length > 0 && result.fails.every(f => classifyFail(f) === 'transient')
     if ((latest.endedAt ?? 0) < lastRepair || age >= config.guardTtlMs || (transientOnly && age >= config.guardRecheckMs)) {
@@ -807,7 +819,7 @@ function merges(ctx: Ctx, runs: RunView[]) {
       continue
     }
     if (result.fails.length > 0) {
-      onGuardFails(ctx, run, result.fails, guards.length)
+      onGuardFails(ctx, run, result.fails, guards.length, latest.startedAt)
       continue
     }
     if (result.warns.length > 0 && done(ctx, `pr-comment:${pr}:${head}`) === undefined) {
@@ -816,9 +828,128 @@ function merges(ctx: Ctx, runs: RunView[]) {
     }
     mergeReview(ctx, run, result)
   }
+  // a PR no rule acted on this pass says what it waits for (#550)
+  for (const run of runs) {
+    if (!MERGEABLE_STATES.includes(run.state) || run.pr === null || run.head === null) continue
+    const n = run.issue as number
+    if (ctx.out.slice(outAt).some(a => a.issue === n) || ctx.skipped.slice(skippedAt).some(s => s.issue === n)) continue
+    const g = ctx.gated.get(n)
+    skip(ctx, g?.rule ?? 'M1', n, waitsFor(ctx, run, g))
+  }
 }
 
-function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number) {
+// repaired: a done entry that changed a PR or its worktree, after which its guard is stale (M1).
+function repaired(e: LedgerEntry): boolean {
+  if (e.status !== 'done') return false
+  if (e.kind === 'fix-linkage' || (e.kind === 'spawn' && e.agent === 'fixer')) return true
+  return outcome(e, 'update-behind')?.result === 'updated' || outcome(e, 'fast-forward')?.result === 'forwarded'
+}
+
+// waitsFor: what a PR no rule acted on this pass waits for, from the last action it wanted that
+// did not go out (#550).
+function waitsFor(ctx: Ctx, run: RunView, g: { key: string; gate: Gate } | undefined): string {
+  const pr = run.pr as number
+  if (g === undefined) return `PR #${pr} waits: no rule acts on it`
+  if (g.gate === 'running') return `PR #${pr} waits for ${g.key} to finish`
+  if (g.gate === 'wait') return `PR #${pr} waits out the retry backoff of ${g.key}`
+  if (g.gate !== 'done') return `PR #${pr} waits: ${g.key} is ${g.gate}`
+  if (g.key.startsWith('tell:')) return `PR #${pr} waits on the owner (${g.key})`
+  let guardEnd = 0
+  for (const e of ctx.state.ledger) {
+    if (e.kind === 'guard' && e.pr === pr && e.head === run.head && e.status === 'done') guardEnd = Math.max(guardEnd, e.endedAt ?? 0)
+  }
+  const due = Math.max(0, guardEnd + ctx.config.guardTtlMs - ctx.state.now)
+  return `PR #${pr} waits for its head to move or its next guard in ${Math.ceil(due / 1000)}s (${g.key} is done)`
+}
+
+// cleanSlotOn: a pool slot has the branch checked out and nothing uncommitted (#551).
+function cleanSlotOn(ctx: Ctx, branch: string): boolean {
+  return ctx.state.sources.pool.ok && (ctx.state.pool?.slots ?? []).some(s => s.branch === branch && s.dirty === false)
+}
+
+function fastForward(run: RunView, key: string, rule: 'M1' | 'M2'): Action {
+  return {
+    kind: 'fast-forward',
+    key,
+    class: 'free',
+    rule,
+    reason: rule === 'M1' ? 'before the first guard of a head' : 'guard: a worktree lags the run head',
+    issue: run.issue as number,
+    pr: run.pr as number,
+    run: run.run,
+    head: run.head as string,
+    branch: run.branch,
+  }
+}
+
+// worktreeLag: a guard `head` FAIL whose only problem is a worktree elsewhere on the branch: the
+// run, origin and PR heads are all this head, and every worktree's head was read (the guard
+// prints `run= origin= pr=` and a `worktree=` per worktree). That the worktree is behind, clean
+// and has nothing origin lacks is the fast-forward's to prove (#551).
+export function worktreeLag(fail: GuardFail, head: string): boolean {
+  if (fail.name !== 'head') return false
+  const m = /^run=(\S+) origin=(\S+) pr=(\S+)((?: worktree=\S+)*) \(run /.exec(fail.reason)
+  if (m === null || m[1] !== head || m[2] !== head || m[3] !== head) return false
+  const worktrees = (m[4] ?? '').split(' worktree=').filter(w => w !== '')
+  return worktrees.some(w => w !== head) && !worktrees.includes('unknown')
+}
+
+// lagForward: rule M2 for a worktree that lags the run's head (#551): the fast-forward, once per
+// guard, unless one already went through before this guard ran (the lag came back, so the judge
+// looks). 'acting' while it is wanted; else the line of a refusal, for the judge, or null.
+function lagForward(ctx: Ctx, run: RunView, seq: number, guardAt: Ms): 'acting' | string | null {
+  const pr = run.pr as number
+  const head = run.head as string
+  const went = ctx.state.ledger.some(
+    e => e.kind === 'fast-forward' && e.pr === pr && e.head === head && repaired(e) && (e.endedAt ?? 0) <= guardAt,
+  )
+  if (went) return null
+  const key = `fast-forward:${pr}:${head}:${seq}`
+  const ended = done(ctx, key)
+  if (ended !== undefined) {
+    const o = outcome(ended, 'fast-forward')
+    return o?.result === 'refused' ? o.line : null
+  }
+  // one that ran out of attempts is no owner notice: the judge hears of the lag instead
+  if (gate(ctx, key, 'fast-forward') === 'exhausted') return null
+  want(ctx, fastForward(run, key, 'M2'))
+  return 'acting'
+}
+
+// digest: a short stable name for a text (FNV-1a, 32 bits), for a key that follows content.
+function digest(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0
+  return h.toString(16).padStart(8, '0')
+}
+
+// guardFixerKey: the fixer a guard-fail judge's round asked for, keyed like that round.
+function guardFixerKey(judgeKey: string): string {
+  return `fixer:guard:${judgeKey.slice('judge:guard-fail:'.length)}`
+}
+
+// guardJudgeKey: the guard-fail judge for one failure (#550), keyed by the PR, head and a digest
+// of the FAIL lines, not the guard's number, so a re-check that fails the same way wakes no one.
+// A new round (':r<n>') comes once the owner resumed the run after the last, or as a slow
+// reminder JUDGE_REMIND_MS after an answer other than hold (and after the fixer it asked for).
+function guardJudgeKey(ctx: Ctx, run: RunView, base: string): string {
+  for (let round = 0; ; round++) {
+    const key = `${base}${roundSuffix(round)}`
+    const entry = done(ctx, key)
+    if (entry === undefined) return key
+    const decision = outcome(entry, 'wake')?.decision
+    let since = entry.endedAt ?? 0
+    if (decision === 'fixer') {
+      const fixer = done(ctx, guardFixerKey(key))
+      const spent = gate(ctx, guardFixerKey(key), 'fixer') === 'exhausted'
+      since = fixer !== undefined ? Math.max(since, fixer.endedAt ?? 0) : spent ? since : Number.POSITIVE_INFINITY
+    }
+    const resumed = resumes(ctx, `run:${run.run}`, entry.endedAt ?? 0) > 0
+    if (!resumed && (decision === 'hold' || ctx.state.now - since < JUDGE_REMIND_MS)) return key
+  }
+}
+
+function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number, guardAt: Ms) {
   const n = run.issue as number
   const pr = run.pr as number
   const head = run.head as string
@@ -889,14 +1020,26 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number) {
       )
       if (held) {
         ctx.owner.add(`hold:guard:${pr}:${head}`)
+        skip(ctx, 'M2', n, `PR #${pr} is held by judge(guard-fail) until the owner resumes run:${run.run}`)
         return
       }
-      const key = `judge:guard-fail:${pr}:${head}:${seq}`
-      const answer = outcome(done(ctx, key), 'wake')
+      // a worktree the pipeline's own commits left behind is fast-forwarded, not judged (#551)
+      const context = [...lines]
+      if (fails.some(f => worktreeLag(f, head))) {
+        const forward = lagForward(ctx, run, seq, guardAt)
+        if (forward === 'acting') return
+        if (forward !== null) context.push(`FAST-FORWARD ${forward}`)
+      }
+      const key = guardJudgeKey(ctx, run, `judge:guard-fail:${pr}:${head}:${digest(lines.join('\n'))}`)
+      const judged = done(ctx, key)
+      const answer = outcome(judged, 'wake')
       if (answer === undefined) {
-        want(ctx, wake('judge', 'guard-fail', key, 'M2', n, { issue: n, pr, run: run.run, head, brief }, lines))
+        want(ctx, wake('judge', 'guard-fail', key, 'M2', n, { issue: n, pr, run: run.run, head, brief }, context))
       } else if (answer.decision === 'fixer') {
-        want(ctx, fixer('guard', `fixer:guard:${pr}:${head}`, answer.instructions ?? lines.join('\n')))
+        want(ctx, fixer('guard', guardFixerKey(key), answer.instructions ?? lines.join('\n')))
+      } else {
+        const remind = Math.max(0, (judged?.endedAt ?? 0) + JUDGE_REMIND_MS - ctx.state.now)
+        skip(ctx, 'M2', n, `PR #${pr} waits: judge(guard-fail) answered ${answer.decision}; asked again if the failure changes, or in ${Math.ceil(remind / 1000)}s`)
       }
       return
     }
@@ -1720,10 +1863,11 @@ function breakerOpen(ctx: Ctx, kind: ActionKind): number | null {
 }
 
 // writesBranch: an action that changes an issue's branch or its PR's head: an implementer or a
-// fixer, a respond (the pipeline commits on the run's head), an update-behind, a merge.
+// fixer, a respond (the pipeline commits on the run's head), an update-behind, a merge; and a
+// fast-forward, which moves the worktree an agent of the issue may be working in.
 function writesBranch(action: Action): boolean {
   if (action.kind === 'spawn') return action.agent === 'fixer'
-  return action.kind === 'delegate' || action.kind === 'respond' || action.kind === 'update-behind' || action.kind === 'merge'
+  return ['delegate', 'respond', 'update-behind', 'fast-forward', 'merge'].includes(action.kind)
 }
 
 // agentWriting: an implementer or fixer of this issue still runs, by the ledger, or by the agent

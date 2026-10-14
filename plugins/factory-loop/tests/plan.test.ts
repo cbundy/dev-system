@@ -585,7 +585,7 @@ describe('M: merge', () => {
     const stale = guarded(pending, [], 1, { endedAt: NOW - 4 * MIN })
     expect(keys(plan(mergeReady([stale]), CFG))).toEqual(['guard:550:head50:2'])
     const failed = [{ name: 'checks', reason: 'ci=fail' }]
-    expect(keys(plan(mergeReady([guarded(failed)]), CFG))).toEqual(['judge:guard-fail:550:head50:1'])
+    expect(keys(plan(mergeReady([guarded(failed)]), CFG))).toEqual([expect.stringMatching(/^judge:guard-fail:550:head50:[0-9a-f]{8}$/)])
   })
 
   test('an untrusted PR author is never merged and the owner is told (I-11.5, SPEC M2)', () => {
@@ -655,7 +655,7 @@ describe('M: merge', () => {
     expect(keys(plan(base(merged('merge'), [reviewed({ type: 'merge' }, 'head50', { bump: 'patch' })]), CFG))).toEqual([])
   })
 
-  test('a guard older than 30 minutes is run again (SPEC M1)', () => {
+  test('a guard older than guardTtlMs is run again (SPEC M1)', () => {
     expect(keys(plan(mergeReady([guarded([], [], 1, { endedAt: NOW - 31 * MIN })]), CFG))).toEqual(['guard:550:head50:2'])
   })
 })
@@ -1436,3 +1436,156 @@ describe('properties', () => {
   })
 })
 
+// --- #550 and #551: re-guard after a repair, judge a failure once, fast-forward a lagging worktree ---
+
+// The guard's head FAIL line for PR 550 (images/base/callum-flow-merge-guard): the run, origin
+// and PR heads, then one worktree= per worktree on the branch.
+function headFail(runHead: string, origin: string, prHead: string, ...worktrees: string[]) {
+  const wt = worktrees.map(w => ` worktree=${w}`).join('')
+  return { name: 'head', reason: `run=${runHead} origin=${origin} pr=${prHead}${wt} (run 01M4RQ0050AAAA); fix: if only a worktree lags the branch, fast-forward it` }
+}
+const LAG = headFail('head50', 'head50', 'head50', 'wt50')
+const CI_FAIL = { name: 'checks', reason: 'ci=fail' }
+
+// The guard-fail judge's answer for a failure, under the key plan gives that failure.
+function judgedFail(fails: { name: string; reason: string }[], decision: string, over: Partial<LedgerEntry> = {}) {
+  const key = keys(plan(mergeReady([guarded(fails)]), CFG))[0] as string
+  return entry(key, 'judge', { wake: 'guard-fail', class: 'drive', issue: 50, pr: 550, head: 'head50', outcome: wakeAnswer(decision, { instructions: 'make ci pass' }), ...over })
+}
+function fastForward(key: string, result: 'forwarded' | 'current' | 'refused', over: Partial<LedgerEntry> = {}) {
+  return entry(key, 'fast-forward', { issue: 50, pr: 550, head: 'head50', outcome: { kind: 'fast-forward', result, line: `${result.toUpperCase()} x` }, ...over })
+}
+function fixerDone(key: string, startedAt: number, endedAt: number) {
+  return entry(key, 'spawn', { agent: 'fixer', class: 'drive', issue: 50, pr: 550, head: 'head50', startedAt, endedAt })
+}
+const waits = (r: PlanResult) => r.skipped.filter(s => s.issue === 50 && s.rule.startsWith('M'))
+
+describe('M1, M2: re-guard after a repair and judge a failure once (#550)', () => {
+  test('a fixer that ends done without a commit makes the guard stale, so the next pass guards again', () => {
+    const judged = judgedFail([CI_FAIL], 'fixer', { endedAt: NOW - 50_000 })
+    const fixerKey = keys(plan(mergeReady([guarded([CI_FAIL]), judged]), CFG))[0] as string
+    expect(fixerKey.startsWith('fixer:guard:550:head50:')).toBe(true)
+    const fixed = fixerDone(fixerKey, NOW - 40_000, NOW - 10_000)
+    expect(keys(plan(mergeReady([guarded([CI_FAIL]), judged, fixed]), CFG))).toEqual(['guard:550:head50:2'])
+    // any fixer on the PR counts: a conflict fixer that made no commit too
+    const conflict = [{ name: 'mergeable', reason: 'conflicts with main, rebase and re-gate' }]
+    const resolved = fixerDone('fixer:conflict:550:head50', NOW - 40_000, NOW - 10_000)
+    expect(keys(plan(mergeReady([guarded(conflict), resolved]), CFG))).toEqual(['guard:550:head50:2'])
+  })
+
+  test('a PR no rule acts on says what it waits for', () => {
+    const judged = judgedFail([CI_FAIL], 'fixer', { endedAt: NOW - 50_000 })
+    const fixerKey = keys(plan(mergeReady([guarded([CI_FAIL]), judged]), CFG))[0] as string
+    // the fixer ended before the guard that saw the failure: nothing to do but wait
+    const fixed = fixerDone(fixerKey, NOW - 4 * MIN, NOW - 3 * MIN)
+    const r = plan(mergeReady([guarded([CI_FAIL]), judged, fixed]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(waits(r)).toEqual([{ rule: 'M2', issue: 50, why: `PR #550 waits for its head to move or its next guard in 240s (${fixerKey} is done)` }])
+    // a guard still running, a judge still open, an owner notice and a hold each say so too
+    const guarding = plan(mergeReady([guarded([], [], 1, { status: 'running', endedAt: null })]), CFG)
+    expect(waits(guarding)).toEqual([{ rule: 'M1', issue: 50, why: 'PR #550 waits for guard:550:head50:1 to finish' }])
+    const open = { ...judged, status: 'running' as const, endedAt: null, outcome: undefined }
+    expect(waits(plan(mergeReady([guarded([CI_FAIL]), open]), CFG))).toEqual([{ rule: 'M2', issue: 50, why: `PR #550 waits for ${judged.key} to finish` }])
+    const base = [{ name: 'base', reason: 'PR targets epic/x' }]
+    const told = entry('tell:base:550:head50', 'tell', { wake: 'base', class: 'owner', issue: 50 })
+    expect(waits(plan(mergeReady([guarded(base), told]), CFG))).toEqual([{ rule: 'M2', issue: 50, why: 'PR #550 waits on the owner (tell:base:550:head50)' }])
+    const held = judgedFail([CI_FAIL], 'hold')
+    expect(waits(plan(mergeReady([guarded([CI_FAIL]), held]), CFG))).toEqual([
+      { rule: 'M2', issue: 50, why: 'PR #550 is held by judge(guard-fail) until the owner resumes run:01M4RQ0050AAAA' },
+    ])
+  })
+
+  test('a PR that keeps failing the same way across re-checks raises one judge wake; a changed failure raises another', () => {
+    const key = keys(plan(mergeReady([guarded([CI_FAIL])]), CFG))[0] as string
+    expect(key).toMatch(/^judge:guard-fail:550:head50:[0-9a-f]{8}$/)
+    const first = guarded([CI_FAIL], [], 1, { startedAt: NOW - 30 * MIN, endedAt: NOW - 29 * MIN })
+    const judged = judgedFail([CI_FAIL], 'wait', { startedAt: NOW - 29 * MIN, endedAt: NOW - 28 * MIN })
+    // re-check after re-check fails the same way, each fresh when planned: no new wake
+    for (let n = 2; n <= 4; n++) {
+      const rechecks = Array.from({ length: n - 1 }, (_, i) => {
+        const ago = (n - 2 - i) * 6 * MIN + MIN
+        return guarded([CI_FAIL], [], i + 2, { startedAt: NOW - ago - 30_000, endedAt: NOW - ago })
+      })
+      const r = plan(mergeReady([first, judged, ...rechecks]), CFG)
+      expect([n, keys(r)]).toEqual([n, []])
+    }
+    // the failure changes: one new judge, under its own key
+    const changed = guarded([CI_FAIL, { name: 'checks', reason: 'lint=fail' }], [], 2, { startedAt: NOW - 30_000, endedAt: NOW - 20_000 })
+    const r = plan(mergeReady([first, judged, changed]), CFG)
+    expect(r.actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+    expect(keys(r)[0]).not.toBe(key)
+  })
+
+  test('the same failure is asked about again only after a slow reminder, or once the owner resumes after a hold', () => {
+    const recheck = guarded([CI_FAIL], [], 2, { startedAt: NOW - 2 * MIN, endedAt: NOW - MIN })
+    const waited = judgedFail([CI_FAIL], 'wait', { endedAt: NOW - 29 * MIN })
+    expect(keys(plan(mergeReady([recheck, waited]), CFG))).toEqual([])
+    const reminded = { ...waited, endedAt: NOW - 31 * MIN }
+    expect(keys(plan(mergeReady([recheck, reminded]), CFG))).toEqual([`${waited.key}:r1`])
+    const held = judgedFail([CI_FAIL], 'hold', { endedAt: NOW - 40 * MIN })
+    expect(keys(plan(mergeReady([recheck, held]), CFG))).toEqual([])
+    const resumed = control({ resumed: [{ subject: 'run:01M4RQ0050AAAA', at: NOW - 5 * MIN }] })
+    expect(keys(plan(mergeReady([recheck, held], { control: resumed }), CFG))).toEqual([`${held.key}:r1`])
+  })
+
+  test('the guard expires after 5 minutes by default (SPEC 4.2, M1)', () => {
+    expect(CFG.guardTtlMs).toBe(5 * MIN)
+    expect(keys(plan(mergeReady([guarded([], [], 1, { endedAt: NOW - 6 * MIN })]), CFG))).toEqual(['guard:550:head50:2'])
+  })
+})
+
+describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () => {
+  test('a head FAIL that is only a lagging worktree fast-forwards it, with no judge, then guards again', () => {
+    const r = plan(mergeReady([guarded([LAG])]), CFG)
+    expect(keys(r)).toEqual(['fast-forward:550:head50:1'])
+    expect(find(r, 'fast-forward:550:head50:1')).toMatchObject({ kind: 'fast-forward', class: 'free', rule: 'M2', pr: 550, head: 'head50', branch: 'feat/issue-50-work' })
+    const moved = fastForward('fast-forward:550:head50:1', 'forwarded', { startedAt: NOW - 30_000, endedAt: NOW - 20_000 })
+    expect(keys(plan(mergeReady([guarded([LAG]), moved]), CFG))).toEqual(['guard:550:head50:2'])
+  })
+
+  test('a diverged or dirty worktree (the fast-forward refuses) still goes to the judge, with the refusal', () => {
+    const refused = fastForward('fast-forward:550:head50:1', 'refused', { startedAt: NOW - 30_000, endedAt: NOW - 20_000 })
+    const r = plan(mergeReady([guarded([LAG]), refused]), CFG)
+    expect(r.actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+    const judge = r.actions.find(a => a.kind === 'judge') as Extract<Action, { wake: string }>
+    expect(judge.wake).toBe('guard-fail')
+    expect(judge.context).toContain('FAST-FORWARD REFUSED x')
+    // a fast-forward that ran out of attempts goes to the judge too, with no notice of its own
+    const spent = fastForward('fast-forward:550:head50:1', 'refused', { status: 'failed', attempts: 3, outcome: undefined })
+    expect(plan(mergeReady([guarded([LAG]), spent]), CFG).actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+  })
+
+  test('a head FAIL that is more than a lagging worktree goes to the judge as before', () => {
+    for (const fail of [headFail('head50', 'head51', 'head51', 'head50'), headFail('head50', 'head50', 'head50', 'unknown'), headFail('head50', 'head50', 'head50')]) {
+      const r = plan(mergeReady([guarded([fail])]), CFG)
+      expect([fail.reason, r.actions.filter(a => a.kind !== 'title').map(a => a.kind)]).toEqual([fail.reason, ['judge']])
+    }
+  })
+
+  test('a lag that comes back after a fast-forward went through goes to the judge, not round again', () => {
+    const moved = fastForward('fast-forward:550:head50:1', 'forwarded', { startedAt: NOW - 4 * MIN, endedAt: NOW - 4 * MIN + 1000 })
+    const again = guarded([LAG], [], 2, { startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
+    const r = plan(mergeReady([guarded([LAG], [], 1, { startedAt: NOW - 6 * MIN, endedAt: NOW - 5 * MIN }), moved, again]), CFG)
+    expect(r.actions.filter(a => a.kind !== 'title').map(a => a.kind)).toEqual(['judge'])
+  })
+
+  test('before the first guard of a head, a clean slot on the branch is fast-forwarded first', () => {
+    const slot = { path: '/w/slot-3', branch: 'feat/issue-50-work', state: 'leased', dirty: false, busy: false }
+    const pool = (s: typeof slot) => ({ pool: { free: 10, total: 16, slots: [s] } })
+    expect(keys(plan(mergeReady([], pool(slot)), CFG))).toEqual(['fast-forward:550:head50', 'guard:550:head50:1'])
+    // a dirty slot is left to the guard (and the judge), and no slot means nothing to forward
+    expect(keys(plan(mergeReady([], pool({ ...slot, dirty: true })), CFG))).toEqual(['guard:550:head50:1'])
+    expect(keys(plan(mergeReady(), CFG))).toEqual(['guard:550:head50:1'])
+    // the fast-forward that ran just before the first guard does not make that guard stale
+    const ff = fastForward('fast-forward:550:head50', 'forwarded', { startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 500 })
+    const g = guarded([], [], 1, { startedAt: NOW - 3 * MIN + 600, endedAt: NOW - 2 * MIN })
+    expect(keys(plan(mergeReady([ff, g], pool(slot)), CFG))).toEqual(['adjudicate-merge:550:head50'])
+  })
+
+  test('no fast-forward while an agent works the issue\'s branch', () => {
+    const working = entry('fixer:gate:x', 'spawn', { agent: 'fixer', issue: 50, pr: 550, status: 'running', endedAt: null, agentId: 'a-fix' })
+    const r = plan(mergeReady([guarded([LAG]), working]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M2', issue: 50, why: 'an agent already works the branch of #50 (fast-forward)' })
+  })
+})

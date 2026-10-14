@@ -414,7 +414,9 @@ function outcomeTokens(o: Outcome | undefined): string[] {
       return ['out=handoff', `notgated=${yn(o.notGated)}`, `run=${opt(o.run)}`, `head=${opt(o.head)}`, `branch=${opt(o.newBranch)}`]
     case 'guard':
     case 'respond':
-      // a lost guard re-runs (M1), and a respond settles by the run moving (P3a)
+    case 'fast-forward':
+      // a lost guard re-runs (M1), a respond settles by the run moving (P3a), and a guard after
+      // a fast-forward shows whether the worktree caught up (M2)
       return []
     case 'update-behind':
       return ['out=update-behind', `result=${o.result}`, `from=${opt(o.from)}`, `to=${opt(o.to)}`]

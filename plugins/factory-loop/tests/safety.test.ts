@@ -57,6 +57,8 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
         : { stdout: 'GUARD author PASS\nGUARD test-weakening WARN tests/x.test.ts: an assertion removed\n' }
     case 'callum-flow-fix-linkage':
       return { stdout: 'REPAIRED PR #512: Closes #470\n' }
+    case 'sh':
+      return args[2] === 'factory-loop-fast-forward' ? { stdout: `FORWARDED 1f08432 ${HEAD} ${SLOT}\n` } : {}
     case 'callum-flow-merge':
       return { stdout: 'merged\nClose issue #470 by hand: the PR targets epic/x\n' }
     case 'callum-flow-rollout':
@@ -183,6 +185,7 @@ const ACTIONS: Action[] = [
   respond('fix', { findings: 'review-1,review-2', instructions: '--yes is not an answer; reject a moved HEAD', addFinding: '{"id":"x","note":"--yes"}', logReview: true }),
   { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
+  { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, branch: 'issue-470-x' },
   { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
   { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
   { ...base, kind: 'merge', key: `merge:512:${HEAD}`, class: 'free', rule: 'M5', pr: 512, run: RUN, head: HEAD, bump: 'minor', bumpReason: 'new' },
@@ -236,6 +239,9 @@ function bans(argv: readonly string[]): string[] {
     if (/\b(pkill|killall|coder)\b/.test(script)) out.push('a shell script with a broad kill or coder')
     if (/\bkill\b/.test(script) && script !== PROBE) out.push('a shell script that kills')
     if (/(^|\s)--yes\b|\brerun\b|\babort\b/.test(script)) out.push('a shell script with --yes, rerun or abort')
+    // the one git write a script may make is the fast-forward of a worktree (#551)
+    if (/\bgit(?:\s+-C\s+\S+)?\s+(?:push|reset|rebase|checkout|clean|stash|commit)(?=\s|$)/.test(script)) out.push('a shell script that writes git history or discards work')
+    if (/\bgit(?:\s+-C\s+\S+)?\s+merge(?=\s|$)(?!\s+--ff-only)/.test(script)) out.push('a shell script that merges but by fast-forward')
   }
   if (cmd === 'gh') {
     if (args[0] === 'pr' && (args[1] === 'edit' || args[1] === 'merge')) out.push(`gh pr ${args[1]}`)
@@ -273,6 +279,9 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['gh', 'api', 'repos/x/pulls/1', '--repo', REPO],
       ['git', 'merge', 'main'],
       ['git', 'push', '--force'],
+      ['sh', '-c', 'git -C "$1" merge "$2"', 'sh', '/w', 'main'],
+      ['sh', '-c', 'git -C "$1" reset --hard "$2"', 'sh', '/w', 'abc1234'],
+      ['sh', '-c', 'git push origin HEAD'],
     ]
     for (const argv of bad) expect({ argv, banned: bans(argv).length > 0 }).toEqual({ argv, banned: true })
     expect(bans(['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'])).toContain('the readyLabel')
@@ -283,6 +292,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
       [`${TOOLS}/queue-watch.sh`, '--once', '--repo', REPO, '--label', READY, '--known', 'none'],
       ['no-mistakes', 'axi', 'respond', '--action', 'fix', '--instructions=--yes is not an answer'],
       ['git', 'switch', 'issue-470-x'],
+      ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })

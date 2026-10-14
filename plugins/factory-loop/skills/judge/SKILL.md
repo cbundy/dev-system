@@ -76,12 +76,15 @@ Decide from the wake itself, plus only the reads named. Every judge times out to
     the owner (`merge-hold`) with your reason.
 - **`guard-fail`** (`issue pr run head brief`; detail `GUARD <name> FAIL <reason>` lines): the
   merge guard failed in a way no rule maps (a failed CI check, `head`, an unknown line). Each
-  FAIL line names its fix.
+  FAIL line names its fix. A worktree that only lags its branch never comes here: the loop
+  fast-forwards it; when that was refused (a dirty or diverged worktree), a `FAST-FORWARD
+  REFUSED <why>` detail line says so. You are asked once per failure, not on every re-check.
   - `fixer` (instructions): the fix is a change on the branch or a fresh gated run. Say what
     failed and what to do, from the line: `CI check test failed on 03a35cd: make it pass
     without weakening a test, then re-gate`. The loop spawns the fixer.
   - `wait`: it should clear by itself (a check being re-run, a push in flight). The loop
-    guards again later and asks again if it still fails.
+    guards again later, and asks again if the failure changes, or after 30 minutes if it
+    still stands.
   - `hold` (reason): it needs the owner (repo settings, a secret, a required check that never
     runs, a line you cannot map). It lasts until the head moves or `/factory resume <run>`.
 - **`cancelled`** (`issue run branch head brief`): the issue's current run was cancelled and
