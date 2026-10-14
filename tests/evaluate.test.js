@@ -424,6 +424,18 @@ test("two devices: `superseded` does not release a claim", () => {
   assert.equal(c.stuck.issues[0].issue, 6);
 });
 
+test("two devices: a `loop` event is bookkeeping, not progress, so #6 stays stuck", () => {
+  // #6 is stuck in the fixture (last event 03:30); the factory loop logging an agent end and a wake
+  // for it later (D-09) must neither unstick it nor become its last state.
+  const events = path.join(tmp, "two-device-loop.jsonl");
+  const loop = (ts, note) => ({ v: 2, ts, repo: "acme/widgets", device: "A", session_id: null, actor: "agent", state: "loop", issue: 6, run_id: "r6a", branch: null, pr: null, head: null, note });
+  fs.writeFileSync(events, fs.readFileSync(path.join(TWO, "events.jsonl"), "utf8") +
+    [loop("2026-10-09T11:00:00Z", "kind=spawn key=fix:r6a status=done"), loop("2026-10-09T11:30:00Z", "kind=tell key=tell:escalate:6 status=running")].map((e) => JSON.stringify(e)).join("\n") + "\n");
+  const args = TWO_WINDOW.map((a) => (a === path.join(TWO, "events.jsonl") ? events : a));
+  const c = json(args).claims;
+  assert.deepEqual(c.stuck.issues, [{ issue: 6, devices: ["A"], last_event_at: "2026-10-09T03:30:00.000Z", last_state: "delegated", silent_seconds: 30600 }]);
+});
+
 test("two devices: the stuck threshold follows CALLUM_FLOW_LEASE_MINUTES", () => {
   // a 10 minute lease makes everything silent for over 20 minutes stuck: #3 (59m) and #4 (35m) join #6
   const c = json(TWO_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "10" }).claims;

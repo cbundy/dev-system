@@ -490,6 +490,7 @@ reset
 closed_issue 7 completed
 seed closed 7
 for s in renewed usage watcher_error test_weakened claim_lost; do seed "$s" 7; done
+rc_of "$EVENT" loop --issue 7 --repo o/r --note "kind=tell key=tell:closed:7 status=done"
 n=$(events | wc -l)
 rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "final then noise wrote: $(events)"

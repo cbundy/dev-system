@@ -1,0 +1,579 @@
+{
+ "args": {
+  "stepMinutes": "2",
+  "out": "/tmp/claude-1000/-workspaces-dev-system/efffea22-55dd-4023-99e4-ce7e129f5e07/scratchpad/replay5-evening",
+  "skipLabels": "parked",
+  "repo": "cbundy/dev-system",
+  "device": "coder-dev-system-orchestrator",
+  "from": "2026-10-12T18:30:00Z",
+  "to": "2026-10-12T20:50:00Z"
+ },
+ "decisions": [
+  {
+   "type": "claim",
+   "issue": 506,
+   "ts": 1791830409000,
+   "at": "2026-10-12T18:40:09.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000",
+    "claim:507:1791830355000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 507,
+   "ts": 1791830415000,
+   "at": "2026-10-12T18:40:15.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 506,
+   "ts": 1791830534000,
+   "at": "2026-10-12T18:42:14.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 507,
+   "ts": 1791830534000,
+   "at": "2026-10-12T18:42:14.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 489,
+   "ts": 1791830672000,
+   "at": "2026-10-12T18:44:32.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "sweep:1791816059000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 506,
+   "run": "01M4RQ1143SJGAX217A1SN9KB6",
+   "ts": 1791830908000,
+   "parkedAt": 1791830879000,
+   "at": "2026-10-12T18:48:28.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ1143SJGAX217A1SN9KB6:park@1791830879000:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 498,
+   "ts": 1791831051000,
+   "at": "2026-10-12T18:50:51.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 506,
+   "run": "01M4RQ1143SJGAX217A1SN9KB6",
+   "ts": 1791831132000,
+   "parkedAt": 1791831104000,
+   "at": "2026-10-12T18:52:12.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ1143SJGAX217A1SN9KB6:park@1791831104000:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 507,
+   "run": "01M4RQ9K313Y2G8Z14CRJPKQXT",
+   "ts": 1791831245000,
+   "parkedAt": 1791831203000,
+   "at": "2026-10-12T18:54:05.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831203000:f9ac07be2980bad307cf1220e853fcc2fcb214cc"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 507,
+   "run": "01M4RQ9K313Y2G8Z14CRJPKQXT",
+   "ts": 1791831246000,
+   "at": "2026-10-12T18:54:06.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791831606000,
+   "at": "2026-10-12T19:00:06.000Z",
+   "agreed": true,
+   "leadMinutes": null,
+   "lagSeconds": 15,
+   "planBefore": [
+    "sweep:1791816059000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791832806000,
+   "at": "2026-10-12T19:20:06.000Z",
+   "agreed": true,
+   "leadMinutes": null,
+   "lagSeconds": 15,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 489,
+   "ts": 1791832837000,
+   "at": "2026-10-12T19:20:37.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 498,
+   "ts": 1791832837000,
+   "at": "2026-10-12T19:20:37.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 406,
+   "ts": 1791832844000,
+   "at": "2026-10-12T19:20:44.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 507,
+   "run": "01M4RQ9K313Y2G8Z14CRJPKQXT",
+   "ts": 1791832888000,
+   "parkedAt": 1791831484000,
+   "at": "2026-10-12T19:21:28.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "sweep:1791816059000",
+    "adjudicate:01M4RQ9K313Y2G8Z14CRJPKQXT:park@1791831484000:03a35cd99459934a027ad40644f9759ba03ddbe0",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 506,
+   "pr": 510,
+   "ts": 1791832920000,
+   "at": "2026-10-12T19:22:00.000Z",
+   "agreed": true,
+   "leadMinutes": 18,
+   "planBefore": [
+    "sweep:1791816059000",
+    "guard:510:357eb1fb7d9de8dfa3a87d0cf3d14d9ddda7aa2c:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 507,
+   "pr": 512,
+   "ts": 1791833771000,
+   "at": "2026-10-12T19:36:11.000Z",
+   "agreed": true,
+   "leadMinutes": 6,
+   "planBefore": [
+    "sweep:1791816059000",
+    "guard:512:03a35cd99459934a027ad40644f9759ba03ddbe0:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "closed",
+   "issue": 406,
+   "ts": 1791833792000,
+   "at": "2026-10-12T19:36:32.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791834018000,
+   "at": "2026-10-12T19:40:18.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "heartbeat:1791832811000",
+    "sweep:1791816059000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 489,
+   "run": "01M4RTJPBQBYSS7GYH7CHQ8FXB",
+   "ts": 1791835113000,
+   "parkedAt": 1791835076000,
+   "at": "2026-10-12T19:58:33.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835076000:71d50a79194600ff2d3015b1935ba3bd972fdb46",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "fix_requested",
+   "issue": 489,
+   "run": "01M4RTJPBQBYSS7GYH7CHQ8FXB",
+   "ts": 1791835113000,
+   "at": "2026-10-12T19:58:33.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835076000:71d50a79194600ff2d3015b1935ba3bd972fdb46",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791835205000,
+   "at": "2026-10-12T20:00:05.000Z",
+   "agreed": true,
+   "leadMinutes": null,
+   "lagSeconds": 30,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 489,
+   "run": "01M4RTJPBQBYSS7GYH7CHQ8FXB",
+   "ts": 1791835267000,
+   "parkedAt": 1791835242000,
+   "at": "2026-10-12T20:01:07.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "adjudicate:01M4RTJPBQBYSS7GYH7CHQ8FXB:park@1791835242000:f4029b7a97d9e049a55565df5c63ca6756197bb6",
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 514,
+   "ts": 1791835500000,
+   "at": "2026-10-12T20:05:00.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000",
+    "claim:515:1791835483000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "claim",
+   "issue": 515,
+   "ts": 1791835506000,
+   "at": "2026-10-12T20:05:06.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 515,
+   "ts": 1791835609000,
+   "at": "2026-10-12T20:06:49.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "delegate",
+   "issue": 514,
+   "ts": 1791835615000,
+   "at": "2026-10-12T20:06:55.000Z",
+   "agreed": false,
+   "leadMinutes": null,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 498,
+   "pr": 513,
+   "ts": 1791835660000,
+   "at": "2026-10-12T20:07:40.000Z",
+   "agreed": true,
+   "leadMinutes": 14,
+   "planBefore": [
+    "guard:513:6eccce200263a2f1b821b773532a9314efcde730:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 515,
+   "run": "01M4RW4A0GWEVB80KHSW6JNAMG",
+   "ts": 1791836242000,
+   "parkedAt": 1791836221000,
+   "at": "2026-10-12T20:17:22.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "sweep:1791834045000",
+    "adjudicate:01M4RW4A0GWEVB80KHSW6JNAMG:park@1791836221000:6578711ffef619034098fb90c475ec43e3e85a05",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791836405000,
+   "at": "2026-10-12T20:20:05.000Z",
+   "agreed": true,
+   "leadMinutes": null,
+   "lagSeconds": 15,
+   "planBefore": [
+    "sweep:1791834045000",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "adjudicate",
+   "issue": 515,
+   "run": "01M4RW4A0GWEVB80KHSW6JNAMG",
+   "ts": 1791836449000,
+   "parkedAt": 1791836407000,
+   "at": "2026-10-12T20:20:49.000Z",
+   "agreed": true,
+   "leadMinutes": 0,
+   "planBefore": [
+    "adjudicate:01M4RW4A0GWEVB80KHSW6JNAMG:park@1791836407000:6578711ffef619034098fb90c475ec43e3e85a05",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 514,
+   "pr": 517,
+   "ts": 1791836557000,
+   "at": "2026-10-12T20:22:37.000Z",
+   "agreed": true,
+   "leadMinutes": 1,
+   "planBefore": [
+    "guard:517:0e32c76ab2e2844a60e48e04c0e61808fa70b7c0:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "heartbeat",
+   "ts": 1791837604000,
+   "at": "2026-10-12T20:40:04.000Z",
+   "agreed": true,
+   "leadMinutes": null,
+   "lagSeconds": 15,
+   "planBefore": [
+    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  },
+  {
+   "type": "merge",
+   "issue": 515,
+   "pr": 518,
+   "ts": 1791837792000,
+   "at": "2026-10-12T20:43:12.000Z",
+   "agreed": true,
+   "leadMinutes": 17,
+   "planBefore": [
+    "guard:518:6578711ffef619034098fb90c475ec43e3e85a05:1",
+    "claim:467:1791780905000",
+    "claim:468:1791782115000"
+   ],
+   "skippedBefore": []
+  }
+ ],
+ "extras": [
+  {
+   "key": "sweep:1791816059000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791829800000,
+   "at": "2026-10-12T18:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "claim:467:1791780905000",
+   "kind": "claim",
+   "rule": "D1",
+   "issue": 467,
+   "run": null,
+   "pr": null,
+   "t": 1791829800000,
+   "at": "2026-10-12T18:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "claim:468:1791782115000",
+   "kind": "claim",
+   "rule": "D1",
+   "issue": 468,
+   "run": null,
+   "pr": null,
+   "t": 1791829800000,
+   "at": "2026-10-12T18:30:00.000Z",
+   "liveLater": []
+  },
+  {
+   "key": "sweep:1791834045000",
+   "kind": "sweep",
+   "rule": "H2",
+   "issue": null,
+   "run": null,
+   "pr": null,
+   "t": 1791835920000,
+   "at": "2026-10-12T20:12:00.000Z",
+   "liveLater": []
+  }
+ ]
+}

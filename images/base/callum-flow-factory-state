@@ -50,6 +50,10 @@ const PIPELINE_HINTS = new Set(['run_started', 'parked', 'merge_ready', 'failed'
 // of a designing stage (see the lapse rule in deriveIssue) and never starts a new life.
 // `superseded` (a run was replaced for the same issue) is deliberately in neither map above: it is
 // never a stage and never final. It only removes the named run from latest-run selection.
+// `loop` is the factory loop's own bookkeeping (agent starts and ends, wakes, notices and holds;
+// DECISIONS D-09). It says nothing about an issue's life, so no issue is derived from it (stage,
+// run, PR, visibility); it still counts in a repo's coverage, as the factory at work.
+const BOOKKEEPING = new Set(['loop']);
 // What starts a new life after an `abandoned` event (docs/factory-state.md). `failed`,
 // `head_mismatch`, `conflict` and `ci_stalled` replay on old runs and never count.
 const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 'design_routed', 'implementer_routed', 'delegated']);
@@ -353,15 +357,16 @@ function deriveState(input) {
 
   for (const repo of [...repoNames].sort()) {
     const evR = events.filter((e) => e.repo === repo);
+    const lifeR = evR.filter((e) => !BOOKKEEPING.has(e.state));
     const runsR = runs.filter((r) => r.repo === repo);
     const gh = github && github[repo] ? github[repo] : null;
-    const issueNums = new Set([...evR.filter((e) => Number.isInteger(e.issue)).map((e) => e.issue), ...runsR.filter((r) => r.issue !== null).map((r) => r.issue)]);
+    const issueNums = new Set([...lifeR.filter((e) => Number.isInteger(e.issue)).map((e) => e.issue), ...runsR.filter((r) => r.issue !== null).map((r) => r.issue)]);
     const live = [];
     const recent = [];
     const placed = new Set();
 
     for (const n of [...issueNums].sort((a, b) => a - b)) {
-      const d = deriveIssue(repo, n, evR.filter((e) => e.issue === n), runsR.filter((r) => r.issue === n), at, rules);
+      const d = deriveIssue(repo, n, lifeR.filter((e) => e.issue === n), runsR.filter((r) => r.issue === n), at, rules);
       if (d.stage === null) continue; // only noise events (claim_lost, usage, ...): nothing to place
       // pipeline-only issues: only what is still moving shows up (history stays out of the live view)
       if (!d.hasEvents && !d.final && !['in pipeline', 'parked', 'ready to merge'].includes(d.stage)) continue;

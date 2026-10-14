@@ -84,10 +84,12 @@ case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn
 [ "$(wc -l < "$log" | tr -d ' ')" = $((before + 1)) ] || fail "the line must still be written"
 [ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
 
-# every state of the closed vocabulary is accepted
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind; do
-  ev "$s" --issue 1 --run r1 || fail "$s should be accepted"
+# every state of the closed vocabulary is accepted (loop with its required note, tested below)
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop; do
+  ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s" || fail "$s should be accepted"
 done
+[ "$(PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep '^states:')" = "states: $(grep '^STATES=' "$EVENT" | sed 's/^STATES="//; s/"$//')" ] || fail "usage should list the vocabulary"
+PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop$' || fail "the vocabulary should list loop"
 
 # superseded is run-scoped: --run is required, and the line carries it
 rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
@@ -95,6 +97,20 @@ rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
 case "$out" in *"--run is required"*) ;; *) fail "superseded without --run should say so: $out" ;; esac
 ev superseded --issue 1 --run r9 --note "by feat/issue-1-x-v2" || fail "superseded with --run should be accepted"
 [ "$(tail -n 1 "$log" | jq -r '.run_id')" = r9 ] || fail "superseded should record the run"
+
+# loop (D-09): the factory loop's bookkeeping. --issue is optional; the note must carry kind=,
+# key= and status= with values (more fields may follow, in any order), or nothing is written.
+ev loop --issue 470 --run r1 --note "kind=spawn key=design:470:1 status=running agent=designer" || fail "loop should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .run_id, .note]')" = '["loop",470,"r1","kind=spawn key=design:470:1 status=running agent=designer"]' ] || fail "loop line wrong: $(tail -n 1 "$log")"
+ev loop --note "status=held key=capped:start kind=hold" || fail "loop without --issue should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue]')" = '["loop",null]' ] || fail "loop without --issue wrong: $(tail -n 1 "$log")"
+before=$(wc -l < "$log" | tr -d ' ')
+for bad in "" "kind=spawn key=k1" "kind=spawn status=done" "key=k1 status=done" "kind= key=k1 status=done" "kind=spawn key=k1 status=" "kind=spawn rekey=k1 status=done"; do
+  rc=0; out=$(ev loop --issue 1 --note "$bad" 2>&1) || rc=$?
+  [ "$rc" = 2 ] || fail "loop with note '$bad' must exit 2, got $rc"
+  case "$out" in *"kind=, key= and status="*) ;; *) fail "loop with note '$bad' should say why: $out" ;; esac
+done
+[ "$(wc -l < "$log" | tr -d ' ')" = "$before" ] || fail "a rejected loop event must not write"
 
 # --path prints the file a write appends to, and writes nothing
 before=$(find "$events" -type f | sort | tr '\n' ' ')
@@ -173,6 +189,13 @@ icev ready --issue 20 --if-changed
 printf 'not json\n' >> "$iclog"
 icev ready --issue 20 --if-changed
 [ "$(iclines)" = 11 ] || fail "an unparseable line must be ignored, not stop the check: $(iclines)"
+# a loop line (the factory loop's bookkeeping) is no transition: it never makes a repeat new
+icev loop --issue 20 --note "kind=hold key=capped:start status=held"
+icev ready --issue 20 --if-changed
+[ "$(iclines)" = 12 ] || fail "a loop line must not make a repeated ready new: $(iclines)"
+icev loop --branch fix/issue-9-a --note "kind=spawn key=fix:r1 status=done"
+icev parked --branch fix/issue-9-a --head h2 --if-changed
+[ "$(iclines)" = 13 ] || fail "a loop line must not make a repeated parked new: $(iclines)"
 
 # --- event-push-loop --------------------------------------------------------
 cat > "$fakebin/psql" <<'STUB'
@@ -385,12 +408,28 @@ out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/cal
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
 [ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
 
+# queue-watch --once (factory loop, SPEC 3.4): one read, the same first-sight call
+: > "$fakebin/event-calls"
+out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --once --known 4 2> /dev/null) || fail "queue-watch --once should exit 0 (a failing event call must not matter)"
+[ "$out" = "queue known=4 now=4,9" ] || fail "queue-watch --once stdout: $out"
+[ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch --once should record the new issue as a first sight: $(cat "$fakebin/event-calls")"
+
 : > "$fakebin/event-calls"
 rc=0
 out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/pipeline-watch.sh" --stream 2> /dev/null) || rc=$?
 [ "$rc" != 0 ] || fail "pipeline-watch without no-mistakes should fail"
 [ "$out" = "watcher-error no-mistakes not on PATH" ] || fail "pipeline-watch stdout changed: $out"
 grep -q '^watcher_error --note pipeline-watch: no-mistakes not on PATH --actor watcher$' "$fakebin/event-calls" || fail "pipeline-watch should record watcher_error: $(cat "$fakebin/event-calls")"
+
+# pipeline-watch --once: the same failure is exit 1 and stderr only; its caller reports the failed source
+: > "$fakebin/event-calls"
+rc=0
+out=$(PATH="$fakebin:$toolbin" "$SH" "$SRC/pipeline-watch.sh" --once 2> "$tmpdir/once.err") || rc=$?
+[ "$rc" = 1 ] || fail "pipeline-watch --once without no-mistakes should exit 1, got $rc"
+[ -z "$out" ] || fail "pipeline-watch --once should print nothing on a fatal error: $out"
+grep -qx 'pipeline-watch.sh: no-mistakes not on PATH' "$tmpdir/once.err" || fail "pipeline-watch --once should give the reason: $(cat "$tmpdir/once.err")"
+[ ! -s "$fakebin/event-calls" ] || fail "pipeline-watch --once should log nothing on a fatal error: $(cat "$fakebin/event-calls")"
 
 : > "$fakebin/event-calls"
 now=$(date +%s)

@@ -45,6 +45,9 @@ const ALIVE_MS = 30 * 60 * 1000; // a device is alive if it logged any event in 
 const STUCK_LEASES = 2; // stuck: no event for longer than this many leases
 const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound with another device idle, means "B"
 const RELEASE_STATES = ['merged', 'abandoned', 'closed', 'reclaimed', 'ready']; // end an in-flight claim
+// Not progress for the stuck test (metrics.md query 6): a lost race, a claim heartbeat, and the
+// factory loop's bookkeeping (DECISIONS D-09). Each still counts as the device being alive.
+const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop']);
 const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
 const ACTION_BASH_RE = new RegExp(
   [
@@ -391,7 +394,7 @@ function computeClaims(evs, win, leaseMinutes) {
     let flagged = false;
     let last = null;
     for (const e of byIssue.get(n)) {
-      if (e.state === 'claim_lost' || e.state === 'renewed') continue;
+      if (NOT_PROGRESS.has(e.state)) continue;
       last = e;
       if (e.state === 'claimed') {
         live.set(e.dev, e.t);

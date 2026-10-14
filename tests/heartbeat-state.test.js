@@ -91,6 +91,16 @@ test("noise events never decide an issue: untrusted_stripped after merged stays 
   assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
 });
 
+test("a loop event (the factory loop's bookkeeping, D-09) never decides an issue", () => {
+  // a wake about queued #5 must not make it in flight; an agent end on claimed #6 leaves it claimed
+  const loop = (issue, note) => ev("loop", issue, { ts: "2026-10-12T11:00:00Z", note });
+  writeEvents([ev("ready", 5), loop(5, "kind=judge key=judge:release status=running"),
+    ev("claimed", 6), loop(6, "kind=spawn key=design:6:1 status=done"),
+    ev("merged", 7), loop(7, "kind=tell key=tell:merged:7 status=done")]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
+});
+
 test("another device's lines are ignored", () => {
   writeEvents([ev("claimed", 5, { device: "other" })]);
   assert.equal(run().out.state, "idle");

@@ -72,6 +72,31 @@ test("implementer_routed (#506) is a delegation decision: implementing, and a ne
   assert.equal(issue(r, A, 91).stage, "implementing", "routed after abandoned starts a new life");
 });
 
+test("loop events (the factory loop's bookkeeping, D-09) never derive anything about an issue", () => {
+  const e = (issue, ts, state, extra = {}) => ({ repo: A, device: "dev-a", ts, state, issue, run_id: null, branch: null, pr: null, note: null, actor: "agent", ...extra });
+  const loop = (issue, ts, note) => e(issue, ts, "loop", { run_id: "rL", pr: 900 + issue, note });
+  const run = (id, issue, status, ts) => ({ id, repo: A, device: "dev-a", branch: `feat/issue-${issue}-x`, status, pr_url: null, pr_state: null, issue, awaiting_agent_since: null, created_at: ts, updated_at: ts });
+  const r = derive({
+    at: "2026-10-10T12:00:00.000Z", repos: [], workers: { available: false, reason: "test" },
+    runs: [run("r97", 97, "failed", "2026-10-10T08:00:00.000Z")],
+    events: [
+      e(95, "2026-10-10T11:00:00.000Z", "claimed", { note: "lease: 120" }),
+      loop(95, "2026-10-10T11:30:00.000Z", "kind=spawn key=design:95:1 status=running"),
+      loop(96, "2026-10-10T11:00:00.000Z", "kind=judge key=judge:96 status=done"),
+      loop(97, "2026-10-10T11:00:00.000Z", "kind=tell key=tell:97 status=done"),
+      e(98, "2026-10-10T09:00:00.000Z", "claimed"),
+      e(98, "2026-10-10T10:00:00.000Z", "abandoned"),
+      loop(98, "2026-10-10T11:00:00.000Z", "kind=spawn key=fix:98 status=done"),
+    ],
+  });
+  const d95 = issue(r, A, 95);
+  assert.deepEqual([d95.stage, d95.entered_at, d95.run, d95.pr], ["designing", "2026-10-10T11:00:00.000Z", null, null], "a loop event sets no stage, run or PR");
+  assert.equal(issue(r, A, 96), undefined, "an issue with only loop events is not placed");
+  assert.equal(issue(r, A, 97), undefined, "a loop event does not bring a pipeline-only history into view");
+  assert.equal(issue(r, A, 98).stage, "closed without merge", "a loop event after abandoned is no new life");
+  assert.equal(r.repos[0].coverage.events, 7, "loop events still count as the factory at work");
+});
+
 test("superseded run: an abandon is final only until a new life starts; superseded is never a stage", () => {
   const r = derive(input("superseded-run"));
   const st = (n) => issue(r, A, n);

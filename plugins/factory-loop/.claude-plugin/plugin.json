@@ -1,0 +1,51 @@
+{
+  "name": "factory-loop",
+  "displayName": "Factory loop",
+  "version": "0.35.0",
+  "description": "Draft, not yet shipped: the issue orchestrator as one deterministic code loop inside its Claude Code session. Every minute, or at once when an agent or the owner pings it, it reads the factory, plans, logs its decisions and shows its status in the session title. In act mode, once its safety rails pass, it claims, dispatches agents, drives pipeline gates, guards, merges and wakes the model for judgment calls; in observe mode (the default) it executes nothing.",
+  "author": {
+    "name": "Callum Bundy"
+  },
+  "homepage": "https://github.com/cbundy/dev-system",
+  "repository": "https://github.com/cbundy/dev-system",
+  "keywords": [
+    "orchestration",
+    "mod"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "off, observe (plan and log, execute nothing) or act (run the plan, once the act lock, DEV_ROLE=orchestrator, no armed old watcher and no other orchestrator's heartbeat allow it)",
+      "options": [
+        "off",
+        "observe",
+        "act"
+      ],
+      "default": "observe"
+    },
+    "repo": {
+      "type": "string",
+      "title": "Repository",
+      "description": "owner/name to run for; empty means the session checkout's GitHub origin",
+      "default": ""
+    },
+    "shadowDevice": {
+      "type": "string",
+      "title": "Shadow device",
+      "description": "Observe mode only: plan as this device (a live orchestrator's) to shadow its work",
+      "default": ""
+    },
+    "runSource": {
+      "type": "string",
+      "title": "Run source",
+      "description": "local (the pipeline watcher) or events (the event log, for a shadow run)",
+      "options": [
+        "local",
+        "events"
+      ],
+      "default": "local"
+    }
+  }
+}
