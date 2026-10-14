@@ -77,8 +77,9 @@ Decide from the wake itself, plus only the reads named. Every judge times out to
 - **`guard-fail`** (`issue pr run head brief`; detail `GUARD <name> FAIL <reason>` lines): the
   merge guard failed in a way no rule maps (a failed CI check, `head`, an unknown line). Each
   FAIL line names its fix. A worktree that only lags its branch never comes here: the loop
-  fast-forwards it; when that was refused (a dirty or diverged worktree), a `FAST-FORWARD
-  REFUSED <why>` detail line says so. You are asked once per failure, not on every re-check.
+  fast-forwards it; when that was refused (a dirty or diverged worktree, or the main checkout
+  left on the branch, which the loop never moves), a `FAST-FORWARD REFUSED <why>` detail line
+  says so. You are asked once per failure, not on every re-check.
   - `fixer` (instructions): the fix is a change on the branch or a fresh gated run. Say what
     failed and what to do, from the line: `CI check test failed on 03a35cd: make it pass
     without weakening a test, then re-gate`. The loop spawns the fixer.
