@@ -102,8 +102,8 @@ RUN npm install -g @openai/codex \
   && codex --version \
   && find "$(npm prefix -g)/lib/node_modules/@openai/codex" -name codex-code-mode-host -type f -perm -u+x | grep -q .
 
-# no-mistakes and treehouse: their install scripts put the binaries under
-# ~/.no-mistakes/bin and ~/.local/bin. The no-mistakes installer also starts a
+# no-mistakes and treehouse: the binaries land under ~/.no-mistakes/bin and
+# ~/.local/bin. The no-mistakes installer also starts a
 # daemon and writes state into its default home; that state belongs in
 # /persist at run time, so everything but the binary is dropped here, with
 # the systemd user unit that daemon start leaves behind (for the build-time
@@ -113,7 +113,12 @@ RUN curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/do
   && find /home/node/.no-mistakes -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} + \
   && rm -rf /home/node/.config/systemd \
   && ln -s /persist/no-mistakes/logs /home/node/.no-mistakes/logs
-RUN curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh \
+# treehouse uses the repo's own installer, not its upstream one: that one asks
+# api.github.com for the latest tag, and the anonymous rate limit (403) made
+# image builds flake (#356). This one reads the releases/latest redirect.
+COPY --chown=node:node --chmod=0755 features/src/callum-tools/install-treehouse.sh /tmp/install-treehouse.sh
+RUN /tmp/install-treehouse.sh /home/node/.local/bin \
+  && rm -f /tmp/install-treehouse.sh \
   && treehouse --version
 
 # uv (cbundy/dev-system#149): the Python bootstrapper, so a Python repo runs

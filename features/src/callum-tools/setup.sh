@@ -70,7 +70,7 @@ fi
 
 # 3. treehouse (reusable worktree pool for parallel agents).
 if [ "${INSTALL_TREEHOUSE}" = "true" ]; then
-  curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh || true
+  /usr/local/share/callum-tools/install-treehouse.sh || true
   command -v treehouse >/dev/null 2>&1 || FAILED="$FAILED treehouse"
 fi
 
