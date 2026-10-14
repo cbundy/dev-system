@@ -19,6 +19,8 @@ For a bug, reproduce from the real failure before designing the fix.
 Spawn `callum-flow:explorer` yourself for the file:line map, so the exploration
 report stays in your context. Skip it only for a trivial, already-understood change.
 
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.
+
 Do not edit code. The only GitHub state you change is posting comments and,
 for a large or high-risk issue, managing sub-issues as described below. Post the brief with
 `gh issue comment <N> --body-file <file>`; later runs on the same issue append a

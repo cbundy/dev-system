@@ -91,6 +91,16 @@ test("the loop's own agents are the callum-flow definitions word for word but fo
   }
 });
 
+test("every loop agent definition carries the command rule", () => {
+  const own = fs.readdirSync(path.join(ROOT, "plugins/factory-loop/agents")).filter((f) => f.endsWith(".md"));
+  for (const file of own) {
+    const text = read(`plugins/factory-loop/agents/${file}`);
+    for (const phrase of ["timeout 30", "claude remote-control", "pgrep -f", "no background shell"]) {
+      assert.ok(text.toLowerCase().includes(phrase), `plugins/factory-loop/agents/${file} must carry the command rule: missing "${phrase}"`);
+    }
+  }
+});
+
 test("the model is never offered the loop's own agent types, but while the loop's own repair message resumes one (#559)", () => {
   const register = read(`${HOOKS}/register.ts`);
   for (const type of Object.values(SUBAGENT_OF).filter((t) => t.startsWith("factory-loop:"))) {

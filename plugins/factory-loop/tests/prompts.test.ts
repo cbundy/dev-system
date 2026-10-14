@@ -5,7 +5,7 @@
 // reference and no brief content may get through.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CHECKOUT_RULE, FOREGROUND_RULE, askOf, descriptionOf, nameOf, neutral, promptOf, repairPrompt, scriptShaped } from '../hooks/prompts'
+import { CHECKOUT_RULE, COMMAND_RULE, FOREGROUND_RULE, askOf, descriptionOf, nameOf, neutral, promptOf, repairPrompt, scriptShaped } from '../hooks/prompts'
 import type { AgentAction, PromptEnv, ScriptPlace } from '../hooks/prompts'
 import { DESIGNER_RESULT, HANDOFF_RESULT } from '../hooks/replies'
 import type { AdjudicatorPurpose, FixerPurpose } from '../hooks/types'
@@ -238,6 +238,14 @@ describe('the main checkout (testbed, 2026-10-13)', () => {
     expect(promptOf(designer(BENIGN), ENV)).toContain(FOREGROUND_RULE)
     expect(promptOf(fixer(BENIGN, 'conflict'), ENV)).toContain(FOREGROUND_RULE)
     expect(promptOf(adjudicator(BENIGN, 'gate'), ENV)).not.toContain(FOREGROUND_RULE)
+  })
+})
+
+describe('the command rule (2026-10-14)', () => {
+  test('every role prompt carries it', () => {
+    const actions = [designer(BENIGN), adjudicator(BENIGN, 'gate'), adjudicator(BENIGN, 'merge'), adjudicator(BENIGN, 'weakening'), fixer(BENIGN, 'conflict')]
+    for (const action of actions) expect(promptOf(action, ENV)).toContain(COMMAND_RULE)
+    expect(promptOf(delegate(BENIGN), ENV)).toContain(COMMAND_RULE)
   })
 })
 
