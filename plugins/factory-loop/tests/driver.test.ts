@@ -867,13 +867,13 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
 
   // an adjudicator at work on a gate, whose reply will not parse; with the test's engine, a repair
   // message resumes it as the engine does
-  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send'], engine?: HostOptions['engine']) => {
+  const gateAt = (on: Parameters<typeof host>[0], send: HostOptions['send'], engine?: HostOptions['engine'], config: Record<string, unknown> = ACT) => {
     const key = 'adjudicate:R470:review:abc1234'
     const store = ledgerOf([
       entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
       entry(key, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 470, run: 'R470', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
     ])
-    const h = host(on, { config: ACT, run: factory().run, store, send, engine })
+    const h = host(on, { config, run: factory().run, store, send, engine })
     h.agents.push({ id: 'agent-1', type: 'factory-loop:adjudicator', status: 'running', description: 'Adjudicate #470 review' })
     return { h, key }
   }
@@ -914,6 +914,38 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'done', attempts: 1, outcome: { kind: 'adjudicator', action: { type: 'approve' } } })
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', key, answer: 'text', status: 'done', afterRepair: true }))
     expect(h.sends).toHaveLength(1)
+  })
+
+  // config answerTools (#560): a spawn from the loop's timer cannot reach its tool hook on Claude
+  // Code 2.1.299, so the repair message asks for text unless the setting is on
+  const CONTRACT_LINE = 'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
+
+  test('answerTools off by default: the repair message asks for the text contract alone, and a bad value in either file is named (#560)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerTools: 1 })
+    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerTools: 'yes' }))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last().config).toEqual(['answerTools: "yes" is not true or false', 'answerTools: 1 is not true or false'])
+    await agentDone($, h, 'agent-1', 'All good.')
+    expect(h.sends.map(s => s.to)).toEqual(['agent-1'])
+    const text = h.sends[0]?.text ?? ''
+    expect(text).toContain('The factory loop could not read your answer: no ACTION line.')
+    expect(text).not.toContain('mcp__factory-loop__verdict')
+    expect(text.split('\n').pop()).toBe(CONTRACT_LINE)
+  })
+
+  test("answerTools on in the workspace file, over the repo's: the repair message asks for the tool again, text as the fallback (#560)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h } = gateAt(on, undefined, undefined, { ...ACT, answerTools: true })
+    h.files.set('/work/.claude/factory-loop.json', JSON.stringify({ answerTools: false }))
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.last().config).toBeUndefined()
+    await agentDone($, h, 'agent-1', 'All good.')
+    const text = h.sends[0]?.text ?? ''
+    expect(text).toContain('Call mcp__factory-loop__verdict now with the answer you reached')
+    expect(text.split('\n').pop()).toBe(`If you cannot call it, ${CONTRACT_LINE.charAt(0).toLowerCase()}${CONTRACT_LINE.slice(1)}`)
   })
 
   test("a repair message the engine refuses: the decision log keeps the engine's words whole, the entry a clipped copy (#559)", async ($, on) => {

@@ -118,6 +118,14 @@ times, the wakes' latencies, and what each issue waits on and since when. The tr
 kept under `traceMaxBytes` (100 MiB) in all: the oldest go first, and a day's file that alone
 fills the cap is cut short. SPEC 12.1 explains each field, with `jq` examples.
 
+## Answer tools
+
+The loop's agents can answer through validated tools (`mcp__factory-loop__verdict`, `design`
+and `handoff`), but on Claude Code 2.1.299 an agent the loop spawns from its timer never reaches
+them (SPEC 13). So the prompts and the repair message ask for the text contract alone, unless
+`"answerTools": true` is set in the repo's `.claude/factory-loop.json` or in the workspace file
+(which wins). The tools stay registered and served either way (DECISIONS D-73).
+
 ## Pinned Claude Code version
 
 Proven on **Claude Code 2.1.296**, the version the

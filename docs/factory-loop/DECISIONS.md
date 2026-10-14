@@ -906,6 +906,14 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   that works on still holds its branch, so it must stay supervised. The alternative would hold
   the issue for up to 2 h and end in a failed stop of a completed agent with a spurious owner
   tell.
+- **Note** (2026-10-14, #560): every rule here reads an agent listed `idle` as one listed
+  `completed`: reconcile, the repair grace, and the A1 and A2 at-work checks (and the readers
+  that share `listedLive`). The engine documents `idle` as between turns, until a message wakes
+  it, and on Claude Code 2.1.299 a finished agent is listed `idle` for 20 s or more, so before
+  this the "5 minutes, then lost" rule might never fire. An agent the loop awaits a repair reply
+  from is never cut off by it: while the send is on its way the agent is held at work as an
+  answer being handled, and once delivered its entry stays `running`, which plan never treats as
+  ended, while the reconciling read holds it at work within the 5 minutes.
 
 ### D-72 An issue closed on GitHub is finished, and its state is read before the queue
 
@@ -939,3 +947,29 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
   everything else too is alternative (a). Other devices' live issues are read because the title
   counts them. A clean slot of a finished issue holds nothing, and A2 stops any agent there
   before H3 returns the slot.
+
+### D-73 Agents are asked for text until a timer-spawned agent reaches the loop's tools
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #560): a setting,
+  `answerTools`, default `false`, in the repo's `.claude/factory-loop.json` and in the workspace
+  file, which wins. Off, the spawn prompts and the repair message ask for the text contract alone
+  and name no tool. On, they ask for the tool first, with the text as the fallback, as #548 built
+  them. The three answer tools stay registered and served either way, and a call is answered as
+  before. A bad value in either file is left out and named in the decision log (SPEC 4.1, 4.2,
+  6.3, 7.3a, 13).
+- **Alternatives**: (a) keep asking for the tool, as now; (b) unregister the tools while off; (c)
+  spawn agents from a hook the engine serves, not the timer; (d) a `/factory` op to switch it.
+- **Why**: a probe mod on Claude Code 2.1.299 shows that a spawn made from a `$.clock.after`
+  callback starts an agent whose call to the mod's own tool fails in milliseconds with
+  `<plugin> registered the tool ... but no tool.call hook answered this call`, and the hook never
+  runs. The same spawn made inside a `command.run` hook works. Every pass of the loop runs from its
+  timer, so every agent it spawns is in the failing case; that was the real cause of run 3's 80
+  and more failed tool calls, besides the deadline #558 fixed. (a) has every agent call, fail,
+  and fall back to text, which wastes a step and invites odd replies. (b) removes the path for no
+  gain: an agent that calls anyway gets the same refusal-or-answer it gets now, and keeping the
+  tools served means turning the setting on is all an engine fix needs. (c) would put passes back
+  on hooks' own dispatch, under the hook budget, which the loop avoids on purpose (a ping runs its
+  pass with the timers' `$`), and a quiet factory has no hook to spawn from when the timer finds
+  work. (d) is more surface for a switch that changes only with an engine release; the file,
+  read every pass, is enough. The workspace file wins, as `trace` does, so a testbed can try the
+  tools without touching the repo's checked-in file.

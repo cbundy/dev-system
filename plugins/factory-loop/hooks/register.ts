@@ -170,8 +170,8 @@ let prevPassAt: Ms = 0
 let traceCut: string | null = null
 // the day and cap whose trace file this load has read for an earlier load's cut (writeTrace)
 let traceChecked: string | null = null
-// agents whose answer is being handled, when each was first listed completed, and when each was
-// sent its repair message (act.ts)
+// agents whose answer is being handled, when each was first listed with its turn ended (idle or
+// completed), and when each was sent its repair message (act.ts)
 const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
 // the loop's own agent types with a repair message of the loop's on its way, and how many: the
 // engine resumes an agent only as a type it offers the model, so the loop offers its hidden types
@@ -197,6 +197,9 @@ type AgentRow = { id: string; type: string; status: AgentStatus }
 // Options as the manifest's userConfig gives them; the workspace config file overrides them.
 type Options = { mode?: unknown; repo?: unknown; shadowDevice?: unknown; runSource?: unknown }
 let options: Options = {}
+
+// The settings of SPEC 4.2 the workspace file may also set, over the repo's file (SPEC 4.1).
+const WORKSPACE_SETTINGS = ['trace', 'answerTools'] as const
 
 async function text($: EngineInterface, path: string): Promise<string | null> {
   try {
@@ -239,11 +242,12 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
-  // the repo-local settings, durations and all (SPEC 4.2); what they get wrong is logged. The
-  // workspace file's trace, which /factory trace writes, wins over the repo's (#552).
-  const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)))
-  const trace = typeof file.trace === 'boolean' ? file.trace : loaded.config.trace
-  const config: Config = { ...loaded.config, mode: mode as Config['mode'], trace }
+  // the repo-local settings, durations and all (SPEC 4.2), then the few the workspace file may set
+  // over them: trace, which /factory trace writes (#552), and answerTools (#560). What either
+  // gets wrong is logged.
+  const over = Object.fromEntries(WORKSPACE_SETTINGS.filter(key => key in file).map(key => [key, file[key]]))
+  const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
+  const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = `${base}/${repo.replace('/', '__')}`
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
   const env: Record<string, string> = {

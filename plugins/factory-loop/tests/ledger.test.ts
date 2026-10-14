@@ -410,7 +410,7 @@ describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
     expect(only(after, wake.key)).toBe(wake)
   })
 
-  test('an agent the list lacks, or lists as completed, is lost; failed or killed is failed', () => {
+  test('an agent the list lacks, or lists as completed or idle (its turn ended, #560), is lost; failed or killed is failed', () => {
     const ids = ['gone', 'done', 'failed', 'killed', 'running', 'waiting', 'idle', 'pending']
     const before = [...ids.map(agentEntry), wake, done]
     const after = reconcileAgents(
@@ -427,11 +427,12 @@ describe('a reload and the agent list (SPEC 3.3, 7.5, 10.4)', () => {
       NOW,
     )
     const status = (id: string) => only(after, `agent:${id}`).status
-    expect(ids.map(status)).toEqual(['lost', 'lost', 'failed', 'failed', 'running', 'running', 'running', 'running'])
+    expect(ids.map(status)).toEqual(['lost', 'lost', 'failed', 'failed', 'running', 'running', 'lost', 'running'])
     expect(only(after, 'agent:gone')).toMatchObject({ endedAt: NOW, summary: 'lost: gone from the agent list' })
     expect(only(after, 'agent:done').summary).toBe('lost: completed with no answer')
+    expect(only(after, 'agent:idle').summary).toBe('lost: idle with no answer')
     expect(only(after, 'agent:killed').summary).toBe('agent killed')
-    expect(changedEntries(before, after).map(e => e.key)).toEqual(['agent:gone', 'agent:done', 'agent:failed', 'agent:killed'])
+    expect(changedEntries(before, after).map(e => e.key)).toEqual(['agent:gone', 'agent:done', 'agent:failed', 'agent:killed', 'agent:idle'])
     // wakes are never agents, and an ended entry is history
     expect(only(after, wake.key)).toBe(wake)
     expect(only(after, done.key)).toBe(done)

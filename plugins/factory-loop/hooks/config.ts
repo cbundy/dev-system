@@ -74,6 +74,9 @@ export const DEFAULT_CONFIG: Config = {
   trace: false,
   // 100 MiB in all (owner, #552)
   traceMaxBytes: 100 * 1024 * 1024,
+  // off: a spawn from the loop's timer never reaches its tool hook on Claude Code 2.1.299, so
+  // agents are asked for text until the engine lets it (#560, D-73)
+  answerTools: false,
 }
 
 export const EMPTY_CONTROL: Control = {

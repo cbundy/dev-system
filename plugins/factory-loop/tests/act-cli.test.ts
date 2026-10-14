@@ -553,7 +553,9 @@ describe('stop-agent: only the loop\'s own running agents', () => {
     expect(ownAgent([{ ...running('a1'), status: 'timed-out' }], 'a1', listed('running'))).toBe(false)
     const answered = { ...running('a1'), status: 'done' as const, endedAt: NOW }
     expect(ownAgent([answered], 'a1', listed('waiting'))).toBe(true)
-    for (const status of ['completed', 'killed', 'failed'] as const) expect(ownAgent([answered], 'a1', listed(status))).toBe(false)
+    // idle: its turn ended (#560), so the loop stops nothing of it
+    for (const status of ['completed', 'idle', 'killed', 'failed'] as const) expect(ownAgent([answered], 'a1', listed(status))).toBe(false)
+    expect(ownAgent([running('a1')], 'a1', listed('idle'))).toBe(true)
     expect(ownAgent([answered], 'a1', [])).toBe(false)
   })
 

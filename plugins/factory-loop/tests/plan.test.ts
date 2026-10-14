@@ -991,7 +991,7 @@ describe('A: agents', () => {
     const s = state({ issues: [mine(60, 'designing', { stageSince: life })] })
     const timedOut = entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'timed-out', attempts: 1, agentId: 'a60', endedAt: NOW - 5 * MIN })
     const stopFailed = entry('stop:a60', 'stop-agent', { rule: 'A1', issue: 60, status: 'failed', attempts: 1, endedAt: NOW - 5 * MIN })
-    const listed = (status: 'running' | 'killed' | 'completed') => ({ ...s, agents: [{ id: 'a60', type: 'callum-flow:designer', status }] })
+    const listed = (status: 'running' | 'killed' | 'completed' | 'idle') => ({ ...s, agents: [{ id: 'a60', type: 'callum-flow:designer', status }] })
     const r = plan(withLedger(listed('running'), [timedOut, stopFailed]), CFG)
     expect(keys(r)).toEqual(['tell:agent-failed:stop:a60'])
     expect(find(r, 'tell:agent-failed:stop:a60')).toMatchObject({ rule: 'A1', issue: 60, fields: { key: 'stop:a60', kind: 'stop-agent' } })
@@ -999,7 +999,8 @@ describe('A: agents', () => {
     // told once; the designer is retried only once the list shows the old agent ended
     const told = entry('tell:agent-failed:stop:a60', 'tell', { wake: 'agent-failed', class: 'owner', issue: 60 })
     expect(keys(plan(withLedger(listed('running'), [timedOut, stopFailed, told]), CFG))).toEqual([])
-    for (const status of ['killed', 'completed'] as const) {
+    // idle is between turns: its turn ended, as completed (#560)
+    for (const status of ['killed', 'completed', 'idle'] as const) {
       expect(keys(plan(withLedger(listed(status), [timedOut, stopFailed, told]), CFG))).toEqual([key])
     }
     expect(keys(plan(withLedger(s, [timedOut, stopFailed, told]), CFG))).toEqual([key])
@@ -1026,13 +1027,15 @@ describe('A: agents', () => {
         outcome: { kind: 'handoff', notGated: false, run: 'R50', head: 'head50', newBranch: null },
         ...over,
       })
-    const listed = (status: 'running' | 'waiting' | 'completed' | 'killed') => ({ agents: [{ id: 'a-fix', type: 'callum-flow:fixer', status }] })
+    const listed = (status: 'running' | 'waiting' | 'completed' | 'killed' | 'idle') => ({ agents: [{ id: 'a-fix', type: 'callum-flow:fixer', status }] })
     const r = plan(mergeReady([guarded(), reviewed(), answered()], listed('waiting')), CFG)
     expect(keys(r)).toEqual(['stop:a-fix'])
     expect(find(r, 'stop:a-fix')).toMatchObject({ rule: 'A1', reason: 'timed out', entry: 'fixer:guard:550:head50' })
     // the merge waits on it meanwhile, and goes once the list shows it ended
     expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'an agent already works the branch of #50 (merge)' })
-    for (const status of ['completed', 'killed'] as const) expect(keys(plan(mergeReady([guarded(), reviewed(), answered()], listed(status)), CFG))).toEqual(['merge:550:head50'])
+    // listed idle, its turn has ended (Claude Code 2.1.299 lists it so for 20 s or more before
+    // completed, #560): no stop of an agent past its turn, and the merge goes
+    for (const status of ['completed', 'killed', 'idle'] as const) expect(keys(plan(mergeReady([guarded(), reviewed(), answered()], listed(status)), CFG))).toEqual(['merge:550:head50'])
     // within its timeout it works on, except where an A2 stop applies: the owner dropped the issue
     const young = answered({ startedAt: NOW - 30 * MIN, endedAt: NOW - 20 * MIN })
     expect(keys(plan(mergeReady([guarded(), reviewed(), young], listed('running')), CFG))).toEqual([])
@@ -1041,6 +1044,24 @@ describe('A: agents', () => {
     // an answer just in: the list has not yet marked the agent completed, so nothing is stopped
     const fresh = answered({ endedAt: NOW - 5_000 })
     expect(keys(plan(mergeReady([guarded(), reviewed(), fresh], listed('running')), CFG))).toEqual([])
+  })
+
+  test('a running agent entry whose agent is listed idle is left to the reconciling read: plan neither stops nor retries it, so an agent the loop awaits a repair reply from is never cut off (#560)', () => {
+    // the fixer's answer did not parse and the loop sent its repair message: the entry runs on,
+    // reminded, while the list may still show the agent idle until the message resumes it
+    const repairing = entry('fixer:guard:550:head50', 'spawn', {
+      agent: 'fixer',
+      class: 'drive',
+      issue: 50,
+      status: 'running',
+      startedAt: NOW - 30 * MIN,
+      endedAt: null,
+      agentId: 'a-fix',
+      reminded: true,
+    })
+    const r = plan(mergeReady([guarded(), reviewed(), repairing], { agents: [{ id: 'a-fix', type: 'callum-flow:fixer', status: 'idle' }] }), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M5', issue: 50, why: 'an agent already works the branch of #50 (merge)' })
   })
 
   test('an agent whose attempts ran out is reported to the owner (SPEC A1)', () => {
@@ -1690,9 +1711,11 @@ describe('H5: the main checkout kept up to date with origin (#555)', () => {
     expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('adjudicator')]), ACT))).toEqual([])
     // an answer is in, but the list still shows the agent at work: it may still be reading
     expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), ACT))).toEqual([])
-    // the agent ended: the update goes ahead
-    const ended = { ...base, agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'completed' as const }] }
-    expect(updates(plan(withLedger(ended, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), ACT)).length).toBe(1)
+    // the agent ended: the update goes ahead; listed idle, its turn has ended too (#560)
+    for (const status of ['completed', 'idle'] as const) {
+      const ended = { ...base, agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status }] }
+      expect(updates(plan(withLedger(ended, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), ACT)).length).toBe(1)
+    }
     // a task is the model working in the checkout (a release, a hand merge's run-it), as G5 says
     const task = entry('task:release:2:none', 'task', { wake: 'release', class: 'drive', status: 'running', endedAt: null })
     const tasked = plan(withLedger(state(), [merged(NOW - MIN), task]), ACT)

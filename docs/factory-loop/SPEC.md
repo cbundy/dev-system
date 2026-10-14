@@ -258,11 +258,13 @@ as they do today.
   directory), `poolSize` (default 16), `toolsDir` (where `pipeline-watch.sh`, `queue-watch.sh`
   and `usage-check.sh` live; default `/usr/local/share/callum-tools`, the base image's copy),
   `binDir` (put ahead of `PATH` for every command, so the loop runs a checkout's own CLIs before
-  a base image release carries them) and `trace` (`true` or `false`): trace mode for this
+  a base image release carries them), `trace` (`true` or `false`): trace mode for this
   workspace's loop (12.1), over the repo's `trace`; `/factory trace on|off` writes it, as
-  `/factory mode` writes `mode`. It is plain JSON, easy to read and set from a shell, which
-  the shadow run uses (DECISIONS D-33). A testbed points `toolsDir` at a checkout's
-  `features/src/callum-tools` and `binDir` at its `images/base` (DECISIONS D-42).
+  `/factory mode` writes `mode`; and `answerTools` (`true` or `false`, 4.2), over the repo's. A
+  bad value of either is left out and named in the decision log, as the repo's are. It is plain
+  JSON, easy to read and set from a shell, which the shadow run uses (DECISIONS D-33). A testbed
+  points `toolsDir` at a checkout's `features/src/callum-tools` and `binDir` at its
+  `images/base` (DECISIONS D-42).
 - **Repo-local** `.claude/factory-loop.json` in the consumer's main checkout: everything in 4.2.
   The plugin ships no repo-specific values (CLAUDE.md: shared plugins stay generic). An unknown
   key or a bad value is left out and named in the decision log (`config`).
@@ -283,6 +285,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (11.2) |
 | `trace` | `false` | trace mode (12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
+| `answerTools` | `false` | the spawn prompts and the repair message ask agents to answer through their tools first, with the text contract as the fallback (6.3, 7.3a). Off, they ask for the text contract alone; the tools stay registered and served either way. Off by default because on Claude Code 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook (13, DECISIONS D-73). The workspace file's `answerTools` overrides it |
 | `passEveryMs` | `60s` | the timer |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
 | `usageStaleMs` | `15m` | an older reading counts as unavailable |
@@ -516,7 +519,7 @@ GitHub or the harness is `M6`.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| A1 | a `running` agent entry, or a `done` one whose agent the agent list still shows at work more than 60 s after its answer (an answer through the tool ends the entry before the agent's turn, 7.3a.4), is older than its `agentTimeoutMs` | `stop-agent`; when the stop ends, stopped or not, the agent's entry becomes `timed-out`. A stop for a done entry leaves its outcome as it is; the entry is not marked `timed-out`. A stop that failed leaves the agent marked `timed-out` and tells the owner (`tell(agent-failed)` for its `stop:` key); its rule waits until the agent list shows the agent ended, so a second agent never starts beside it. A `failed`, `timed-out` or `lost` agent is retried by its own rule while attempts remain; once exhausted, `tell(agent-failed)` (`tell(task-timeout)` for a task) | `stop:<agentId>`, `tell:agent-failed:<key>`, `tell:task-timeout:<key>` |
+| A1 | a `running` agent entry, or a `done` one whose agent the agent list still shows at work more than 60 s after its answer (an answer through the tool ends the entry before the agent's turn, 7.3a.4; an agent listed `idle` or `completed` has ended its turn and is not at work, 7.5), is older than its `agentTimeoutMs` | `stop-agent`; when the stop ends, stopped or not, the agent's entry becomes `timed-out`. A stop for a done entry leaves its outcome as it is; the entry is not marked `timed-out`. A stop that failed leaves the agent marked `timed-out` and tells the owner (`tell(agent-failed)` for its `stop:` key); its rule waits until the agent list shows the agent ended, so a second agent never starts beside it. A `failed`, `timed-out` or `lost` agent is retried by its own rule while attempts remain; once exhausted, `tell(agent-failed)` (`tell(task-timeout)` for a task) | `stop:<agentId>`, `tell:agent-failed:<key>`, `tell:task-timeout:<key>` |
 | A2 | a running agent's issue (or that of a done entry whose agent is still at work, as in A1) is not paused, and it is finished (closed on GitHub, `merged` or `closed without merge`; observe reads the GitHub state of every issue of the loop's running work, #556), was claimed by another device, was dropped by the owner, or was split while its implementer runs | `stop-agent` with the reason `issue <why>` in the decision log, and `tell(claim-lost)` for another device's claim, else `tell(stopped)` with why (`merged` or `closed without merge` when the factory shows it ended, else `closed`; `dropped` or `split`). The stopped agent's entry ends with its own `turn.complete` or the agent list | `stop:<agentId>`, `tell:claim-lost:<N>:<holder>`, `tell:stopped:<agentId>` |
 
 ### 5.8 Owner and report (O)
@@ -640,9 +643,9 @@ Each spawn's prompt comes from a template in `hooks/prompts.ts`. Templates carry
 numbers, URLs, branch names, run ids, heads, step names, instructions from the adjudicator or
 the model, owner notes, pointers (CLAUDE.md, the agent type's own memory file under
 `.claude/agent-memory/`, the `implement-issue` skill), a per-issue scratch subdirectory (I-95),
-the answer tool to call and the closing `RESULT` line the loop parses. The designer's also lists
-other issues' branches in flight (names only), and a prompt for an issue with a `model:` label
-says to pass that model to the agent's own sub-agents.
+the answer tool to call (with `answerTools` on, 4.2) and the closing `RESULT` line the loop
+parses. The designer's also lists other issues' branches in flight (names only), and a prompt
+for an issue with a `model:` label says to pass that model to the agent's own sub-agents.
 
 - **No brief content.** A brief travels as its comment URL only; anything else in its place is
   dropped and the prompt says to read the issue instead.
@@ -651,12 +654,14 @@ says to pass that model to the agent's own sub-agents.
   `GH-N`, `owner/repo#N`, a URL), or at the end of the value, becomes its `-ing` form ("Fixes
   #12" reads "Fixing #12"), so an agent that copies it into a PR body closes nothing (I-33).
   Every id (branch, run, head, step, model, repo) must have its shape, or it shows as not known.
-- **Answer tools first.** Each prompt first asks the agent to answer through its tool (7.3a):
-  the adjudicator `mcp__factory-loop__verdict`, the designer `mcp__factory-loop__design` (once
-  the brief is posted), the implementer and fixer `mcp__factory-loop__handoff` (after the
-  `implement-issue` handoff). The prompt says to load the tool with ToolSearch if it is listed by
-  name only, to correct the call and call again on an error, and to end the turn once it is
-  recorded. The machine line stays the fallback, last. The designer's, implementer's and fixer's
+- **Answer tools first, when `answerTools` is on** (4.2, #560). Off, the default, each prompt
+  asks for its machine lines alone and names no tool. On, each prompt first asks the agent to
+  answer through its tool (7.3a): the adjudicator `mcp__factory-loop__verdict`, the designer
+  `mcp__factory-loop__design` (once the brief is posted), the implementer and fixer
+  `mcp__factory-loop__handoff` (after the `implement-issue` handoff). The prompt says to load the
+  tool with ToolSearch if it is listed by name only, to correct the call and call again on an
+  error, and to end the turn once it is recorded. The machine line stays the fallback, last.
+  The designer's, implementer's and fixer's
   prompts also say to run any sub-agent in the foreground and wait for it there: "your turn ends
   only with your final answer, given as asked below."
 - **The lines the loop parses.** The designer ends with the `RESULT` line of section 7.2.
@@ -803,6 +808,9 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    and `flags`), `mcp__factory-loop__design` (`{ brief: URL|null, created: int[],
    pendingDecision }`) and `mcp__factory-loop__handoff` (`{ run, head, commit, gated, branch,
    pr }`). Each tool's input schema is its agent's text contract. All wait behind ToolSearch.
+   They are registered and served whatever `answerTools` says (4.2); the setting decides only
+   whether the prompts and the repair message ask for them (6.3). Off, the default, an agent that
+   calls its tool anyway is answered as below.
 2. **Matching.** A call is tied to the running `spawn` or `delegate` entry whose `agentId` is the
    call's `tool.call` `agentId`. Refused: the main conversation, an agent the ledger does not
    hold (an agent's own sub-agents among them), an entry that no longer runs ("already recorded"
@@ -824,18 +832,22 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
 4. **Recording.** An accepted call finishes the entry at once with the outcome and events the same
    text gives (verdict lines read `<VERDICT>: <id>: <reason>`). Its summary is marked `(tool)`.
    The agent's later closing words are not read. An agent still listed at work 60 s after its
-   accepted call stays under rules A1 and A2 (5.7).
+   accepted call stays under rules A1 and A2 (5.7); one listed `idle` or `completed` has ended
+   its turn (7.5) and does not.
 5. **Text.** An agent that ends without calling the tool is parsed as before (6.3, 7.2, 7.3).
 6. **Repair.** A final answer with no machine line (an adjudicator reply that does not parse, a
    handoff with no `RESULT` or `NOT GATED`, a designer report with no `RESULT` line), from an
    agent that is not still at work, first gets one message to the same agent via
    `$.session.send`, which resumes a finished agent from its transcript. The message names what
-   was wrong (the parser's reason, quoting the line) and asks for the tool, with the machine lines
-   as the fallback. The entry stays running with its attempt unspent and is marked `reminded`
-   before the send; the agent counts as at work while still listed completed, for 5 minutes
-   after the message or until its next `turn.complete`. After that its next `completed` listing
-   is counted afresh: one pass of grace, then lost. One per attempt, only to agents the ledger
-   holds, only in act mode with no kill switch and no restart pending. The engine resumes an agent
+   was wrong (the parser's reason, quoting the line) and asks for the machine lines again; with
+   `answerTools` on, for the tool first, with the machine lines as the fallback. The entry stays
+   running with its attempt unspent and is marked `reminded` before the send. While the send is
+   on its way the agent counts as at work, its answer being handled. Once delivered, the loop
+   waits on its reply: the agent counts as at work while still listed with its turn ended
+   (`idle` or `completed`), for 5 minutes after the message or until its next `turn.complete`.
+   After that its next such listing is counted afresh: one pass of grace, then lost (#560). One
+   per attempt, only to agents the ledger holds, only in act mode with no kill switch and no
+   restart pending. The engine resumes an agent
    only as a type it offers the model, and asks the `agent.offer` hooks, which hide the loop's own
    adjudicator and designer (6.1): so while the loop's repair message to one of them is on its
    way, its type is offered. Hidden, the engine refused every repair of testbed run 3: `Agent
@@ -907,9 +919,14 @@ keeps (FINDINGS check 5). On load:
    one session keeps that session's wakes (#549).
 3. A `running` agent is judged against the first successful agent-list read, and against every
    pass's after that: an id the list lacks is `lost`, one listed `failed` or `killed` is
-   `failed`, and one listed `completed` while its entry still runs is `lost`, but only from the
-   second pass that lists it so, since its `turn.complete` may still be on its way. An agent
-   whose answer is being handled counts as running. A failed read changes nothing.
+   `failed`, and one listed `completed` or `idle` while its entry still runs is `lost`, but only
+   from the second pass that lists it so (idle then completed is one sighting), since its
+   `turn.complete` may still be on its way. `idle` is the engine's "between turns, until a
+   message wakes it" (`AgentStatus`): on Claude Code 2.1.299 an agent that ended its turn is
+   listed `idle` for 20 s or more before `completed`, and only the loop's own repair message
+   wakes one of its agents, so the loop reads `idle` as an ended turn everywhere, like
+   `completed` (#560). An agent whose answer is being handled counts as running, as does one the
+   loop awaits a repair reply from (7.3a.6). A failed read changes nothing.
 4. Plan then re-derives what to do from the state, not from the lost entries. This is safe
    because every write the loop can lose midway is either idempotent at the CLI (a claim this
    device already holds is kept and nothing is posted; the heartbeat, sweep, labels and
@@ -1381,14 +1398,23 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
   10 s of the hook's own time, in which awaiting other work (the loop's hook queue) counts and a
   `$` call does not. The `.catch` refusal never reached the agents in run 3. The loop's 2 s bound
   (7.3a) keeps well inside it; only the testbed proves the live answer times.
+- **Agents spawned from the loop's timer cannot reach its tools** (#560): on Claude Code
+  2.1.299 a probe mod's `$.agent.spawn` made from a `$.clock.after` callback started an agent
+  whose call to the mod's own tool failed in milliseconds with `<plugin> registered the tool ...
+  but no tool.call hook answered this call`, and the hook never ran. The same spawn made inside a
+  `command.run` hook worked. The loop's passes run from its timer, so every agent it spawns is
+  in the failing case: this, not only the deadline above, was the cause of testbed run 3's 80
+  and more failed tool calls. So `answerTools` is off (4.2, DECISIONS D-73) and agents are asked
+  for text; the tools stay served, and the setting goes on once the engine lets a timer-spawned
+  agent reach them, which a probe on each upgrade checks.
 - **The repair message** (#559): probe mods on 2.1.299 proved that `$.session.send` to an agent
   after its `turn.complete` is delivered and resumes it: sent at once, after 60 ms of hook work,
   20 s later, and from a hook held 12 s past its budget. The list shows the agent `idle` once its
   turn ends. The engine resumes only a type it offers: with the type hidden it refused as in run
   3, and with it offered only while the send was on its way the agent was resumed. In that window
   (milliseconds, 10 s at most) the model would also be offered the type if it listed agents. Only
-  the testbed proves it end to end. An agent the list still shows completed 5 minutes after its
-  repair message is taken as never resumed.
+  the testbed proves it end to end. An agent the list still shows idle or completed 5 minutes
+  after its repair message is taken as never resumed.
 - **An issue closed on GitHub** (#556) is known closed only once observe has read it: for up to
   `githubEveryMs` after it closes, and on the first pass after a load when more than 12 issues the
   loop may act on are unread (they are read first, but within the pass's 12), it is driven as

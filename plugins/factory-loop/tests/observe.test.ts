@@ -498,6 +498,13 @@ describe('config (SPEC 4.2)', () => {
     expect(loadConfig(null, 'x').problems).toEqual(['settings: not a JSON object'])
   })
 
+  test('answerTools: off by default; true or false in either file, the later layer winning; a bad value is named and left out (#560)', () => {
+    expect(DEFAULT_CONFIG.answerTools).toBe(false)
+    expect(loadConfig({ answerTools: true }).config.answerTools).toBe(true)
+    expect(loadConfig({ answerTools: true }, { answerTools: false }).config.answerTools).toBe(false)
+    expect(loadConfig({ answerTools: 'on' })).toMatchObject({ config: { answerTools: false }, problems: ['answerTools: "on" is not true or false'] })
+  })
+
   test('the defaults the owner set on 2026-10-13', () => {
     expect(DEFAULT_CONFIG).toMatchObject({
       inDevLabel: 'in development',

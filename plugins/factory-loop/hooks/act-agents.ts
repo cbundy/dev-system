@@ -80,6 +80,8 @@ export type SpawnOptions = {
   modelOverride: string | null
   inFlight: InFlight[]
   notes?: readonly string[]
+  // config answerTools: the prompt asks for the agent's answer tool first (#560)
+  answerTools?: boolean
 }
 
 // notesOf: the owner's notes for an issue, and those for every issue, oldest first (SPEC 4.3).
@@ -103,7 +105,7 @@ export const SUBAGENT_OF: Record<AgentType, string> = {
 // description and name (D-11). No model leaves the agent's frontmatter model in charge.
 export function spawnInputOf(action: AgentAction, opts: SpawnOptions): SpawnInput {
   const type: AgentType = action.kind === 'delegate' ? 'implementer' : action.agent
-  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [] }
+  const env: PromptEnv = { repo: opts.repo, modelOverride: opts.modelOverride, inFlight: opts.inFlight, notes: opts.notes ?? [], answerTools: opts.answerTools === true }
   const input: SpawnInput = {
     subagentType: SUBAGENT_OF[type],
     prompt: promptOf(action, env),
@@ -287,7 +289,7 @@ export function interim(answer: AgentAnswer, exec: Exec): boolean {
 
 // stillAtWork: the agent list shows the agent holding background work (`waiting`), or a
 // sub-agent it started still at work. Its own `running` proves nothing at its turn.complete: an
-// agent that just ended is listed so until the engine marks it completed.
+// agent that just ended is listed so until the engine marks it idle or completed.
 export function stillAtWork(agents: readonly ListedLoop[], id: string): boolean {
   return agents.some(a => (a.id === id && a.status === 'waiting') || (a.parentId === id && AT_WORK.includes(a.status)))
 }
@@ -379,7 +381,7 @@ function refused(why: string): Exec {
 // start: write the spawn record, then spawn. A deny, a throw or a start with no agent id is a
 // failed attempt; a started agent runs on, and its turn.complete ends the entry.
 async function start(ctx: ExecCtx, action: AgentAction, model: string | null, env: Omit<PromptEnv, 'repo'>): Promise<Exec> {
-  const input = spawnInputOf(action, { repo: ctx.rt.repo, attempt: ctx.entry.attempts, model, ...env })
+  const input = spawnInputOf(action, { repo: ctx.rt.repo, attempt: ctx.entry.attempts, model, answerTools: ctx.rt.config.answerTools, ...env })
   let saved = true
   try {
     const record = recordOf(action, input, ctx.entry.attempts)

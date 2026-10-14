@@ -9,6 +9,7 @@ import type {
   ActionClass,
   ActionKind,
   AdjudicatorAction,
+  AgentStatus,
   AgentType,
   AgentView,
   Bump,
@@ -40,7 +41,7 @@ const JUDGE_REMIND_MS = 30 * 60_000
 // The title's M: issues merged in this window (D-23).
 const MERGED_WINDOW_MS = 6 * HOUR
 // An agent still listed at work this long after its answer was recorded did not end its turn:
-// the list marks one that did completed within seconds (answeredLive).
+// the list marks one that did idle or completed within seconds (answeredLive, turnEnded).
 const ANSWERED_GRACE_MS = 60_000
 // A hand merge older than this gets no follow-ups (rule M7). callum-flow-factory-state lists a
 // final stage for 24 hours, and the bound keeps a merge from ever outliving the ledger's 7-day
@@ -332,17 +333,28 @@ function agentLive(ctx: Ctx, agentId: string): boolean {
   return listedLive(ctx.state.agents, agentId)
 }
 
-// listedLive: an agent list shows this agent still at work (the stop-agent executor asks too).
+// listedLive: an agent list shows this agent still at work (the stop-agent executor asks too):
+// listed, not failed or killed, and its turn not ended (turnEnded).
 export function listedLive(agents: readonly AgentView[], agentId: string): boolean {
   const seen = agents.find(a => a.id === agentId)
-  return seen !== undefined && seen.status !== 'completed' && seen.status !== 'failed' && seen.status !== 'killed'
+  return seen !== undefined && !turnEnded(seen.status) && seen.status !== 'failed' && seen.status !== 'killed'
+}
+
+// turnEnded: an agent of the loop listed past its turn: `completed`, or `idle`, which the engine
+// documents as between turns, until a message wakes it (AgentStatus). On Claude Code 2.1.299 an
+// agent that ended its turn is listed idle for 20 s or more before completed (#560). Nothing but
+// the loop's own repair message wakes one of its agents, and while that is on its way, or its
+// reply awaited, the entry is running and the reconciling read holds it at work (act.ts
+// reconcilable), so idle reads as ended here exactly as completed does.
+export function turnEnded(status: AgentStatus): boolean {
+  return status === 'completed' || status === 'idle'
 }
 
 // answeredLive: an agent entry that is done, while the list still shows its agent at work
 // ANSWERED_GRACE_MS after the answer. An answer through the tool ends the entry before the
 // agent's turn does (SPEC 7.3a.4), and an agent that works on, or waits on background work,
 // still holds its branch (agentWriting), so rules A1 and A2 keep covering it. The grace leaves
-// alone an agent the list has not yet marked completed.
+// alone an agent the list has not yet marked idle or completed (turnEnded).
 function answeredLive(agents: readonly AgentView[], e: LedgerEntry, now: Ms): boolean {
   if (e.status !== 'done' || e.agentId === undefined || e.endedAt === null || (e.kind !== 'spawn' && e.kind !== 'delegate')) return false
   return now - e.endedAt > ANSWERED_GRACE_MS && listedLive(agents, e.agentId)

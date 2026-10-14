@@ -27,7 +27,7 @@ import { TOOL_OF } from '../hooks/agent-tools'
 import { answerPath } from '../hooks/exec'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
-import type { Action, ActionKind, LedgerEntry, State } from '../hooks/types'
+import type { Action, ActionKind, Config, LedgerEntry, State } from '../hooks/types'
 import { DEVICE, NOW, config, entry, issue, run, state } from './fixtures'
 
 const REPO = 'cbundy/dev-system'
@@ -39,7 +39,7 @@ const BRANCH = 'feat/issue-470-agents'
 type Reply = Partial<RunResult> | Error
 type SpawnReply = { agentId?: string; deny?: string } | Error
 
-function runtime(): Runtime {
+function runtime(over: Partial<Config> = {}): Runtime {
   return {
     mode: 'act',
     repo: REPO,
@@ -51,7 +51,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO },
     toolsDir: '/usr/local/share/callum-tools',
-    config: config(),
+    config: config(over),
     configProblems: [],
   }
 }
@@ -64,6 +64,7 @@ type Over = {
   files?: Record<string, string>
   state?: Partial<State>
   entry?: LedgerEntry
+  config?: Partial<Config>
 }
 
 // harness: a fake ExecCtx. Commands answer from `replies` in order (a missing reply is a quiet
@@ -101,7 +102,7 @@ function harness(over: Over = {}) {
   }
   const ctx: ExecCtx = {
     io,
-    rt: runtime(),
+    rt: runtime(over.config),
     state: state(over.state ?? {}),
     entry: over.entry ?? entry('under-test', 'spawn', { status: 'running', endedAt: null }),
     cmd: async (argv, init) => {
@@ -302,6 +303,24 @@ describe('spawn (SPEC 6.1)', () => {
     const path = spawnRecordPath(LOOP, 'design:470:1000')
     expect(log).toEqual([`write ${path}`, 'spawn factory-loop:designer'])
     expect(JSON.parse(files.get(path) ?? '{}')).toMatchObject({ key: 'design:470:1000', agent: 'designer', purpose: null, branch: null, issue: 470, prompt: input.prompt })
+  })
+
+  test('each spawn asks for its answer tool only with config answerTools on; off, the default, it asks for its machine line alone (#560)', async () => {
+    const actions: [Action, string][] = [
+      [A.designer(), TOOL_OF.designer],
+      [A.adjudicator('gate'), TOOL_OF.adjudicator],
+      [A.adjudicator('merge'), TOOL_OF.adjudicator],
+      [A.fixer(), TOOL_OF.fixer],
+      [A.delegate(), TOOL_OF.implementer],
+    ]
+    for (const [action, tool] of actions) {
+      const replies = action.kind === 'delegate' ? [{ stdout: 'opus\n' }] : []
+      const off = await exec(action, { replies })
+      expect(off.spawns[0]?.prompt).not.toContain(tool)
+      expect(off.spawns[0]?.prompt).not.toContain('ToolSearch')
+      const on = await exec(action, { replies, config: { answerTools: true } })
+      expect(on.spawns[0]?.prompt).toContain(`calling ${tool}`)
+    }
   })
 
   test('an adjudicator and a fixer: the record keeps the branch and the purpose the answer needs', async () => {

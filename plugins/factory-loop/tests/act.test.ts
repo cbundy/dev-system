@@ -360,6 +360,26 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(seen.size).toBe(0)
   })
 
+  test('an agent listed idle has ended its turn, as one listed completed: a first sighting waits one pass, and idle then completed is one sighting (#560)', () => {
+    const seen = new Map<string, number>()
+    const idle = [{ id: 'a', status: 'idle' as const }]
+    expect(reconcilable(idle, new Set(), seen, NOW, new Map())).toEqual([{ id: 'a', status: 'running' }])
+    expect(reconcilable(idle, new Set(), seen, NOW + MIN, new Map())).toEqual(idle)
+    // listed idle, then completed: the second pass judges it, it is not counted afresh
+    const twice = new Map<string, number>()
+    expect(reconcilable(idle, new Set(), twice, NOW, new Map())).toEqual([{ id: 'a', status: 'running' }])
+    expect(reconcilable([{ id: 'a', status: 'completed' }], new Set(), twice, NOW + 5_000, new Map())).toEqual([{ id: 'a', status: 'completed' }])
+    // an answer in flight, or a repair message within REPAIR_GRACE_MS, counts as running though idle
+    expect(reconcilable(idle, new Set(['a']), new Map(), NOW, new Map())).toEqual([{ id: 'a', status: 'running' }])
+    const repairing = new Map([['a', NOW - MIN]])
+    const after = new Map([['a', NOW - 2 * MIN]])
+    expect(reconcilable(idle, new Set(), after, NOW, repairing)).toEqual([{ id: 'a', status: 'running' }])
+    expect(reconcilable(idle, new Set(), after, NOW + REPAIR_GRACE_MS, repairing)).toEqual(idle)
+    expect(repairing.size).toBe(0)
+    // waiting (background work it holds) and running are at work still
+    expect(reconcilable([{ id: 'b', status: 'waiting' }], new Set(), new Map(), NOW, new Map())).toEqual([{ id: 'b', status: 'waiting' }])
+  })
+
   test('an update is done once the workspace came back from its restart, never when it failed (rule H4, D-15)', () => {
     const due = control({ updateDue: { reason: 'image', at: 7 } })
     const restart = (status: LedgerEntry['status'], endedAt: number | null = NOW - MIN) => [entry('restart:7', 'restart-self', { status, endedAt })]
@@ -444,7 +464,9 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(sent[0]?.to).toBe('agent-1')
     // the type it runs as, which the engine must offer to resume it (#559)
     expect(sent[0]?.type).toBe('adjudicator')
-    expect(sent[0]?.text).toContain('mcp__factory-loop__verdict')
+    // in text, with the answer tools off by default (config answerTools, #560)
+    expect(sent[0]?.text).not.toContain('mcp__factory-loop__verdict')
+    expect(sent[0]?.text).toContain('Reply in your output contract and nothing else')
     expect(sent[0]?.text).toContain('I checked the run and it looks fine.')
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'running', attempts: 1, agentId: 'agent-1', reminded: true })
     // the pass after does not take the agent's completed listing before the resume as its end
@@ -507,6 +529,49 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const status = () => f.env.live.ledger.find(e => e.key === gate.key)?.status
     // passes seconds apart (pings), the agent still listed completed: it is not lost
     for (const at of [NOW + 1_000, NOW + 6_000, NOW + REPAIR_GRACE_MS]) {
+      await actPass(f.env, { ...s, now: at }, listed, between)
+      expect([at - NOW, status()]).toEqual([at - NOW, 'running'])
+    }
+    // never resumed: past the grace it gets the usual one pass, then it is lost
+    await actPass(f.env, { ...s, now: NOW + REPAIR_GRACE_MS + 6_000 }, listed, between)
+    expect(status()).toBe('running')
+    await actPass(f.env, { ...s, now: NOW + REPAIR_GRACE_MS + 12_000 }, listed, between)
+    expect(status()).toBe('lost')
+    expect(between.repairing.size).toBe(0)
+  })
+
+  test('an agent whose turn ended with no answer the loop could take is lost on the second pass that lists it idle, as completed, not at its A1 timeout (#560)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([gate])
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    const listed = { ok: true, agents: [{ id: 'agent-1', status: 'idle' as AgentStatus }] }
+    await actPass(f.env, { ...s, now: NOW }, listed, between)
+    expect(f.env.live.ledger.find(e => e.key === gate.key)?.status).toBe('running')
+    await actPass(f.env, { ...s, now: NOW + 6_000 }, listed, between)
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'lost', summary: 'lost: idle with no answer' })
+  })
+
+  test('an agent sent its repair message stays at work while listed idle, for REPAIR_GRACE_MS, and while the message is on its way; then it is lost as when listed completed (#548, #560)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([gate])
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const s = state({ issues: [mine(60, 'in pipeline', { stageSince: 1 })], ledger: [] })
+    const listed = { ok: true, agents: [{ id: 'agent-1', status: 'idle' as AgentStatus }] }
+    const status = () => f.env.live.ledger.find(e => e.key === gate.key)?.status
+    // the repair message is on its way (the engine has not answered the send): passes meanwhile,
+    // the agent listed idle, never mark it lost
+    let deliver: (why: string | null) => void = () => undefined
+    const sending = new Promise<string | null>(resolve => (deliver = resolve))
+    const answered = agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'All good.', reason: 'answer' }, between, async () => false, async () => sending)
+    for (const at of [NOW + 1_000, NOW + 6_000, NOW + 12_000]) {
+      await actPass(f.env, { ...s, now: at }, listed, between)
+      expect([at - NOW, status()]).toEqual([at - NOW, 'running'])
+    }
+    deliver(null)
+    expect(await answered).toMatchObject({ result: 'repair' })
+    // delivered: still listed idle until the resume shows, it waits on the reply within the grace
+    for (const at of [NOW + 13_000, NOW + 20_000, NOW + REPAIR_GRACE_MS]) {
       await actPass(f.env, { ...s, now: at }, listed, between)
       expect([at - NOW, status()]).toEqual([at - NOW, 'running'])
     }

@@ -13,6 +13,8 @@ import type { AdjudicatorPurpose, FixerPurpose } from '../hooks/types'
 const REPO = 'cbundy/dev-system'
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-3301234567'
 const ENV: PromptEnv = { repo: REPO, modelOverride: null, inFlight: [] }
+// the answer tools asked for (config answerTools, #560); off by default
+const TOOLS: Partial<PromptEnv> = { answerTools: true }
 
 // Any of GitHub's nine closing keywords, as a word.
 const KEYWORD = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b/i
@@ -166,22 +168,26 @@ function render(action: AgentAction, f: Fields, env: Partial<PromptEnv> = {}): s
 const lastLine = (text: string) => text.split('\n').pop()
 
 describe('every template (SPEC 6.3)', () => {
-  test('its own text holds no closing keyword at all, nor do its description and name', () => {
-    for (const [name, action] of all(BENIGN)) {
-      for (const text of [render(action, BENIGN), descriptionOf(action), nameOf(action, 2)]) {
-        if (KEYWORD.test(text)) throw new Error(`${name}: ${text.match(KEYWORD)?.[0]} in ${JSON.stringify(text)}`)
+  test('its own text holds no closing keyword at all, nor do its description and name, with or without the answer tools', () => {
+    for (const answerTools of [false, true]) {
+      for (const [name, action] of all(BENIGN)) {
+        for (const text of [render(action, BENIGN, { answerTools }), descriptionOf(action), nameOf(action, 2)]) {
+          if (KEYWORD.test(text)) throw new Error(`${name}: ${text.match(KEYWORD)?.[0]} in ${JSON.stringify(text)}`)
+        }
       }
     }
   })
 
   test('hostile inputs: no keyword before an issue reference, no brief content, no garbled id', () => {
-    for (const [name, action] of all(HOSTILE)) {
-      for (const text of [render(action, HOSTILE, { repo: REPO }), descriptionOf(action), nameOf(action, 1)]) {
-        const m = text.match(CLOSING_REF)
-        if (m !== null) throw new Error(`${name}: "${m[0]}" in ${JSON.stringify(text)}`)
-        expect(text).not.toContain('Design brief')
-        expect(text).not.toContain('secret plan')
-        for (const id of ['01K7 fixes', 'feat/issue-470 closes', 'review; resolves', 'closes #4', 'opus fixes', 'fixed #6']) expect(text).not.toContain(id)
+    for (const answerTools of [false, true]) {
+      for (const [name, action] of all(HOSTILE)) {
+        for (const text of [render(action, HOSTILE, { repo: REPO, answerTools }), descriptionOf(action), nameOf(action, 1)]) {
+          const m = text.match(CLOSING_REF)
+          if (m !== null) throw new Error(`${name}: "${m[0]}" in ${JSON.stringify(text)}`)
+          expect(text).not.toContain('Design brief')
+          expect(text).not.toContain('secret plan')
+          for (const id of ['01K7 fixes', 'feat/issue-470 closes', 'review; resolves', 'closes #4', 'opus fixes', 'fixed #6']) expect(text).not.toContain(id)
+        }
       }
     }
   })
@@ -255,9 +261,8 @@ describe('the adjudicator', () => {
     const text = render(adjudicator(BENIGN, 'gate'), BENIGN)
     expect(text).toContain('Adjudicate the review gate of run 01K7RRXQ7M2YB9ZB3J8N0V5F6D for issue #470')
     expect(text).toContain('Where: run 01K7RRXQ7M2YB9ZB3J8N0V5F6D, branch feat/issue-470-agents, head 3f2a9c1d4e, PR #512 (https://github.com/cbundy/dev-system/pull/512).')
-    // the verdict tool first (#548), its own output contract as the fallback, last
-    expect(text).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings and one action')
-    expect(lastLine(text)).toBe('If you cannot call it, reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    // its own output contract, last (the answer tools are off by default, #560)
+    expect(lastLine(text)).toBe('Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
     // the adjudicator spawns nothing: no model line
     expect(text).not.toContain('Model override')
   })
@@ -349,45 +354,97 @@ describe('the fixer and the implementer', () => {
   })
 })
 
-describe('the answer tools and the repair message (#548)', () => {
-  test('every prompt asks for its own tool before its machine line, which stays the fallback, last', () => {
+describe('the answer tools and the repair message (#548, #560)', () => {
+  // config answerTools (#560): a spawn from the loop's timer cannot reach its tool hook on Claude
+  // Code 2.1.299, so by default every prompt asks for the text contract alone
+  test('answerTools off (the default): every prompt asks for its machine line alone, and names no tool', () => {
+    for (const [name, action] of all(BENIGN)) {
+      for (const text of [render(action, BENIGN), render(action, BENIGN, { answerTools: false })]) {
+        if (/mcp__factory-loop__|ToolSearch|call it/.test(text)) throw new Error(`${name}: a tool asked for in ${JSON.stringify(text)}`)
+      }
+    }
     const designerText = render(designer(BENIGN), BENIGN)
+    expect(designerText.split('\n').slice(-2)).toEqual(['Once the brief is posted, end your return with the line below, exactly once and last, filled in.', DESIGNER_RESULT])
+    const merge = render(adjudicator(BENIGN, 'merge'), BENIGN)
+    expect(merge).toContain('\nReply with exactly these lines and nothing else:\n')
+    for (const purpose of ['gate', 'weakening'] as const) {
+      expect(lastLine(render(adjudicator(BENIGN, purpose), BENIGN))).toBe('Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    }
+    for (const action of [delegate(BENIGN), fixer(BENIGN, 'conflict')]) {
+      const lines = render(action, BENIGN).split('\n')
+      expect(lines.slice(-3)).toEqual([
+        'After the implement-issue handoff (its section 8), end your final message with the line below, exactly once and last, filled in.',
+        'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only with a run, when its head equals your commit or you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none.',
+        HANDOFF_RESULT,
+      ])
+    }
+  })
+
+  test('answerTools on: every prompt asks for its own tool before its machine line, which stays the fallback, last', () => {
+    const designerText = render(designer(BENIGN), BENIGN, TOOLS)
     expect(designerText).toContain('Once the brief is posted, answer by calling mcp__factory-loop__design with brief, created and pendingDecision (load it with ToolSearch first if it is listed by name only).')
     expect(designerText.split('\n').slice(-2)).toEqual(['If you cannot call it, end your return with the line below, exactly once and last, filled in.', DESIGNER_RESULT])
-    const merge = render(adjudicator(BENIGN, 'merge'), BENIGN)
+    const merge = render(adjudicator(BENIGN, 'merge'), BENIGN, TOOLS)
     expect(merge).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags')
     expect(merge).toContain('If you cannot call it, reply with exactly these lines and nothing else:')
-    expect(render(adjudicator(BENIGN, 'weakening'), BENIGN)).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings and one action')
+    for (const purpose of ['gate', 'weakening'] as const) {
+      const text = render(adjudicator(BENIGN, purpose), BENIGN, TOOLS)
+      expect(text).toContain('Answer by calling mcp__factory-loop__verdict once, with your findings and one action')
+      expect(lastLine(text)).toBe('If you cannot call it, reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.')
+    }
     for (const action of [delegate(BENIGN), fixer(BENIGN, 'conflict')]) {
-      const text = render(action, BENIGN)
+      const text = render(action, BENIGN, TOOLS)
       expect(text).toContain('answer by calling mcp__factory-loop__handoff once, with run, head, commit, gated, branch and pr')
+      expect(text).toContain('In the tool, none is null and yes is true.')
       expect(text.split('\n').slice(-2)).toEqual(['If you cannot call it, end your final message with the line below, exactly once and last, filled in.', HANDOFF_RESULT])
     }
   })
 
-  test('repairPrompt: what was wrong, the tool again, and the machine lines as the fallback', () => {
-    expect(repairPrompt('adjudicator', 'gate', 'no ACTION line').split('\n')).toEqual([
+  test('repairPrompt with answerTools off (the default): what was wrong, then the machine lines alone', () => {
+    for (const text of [repairPrompt('adjudicator', 'gate', 'no ACTION line'), repairPrompt('adjudicator', 'gate', 'no ACTION line', false)]) {
+      expect(text.split('\n')).toEqual([
+        'The factory loop could not read your answer: no ACTION line.',
+        'Do not redo the work: give the answer you reached.',
+        'Reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.',
+      ])
+    }
+    expect(lastLine(repairPrompt('adjudicator', 'merge', 'a merge review needs its BUMP line'))).toBe(
+      'Reply with only your verdict lines, one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.',
+    )
+    expect(repairPrompt('designer', null, 'no RESULT line').split('\n').slice(-2)).toEqual(['Reply with only the line below, filled in.', DESIGNER_RESULT])
+    for (const type of ['implementer', 'fixer'] as const) {
+      expect(repairPrompt(type, null, 'no RESULT line, and it does not say NOT GATED').split('\n').slice(-2)).toEqual(['Reply with only the line below, filled in.', HANDOFF_RESULT])
+    }
+    for (const type of ['designer', 'implementer', 'adjudicator', 'fixer'] as const) {
+      for (const purpose of [null, 'gate', 'merge'] as const) expect(repairPrompt(type, purpose, 'no RESULT line')).not.toMatch(/mcp__factory-loop__|ToolSearch|call it/)
+    }
+  })
+
+  test('repairPrompt with answerTools on: what was wrong, the tool again, and the machine lines as the fallback', () => {
+    expect(repairPrompt('adjudicator', 'gate', 'no ACTION line', true).split('\n')).toEqual([
       'The factory loop could not read your answer: no ACTION line.',
       'Do not redo the work. Call mcp__factory-loop__verdict now with the answer you reached (load it with ToolSearch first if it is listed by name only). If it returns an error, correct the call and call it again; once it is recorded, end your turn.',
       'If you cannot call it, reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.',
     ])
-    expect(repairPrompt('adjudicator', 'merge', 'a merge review needs its BUMP line')).toContain('one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.')
-    const designerText = repairPrompt('designer', null, 'no RESULT line')
+    expect(repairPrompt('adjudicator', 'merge', 'a merge review needs its BUMP line', true)).toContain('one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.')
+    const designerText = repairPrompt('designer', null, 'no RESULT line', true)
     expect(designerText).toContain('Call mcp__factory-loop__design now')
     expect(lastLine(designerText)).toBe(DESIGNER_RESULT)
     for (const type of ['implementer', 'fixer'] as const) {
-      const text = repairPrompt(type, null, 'no RESULT line, and it does not say NOT GATED')
+      const text = repairPrompt(type, null, 'no RESULT line, and it does not say NOT GATED', true)
       expect(text).toContain('Call mcp__factory-loop__handoff now')
       expect(lastLine(text)).toBe(HANDOFF_RESULT)
     }
   })
 
   test('the repair message holds no closing keyword of its own, and neutralizes one the quoted line carries (I-33)', () => {
-    for (const type of ['designer', 'implementer', 'adjudicator', 'fixer'] as const) {
-      for (const purpose of [null, 'gate', 'merge'] as const) {
-        const text = repairPrompt(type, purpose, 'no RESULT line')
-        if (KEYWORD.test(text)) throw new Error(`${type} ${purpose}: ${text.match(KEYWORD)?.[0]} in ${JSON.stringify(text)}`)
-        for (const hostile of HOSTILE_TEXT) expect(repairPrompt(type, purpose, `a line that is not a contract line: "${hostile}"`)).not.toMatch(CLOSING_REF)
+    for (const tools of [false, true]) {
+      for (const type of ['designer', 'implementer', 'adjudicator', 'fixer'] as const) {
+        for (const purpose of [null, 'gate', 'merge'] as const) {
+          const text = repairPrompt(type, purpose, 'no RESULT line', tools)
+          if (KEYWORD.test(text)) throw new Error(`${type} ${purpose}: ${text.match(KEYWORD)?.[0]} in ${JSON.stringify(text)}`)
+          for (const hostile of HOSTILE_TEXT) expect(repairPrompt(type, purpose, `a line that is not a contract line: "${hostile}"`, tools)).not.toMatch(CLOSING_REF)
+        }
       }
     }
   })

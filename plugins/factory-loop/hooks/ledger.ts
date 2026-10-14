@@ -9,6 +9,7 @@
 import { ACTION_KINDS, DEFAULT_CONFIG } from './config'
 import { loopEventArgs } from './derive'
 import type { Exec, ExtraEntry } from './exec'
+import { turnEnded } from './plan'
 import type {
   Action,
   ActionClass,
@@ -217,8 +218,9 @@ export function onLoad(ledger: readonly LedgerEntry[], now: Ms): LedgerEntry[] {
 
 // reconcileAgents: a running agent entry against the session's agent list. An id the list
 // lacks is lost (SPEC 3.3, 7.5); one listed failed or killed is failed (SPEC 10.4); one listed
-// completed while its entry still runs ended with no answer, so it is lost. The list must be a
-// successful read: an empty list marks every running agent lost.
+// completed or idle (its turn ended, plan.ts turnEnded, #560) while its entry still runs ended
+// with no answer, so it is lost. The list must be a successful read: an empty list marks every
+// running agent lost.
 export function reconcileAgents(
   ledger: readonly LedgerEntry[],
   agents: readonly { id: string; status: AgentStatus }[],
@@ -230,7 +232,7 @@ export function reconcileAgents(
     const seen = status.get(e.agentId)
     if (seen === undefined) return ended(e, 'lost', now, 'lost: gone from the agent list')
     if (seen === 'failed' || seen === 'killed') return ended(e, 'failed', now, `agent ${seen}`)
-    if (seen === 'completed') return ended(e, 'lost', now, 'lost: completed with no answer')
+    if (turnEnded(seen)) return ended(e, 'lost', now, `lost: ${seen} with no answer`)
     return e
   })
 }

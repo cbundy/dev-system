@@ -6,9 +6,10 @@
 // and anything else in its place is dropped. Never a GitHub closing keyword before an issue
 // reference (I-33): the template text uses none of the words, every id is checked for its
 // shape, and free text (notes, instructions, guard and verdict lines) is neutralized. Each agent
-// is asked to answer through its tool (agent-tools.ts, #548), with the machine line as the
-// fallback; the one repair message for an answer the loop could not read is here too. Pure, so
-// tests/prompts.test.ts renders every template with hostile inputs.
+// is asked for its machine line; with the setting answerTools on, first to answer through its
+// tool (agent-tools.ts, #548), the machine line then the fallback (#560). The one repair message
+// for an answer the loop could not read is here too. Pure, so tests/prompts.test.ts renders
+// every template with hostile inputs.
 import { DESIGN, HANDOFF, TOOL_OF, VERDICT } from './agent-tools'
 import { DESIGNER_RESULT, HANDOFF_RESULT, isBriefUrl } from './replies'
 import type { Action, AdjudicatorPurpose, AgentType, FixerPurpose } from './types'
@@ -30,6 +31,9 @@ export type PromptEnv = {
   // the owner's notes for this issue (control notes, SPEC 4.3, 6.3): every agent but the
   // designer, whose action carries them already, gets them before its reading list
   notes?: readonly string[]
+  // config answerTools (SPEC 4.2, #560): ask for the answer tool first; absent is off, the
+  // setting's default
+  answerTools?: boolean
 }
 
 // A free-text value longer than this is cut: a prompt points, it does not carry documents.
@@ -145,14 +149,33 @@ function toolAsk(ask: string): string {
   return `${ask} (load it with ToolSearch first if it is listed by name only). If it returns an error, correct the call and call it again; once it is recorded, end your turn.`
 }
 
-// The handoff's tool and its machine line (replies.ts parseHandoff), after implement-issue
-// section 8.
-const HANDOFF_ASK = [
-  toolAsk(`After the implement-issue handoff (its section 8), answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
-  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only with a run, when its head equals your commit or you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none. In the tool, none is null and yes is true.',
-  'If you cannot call it, end your final message with the line below, exactly once and last, filled in.',
-  HANDOFF_RESULT,
-]
+// answerAsk: how an agent is asked for its answer, given the tool ask and the text ask (lower
+// case, as it follows "If you cannot call it, "). With the answer tools off (config answerTools,
+// #560) the text ask alone, capitalized; on, the tool first and the text ask as its fallback.
+function answerAsk(tools: boolean, tool: string, text: string): string[] {
+  return tools ? [toolAsk(tool), `If you cannot call it, ${text}`] : [capital(text)]
+}
+
+function capital(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// What each field of the handoff's machine line (replies.ts parseHandoff) means.
+const HANDOFF_FIELDS =
+  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only with a run, when its head equals your commit or you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none.'
+
+// handoffAsk: the handoff's machine line after implement-issue section 8; with tools, its tool
+// first and the line as the fallback.
+function handoffAsk(tools: boolean): string[] {
+  const line = 'end your final message with the line below, exactly once and last, filled in.'
+  if (!tools) return [`After the implement-issue handoff (its section 8), ${line}`, HANDOFF_FIELDS, HANDOFF_RESULT]
+  return [
+    toolAsk(`After the implement-issue handoff (its section 8), answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
+    `${HANDOFF_FIELDS} In the tool, none is null and yes is true.`,
+    `If you cannot call it, ${line}`,
+    HANDOFF_RESULT,
+  ]
+}
 
 // The adjudicator's fallback, its own output contract (a merge review's lines are its prompt's).
 const CONTRACT = 'reply in your output contract and nothing else: verdict lines, then exactly one ACTION line.'
@@ -163,11 +186,12 @@ const CONTRACT = 'reply in your output contract and nothing else: verdict lines,
 export function promptOf(action: AgentAction, env: PromptEnv): string {
   const repo = id(env.repo, 'repo')
   const n = issueNo(action.issue)
+  const tools = env.answerTools === true
   let out: string[]
-  if (action.kind === 'delegate') out = implementer(repo, n, action.brief, env.modelOverride)
-  else if (action.agent === 'designer') out = designer(repo, n, action.notes, env)
-  else if (action.agent === 'adjudicator') out = adjudicator(repo, n, action)
-  else out = fixer(repo, n, action, env.modelOverride)
+  if (action.kind === 'delegate') out = implementer(repo, n, action.brief, env.modelOverride, tools)
+  else if (action.agent === 'designer') out = designer(repo, n, action.notes, env, tools)
+  else if (action.agent === 'adjudicator') out = adjudicator(repo, n, action, tools)
+  else out = fixer(repo, n, action, env.modelOverride, tools)
   if (action.kind === 'delegate' || action.agent !== 'designer') out = withNotes(out, env.notes ?? [])
   return out.join('\n')
 }
@@ -183,7 +207,7 @@ function withNotes(out: string[], notes: readonly string[]): string[] {
   return [...out.slice(0, i), ...lines, ...out.slice(i)]
 }
 
-function designer(repo: string | null, n: number | null, notes: readonly string[], env: PromptEnv): string[] {
+function designer(repo: string | null, n: number | null, notes: readonly string[], env: PromptEnv, tools: boolean): string[] {
   const seen = new Set<string>()
   const branches: string[] = []
   for (const f of env.inFlight) {
@@ -200,15 +224,19 @@ function designer(repo: string | null, n: number | null, notes: readonly string[
     ...block('Owner notes:', notes),
     ...modelLine(env.modelOverride),
     scratch(n),
-    toolAsk(`Once the brief is posted, answer by calling ${DESIGN} with brief, created and pendingDecision`),
-    'If you cannot call it, end your return with the line below, exactly once and last, filled in.',
+    ...(tools
+      ? [
+          toolAsk(`Once the brief is posted, answer by calling ${DESIGN} with brief, created and pendingDecision`),
+          'If you cannot call it, end your return with the line below, exactly once and last, filled in.',
+        ]
+      : ['Once the brief is posted, end your return with the line below, exactly once and last, filled in.']),
     DESIGNER_RESULT,
   ]
 }
 
 type AdjudicatorSpawn = Extract<SpawnAction, { agent: 'adjudicator' }>
 
-function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn): string[] {
+function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn, tools: boolean): string[] {
   const run = id(a.run, 'run')
   const branch = id(a.branch, 'branch')
   const head = id(a.head, 'head')
@@ -216,7 +244,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
   const where = [run === null ? null : `run ${run}`, branch === null ? null : `branch ${branch}`, head === null ? null : `head ${head}`]
     .filter(w => w !== null)
     .join(', ')
-  const contract = [toolAsk(`Answer by calling ${VERDICT} once, with your findings and one action`), `If you cannot call it, ${CONTRACT}`]
+  const contract = answerAsk(tools, `Answer by calling ${VERDICT} once, with your findings and one action`, CONTRACT)
   if (a.purpose === 'gate') {
     const step = id(a.step, 'step')
     return [
@@ -259,8 +287,7 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn)
     `  2. the PR body links the issue as the brief's Rollout says${issueNo(a.pr) === null ? '' : ` (\`gh pr view ${a.pr} --json body,closingIssuesReferences\`)`}: merge needs a closing reference to the issue, run-it and keep-open a plain reference that leaves it open;`,
     '  3. a visible (UI) change has screenshot or video evidence in the PR body.',
     scratch(n),
-    toolAsk(`Answer by calling ${VERDICT} once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags`),
-    'If you cannot call it, reply with exactly these lines and nothing else:',
+    ...answerAsk(tools, `Answer by calling ${VERDICT} once, with your findings, one action (merge, hold, fixer or escalate), summary, bump and flags`, 'reply with exactly these lines and nothing else:'),
     '  verdict lines `<VERDICT>: <reason>` for what you find, VERDICT one of CORRECT, WRONG, NIT, ENV, DUP (none when there is nothing to report);',
     '  one ACTION line: `ACTION: merge`, `ACTION: hold <reason>` when the owner must decide, or `ACTION: fixer: <instructions>` when a change is needed before the merge;',
     '  `SUMMARY: <what changes for users, one line>`;',
@@ -282,7 +309,7 @@ const WHY: Record<FixerPurpose, string> = {
   handoff: "the implementer's commit was not gated by its pipeline run. Get it gated as the instructions say.",
 }
 
-function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: string | null): string[] {
+function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: string | null, tools: boolean): string[] {
   const branch = id(a.branch, 'branch')
   const run = id(a.run, 'run')
   const head = id(a.head, 'head')
@@ -301,11 +328,11 @@ function fixer(repo: string | null, n: number | null, a: FixerSpawn, model: stri
     readFirst('fixer'),
     ...modelLine(model),
     scratch(n),
-    ...HANDOFF_ASK,
+    ...handoffAsk(tools),
   ]
 }
 
-function implementer(repo: string | null, n: number | null, brief: string, model: string | null): string[] {
+function implementer(repo: string | null, n: number | null, brief: string, model: string | null, tools: boolean): string[] {
   return [
     `Implement ${issueRef(repo, n)}.`,
     ...briefLines(repo, brief, n),
@@ -313,28 +340,29 @@ function implementer(repo: string | null, n: number | null, brief: string, model
     readFirst('implementer'),
     ...modelLine(model),
     scratch(n),
-    ...HANDOFF_ASK,
+    ...handoffAsk(tools),
   ]
 }
 
 // --- the repair message (#548) -----------------------------------------------------------------
 
 // repairPrompt: the one message the loop sends an agent whose final answer it could not read:
-// what was wrong, then the ask again (its tool, the machine lines as the fallback), so the same
-// agent answers with what it already found instead of a fresh agent redoing the work. The
-// problem may quote the agent's own line, so it is neutralized like any free text.
-export function repairPrompt(type: AgentType, purpose: AdjudicatorPurpose | null, problem: string): string {
-  const fallback =
-    type === 'designer'
-      ? ['If you cannot call it, reply with only the line below, filled in.', DESIGNER_RESULT]
-      : type === 'adjudicator'
-        ? [`If you cannot call it, ${purpose === 'merge' ? 'reply with only your verdict lines, one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.' : CONTRACT}`]
-        : ['If you cannot call it, reply with only the line below, filled in.', HANDOFF_RESULT]
-  return [
-    `The factory loop could not read your answer: ${neutral(problem)}.`,
-    toolAsk(`Do not redo the work. Call ${TOOL_OF[type]} now with the answer you reached`),
-    ...fallback,
-  ].join('\n')
+// what was wrong, then the ask again (its machine lines; with tools, the setting answerTools, its
+// tool first and the machine lines as the fallback), so the same agent answers with what it
+// already found instead of a fresh agent redoing the work. The problem may quote the agent's own
+// line, so it is neutralized like any free text.
+export function repairPrompt(type: AgentType, purpose: AdjudicatorPurpose | null, problem: string, tools = false): string {
+  const reply =
+    type !== 'adjudicator'
+      ? 'reply with only the line below, filled in.'
+      : purpose === 'merge'
+        ? 'reply with only your verdict lines, one ACTION line, and the SUMMARY, BUMP and FLAGS lines your prompt asked for.'
+        : CONTRACT
+  const ask = tools
+    ? answerAsk(true, `Do not redo the work. Call ${TOOL_OF[type]} now with the answer you reached`, reply)
+    : ['Do not redo the work: give the answer you reached.', capital(reply)]
+  const line = type === 'adjudicator' ? [] : [type === 'designer' ? DESIGNER_RESULT : HANDOFF_RESULT]
+  return [`The factory loop could not read your answer: ${neutral(problem)}.`, ...ask, ...line].join('\n')
 }
 
 // --- the spawn's description and name (D-11: the issue goes in both) -------------------------------

@@ -14,7 +14,7 @@ import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
 import type { Runtime } from './observe'
-import { plan } from './plan'
+import { plan, turnEnded } from './plan'
 import { repairPrompt } from './prompts'
 import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
@@ -351,17 +351,21 @@ export function breakerEventArgv(b: BreakerNotice): string[] {
 
 export type ListedAgent = { id: string; status: AgentStatus }
 
-// How long an agent sent the repair message counts as at work while the list still shows it
-// completed (reconcilable): the engine resumes it from its transcript (#548), and when the list
-// shows that is not proven. Past it, the usual one pass of grace, then lost.
+// How long an agent sent the repair message counts as at work while the list still shows its
+// turn ended, idle or completed (reconcilable): the engine resumes it from its transcript (#548),
+// and when the list shows that is not proven. Past it, the usual one pass of grace, then lost.
 export const REPAIR_GRACE_MS = 5 * 60_000
 
-// reconcilable: the agent list as reconcileAgents should judge it. An agent whose answer is being
-// handled counts as running, listed or not, so a pass in between never marks it lost; so does one
-// listed completed within REPAIR_GRACE_MS of its repair message (repairing: when each went out,
-// until its next turn.complete); an agent first listed completed counts as running for that pass,
-// since its turn.complete may still be on its way (seen: when each id was first listed completed).
-// seen and repairing are updated in place.
+// reconcilable: the agent list as reconcileAgents should judge it. An agent listed idle has ended
+// its turn as one listed completed has (plan.ts turnEnded, #560), and each rule here reads them
+// alike. An agent whose answer is being handled counts as running, listed or not, so a pass in
+// between never marks it lost: that covers an agent whose repair message is on its way, since
+// agentAnswered holds it in `answering` until the engine answers the send. So does one whose
+// turn ended within REPAIR_GRACE_MS of its repair message being delivered (repairing: when each
+// went out, until its next turn.complete), for the loop awaits its reply; an agent first listed
+// with its turn ended counts as running for that pass, since its turn.complete may still be on
+// its way (seen: when each id was first so listed, idle then completed being one sighting). seen
+// and repairing are updated in place.
 export function reconcilable(
   agents: readonly ListedAgent[],
   answering: ReadonlySet<string>,
@@ -372,14 +376,14 @@ export function reconcilable(
   for (const [id, at] of [...repairing]) if (now - at > REPAIR_GRACE_MS) repairing.delete(id)
   const out = agents.map(a => {
     if (answering.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
-    if (a.status !== 'completed') return a
+    if (!turnEnded(a.status)) return a
     if (repairing.has(a.id)) return { id: a.id, status: 'running' as AgentStatus }
     const first = seen.get(a.id)
     if (first === undefined) seen.set(a.id, now)
     return first === undefined || first === now ? { id: a.id, status: 'running' as AgentStatus } : a
   })
   for (const id of answering) if (!agents.some(a => a.id === id)) out.push({ id, status: 'running' })
-  for (const id of [...seen.keys()]) if (!agents.some(a => a.id === id && a.status === 'completed')) seen.delete(id)
+  for (const id of [...seen.keys()]) if (!agents.some(a => a.id === id && turnEnded(a.status))) seen.delete(id)
   return out
 }
 
@@ -399,8 +403,8 @@ export function updateDone(ledger: readonly LedgerEntry[], control: Control, loa
 // --- one act-mode pass, from what observe read (SPEC 2) --------------------------------------------
 
 // What the hooks between passes share with the pass: the agents whose answer is being handled,
-// when each agent was first listed completed, and when each was sent its repair message
-// (reconcilable).
+// when each agent was first listed with its turn ended (idle or completed), and when each was
+// sent its repair message (reconcilable).
 export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; repairing: Map<string, Ms> }
 
 // The pass's agent list: only a read that worked may mark agents lost.
@@ -510,10 +514,10 @@ export async function agentAnswered(
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
-      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem), type)
+      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem, env.rt.config.answerTools), type)
       if (undelivered === null) {
-        // listed completed until the message resumes it, which the list may show late: the passes
-        // take it as at work for a while, then count that listing afresh
+        // listed idle or completed until the message resumes it, which the list may show late: the
+        // passes take it as at work for a while, then count that listing afresh
         between.completedSeen.delete(id)
         between.repairing.set(id, at)
         return { result: 'repair', why: problem, key: entry.key }

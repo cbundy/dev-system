@@ -305,6 +305,10 @@ export type Config = {
   trace: boolean
   // the trace files' total size: the oldest go first, and today's is cut short past it
   traceMaxBytes: number
+  // the prompts and the repair message ask agents to answer through their tools first (#548);
+  // off, they ask for the text contract alone, and the tools stay served (#560). The workspace
+  // file's own `answerTools` overrides the repo's
+  answerTools: boolean
 }
 
 export type WakeKind = 'judge' | 'task' | 'tell'
