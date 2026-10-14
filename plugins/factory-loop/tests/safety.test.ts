@@ -196,7 +196,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'env-retry', key: `env-retry:${RUN}:test:${HEAD}:r1`, class: 'drive', rule: 'P2a', run: RUN, branch: 'issue-470-x', step: 'test', head: HEAD },
   { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
-  { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, branch: 'issue-470-x' },
+  { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, origin: HEAD, branch: 'issue-470-x' },
   { ...base, issue: null, kind: 'update-checkout', key: 'update-checkout:0', class: 'free', rule: 'H5', branch: 'main', head: HEAD },
   { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
   { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
@@ -372,7 +372,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
       ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" -c core.hooksPath=/dev/null merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
       ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', '/w', 'b', '/l'],
-      ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h'],
+      ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h', 'h'],
       ['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })

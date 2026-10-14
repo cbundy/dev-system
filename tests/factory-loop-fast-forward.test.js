@@ -1,10 +1,11 @@
 "use strict";
 
-// The factory loop's fast-forward (plugins/factory-loop/hooks/act-merge.ts FF_SCRIPT, #551), run
-// for real by sh from a scratch main checkout whose origin is a local bare repo. The pipeline
+// The factory loop's fast-forward (plugins/factory-loop/hooks/act-merge.ts FF_SCRIPT, #551, #595),
+// run for real by sh from a scratch main checkout whose origin is a local bare repo. The pipeline
 // commits in its own checkout and pushes, so the implementer's worktree lags its branch by
-// exactly those commits; the script must move such a worktree to the run's head, and refuse a
-// dirty one, a diverged one, or a head origin does not have, leaving each as it was.
+// exactly those commits; the script must move such a worktree to the run's head, also when the
+// loop's own update-behind then pushed a rebased head over it, and refuse a dirty one, a diverged
+// one, or an origin that is not the expected head, leaving each as it was.
 // parseFastForward (the same module) must read its real output. Plugin tests cannot run a shell,
 // so this lives here.
 const { test, before, after } = require("node:test");
@@ -75,8 +76,25 @@ function world() {
   return { dir, main, wt, pipeline, handoff, head };
 }
 
-function forward(cwd, head, branch = BRANCH) {
-  const [cmd, ...args] = m.fastForwardArgv(branch, head);
+// rebased: the loop's own update-behind after the run (callum-flow-merge-guard --update-behind):
+// main moves on, and from the main checkout the run head is rebased onto it in a scratch worktree
+// and pushed over the branch, so origin holds the rebased head and the run head is not on it.
+function rebased(w) {
+  git(w.pipeline, "switch", "-q", "main");
+  commit(w.pipeline, "m.txt", "newer main\n");
+  git(w.pipeline, "push", "-q", "origin", "main");
+  git(w.main, "fetch", "-q", "origin");
+  const scratch = path.join(w.dir, "update-behind");
+  git(w.main, "worktree", "add", "-q", "--detach", scratch, w.head);
+  git(scratch, "rebase", "-q", "origin/main");
+  git(scratch, "push", "-q", `--force-with-lease=refs/heads/${BRANCH}:${w.head}`, "origin", `HEAD:refs/heads/${BRANCH}`);
+  const pushed = git(scratch, "rev-parse", "HEAD");
+  git(w.main, "worktree", "remove", scratch);
+  return pushed;
+}
+
+function forward(cwd, head, expect = head, branch = BRANCH) {
+  const [cmd, ...args] = m.fastForwardArgv(branch, head, expect);
   const r = spawnSync(cmd, args, { cwd, encoding: "utf8" });
   return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, read: m.parseFastForward(r.stdout) };
 }
@@ -109,7 +127,7 @@ test("a worktree with a commit origin does not have is refused and left as it wa
   const own = commit(w.wt, "d.txt", "made outside the pipeline\n");
   const r = forward(w.main, w.head);
   assert.equal(r.exitCode, 0, r.stderr);
-  assert.deepEqual(r.read, { result: "refused", line: `REFUSED ${w.wt} at ${own} has commits not on origin/${BRANCH}` });
+  assert.deepEqual(r.read, { result: "refused", line: `REFUSED ${w.wt} at ${own} is not an ancestor of the run head ${w.head}` });
   assert.equal(git(w.wt, "rev-parse", "HEAD"), own);
 });
 
@@ -117,7 +135,7 @@ test("a run head that is not origin's is refused: the branch moved, so the guard
   const w = world();
   const r = forward(w.main, w.handoff);
   assert.equal(r.exitCode, 0, r.stderr);
-  assert.deepEqual(r.read, { result: "refused", line: `REFUSED origin/${BRANCH} is ${w.head}, not the run head ${w.handoff}` });
+  assert.deepEqual(r.read, { result: "refused", line: `REFUSED origin/${BRANCH} is ${w.head}, not the expected head ${w.handoff}` });
   assert.equal(git(w.wt, "rev-parse", "HEAD"), w.handoff);
 });
 
@@ -159,4 +177,37 @@ test("the fast-forward runs none of the repo's git hooks: a post-merge npm insta
   git(w.wt, "fetch", "-q", "origin");
   git(w.wt, "merge", "--ff-only", "-q", more);
   assert.equal(fs.existsSync(marker), true);
+});
+
+test("after the loop's own update-behind, a lagging worktree is fast-forwarded to the run head while origin holds the rebased head", () => {
+  const w = world();
+  const pushed = rebased(w);
+  const r = forward(w.main, w.head, pushed);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(r.read, { result: "forwarded", line: `FORWARDED ${w.handoff} ${w.head} ${w.wt}` });
+  assert.equal(git(w.wt, "rev-parse", "HEAD"), w.head);
+  assert.equal(git(w.wt, "symbolic-ref", "--short", "HEAD"), BRANCH);
+  assert.equal(git(w.main, "rev-parse", `refs/remotes/origin/${BRANCH}`), pushed);
+  assert.deepEqual(forward(w.main, w.head, pushed).read, { result: "current", line: `CURRENT ${w.head}` });
+});
+
+test("after the loop's own update-behind, an origin that is not the pushed head, a dirty worktree and a diverged one are refused and left as they were", () => {
+  const w = world();
+  const pushed = rebased(w);
+  const stale = forward(w.main, w.head);
+  assert.equal(stale.exitCode, 0, stale.stderr);
+  assert.deepEqual(stale.read, { result: "refused", line: `REFUSED origin/${BRANCH} is ${pushed}, not the expected head ${w.head}` });
+  assert.equal(git(w.wt, "rev-parse", "HEAD"), w.handoff);
+  fs.writeFileSync(path.join(w.wt, "b.txt"), "half done\n");
+  const dirty = forward(w.main, w.head, pushed);
+  assert.equal(dirty.exitCode, 0, dirty.stderr);
+  assert.deepEqual(dirty.read, { result: "refused", line: `REFUSED ${w.wt} has uncommitted changes` });
+  assert.equal(git(w.wt, "rev-parse", "HEAD"), w.handoff);
+  assert.equal(fs.readFileSync(path.join(w.wt, "b.txt"), "utf8"), "half done\n");
+  git(w.wt, "checkout", "-q", "--", "b.txt");
+  const own = commit(w.wt, "d.txt", "made outside the pipeline\n");
+  const diverged = forward(w.main, w.head, pushed);
+  assert.equal(diverged.exitCode, 0, diverged.stderr);
+  assert.deepEqual(diverged.read, { result: "refused", line: `REFUSED ${w.wt} at ${own} is not an ancestor of the run head ${w.head}` });
+  assert.equal(git(w.wt, "rev-parse", "HEAD"), own);
 });

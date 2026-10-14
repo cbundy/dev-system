@@ -392,8 +392,8 @@ export type Action =
   // escalation whose verdicts were all ENV
   | (Base & { kind: 'env-retry'; run: string; branch: string; step: string | null; head: string })
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
-  // the worktrees on the run's branch, moved to the run's head when it is origin's (#551)
-  | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; branch: string })
+  // the worktrees on the run's branch, moved to the run's head when origin holds it, or the head the loop's own update-behind pushed (#551, #595)
+  | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; origin: string; branch: string })
   // rule H5: the main checkout, on origin's default branch, fast-forwarded to origin's (#555);
   // head: its commit as observe read it, so plan knows whether a refusal still stands
   | (Base & { kind: 'update-checkout'; branch: string; head: string | null })

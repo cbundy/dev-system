@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { start } from '../hooks/ledger'
-import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf } from '../hooks/plan'
+import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
 import {
   CLEAN,
@@ -2382,6 +2382,46 @@ describe('M1, M2: fast-forward a worktree the pipeline left behind (#551)', () =
     const r = plan(mergeReady([guarded([LAG]), working]), CFG)
     expect(keys(r)).toEqual([])
     expect(r.skipped).toContainEqual({ rule: 'M2', issue: 50, why: 'an agent already works the branch of #50 (fast-forward)' })
+  })
+})
+
+describe('M2: fast-forward after the loop\'s own update-behind rebased the head (#595)', () => {
+  const behind = [{ name: 'mergeable', reason: 'behind main, run update-behind first' }]
+  const updated = entry('update-behind:550:head50', 'update-behind', {
+    issue: 50,
+    pr: 550,
+    head: 'head50',
+    startedAt: NOW - 9 * MIN,
+    endedAt: NOW - 8 * MIN,
+    outcome: { kind: 'update-behind', result: 'updated', from: 'head50', to: 'head51', line: 'UPDATED pr=550 from=head50 to=head51' },
+  })
+  const REBASED_LAG = headFail('head50', 'head51', 'head51', 'wt50')
+  const at = (n: number, over: Partial<LedgerEntry> = {}) => ({ startedAt: NOW - (7 - n) * MIN, endedAt: NOW - (7 - n) * MIN + 30_000, ...over })
+  const world = (extra: LedgerEntry[], fail = REBASED_LAG) => mergeReady([guarded(behind, [], 1, at(0)), updated, guarded([fail], [], 2, at(2)), ...extra], { runs: [run(50, 'head-mismatch')] })
+  const kinds = (r: PlanResult) => r.actions.filter(a => a.kind !== 'title').map(a => a.kind)
+
+  test('a worktree behind the run head, origin at the pushed head: fast-forward to the run head, then guard again, no judge', () => {
+    const r = plan(world([]), CFG)
+    expect(keys(r)).toEqual(['fast-forward:550:head50:2'])
+    expect(find(r, 'fast-forward:550:head50:2')).toMatchObject({ kind: 'fast-forward', head: 'head50', origin: 'head51' })
+    const moved = fastForward('fast-forward:550:head50:2', 'forwarded', { startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 5000 })
+    expect(keys(plan(world([moved]), CFG))).toEqual(['guard:550:head50:3'])
+  })
+
+  test('an origin the loop did not push, an unknown worktree or a lag that returns goes to the judge', () => {
+    expect(kinds(plan(world([], headFail('head50', 'head99', 'head99', 'wt50')), CFG))).toEqual(['judge'])
+    expect(kinds(plan(world([], headFail('head50', 'head51', 'head51', 'unknown')), CFG))).toEqual(['judge'])
+    expect(kinds(plan(world([], headFail('head50', 'head51', 'head50', 'wt50')), CFG))).toEqual(['judge'])
+    const moved = fastForward('fast-forward:550:head50:2', 'forwarded', { startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN + 5000 })
+    const again = guarded([REBASED_LAG], [], 3, { startedAt: NOW - 2 * MIN, endedAt: NOW - 1 * MIN })
+    expect(kinds(plan(world([moved, again]), CFG))).toEqual(['judge'])
+  })
+
+  test('worktreeLag matches the run head, the expected origin and a worktree at neither', () => {
+    expect(worktreeLag(REBASED_LAG, 'head50', 'head51')).toBe(true)
+    expect(worktreeLag(REBASED_LAG, 'head50', 'head50')).toBe(false)
+    expect(worktreeLag(headFail('head50', 'head51', 'head51', 'head51'), 'head50', 'head51')).toBe(false)
+    expect(worktreeLag(headFail('head50', 'head51', 'head51', 'head50', 'head51', 'wt50'), 'head50', 'head51')).toBe(true)
   })
 })
 
