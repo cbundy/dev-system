@@ -30,6 +30,7 @@ import {
   wakeStarted,
 } from './act'
 import type { ActEnv, ActReport, Between, Live } from './act'
+import { stillAtWork } from './act-agents'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
@@ -74,6 +75,8 @@ const STOP_TIMEOUT_MS = 30_000
 const RENAME_TIMEOUT_MS = 10_000
 // $.agent.spawn resolves once the agent started; one that never does must not hold the pass
 const SPAWN_TIMEOUT_MS = 60_000
+// the agent list an interim answer is checked against: a hang must not hold the hooks behind it
+const LIST_TIMEOUT_MS = 10_000
 // $.prompt.submit resolves once its turn starts, which waits for the session to be idle: a wake
 // is taken as queued after this, so a busy session never holds a pass (a late drop still counts)
 const SUBMIT_GRACE_MS = 5_000
@@ -998,15 +1001,28 @@ async function mainTurnEnded($: EngineInterface, e: TurnEnded) {
 }
 
 // turn.complete of an agent of the loop: its answer recorded (act.ts agentAnswered), then a ping.
+// An interim answer is held while a fresh agent list shows the agent still at work (#545).
 async function agentTurnEnded($: EngineInterface, e: TurnEnded & { agentId: string }) {
   const rt = await ledgerFor($)
   if (rt === null) return
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
-  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between)
-  const problems = [...(r.why === undefined ? [] : [`${r.why}: dropped`]), ...env.problems]
+  const r = await agentAnswered(env, lastState ?? bareState(rt, now), { agentId: e.agentId, answer: e.answer, reason: e.reason }, between, id => atWork($, id))
+  const why = r.why === undefined ? [] : [r.result === 'dropped' ? `${r.why}: dropped` : r.why]
+  const problems = [...why, ...env.problems]
   if (problems.length > 0) await appendLine($, rt, { agent: e.agentId, problems })
   if (r.result === 'applied') ping()
+}
+
+// atWork: the agent list shows the agent still at work (act-agents.ts stillAtWork). A list that
+// cannot be read proves nothing, so the answer is read as final.
+async function atWork($: EngineInterface, id: string): Promise<boolean> {
+  try {
+    const rows = await within($, LIST_TIMEOUT_MS, $.agent.list(), 'agent list')
+    return stillAtWork(rows.map(a => (a.parentId === undefined ? { id: a.id, status: a.status } : { id: a.id, status: a.status, parentId: a.parentId })), id)
+  } catch {
+    return false
+  }
 }
 
 // lateDrop: a wake prompt the engine dropped after it was taken as queued started no turn: it is

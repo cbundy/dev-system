@@ -752,6 +752,67 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(`delegate:470:${BRIEF}`)).toMatchObject({ status: 'failed', summary: 'callum-flow:implementer: started with no agent id' })
   })
 
+  test("an agent's interim message while its own sub-agent runs leaves its entry running; its final answer is the one recorded (#545)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 20 * MIN
+    const { run } = factory({ issue: { stage: 'designing', since } })
+    const key = `design:470:${since}`
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
+      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+    ])
+    const h = host(on, { config: ACT, run, store })
+    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
+    // the designer started an explorer in the background, which still runs
+    h.agents.push({ id: 'agent-x', type: 'Explore', status: 'running', description: 'Explore the code', parentId: 'agent-1' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.passes()).toHaveLength(1)
+
+    // its turn ends on an interim message with no RESULT line: the entry runs on and no wake goes out
+    const interim = "The explorer is still running. I'll wait for its notification before posting."
+    await $.turn.complete({ agentId: 'agent-1', answer: interim, reason: 'answer', turnId: 'turn-a1', durationMs: 1000, isAborted: false })
+    expect(h.entry(key)).toMatchObject({ status: 'running', agentId: 'agent-1' })
+    expect(h.lines().some(l => JSON.stringify(l).includes('interim answer'))).toBe(true)
+    await clock.advance(60_000)
+    expect(h.prompts).toEqual([])
+    expect(h.entry(key)).toMatchObject({ status: 'running' })
+
+    // the explorer ends, and the designer's next turn posts the brief: that answer is recorded
+    const x = h.agents.find(a => a.id === 'agent-x')
+    if (x !== undefined) x.status = 'completed'
+    await agentDone($, h, 'agent-1', `Brief posted.\nRESULT brief=${BRIEF} created=none pending_decision=no`)
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
+    expect(h.files.get(answerPath(LOOP_DIR, key))).toContain('RESULT brief=')
+    await clock.advance(5_000)
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`delegate:470:${BRIEF}`])
+  })
+
+  test("a stopped agent's answer with no machine line still goes to the model (#545)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const since = NOW - 20 * MIN
+    const { run } = factory({ issue: { stage: 'designing', since } })
+    const key = `design:470:${since}`
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
+      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+    ])
+    const h = host(on, { config: ACT, run, store })
+    h.agents.push({ id: 'agent-1', type: 'callum-flow:designer', status: 'running', description: 'Design #470' })
+    // a sub-agent it ran in the foreground has ended
+    h.agents.push({ id: 'agent-x', type: 'Explore', status: 'completed', description: 'Explore the code', parentId: 'agent-1' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+
+    // listed running at its own turn.complete, as every agent is as it ends: no proof it works on
+    await agentDone($, h, 'agent-1', 'I looked into it but could not settle the design.')
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', unparsed: true } })
+    await clock.advance(5_000)
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`judge:report:${key}`])
+  })
+
   test('a wake answered through the main loop: turn.start takes the turn, an ANSWER closes it, a silent turn gets one reminder', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const since = NOW - 20 * MIN
