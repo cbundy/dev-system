@@ -130,7 +130,7 @@ export type Control = {
 
 export type AgentType = 'designer' | 'implementer' | 'adjudicator' | 'fixer'
 export type AdjudicatorPurpose = 'gate' | 'weakening' | 'merge'
-export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff'
+export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff' | 'resume'
 export type Rollout = 'merge' | 'run-it' | 'keep-open'
 
 export type GuardFail = { name: string; reason: string }
@@ -388,8 +388,7 @@ export type Action =
       approveReason: string | null
       logReview: boolean
     })
-  // rule P2a (#537): the one `no-mistakes rerun`, of this run's head, once per owner resume of an
-  // escalation whose verdicts were all ENV
+  // Only rule P2a may launch this command; SPEC 5.4 owns resume eligibility.
   | (Base & { kind: 'env-retry'; run: string; branch: string; step: string | null; head: string })
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
   // the worktrees on the run's branch, moved to the run's head when origin holds it, or the head the loop's own update-behind pushed (#551, #595)

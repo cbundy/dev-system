@@ -520,18 +520,19 @@ describe('the argv safety net (SPEC 6.1)', () => {
   test('a code failure is never rerun: plan plans env-retry only when every verdict of the resumed escalation is ENV (#537)', () => {
     const at = '01M4RQ0045AAAA:test:head45'
     const VERDICTS = ['ENV: codex 401', 'CORRECT: a real bug', 'WRONG: a false positive', 'NIT: style', 'DUP: seen before']
-    // every subset of the five verdict kinds, the empty one included
-    for (let mask = 0; mask < 1 << VERDICTS.length; mask++) {
+    // every subset of the five verdict kinds, the empty one included, with and without a resume note
+    for (const withNote of [false, true]) for (let mask = 0; mask < 1 << VERDICTS.length; mask++) {
       const verdicts = VERDICTS.filter((_, i) => (mask & (1 << i)) !== 0)
       const s = state({
         issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
         runs: [runOf(45, 'failed', { step: 'test' })],
-        control: control({ resumed: [{ subject: 'run:01M4RQ0045AAAA', at: NOW - MIN }] }),
+        control: control({ resumed: [{ subject: 'run:01M4RQ0045AAAA', at: NOW - MIN }], notes: withNote ? [{ issue: 45, text: 'change it', at: NOW - 2 * MIN }] : [] }),
       })
       const adj = entry(`adjudicate:${at}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: '01M4RQ0045AAAA', outcome: review({ type: 'escalate', why: 'x' }, null, verdicts) })
       const kinds = plan({ ...s, ledger: [...s.ledger, adj] }, config()).actions.map(a => a.kind)
       const envOnly = verdicts.length > 0 && verdicts.every(v => v.startsWith('ENV:'))
-      expect({ verdicts, rerun: kinds.includes('env-retry') }).toEqual({ verdicts, rerun: envOnly })
+      expect({ verdicts, withNote, rerun: kinds.includes('env-retry') }).toEqual({ verdicts, withNote, rerun: envOnly && !withNote })
+      expect({ verdicts, withNote, fixer: kinds.includes('spawn') }).toEqual({ verdicts, withNote, fixer: !(envOnly && !withNote) })
     }
   })
 

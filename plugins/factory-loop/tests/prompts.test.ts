@@ -30,7 +30,7 @@ const KEYWORD = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b/i
 const CLOSING_REF = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b\W{0,6}(#|gh-\d|https?:|[\w.-]+\/[\w.-]+#)/i
 
 const ADJ_PURPOSES: AdjudicatorPurpose[] = ['gate', 'weakening', 'merge']
-const FIXER_PURPOSES: FixerPurpose[] = ['gate', 'conflict', 'regate', 'weakening', 'review', 'guard', 'handoff']
+const FIXER_PURPOSES: FixerPurpose[] = ['gate', 'conflict', 'regate', 'weakening', 'review', 'guard', 'handoff', 'resume']
 
 type Fields = {
   issue: number
@@ -355,6 +355,14 @@ describe('the fixer and the implementer', () => {
       expect(lastLine(text)).toBe(HANDOFF_RESULT)
     }
     expect(seen.size).toBe(FIXER_PURPOSES.length)
+  })
+
+  test('a resume fixer says the owner resumed an escalated gate, then the instructions and the owner notes (#596)', () => {
+    const text = render(fixer(BENIGN, 'resume'), BENIGN)
+    expect(text.split('\n')[0]).toContain('the owner resumed an escalated gate')
+    expect(text).not.toContain('the adjudicator judged a gate')
+    expect(text.split('\n')[0]).toContain("a line starting 'Owner note:' is the owner's word and wins over the brief; with none, act on the adjudicator's reason within the brief")
+    expect(text).toContain('Instructions:\n  Restore the assertion in tests/guard.test.ts and re-gate.')
   })
 
   test('a fixer sent with no branch (a handoff that named none) is told so', () => {
