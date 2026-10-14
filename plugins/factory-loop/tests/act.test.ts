@@ -58,7 +58,7 @@ function runtime(): Runtime {
     sink: null,
     env: { CALLUM_FLOW_REPO: REPO, CALLUM_FLOW_READY_LABEL: 'ready', CALLUM_FLOW_IN_DEV_LABEL: 'in development' },
     toolsDir: TOOLS,
-    config: config(),
+    config: config({ mode: 'act' }),
     configProblems: [],
   }
 }

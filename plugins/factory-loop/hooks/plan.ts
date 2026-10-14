@@ -119,6 +119,9 @@ type Ctx = {
   atCap: boolean
   // the last action each issue wanted that did not go out, and why: what a PR waits for (#550)
   gated: Map<number, { key: string; gate: Gate; rule: string }>
+  // rule H5's update is due but waits for work reading the main checkout: admit holds new readers
+  // so those drain (#555)
+  checkoutWaits: boolean
 }
 
 // tierOf: the usage tier (SPEC rule G3). The higher of the two windows decides; a missing
@@ -185,6 +188,7 @@ export function plan(state: State, config: Config): PlanResult {
     capped: [],
     atCap: false,
     gated: new Map(),
+    checkoutWaits: false,
   }
 
   const blind = !state.sources.factory.ok
@@ -560,20 +564,28 @@ function restartWhenDrained(ctx: Ctx, kept: Action[]): Action | null {
 // --- H5: the main checkout kept up to date with origin (#555) --------------------------------
 
 // Agents begin in the main checkout and designers read its code, so it follows origin's default
-// branch: after a merge (the loop's own, or a hand merge's rollout read) and at least every
-// checkoutEveryMs, it is fast-forwarded, only while G5 finds it on its default branch and clean
-// (the executor checks again and refuses commits origin lacks). It waits while a designer or
-// adjudicator is at work, as files changing under them would change mid-read. Implementers and
-// fixers work in a worktree of their own, so they do not hold it: they run for hours, and would
-// keep it stale all run. A refusal G5 cannot see, such as commits origin lacks, tells the owner
-// once per sight with G5's notice.
+// branch: on the first pass after a load (a reload can leave it stale), after a merge (the loop's
+// own, or a hand merge's rollout read) and at least every checkoutEveryMs, it is fast-forwarded,
+// only while G5 finds it on its default branch and clean (the executor checks again and refuses
+// commits origin lacks). It waits while work reads the checkout (checkoutReaders), as files
+// changing under it would change mid-read, and meanwhile admit holds new readers, so those drain
+// and the update runs: with several issues in flight there may otherwise never be a gap.
+// Implementers and fixers work in a worktree of their own, so they do not hold it: they run for
+// hours, and would keep it stale all run. A refusal G5 cannot see, such as commits origin lacks,
+// tells the owner once per sight with G5's notice while the checkout is at the refused commit; at
+// another commit it changed since, so the update is tried again at once. Only an acting pass
+// plans it: an observe pass derives its ledger from the event log, where an update leaves no
+// event, so every pass would find one due.
 function updateCheckout(ctx: Ctx) {
   const { state, config } = ctx
   const c = state.checkout
-  if (c === null || 'error' in c || checkoutMoved(state) !== null) return
+  if (config.mode !== 'act' || c === null || 'error' in c || checkoutMoved(state) !== null) return
   const last = lastDone(ctx, 'update-checkout')
-  const refused = outcome(last, 'update-checkout')
-  if (refused?.result === 'refused') {
+  const answer = outcome(last, 'update-checkout')
+  const refused = answer?.result === 'refused' ? answer : undefined
+  // the update records the commit the checkout was at when it was planned
+  const changed = refused !== undefined && last?.head !== c.head
+  if (refused !== undefined && !changed) {
     const key = `tell:checkout:${c.branch ?? 'detached'}@${c.head ?? 'unknown'}:refused`
     want(ctx, wake('tell', 'checkout', key, 'H5', null, { branch: c.branch, head: c.head, default: c.defaultBranch }, [refused.line]))
   }
@@ -581,28 +593,37 @@ function updateCheckout(ctx: Ctx) {
   const merged = state.ledger.some(
     e => e.status === 'done' && (e.endedAt ?? 0) > since && (outcome(e, 'merge')?.result === 'merged' || outcome(e, 'rollout') !== undefined),
   )
-  if (!merged && last !== undefined && state.now - (last.endedAt ?? 0) < config.checkoutEveryMs) return
+  const reason = merged
+    ? 'a merge since the last update'
+    : last === undefined || last.startedAt < state.loadedAt
+      ? 'none since the load'
+      : changed
+        ? 'the refused checkout changed'
+        : state.now - (last.endedAt ?? 0) >= config.checkoutEveryMs
+          ? 'due'
+          : null
+  if (reason === null) return
+  const key = `update-checkout:${last?.endedAt ?? 0}`
   const readers = checkoutReaders(ctx)
   if (readers.length > 0) {
-    skip(ctx, 'H5', null, `update-checkout waits for agents reading the main checkout: ${readers.join(', ')}`)
+    skip(ctx, 'H5', null, `update-checkout waits for work reading the main checkout: ${readers.join(', ')}`)
+    ctx.checkoutWaits = gate(ctx, key, 'update-checkout') === 'go'
     return
   }
-  want(ctx, {
-    kind: 'update-checkout',
-    key: `update-checkout:${last?.endedAt ?? 0}`,
-    class: 'free',
-    rule: 'H5',
-    reason: merged ? 'a merge since the last update' : 'due',
-    issue: null,
-    branch: c.defaultBranch,
-  })
+  want(ctx, { kind: 'update-checkout', key, class: 'free', rule: 'H5', reason, issue: null, branch: c.defaultBranch, head: c.head })
+}
+
+// readsCheckout: work that reads the main checkout's code while it runs (rule H5): a designer or
+// an adjudicator of the loop, or a task, the model working from it (as G5 says).
+function readsCheckout(kind: ActionKind, agent: AgentType | undefined): boolean {
+  return (kind === 'spawn' && (agent === 'designer' || agent === 'adjudicator')) || kind === 'task'
 }
 
 // checkoutReaders: the loop's designers and adjudicators still at work, by the ledger or by the
-// agent list (one whose answer is in may read on).
+// agent list (one whose answer is in may read on), and its running tasks.
 function checkoutReaders(ctx: Ctx): string[] {
   return ctx.state.ledger
-    .filter(e => e.kind === 'spawn' && (e.agent === 'designer' || e.agent === 'adjudicator'))
+    .filter(e => readsCheckout(e.kind, e.agent))
     .filter(e => e.status === 'running' || (e.agentId !== undefined && agentLive(ctx, e.agentId)))
     .map(e => e.key)
     .sort()
@@ -2205,6 +2226,11 @@ function admit(ctx: Ctx): Action[] {
     }
     if (moved !== null && CHECKOUT_HELD.includes(action.kind)) {
       skip(ctx, action.rule, issue, `main checkout ${moved} (${action.kind})`)
+      continue
+    }
+    // rule H5: while the update waits for the checkout's readers, no new reader starts
+    if (ctx.checkoutWaits && readsCheckout(action.kind, action.kind === 'spawn' ? action.agent : undefined)) {
+      skip(ctx, action.rule, issue, `waits for the main checkout's update (${action.kind === 'spawn' ? action.agent : action.kind})`)
       continue
     }
     // one writer per branch: while an implementer or fixer of the issue still works (or one was

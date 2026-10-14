@@ -1627,7 +1627,8 @@ describe('G5: the main checkout (#544)', () => {
 describe('H5: the main checkout kept up to date with origin (#555)', () => {
   // stage D run 2: the testbed's main checkout stayed at the merge of PR 47 for the whole run
   // while origin's main moved on through eight more merges, so agents started there read code
-  // several merges stale
+  // several merges stale. Only an acting pass plans it (see the observe test below).
+  const ACT = config({ mode: 'act' })
   const LAST = NOW - 2 * MIN
   const updates = (r: PlanResult) => r.actions.filter(a => a.kind === 'update-checkout')
   const merged = (endedAt: number) =>
@@ -1635,23 +1636,39 @@ describe('H5: the main checkout kept up to date with origin (#555)', () => {
   const others = (s: State) => s.ledger.filter(e => e.kind !== 'update-checkout')
 
   test('a merge brings the main checkout up to date on the next pass, a free action; so does every checkoutEveryMs', () => {
-    const r = plan(withLedger(state(), [merged(NOW - MIN)]), CFG)
+    const r = plan(withLedger(state(), [merged(NOW - MIN)]), ACT)
     expect(updates(r)).toEqual([
-      { kind: 'update-checkout', key: `update-checkout:${LAST}`, class: 'free', rule: 'H5', reason: 'a merge since the last update', issue: null, branch: 'main' },
+      { kind: 'update-checkout', key: `update-checkout:${LAST}`, class: 'free', rule: 'H5', reason: 'a merge since the last update', issue: null, branch: 'main', head: CLEAN.head },
     ])
     // a merge the last update already saw asks for nothing
-    expect(updates(plan(withLedger(state(), [merged(NOW - 3 * MIN)]), CFG))).toEqual([])
-    // with no merge, it is due every checkoutEveryMs (5 minutes), and first thing when it never ran
-    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs - 1 }), CFG))).toEqual([])
-    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), CFG)).map(a => [a.key, a.reason])).toEqual([[`update-checkout:${LAST}`, 'due']])
+    expect(updates(plan(withLedger(state(), [merged(NOW - 3 * MIN)]), ACT))).toEqual([])
+    // with no merge, it is due every checkoutEveryMs (5 minutes), and first thing when none ran
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs - 1 }), ACT))).toEqual([])
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), ACT)).map(a => [a.key, a.reason])).toEqual([[`update-checkout:${LAST}`, 'due']])
     const fresh = state()
-    expect(updates(plan({ ...fresh, ledger: others(fresh) }, CFG)).map(a => [a.key, a.reason])).toEqual([['update-checkout:0', 'due']])
-    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), config({ checkoutEveryMs: 60 * MIN })))).toEqual([])
+    expect(updates(plan({ ...fresh, ledger: others(fresh) }, ACT)).map(a => [a.key, a.reason])).toEqual([['update-checkout:0', 'none since the load']])
+    expect(updates(plan(state({ now: LAST + CFG.checkoutEveryMs }), config({ mode: 'act', checkoutEveryMs: 60 * MIN })))).toEqual([])
     expect(CFG.checkoutEveryMs).toBe(5 * MIN)
   })
 
+  test('the first pass after a load brings it up to date, however recent the last update: a reload can leave it stale', () => {
+    // the last update (2 minutes ago) came before this load
+    expect(updates(plan(state({ loadedAt: NOW - MIN }), ACT)).map(a => [a.key, a.reason])).toEqual([[`update-checkout:${LAST}`, 'none since the load']])
+    // one this load made counts
+    expect(updates(plan(state({ loadedAt: LAST }), ACT))).toEqual([])
+  })
+
+  test('an observe pass plans none: the ledger it derives from the event log holds no update, so one would be due every pass', () => {
+    const due = state({ now: LAST + CFG.checkoutEveryMs })
+    expect(updates(plan(due, ACT)).length).toBe(1)
+    expect(CFG.mode).toBe('observe')
+    expect(updates(plan(due, CFG))).toEqual([])
+    expect(updates(plan({ ...due, ledger: others(due) }, CFG))).toEqual([])
+    expect(updates(plan(withLedger(state(), [merged(NOW - MIN)]), CFG))).toEqual([])
+  })
+
   test('a checkout off its default branch, carrying changes, detached or unread is left alone, and G5 speaks', () => {
-    const at = (checkout: State['checkout']) => plan(withLedger(state({ checkout }), [merged(NOW - MIN)]), CFG)
+    const at = (checkout: State['checkout']) => plan(withLedger(state({ checkout }), [merged(NOW - MIN)]), ACT)
     const dirty = at({ ...CLEAN, dirty: ['README.md'] })
     expect([updates(dirty), keys(dirty)]).toEqual([[], [`tell:checkout:main@${CLEAN.head}:changed`]])
     const switched = at({ ...CLEAN, branch: 'feat/issue-4-slugify-separator' })
@@ -1663,48 +1680,94 @@ describe('H5: the main checkout kept up to date with origin (#555)', () => {
     expect(updates(at(null))).toEqual([])
   })
 
-  test('held while a designer or adjudicator reads the checkout; an implementer or fixer, in a worktree of its own, does not hold it', () => {
+  test('held while a designer, an adjudicator or a task reads the checkout; an implementer or fixer, in a worktree of its own, does not hold it', () => {
     const reader = (agent: 'designer' | 'adjudicator', over: Partial<LedgerEntry> = {}) =>
       entry(`${agent}:60`, 'spawn', { agent, class: agent === 'designer' ? 'develop' : 'drive', issue: 60, status: 'running', endedAt: null, agentId: `agent-${agent}`, ...over })
     const base = state({ issues: [mine(60, 'designing')], agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'running' }] })
-    const held = plan(withLedger(base, [merged(NOW - MIN), reader('designer')]), CFG)
+    const held = plan(withLedger(base, [merged(NOW - MIN), reader('designer')]), ACT)
     expect(updates(held)).toEqual([])
-    expect(held.skipped).toContainEqual({ rule: 'H5', issue: null, why: 'update-checkout waits for agents reading the main checkout: designer:60' })
-    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('adjudicator')]), CFG))).toEqual([])
+    expect(held.skipped).toContainEqual({ rule: 'H5', issue: null, why: 'update-checkout waits for work reading the main checkout: designer:60' })
+    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('adjudicator')]), ACT))).toEqual([])
     // an answer is in, but the list still shows the agent at work: it may still be reading
-    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), CFG))).toEqual([])
+    expect(updates(plan(withLedger(base, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), ACT))).toEqual([])
     // the agent ended: the update goes ahead
     const ended = { ...base, agents: [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'completed' as const }] }
-    expect(updates(plan(withLedger(ended, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), CFG)).length).toBe(1)
+    expect(updates(plan(withLedger(ended, [merged(NOW - MIN), reader('designer', { status: 'done', endedAt: NOW - MIN })]), ACT)).length).toBe(1)
+    // a task is the model working in the checkout (a release, a hand merge's run-it), as G5 says
+    const task = entry('task:release:2:none', 'task', { wake: 'release', class: 'drive', status: 'running', endedAt: null })
+    const tasked = plan(withLedger(state(), [merged(NOW - MIN), task]), ACT)
+    expect(updates(tasked)).toEqual([])
+    expect(tasked.skipped).toContainEqual({ rule: 'H5', issue: null, why: 'update-checkout waits for work reading the main checkout: task:release:2:none' })
+    expect(updates(plan(withLedger(state(), [merged(NOW - MIN), { ...task, status: 'done', endedAt: NOW - MIN }]), ACT)).length).toBe(1)
     const implementing = state({ issues: [mine(61, 'implementing')], agents: [{ id: 'agent-impl', type: 'callum-flow:implementer', status: 'running' }] })
     const delegated = entry(`delegate:61:${brief(61)}`, 'delegate', { class: 'develop', issue: 61, status: 'running', endedAt: null, agentId: 'agent-impl' })
-    expect(updates(plan(withLedger(implementing, [merged(NOW - MIN), delegated]), CFG)).length).toBe(1)
+    expect(updates(plan(withLedger(implementing, [merged(NOW - MIN), delegated]), ACT)).length).toBe(1)
+  })
+
+  test('while the update waits for readers, no new reader starts, so they drain and it runs: designers, adjudicators and tasks are held', () => {
+    // stage D run 2 again: with five issues in flight a designer or adjudicator was nearly always
+    // at work, so an update that only waited for a gap might never find one
+    const LIFE = NOW - 20 * MIN
+    const reading = entry(`design:60:${LIFE}`, 'spawn', { agent: 'designer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 5 * MIN, endedAt: null, agentId: 'agent-designer' })
+    const busy = (issues: IssueView[], agents: State['agents']) =>
+      state({
+        issues: [...issues, mine(61, 'designing', { stageSince: LIFE }), mine(45, 'parked', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
+        runs: [run(45, 'parked')],
+        milestone: { open: 0, closed: 2, expected: null },
+        agents,
+      })
+    const s = busy([mine(60, 'designing', { stageSince: LIFE })], [{ id: 'agent-designer', type: 'factory-loop:designer', status: 'running' }])
+    const held = plan(withLedger(s, [merged(NOW - MIN), reading]), ACT)
+    expect(keys(held)).toEqual([])
+    const why = held.skipped.map(k => k.why)
+    for (const kind of ['designer', 'adjudicator', 'task']) expect(why).toContain(`waits for the main checkout's update (${kind})`)
+    // with no update due, they start beside the reader as before
+    const quiet = keys(plan(withLedger(s, [reading]), ACT))
+    expect(quiet).toEqual(expect.arrayContaining([`design:61:${LIFE}`, 'task:release:2:none']))
+    expect(quiet.some(k => k.startsWith('adjudicate:'))).toBe(true)
+    // the reader is done: the update goes first, and the held readers start after it in the same
+    // pass (plan's order is the order they run in)
+    const drained = keys(plan(withLedger(busy([], []), [merged(NOW - MIN)]), ACT))
+    expect(drained[0]).toBe(`update-checkout:${LAST}`)
+    expect(drained).toEqual(expect.arrayContaining([`design:61:${LIFE}`, 'task:release:2:none']))
+    // an update that cannot run when they drain (its retry backoff) holds nothing
+    const backingOff = withLedger(s, [merged(NOW - MIN), reading, entry(`update-checkout:${LAST}`, 'update-checkout', { status: 'failed', attempts: 1, startedAt: NOW - MIN, endedAt: NOW - MIN })])
+    expect(keys(plan(backingOff, ACT))).toEqual(quiet)
   })
 
   test('a refused update, the checkout carrying commits origin lacks, tells the owner once with the checkout notice', () => {
     const line = `REFUSED the main checkout at ${CLEAN.head} has commits not on origin/main`
     const refused = (s: State) => ({
       ...s,
-      ledger: [...others(s), entry('update-checkout:0', 'update-checkout', { startedAt: LAST, endedAt: LAST, outcome: { kind: 'update-checkout', result: 'refused', line } })],
+      ledger: [...others(s), entry('update-checkout:0', 'update-checkout', { head: CLEAN.head, startedAt: LAST, endedAt: LAST, outcome: { kind: 'update-checkout', result: 'refused', line } })],
     })
     const key = `tell:checkout:main@${CLEAN.head}:refused`
-    const r = plan(refused(state()), CFG)
+    const r = plan(refused(state()), ACT)
     expect(keys(r)).toEqual([key])
     expect(find(r, key)).toMatchObject({ kind: 'tell', wake: 'checkout', class: 'owner', rule: 'H5', fields: { branch: 'main', head: CLEAN.head, default: 'main' }, context: [line] })
     // told once; the update is tried again at its cadence, not every pass
     const told = withLedger(refused(state()), [entry(key, 'tell', { class: 'owner', wake: 'checkout' })])
-    expect(keys(plan(told, CFG))).toEqual([])
+    expect(keys(plan(told, ACT))).toEqual([])
     // an update that went through ends it
-    expect(keys(plan(state(), CFG))).toEqual([])
+    expect(keys(plan(state(), ACT))).toEqual([])
+  })
+
+  test('a refused checkout that changed since (the owner put it right) is not told the old refusal: the update is tried at once', () => {
+    const line = `REFUSED the main checkout at ${CLEAN.head} has commits not on origin/main`
+    const fixed = { ...CLEAN, head: 'f1x3df1x3df1x3df1x3df1x3df1x3df1x3df1x3d' }
+    const s = state({ checkout: fixed })
+    const r = plan({ ...s, ledger: [...others(s), entry('update-checkout:0', 'update-checkout', { head: CLEAN.head, startedAt: LAST, endedAt: LAST, outcome: { kind: 'update-checkout', result: 'refused', line } })] }, ACT)
+    expect(keys(r)).toEqual([`update-checkout:${LAST}`])
+    expect(updates(r)).toMatchObject([{ reason: 'the refused checkout changed', head: fixed.head }])
   })
 
   test('an update that keeps failing is never used up: it retries at its cadence, and the owner hears once', () => {
     const failing = (attempts: number, endedAt: number) =>
       withLedger(state(), [merged(NOW - MIN), entry(`update-checkout:${LAST}`, 'update-checkout', { status: 'failed', attempts, startedAt: endedAt, endedAt })])
-    expect(keys(plan(failing(1, NOW - MIN), CFG))).toEqual([])
-    expect(keys(plan(failing(1, NOW - 3 * MIN), CFG))).toEqual([`update-checkout:${LAST}`])
-    expect(keys(plan(failing(3, NOW - MIN), CFG))).toEqual([`tell:agent-failed:update-checkout:${LAST}`])
-    expect(keys(plan(failing(9, NOW - CFG.checkoutEveryMs), CFG))).toContain(`update-checkout:${LAST}`)
+    expect(keys(plan(failing(1, NOW - MIN), ACT))).toEqual([])
+    expect(keys(plan(failing(1, NOW - 3 * MIN), ACT))).toEqual([`update-checkout:${LAST}`])
+    expect(keys(plan(failing(3, NOW - MIN), ACT))).toEqual([`tell:agent-failed:update-checkout:${LAST}`])
+    expect(keys(plan(failing(9, NOW - CFG.checkoutEveryMs), ACT))).toContain(`update-checkout:${LAST}`)
   })
 })
 

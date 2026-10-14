@@ -195,7 +195,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'fast-forward', key: `fast-forward:512:${HEAD}:1`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD, branch: 'issue-470-x' },
-  { ...base, issue: null, kind: 'update-checkout', key: 'update-checkout:0', class: 'free', rule: 'H5', branch: 'main' },
+  { ...base, issue: null, kind: 'update-checkout', key: 'update-checkout:0', class: 'free', rule: 'H5', branch: 'main', head: HEAD },
   { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
   { ...base, kind: 'pr-reopen', key: `reopen:512:${RUN}`, class: 'free', rule: 'P6a', pr: 512 },
   { ...base, kind: 'merge', key: `merge:512:${HEAD}`, class: 'free', rule: 'M5', pr: 512, run: RUN, head: HEAD, bump: 'minor', bumpReason: 'new' },
@@ -256,17 +256,23 @@ function envRetryLaunch(argv: readonly string[], action: Action | undefined): bo
 }
 
 // scriptGit: each git command in a shell script that is neither a read nor a fast-forward (of a
-// worktree, #551, or of the main checkout, #555), the one git write a script may make. An
-// allowlist, so a new verb is banned until it is listed here; any option before the verb but
-// `-C <path>` is unknown, so banned too.
+// worktree, #551, or of the main checkout, #555), the one git write a script may make, and that
+// one only with the repo's hooks off (`-c core.hooksPath=/dev/null`: a post-merge npm install
+// could outlast its timeout). An allowlist, so a new verb is banned until it is listed here; any
+// option before the verb but `-C <path>`, and that one `-c` before a fast-forward, is unknown,
+// so banned too.
 const SCRIPT_GIT_READS = ['fetch', 'rev-parse', 'status', 'merge-base', 'symbolic-ref']
+const HOOKS_OFF = ['-c', 'core.hooksPath=/dev/null']
 function scriptGit(script: string): string[] {
   const out: string[] = []
-  for (const m of script.matchAll(/\bgit((?:[ \t]+[^\s;|&()]+){1,4})/g)) {
+  for (const m of script.matchAll(/\bgit((?:[ \t]+[^\s;|&()]+){1,6})/g)) {
     const words = (m[1] ?? '').trim().split(/\s+/)
-    const at = words[0] === '-C' ? 2 : 0
+    let at = words[0] === '-C' ? 2 : 0
+    const hooksOff = words[at] === HOOKS_OFF[0] && words[at + 1] === HOOKS_OFF[1]
+    if (hooksOff) at += 2
     const [verb = '', next = ''] = words.slice(at)
-    const ok = SCRIPT_GIT_READS.includes(verb) || (verb === 'worktree' && next === 'list') || (verb === 'merge' && next === '--ff-only')
+    const read = SCRIPT_GIT_READS.includes(verb) || (verb === 'worktree' && next === 'list')
+    const ok = hooksOff ? verb === 'merge' && next === '--ff-only' : read
     if (!ok) out.push(`a shell script that runs git ${words.slice(0, at + 2).join(' ')}`)
   }
   return out
@@ -342,6 +348,12 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['sh', '-c', 'git worktree remove --force /w'],
       ['sh', '-c', 'git -c k=v reset --hard'],
       ['sh', '-c', 'git -c k=v merge --ff-only x'],
+      // a fast-forward runs only with the repo's hooks off, and that option allows nothing else
+      ['sh', '-c', 'git -C "$p" merge --ff-only x'],
+      ['sh', '-c', 'git merge --ff-only --quiet x'],
+      ['sh', '-c', 'git -c core.hooksPath=/dev/null reset --hard'],
+      ['sh', '-c', 'git -C "$p" -c core.hooksPath=/dev/null merge x'],
+      ['sh', '-c', 'git -c core.hooksPath=/tmp/h merge --ff-only x'],
       ['sh', '-c', 'st=$(git --git-dir=/w/.git status)'],
       ['sh', '-c', 'x=1; git -C "$p" merge --squash y'],
     ]
@@ -356,7 +368,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['git', 'switch', 'issue-470-x'],
       ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
       ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
-      ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
+      ['sh', '-c', 'git merge-base --is-ancestor "$1" "$2" && git -C "$3" -c core.hooksPath=/dev/null merge --ff-only --quiet "$2"', 'sh', 'a', 'b', '/w'],
       ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', '/w', 'b', '/l'],
       ['sh', '-c', FF_SCRIPT, 'factory-loop-fast-forward', 'b', 'h'],
       ['sh', '-c', CHECKOUT_SCRIPT, 'factory-loop-update-checkout', 'main'],

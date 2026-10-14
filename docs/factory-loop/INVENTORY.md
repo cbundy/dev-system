@@ -166,7 +166,7 @@ Row 0 is the skill's frontmatter (`SKILL:1-10`). It is replaced by the new judge
 | I-96 | Never edit inside a PR body's `no-mistakes-pr-appendix` block | MEM lesson | PR edits | model | CLI (`callum-flow-fix-linkage` edits outside it); the loop never edits PR bodies itself |
 | I-97 | Usage events: every `usage-check.sh` run logs one `usage` event | `usage-check.sh` | each check | script | observe `usage` keeps the cadence (`usageEveryMs`, 5 minutes), close to today's tick rate; observe mode sends it to the sink |
 | I-98 | Two devices racing for one issue | `callum-flow-claim` collision rule | claim | CLI | CLI (earliest live claim wins); rule `D1` skips while another device's claim is live; SPEC 10.5 |
-| I-99 | Keep the main checkout up to date with origin, so agents started there read current code | the model's routine, in neither the skill nor the memory file (#555) | merge | model | rule `H5`, exec `update-checkout`: a fast-forward to origin's default branch after each merge and every `checkoutEveryMs`, only while the checkout is clean on that branch and no designer or adjudicator is at work |
+| I-99 | Keep the main checkout up to date with origin, so agents started there read current code | the model's routine, in neither the skill nor the memory file (#555) | merge | model | rule `H5`, exec `update-checkout`: a fast-forward to origin's default branch on the first pass after a load, after each merge and every `checkoutEveryMs`, only while the checkout is clean on that branch and no designer, adjudicator or task reads it (new ones wait meanwhile) |
 
 ## Coverage of the skill, line by line
 

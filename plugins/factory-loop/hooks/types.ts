@@ -369,8 +369,9 @@ export type Action =
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
   // the worktrees on the run's branch, moved to the run's head when it is origin's (#551)
   | (Base & { kind: 'fast-forward'; pr: number; run: string; head: string; branch: string })
-  // rule H5: the main checkout, on origin's default branch, fast-forwarded to origin's (#555)
-  | (Base & { kind: 'update-checkout'; branch: string })
+  // rule H5: the main checkout, on origin's default branch, fast-forwarded to origin's (#555);
+  // head: its commit as observe read it, so plan knows whether a refusal still stands
+  | (Base & { kind: 'update-checkout'; branch: string; head: string | null })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
   | (Base & { kind: 'release-parent'; created: number[] })

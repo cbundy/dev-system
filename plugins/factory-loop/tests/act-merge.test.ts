@@ -940,6 +940,7 @@ describe('update-checkout: the main checkout kept up to date with origin (#555)'
     key: 'update-checkout:0',
     rule: 'H5',
     branch: 'main',
+    head: CLEAN.head,
     ...over,
   })
 
@@ -957,9 +958,15 @@ describe('update-checkout: the main checkout kept up to date with origin (#555)'
     expect(CHECKOUT_SCRIPT).toContain('merge-base --is-ancestor "$at" "$origin"')
     // (its words name "the main checkout", so the verbs are matched after git)
     expect(CHECKOUT_SCRIPT).not.toMatch(/\bgit\s+(\S+\s+)?(push|reset|rebase|checkout|clean|stash|switch|commit)\b/)
-    for (const check of ['symbolic-ref', 'status --porcelain', 'merge-base --is-ancestor']) {
+    for (const check of ['--git-common-dir', 'symbolic-ref', 'status --porcelain', 'merge-base --is-ancestor']) {
       expect(CHECKOUT_SCRIPT.indexOf('merge --ff-only')).toBeGreaterThan(CHECKOUT_SCRIPT.indexOf(check))
     }
+    // only in the main worktree; its branch and head read again just before the move; no git hooks
+    expect(CHECKOUT_SCRIPT).toContain('[ "$gitdir" = "$common" ] || { echo "REFUSED')
+    const recheck = CHECKOUT_SCRIPT.lastIndexOf('symbolic-ref --quiet --short HEAD')
+    expect(recheck).toBeGreaterThan(CHECKOUT_SCRIPT.indexOf('merge-base --is-ancestor'))
+    expect(CHECKOUT_SCRIPT.indexOf('merge --ff-only')).toBeGreaterThan(recheck)
+    expect(CHECKOUT_SCRIPT).toContain('git -c core.hooksPath=/dev/null merge --ff-only')
   })
 
   test('UPDATED, CURRENT and REFUSED are answers; the decision log carries both commits', async () => {
@@ -996,7 +1003,7 @@ describe('update-checkout: the main checkout kept up to date with origin (#555)'
       endedAt: NOW - 30_000,
       outcome: { kind: 'merge', result: 'merged', rollout: 'merge', closeIssue: null, line: 'merged' },
     })
-    const action = plan(withLedger(state(), [merged]), config()).actions.find(a => a.kind === 'update-checkout')
+    const action = plan(withLedger(state(), [merged]), config({ mode: 'act' })).actions.find(a => a.kind === 'update-checkout')
     expect(action).toMatchObject({ rule: 'H5', branch: 'main' })
     if (action === undefined) throw new Error('plan built no update-checkout')
     const { result } = await exec(action, [{ stdout: `UPDATED ${CLEAN.head} ${ORIGIN}\n` }])

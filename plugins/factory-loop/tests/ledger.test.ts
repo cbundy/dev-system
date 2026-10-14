@@ -360,7 +360,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     expect(moved.map(e => e.key)).toEqual(['fast-forward:550:head50:1', 'fast-forward:550:head50:2'])
     // the main checkout's update every 5 minutes (#555): a week of CURRENT at one commit keeps one
     // entry; an update that moved it stays beside the ones before and after
-    const up = (n: number): Action => ({ kind: 'update-checkout', key: `update-checkout:${n}`, class: 'free', rule: 'H5', reason: 'due', issue: null, branch: 'main' })
+    const up = (n: number): Action => ({ kind: 'update-checkout', key: `update-checkout:${n}`, class: 'free', rule: 'H5', reason: 'due', issue: null, branch: 'main', head: null })
     const said = (ledger: LedgerEntry[], n: number, line: string, at: number) =>
       finish(start(ledger, up(n), at).ledger, up(n).key, { status: 'done', outcome: { kind: 'update-checkout', result: line.startsWith('UPDATED') ? 'updated' : 'current', line }, summary: line }, at + 1000)
     let updates: LedgerEntry[] = []

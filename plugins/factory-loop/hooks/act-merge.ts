@@ -146,7 +146,8 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
 // `head`. This moves each worktree on the branch to the run's head, only when origin's branch
 // is that head (fetched fresh), the worktree's head is an ancestor of it and nothing tracked is
 // uncommitted, and only by `git merge --ff-only`, so no commit or change can be lost. Untracked
-// files stay (a fast-forward that would overwrite one fails by itself). The main checkout (the
+// files stay (a fast-forward that would overwrite one fails by itself). The merge runs none of the
+// repo's git hooks (a post-merge npm install could outlast the timeout). The main checkout (the
 // first worktree listed) is never moved (SPEC 5.2 G5): one left behind on the run's branch is
 // refused, and G5 tells the owner. Every worktree is checked before any moves. It answers, with
 // exit 0, a `FORWARDED <from> <to> <path>` line per worktree moved, `CURRENT <head>` when none
@@ -175,7 +176,7 @@ export const FF_SCRIPT = [
   '[ -n "$lag" ] || { echo "CURRENT $head"; exit 0; }',
   'for p in $lag; do',
   '  at=$(git -C "$p" rev-parse --verify --quiet HEAD) || exit 1',
-  '  git -C "$p" merge --ff-only --quiet "$head" >&2 || { echo "factory-loop: the fast-forward of $p failed" >&2; exit 1; }',
+  '  git -C "$p" -c core.hooksPath=/dev/null merge --ff-only --quiet "$head" >&2 || { echo "factory-loop: the fast-forward of $p failed" >&2; exit 1; }',
   '  echo "FORWARDED $at $head $p"',
   'done',
 ].join('\n')
@@ -186,12 +187,18 @@ export function fastForwardArgv(branch: string, head: string): string[] {
 
 // The main checkout's update (rule H5, #555), run with `sh -c` from the main checkout: $1 origin's
 // default branch. Agents begin there, so it follows origin: fetched fresh, and moved only by
-// `git merge --ff-only`, only while it is on that branch with nothing tracked uncommitted and its
-// head an ancestor of origin's, so no commit or change can be lost. Untracked files stay, as in
-// the fast-forward. It answers, with exit 0, `UPDATED <from> <to>`, `CURRENT <head>`, or
-// `REFUSED <why>` (plan tells the owner); anything else is a failure.
+// `git merge --ff-only`, only in the main worktree (not a linked one the session runs in), only
+// while it is on that branch with nothing tracked uncommitted and its head an ancestor of
+// origin's, so no commit or change can be lost. Untracked files stay, as in the fast-forward. Its
+// branch and head are read again just before the merge, whose own ref update holds only while
+// HEAD is still the head it read (SPEC 13 keeps the instant between). The merge runs none of the
+// repo's git hooks (a post-merge npm install could outlast the timeout). It answers, with exit 0,
+// `UPDATED <from> <to>`, `CURRENT <head>`, or `REFUSED <why>` (plan tells the owner); anything
+// else is a failure.
 export const CHECKOUT_SCRIPT = [
   'default=$1',
+  'gitdir=$(git rev-parse --path-format=absolute --git-dir) && common=$(git rev-parse --path-format=absolute --git-common-dir) || { echo "factory-loop: cannot tell whether this is the main worktree" >&2; exit 1; }',
+  '[ "$gitdir" = "$common" ] || { echo "REFUSED $(git rev-parse --show-toplevel) is a linked worktree, not the main checkout"; exit 0; }',
   'git fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" || { echo "factory-loop: cannot fetch origin/$default" >&2; exit 1; }',
   'origin=$(git rev-parse --verify --quiet "refs/remotes/origin/$default^{commit}") || { echo "factory-loop: cannot read origin/$default" >&2; exit 1; }',
   'branch=$(git symbolic-ref --quiet --short HEAD) || { echo "REFUSED the main checkout is detached"; exit 0; }',
@@ -201,7 +208,8 @@ export const CHECKOUT_SCRIPT = [
   'st=$(git status --porcelain --untracked-files=no) || { echo "REFUSED cannot read the status of the main checkout"; exit 0; }',
   '[ -z "$st" ] || { echo "REFUSED the main checkout has uncommitted changes"; exit 0; }',
   'git merge-base --is-ancestor "$at" "$origin" || { echo "REFUSED the main checkout at $at has commits not on origin/$default"; exit 0; }',
-  'git merge --ff-only --quiet "$origin" >&2 || { echo "factory-loop: the fast-forward of the main checkout failed" >&2; exit 1; }',
+  `[ "$(git symbolic-ref --quiet --short HEAD)" = "$default" ] && [ "$(git rev-parse --verify --quiet 'HEAD^{commit}')" = "$at" ] || { echo "factory-loop: the main checkout moved during its update" >&2; exit 1; }`,
+  'git -c core.hooksPath=/dev/null merge --ff-only --quiet "$origin" >&2 || { echo "factory-loop: the fast-forward of the main checkout failed" >&2; exit 1; }',
   'echo "UPDATED $at $origin"',
 ].join('\n')
 

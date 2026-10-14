@@ -66,7 +66,18 @@ function world() {
   commit(merger, "a.txt", "one, merged\n");
   const head = commit(merger, "b.txt", "another merge\n");
   git(merger, "push", "-q", "origin", "HEAD:main");
-  return { main, stale, head };
+  return { dir, main, merger, stale, head };
+}
+
+// hooked: a post-merge hook in the repo's own hooks dir (as husky sets core.hooksPath for its npm
+// install), which leaves a marker when it runs.
+function hooked(cwd, dir) {
+  const hooks = path.join(dir, "hooks");
+  fs.mkdirSync(hooks, { recursive: true });
+  const marker = path.join(dir, "post-merge-ran");
+  fs.writeFileSync(path.join(hooks, "post-merge"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  git(cwd, "config", "core.hooksPath", hooks);
+  return marker;
 }
 
 function update(cwd, branch = "main") {
@@ -138,5 +149,32 @@ test("an origin that cannot be fetched is a failure, and moves nothing", () => {
   const r = update(w.main);
   assert.equal(r.exitCode, 1);
   assert.match(r.stderr, /factory-loop: cannot fetch origin\/main/);
+  assert.equal(git(w.main, "rev-parse", "HEAD"), w.stale);
+});
+
+test("the update runs none of the repo's git hooks: a post-merge npm install could outlast its timeout", () => {
+  const w = world();
+  const marker = hooked(w.main, w.dir);
+  const r = update(w.main);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(r.read, { result: "updated", line: `UPDATED ${w.stale} ${w.head}` });
+  assert.equal(fs.existsSync(marker), false);
+  // the hook is live: a plain fast-forward runs it
+  commit(w.merger, "c.txt", "one more merge\n");
+  git(w.merger, "push", "-q", "origin", "HEAD:main");
+  git(w.main, "fetch", "-q", "origin");
+  git(w.main, "merge", "--ff-only", "-q", "origin/main");
+  assert.equal(fs.existsSync(marker), true);
+});
+
+test("run from a linked worktree on the default branch, the update refuses and moves nothing: only the main checkout follows origin", () => {
+  const w = world();
+  git(w.main, "switch", "-q", "--detach");
+  const linked = path.join(w.dir, "slot 1");
+  git(w.main, "worktree", "add", "-q", linked, "main");
+  const r = update(linked);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(r.read, { result: "refused", line: `REFUSED ${linked} is a linked worktree, not the main checkout` });
+  assert.equal(git(linked, "rev-parse", "HEAD"), w.stale);
   assert.equal(git(w.main, "rev-parse", "HEAD"), w.stale);
 });

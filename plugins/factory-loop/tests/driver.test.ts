@@ -69,7 +69,8 @@ describe('observe mode (SPEC 11.1)', () => {
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:1 - M:0) · observe'])
     expect(h.passes()).toHaveLength(1)
     expect(h.last()).toMatchObject({ mode: 'observe', executed: false, device: DEVICE, tier: 'normal' })
-    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `adjudicate:R45:park@${NOW - 600_000}:h1`])
+    // no main checkout update: the ledger an observe pass derives from the event log cannot show one
+    expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual([`adjudicate:R45:park@${NOW - 600_000}:h1`])
     expect([...h.files.keys()]).toContain(`${LOOP_DIR}/decisions-${iso(NOW).slice(0, 10)}.jsonl`)
 
     // nothing but reads ran, and every one of them wrote its events to the sink
@@ -405,6 +406,11 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     const h = host(on, { config: ACT, run: f.run, store, files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: 777 } }) } })
     await $.session.start(START)
     await clock.advance(6_000)
+    // the first pass after the load brings the main checkout up to date (rule H5), so the restart,
+    // which waits for a pass that plans nothing else, comes on the next
+    expect(h.entry(`update-checkout:${NOW - MIN}`)).toMatchObject({ status: 'done' })
+    expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(0)
+    await clock.advance(60_000)
     // the drain is complete: dev-restart-self asks Coder for the new workspace and returns
     expect(h.commands().filter(s => s.argv[0] === 'dev-restart-self')).toHaveLength(1)
     expect(h.entry('restart:777')).toMatchObject({ status: 'done' })

@@ -72,7 +72,7 @@ function world() {
   commit(pipeline, "b.txt", "the implementer's work, reviewed\n");
   const head = commit(pipeline, "c.txt", "documented\n");
   git(pipeline, "push", "-q", "origin", BRANCH);
-  return { main, wt, pipeline, handoff, head };
+  return { dir, main, wt, pipeline, handoff, head };
 }
 
 function forward(cwd, head, branch = BRANCH) {
@@ -139,4 +139,24 @@ test("a fast-forward that cannot go through (an untracked file in its way) fails
   assert.equal(r.read, null);
   assert.equal(git(w.wt, "rev-parse", "HEAD"), w.handoff);
   assert.equal(fs.readFileSync(path.join(w.wt, "c.txt"), "utf8"), "in the way\n");
+});
+
+test("the fast-forward runs none of the repo's git hooks: a post-merge npm install could outlast its timeout", () => {
+  const w = world();
+  // in the repo's own hooks dir, as husky sets core.hooksPath; worktrees share it
+  const hooks = path.join(w.dir, "hooks");
+  fs.mkdirSync(hooks);
+  const marker = path.join(w.dir, "post-merge-ran");
+  fs.writeFileSync(path.join(hooks, "post-merge"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+  git(w.main, "config", "core.hooksPath", hooks);
+  const r = forward(w.main, w.head);
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(r.read, { result: "forwarded", line: `FORWARDED ${w.handoff} ${w.head} ${w.wt}` });
+  assert.equal(fs.existsSync(marker), false);
+  // the hook is live: a plain fast-forward runs it
+  const more = commit(w.pipeline, "d.txt", "more\n");
+  git(w.pipeline, "push", "-q", "origin", BRANCH);
+  git(w.wt, "fetch", "-q", "origin");
+  git(w.wt, "merge", "--ff-only", "-q", more);
+  assert.equal(fs.existsSync(marker), true);
 });
