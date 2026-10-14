@@ -59,6 +59,12 @@
 #                        that takes a POST body) when logins are needed
 set -u
 
+# DL_WATCH, DL_STATES and DL_CACHED are this script's own, set inside it for one call; values
+# inherited from the environment are dropped. The watcher once set them as a prefix of a
+# function call, which exports them: a tmux server a login started kept them, every shell of
+# that server inherited them, and a later `dev-login start` there trusted stale states.
+unset DL_WATCH DL_STATES DL_CACHED
+
 RUN_DIR=${DEV_LOGIN_RUN_DIR:-/tmp/dev-login}
 LOCK="$RUN_DIR/lock"
 ALL_TOOLS="claude codex gh"
@@ -515,7 +521,8 @@ cmd_watch() {
       [ "$tool" = gh ] && [ "$state" = scope ] && continue
       sig="$sig $tool=$state"
     done
-    lines=$(DL_WATCH=1 DL_STATES="$states" cmd_start)
+    # plain assignments in the subshell, never exported to what cmd_start runs (tmux)
+    lines=$(DL_WATCH=1; DL_STATES=$states; cmd_start)
     if [ -z "$sig" ]; then
       [ -z "$last" ] || log "all logins are done"
       return 0
