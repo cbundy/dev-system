@@ -495,6 +495,8 @@ ver_stopped() {
   [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop467' and state = 'stopped' and last_seen >= '$t'")" = 1 ] || {
     psql_av "select device, state, last_seen from factory.workers where device = 'hb-stop467'"
     echo "no stopped row after $t"
+    docker logs "$RUN_ID-$n" 2>&1 | tail -30 | sed 's/^/    log: /'
+    docker cp "$RUN_ID-$n:/tmp/dev-heartbeat.log" - 2>/dev/null | tail -c 3000 | sed 's/^/    hb: /'
     return 1
   }
 }
