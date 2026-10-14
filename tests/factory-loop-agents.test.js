@@ -91,13 +91,17 @@ test("the loop's own agents are the callum-flow definitions word for word but fo
   }
 });
 
-test("every loop agent definition carries the command rule", () => {
+// COMMAND_RULE (prompts.ts): the paragraph every role prompt carries, unescaped from its string literal
+const COMMAND_RULE = (() => {
+  const m = read(`${HOOKS}/prompts.ts`).match(/export const COMMAND_RULE =\s*'((?:[^'\\]|\\.)*)'/);
+  assert.ok(m, "prompts.ts: no COMMAND_RULE");
+  return m[1].replace(/\\(.)/g, "$1");
+})();
+
+test("every loop agent definition carries the command rule its prompts carry, word for word", () => {
   const own = fs.readdirSync(path.join(ROOT, "plugins/factory-loop/agents")).filter((f) => f.endsWith(".md"));
   for (const file of own) {
-    const text = read(`plugins/factory-loop/agents/${file}`);
-    for (const phrase of ["timeout 30", "claude remote-control", "pgrep -f", "no background shell"]) {
-      assert.ok(text.toLowerCase().includes(phrase), `plugins/factory-loop/agents/${file} must carry the command rule: missing "${phrase}"`);
-    }
+    assert.ok(read(`plugins/factory-loop/agents/${file}`).includes(COMMAND_RULE), `plugins/factory-loop/agents/${file} must carry COMMAND_RULE from prompts.ts word for word`);
   }
 });
 
