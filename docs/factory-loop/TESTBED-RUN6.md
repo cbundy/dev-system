@@ -11,7 +11,7 @@ holds up on a testbed that matches a real consumer: the testbed was first update
 - **9 of 12 issues merged.** Five merged in the first 13 minutes (claims at 10:40, merges 10:48
   to 10:53), two more at 11:00 and the last two at 11:21 and 11:22, after a usage pause.
 - **The last three are not loop bugs.** Each was escalated to the owner, as it should be: a scope
-  question in the test issues, and two no-mistakes failures, now filed
+  question, and two no-mistakes failures, now filed
   ([#492](https://github.com/cbundy/dev-system/issues/492) and
   [#571](https://github.com/cbundy/dev-system/issues/571)).
 - **Usage tiering worked live for the first time.** As the five-hour usage window filled, the
@@ -56,9 +56,10 @@ holds up on a testbed that matches a real consumer: the testbed was first update
 
 ## The three escalations
 
-- **Issue 148, a scope call.** Pair C's two issues contradict each other, the same flaw in the
-  test issues that run 5's issue 120 showed. The adjudicator escalated it rather than guess. The
-  owner chose not to answer it this time; the loop keeps its worktrees while it waits.
+- **Issue 148, a scope call.** The change made two docs outside the brief's files stale
+  (`docs/api.md` and a JSDoc comment). The documentation gate's adjudicator judged widening the
+  scope to be the owner's call and escalated rather than guess. The owner chose not to answer it
+  this time; the loop keeps its worktrees while it waits.
 - **Issue 150, a no-mistakes PR body failure.** GitHub rewrites control characters in a stored
   PR body, and no-mistakes embeds evidence verbatim and then byte-compares the body it sent with
   the one GitHub stored. The root cause is on
