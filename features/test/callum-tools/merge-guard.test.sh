@@ -275,6 +275,41 @@ echo amended > f.txt && git -C "$work" add f.txt && git -C "$work" commit -q -m 
 git -C "$work" checkout -q -B "$B" HEAD
 g 7; expect_fail "worktree with a changed patch after a rebase" head
 git -C "$work" reset -q --hard "$GATED"
+# a pre-rebase copy whose context lines main changed (a verbatim patch id keeps 3 lines of context)
+(
+  cd "$work"
+  git checkout -q main && git reset -q --hard "$BASE0"
+  printf '%s\n' 1 2 3 4 5 6 7 8 9 > c.txt && printf '%s\n' x y z q q q q x y z q q q q > rep.txt
+  git add c.txt rep.txt && git commit -q -m "context base" && git push -q -f origin main
+  git checkout -q -B "$B" && sed -i 's/^5$/five/' c.txt && git commit -q -am "feature near main's edit"
+  git checkout -q main && sed -i 's/^7$/seven/' c.txt && git commit -q -am "main edits two lines below" && git push -q origin main
+  git checkout -q -B ctx-run "$B" && git rebase -q main
+  git checkout -q main && echo far > far.txt && git add far.txt && git commit -q -m "main moves on" && git push -q origin main
+  git checkout -q -B ctx-pr ctx-run && git rebase -q main && git push -q -f origin "HEAD:refs/heads/$B"
+  git checkout -q "$B"
+)
+CTX_SLOT=$(git -C "$work" rev-parse HEAD) CTX_RUN=$(git -C "$work" rev-parse ctx-run) CTX_PR=$(git -C "$work" rev-parse ctx-pr)
+echo "$CTX_RUN" > "$st/runhead"; echo "$CTX_PR" > "$st/prhead"
+g 7; [ "$rc" = 0 ] && printf '%s\n' "$out" | grep -q "^GUARD head PASS .* rebased_from=$CTX_RUN\$" || fail "pre-rebase copy with changed context: rc=$rc out=$out"
+passed=$((passed + 1))
+# the same added lines at another identical spot share a patch id: the tree check catches it
+git -C "$work" reset -q --hard "$CTX_RUN"
+sed -i '11a FOO' "$work/rep.txt" && git -C "$work" commit -q -am "first FOO, gated"
+GATED_FOO=$(git -C "$work" rev-parse HEAD)
+sed -i '4a FOO' "$work/rep.txt" && git -C "$work" commit -q -am "second FOO, outside the pipeline"
+(cd "$work" && git checkout -q -B ctx-pr2 "$GATED_FOO" && git rebase -q --onto main "$CTX_RUN" && git push -q -f origin "HEAD:refs/heads/$B" && git checkout -q "$B")
+CTX_PR2=$(git -C "$work" rev-parse ctx-pr2)
+[ "$CTX_PR2" != "$GATED_FOO" ] || fail "the FOO fixture must rebase"
+echo "$GATED_FOO" > "$st/runhead"; echo "$CTX_PR2" > "$st/prhead"
+g 7; expect_fail "a change whose patch id equals a gated one at another spot" head
+# back to the update-behind fixture
+(cd "$work" && git checkout -q main && git reset -q --hard "$BASE0" && git push -q -f origin main && git checkout -q "$B")
+behind_setup
+g 7 --update-behind
+[ "$rc" = 0 ] || fail "update-behind again: rc=$rc out=$out"
+NEWH=$(origin_b); GATED=$(git -C "$work" rev-parse HEAD)
+PROOF=$(printf '%s' "$out" | sed 's/.*gated_patch=\([^ ]*\) .*/\1/')
+echo "$NEWH" > "$st/prhead"; echo CLEAN > "$st/mss"
 # a second update-behind in a row: main moves again, the loop rebases the rebased head, and the
 # proof still holds against the gated run head
 (cd "$work" && git checkout -q main && git pull -q --ff-only origin main && echo again > o2.txt && git add o2.txt && git commit -q -m "main moves again" && git push -q origin main && git checkout -q "$B")
