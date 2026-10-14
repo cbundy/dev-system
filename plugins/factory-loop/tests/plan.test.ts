@@ -347,6 +347,24 @@ describe('H: housekeeping', () => {
     expect(unread.skipped).toContainEqual(kept(12, '/t/2', '#12 merged, its tree not read'))
   })
 
+  test('a dropped issue that has ended still gets its clean slot returned, with every H3 check (#601)', () => {
+    const dropped = control({ dropped: [{ issue: 12, at: NOW - MIN }] })
+    const ended = [issue(12, { stage: 'closed without merge', holder: DEVICE })]
+    const mk = (over = {}, ledger: LedgerEntry[] = []) =>
+      withLedger(state({ issues: ended, control: dropped, pool: { free: 8, total: 16, slots: [slotOf('/t/1', 'feat/issue-12-x', { dirty: false, ...over })] } }), ledger)
+    const r = plan(mk(), CFG)
+    expect(keys(r)).toEqual(['release:/t/1:lease/t/1'])
+    expect(find(r, 'release:/t/1:lease/t/1')).toMatchObject({ rule: 'H3', issue: 12 })
+    expect(r.skipped.some(k => k.why.startsWith('owner: dropped (release-worktree)'))).toBe(false)
+    // an agent of the issue still running keeps the slot
+    const agent = entry('delegate:12:x', 'delegate', { issue: 12, status: 'running', agentId: 'a12', startedAt: NOW - 10 * MIN, endedAt: null })
+    const busy = plan(mk({}, [agent]), CFG)
+    expect(keys(busy).some(k => k.startsWith('release:'))).toBe(false)
+    expect(busy.skipped).toContainEqual(kept(12, '/t/1', 'an agent of #12 is at work'))
+    // a dirty slot gets only the tell
+    expect(keys(plan(mk({ dirty: true }), CFG))).toEqual(['tell:worktree-dirty:/t/1:lease/t/1'])
+  })
+
   test('the keys follow the lease: a later lease on the same path and branch is returned and told too (#563)', () => {
     // the issue was reopened and worked again in the same slot, on the same branch
     const first = slotOf('/t/1', null, { leaseBranch: 'feat/issue-12-x', dirty: false, lease: 'l1' })

@@ -2372,6 +2372,9 @@ function agentWriting(ctx: Ctx, issue: number): boolean {
   return ctx.state.ledger.some(e => e.issue === issue && (e.kind === 'delegate' || (e.kind === 'spawn' && e.agent === 'fixer')) && heldBy(ctx, e))
 }
 
+// actions a dropped issue keeps: cleanup that returns the issue's resources still runs; work does not (G4)
+const DROPPED_KEEPS: string[] = ['abandon', 'stop-agent', 'tell', 'release-worktree']
+
 function admit(ctx: Ctx): Action[] {
   const { state, config, tier } = ctx
   const control = state.control
@@ -2403,7 +2406,7 @@ function admit(ctx: Ctx): Action[] {
     if (
       issue !== null &&
       control.dropped.some(d => d.issue === issue) &&
-      !['abandon', 'stop-agent', 'tell'].includes(action.kind)
+      !DROPPED_KEEPS.includes(action.kind)
     ) {
       skip(ctx, action.rule, issue, `owner: dropped (${action.kind})`)
       continue
