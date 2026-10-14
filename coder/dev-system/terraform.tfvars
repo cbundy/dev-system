@@ -26,6 +26,7 @@ template_tester_secrets_dir = "/etc/dev-system/template-tester"
 # Uncomment for private per-repo images (see "Private images" in README.md).
 # registry_auth_config = "/etc/coder/registry/config.json"
 
-# Uncomment to share one gh login between all workspaces (see "Sharing one gh
-# login" in README.md).
-# gh_volume_name = "dev-system-gh"
+# One gh login shared between all workspaces on the Docker host (see "Sharing one gh
+# login" in README.md): GitHub keeps at most 10 tokens per user for the GitHub CLI app,
+# so with a login per workspace each new sign-in revoked the oldest workspace's token.
+gh_volume_name = "dev-system-gh"
