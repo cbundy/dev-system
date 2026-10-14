@@ -103,6 +103,22 @@ follow directly from the skill or the brief.
   with the plugin installed from acting by accident. The repo-local
   `allowActOutsideOrchestrator` lifts it for a testbed.
 
+### D-64 A resumed environment escalation reruns the same head once (owner call)
+
+- **Decision**: owner, 2026-10-13, #537 option B. A narrow executor (`env-retry`, rule `P2a`)
+  runs `no-mistakes rerun` on the same head only when the owner has resumed the escalation and
+  every verdict on the failed step was `ENV`, at most once per resume. A repeat failure
+  escalates to the owner again, and a code failure is never rerun (SPEC 5.4, 6.1). To be
+  revisited if more environment-failure cases turn up. The agent's choices, 2026-10-14, for
+  owner review: the kind is named `env-retry`, so the word `rerun` appears in the hooks only on
+  its one argv declaration; its single attempt is fixed whatever `maxAttempts` says, and
+  `/factory retry` never clears it, so only a resume allows another rerun; a rerun whose old run
+  still sits at the gate `respondSettleMs` later tells the owner again rather than asking an
+  adjudicator.
+- **Alternatives**: option A, the resume becomes a `task(redrive)` for the model.
+- **Why**: on the testbed codex was logged out, so six runs failed at the test step. Every
+  resume re-asked adjudicators about the stale failure, and only a hand rerun moved the runs.
+
 ## Interpretations of the skill
 
 ### D-07 What "at most one new dispatch per tick" means in Slow (owner call)
@@ -269,13 +285,15 @@ follow directly from the skill or the brief.
   a busy session never holds a pass. A prompt refused or dropped within that time is skipped
   with no attempt counted, and a later drop marks the wake lost with its attempt given back.
   Every first line carries `repo=`. The one reminder repeats why an answer was refused, and an
-  aborted or refused turn gets it too. A wake another session submitted ends at load by its
-  fallback (SPEC 7.5, 8.1, 8.2).
+  aborted or refused turn gets it too. A wake from an earlier session (another session id, or
+  none recorded and started before this load) is lost at once with its attempt given back, so
+  its rule decides again (SPEC 7.5, 8.1, 8.2; #549).
 - **Alternatives**: wait for the submit to resolve; count a dropped prompt as the wake's attempt.
 - **Why**: a wake gets one attempt, so a prompt the model never saw must not use it up. Waiting
   on a busy session would stall every other action for as long as its turn runs. `repo=` saves a
   read for every link the model writes. A wake from a session that ended can never be answered,
-  and would hold every other wake until its timeout.
+  and would hold every other wake until its timeout, and a fallback would hold its rule (a
+  judge's hold) for a question nobody was asked.
 
 ### D-56 Prompts rewrite closing keywords; handoffs end in a RESULT line
 
@@ -754,9 +772,62 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 - **Decision**: while an implementer or fixer of an issue runs (by the ledger, or by the agent
   list for one a stop did not end), no other action that writes the issue's branch or its PR's
-  head starts: another implementer or fixer, a respond, an update-behind, a merge. Only one such
-  writer is kept per issue per pass.
+  head starts: another implementer or fixer, a respond, an `env-retry` (D-64), an update-behind,
+  a fast-forward (D-66), a merge. Only one such writer is kept per issue per pass.
 - **Alternatives**: rely on each action's own key, as the first build did.
 - **Why**: found on the testbed on 2026-10-13: a guard-failure fixer and then a conflict fixer
   started on the same PR a pass apart, once earlier merges made the branch conflict. Two agents
   committing to one branch race each other and the pipeline.
+
+### D-65 A guard failure is judged once; the guard expires after 5 minutes
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #550): a guard goes stale once
+  any fixer on the PR ends `done`, with or without a commit, so the next pass guards again.
+  `guardTtlMs` drops from 30 to 5 minutes, a backstop only. The guard-fail judge is keyed by the
+  PR, the head and a digest of the FAIL lines, not by the guard's number: a re-check that fails
+  the same way wakes no one, and a changed failure gets a new judge. A new round comes when the
+  owner resumes the run, or 30 minutes after a `wait` answer (or after the fixer a `fixer` answer
+  asked for ended) while the same failure stands; the 30 minutes are a constant in plan.ts
+  (`JUDGE_REMIND_MS`), not a setting. The guard fixer's key follows the judge's round. Every
+  merge-ready PR that no rule acts on in a pass leaves a skip line saying what it waits for
+  (SPEC 4.2, 5.5).
+- **Alternatives**: keep the 30 minute expiry and re-guard only after a commit; key the judge by
+  the guard's number; no reminder after `wait`.
+- **Why**: stage D run 2, PRs 44 to 46 sat about 20 minutes after no-commit fixers, and setting
+  the expiry to 3 minutes by hand cleared them within a minute. A judge keyed by the guard's
+  number would wake the session on every re-check, so the key follows the failure. Without the
+  reminder, a `wait`, or a fixer that did not cure the failure, would leave the PR waiting for
+  good; 30 minutes matches the old cadence for a truly stuck PR. Under the old per-head fixer
+  key, a later `fixer` answer for a changed failure could never start a new fixer.
+
+### D-66 The loop fast-forwards a worktree the pipeline's own commits left behind
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #551): a free `fast-forward`
+  action runs one `sh -c` script from the main checkout. Rule `M2` runs it once per guard on a
+  `head` FAIL whose run, origin and PR heads all equal the run head, before any judge; rule `M1`
+  runs it before a head's first guard when a clean pool slot sits on the run's branch. It counts
+  as writing the branch (D-63). A refusal, used-up attempts, or a lag that comes back after a
+  fast-forward went through go to the judge with a `FAST-FORWARD REFUSED <why>` line. It never
+  moves the main checkout, which rule `G5` promises the loop leaves alone: a main checkout left
+  behind on the run's branch is refused (SPEC 5.5, 6.1).
+- **Alternatives**: keep judging every `head` FAIL; fast-forward before every first guard,
+  whatever the pool shows; move a lagging worktree by any means but `--ff-only`.
+- **Why**: run 2 had six `FAIL head` results, every PR the pipeline committed to, each costing a
+  judge wake and a fixer for one fast-forward. Safety: origin must equal the run head, the tree
+  must have no uncommitted tracked change and the worktree's head must be an ancestor of the run
+  head, every worktree is checked before any moves, only `--ff-only` is used, and anything else
+  goes to the judge. Untracked files stay: `--ff-only` never deletes one and refuses to
+  overwrite one. Plan cannot see worktree heads, so gating the first-guard run on the pool saves
+  a command per head where nothing could lag.
+
+### D-67 An agent's own `running` status is no proof it is still at work
+
+- **Decision** (the agent's choice, 2026-10-14, for owner review; #545): an answer with no
+  machine line is interim only when a fresh agent list shows the agent `waiting`, or a sub-agent
+  of its own pending, running or waiting; then the loop waits for its next answer, up to its
+  timeout. The agent's own `running` does not count (SPEC 7.3).
+- **Alternatives**: hold whenever the list shows the agent at work, `running` included.
+- **Why**: the test host lists an agent as `running` at its own `turn.complete`, and the real
+  engine may too before it marks the agent completed. Counting `running` would hold every
+  stopped agent's missing line until the `A1` timeout, so a designer's missing `RESULT` would no
+  longer reach the model at once.

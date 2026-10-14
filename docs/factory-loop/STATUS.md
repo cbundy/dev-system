@@ -37,6 +37,35 @@ The full continuation plan, stage by stage, is [PLAN.md](PLAN.md).
 Nothing is blocked on anyone else. The shadow in `spike-reconcile-mod` stops with
 `coder ssh spike-reconcile-mod -- touch /persist/claude/factory-loop/OFF`.
 
+## Release v0.1, wave 1 (2026-10-14)
+
+The first wave of the "loop rewrite v0.1" fixes, from the two testbed runs
+([TESTBED-RUN2.md](TESTBED-RUN2.md)), integrated on `v01/wave1`:
+
+- A claim that has finished but that the factory state does not show yet holds its issue (no
+  second claim) and its place under the in-flight cap, `serial` and the worktree reserve, for at
+  most one heartbeat interval (#538, #547).
+- One `loop` event per ledger transition: a wake's turn taking its id no longer logs it twice
+  (#536).
+- The loop waits for an agent's final answer: a turn with no machine line from an agent still
+  holding background work is interim (#545, D-67).
+- A wake left open by an earlier session is lost at once and asked again, instead of blocking
+  every other wake until its timeout (#549).
+- A main checkout an agent moved holds new claims, agents and tasks and tells the owner once
+  (rule `G5`, #544); the PR of a superseded run is closed with a link to its successor (rule
+  `M8`, #553).
+- A resumed escalation whose verdicts were all `ENV` reruns the same head once (`env-retry`,
+  rule `P2a`, #537, D-64).
+- A repair re-guards at once, a guard failure is judged once rather than at every re-check, and
+  the guard expires after 5 minutes, not 30 (#550, D-65); a worktree the pipeline's own commits
+  left behind is fast-forwarded rather than judged (#551, D-66). The fast-forward never moves
+  the main checkout, which rule `G5` promises the loop leaves alone.
+
+The choices made without you are D-64 (your option B, with two guards of the agent's) to D-67.
+Gates on `v01/wave1`: `npm run lint` (151 files), `npm test` (633 node tests, 48 shell suites,
+2 mods) and the plugin's own suite (609 tests across 14 files) all pass, with the strict type
+check clean. None of it has run on the testbed yet.
+
 ## Stage C: the act half (2026-10-13)
 
 Built in three waves, each committed with its tests, then reviewed:
@@ -83,7 +112,9 @@ Only a real session can show these; stage D on the testbed is where each gets pr
 
 - **Agents from a mod**: that `$.agent.spawn` returns an agent id (the engine's test host never
   does), that each agent's `turn.complete` carries it, and how the agent list shows an agent
-  before and after its answer.
+  before and after its answer; and that an agent with a background sub-agent is listed
+  `waiting` (or its child listed with its `parentId`) at its interim `turn.complete`, and runs
+  another turn with its final answer once the child ends (#545).
 - **Long-running agents** (implementers for an hour or more) and several at once, with answers
   arriving while a pass runs.
 - **Stopping an agent** with `TaskStop` from a mod: its 30-second bound, the failed-stop path and
@@ -100,7 +131,11 @@ Only a real session can show these; stage D on the testbed is where each gets pr
   the old-watcher check and its 10-minute quiet window against an armed `orchestrator-watch.sh`
   re-arming between turns, and the checkout check in a real consumer checkout.
 - **The respond launch** in a real treehouse slot with the real `no-mistakes axi respond` (tested
-  with a stub in a scratch worktree).
+  with a stub in a scratch worktree), and the same launch of `env-retry`'s `no-mistakes rerun`
+  (#537).
+- **The fast-forward** against real pool worktrees behind a real pipeline (tested against
+  scratch git repos, #551), and the main checkout read of rule `G5` in a consumer's real
+  checkout (#544).
 - **The judge skill** against real wakes, including the new `pass-error` and `old-watcher`
   notices, and those notices reaching the phone.
 - **Engine details**: a hot reload while a pass or command is in flight (whether the old
