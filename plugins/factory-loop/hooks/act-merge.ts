@@ -1,10 +1,11 @@
 // The gate and merge executors (SPEC 5.5, 6.1, 6.2, 7.4): guard, update-behind, fix-linkage,
-// merge (then callum-flow-rollout), rollout for a hand merge (D-29), and respond, which drives a
-// parked gate with a detached `no-mistakes axi respond`. They decide nothing (plan did): each
-// runs its catalogue row's commands through ctx.cmd and reads the CLI's own lines and exit codes
-// (images/base/callum-flow-merge-guard, callum-flow-merge, callum-flow-rollout,
-// callum-flow-fix-linkage). The argv and the reading of the output are pure functions below, so
-// tests, the replay harness and the argv safety test use them without the engine.
+// merge (then callum-flow-rollout), rollout for a hand merge (D-29), respond, which drives a
+// parked gate with a detached `no-mistakes axi respond`, and env-retry, the one detached rerun
+// (#537). They decide nothing (plan did): each runs its catalogue row's commands through ctx.cmd
+// and reads the CLI's own lines and exit codes (images/base/callum-flow-merge-guard,
+// callum-flow-merge, callum-flow-rollout, callum-flow-fix-linkage). The argv and the reading of
+// the output are pure functions below, so tests, the replay harness and the argv safety test use
+// them without the engine.
 import { detailOf, rateLimited, respondLogPath } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, ExtraEntry, RunInit, RunResult } from './exec'
 import type { Action, ActionKind, GuardFail, LedgerEntry, Outcome, Pool, Rollout, Slot } from './types'
@@ -93,6 +94,11 @@ export function respondArgv(a: RespondAction): string[] {
   return argv
 }
 
+// The one rerun the loop runs (rule P2a, #537): the pipeline again on the run's own head, from
+// the slot on its branch, with no flag at all. The argv safety tests allow exactly this argv,
+// from the env-retry executor, and nothing else that reruns.
+export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun']
+
 // A fresh slot for a respond when no slot has the run's branch: leased durably, with no
 // subshell, its path on stdout (treehouse get --help). Empty stdin keeps any prompt from waiting.
 export const LEASE_ARGV: readonly string[] = ['treehouse', 'get', '--lease', '--lease-holder', LEASE_HOLDER]
@@ -147,6 +153,10 @@ export function argvsOf(action: Action, loopDir: string, attempt = 1): string[][
     case 'respond': {
       const log = respondLogPath(loopDir, action.key, attempt)
       return [[...LEASE_ARGV], switchArgv(action.branch), returnArgv('<slot>'), launchArgv('<slot>', action.branch, log, respondArgv(action))]
+    }
+    case 'env-retry': {
+      const log = respondLogPath(loopDir, action.key, attempt)
+      return [[...LEASE_ARGV], switchArgv(action.branch), returnArgv('<slot>'), launchArgv('<slot>', action.branch, log, ENV_RETRY_ARGV)]
     }
     default:
       return null
@@ -419,6 +429,32 @@ const respond: Executor = async (ctx, action) => {
   return { status: 'done', outcome, summary: clip(`respond --action ${action.action} on ${action.step ?? 'its gate'} launched in ${where}${logged}`) }
 }
 
+// env-retry (rule P2a, #537): the rerun, launched detached like a respond and read back after the
+// settle. Only rule P2a's action for a resume round, on its first attempt: anything else is
+// refused before a command runs. A clean launch is done; the new run it starts settles it.
+const envRetry: Executor = async (ctx, action) => {
+  if (action.kind !== 'env-retry') return wrongKind('env-retry', action)
+  if (action.rule !== 'P2a' || !/^env-retry:.+:r\d+$/.test(action.key)) return refused(`env-retry ${action.key} is not rule P2a's, after an owner resume`)
+  if (ctx.entry.attempts > 1) return refused(`env-retry ${action.key} runs once per resume`)
+  if (!validBranch(action.branch)) return refused(`branch ${JSON.stringify(action.branch)} is not one env-retry can switch to`)
+  const log = respondLogPath(ctx.rt.loopDir, ctx.entry.key, ctx.entry.attempts)
+  const found = slotFor(ctx.state.pool, action.branch)
+  let slot = found?.path ?? null
+  if (slot === null) {
+    const leased = await leaseSlot(ctx, action.branch)
+    if (typeof leased !== 'string') return leased
+    slot = leased
+  }
+  const r = await run(ctx, launchArgv(slot, action.branch, log, ENV_RETRY_ARGV), MERGE_TIMEOUT_MS.respond)
+  if (!('exitCode' in r)) return r
+  const outcome: Outcome = { kind: 'respond', slot, log }
+  // the launch's wrapper names every command it runs "respond"
+  const problem = respondProblem(r)?.replace(/^respond exited/, 'exited')
+  if (problem !== undefined) return { status: 'failed', outcome, summary: clip(`env-retry of ${short(action.head)} in ${slot}: ${problem}`) }
+  const where = found === null ? `leased ${slot}` : slot
+  return { status: 'done', outcome, summary: clip(`env-retry of ${short(action.head)} on ${action.branch} launched in ${where}`) }
+}
+
 // leaseSlot: a fresh slot on the run's branch, or why there is none. A slot leased but not
 // switched goes straight back to the pool: the housekeeping rule that returns slots (H3) only
 // sees slots on an issue's branch.
@@ -452,6 +488,7 @@ export const mergeExecutors: Partial<Record<ActionKind, Executor>> = {
   merge,
   rollout,
   respond,
+  'env-retry': envRetry,
 }
 
 // --- helpers -----------------------------------------------------------------------------------

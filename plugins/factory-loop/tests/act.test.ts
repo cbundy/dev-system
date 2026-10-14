@@ -27,6 +27,7 @@ import {
 } from '../hooks/act'
 import type { ActEnv, Acted, Between, Live } from '../hooks/act'
 import { ACTION_KINDS } from '../hooks/config'
+import { controlText } from '../hooks/control'
 import type { ActIo, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import { finish } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
@@ -507,6 +508,7 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
   let last: Acted | null = null
   const h = {
     seen,
+    files,
     spawns,
     prompts,
     titles,
@@ -650,6 +652,63 @@ describe('act mode end to end (SPEC 2, 5, 6)', () => {
     expect(h.seen.every(s => s.env.CALLUM_FLOW_REPO === REPO)).toBe(true)
     // and nothing is left running but the run-it task the model now holds
     expect(h.live.ledger.filter(e => e.status === 'running').map(e => e.key)).toEqual(['task:run-it:470'])
+  })
+
+  // #537, as on the testbed: codex was logged out, so the run failed at test and the adjudicator
+  // escalated ENV. The owner fixes it and resumes the run; the loop reruns the same head itself,
+  // and the new run is the one judged from then on.
+  test('an environment escalation the owner resumed is rerun on the same head, and the new run goes on (#537)', async () => {
+    let clock = NOW
+    const { w, run } = world(() => clock)
+    const RERUN = `01K7S2${'B'.repeat(20)}`
+    const h = harness((argv, s) => {
+      if (argv[0] === 'sh' && argv.includes('rerun')) {
+        w.run = RERUN
+        w.stage = 'ready to merge'
+        w.since = clock
+        w.watch = `merge-ready ${BRANCH} ${RERUN} pr=512 head=${HEAD}\n`
+        return { stdout: `run ${RERUN} started\n` }
+      }
+      return run(argv, s)
+    })
+    const at = (s: number) => {
+      clock = NOW + s * 1000
+      h.at(s)
+    }
+    Object.assign(w, { stage: 'in pipeline', since: NOW, run: RUN, pr: 512, slotBranch: BRANCH, queue: [] })
+    w.watch = `failed ${BRANCH} ${RUN} step=test pr=512 head=${HEAD}\n`
+    const gate = `${RUN}:test:${HEAD}`
+
+    // the failed step goes to the adjudicator, which escalates ENV; the owner is told
+    at(5)
+    await h.pass()
+    expect(h.keys()).toContain(`adjudicate:${gate}`)
+    await h.answer('agent-1', 'ENV: codex is logged out, its evidence step got a 401; the tests passed\nACTION: escalate: codex needs a login in this workspace')
+    at(60)
+    await h.pass()
+    expect(h.keys()).toEqual([`tell:escalate:${gate}`])
+    await h.turn('turn-1', h.prompts[0] ?? '', 'Run 01K7S2 needs codex logged in; resume it once that is done.')
+    at(120)
+    await h.pass()
+    expect(h.keys()).toEqual([])
+
+    // the owner logs codex in and resumes the run: the same head is rerun, no new adjudicator
+    h.files.set(`${LOOP_DIR}/control.json`, controlText(control({ resumed: [{ subject: `run:${RUN}`, at: NOW + 150_000 }] })))
+    at(180)
+    await h.pass()
+    expect(h.keys()).toEqual([`env-retry:${gate}:r1`])
+    const launch = h.ran('sh').filter(s => s.argv.includes('rerun'))
+    expect(launch.map(s => s.argv.slice(3, 6))).toEqual([['factory-loop-respond', SLOT, BRANCH]])
+    expect(launch.map(s => s.argv.slice(7))).toEqual([['no-mistakes', 'rerun']])
+    expect(h.entry(`env-retry:${gate}:r1`)).toMatchObject({ status: 'done', rule: 'P2a', run: RUN, head: HEAD })
+    expect(h.spawns).toHaveLength(1)
+
+    // the rerun is the run now: its merge gate is judged, and nothing reruns again
+    at(240)
+    await h.pass()
+    expect(h.keys()).toEqual([`guard:512:${HEAD}:1`])
+    expect(h.ran('callum-flow-merge-guard').map(s => s.argv)).toEqual([['callum-flow-merge-guard', '512', '--run', RERUN]])
+    expect(h.ran('sh').filter(s => s.argv.includes('rerun'))).toHaveLength(1)
   })
 
   test('an agent that answers after its entry ended is dropped, and one the loop never spawned is not its own', async () => {

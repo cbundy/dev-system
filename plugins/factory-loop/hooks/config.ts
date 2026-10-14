@@ -95,7 +95,7 @@ export function parseDuration(text: string): Ms | null {
 
 // Every action kind, for the loaders that read one from text (SPEC 6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
-  'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'guard', 'update-behind', 'fix-linkage', 'merge',
+  'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fix-linkage', 'merge',
   'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment',
   'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
 ]

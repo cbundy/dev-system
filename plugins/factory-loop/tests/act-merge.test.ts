@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  ENV_RETRY_ARGV,
   LAUNCH_SCRIPT,
   LEASE_ARGV,
   MERGE_TIMEOUT_MS,
@@ -777,9 +778,54 @@ describe('respond (rules P3, P3a; SPEC 6.1, I-51 to I-53, I-94)', () => {
   })
 })
 
+describe('env-retry (rule P2a, #537)', () => {
+  const onBranch: Pool = { free: 3, total: 16, slots: [slot(SLOT, BRANCH, 'in-use')] }
+  const retry = (over: Partial<Extract<Action, { kind: 'env-retry' }>> = {}): Action => ({
+    ...base,
+    class: 'drive',
+    kind: 'env-retry',
+    key: `env-retry:${RUN}:test:${GATED}:r1`,
+    rule: 'P2a',
+    run: RUN,
+    branch: BRANCH,
+    step: 'test',
+    head: GATED,
+    ...over,
+  })
+
+  test('the rerun with no flag at all, launched detached from the slot on the branch, or a leased one', async () => {
+    expect(ENV_RETRY_ARGV).toEqual(['no-mistakes', 'rerun'])
+    expect(argvsOf(retry(), LOOP_DIR)?.pop()).toEqual(launchArgv('<slot>', BRANCH, respondLogPath(LOOP_DIR, retry().key, 1), ENV_RETRY_ARGV))
+    const { result, calls, events } = await exec(retry(), [{ stdout: 'run 01M4RQ0050BBBB started\n' }], { pool: onBranch })
+    expect(calls).toEqual([{ argv: launchArgv(SLOT, BRANCH, LOG, ENV_RETRY_ARGV), init: { timeoutMs: 30_000 } }])
+    expect(events).toHaveLength(0)
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'respond', slot: SLOT, log: LOG }, summary: `env-retry of a1b2c3d on ${BRANCH} launched in ${SLOT}` })
+    const leased = await exec(retry(), [{ stdout: LEASED }, {}, {}], { pool: { free: 3, total: 16, slots: [] } })
+    expect(leased.calls.map(c => c.argv)).toEqual([[...LEASE_ARGV], ['git', 'switch', BRANCH], launchArgv(LEASED, BRANCH, LOG, ENV_RETRY_ARGV)])
+  })
+
+  test('a rerun that exited at once is failed with its last line', async () => {
+    const { result } = await exec(retry(), [{ stdout: 'Error: no runs found for this branch\nfactory-loop: respond exited 1\n' }], { pool: onBranch })
+    expect(result).toEqual({ status: 'failed', outcome: { kind: 'respond', slot: SLOT, log: LOG }, summary: `env-retry of a1b2c3d in ${SLOT}: exited 1: Error: no runs found for this branch` })
+  })
+
+  test('refused before anything runs: another rule, a key that is no resume round, a second attempt, a bad branch', async () => {
+    const cases: [Action, number][] = [
+      [retry({ rule: 'P3' }), 1],
+      [retry({ key: `env-retry:${RUN}:test:${GATED}` }), 1],
+      [retry(), 2],
+      [retry({ branch: '--detach' }), 1],
+    ]
+    for (const [action, attempts] of cases) {
+      const { result, calls } = await exec(action, [], { pool: onBranch, attempts })
+      expect({ key: action.key, calls: calls.length, result }).toMatchObject({ key: action.key, calls: 0, result: { status: 'failed', noRetry: true } })
+    }
+  })
+})
+
 describe('every executor', () => {
   test('mergeExecutors covers exactly its kinds, and each refuses another kind', async () => {
-    expect(Object.keys(mergeExecutors).sort()).toEqual(['fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind'])
+    expect(Object.keys(mergeExecutors).sort()).toEqual(['env-retry', 'fix-linkage', 'guard', 'merge', 'respond', 'rollout', 'update-behind'])
     for (const kind of Object.keys(mergeExecutors) as ActionKind[]) {
       const h = harness()
       const other: Action = kind === 'guard' ? A.linkage() : A.guard()

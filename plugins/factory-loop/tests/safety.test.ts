@@ -4,21 +4,26 @@
 // and an act-mode observe pass's commands join them. Not one argv may pass --yes, run
 // `no-mistakes rerun` or `abort`, merge but through callum-flow-merge (which runs the guard),
 // edit a PR body, add a label (the readyLabel least of all), run a `coder` command or kill a
-// process by name; and stop-agent stops only an agent the ledger holds. The root node test
+// process by name; and stop-agent stops only an agent the ledger holds. The one exception is rule
+// P2a's env-retry (#537): exactly its detached `no-mistakes rerun`, with no other argument, once
+// per owner resume of an escalation whose verdicts were all ENV. The root node test
 // tests/factory-loop-safety.test.js scans the hooks' string literals for the same, as a second
 // net.
 import { describe, expect, test } from 'claude-code/testing'
 
 import { EXECUTORS, capEventArgv, ctxOf, dispatch, eventArgv, runActions } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
+import { ENV_RETRY_ARGV, LAUNCH_SCRIPT } from '../hooks/act-merge'
 import { ACTION_KINDS } from '../hooks/config'
+import { respondLogPath } from '../hooks/exec'
 import type { ActIo, RunInit, SpawnInput } from '../hooks/exec'
 import { loopEvent, start } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
+import { plan } from '../hooks/plan'
 import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
 import type { Action, AdjudicatorPurpose, FixerPurpose, LedgerEntry, State } from '../hooks/types'
-import { DEVICE, MIN, NOW, config, entry, state } from './fixtures'
+import { DEVICE, MIN, NOW, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
 
 const READY = 'ready'
@@ -181,6 +186,7 @@ const ACTIONS: Action[] = [
   respond('approve', { key: ':park', step: null }),
   respond('skip'),
   respond('fix', { findings: 'review-1,review-2', instructions: '--yes is not an answer; reject a moved HEAD', addFinding: '{"id":"x","note":"--yes"}', logReview: true }),
+  { ...base, kind: 'env-retry', key: `env-retry:${RUN}:test:${HEAD}:r1`, class: 'drive', rule: 'P2a', run: RUN, branch: 'issue-470-x', step: 'test', head: HEAD },
   { ...base, kind: 'guard', key: `guard:512:${HEAD}:1`, class: 'free', rule: 'M1', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'update-behind', key: `update-behind:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512, run: RUN, head: HEAD },
   { ...base, kind: 'fix-linkage', key: `fix-linkage:512:${HEAD}`, class: 'free', rule: 'M2', pr: 512 },
@@ -210,19 +216,30 @@ function world(): { state: State; ledger: LedgerEntry[] } {
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles
-async function run(action: Action, poolless = false): Promise<Recorded & { status: string; summary: string }> {
+async function run(action: Action, poolless = false, attempt = 1): Promise<Recorded & { status: string; summary: string }> {
   const { io, seen } = recorder()
   const w = world()
   const s = poolless ? { ...w.state, pool: { free: 10, total: 16, slots: [] } } : w.state
   const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
-  const started = start(w.ledger, action, NOW).entry
+  const started = { ...start(w.ledger, action, NOW).entry, attempts: attempt }
   const exec = await dispatch(ctxOf(env, s, started), action)
   return { ...seen, status: exec.status, summary: exec.summary }
 }
 
 // --- the bans, one argv at a time -------------------------------------------------------------------
 
-function bans(argv: readonly string[]): string[] {
+// envRetryLaunch: the one rerun allowed (#537): rule P2a's env-retry, launched detached with
+// exactly ENV_RETRY_ARGV, `no-mistakes rerun` and no other argument, after the launch's fixed
+// slot, branch and log.
+function envRetryLaunch(argv: readonly string[], action: Action | undefined): boolean {
+  if (action?.kind !== 'env-retry' || action.rule !== 'P2a') return false
+  if (argv.length !== 9 || argv[0] !== 'sh' || argv[1] !== '-c' || argv[2] !== LAUNCH_SCRIPT) return false
+  return ENV_RETRY_ARGV.length === 2 && argv[7] === 'no-mistakes' && argv[8] === 'rerun' && ENV_RETRY_ARGV.every((a, i) => argv[7 + i] === a)
+}
+
+function bans(argv: readonly string[], action?: Action): string[] {
+  // the rerun's launch is held to every other ban, its two-word command left out
+  if (envRetryLaunch(argv, action)) return bans(argv.slice(0, 7))
   const out: string[] = []
   const [cmd = '', ...args] = argv
   if (argv.some(a => a === '--yes' || a.startsWith('--yes='))) out.push('--yes')
@@ -297,19 +314,22 @@ describe('the argv safety net (SPEC 6.1)', () => {
   test('no executor passes --yes, reruns, aborts, merges past the guard, edits a PR body, adds a label, runs coder or kills by name', async () => {
     const all: string[][] = []
     for (const action of ACTIONS) {
-      for (const poolless of action.kind === 'respond' ? [false, true] : [false]) {
+      for (const poolless of action.kind === 'respond' || action.kind === 'env-retry' ? [false, true] : [false]) {
         const r = await run(action, poolless)
         expect(r.status === 'failed' ? `${action.key}: ${r.summary}` : 'ran').toBe('ran')
         all.push(...r.argvs)
-        for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv) }).toEqual({ key: action.key, argv, bans: [] })
+        for (const argv of r.argvs) expect({ key: action.key, argv, bans: bans(argv, action) }).toEqual({ key: action.key, argv, bans: [] })
         // every spawn names a callum-flow agent, with the issue in its name and description
         for (const s of r.spawns) expect(s.subagentType).toMatch(/^callum-flow:(designer|implementer|adjudicator|fixer)$/)
       }
     }
     // the merge goes only through callum-flow-merge, which runs the guard inside it
     expect(all.filter(a => a.includes('merge') || a[0] === 'callum-flow-merge').map(a => a[0])).toEqual(['callum-flow-merge'])
-    // respond is only ever `no-mistakes axi respond`, inside the detached launch
-    expect(all.filter(a => a.includes('no-mistakes')).every(a => a[0] === 'sh' && a.includes('respond'))).toBe(true)
+    // no-mistakes runs only inside the detached launch: `axi respond`, or env-retry's rerun (its
+    // slot found, then leased)
+    const nm = all.filter(a => a.includes('no-mistakes'))
+    expect(nm.every(a => a[0] === 'sh' && a[2] === LAUNCH_SCRIPT && (a.includes('respond') || a.slice(7).join(' ') === 'no-mistakes rerun'))).toBe(true)
+    expect(nm.filter(a => a.includes('rerun')).length).toBe(2)
   })
 
   test('the loop\'s own events and the rails\' probes stay inside the bans; only signal 0 is sent', async () => {
@@ -365,6 +385,56 @@ describe('the argv safety net (SPEC 6.1)', () => {
     }
   })
 
+  test('the one rerun cannot widen: only env-retry of rule P2a, only `no-mistakes rerun`, once per resume (#537)', async () => {
+    const envRetry = ACTIONS.find(a => a.kind === 'env-retry') as Action
+    const launch = (tail: string[]) => ['sh', '-c', LAUNCH_SCRIPT, 'factory-loop-respond', SLOT, 'issue-470-x', respondLogPath(LOOP_DIR, envRetry.key, 1), ...tail]
+    expect(bans(launch(['no-mistakes', 'rerun']), envRetry)).toEqual([])
+    // any other action, rule, argument or form is banned
+    const respondAction = ACTIONS.find(a => a.kind === 'respond') as Action
+    const widened: [string[], Action][] = [
+      [launch(['no-mistakes', 'rerun']), respondAction],
+      [launch(['no-mistakes', 'rerun']), { ...envRetry, rule: 'P3' }],
+      [launch(['no-mistakes', 'rerun', '--yes']), envRetry],
+      [launch(['no-mistakes', 'rerun', '--intent', 'x']), envRetry],
+      [launch(['no-mistakes', 'axi', 'abort']), envRetry],
+      [launch(['no-mistakes', 'axi', 'respond', '--action', 'approve', '--yes']), envRetry],
+      [['no-mistakes', 'rerun'], envRetry],
+      [['sh', '-c', 'no-mistakes rerun'], envRetry],
+      [['sh', '-c', `${LAUNCH_SCRIPT}\nno-mistakes rerun`, 'x', SLOT, 'issue-470-x', 'log', 'no-mistakes', 'rerun'], envRetry],
+    ]
+    for (const [argv, action] of widened) expect({ argv, rule: action.rule, banned: bans(argv, action).length > 0 }).toEqual({ argv, rule: action.rule, banned: true })
+    // the executor runs exactly that launch, from the slot on the run's branch
+    expect(await run(envRetry)).toMatchObject({ status: 'done', argvs: [launch(['no-mistakes', 'rerun'])] })
+    // and refuses, before any command, another rule, a key that is no resume round, or a second attempt
+    const refusals: [Action, number][] = [
+      [{ ...envRetry, rule: 'P3' }, 1],
+      [{ ...envRetry, key: `env-retry:${RUN}:test:${HEAD}` }, 1],
+      [envRetry, 2],
+    ]
+    for (const [action, attempt] of refusals) {
+      const r = await run(action, false, attempt)
+      expect({ key: action.key, rule: action.rule, attempt, status: r.status, argvs: r.argvs }).toEqual({ key: action.key, rule: action.rule, attempt, status: 'failed', argvs: [] })
+    }
+  })
+
+  test('a code failure is never rerun: plan plans env-retry only when every verdict of the resumed escalation is ENV (#537)', () => {
+    const at = '01M4RQ0045AAAA:test:head45'
+    const VERDICTS = ['ENV: codex 401', 'CORRECT: a real bug', 'WRONG: a false positive', 'NIT: style', 'DUP: seen before']
+    // every subset of the five verdict kinds, the empty one included
+    for (let mask = 0; mask < 1 << VERDICTS.length; mask++) {
+      const verdicts = VERDICTS.filter((_, i) => (mask & (1 << i)) !== 0)
+      const s = state({
+        issues: [mine(45, 'in pipeline', { delegatedBrief: brief(45), run: '01M4RQ0045AAAA', pr: 545 })],
+        runs: [runOf(45, 'failed', { step: 'test' })],
+        control: control({ resumed: [{ subject: 'run:01M4RQ0045AAAA', at: NOW - MIN }] }),
+      })
+      const adj = entry(`adjudicate:${at}`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 45, run: '01M4RQ0045AAAA', outcome: review({ type: 'escalate', why: 'x' }, null, verdicts) })
+      const kinds = plan({ ...s, ledger: [...s.ledger, adj] }, config()).actions.map(a => a.kind)
+      const envOnly = verdicts.length > 0 && verdicts.every(v => v.startsWith('ENV:'))
+      expect({ verdicts, rerun: kinds.includes('env-retry') }).toEqual({ verdicts, rerun: envOnly })
+    }
+  })
+
   test('restart-self runs only for rule H4, and a pass of every action at once stays inside the bans', async () => {
     const wrong = await run({ ...base, issue: null, kind: 'restart-self', key: 'restart:8', class: 'free', rule: 'O1', why: 'x', at: 8 })
     expect(wrong).toMatchObject({ status: 'failed', argvs: [] })
@@ -372,6 +442,8 @@ describe('the argv safety net (SPEC 6.1)', () => {
     const w = world()
     const env: ActEnv = { io, rt: runtime(), live: { ledger: w.ledger }, commands: [], wakeId: () => 'w1', session: 'session-1', save: async () => true, holds: async () => true, problems: [] }
     await runActions(env, w.state, ACTIONS)
-    for (const argv of seen.argvs) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
+    // the pass's one env-retry may launch its rerun; every other argv stays inside the bans
+    const envRetry = ACTIONS.find(a => a.kind === 'env-retry')
+    for (const argv of seen.argvs) expect({ argv, bans: bans(argv, envRetry) }).toEqual({ argv, bans: [] })
   })
 })

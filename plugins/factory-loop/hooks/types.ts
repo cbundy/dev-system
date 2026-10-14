@@ -137,7 +137,8 @@ export type MergeReport = { summary: string; bump: Bump; bumpReason: string; fla
 export type Outcome =
   // a CLI's exit code; on failure the first 2 000 characters of its stderr (SPEC 10.1)
   | { kind: 'cli'; exit: number; detail?: string }
-  // a detached respond (SPEC 6.1): the slot it runs in and the log its launch was read back from
+  // a detached respond or env-retry (SPEC 6.1): the slot it runs in and the log its launch was
+  // read back from
   | { kind: 'respond'; slot: string; log: string }
   | { kind: 'claim'; result: 'claimed' | 'lost' }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
@@ -166,6 +167,7 @@ export type ActionKind =
   | 'spawn'
   | 'delegate'
   | 'respond'
+  | 'env-retry'
   | 'guard'
   | 'update-behind'
   | 'fix-linkage'
@@ -336,6 +338,9 @@ export type Action =
       approveReason: string | null
       logReview: boolean
     })
+  // rule P2a (#537): the one `no-mistakes rerun`, of this run's head, once per owner resume of an
+  // escalation whose verdicts were all ENV
+  | (Base & { kind: 'env-retry'; run: string; branch: string; step: string | null; head: string })
   | (Base & { kind: 'guard' | 'update-behind'; pr: number; run: string; head: string })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
