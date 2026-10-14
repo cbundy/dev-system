@@ -187,6 +187,10 @@ Owner items (the title counts them until resolved):
   skipping. Owner follows the line; `retry <N>` tries again.
 - `linkage` (issue, pr; guard lines): the PR's `Closes`/`Refs` linkage is still wrong after one
   repair. Owner fixes the PR body; the loop guards again.
+- `checkout` (branch, head, default; detail: what is wrong): the session's main checkout is
+  detached, on another branch, carrying changes, or cannot be read, so no claim, agent or task
+  starts until it is back on its default branch and clean. Owner makes sure no agent is using
+  it, then puts it back; never move it yourself, and the loop never does either.
 
 Notices:
 - `agent-failed` (key, kind): an agent or command used every attempt. `retry <N>` or

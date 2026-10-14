@@ -70,6 +70,7 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
     case 'callum-flow-claim':
       return {}
     case 'gh':
+      if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
       return { stdout: args[1] === 'comment' ? 'https://github.com/cbundy/dev-system/pull/512#issuecomment-2\n' : '' }
   }
   return {}
@@ -190,6 +191,7 @@ const ACTIONS: Action[] = [
   { ...base, kind: 'abandon', key: 'abandon:470:1', class: 'free', rule: 'D6', run: RUN, branch: 'issue-470-x', note: 'dropped by the owner' },
   { ...base, kind: 'abandon', key: 'abandon:470:2', class: 'free', rule: 'P5', run: null, branch: null, note: 'cancelled run dropped' },
   { ...base, kind: 'milestone-expect', key: 'expect:minor:512', class: 'free', rule: 'M7', bump: 'minor', why: 'a new\ncapability' },
+  { ...base, kind: 'pr-close', key: 'pr-close:511', class: 'free', rule: 'M8', pr: 511, run: RUN, newBranch: 'issue-470-x-v2', by: 512 },
   { ...base, kind: 'pr-comment', key: `pr-comment:512:${HEAD}`, class: 'free', rule: 'M3', pr: 512, body: 'Test change justified: --body edits are not ours' },
   { ...base, kind: 'release-worktree', key: `release:${SLOT}:issue-470-x`, class: 'free', rule: 'H3', path: SLOT, branch: 'issue-470-x' },
   { ...base, issue: null, kind: 'restart-self', key: 'restart:7', class: 'free', rule: 'H4', why: 'image', at: 7 },
@@ -248,7 +250,10 @@ function bans(argv: readonly string[]): string[] {
   const labelWrite = cmd === 'gh' && (args[1] === 'edit' || args[1] === 'create') && args.includes('--label')
   if (adds.length > 0 || labelWrite || (cmd === 'gh' && args[0] === 'label')) out.push('a label added')
   if (adds.some(l => l.split(',').some(x => x.trim().toLowerCase() === READY))) out.push('the readyLabel')
-  if (cmd === 'git' && args[0] !== 'switch' && args[0] !== 'remote') out.push(`git ${args[0]}`)
+  // git switches a leased slot to its branch, or reads: the origin, and the main checkout's
+  // default branch and status (#544), which never move it
+  const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status'].includes(verb ?? '')) out.push(`git ${verb}`)
   return out
 }
 
@@ -273,6 +278,8 @@ describe('the argv safety net (SPEC 6.1)', () => {
       ['gh', 'api', 'repos/x/pulls/1', '--repo', REPO],
       ['git', 'merge', 'main'],
       ['git', 'push', '--force'],
+      ['git', 'checkout', 'main'],
+      ['git', '--no-optional-locks', 'checkout', 'main'],
     ]
     for (const argv of bad) expect({ argv, banned: bans(argv).length > 0 }).toEqual({ argv, banned: true })
     expect(bans(['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'])).toContain('the readyLabel')
@@ -283,6 +290,8 @@ describe('the argv safety net (SPEC 6.1)', () => {
       [`${TOOLS}/queue-watch.sh`, '--once', '--repo', REPO, '--label', READY, '--known', 'none'],
       ['no-mistakes', 'axi', 'respond', '--action', 'fix', '--instructions=--yes is not an answer'],
       ['git', 'switch', 'issue-470-x'],
+      ['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+      ['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
     ]
     for (const argv of good) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })

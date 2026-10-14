@@ -11,6 +11,7 @@ import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
 import {
   parseBrief,
+  parseCheckout,
   parseCsv,
   parseFactoryState,
   parseIssueRead,
@@ -125,6 +126,28 @@ describe('parse', () => {
       stripped: 0,
     })
     expect(parseBrief(json)).toEqual({ url: 'u3', at: NOW - 10 * MIN })
+  })
+
+  test('the main checkout: its branch or a detached head, its commit, changed tracked paths, the default branch (#544)', () => {
+    const oid = '# branch.oid 5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff'
+    const clean = `${oid}\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n`
+    expect(parseCheckout('origin/main\n', clean)).toEqual({ branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff', defaultBranch: 'main', dirty: [] })
+    // the testbed's adjudicator left it detached on another issue's branch
+    expect(parseCheckout('origin/main\n', `${oid}\n# branch.head (detached)\n`)).toMatchObject({ branch: null, defaultBranch: 'main' })
+    // modified, renamed (path, then its old name after a tab) and unmerged entries; untracked are allowed
+    const changed = [
+      `${oid}`,
+      '# branch.head main',
+      '1 .M N... 100644 100644 100644 aaaa aaaa plugins/factory-loop/hooks/plan.ts',
+      '2 R. N... 100644 100644 100644 bbbb bbbb R100 docs/new name.md\tdocs/old.md',
+      'u UU N... 100644 100644 100644 100644 cccc dddd eeee README.md',
+      '? scratch.txt',
+    ].join('\n')
+    expect(parseCheckout('origin/main', changed)).toMatchObject({ dirty: ['plugins/factory-loop/hooks/plan.ts', 'docs/new name.md', 'README.md'] })
+    // what does not read
+    expect(parseCheckout('', clean)).toBeNull()
+    expect(parseCheckout('origin/main', '')).toBeNull()
+    expect(parseCheckout('origin/main', `${oid}\n# branch.head main\nfatal: bad\n`)).toBeNull()
   })
 
   test('the ready queue, ascending', () => {
@@ -676,6 +699,9 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     queue: Reply
     issues: Record<string, Reply>
     files: Record<string, string>
+    // the main checkout: origin's default branch, and its status
+    originHead: Reply
+    status: Reply
   }
 
   function host(over: Partial<World> = {}) {
@@ -687,6 +713,8 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       queue: { stdout: 'queue known=114 now=114,470\n' },
       issues: {},
       files: {},
+      originHead: { stdout: 'origin/main\n' },
+      status: { stdout: `# branch.oid ${SHA(1)}\n# branch.head main\n` },
       ...over,
     }
     let now = NOW
@@ -713,6 +741,9 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
           return { stdout: 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth' }
         case 'treehouse':
           return { stdout: '[]' }
+        case 'git':
+          if (args[0] === 'symbolic-ref') return world.originHead
+          return args[1] === 'status' ? world.status : {}
         default:
           return {}
       }
@@ -1010,6 +1041,33 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect([shadow.rateLimited, shadow.state.githubBackoffUntil]).toEqual([true, null])
     // a quiet pass reports none
     expect((await host().pass(runtime(), stored())).rateLimited).toBe(false)
+  })
+
+  test('the main checkout is read every pass, and a moved one holds what starts in it at once (#544)', async () => {
+    const h = host({ factory: [fsIssue(60, 'designing')] })
+    const first = await h.pass(runtime(), stored())
+    expect(h.commands()).toContain('git symbolic-ref --quiet --short refs/remotes/origin/HEAD')
+    expect(h.commands()).toContain('git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no')
+    expect(first.state.checkout).toEqual({ branch: 'main', head: SHA(1), defaultBranch: 'main', dirty: [] })
+    expect(plan(first.state, config()).actions.map(a => a.key)).toContain(`design:60:${NOW - 30 * MIN}`)
+
+    // an agent checks out another issue's branch: the next pass sees it, tells, and holds the designer
+    h.world.status = { stdout: `# branch.oid ${SHA(4)}\n# branch.head (detached)\n` }
+    const moved = await h.pass(runtime(), stored(), NOW + MIN)
+    expect(moved.state.checkout).toMatchObject({ branch: null, head: SHA(4) })
+    const r = plan(moved.state, config())
+    expect(r.actions.map(a => a.key)).toContain(`tell:checkout:detached@${SHA(4)}`)
+    expect(r.actions.filter(a => a.kind === 'spawn')).toEqual([])
+    expect(r.title).toContain('checkout')
+
+    // a read that fails is a checkout not proven where it belongs; observe mode reads it too
+    h.world.originHead = { exitCode: 1 }
+    expect((await h.pass(runtime(), stored(), NOW + 2 * MIN)).state.checkout).toEqual({
+      error: 'no origin/HEAD (exit 1); git remote set-head origin --auto sets it',
+    })
+    h.world.originHead = { stdout: 'origin/main\n' }
+    h.world.status = { exitCode: 128, stderr: 'fatal: not a git repository\n' }
+    expect((await h.pass(runtime({ mode: 'observe' }), undefined, NOW + 3 * MIN)).state.checkout).toEqual({ error: 'exit 128: fatal: not a git repository' })
   })
 
   test('state.agents lists only the session agents the ledger holds', async () => {

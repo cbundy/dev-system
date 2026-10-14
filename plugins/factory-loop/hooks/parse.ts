@@ -1,7 +1,7 @@
 // Pure parsers for what observe reads: each turns one command's output into typed values,
 // or reports that it could not. No I/O here, so the tests and the replay harness (plain
 // Node) drive them directly. Types only are imported.
-import type { Bump, Milestone, Pool, RunState, Stage, Usage } from './types'
+import type { Bump, Checkout, Milestone, Pool, RunState, Stage, Usage } from './types'
 
 const STAGES: readonly Stage[] = [
   'queued',
@@ -370,6 +370,32 @@ export function parsePool(json: string, maxTrees: number): Pool | null {
   } catch {
     return null
   }
+}
+
+// --- the main checkout (#544) -------------------------------------------------------------------
+
+// parseCheckout: origin's default branch, from `git symbolic-ref --short refs/remotes/origin/HEAD`
+// (`origin/main`), and the checkout's branch, commit and changed tracked paths, from `git status
+// --porcelain=v2 --branch --untracked-files=no` (`# branch.head (detached)` when detached, then
+// one line per changed path; untracked files are allowed); null when either does not read.
+export function parseCheckout(originHead: string, status: string): Checkout | null {
+  const defaultBranch = originHead.trim().match(/^origin\/(\S+)$/)?.[1]
+  if (defaultBranch === undefined) return null
+  let branch: string | null | undefined
+  let head: string | null = null
+  const dirty: string[] = []
+  for (const line of status.split('\n')) {
+    const header = line.match(/^# branch\.(oid|head) (.+)$/)
+    if (header?.[1] === 'head') branch = header[2] === '(detached)' ? null : (header[2] ?? null)
+    else if (header?.[1] === 'oid') head = header[2] === '(initial)' ? null : (header[2] ?? null)
+    if (line === '' || line.startsWith('#') || line.startsWith('? ') || line.startsWith('! ')) continue
+    // ordinary (1), renamed (2, then a score and `<path>\t<orig>`) and unmerged (u) entries carry
+    // 8, 9 and 10 fields before the path
+    const fields = line.startsWith('1 ') ? 8 : line.startsWith('2 ') ? 9 : line.startsWith('u ') ? 10 : null
+    if (fields === null) return null
+    dirty.push(line.split(' ').slice(fields).join(' ').split('\t')[0] ?? '')
+  }
+  return branch === undefined ? null : { branch, head, defaultBranch, dirty }
 }
 
 // --- callum-flow-milestone show next -----------------------------------------------------------

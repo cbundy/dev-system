@@ -7,6 +7,7 @@
 import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { parsePool } from './parse'
+import { issueFromBranch } from './plan'
 import type { Action, ActionKind, LedgerEntry } from './types'
 
 const SEC = 1000
@@ -24,6 +25,7 @@ export type CliKind =
   | 'milestone-expect'
   | 'pr-reopen'
   | 'pr-comment'
+  | 'pr-close'
   | 'release-worktree'
   | 'restart-self'
 
@@ -40,6 +42,7 @@ export const CLI_TIMEOUT_MS: Record<CliKind, number> = {
   'milestone-expect': 60 * SEC,
   'pr-reopen': 60 * SEC,
   'pr-comment': 60 * SEC,
+  'pr-close': 60 * SEC,
   'release-worktree': 120 * SEC,
   'restart-self': 600 * SEC,
 }
@@ -110,6 +113,17 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
           stdin: action.body,
         },
       ]
+    case 'pr-close': {
+      // rule M8 (#553): read the PR, then close it with a comment linking the one its work moved
+      // to; the executor runs the close only once the read says so (prCloseCheck). Never
+      // --delete-branch: the old branch keeps its commits.
+      const pr = String(action.pr)
+      const comment = `Superseded by #${action.by}: a conflict fix moved this work to \`${action.newBranch}\`. Closed by the factory loop.`
+      return [
+        { argv: ['gh', 'pr', 'view', pr, '--repo', repo, '--json', 'state,headRefName'], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
+        { argv: ['gh', 'pr', 'close', pr, '--repo', repo, '--comment', comment], timeoutMs: CLI_TIMEOUT_MS['pr-close'] },
+      ]
+    }
     case 'release-worktree':
       // Empty stdin: were the slot dirty after all, treehouse's discard prompt reads end of
       // input and keeps the work. The status read proves the slot is back (SPEC 6.1).
@@ -160,6 +174,30 @@ export function eventFailure(state: string, err: unknown): Exec {
   }
   if (exit === 2) exec.noRetry = true
   return exec
+}
+
+// prCloseCheck: what `gh pr view --json state,headRefName` says about closing a superseded run's
+// PR: 'close' for an open PR on a branch of its issue other than the one the work moved to; done,
+// left alone, for one already merged or closed; refused for one on any other branch.
+export function prCloseCheck(action: Extract<Action, { kind: 'pr-close' }>, json: string): 'close' | Exec {
+  let pr: Record<string, unknown> = {}
+  try {
+    const v: unknown = JSON.parse(json)
+    if (v !== null && typeof v === 'object') pr = v as Record<string, unknown>
+  } catch {
+    // read below as unreadable
+  }
+  const { state, headRefName: head } = pr
+  if (state === 'MERGED' || state === 'CLOSED') {
+    return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `PR #${action.pr} is already ${state.toLowerCase()}: left alone` }
+  }
+  if (state !== 'OPEN' || typeof head !== 'string') {
+    return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: json.slice(0, 2000) }, summary: `gh pr view: PR #${action.pr} did not read` }
+  }
+  if (head === action.newBranch || issueFromBranch(head) !== action.issue) {
+    return refused(`PR #${action.pr} is on ${head}, not a superseded branch of #${action.issue}`)
+  }
+  return 'close'
 }
 
 // slotState: the pool's word for the slot at this path in `treehouse status --json`
@@ -258,6 +296,22 @@ function command(kind: CliKind): Executor {
   }
 }
 
+// pr-close (rule M8, #553): the read, then the close only when prCloseCheck allows it, so a PR
+// that merged or closed meanwhile, or one on another branch, is never closed.
+const prClose: Executor = async (ctx, action) => {
+  if (action.kind !== 'pr-close') return refused(`the pr-close executor got a ${action.kind} action`)
+  const steps = stepsOf(action, ctx.rt.repo, ctx.rt.config.inDevLabel)
+  const [view, close] = typeof steps === 'string' ? [] : steps
+  if (view === undefined || close === undefined) return refused(typeof steps === 'string' ? steps : 'pr-close has no steps')
+  const read = await runSteps(ctx, [view])
+  if ('failed' in read) return read.failed
+  const check = prCloseCheck(action, read.results[0]?.stdout ?? '')
+  if (check !== 'close') return check
+  const closed = await runSteps(ctx, [close])
+  if ('failed' in closed) return closed.failed
+  return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: clip(`closed PR #${action.pr}, superseded by #${action.by}`) }
+}
+
 // ownAgent: the ledger holds a running entry for this agent id, so the loop spawned it. An
 // agent the loop did not spawn is never stopped (SPEC 6.1).
 export function ownAgent(ledger: readonly LedgerEntry[], agentId: string): boolean {
@@ -301,6 +355,7 @@ export const cliExecutors: Partial<Record<ActionKind, Executor>> = {
   'milestone-expect': command('milestone-expect'),
   'pr-reopen': command('pr-reopen'),
   'pr-comment': command('pr-comment'),
+  'pr-close': prClose,
   'release-worktree': command('release-worktree'),
   'restart-self': command('restart-self'),
   'stop-agent': stopAgent,

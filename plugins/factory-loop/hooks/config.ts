@@ -97,7 +97,7 @@ export function parseDuration(text: string): Ms | null {
 export const ACTION_KINDS: readonly ActionKind[] = [
   'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'guard', 'update-behind', 'fix-linkage', 'merge',
   'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect', 'pr-reopen', 'pr-comment',
-  'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+  'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
 ]
 // maxAttempts may name any action kind or agent type.
 const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']

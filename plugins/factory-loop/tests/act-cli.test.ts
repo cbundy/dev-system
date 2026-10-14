@@ -5,7 +5,7 @@
 // treehouse status --json as it printed on 2026-10-13).
 import { describe, expect, test } from 'claude-code/testing'
 
-import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, slotState, stepsOf, usageError } from '../hooks/act-cli'
+import { CLI_TIMEOUT_MS, NO_EXIT, cliExecutors, commandFailure, eventFailure, finish, ownAgent, prCloseCheck, slotState, stepsOf, usageError } from '../hooks/act-cli'
 import type { ActIo, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from '../hooks/exec'
 import type { Runtime } from '../hooks/observe'
 import type { Action, ActionKind, LedgerEntry } from '../hooks/types'
@@ -124,6 +124,7 @@ const A = {
   later: (): Action => ({ ...base, kind: 'milestone-later', key: 'milestone-later:470', rule: 'M7', issue: 470 }),
   expect: (why = 'a new CLI flag'): Action => ({ ...base, kind: 'milestone-expect', key: 'expect:minor:512', rule: 'M7', issue: 470, bump: 'minor', why }),
   reopen: (): Action => ({ ...base, kind: 'pr-reopen', key: 'reopen:512:01RUN', rule: 'P6a', issue: 470, pr: 512 }),
+  prClose: (): Action => ({ ...base, kind: 'pr-close', key: 'pr-close:44', rule: 'M8', issue: 32, pr: 44, run: '01RUN', newBranch: 'feat/issue-32-slug-v2', by: 50 }),
   comment: (): Action => ({ ...base, kind: 'pr-comment', key: 'pr-comment:512:h1', rule: 'M3', issue: 470, pr: 512, body: 'Accepted:\n\nCORRECT: x' }),
   release: (): Action => ({ ...base, kind: 'release-worktree', key: `release:${SLOT}:feat/issue-470-x`, rule: 'H3', issue: 470, path: SLOT, branch: 'feat/issue-470-x' }),
   restart: (rule = 'H4'): Action => ({ ...base, kind: 'restart-self', key: 'restart:1', rule, issue: null, why: 'image 1.2.3', at: 1 }),
@@ -158,6 +159,10 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
       ['gh', 'pr', 'reopen', '512', '--repo', REPO],
     ])
     expect(argv(A.comment())).toEqual([['gh', 'pr', 'comment', '512', '--repo', REPO, '--body-file', '-']])
+    expect(argv(A.prClose())).toEqual([
+      ['gh', 'pr', 'view', '44', '--repo', REPO, '--json', 'state,headRefName'],
+      ['gh', 'pr', 'close', '44', '--repo', REPO, '--comment', 'Superseded by #50: a conflict fix moved this work to `feat/issue-32-slug-v2`. Closed by the factory loop.'],
+    ])
     expect(argv(A.release())).toEqual([['treehouse', 'return', SLOT], ['treehouse', 'status', '--json']])
     expect(argv(A.restart())).toEqual([['dev-restart-self']])
   })
@@ -173,7 +178,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
   })
 
   test('no template can pass a forbidden flag or command (SPEC 6.1)', () => {
-    const all = [A.heartbeat(), A.sweep(), A.claim(), A.close(), A.releaseParent(), A.abandon(), A.later(), A.expect(), A.reopen(), A.comment(), A.release(), A.restart()]
+    const all = [A.heartbeat(), A.sweep(), A.claim(), A.close(), A.releaseParent(), A.abandon(), A.later(), A.expect(), A.reopen(), A.comment(), A.prClose(), A.release(), A.restart()]
     for (const a of all) {
       for (const words of argv(a)) {
         const line = words.join(' ')
@@ -307,6 +312,52 @@ describe('gh writes: close-issue, pr-comment, pr-reopen', () => {
     expect(reopenFailed.calls).toHaveLength(2)
     expect(reopenFailed.result).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
     expect(reopenFailed.result.summary).toStartWith('gh pr reopen: exit 1')
+  })
+})
+
+describe('pr-close: the PR of a superseded run (rule M8, #553)', () => {
+  const view = (state: string, head = 'feat/issue-32-slug') => ({ stdout: `${JSON.stringify({ headRefName: head, state })}\n` })
+
+  test('an open PR on the old branch: read, then closed with a comment linking the new PR', async () => {
+    const { result, calls } = await exec(A.prClose(), [view('OPEN')])
+    expect(calls.map(c => c.argv.slice(0, 3))).toEqual([
+      ['gh', 'pr', 'view'],
+      ['gh', 'pr', 'close'],
+    ])
+    expect(calls[1]?.argv).toContain('--repo')
+    expect(calls[1]?.argv).not.toContain('--delete-branch')
+    expect(calls.map(c => c.init)).toEqual([{ timeoutMs: 60_000 }, { timeoutMs: 60_000 }])
+    expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'closed PR #44, superseded by #50' })
+  })
+
+  test('never a merged PR, nor one closed already: left alone, done, and the close never runs', async () => {
+    for (const state of ['MERGED', 'CLOSED']) {
+      const { result, calls } = await exec(A.prClose(), [view(state)])
+      expect(calls).toHaveLength(1)
+      expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: `PR #44 is already ${state.toLowerCase()}: left alone` })
+    }
+  })
+
+  test('a PR on the new branch, or on a branch of another issue, is refused and never retried', async () => {
+    for (const head of ['feat/issue-32-slug-v2', 'feat/issue-33-other', 'chore/docs']) {
+      const { result, calls } = await exec(A.prClose(), [view('OPEN', head)])
+      expect(calls).toHaveLength(1)
+      expect(result).toEqual({ status: 'failed', summary: `refused: PR #44 is on ${head}, not a superseded branch of #32`, noRetry: true })
+    }
+  })
+
+  test('a failed or unreadable read closes nothing and is retried; a failed close names its step', async () => {
+    const failed = await exec(A.prClose(), [{ exitCode: 1, stderr: RATE }])
+    expect(failed.calls).toHaveLength(1)
+    expect(failed.result).toMatchObject({ status: 'failed', rateLimited: true })
+    const unread = await exec(A.prClose(), [{ stdout: 'not json' }])
+    expect(unread.calls).toHaveLength(1)
+    expect(unread.result).toMatchObject({ status: 'failed', summary: 'gh pr view: PR #44 did not read' })
+    expect('noRetry' in unread.result).toBe(false)
+    const close = await exec(A.prClose(), [view('OPEN'), { exitCode: 1, stderr: 'GraphQL: Something went wrong' }])
+    expect(close.result.summary).toStartWith('gh pr close: exit 1')
+    // the pure reading, as the executor uses it
+    expect(prCloseCheck(A.prClose() as Extract<Action, { kind: 'pr-close' }>, view('OPEN').stdout)).toBe('close')
   })
 })
 
@@ -499,6 +550,7 @@ describe('guards and pure readers', () => {
         'heartbeat',
         'milestone-expect',
         'milestone-later',
+        'pr-close',
         'pr-comment',
         'pr-reopen',
         'release-parent',

@@ -627,6 +627,7 @@ function bareState(rt: Runtime, now: Ms): State {
     control: EMPTY_CONTROL,
     lastTitle,
     githubBackoffUntil: null,
+    checkout: null,
   }
 }
 

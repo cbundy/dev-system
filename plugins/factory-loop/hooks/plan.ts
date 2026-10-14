@@ -57,6 +57,7 @@ const OWNER_TELLS = [
   'ci-triggers',
   'update-behind',
   'linkage',
+  'checkout',
 ]
 // Actions that write to GitHub (or read it heavily); held while GitHub rate-limits us.
 const GITHUB: readonly ActionKind[] = [
@@ -75,7 +76,12 @@ const GITHUB: readonly ActionKind[] = [
   'milestone-expect',
   'pr-reopen',
   'pr-comment',
+  'pr-close',
 ]
+// What waits while the main checkout is off its default branch (rule G5, #544): each starts work
+// in it or reads its code (a claim leads to a designer; agents begin in it; a task is the model
+// working from it). Free commands read only the object store and remote refs, so they go on.
+const CHECKOUT_HELD: readonly ActionKind[] = ['claim', 'spawn', 'delegate', 'task']
 const ALLOWED: Record<Tier, readonly ActionClass[]> = {
   normal: ['free', 'owner', 'drive', 'develop', 'start'],
   slow: ['free', 'owner', 'drive', 'develop', 'start'],
@@ -165,11 +171,13 @@ export function plan(state: State, config: Config): PlanResult {
   if (blind) {
     blindPass(ctx)
   } else {
+    checkout(ctx)
     housekeeping(ctx)
     if (state.sources.runs.ok) {
       const runs = currentRuns(ctx)
       pipelineGates(ctx, runs)
       merges(ctx, runs)
+      supersededPrs(ctx)
     } else {
       skip(ctx, 'P', null, 'runs source unavailable')
     }
@@ -381,6 +389,37 @@ function blindPass(ctx: Ctx) {
   if (since === null || state.now - since >= config.blindNoticeAfterMs) {
     want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never' }))
   }
+}
+
+// --- G5: the main checkout (#544) ----------------------------------------------------------
+
+// checkoutMoved: why the main checkout is not where an agent may start in it: detached, on
+// another branch, carrying changes, or unreadable; null when it is on its default branch and
+// clean, or was not read (the replay harness).
+export function checkoutMoved(state: State): string | null {
+  const c = state.checkout
+  if (c === null) return null
+  if ('error' in c) return `unreadable: ${c.error}`
+  if (c.branch === null) return `detached at ${(c.head ?? 'unknown').slice(0, 7)}`
+  if (c.branch !== c.defaultBranch) return `on ${c.branch}, not ${c.defaultBranch}`
+  if (c.dirty.length === 0) return null
+  const more = c.dirty.length > 3 ? ` and ${c.dirty.length - 3} more` : ''
+  return `has changes: ${c.dirty.slice(0, 3).join(', ')}${more}`
+}
+
+// A moved checkout tells the owner once per sight (its branch, commit and whether it carries
+// changes), and admit holds what starts in it until it is back. The loop never moves it itself:
+// an agent may be using it.
+function checkout(ctx: Ctx) {
+  const why = checkoutMoved(ctx.state)
+  const c = ctx.state.checkout
+  if (why === null || c === null) return
+  if ('error' in c) {
+    want(ctx, wake('tell', 'checkout', 'tell:checkout:unreadable', 'G5', null, {}, [why]))
+    return
+  }
+  const seen = `${c.branch ?? 'detached'}@${c.head ?? 'unknown'}${c.dirty.length > 0 ? ':changed' : ''}`
+  want(ctx, wake('tell', 'checkout', `tell:checkout:${seen}`, 'G5', null, { branch: c.branch ?? 'detached', head: c.head, default: c.defaultBranch }, [why]))
 }
 
 // --- H: housekeeping -------------------------------------------------------------------
@@ -901,6 +940,44 @@ function onGuardFails(ctx: Ctx, run: RunView, fails: GuardFail[], seq: number) {
       return
     }
   }
+}
+
+// --- M8: the PR of a superseded run (#553, I-39) ---------------------------------------------
+
+// A fixer sent to a run that handed off on a new branch superseded that run (act-agents.ts logs
+// `superseded`); callum-flow-regate then says "once the new PR exists, close the old PR".
+type Moved = { issue: number; run: string; pr: number; newRun: string | null; newBranch: string }
+
+// supersededPrs: each superseded run's PR is closed once the branch its work moved to has a PR,
+// with a link to the newest one down the chain. A run the watcher still shows and the event log
+// does not mark superseded is left alone; a merged or closed PR is the executor's to leave.
+function supersededPrs(ctx: Ctx) {
+  const moves: Moved[] = []
+  for (const e of [...ctx.byKey.values()].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))) {
+    const handoff = outcome(e.status === 'done' && e.kind === 'spawn' && e.agent === 'fixer' ? e : undefined, 'handoff')
+    if (handoff === undefined || handoff.newBranch === null || e.issue === null || e.run === null || e.pr === null) continue
+    moves.push({ issue: e.issue, run: e.run, pr: e.pr, newRun: handoff.run, newBranch: handoff.newBranch })
+  }
+  for (const m of moves) {
+    const key = `pr-close:${m.pr}`
+    if (done(ctx, key) !== undefined || ctx.state.runs.some(r => r.run === m.run && !r.superseded)) continue
+    const by = replacement(ctx, moves, m, [])
+    if (by === null) {
+      if (isLive(ctx.issues.get(m.issue))) skip(ctx, 'M8', m.issue, `PR #${m.pr} superseded: waiting for the PR of ${m.newBranch}`)
+      continue
+    }
+    want(ctx, { kind: 'pr-close', key, class: 'free', rule: 'M8', reason: `superseded by #${by}`, issue: m.issue, pr: m.pr, run: m.run, newBranch: m.newBranch, by })
+  }
+}
+
+// replacement: the PR the moved work has now. A new run that moved on in turn was superseded by
+// a fixer sent with its PR, so the chain is followed to its newest PR; null while the new
+// branch has none yet.
+function replacement(ctx: Ctx, moves: Moved[], m: Moved, seen: string[]): number | null {
+  const next = m.newRun === null ? undefined : moves.find(o => o.run === m.newRun && o.run !== m.run && !seen.includes(o.run))
+  if (next !== undefined) return replacement(ctx, moves, next, [...seen, m.run]) ?? next.pr
+  const run = ctx.state.runs.find(r => r.pr !== null && r.pr !== m.pr && (r.branch === m.newBranch || (m.newRun !== null && r.run === m.newRun)))
+  return run?.pr ?? null
 }
 
 // prHead: the PR's head as this loop's own updates left it. update-behind pushes a new PR head
@@ -1789,6 +1866,7 @@ function admit(ctx: Ctx): Action[] {
   const tripped = new Set<string>()
   const breakers = new Map<ActionKind, number>()
   const backoff = state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil
+  const moved = checkoutMoved(state)
   const kept: Action[] = []
   const writing = new Set<number>()
   for (const action of ctx.out) {
@@ -1803,6 +1881,10 @@ function admit(ctx: Ctx): Action[] {
       !['abandon', 'stop-agent', 'tell'].includes(action.kind)
     ) {
       skip(ctx, action.rule, issue, `owner: dropped (${action.kind})`)
+      continue
+    }
+    if (moved !== null && CHECKOUT_HELD.includes(action.kind)) {
+      skip(ctx, action.rule, issue, `main checkout ${moved} (${action.kind})`)
       continue
     }
     // one writer per branch: while an implementer or fixer of the issue still works (or one was
@@ -1905,6 +1987,7 @@ export function titleOf(state: State, config: Config, tier: Tier, notes: TitleNo
   const words: string[] = []
   if (config.mode !== 'act') words.push('observe')
   if (notes.blind) words.push('blind')
+  if (checkoutMoved(state) !== null) words.push('checkout')
   if (tier === 'stop-new') words.push('stop new')
   if (tier === 'stop-all') words.push('stop all')
   if (!notes.blind) {

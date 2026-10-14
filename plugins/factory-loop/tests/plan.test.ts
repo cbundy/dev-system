@@ -7,6 +7,7 @@ import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, State } from '../hooks/types'
 import {
+  CLEAN,
   DEVICE,
   MIN,
   NOW,
@@ -1407,6 +1408,142 @@ describe('parsing helpers', () => {
     expect(issueFromBranch('feat/issue-506-implementer-route-v2')).toBe(506)
     expect(issueFromBranch('issue-448-dev-statusline')).toBe(448)
     expect(issueFromBranch('chore/release-1.0')).toBeNull()
+  })
+})
+
+describe('G5: the main checkout (#544)', () => {
+  // testbed 2026-10-13: an adjudicator checked out another issue's branch in the session's
+  // directory, and the loop kept starting agents there for 25 minutes
+  const SHA = '9f3c2a1b7d4e5f60718293a4b5c6d7e8f9012345'
+  const LIFE = NOW - 30 * MIN
+  const designing = (checkout: State['checkout']) => state({ issues: [mine(60, 'designing')], checkout })
+  const told = (s: State, key: string) => withLedger(s, [entry(key, 'tell', { class: 'owner', wake: 'checkout' })])
+
+  test('a detached checkout shows within one pass: the title, one owner notice, and designers held', () => {
+    const s = designing({ branch: null, head: SHA, defaultBranch: 'main', dirty: [] })
+    const r = plan(s, CFG)
+    expect(keys(r)).toEqual([`tell:checkout:detached@${SHA}`])
+    expect(find(r, `tell:checkout:detached@${SHA}`)).toMatchObject({ kind: 'tell', wake: 'checkout', class: 'owner', rule: 'G5', fields: { head: SHA, default: 'main' } })
+    expect(r.title).toContain('checkout')
+    expect(r.owner).toBe(1)
+    expect(r.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'main checkout detached at 9f3c2a1 (spawn)' })
+    // told once: the next pass holds on in silence, and the title still says so
+    const after = plan(told(s, `tell:checkout:detached@${SHA}`), CFG)
+    expect(keys(after)).toEqual([])
+    expect([after.title.includes('checkout'), after.owner]).toEqual([true, 1])
+    // put back on its default branch: the designer starts, and the title drops the word
+    const back = plan({ ...told(s, `tell:checkout:detached@${SHA}`), checkout: CLEAN }, CFG)
+    expect(keys(back)).toEqual([`design:60:${LIFE}`])
+    expect(back.title).not.toContain('checkout')
+  })
+
+  test('a checkout switched to another branch, or carrying changes, holds designers and tells once', () => {
+    const switched = plan(designing({ branch: 'feat/issue-4-slugify-separator', head: SHA, defaultBranch: 'main', dirty: [] }), CFG)
+    expect(keys(switched)).toEqual([`tell:checkout:feat/issue-4-slugify-separator@${SHA}`])
+    expect(switched.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'main checkout on feat/issue-4-slugify-separator, not main (spawn)' })
+    const dirty = plan(designing({ ...CLEAN, dirty: ['plugins/factory-loop/hooks/plan.ts', 'README.md', 'a.ts', 'b.ts'] }), CFG)
+    expect(keys(dirty)).toEqual([`tell:checkout:main@${CLEAN.head}:changed`])
+    expect(dirty.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'main checkout has changes: plugins/factory-loop/hooks/plan.ts, README.md, a.ts and 1 more (spawn)' })
+    // a checkout that cannot be read is not proven where it belongs: held, and told
+    const unread = plan(designing({ error: 'exit 128: fatal: not a git repository' }), CFG)
+    expect(keys(unread)).toEqual(['tell:checkout:unreadable'])
+    expect(unread.skipped).toContainEqual({ rule: 'D2', issue: 60, why: 'main checkout unreadable: exit 128: fatal: not a git repository (spawn)' })
+    // not read at all (the replay harness): nothing to hold
+    expect(keys(plan(designing(null), CFG))).toEqual([`design:60:${LIFE}`])
+  })
+
+  test('what starts in the checkout waits: claims, agents and tasks; free work, judges and notices go on', () => {
+    const moved = { branch: 'feat/issue-4-slugify-separator', head: SHA, defaultBranch: 'main', dirty: [] }
+    const key = `tell:checkout:feat/issue-4-slugify-separator@${SHA}`
+    // a claim, a delegation, a gate adjudicator and the release task all wait
+    const busy = told(
+      state({
+        queue: [7],
+        issues: [issue(7), mine(61, 'designing'), mine(45, 'parked', { pr: 545 })],
+        runs: [run(45, 'parked')],
+        milestone: { open: 0, closed: 2, expected: null },
+        checkout: moved,
+      }),
+      key,
+    )
+    const withDesign = withLedger(busy, [
+      entry(`design:61:${LIFE}`, 'spawn', { agent: 'designer', class: 'develop', issue: 61, outcome: { kind: 'designer', brief: brief(61), created: [], pendingDecision: false } }),
+    ])
+    const r = plan(withDesign, CFG)
+    expect(keys(r)).toEqual([])
+    const why = r.skipped.map(k => k.why)
+    for (const kind of ['claim', 'delegate', 'spawn', 'task']) expect(why).toContain(`main checkout on feat/issue-4-slugify-separator, not main (${kind})`)
+    // the merge reads only the object store and remote refs, so it goes on
+    const ready = mergeReady([guarded(), reviewed()])
+    expect(keys(plan({ ...told(ready, key), checkout: moved }, CFG))).toEqual(['merge:550:head50'])
+  })
+})
+
+describe('M8: the PR of a superseded run is closed (#553, I-39)', () => {
+  // stage D run 2: issue 32's conflict fixes moved it to -v2, then -v2-v2, and PRs 44 and 50
+  // stayed open with their Closes keyword beside the live PR 57
+  const B = 'feat/issue-32-slug'
+  const R1 = '01M4RQ0032AAAA'
+  const R2 = '01M4RQ0032BBBB'
+  const R3 = '01M4RQ0032CCCC'
+  // a conflict fixer sent to a run and its PR that handed off on a new branch, with its new run
+  const moved = (runId: string, pr: number, to: string, newRun: string | null) =>
+    entry(`fixer:conflict:${pr}:h${pr}`, 'spawn', {
+      agent: 'fixer',
+      class: 'drive',
+      issue: 32,
+      run: runId,
+      pr,
+      head: `h${pr}`,
+      outcome: { kind: 'handoff', notGated: false, run: newRun, head: `n${pr}`, newBranch: to },
+    })
+  const live = (branch: string, runId: string, pr: number | null) => run(32, 'running', { branch, run: runId, pr })
+  const at = (ledger: LedgerEntry[], runs: State['runs']) => withLedger(state({ issues: [mine(32, 'in pipeline', { pr: 57 })], runs }), ledger)
+  const closed = (pr: number) => entry(`pr-close:${pr}`, 'pr-close', { issue: 32, pr })
+
+  test('once the new branch has its PR, the old PR is closed with a link to it', () => {
+    const r = plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, 50)]), CFG)
+    expect(keys(r)).toEqual(['pr-close:44'])
+    expect(find(r, 'pr-close:44')).toMatchObject({ kind: 'pr-close', class: 'free', rule: 'M8', issue: 32, pr: 44, run: R1, newBranch: `${B}-v2`, by: 50 })
+  })
+
+  test('no PR on the new branch yet: it waits, and says so', () => {
+    const r = plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, null)]), CFG)
+    expect(keys(r)).toEqual([])
+    expect(r.skipped).toContainEqual({ rule: 'M8', issue: 32, why: `PR #44 superseded: waiting for the PR of ${B}-v2` })
+    expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], []), CFG))).toEqual([])
+  })
+
+  test('a chain (-v2, then -v2-v2) closes each older PR once', () => {
+    const first = [moved(R1, 44, `${B}-v2`, R2)]
+    expect(keys(plan(at(first, [live(`${B}-v2`, R2, 50)]), CFG))).toEqual(['pr-close:44'])
+    // 44 closed; the second fix moves 50's work on, and the new run's PR is 57
+    const second = [...first, closed(44), moved(R2, 50, `${B}-v2-v2`, R3)]
+    const r = plan(at(second, [live(`${B}-v2-v2`, R3, 57)]), CFG)
+    expect(keys(r)).toEqual(['pr-close:50'])
+    expect(find(r, 'pr-close:50')).toMatchObject({ pr: 50, by: 57, newBranch: `${B}-v2-v2` })
+    expect(keys(plan(at([...second, closed(50)], [live(`${B}-v2-v2`, R3, 57)]), CFG))).toEqual([])
+    // both fixes done before either close: each old PR links the newest one
+    const both = plan(at([...first, moved(R2, 50, `${B}-v2-v2`, R3)], [live(`${B}-v2-v2`, R3, 57)]), CFG)
+    expect(both.actions.flatMap(a => (a.kind === 'pr-close' ? [[a.key, a.by]] : []))).toEqual([
+      ['pr-close:44', 57],
+      ['pr-close:50', 57],
+    ])
+  })
+
+  test('never a PR whose run is not superseded: a fixer on the same branch, no run, or a run the log does not mark superseded', () => {
+    // the fixer pushed to the branch it was sent to: nothing moved
+    const same = entry('fixer:conflict:44:h44', 'spawn', { agent: 'fixer', issue: 32, run: R1, pr: 44, outcome: { kind: 'handoff', notGated: false, run: R2, head: 'n', newBranch: null } })
+    expect(keys(plan(at([same], [live(B, R2, 44)]), CFG))).toEqual([])
+    // the fixer was sent with no run (a handoff fixer): no superseded event was logged
+    expect(keys(plan(at([{ ...moved(R1, 44, `${B}-v2`, R2), run: null }], [live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    // the watcher still shows the old run and the event log does not mark it superseded
+    const old = run(32, 'cancelled', { branch: B, run: R1, pr: 44, superseded: false })
+    expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [old, live(`${B}-v2`, R2, 50)]), CFG))).toEqual([])
+    const marked = { ...old, superseded: true }
+    expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [marked, live(`${B}-v2`, R2, 50)]), CFG))).toEqual(['pr-close:44'])
+    // the new branch's PR is the old one: nothing replaced it
+    expect(keys(plan(at([moved(R1, 44, `${B}-v2`, R2)], [live(`${B}-v2`, R2, 44)]), CFG))).toEqual([])
   })
 })
 

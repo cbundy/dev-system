@@ -84,6 +84,12 @@ export type RunView = {
   superseded: boolean
 }
 
+// The main checkout, where every agent the loop starts begins and its own commands run (#544):
+// the branch checked out (null when HEAD is detached), its commit, origin's default branch and
+// the tracked paths with changes (untracked files are not the checkout moving). A read that
+// failed is { error }.
+export type Checkout = { branch: string | null; head: string | null; defaultBranch: string; dirty: string[] } | { error: string }
+
 export type Slot = { path: string; branch: string | null; state: string; dirty: boolean | null; busy: boolean }
 export type Pool = { free: number; total: number; slots: Slot[] }
 
@@ -177,6 +183,7 @@ export type ActionKind =
   | 'milestone-expect'
   | 'pr-reopen'
   | 'pr-comment'
+  | 'pr-close'
   | 'release-worktree'
   | 'restart-self'
   | 'rollout'
@@ -232,6 +239,8 @@ export type State = {
   control: Control
   lastTitle: string | null
   githubBackoffUntil: Ms | null
+  // null: not read (the replay harness, a state built outside a pass)
+  checkout: Checkout | null
 }
 
 export type Mode = 'off' | 'observe' | 'act'
@@ -343,6 +352,8 @@ export type Action =
   | (Base & { kind: 'abandon'; run: string | null; branch: string | null; note: string })
   | (Base & { kind: 'milestone-expect'; bump: Bump; why: string })
   | (Base & { kind: 'pr-comment'; pr: number; body: string })
+  // rule M8: the PR of a superseded run, and the PR on the branch its work moved to (#553)
+  | (Base & { kind: 'pr-close'; pr: number; run: string; newBranch: string; by: number })
   | (Base & { kind: 'release-worktree'; path: string; branch: string })
   // rule H4: why the update is due, and when it was asked for (the key's subject)
   | (Base & { kind: 'restart-self'; why: string; at: Ms })

@@ -7,6 +7,7 @@ import { issueFromBranch } from './plan'
 import type {
   AgentView,
   Brief,
+  Checkout,
   Control,
   IssueView,
   LedgerEntry,
@@ -47,6 +48,8 @@ export type Observed = {
   githubBackoffUntil: number | null
   // config trackerTitle: a title matching it marks a tracker
   trackerTitle: string
+  // the main checkout (#544); the replay harness leaves it out: not read
+  checkout?: Checkout | null
 }
 
 const UNAVAILABLE: Usage = { fiveHour: null, sevenDay: null, fiveHourResetsAt: null, sevenDayResetsAt: null, unavailable: true }
@@ -171,6 +174,7 @@ export function buildState(o: Observed): State {
     control: o.control,
     lastTitle: o.lastTitle,
     githubBackoffUntil: o.githubBackoffUntil,
+    checkout: o.checkout ?? null,
   }
 }
 

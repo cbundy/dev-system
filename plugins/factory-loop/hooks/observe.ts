@@ -12,6 +12,7 @@ import { choose } from './ledger'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
+  parseCheckout,
   parseCsv,
   parseFactoryState,
   parseIssueRead,
@@ -26,7 +27,7 @@ import {
 import type { Factory } from './parse'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
-import type { Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
+import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
 
 const GITHUB_READS_PER_PASS = 12
 const EVENT_DAYS = 3
@@ -365,6 +366,25 @@ export async function observe(
     }
   }
 
+  // checkout: the main checkout's branch and tracked changes, every pass (rule G5, #544). Agents
+  // the loop starts begin there and designers read its code, so one an agent moved holds them.
+  // --no-optional-locks: the read never takes the index lock from under an agent's git command.
+  let checkout: Checkout
+  try {
+    const origin = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], undefined, 10_000)
+    if (origin.exitCode !== 0) {
+      // --quiet: a ref that is not set exits 1 with nothing on stderr
+      const why = origin.stderr.trim() === '' ? `exit ${origin.exitCode}` : fail(origin)
+      checkout = { error: `no origin/HEAD (${why}); git remote set-head origin --auto sets it` }
+    } else {
+      const status = await run(['git', '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no'], undefined, 30_000)
+      const read = status.exitCode === 0 ? parseCheckout(origin.stdout, status.stdout) : null
+      checkout = read ?? { error: status.exitCode === 0 ? 'git status did not read' : fail(status) }
+    }
+  } catch (err) {
+    checkout = { error: String(err) }
+  }
+
   // milestone: every milestoneEveryMs; nothing printed means the repo has not opted in
   if (cache.milestone === undefined || now - cache.milestone.at >= cfg.milestoneEveryMs) {
     try {
@@ -441,6 +461,7 @@ export async function observe(
     lastTitle,
     githubBackoffUntil,
     trackerTitle: cfg.trackerTitle,
+    checkout,
   })
   return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited }
 }
