@@ -50,18 +50,18 @@ fi
 
 # Run the command as a child, not exec, so the stop path can write the worker's final
 # heartbeat once it has exited (heartbeat-loop --final, #467). Stop signals are forwarded to
-# the child; bash's wait returns early when a trapped signal arrives, so loop until the
-# child has really exited.
+# the child; bash's wait returns early (128+signal) when a trapped signal arrives, so loop
+# until the child has really exited, then take its own status from a final wait.
 ( trap - INT QUIT; exec "$@" ) <&0 &
 child=$!
 trap 'kill -s TERM "$child" 2>/dev/null || true' TERM
 trap 'kill -s INT "$child" 2>/dev/null || true' INT
 trap 'kill -s HUP "$child" 2>/dev/null || true' HUP
-while :; do
-  status=0
-  wait "$child" || status=$?
-  kill -0 "$child" 2>/dev/null || break
+while kill -0 "$child" 2>/dev/null; do
+  wait "$child"
 done
+status=0
+wait "$child" || status=$?
 trap - TERM INT HUP
 
 hb=/usr/local/share/dev-system/heartbeat-loop
