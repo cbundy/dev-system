@@ -453,7 +453,10 @@ export type Answered = { result: 'applied' | 'repair' | 'waiting' | 'recorded' |
 // is asked only then. A final answer with no machine line first gets one repair message to the
 // same agent, naming what was wrong (#548): the entry runs on with its attempt unspent, and only
 // an answer still unreadable after it, or a message that could not be delivered, fails the
-// attempt (or sends the designer's report to the model, rule D3) as before.
+// attempt (or sends the designer's report to the model, rule D3) as before. A tool call is
+// answered outside the hook queue (#558), so it may finish the entry while this answer is read:
+// the entry is checked again just before each change, with no await between, and an entry its
+// tool finished meanwhile is 'recorded', the text never read over it.
 export async function agentAnswered(
   env: ActEnv,
   state: State,
@@ -472,21 +475,28 @@ export async function agentAnswered(
   try {
     const read = await onAgentAnswer(ctxOf(env, state, entry), entry, answer)
     let exec = read.exec
+    const ours = (e: LedgerEntry | undefined): e is LedgerEntry => e !== undefined && e.agentId === id && e.startedAt === entry.startedAt
     const still = () => {
       const current = env.live.ledger.find(e => e.key === entry.key)
-      return current !== undefined && current.agentId === id && current.status === 'running' && current.startedAt === entry.startedAt ? current : null
+      return ours(current) && current.status === 'running' ? current : null
     }
-    const current = still()
-    if (current === null) return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
+    // the attempt no longer runs: its tool answered meanwhile, or a stop or a retry ended it
+    const ended = (): Answered => {
+      const current = env.live.ledger.find(e => e.key === entry.key)
+      return ours(current) && current.status === 'done' ? { result: 'recorded', key: entry.key } : { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
+    }
+    if (still() === null) return ended()
     if (interim(answer, exec) && (await atWork(id))) {
       return { result: 'waiting', why: `interim answer for ${entry.key}: the agent still works, so its final answer is awaited` }
     }
+    const at = await env.io.now()
+    const current = still()
+    if (current === null) return ended()
     const repaired = current.reminded === true
     const type = agentOf(entry)
     if (interim(answer, exec) && !repaired && type !== null) {
       const problem = read.problem ?? 'no machine line'
       // the repair is on the entry before it goes out, so a reload never sends a second one
-      const at = await env.io.now()
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
@@ -499,9 +509,9 @@ export async function agentAnswered(
         return { result: 'repair', why: problem, key: entry.key }
       }
       exec = { ...exec, summary: clip(`${exec.summary}; the repair message was not delivered: ${undelivered}`) }
-      if (still() === null) return { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
     }
     const now = await env.io.now()
+    if (still() === null) return ended()
     const moved = transition(env.live, l => finish(l, entry.key, exec, now, { config: env.rt.config }))
     await env.save()
     await logLoop(env, moved)
@@ -511,8 +521,18 @@ export async function agentAnswered(
   }
 }
 
-// What an answer tool's call did: ok and the text the agent reads; key: the entry it answered.
-export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?: boolean }
+// The refusal of a tool call that could not be decided in time (#558): the agent answers in text.
+export const TOOL_LATE = 'Not recorded: the factory loop could not check this answer in time; reply with your text lines instead.'
+
+// Asked just before a tool call changes the ledger: false once the caller has answered the call
+// without it (register.ts bounded), and then nothing changes.
+export type Claim = () => boolean
+
+// What an answer tool's call did: ok and the text the agent reads; key: the entry it answered;
+// after: an accepted call's follow-up, run once the call has its answer (#558): the call's input
+// saved, its events, the ledger saved and the entry's loop event, in that order; notes on what
+// failed, for the decision log.
+export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?: boolean; after?: (env: ActEnv) => Promise<string[]> }
 
 // agentToolAnswered: an agent's answer tool (agent-tools.ts, #548), tied to the entry that
 // spawned it by the call's agentId. Only an agent whose entry still runs may answer: the main
@@ -520,8 +540,18 @@ export type ToolAnswered = { ok: boolean; text: string; key?: string; repaired?:
 // one whose answer is in are refused. A call the contract refuses changes nothing and tells the
 // agent what to correct; an accepted one finishes the entry at once, as its text would (its
 // turn's closing words are then not read). Both channels share the reading, so a tool answer
-// means exactly what the same answer in text means.
-export async function agentToolAnswered(env: ActEnv, state: State, tool: string, input: unknown, agentId: string | undefined): Promise<ToolAnswered> {
+// means exactly what the same answer in text means. The call is answered before the engine gives
+// up on it (#558): the entry is checked and finished in the live ledger with no await between,
+// so the answer is true when given and every hook and pass after it sees the entry done, and
+// what is slow is left to `after`.
+export async function agentToolAnswered(
+  env: ActEnv,
+  state: State,
+  tool: string,
+  input: unknown,
+  agentId: string | undefined,
+  claim: Claim = () => true,
+): Promise<ToolAnswered> {
   const no = (why: string, key?: string): ToolAnswered => (key === undefined ? { ok: false, text: `Not recorded: ${why}.` } : { ok: false, text: `Not recorded: ${why}.`, key })
   if (agentId === undefined) return no('this tool takes the answer of an agent the factory loop started, and the main conversation is none')
   const entry = env.live.ledger.find(e => e.agentId === agentId && (e.kind === 'spawn' || e.kind === 'delegate'))
@@ -531,15 +561,27 @@ export async function agentToolAnswered(env: ActEnv, state: State, tool: string,
   }
   const r = await onToolAnswer(ctxOf(env, state, entry), entry, tool, input)
   if ('refused' in r) return no(r.refused, entry.key)
+  const now = await env.io.now()
   const current = env.live.ledger.find(e => e.key === entry.key)
   if (current === undefined || current.agentId !== agentId || current.status !== 'running' || current.startedAt !== entry.startedAt) {
     return no('the factory loop stopped waiting on this agent meanwhile', entry.key)
   }
-  const now = await env.io.now()
+  if (!claim()) return { ok: false, text: TOOL_LATE, key: entry.key }
   const moved = transition(env.live, l => finish(l, entry.key, r.exec, now, { config: env.rt.config }))
+  const after = async (later: ActEnv): Promise<string[]> => {
+    const notes = await r.after(ctxOf(later, state, entry))
+    await keep(later, moved)
+    return notes
+  }
+  return { ok: true, text: `Recorded: ${r.exec.summary}. End your turn now; no reply lines are needed.`, key: entry.key, repaired: current.reminded === true, after }
+}
+
+// keep: what follows a transition a hook made at once in the live ledger (#558): the ledger
+// saved, then the moved entries' loop events.
+export async function keep(env: ActEnv, moved: readonly LedgerEntry[]): Promise<void> {
+  if (moved.length === 0) return
   await env.save()
   await logLoop(env, moved)
-  return { ok: true, text: `Recorded: ${r.exec.summary}. End your turn now; no reply lines are needed.`, key: entry.key, repaired: current.reminded === true }
 }
 
 const WAKE_HEAD = /^(JUDGE|TASK|TELL) /m
@@ -573,32 +615,35 @@ export async function wakeEnded(env: ActEnv, turn: TurnEnd): Promise<{ moved: bo
   return { moved: out.updates.length > 0, prompts: out.prompts, problems: out.problems }
 }
 
-// wakeAnswered: mcp__factory-loop__answer, checked as the ANSWER block is (wake.ts answerTool).
-export async function wakeAnswered(env: ActEnv, input: unknown, agentId: string | undefined): Promise<{ ok: boolean; text: string; moved: boolean }> {
+// wakeAnswered: mcp__factory-loop__answer, checked as the ANSWER block is (wake.ts answerTool)
+// and recorded in the live ledger at once, with no await between the check and the change, as an
+// agent's tool is (#558); `moved` asks for keep, once the call has its answer. claim: as for
+// agentToolAnswered.
+export async function wakeAnswered(
+  env: ActEnv,
+  input: unknown,
+  agentId: string | undefined,
+  claim: Claim = () => true,
+): Promise<{ ok: boolean; text: string; moved: LedgerEntry[] }> {
   const now = await env.io.now()
   const r = answerTool(env.live.ledger, input, env.rt.repo, agentId === undefined ? {} : { agentId })
   const update = r.update
-  if (update === null) return { ok: r.ok, text: r.text, moved: false }
-  const moved = transition(env.live, l => finish(l, update.key, update, now))
-  await env.save()
-  await logLoop(env, moved)
-  return { ok: r.ok, text: r.text, moved: true }
+  if (update === null) return { ok: r.ok, text: r.text, moved: [] }
+  if (!claim()) return { ok: false, text: TOOL_LATE, moved: [] }
+  return { ok: r.ok, text: r.text, moved: transition(env.live, l => finish(l, update.key, update, now)) }
 }
 
-// retried: `/factory retry <N>` clears the issue's exhausted entries (D-38, ledger.ts
-// retryIssue); the keys it cleared.
-export async function retried(env: ActEnv, issue: number): Promise<string[]> {
+// retried: `/factory retry <N>` clears the issue's exhausted entries in the live ledger at once
+// (D-38, ledger.ts retryIssue): the keys it cleared, and the entries it moved, for keep once the
+// op has its answer (#558).
+export function retried(env: Pick<ActEnv, 'live' | 'rt'>, issue: number): { cleared: string[]; moved: LedgerEntry[] } {
   let cleared: string[] = []
   const moved = transition(env.live, l => {
     const r = retryIssue(l, issue, env.rt.config)
     cleared = r.cleared
     return r.ledger
   })
-  if (moved.length > 0) {
-    await env.save()
-    await logLoop(env, moved)
-  }
-  return cleared
+  return { cleared, moved }
 }
 
 // --- small helpers --------------------------------------------------------------------------------

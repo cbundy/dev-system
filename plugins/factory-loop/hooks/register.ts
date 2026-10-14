@@ -14,6 +14,7 @@
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
+  TOOL_LATE,
   actPass,
   agentAnswered,
   agentToolAnswered,
@@ -21,6 +22,7 @@ import {
   capEventArgv,
   capKey,
   commandOf,
+  keep,
   logLoop,
   loggedOf,
   passErrorTell,
@@ -32,7 +34,7 @@ import {
   wakeEnded,
   wakeStarted,
 } from './act'
-import type { ActEnv, ActReport, Answered, Between, Live, Repair } from './act'
+import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, ToolAnswered } from './act'
 import { stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
@@ -111,6 +113,12 @@ const REPAIR_TIMEOUT_MS = 10_000
 const SUBMIT_GRACE_MS = 5_000
 // three passes in a row that throw tell the owner (SPEC 10.9)
 const ERROR_PASSES = 3
+// The engine gives each hook a budget of its own time per dispatch (HookBudget, 10 s: awaiting
+// the hook queue counts, a $ call does not), and a tool call whose hook outruns it is left with
+// "no tool.call hook answered this call" (stage D run 3, #558). The loop's tool hooks decide
+// against what is in memory and answer at once; one whose own work is not done within this
+// bound refuses, asking for text.
+const TOOL_ANSWER_MS = 2_000
 const DEFAULT_TOOLS_DIR = '/usr/local/share/callum-tools'
 
 const lastPassRef = { plugin: 'factory-loop', key: 'lastPass' } as const
@@ -601,6 +609,10 @@ function ping(why: string) {
   ask?.('ping', why)
 }
 
+// background: queue what a tool call leaves for later with the $ the loop's timers run with, as
+// ask does, made once per load (ensure).
+let background: ((after: After) => void) | null = null
+
 async function step($: EngineInterface) {
   const now = await $.clock.now()
   const r = nextPass(sched, now)
@@ -1083,7 +1095,8 @@ function summaryOf(a: Action) {
   }
 }
 
-// clearUpdate: control.json without updateDue, once the restart for it ran (rule H4).
+// clearUpdate: control.json without updateDue, once the restart for it ran (rule H4). Its line
+// is appended outside the owner's op queue, which holds only file reads and writes (#558).
 async function clearUpdate($: EngineInterface, rt: Runtime, at: Ms | null): Promise<boolean> {
   if (at === null) return false
   const run = ops.then(async () => {
@@ -1091,17 +1104,19 @@ async function clearUpdate($: EngineInterface, rt: Runtime, at: Ms | null): Prom
     const loaded = await readControl(fio, rt.loopDir)
     if (loaded.error !== null || loaded.control.updateDue?.at !== at) return false
     await writeControl(fio, rt.loopDir, { ...loaded.control, updateDue: null })
-    await appendLine($, rt, { control: 'update off', text: `restart:${at} ran: the update is done and the drain ends` })
     return true
   })
   ops = run.catch(() => undefined)
-  return run.catch(() => false)
+  const cleared = await run.catch(() => false)
+  if (cleared) await appendLine($, rt, { control: 'update off', text: `restart:${at} ran: the update is done and the drain ends` })
+  return cleared
 }
 
 // --- between passes: the hooks that feed the ledger ---------------------------------------------
 
 // hook: hook work that reads and changes the ledger, one at a time and in the order the events
-// came (a wake's turn.start before its turn.complete).
+// came (a wake's turn.start before its turn.complete). A tool call never waits here: it changes
+// the ledger in memory at once and leaves the rest to this queue (later, #558).
 function hook(work: () => Promise<void>): Promise<void> {
   const run = hooking.then(work)
   hooking = run.catch(() => undefined)
@@ -1118,6 +1133,76 @@ async function ledgerFor($: EngineInterface): Promise<Runtime | null> {
   if (rt === null || rt.repo === '' || rt.mode !== 'act' || (await killed($))) return null
   if (live.loaded && live.repo === rt.repo) return rt
   return (await ensureLedger($, rt, [])) ? rt : null
+}
+
+// held: the runtime a tool call is decided against, from memory alone (#558): the last pass's,
+// in act mode with no kill switch, with its ledger loaded. 'none': this session keeps no ledger
+// (observe, off, the kill switch, a session no person reaches); 'loading': it has not loaded one
+// yet (no pass since this module loaded, the store unread, the act lock another session's).
+// Nothing is loaded here, so a call never waits on ensureLedger.
+async function held($: EngineInterface): Promise<Runtime | 'none' | 'loading'> {
+  if (headless) return 'none'
+  const rt = lastRt
+  if (rt === null) return 'loading'
+  if (rt.repo === '' || rt.mode !== 'act' || (await killed($))) return 'none'
+  return live.loaded && live.repo === rt.repo ? rt : 'loading'
+}
+
+// What a tool call leaves for once it has answered (#558): its ledger work (act.ts keep, or an
+// answer's follow-up, with notes on what failed), then its decision-log line, given the problems
+// met, and its ping.
+type After = { rt: Runtime; run?: (env: ActEnv) => Promise<string[]>; line?: (problems: string[]) => Record<string, unknown>; ping?: string }
+
+// later: what a tool call leaves for once it has answered, in the hook queue behind the hook work
+// before it, with the $ the loop's timers run with (background), never the call's own, whose
+// dispatch has ended by then.
+function later($: EngineInterface, after: After) {
+  if (background !== null) background(after)
+  else void hook(() => afterwards($, after))
+}
+
+// afterwards: one After, in the hook queue.
+async function afterwards($: EngineInterface, after: After) {
+  const env = hookEnv($, after.rt, await $.clock.now())
+  const notes = after.run === undefined ? [] : await after.run(env)
+  if (after.line !== undefined) await appendLine($, after.rt, after.line([...notes, ...env.problems]))
+  if (after.ping !== undefined) ping(after.ping)
+}
+
+// kept: an After's ledger work for a transition a hook made at once: saved, then logged.
+function kept(moved: readonly LedgerEntry[]) {
+  return async (env: ActEnv): Promise<string[]> => {
+    await keep(env, moved)
+    return []
+  }
+}
+
+// bounded: a tool hook's answer, from work that decides it, within TOOL_ANSWER_MS on $.clock
+// (#558); past it, `late`. The work calls claim() just before it changes anything, and changes
+// nothing when it returns false: the bound has passed, so a call answered late changed nothing. A
+// claimed call still unanswered at the bound (a write that hangs) answers `unsure`.
+function bounded($: EngineInterface, work: (claim: Claim) => Promise<OpAnswer>, late: OpAnswer, unsure: OpAnswer = late): Promise<OpAnswer> {
+  let at: 'open' | 'claimed' | 'late' = 'open'
+  const claim = () => {
+    if (at === 'open') at = 'claimed'
+    return at === 'claimed'
+  }
+  return new Promise<OpAnswer>((resolve, reject) => {
+    const t = $.clock.after(TOOL_ANSWER_MS, () => {
+      if (at === 'open') at = 'late'
+      resolve(at === 'late' ? late : unsure)
+    })
+    work(claim).then(
+      r => {
+        t.cancel()
+        resolve(r)
+      },
+      err => {
+        t.cancel()
+        reject(err)
+      },
+    )
+  })
 }
 
 // killed: the kill switch exists (SPEC 11.3).
@@ -1249,70 +1334,101 @@ async function releaseLock($: EngineInterface, sessionId: string) {
 
 type OpAnswer = { ok: boolean; text: string }
 
+const OP_LATE: OpAnswer = { ok: false, text: 'factory-loop: the op could not run in time; nothing was changed.' }
+const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was still being written when it had to answer; /factory status shows whether it took.' }
+
 // ownerOp: /factory <op> and the control tool, one at a time (control.json is read, changed and
-// written whole). A change pings the loop and gets its own decision-log line; retry clears the
-// issue's exhausted entries through the ledger.
+// written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
+// writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
+// decision-log line once it has its answer; retry clears the issue's exhausted entries in the
+// live ledger at once.
 function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
-  const run = ops.then(async (): Promise<OpAnswer> => {
-    const rt = lastRt ?? (await runtime($))
-    const paths = { loopDir: rt.loopDir, configDir: await configDir($) }
+  const work = (claim: Claim) => {
+    const run = ops.then(async (): Promise<OpAnswer> => {
+      const rt = lastRt ?? (await runtime($))
+      const paths = { loopDir: rt.loopDir, configDir: await configDir($) }
+      const now = await $.clock.now()
+      const last = (await $.state.get(lastPassRef)).value ?? null
+      const from = agentId === undefined ? { last } : { last, agentId }
+      const fio = claimedIo(fileIo($), claim)
+      const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
+      let said = reply.text
+      if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
+      if (reply.ping && claim()) later($, { rt, line: () => ({ control: reply.logged, text: said }), ping: `owner ${reply.logged ?? ''}` })
+      return { ok: reply.ok, text: said }
+    })
+    ops = run.catch(() => undefined)
+    return run
+  }
+  return bounded($, work, OP_LATE, OP_UNSURE)
+}
+
+// claimedIo: file writes that go ahead only once the op claims its change (bounded), so an op
+// answered late writes nothing.
+function claimedIo(io: FileIo, claim: Claim): FileIo {
+  return { readFile: io.readFile, writeFile: (path, body) => (claim() ? io.writeFile(path, body) : Promise.reject(new Error('the op ran out of time'))) }
+}
+
+// retry: `/factory retry <N>` in the live ledger (act.ts retried): cleared at once, saved and
+// logged once the op has its answer (#558).
+async function retry($: EngineInterface, issue: number, claim: Claim): Promise<string> {
+  const rt = await held($)
+  if (rt === 'none') return `Retry #${issue}: this session holds no ledger (act mode keeps one), so nothing was cleared.`
+  if (rt === 'loading') return `Retry #${issue}: the ledger is not loaded yet (the next pass loads it), so nothing was cleared.`
+  if (!claim()) return OP_LATE.text
+  const r = retried({ live, rt }, issue)
+  later($, { rt, run: kept(r.moved) })
+  return retryText(issue, r.cleared)
+}
+
+const NO_WAKE: OpAnswer = { ok: false, text: 'Not recorded: no wake of the factory loop is open in this session.' }
+const WAKE_LOADING: OpAnswer = { ok: false, text: 'Not recorded: the factory loop has not loaded its ledger yet; give the ANSWER block in your reply instead.' }
+const WAKE_LATE: OpAnswer = { ok: false, text: 'Not recorded: the factory loop could not check this answer in time; give the ANSWER block in your reply instead.' }
+
+// answer: mcp__factory-loop__answer (act.ts wakeAnswered), answered at once from the ledger in
+// memory (#558); the ledger saved, the wake's loop event and the ping follow once it has its
+// answer.
+function answer($: EngineInterface, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
+  const work = async (claim: Claim): Promise<OpAnswer> => {
+    const rt = await held($)
+    if (rt === 'none') return NO_WAKE
+    if (rt === 'loading') return WAKE_LOADING
+    const r = await wakeAnswered(hookEnv($, rt, await $.clock.now()), input, agentId, claim)
+    if (r.moved.length > 0) later($, { rt, run: kept(r.moved), ping: `wake ${typeof input.id === 'string' ? input.id : '?'}` })
+    return { ok: r.ok, text: r.text }
+  }
+  return bounded($, work, WAKE_LATE)
+}
+
+const NO_LEDGER = 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.'
+const LEDGER_LOADING = 'Not recorded: the factory loop has not loaded its ledger yet; reply with your text lines instead.'
+
+// agentTool: an agent's answer tool (act.ts agentToolAnswered, #548), answered at once (#558):
+// refused unless this session keeps the ledger, loaded, and the caller is an agent of the loop
+// whose answer it waits on; an accepted call is recorded in the ledger in memory. What follows,
+// in the hook queue once the call has its answer: the call's input saved, its events, the ledger
+// saved and its loop event, then a decision-log line for each call (the answer's path, 'tool',
+// or why it was refused) and an accepted call's ping.
+function agentTool($: EngineInterface, tool: string, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
+  const work = async (claim: Claim): Promise<OpAnswer> => {
+    const rt = await held($)
+    if (rt === 'none') return { ok: false, text: NO_LEDGER }
+    if (rt === 'loading') return { ok: false, text: LEDGER_LOADING }
     const now = await $.clock.now()
-    const last = (await $.state.get(lastPassRef)).value ?? null
-    const from = agentId === undefined ? { last } : { last, agentId }
-    const reply = typeof input === 'string' ? await runOp(fileIo($), paths, input, now, from) : await controlTool(fileIo($), paths, input, now, from)
-    let said = reply.text
-    if (reply.retryIssue !== null) said = await retry($, reply.retryIssue)
-    if (reply.ping) {
-      await appendLine($, rt, { control: reply.logged, text: said })
-      ping(`owner ${reply.logged ?? ''}`)
-    }
-    return { ok: reply.ok, text: said }
-  })
-  ops = run.catch(() => undefined)
-  return run
-}
-
-async function retry($: EngineInterface, issue: number): Promise<string> {
-  let said = `Retry #${issue}: this session holds no ledger (act mode keeps one), so nothing was cleared.`
-  await hook(async () => {
-    const rt = await ledgerFor($)
-    if (rt === null) return
-    said = retryText(issue, await retried(hookEnv($, rt, await $.clock.now()), issue))
-  })
-  return said
-}
-
-// answer: mcp__factory-loop__answer (act.ts wakeAnswered).
-async function answer($: EngineInterface, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
-  let reply: OpAnswer = { ok: false, text: 'Not recorded: no wake of the factory loop is open in this session.' }
-  await hook(async () => {
-    const rt = await ledgerFor($)
-    if (rt === null) return
-    const r = await wakeAnswered(hookEnv($, rt, await $.clock.now()), input, agentId)
-    reply = { ok: r.ok, text: r.text }
-    if (r.moved) ping(`wake ${typeof input.id === 'string' ? input.id : '?'}`)
-  })
-  return reply
-}
-
-// agentTool: an agent's answer tool (act.ts agentToolAnswered, #548): refused unless this session
-// keeps the ledger and the caller is an agent of the loop whose answer it waits on. Each call
-// gets a decision-log line: the answer's path ('tool'), or why it was refused.
-async function agentTool($: EngineInterface, tool: string, input: Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
-  let reply: OpAnswer = { ok: false, text: 'Not recorded: no factory loop keeps a ledger in this session; reply with your text lines instead.' }
-  await hook(async () => {
-    const rt = await ledgerFor($)
-    if (rt === null) return
-    const now = await $.clock.now()
-    const env = hookEnv($, rt, now)
-    const r = await agentToolAnswered(env, lastState ?? bareState(rt, now), tool, input, agentId)
-    reply = { ok: r.ok, text: r.text }
-    const path = r.ok ? { answer: 'tool', afterRepair: r.repaired === true ? true : undefined } : { answer: 'tool refused', why: r.text }
-    await appendLine($, rt, { agent: agentId, tool, key: r.key, ...path, problems: env.problems.length > 0 ? env.problems : undefined })
-    // an accepted call ends its entry as the agent's turn.complete would: the same trigger
-    if (r.ok) ping(`agent ${agentId ?? '?'}`)
-  })
-  return reply
+    const r = await agentToolAnswered(hookEnv($, rt, now), lastState ?? bareState(rt, now), tool, input, agentId, claim)
+    // the answer given: this one, or the bound's once it passed
+    const given: ToolAnswered = claim() ? r : { ok: false, text: TOOL_LATE, key: r.key }
+    const path = given.ok ? { answer: 'tool', afterRepair: given.repaired === true ? true : undefined } : { answer: 'tool refused', why: given.text }
+    later($, {
+      rt,
+      run: given.after,
+      line: problems => ({ agent: agentId, tool, key: given.key, ...path, problems: problems.length > 0 ? problems : undefined }),
+      // an accepted call ends its entry as the agent's turn.complete would: the same trigger
+      ping: given.ok ? `agent ${agentId ?? '?'}` : undefined,
+    })
+    return { ok: given.ok, text: given.text }
+  }
+  return bounded($, work, { ok: false, text: TOOL_LATE })
 }
 
 const agentReply = (r: OpAnswer) => (r.ok ? { result: r.text } : { deny: r.text })
@@ -1345,6 +1461,7 @@ function ensure($: EngineInterface) {
   started ??= (async () => {
     loadedAt = await $.clock.now()
     ask = (source, why) => void request($, source, why).catch(() => undefined)
+    background = after => void hook(() => afterwards($, after))
     await registerControls($)
     // the first pass after a load: a session start or a reload
     $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))

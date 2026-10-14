@@ -4,8 +4,9 @@
 // reads next pass. They decide nothing (plan did): the prompt comes from prompts.ts and the
 // reading of the reply from replies.ts and agent-tools.ts, all pure, and readAnswer and
 // readToolAnswer below are pure too, so tests and the replay harness drive them without the
-// engine. Every answer is saved whole first (exec.ts answerPath), so a judge(report) or
-// judge(handoff) wake points the model at the file (SPEC 7.2).
+// engine. Every answer in text is saved whole first (exec.ts answerPath), so a judge(report) or
+// judge(handoff) wake points the model at the file (SPEC 7.2); a tool call's input is saved once
+// the call has its answer (#558).
 import { TOOL_OF, checkDesign, checkHandoff, checkVerdict } from './agent-tools'
 import type { ToolCheck } from './agent-tools'
 import { answerPath, detailOf, rateLimited } from './exec'
@@ -314,20 +315,30 @@ export async function onAgentAnswer(ctx: ExecCtx, entry: LedgerEntry, answer: Ag
   return { exec: noted(read.exec, notes), problem: read.problem }
 }
 
-// onToolAnswer: an agent of the loop called its answer tool. A call the contract refuses changes
-// nothing; an accepted one is saved (the call's input, as JSON), its events go out, and the
-// driver records the Exec, as for an answer in text.
-export async function onToolAnswer(ctx: ExecCtx, entry: LedgerEntry, tool: string, input: unknown): Promise<{ exec: Exec } | { refused: string }> {
+// onToolAnswer: an agent of the loop called its answer tool, read against its spawn record. A
+// call the contract refuses changes nothing. An accepted one gives the Exec the driver records at
+// once, as for an answer in text, and `after`, what follows once the call has its answer (#558):
+// the call's input saved (as JSON) and its events logged, through the ExecCtx it is handed; notes
+// on what failed, for the decision log.
+export async function onToolAnswer(
+  ctx: ExecCtx,
+  entry: LedgerEntry,
+  tool: string,
+  input: unknown,
+): Promise<{ exec: Exec; after: (later: ExecCtx) => Promise<string[]> } | { refused: string }> {
   const read = readToolAnswer(entry, tool, input, await answerInfoOf(ctx, entry))
   if ('refused' in read) return read
-  const notes: string[] = []
-  try {
-    await ctx.io.writeFile(answerPath(ctx.rt.loopDir, entry.key), JSON.stringify({ tool, input }, null, 2))
-  } catch (err) {
-    notes.push(`answer not saved: ${message(err)}`)
+  const after = async (later: ExecCtx): Promise<string[]> => {
+    const notes: string[] = []
+    try {
+      await later.io.writeFile(answerPath(later.rt.loopDir, entry.key), JSON.stringify({ tool, input }, null, 2))
+    } catch (err) {
+      notes.push(`answer not saved: ${message(err)}`)
+    }
+    notes.push(...(await logEvents(later, read.events)))
+    return notes
   }
-  notes.push(...(await logEvents(ctx, read.events)))
-  return { exec: noted(read.exec, notes) }
+  return { exec: read.exec, after }
 }
 
 // answerInfoOf: what reading an answer needs beside the entry: the branch and purpose its spawn

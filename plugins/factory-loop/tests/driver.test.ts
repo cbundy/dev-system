@@ -1104,6 +1104,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(fromAgent).toMatchObject({ deny: expect.stringContaining('only the main conversation') })
     const r = await $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w9', decision: 'merge' })
     expect(r).toMatchObject({ result: 'Recorded: w9 merge. No ANSWER block is needed.' })
+    await clock.settle()
     expect(h.entry('judge:sequence:512:abc1234')).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'merge' } })
   })
 
@@ -1134,6 +1135,7 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.entry(key)).toMatchObject({ status: 'running' })
     // corrected in the same turn: recorded at once, and the decision log says which path each call took
     expect(await $.tool.call({ ...answer, agentId: 'agent-1' })).toMatchObject({ result: expect.stringContaining('Recorded: designer #470 (tool): brief') })
+    await clock.settle()
     expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool refused' }))
     expect(h.lines()).toContainEqual(expect.objectContaining({ agent: 'agent-1', tool: 'mcp__factory-loop__design', key, answer: 'tool' }))
@@ -1147,6 +1149,166 @@ describe('act mode: between passes (SPEC 2, 8.2, 10.4)', () => {
     expect(h.passes()).toHaveLength(2)
     expect(h.last()).toMatchObject({ trigger: 'agent agent-1' })
     expect((h.last().actions as { key: string }[]).map(a => a.key)).toEqual(['update-checkout:0', `delegate:470:${BRIEF}`])
+  })
+
+  // a designer at work on 470 beside an open wake, where the loop event of the wake's end (or, with
+  // `designer`, of the designer's) hangs until the test lets it go: the hook work that logs it
+  // holds the hook queue meanwhile, as a busy session does (#558)
+  const heldQueue = (on: Parameters<typeof host>[0], opts: { holding?: 'wake' | 'designer'; hold?: HostOptions['hold'] } = {}) => {
+    const since = NOW - 20 * MIN
+    const key = `design:470:${since}`
+    const task = 'task:redrive:issue-470-x:abc'
+    const held = `kind=${opts.holding === 'designer' ? `spawn key=${key}` : `task key=${task}`} status=done`
+    let release: () => void = () => undefined
+    const holding = new Promise<Answer>(resolve => (release = () => resolve({})))
+    const { run } = factory({
+      issue: { stage: 'designing', since },
+      run: argv => (argv[0] === 'callum-flow-event' && (argv.at(-1) ?? '').startsWith(held) ? holding : undefined),
+    })
+    const store = ledgerOf([
+      entry('sweep:0', 'sweep', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN }),
+      entry('claim:470:new', 'claim', { class: 'start', issue: 470, status: 'done', startedAt: since, endedAt: since, outcome: { kind: 'claim', result: 'claimed' } }),
+      entry(key, 'spawn', { agent: 'designer', class: 'develop', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' }),
+      entry(task, 'task', { wake: 'redrive', class: 'drive', issue: 470, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, wakeId: 'w1', session: SESSION }),
+    ])
+    const h = host(on, { config: ACT, run, store, hold: opts.hold })
+    h.agents.push({ id: 'agent-1', type: 'factory-loop:designer', status: 'running', description: 'Design #470' })
+    return { h, key, task, release: () => release() }
+  }
+  const DESIGN_CALL = { tool: 'mcp__factory-loop__design', brief: BRIEF, created: [], pendingDecision: false, agentId: 'agent-1' } as const
+
+  test('an answer tool call is answered at once while other hook work holds the queue; the store and the decision log follow, in hook order (#558)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key, task, release } = heldQueue(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const passes = h.passes().length
+    // the main loop answers the wake: its loop event hangs, and the hook queue with it
+    const turn = $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
+    await clock.settle()
+    expect(h.entry(task)).toMatchObject({ status: 'done' })
+    // the designer's call is decided against the ledger in memory and answered, the queue still held
+    const answers: unknown[] = []
+    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
+    await clock.settle()
+    expect(answers).toEqual([{ result: expect.stringContaining('Recorded: designer #470 (tool): brief') }])
+    // recorded in memory at once: a second call is told so, still without the queue
+    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
+    await clock.settle()
+    expect(answers[1]).toEqual({ deny: 'Not recorded: your answer is already recorded; end your turn.' })
+    // what follows waits its turn behind the wake: nothing saved, logged or pinged yet
+    expect(h.entry(key)).toMatchObject({ status: 'running' })
+    expect(h.lines().some(l => l.tool === 'mcp__factory-loop__design')).toBe(false)
+    expect(h.files.has(answerPath(LOOP_DIR, key))).toBe(false)
+
+    // the queue frees: the store takes the answer, its loop event goes out after the wake's, and the
+    // decision log has a line for each call, in order
+    release()
+    await turn
+    await clock.settle()
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [], pendingDecision: false } })
+    expect(JSON.parse(h.files.get(answerPath(LOOP_DIR, key)) ?? '{}')).toMatchObject({ tool: 'mcp__factory-loop__design' })
+    const loops = h.events().map(e => e.at(-1) ?? '').filter(n => n.startsWith('kind='))
+    expect(loops.findIndex(n => n.startsWith(`kind=task key=${task} status=done`))).toBeLessThan(loops.findIndex(n => n.startsWith(`kind=spawn key=${key} status=done`)))
+    const tools = h.lines().filter(l => l.tool === 'mcp__factory-loop__design')
+    expect(tools.map(l => l.answer)).toEqual(['tool', 'tool refused'])
+    // the ping: the next pass delegates, its trigger the agent
+    await clock.advance(5_000)
+    expect(h.passes()).toHaveLength(passes + 1)
+    expect(String(h.last().trigger)).toContain('agent agent-1')
+  })
+
+  test('an agent whose tool answered ends its turn while the follow-up still waits, with words that say otherwise: they are never read (#558)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key, release } = heldQueue(on)
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const turn = $.turn.complete({ turnId: 'turn-1', answer: 'ANSWER w1 done', reason: 'answer', durationMs: 900, isAborted: false })
+    await clock.settle()
+    expect(await $.tool.call(DESIGN_CALL)).toMatchObject({ result: expect.stringContaining('Recorded') })
+    // its turn ends while the follow-up is still queued, with a RESULT line that says otherwise
+    const ended = agentDone($, h, 'agent-1', 'Done.\nRESULT brief=none created=471 pending_decision=no')
+    await clock.settle()
+    release()
+    await Promise.all([turn, ended])
+    await clock.settle()
+    // the tool's answer stands: no text read, no repair, no second line
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF, created: [] } })
+    expect(h.sends).toEqual([])
+    expect(h.lines().filter(l => l.agent === 'agent-1').map(l => l.answer)).toEqual(['tool'])
+    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith(`kind=spawn key=${key} `))).toHaveLength(1)
+  })
+
+  test("the owner's answer and control tools are answered while other hook work holds the queue; their store writes, lines and pings follow (#558)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key, task, release } = heldQueue(on, { holding: 'designer' })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // the designer's text answer: its loop event hangs, and the hook queue with it
+    const ended = agentDone($, h, 'agent-1', `RESULT brief=${BRIEF} created=none pending_decision=no`)
+    await clock.settle()
+    expect(h.entry(key)).toMatchObject({ status: 'done' })
+    const answers: unknown[] = []
+    void $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w1', decision: 'done' }).then(r => answers.push(r))
+    await clock.settle()
+    void $.tool.call({ tool: 'mcp__factory-loop__control', op: 'pause 470' }).then(r => answers.push(r))
+    await clock.settle()
+    expect(answers).toEqual([{ result: expect.stringContaining('Recorded: w1 done') }, { result: expect.stringContaining('Paused #470') }])
+    expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
+    expect(h.entry(task)).toMatchObject({ status: 'running' })
+    expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
+
+    release()
+    await ended
+    await clock.settle()
+    expect(h.entry(task)).toMatchObject({ status: 'done', outcome: { kind: 'wake', decision: 'done' } })
+    expect(h.events().some(e => (e.at(-1) ?? '').startsWith(`kind=task key=${task} status=done`))).toBe(true)
+    expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
+  })
+
+  test('a tool call right after a load, before the first pass, is refused at once asking for text, and nothing is loaded for it; the text answer is read as before (#558)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { h, key } = heldQueue(on)
+    await $.session.start(START)
+    await clock.settle()
+    expect(h.passes()).toEqual([])
+    expect(await $.tool.call(DESIGN_CALL)).toEqual({ deny: 'Not recorded: the factory loop has not loaded its ledger yet; reply with your text lines instead.' })
+    expect(await $.tool.call({ tool: 'mcp__factory-loop__answer', id: 'w1', decision: 'done' })).toEqual({
+      deny: 'Not recorded: the factory loop has not loaded its ledger yet; give the ANSWER block in your reply instead.',
+    })
+    expect(h.files.has(LOCK)).toBe(false)
+    expect(h.entry(key)).toMatchObject({ status: 'running' })
+    // the agent's text: its turn.complete loads the ledger, as it did
+    await agentDone($, h, 'agent-1', `RESULT brief=${BRIEF} created=none pending_decision=no`)
+    expect(h.entry(key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: BRIEF } })
+  })
+
+  test("a tool call whose own work outruns 2 s is refused asking for text, and changes nothing when that work ends; the agent's next call is recorded (#558)", async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    // the spawn record's read hangs while the test holds it, as a stalled disk would
+    let slow: Promise<void> | null = null
+    let release: () => void = () => undefined
+    const { h, key } = heldQueue(on, { hold: (path, op) => (op === 'read' && path.startsWith(`${LOOP_DIR}/spawns/`) ? (slow ?? undefined) : undefined) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    slow = new Promise<void>(resolve => (release = resolve))
+    const answers: unknown[] = []
+    void $.tool.call(DESIGN_CALL).then(r => answers.push(r))
+    await clock.advance(1_900)
+    expect(answers).toEqual([])
+    await clock.advance(100)
+    expect(answers).toEqual([{ deny: 'Not recorded: the factory loop could not check this answer in time; reply with your text lines instead.' }])
+    // the read comes back: the late work finds its answer given and changes nothing
+    slow = null
+    release()
+    await clock.settle()
+    expect(h.entry(key)).toMatchObject({ status: 'running' })
+    expect(h.lines().filter(l => l.agent === 'agent-1')).toEqual([
+      expect.objectContaining({ tool: 'mcp__factory-loop__design', key, answer: 'tool refused', why: 'Not recorded: the factory loop could not check this answer in time; reply with your text lines instead.' }),
+    ])
+    expect(await $.tool.call(DESIGN_CALL)).toMatchObject({ result: expect.stringContaining('Recorded') })
+    await clock.settle()
+    expect(h.entry(key)).toMatchObject({ status: 'done' })
   })
 
   test('an agent that works on after its tool answer is stopped at its timeout, its answer kept (SPEC A1, #548)', async ($, on) => {
@@ -1506,6 +1668,8 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
 
     expect(await factoryOp($, 'pause 470')).toMatchObject({ text: 'Paused #470: no action on it until unpause; its claim still renews.' })
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470] })
+    // its line and ping follow the answer (#558)
+    await clock.settle()
     expect(h.lines().some(l => l.control === 'pause 470')).toBe(true)
     await clock.advance(5_000)
     expect(h.passes()).toHaveLength(2)
@@ -1533,6 +1697,8 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     await clock.advance(6_000)
     const r = await factoryOp($, 'retry 470')
     expect(r.text).toBe('Retry #470: cleared 1 exhausted action (claim:470:new); its rules try again from the next pass.')
+    // cleared in memory at once, and in the store once the op has its answer (#558)
+    await clock.settle()
     expect(h.entry('claim:470:new')).toMatchObject({ attempts: 0, summary: 'attempts cleared by the owner (/factory retry)' })
   })
 
@@ -1581,5 +1747,39 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     await clock.advance(6_000)
     await Promise.all([factoryOp($, 'pause 470'), factoryOp($, 'skip 471')])
     expect(JSON.parse(h.files.get(`${LOOP_DIR}/control.json`) ?? '{}')).toMatchObject({ paused: [470], skip: [471] })
+  })
+
+  test('an op whose own work outruns 2 s answers within it: refused, writing nothing, before its change; unsure once its write began (#558)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const control = `${LOOP_DIR}/control.json`
+    let slow: { op: 'read' | 'write'; until: Promise<void> } | null = null
+    let release: () => void = () => undefined
+    const holdNext = (op: 'read' | 'write') => (slow = { op, until: new Promise<void>(resolve => (release = resolve)) })
+    const h = host(on, { config: ACT, run: factory().run, hold: (path, op) => (path === control && slow?.op === op ? slow.until : undefined) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const answers: unknown[] = []
+
+    // control.json's read hangs: refused at 2 s, and the op writes nothing once the read returns
+    holdNext('read')
+    void $.tool.call({ tool: 'mcp__factory-loop__control', op: 'pause 470' }).then(r => answers.push(r))
+    await clock.advance(2_000)
+    expect(answers).toEqual([{ deny: 'factory-loop: the op could not run in time; nothing was changed.' }])
+    slow = null
+    release()
+    await clock.settle()
+    expect(h.files.has(control)).toBe(false)
+    expect(h.lines().some(l => l.control === 'pause 470')).toBe(false)
+
+    // its write hangs: the answer says it may have taken, and once written it is logged as a change
+    holdNext('write')
+    void $.tool.call({ tool: 'mcp__factory-loop__control', op: 'skip 471' }).then(r => answers.push(r))
+    await clock.advance(2_000)
+    expect(answers[1]).toEqual({ deny: 'factory-loop: the op was still being written when it had to answer; /factory status shows whether it took.' })
+    slow = null
+    release()
+    await clock.settle()
+    expect(JSON.parse(h.files.get(control) ?? '{}')).toMatchObject({ skip: [471], paused: [] })
+    expect(h.lines().some(l => l.control === 'skip 471')).toBe(true)
   })
 })

@@ -65,6 +65,8 @@ export type HostOptions = {
   // answers $.session.send (an agent's repair message), at once or later (or never): undefined
   // delivers it, a string refuses it
   send?: (to: string, text: string) => string | undefined | Promise<string | undefined>
+  // holds a file's read ($.fs.exists, $.fs.read) or write until the promise it returns resolves
+  hold?: (path: string, op: 'read' | 'write') => Promise<void> | undefined
 }
 
 export type Host = ReturnType<typeof host>
@@ -159,12 +161,17 @@ export function host(on: On, opts: HostOptions = {}) {
     },
   }
 
-  on('fs.exists', async ($, e) => ({ value: files.has(e.path) }))
+  on('fs.exists', async ($, e) => {
+    await opts.hold?.(e.path, 'read')
+    return { value: files.has(e.path) }
+  })
   on('fs.read', async ($, e) => {
+    await opts.hold?.(e.path, 'read')
     const body = files.get(e.path)
     return body === undefined ? { deny: `ENOENT ${e.path}` } : { value: body }
   })
   on('fs.write', async ($, e) => {
+    await opts.hold?.(e.path, 'write')
     files.set(e.path, e.text)
     return { value: undefined }
   })

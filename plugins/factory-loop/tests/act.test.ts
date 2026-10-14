@@ -10,6 +10,7 @@ import {
   EXECUTORS,
   GITHUB_KINDS,
   REPAIR_GRACE_MS,
+  TOOL_LATE,
   actPass,
   agentAnswered,
   agentToolAnswered,
@@ -26,6 +27,7 @@ import {
   sendNotice,
   transition,
   updateDone,
+  wakeAnswered,
   wakeEnded,
   wakeStarted,
 } from '../hooks/act'
@@ -526,24 +528,30 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger).toEqual([gate])
   })
 
-  test('the answer tool: a valid call finishes its entry at once, with its events and its input saved; a second call and the closing words change nothing (#548)', async () => {
+  test('the answer tool: a valid call finishes its entry in memory at once; its input, its events, the save and its loop event follow; a second call and the closing words change nothing (#548, #558)', async () => {
     const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
     const files = new Map<string, string>()
-    const f = fake([gate], () => ({}), { writeFile: async (p, t) => void files.set(p, t) })
+    const f = fake([gate], () => ({}), { writeFile: async (p, t) => void (f.order.push('write'), files.set(p, t)) })
     const s = state({ runs: [runOf(60, 'parked', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
     const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'the timeout is handled in parse.ts' }], action: { type: 'approve', reason: 'review-1 is a false positive' } }
-    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toEqual({
+    const r = await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')
+    expect(r).toEqual({
       ok: true,
       text: 'Recorded: adjudicator #60 (gate, tool): ACTION approve, 1 verdict line. End your turn now; no reply lines are needed.',
       key: gate.key,
       repaired: false,
+      after: expect.any(Function),
     })
     expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({
       status: 'done',
       attempts: 1,
       outcome: { kind: 'adjudicator', verdicts: ['WRONG: review-1: the timeout is handled in parse.ts'], action: { type: 'approve', reason: 'review-1 is a false positive' }, report: null },
     })
-    // its verdict event on the run's branch, then the entry's loop event
+    // nothing slow before the answer: no write, no event, no save
+    expect(f.order).toEqual([])
+    // then, in order: its input saved, its verdict event on the run's branch, the ledger saved, the entry's loop event
+    expect(await r.after?.(f.env)).toEqual([])
+    expect(f.order).toEqual(['write', 'callum-flow-event', 'save', 'callum-flow-event'])
     expect(f.calls.map(c => c.argv.slice(0, 2).join(' '))).toEqual(['callum-flow-event verdict', 'callum-flow-event loop'])
     expect(f.calls[0]?.argv).toContain('feat/issue-60-x')
     expect(JSON.parse(files.get(answerPath(LOOP_DIR, gate.key)) ?? '{}')).toEqual({ tool: 'mcp__factory-loop__verdict', input })
@@ -581,6 +589,88 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     expect(f.env.live.ledger.find(e => e.key === designer.key)).toMatchObject({ status: 'done', outcome: { kind: 'designer', brief: good.brief }, summary: expect.stringContaining('designer #60 (tool): brief') })
   })
 
+  test('a tool answer that lands while the text answer is being read wins: the text is never applied over it (#558)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    let release: () => void = () => undefined
+    const held = new Promise<void>(resolve => (release = resolve))
+    // the text answer's file write waits on the test: its reading is in flight
+    const f = fake([gate], () => ({}), { writeFile: async () => held })
+    const between: Between = { answering: new Set(), completedSeen: new Map(), repairing: new Map() }
+    const s = state({ runs: [runOf(60, 'parked', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
+    const reading = agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'WRONG: review-1 nothing\nACTION: escalate\nwhy: unsure', reason: 'answer' }, between)
+    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
+    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toMatchObject({ ok: true })
+    release()
+    expect(await reading).toEqual({ result: 'recorded', key: gate.key })
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'done', outcome: { action: { type: 'approve' } }, summary: expect.stringContaining('(gate, tool)') })
+    expect(f.saves).toEqual([])
+
+    // an interim reply while the agent list is asked: no repair mark goes over the tool's answer
+    const g = fake([gate])
+    let listed: (working: boolean) => void = () => undefined
+    const asking = new Promise<boolean>(resolve => (listed = resolve))
+    let asked: () => void = () => undefined
+    const atWork = new Promise<void>(resolve => (asked = resolve))
+    const sent: string[] = []
+    const interim = agentAnswered(g.env, s, { agentId: 'agent-1', answer: 'Still reading the logs.', reason: 'answer' }, between, () => (asked(), asking), async to => (sent.push(to), null))
+    await atWork
+    expect(await agentToolAnswered(g.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toMatchObject({ ok: true })
+    listed(false)
+    expect(await interim).toEqual({ result: 'recorded', key: gate.key })
+    expect(g.env.live.ledger.find(e => e.key === gate.key)).toMatchObject({ status: 'done', outcome: { action: { type: 'approve' } } })
+    expect(g.env.live.ledger.find(e => e.key === gate.key)?.reminded).toBeUndefined()
+    expect(sent).toEqual([])
+  })
+
+  test('a pass in flight never writes over a tool answer that landed meanwhile: its finish and its saves keep it (#558)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    let release: () => void = () => undefined
+    const held = new Promise<Partial<RunResult>>(resolve => (release = () => resolve({})))
+    const f = fake([gate], () => ({}))
+    // the claim's command waits on the test
+    let started: () => void = () => undefined
+    const inFlight = new Promise<void>(resolve => (started = resolve))
+    const run = f.env.io.run
+    f.env.io = {
+      ...f.env.io,
+      run: async (argv, init) => {
+        if (argv[0] !== 'callum-flow-claim') return run(argv, init)
+        started()
+        return { exitCode: 0, stdout: '', stderr: '', ...(await held) }
+      },
+    }
+    const s = state({ runs: [runOf(60, 'parked', { run: 'R60', branch: 'feat/issue-60-x' })], ledger: [] })
+    const acting = runActions(f.env, s, [claim])
+    await inFlight
+    expect(f.env.live.ledger.find(e => e.key === claim.key)).toMatchObject({ status: 'running' })
+    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
+    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1')).toMatchObject({ ok: true })
+    release()
+    await acting
+    const done = { status: 'done', outcome: { kind: 'adjudicator', action: { type: 'approve' } } }
+    expect(f.env.live.ledger.find(e => e.key === gate.key)).toMatchObject(done)
+    expect(f.env.live.ledger.find(e => e.key === claim.key)).toMatchObject({ status: 'done' })
+    // the pass's last save holds both
+    expect(f.saves.at(-1)?.find(e => e.key === gate.key)).toMatchObject(done)
+  })
+
+  test('a tool call claimed too late changes nothing: the agent tools and the wake answer tool (#558)', async () => {
+    const gate = entry(`adjudicate:R60:review:abc1234`, 'spawn', { agent: 'adjudicator', class: 'drive', issue: 60, run: 'R60', status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const judge = entry('judge:sequence:512:abc1234', 'judge', { wake: 'sequence', class: 'drive', issue: 60, pr: 512, status: 'running', startedAt: NOW - MIN, endedAt: null, wakeId: 'w9' })
+    const f = fake([gate, judge])
+    const s = state({ ledger: [] })
+    const late = () => false
+    const input = { findings: [{ id: 'review-1', verdict: 'WRONG', reason: 'handled in parse.ts' }], action: { type: 'approve', reason: 'a false positive' } }
+    expect(await agentToolAnswered(f.env, s, 'mcp__factory-loop__verdict', input, 'agent-1', late)).toEqual({ ok: false, text: TOOL_LATE, key: gate.key })
+    expect(await wakeAnswered(f.env, { id: 'w9', decision: 'merge' }, undefined, late)).toEqual({ ok: false, text: TOOL_LATE, moved: [] })
+    expect(f.env.live.ledger).toEqual([gate, judge])
+    expect(f.calls).toEqual([])
+    // in time: recorded in memory at once, its keep left to the caller
+    const r = await wakeAnswered(f.env, { id: 'w9', decision: 'merge' }, undefined)
+    expect(r).toMatchObject({ ok: true, moved: [expect.objectContaining({ key: judge.key, status: 'done' })] })
+    expect(f.saves).toEqual([])
+  })
+
   test("a handoff through the tool after a repair: the fixer's new branch supersedes its run, and the answer says it followed the repair (#548)", async () => {
     const fixer = entry('fixer:conflict:560:abc1234', 'spawn', { agent: 'fixer', class: 'drive', issue: 60, run: 'R60', pr: 560, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1', reminded: true })
     const f = fake([fixer])
@@ -588,6 +678,7 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     const r = await agentToolAnswered(f.env, s, 'mcp__factory-loop__handoff', { run: 'R61', head: 'abcdef1', commit: 'abcdef1', gated: true, branch: 'feat/issue-60-x-v2', pr: 561 }, 'agent-1')
     expect(r).toMatchObject({ ok: true, repaired: true })
     expect(f.env.live.ledger[0]).toMatchObject({ status: 'done', outcome: { kind: 'handoff', notGated: false, run: 'R61', head: 'abcdef1', newBranch: 'feat/issue-60-x-v2' } })
+    await r.after?.(f.env)
     expect(f.calls[0]?.argv).toEqual(['callum-flow-event', 'superseded', '--issue', '60', '--run', 'R60', '--note', 'by feat/issue-60-x-v2'])
   })
 

@@ -57,7 +57,8 @@ every passEveryMs (60 s), or at once when pinged:
 - **Between passes.** Hooks feed the ledger as things happen: an agent's answer, a wake's turn
   starting and ending, the answer tool, `/factory retry`. They work only in act mode with no
   kill switch, one at a time and in the order their events came, on the same in-memory ledger
-  the pass uses (section 7.1).
+  the pass uses (section 7.1); a tool call changes that ledger at once and queues the rest
+  (7.3a.7).
 - **Plan is the heart.** `plan` lives in `plugins/factory-loop/hooks/plan.ts` and imports
   types only. Everything it needs, the time included, arrives in `State`. Actions already
   running or done are in the state's ledger, so re-planning an unchanged state yields no new
@@ -830,6 +831,18 @@ message (7.3a), and a designer's still missing after it goes to `judge(report)` 
    holds, only in act mode with no kill switch and no restart pending. A second unreadable answer,
    or a message not delivered within 10 s, fails the attempt (the designer's goes to
    `judge(report)`, rule `D3`) as before.
+7. **Answered at once (#558).** The engine gives up on a tool hook that runs too long (13), so
+   each tool hook answers from memory and never waits on the hook queue. The call is checked
+   against the live ledger, the last pass's runtime and the kill switch. An accepted call
+   finishes its entry in the live ledger before the hook returns, so a later `turn.complete` reads
+   `recorded` and a pass in flight keeps the change. What follows goes through the hook queue, in
+   order with other hook work: the call's input saved, its events, the ledger saved, its loop
+   event, its decision-log line (a failed save or event in `problems`) and the ping. Before the
+   first pass after a load the ledger is not loaded, so a call is refused, asking for text;
+   nothing is loaded for it. A call whose own work takes more than 2 s is refused, asking for
+   text, and changes nothing when that work ends. The owner's `answer` tool and `retry` change the
+   live ledger the same way. `control` (and `/factory`) writes `control.json` within the same
+   bound, or nothing; once its write has begun, the answer says the op may not have taken.
 
 ### 7.4 Events the loop logs
 
@@ -1346,6 +1359,12 @@ jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[
   switch` to another branch at that same commit in the instant between could still move that
   branch to origin's commit: a fast-forward, so nothing is lost, and `G5` then sees the switch
   (#555).
+- **The engine's hook deadline** (#558): a probe mod's `tool.call` hook that waited before
+  answering got its answer through at 3 s and 8 s. At 20 s the agent got `no tool.call hook
+  answered this call`, though the hook ran to its end. This fits the documented `HookBudget`:
+  10 s of the hook's own time, in which awaiting other work (the loop's hook queue) counts and a
+  `$` call does not. The `.catch` refusal never reached the agents in run 3. The loop's 2 s bound
+  (7.3a) keeps well inside it; only the testbed proves the live answer times.
 - **The repair message**: whether `$.session.send` reaches an agent at its own `turn.complete`
   and resumes it is proven only on the testbed. An agent the list still shows completed 5
   minutes after its repair message is taken as never resumed.

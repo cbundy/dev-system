@@ -194,6 +194,8 @@ describe('trace on', () => {
     const r = await factoryOp($, 'trace on')
     expect(r.text).toStartWith('Trace on')
     expect(JSON.parse(h.files.get(CONFIG_FILE) ?? '{}')).toEqual({ ...OBSERVE, poolSize: 8, trace: true })
+    // its line follows the answer (#558)
+    await clock.settle()
     expect(h.lines().some(l => l.control === 'trace on')).toBe(true)
     // the op pings a pass, which traces
     await clock.advance(5_000)
