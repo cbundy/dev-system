@@ -5,6 +5,10 @@ alternatives and why, and carry on. Each decision below is in force in [SPEC.md]
 code. The ones marked **owner call** are the ones most worth a look in the morning: the rest
 follow directly from the skill or the brief.
 
+The owner reviewed D-01 to D-39 in stage B, and approved D-40 to D-74 (the build decisions from
+stage C, the testbed runs and release v0.1) on 2026-10-14. The review doc's Decisions tab has a
+short summary of each under "Build decisions".
+
 ## Owner calls
 
 ### D-05 The adjudicator reviews each merge; the model only sequences releases (owner call)
@@ -109,8 +113,8 @@ follow directly from the skill or the brief.
   runs `no-mistakes rerun` on the same head only when the owner has resumed the escalation and
   every verdict on the failed step was `ENV`, at most once per resume. A repeat failure
   escalates to the owner again, and a code failure is never rerun (SPEC 5.4, 6.1). To be
-  revisited if more environment-failure cases turn up. The agent's choices, 2026-10-14, for
-  owner review: the kind is named `env-retry`, so the word `rerun` appears in the hooks only on
+  revisited if more environment-failure cases turn up. The agent's choices, 2026-10-14, approved
+  by the owner the same day: the kind is named `env-retry`, so the word `rerun` appears in the hooks only on
   its one argv declaration; its single attempt is fixed whatever `maxAttempts` says, and
   `/factory retry` never clears it, so only a resume allows another rerun; a rerun whose old run
   still sits at the gate `respondSettleMs` later tells the owner again rather than asking an
@@ -784,7 +788,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-65 A guard failure is judged once; the guard expires after 5 minutes
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #550): a guard goes stale once
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #550): a guard goes stale once
   any fixer on the PR ends `done`, with or without a commit, so the next pass guards again.
   `guardTtlMs` drops from 30 to 5 minutes, a backstop only. The guard-fail judge is keyed by the
   PR, the head and a digest of the FAIL lines, not by the guard's number: a re-check that fails
@@ -805,7 +809,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-66 The loop fast-forwards a worktree the pipeline's own commits left behind
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #551): a free `fast-forward`
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #551): a free `fast-forward`
   action runs one `sh -c` script from the main checkout. Rule `M2` runs it once per guard on a
   `head` FAIL whose run, origin and PR heads all equal the run head, before any judge; rule `M1`
   runs it before a head's first guard when a clean pool slot sits on the run's branch. It counts
@@ -829,7 +833,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-67 An agent's own `running` status is no proof it is still at work
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #545): an answer with no
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #545): an answer with no
   machine line is interim only when a fresh agent list shows the agent `waiting`, or a sub-agent
   of its own pending, running or waiting; then the loop waits for its next answer, up to its
   timeout. The agent's own `running` does not count (SPEC 7.3).
@@ -841,7 +845,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-68 Agents answer through validated tools; one repair message before an attempt is spent
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #548): three tools
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #548): three tools
   (`mcp__factory-loop__verdict`, `mcp__factory-loop__design`, `mcp__factory-loop__handoff`),
   each schema its agent's contract, behind ToolSearch. The handler re-checks every field plus
   what a schema cannot, and names all problems at once. Fix ids must be judged `CORRECT` or `ENV`
@@ -863,7 +867,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-69 Trace mode: one switch in two files, a size cap, and skip ages kept in memory
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #552; the per-repo switch and
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #552; the per-repo switch and
   the 100 MiB cap are the owner's): trace mode is the setting `trace`, in the repo's
   `.claude/factory-loop.json` and in the workspace file, which wins. `/factory trace on|off`
   writes the workspace file, as `/factory mode` does. The trace files share one cap,
@@ -884,7 +888,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-70 The loop owns copies of the adjudicator and designer definitions
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #548):
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #548):
   `plugins/factory-loop/agents/{adjudicator,designer}.md` are the callum-flow definitions word
   for word, plus ToolSearch and the answer tool on `tools:`. A root test
   (`tests/factory-loop-agents.test.js`) keeps them in step, and `agent.offer` hides them from the
@@ -900,7 +904,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-71 After an answer: supervision and repair grace
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #548): a done agent entry whose
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #548): a done agent entry whose
   agent is still listed at work 60 s after its answer stays under rules A1 and A2, and
   `stop-agent` accepts that agent as the loop's own. The 60 s grace leaves alone an agent the list
   has not yet marked completed. A repaired agent counts as at work for 5 minutes while still
@@ -922,7 +926,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-72 An issue closed on GitHub is finished, and its state is read before the queue
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #556): each pass's GitHub
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #556): each pass's GitHub
   reads start with the issues the loop may act on or counts as live: those of its running work,
   this device's issues, every issue in a live stage, whoever holds it, and that of a merged Run it
   not answered `done`. The queue comes after them. An issue known closed is not read again unless
@@ -955,7 +959,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-73 Agents are asked for text until a timer-spawned agent reaches the loop's tools
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #560): a setting,
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #560): a setting,
   `answerTools`, default `false`, in the repo's `.claude/factory-loop.json` and in the workspace
   file, which wins. Off, the spawn prompts and the repair message ask for the text contract alone
   and name no tool. On, they ask for the tool first, with the text as the fallback, as #548 built
@@ -984,7 +988,7 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 
 ### D-74 Agents answer through a checked script until a timer-spawned agent reaches the loop's tools
 
-- **Decision** (the agent's choice, 2026-10-14, for owner review; #561): a temporary workaround
+- **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #561): a temporary workaround
   for the answer tools of D-68, which no agent the loop spawns can reach (D-73). The plugin ships
   `bin/factory-answer`; each prompt names it by its absolute path under `$.plugin.root` and an
   answer file unique to the ledger entry and attempt (`answers/<key>.a<attempt>.<started ms>.answer.json`),
