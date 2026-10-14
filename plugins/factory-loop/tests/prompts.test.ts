@@ -234,6 +234,13 @@ describe('the main checkout (testbed, 2026-10-13)', () => {
     for (const action of actions) expect(promptOf(action, ENV)).toContain(CHECKOUT_RULE)
   })
 
+  test('agents that work in a worktree are told never to write in the main checkout and how paths map (#624)', () => {
+    for (const action of [delegate(BENIGN), fixer(BENIGN, 'gate'), designer(BENIGN)]) expect(promptOf(action, ENV)).toContain(CHECKOUT_RULE)
+    expect(CHECKOUT_RULE).toContain('never edit, write or run a write command in it')
+    expect(CHECKOUT_RULE).toContain('cd into it once at the start and use worktree-absolute paths')
+    expect(CHECKOUT_RULE).toContain('maps to the same relative path in your worktree')
+  })
+
   test('agents that start sub-agents are told to run them in the foreground; the adjudicator starts none', () => {
     expect(promptOf(designer(BENIGN), ENV)).toContain(FOREGROUND_RULE)
     expect(promptOf(fixer(BENIGN, 'conflict'), ENV)).toContain(FOREGROUND_RULE)

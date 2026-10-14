@@ -11,7 +11,9 @@ set -eu
 
 # Start from a clean host environment. Only settings assigned by this suite below
 # may reach dev-login, including direct concurrent and timeout invocations.
-for name in $(env | sed -n 's/^\(DEV_[A-Za-z0-9_]*\)=.*/\1/p'); do
+# DL_* are dev-login's own internal hand-offs (DL_STATES, DL_WATCH): a value leaked
+# into the host environment would stand in for the states this suite sets up.
+for name in $(env | sed -n 's/^\(DEV_[A-Za-z0-9_]*\)=.*/\1/p; s/^\(DL_[A-Za-z0-9_]*\)=.*/\1/p'); do
   unset "$name"
 done
 unset GH_TOKEN GITHUB_TOKEN KUBERNETES_SERVICE_HOST
