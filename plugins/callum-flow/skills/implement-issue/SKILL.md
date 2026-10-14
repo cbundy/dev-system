@@ -105,6 +105,10 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   fresh slot on the run's branch.
 
 ## 2. Booting the app (only if you need it for evidence or manual checks)
+- Follow your prompt's command restrictions first. Factory-loop prompts include
+  [`COMMAND_RULE`](../../../factory-loop/hooks/prompts.ts), which prohibits starting
+  servers. In those sessions, skip the boot procedure below and report any manual
+  verification or evidence that this restriction blocks in your handoff.
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
   commands section or `scripts/` for something like `scripts/dev-server.sh`.
   A well-behaved boot script auto-selects a free port, launches the app in
