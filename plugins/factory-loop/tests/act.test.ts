@@ -33,7 +33,7 @@ import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
 import type { Action, AgentStatus, LedgerEntry } from '../hooks/types'
 import { DEVICE, MIN, NOW, config, control, entry, mine, state } from './fixtures'
-import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, iso } from './host'
+import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, checkout, factoryDoc, iso } from './host'
 import type { Seen } from './host'
 
 const RATE = 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)'
@@ -474,7 +474,7 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
     run: async (argv, init) => {
       const s: Seen = { argv, env: init.env, stdin: init.stdin, cwd: init.cwd }
       seen.push(s)
-      const r = run(argv, s) ?? {}
+      const r = run(argv, s) ?? checkout(argv) ?? {}
       return { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }
     },
     spawnAgent: async input => {

@@ -25,6 +25,15 @@ function origin(argv: readonly string[]): Reply | undefined {
   return argv.join(' ') === 'git remote get-url origin' ? { stdout: `https://github.com/${REPO}.git\n` } : undefined
 }
 
+// checkout: the main checkout on its default branch with nothing changed (#544), unless a test
+// answers git itself.
+export function checkout(argv: readonly string[]): Reply | undefined {
+  const line = argv.join(' ')
+  if (line === 'git symbolic-ref --quiet --short refs/remotes/origin/HEAD') return { stdout: 'origin/main\n' }
+  if (line.startsWith('git --no-optional-locks status ')) return { stdout: '# branch.oid 5251b75ef45eef8d6c31556c1b5ac3d5dd34f3ff\n# branch.head main\n' }
+  return undefined
+}
+
 // lockCas: rails.ts LOCK_CAS_SCRIPT, as the shell runs it, over a test's files; undefined for any
 // other command. The lease lands only while the file still holds what its writer read.
 export function lockCas(files: { get: (p: string) => string | undefined; set: (p: string, t: string) => unknown }, argv: readonly string[], stdin: string | undefined): Required<Reply> | undefined {
@@ -164,7 +173,7 @@ export function host(on: On, opts: HostOptions = {}) {
     }
     // the old-watcher rail asks whether a lock directory exists: one does when a file is under it
     if (argv[0] === 'test' && argv[1] === '-d') return done({ exitCode: [...files.keys()].some(p => p.startsWith(`${argv[2]}/`)) ? 0 : 1 })
-    return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? {})
+    return done(lockCas(files, argv, e.init?.stdin) ?? (await opts.run?.(argv, s)) ?? origin(argv) ?? checkout(argv) ?? {})
   })
   on('session.usage', async () => ({ value: { startedAt: NOW, context: { window: 200_000, tokens: 1000, percent: 1 }, rateLimits: h.usage } }))
   on('session.id', async () => ({ value: SESSION }))

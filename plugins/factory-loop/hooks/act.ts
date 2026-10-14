@@ -51,6 +51,7 @@ export const GITHUB_KINDS: readonly ActionKind[] = [
   'milestone-expect',
   'pr-reopen',
   'pr-comment',
+  'pr-close',
 ]
 
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
