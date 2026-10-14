@@ -1,0 +1,273 @@
+#!/bin/bash
+#
+# dev-remote-sessions: brings the Remote Control sessions that were live when the
+# container stopped back online after a restart (cbundy/dev-system#533).
+#
+# Claude Code keeps a record of every running session in
+# $CLAUDE_CONFIG_DIR/sessions/<pid>.json (sessionId, cwd, kind, name, tmux,
+# bridgeSessionId, procStart, updatedAt) and deletes it on a graceful exit. A
+# container stop SIGKILLs what is still running, so those records stay behind
+# and, until now, nothing read them. This helper reads them (an undocumented
+# format, so it is parsed defensively: a missing field or bad JSON skips that
+# record with a log line, never an error), takes the permission mode, effort and
+# model from the session's transcript, and starts
+# `claude --resume <id> --remote-control <name>` for each in its own cwd, in
+# the tmux session `claude-restored` (one window per session). No message is
+# sent: a resumed session waits for the owner.
+#
+# Usage: dev-remote-sessions <command>
+#   snapshot  record the live sessions (pid and process start still match) in the
+#             state dir, replacing the last snapshot. A session that ends
+#             gracefully is thereby remembered until the next snapshot. A no-op
+#             until `plan` ran this boot, so a fresh start never overwrites the
+#             snapshot the restore needs.
+#   plan      once per boot (exit 3 when already done): freeze the restore
+#             candidates into pending.json. dev-remote-control runs it before
+#             it prunes worktrees.
+#   pending   print the restore candidates (JSON lines), nothing changed.
+#   cwds      print "live<TAB>dir" / "pending<TAB>dir" for every live session
+#             and every restore candidate: dev-prune-worktrees keeps these.
+#   restore   once per boot (exit 3 when already done): start each planned
+#             session, record every record it considered in the ledger.
+#
+# Candidates are the latest snapshot plus stale records (their process is gone),
+# deduplicated by sessionId, minus: sessions that are live, the supervisor's own
+# session (tmux session `claude`), records without a bridgeSessionId,
+# non-interactive sessions, sessions last updated more than
+# DEV_REMOTE_CONTROL_RESTORE_HOURS (default 24, 0 turns restoring off) ago,
+# sessions with no transcript, and records already in the ledger.
+#
+# State, in ${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}/remote-sessions:
+#   snapshot/  the last snapshot        pending.json  the planned candidates
+#   ledger/    one file per record considered, so a session is never restored
+#              twice (a session the owner later exits stays gone)
+# Per-boot markers live in /tmp (they hold pid 1's start time, so a container
+# restart invalidates them).
+#
+# Test overrides: DEV_REMOTE_SESSIONS_SOCKET (tmux -L socket), DEV_SYSTEM_SHARE.
+set -u
+
+CFG=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+SESS_DIR=$CFG/sessions
+STATE=${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}/remote-sessions
+SHARE=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}
+MARK_DIR=${DEV_REMOTE_SESSIONS_MARK_DIR:-/tmp}
+HOURS=${DEV_REMOTE_CONTROL_RESTORE_HOURS:-24}
+case $HOURS in '' | *[!0-9]*) HOURS=24 ;; esac
+RESTORED_SESSION=claude-restored
+SUPERVISOR_SESSION=claude
+
+log() {
+  echo "dev-remote-sessions: $*" >&2
+}
+
+# shellcheck source=claude-config.sh
+. "$SHARE/claude-config.sh" 2>/dev/null || prepare_claude_config() { :; }
+
+tm() {
+  if [ -n "${DEV_REMOTE_SESSIONS_SOCKET:-}" ]; then
+    TMUX='' tmux -L "$DEV_REMOTE_SESSIONS_SOCKET" "$@"
+  else
+    tmux "$@"
+  fi
+}
+
+# Field 22 of /proc/<pid>/stat (the process start time), the way Claude records
+# it as procStart. The command name (field 2) may hold spaces, so cut after ")".
+proc_start() {
+  local s
+  s=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  s=${s##*) }
+  # shellcheck disable=SC2086
+  set -- $s
+  echo "${20:-}"
+}
+
+# This boot's identity: pid 1's start time (a container restart changes it).
+boot_id() {
+  proc_start 1 || echo unknown
+}
+
+marked() { [ "$(cat "$MARK_DIR/dev-remote-sessions.$1" 2>/dev/null)" = "$(boot_id)" ]; }
+mark() { boot_id > "$MARK_DIR/dev-remote-sessions.$1" 2>/dev/null; }
+
+# Normalized records of every readable <dir>/*.json, one JSON line each.
+load_dir() {
+  local f
+  for f in "$1"/*.json; do
+    [ -f "$f" ] || continue
+    jq -ce 'select(type == "object" and (.pid | type == "number") and (.sessionId | type == "string"))
+      | {pid, procStart: ((.procStart // "") | tostring), sessionId, cwd: (.cwd // ""),
+         kind: (.kind // ""), name: (.name // ""), bridgeSessionId: (.bridgeSessionId // ""),
+         tmux: (.tmux // ""), updatedAt: (.updatedAt // 0)}' "$f" 2>/dev/null ||
+      log "skipping $f: not a session record"
+  done
+}
+
+# Is the process in record $1 (JSON line) still the one that wrote it?
+is_live() {
+  local pid start
+  pid=$(jq -r .pid <<< "$1") start=$(jq -r .procStart <<< "$1")
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$start" ] || [ "$(proc_start "$pid")" = "$start" ]
+}
+
+rec_key() { jq -r '"\(.pid)-\(.procStart)"' <<< "$1"; }
+
+live_records() {
+  local r
+  while IFS= read -r r; do
+    [ -z "$r" ] || ! is_live "$r" || echo "$r"
+  done < <(load_dir "$SESS_DIR")
+}
+
+# The restore candidates, as JSON lines carrying the transcript's permission
+# mode, effort and model.
+candidates() {
+  local live all r now_ms cutoff
+  live=$(live_records)
+  all=$(
+    load_dir "$STATE/snapshot"
+    load_dir "$SESS_DIR"
+  )
+  [ -n "$all" ] || return 0
+  now_ms=$(($(date +%s) * 1000))
+  cutoff=$((now_ms - HOURS * 3600000))
+  # Records not live and not in the ledger; then one per session.
+  local kept=""
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    is_live "$r" && continue
+    [ ! -e "$STATE/ledger/$(rec_key "$r")" ] || continue
+    kept="$kept$r
+"
+  done <<< "$all"
+  [ -n "$kept" ] || return 0
+  jq -cs --argjson live "$(printf '%s\n' "$live" | jq -cs '[.[].sessionId]')" --argjson cutoff "$cutoff" --arg sup "$SUPERVISOR_SESSION" '
+    group_by(.sessionId)
+    | map({keys: map("\(.pid)-\(.procStart)")} + (max_by(.updatedAt)))
+    | .[]
+    | select(.kind == "interactive" and .bridgeSessionId != "" and .cwd != "" and .updatedAt >= $cutoff
+        and (.sessionId as $s | $live | index($s) | not)
+        and ((.tmux | split(":")[0]) != $sup))' <<< "$kept" |
+    while IFS= read -r r; do
+      enrich "$r" || true
+    done
+}
+
+# Adds the transcript's permissionMode, effort and model to candidate $1 and
+# prints it; fails (logged) when the session has no transcript.
+enrich() {
+  local sid cwd t line mode effort model
+  sid=$(jq -r .sessionId <<< "$1") cwd=$(jq -r .cwd <<< "$1")
+  t=$CFG/projects/${cwd//[^a-zA-Z0-9]/-}/$sid.jsonl
+  if [ ! -f "$t" ]; then
+    t=$(find "$CFG/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -n 1)
+  fi
+  if [ -z "$t" ] || [ ! -f "$t" ]; then
+    log "session $sid has no transcript: not restoring it"
+    return 1
+  fi
+  mode=$(grep '"type":"permission-mode"' "$t" 2>/dev/null | tail -n 1 | jq -r '.permissionMode // empty' 2>/dev/null)
+  line=$(grep '"type":"assistant"' "$t" 2>/dev/null | grep -v '"model":"<synthetic>"' | tail -n 1)
+  effort=$(jq -r '.effort // empty' <<< "$line" 2>/dev/null)
+  model=$(jq -r '.message.model // empty' <<< "$line" 2>/dev/null)
+  jq -c --arg m "$mode" --arg e "$effort" --arg mo "$model" '. + {permissionMode: $m, effort: $e, model: $mo}' <<< "$1" 2>/dev/null
+}
+
+cmd_snapshot() {
+  marked planned || return 0
+  local tmp r
+  mkdir -p "$STATE" || { log "cannot create $STATE"; return 1; }
+  tmp=$(mktemp -d "$STATE/.snapshot.XXXXXX") || return 1
+  while IFS= read -r r; do
+    [ -z "$r" ] || echo "$r" > "$tmp/$(rec_key "$r").json"
+  done < <(live_records)
+  rm -rf "$STATE/snapshot"
+  mv "$tmp" "$STATE/snapshot"
+}
+
+cmd_plan() {
+  marked planned && return 3
+  mkdir -p "$STATE" || { log "cannot create $STATE"; return 1; }
+  if [ "$HOURS" = 0 ]; then
+    : > "$STATE/pending.json"
+  else
+    candidates > "$STATE/pending.json.tmp" && mv "$STATE/pending.json.tmp" "$STATE/pending.json"
+  fi
+  mark planned
+  log "$(grep -c . "$STATE/pending.json" 2>/dev/null || echo 0) session(s) to restore"
+}
+
+cmd_cwds() {
+  local r
+  while IFS= read -r r; do
+    [ -z "$r" ] || printf 'live\t%s\n' "$(jq -r .cwd <<< "$r")"
+  done < <(live_records)
+  [ "$HOURS" != 0 ] || return 0
+  while IFS= read -r r; do
+    [ -z "$r" ] || printf 'pending\t%s\n' "$(jq -r .cwd <<< "$r")"
+  done < <(candidates)
+}
+
+launch() {
+  local sid cwd name mode effort model
+  sid=$(jq -r .sessionId <<< "$1") cwd=$(jq -r .cwd <<< "$1") name=$(jq -r .name <<< "$1")
+  mode=$(jq -r .permissionMode <<< "$1") effort=$(jq -r .effort <<< "$1") model=$(jq -r .model <<< "$1")
+  if [ ! -d "$cwd" ]; then
+    log "session $sid: $cwd no longer exists, not restoring it"
+    return 1
+  fi
+  [ -n "$name" ] || name="restored-${sid:0:8}"
+  prepare_claude_config "$cwd"
+  local -a args=(--resume "$sid" --remote-control "$name")
+  case $mode in
+    bypassPermissions) args+=(--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}') ;;
+    "" | default) ;;
+    *) args+=(--permission-mode "$mode") ;;
+  esac
+  [ -z "$effort" ] || args+=(--effort "$effort")
+  [ -z "$model" ] || args+=(--model "$model")
+  # shellcheck disable=SC2016
+  local -a cmd=(bash -c ". '$SHARE/telemetry.sh'; claude \"\$@\"" bash "${args[@]}")
+  if tm has-session -t "$RESTORED_SESSION" 2>/dev/null; then
+    tm new-window -d -t "$RESTORED_SESSION:" -n "${sid:0:8}" -c "$cwd" "${cmd[@]}" 9>&-
+  else
+    tm new-session -d -s "$RESTORED_SESSION" -n "${sid:0:8}" -c "$cwd" "${cmd[@]}" 9>&-
+  fi || { log "session $sid: could not start it in tmux"; return 1; }
+  log "restored session $sid (\"$name\") in $cwd - attach: tmux attach -t $RESTORED_SESSION"
+}
+
+cmd_restore() {
+  marked restored && return 3
+  mark restored
+  [ "$HOURS" != 0 ] || return 0
+  local r k sid
+  mkdir -p "$STATE/ledger" || { log "cannot create $STATE"; return 1; }
+  if [ ! -f "$STATE/pending.json" ]; then
+    candidates > "$STATE/pending.json"
+  fi
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    sid=$(jq -r .sessionId <<< "$r" 2>/dev/null) || continue
+    # Ledger first: whatever happens next, this record is never tried again.
+    for k in $(jq -r '.keys[]?' <<< "$r" 2>/dev/null); do
+      echo "$sid $(date +%s)" > "$STATE/ledger/$k"
+    done
+    launch "$r" || true
+  done < "$STATE/pending.json"
+  rm -f "$STATE/pending.json"
+  return 0
+}
+
+case "${1:-}" in
+  snapshot) cmd_snapshot ;;
+  plan) cmd_plan ;;
+  pending) candidates ;;
+  cwds) cmd_cwds ;;
+  restore) cmd_restore ;;
+  *)
+    echo "usage: dev-remote-sessions snapshot|plan|pending|cwds|restore" >&2
+    exit 2
+    ;;
+esac

@@ -35,6 +35,11 @@
 # - in server mode, removes stale bridge worktrees before every start
 #   (dev-prune-worktrees --delete: orphaned, clean, pushed, idle 72h+;
 #   cbundy/dev-system#93);
+# - once per container start, resumes the other Remote Control sessions that
+#   were live when it stopped, in the tmux session `claude-restored`, without
+#   sending them a message (dev-remote-sessions, cbundy/dev-system#533), and
+#   records the live ones about every minute and on SIGTERM so a graceful stop
+#   is remembered too;
 # - restarts Claude when it exits (crash, /exit, an update restart), with a
 #   backoff, so a Claude that keeps exiting does not spin. Each start runs
 #   `claude` from PATH, so a version the auto-updater installed is picked up;
@@ -59,6 +64,11 @@
 #   DEV_REMOTE_CONTROL_RESUME_PROMPT
 #                            session mode: the message sent when a
 #                            conversation is resumed
+#   DEV_REMOTE_CONTROL_RESTORE_HOURS
+#                            after a container restart, sessions started in
+#                            claude.ai that were live at the restart and last
+#                            active within this many hours (default 24) are
+#                            resumed, see dev-remote-sessions; 0 turns it off
 #   DEV_REMOTE_CONTROL_SKIP_PERMISSIONS
 #                            1 runs Claude with --dangerously-skip-permissions
 #                            (server mode: --permission-mode bypassPermissions
@@ -80,6 +90,8 @@ set -u
 . /usr/local/share/dev-system/workspace.sh
 # shellcheck source=exec-hint.sh
 . "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/exec-hint.sh"
+# shellcheck source=claude-config.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/claude-config.sh"
 
 SESSION=claude
 LOCK=/tmp/dev-remote-control.lock
@@ -218,34 +230,21 @@ wait_for_login() {
   [ -z "$last" ] || log "Claude login found"
 }
 
-# Pre-answers the start-up dialogs nobody is there to answer: workspace trust,
-# the one-time Remote Control consent (remoteDialogSeen: `claude
-# remote-control` blocks on "Enable Remote Control? (y/n)" without it, and the
-# interactive Claude has a matching dialog; enabling DEV_REMOTE_CONTROL is the
-# consent, cbundy/dev-system#88), the one-time "Try the new fullscreen
-# renderer?" prompt (fullscreenUpsellSeenCount, shown while it is below 3) and,
-# if somehow still pending, onboarding.
-# With a second argument of 1 it also accepts the bypass-permissions
-# disclaimer, as answering it interactively would: server mode has no
-# --settings flag to skip it per run, and a spawned session would otherwise
-# fall back to the default permission mode. Only missing values are set.
-# shellcheck disable=SC2016 # $ws and $bypass are jq variables
-prepare_claude_config() {
-  local ws="$1" bypass="${2:-0}" cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.claude.json" tmp
-  local want='.hasCompletedOnboarding == true and .projects[$ws].hasTrustDialogAccepted == true
-    and .remoteDialogSeen == true and (.fullscreenUpsellSeenCount // 0) >= 3 and ($bypass != "1" or .bypassPermissionsModeAccepted == true)'
-  local set='.hasCompletedOnboarding = true | .projects[$ws].hasTrustDialogAccepted = true
-    | .remoteDialogSeen = true | .fullscreenUpsellSeenCount = ([.fullscreenUpsellSeenCount // 0, 3] | max)
-    | if $bypass == "1" then .bypassPermissionsModeAccepted = true else . end'
-  [ -s "$cfg" ] || (umask 077 && echo '{}' > "$cfg") || return 0
-  jq -e --arg ws "$ws" --arg bypass "$bypass" "$want" "$cfg" >/dev/null 2>&1 && return 0
-  tmp=$(mktemp "$cfg.XXXXXX") || return 0
-  if jq --arg ws "$ws" --arg bypass "$bypass" "$set" "$cfg" > "$tmp" 2>/dev/null; then
-    mv "$tmp" "$cfg" && log "marked $ws as trusted and Remote Control as accepted in $cfg"
-  else
-    log "WARNING: $cfg is not valid JSON - Claude may wait on its trust or Remote Control dialog (attach to answer it)"
-  fi
-  rm -f "$tmp"
+# Records the live Remote Control sessions, so a restart can bring back the
+# ones that end gracefully too (dev-remote-sessions, cbundy/dev-system#533).
+# Never fatal and never slow.
+snapshot_sessions() {
+  command -v dev-remote-sessions >/dev/null 2>&1 || return 0
+  timeout 20 dev-remote-sessions snapshot 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2
+  return 0
+}
+
+# Starts the sessions that were live when the container last stopped, once per
+# container start, in the background so the supervisor never waits on it.
+restore_sessions() {
+  command -v dev-remote-sessions >/dev/null 2>&1 || return 0
+  (timeout 300 dev-remote-sessions restore 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2) &
+  return 0
 }
 
 # Stops Claude gracefully (SIGTERM to the pane's process group, so it can end
@@ -265,12 +264,13 @@ on_signal() {
   log "stopping"
   [ -n "${SLEEP_PID:-}" ] && kill "$SLEEP_PID" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
+  snapshot_sessions
   stop_claude
   exit 0
 }
 
 supervise() {
-  local ws name spawn started ran status session backoff=$BACKOFF_MIN
+  local ws name spawn started ran status session backoff=$BACKOFF_MIN last_snapshot
   local status_file=/tmp/dev-remote-control.status
   local -a args
   trap on_signal TERM INT HUP
@@ -278,6 +278,12 @@ supervise() {
   # A session left over from an earlier supervisor that was killed outright
   # is replaced, so exactly one Claude runs.
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+  # Which Remote Control sessions to bring back is decided now, before the
+  # worktree prune below, which must not remove their working directories.
+  if command -v dev-remote-sessions >/dev/null 2>&1; then
+    timeout 60 dev-remote-sessions plan 9>&- 2>&1 | sed 's/^/dev-remote-control: /' >&2
+  fi
 
   # codex and gh logins are needed whether or not Claude is logged in.
   ws=$(cd "$(workspace "$START_DIR")" && pwd -P)
@@ -350,8 +356,14 @@ supervise() {
       bash -c 'f=$1; shift; . /usr/local/share/dev-system/telemetry.sh; claude "$@"; echo $? > "$f"' \
       bash "$status_file" "${args[@]}" 9>&-; then
       log "started Claude with Remote Control ($MODE mode) as \"$name\" in $ws - attach locally: $(exec_hint "tmux attach -t $SESSION")"
+      restore_sessions
+      last_snapshot=$(date +%s)
       while tmux has-session -t "$SESSION" 2>/dev/null; do
         pause 2
+        if [ $(($(date +%s) - last_snapshot)) -ge 60 ]; then
+          snapshot_sessions
+          last_snapshot=$(date +%s)
+        fi
       done
     else
       log "WARNING: could not start the tmux session for Claude"

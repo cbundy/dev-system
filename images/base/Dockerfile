@@ -232,6 +232,7 @@ COPY --chmod=0755 \
   images/base/dev-remote-control \
   images/base/dev-prune-worktrees \
   images/base/dev-restart-self \
+  images/base/dev-remote-sessions \
   images/base/dev-version \
   images/base/dev-query \
   images/base/dev-login \
@@ -257,7 +258,7 @@ COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop i
 # models.env is the baked copy of the no-mistakes models: dev-init pins from
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).
-COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/agentsview.sh \
+COPY --chmod=0644 images/base/dev-login-page.js images/base/workspace.sh images/base/claude-config.sh images/base/agentsview.sh \
   images/base/telemetry.sh images/base/codex-otel.sh images/base/models.sh images/base/models.env \
   images/base/gh.sh images/base/exec-hint.sh images/base/plugins.sh images/base/persist.sh images/base/trusted-authors.sh \
   /usr/local/share/dev-system/
