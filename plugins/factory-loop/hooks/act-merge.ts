@@ -145,13 +145,14 @@ export function launchArgv(slot: string, branch: string, log: string, respond: r
 // branch, $2 the run's head, $3 the head origin's branch must be at: the run's head, or the head
 // the loop's own proven update-behind pushed over it (#595). The pipeline commits in its own checkout and pushes, so the
 // implementer's worktree sits behind the branch by exactly those commits and the guard fails
-// `head`. This moves each worktree on the branch to the run's head, only when origin's branch
+// `head`. Worktrees already at the run head or expected origin head need no repair. This moves
+// the remaining worktrees on the branch to the run's head, only when origin's branch
 // is that expected head (fetched fresh), the worktree's head is an ancestor of the run head and nothing tracked is
 // uncommitted, and only by `git merge --ff-only`, so no commit or change can be lost. Untracked
 // files stay (a fast-forward that would overwrite one fails by itself). The merge runs none of the
 // repo's git hooks (a post-merge npm install could outlast the timeout). The main checkout (the
 // first worktree listed) is never moved (SPEC 5.2 G5): one left behind on the run's branch is
-// refused, and G5 tells the owner. Every worktree is checked before any moves. It answers, with
+// refused, and G5 tells the owner. Every worktree needing repair is checked before any moves. It answers, with
 // exit 0, a `FORWARDED <from> <to> <path>` line per worktree moved, `CURRENT <head>` when none
 // lagged, or `REFUSED <why>`; anything else is a failure.
 export const FF_SCRIPT = [

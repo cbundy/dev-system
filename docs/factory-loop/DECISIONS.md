@@ -810,22 +810,14 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 ### D-66 The loop fast-forwards a worktree the pipeline's own commits left behind
 
 - **Decision** (the agent's choice, 2026-10-14, approved by the owner the same day; #551): a free `fast-forward`
-  action runs one `sh -c` script from the main checkout. Rule `M2` runs it once per guard on a
-  `head` FAIL whose run, origin and PR heads all equal the run head, before any judge; rule `M1`
-  runs it before a head's first guard when a clean pool slot sits on the run's branch. It counts
-  as writing the branch (D-63). A refusal, used-up attempts, or a lag that comes back after a
-  fast-forward went through go to the judge with a `FAST-FORWARD REFUSED <why>` line. It never
-  moves the main checkout, which rule `G5` promises the loop leaves alone: a main checkout left
-  behind on the run's branch is refused (SPEC 5.5, 6.1).
+  action repairs worktree lag before waking the judge. The current eligibility, recovery and
+  safety requirements live in [SPEC rule M2](SPEC.md#55-merge-m) and the
+  [executor catalogue](SPEC.md#61-catalogue).
 - **Alternatives**: keep judging every `head` FAIL; fast-forward before every first guard,
   whatever the pool shows; move a lagging worktree by any means but `--ff-only`.
 - **Why**: run 2 had six `FAIL head` results, every PR the pipeline committed to, each costing a
-  judge wake and a fixer for one fast-forward. Safety: origin must equal the run head, the tree
-  must have no uncommitted tracked change and the worktree's head must be an ancestor of the run
-  head, every worktree is checked before any moves, only `--ff-only` is used, and anything else
-  goes to the judge. Untracked files stay: `--ff-only` never deletes one and refuses to
-  overwrite one. Plan cannot see worktree heads, so gating the first-guard run on the pool saves
-  a command per head where nothing could lag.
+  judge wake and a fixer for one fast-forward. The executor's refusal checks protect work that
+  a repair must preserve; see the executor catalogue above.
 - **Note** (2026-10-14, #563): rule `M1`'s first-guard run is removed. Observe reads a slot's
   tree only for a finished issue, and an implementer detaches its slot once the pipeline holds
   the branch, so it never ran. `M2`'s run on a `head` FAIL covers the lag, at the cost of one
