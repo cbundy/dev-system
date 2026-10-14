@@ -985,6 +985,22 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect([shadow.state.queue, shadow.queueKnown]).toEqual([[114, 470], null])
   })
 
+  test('a respond whose log ends in a fresh gate for its step is marked regated; one that never reached the run is not (#620)', async () => {
+    const sent = (key: string, log: string) => entry(key, 'respond', { run: 'R1', endedAt: NOW - MIN, outcome: { kind: 'respond', slot: '/slot', log } })
+    const ledger = [
+      sent('respond:R1:test:h1:fix', '/log/regate.log'),
+      sent('respond:R1:test:h2:fix', '/log/other-step.log'),
+      sent('respond:R1:test:h3:fix', '/log/no-gate.log'),
+      sent('respond:R1:test:h4:fix', '/log/missing.log'),
+    ]
+    const h = host()
+    h.world.files['/log/regate.log'] = 'run: running\n  test: fixing\ngate:\n  step: test\n  status: fix_review\n'
+    h.world.files['/log/other-step.log'] = 'run: running\ngate:\n  step: review\n  status: fix_review\n'
+    h.world.files['/log/no-gate.log'] = 'run: running\nfactory-loop: respond exited 0\n'
+    const obs = await h.pass(runtime(), stored({ ledger }))
+    expect(obs.state.regated).toEqual(['respond:R1:test:h1:fix'])
+  })
+
   test('the store wins whenever it holds a ledger; observe mode derives it from the 3-day log', async () => {
     const kept = [entry('claim:470:new', 'claim', { class: 'start', issue: 470, outcome: { kind: 'claim', result: 'claimed' } })]
     const h = host()

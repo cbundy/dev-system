@@ -140,7 +140,11 @@ of when and why the model was involved (D-13).
   unmoved, twice. Read the run's log (`~/.no-mistakes/logs/<run>/`), the respond logs the
   detail lines name (in `${CLAUDE_CONFIG_DIR:-~/.claude}/factory-loop/<owner>__<repo>/`) and
   `daemon.log`. A hung run or a dead daemon: re-drive as above, then `done`. The run moved on
-  after all: `done`. Anything else: `hold` with what you found.
+  after all: `done`. Anything else: `hold` (or `failed`) with what you found. The reason goes
+  to the owner as a `tell(escalate)` the moment you answer, so write it for the owner: what
+  the gate is, why the respond cannot move it, and what the owner can do (approve, skip,
+  drop the issue). A respond that reached the run and left the gate parked again is not
+  stuck: the loop adjudicates that gate afresh, and you are not asked.
 - **`run-it`** (`issue pr`): the PR merged with a `run-it` rollout and the issue stays open.
   Its release goes out on its own, never with another `run-it` change; then do the issue's
   `## Run it` steps, record the result on the issue and close it. A release needs the owner:

@@ -52,6 +52,17 @@ Run only commands known to exit. Read source, docs and `--help` output only from
   emit a `CORRECT` line and add it with `--add-finding`. If there are zero findings
   and nothing is missed, emit no verdict line and propose `approve`.
 - A failed test step is judged the same way: a real defect (`CORRECT`) or `ENV`.
+- A test gate's `live validation verdict: inconclusive` finding whose untested scenarios
+  are agent or prompt behaviour the isolated test agent cannot exercise (for example its
+  `claude -p` is not logged in) is `ENV`. When every other scenario that could run passed
+  live and the change's unit tests pass, propose `ACTION: approve --reason <text>`, the
+  test-exception path: the reason names the untested scenarios and the tests that cover the
+  change. Never propose `fix` for it: a fix cannot change what the test agent cannot do.
+- An `ENV` finding that a fix round cannot change is never answered `fix` again. When your
+  prompt says the gate came back after a previous round, or the same finding is back on the
+  same head after a `fix`, propose `approve --reason <text>` if the brief allows it, else
+  `escalate: <why>` carrying the finding. Judge a gate that came back as it stands now:
+  its finding ids may have been renumbered since the previous round.
 - A test deletion or weakening is judged against the brief: an `ask-user` finding that
   proposes removing a test, a committed auto-fix that removed assertions, added
   `--warn-only` or `|| true`, skipped a test or commented an assertion out, or a
@@ -84,7 +95,7 @@ nothing else - no log excerpts, no diff content, no preamble:
 
 Every verdict carries a proposed action through that single line: `CORRECT` -> `fix`
 or `fixer:`, `WRONG` -> `approve` with the evidence as `--reason`, `NIT` -> `approve`
-or `skip`, `ENV` -> `fix` instructions, `fixer:` or `escalate:`, `DUP` -> `skip`.
+or `skip`, `ENV` -> `fix` instructions (only when a fix can change it), `fixer:`, `approve --reason` (an inconclusive scenario the test agent cannot run, or an `ENV` finding that came back after a fix) or `escalate:`, `DUP` -> `skip`.
 When findings mix, propose `fix` for the `CORRECT` ones. Judge every finding the gate
 shows: a `fix` declines by name each judged finding it leaves out of `--findings`
 (`axi respond --ignore`), and no-mistakes refuses a fix that leaves a gate finding

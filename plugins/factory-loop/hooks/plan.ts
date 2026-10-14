@@ -823,7 +823,11 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           }
         }
       }
-      const adjKey = `adjudicate:${at}${suffix}`
+      // #620: a respond that reached the run and left the step parked again on this head is a new
+      // round, judged afresh under its own keys, never an unmoved gate whose old answer is replayed
+      const round = regateRound(ctx, at, suffix)
+      const gate = round > 0 ? `${at}:f${round}` : at
+      const adjKey = `adjudicate:${gate}${suffix}`
       const adj = done(ctx, adjKey)
       if (adj === undefined) {
         want(ctx, {
@@ -846,16 +850,27 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           handoffHead: null,
           verdicts: [],
           guard: [],
+          ...(round > 0 ? { after: previousRound(ctx, at, suffix, round) } : {}),
         })
         continue
       }
       const verdict = outcome(adj, 'adjudicator')
       if (verdict === undefined) continue
       const action = verdict.action
-      if (action.type === 'escalate') {
+      if (action.type === 'fix' && round > 0) {
+        // the cap: one fix round per run, step and head. A fix cannot change what it already failed to
         want(
           ctx,
-          wake('tell', 'escalate', `tell:escalate:${at}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
+          wake('tell', 'escalate', `tell:escalate:${gate}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
+            'a fix on this head already ran and the gate came back with the same findings',
+            resumeEffect(verdict.verdicts, run.head),
+            ...verdict.verdicts,
+          ]),
+        )
+      } else if (action.type === 'escalate') {
+        want(
+          ctx,
+          wake('tell', 'escalate', `tell:escalate:${gate}${suffix}`, 'P3', n, { issue: n, run: run.run, step: run.step, brief }, [
             action.why,
             resumeEffect(verdict.verdicts, run.head),
             ...verdict.verdicts,
@@ -866,7 +881,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
           kind: 'spawn',
           agent: 'fixer',
           purpose: 'gate',
-          key: `fixer:gate:${at}${suffix}`,
+          key: `fixer:gate:${gate}${suffix}`,
           class: 'drive',
           rule: 'P3',
           reason: 'adjudicator asked for a fixer',
@@ -883,7 +898,7 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
         // the merge review's answers; the parser rejects them for a gate, so this is a loop bug
         skip(ctx, 'P3', n, `adjudicator: ACTION ${action.type} does not answer a gate`)
       } else {
-        respond(ctx, run, action, `respond:${at}:${action.type}${suffix}`)
+        respond(ctx, run, action, `respond:${gate}:${action.type}${suffix}`)
       }
       continue
     }
@@ -939,6 +954,36 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
   }
 }
 
+// regateRound (#620): how many of this gate's responds reached the run and found the step parked
+// again on the same head: 0 for a gate no respond has answered, 1 after a fix that changed nothing.
+// Only the first round's responds count (their keys carry no round), so it never goes past 1:
+// the cap lets a gate have one fix round.
+function regateRound(ctx: Ctx, at: string, suffix: string): number {
+  const regated = new Set(ctx.state.regated ?? [])
+  const base = new Set<string>()
+  for (const key of regated) {
+    const plain = key.endsWith(':retry') ? key.slice(0, -':retry'.length) : key
+    if (!plain.startsWith(`respond:${at}:`)) continue
+    const rest = plain.slice(`respond:${at}:`.length)
+    if (rest === `fix${suffix}` || rest === `approve${suffix}` || rest === `skip${suffix}`) base.add(plain)
+  }
+  return base.size > 0 ? 1 : 0
+}
+
+// previousRound: the answer the gate came back after, for the next adjudicator's prompt.
+function previousRound(ctx: Ctx, at: string, suffix: string, round: number): { action: string; verdicts: string[] } {
+  const prev = outcome(done(ctx, `adjudicate:${round > 1 ? `${at}:f${round - 1}` : at}${suffix}`), 'adjudicator')
+  if (prev === undefined) return { action: 'unknown', verdicts: [] }
+  const a = prev.action
+  const action =
+    a.type === 'fix'
+      ? `fix${a.findings === null ? '' : ` --findings ${a.findings}`}`
+      : a.type === 'approve'
+        ? `approve${a.reason === null ? '' : ` --reason ${a.reason}`}`
+        : a.type
+  return { action, verdicts: prev.verdicts }
+}
+
 // latestEscalation: this gate's latest adjudication, when it escalated and the owner resumed the
 // run after it: its reason and verdict lines (both empty when rebuilt from the event log, which
 // carries neither) and its end. undefined otherwise: the latest one asked for something else, the
@@ -946,7 +991,8 @@ function pipelineGates(ctx: Ctx, runs: RunView[]) {
 // adjudication is a fixer's or an env-retry's, so a second resume looks back past it.
 function latestEscalation(ctx: Ctx, run: RunView, at: string, resumed: number): { why: string; verdicts: string[]; endedAt: Ms } | undefined {
   for (let round = resumed - 1; round >= 0; round--) {
-    const adj = done(ctx, `adjudicate:${at}${round > 0 ? `:r${round}` : ''}`)
+    const rs = round > 0 ? `:r${round}` : ''
+    const adj = done(ctx, `adjudicate:${at}:f1${rs}`) ?? done(ctx, `adjudicate:${at}${rs}`)
     if (adj === undefined) continue
     const verdict = outcome(adj, 'adjudicator')
     if (verdict === undefined || verdict.action.type !== 'escalate') return undefined
@@ -1064,9 +1110,23 @@ function respond(ctx: Ctx, run: RunView, action: AdjAction, key: string) {
   if (retry === undefined) {
     want(ctx, make(retryKey, false))
   } else if (state.now - (retry.endedAt ?? 0) >= config.respondSettleMs) {
+    const stuckKey = `task:respond-stuck:${gateOf(run)}`
+    const answer = outcome(done(ctx, stuckKey), 'wake')
+    if (answer !== undefined && (answer.decision === 'hold' || answer.decision === 'failed')) {
+      // #620: a held or failed respond-stuck is the model giving up on a gate only the owner can
+      // move; it reaches the owner at once, once per answer, with the judge's reason
+      want(
+        ctx,
+        wake('tell', 'escalate', `tell:escalate:${gateOf(run)}:respond-stuck`, 'P3a', n, { issue: n, run: run.run, step: run.step, brief: briefOf(ctx, ctx.issues.get(n)) }, [
+          `the respond to this gate did not move it, and the judge ${answer.decision === 'hold' ? 'held' : 'failed'} it: ${answer.reason ?? 'no reason given'}`,
+          'a resume of the run lets the loop look at the gate again; an approve or a skip by hand moves it on',
+        ]),
+      )
+      return
+    }
     want(
       ctx,
-      wake('task', 'respond-stuck', `task:respond-stuck:${gateOf(run)}`, 'P3a', n, {
+      wake('task', 'respond-stuck', stuckKey, 'P3a', n, {
         issue: n,
         run: run.run,
         branch: run.branch,

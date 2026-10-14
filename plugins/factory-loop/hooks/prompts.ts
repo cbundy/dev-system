@@ -336,6 +336,12 @@ function adjudicator(repo: string | null, n: number | null, a: AdjudicatorSpawn,
         : `Adjudicate the ${step} gate of ${run === null ? 'the run' : `run ${run}`} for ${issueRef(repo, n)}, which awaits a decision.`,
       ...(where === '' ? [] : [`Where: ${where}${pr === null ? '' : `, ${pr}`}.`]),
       ...briefLines(repo, a.brief, n),
+      ...(a.after === undefined
+        ? []
+        : [
+            `The gate came back on the same head after the previous round's answer (ACTION: ${neutral(a.after.action)}). Judge it as it stands now, with its finding ids as they are now, and do not repeat that answer unless the findings are the same and a fix could change them.`,
+            ...block('The previous round judged:', a.after.verdicts),
+          ]),
       readFirst('adjudicator'),
       scratch(n),
       ...contract,

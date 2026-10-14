@@ -46,6 +46,8 @@ export type Observed = {
   control: Control
   lastTitle: string | null
   githubBackoffUntil: number | null
+  // the keys of respond entries whose log shows a fresh gate (observe reads the logs)
+  regated?: string[]
   // config trackerTitle: a title matching it marks a tracker
   trackerTitle: string
   // the main checkout (#544); the replay harness leaves it out: not read
@@ -174,6 +176,7 @@ export function buildState(o: Observed): State {
     control: o.control,
     lastTitle: o.lastTitle,
     githubBackoffUntil: o.githubBackoffUntil,
+    regated: o.regated ?? [],
     checkout: o.checkout ?? null,
   }
 }

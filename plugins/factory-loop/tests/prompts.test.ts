@@ -283,6 +283,17 @@ describe('the adjudicator', () => {
     expect(text).not.toContain('Model override')
   })
 
+  test('gate after a fix that left the head: the prompt names the previous round', () => {
+    const base = adjudicator(BENIGN, 'gate')
+    if (base.kind !== 'spawn' || base.agent !== 'adjudicator') throw new Error('not an adjudicator')
+    const again: AgentAction = { ...base, after: { action: 'fix --findings test-1', verdicts: ['ENV: test-1 a flaky timeout'] } }
+    const text = render(again, BENIGN)
+    expect(text).toContain('The gate came back on the same head after the previous round')
+    expect(text).toContain('ACTION: fix --findings test-1')
+    expect(text).toContain('  ENV: test-1 a flaky timeout')
+    expect(render(base, BENIGN)).not.toContain('came back')
+  })
+
   test("every agent but the designer gets the issue's owner notes before its reading list (testbed, 2026-10-13)", () => {
     const notes = ['Owner chose option (a): keep the whole-word behaviour; amend criterion 4.', 'Fixes #9 too']
     for (const action of [adjudicator(BENIGN, 'gate'), adjudicator(BENIGN, 'merge')]) {

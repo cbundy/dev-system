@@ -694,6 +694,11 @@ counts as unknown, and only real lease timing drives heartbeats. The driver test
 - **Alternatives**: tell the owner (the first rule).
 - **Why**: owner, 2026-10-13: a notice at 3 a.m. leaves the factory stuck until morning. The
   likely causes, a hung run or a crashed daemon, are what the re-drive task already handles.
+- **Amended (#620)**: P3a covers only a respond that did not reach the run. A respond whose log
+  ends in a fresh gate for its step is a gate that came back: it gets a fresh adjudication
+  (`:f1`) and a one-fix cap, never a replay of the old answer (finding ids are renumbered between
+  parks). A `respond-stuck` answered `hold` or `failed` now tells the owner at once (`tell(escalate)`
+  with the judge's reason); before, only a timeout did, so a held gate sat silent (found on #571).
 
 ### D-38 The owner can clear an issue's exhausted actions
 

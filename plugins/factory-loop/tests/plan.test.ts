@@ -662,6 +662,63 @@ describe('P: pipeline gates', () => {
     expect(keys(plan(withLedger(parkedReview(), [adj, fresh]), CFG))).toEqual([])
   })
 
+  // #620, found on #571: a fix with nothing to change re-parked the step on the same head, and the
+  // loop replayed the old answer against renumbered findings instead of judging the gate again.
+  describe('a gate that came back after a respond (#620)', () => {
+    const RUN = '01M4RQ0045AAAA'
+    const fixAnswer = adjudicated({ type: 'fix', findings: 'review-1', instructions: null, addFinding: null, ignore: null })
+    const fixSent = (over: Partial<LedgerEntry> = {}) => entry(`respond:${AT45}:fix`, 'respond', { run: RUN, endedAt: NOW - 20 * MIN, ...over })
+    const regated = (over: Partial<State> = {}) => withLedger(parkedReview({ regated: [`respond:${AT45}:fix`], ...over }), [fixAnswer, fixSent()])
+    const F1 = `${AT45}:f1`
+    const f1 = (action: AdjudicatorAction) => adjudicated(action, `adjudicate:${F1}`)
+
+    test('a fresh adjudicator under :f1, naming the previous round; no retry, no respond-stuck', () => {
+      const r = plan(regated(), CFG)
+      expect(keys(r)).toEqual([`adjudicate:${F1}`])
+      expect(find(r, `adjudicate:${F1}`)).toMatchObject({
+        agent: 'adjudicator',
+        purpose: 'gate',
+        after: { action: 'fix --findings review-1', verdicts: ['CORRECT: review-1 a real gap'] },
+      })
+    })
+
+    test('the f1 round answering approve with a reason responds with it', () => {
+      const s = withLedger(regated(), [f1({ type: 'approve', reason: 'untested scenarios are agent behaviour' })])
+      const r = plan(s, CFG)
+      expect(keys(r)).toEqual([`respond:${F1}:approve`])
+      expect(find(r, `respond:${F1}:approve`)).toMatchObject({ kind: 'respond', action: 'approve', approveReason: 'untested scenarios are agent behaviour' })
+    })
+
+    test('the f1 round answering fix again is not executed: the owner hears, with the verdict lines', () => {
+      const s = withLedger(regated(), [f1({ type: 'fix', findings: 'review-1', instructions: null, addFinding: null, ignore: null })])
+      const r = plan(s, CFG)
+      expect(keys(r)).toEqual([`tell:escalate:${F1}`])
+      expect(find(r, `tell:escalate:${F1}`)).toMatchObject({
+        context: [expect.stringContaining('a fix on this head already ran and the gate came back with the same findings'), expect.any(String), 'CORRECT: review-1 a real gap'],
+      })
+    })
+
+    test('a respond whose log shows no new gate is still retried, then respond-stuck (P3a)', () => {
+      const s = withLedger(parkedReview(), [fixAnswer, fixSent()])
+      expect(keys(plan(s, CFG))).toEqual([`respond:${AT45}:fix:retry`])
+    })
+
+    test('a respond-stuck answered hold or failed tells the owner once, with the reason; done tells nothing', () => {
+      const adj = adjudicated({ type: 'approve', reason: null })
+      const sent = entry(`respond:${AT45}:approve`, 'respond', { run: RUN, endedAt: NOW - 20 * MIN })
+      const retried = entry(`respond:${AT45}:approve:retry`, 'respond', { run: RUN, endedAt: NOW - 16 * MIN })
+      const stuckKey = 'task:respond-stuck:01M4RQ0045AAAA:review:head45'
+      const answered = (d: string) => withLedger(parkedReview(), [adj, sent, retried, entry(stuckKey, 'task', { wake: 'respond-stuck', issue: 45, outcome: wakeAnswer(d, { reason: 'approve a test exception' }) })])
+      for (const d of ['hold', 'failed']) {
+        const r = plan(answered(d), CFG)
+        expect(keys(r)).toEqual([`tell:escalate:${RUN}:review:head45:respond-stuck`])
+        expect(find(r, `tell:escalate:${RUN}:review:head45:respond-stuck`)).toMatchObject({ context: [expect.stringContaining('approve a test exception'), expect.any(String)] })
+        expect(r.owner).toBe(1)
+      }
+      expect(keys(plan(answered('done'), CFG))).toEqual([])
+    })
+  })
+
   test('failed with run id unknown is infrastructure: a re-drive, no adjudicator (SKILL:125-127)', () => {
     const s = state({ issues: [mine(46, 'implementing')], runs: [run(46, 'failed', { run: 'unknown', step: null })] })
     expect(keys(plan(s, CFG))).toEqual(['task:redrive:feat/issue-46-work:head46'])

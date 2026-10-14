@@ -7,7 +7,7 @@
 import { EMPTY_CONTROL, controlFrom } from './config'
 import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
-import { rateLimited } from './exec'
+import { logRegated, rateLimited } from './exec'
 import { choose } from './ledger'
 import type { LedgerSource } from './ledger'
 import {
@@ -101,6 +101,8 @@ export type Cache = {
   runs?: Timed<SeenRun[]>
   // act mode: the last ledger rebuilt from the event log, and how many entries it found
   rebuilt?: Timed<number>
+  // respond keys whose log was found to end in a fresh gate (never undone: a log only grows)
+  regated?: Set<string>
 }
 
 export function emptyCache(): Cache {
@@ -120,6 +122,7 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.pool
   delete cache.runs
   delete cache.rebuilt
+  delete cache.regated
   cache.github.clear()
   cache.timelines.clear()
   cache.leaseBranches.clear()
@@ -519,6 +522,7 @@ export async function observe(
   let githubBackoffUntil = backoffUntil
   if (stored !== undefined && limited) githubBackoffUntil = Math.max(backoffUntil ?? 0, now + GITHUB_BACKOFF_MS)
 
+  const regated = await readRegated(io, ledger, cache, now)
   const state = buildState({
     now,
     repo: rt.repo,
@@ -539,6 +543,7 @@ export async function observe(
     control,
     lastTitle,
     githubBackoffUntil,
+    regated,
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
@@ -569,4 +574,26 @@ async function readControl(io: Io, rt: Runtime): Promise<Control> {
   } catch {
     return EMPTY_CONTROL
   }
+}
+
+// readRegated (#620): the respond entries of the last day whose log ends in a fresh gate for the
+// respond's own step, so plan can tell a gate that came back after a respond from one the respond
+// never reached. A respond's key is respond:<run>:<step>:<head>:<action>[...]. A log that is
+// unreadable counts as no gate.
+const REGATE_WITHIN_MS = 24 * 3_600_000
+async function readRegated(io: Io, ledger: readonly LedgerEntry[], cache: Cache, now: number): Promise<string[]> {
+  const found = (cache.regated ??= new Set<string>())
+  for (const e of ledger) {
+    if (e.kind !== 'respond' || e.status !== 'done' || e.outcome?.kind !== 'respond' || found.has(e.key)) continue
+    if (now - (e.endedAt ?? 0) > REGATE_WITHIN_MS) continue
+    const step = e.key.split(':')[2]
+    if (step === undefined) continue
+    try {
+      const text = await io.readFile(e.outcome.log)
+      if (text !== null && logRegated(text, step)) found.add(e.key)
+    } catch {
+      // an unreadable log is no gate
+    }
+  }
+  return [...found].sort()
 }

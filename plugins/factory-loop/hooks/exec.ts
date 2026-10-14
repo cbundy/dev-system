@@ -130,6 +130,17 @@ export function respondLogPath(loopDir: string, key: string, attempt: number): s
   return `${loopDir}/respond/${key.replace(/[^A-Za-z0-9._-]+/g, '_')}-${attempt}.log`
 }
 
+// logRegated: whether a respond's log ends in a fresh `gate:` block for `step`: the respond
+// reached the run, and the step parked again (#620). The pipeline prints `gate:` followed by an
+// indented `step:` line each time it parks; only the last block counts.
+export function logRegated(text: string, step: string): boolean {
+  const at = text.lastIndexOf('\ngate:\n')
+  const start = at >= 0 ? at + 1 : text.startsWith('gate:\n') ? 0 : -1
+  if (start < 0) return false
+  const m = /^ {2}step: *"?([^"\s]+)"?\s*$/m.exec(text.slice(start + 'gate:\n'.length))
+  return m !== null && m[1] === step
+}
+
 // The last line of every wake prompt (skills/judge/SKILL.md answers by it).
 export const WAKE_POINTER = 'Answer with the factory-loop:judge skill.'
 

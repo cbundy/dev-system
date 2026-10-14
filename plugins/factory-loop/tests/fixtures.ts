@@ -69,6 +69,7 @@ export function state(over: Partial<State> = {}): State {
     control: control(),
     lastTitle: null,
     githubBackoffUntil: null,
+    regated: [],
     checkout: CLEAN,
     ...over,
   }

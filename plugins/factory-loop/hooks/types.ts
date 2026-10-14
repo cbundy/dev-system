@@ -266,6 +266,9 @@ export type State = {
   control: Control
   lastTitle: string | null
   githubBackoffUntil: Ms | null
+  // the keys of done respond entries whose log ends in a fresh `gate:` block for their step: the
+  // respond reached the run and the step parked again (#620). Empty when none was read.
+  regated: string[]
   // null: not read (the replay harness, a state built outside a pass)
   checkout: Checkout | null
 }
@@ -358,6 +361,9 @@ export type Action =
       handoffHead: string | null
       verdicts: string[]
       guard: string[]
+      // purpose gate, a round after a fix that left the head where it was (#620): the previous
+      // round's action line and verdict lines, which the prompt names
+      after?: { action: string; verdicts: string[] }
     })
   | (Base & {
       kind: 'spawn'

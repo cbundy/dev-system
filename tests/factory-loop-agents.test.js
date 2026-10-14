@@ -115,3 +115,12 @@ test("the model is never offered the loop's own agent types, but while the loop'
     );
   }
 });
+
+test("both adjudicator definitions carry the inconclusive-test and no-repeat-fix rules (#620)", () => {
+  for (const rel of ["plugins/factory-loop/agents/adjudicator.md", "plugins/callum-flow/agents/adjudicator.md"]) {
+    const text = read(rel);
+    assert.ok(text.includes("live validation verdict: inconclusive"), `${rel}: no inconclusive rule`);
+    assert.ok(text.includes("ACTION: approve --reason <text>"), `${rel}: no test-exception action`);
+    assert.ok(text.includes("is never answered `fix` again"), `${rel}: no no-repeat-fix rule`);
+  }
+});
