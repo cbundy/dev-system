@@ -149,7 +149,7 @@ function toolAsk(ask: string): string {
 // section 8.
 const HANDOFF_ASK = [
   toolAsk(`After the implement-issue handoff (its section 8), answer by calling ${HANDOFF} once, with run, head, commit, gated, branch and pr`),
-  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only when head equals commit, or when you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none. In the tool, none is null and yes is true.',
+  'run and head: the pipeline run you started or drove, and its head from `no-mistakes status`. commit: your latest commit, or none when you drove the run with `axi respond` and committed nothing. gated: yes only with a run, when its head equals your commit or you committed nothing. branch: the branch the work is on now (a new one when `callum-flow-regate` moved you). pr: the PR number, or none. In the tool, none is null and yes is true.',
   'If you cannot call it, end your final message with the line below, exactly once and last, filled in.',
   HANDOFF_RESULT,
 ]

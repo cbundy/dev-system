@@ -37,6 +37,7 @@ import type { ActIo, RunInit, RunResult, SpawnInput } from '../hooks/exec'
 import { finish } from '../hooks/ledger'
 import { emptyCache, observe } from '../hooks/observe'
 import type { Io, Runtime } from '../hooks/observe'
+import { plan } from '../hooks/plan'
 import type { Action, AgentStatus, LedgerEntry } from '../hooks/types'
 import { DEVICE, MIN, NOW, config, control, entry, mine, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, checkout, factoryDoc, iso } from './host'
@@ -430,6 +431,24 @@ describe('notices from outside plan, rate-cap holds, reconciling, the update', (
     f.env.live.ledger = [{ ...designer, attempts: 2 }]
     expect(await said('RESULT brief=none created=61 pending_decision=no')).toMatchObject({ result: 'applied', repaired: false })
     expect(files.get(answerPath(LOOP_DIR, designer.key))).toBe('RESULT brief=none created=61 pending_decision=no')
+  })
+
+  test('an implementer that gave up and answers the repair gated with no run fails its attempt, so rule D4b retries it, never a done entry no rule reads (#548)', async () => {
+    const implementer = entry('delegate:60:b', 'delegate', { agent: 'implementer', class: 'develop', issue: 60, status: 'running', startedAt: NOW - 10 * MIN, endedAt: null, agentId: 'agent-1' })
+    const f = fake([implementer])
+    const between: Between = { answering: new Set(), completedSeen: new Map() }
+    const s = state({ issues: [mine(60, 'implementing', { stageSince: 1 })], ledger: [] })
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: 'I could not finish.', reason: 'answer' }, between, async () => false, async () => null)).toMatchObject({ result: 'repair' })
+    // through the tool: refused, with what to correct
+    const call = { run: null, head: null, commit: null, gated: true, branch: 'feat/issue-60-x', pr: null }
+    const refused = await agentToolAnswered(f.env, s, 'mcp__factory-loop__handoff', call, 'agent-1')
+    expect(refused).toMatchObject({ ok: false, text: expect.stringContaining('gated is true with run null') })
+    // in text: the attempt fails, and plan retries the delegation
+    const said = 'RESULT run=none head=none commit=none gated=yes branch=feat/issue-60-x pr=none'
+    expect(await agentAnswered(f.env, s, { agentId: 'agent-1', answer: said, reason: 'answer' }, between, async () => false, async () => null)).toMatchObject({ result: 'applied', repaired: true })
+    expect(f.env.live.ledger.find(e => e.key === implementer.key)).toMatchObject({ status: 'failed', attempts: 1 })
+    const next = plan({ ...s, now: NOW + 10 * MIN, ledger: f.env.live.ledger }, config())
+    expect(next.actions.map(a => a.key)).toContain(implementer.key)
   })
 
   test('no repair goes to an agent still at work, nor to one the loop did not start (#548)', async () => {

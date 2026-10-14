@@ -10,7 +10,7 @@
 // answer tool does, so they cost the main conversation nothing.
 import type { ToolSpec } from 'claude-code'
 
-import { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, VERDICTS, handoffOutcome, isBriefUrl } from './replies'
+import { ACTIONS_FOR, BUMPS, FINDING_ID, FLAGS, HANDOFF_SHAPES, VERDICTS, gatedWithoutRun, handoffOutcome, isBriefUrl } from './replies'
 import type { AdjudicatorOutcome, DesignResult, HandoffOutcome } from './replies'
 import type { AdjudicatorAction, AdjudicatorPurpose, AgentType, MergeFlag, MergeReport } from './types'
 
@@ -102,7 +102,7 @@ export const HANDOFF_TOOL: ToolSpec = {
   description:
     "The factory loop's handoff from an implementer or fixer, in place of the RESULT line: one call after the implement-issue " +
     'handoff. run and head: the pipeline run you started or drove and its head from `no-mistakes status`; commit: your latest ' +
-    'commit, null when you committed nothing; gated: true only when head equals commit, or when you committed nothing; branch: ' +
+    'commit, null when you committed nothing; gated: true only with a run, when its head equals your commit or you committed nothing; branch: ' +
     'the branch the work is on now; pr: the PR number, or null. An error says what is wrong: correct the call and call it again; ' +
     'once it is recorded, end your turn.',
   inputSchema: {
@@ -345,7 +345,7 @@ export function checkDesign(input: unknown, repo: string, issue: number | null):
 
 // checkHandoff: the handoff tool's input, read as its RESULT line is (replies.ts handoffOutcome):
 // not gated when it says so or its head is not its commit; a branch other than the one the spawn
-// named is a new one.
+// named is a new one; gated with no run is refused (replies.ts gatedWithoutRun).
 export function checkHandoff(input: unknown, namedBranch: string | null): ToolCheck<HandoffOutcome> {
   const problems: string[] = []
   const o = record(input) ?? {}
@@ -364,6 +364,7 @@ export function checkHandoff(input: unknown, namedBranch: string | null): ToolCh
   const commit = id('commit', HANDOFF_SHAPES.sha, 'a commit SHA of 7 to 40 hex digits')
   const branch = id('branch', HANDOFF_SHAPES.branch, 'a branch name')
   if (typeof o.gated !== 'boolean') problems.push('gated must be true or false')
+  else if (o.run === null && gatedWithoutRun({ run, gated: o.gated })) problems.push('gated is true with run null, and with no pipeline run nothing is gated: give the run, or gated false')
   if (o.pr === undefined) problems.push('pr is required (null for none)')
   else if (o.pr !== null && !(Number.isInteger(o.pr) && (o.pr as number) > 0)) problems.push(`pr ${clip(o.pr)} is not a PR number, or null`)
   const pr = typeof o.pr === 'number' ? o.pr : null

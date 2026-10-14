@@ -364,7 +364,15 @@ export function readHandoff(answer: string, namedBranch: string | null): Handoff
     const misshapen = all.filter(l => /^RESULT\b/.test(bare(l))).pop()
     return misshapen === undefined ? 'no RESULT line, and it does not say NOT GATED' : `the RESULT line is not in the shape ${HANDOFF_RESULT}: ${quote(misshapen)}`
   }
+  if (gatedWithoutRun(fields)) return 'the RESULT line says gated=yes with run=none, and with no pipeline run nothing is gated: name the run, or say gated=no'
   return handoffOutcome(fields, namedBranch)
+}
+
+// gatedWithoutRun: a handoff that says gated but names no run, as an agent that gave up and
+// committed nothing may. Read as done, no rule would act on it (D4b retries only a delegate that
+// failed, D5 only one not gated), so its issue would stall: it is unreadable instead.
+export function gatedWithoutRun(fields: Pick<HandoffFields, 'run' | 'gated'>): boolean {
+  return fields.gated && fields.run === null
 }
 
 // handoffOutcome: what a handoff's fields mean, from either channel.

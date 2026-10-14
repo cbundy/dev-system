@@ -213,6 +213,13 @@ describe('checkHandoff', () => {
     })
   })
 
+  test('gated with no run is refused, as its RESULT line is: the agent names the run or says not gated', () => {
+    expect(problems(checkHandoff({ run: null, head: null, commit: null, gated: true, branch: 'feat/issue-470-x', pr: null }, null))).toEqual([
+      'gated is true with run null, and with no pipeline run nothing is gated: give the run, or gated false',
+    ])
+    expect(checkHandoff({ run: null, head: null, commit: null, gated: false, branch: 'feat/issue-470-x', pr: null }, null)).toMatchObject({ ok: true, outcome: { notGated: true } })
+  })
+
   test('each id has its shape, every field is there, and nothing else is', () => {
     expect(problems(checkHandoff({ run: '01K7 --yes', head: 'HEAD', commit: 'abc', gated: 'yes', branch: 'feat x', pr: 0, url: 'x' }, null))).toEqual([
       'url is not a field here',

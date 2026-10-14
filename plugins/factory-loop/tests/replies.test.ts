@@ -336,6 +336,14 @@ describe('parseHandoff (implement-issue section 8)', () => {
     expect(parseHandoff(text, 'feat/issue-470-x')).toEqual({ kind: 'handoff', notGated: false, run: '01K7S3', head: 'ccccccc', newBranch: null })
   })
 
+  test('gated with no run is unreadable, never done: no rule acts on a done handoff that names no run and is gated, so its issue would stall', () => {
+    const gaveUp = 'I could not finish.\nRESULT run=none head=none commit=none gated=yes branch=feat/issue-470-x pr=none'
+    expect(parseHandoff(gaveUp, null)).toBeNull()
+    expect(readHandoff(gaveUp, null)).toBe('the RESULT line says gated=yes with run=none, and with no pipeline run nothing is gated: name the run, or say gated=no')
+    // said not gated, it goes to the model (rule D5)
+    expect(parseHandoff(gaveUp.replace('gated=yes', 'gated=no'), null)).toEqual({ kind: 'handoff', notGated: true, run: null, head: null, newBranch: 'feat/issue-470-x' })
+  })
+
   test('the last RESULT line counts', () => {
     const text = 'RESULT run=01OLD head=aaaaaaa commit=aaaaaaa gated=yes branch=feat/issue-470-x pr=none\nRESULT run=01NEW head=bbbbbbb commit=bbbbbbb gated=yes branch=feat/issue-470-x pr=none'
     expect(parseHandoff(text, 'feat/issue-470-x')?.run).toBe('01NEW')
