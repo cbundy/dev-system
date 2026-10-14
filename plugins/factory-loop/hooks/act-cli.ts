@@ -69,7 +69,8 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
   })
   switch (action.kind) {
     case 'heartbeat':
-      return [{ argv: ['callum-flow-claim', '--heartbeat', ...action.issues.map(String)], timeoutMs: CLI_TIMEOUT_MS.heartbeat }]
+      // exit 1: a claim that did not renew, after any it revived (finish keeps those)
+      return [{ argv: heartbeatArgv(action), timeoutMs: CLI_TIMEOUT_MS.heartbeat, ok: [0, 1] }]
     case 'sweep':
       return [{ argv: ['callum-flow-sweep'], timeoutMs: CLI_TIMEOUT_MS.sweep }]
     case 'claim':
@@ -149,6 +150,10 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
   }
 }
 
+function heartbeatArgv(action: Extract<Action, { kind: 'heartbeat' }>): string[] {
+  return ['callum-flow-claim', '--heartbeat', ...action.issues.map(String)]
+}
+
 // Exit 2 is a usage error, a loop bug never retried (SPEC 10.1), for the image's own CLIs
 // (callum-flow-*, dev-restart-self). gh exits 2 when a command is cancelled and 1 on bad
 // usage; treehouse exits 1 on bad usage too.
@@ -158,7 +163,7 @@ export function usageError(argv: readonly string[], exit: number): boolean {
 
 // commandFailure: a command that exited with a failure: its exit and detailOf() in the
 // outcome (SPEC 10.1), and a GitHub rate limit flagged for the driver's backoff (SPEC 10.2).
-export function commandFailure(argv: readonly string[], r: RunResult): Exec {
+export function commandFailure(argv: readonly string[], r: RunResult): Extract<Exec, { status: 'failed' }> {
   const line = lastLine(r.stderr) || lastLine(r.stdout)
   const exec: Extract<Exec, { status: 'failed' }> = {
     status: 'failed',
@@ -251,9 +256,18 @@ export function finish(action: Action, results: RunResult[]): Exec {
     case 'heartbeat': {
       // `revived <N>` lines: expired claims the heartbeat renewed (an older image prints none)
       const revived = [...(last?.stdout ?? '').matchAll(/^revived (\d+)\s*$/gm)].map(m => Number(m[1]))
+      const told = revived.map(n => `#${n}`).join(', ')
+      if (last !== undefined && last.exitCode !== 0) {
+        const failed = commandFailure(heartbeatArgv(action), last)
+        if (revived.length > 0 && failed.outcome?.kind === 'cli') {
+          failed.outcome.revived = revived
+          failed.summary = clip(`${failed.summary}; revived ${told}`)
+        }
+        return failed
+      }
       return revived.length === 0
         ? ok('leases renewed')
-        : { status: 'done', outcome: { kind: 'cli', exit: 0, revived }, summary: clip(`leases renewed; revived ${revived.map(n => `#${n}`).join(', ')}`) }
+        : { status: 'done', outcome: { kind: 'cli', exit: 0, revived }, summary: clip(`leases renewed; revived ${told}`) }
     }
     case 'sweep':
       return ok('swept')

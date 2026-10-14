@@ -541,7 +541,7 @@ function housekeeping(ctx: Ctx) {
   }
   // H1 revive: a heartbeat that revived something is told once, keyed on its entry
   for (const entry of ctx.state.ledger) {
-    const revived = entry.kind === 'heartbeat' && entry.status === 'done' ? outcome(entry, 'cli')?.revived : undefined
+    const revived = entry.kind === 'heartbeat' && (entry.status === 'done' || entry.status === 'failed') ? outcome(entry, 'cli')?.revived : undefined
     if (revived === undefined || revived.length === 0) continue
     want(ctx, wake('tell', 'revived', `tell:revived:${entry.key}:${entry.endedAt ?? 0}`, 'H1', null, { issues: revived.join(',') }, revived.map(n => `#${n}`)))
   }

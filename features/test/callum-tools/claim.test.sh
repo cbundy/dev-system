@@ -326,6 +326,10 @@ reset # another device's live claim
 issue 7 OPEN 'In development'
 { cm 100 devA "$STALE" "$STALE"; cm 101 devB "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
 revive_none --heartbeat 7
+reset # another device's older claim, renewed and live, under this device's newest expired one
+issue 7 OPEN 'In development'
+{ cm 101 devB '2026-10-08T07:00:00Z' "$FRESH"; cm 100 devA "$STALE" "$STALE"; } | arr > "$d/comments-7.json"
+revive_none --heartbeat 7
 reset # a newer claim by another device, expired too
 issue 7 OPEN 'In development'
 { cm 100 devA "$STALE" "$STALE"; cm 101 devB '2026-10-08T09:00:00Z' '2026-10-08T09:00:00Z'; } | arr > "$d/comments-7.json"

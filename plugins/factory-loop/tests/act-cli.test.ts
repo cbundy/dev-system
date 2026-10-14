@@ -229,9 +229,19 @@ describe('heartbeat and sweep', () => {
 
   test('the held issues are argv, and `revived <N>` lines become the outcome and the summary (#589)', async () => {
     const beat: Action = { ...A.heartbeat(), issues: [7, 9] } as Action
-    expect(stepsOf(beat, REPO, IN_DEV)).toEqual([{ argv: ['callum-flow-claim', '--heartbeat', '7', '9'], timeoutMs: 120_000 }])
+    expect(stepsOf(beat, REPO, IN_DEV)).toEqual([{ argv: ['callum-flow-claim', '--heartbeat', '7', '9'], timeoutMs: 120_000, ok: [0, 1] }])
     const { result } = await exec(beat, [{ stdout: 'revived 7\nrevived 9\n' }])
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0, revived: [7, 9] }, summary: 'leases renewed; revived #7, #9' })
+  })
+
+  test('exit 1 after a revive is failed and still carries the revived issues (#589)', async () => {
+    const beat: Action = { ...A.heartbeat(), issues: [7, 9] } as Action
+    const { result } = await exec(beat, [{ exitCode: 1, stdout: 'revived 7\n', stderr: 'callum-flow-claim: cannot read comments of #9\n' }])
+    expect(result).toMatchObject({
+      status: 'failed',
+      outcome: { kind: 'cli', exit: 1, revived: [7] },
+      summary: 'callum-flow-claim --heartbeat: exit 1: callum-flow-claim: cannot read comments of #9; revived #7',
+    })
   })
 
   test('exit 1 (a gh failure) is failed with its stderr, retried by the rule', async () => {

@@ -255,6 +255,9 @@ describe('H: housekeeping', () => {
     expect(keys(plan(after, CFG))).toEqual([`tell:revived:heartbeat:0:${NOW - 30_000}`, `sweep:${NOW - 40 * MIN}`])
     const told = entry(`tell:revived:heartbeat:0:${NOW - 30_000}`, 'tell', { wake: 'revived', class: 'owner' })
     expect(keys(plan(held({ ledger: [beat, sweepDue, UPDATED, told] }), CFG))).toEqual([`sweep:${NOW - 40 * MIN}`])
+    // a heartbeat that failed after reviving is told too
+    const partial = entry('heartbeat:0', 'heartbeat', { status: 'failed', endedAt: NOW - 30_000, outcome: { kind: 'cli', exit: 1, revived: [9] } })
+    expect(keys(plan(held({ ledger: [partial, sweepDue, UPDATED] }), CFG))).toContain(`tell:revived:heartbeat:0:${NOW - 30_000}`)
     // nothing held: the sweep never waits
     expect(keys(plan(state({ loadedAt: NOW - MIN, ledger: [sweepDue, UPDATED] }), CFG))).toEqual([`sweep:${NOW - 40 * MIN}`])
   })
