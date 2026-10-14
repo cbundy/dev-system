@@ -25,15 +25,14 @@
 #             candidates into pending.json. dev-remote-control runs it before
 #             it prunes worktrees.
 #   pending   print the restore candidates (JSON lines), nothing changed.
-#   live      print the sessionId of every live session.
+#   taken     print the sessionIds the supervisor must not resume: the live
+#             sessions, the planned restores and the sessions already restored.
 #   cwds      print "live<TAB>dir" / "pending<TAB>dir" for every live session
 #             and every planned (or, before `plan`, candidate) restore:
 #             dev-prune-worktrees keeps these.
-#   restore [--skip <sessionId>]
-#             once per boot (exit 3 when already done): start each planned
-#             session that is not live and not <sessionId> (the conversation
-#             the supervisor resumed), record every record it considered in the
-#             ledger.
+#   restore   once per boot (exit 3 when already done): start each planned
+#             session that is not live, record every record it considered in
+#             the ledger.
 #
 # Candidates are the latest snapshot plus stale records (their process is gone),
 # deduplicated by sessionId, minus: sessions that are live, the supervisor's own
@@ -247,9 +246,13 @@ launch() {
   log "restored session $sid (\"$name\") in $cwd - attach: tmux attach -t $RESTORED_SESSION"
 }
 
+cmd_taken() {
+  live_sids
+  [ ! -f "$STATE/pending.json" ] || jq -r '.sessionId // empty' "$STATE/pending.json" 2>/dev/null
+  cat "$STATE/ledger"/* 2>/dev/null | cut -d' ' -f1
+}
+
 cmd_restore() {
-  local skip=""
-  [ "${1:-}" != --skip ] || skip=${2:-}
   marked restored && return 3
   mark restored
   [ "$HOURS" != 0 ] || return 0
@@ -265,7 +268,7 @@ cmd_restore() {
     for k in $(jq -r '.keys[]?' <<< "$r" 2>/dev/null); do
       echo "$sid $(date +%s)" > "$STATE/ledger/$k"
     done
-    if [ "$sid" = "$skip" ] || live_sids | grep -qxF -- "$sid"; then
+    if live_sids | grep -qxF -- "$sid"; then
       log "session $sid is already running: not restoring it"
       continue
     fi
@@ -279,14 +282,11 @@ case "${1:-}" in
   snapshot) cmd_snapshot ;;
   plan) cmd_plan ;;
   pending) candidates ;;
-  live) live_sids ;;
+  taken) cmd_taken ;;
   cwds) cmd_cwds ;;
-  restore)
-    shift
-    cmd_restore "$@"
-    ;;
+  restore) cmd_restore ;;
   *)
-    echo "usage: dev-remote-sessions snapshot|plan|pending|live|cwds|restore [--skip <sessionId>]" >&2
+    echo "usage: dev-remote-sessions snapshot|plan|pending|taken|cwds|restore" >&2
     exit 2
     ;;
 esac

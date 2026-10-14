@@ -1062,10 +1062,10 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   supervisor's `claude` session): `tmux attach -t claude-restored`.
 - Never restored: the supervisor's own session, sessions without a `bridgeSessionId`,
   non-interactive sessions, sessions with no transcript, and sessions last updated more
-  than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running (the
-  conversation the supervisor resumed, or one still live) is not started a second time,
-  and the supervisor never resumes a session that is already running. A session is
-  restored once: every record considered goes in a ledger under
+  than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
+  started a second time, and `DEV_REMOTE_CONTROL_RESUME` never resumes a session that is
+  running, planned for restore or already restored, so each keeps its own name. A
+  session is restored once: every record considered goes in a ledger under
   `$DEV_RESTART_SELF_DIR/remote-sessions/`, so a session you later exit does not come back
   on the following restart. A failure restoring one session is logged and never delays
   the supervisor.

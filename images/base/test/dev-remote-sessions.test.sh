@@ -130,8 +130,8 @@ printf '%s\n' "$cw" | grep -qxF "$(printf 'live\t%s' "$cwd_c")" || fail "cwds: n
 printf '%s\n' "$cw" | grep -qxF "$(printf 'pending\t%s' "$cwd_a")" || fail "cwds: no pending line: $cw"
 DEV_REMOTE_CONTROL_RESTORE_HOURS=1 "$HELPER" cwds 2>/dev/null | grep -qF "$cwd_b" && fail "cwds before plan: a session outside the window is pending"
 
-# --- live: the sessionIds of the live sessions ----------------------------------------------------
-[ "$("$HELPER" live 2>/dev/null)" = e5555555-0000-4000-8000-000000000005 ] || fail "live: wrong sessionIds: $("$HELPER" live 2>&1)"
+# --- taken: before plan, only the live sessions -----------------------------------------------------
+[ "$("$HELPER" taken 2>/dev/null)" = e5555555-0000-4000-8000-000000000005 ] || fail "taken: wrong sessionIds: $("$HELPER" taken 2>&1)"
 
 # --- snapshot: a no-op until restore ran this boot ----------------------------------------------
 "$HELPER" snapshot 2>/dev/null
@@ -206,8 +206,8 @@ grep -q "no longer exists" "$tmp/err" || fail "a missing cwd was not logged"
 grep -q "could not start" "$tmp/err" || fail "a failing launch was not logged"
 [ -e "$tmp/state/remote-sessions/ledger/$dead_pid-5001" ] || fail "a failed launch was not ledgered"
 
-# --- restore never starts a session that is already running ---------------------------------------
-# A is the conversation the supervisor resumed (--skip); C came back to life after plan.
+# --- taken covers planned and restored sessions; restore never starts a running one -----------------
+# C came back to life after plan.
 rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
 rm -f "$tmp/cfg/sessions/"2[0-9][0-9].json
 rec 301 $A "$cwd_a" "dev:@1.%1" session_A interactive 1 "$dead_pid" 6001
@@ -215,14 +215,19 @@ rec 302 $B "$cwd_b" "dev:@2.%2" session_B interactive 1 "$dead_pid" 6002
 rec 303 $C "$cwd_c" "dev:@3.%3" session_C interactive 1 "$dead_pid" 6003
 transcript $C "$cwd_c" default high m
 "$HELPER" plan 2>/dev/null
-[ "$(wc -l < "$tmp/state/remote-sessions/pending.json")" = 3 ] || fail "skip: expected 3 pending lines"
+[ "$(wc -l < "$tmp/state/remote-sessions/pending.json")" = 3 ] || fail "taken: expected 3 pending lines"
+got=$("$HELPER" taken 2>/dev/null | sort -u | tr '\n' ' ')
+[ "$got" = "$A $B $C " ] || fail "taken after plan: '$got', want the planned sessions"
 rec 304 $C "$cwd_c" "dev:@4.%4" session_C interactive 0 "$live_pid" "$live_start"
 : > "$TMUX_LOG"
-"$HELPER" restore --skip $A 2>"$tmp/err" || fail "restore --skip failed: $(cat "$tmp/err")"
-grep -q -- "--resume $A" "$TMUX_LOG" && fail "restore started the conversation the supervisor resumed"
+"$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
 grep -q -- "--resume $C" "$TMUX_LOG" && fail "restore started a session that is live"
-grep -q -- "--resume $B" "$TMUX_LOG" || fail "restore --skip did not start the other session: $(cat "$TMUX_LOG")"
-[ "$(grep -c "already running" "$tmp/err")" = 2 ] || fail "skipped running sessions were not logged: $(cat "$tmp/err")"
-[ -e "$tmp/state/remote-sessions/ledger/$dead_pid-6001" ] || fail "a skipped session was not ledgered"
+grep -q -- "--resume $A" "$TMUX_LOG" || fail "restore did not start A next to a live session: $(cat "$TMUX_LOG")"
+grep -q -- "--resume $B" "$TMUX_LOG" || fail "restore did not start B next to a live session: $(cat "$TMUX_LOG")"
+grep -q "already running" "$tmp/err" || fail "a running session skipped by restore was not logged: $(cat "$tmp/err")"
+[ -e "$tmp/state/remote-sessions/ledger/$dead_pid-6003" ] || fail "a skipped session was not ledgered"
+rm -f "$tmp/cfg/sessions/304.json"
+got=$("$HELPER" taken 2>/dev/null | sort -u | tr '\n' ' ')
+[ "$got" = "$A $B $C " ] || fail "taken after restore: '$got', want the restored sessions"
 
 echo "dev-remote-sessions: ok"
