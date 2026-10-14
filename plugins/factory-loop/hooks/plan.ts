@@ -1191,8 +1191,8 @@ function supersededPrs(ctx: Ctx) {
     moves.push({ issue: e.issue, run: e.run, pr: e.pr, newRun: handoff.run, newBranch: handoff.newBranch })
   }
   // a run the event log marks superseded with no fixer behind it (task(redrive), I-39) moved to
-  // callum-flow-regate's <branch>-v<n>: it moves once a live run of the issue on such a branch
-  // shows a PR of its own
+  // callum-flow-regate's <branch>-v<n>: it moves once a run of the issue on such a branch, not
+  // superseded itself, shows a PR of its own
   for (const old of ctx.state.runs) {
     if (!old.superseded || old.issue === null || old.pr === null || leftOpen.has(old.pr) || moves.some(m => m.pr === old.pr)) continue
     const next = ctx.state.runs.find(
