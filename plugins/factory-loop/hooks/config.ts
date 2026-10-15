@@ -69,11 +69,11 @@ export const DEFAULT_CONFIG: Config = {
     task: 1,
     tell: 1,
     // v2 (appendix B): a step key is one attempt, the table retries steps (v2 SPEC 5.1); an
-    // update and a merge are one per key; a CI re-run two, since one that failed as a command
-    // re-ran nothing (8.5); effects keep the default 3, and a slot op carries its own cap on its
-    // action
+    // update and a merge are one per key; a CI re-run's call three, with backoff, since one that
+    // failed on a transient error re-ran nothing (8.5); effects keep the default 3, and a slot op
+    // and a CI re-run carry their own caps on their actions
     'agent-step': 1,
-    'ci-rerun': 2,
+    'ci-rerun': 3,
     'queue-update': 1,
     'queue-merge': 1,
   },

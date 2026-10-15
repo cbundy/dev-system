@@ -12,13 +12,15 @@
 //   merged; not-ok with conflict, patch or policy; again (no transition) for behind, checks and
 //   linkage; unknown for read, a failed try (a CLI failure) or a lost one;
 // - mayHaveMerged: a merge try that merged, or may have (running or lost), never a refusal;
-// - ciOf: the checks on the head, each failed or cancelled one after its one re-run per round;
+// - ciOf: the checks on the head, each failed or cancelled one after its one re-run per round, read
+//   as the review step reads its own (8.5);
 // - pastWait: the bound on a wait on GitHub with nothing of the head's own running (4.4).
 //
 // Pure: the time is state.now.
 import type { LedgerEntry, Ms } from '../types'
 import { keyParts, prKey, queueKey, rerunKey, short } from './keys'
 import { lifeEntries, unknownOf } from './rules-agent'
+import { rerunRefused } from './rules-review'
 import type { CheckRun, PrView } from './sources-prs'
 import type { StepModule } from './steps'
 import type { AgentStep, GuardClass, IssueRecord, RecordRef, TableEvent, V2Ctx } from './types'
@@ -156,16 +158,22 @@ export function updateResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: s
 // --- CI on the head (8.5) -----------------------------------------------------------------------------------
 
 // What the head's checks say: every check on the head counts, required or not, and a failed or
-// cancelled one gets one re-run per round (by its run, rerunKey) before it counts as failed.
-// - red: a check failed after its re-run, or with none possible (no run to re-run);
-// - retry: the runs whose failed checks get their one re-run now, or again: a re-run that failed
-//   as a command, timed out or was lost re-ran nothing, so the check's result after it is a fact
-//   not read, never red (the step tries the re-run again, or is unknown once it is used up);
-// - pending: a check has not finished, or a re-run's result is not read yet (the read is older
-//   than the re-run);
+// cancelled one gets one re-run per round (by its run, rerunKey) before it counts as failed, read
+// as the review step reads its own (8.5, rules-review.ts ciHalf):
+// - red: a check failed after its re-run, GitHub refused the re-run (rerunRefused), or none is
+//   possible (no run to re-run);
+// - retry: the finished runs whose failed checks get their one re-run now, or again after a
+//   transient failure of the call (a GitHub blip, a gh error): it re-ran nothing, so the check is
+//   never red for it (the step tries the re-run again after its backoff, or is unknown once it is
+//   used up);
+// - pending: a check has not finished; a failed check's run still has a job going (GitHub refuses
+//   to re-run a run in progress); or a re-run's result is not read yet: it runs, or GitHub took it
+//   (done, its answer lost or timed out, or a check of the run ended since its start) and the read
+//   is older than it. pastWait bounds that wait, so a re-run GitHub never took makes the step
+//   unknown, never red;
 // - none: no check on the head yet; green: every check passed or was skipped.
 export type CiRead =
-  | { kind: 'red'; failed: CheckRun[] }
+  | { kind: 'red'; failed: CheckRun[]; refused: Record<string, string> }
   | { kind: 'retry'; runs: string[] }
   | { kind: 'pending'; done: number; all: number }
   | { kind: 'none' }
@@ -173,20 +181,38 @@ export type CiRead =
 
 export function ciOf(r: IssueRecord, checks: readonly CheckRun[], reruns: readonly LedgerEntry[]): CiRead {
   const red: CheckRun[] = []
+  const refused: Record<string, string> = {}
   const rerun = new Set<string>()
   let waiting = false
+  const going = new Set(checks.flatMap(c => (c.bucket === 'pending' && c.runId !== null ? [c.runId] : [])))
   for (const c of checks.filter(x => x.bucket === 'fail' || x.bucket === 'cancel')) {
     if (c.runId === null) {
       red.push(c)
       continue
     }
-    const key = rerunKey(r, r.round, c.runId)
+    const runId = c.runId
+    const key = rerunKey(r, r.round, runId)
     const e = reruns.find(x => x.key === key)
-    if (e === undefined || e.status === 'failed' || e.status === 'timed-out' || e.status === 'lost') rerun.add(c.runId)
-    else if (e.status === 'running' || (c.completedAt !== null && c.completedAt < e.startedAt)) waiting = true
-    else red.push(c)
+    if (going.has(runId) || e?.status === 'running') {
+      waiting = true
+      continue
+    }
+    if (e === undefined) {
+      rerun.add(runId)
+      continue
+    }
+    if (rerunRefused(e)) {
+      red.push(c)
+      refused[runId] = e.summary ?? e.status
+      continue
+    }
+    const since = (x: CheckRun) => x.completedAt !== null && x.completedAt >= e.startedAt
+    const took = e.status === 'done' || e.status === 'lost' || e.status === 'timed-out' || checks.some(x => x.runId === runId && since(x))
+    if (!took) rerun.add(runId)
+    else if (since(c)) red.push(c)
+    else waiting = true
   }
-  if (red.length > 0) return { kind: 'red', failed: red }
+  if (red.length > 0) return { kind: 'red', failed: red, refused }
   if (rerun.size > 0) return { kind: 'retry', runs: [...rerun].sort() }
   const done = checks.filter(c => c.bucket === 'pass' || c.bucket === 'skipping').length
   if (waiting || checks.some(c => c.bucket === 'pending')) return { kind: 'pending', done, all: checks.length }
@@ -194,9 +220,13 @@ export function ciOf(r: IssueRecord, checks: readonly CheckRun[], reruns: readon
 }
 
 // redNotes: the failed checks, by name and link, for the fixer (9.7: it reads their logs with
-// gh run view --log-failed).
-export function redNotes(failed: readonly CheckRun[]): string[] {
-  return failed.slice(0, 8).map(c => `check ${c.name} failed${c.runId === null ? '' : ` after its one re-run (run ${c.runId})`}${c.link === null ? '' : `: ${c.link}`}`)
+// gh run view --log-failed), each with its re-run or GitHub's refusal of it.
+export function redNotes(failed: readonly CheckRun[], refused: Readonly<Record<string, string>> = {}): string[] {
+  return failed.slice(0, 8).map(c => {
+    const no = c.runId === null ? undefined : refused[c.runId]
+    const after = c.runId === null ? '' : no === undefined ? ` after its one re-run (run ${c.runId})` : `, and GitHub refused its one re-run (${no})`
+    return `check ${c.name} failed${after}${c.link === null ? '' : `: ${c.link}`}`
+  })
 }
 
 // --- the wait on GitHub (4.4) ----------------------------------------------------------------------------------

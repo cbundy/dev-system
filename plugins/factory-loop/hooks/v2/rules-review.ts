@@ -45,8 +45,9 @@ import type { IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
 const RULE = 'S2'
 const MIN = 60_000
 // a re-run's attempts: a GitHub blip, a gh timeout or a restart during the call is retried with
-// backoff; the key stays one per round and run
-const RERUN_ATTEMPTS = 3
+// backoff; the key stays one per round and run. The merge queue's head re-runs its checks with the
+// same cap (rules-queue.ts).
+export const RERUN_ATTEMPTS = 3
 
 // The start of a failed re-run's summary when GitHub itself refused it (act-ci.ts): retrying
 // cannot help, so its checks count as failed.
@@ -263,8 +264,9 @@ type Ci = { kind: 'green' } | { kind: 'red'; notes: string[] } | { kind: 'pendin
 const failedWord = (c: CheckRun) => (c.bucket === 'cancel' ? 'was cancelled' : 'failed')
 const checkName = (c: CheckRun) => `CI check "${c.name.replace(/\s+/g, ' ').slice(0, 120)}"`
 
-// refused: the re-run ended with GitHub's own refusal (act-ci.ts), which no retry can change.
-function refused(e: LedgerEntry): boolean {
+// rerunRefused: the re-run ended with GitHub's own refusal (act-ci.ts), which no retry can change.
+// The merge queue's head reads its re-runs the same way (steps-queue.ts ciOf).
+export function rerunRefused(e: LedgerEntry): boolean {
   return e.status === 'failed' && (e.summary ?? '').startsWith(RERUN_REFUSED)
 }
 
@@ -300,7 +302,7 @@ function ciHalf(env: StepEnv, pv: PrView, head: string, plan: boolean): Ci {
       }
       continue
     }
-    if (e !== undefined && refused(e)) {
+    if (e !== undefined && rerunRefused(e)) {
       for (const c of checks) red.push(`${checkName(c)} ${failedWord(c)} on ${short(head)}, and GitHub refused its one re-run (${e.summary ?? e.status})${log}`)
       continue
     }

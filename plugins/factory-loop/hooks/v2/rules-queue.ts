@@ -9,8 +9,8 @@
 //   sets seqAt, so a head whose step ends other than ok goes to the back and the next PR becomes
 //   the head (property 14).
 // - The head's step (4.2): its result from the tries of its seq (steps-queue.ts), then the PR as
-//   read: a changed patch, a conflict, red CI after the one re-run, an untrusted author, a wait on
-//   GitHub past its bound; otherwise Q1, a CI re-run, the body written again after a linkage FAIL,
+//   read: a changed patch, a conflict, red CI after the one re-run (or GitHub's refusal of it), an
+//   untrusted author, a wait on GitHub past its bound; otherwise Q1, a CI re-run, the body written again after a linkage FAIL,
 //   the PR reopened after a hand close the record handled, or Q2. A PR that did not read is a wait
 //   on GitHub, bounded like any other (4.4); only a GitHub rate limit holds it with no clock.
 // - Every action of the head is wanted through the foundation, so one that failed is tried again
@@ -28,6 +28,7 @@ import type { Gate } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { prKey, rerunKey, short } from './keys'
 import { lifeEntries, triggerOf, unknownOf } from './rules-agent'
+import { RERUN_ATTEMPTS } from './rules-review'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import type { PrView } from './sources-prs'
 import { ciOf, conflictNote, headFacts, mayHaveMerged, mergeKey, mergeResult, mergesAt, pastWait, redNotes, updateKey, updateResult } from './steps-queue'
@@ -39,9 +40,9 @@ import type { IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
 // loop reads it as ready is a fact the loop cannot read, so the step is unknown.
 export const MERGE_TRIES = 3
 
-// The attempts of one CI re-run (8.5): a re-run that failed as a command re-ran nothing, so it is
-// tried again once before the step is unknown.
-export const RERUN_ATTEMPTS = 2
+// The attempts of one CI re-run (8.5) are the review step's (RERUN_ATTEMPTS, rules-review.ts): a
+// call that failed on a transient error re-ran nothing, so it is tried again after its backoff
+// before the step is unknown; GitHub's own refusal is never retried.
 
 // The mergeable states GitHub merges from (the guard's CLEAN, UNSTABLE and HAS_HOOKS).
 const MERGEABLE: readonly string[] = ['clean', 'unstable', 'has_hooks']
@@ -156,7 +157,7 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
   const ci = ciOf(r, view.checks, facts.reruns)
   switch (ci.kind) {
     case 'red': {
-      const notes = redNotes(ci.failed)
+      const notes = redNotes(ci.failed, ci.refused)
       return result({ kind: 'not-ok', reason: 'ci-red', data: { pr: view.pr, text: `red CI on ${short(head)}: ${ci.failed.map(c => c.name).join(', ')}`, notes } }, fact(`queue-ci-red:${at}`))
     }
     case 'retry':
@@ -198,9 +199,10 @@ function merge(env: StepEnv, view: PrView, head: string, tries: readonly LedgerE
   return planned(env, g, key, `the merge of PR #${view.pr}`)
 }
 
-// rerun: the one CI re-run of each run whose checks failed (8.5), by round and run id, tried again
-// when it failed as a command; one used up re-ran nothing, so the checks after it are a fact not
-// read, and the step is unknown, never red.
+// rerun: the one CI re-run of each finished run whose checks failed (8.5), by round and run id,
+// tried again when its call failed on a transient error; one used up re-ran nothing, so the checks
+// after it are a fact not read, and the step is unknown, never red (in reviewing it is a stalled
+// effect instead: the queue moves past a head that cannot move, 9.1).
 function rerun(env: StepEnv, view: PrView, runs: readonly string[]): StepRead {
   const { ctx, r } = env
   const reads = runs.map(runId => {

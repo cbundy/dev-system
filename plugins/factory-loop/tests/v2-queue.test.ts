@@ -17,7 +17,8 @@ import { interventionKey, lifeKey, lifeOf, prKey, rerunKey, transitionKey } from
 import { emptyV2State } from '../hooks/v2/observe'
 import type { SourceCtx } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { MERGE_TRIES, RERUN_ATTEMPTS, queueOf } from '../hooks/v2/rules-queue'
+import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
+import { RERUN_ATTEMPTS, RERUN_REFUSED } from '../hooks/v2/rules-review'
 import { checksOf, headsOf, pullOf, readPrs } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
@@ -314,16 +315,30 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     expect(of(plan(world([r], [view(r, { checks: [{ ...red, bucket: 'cancel' }] })])), 21).map(a => a.kind)).toContain('ci-rerun')
   })
 
-  test('a re-run that failed as a command re-ran nothing: never red; it is tried again after its backoff, and once used up the step is unknown', () => {
+  test('a re-run whose call failed on a transient error re-ran nothing: never red; it is tried again after its backoff, and once used up the step is unknown; a lost or timed-out one, or one GitHub took anyway, is awaited', () => {
     const r = rec(26)
     const red = check({ name: 'ci', bucket: 'fail', state: 'FAILURE', completedAt: NOW - 5 * MIN })
     const reds = [view(r, { checks: [red] })]
     const broken = (over: Partial<LedgerEntry>) => entry(rerunKey(r, 1, '9001'), 'ci-rerun', { issue: 26, status: 'failed', summary: 'gh run rerun: HTTP 502', startedAt: NOW - 4 * MIN, endedAt: NOW - 4 * MIN + 5000, ...over })
-    for (const status of ['failed', 'timed-out', 'lost'] as const) {
-      const p = plan(withLedger(world([r], reds), [broken({ status })]))
-      expect({ status, t: transitionOf(p, 26) }).toEqual({ status, t: undefined })
-      expect(of(p, 26).filter(a => a.kind === 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(r, 1, '9001'), maxAttempts: RERUN_ATTEMPTS })])
+    // a transient failure: the same key again, with the review step's cap (8.5)
+    const p = plan(withLedger(world([r], reds), [broken({})]))
+    expect(transitionOf(p, 26)).toBeUndefined()
+    expect(of(p, 26).filter(a => a.kind === 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(r, 1, '9001'), maxAttempts: RERUN_ATTEMPTS })])
+    expect(RERUN_ATTEMPTS).toBe(3)
+    // lost or timed out: GitHub may have started it, so it is awaited, not run again
+    for (const status of ['timed-out', 'lost'] as const) {
+      const w = plan(withLedger(world([r], reds), [broken({ status })]))
+      expect({ status, t: transitionOf(w, 26), reruns: of(w, 26).filter(a => a.kind === 'ci-rerun') }).toEqual({ status, t: undefined, reruns: [] })
+      expect(said(w, 26)).toEqual(['merge queue: CI runs on aaaaaaa (0 of 1 checks done)'])
     }
+    // one GitHub never took: the wait is bounded, unknown (github-wait), never ci-red
+    const old = { ...red, completedAt: NOW - 14 * MIN }
+    const never = plan(withLedger(world([r], [view(r, { checks: [old] })]), [broken({ status: 'lost', startedAt: NOW - 12 * MIN, endedAt: NOW - 12 * MIN + 5000 })]))
+    expect(transitionOf(never, 26)).toMatchObject({ row: 'U2', event: 'unknown', via: 'unknown:github-wait' })
+    // a failed call GitHub took anyway: a check of the run ended since, so its result counts
+    const took = plan(withLedger(world([r], [view(r, { checks: [{ ...red, completedAt: NOW - MIN }] })]), [broken({})]))
+    expect(of(took, 26).filter(a => a.kind === 'ci-rerun')).toEqual([])
+    expect(transitionOf(took, 26)).toMatchObject({ row: 'T9', via: 'fix:ci' })
     // inside its backoff it waits, and says so
     const soon = plan(withLedger(world([r], reds), [broken({ endedAt: NOW - 30_000 })]))
     expect(transitionOf(soon, 26)).toBeUndefined()
@@ -332,6 +347,25 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     // used up: unknown (cli), triggered by the re-run's entry, never ci-red
     const spent = broken({ attempts: RERUN_ATTEMPTS })
     expect(transitionOf(plan(withLedger(world([r], reds), [spent])), 26)).toMatchObject({ row: 'U2', event: 'unknown', via: 'unknown:cli', trigger: { kind: 'entry', key: spent.key } })
+  })
+
+  test('GitHub\'s own refusal of the re-run counts the check failed at once, named in the fixer\'s notes; a run with a job still going is not re-run until it finishes', () => {
+    const r = rec(29)
+    const red = check({ name: 'ci', bucket: 'fail', state: 'FAILURE', completedAt: NOW - 5 * MIN })
+    const summary = `${RERUN_REFUSED} of run 9001: run 9001 cannot be rerun; its workflow file may be broken`
+    const no = entry(rerunKey(r, 1, '9001'), 'ci-rerun', { issue: 29, status: 'failed', attempts: 1, maxAttempts: RERUN_ATTEMPTS, summary, startedAt: NOW - 4 * MIN, endedAt: NOW - 4 * MIN + 5000 })
+    const refused = plan(withLedger(world([r], [view(r, { checks: [red] })]), [no]))
+    expect(of(refused, 29).filter(a => a.kind === 'ci-rerun')).toEqual([])
+    expect(transitionOf(refused, 29)).toMatchObject({ row: 'T9', via: 'fix:ci', next: { state: 'fixing', notes: [`check ci failed, and GitHub refused its one re-run (${summary}): ${red.link}`] } })
+    // a job of the failed check's run still going: GitHub would refuse the re-run, so it waits
+    const going = check({ name: 'lint', bucket: 'pending', state: 'IN_PROGRESS', completedAt: null })
+    const busy = plan(world([r], [view(r, { checks: [red, going] })]))
+    expect(transitionOf(busy, 29)).toBeUndefined()
+    expect(of(busy, 29).filter(a => a.kind === 'ci-rerun')).toEqual([])
+    expect(said(busy, 29)).toEqual(['merge queue: CI runs on aaaaaaa (0 of 2 checks done)'])
+    // once it finishes, the run gets its one re-run
+    const finished = plan(world([r], [view(r, { checks: [red, { ...going, bucket: 'pass', state: 'SUCCESS', completedAt: NOW - MIN }] })]))
+    expect(of(finished, 29).filter(a => a.kind === 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(r, 1, '9001'), runId: '9001' })])
   })
 
   test('waits on GitHub are bounded (4.4): a check running past ciRunMs, or nothing started ciStartMs after the latest of the head\'s sighting, its coming to the front, its last action and the last check', () => {
