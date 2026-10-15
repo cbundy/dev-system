@@ -63,8 +63,10 @@ function record(v: unknown): Record<string, unknown> | null {
 // --- what the step reads -----------------------------------------------------------------------------------
 
 // lifePr: the life's PR: the record's (adopted at claim, or set when reviewing ended), else the one
-// the newest done ensure of this life named (8.1). rules-state.ts reads GitHub's PR events by it,
-// so a PR merged or closed by hand during the first review round is seen (E3, E4).
+// the newest done ensure of this life named (8.1). It is the one reader of a life's PR: the prs
+// source reads the PR by it (sources-prs.ts), so a PR the ensure just opened is read on the next
+// pass; rules-state.ts reads GitHub's PR events by it, so a PR merged or closed by hand during the
+// first review round is seen (E3, E4); and the pushes, the triage and the work prompts name it.
 export function lifePr(ledger: readonly LedgerEntry[], r: Pick<IssueRecord, 'issue' | 'life' | 'pr'>): number | null {
   if (r.pr !== null) return r.pr
   let newest: { at: number; pr: number } | null = null

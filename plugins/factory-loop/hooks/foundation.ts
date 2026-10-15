@@ -237,15 +237,20 @@ function unexplained(e: LedgerEntry): boolean {
 // stepBreaker: when the step-unknown breaker is open (v2 SPEC 5.3): `since` is the newest of the
 // unknowns that tripped it, `until` when it closes. A trip is any `trips` unexplained unknowns, on
 // at least `records` issues, within `windowMs` of each other; it holds `holdMs` from the newest.
+// An unknown that ended while a trip held is the breaker's own (its cause is `breaker`, 5.1) and
+// counts toward no trip, so a trip neither extends itself nor moves its `since`, and is told once.
 // null when it is closed now.
 export function stepBreaker(ledger: readonly LedgerEntry[], now: Ms): { since: Ms; until: Ms } | null {
   const seen = ledger.filter(unexplained).sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+  const counted: LedgerEntry[] = []
   let open: { since: Ms; until: Ms } | null = null
-  for (let i = 0; i < seen.length; i++) {
-    const newest = seen[i]?.endedAt ?? 0
-    const window = seen.slice(0, i + 1).filter(e => newest - (e.endedAt ?? 0) <= STEP_BREAKER.windowMs)
-    const issues = new Set(window.map(e => e.issue))
-    if (window.length >= STEP_BREAKER.trips && issues.size >= STEP_BREAKER.records) open = { since: newest, until: newest + STEP_BREAKER.holdMs }
+  for (const e of seen) {
+    const at = e.endedAt ?? 0
+    if (open !== null && at < open.until) continue
+    counted.push(e)
+    const window = counted.filter(x => at - (x.endedAt ?? 0) <= STEP_BREAKER.windowMs)
+    const issues = new Set(window.map(x => x.issue))
+    if (window.length >= STEP_BREAKER.trips && issues.size >= STEP_BREAKER.records) open = { since: at, until: at + STEP_BREAKER.holdMs }
   }
   return open !== null && now < open.until ? open : null
 }
@@ -293,6 +298,9 @@ export function admit(ctx: PlanCtx): Action[] {
   const breakers = new Map<string, Ms>()
   const backoff = state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil
   const steps = stepBreaker(state.ledger, state.now)
+  // the step-unknown breaker is a fact of the ledger: the owner hears once it trips, whether or not
+  // this pass asks for anything it holds (v2 SPEC 5.3), and its tell logs the trip (7.2)
+  if (steps !== null) breakers.set('steps', steps.since)
   const kept: Action[] = []
   for (const action of ctx.out) {
     const issue = action.issue
@@ -319,7 +327,6 @@ export function admit(ctx: PlanCtx): Action[] {
       continue
     }
     if (steps !== null && STEP_BREAKER.classes.includes(action.class)) {
-      breakers.set('steps', steps.since)
       skip(ctx, action.rule, issue, `breaker open: step unknowns (${action.kind})`)
       continue
     }

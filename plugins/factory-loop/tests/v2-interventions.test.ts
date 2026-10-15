@@ -821,6 +821,39 @@ describe('the owner\'s files in the pass driver', () => {
     await clock.advance(61_000)
     expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/control-file\/i13\//)])
   })
+
+  // fault drill 1 (2026-10-15): the operator's hand edit of config.json, mode off -> act, was not
+  // logged: the loop had kept no version of the file, so the first acting read had nothing to
+  // compare against
+  test('a hand edit that turns the loop on is one config-file intervention, the first acting pass\'s; an op that turns it on is not', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const path = `${CFG_DIR}/factory-loop/config.json`
+    const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.titles).toEqual(['🔄 dev-system · off'])
+    // by hand: mode off -> act
+    h.files.set(path, JSON.stringify(ACT_V2))
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
+    const iv = h.events().find(e => e[1] === 'intervention' && (e.at(-1) ?? '').includes('cause=config-file'))
+    expect(iv?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20config.json%20mode')
+    // once
+    await clock.advance(60_000)
+    expect(fileIvs(h.last())).toEqual([])
+    // the op: observe, then `/factory mode act`, logged as the op alone
+    const r = await $.command.run({ command: 'factory', args: 'mode observe', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+    expect(JSON.parse(h.files.get(path) ?? '{}').mode).toBe('observe')
+    expect(r.text).not.toBe('')
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ mode: 'observe', executed: false })
+    await $.command.run({ command: 'factory', args: 'mode act', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ mode: 'act', executed: true })
+    expect(fileIvs(h.last())).toEqual([])
+    expect(h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))).toHaveLength(1)
+  })
 })
 
 // --- the op's events -------------------------------------------------------------------------------------

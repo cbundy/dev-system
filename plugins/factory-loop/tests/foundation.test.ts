@@ -245,6 +245,33 @@ describe('the step-unknown breaker (v2 SPEC 5.3)', () => {
     expect(stepBreaker([unknownAt(1, NOW - 10 * MIN, 'breaker'), unknownAt(2, NOW - 8 * MIN), unknownAt(3, NOW - 4 * MIN)], NOW)).not.toBeNull()
   })
 
+  test('the unknowns that end while it holds are its own: they neither extend the hold nor move its since (fault drill 1, 2026-10-15)', () => {
+    // two unknowns, then the one that trips it; then the unknowns its hold brought, on both records
+    const t0 = NOW - 40 * MIN
+    const trip = t0 + 11 * MIN
+    const ledger = [unknownAt(4, t0), unknownAt(3, t0 + 5_000), unknownAt(4, trip, 'breaker'), unknownAt(3, trip + 5_000, 'breaker'), unknownAt(4, t0 + 22 * MIN, 'breaker'), unknownAt(3, t0 + 22 * MIN + 5_000, 'breaker')]
+    const held = { since: trip, until: trip + STEP_BREAKER.holdMs }
+    expect(stepBreaker(ledger, trip + MIN)).toEqual(held)
+    expect(stepBreaker(ledger, t0 + 23 * MIN)).toEqual(held)
+    expect(stepBreaker(ledger, held.until)).toBeNull()
+    // after the hold, three new unknowns trip it again
+    const after = [...ledger, unknownAt(1, held.until + MIN), unknownAt(2, held.until + 2 * MIN), unknownAt(1, held.until + 3 * MIN)]
+    expect(stepBreaker(after, held.until + 4 * MIN)).toEqual({ since: held.until + 3 * MIN, until: held.until + 3 * MIN + STEP_BREAKER.holdMs })
+  })
+
+  test('it is told once it trips, though the pass asks for nothing it holds (v2 SPEC 5.3, 7.2)', () => {
+    const s = withLedger(state(), [unknownAt(1, NOW - 10 * MIN), unknownAt(2, NOW - 8 * MIN), unknownAt(3, NOW - 4 * MIN)])
+    const ctx = ctxOf(s, CFG, V2_OWNER_TELLS, GITHUB_V2)
+    ctx.out = [{ kind: 'label', key: 'i1/lss1x2k/s2/label', class: 'free', rule: 'S3', reason: 'label', issue: 1, op: 'set', label: 'factory:building' }]
+    expect(keysOf(admit(ctx))).toEqual(['i1/lss1x2k/s2/label', `tell:breaker:steps:${NOW - 4 * MIN}`])
+    expect(ctx.skipped).toEqual([])
+    expect(ctx.owner.has(`tell:breaker:steps:${NOW - 4 * MIN}`)).toBe(true)
+    // closed: nothing told
+    const quiet = ctxOf(state(), CFG, V2_OWNER_TELLS, GITHUB_V2)
+    quiet.out = []
+    expect(keysOf(admit(quiet))).toEqual([])
+  })
+
   test('while open it holds every start, develop and drive action, names the filter, and tells the owner once as an owner item; free work goes on', () => {
     const s = withLedger(state({ queue: [7], issues: [issue(7)] }), [unknownAt(1, NOW - 10 * MIN), unknownAt(2, NOW - 8 * MIN), unknownAt(3, NOW - 4 * MIN)])
     const ctx = ctxOf(s, CFG, V2_OWNER_TELLS, GITHUB_V2)

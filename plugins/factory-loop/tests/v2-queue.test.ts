@@ -881,10 +881,10 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(merged.argvs.map(a => a[0])).toEqual(['callum-flow-issue-read'])
     // the merged PR's head goes; one no record names stays
     expect(out.heads).toEqual({ [HEAD2]: { pr: 999, at: NOW - HOUR } })
-    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [r], [], NOW)).toEqual({ [HEAD]: { pr: 676, at: 1 } })
-    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [{ ...r, state: 'closed' }], [], NOW)).toEqual({})
+    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [r], [], NOW, [])).toEqual({ [HEAD]: { pr: 676, at: 1 } })
+    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [{ ...r, state: 'closed' }], [], NOW, [])).toEqual({})
     // records not read (none at all): no head is forgotten
-    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [], [], NOW)).toEqual({ [HEAD]: { pr: 676, at: 1 } })
+    expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [], [], NOW, [])).toEqual({ [HEAD]: { pr: 676, at: 1 } })
   })
 
   test('nothing is read with no budget or after a rate limit; a PR that does not read is left out and named; an untrusted author too', async () => {
@@ -901,6 +901,21 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(out.source).toMatchObject({ ok: false, error: expect.stringContaining('PR #678: not by a trusted author') })
     // no record in reviewing or the queue: nothing to read, and nothing wrong
     expect((await readPrs(sourceCtx([rec(79, { state: 'fixing', step: 'fix' })], prReply({})).ctx)).source).toEqual({ ok: true, at: NOW })
+  })
+
+  test('a record whose PR its life\'s ensure opened, before the record names it (8.1), has that PR read; a record whose life has none is not; its heads go when it closes', async () => {
+    // reviewing by T5, then the ensure of its seq opened PR #680: the ledger names it, the record not yet
+    const r = rec(80, { state: 'reviewing', step: 'review', pr: null })
+    const opened = entry(prKey(r, 'ensure'), 'pr', { issue: 80, outcome: { kind: 'pr', pr: 680, created: true, reopened: false } })
+    const fresh = rec(81, { state: 'reviewing', step: 'review', pr: null })
+    const { ctx, argvs } = sourceCtx([r, fresh], prReply({ '680': sha('6') }), { state: { ...baseState(), ledger: [opened] } })
+    const out = await readPrs(ctx)
+    expect(out.source).toEqual({ ok: true, at: NOW })
+    expect(out.read.prs.map(v => [v.pr, v.issue, v.head])).toEqual([[680, 80, sha('6')]])
+    expect(argvs.filter(a => a[0] === 'callum-flow-issue-read')).toEqual([['callum-flow-issue-read', '--json', '--pr', '680']])
+    expect(out.heads).toEqual({ [sha('6')]: { pr: 680, at: NOW } })
+    // dropped before reviewing ended, the record never named the PR: its head still goes
+    expect(headsOf(out.heads, [{ ...r, state: 'closed' }], [], NOW, [opened])).toEqual({})
   })
 
   test('the parsers: the REST pull and gh pr checks, whose exit 8 and 1 still carry the list; no checks yet is an empty list', () => {

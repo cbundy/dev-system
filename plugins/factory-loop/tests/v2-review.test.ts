@@ -3,9 +3,11 @@
 // both, the CI half with one re-run per round, a conflict at once, the GitHub waits bounded, the
 // step's result through the table, and the review's writes (the PR comment, the `reviewed` event,
 // the fixer's `verdict` events); then the reviewer interface and registry, the `review` contract,
-// the prompt, the step module through the agent-step executor, and the `ci-rerun` executor. Plans
-// are driven through planV2 itself; actions are found by kind, and keys come from the key codec.
-import { describe, expect, test } from 'claude-code/testing'
+// the prompt, the step module through the agent-step executor, and the `ci-rerun` executor; last,
+// the step in the pass driver, from T5 through the ensure to the PR's first read (fault drill 1).
+// Plans are driven through planV2 itself; actions are found by kind, and keys come from the key
+// codec.
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
@@ -18,7 +20,7 @@ import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { eventArgv, parseEvent } from '../hooks/v2/events'
 import { entryKey, lifeOf, prKey, prepareKey, rerunKey, reviewKey, reviewPrepareKey, short, stepKey, transitionKey } from '../hooks/v2/keys'
-import { emptyV2State } from '../hooks/v2/observe'
+import { emptyV2State, recordsToStore } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { REVIEW_PROMPTS, adjudicatorPrompt } from '../hooks/v2/prompts-review'
 import { COMMAND_RULE, TEST_POLICY } from '../hooks/v2/prompts-triage'
@@ -31,8 +33,10 @@ import { priorOf, reviewInput, reviewResult } from '../hooks/v2/steps-review'
 import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES, STEP_AGENT, unknownResult } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2State } from '../hooks/v2/types'
+import { handshakePath } from '../hooks/v2/workspace'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state as baseState } from './fixtures'
-import { LOOP_DIR, REPO, TOOLS } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso } from './host'
+import type { Seen } from './host'
 
 const HOUR = 60 * MIN
 const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
@@ -895,5 +899,86 @@ describe('the ci-rerun executor (v2 SPEC 8.5, appendix B)', () => {
     const bad: Action = { ...a, kind: 'ci-rerun', pr: PR, round: 1, runId: '--repo' } as Action
     expect(await dispatch(ctxOf(w.env, s, start([], bad, NOW).entry), bad)).toMatchObject({ status: 'failed', noRetry: true })
     expect(w.argvs).toEqual([])
+  })
+})
+
+// --- the pass driver: a PR the ensure opened is read on the next pass (2.4, 8.1) ------------------------------
+
+describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
+  const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
+  const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
+
+  // Fault drill 1 on the testbed (2026-10-15): after the ensure opened the PR, every pass skipped
+  // the record with "PR #N was not read this pass" and ran no PR read, so the reviewer never
+  // started and the wait went unknown (github-wait), then to the breaker and triage.
+  test('a record that entered reviewing by T5 has its PR opened by the ensure; the next pass reads that PR and starts the reviewer', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const n = 4
+    const pr = 5
+    const life = lifeOf(NOW - HOUR)
+    // the record T5 made: reviewing, round 1, the build's head, no PR yet
+    const r: IssueRecord = { ...madeRecord({ issue: n, life, branch: `issue-${n}`, pr: null, others: [] }, NOW - HOUR), seq: 4, seqAt: NOW - MIN, since: NOW - MIN, state: 'reviewing', step: 'review', round: 1, head: HEAD, brief: BRIEF(n) }
+    const t5 = entry(transitionKey(r), 'transition', { issue: n, rule: 'S3', startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'transition', row: 'T5', event: 'ok', cause: null, from: 'building', to: 'reviewing', step: 'build', stored: true, via: 'build' } })
+    const slot = { name: '1', path: '/slots/1', status: 'leased', branch: `issue-${n}`, lease_id: 'L1', lease_holder: `factory-loop:${n}:${life}`, leased_at: iso(NOW - HOUR), processes: [] }
+    const pull = { pr: { number: pr, state: 'open', merged: false, head: { sha: HEAD, ref: `issue-${n}`, repo: { full_name: REPO } }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean', body: '' }, stripped: 0 }
+    let opened = false
+    const run = (argv: string[], s: Seen) => {
+      const line = argv.join(' ')
+      switch (argv[0]) {
+        case 'callum-flow-factory-state':
+          return { stdout: factoryDoc([{ issue: n, stage: 'reviewing', entered_at: iso(NOW - MIN), holder: DEVICE, run: null, pr: null, stuck: null, github: null }]) }
+        case 'dev-query':
+          return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
+        case `${TOOLS}/queue-watch.sh`:
+          return { stdout: 'queue known=none now=none\n' }
+        case `${TOOLS}/usage-check.sh`:
+          return { stdout: USAGE }
+        case 'treehouse':
+          return { stdout: JSON.stringify([slot]) }
+        case 'callum-flow-rollout':
+          return { stdout: `ROLLOUT merge source=issue\n` }
+        case 'callum-flow-patch-id':
+          return { stdout: `${PATCH}\n` }
+        case 'callum-flow-issue-read':
+          if (line === `callum-flow-issue-read --json --pr ${pr}`) return opened ? { stdout: JSON.stringify(pull) } : { exitCode: 1, stderr: 'HTTP 404: Not Found' }
+          return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      }
+      if (line === ARGV.branchPrsArgv(REPO, `issue-${n}`).join(' ')) return { stdout: opened ? JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: HEAD }]) : '[]' }
+      if (line.startsWith('gh pr create ')) {
+        opened = true
+        return { stdout: `https://github.com/${REPO}/pull/${pr}\n` }
+      }
+      if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return { stdout: JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: iso(NOW - MIN), completedAt: iso(NOW), link: `https://github.com/${REPO}/actions/runs/7/job/1` }]) }
+      return undefined
+    }
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [t5] } },
+      run,
+    })
+    // the companion runs in the session: its handshake, written every minute (10.9)
+    let at = NOW
+    const pass = async (ms: number) => {
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      at += ms
+      await clock.advance(ms)
+    }
+    await $.session.start(START)
+    await pass(6_000)
+    // the seq's entry actions, then the ensure, which opens the PR: the ledger names it, the record not yet (8.1)
+    for (let i = 0; i < 4 && h.entry(prKey(r, 'ensure'))?.status !== 'done'; i++) await pass(60_000)
+    expect(opened).toBe(true)
+    expect(h.entry(prKey(r, 'ensure'))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr, created: true } })
+    // the next pass reads the PR, its checks and its patch, and starts the reviewer in the slot
+    const before = h.seen.length
+    await pass(60_000)
+    const ran = h.seen.slice(before).map(c => c.argv.join(' '))
+    expect(ran).toContain(`callum-flow-issue-read --json --pr ${pr}`)
+    expect(ran).toContain(ARGV.prChecksArgv(REPO, pr).join(' '))
+    expect(ran).toContain(ARGV.patchIdArgv(HEAD, 'main').join(' '))
+    const line = h.last()
+    expect((line.sources as Record<string, string>)['v2.prs']).toBe('ok')
+    expect((line.skipped as { why: string }[]).map(x => x.why).filter(w => w.includes(`PR #${pr}`))).toEqual([])
+    expect((line.actions as { key: string; kind: string }[]).filter(a => a.kind === 'slot' || a.kind === 'agent-step').map(a => a.key)).toEqual([prepareKey(r, 1)])
   })
 })

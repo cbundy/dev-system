@@ -26,6 +26,7 @@ import { keyParts, prepareKey } from './keys'
 import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
 import { leftoversOf } from './rules-agent'
+import { lifePr } from './rules-review'
 import type { AgentStepAction, StepModule, StepRecord } from './steps'
 import { stepFiles } from './steps-triage'
 import { SLOT_STATES, unknownResult } from './types'
@@ -104,7 +105,8 @@ function workInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place:
     branch: action.branch,
     base: baseOf(ctx.state),
     head: r.head,
-    pr: r.pr,
+    // the life's PR: the record's, else the one this life's ensure opened (8.1)
+    pr: lifePr(ctx.state.ledger, r),
     brief: r.brief,
     attempt: action.attempt,
     notes: action.notes,

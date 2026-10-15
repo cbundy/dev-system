@@ -15,7 +15,7 @@ import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { applied, commentBody, hiddenKey, issueBranch, labelArgvs, openPrsOf, postedUrl, recordStale, triggerStale } from '../hooks/v2/act-state'
 import { eventArgv } from '../hooks/v2/events'
-import { claimKey, entryKey, followKey, interventionKey, lifeKey, lifeOf, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
+import { claimKey, entryKey, followKey, interventionKey, lifeKey, lifeOf, prKey, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
@@ -1042,6 +1042,13 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(results[0]?.files.slice(0, 2)).toEqual([stepRecordPath(LOOP_DIR, results[0]?.key ?? ''), stepAnswerPath(LOOP_DIR, results[0]?.key ?? '')])
     expect(stepFiles(LOOP_DIR, 'i1/lx/s2/build/a1').slice(0, 2)).toEqual([stepRecordPath(LOOP_DIR, 'i1/lx/s2/build/a1'), stepAnswerPath(LOOP_DIR, 'i1/lx/s2/build/a1')])
     expect(triageInput(env, { ...action, issue: 999 }, input().place)).toEqual(`#999 has no record of life ${LIFE} in the state the pass planned from`)
+    // in its first review round the record names no PR yet: the triage is told the one its ensure
+    // opened (8.1), with that PR's checks and merge state
+    const rv = rec(153, { state: 'reviewing', step: 'triage', head: HEAD, seq: 7 })
+    const ensured = done(prKey(rv, 'ensure'), 'pr', { issue: 153, outcome: { kind: 'pr', pr: 753, created: true, reopened: false } })
+    const read = { pr: 753, issue: 153, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [{ name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: 'https://x/actions/runs/1/job/2' }], patch: null, readAt: NOW }
+    const seen: ExecCtx = { ...env, state: withLedger(world([rv], {}, { prs: { prs: [read] } }), [ensured]) }
+    expect(triageInput(seen, { ...action, issue: 153, branch: 'issue-153' }, input().place)).toMatchObject({ pr: 753, mergeable: 'clean', checks: [{ name: 'ci', bucket: 'fail', link: 'https://x/actions/runs/1/job/2' }], fixValid: true })
   })
 
   test('the record round-trips the store after every executor\'s transition', () => {

@@ -10,6 +10,7 @@ import type { LedgerEntry } from '../types'
 import { keyParts } from './keys'
 import { triagePrompt } from './prompts-triage'
 import type { TriageInput, TriageResult } from './prompts-triage'
+import { lifePr } from './rules-review'
 import type { AgentStepAction, StepModule } from './steps'
 import { STATE_STEP, TRIAGE_CHOICES } from './types'
 import type { AgentStep, IssueRecord, StepResult } from './types'
@@ -70,7 +71,9 @@ export function triageInput(ctx: ExecCtx, action: AgentStepAction, place: Triage
   const r = (ctx.state.v2?.records ?? []).find(x => x.issue === action.issue && x.life === action.life)
   if (r === undefined) return `#${action.issue} has no record of life ${action.life} in the state the pass planned from`
   const config = ctx.rt.config
-  const pv = r.pr === null ? undefined : ctx.state.v2?.prs.prs.find(p => p.pr === r.pr)
+  // the life's PR: the record's, else the one this life's ensure opened (8.1)
+  const pr = lifePr(ctx.state.ledger, r)
+  const pv = pr === null ? undefined : ctx.state.v2?.prs.prs.find(p => p.pr === pr)
   const prState = r.state === 'reviewing' || r.state === 'merge-queue'
   const review = ctx.state.ledger
     .filter(e => e.kind === 'agent-step' && e.step === 'review' && e.status === 'done' && keyParts(e.key)?.life === r.life && e.issue === r.issue)
@@ -94,14 +97,14 @@ export function triageInput(ctx: ExecCtx, action: AgentStepAction, place: Triage
     brief: r.brief,
     branch: r.branch,
     head: r.head,
-    pr: r.pr,
+    pr,
     results: resultsOf(ctx, r),
     checks: prState ? (pv?.checks ?? []).map(c => ({ name: c.name, bucket: c.bucket, link: c.link })) : null,
     mergeable: pv?.mergeable ?? null,
     reviewAnswer: review === undefined ? null : stepFiles(ctx.rt.loopDir, review.key)[1] ?? null,
     guard,
     notes: action.notes,
-    fixValid: (r.head !== null || r.pr !== null) && r.fixes < config.reviewFixCap,
+    fixValid: (r.head !== null || pr !== null) && r.fixes < config.reviewFixCap,
     place,
   }
 }

@@ -1,6 +1,8 @@
 // The `prs` source (docs/factory-loop/v2/SPEC.md 2.4): for each record in reviewing or the merge
-// queue with a PR, the PR (callum-flow-issue-read --json --pr <n>: state, merged, merged head,
-// closedAt, head, mergeable_state, author), its check runs (gh pr checks <n> --repo R --json
+// queue whose life has a PR (rules-review.ts lifePr: the record's, else the one the life's done
+// ensure named, 8.1, so a PR the ensure just opened is read on the next pass), the PR
+// (callum-flow-issue-read --json --pr <n>: state, merged, merged head, closedAt, head,
+// mergeable_state, author), its check runs (gh pr checks <n> --repo R --json
 // name,state,bucket,startedAt,completedAt,link, the run id from the link) and, when the head moved,
 // its patch id (8.4: callum-flow-patch-id <head> <default branch>, kept per head, so it is computed
 // once); main's head on origin when a merge-queue PR shows behind, for Q1's key (9.2); and the time
@@ -13,10 +15,11 @@
 // The rules read a missing PR as not read, never as a fact, except an untrusted author's, which is
 // one (9.3, policy).
 import type { RunResult } from '../exec'
-import type { Ms, Source } from '../types'
+import type { LedgerEntry, Ms, Source } from '../types'
 import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv } from './argv'
 import type { SourceCtx } from './observe'
 import { queueOf } from './rules-queue'
+import { lifePr } from './rules-review'
 import type { HeadSeen, IssueRecord } from './types'
 
 export type CheckRun = {
@@ -145,21 +148,26 @@ export function shaOf(stdout: string, branch: string): string | null {
 // is, so it is computed when the head moves and kept while the head is.
 const PATCHES = new Map<string, string>()
 
-// prRecords: the records whose PR the source reads, in 2.4's order: the queue's head, then the
-// other records in reviewing and the merge queue, oldest seq first.
-export function prRecords(records: readonly IssueRecord[], paused: readonly number[]): (IssueRecord & { pr: number })[] {
+// prRecords: the records whose PR the source reads, each with its life's PR (lifePr), in 2.4's
+// order: the queue's head, then the other records in reviewing and the merge queue, oldest seq
+// first.
+export function prRecords(records: readonly IssueRecord[], paused: readonly number[], ledger: readonly LedgerEntry[]): (IssueRecord & { pr: number })[] {
   const head = queueOf(records, paused)[0]
   const rank = (r: IssueRecord) => (r === head ? 0 : 1)
   return records
-    .filter((r): r is IssueRecord & { pr: number } => r.pr !== null && (r.state === 'reviewing' || r.state === 'merge-queue'))
+    .filter(r => r.state === 'reviewing' || r.state === 'merge-queue')
     .sort((a, b) => rank(a) - rank(b) || a.seqAt - b.seqAt || a.issue - b.issue)
+    .flatMap(r => {
+      const pr = lifePr(ledger, r)
+      return pr === null ? [] : [{ ...r, pr }]
+    })
 }
 
 // readPrs: the PRs of the records that have one, main's head when a merge-queue PR is behind, and
 // the heads first seen, updated.
 export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: Source; heads: Record<string, HeadSeen> }> {
   const now = ctx.now
-  const want = prRecords(ctx.records, ctx.state.control.paused)
+  const want = prRecords(ctx.records, ctx.state.control.paused, ctx.state.ledger)
   const checkout = ctx.state.checkout
   const defaultBranch = checkout !== null && !('error' in checkout) ? checkout.defaultBranch : null
   const errors: string[] = []
@@ -193,7 +201,7 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
     if (sha === null) errors.push(`main's head on origin did not read: ${lastLine(r) || `exit ${r.exitCode}`}`)
     main = { branch, sha }
   }
-  const heads = headsOf(ctx.heads, ctx.records, prs, now)
+  const heads = headsOf(ctx.heads, ctx.records, prs, now, ctx.state.ledger)
   for (const k of [...PATCHES.keys()]) {
     const sha = k.split(' ').at(-1) ?? ''
     if (heads[sha] === undefined) PATCHES.delete(k)
@@ -244,11 +252,12 @@ async function patchOf(ctx: SourceCtx, head: string, base: string, pr: number, e
 
 // headsOf: the heads first seen (2.4): an open PR's head the first time it is read; a head goes
 // when its PR is read closed or merged, or its record closed (a closed record stays in the store
-// for a week). A head whose PR no record names stays: records that could not be read are no
-// reason to forget when a head was first seen.
-export function headsOf(before: Readonly<Record<string, HeadSeen>>, records: readonly IssueRecord[], prs: readonly PrView[], now: Ms): Record<string, HeadSeen> {
-  const live = new Set(records.filter(r => r.state !== 'closed' && r.pr !== null).map(r => r.pr))
-  const closed = new Set(records.filter(r => r.state === 'closed' && r.pr !== null && !live.has(r.pr)).map(r => r.pr))
+// for a week). A record's PR is its life's (lifePr). A head whose PR no record names stays:
+// records that could not be read are no reason to forget when a head was first seen.
+export function headsOf(before: Readonly<Record<string, HeadSeen>>, records: readonly IssueRecord[], prs: readonly PrView[], now: Ms, ledger: readonly LedgerEntry[]): Record<string, HeadSeen> {
+  const prsOf = (rs: IssueRecord[]) => rs.flatMap(r => lifePr(ledger, r) ?? [])
+  const live = new Set(prsOf(records.filter(r => r.state !== 'closed')))
+  const closed = new Set(prsOf(records.filter(r => r.state === 'closed')).filter(pr => !live.has(pr)))
   const ended = new Set(prs.filter(v => v.state !== 'open').map(v => v.pr))
   const out: Record<string, HeadSeen> = {}
   for (const [sha, h] of Object.entries(before)) if (!closed.has(h.pr) && !ended.has(h.pr)) out[sha] = h

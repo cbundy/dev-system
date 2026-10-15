@@ -4,7 +4,8 @@
 // the ledger is. register.ts holds one V2Live and the engine; each function here is one call from
 // it: loadV2 with the ledger, storedV2 and readStoredV2 for observe, keepV2 after it, v2IoOf for
 // the transition executor (ActIo.v2), and for the owner's files notingIo with noteWritten (an op's
-// writes, the clearing of a done update) and noteKillSwitch (a pass that found the OFF file).
+// writes, the clearing of a done update), noteKillSwitch (a pass that found the OFF file) and
+// noteIdle (each tick: the settings as the loop read them while it did not act).
 //
 // - A read keeps three cases apart: the store could not be read (or holds no stored records under
 //   the key), so nothing is loaded and v2 plans nothing that releases or starts (v2/plan.ts); the
@@ -19,7 +20,7 @@ import type { LedgerEntry, Ms, State } from '../types'
 import { headsFromStore, headsKey, headsToStore, recordsFromStore, recordsKey, recordsToStore } from './observe'
 import type { V2Stored } from './observe'
 import { EMPTY_FILES, baseOf, filesFromStore, filesKey, keepFiles, seenOf } from './sources-interventions'
-import type { FilesSeen } from './sources-interventions'
+import type { FileSeen, FilesSeen } from './sources-interventions'
 import { editOf } from './rules-interventions'
 import type { HeadSeen, IssueRecord, V2Io } from './types'
 
@@ -41,13 +42,16 @@ export type V2Live = {
   heads: Record<string, HeadSeen> | null
   // files:<repo>, kept whether or not the records are loaded
   files: FilesSeen | null
+  // the workspace config.json as the newest tick that did not act under planner v2 read it, in
+  // memory only (noteIdle); null once an acting tick has kept it
+  idle: { repo: string; seen: FileSeen } | null
   loaded: boolean
   // why the records are not loaded: the store's read failed, or the key holds no stored records
   error: string | null
 }
 
 export function newV2Live(): V2Live {
-  return { repo: '', records: [], absent: true, heads: null, files: null, loaded: false, error: 'not loaded yet' }
+  return { repo: '', records: [], absent: true, heads: null, files: null, idle: null, loaded: false, error: 'not loaded yet' }
 }
 
 // What a read of records:<repo> gave.
@@ -192,6 +196,8 @@ export function noteWritten(live: V2Live, io: V2StoreIo, rt: Pick<Runtime, 'repo
   return async (path, before, after) => {
     const part = path === `${rt.loopDir}/control.json` ? 'control' : path === `${baseOf(rt.loopDir)}/config.json` ? 'workspace' : null
     if (part === null) return
+    // an op while the loop does not act (`mode act` among them) writes the version it reads next
+    if (part === 'workspace' && live.idle !== null && live.idle.repo === rt.repo) live.idle = { repo: rt.repo, seen: seenOf(after) }
     const at = await io.now()
     await updateFiles(live, io, rt.repo, f => {
       if (f === null) return null
@@ -216,6 +222,25 @@ export async function noteKillSwitch(live: V2Live, io: V2StoreIo, rt: Pick<Runti
     return { ...base, off: true, edits: [...base.edits, { what: 'control', at, issues: [], detail: 'the OFF file was created' }] }
   })
   return killed
+}
+
+// noteIdle: each tick, before its pass (7.2). While the loop does not act under planner v2 (mode off
+// or observe, or planner v1), the workspace config.json it reads is kept in memory, never in the
+// store, which only an acting pass writes. The first tick that acts under v2 again makes that the
+// version files:<repo> holds for the workspace file, so the edit that turned the loop on (`mode`,
+// `planner`) is compared like any other and logged once as config-file; an op's write is the
+// loop's own version (noteWritten). A read that fails changes nothing. Never throws.
+export async function noteIdle(live: V2Live, io: V2StoreIo, files: Pick<FileIo, 'readFile'>, rt: Pick<Runtime, 'repo' | 'mode' | 'config' | 'loopDir'>): Promise<void> {
+  if (rt.repo === '') return
+  if (rt.mode !== 'act' || rt.config.planner !== 'v2') {
+    const text = await files.readFile(`${baseOf(rt.loopDir)}/config.json`).catch(() => null)
+    if (text !== null) live.idle = { repo: rt.repo, seen: seenOf(text) }
+    return
+  }
+  const idle = live.idle
+  live.idle = null
+  if (idle === null || idle.repo !== rt.repo) return
+  await updateFiles(live, io, rt.repo, f => ({ ...(f ?? EMPTY_FILES), workspace: idle.seen }))
 }
 
 // What the driver gives v2IoOf: whether the ledger is loaded and this session may act on it, a

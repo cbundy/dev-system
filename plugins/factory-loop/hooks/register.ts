@@ -103,7 +103,7 @@ import { transitionsOf } from './v2/plan'
 import { stateCounts } from './v2/rules-state'
 import { newSettingsCache, repoLoaded } from './v2/settings'
 import type { SettingsIo } from './v2/settings'
-import { keepV2, loadV2, newV2Live, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
+import { keepV2, loadV2, newV2Live, noteIdle, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
 import type { V2StoreIo } from './v2/store'
 import { STEP_AGENT } from './v2/types'
 import type { V2Io } from './v2/types'
@@ -778,6 +778,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigge
     rt = await runtime($)
     lastRt = rt
     rearm($, rt.config.passEveryMs)
+    await noteIdle(liveV2, v2StoreIo($), fileIo($), rt)
     const off = rt.mode === 'off' || (await noteKillSwitch(liveV2, v2StoreIo($), rt, await killed($)))
     if (off || rt.repo === '') {
       await setTitle($, offTitle(rt))

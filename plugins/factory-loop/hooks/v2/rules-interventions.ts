@@ -24,6 +24,7 @@ import { intervention } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
+import { lifePr } from './rules-review'
 import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
 import type { IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
 import { UNKNOWN_WHYS } from './types'
@@ -247,18 +248,19 @@ function loopMayHaveMade(writes: readonly Write[], at: Ms, slack: Ms): boolean {
 // ends, so building and fixing are never read for pushes.
 const STILL: readonly IssueState[] = ['reviewing', 'merge-queue', 'parked']
 
-// fromPushes: a head on a record's PR that no loop step produced, first seen after the life began,
-// is a person's push (4.1). Judged only on a head observe saw first (heads first seen, 2.4), within
-// FACT_WINDOW_MS; a head that was there before the life began is not this life's touch. A record
-// that adopted its PR, with no head of its own, takes the first head seen in its life as the
-// loop's start. The loop's own heads are the record's, those its writes read, and any a write that
-// read none may have made (loopMayHaveMade).
+// fromPushes: a head on a record's PR (its life's, lifePr) that no loop step produced, first seen
+// after the life began, is a person's push (4.1). Judged only on a head observe saw first (heads
+// first seen, 2.4), within FACT_WINDOW_MS; a head that was there before the life began is not this
+// life's touch. A record that adopted its PR, with no head of its own, takes the first head seen in
+// its life as the loop's start. The loop's own heads are the record's, those its writes read, and
+// any a write that read none may have made (loopMayHaveMade).
 function fromPushes(ctx: V2Ctx): Planned[] {
   const out: Planned[] = []
   const slack = Math.max(ctx.config.passEveryMs, ctx.config.githubEveryMs)
   for (const r of ctx.v2.records) {
-    if (r.pr === null || !STILL.includes(r.state)) continue
-    const view = ctx.v2.prs.prs.find(v => v.pr === r.pr && v.issue === r.issue)
+    const pr = lifePr(ctx.state.ledger, r)
+    if (pr === null || !STILL.includes(r.state)) continue
+    const view = ctx.v2.prs.prs.find(v => v.pr === pr && v.issue === r.issue)
     if (view === undefined || view.state !== 'open' || view.head === null) continue
     const head = view.head
     const seen = ctx.v2.heads[head]
@@ -268,7 +270,7 @@ function fromPushes(ctx: V2Ctx): Planned[] {
     if (writes.some(w => w.head === head) || loopMayHaveMade(writes, seen.at, slack)) continue
     if (r.head === null) {
       const first = Object.entries(ctx.v2.heads)
-        .filter(([, h]) => h.pr === r.pr && h.at > began)
+        .filter(([, h]) => h.pr === pr && h.at > began)
         .sort((a, b) => a[1].at - b[1].at)[0]
       if (first === undefined || first[0] === head) continue
     }
@@ -276,7 +278,7 @@ function fromPushes(ctx: V2Ctx): Planned[] {
     out.push({
       key: interventionKey(fact),
       rule: 'S6',
-      event: intervention('person', 'push', fact, `head ${short(head)} on ${r.branch} was pushed by no loop step`, { issue: r.issue, life: r.life, pr: r.pr }),
+      event: intervention('person', 'push', fact, `head ${short(head)} on ${r.branch} was pushed by no loop step`, { issue: r.issue, life: r.life, pr }),
     })
   }
   return out

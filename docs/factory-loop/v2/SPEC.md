@@ -147,7 +147,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue with a PR: `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -219,7 +219,7 @@ type IssueRecord = {
   since: Ms                    // when it entered this state
   resumeTo: IssueState | null  // queued: where a lease leads (default designing); parked: where an unpark leads
   branch: string               // fixed for the life (3.5)
-  pr: number | null            // adopted at claim, or set when reviewing ends (8.1)
+  pr: number | null            // adopted at claim, or set when reviewing ends; until then the ensure's (8.1)
   head: string | null          // the head a writer step last confirmed on origin
   approvedPatch: string | null // the patch id the reviewer approved (8.4)
   brief: string | null         // the design brief comment URL
@@ -740,10 +740,13 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
 
 - **Trip.** Three unexplained unknowns of agent steps, on two or more records, within 15 minutes.
   Unexplained means not caused by `load`, `usage` or `slot` (5.1), so a restart that cuts every
-  agent at once does not trip it.
+  agent at once does not trip it. An unknown that ends while the breaker holds is the breaker's
+  own (cause `breaker`, 5.1) and counts toward no trip, so a trip holds 30 minutes from the
+  unknown that tripped it, never longer, and is told once.
 - **Effect.** It closes the `start`, `develop` and `drive` classes for 30 minutes: no claims, no
   agent steps, no triage. The held steps show the skip line `breaker` and cannot time out (4.4).
-  The owner hears once (`tell(breaker)`, an owner item).
+  The owner hears once, on the first pass after the trip, whether or not that pass asks for
+  anything the breaker holds (`tell(breaker)`, an owner item); its tell logs the trip (7.2).
 - **Why.** An outage (an API failure, a token expiry, an Actions incident) would otherwise spend
   every issue's retries and triages, then park them all (C3:112; `failures/F2`,
   `totality/T-12`). It replaces the draft's park bucket, which acted only after the damage.
@@ -988,7 +991,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `pr-closed` | E4 | the issue |
 | `issue-closed` | E2 | the issue |
 | `control-file` | `control.json` or the `OFF` file changed with no op (its digest against the last one the loop read or wrote, kept as `files:<repo>` beside the records; an op that finds its file already changed keeps that edit to log; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
-| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting | none |
+| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
@@ -1099,6 +1102,13 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   A re-run never makes a second PR (`totality/T-04`). The PR's number is in the done `pr` entry, so
   plan sees it at once, and the row that ends the reviewing step (T8, T9, T10) writes it to the
   record.
+- **The life's PR** is the record's `pr`, else the PR the life's newest done ensure named
+  (`lifePr` in `hooks/v2/rules-review.ts`). Every reader of a life's PR goes through it: the `prs`
+  source, which so reads a PR the ensure just opened on the next pass (2.4); GitHub's PR events
+  (E3, E4); the push check (7.2); and the triage and work prompts. No reader takes the record's
+  field alone: in the first review round it is still empty. (Fault drill 1, 2026-10-15: the `prs`
+  source read only the record's field, so a new PR was never read and the review waited until
+  its GitHub bound.)
 - **Title:** the builder's answer `title`, one line of at most 72 characters, closing keywords
   rewritten (D-56).
 - **Body**, written only by the loop (OB:71):
