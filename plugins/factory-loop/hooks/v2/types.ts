@@ -6,8 +6,9 @@
 // constants only: the pure planner imports this, so nothing here may run a command or read a
 // clock.
 import type { PlanCtx } from '../foundation'
-import type { ActionBase, ActionClass, Checkout, Config, LedgerStatus, Ms, Source } from '../types'
+import type { ActionBase, ActionClass, Config, LedgerEntry, LedgerStatus, Ms, Source } from '../types'
 import type { V2Event } from './events'
+import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
 
@@ -198,7 +199,11 @@ export type V2Outcome =
       from: IssueState | null
       to: IssueState
       step: StepKind | null
+      // false from the entry's start until the executor stored the record (a lost entry may carry
+      // false: the seq is the record's when the store holds it at that seq)
       stored: boolean
+      // the transition note's via code (table.ts viaOf), which the seq's entry actions log
+      via?: string
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
@@ -239,7 +244,21 @@ export type StepMarker = {
 export type SplitChild = { key: string; title: string; body: string; blockedBy: string[]; ready: boolean }
 
 export type V2Action =
-  | (ActionBase & { kind: 'transition'; row: string; event: EventKind; from: RecordRef | null; next: IssueRecord; trigger: Trigger })
+  // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;
+  // fromState and fromStep: the state and step the record leaves, which the entry carries from its
+  // start (ledger.ts start), so a crash before it is saved done loses none of them (3.3)
+  | (ActionBase & {
+      kind: 'transition'
+      row: string
+      event: EventKind
+      from: RecordRef | null
+      next: IssueRecord
+      trigger: Trigger
+      cause?: OutsideCause | null
+      via?: string
+      fromState?: IssueState | null
+      fromStep?: StepKind | null
+    })
   // set: add the state's label and remove the other six; ensure: create the seven; clear: remove
   // every factory label (3.4)
   | (ActionBase & { kind: 'label'; op: 'set' | 'ensure' | 'clear'; label: FactoryLabel | null })
@@ -347,8 +366,9 @@ export type V2State = {
   comments: Record<number, IssueComment[]>
   prs: PrsRead
   interventions: InterventionFacts
-  // the main checkout as the pass before read it, for R1's tripwire (10.7)
-  checkoutBefore: Checkout | null
+  // the main checkout the tripwire last settled on, which R1 compares this pass's read with
+  // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
+  checkoutBase: CheckoutBase | null
 }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.
@@ -361,6 +381,8 @@ export type V2Ctx = PlanCtx & { v2: V2State }
 // saved; changed is false when fn changed nothing or the store refused the write.
 export type V2Io = {
   records: () => readonly IssueRecord[]
+  // the live ledger, which the transition executor re-checks its trigger against (3.3)
+  ledger?: () => readonly LedgerEntry[]
   updateRecords: (fn: (records: readonly IssueRecord[]) => IssueRecord[] | null) => Promise<{ changed: boolean; saved: boolean }>
   // asks the driver for the next pass at once: a transition's next event is taken without delay
   ping: (why: string) => void

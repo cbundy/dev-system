@@ -223,10 +223,12 @@ export function executorBreaker(state: State, kind: ActionKind): Ms | null {
 
 // An unexplained unknown of an agent step, as the transition that handled it recorded it: its
 // event is unknown or a running step's timeout, its step an agent's, its cause none of a load, a
-// usage limit or a lost slot.
+// usage limit or a lost slot. A transition lost to a reload counts by the facts it carries from
+// its start (ledger.ts start): either the store took it, or the record's next transition reuses
+// its key and replaces it, so nothing counts twice.
 function unexplained(e: LedgerEntry): boolean {
   const o = e.outcome
-  if (e.kind !== 'transition' || e.status !== 'done' || o?.kind !== 'transition') return false
+  if (e.kind !== 'transition' || (e.status !== 'done' && e.status !== 'lost') || o?.kind !== 'transition') return false
   if (o.event !== 'unknown' && o.event !== 'timeout') return false
   if (o.step === null || !(AGENT_STEPS as readonly string[]).includes(o.step)) return false
   return o.cause === null || !STEP_BREAKER.explained.includes(o.cause)

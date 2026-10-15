@@ -43,9 +43,12 @@ export function commentsReadArgv(on: 'issue' | 'pr', n: number): string[] {
 
 // --- the PR (3.5, 8.1) --------------------------------------------------------------------------------
 
-// The open PRs, once at a claim, for adoption.
+// The open PRs, once at a claim, for adoption. gh lists 30 by default; the limit is set well above
+// any count of open PRs, so the issue's PR is never cut off the list (3.5).
+export const OPEN_PRS_LIMIT = 1000
+
 export function openPrsArgv(repo: string): string[] {
-  return ['gh', 'pr', 'list', '--repo', repo, '--state', 'open', '--json', 'number,headRefName']
+  return ['gh', 'pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(OPEN_PRS_LIMIT), '--json', 'number,headRefName']
 }
 
 // The branch's PRs, every state.

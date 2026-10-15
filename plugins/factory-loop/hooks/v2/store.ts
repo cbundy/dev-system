@@ -15,7 +15,7 @@
 //   and its retry stores the new seq (3.3).
 import type { FileIo } from '../control'
 import type { Runtime } from '../observe'
-import type { Ms, State } from '../types'
+import type { LedgerEntry, Ms, State } from '../types'
 import { headsFromStore, headsKey, headsToStore, recordsFromStore, recordsKey, recordsToStore } from './observe'
 import type { V2Stored } from './observe'
 import { EMPTY_FILES, baseOf, filesFromStore, filesKey, keepFiles, seenOf } from './sources-interventions'
@@ -225,6 +225,8 @@ export type V2IoDeps = {
   ready: () => boolean
   write: (save: () => Promise<void>) => Promise<boolean>
   ping: (why: string) => void
+  // the live ledger, for the transition executor's trigger
+  ledger?: () => readonly LedgerEntry[]
 }
 
 const UNCHANGED = { changed: false, saved: false } as const
@@ -250,6 +252,7 @@ export function v2IoOf(live: V2Live, io: V2StoreIo, deps: V2IoDeps): V2Io {
       return { changed: true, saved: true }
     },
     ping: deps.ping,
+    ...(deps.ledger === undefined ? {} : { ledger: deps.ledger }),
   }
 }
 

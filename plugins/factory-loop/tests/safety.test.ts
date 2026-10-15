@@ -32,6 +32,7 @@ import { plan } from '../hooks/plan'
 import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
 import type { Action, AdjudicatorPurpose, FixerPurpose, LedgerEntry, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
+import { emptyV2State } from '../hooks/v2/observe'
 import { AGENT_STEPS, FACTORY_LABELS, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
@@ -89,6 +90,9 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return {}
     case 'callum-flow-claim':
       return {}
+    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor)
+    case 'callum-flow-issue-read':
+      return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
       return { stdout: args[1] === 'comment' ? 'https://github.com/cbundy/dev-system/pull/512#issuecomment-2\n' : '' }
@@ -323,7 +327,8 @@ function world(): { state: State; ledger: LedgerEntry[] } {
     // the model's own agent, at work: listed, but never the loop's
     { id: 'the-models-own-agent', type: 'general-purpose', status: 'running' as const },
   ]
-  return { state: state({ ledger, pool, agents }), ledger }
+  // the v2 records the pass planned from: the triage step reads its record's counts from them
+  return { state: { ...state({ ledger, pool, agents }), v2: emptyV2State(NOW, [RECORD]) }, ledger }
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles

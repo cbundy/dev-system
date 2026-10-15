@@ -415,9 +415,9 @@ function actIo($: EngineInterface): ActIo {
 }
 
 // v2Io: the live records for the transition executor, stored after every ledger save queued
-// before them (v2/store.ts), and the driver's ping (v2 SPEC 3.3, 4.6).
+// before them (v2/store.ts), the driver's ping and the live ledger (v2 SPEC 3.3, 4.6).
 function v2Io($: EngineInterface): V2Io {
-  return v2IoOf(liveV2, v2StoreIo($), { ready: () => live.loaded && lastRt !== null, write: save => afterSaves($, lastRt, save), ping: why => ping(why) })
+  return v2IoOf(liveV2, v2StoreIo($), { ready: () => live.loaded && lastRt !== null, write: save => afterSaves($, lastRt, save), ping: why => ping(why), ledger: () => live.ledger })
 }
 
 function fileIo($: EngineInterface): FileIo {
