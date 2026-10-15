@@ -57,6 +57,8 @@ export type Runtime = {
   poolSize: number
   cwd: string
   loopDir: string
+  // $.session.id(), by which v2's workspace rail reads the companion's handshake (v2 SPEC 10.9)
+  session?: string
   // the observe-mode event sink (SPEC 11.1), null when acting; env carries it
   sink: string | null
   // the base environment of every command the loop runs, observe and act alike:

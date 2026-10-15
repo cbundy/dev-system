@@ -160,6 +160,16 @@ const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 // V2_DEFAULTS on every key no layer set, which the v2 shadow plans with (v2 SPEC 2.3).
 export type LoadedConfig = { config: Config; problems: string[]; v2: Config }
 
+// jsonObject: a settings file's text as an object; {} for no file, or one that does not read.
+export function jsonObject(raw: string | null): Record<string, unknown> {
+  try {
+    const v: unknown = raw === null ? {} : JSON.parse(raw)
+    return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
 // loadConfig: DEFAULT_CONFIG with each raw JSON object layered over it, in order. A time
 // setting takes a duration string under its key with "Ms" dropped (`passEvery: "60s"`), or a
 // number of milliseconds under either spelling; the agentTimeout and wakeTimeout maps likewise,

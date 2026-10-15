@@ -150,7 +150,7 @@ describe('the agent-step executor', () => {
     const record = parseStepRecord(w.files.get(stepRecordPath(LOOP_DIR, action.key)) ?? null, DEPS.contracts) as StepRecord
     expect(record).toMatchObject({ v: 2, key: action.key, issue: 470, step: 'review', life: 'tbq3k0', seq: 3, attempt: 1, role: 'reader', subagentType: STEP_AGENT.review, model: 'sonnet', contract: 'review', answerFile: place })
     expect(w.spawns).toEqual([
-      { subagentType: 'factory-loop:reviewer', prompt: `review #470: answer with ${BIN} --to ${place}`, description: 'Review #470', name: 'review-470-s3-a1', model: 'sonnet' },
+      { subagentType: 'factory-loop:reviewer', prompt: `review #470: answer with ${BIN} --to ${place}`, description: 'Review #470', name: 'review-470-s3-a1', model: 'sonnet', cwd: '/slots/1' },
     ])
   })
 

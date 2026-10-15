@@ -1,0 +1,1 @@
+{ "name": "workspace-probe-spawner", "version": "0.1.0", "description": "The workspace probe's spawner: spawns one agent from a timer, as the factory loop does" }

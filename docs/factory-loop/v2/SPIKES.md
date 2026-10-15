@@ -148,14 +148,16 @@ way.
 | Start the agent in its slot | the companion's `agent.spawn` hook sets `cwd` from the prompt's `factory-slot:` line, checked against the slot's step marker (10.3) | proven: spike 1, runs 5, 7 and 8 |
 | Confine its file writes | the companion's `tool.call` hook, by agent id, with paths resolved against the slot (10.4) | proven: spike 2, run-guard |
 | Keep it off the main checkout | callum-flow's existing guard, which already fires for these agents, plus a tell-only tripwire (10.4, 10.7) | proven: spike 1, run 3 |
-| 10-minute Bash timeout | `$.env.set` in the loop's `session.start`, and the companion's `tool.call` adding the timeout (10.5) | the companion's rewrite is spike 3's A4 mechanism in the plugin whose hooks spike 2 proved fire. `$.env.set` (A3) ran with a frame open; it sets session state rather than running a hook, so it should not depend on frames, but that is not yet shown |
-| Stop gate | the companion's `classic.SubagentStop` with `$.process.run` and one 10-minute budget; no cap; a gate that cannot run lets CI decide (10.6) | a second plugin's SubagentStop blocks (spike 2, run-guard), and a long `$.process.run` gate works in a mod hook (spike 3, run C), but the two have not been seen together in the frameless shape |
+| 10-minute Bash timeout | `$.env.set` in the loop's `session.start`, and the companion's `tool.call` adding the timeout (10.5) | proven: the workspace probe (U9), cases `envset-start`, `envset-timer` and `companion` |
+| Stop gate | the companion's `classic.SubagentStop` with `$.process.run` and one 10-minute budget; no cap; a gate that cannot run lets CI decide (10.6) | proven: the workspace probe (U9), cases `gate` and `companion` |
 | Answers | the answer script only (`answerChannel: script`) | proven: spike 2 |
-| Know the companion is loaded | a handshake file and a rail that holds agent steps without it (10.9) | design only |
+| Know the companion is loaded | a handshake file and a rail that holds agent steps without it (10.9) | built (U9); the handshake shown in the probe's `companion` case |
 
-**Before workflow 3 builds it,** U9 re-runs the frameless probe for the two points not yet seen in
+**Before workflow 3 built it,** U9 re-ran the frameless probe for the two points not yet seen in
 the loop's exact shape: the long gate inside the companion's SubagentStop, and `$.env.set` with
-no frame open. If either fails, U9 uses the stated fallback:
+no frame open. Both passed on 2.1.300 (2026-10-15), so no fallback was built; the results are in
+the probe's [README](../probes/workspace-probe/README.md). Had either failed, U9 would have used
+the stated fallback:
 
 - **For the gate:** a command hook in the companion's own `hooks/hooks.json`, with `timeout` 900
   and the gate's own budget 600 s, keyed by agent id. This is proven by run B and run-plugincmd.

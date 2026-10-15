@@ -11,6 +11,7 @@ import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
+import type { WorkspaceRead } from './workspace'
 
 // --- states, steps and the record (SPEC 3.1, 3.2) ------------------------------------------------
 
@@ -373,6 +374,9 @@ export type V2State = {
   // the main checkout the tripwire last settled on, which R1 compares this pass's read with
   // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
   checkoutBase: CheckoutBase | null
+  // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
+  // when not read, which holds nothing
+  workspace?: WorkspaceRead
 }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.

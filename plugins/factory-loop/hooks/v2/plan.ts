@@ -5,7 +5,8 @@
 //
 // The order is the order the act step runs the actions in: R1 first (6.2), then the record's
 // rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions, and
-// the fleet's (H2, O3); what used up its attempts is told; G4 admits; R2's restart goes last of
+// the fleet's (H2, O3); what used up its attempts is told, and a missing companion plugin (the
+// workspace rail, 10.9: its hold is in the record's rules); G4 admits; R2's restart goes last of
 // all, after the title, and only on a pass that admitted nothing else. When the records could not
 // be read, the record's, slot and queue rules plan nothing (G2).
 import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleOf } from '../foundation'
@@ -18,6 +19,7 @@ import { slotRules } from './rules-slots'
 import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
 import type { V2Ctx } from './types'
+import { workspaceTell } from './workspace'
 
 export function planV2(state: State, config: Config): PlanResult {
   const tier = tierOf(state.usage, config, state.control.usageOverride, state.now)
@@ -45,6 +47,7 @@ export function planV2(state: State, config: Config): PlanResult {
     fleetRules(ctx)
     restartTells(ctx)
     fleetTells(ctx)
+    workspaceTell(ctx)
     counts = stateTitle(ctx)
   }
   const actions = admit(base)

@@ -31,6 +31,7 @@ import { PLANS as REVIEW } from './rules-review'
 import { PLANS as WORK } from './rules-work'
 import { nextRecord, normalize, rowFor, viaOf } from './table'
 import { FACTORY_LABELS } from './types'
+import { workspaceHold } from './workspace'
 import type { IssueRecord, Row, StepKind, TableEvent, Trigger, V2Ctx } from './types'
 
 const HOUR = 3_600_000
@@ -237,7 +238,7 @@ function recordRules(ctx: V2Ctx, r: IssueRecord, items: readonly EntryItem[]): v
     else if (u === null) skip(ctx, 'S6', n, 'parked: waits on the owner')
     else take(ctx, r, u, logged, '')
   } else {
-    const hold = !logged ? `its transition event of seq ${r.seq} is not logged yet` : stalled !== null ? `stalled: ${stalled.key}` : !entryDone(ctx, items) ? 'its entry actions run first' : null
+    const hold = !logged ? `its transition event of seq ${r.seq} is not logged yet` : stalled !== null ? `stalled: ${stalled.key}` : !entryDone(ctx, items) ? 'its entry actions run first' : workspaceHold(ctx, r.step)
     const read = stepRead(ctx, r, hold === null, hold)
     if (read?.kind === 'running') {
       running = true

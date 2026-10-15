@@ -41,7 +41,7 @@ import {
 import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
-import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
+import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject, loadConfig } from './config'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
@@ -107,6 +107,7 @@ import { keepV2, loadV2, newV2Live, noteKillSwitch, noteWritten, notingIo, readS
 import type { V2StoreIo } from './v2/store'
 import { STEP_AGENT } from './v2/types'
 import type { V2Io } from './v2/types'
+import { BASH_TIMEOUT_MS, withSlotLine } from './v2/workspace'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -232,15 +233,6 @@ async function text($: EngineInterface, path: string): Promise<string | null> {
   }
 }
 
-function json(raw: string | null): Record<string, unknown> {
-  try {
-    const v = raw === null ? {} : JSON.parse(raw)
-    return v !== null && typeof v === 'object' ? v : {}
-  } catch {
-    return {}
-  }
-}
-
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
 // configDir: CLAUDE_CONFIG_DIR, else ~/.claude, with no doubled or trailing /: every path the loop
@@ -258,7 +250,7 @@ async function configDir($: EngineInterface) {
 async function runtime($: EngineInterface): Promise<Runtime> {
   const dir = await configDir($)
   const base = loopBaseOf(dir)
-  const file = json(await text($, `${base}/config.json`))
+  const file = jsonObject(await text($, `${base}/config.json`))
   const pick = (key: keyof Options) => (typeof file[key] === 'string' && file[key] !== '' ? file[key] : options[key])
   const checkout = str(file.checkout) || cwd
   let repo = typeof pick('repo') === 'string' && pick('repo') !== '' ? String(pick('repo')) : ''
@@ -272,7 +264,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
   // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
-  let loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
+  let loaded = loadConfig(jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
   if (loaded.config.planner === 'v2') loaded = await repoLoaded(settingsIo($), settingsCache, checkout, loaded, over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
@@ -293,6 +285,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : 16,
     cwd: checkout,
     loopDir,
+    session: await $.session.id(),
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,
@@ -375,7 +368,9 @@ function actIo($: EngineInterface): ActIo {
     now: () => $.clock.now(),
     run: (argv, init) => $.process.run(argv, init),
     spawnAgent: async input => {
-      const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: input.prompt, description: input.description }
+      // an agent step starts in its slot: the companion reads the slot line (v2 SPEC 10.3)
+      const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: withSlotLine(input.prompt, input.cwd), description: input.description }
+      if (input.cwd !== undefined) args.cwd = input.cwd
       if (input.name !== undefined) args.name = input.name
       if (input.model !== undefined) args.model = input.model
       const r = await within($, SPAWN_TIMEOUT_MS, $.agent.spawn(args), 'agent spawn')
@@ -1606,6 +1601,9 @@ export const register: Register = (on, opts) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // the 10-minute Bash timeout for every agent the loop starts (v2 SPEC 10.5)
+    await $.env.set('BASH_DEFAULT_TIMEOUT_MS', BASH_TIMEOUT_MS).catch(() => undefined)
+    await $.env.set('BASH_MAX_TIMEOUT_MS', BASH_TIMEOUT_MS).catch(() => undefined)
     cwd = e.cwd
     if (!e.isInteractive) headless = true
     else await ensure($)

@@ -18,6 +18,11 @@
       "name": "factory-loop",
       "source": "./plugins/factory-loop",
       "description": "The issue orchestrator as a deterministic loop: claims, gates and merges a repo's ready issues in code and wakes Claude only for judgment calls. For orchestrator workspaces (the orchestrator-loop Coder template); not enabled by default."
+    },
+    {
+      "name": "factory-loop-workspace",
+      "source": "./plugins/factory-loop-workspace",
+      "description": "The factory loop's companion, enabled beside factory-loop: starts each agent the loop runs in its worktree slot, confines its writes and pushes, gives its commands a 10-minute timeout, and holds a writer's finish while the repo's gates fail."
     }
   ]
 }

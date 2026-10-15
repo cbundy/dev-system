@@ -329,13 +329,15 @@ export const stepExecutor = (deps: StepDeps = STEP_DEPS): Executor => async (ctx
   } catch (err) {
     return { status: 'failed', summary: clip(`${action.key}: its job file or record could not be written: ${message(err)}`) }
   }
-  const input: { subagentType: string; prompt: string; description: string; name: string; model?: string } = {
+  const input: { subagentType: string; prompt: string; description: string; name: string; model?: string; cwd?: string } = {
     subagentType,
     prompt: spawn.prompt,
     description: `${TITLE[action.step]} #${action.issue}`,
     name: `${action.step}-${action.issue}-s${action.seq}-a${action.attempt}`,
   }
   if (spawn.model !== null) input.model = spawn.model
+  // the companion starts the agent there (10.3)
+  if (action.slot !== null) input.cwd = action.slot
   let r: { agentId?: string; deny?: string }
   try {
     r = await ctx.io.spawnAgent(input)

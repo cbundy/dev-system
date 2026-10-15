@@ -17,6 +17,8 @@ export type SpawnInput = {
   description: string
   name?: string
   model?: string
+  // the slot an agent step runs in (v2 SPEC 10.3): its prompt opens with the slot line
+  cwd?: string
 }
 
 // ActIo: the engine calls the act half makes. Commands always go through ExecCtx.cmd, which
