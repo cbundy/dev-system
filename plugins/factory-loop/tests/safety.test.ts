@@ -90,11 +90,18 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return {}
     case 'callum-flow-claim':
       return {}
-    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor)
+    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor);
+    // the open issues, none of them a split's child yet; one issue, with its REST id (v2's split)
     case 'callum-flow-issue-read':
+      if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]) }, stripped: 0 }) }
       return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
+      // v2's pr ensure finds no PR on the branch and opens one; a split's child is created
+      if (args[0] === 'pr' && args[1] === 'list') return { stdout: '[]' }
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/pull/513\n' }
+      if (args[0] === 'issue' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/issues/601\n' }
       return { stdout: args[1] === 'comment' ? 'https://github.com/cbundy/dev-system/pull/512#issuecomment-2\n' : '' }
   }
   return {}
@@ -303,7 +310,9 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
     case 'split':
       if (is('gh', 'issue', 'create', '--repo', REPO, '--title', text, '--body-file', '-')) return { body: true }
       if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', READY)) return { labels: true, ready: true }
-      return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '-F', f => /^(sub_issue_id|issue_id)=[1-9]\d*$/.test(f))
+      // the links, and the reads of the links already there (GET, ids only)
+      return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '-F', f => /^(sub_issue_id|issue_id)=[1-9]\d*$/.test(f)) ||
+        is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
     case 'ci-rerun':
@@ -408,9 +417,11 @@ function bans(argv: readonly string[], action?: Action): string[] {
   if ((adds.length > 0 || labelWrite || (cmd === 'gh' && args[0] === 'label')) && v2.labels !== true) out.push('a label added')
   if (adds.some(l => l.split(',').some(x => x.trim().toLowerCase() === READY)) && v2.ready !== true) out.push('the readyLabel')
   // git switches a leased slot to its branch, or reads: the origin, the main checkout's default
-  // branch and status (#544), which never move it, and v2's direct read of a branch on origin
+  // branch and status (#544), which never move it, and v2's direct read of a branch on origin, with
+  // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '')) out.push(`git ${verb}`)
+  const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step')) out.push(`git ${verb}`)
   return out
 }
 
@@ -430,16 +441,25 @@ const V2_ARGVS: [Action['kind'], string[]][] = [
   ['pr', ARGV.prCreateArgv(REPO, 'main', 'issue-470', 'The work')],
   ['pr', ARGV.prBodyArgv(REPO, 512)],
   ['pr', ARGV.prReadArgv(512)],
+  ['pr', ARGV.rolloutArgv(470)],
   ['split', ARGV.issueCreateArgv(REPO, 'Part one')],
   ['split', ARGV.subIssueArgv(REPO, 470, 3_100_200)],
   ['split', ARGV.blockedByArgv(REPO, 471, 3_100_201)],
   ['split', ARGV.childReadyArgv(REPO, 471, READY)],
+  ['split', ARGV.openIssuesArgv()],
+  ['split', ARGV.issueReadArgv(471)],
+  ['split', ARGV.subIssuesReadArgv(REPO, 470)],
+  ['split', ARGV.blockersReadArgv(REPO, 471)],
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed')],
   ['queue-merge', ARGV.patchIdArgv('issue-470', 'origin/main')],
   ['agent-step', ARGV.lsRemoteArgv('issue-470')],
+  ['agent-step', ARGV.fetchArgv()],
+  ['agent-step', ARGV.beyondBaseArgv('main', 'abc1234')],
+  ['agent-step', ARGV.isAncestorArgv('abc1234', 'def5678')],
+  ['agent-step', ARGV.implementerRouteArgv(470)],
   ['claim', ARGV.claimArgv(470)],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
   ['slot', ARGV.slotLeaseArgv(470, LIFE)],

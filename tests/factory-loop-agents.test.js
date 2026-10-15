@@ -82,8 +82,10 @@ const ADDED = {
 test("every file in the loop's agents folder is a v1 copy the loop spawns or a v2 step's own definition, and the v1 copies are all there", () => {
   for (const file of ownFiles()) assert.ok(V1_TYPES.includes(typeOf(file)) || V2_TYPES.includes(typeOf(file)), `plugins/factory-loop/agents/${file} is neither a v1 copy nor a v2 step's agent`);
   assert.deepEqual(ownFiles().map(typeOf).filter((t) => V1_TYPES.includes(t)).sort(), [...V1_TYPES].sort());
-  // the triage agent is built (U2); the other v2 definitions come with their units
-  assert.ok(ownFiles().includes("triage.md"), "plugins/factory-loop/agents/triage.md is missing");
+  // the triage agent is built (U2), the designer, builder and fixer (U5); the reviewer comes with U6
+  for (const file of ["triage.md", "designer-v2.md", "builder.md", "fixer.md"]) {
+    assert.ok(ownFiles().includes(file), `plugins/factory-loop/agents/${file} is missing`);
+  }
 });
 
 test("the loop's own v1 agents are the callum-flow definitions word for word but for their tools, which add only ToolSearch and the answer tool, and the one sentence that allows the answer script", () => {
@@ -141,6 +143,21 @@ test("a v2 definition names itself, answers with the answer script through Bash 
     assert.ok(tools.includes("Bash"), `${file}: tools must list Bash, which runs the answer script`);
     assert.ok(!tools.some((t) => t.startsWith("mcp__factory-loop__")), `${file}: a v2 agent answers with the answer script, not a tool`);
     assert.doesNotMatch(text, /\baxi\b|no-mistakes|implement-issue/, `${file} names axi, no-mistakes or implement-issue`);
+  }
+});
+
+// The v2 prompt templates (hooks/v2/prompts-*.ts), their code without its comments: what every
+// agent the loop starts is told. no-mistakes is out of the loop's path (v2 SPEC 1), so no prompt
+// names it, its `axi` driver, or the implement-issue skill that drives it.
+test("no v2 prompt template names axi, no-mistakes or implement-issue", () => {
+  const prompts = fs.readdirSync(path.join(ROOT, HOOKS, "v2")).filter((f) => /^prompts-.*\.ts$/.test(f));
+  assert.ok(prompts.includes("prompts-work.ts") && prompts.includes("prompts-triage.ts"), prompts.join(", "));
+  for (const file of prompts) {
+    const code = read(`${HOOKS}/v2/${file}`)
+      .split("\n")
+      .filter((l) => !/^\s*\/\//.test(l))
+      .join("\n");
+    assert.doesNotMatch(code, /\baxi\b|no-mistakes|implement-issue/, `${HOOKS}/v2/${file} names axi, no-mistakes or implement-issue`);
   }
 });
 
