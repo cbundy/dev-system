@@ -2,8 +2,8 @@
 
 **Status.** Revised in workflow 1, 2026-10-15, after three critics and three spikes, then updated
 the same day with the owner's answers to its ten open questions (section 15) and two structural
-decisions: the module layout with a size guard (2.5), and structured event payloads (7.1). What
-changed and why, finding by finding, is in [BUILD-NOTES-W1.md](BUILD-NOTES-W1.md). The spike
+decisions: the module layout with a size guard (2.5), and structured event payloads (7.1), which
+the owner later withdrew: v2 writes today's event format (section 15). What changed and why, finding by finding, is in [BUILD-NOTES-W1.md](BUILD-NOTES-W1.md). The spike
 answers are in [SPIKES.md](SPIKES.md). Workflow 2 builds from this version.
 
 **Sources and short names.**
@@ -270,9 +270,9 @@ type IssueRecord = {
   that pruning could reset (`totality/T-14`).
 - **Pruning.** A closed record goes 7 days after it closed, as ledger entries do (v1 SPEC 7.1).
 - **Rebuild.** With no records in the store (a new device, a wiped config), act mode rebuilds them
-  from this device's `transition` events: the newest per issue over 90 days. The event's `data`
-  payload carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` reads
-  it. A step in flight is not rebuilt: S2 starts the same attempt again, and an
+  from this device's `transition` events: the newest per issue over 90 days. The event's note
+  carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` parses it with
+  `events.ts`. A step in flight is not rebuilt: S2 starts the same attempt again, and an
   agent step first looks for an answer already recorded for its key (10.8).
 
 ### 3.4 Labels
@@ -796,20 +796,20 @@ v1-only facts.
 
 | Case | Actions, in order | Event |
 |---|---|---|
-| labelled `ready` | stop any agent of the loop on it; remove its `factory:*` labels (the migration also removes `In development`); free a `factory-loop:` slot leased for it (W2), or, in the migration, the v1 slot on its branch | `reclaimed`, with the release payload (7.1) |
-| not labelled `ready` | the same | `abandoned`, with the release payload |
+| labelled `ready` | stop any agent of the loop on it; remove its `factory:*` labels (the migration also removes `In development`); free a `factory-loop:` slot leased for it (W2), or, in the migration, the v1 slot on its branch | `reclaimed`, with the release fields (7.1) |
+| not labelled `ready` | the same | `abandoned`, with the release fields |
 
 - The event is logged last, so it is never logged for a release that did not happen (the order
   D-48 set for `abandon`). R1's release is keyed `i<N>/reconcile/<claim time>`, and a done key
   never runs again.
 - Each release is an intervention (`reconcile`, 7.2): by the loop for R1's, by a person for the
   migration's, which act on the owner's approval. The migration tool is not the loop, so it writes
-  its events itself, with the same payload schemas (7.1); its tests validate them.
+  its events itself, in the same note encoding (7.1); its tests parse them with `events.ts`.
 - After a release the issue no longer shows as active: its labels are off, and its newest decision
   event is `reclaimed` or `abandoned`, which every factory reader takes as the end of a claim
   (`docs/metrics.md:225-247`; `docs/factory-state.md`, "Stages"). No new kind is needed
   (OB:52-54).
-- The payload's reason reads `no live step in <stage>: <what was checked>`.
+- The release's free-text field reads `no live step in <stage>: <what was checked>`.
 - The issue's open PR is never updated or closed. The report names it, so the owner can re-add
   `ready` and S1 adopts the PR (3.5).
 
@@ -834,49 +834,50 @@ Whatever the view shows when the tool runs, the same rule applies.
 
 ### 7.1 What v2 emits
 
-**The format.** v2's events use the structured event format of issue #534 (owner, 2026-10-15):
-`callum-flow-event <state> --data '<json object>'`, a versioned payload in a `data` field, stored
-whole in `factory.events.raw`. #534's design guide for events is the convention v2 follows where
-it fits; it is not prescriptive.
+**The format.** v2 writes its events in today's format (owner, 2026-10-15; section 15):
+`callum-flow-event` states with their existing fields (issue, run, branch, pr, head, note,
+actor), and v2's extra fields as `key=value` tokens in the note, in the encoding today's `loop`
+notes use (`loopNote` and its inverse `entryFromLoop`, `derive.ts:369` and `:445`;
+`docs/metrics.md`, "loop"):
 
-- Every payload v2 adds has a schema name and a version, a JSON Schema file beside #534's schemas
-  for the current kinds, and tests: valid examples pass, and a missing or unknown field fails.
-  The names below are working names; the form follows the guide.
-- The `note` is a short line for people, for example `building -> reviewing (T5)`. No reader
-  parses it. There are no note codecs.
-- **One seam.** `hooks/v2/events.ts` builds every event v2 writes: the state, the payload, the
-  note and the argv. The `event` executor and `act-events.ts` call only it, so the format changes
-  in one place.
-- **Order.** U4 changes `images/base/callum-flow-event`, which #534 also changes, so U4 starts
-  from a branch that already contains #534 (main merged into `feat/factory-loop-v2` after #534
-  lands). If #534 has not landed when U4 is due, U4 writes through the same module in today's
-  format and switches to `data` when #534 lands, with no rule changes.
+- Tokens are separated by single spaces. A value holds no spaces: `%` and whitespace are
+  percent-encoded (`enc`, `derive.ts:352`). A missing value is `none`, a list is comma-joined, a
+  flag is `yes` or `no`.
+- The note stays within `LOOP_NOTE_MAX` (500 characters, `derive.ts:342`). Free text (a reason, a
+  question, notes) comes last and is clipped first, so the identifying fields always fit.
+- `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
+  and `status=` for `loop` (`images/base/callum-flow-event:147-155`): `transition` needs `life=`,
+  `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
+  `who=` and `cause=`.
+- **One seam.** `hooks/v2/events.ts` builds every event v2 writes: the state, the columns, the
+  note and the argv, and holds the note's parser. The `event` executor and `act-events.ts` call
+  only it, so a later format change touches one module.
 
 Three new states in `callum-flow-event`, whose vocabulary is closed
 (`images/base/callum-flow-event:27-30`; the last addition was `loop`, D-09):
 
-| State | When | Columns | Payload |
+| State | When | Columns | Note fields |
 |---|---|---|---|
-| `transition` | every record change (4.6), and again after a re-claim (4.1) | issue, branch, pr, head | `factory-loop.transition` v1: the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
-| `reviewed` | each review result (8.3) | issue, branch, pr, head | `factory-loop.reviewed` v1: verdict (`approve`, `changes` or `unknown`), round, patch, the counts of error, warning and info findings, the reviewer's id, the answer's path |
-| `intervention` | each intervention (7.2) | issue (when there is one), pr | `factory-loop.intervention` v1: `who` (`person` or `loop`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the issue and life when there are any, and the key of the fact it records |
+| `transition` | every record change (4.6), and again after a re-claim (4.1) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
+| `reviewed` | each review result (8.3) | issue, branch, pr, head | `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`, the counts of error, warning and info findings, the reviewer's id, the answer's path |
+| `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person` or `loop`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
 - A retried event can be logged twice (a crash between the CLI's exit and the ledger's save).
-  `transition` payloads carry `life` and `seq`, and `intervention` payloads their fact's key, so
+  `transition` notes carry `life` and `seq`, and `intervention` notes their fact's key, so
   readers count one per (issue, life, seq) or per key, as they already count identical
   consecutive rows once (`callum-flow-sweep` header).
 
 Reused states, each with the meaning it already has. v2 writes them through `events.ts` too, with
-#534's schema for the kind and the note today's queries read:
+the note today's queries read:
 
 | State | Logged by | In v2 |
 |---|---|---|
 | `claimed`, `renewed`, `claim_lost` | `callum-flow-claim` | S1 and H1, unchanged |
 | `ready` | `queue-watch.sh --once` | unchanged |
-| `reclaimed`, `closed` | `callum-flow-sweep`; R1 and the migration for `reclaimed` | unchanged; a release to the queue. A release carries the payload `factory-loop.release` v1: reason `reconcile`, the stage, what was checked, the open PR |
-| `abandoned` | v2 executors | drop, split, a triage drop, a release out of the factory (with the release payload) |
+| `reclaimed`, `closed` | `callum-flow-sweep`; R1 and the migration for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, the stage, what was checked, the open PR |
+| `abandoned` | v2 executors | drop, split, a triage drop, a release out of the factory (with the release fields) |
 | `delegated` | entry to building, `--note "brief <url>"` | keeps the metrics' design stage (`docs/metrics.md:108-113`) |
 | `fix_requested` | entry to fixing, `--note review\|ci\|conflict\|triage` | keeps the first-pass query (`docs/metrics.md:120-143`) |
 | `merge_ready` | entry to merge-queue | keeps the merge-ready point of lead time and the waiting split |
@@ -909,7 +910,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting | none |
 | `restart` | a module load with no `restart-self` in flight | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
-| `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --data '{"who":"person","cause":"rescue","reason":"<what>"}'` (in the payload form #534 sets), which the operator playbook adds to each rescue recipe | the issue, when given |
+| `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --note 'who=person cause=rescue reason=<what, spaces as %20>'` (the encoding of 7.1), which the operator playbook adds to each rescue recipe | the issue, when given |
 
 **By the loop** (`who=loop`). Each comes from a fact the loop already holds:
 
@@ -960,12 +961,14 @@ issue exactly when it names the issue.
 
 ### 7.3 Readers
 
-Every reader takes v2's payloads from `data` (7.1), never from the note.
+Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it parses today's
+`loop` and `implementer_routed` notes (for example `substring(e.note FROM 'model=([^ ]+)')`,
+`docs/metrics.md:433`), and decodes percent-encoded values.
 
 - **`callum-flow-factory-state`** (`docs/factory-state.md`, "Source precedence"). Three changes in
   U4:
   - A new step between 2 and 3: an issue whose current life has a `transition` event takes its
-    stage from the newest one's payload. queued maps to `queued`, designing to `designing`, building to
+    stage from the newest one's `to`. queued maps to `queued`, designing to `designing`, building to
     `implementing`, reviewing and fixing to `in pipeline`, merge-queue to `ready to merge`, parked
     to `parked`, and closed to `merged` or `closed without merge` by its `why`. The detail column
     shows the v2 state, the step and the attempt. Mirror runs no longer set the stage of such an
@@ -980,7 +983,7 @@ Every reader takes v2's payloads from `data` (7.1), never from the note.
     `who=person`), with the fleet-level ones per day. A merged issue is **untouched** when no
     `intervention` names it between its first `claimed` and its `merged`;
   - judgement calls per merged issue, by kind and outcome (#632 metric 2): `reviewed` events,
-    `intervention` events with cause `triage`, `transition` events whose payload is a designer
+    `intervention` events with cause `triage`, `transition` events whose fields show a designer
     question or split, and fixer `verdict` events. A judgement is overridden when a person
     intervention names the issue within an hour after it;
   - claim completion (#632 metric 3): per issue and life, the first `claimed`, then the first of
@@ -993,7 +996,7 @@ Every reader takes v2's payloads from `data` (7.1), never from the note.
   stuck issues (query 6). Lead time (query 1) has no `run` stage for v2 issues; its v2 twin uses
   the first `transition` to reviewing.
 - **The loop** reads `transition` events only to rebuild records (3.3). `EVENTS_SQL`
-  (`derive.ts:38-50`) gains the three states and the payload (`raw->'data'`).
+  (`derive.ts:38-50`) gains the three states; `record.ts` parses their notes with `events.ts`.
 
 ## 8. Design briefs and review
 
@@ -1883,13 +1886,13 @@ and the owner's two structural decisions. They are settled.
 - **Why:** today's loop grew into a few large files (`plan.ts` alone is 2,541 lines). A check
   keeps v2 from doing the same.
 
-### v2's events are structured payloads (owner)
+### v2's events use today's format (owner)
 
-- **Decision:** every new v2 payload is a `data` object with a schema name and version, a JSON
-  Schema and tests, in the format of issue #534, whose design guide v2 follows where it fits. The
-  note is a short line for people. One module, `hooks/v2/events.ts`, writes every v2 event (7.1).
-- **Alternatives:** key=value notes with codecs (workflow 1's draft).
-- **Why:** readers get typed fields with no parsing, and the format changes in one place.
+- **Decision:** on 2026-10-15 the owner withdrew the decision to use issue #534's structured
+  event format, and the idea of a new database table: "it's going to be too complex to add". v2
+  writes today's format: existing `callum-flow-event` states and fields, with its extra fields as
+  `key=value` tokens in the note, encoded as `loop` notes are. `hooks/v2/events.ts` is the one
+  seam, so a later format change touches one module (7.1).
 
 ### The table is data, with one lookup
 
@@ -2178,9 +2181,9 @@ allowlists), so later units only fill their own files.
 | Unit | Wave | Creates | Changes | Depends on | Effort |
 |---|---|---|---|---|---|
 | U1 Skeleton, switch and vocabulary | 1 (first) | `hooks/foundation.ts` (with the breaker's step-unknown bucket); `hooks/v2/types.ts`, `plan.ts`, `observe.ts`, `registry.ts`, `steps.ts`; stub modules for U2 to U9 (`rules-state.ts`, `reconcile.ts`, `release.ts`, `rules-queue.ts`, `rules-slots.ts`, `rules-interventions.ts`, `sources-prs.ts`, `sources-interventions.ts`, `events.ts` (its types and signatures), `act-state.ts`, `act-events.ts`, `act-pr.ts`, `act-split.ts`, `act-review.ts`, `act-ci.ts`, `act-queue.ts`, `act-slots.ts`, `steps-work.ts`, `steps-review.ts`, `steps-queue.ts`, `steps-triage.ts`, `contracts-work.mjs`, `contracts-review.mjs`, `contracts-triage.mjs`), each failing `noRetry` until built; `tests/foundation.test.ts` (parity); `tests/v2-switch.test.ts` | `hooks/types.ts`, `config.ts` (v2 kinds and keys; the workspace file may set every key), `act.ts` (planner switch, registry), `register.ts` (planner and shadow, the records and heads keys, transition pings, decision-log fields, `ownerOp` calls `act-events.ts`), `control.ts` (ops of appendix E), `contract.mjs` (imports the v2 contract modules), `observe.ts` (calls `observeV2`), `scripts/factory-loop-replay.js` (`--planner`), `tests/factory-loop-plan.test.js` (purity over `hooks/v2/`), `tests/factory-loop-safety.test.js` and `plugins/factory-loop/tests/safety.test.ts` (every v2 argv of appendix B, `gh run rerun` among them), `plugins/factory-loop/tests/control.test.ts`; `scripts/lint.sh` (the size guard and its allowlist, 2.5) and a test of the guard | - | xhigh |
-| U2 State model, table and triage | 1 | `hooks/v2/table.ts`, `record.ts`; fills `rules-state.ts` (S0 to S6, H1 with the re-claim, O1's counts), `act-state.ts` (`transition` with its trigger, `label`, `comment` with the hidden key, `event` through `events.ts`, follow-ups reusing v1's `rollout`, `close-issue`, `release-parent` and `milestone-later` executors), `steps-triage.ts`, `contracts-triage.mjs`; `hooks/v2/prompts-triage.ts`; `agents/triage.md`; `plugins/factory-loop/tests/v2-table.test.ts`, `v2-state.test.ts`, `v2-record.test.ts` | `hooks/derive.ts` (v2 states and the payload in `EVENTS_SQL`; `recordsFromEvents` lives in `record.ts`, so `derive.ts` stays under the size budget), `skills/judge/SKILL.md` (v2 TELL kinds and the release task with Run its, beside the v1 sections), `tests/factory-loop-judge-skill.test.js`, `tests/factory-loop-agents.test.js` (triage) | U1 | xhigh |
-| U3 Reconcile | 1 | fills `reconcile.ts` (R1 and the tripwire), `release.ts` (the release actions of 6.4, shared); `bin/factory-reconcile` (the one-shot migration, 6.3, which also removes `In development` from the issues it touches); `plugins/factory-loop/tests/v2-reconcile.test.ts`; `tests/factory-loop-reconcile.test.js` (the tool over fixtures) | - | U1; U4 for one test: the migration's event payloads are validated against U4's release schema, so that test lands with or after U4 | xhigh |
-| U4 Events, interventions and the claim tools | 1 | fills `hooks/v2/events.ts` (the one seam: every v2 event's state, `data` payload, note and argv, 7.1), `rules-interventions.ts` and `sources-interventions.ts` (every intervention of 7.2, the push detection, the companion's log, the control and config digests), `act-events.ts`; the JSON Schemas of the `transition`, `reviewed`, `intervention` and `release` payloads, beside #534's, and their tests; `plugins/factory-loop/tests/v2-events.test.ts`, `v2-interventions.test.ts` | `images/base/callum-flow-event` (three states, on top of #534's `--data`) and its test; `images/base/callum-flow-claim` (no `In development`; the heartbeat's own claims from factory-state, 3.6) and `features/test/callum-tools/claim.test.sh`; `images/base/callum-flow-sweep` (candidates from events, no `In development`, and the merged-PR pattern `(^\|/)issue-<N>(-\|$)`, `totality/T-27`) and its test; `images/base/callum-flow-factory-state` (the v2 stage from `data`; `nomistakes.runs` optional; the label checks of 3.6), `tests/factory-state.test.js`, `tests/fixtures/factory-state/` (new fixtures), `docs/factory-state.md`; `images/base/callum-flow-evaluate` (interventions and judgement calls from `data`) and its tests; `docs/metrics.md`; `images/base/README.md` (event log and claim tool reference); `plugins/callum-flow/skills/issue-orchestrator/SKILL.md` (its two `In development` lines) | U1; a branch that contains #534 (main merged into `feat/factory-loop-v2` after #534 lands). If #534 has not landed when U4 is due, U4 writes through `events.ts` in today's format and switches to `data` when it lands, with no rule changes | xhigh |
+| U2 State model, table and triage | 1 | `hooks/v2/table.ts`, `record.ts`; fills `rules-state.ts` (S0 to S6, H1 with the re-claim, O1's counts), `act-state.ts` (`transition` with its trigger, `label`, `comment` with the hidden key, `event` through `events.ts`, follow-ups reusing v1's `rollout`, `close-issue`, `release-parent` and `milestone-later` executors), `steps-triage.ts`, `contracts-triage.mjs`; `hooks/v2/prompts-triage.ts`; `agents/triage.md`; `plugins/factory-loop/tests/v2-table.test.ts`, `v2-state.test.ts`, `v2-record.test.ts` | `hooks/derive.ts` (v2 states in `EVENTS_SQL`; `recordsFromEvents` lives in `record.ts`, so `derive.ts` stays under the size budget), `skills/judge/SKILL.md` (v2 TELL kinds and the release task with Run its, beside the v1 sections), `tests/factory-loop-judge-skill.test.js`, `tests/factory-loop-agents.test.js` (triage) | U1 | xhigh |
+| U3 Reconcile | 1 | fills `reconcile.ts` (R1 and the tripwire), `release.ts` (the release actions of 6.4, shared); `bin/factory-reconcile` (the one-shot migration, 6.3, which also removes `In development` from the issues it touches); `plugins/factory-loop/tests/v2-reconcile.test.ts`; `tests/factory-loop-reconcile.test.js` (the tool over fixtures) | - | U1; U4 for one test: the migration's event notes are parsed with `events.ts`, which U4 fills, so that test lands with or after U4 | xhigh |
+| U4 Events, interventions and the claim tools | 1 | fills `hooks/v2/events.ts` (the one seam: every v2 event's state, columns, `key=value` note, argv and the note's parser, 7.1), `rules-interventions.ts` and `sources-interventions.ts` (every intervention of 7.2, the push detection, the companion's log, the control and config digests), `act-events.ts`; `plugins/factory-loop/tests/v2-events.test.ts`, `v2-interventions.test.ts` | `images/base/callum-flow-event` (three states and their required note tokens) and its test; `images/base/callum-flow-claim` (no `In development`; the heartbeat's own claims from factory-state, 3.6) and `features/test/callum-tools/claim.test.sh`; `images/base/callum-flow-sweep` (candidates from events, no `In development`, and the merged-PR pattern `(^\|/)issue-<N>(-\|$)`, `totality/T-27`) and its test; `images/base/callum-flow-factory-state` (the v2 stage from the `transition` note; `nomistakes.runs` optional; the label checks of 3.6), `tests/factory-state.test.js`, `tests/fixtures/factory-state/` (new fixtures), `docs/factory-state.md`; `images/base/callum-flow-evaluate` (interventions and judgement calls from the notes) and its tests; `docs/metrics.md`; `images/base/README.md` (event log and claim tool reference); `plugins/callum-flow/skills/issue-orchestrator/SKILL.md` (its two `In development` lines) | U1 | xhigh |
 | U5 Designer, builder, fixer and the PR | 2 | `agents/designer-v2.md`, `agents/builder.md`, `agents/fixer.md`; `hooks/v2/prompts-work.ts` (the three prompts, `FOREGROUND_RULE`, the v2 `COMMAND_RULE`, the slot line, the retry context); fills `contracts-work.mjs` (design, build, fix), `steps-work.ts` (design, build, fix, the direct origin read), `act-pr.ts` (ensure, body), `act-split.ts` (children); `plugins/factory-loop/tests/v2-work.test.ts`, `v2-pr.test.ts`; a test that no v2 prompt or loop-owned definition names `axi`, `no-mistakes` or `implement-issue` | `tests/factory-loop-agents.test.js` (the new types); `CLAUDE.md` and `templates/CLAUDE.md` ("Implementation sub-agents": one line saying that agents the factory loop starts follow their prompt, not `implement-issue`) | U1, U2 | high |
 | U6 Reviewer and CI | 2 | `agents/reviewer.md`; `hooks/v2/reviewer.ts`, `prompts-review.ts`; fills `contracts-review.mjs`, `steps-review.ts` (the review and CI halves), `act-review.ts` (PR comment, `reviewed` and fixer `verdict` events), `act-ci.ts` (`ci-rerun`); `plugins/factory-loop/tests/v2-review.test.ts` | - | U1, U2 | high |
 | U7 Merge queue | 2 | fills `rules-queue.ts` (order, Q1, Q2), `steps-queue.ts`, `act-queue.ts`, `sources-prs.ts` (PRs, checks, patch ids, heads first seen); `images/base/callum-flow-patch-id` and its test; `plugins/factory-loop/tests/v2-queue.test.ts`; `tests/factory-loop-v2-patch-id.test.js` (real git) | `images/base/callum-flow-merge-guard` (`--patch`: no run lookup, class tokens) and `images/base/callum-flow-merge` (passes it), their tests; `images/base/README.md` (the guard mode) | U1, U2 | xhigh |
@@ -2194,8 +2197,8 @@ Notes:
 - Workflow 2 runs U1 first, then U2, U3 and U4 in parallel. They share no file: U2 and U3 write
   events only by calling `events.ts`, which U1 stubs and U4 fills. U4 alone changes the image's
   event, claim, sweep and factory-state tools.
-- U4 needs #534 on the branch (7.1). Main is merged into `feat/factory-loop-v2` after #534 lands
-  and before U4 starts, or U4 uses the stated fallback.
+- U4 runs beside U2 and U3 after U1. It waits on nothing outside the branch: v2 writes today's
+  event format (7.1).
 - Workflow 3 runs U5, U6 and U7 beside U8 and U9. Only U9 touches `register.ts`, `rails.ts`,
   `exec.ts`, the marketplace and `coder/`. Only U7 touches `images/base/README.md` in that
   workflow. Only U5 touches `CLAUDE.md`.
@@ -2254,8 +2257,8 @@ own test.
 17. **Reconcile.** A done release plans nothing next pass; R1 never names an issue with a record,
     a claim in flight, or another device's claim; observe mode executes nothing.
 18. **Events.** Every transition's seq logs exactly one `transition` event before the next
-    transition, and rebuilding from any history of them gives back the records. Every payload
-    `events.ts` builds validates against its JSON Schema.
+    transition, and rebuilding from any history of them gives back the records. Every note
+    `events.ts` builds parses back to the same fields and stays within `LOOP_NOTE_MAX`.
 19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines outside the
     allowlist, no listed file is over its cap, and no listed file is at or under 600 (2.5;
     `npm run lint`).
@@ -2385,7 +2388,7 @@ delete wave.
 | `transition` | free | re-checks its trigger, stores the record, pings | 3 |
 | `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force`; op `clear` (3.4) | 3 |
 | `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -` | 3 |
-| `event` | free | `callum-flow-event <state> --data <json> --note <line> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention` | 3 |
+| `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention` | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
