@@ -6,7 +6,7 @@
 // constants only: the pure planner imports this, so nothing here may run a command or read a
 // clock.
 import type { PlanCtx } from '../foundation'
-import type { ActionBase, ActionClass, Checkout, Config, LedgerStatus, Ms, Source } from '../types'
+import type { ActionBase, ActionClass, Checkout, Config, LedgerEntry, LedgerStatus, Ms, Source } from '../types'
 import type { V2Event } from './events'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
@@ -195,6 +195,8 @@ export type V2Outcome =
       to: IssueState
       step: StepKind | null
       stored: boolean
+      // the transition note's via code (table.ts viaOf), which the seq's entry actions log
+      via?: string
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
@@ -235,7 +237,8 @@ export type StepMarker = {
 export type SplitChild = { key: string; title: string; body: string; blockedBy: string[]; ready: boolean }
 
 export type V2Action =
-  | (ActionBase & { kind: 'transition'; row: string; event: EventKind; from: RecordRef | null; next: IssueRecord; trigger: Trigger })
+  // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code
+  | (ActionBase & { kind: 'transition'; row: string; event: EventKind; from: RecordRef | null; next: IssueRecord; trigger: Trigger; cause?: OutsideCause | null; via?: string })
   // set: add the state's label and remove the other six; ensure: create the seven; clear: remove
   // every factory label (3.4)
   | (ActionBase & { kind: 'label'; op: 'set' | 'ensure' | 'clear'; label: FactoryLabel | null })
@@ -357,6 +360,8 @@ export type V2Ctx = PlanCtx & { v2: V2State }
 // saved; changed is false when fn changed nothing or the store refused the write.
 export type V2Io = {
   records: () => readonly IssueRecord[]
+  // the live ledger, which the transition executor re-checks its trigger against (3.3)
+  ledger?: () => readonly LedgerEntry[]
   updateRecords: (fn: (records: readonly IssueRecord[]) => IssueRecord[] | null) => Promise<{ changed: boolean; saved: boolean }>
   // asks the driver for the next pass at once: a transition's next event is taken without delay
   ping: (why: string) => void

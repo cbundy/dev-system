@@ -237,15 +237,15 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
   })
 
   test('a v2 kind not built yet fails, never retried, before any command; a v1 kind keeps v1\'s executor under planner v2', async () => {
-    const event: Action = { kind: 'event', key: 'i470/ltbq3k0/s4/event/transition', class: 'free', rule: 'S3', reason: 'x', issue: 470, event: { state: 'transition', record: record(), row: 'T2', from: 'designing', via: 'ok' } }
-    const claim: Action = { kind: 'claim', key: 'i470/claim/tbq3k0', class: 'start', rule: 'S1', reason: 'x', issue: 470 }
+    const pr: Action = { kind: 'pr', key: 'i470/ltbq3k0/s4/pr/ensure', class: 'free', rule: 'S2', reason: 'x', issue: 470, op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 't', summary: 's', evidence: null, brief: null }
+    const sweep: Action = { kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2', reason: 'x', issue: null }
     for (const planner of ['v1', 'v2'] as const) {
       const { env, argvs } = envOf(planner)
       const s = state()
-      expect(await dispatch(ctxOf(env, s, start([], event, NOW).entry), event)).toEqual({ status: 'failed', summary: 'event: not built yet (U2)', noRetry: true })
+      expect(await dispatch(ctxOf(env, s, start([], pr, NOW).entry), pr)).toEqual({ status: 'failed', summary: 'pr: not built yet (U5)', noRetry: true })
       expect(argvs).toEqual([])
-      expect(await dispatch(ctxOf(env, s, start([], claim, NOW).entry), claim)).toMatchObject({ status: 'done' })
-      expect(argvs).toEqual([['callum-flow-claim', '470']])
+      expect(await dispatch(ctxOf(env, s, start([], sweep, NOW).entry), sweep)).toMatchObject({ status: 'done' })
+      expect(argvs).toEqual([['callum-flow-sweep']])
     }
   })
 

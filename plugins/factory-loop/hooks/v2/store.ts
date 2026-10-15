@@ -11,7 +11,7 @@
 // - A record change is kept in memory only once the store took it: a write that fails leaves both
 //   at the old seq, so the transition executor's compare finds the record where the store has it
 //   and its retry stores the new seq (3.3).
-import type { Ms, State } from '../types'
+import type { LedgerEntry, Ms, State } from '../types'
 import { headsFromStore, headsKey, headsToStore, recordsFromStore, recordsKey, recordsToStore } from './observe'
 import type { V2Stored } from './observe'
 import type { HeadSeen, IssueRecord, V2Io } from './types'
@@ -123,6 +123,8 @@ export type V2IoDeps = {
   ready: () => boolean
   write: (save: () => Promise<void>) => Promise<boolean>
   ping: (why: string) => void
+  // the live ledger, for the transition executor's trigger
+  ledger?: () => readonly LedgerEntry[]
 }
 
 const UNCHANGED = { changed: false, saved: false } as const
@@ -148,6 +150,7 @@ export function v2IoOf(live: V2Live, io: V2StoreIo, deps: V2IoDeps): V2Io {
       return { changed: true, saved: true }
     },
     ping: deps.ping,
+    ...(deps.ledger === undefined ? {} : { ledger: deps.ledger }),
   }
 }
 

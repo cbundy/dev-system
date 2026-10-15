@@ -1,0 +1,466 @@
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 33 rows, each
+// naming the states it applies to, the event it takes, a pure guard, the next state, the pure
+// change to the record and the events it logs beside `transition`. rowFor is the only lookup:
+// plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
+// are exclusive and exhaustive, so rowFor finds exactly one row or throws, which is a test failure,
+// never a runtime path: plan first brings an event into the domain the table covers (normalize).
+// E7 is the explicit row for an event with no meaning in the state, one per event kind.
+//
+// Pure: the time is the caller's `now`, the settings the caller's Config.
+import type { Config, Ms } from '../types'
+import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
+import type { EmitSpec, IssueRecord, IssueState, Row, StepKind, TableEvent } from './types'
+
+// --- the states the rows name ------------------------------------------------------------------------
+
+// The step states (4.3): the states whose step can end unknown or call triage.
+export const STEP_STATES: readonly IssueState[] = ['designing', 'building', 'reviewing', 'fixing', 'merge-queue']
+// Every state but closed, which is absorbing.
+export const LIVE_STATES: readonly IssueState[] = ISSUE_STATES.filter(s => s !== 'closed')
+
+// The not-ok reasons each state's own step gives (4.2): the guard inputs of T3, T4, T9, T10, T14
+// and T15. A step module that gives another one is read as unknown (normalize).
+export const NOT_OK_REASONS: Readonly<Record<IssueState, readonly string[]>> = {
+  queued: [],
+  designing: ['question', 'split'],
+  building: ['cannot', 'no-commit'],
+  reviewing: ['changes', 'ci-red', 'conflict'],
+  fixing: ['declined'],
+  'merge-queue': ['changes', 'ci-red', 'conflict', 'patch', 'policy'],
+  parked: [],
+  closed: [],
+}
+
+// The not-ok reasons that send a PR to a fixer (T9, T10), with the `fix_requested` note each logs.
+export const FIX_REASONS: Readonly<Record<string, 'review' | 'ci' | 'conflict'>> = { changes: 'review', 'ci-red': 'ci', conflict: 'conflict' }
+
+// What an event carries for the rows that read it. The step modules (rules-agent.ts and the units'
+// own) and the GitHub and owner events put these in TableEvent.data; a row reads only its own.
+export type EventData = {
+  // a step's result in words: the builder's reason, the findings, the failed checks, the conflict,
+  // the guard's FAIL lines
+  text?: string
+  // a designer's or the triage's question for the owner (T3, X4)
+  question?: string
+  // T2: the brief comment's URL, once the loop posted it
+  brief?: string
+  // T5, T11: the head a writer confirmed on origin
+  head?: string
+  // T8: the patch id the reviewer approved; T8, T9, T10: the PR the reviewing step ensured
+  patch?: string
+  pr?: number
+  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step
+  notes?: string[]
+  // X1, X2, X3: the triage's instructions
+  instructions?: string
+  // X2, X4: whether the branch has commits beyond the base, when the triage's reader knows
+  commits?: boolean
+  // E4, P1: GitHub's closedAt of the PR's hand close
+  closedAt?: string
+  // P1: the owner's note, or the trusted comments posted after the park
+  note?: string
+}
+
+export function dataOf(e: TableEvent): EventData {
+  return e.data !== null && typeof e.data === 'object' && !Array.isArray(e.data) ? (e.data as EventData) : {}
+}
+
+// --- the guards' facts -----------------------------------------------------------------------------------
+
+// ownStep: the record runs its state's own step, not triage.
+export function ownStep(r: IssueRecord): boolean {
+  return STATE_STEP[r.state] !== null && r.step === STATE_STEP[r.state]
+}
+
+const onTriage = (r: IssueRecord) => r.step === 'triage'
+
+// waiting: a waiting state (4.4): queued for its slot, a merge-queue record that runs no step of its
+// own (behind the head; the head has no clock either, its waits on GitHub are bounded), parked. A
+// timeout there is a tell period (E6); anywhere else it is the running step's unknown.
+export function waiting(r: IssueRecord): boolean {
+  return r.state === 'queued' || r.state === 'parked' || (r.state === 'merge-queue' && r.step === 'queue')
+}
+
+// sameTarget: where "resumeTo same state" leads (3.2): a record parked from queued keeps queued's
+// own target, never queued itself.
+export function sameTarget(r: IssueRecord): IssueState {
+  return r.state === 'queued' ? (r.resumeTo ?? 'designing') : r.state
+}
+
+// commits: the branch has commits beyond the base (X2): the event's word, else a head a writer
+// confirmed on origin or a PR the life has.
+function commits(r: IssueRecord, e: TableEvent): boolean {
+  return dataOf(e).commits ?? (r.head !== null || r.pr !== null)
+}
+
+const outside = (e: TableEvent) => e.cause !== undefined && e.cause !== null && (OUTSIDE_CAUSES as readonly string[]).includes(e.cause)
+const fixable = (e: TableEvent) => e.reason !== undefined && e.reason in FIX_REASONS
+const u1 = (r: IssueRecord, e: TableEvent) => outside(e) && !r.cut
+const fixValid = (r: IssueRecord, e: TableEvent, c: Config) => commits(r, e) && r.fixes < c.reviewFixCap
+
+// --- what the rows write -----------------------------------------------------------------------------------
+
+// A note is a short line for the step of a seq; a record keeps at most NOTES_MAX of them.
+const NOTE_MAX = 1000
+const NOTES_MAX = 8
+
+function clip(text: string, max = NOTE_MAX): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 3)}...` : t
+}
+
+// textOf: an event's result in words, for a question or a note.
+function textOf(e: TableEvent, fallback: string): string {
+  const d = dataOf(e)
+  return clip(d.text ?? d.question ?? e.reason ?? fallback)
+}
+
+// added: the record's notes with these added (a same-state row keeps the seq's notes).
+function added(r: IssueRecord, ...more: (string | null | undefined)[]): string[] {
+  return [...r.notes, ...more.filter((n): n is string => typeof n === 'string' && n !== '').map(n => clip(n))].slice(-NOTES_MAX)
+}
+
+// own: the notes of a row that changes the state (they replace the old seq's).
+function own(...notes: (string | null | undefined)[]): string[] {
+  return notes.filter((n): n is string => typeof n === 'string' && n !== '').map(n => clip(n)).slice(-NOTES_MAX)
+}
+
+// attemptNote: an unknown's line, which U4's question repeats as one of the last two results.
+function attemptNote(r: IssueRecord, e: TableEvent): string {
+  return `attempt ${r.attempt} of ${r.step ?? 'the step'} ended unknown (${e.why ?? 'unknown'}): ${e.reason ?? 'no reason given'}`
+}
+
+const ATTEMPT = /^attempt \d+ of /
+
+// lastTwo: U4's question, from the earlier unknown's note and this one.
+function lastTwo(r: IssueRecord, e: TableEvent): string {
+  const earlier = r.notes.filter(n => ATTEMPT.test(n)).slice(-1)
+  const step = r.step === 'triage' ? `the triage of ${r.state}` : `${r.step ?? 'the step'} in ${r.state}`
+  return clip(`${step} gave no usable result twice: ${[...earlier, attemptNote(r, e)].join('; ')}`, 2000)
+}
+
+const none = () => ({})
+
+// --- the rows ----------------------------------------------------------------------------------------------
+
+const EMIT_DELEGATED: readonly EmitSpec[] = [{ state: 'delegated', note: null }]
+const EMIT_MERGE_READY: readonly EmitSpec[] = [{ state: 'merge_ready', note: null }]
+const EMIT_FIX: readonly EmitSpec[] = [{ state: 'fix_requested', note: null }]
+const EMIT_FIX_TRIAGE: readonly EmitSpec[] = [{ state: 'fix_requested', note: 'triage' }]
+const EMIT_ABANDONED: readonly EmitSpec[] = [{ state: 'abandoned', note: null }]
+const EMIT_DROPPED: readonly EmitSpec[] = [{ state: 'abandoned', note: 'dropped' }]
+
+// T1 leads where resumeTo says, counting an entry to reviewing as a round and an entry to fixing as
+// a fix, as every other entry to them counts (3.2: round counts entries to reviewing, fixes entries
+// to fixing).
+function leased(r: IssueRecord): Partial<IssueRecord> {
+  const to = r.resumeTo ?? 'designing'
+  return { round: to === 'reviewing' ? r.round + 1 : r.round, fixes: to === 'fixing' ? r.fixes + 1 : r.fixes, resumeTo: null }
+}
+
+// The rows of 4.3. S0 makes a record from its claim and is never matched by rowFor (madeRecord);
+// E7 is the fallback, one row per event kind (E7_ROWS).
+const ROWS: readonly Row[] = [
+  { id: 'S0', states: [], on: 'ok', next: 'queued', change: none, emit: [], via: 'claim' },
+  // step results (S3)
+  { id: 'T1', states: ['queued'], on: 'ok', when: r => ownStep(r), next: 'resumeTo', change: leased, emit: [], via: 'lease' },
+  { id: 'T2', states: ['designing'], on: 'ok', when: r => ownStep(r), next: 'building', change: (r, e) => ({ brief: dataOf(e).brief ?? r.brief }), emit: EMIT_DELEGATED, via: 'brief' },
+  {
+    id: 'T3',
+    states: ['designing'],
+    on: 'not-ok',
+    when: (r, e) => ownStep(r) && e.reason === 'question',
+    next: 'parked',
+    change: (_r, e) => ({ question: clip(dataOf(e).question ?? textOf(e, 'the designer asks the owner'), 2000), resumeTo: 'designing' }),
+    emit: [],
+    via: 'question',
+  },
+  { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), emit: [], via: 'split' },
+  { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), emit: [], via: 'build' },
+  {
+    id: 'T6',
+    states: ['building'],
+    on: 'not-ok',
+    when: (r, _e, c) => ownStep(r) && r.triages < c.maxTriages,
+    next: 'same',
+    change: (r, e) => ({ step: 'triage', attempt: 1, triages: r.triages + 1, cut: false, notes: added(r, `the builder could not finish (${e.reason ?? 'cannot'}): ${textOf(e, 'no reason given')}`) }),
+    emit: [],
+    via: 'cannot',
+  },
+  {
+    id: 'T7',
+    states: ['building'],
+    on: 'not-ok',
+    when: (r, _e, c) => ownStep(r) && r.triages >= c.maxTriages,
+    next: 'parked',
+    change: (_r, e) => ({ question: clip(`the builder could not finish (${e.reason ?? 'cannot'}): ${textOf(e, 'no reason given')}`, 2000), resumeTo: 'building' }),
+    emit: [],
+    via: 'cannot',
+  },
+  {
+    id: 'T8',
+    states: ['reviewing'],
+    on: 'ok',
+    when: r => ownStep(r),
+    next: 'merge-queue',
+    change: (r, e) => ({ approvedPatch: dataOf(e).patch ?? r.approvedPatch, pr: dataOf(e).pr ?? r.pr }),
+    emit: EMIT_MERGE_READY,
+    via: 'approve',
+  },
+  {
+    id: 'T9',
+    states: ['reviewing', 'merge-queue'],
+    on: 'not-ok',
+    when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes < c.reviewFixCap,
+    next: 'fixing',
+    change: (r, e) => ({ fixes: r.fixes + 1, pr: dataOf(e).pr ?? r.pr, notes: own(...(dataOf(e).notes ?? [textOf(e, e.reason ?? 'changes')])) }),
+    emit: EMIT_FIX,
+    via: 'fix:',
+  },
+  {
+    id: 'T10',
+    states: ['reviewing', 'merge-queue'],
+    on: 'not-ok',
+    when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes >= c.reviewFixCap,
+    next: 'parked',
+    change: (r, e) => ({
+      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${[...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')].join('; ')}`, 2000),
+      resumeTo: 'fixing',
+      pr: dataOf(e).pr ?? r.pr,
+    }),
+    emit: [],
+    via: 'fix-cap:',
+  },
+  { id: 'T11', states: ['fixing'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), emit: [], via: 'fix' },
+  {
+    id: 'T12',
+    states: ['fixing'],
+    on: 'not-ok',
+    when: r => ownStep(r),
+    next: 'reviewing',
+    change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'every finding declined')])) }),
+    emit: [],
+    via: 'declined',
+  },
+  { id: 'T13', states: ['merge-queue'], on: 'ok', when: r => ownStep(r), next: 'closed', change: () => ({ why: 'merged' }), emit: [], via: 'merged' },
+  { id: 'T14', states: ['merge-queue'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'patch', next: 'reviewing', change: r => ({ approvedPatch: null, round: r.round + 1 }), emit: [], via: 'patch' },
+  {
+    id: 'T15',
+    states: ['merge-queue'],
+    on: 'not-ok',
+    when: (r, e) => ownStep(r) && e.reason === 'policy',
+    next: 'parked',
+    change: (_r, e) => ({ question: clip(`the merge guard refused what only the owner can change: ${textOf(e, 'policy')}`, 2000), resumeTo: 'merge-queue' }),
+    emit: [],
+    via: 'policy',
+  },
+  // the unknown path (S4, section 5)
+  { id: 'U1', states: STEP_STATES, on: 'unknown', when: (r, e) => u1(r, e), next: 'same', change: (r, e) => ({ cut: true, notes: added(r, attemptNote(r, e)) }), emit: [], via: 'free:' },
+  { id: 'U2', states: STEP_STATES, on: 'unknown', when: (r, e) => !u1(r, e) && r.attempt <= 1, next: 'same', change: (r, e) => ({ attempt: 2, cut: false, notes: added(r, attemptNote(r, e)) }), emit: [], via: 'unknown:' },
+  {
+    id: 'U3',
+    states: STEP_STATES,
+    on: 'unknown',
+    when: (r, e, c) => !u1(r, e) && r.attempt >= 2 && r.step !== 'triage' && r.triages < c.maxTriages,
+    next: 'same',
+    change: (r, e) => ({ step: 'triage', attempt: 1, triages: r.triages + 1, cut: false, notes: added(r, attemptNote(r, e)) }),
+    emit: [],
+    via: 'unknown:',
+  },
+  {
+    id: 'U4',
+    states: STEP_STATES,
+    on: 'unknown',
+    when: (r, e, c) => !u1(r, e) && r.attempt >= 2 && (r.step === 'triage' || r.triages >= c.maxTriages),
+    next: 'parked',
+    change: (r, e) => ({ question: lastTwo(r, e), resumeTo: sameTarget(r) }),
+    emit: [],
+    via: 'unknown:',
+  },
+  // the triage's answers (S5)
+  {
+    id: 'X1',
+    states: STEP_STATES,
+    on: 'triage',
+    when: (r, e) => onTriage(r) && e.choice === 'retry',
+    next: 'same',
+    change: (r, e) => ({ step: STATE_STEP[r.state], attempt: 2, cut: false, notes: added(r, dataOf(e).instructions) }),
+    emit: [],
+    via: 'triage:',
+  },
+  {
+    id: 'X2',
+    states: STEP_STATES,
+    on: 'triage',
+    when: (r, e, c) => onTriage(r) && e.choice === 'fix' && fixValid(r, e, c),
+    next: 'fixing',
+    change: (r, e) => ({ fixes: r.fixes + 1, notes: own(dataOf(e).instructions) }),
+    emit: EMIT_FIX_TRIAGE,
+    via: 'triage:',
+  },
+  { id: 'X3', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'redesign', next: 'designing', change: (_r, e) => ({ notes: own(dataOf(e).instructions) }), emit: [], via: 'triage:' },
+  {
+    id: 'X4',
+    states: STEP_STATES,
+    on: 'triage',
+    when: (r, e, c) => onTriage(r) && (e.choice === 'park' || (e.choice === 'fix' && !fixValid(r, e, c))),
+    next: 'parked',
+    change: (r, e) => ({
+      question:
+        e.choice === 'park'
+          ? clip(dataOf(e).question ?? textOf(e, 'the triage asks the owner'), 2000)
+          : clip(`the triage chose a fixer, which is not possible here (${commits(r, e) ? `the fix cap of ${r.fixes} rounds is reached` : 'the branch has no commits beyond the base'}): ${e.reason ?? ''}`, 2000),
+      resumeTo: sameTarget(r),
+    }),
+    emit: [],
+    via: 'triage:',
+  },
+  { id: 'X5', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'drop', next: 'closed', change: (_r, e) => ({ why: 'dropped', notes: own(`triage: ${e.reason ?? 'dropped'}`) }), emit: EMIT_ABANDONED, via: 'triage:' },
+  // the owner's and GitHub's events (S6)
+  { id: 'E1', states: LIVE_STATES, on: 'drop', next: 'closed', change: () => ({ why: 'dropped', notes: own('dropped') }), emit: EMIT_DROPPED, via: 'drop' },
+  { id: 'E2', states: LIVE_STATES, on: 'issue-closed', next: 'closed', change: () => ({ why: 'closed-on-github' }), emit: [], via: 'issue-closed' },
+  { id: 'E3', states: LIVE_STATES, on: 'pr-merged', when: r => r.pr !== null, next: 'closed', change: () => ({ why: 'merged-by-hand' }), emit: [], via: 'pr-merged' },
+  {
+    id: 'E4',
+    states: LIVE_STATES.filter(s => s !== 'parked'),
+    on: 'pr-closed',
+    when: r => r.pr !== null,
+    next: 'parked',
+    change: (r, e) => ({ question: `PR #${r.pr} was closed by hand; a resume reopens it`, resumeTo: sameTarget(r), prClosedAt: dataOf(e).closedAt ?? r.prClosedAt }),
+    emit: [],
+    via: 'pr-closed',
+  },
+  { id: 'E5', states: LIVE_STATES, on: 'claim-lost', next: 'closed', change: () => ({ why: 'claim-lost' }), emit: [], via: 'claim-lost' },
+  { id: 'E6', states: ['queued', 'merge-queue', 'parked'], on: 'timeout', when: r => waiting(r), next: 'same', change: none, emit: [], via: 'timeout' },
+  // the parked state (S6)
+  {
+    id: 'P1',
+    states: ['parked'],
+    on: 'unpark',
+    next: 'queued',
+    change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
+    emit: [],
+    via: 'unpark:',
+  },
+]
+
+// E7: an event with no meaning in the state (a late result of an ended seq, pr-closed while parked,
+// an unpark of a record that is not parked, pr-merged or pr-closed with no PR, every event in
+// closed). It changes nothing: plan logs it in the decision log. One row per event kind, all E7.
+const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE_STATES, on, next: 'same', change: none, emit: [], via: 'none' }))
+
+export const TABLE: readonly Row[] = [...ROWS, ...E7_ROWS]
+
+// The 33 row ids, in the table's order.
+export const ROW_IDS: readonly string[] = [...new Set(TABLE.map(r => r.id))]
+
+// laterOf: the later of two GitHub timestamps (ISO strings compare in time order).
+function laterOf(a: string | null, b: string | null): string | null {
+  if (a === null) return b
+  if (b === null) return a
+  return a >= b ? a : b
+}
+
+// --- the lookup --------------------------------------------------------------------------------------------
+
+// normalize: the event as the table reads it. A running step's timeout is its unknown (why
+// timeout); a waiting state's stays a timeout (E6). A not-ok whose reason the state's own step
+// cannot give is an outcome outside the step's known outcomes, so it is unknown (5.1).
+export function normalize(r: IssueRecord, e: TableEvent): TableEvent {
+  if (e.kind === 'timeout' && !waiting(r)) return { ...e, kind: 'unknown', why: e.why ?? 'timeout', reason: e.reason ?? 'the step ran past its timeout' }
+  if (e.kind === 'not-ok' && ownStep(r) && !NOT_OK_REASONS[r.state].includes(e.reason ?? '')) {
+    return { ...e, kind: 'unknown', why: 'bad-answer', reason: `an outcome the table does not know: not-ok ${e.reason ?? 'with no reason'}` }
+  }
+  return e
+}
+
+// rowFor: the one row for this record and event (4.6): exactly one row that is not E7, else E7.
+// Throws when two rows match: the guards are exclusive, so that is a bug the totality test finds.
+export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row {
+  const ev = normalize(r, e)
+  const hits = ROWS.filter(row => row.id !== 'S0' && row.on === ev.kind && row.states.includes(r.state) && (row.when === undefined || row.when(r, ev, c)))
+  if (hits.length > 1) throw new Error(`rowFor: ${hits.map(h => h.id).join(', ')} all match ${r.state}/${r.step ?? 'none'} on ${ev.kind}`)
+  const hit = hits[0] ?? E7_ROWS.find(row => row.on === ev.kind)
+  if (hit === undefined) throw new Error(`rowFor: no row for ${ev.kind}`)
+  return hit
+}
+
+// viaOf: the transition note's via code: the row's own, with the event's cause, why, choice or fix
+// kind where the row's code takes one (free:<cause>, unknown:<why>, triage:<choice>, fix:<kind>).
+export function viaOf(row: Row, e: TableEvent): string {
+  if (!row.via.endsWith(':')) return row.via
+  const tail =
+    row.id === 'U1'
+      ? e.cause
+      : row.id.startsWith('U')
+        ? e.why
+        : row.id.startsWith('X')
+          ? e.choice
+          : row.id === 'T9' || row.id === 'T10'
+            ? FIX_REASONS[e.reason ?? '']
+            : e.reason
+  return `${row.via}${tail ?? 'none'}`
+}
+
+// nextRecord: the record a changing row makes (4.6): seq + 1 at now, the state the row names, and
+// the row's own change on top. A change of state starts the new state's own step at attempt 1 with
+// no cut and the row's notes alone; a same-state row keeps the seq's notes unless it adds its own.
+// Leaving parked clears the question; only closed keeps a why.
+export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): IssueRecord {
+  const ev = normalize(r, e)
+  const state: IssueState = row.next === 'same' ? r.state : row.next === 'resumeTo' ? (r.resumeTo ?? 'designing') : row.next
+  const changed = state !== r.state
+  const step: StepKind | null = changed ? STATE_STEP[state] : r.step
+  const base: IssueRecord = {
+    ...r,
+    seq: r.seq + 1,
+    seqAt: now,
+    state,
+    since: changed ? now : r.since,
+    step,
+    attempt: changed ? 1 : r.attempt,
+    cut: changed ? false : r.cut,
+    notes: changed ? [] : r.notes,
+    question: state === 'parked' ? r.question : null,
+    why: state === 'closed' ? r.why : null,
+    resumeTo: state === 'parked' || state === 'queued' ? r.resumeTo : null,
+  }
+  return { ...base, ...row.change(r, ev, now) }
+}
+
+// The claim a record is made from (S0, 3.5): the life (the claim's time in base-36 seconds), the
+// branch (an adopted PR's head branch, else issue-<N>), the adopted PR and the others left alone.
+export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[] }
+
+// madeRecord: row S0's queued record: a lease leads to designing, or to reviewing for an adopted
+// PR, whose whole diff the review reads (3.5).
+export function madeRecord(claim: Claimed, now: Ms): IssueRecord {
+  const others = claim.others.length === 0 ? [] : [`other open PRs on this issue's branches, left alone: ${claim.others.map(p => `#${p}`).join(', ')}`]
+  return {
+    issue: claim.issue,
+    life: claim.life,
+    seq: 1,
+    seqAt: now,
+    state: 'queued',
+    since: now,
+    resumeTo: claim.pr === null ? null : 'reviewing',
+    branch: claim.branch,
+    pr: claim.pr,
+    head: null,
+    approvedPatch: null,
+    brief: null,
+    step: 'lease',
+    attempt: 1,
+    cut: false,
+    triages: 0,
+    fixes: 0,
+    round: 0,
+    question: null,
+    why: null,
+    notes: others,
+    prClosedAt: null,
+  }
+}
+
+// S0's row, for the transition that makes a record.
+export const ROW_S0: Row = ROWS[0] as Row

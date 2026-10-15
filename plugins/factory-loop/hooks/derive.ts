@@ -33,8 +33,9 @@ export type FactoryEvent = {
   device: string | null
 }
 
-// The events plan and the derivation need, for one repo, up to :'at', over :'days' days.
-// Run through `dev-query --csv -v repo=.. -v at=.. -v days=..` with the SQL on stdin.
+// The events plan and the derivation need, for one repo, up to :'at', over :'days' days, v2's
+// three states among them (v2 SPEC 7.1; v2/record.ts rebuilds records from `transition`). Run
+// through `dev-query --csv -v repo=.. -v at=.. -v days=..` with the SQL on stdin.
 export const EVENTS_SQL = `select
   to_char(ts at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as ts,
   state, issue, run_id, branch, pr, head, note, actor, device
@@ -44,7 +45,7 @@ where repo = :'repo'
   and ts > :'at'::timestamptz - make_interval(days => :'days'::int)
   and state in ('ready', 'claimed', 'renewed', 'reclaimed', 'closed', 'delegated', 'verdict',
     'fix_requested', 'parked', 'failed', 'merge_ready', 'head_mismatch', 'conflict', 'ci_stalled',
-    'merged', 'abandoned', 'superseded', 'rebased_behind', 'loop')
+    'merged', 'abandoned', 'superseded', 'rebased_behind', 'loop', 'transition', 'reviewed', 'intervention')
 order by ts, seq;
 `
 

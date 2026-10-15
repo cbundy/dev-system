@@ -342,7 +342,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     }
   })
 
-  test('observeV2 keeps the store\'s three cases apart: not read (no records, the store source failed, no rebuild), absent (a rebuild may fill it) and an empty list (no records)', async () => {
+  test('observeV2 keeps the store\'s three cases apart: not read (no records, the store source failed, no rebuild), absent (a rebuild reads the event log) and an empty list (no records)', async () => {
     const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
     const runs: string[][] = []
     const base = { io, rt: { ...runtimeOf(), config: config({ planner: 'v2' }) }, run: async (argv: string[]) => (runs.push(argv), { exitCode: 0, stdout: '', stderr: '' }), state: state(), poolJson: null, backoff: false, limited: () => false }
@@ -354,7 +354,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     expect(failed).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: false, error: `records:${REPO} could not be read: the store is down` } } })
     expect(await of({ records: null, heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: true } } })
     expect(await of({ records: [], heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'store', sources: { store: { ok: true } } })
-    expect(runs.filter(a => a[0] === 'dev-query')).toEqual([])
+    // only the absent key reads this device's transition events for a rebuild (v2/record.ts)
+    expect(runs.filter(a => a[0] === 'dev-query')).toHaveLength(1)
   })
 
   test('with no store records and no rebuild built yet, there are no records, and a state built outside a pass reads nothing', () => {

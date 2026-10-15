@@ -17,7 +17,7 @@
 // and a word the bans catch there (a label added, a PR body, a body file, a CI re-run, a slot's
 // kill) is allowed only on the lines V2_ALLOWED names, exactly as written. Elsewhere it is caught
 // as before. The v2 kind `ci-rerun` and the key family `/rerun/` are names, not commands, and so is
-// `kill` on the two vocabulary lines V2_NAMES names (a slot op, an entry action's key).
+// `kill` on the vocabulary lines V2_NAMES names (a slot op, an entry action's key).
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -43,6 +43,7 @@ const V2_RERUN = "  return ['gh', 'run', 'rerun', runId, '--failed', '--repo', r
 const V2_NAMES = [
   { file: "v2/types.ts", line: "export const SLOT_OPS = ['lease', 'prepare', 'kill', 'free'] as const" },
   { file: "v2/keys.ts", line: "export type EntryAction = 'label' | 'stop' | 'kill' | 'comment' | 'tell' | `event/${string}`" },
+  { file: "v2/rules-entry.ts", line: "const KILL = 'kill' as const" },
 ];
 // after these, a `/` starts a regular expression rather than a division
 const REGEX_AFTER = new Set("(,=:[!&|?{};+-*%<>~^".split(""));
