@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/verdict.schema.json",
+  "title": "verdict",
+  "description": "One adjudicator verdict on one gate finding: CORRECT, WRONG (reviewer false positive), NIT, ENV or DUP. Written by: the factory loop, one per verdict line; the orchestrator skill. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "verdict"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run whose gate was judged."
+    },
+    "branch": {
+      "description": "The run's branch, when known."
+    },
+    "note": {
+      "description": "Legacy machine-read note: <VERDICT>: <finding id> <reason> or <VERDICT>: <finding id>: <reason> with VERDICT one of CORRECT, WRONG, NIT, ENV, DUP (agents logged older lines by hand, so not every row follows it, and some have none). Readers take the word before the first colon as the verdict and the next word as the finding id. Read by metrics 3 and 5, callum-flow-evaluate, the factory loop (/^ENV:/). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data": false
+  }
+}

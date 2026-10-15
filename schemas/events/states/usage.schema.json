@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/usage.schema.json",
+  "title": "usage",
+  "description": "One reading of the Claude plan's usage for the usage gate: the five-hour and weekly percentages and their resets, or why none was available. Housekeeping. Written by: usage-check.sh on every check (actor watcher); the factory loop runs it every few minutes. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "usage"
+    },
+    "note": {
+      "description": "Legacy machine-read note: the usage percentages (whole, rounded up), reset times and seconds to them, and the source; or usage=unavailable reason=<r>[,<r>...]. Read by scripts/factory-loop-replay.js (parse.ts parseUsage). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^(five_hour=[0-9]+ resets_at=\\S+ resets_in=[0-9]+ seven_day=[0-9]+ seven_day_resets_at=\\S+ seven_day_resets_in=[0-9]+ source=(oauth|statusline)|usage=unavailable reason=\\S+)$"
+    },
+    "data": false
+  }
+}

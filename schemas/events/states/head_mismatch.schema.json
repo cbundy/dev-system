@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/head_mismatch.schema.json",
+  "title": "head_mismatch",
+  "description": "The run would be merge-ready, but its head is not the branch's head on origin or in the worktree, so its green proves nothing. Expected after rebased_behind. Replay-prone. Written by: pipeline-watch.sh (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "head_mismatch"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The pipeline run. The watcher always sets it."
+    },
+    "branch": {
+      "description": "The run's branch. The watcher always sets it (the issue comes from its issue-<N>)."
+    },
+    "head": {
+      "description": "The run's head sha (head_sha), null when unreadable."
+    },
+    "note": {
+      "description": "Legacy machine-read note: the three heads compared (worktree= only when the branch is checked out). Read by the factory loop (shown as the run's detail). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^run=([0-9a-f]+|unknown) branch=([0-9a-f]+|unknown)( worktree=([0-9a-f]+|unknown))?$"
+    },
+    "data": false
+  }
+}

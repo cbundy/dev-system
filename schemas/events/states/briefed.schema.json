@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/briefed.schema.json",
+  "title": "briefed",
+  "description": "The issue's design brief exists. In the vocabulary and read as a designing decision, but nothing writes it today. Written by: none today. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "briefed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "data": false
+  }
+}

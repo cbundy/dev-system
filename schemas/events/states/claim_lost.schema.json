@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/claim_lost.schema.json",
+  "title": "claim_lost",
+  "description": "A claim attempt lost: another device holds a live claim, or this device lost the post-and-reread race. Proof that two devices contended. Written by: callum-flow-claim (exit 3). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "claim_lost"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "For people: held by <device> since <time> or race lost to <device>. No reader parses it."
+    },
+    "data": false
+  }
+}

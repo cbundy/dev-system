@@ -1419,6 +1419,10 @@ restart never replays old events; transitions a watcher observes are always logg
 `callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
 `CALLUM_EVENTS_DIR` default as a write) and writes nothing.
 
+The event contract (the envelope, every state's fields and note, versioning, and how to add or
+change an event) is [docs/events.md](../../docs/events.md), with a JSON Schema per state in
+[`schemas/events/`](../../schemas/events/).
+
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
 `${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}`; they are null when the snapshot is missing or unreadable, and the

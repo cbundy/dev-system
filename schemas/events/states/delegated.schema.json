@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/delegated.schema.json",
+  "title": "delegated",
+  "description": "The brief was handed to the implementer sub-agent: design ends, implementation starts. Written by: the factory loop (note brief <url>); the orchestrator skill (no note). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "delegated"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: brief <issue comment URL> from the factory loop; a hand-logged line may have no note or other text. Readers take the first https://github.com/.../issues/<n>#issuecomment-<id> anywhere in the note. Read by factory loop derive.ts (factsOf, deriveLedger). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data": false
+  }
+}

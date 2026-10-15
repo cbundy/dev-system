@@ -51,6 +51,7 @@ templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base
 tests/                            CLI and hook tests (ci.yml)
+schemas/events/                   JSON Schemas of the factory events (docs/events.md)
 scripts/lint.sh                   lint entrypoint (npm run lint)
 scripts/test.sh                   test entrypoint (npm test); see Test runner below
 scripts/test-reporter.js          node:test reporter: failing test, file:line and assertion only
@@ -60,7 +61,7 @@ scripts/release-notes.js          validates release-notes/vX.Y.Z.md and builds t
 .github/workflows/                ci.yml (lint and test on every PR and push to main; the
                                   required check), release.yml, publish-base-image.yml,
                                   publish-dev-image.yml, publish-features.yml, test-features.yml
-package.json                      makes the repo npm-installable (bin + templates only)
+package.json                      makes the repo npm-installable (bin + templates only); test-only devDependencies
 docs/                             these docs
 ```
 
@@ -68,7 +69,8 @@ Claims: GitHub is the claim store. `callum-flow-claim` posts a lease comment on 
 
 ## Test runner
 
-`npm test` discovers tests by glob: all `tests/*.test.js` form one Node job, each
+`npm test` first installs the test-only dev dependencies (`npm ci`) when `node_modules` is missing
+or older than `package-lock.json`, then discovers tests by glob: all `tests/*.test.js` form one Node job, each
 `*.test.sh` under `features/test/callum-tools/`, `coder/test/` and `images/base/test/`
 forms a shell job, and each mod's validation and tests form a job. See
 [mod testing](../plugins/factory-hud/README.md#develop-it) for Claude Code requirements.

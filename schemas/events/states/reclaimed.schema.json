@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/reclaimed.schema.json",
+  "title": "reclaimed",
+  "description": "The sweep found the issue's claim expired and put it back in the queue (ready label, claimant unassigned). Written by: callum-flow-sweep (actor agent, not sweep). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "reclaimed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "For people: lease expired. No reader parses it."
+    },
+    "data": false
+  }
+}

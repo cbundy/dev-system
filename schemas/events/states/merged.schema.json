@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/merged.schema.json",
+  "title": "merged",
+  "description": "The PR was squash-merged after every merge guard passed. A stage, not final: the issue stays visible until GitHub closes it. Throughput counts this state. Written by: callum-flow-merge (run by the factory loop and the orchestrator). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "merged"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The gated run that was merged."
+    },
+    "branch": {
+      "description": "The PR's head branch."
+    },
+    "pr": {
+      "description": "The merged PR. callum-flow-merge always sets it; readers accept a merge noted without one."
+    },
+    "head": {
+      "description": "The verified PR head sha that was merged."
+    },
+    "note": {
+      "description": "For people: empty from callum-flow-merge. No reader parses it."
+    },
+    "data": false
+  }
+}

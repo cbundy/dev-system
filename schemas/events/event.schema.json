@@ -1,0 +1,481 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/event.schema.json",
+  "title": "Factory event",
+  "description": "Any line of the factory event log or row of factory.events.raw (docs/events.md): the envelope of its version (v), then the rules of its state (states/<state>.schema.json). Validate an event against this file. A test fails when the states listed here, the files in states/ and callum-flow-event's vocabulary disagree.",
+  "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "v": {
+            "const": 1
+          }
+        },
+        "required": [
+          "v"
+        ]
+      },
+      "then": {
+        "$ref": "envelope.v1.schema.json"
+      },
+      "else": {
+        "$ref": "envelope.v2.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ready"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/ready.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "claimed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/claimed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "briefed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/briefed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "delegated"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/delegated.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "run_started"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/run_started.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "parked"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/parked.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "verdict"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/verdict.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "fix_requested"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/fix_requested.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "failed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/failed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "merge_ready"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/merge_ready.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "head_mismatch"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/head_mismatch.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "conflict"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/conflict.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ci_stalled"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/ci_stalled.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "merged"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/merged.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "abandoned"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/abandoned.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "closed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/closed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "reclaimed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/reclaimed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "claim_lost"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/claim_lost.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "untrusted_stripped"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/untrusted_stripped.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "design_routed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/design_routed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "implementer_routed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/implementer_routed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "test_weakened"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/test_weakened.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "watcher_error"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/watcher_error.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "usage"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/usage.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "superseded"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/superseded.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "renewed"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/renewed.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "rebased_behind"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/rebased_behind.schema.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "loop"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "$ref": "states/loop.schema.json"
+      }
+    }
+  ],
+  "properties": {
+    "state": {
+      "enum": [
+        "ready",
+        "claimed",
+        "briefed",
+        "delegated",
+        "run_started",
+        "parked",
+        "verdict",
+        "fix_requested",
+        "failed",
+        "merge_ready",
+        "head_mismatch",
+        "conflict",
+        "ci_stalled",
+        "merged",
+        "abandoned",
+        "closed",
+        "reclaimed",
+        "claim_lost",
+        "untrusted_stripped",
+        "design_routed",
+        "implementer_routed",
+        "test_weakened",
+        "watcher_error",
+        "usage",
+        "superseded",
+        "renewed",
+        "rebased_behind",
+        "loop"
+      ]
+    }
+  }
+}

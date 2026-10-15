@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/ci_stalled.schema.json",
+  "title": "ci_stalled",
+  "description": "The run sits in its CI step with no checks reported past the grace time, and GitHub confirms the PR has none. Replay-prone. Written by: pipeline-watch.sh (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "ci_stalled"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The pipeline run. The watcher always sets it."
+    },
+    "branch": {
+      "description": "The run's branch. The watcher always sets it (the issue comes from its issue-<N>)."
+    },
+    "head": {
+      "description": "The run's head sha (head_sha), null when unreadable."
+    },
+    "note": {
+      "description": "Legacy machine-read note: reason=no-workflow (the repo has no workflows) or reason=no-checks (none ran). Read by the factory loop (plan.ts, rules P6, P6a). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^reason=(no-workflow|no-checks)$"
+    },
+    "data": false
+  }
+}

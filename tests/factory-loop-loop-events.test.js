@@ -5,7 +5,8 @@
 // space): one refused is a usage error the loop only notes. This runs the real
 // images/base/callum-flow-event, into a scratch log, with the notes the plugin builds for an entry
 // of every loop kind (ledger.ts loopEvent), a rate-cap hold (act.ts capEventArgv) and the ping
-// breaker (act.ts breakerEventArgv). Plugin tests cannot run a command, so this lives here.
+// breaker (act.ts breakerEventArgv), and checks each written line against the event schema
+// (schemas/events/). Plugin tests cannot run a command, so this lives here.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
@@ -13,6 +14,7 @@ const { register } = require("node:module");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const Ajv2020 = require("ajv/dist/2020").default;
 
 // The plugin's modules import each other without a file extension, as the engine resolves them;
 // plain Node needs the ".ts" (scripts/factory-loop-replay.js does the same).
@@ -83,4 +85,12 @@ test("every loop note the plugin builds is one callum-flow-event takes", () => {
   const lines = fs.readFileSync(path.join(dir, "cbundy__dev-system.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
   assert.equal(lines.length, argvs.length);
   assert.ok(lines.every((l) => l.state === "loop" && / key=\S+ status=\S+/.test(` ${l.note}`)));
+  // and each line the writer made is a valid event under the contract (docs/events.md)
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  const schemas = path.join(ROOT, "schemas", "events");
+  for (const f of ["envelope.v1.schema.json", "envelope.v2.schema.json", "event.schema.json", ...fs.readdirSync(path.join(schemas, "states")).map((s) => `states/${s}`)]) {
+    ajv.addSchema(JSON.parse(fs.readFileSync(path.join(schemas, f), "utf8")));
+  }
+  const valid = ajv.getSchema("https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/event.schema.json");
+  for (const l of lines) assert.ok(valid(l), `${l.note}: ${ajv.errorsText(valid.errors)}`);
 });

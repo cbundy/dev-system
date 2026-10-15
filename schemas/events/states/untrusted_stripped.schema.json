@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/untrusted_stripped.schema.json",
+  "title": "untrusted_stripped",
+  "description": "callum-flow-issue-read dropped or refused content by an untrusted author. Records the count, never the content. Housekeeping; written on every such read, so it repeats. Written by: callum-flow-issue-read, under whichever tool read (queue-watch, claim, sweep, factory-state, routes, merge-guard, the loop). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "untrusted_stripped"
+    },
+    "issue": {
+      "description": "The issue read; on a PR read the PR number (issue and pr are then the same number).",
+      "type": "integer"
+    },
+    "pr": {
+      "description": "The PR, on a PR read."
+    },
+    "note": {
+      "description": "For people: what was read: issue, pr, comment, comments=<n>, list stripped=<n> or timeline=<n>. No reader parses it."
+    },
+    "data": false
+  }
+}

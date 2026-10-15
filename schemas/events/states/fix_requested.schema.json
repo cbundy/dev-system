@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/fix_requested.schema.json",
+  "title": "fix_requested",
+  "description": "The factory asked the pipeline to fix gate findings (axi respond --action fix). With note review it counts toward the review-fix cap; any one is a first-pass setback. Written by: the factory loop (review fixes only); the orchestrator skill. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "fix_requested"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run asked to fix."
+    },
+    "branch": {
+      "description": "The run's branch."
+    },
+    "note": {
+      "description": "Legacy machine-read note: review when the fix answers the review gate; otherwise null or, on older hand-logged lines, other text. Read by the factory loop (note === 'review'). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "data": false
+  }
+}

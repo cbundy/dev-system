@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/failed.schema.json",
+  "title": "failed",
+  "description": "The watcher saw the run fail, or be cancelled (note cancelled). Run id unknown means it failed at launch. Replay-prone: never sets a stage. Written by: pipeline-watch.sh (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "failed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run, or \"unknown\" when it failed before it had an id."
+    },
+    "branch": {
+      "description": "The run's branch. The watcher always sets it (the issue comes from its issue-<N>)."
+    },
+    "head": {
+      "description": "The run's head sha; for an unknown run the head as the runs list printed it, possibly short."
+    },
+    "note": {
+      "description": "Legacy machine-read note: cancelled for a cancelled run, null for a failed one. Read by the factory loop (runState). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^cancelled$"
+    },
+    "data": false
+  }
+}

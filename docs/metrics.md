@@ -2,7 +2,8 @@
 
 The factory event log (`callum-flow-event`, shipped to the `factory.events` table by
 `event-push-loop`; see "Factory event log" in `images/base/README.md`) answers the questions
-below, plus the waste measures at the end. Run the queries with `dev-query` (see "dev-query" in `images/base/README.md`), e.g.
+below, plus the waste measures at the end. What each state and field means, and its exact format,
+is in [events.md](events.md). Run the queries with `dev-query` (see "dev-query" in `images/base/README.md`), e.g.
 `dev-query -c '<sql>'` or the SQL on stdin: it connects to the agentsview PostgreSQL read-only and
 handles the TLS root-cert and secret-masking details. To run by hand with `psql` instead, you need
 the database URL and, for `sslmode=verify-ca`/`verify-full` with a private CA, `PGSSLROOTCERT`.

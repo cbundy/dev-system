@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/closed.schema.json",
+  "title": "closed",
+  "description": "The sweep saw GitHub close the issue while its latest lifecycle event was not final (closed outside the factory). Final, releases a claim; throughput still counts only merged. Written by: callum-flow-sweep (actor sweep). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "closed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: GitHub's close reason as GitHub gives it (completed, not_planned, duplicate); null when GitHub gives none. Read by callum-flow-factory-state (detail), metrics queries. Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z_]+$"
+    },
+    "data": false
+  }
+}

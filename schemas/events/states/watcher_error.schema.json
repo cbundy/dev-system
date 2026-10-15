@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/watcher_error.schema.json",
+  "title": "watcher_error",
+  "description": "A streaming watcher died; it also prints a watcher-error line, so a crash is never silent. The --once modes the factory loop uses never log it. Housekeeping. Written by: queue-watch.sh, pipeline-watch.sh in --stream mode (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "watcher_error"
+    },
+    "note": {
+      "description": "For people: <watcher>: <reason>, for example pipeline-watch: no-mistakes not on PATH. No reader parses it."
+    },
+    "data": false
+  }
+}

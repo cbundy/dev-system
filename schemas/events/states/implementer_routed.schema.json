@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/implementer_routed.schema.json",
+  "title": "implementer_routed",
+  "description": "callum-flow-implementer-route picked the implementer's model (Sonnet or Opus, or a label's alias) for the model comparison. Logged again on every delegate attempt. Written by: callum-flow-implementer-route (run by the factory loop and the orchestrator before delegated). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "implementer_routed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: the model alias, why, the hash bucket (- unless reason=hash) and the Opus percentage. Read by metrics 8 (model=([^ ]+), reason=hash). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^model=[A-Za-z0-9._-]+ reason=(label|default|hash|fallback) bucket=([0-9]|[1-9][0-9]|-) pct=([0-9]|[1-9][0-9]|100)$"
+    },
+    "data": false
+  }
+}

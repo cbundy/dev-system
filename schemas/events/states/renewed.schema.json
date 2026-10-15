@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/renewed.schema.json",
+  "title": "renewed",
+  "description": "A claim heartbeat extended this device's claim on the issue. Housekeeping: never a stage, never progress, never a new life. Written by: callum-flow-claim --heartbeat, one per claim comment it extended. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "renewed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: the renewed lease in minutes, as written in the claim comment. Read by callum-flow-factory-state. Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^lease: [0-9]+$"
+    },
+    "data": false
+  }
+}

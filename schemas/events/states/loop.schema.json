@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/loop.schema.json",
+  "title": "loop",
+  "description": "The factory loop's own bookkeeping (DECISIONS D-09): agent and wake starts and ends with their answers, owner notices, rate-cap holds and the ping breaker. Never a stage, never progress; rebuilds the loop's ledger after a lost store. Written by: the factory loop (ledger.ts loopEvent, act.ts capEventArgv, breakerEventArgv). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "loop"
+    },
+    "issue": {
+      "description": "The entry's issue, or the issue of a per-issue cap; null for work that names none."
+    },
+    "run_id": {
+      "description": "The entry's run, when it has one."
+    },
+    "pr": {
+      "description": "The entry's PR, when it has one."
+    },
+    "head": {
+      "description": "The entry's head, when it has one."
+    },
+    "note": {
+      "description": "Legacy machine-read note: kind=<kind> key=<key> status=<status> then more key=value tokens (attempts, class, rule, started, ended, agent, agentId, wake and the outcome's out= tokens), values with % and whitespace percent-encoded and none for empty, at most 500 characters before the outcome is dropped; full grammar in SPEC 7.4. Read by the factory loop (derive.ts entryFromLoop); callum-flow-event itself refuses a note without the three keys. Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^(?=(.* )?kind=\\S)(?=(.* )?key=\\S)(?=(.* )?status=\\S)"
+    },
+    "data": false
+  }
+}

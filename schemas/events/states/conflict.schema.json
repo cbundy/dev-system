@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/conflict.schema.json",
+  "title": "conflict",
+  "description": "The run is green and its head matches, but GitHub reports the PR not mergeable (CONFLICTING or DIRTY). Replay-prone. Written by: pipeline-watch.sh (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "conflict"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The pipeline run. The watcher always sets it."
+    },
+    "branch": {
+      "description": "The run's branch. The watcher always sets it (the issue comes from its issue-<N>)."
+    },
+    "head": {
+      "description": "The run's head sha (head_sha), null when unreadable."
+    },
+    "note": {
+      "description": "For people: always empty. No reader parses it."
+    },
+    "data": false
+  }
+}

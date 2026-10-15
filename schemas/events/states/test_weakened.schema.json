@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/test_weakened.schema.json",
+  "title": "test_weakened",
+  "description": "One commit of a merged PR deleted or weakened tests (removed assertions, || true, skips and the like), as callum-flow-test-weakening flagged it. Advisory; one event per flagged commit, restored ones included. Written by: callum-flow-merge, after the merge. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "test_weakened"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The merged run."
+    },
+    "branch": {
+      "description": "The PR branch."
+    },
+    "pr": {
+      "description": "The merged PR."
+    },
+    "head": {
+      "description": "The merged PR head (the flagged commit is in the note)."
+    },
+    "note": {
+      "description": "Legacy machine-read note: the pipeline step, the flagged commit, whether it was restored, what kinds of weakening and which test files (last, unescaped). Read by callum-flow-evaluate, metrics 5b. Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^step=(review|document|ci|test|lint|rebase|none) commit=[0-9a-f]{7} restored=(yes|no) kinds=(removed-assertion|warn-only|or-true|skip|only|commented-assert)(,(removed-assertion|warn-only|or-true|skip|only|commented-assert))* files=\\S.*$"
+    },
+    "data": false
+  }
+}

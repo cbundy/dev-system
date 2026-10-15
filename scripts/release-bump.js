@@ -2,8 +2,8 @@
 // Bumps the whole system to one release version, in a normal PR, so a release never pushes
 // to main (cbundy/dev-system#147). It sets `version` in every
 // plugins/*/.claude-plugin/plugin.json, the `version:` frontmatter field of every
-// plugins/*/skills/*/SKILL.md (replaced if present, appended if missing) and the root
-// package.json, then refreshes this repo's own template stamp with
+// plugins/*/skills/*/SKILL.md (replaced if present, appended if missing), the root
+// package.json and package-lock.json (its own and its root package's version), then refreshes this repo's own template stamp with
 // `node bin/callum-dev.js update`. It also pins the callum marketplace `ref` in the
 // templates' .claude/settings.json to the release tag vX.Y.Z, so workspaces install the
 // plugin from a release, never from main (cbundy/dev-system#215). The Release workflow runs --check against the version
@@ -66,6 +66,8 @@ function versionedFiles(root = REPO_ROOT) {
     }
   }
   files.push({ file: path.join(root, "package.json"), kind: "json" });
+  const lock = path.join(root, "package-lock.json");
+  if (fs.existsSync(lock)) files.push({ file: lock, kind: "lock" });
   return files.map((f) => ({ ...f, file: path.relative(root, f.file) }));
 }
 
@@ -79,6 +81,12 @@ function frontmatter(src, file) {
 function readVersion(root, { file, kind }) {
   const src = fs.readFileSync(path.join(root, file), "utf-8");
   if (kind === "json") return JSON.parse(src).version ?? null;
+  if (kind === "lock") {
+    // the lockfile carries the version twice; a mismatch between them is reported as such
+    const lock = JSON.parse(src);
+    const root = lock.packages?.[""]?.version;
+    return lock.version === root ? (lock.version ?? null) : `${lock.version} (packages[""] ${root})`;
+  }
   const v = frontmatter(src, file)[1].match(/^version:\s*(.*)$/m);
   return v ? v[1].trim() : null;
 }
@@ -90,6 +98,13 @@ function writeVersion(root, { file, kind }, version) {
     const pkg = JSON.parse(src);
     pkg.version = version;
     fs.writeFileSync(abs, JSON.stringify(pkg, null, 2) + "\n");
+    return;
+  }
+  if (kind === "lock") {
+    const lock = JSON.parse(src);
+    lock.version = version;
+    if (lock.packages?.[""]) lock.packages[""].version = version;
+    fs.writeFileSync(abs, JSON.stringify(lock, null, 2) + "\n");
     return;
   }
   const m = frontmatter(src, file);

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/run_started.schema.json",
+  "title": "run_started",
+  "description": "An agent's optional record that it started a no-mistakes run. Pipeline facts come from the nomistakes mirror, never from this event; kept for the old rows' run links. Written by: an implementer agent by hand (implement-issue skill, optional). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "run_started"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run started."
+    },
+    "branch": {
+      "description": "Its branch."
+    },
+    "head": {
+      "description": "Its head sha."
+    },
+    "data": false
+  }
+}

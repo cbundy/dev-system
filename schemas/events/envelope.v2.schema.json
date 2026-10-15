@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/envelope.v2.schema.json",
+  "title": "Factory event envelope, v2",
+  "description": "The fields every factory event line carries, whatever its state (docs/events.md), written since 2026-10-11 (#316). callum-flow-event writes every key on every line, null when it has no value; a key is never omitted (data is the one exception: present only when the state has a payload). Frozen: a change to the envelope is a new envelope version in a new file.",
+  "type": "object",
+  "required": [
+    "v",
+    "ts",
+    "repo",
+    "device",
+    "session_id",
+    "actor",
+    "state",
+    "issue",
+    "run_id",
+    "branch",
+    "pr",
+    "head",
+    "note",
+    "event_id",
+    "base_image",
+    "dev_image",
+    "template_version",
+    "plugin_version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "description": "The envelope version: 2.",
+      "const": 2
+    },
+    "ts": {
+      "description": "When the event was written, UTC, to the second.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "repo": {
+      "description": "The repo the event is about, owner/name (--repo, CALLUM_FLOW_REPO, else the origin remote; the directory name when there is no remote).",
+      "type": "string",
+      "minLength": 1
+    },
+    "device": {
+      "description": "The machine that wrote the event: DEV_MACHINE_NAME, else the hostname.",
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "description": "The Claude session that wrote the event: CLAUDE_SESSION_ID, else the newest transcript of the working directory's Claude project; null when neither is known.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "actor": {
+      "description": "Who wrote it: --actor, CALLUM_FLOW_ACTOR, else \"agent\". Free text; the values in use are listed in docs/events.md.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "What happened: one word from the closed vocabulary. Each state has its own schema in states/.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "issue": {
+      "description": "The GitHub issue the event is about (--issue, or the issue-<N> part of --branch).",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "run_id": {
+      "description": "The no-mistakes pipeline run (--run). Usually a ULID; \"unknown\" when a watcher could not tell.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "branch": {
+      "description": "The git branch (--branch).",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "pr": {
+      "description": "The pull request number (--pr).",
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "head": {
+      "description": "A commit sha (--head): the run's or the PR's head, as the state defines.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "note": {
+      "description": "A short line for people (--note). Some older states put machine-read fields here; each state's schema says when, and new events put fields in data instead.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "event_id": {
+      "description": "A UUID made locally when the line was written, unique per event even if the log file is lost; null when the kernel's UUID source was unreadable.",
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "base_image": {
+      "description": "The running base image version (dev-version --json), null when unknown.",
+      "type": ["string", "null"]
+    },
+    "dev_image": {
+      "description": "The running dev image version, null when unknown.",
+      "type": ["string", "null"]
+    },
+    "template_version": {
+      "description": "The running Coder template version, null when unknown.",
+      "type": ["string", "null"]
+    },
+    "plugin_version": {
+      "description": "The running callum-flow plugin version, null when unknown.",
+      "type": ["string", "null"]
+    },
+    "data": {
+      "description": "The event's structured payload, when its state defines one: a JSON object naming its own schema and version (docs/events.md, 'Payloads'). Absent on every event written today. Each state's schema says which payloads it accepts.",
+      "$ref": "#/$defs/payloadHeader"
+    }
+  },
+  "$defs": {
+    "payloadHeader": {
+      "description": "What every payload carries: the name of its schema (schemas/events/data/<schema>/) and that schema's version (v<version>.schema.json there).",
+      "type": "object",
+      "required": ["schema", "version"],
+      "properties": {
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

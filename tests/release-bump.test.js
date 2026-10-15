@@ -70,6 +70,19 @@ test("bump sets every plugin.json, SKILL.md (replaced or appended) and package.j
   assert.equal(JSON.parse(read(root, PIN)).extraKnownMarketplaces.callum.source.repo, "o/r");
 });
 
+test("bump sets both versions in package-lock.json, and check reads them", (t) => {
+  const root = fakeRepo(t);
+  const lock = (v, rootV = v) => JSON.stringify({ name: "demo", version: v, lockfileVersion: 3, packages: { "": { name: "demo", version: rootV } } }, null, 2) + "\n";
+  write(root, "package-lock.json", lock("1.0.0"));
+  assert.deepEqual(check("1.0.0", { root }).filter((m) => m.startsWith("package-lock.json")), []);
+  bump("1.1.0", { root, update: () => 0, log: quiet });
+  assert.equal(read(root, "package-lock.json"), lock("1.1.0"));
+  write(root, "package-lock.json", lock("1.1.0", "1.0.0"));
+  assert.deepEqual(check("1.1.0", { root }).filter((m) => m.startsWith("package-lock.json")), [
+    'package-lock.json: has 1.1.0 (packages[""] 1.0.0), expected 1.1.0',
+  ]);
+});
+
 test("check flags a template ref that is not the release tag, and one that is missing", (t) => {
   const root = fakeRepo(t);
   assert.deepEqual(check("1.0.0", { root }).filter((m) => m.startsWith(PIN)), []);

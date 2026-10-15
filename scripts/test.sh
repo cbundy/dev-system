@@ -19,6 +19,15 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 sh scripts/test-pool.sh --check-jobs || exit $?
 
+# The dev dependencies (package-lock.json; only test tooling such as ajv, nothing the CLI ships)
+# are installed here, so CI, a fresh no-mistakes worktree and a new checkout need no separate
+# step. npm keeps node_modules/.package-lock.json; when it is missing, or package-lock.json is
+# newer, the install is stale. Without a package-lock.json there is nothing to install.
+stamp=node_modules/.package-lock.json
+if [ -f package-lock.json ] && { [ ! -f "$stamp" ] || [ -n "$(find package-lock.json -newer "$stamp")" ]; }; then
+  npm ci --ignore-scripts --no-audit --no-fund --loglevel=error > /dev/null || { echo "test: npm ci failed" >&2; exit 1; }
+fi
+
 # Jobs that run first, in this order, so the longest ones start at once and set the wall time.
 # An entry that no longer exists is ignored; a suite not listed still runs.
 SLOW_FIRST="

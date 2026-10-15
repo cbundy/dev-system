@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/superseded.schema.json",
+  "title": "superseded",
+  "description": "A run or branch was replaced for the same issue; run_id names the old run. Run-scoped: never a stage, ends nothing, releases no claim. Written by: callum-flow-regate; the factory loop (a fixer's new branch); the orchestrator and judge skills. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "superseded"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run being replaced (required; may be \"unknown\").",
+      "type": "string"
+    },
+    "branch": {
+      "description": "The replacing branch, when callum-flow-regate logs it."
+    },
+    "note": {
+      "description": "For people: by <new branch> or re-gate on <branch>. No reader parses it."
+    },
+    "data": false
+  }
+}

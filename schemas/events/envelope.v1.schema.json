@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/envelope.v1.schema.json",
+  "title": "Factory event envelope, v1",
+  "description": "The envelope written from 2026-10-08 (#230) until 2026-10-11 (#316, which added the version fields and v 2). Kept so the rows of that time still validate; nothing writes it any more. Frozen.",
+  "type": "object",
+  "required": [
+    "v",
+    "ts",
+    "repo",
+    "device",
+    "session_id",
+    "actor",
+    "state",
+    "issue",
+    "run_id",
+    "branch",
+    "pr",
+    "head",
+    "note"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "description": "The envelope version: 1.",
+      "const": 1
+    },
+    "ts": {
+      "description": "When the event was written, UTC, to the second.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "repo": {
+      "description": "The repo the event is about, owner/name (--repo, CALLUM_FLOW_REPO, else the origin remote; the directory name when there is no remote).",
+      "type": "string",
+      "minLength": 1
+    },
+    "device": {
+      "description": "The machine that wrote the event: DEV_MACHINE_NAME, else the hostname.",
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "description": "The Claude session that wrote the event: CLAUDE_SESSION_ID, else the newest transcript of the working directory's Claude project; null when neither is known.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "actor": {
+      "description": "Who wrote it: --actor, CALLUM_FLOW_ACTOR, else \"agent\". Free text; the values in use are listed in docs/events.md.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "What happened: one word from the closed vocabulary. Each state has its own schema in states/.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "issue": {
+      "description": "The GitHub issue the event is about (--issue, or the issue-<N> part of --branch).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "run_id": {
+      "description": "The no-mistakes pipeline run (--run). Usually a ULID; \"unknown\" when a watcher could not tell.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "branch": {
+      "description": "The git branch (--branch).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "pr": {
+      "description": "The pull request number (--pr).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "head": {
+      "description": "A commit sha (--head): the run's or the PR's head, as the state defines.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "note": {
+      "description": "A short line for people (--note). Some older states put machine-read fields here; each state's schema says when, and new events put fields in data instead.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "event_id": {
+      "description": "A UUID made locally when the line was written. Added on 2026-10-10 (#353), so the first v1 lines lack the key.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}

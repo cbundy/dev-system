@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/design_routed.schema.json",
+  "title": "design_routed",
+  "description": "callum-flow-design-route decided whether the issue is designed in a live session or by the designer sub-agent. Nothing calls the route today, so the event is rare. Written by: callum-flow-design-route. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "design_routed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: the route, why, the hash bucket (- unless reason=hash) and the session percentage. Read by no reader parses it yet. Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": "string",
+      "pattern": "^route=(session|subagent) reason=(label|default|hash|fallback) bucket=([0-9]|[1-9][0-9]|-) pct=([0-9]|[1-9][0-9]|100)$"
+    },
+    "data": false
+  }
+}

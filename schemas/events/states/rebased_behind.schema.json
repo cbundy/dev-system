@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/rebased_behind.schema.json",
+  "title": "rebased_behind",
+  "description": "A PR that was only behind its base was rebased and pushed without a new pipeline run, after the patch was proved unchanged against the gated run. The next head_mismatch for that run is expected. Written by: the factory loop after callum-flow-merge-guard --update-behind; the orchestrator skill. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "rebased_behind"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The original gated run."
+    },
+    "branch": {
+      "description": "The PR branch (the factory loop sets it; needed for the ledger rebuild)."
+    },
+    "pr": {
+      "description": "The PR updated."
+    },
+    "head": {
+      "description": "The new head pushed."
+    },
+    "data": false
+  }
+}

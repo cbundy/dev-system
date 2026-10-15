@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/ready.schema.json",
+  "title": "ready",
+  "description": "The issue joined the trusted ready queue, as the queue watcher saw it. Starts lead time; the issue is queued. Written by: queue-watch.sh (actor watcher), with --if-changed on a watcher's first sight. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "ready"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "data": false
+  }
+}

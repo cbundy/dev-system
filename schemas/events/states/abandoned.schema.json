@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/abandoned.schema.json",
+  "title": "abandoned",
+  "description": "Work on the issue stopped: split into new issues, dropped, or a cancelled run dropped. Ends the issue until a new life starts. Replacing a run uses superseded instead. Written by: the factory loop (split, judge's drop, /factory drop); the orchestrator skill. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "abandoned"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The run dropped, when there was one."
+    },
+    "branch": {
+      "description": "Its branch, when known."
+    },
+    "note": {
+      "description": "For people: why, for example split into 471,472 or dropped by the owner. No reader parses it."
+    },
+    "data": false
+  }
+}

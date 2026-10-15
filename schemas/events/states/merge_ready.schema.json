@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/merge_ready.schema.json",
+  "title": "merge_ready",
+  "description": "The run passed every step and CI, its head is the branch's head on origin and in the worktree, and GitHub says the PR is mergeable. Only the merge guards remain. Written by: pipeline-watch.sh (actor watcher). Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "merge_ready"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "run_id": {
+      "description": "The pipeline run. The watcher always sets it."
+    },
+    "branch": {
+      "description": "The run's branch. The watcher always sets it (the issue comes from its issue-<N>)."
+    },
+    "head": {
+      "description": "The run's head sha, equal to the branch head."
+    },
+    "note": {
+      "description": "For people: always empty. No reader parses it."
+    },
+    "data": false
+  }
+}

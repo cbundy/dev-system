@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/cbundy/dev-system/main/schemas/events/states/claimed.schema.json",
+  "title": "claimed",
+  "description": "This device won the GitHub claim on the issue (the earliest live claimed-by: comment). Starts the designing stage and a lease. Written by: callum-flow-claim. Applied after the envelope by event.schema.json.",
+  "type": "object",
+  "properties": {
+    "state": {
+      "const": "claimed"
+    },
+    "issue": {
+      "description": "Required for this state.",
+      "type": "integer"
+    },
+    "note": {
+      "description": "Legacy machine-read note: the claim's lease in minutes; null on lines before the lease was recorded (readers then use 120). Read by callum-flow-factory-state (/lease: *(\\d+)/). Frozen until it moves into a payload (docs/events.md, Legacy notes).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^lease: [0-9]+$"
+    },
+    "data": false
+  }
+}
