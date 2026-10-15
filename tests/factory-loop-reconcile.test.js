@@ -8,8 +8,8 @@
 // now says, in the release's order (labels, the slot, the closing event, the intervention), and
 // refuses to act until every event it writes is one the factory's readers count. Every release
 // leaves the factory, whatever the issue's labels: the migration requeues nothing (SPEC 6.3). It
-// also lists the issues that show as active with no holder and no ready label, and releases a
-// live issue only when it is named. The tool runs
+// also lists the issues that show as active with no live claim and no ready label (no holder, or
+// queued after a claim lapsed), and releases a live issue only when it is named. The tool runs
 // through a runner that gives it an events.ts with U4's note tokens and parser (TEST_EVENTS below),
 // and a stub callum-flow-event that writes its lines as the real one does. Plugin tests cannot run
 // a command, so this lives here.
@@ -107,6 +107,8 @@ function fixtures() {
           live(40, "queued", AT - 72 * HOUR, { holder: null }),
           live(41, "queued", AT - 2 * HOUR, { holder: null }),
           live(42, "in pipeline", AT - HOUR, { holder: null, run: "R42", source: "mirror" }),
+          // a v2 record queued for a slot: live work, never a ghost
+          live(43, "queued", AT - HOUR, { v2: { state: "queued", step: "lease", attempt: 1, life: "t3xq00", seq: 1, why: null } }),
         ],
         recent: [{ ...live(21, "merged", AT - 5 * HOUR), holder: DEVICE }],
       },
@@ -154,6 +156,7 @@ function fixtures() {
         { match: "^--json 16$", stdout: ghIssue(16, ["factory:designing"]) },
         { match: "^--json 17$", stdout: ghIssue(17, ["In development"], "closed") },
         { match: "^--json 18$", code: 3 },
+        { match: "^--json 20$", stdout: ghIssue(20, ["bug", "In development"]) },
         { match: "^--json 40$", stdout: ghIssue(40, ["enhancement"]) },
         { match: "^--json 41$", stdout: ghIssue(41, ["ready"]) },
         { match: "^--json 42$", stdout: ghIssue(42, ["bug"]) },
@@ -307,8 +310,12 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.match(line(out, 12), /run R12 updated 5m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(line(out, 13), /PR #113: head pushed 6h00m ago, a check never, a review 10m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(line(out, 14), /slot 4 on feat\/issue-14-w: HEAD moved 5h00m ago, tree changed 10m ago\. Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\. .*Slot: 4\./);
-  // with no holder: a ghost that leaves, one in the queue left out, one live
-  assert.match(out, /^## Live in the factory with no holder and no ready label$/m);
+  // with no live claim: ghosts that leave (no holder; queued after its claim lapsed), one in the
+  // queue left out, one live, and a v2 record's queued state never looked at
+  assert.match(out, /^## Live in the factory with no live claim and no ready label$/m);
+  assert.match(line(out, 20), /^- #20: queued for 1h00m with no live claim; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no live claim and nothing is requeued\)\. Labels: bug, In development\. Open PR: none\. Slot: none\.$/);
+  assert.equal(line(out, 43), "", "a v2 record queued for its slot is live work");
+  assert.ok(!w.calls().some((c) => c.name === "callum-flow-issue-read" && c.argv.join(" ") === "--json 43"), "nothing of it is read");
   assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
   assert.equal(line(out, 41), "", "an issue in the queue (ready) is no ghost");
   assert.match(line(out, 42), /in pipeline for 1h00m with no holder; .*run R42 updated 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
@@ -324,7 +331,7 @@ test("observe lists this device's live claims with no v2 record, the live issues
   assert.match(slotLine(out, 8), /: HEAD moved 5h00m ago, tree clean, 1 process\(es\)\. Proposal: #31 has no live claim and no record: free the slot\.$/);
   assert.equal(slotLine(out, 1) + slotLine(out, 4) + slotLine(out, 6) + slotLine(out, 9), "", "a candidate's slot is on its own line; the loop's and an available one are not listed");
   // In development with no live claim, open or closed
-  assert.match(line(out, 20), /^- #20 \(open\): queued \(claim lapsed at 2026-10-15T11:00:00.000Z\)\. Proposal: remove the label\.$/);
+  assert.equal(out.split("\n").filter((l) => l.startsWith("- #20")).length, 1, "#20's release takes its label off: it is not listed twice");
   assert.match(line(out, 21), /^- #21 \(closed\): merged\. Proposal: remove the label\.$/);
   // nothing written but the report
   assert.deepEqual(writes(w.calls()), []);
@@ -409,12 +416,13 @@ test("--act all acts on every proposal but a live claim, and leaves a busy slot 
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /^## Act on all$/m);
   for (const n of [10, 11, 17, 20, 21, 30, 40]) assert.match(r.stdout, new RegExp(`^- #${n}: `, "m"));
+  assert.match(r.stdout, /^- #20: removed In development; logged abandoned; logged the intervention\.$/m);
   assert.match(r.stdout, /^- #40: logged abandoned; logged the intervention\.$/m);
   assert.match(r.stdout, /^- #31: slot 8 left alone: it is busy or changed within 2h00m \(name #31 to free it\)\.$/m);
   const writes17 = writes(w.calls()).filter((c) => names(c, 17));
   assert.deepEqual(writes17.map((c) => c.argv.slice(0, 2)), [["issue", "edit"]], "a closed issue's labels go; the sweep logs its close");
   assert.ok(!w.calls().some((c) => c.argv.includes(fx.slots[7].path) && c.argv[0] === "return"));
-  for (const n of [12, 13, 14, 18, 41, 42]) assert.ok(!writes(w.calls()).some((c) => names(c, n)), `#${n} is left alone`);
+  for (const n of [12, 13, 14, 18, 41, 42, 43]) assert.ok(!writes(w.calls()).some((c) => names(c, n)), `#${n} is left alone`);
 
   const named = world(fx.answers).run(["--act", "31"]);
   assert.match(named.stdout, /^- #31: slot 8 returned, its HEAD was [0-9a-f]{8}\.$/m);

@@ -810,11 +810,13 @@ the issues v1 left behind, with v1's evidence, so v2's every-pass rule never has
 v1-only facts.
 
 - **Observe by default.** `factory-reconcile --repo R` lists this device's live claims (from
-  `callum-flow-factory-state`) that have no v2 record, and the issues the view shows as live
-  (queued among them) with no holder at all and no `ready` label (owner, 2026-10-15): no device
+  `callum-flow-factory-state`) that have no v2 record, and the issues the view shows as live with
+  no live claim and no `ready` label (owner, 2026-10-15): those with no holder at all, in a live
+  stage or queued, and those queued after their claim ended or lapsed, whoever made it. No device
   holds them, so nothing else would ever end them (#286, #289, #290, #468 and #469 on dev-system
-  showed as queued for 3 to 6 days). A no-holder issue labelled `ready` is in the queue and is
-  left out. For each it looks for live evidence within `T`, the timeout of the v2 state its
+  showed as queued for 3 to 6 days with no holder; #590 there, and #54 and #57 on plant-console,
+  as queued after the loops' claims lapsed). One labelled `ready` is in the queue and is left out,
+  and so is a v2 record's queued state, which is live work. For each it looks for live evidence within `T`, the timeout of the v2 state its
   factory-state stage maps to (designing to designing, implementing to building, in pipeline and
   parked to reviewing, ready to merge to merge-queue; any other stage, queued among them, 2 h):
   - a no-mistakes run of the issue's branch updated within `T`, as the `factory` source reports it;
@@ -1978,12 +1980,14 @@ and the owner's two structural decisions. They are settled.
 
 ### The migration lists ghosts no device holds (owner, 2026-10-15)
 
-- **Decision:** `factory-reconcile` also lists the issues the factory-state view shows as live,
-  queued among them, with no holder device and no `ready` label, and proposes that they leave
-  (6.3). A live issue named in `--act` is released all the same.
-- **Why:** #286, #289, #290, #468 and #469 showed as queued for days with no holder, and no
-  device's R1 or sweep would ever end them; #467's run looked live only because a monitor touched
-  it, so the owner names it.
+- **Decision:** `factory-reconcile` also lists the issues the factory-state view shows as live
+  with no live claim and no `ready` label (no holder at all, or queued after a claim ended or
+  lapsed), and proposes that they leave (6.3). A live issue named in `--act` is released all the
+  same.
+- **Why:** #286, #289, #290, #468 and #469 showed as queued for days with no holder, and #590,
+  #54 and #57 as queued after their claims lapsed, with nothing that would ever end them; the
+  owner wants the view to start clean. #467's run looked live only because a monitor touched it,
+  so the owner names it.
 
 ### A red main does not hold the merge queue (owner)
 

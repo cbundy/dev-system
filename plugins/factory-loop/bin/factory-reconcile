@@ -9,9 +9,11 @@
 //   factory-reconcile --repo <owner/name> ... --act <N>... | --act all
 //
 // Observe (the default) changes nothing. It lists this device's live claims (from
-// callum-flow-factory-state) that have no v2 record, and the issues the factory shows as live
-// (queued among them) with no holder at all and no `ready` label: ghosts no device holds, which
-// nothing else would ever end. For each it looks for live evidence within T, the timeout of the v2
+// callum-flow-factory-state) that have no v2 record, and the issues the factory shows as live with
+// no live claim and no `ready` label: those with no holder at all, in a live stage or queued, and
+// those queued after their claim ended or lapsed, whatever device made it (but a v2 record's
+// queued state, which is live work). These are ghosts no device holds, which nothing else would
+// ever end. For each it looks for live evidence within T, the timeout of the v2
 // state its stage maps to (designing to designing, implementing to building, in pipeline and
 // parked to reviewing, ready to merge to merge-queue's wait; any other stage, queued among them,
 // 2 h): a no-mistakes run of the issue's branch updated (the fleet database's mirror); the open
@@ -67,8 +69,8 @@ const { pathToFileURL } = require('node:url')
 
 const ME = 'factory-reconcile'
 const USAGE = `usage: ${ME} --repo <owner/name> [--device <name>] [--checkout <dir>] [--loop-dir <dir>] [--act <N>... | --act all]
-  Lists this device's live claims with no v2 record, the live issues with no holder and no ready
-  label, the pool's other slots and the issues that still carry 'In development', each with a
+  Lists this device's live claims with no v2 record, the live issues with no live claim and no
+  ready label, the pool's other slots and the issues that still carry 'In development', each with a
   proposal, and changes nothing. Every release leaves the factory: nothing is requeued.
   --act <N>... | all   do what each named issue's proposal says now (all: every proposal but live;
                        a live issue named is released all the same); refused until
@@ -190,8 +192,15 @@ const hasLabel = (labels, name) => labels.some((l) => l.toLowerCase() === name.t
 
 // --- the report (pure: what was read in, the proposals out) -------------------------------------------
 
-// orphanStages: the stages a ghost with no holder shows: a live one, or queued (6.3).
-const orphanStages = (h) => ['queued', ...h.release.LIVE_STAGES]
+// orphanOf: how the factory shows an issue with no live claim as active (6.3): with no holder, in a
+// live stage or queued; or queued with a holder whose claim ended or lapsed. A v2 record's queued
+// state is live work, never one. null for any other issue.
+function orphanOf(i, h) {
+  if (i.v2 !== null && i.v2 !== undefined) return null
+  if (!i.holder && (i.stage === 'queued' || h.release.LIVE_STAGES.includes(i.stage))) return 'no holder'
+  if (i.holder && i.stage === 'queued') return 'no live claim'
+  return null
+}
 
 // buildReport: from what gather() read, every proposal (6.3). h: the shared hooks.
 function buildReport(input, h) {
@@ -211,8 +220,9 @@ function buildReport(input, h) {
   const slotsOn = (n) => poolSlots.filter((s) => issueOfBranch(s.branch) === n)
   const named = new Set()
 
-  // assess: one issue that shows as active: what was checked, and its proposal. With no holder,
-  // one labelled ready is in the queue, not a ghost: it is left out (null).
+  // assess: one issue that shows as active: what was checked, and its proposal. orphan: how it
+  // shows with no live claim (orphanOf), else null; such a one labelled ready is in the queue, not
+  // a ghost: it is left out (null).
   const assess = (f, orphan) => {
     const n = f.issue
     const since = ms(f.entered_at)
@@ -289,7 +299,7 @@ function buildReport(input, h) {
       plan.removeLabels = h.release.releaseLabels(labels, true, input.inDevLabel)
       plan.freeSlots = freeable
     }
-    const whose = orphan ? 'no holder' : 'no v2 record'
+    const whose = orphan ?? 'no v2 record'
     let proposal
     if (!gh.ok) proposal = `not read (${gh.error}): check again later`
     else if (isLive) {
@@ -305,7 +315,7 @@ function buildReport(input, h) {
       proposal = `not fully checked (${unread.join(', ')} not read): check again later`
     } else {
       release(`nothing within ${dur(T)}`)
-      proposal = `leave the factory (abandoned: ${orphan ? 'no holder and ' : ''}nothing is requeued)${byHand}`
+      proposal = `leave the factory (abandoned: ${orphan ? `${orphan} and ` : ''}nothing is requeued)${byHand}`
     }
     return {
       issue: n,
@@ -319,6 +329,7 @@ function buildReport(input, h) {
       proposal,
       pr,
       slots: slots.map((s) => s.name),
+      whose,
     }
   }
 
@@ -327,12 +338,12 @@ function buildReport(input, h) {
   const recorded = []
   for (const f of [...live.values()].filter((i) => i.holder === device).sort((a, b) => a.issue - b.issue)) {
     if (hasRecord(f.issue)) recorded.push(f.issue)
-    else claims.push(assess(f, false))
+    else claims.push(assess(f, null))
   }
-  // the issues that show as active with no holder at all, and no ready label (6.3)
+  // the issues that show as active with no live claim and no ready label (6.3)
   const orphans = []
-  for (const f of factory.issues.filter((i) => !i.holder && orphanStages(h).includes(i.stage)).sort((a, b) => a.issue - b.issue)) {
-    const row = assess(f, true)
+  for (const f of factory.issues.filter((i) => orphanOf(i, h) !== null && !hasRecord(i.issue)).sort((a, b) => a.issue - b.issue)) {
+    const row = assess(f, orphanOf(f, h))
     if (row !== null) orphans.push(row)
   }
 
@@ -359,7 +370,8 @@ function buildReport(input, h) {
   const labelRows = []
   if (input.inDev.ok) {
     for (const i of [...input.inDev.list].sort((a, b) => a.number - b.number)) {
-      if (live.has(i.number)) continue
+      // a live claim's, or one a release above already takes off
+      if (live.has(i.number) || plans.get(i.number)?.release) continue
       const p = planOf(i.number)
       const names = labelNames(i.labels).filter((l) => l.toLowerCase() === input.inDevLabel.toLowerCase())
       if (names.length === 0) continue
@@ -405,9 +417,9 @@ function renderReport(r) {
   if (r.claims.length === 0) out.push('None.')
   for (const c of r.claims) out.push(issueLine(c, 'no v2 record'))
   if (r.recorded.length) out.push(`- With a v2 record, left to the loop: ${r.recorded.map((n) => `#${n}`).join(', ')}.`)
-  out.push('', '## Live in the factory with no holder and no ready label', '')
+  out.push('', '## Live in the factory with no live claim and no ready label', '')
   if (r.orphans.length === 0) out.push('None.')
-  for (const c of r.orphans) out.push(issueLine(c, 'no holder'))
+  for (const c of r.orphans) out.push(issueLine(c, c.whose))
   out.push('', '## The pool\'s other slots', '')
   if (r.poolNote !== null) out.push(`Not read: ${r.poolNote}.`)
   else if (r.slots.length === 0) out.push('None.')
@@ -516,9 +528,9 @@ function gather(o, io, settings) {
     runs = { ok: false, error: err.message }
   }
 
-  // this device's live claims, and the issues that show as active with no holder (6.3)
+  // this device's live claims, and the issues that show as active with no live claim (6.3)
   const candidates = factory.issues
-    .filter((i) => (i.holder === device && settings.liveStages.includes(i.stage)) || (!i.holder && (i.stage === 'queued' || settings.liveStages.includes(i.stage))))
+    .filter((i) => (i.holder === device && settings.liveStages.includes(i.stage)) || ((i.v2 === null || i.v2 === undefined) && (i.stage === 'queued' || (!i.holder && settings.liveStages.includes(i.stage)))))
     .map((i) => i.issue)
   const readEnv = { env: { CALLUM_FLOW_REPO: repo } }
   // the candidates' labels and state, through the trusted reader
