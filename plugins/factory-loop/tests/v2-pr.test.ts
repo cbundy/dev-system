@@ -13,7 +13,7 @@ import type { ActIo } from '../hooks/exec'
 import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action } from '../hooks/types'
-import { createdPr, footer, listedPrs, prBody, prRead, prTitle, rolloutLinkage, summaryOf } from '../hooks/v2/act-pr'
+import { candidates, createdPr, footer, listedPrs, prBody, prRead, prTitle, refusedReopen, rolloutLinkage, summaryOf } from '../hooks/v2/act-pr'
 import { childBody, childTitle, createdIssue, foundChild, ids, issueId } from '../hooks/v2/act-split'
 import { hiddenKey } from '../hooks/v2/act-state'
 import { childKey, lifeOf, prKey } from '../hooks/v2/keys'
@@ -27,7 +27,8 @@ const READY = 'ready'
 
 // --- a fake GitHub ---------------------------------------------------------------------------------------
 
-type Pr = { number: number; state: 'OPEN' | 'CLOSED' | 'MERGED'; ref: string; repo: string; trusted: boolean; body: string; title: string }
+// gone: its head branch was deleted or recreated after it closed, so GitHub refuses to reopen it
+type Pr = { number: number; state: 'OPEN' | 'CLOSED' | 'MERGED'; ref: string; repo: string; trusted: boolean; body: string; title: string; gone?: boolean }
 type Issue = { number: number; id: number; title: string; body: string; labels: string[] }
 // down: GitHub answers every gh command with a 502
 type Gh = { prs: Pr[]; issues: Issue[]; subs: Map<number, number[]>; blockers: Map<number, number[]>; rollout: string; writes: string[][]; down: boolean }
@@ -68,6 +69,8 @@ function answer(g: Gh, argv: string[], stdin: string | undefined): { exitCode?: 
   }
   const pr = g.prs.find(p => p.number === Number(a[2]))
   if (a[0] === 'pr' && a[1] === 'reopen' && pr !== undefined) {
+    // GitHub refuses a PR whose head branch is gone, or while another PR is open on its head
+    if (pr.gone === true || g.prs.some(p => p !== pr && p.state === 'OPEN' && p.ref === pr.ref)) return { exitCode: 1, stderr: 'GraphQL: Could not open the pull request. (reopenPullRequest)' }
     write()
     pr.state = 'OPEN'
     return {}
@@ -224,6 +227,42 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr reopen', 'gh pr edit'])
     const merged = gh({ prs: [{ number: 621, state: 'MERGED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x' }] })
     expect(await act(merged).run(ensure())).toMatchObject({ status: 'done', outcome: { kind: 'pr', created: true } })
+  })
+
+  test('an open PR comes before a closed one, even the one plan named: a resume after a hand close uses the PR opened since', async () => {
+    const g = gh({
+      prs: [
+        { number: 621, state: 'CLOSED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x' },
+        { number: 640, state: 'OPEN', ref: 'issue-300', repo: REPO, trusted: true, body: 'Opened by a person.', title: 'y' },
+      ],
+    })
+    const w = act(g)
+    expect(await w.run(ensure({ pr: 621 }))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr: 640, created: false, reopened: false } })
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr edit'])
+    expect(g.prs.map(p => [p.number, p.state])).toEqual([[621, 'CLOSED'], [640, 'OPEN']])
+    // the order: open first, the named one first within each state, then newest first
+    const listed = [{ pr: 9, state: 'CLOSED' as const }, { pr: 5, state: 'CLOSED' as const }, { pr: 7, state: 'OPEN' as const }, { pr: 3, state: 'OPEN' as const }, { pr: 8, state: 'MERGED' as const }]
+    expect(candidates(listed, 5).map(l => l.pr)).toEqual([7, 3, 5, 9])
+    expect(candidates(listed, 3).map(l => l.pr)).toEqual([3, 7, 9, 5])
+  })
+
+  test('a closed PR GitHub refuses to reopen (its branch was deleted) is passed over for the next one, then a new PR; a re-run uses that one', async () => {
+    const g = gh({ prs: [{ number: 621, state: 'CLOSED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x', gone: true }] })
+    const w = act(g)
+    expect(await w.run(ensure({ pr: 621 }))).toEqual({
+      status: 'done',
+      outcome: { kind: 'pr', pr: 501, created: true, reopened: false },
+      summary: 'opened PR #501 for #300 on issue-300 (Closes #300); #621 not reopened: GraphQL: Could not open the pull request. (reopenPullRequest)',
+    })
+    expect(verbs(w.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout', 'gh pr reopen', 'gh pr create'])
+    // run again with the record's old PR named: the new open one is used, nothing written
+    const again = act(g)
+    expect(await again.run(ensure({ pr: 621 }))).toMatchObject({ status: 'done', outcome: { kind: 'pr', pr: 501, created: false, reopened: false } })
+    expect(verbs(again.argvs)).toEqual(['gh pr list', 'callum-flow-issue-read', 'callum-flow-rollout'])
+    // a reopen that failed because GitHub or the network was down is tried again, never passed over
+    expect(refusedReopen({ exitCode: 1, stdout: '', stderr: 'HTTP 502: Bad Gateway' })).toBeNull()
+    expect(refusedReopen({ exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' })).toBeNull()
+    expect(refusedReopen({ exitCode: 1, stdout: '', stderr: 'GraphQL: Could not open the pull request.' })).toBe('GraphQL: Could not open the pull request.')
   })
 
   test('a PR by an untrusted author, or from another repository\'s branch of the same name, is left alone', async () => {

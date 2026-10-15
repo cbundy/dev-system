@@ -10,8 +10,9 @@
 // keyword before a reference survives into a prompt.
 //
 // neutralBody is here too: a long text the loop posts (a brief, a split child's body) made safe the
-// same way, with no 4 000-character cut. Pure.
-import { FOREGROUND_RULE, neutral } from '../prompts'
+// same way, with no 4 000-character cut. So are a failed check's note and id (checkNote, checkId),
+// which the steps that end in red CI give and the fixer reads. Pure.
+import { FOREGROUND_RULE, neutral, neutralWhole } from '../prompts'
 import type { ScriptPlace } from '../prompts'
 import { COMMAND_RULE } from './prompts-triage'
 
@@ -54,50 +55,60 @@ export type DesignInput = WorkInput & { inFlight: { issue: number; branch: strin
 // Why a fixer runs (T9's fix_requested note, or a triage's fix, X2).
 export type FixWhy = 'review' | 'ci' | 'conflict' | 'triage'
 
-// The fixer's: why it runs, the round, the latest review's answer file, the finding ids it must
-// give a disposition each, and the head's failed checks.
-export type FixInput = WorkInput & { round: number; why: FixWhy | null; reviewAnswer: string | null; findings: string[]; checks: { name: string; link: string | null }[] }
+// The fixer's: why it runs, the round, the latest review's answer file, and the finding ids it must
+// give a disposition each (a review's error findings, or the failed checks its notes name).
+export type FixInput = WorkInput & { round: number; why: FixWhy | null; reviewAnswer: string | null; findings: string[] }
 
 const SHA = /^[0-9a-f]{7,40}$/i
 const BRANCH = /^[A-Za-z0-9._/-]+$/
 const PATH = /^\/[A-Za-z0-9._/@*-]+$/
 const BRIEF_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+#issuecomment-\d+$/
+// the fix contract's finding id (contracts-work.mjs FINDING_ID)
 const FINDING = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/
 const ERROR_MAX = 2000
-// neutral() keeps 4 000 characters of one text; a body is neutralized in blocks of lines below it
-const BLOCK_MAX = 3500
 // GitHub takes 65 536 characters in an issue body or a comment
 export const BODY_MAX = 60000
+const CHECK_NAME_MAX = 60
 
 // --- text ----------------------------------------------------------------------------------------------
 
-// neutralBody: a long text made safe as neutral() makes a prompt's free text, in blocks of whole
-// lines, so nothing is cut at neutral()'s cap: control characters dropped, each closing keyword
-// before a reference turned into its participle, a block's leading indent kept; at most max
-// characters in all.
+// neutralBody: a long text made safe as neutral() makes a prompt's free text, over the whole text
+// at once, so nothing is cut at neutral()'s cap and every line, blank line and indent stays as it
+// was: control characters dropped, each closing keyword before a reference turned into its
+// participle; leading blank lines and trailing space dropped; at most max characters in all.
 export function neutralBody(text: string, max = BODY_MAX): string {
-  const blocks: string[] = []
-  let block: string[] = []
-  let size = 0
-  for (const line of text.replace(/\r\n?/g, '\n').split('\n')) {
-    if (size + line.length + 1 > BLOCK_MAX && block.length > 0) {
-      blocks.push(block.join('\n'))
-      block = []
-      size = 0
-    }
-    block.push(line)
-    size += line.length + 1
-  }
-  blocks.push(block.join('\n'))
-  const out = blocks
-    .map(b => {
-      const lead = /^[ \t]*/.exec(b)?.[0] ?? ''
-      const n = neutral(b)
-      return n === '' ? '' : `${lead}${n}`
-    })
-    .join('\n')
-    .trim()
+  const out = neutralWhole(text.replace(/\r\n?/g, '\n'))
+    .replace(/^(?:[ \t]*\n)+/, '')
+    .trimEnd()
   return out.length > max ? `${out.slice(0, max - 3)}...` : out
+}
+
+// --- a failed check (8.5, 9.7) -----------------------------------------------------------------------
+
+// checkId: the finding id a fixer gives a failed check's disposition by, in the fix contract's id
+// shape: check:<run id>-<job id> from its link (a matrix's jobs share a run), check:<run id> when
+// the link names no job, else check: and the check's name with every other character a dash.
+export function checkId(name: string, link: string | null): string {
+  const m = /\/actions\/runs\/(\d+)(?:\/job\/(\d+))?/.exec(link ?? '')
+  if (m?.[1] !== undefined) return `check:${m[1]}${m[2] === undefined ? '' : `-${m[2]}`}`.slice(0, 80)
+  const slug = name.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^[-_.]+|-+$/g, '').slice(0, CHECK_NAME_MAX)
+  return `check:${slug === '' ? 'unnamed' : slug}`
+}
+
+// checkNote: a failed check as the note a step that ends in red CI gives (the review step and the
+// merge queue, U6 and U7), which T9 copies to the record for the fixer: its id, name and run link.
+export function checkNote(name: string, link: string | null): string {
+  const shown = name.replace(/\s+/g, ' ').trim().slice(0, 200)
+  return `failed check ${checkId(name, link)}: ${shown}${link === null ? '' : `, ${link}`}`
+}
+
+// checkIdsOf: the ids of the failed checks a record's notes name (checkNote), each once.
+export function checkIdsOf(notes: readonly string[]): string[] {
+  const ids = notes.flatMap(n => {
+    const id = /^failed check (check:\S+): /.exec(n)?.[1]
+    return id !== undefined && FINDING.test(id) ? [id] : []
+  })
+  return [...new Set(ids)]
 }
 
 // lines: free text, neutralized, each line indented under its heading.
@@ -145,7 +156,9 @@ function readerRules(): string {
   return `You read; you change nothing in the repository: no edit, commit, push, branch switch or reset. You may write scratch files outside the repository, under /tmp. Never start a sub-agent in the background. ${GITHUB_RULE}`
 }
 
-function priorLines(i: WorkInput): string[] {
+// priorLines: the previous attempt (5.1), and for a writer the patch of what an earlier attempt
+// left uncommitted; a reader changes nothing in its slot, so it is never asked to apply one.
+function priorLines(i: WorkInput, role: 'writer' | 'reader'): string[] {
   const out: string[] = []
   if (i.prior !== null) {
     out.push(`This is attempt ${i.attempt}. The previous attempt (${i.prior.key}) ended ${i.prior.status}: ${neutral(i.prior.summary).replace(/\s+/g, ' ')}`)
@@ -155,7 +168,7 @@ function priorLines(i: WorkInput): string[] {
     for (const f of i.prior.files) out.push(`  file: ${f}`)
     out.push('Do not repeat what it did that the result above shows was done, and do not repeat what failed.')
   }
-  if (i.leftovers !== null && PATH.test(i.leftovers)) {
+  if (role === 'writer' && i.leftovers !== null && PATH.test(i.leftovers)) {
     out.push(`Uncommitted work an earlier attempt left in this slot, if any, was saved as a patch: ${i.leftovers}. Apply what is useful with \`git apply\`; the slot itself starts clean at origin's head.`)
   }
   return out
@@ -207,7 +220,7 @@ export function designPrompt(i: DesignInput): string {
     ...existing,
     ...(inFlight.length === 0 ? [] : ['Branches in flight for other issues (find the files they share with yours, and sequence after them where needed):', ...inFlight.map(f => `  ${f.branch}, for issue #${f.issue}`)]),
     ...notesLines(i),
-    ...priorLines(i),
+    ...priorLines(i, 'reader'),
     '',
     'How to design, as your agent definition says: for a bug, reproduce the real failure first; spawn callum-flow:explorer in the foreground for the file:line map, unless the change is trivial; cite file:line only for what you checked yourself; never decide an owner decision, ask it.',
     '',
@@ -244,7 +257,7 @@ export function buildPrompt(i: WorkInput): string {
     where(i),
     ...(i.head !== null || i.pr !== null ? [`The branch already has work from an earlier attempt or claim: continue from it, and merge origin/${baseOf(i)} if you need its changes.`] : []),
     ...notesLines(i),
-    ...priorLines(i),
+    ...priorLines(i, 'writer'),
     '',
     GATE_RULE,
     QUALITY,
@@ -268,7 +281,8 @@ export function buildPrompt(i: WorkInput): string {
 
 const WHY: Record<FixWhy, (i: FixInput) => string> = {
   review: i => `The review of round ${i.round} asked for changes. Fix each finding, or decline it with the reason you judge it wrong.`,
-  ci: i => `A check on the PR failed after its one re-run. Read the failed logs with \`gh run view <run id> --log-failed --repo ${i.repo}\` and fix the cause; when it is not this branch's (a break on origin/${baseOf(i)} the PR cannot fix), decline it with the evidence.`,
+  ci: i =>
+    `A check on the PR failed after its one re-run. The notes below name each failed check with its id and run link${i.pr === null ? '' : ` (when none does, list them with \`gh pr checks ${i.pr} --repo ${i.repo}\`)`}. Read the failed logs with \`gh run view <run id> --log-failed --repo ${i.repo}\` and fix the cause; when it is not this branch's (a break on origin/${baseOf(i)} the PR cannot fix), decline it with the evidence.`,
   conflict: i => `The PR conflicts with origin/${baseOf(i)}. Merge origin/${baseOf(i)} into ${branchOf(i)}, resolve every conflict keeping both sides' intent, and run the tests.`,
   triage: () => "The loop's triage sent you with the instructions in the notes below.",
 }
@@ -277,7 +291,6 @@ export function fixPrompt(i: FixInput): string {
   const b = branchOf(i)
   const why = i.why === null ? 'The PR needs changes before it can merge: the notes below say what.' : WHY[i.why](i)
   const findings = i.findings.filter(f => FINDING.test(f))
-  const checks = i.checks.map(c => `  - ${neutral(c.name).replace(/\s+/g, ' ')}${c.link === null ? '' : `: ${c.link}`}`)
   const out = [
     ...slotLine(i),
     `You are the factory loop's fixer for issue #${i.issue} (${issueUrl(i)}). ${why}`,
@@ -289,9 +302,8 @@ export function fixPrompt(i: FixInput): string {
     where(i),
     ...(i.reviewAnswer !== null && PATH.test(i.reviewAnswer) ? [`The review's answer, with every finding: ${i.reviewAnswer}`] : []),
     ...(findings.length === 0 ? [] : [`Give each of these findings a disposition: ${findings.join(', ')}.`]),
-    ...(checks.length === 0 ? [] : ['Failed checks on the head:', ...checks]),
     ...notesLines(i),
-    ...priorLines(i),
+    ...priorLines(i, 'writer'),
     '',
     GATE_RULE,
     TEST_POLICY,
@@ -303,7 +315,7 @@ export function fixPrompt(i: FixInput): string {
       i.place,
       'Then',
       '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
-      'findings: one { id, disposition, reason } per finding (a failed check is check:<its name>, a conflict is conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters.',
+      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters.',
     ),
     'If you judge every finding wrong and push nothing, record {"result": "declined", "summary": "...", "findings": [...]} the same way, each disposition declined with its evidence: the PR goes back to review with your reasons.',
   ]

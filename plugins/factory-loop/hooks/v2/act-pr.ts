@@ -2,8 +2,11 @@
 // per issue for life, written only by the loop:
 // - op ensure, the reviewing step's first part: list the branch's PRs (every state), use an open
 //   one, reopen a closed unmerged one, or create one; then write the loop's body when the PR's
-//   differs from it, so an adopted PR's linkage is the loop's own. A re-run finds the PR it made, so
-//   it never makes a second (totality/T-04).
+//   differs from it, so an adopted PR's linkage is the loop's own. Open PRs come before closed
+//   ones, the one plan named first within each. A reopen GitHub refuses (the head branch was
+//   deleted or recreated, or another PR is open on the same head and base) moves on to the next
+//   PR, then to a new one, so a PR that cannot be reopened never stalls the record. A re-run finds
+//   the PR it made, so it never makes a second (totality/T-04).
 // - op body: the loop's body written again, after a linkage FAIL at the merge (9.3).
 // The body follows the issue's Rollout (`callum-flow-rollout`): `Closes #N` for merge, `Refs #N`
 // for run-it and keep-open. Every free-text part goes through neutral() (prompts.ts), which caps it
@@ -183,17 +186,24 @@ function done(pr: number, created: boolean, reopened: boolean, summary: string):
 
 // --- the executor -----------------------------------------------------------------------------------------
 
-// found: the branch's PR to use: the one plan named first, then open ones, then closed unmerged
-// ones, each newest first, by a trusted author with its head on this repo's branch.
-async function found(ctx: ExecCtx, a: PrAction, listed: Listed[]): Promise<{ pr: number; read: PrRead } | null | { exec: Exec }> {
-  const rank = (l: Listed) => (l.pr === a.pr ? 0 : l.state === 'OPEN' ? 1 : 2)
-  for (const l of listed.filter(x => x.state !== 'MERGED').sort((x, y) => rank(x) - rank(y) || y.pr - x.pr)) {
-    const r = await readPr(ctx, l.pr)
-    if ('exec' in r) return r
-    if (r.read === null || r.read.merged || r.read.ref !== a.branch || (r.read.repo !== null && r.read.repo.toLowerCase() !== ctx.rt.repo.toLowerCase())) continue
-    return { pr: l.pr, read: r.read }
-  }
-  return null
+// candidates: the branch's PRs that may be used, in order: open ones, then closed unmerged ones,
+// the one plan named first within each, then newest first (8.1: an open PR is used; a closed,
+// unmerged one is reopened).
+export function candidates(listed: readonly Listed[], named: number | null): Listed[] {
+  const rank = (l: Listed) => (l.state === 'OPEN' ? 0 : 2) + (l.pr === named ? 0 : 1)
+  return listed.filter(x => x.state !== 'MERGED').sort((x, y) => rank(x) - rank(y) || y.pr - x.pr)
+}
+
+// A failed command that may pass when tried again: GitHub or the network down, a timeout, a rate
+// limit. Any other failure of a reopen is GitHub refusing that PR.
+const PASSING = /\bHTTP (?:5\d\d|429)\b|error connecting|timed? ?out|connection (?:reset|refused)|\bEOF\b|rate limit|TLS handshake/i
+
+// refusedReopen: why GitHub refused to reopen the PR, or null when the failure may pass on a retry.
+export function refusedReopen(r: RunResult): string | null {
+  const text = `${r.stderr}\n${r.stdout}`
+  if (PASSING.test(text)) return null
+  const line = (r.stderr.trim() || r.stdout.trim()).split('\n').pop()?.trim() ?? ''
+  return line === '' ? `exit ${r.exitCode}` : line
 }
 
 async function ensure(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
@@ -203,35 +213,59 @@ async function ensure(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
   if (listedRun.r.exitCode !== 0) return commandFailure(listArgv, listedRun.r)
   const listed = listedPrs(listedRun.r.stdout)
   if (listed === null) return failed(`the PRs of ${a.branch} did not read`, listedRun.r.stdout)
-  const pick = await found(ctx, a, listed)
-  if (pick !== null && 'exec' in pick) return pick.exec
-  const link = await linkageOf(ctx, n)
-  if ('exec' in link) return link.exec
-  if (pick === null) {
-    const body = prBody({ issue: n, summary: a.summary, linkage: link.linkage, brief: a.brief, evidence: a.evidence })
-    const argv = ARGV.prCreateArgv(ctx.rt.repo, a.base, a.branch, prTitle(a.title, n))
-    const made = await run(ctx, argv, body)
-    if (!made.ok) return made.exec
-    if (made.r.exitCode !== 0) return commandFailure(argv, made.r)
-    const pr = createdPr(made.r.stdout, ctx.rt.repo)
-    if (pr === null) return failed(`gh pr create printed no PR of ${ctx.rt.repo}`, made.r.stdout)
-    return done(pr, true, false, `opened PR #${pr} for #${n} on ${a.branch} (${link.linkage} #${n})`)
+  // the linkage is read once, before the first write
+  let link: Linkage | null = null
+  const linkage = async (): Promise<Linkage | Exec> => {
+    if (link !== null) return link
+    const got = await linkageOf(ctx, n)
+    if ('exec' in got) return got.exec
+    link = got.linkage
+    return link
   }
-  let reopened = false
-  if (!pick.read.open) {
-    const argv = ARGV.prReopenArgv(ctx.rt.repo, pick.pr)
-    const ran = await run(ctx, argv)
-    if (!ran.ok) return ran.exec
-    if (ran.r.exitCode !== 0) return commandFailure(argv, ran.r)
-    reopened = true
+  const refusals: string[] = []
+  for (const l of candidates(listed, a.pr)) {
+    const r = await readPr(ctx, l.pr)
+    if ('exec' in r) return r.exec
+    if (r.read === null || r.read.merged || r.read.ref !== a.branch || (r.read.repo !== null && r.read.repo.toLowerCase() !== ctx.rt.repo.toLowerCase())) continue
+    const lk = await linkage()
+    if (typeof lk !== 'string') return lk
+    let reopened = false
+    if (!r.read.open) {
+      const argv = ARGV.prReopenArgv(ctx.rt.repo, l.pr)
+      const ran = await run(ctx, argv)
+      if (!ran.ok) return ran.exec
+      if (ran.r.exitCode !== 0) {
+        const why = refusedReopen(ran.r)
+        if (why === null) return commandFailure(argv, ran.r)
+        refusals.push(`#${l.pr} not reopened: ${why}`)
+        continue
+      }
+      reopened = true
+    }
+    return used(ctx, a, n, l.pr, r.read, lk, reopened)
   }
-  const summary = a.summary.trim() === '' ? summaryOf(pick.read.body, n) : a.summary
-  const body = prBody({ issue: n, summary, linkage: link.linkage, brief: a.brief, evidence: a.evidence })
+  const lk = await linkage()
+  if (typeof lk !== 'string') return lk
+  const body = prBody({ issue: n, summary: a.summary, linkage: lk, brief: a.brief, evidence: a.evidence })
+  const argv = ARGV.prCreateArgv(ctx.rt.repo, a.base, a.branch, prTitle(a.title, n))
+  const made = await run(ctx, argv, body)
+  if (!made.ok) return made.exec
+  if (made.r.exitCode !== 0) return commandFailure(argv, made.r)
+  const pr = createdPr(made.r.stdout, ctx.rt.repo)
+  if (pr === null) return failed(`gh pr create printed no PR of ${ctx.rt.repo}`, made.r.stdout)
+  const tail = refusals.length === 0 ? '' : `; ${refusals.join('; ')}`
+  return done(pr, true, false, `opened PR #${pr} for #${n} on ${a.branch} (${lk} #${n})${tail}`)
+}
+
+// used: an open or reopened PR made the loop's: its body written when it differs.
+async function used(ctx: ExecCtx, a: PrAction, n: number, pr: number, read: PrRead, linkage: Linkage, reopened: boolean): Promise<Exec> {
+  const summary = a.summary.trim() === '' ? summaryOf(read.body, n) : a.summary
+  const body = prBody({ issue: n, summary, linkage, brief: a.brief, evidence: a.evidence })
   const how = reopened ? 'reopened' : 'uses'
-  if (same(pick.read.body, body)) return done(pick.pr, false, reopened, `${how} PR #${pick.pr} for #${n}; its body is the loop's`)
-  const wrote = await writeBody(ctx, pick.pr, body)
+  if (same(read.body, body)) return done(pr, false, reopened, `${how} PR #${pr} for #${n}; its body is the loop's`)
+  const wrote = await writeBody(ctx, pr, body)
   if (wrote !== null) return wrote
-  return done(pick.pr, false, reopened, `${how} PR #${pick.pr} for #${n}; the loop's body written (${link.linkage} #${n})`)
+  return done(pr, false, reopened, `${how} PR #${pr} for #${n}; the loop's body written (${linkage} #${n})`)
 }
 
 // body: the loop's body written again over the PR's (a linkage FAIL at the merge, 9.3).

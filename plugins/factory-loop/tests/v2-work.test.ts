@@ -19,13 +19,13 @@ import { CONTRACTS, rolloutOf } from '../hooks/v2/contracts-work.mjs'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { COMMAND_RULE, FOREGROUND_RULE, TEST_POLICY, buildPrompt, designPrompt, fixPrompt, neutralBody } from '../hooks/v2/prompts-work'
+import { COMMAND_RULE, FOREGROUND_RULE, TEST_POLICY, buildPrompt, checkId, checkIdsOf, checkNote, designPrompt, fixPrompt, neutralBody } from '../hooks/v2/prompts-work'
 import type { FixInput, WorkInput } from '../hooks/v2/prompts-work'
 import { stepAnswerPath, stepAnswered, stepExecutor, stepRecorded } from '../hooks/v2/steps'
-import { errorFindings, routedModel } from '../hooks/v2/steps-work'
+import { errorFindings, fixWhyOf, routedModel } from '../hooks/v2/steps-work'
 import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES } from '../hooks/v2/types'
-import type { AgentStep, IssueRecord, Lease, StepResult, V2State } from '../hooks/v2/types'
+import type { AgentStep, IssueRecord, IssueState, Lease, StepResult, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, issue, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -157,7 +157,7 @@ const PLACE = { bin: BIN, file: `${LOOP_DIR}/answers/x.answer.json` }
 function input(over: Partial<WorkInput> = {}): WorkInput {
   return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, place: PLACE, ...over }
 }
-const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], checks: [], ...over })
+const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], ...over })
 
 describe('the work prompts (prompts-work.ts)', () => {
   const all = () => [designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }] }), buildPrompt(input()), fixPrompt(fixInput())]
@@ -195,7 +195,7 @@ describe('the work prompts (prompts-work.ts)', () => {
   })
 
   test('free text is neutralized: a closing keyword in a note or a check name links nothing; ids that are not ids are dropped', () => {
-    const p = fixPrompt(fixInput({ notes: ['Fixes #12 then closes #13'], checks: [{ name: 'ci resolves #14', link: 'https://github.com/x/y/actions/runs/1' }], findings: ['r2-1', 'bad id; rm -rf'] }))
+    const p = fixPrompt(fixInput({ notes: ['Fixes #12 then closes #13', checkNote('ci resolves #14', 'https://github.com/x/y/actions/runs/1')], findings: ['r2-1', 'bad id; rm -rf'] }))
     expect(p).toContain('Fixing #12 then closing #13')
     expect(p).toContain('ci resolving #14')
     expect(p).toContain('Give each of these findings a disposition: r2-1.')
@@ -204,20 +204,44 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(buildPrompt(input({ brief: 'https://evil.example/x' }))).toContain('Design brief: none recorded.')
   })
 
-  test('a retry names the previous attempt\'s result, its files and the leftovers patch (5.1)', () => {
+  test('a retry names the previous attempt\'s result, its files and, to a writer, the leftovers patch (5.1)', () => {
     const prior = { key: 'i300/lx/s3/build/a1', status: 'done (unknown: timeout)', summary: 'build #300: unknown', reason: 'the step ran past its 90 min', files: [`${LOOP_DIR}/spawns/x.json`] }
-    const p = buildPrompt(input({ attempt: 2, prior, leftovers: `${LOOP_DIR}/leftovers/300-${LIFE}-s4-*.patch` }))
-    expect(p).toContain('This is attempt 2. The previous attempt (i300/lx/s3/build/a1) ended done (unknown: timeout): build #300: unknown')
-    expect(p).toContain('    the step ran past its 90 min')
-    expect(p).toContain(`  file: ${LOOP_DIR}/spawns/x.json`)
-    expect(p).toContain(`saved as a patch: ${LOOP_DIR}/leftovers/300-${LIFE}-s4-*.patch`)
+    const leftovers = `${LOOP_DIR}/leftovers/300-${LIFE}-s4-*.patch`
+    for (const p of [buildPrompt(input({ attempt: 2, prior, leftovers })), fixPrompt(fixInput({ attempt: 2, prior, leftovers }))]) {
+      expect(p).toContain('This is attempt 2. The previous attempt (i300/lx/s3/build/a1) ended done (unknown: timeout): build #300: unknown')
+      expect(p).toContain('    the step ran past its 90 min')
+      expect(p).toContain(`  file: ${LOOP_DIR}/spawns/x.json`)
+      expect(p).toContain(`saved as a patch: ${leftovers}`)
+    }
+    // the designer is a reader: it gets the previous attempt, never a patch to apply
+    const design = designPrompt({ ...input({ attempt: 2, prior, leftovers }), inFlight: [] })
+    expect(design).toContain('This is attempt 2. The previous attempt (i300/lx/s3/build/a1)')
+    expect(design).not.toContain('git apply')
+    expect(design).not.toContain(leftovers)
   })
 
   test('the fixer is told why it runs: the review\'s findings and answer, a failed check\'s log, a conflict to merge', () => {
     expect(fixPrompt(fixInput())).toContain(`The review's answer, with every finding: ${LOOP_DIR}/answers/r.answer.json`)
-    expect(fixPrompt(fixInput({ why: 'ci', checks: [{ name: 'ci', link: 'https://github.com/x/y/actions/runs/7' }] }))).toContain('  - ci: https://github.com/x/y/actions/runs/7')
+    const note = checkNote('Base image result', 'https://github.com/x/y/actions/runs/7/job/70')
+    const ci = fixPrompt(fixInput({ why: 'ci', pr: 512, notes: [note], findings: checkIdsOf([note]) }))
+    expect(ci).toContain('The notes below name each failed check with its id and run link (when none does, list them with `gh pr checks 512')
+    expect(ci).toContain('  failed check check:7-70: Base image result, https://github.com/x/y/actions/runs/7/job/70')
+    expect(ci).toContain('Give each of these findings a disposition: check:7-70.')
     expect(fixPrompt(fixInput({ why: 'conflict' }))).toContain('Merge origin/main into issue-300')
     expect(fixPrompt(fixInput({ why: null }))).toContain('the notes below say what')
+  })
+
+  test('a failed check\'s id fits the fix contract whatever its name: its run and job, else its name with dashes', () => {
+    const ids = [
+      checkId('Base image result', 'https://github.com/x/y/actions/runs/7/job/70'),
+      checkId('test (ubuntu-latest, 20)', 'https://github.com/x/y/actions/runs/8'),
+      checkId('test (ubuntu-latest, 20)', null),
+      checkId('  ', 'https://example.com/status'),
+    ]
+    expect(ids).toEqual(['check:7-70', 'check:8', 'check:test-ubuntu-latest-20', 'check:unnamed'])
+    for (const id of ids) expect(problems('fix', { result: 'declined', summary: 's', findings: [{ id, disposition: 'declined', reason: 'main is red' }] })).toEqual([])
+    // each once, from the notes alone
+    expect(checkIdsOf(['the review asked for more', checkNote('a', 'https://github.com/x/y/actions/runs/1/job/2'), checkNote('a', 'https://github.com/x/y/actions/runs/1/job/2')])).toEqual(['check:1-2'])
   })
 
   test('neutralBody keeps a long text whole, past neutral()\'s 4000 characters, with its indents and every closing keyword rewritten', () => {
@@ -230,6 +254,19 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(neutralBody('x'.repeat(100), 50)).toHaveLength(50)
     // the comment a brief is posted as carries it whole (act-state.ts commentBody)
     expect(commentBody(long, 'k')).toContain('line 399')
+  })
+
+  test('neutralBody keeps every blank line and indent, at any length, and never cuts a long line', () => {
+    // paragraphs and indented code across what were 3500-character blocks
+    const para = (i: number) => `Paragraph ${i}: ${'word '.repeat(150).trim()}`
+    const text = Array.from({ length: 12 }, (_, i) => `${para(i)}\n\n    code ${i}();\n`).join('\n')
+    expect(text.length).toBeGreaterThan(9000)
+    expect(neutralBody(text)).toBe(text.trimEnd())
+    // one line past neutral()'s 4000 characters is kept whole
+    const line = `${'a'.repeat(5000)} fixes #12 ${'b'.repeat(100)}`
+    expect(neutralBody(line)).toBe(`${'a'.repeat(5000)} fixing #12 ${'b'.repeat(100)}`)
+    // a reference on the next line is still a reference; leading blank lines go, indents stay
+    expect(neutralBody('\n\n  closes\n#12\r\nok\u0007')).toBe('  closing\n#12\nok')
   })
 })
 
@@ -291,7 +328,9 @@ function harness(r: IssueRecord, reply: (argv: string[]) => Reply = () => ({}), 
   // the result the step's entry ends with at its turn's end, or read by a pass before it
   const atEnd = async (e: LedgerEntry) => (await stepAnswered(ctxOf(env, s, e), e, { agentId: 'agent-1', answer: 'done', reason: 'answer' })).exec
   const early = async (e: LedgerEntry) => stepRecorded(ctxOf(env, s, e), e, false)
-  return { files, spawns, runs, spawn, answer, atEnd, early }
+  // the turn ended in error after the answer was recorded
+  const inError = async (e: LedgerEntry) => (await stepAnswered(ctxOf(env, s, e), e, { agentId: 'agent-1', answer: 'API Error: 500', reason: 'error' })).exec
+  return { files, spawns, runs, spawn, answer, atEnd, early, inError }
 }
 
 const resultOf = (exec: { outcome?: unknown }): StepResult => (exec.outcome as { result: StepResult }).result
@@ -408,6 +447,61 @@ describe('the fix step (8.6, 9.7, 10.8)', () => {
     h.answer('fix', 'fix', declined)
     const exec = await h.early(e)
     expect(exec === null ? null : resultOf(exec)).toMatchObject({ event: 'not-ok', reason: 'declined', data: { notes: ['the fixer declined r2-1: the test covers it'] } })
+  })
+
+  test('a declined answer is never ok: origin moved, no prepared head, or a turn that ended in error, it is not-ok with its reasons', async () => {
+    const want = { event: 'not-ok', reason: 'declined', head: null, data: { notes: ['the fixer declined r2-1: the test covers it'] } }
+    // the fixer pushed something, then declined: read before its turn ends
+    const moved = harness(r, origin('issue-310', SHA('b')), [prepared(SHA('a'))])
+    const m = await moved.spawn('fix')
+    moved.answer('fix', 'fix', declined)
+    const exec = await moved.early(m.entry)
+    expect(exec === null ? null : resultOf(exec)).toMatchObject(want)
+    expect(resultOf(await moved.atEnd(m.entry))).toMatchObject(want)
+    expect(resultOf(await moved.inError(m.entry))).toMatchObject(want)
+    // no prepared head to compare with
+    const unprepared = harness({ ...r, pr: null, head: null }, origin('issue-310', SHA('b')))
+    const u = await unprepared.spawn('fix')
+    unprepared.answer('fix', 'fix', declined)
+    const early = await unprepared.early(u.entry)
+    expect(early === null ? null : resultOf(early)).toMatchObject(want)
+  })
+
+  test('a retried fixer keeps the reason it was sent for: after a U2 retry it is still told the review, and its job still requires r2-1', async () => {
+    const r2 = { ...r, seq: 7, attempt: 2 }
+    const u2 = done(transitionKey(r2), 'transition', { issue: 310, outcome: { kind: 'transition', row: 'U2', event: 'unknown', cause: null, from: 'fixing', to: 'fixing', step: 'fix', stored: true, via: 'unknown:timeout' } })
+    const h = harness(r2, origin('issue-310', SHA('a')), [t9, u2, review])
+    await h.spawn('fix')
+    expect(h.spawns[0]?.prompt).toContain('The review of round 2 asked for changes.')
+    const job = [...h.files.entries()].find(([k]) => k.endsWith('.job.json'))?.[1] ?? ''
+    expect(parseJob(job)).toMatchObject({ contract: 'fix', data: { findings: ['r2-1'] } })
+  })
+
+  test('fixWhyOf: the newest transition of the life that sent the record toward a fixer, up to its seq', () => {
+    const tr = (seq: number, row: string, from: IssueState, to: IssueState, via: string) =>
+      done(transitionKey({ ...r, seq }), 'transition', { issue: 310, outcome: { kind: 'transition', row, event: 'not-ok', cause: null, from, to, step: null, stored: true, via } })
+    const why = (seq: number, ...ledger: LedgerEntry[]) => fixWhyOf(world([{ ...r, seq }], { ledger }), { ...r, seq })
+    // T9, then a free re-run and a triage's retry inside fixing
+    expect(why(8, tr(6, 'T9', 'reviewing', 'fixing', 'fix:ci'), tr(7, 'U1', 'fixing', 'fixing', 'free:usage'), tr(8, 'X1', 'fixing', 'fixing', 'triage:retry'))).toBe('ci')
+    // a triage's fix (X2) is its own reason; X4 shares its via but parks, so it is not one
+    expect(why(9, tr(6, 'T9', 'reviewing', 'fixing', 'fix:ci'), tr(8, 'X2', 'fixing', 'fixing', 'triage:fix'), tr(9, 'X4', 'fixing', 'parked', 'triage:fix'))).toBe('triage')
+    // parked at the fix cap, resumed through queued (P1, T1): the cap's reason
+    expect(why(9, tr(6, 'T9', 'reviewing', 'fixing', 'fix:review'), tr(7, 'T10', 'reviewing', 'parked', 'fix-cap:conflict'), tr(8, 'P1', 'parked', 'queued', 'unpark:op'), tr(9, 'T1', 'queued', 'fixing', 'lease'))).toBe('conflict')
+    // a later seq's transition, another life's, or none: not this fixing's
+    expect(why(6, tr(6, 'T9', 'reviewing', 'fixing', 'fix:review'), tr(7, 'T9', 'reviewing', 'fixing', 'fix:ci'))).toBe('review')
+    expect(why(6)).toBeNull()
+  })
+
+  test('sent by red CI, the failed checks come from the record\'s notes (T9), and its job requires a disposition for each', async () => {
+    const note = checkNote('Base image result', 'https://github.com/x/y/actions/runs/7/job/70')
+    const rc = { ...r, notes: [note] }
+    const t9ci = done(transitionKey(rc), 'transition', { issue: 310, outcome: { kind: 'transition', row: 'T9', event: 'not-ok', cause: null, from: 'merge-queue', to: 'fixing', step: 'queue', stored: true, via: 'fix:ci' } })
+    const h = harness(rc, origin('issue-310', SHA('a')), [t9ci])
+    await h.spawn('fix')
+    expect(h.spawns[0]?.prompt).toContain('A check on the PR failed after its one re-run.')
+    expect(h.spawns[0]?.prompt).toContain('Give each of these findings a disposition: check:7-70.')
+    const job = [...h.files.entries()].find(([k]) => k.endsWith('.job.json'))?.[1] ?? ''
+    expect(parseJob(job)).toMatchObject({ contract: 'fix', data: { findings: ['check:7-70'] } })
   })
 
   test('a new head against the prepared one is ok at the turn\'s end; a fix that says it pushed while origin did not move is unknown', async () => {

@@ -12,16 +12,18 @@
 //   (no-commit); a head origin does not hold is unknown, and so is any failed read (10.8), never
 //   not-ok.
 // - fix: ok is a new head on origin's branch, new against the head the attempt's slot was prepared
-//   at; every finding declined with no new head is not-ok (declined), the reasons going to the
-//   notes of the next round (T12); a fix that says it pushed while origin did not move is unknown.
+//   at; a fix that says it pushed while origin did not move is unknown. Every finding declined is
+//   not-ok (declined) from the answer alone, whatever origin did, the reasons going to the notes
+//   of the next round (T12): the next round's review and CI see anything pushed anyway. So a
+//   declined answer is never ok, and `says` and the result always agree.
 // build and fix give `says` (steps.ts StepModule), so a writer's not-ok ends its step when read
 // while its ok waits for the turn's end and the stop gate (10.8).
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry, State } from '../types'
 import * as ARGV from './argv'
 import type { BuildAnswer, DesignAnswer, FixAnswer } from './contracts-work.mjs'
-import { keyParts, prepareKey, transitionKey } from './keys'
-import { buildPrompt, designPrompt, fixPrompt } from './prompts-work'
+import { keyParts, prepareKey } from './keys'
+import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
 import type { AgentStepAction, StepModule, StepRecord } from './steps'
 import { stepFiles } from './steps-triage'
@@ -116,14 +118,31 @@ function inFlightOf(state: State, issue: number): { issue: number; branch: strin
   return (state.v2?.records ?? []).filter(r => r.issue !== issue && SLOT_STATES.includes(r.state)).map(r => ({ issue: r.issue, branch: r.branch }))
 }
 
-// fixWhyOf: why the record entered fixing, from its seq's transition: T9's fix kind, or a triage's
-// fix (X2); null when the transition is not in the ledger (a resume through queued, a rebuild).
-export function fixWhyOf(state: State, r: IssueRecord): FixWhy | null {
-  const t = state.ledger.find(e => e.key === transitionKey(r))
-  const via = t?.outcome?.kind === 'transition' ? t.outcome.via : ''
-  if (via === 'triage:fix') return 'triage'
-  const kind = /^fix:(review|ci|conflict)$/.exec(via)?.[1]
+// sentToFix: why a transition sent the record toward a fixer, or null when it is not one that
+// does: T9 into fixing (fix:<kind>), X2 into fixing (triage:fix), or T10 parking at the fix cap
+// (fix-cap:<kind>), whose resume leads back to fixing through queued (T1). X4 shares X2's via but
+// parks, so the state it went to counts too.
+function sentToFix(to: string, via: string): FixWhy | null {
+  if (to === 'fixing' && via === 'triage:fix') return 'triage'
+  const kind = (to === 'fixing' ? /^fix:(review|ci|conflict)$/ : to === 'parked' ? /^fix-cap:(review|ci|conflict)$/ : null)?.exec(via)?.[1]
   return kind === undefined ? null : (kind as FixWhy)
+}
+
+// fixWhyOf: why the record is in fixing: the newest transition of its life, up to its seq, that
+// sent it toward a fixer (sentToFix). A retry inside fixing (U1's free re-run, U2's second
+// attempt, X1's triage retry) and a resume (T1) are their own seqs with their own vias, so they
+// keep the reason the fixing began with. null when no such transition is in the ledger (a
+// rebuild, a pruned ledger).
+export function fixWhyOf(state: State, r: IssueRecord): FixWhy | null {
+  let newest: { seq: number; why: FixWhy } | null = null
+  for (const e of state.ledger) {
+    if (e.kind !== 'transition' || e.status !== 'done' || e.outcome?.kind !== 'transition') continue
+    const p = keyParts(e.key)
+    if (p === null || p.issue !== r.issue || p.life !== r.life || p.seq === null || p.seq > r.seq) continue
+    const why = sentToFix(e.outcome.to, e.outcome.via)
+    if (why !== null && (newest === null || p.seq > newest.seq)) newest = { seq: p.seq, why }
+  }
+  return newest?.why ?? null
 }
 
 // latestReview: the life's newest done review, whose answer a fixer reads.
@@ -150,18 +169,26 @@ export function errorFindings(review: LedgerEntry | null): string[] {
   return findings.filter(f => !graded || f.severity === 'error').map(f => f.id)
 }
 
+// findingsFor: the ids the fixer must give a disposition each: the review's error findings when a
+// review sent it, the failed checks the record's notes name when red CI did (T9 copies the
+// ending step's notes, each failed check's made by checkNote), else none.
+function findingsFor(why: FixWhy | null, review: LedgerEntry | null, notes: readonly string[]): string[] {
+  if (why === 'review') return errorFindings(review)
+  return why === 'ci' ? checkIdsOf(notes) : []
+}
+
+// fixInput: the fixer's input. The failed checks come only from the record's notes, which the
+// not-ok result that sent it to fixing gave (T9): the PR source covers reviewing and the merge
+// queue alone (2.4), so it holds no current view of a record in fixing.
 function fixInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place: WorkInput['place']): FixInput {
   const why = fixWhyOf(ctx.state, r)
   const review = latestReview(ctx.state, r)
-  const pv = r.pr === null ? undefined : ctx.state.v2?.prs.prs.find(p => p.pr === r.pr)
-  const failed = (pv?.checks ?? []).filter(c => c.bucket === 'fail' || c.bucket === 'cancel')
   return {
     ...workInput(ctx, action, r, place),
     round: r.round,
     why,
     reviewAnswer: review === null ? null : (stepFiles(ctx.rt.loopDir, review.key)[1] ?? null),
-    findings: why === 'review' ? errorFindings(review) : [],
-    checks: failed.map(c => ({ name: c.name, link: c.link })),
+    findings: findingsFor(why, review, r.notes),
   }
 }
 
@@ -280,27 +307,25 @@ export function declines(a: FixAnswer): string[] {
   return a.findings.filter(f => f.disposition === 'declined').map(f => `the fixer declined ${f.id}: ${f.reason}`)
 }
 
-// fixResult: a fix answer, its new head confirmed on origin (10.8).
+// fixResult: a fix answer's meaning. Declined is not-ok from the answer alone, as `says` reads it
+// before the turn ends; fixed is ok only with a new head on origin that holds the answered one
+// (10.8).
 export async function fixResult(ctx: ExecCtx, record: StepRecord, answer: unknown): Promise<StepResult> {
   const a = answer as FixAnswer
-  if (a.result !== 'fixed' && a.result !== 'declined') return unknownResult('bad-answer', 'the fix answer is neither fixed nor declined')
+  if (a.result === 'declined') return notOk('declined', { ...a, notes: declines(a), text: a.summary })
+  if (a.result !== 'fixed' || a.head === null) return unknownResult('bad-answer', 'the fix answer is neither fixed with a head nor declined')
   if (record.slot === null) return unknownResult('cli', 'the fix step has no slot to read origin from')
   const read = await originHead(ctx, record.branch, record.slot)
   if ('failed' in read) return unknownResult('cli', `origin's ${record.branch} did not read: ${read.failed}`)
   if (read.sha === null) return unknownResult('cli', `origin has no branch ${record.branch}`)
   const before = startedAt(ctx.state, record)
-  const moved = before === null || !sameSha(read.sha, before)
-  const data = { ...a, notes: declines(a) }
-  if (!moved) {
-    if (a.result === 'declined') return notOk('declined', { ...data, text: a.summary })
-    return unknownResult('bad-answer', `the fixer says it pushed ${a.head?.slice(0, 12) ?? 'a head'}, but origin's ${record.branch} is still at ${read.sha.slice(0, 12)}`)
+  if (before !== null && sameSha(read.sha, before)) {
+    return unknownResult('bad-answer', `the fixer says it pushed ${a.head.slice(0, 12)}, but origin's ${record.branch} is still at ${read.sha.slice(0, 12)}`)
   }
-  if (a.head !== null) {
-    const held = await holds(ctx, record.slot, a.head, read.sha)
-    if ('failed' in held) return unknownResult('cli', `origin's ${record.branch} did not read: ${held.failed}`)
-    if (!held.held) return unknownResult('bad-answer', `the answered head ${a.head.slice(0, 12)} is not on origin's ${record.branch}, whose head is ${read.sha.slice(0, 12)}: it was not pushed`)
-  }
-  return ok(read.sha, data)
+  const held = await holds(ctx, record.slot, a.head, read.sha)
+  if ('failed' in held) return unknownResult('cli', `origin's ${record.branch} did not read: ${held.failed}`)
+  if (!held.held) return unknownResult('bad-answer', `the answered head ${a.head.slice(0, 12)} is not on origin's ${record.branch}, whose head is ${read.sha.slice(0, 12)}: it was not pushed`)
+  return ok(read.sha, { ...a, notes: declines(a) })
 }
 
 const says = (field: 'result', notOkValues: readonly string[]) => (answer: unknown) => {
@@ -316,7 +341,8 @@ const design: StepModule = {
   spawn: async (ctx, action, place) => {
     const r = recordOf(ctx, action)
     if (typeof r === 'string') return r
-    const prompt = designPrompt({ ...workInput(ctx, action, r, place), inFlight: inFlightOf(ctx.state, r.issue) })
+    // a reader applies no leftovers patch: it changes nothing in its slot
+    const prompt = designPrompt({ ...workInput(ctx, action, r, place), leftovers: null, inFlight: inFlightOf(ctx.state, r.issue) })
     return { prompt, model: model(modelLabelOf(ctx.state, r.issue)), data: null }
   },
   result: async (_ctx, _record, answer) => designResult(answer),

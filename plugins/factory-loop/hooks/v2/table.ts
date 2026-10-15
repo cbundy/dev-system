@@ -49,7 +49,9 @@ export type EventData = {
   // T8: the patch id the reviewer approved; T8, T9, T10: the PR the reviewing step ensured
   patch?: string
   pr?: number
-  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step
+  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step; a failed
+  // check is one note in the shape prompts-work.ts checkNote gives, so the fixer gets its id and
+  // its run link (the PR source does not cover a record in fixing, 2.4)
   notes?: string[]
   // X1, X2, X3: the triage's instructions
   instructions?: string
