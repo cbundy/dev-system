@@ -2,19 +2,17 @@
 
 Workflow 1 of the v2 build, 2026-10-15: the spec, three spikes, three critics and a revision. This
 page records what the critics found, what the revision did with each finding, the rule count, the
-workspace design the spec now uses, and the questions only the owner can answer.
+workspace design the spec now uses, and the owner's decisions on the spec.
 
 ## What happens next
 
-- **The owner** answers the open questions below. Workflow 2 can start without them, because none
-  changes the state model it builds. Three are needed earlier:
-  - question 2 (run the reconcile migration now) decides whether the migration tool's first report
-    comes to the owner during workflow 2;
-  - question 4 (a red main) must be settled before workflow 3 builds the merge queue;
-  - question 5 (what counts as a manual touch) must be settled before workflow 2's events unit
-    lands.
 - **Workflow 2** builds U1 first, then U2 (the state model, table and triage), U3 (reconcile and
-  the migration tool) and U4 (events and manual touches), from [SPEC.md](SPEC.md) section 16.
+  the migration tool) and U4 (events, interventions and the claim tools) in parallel, from
+  [SPEC.md](SPEC.md) section 16. No question for the owner is open.
+- **Before U4 starts,** main is merged into `feat/factory-loop-v2` once issue #534 lands, so U4
+  builds on its structured event format. If #534 is late, U4 uses the stated fallback.
+- **The owner** sees the migration tool's first report during workflow 2 and approves releases by
+  issue, while both live loops stay in observe mode.
 - **Workflow 3** starts U9 with the frameless re-probe described in [SPIKES.md](SPIKES.md), before
   building the companion plugin.
 
@@ -64,7 +62,7 @@ measuring the layer, so SPEC.md section 14.2 now counts everything against C3's 
 | Key families | about 62 | about 12 | 17 | 13 new, plus the foundation's 5 |
 | Notice kinds of the new layer | about 24 in all | about 5 | 9 | 6 |
 | Sources | 10 | fewer than 10 | about 15 | 10 |
-| Detected touch kinds | 0 | - | 12 | 6 |
+| Intervention causes | 0 | - | 12 touch kinds | 11 person, 16 loop (owner's widening) |
 | New settings | - | - | 12 | 11 |
 
 The spec gives the reason for each excess over C3's estimate. The text grew, from about 21,400 to
@@ -199,58 +197,99 @@ Section numbers are SPEC.md's.
 - **v1's runaway protection** already has an executor breaker, three failures of a kind closing it
   for 30 minutes (`docs/factory-loop/SPEC.md` 11.4), which the step-unknown bucket extends.
 
-## Open questions for the owner
+## Owner decisions
 
-The same ten as SPEC.md section 18, with options and a recommendation each.
+The owner answered the ten open questions on 2026-10-15 and added two structural decisions and
+one on the event format. All are in SPEC.md section 15, and section 18 now says no question is
+open. What each changed in the spec:
 
-1. **Does a drop close the GitHub issue?**
-   - (a) No: the record closes and the labels go. The issue stays open, and re-adding `ready`
-     brings it back.
-   - (b) Close it as not planned.
-   - *Recommend (a):* the issue is yours, and a drop is the factory stepping away.
-2. **Run the reconcile migration now, before v2?**
-   - (a) Build `factory-reconcile` in wave 1, show you its report, and run the releases you approve
-     while both live loops stay in observe.
-   - (b) Only at cutover.
-   - *Recommend (a):* you called the ghosts a big gap now, and the tool needs nothing from later
-     waves.
-3. **Ghosts without `ready`.**
-   - (a) They leave the factory, and the report names each open PR, so re-adding `ready` brings it
-     back with the PR adopted.
-   - (b) Adopt them into v2 records at cutover.
-   - *Recommend (a):* it is your rule, and adoption keeps the work.
-4. **A red main.**
-   - (a) No hold: a failed check on the head gets one re-run, then a fixer, and the queue moves on,
-     as your rule says.
-   - (b) Hold the queue while main's required check is red, with held records leaving the
-     in-flight count.
-   - *Recommend (a):* with "up to date before merging" on, the head's own CI already carries
-     main's state.
-5. **What counts as a manual touch for the cutover bar.**
-   - (a) Only what a person did to move work: work ops, recorded rescues, hand pushes, merges and
-     closes, removing the parked label, and hand edits of `control.json`. Operations such as
-     `mode`, `trace`, a K change or a restart are logged but not counted, and issues that change
-     the loop itself are left out of the ten.
-   - (b) Everything the loop did not do itself.
-   - *Recommend (a):* it matches the definition in
-     [#632](https://github.com/cbundy/dev-system/issues/632), and (b) fails the bar for issues
-     nobody touched.
-6. **Enabling the companion plugin.**
-   - (a) Add `factory-loop-workspace` to the orchestrator-loop Coder template's plugin list,
-     pushed by you at cutover.
-   - (b) Enable it in each consumer repo's settings.
-   - *Recommend (a):* one place, and the loop holds agent steps and tells you if the plugin is
-     missing.
-7. **Capacity.** K = 2 at cutover, then 3, and 3 as v2's default (v1's is 5).
-   - *Recommend this:* C3's model meets the 12 to 22 merges a day baseline from K = 2.
-8. **The release task.**
-   - (a) Keep it, with the Run its folded in, never waiting on you inside its wake.
-   - (b) Take releases out of the loop.
-   - *Recommend (a):* your standing release authority lets the judge finish them, and no merge
-     waits.
-9. **Caps.** `fixCap` 3 and `maxTriages` 2 per life.
-   - *Recommend both:* 3 is today's review cap, and 2 is C3's.
-10. **`In development` beside the `factory:*` labels.**
-    - (a) Keep it until the old orchestrator is retired.
-    - (b) Drop it now.
-    - *Recommend (a):* the claim, heartbeat and sweep tools rely on it.
+1. **A drop does not close the GitHub issue** (recommended option). Section 11 and the decision
+   now cite section 15 instead of the question.
+2. **The reconcile migration runs now** (recommended). 6.3: built in wave 1, its report to the
+   owner, approved releases run while both live loops stay in observe.
+3. **Ghosts without `ready` leave the factory** (recommended), the report naming each open PR.
+   No text change beyond the decision.
+4. **A red main does not hold the merge queue** (recommended). 9.5 says the owner confirmed it.
+5. **Interventions, not manual touches** (the owner chose the broader alternative). The owner
+   wants every point where someone had to step in unexpectedly recorded, so the signals are not
+   lost.
+   - 7.2 is rewritten: an `intervention` event (renamed from `manual_touch`) with `who`
+     (`person` or `loop`), a cause code, a one-line reason and the issue when there is one.
+   - Person causes: `op:<name>` (every op but `status` and `help`, `mode`, `trace` and
+     `planner` included), `unpark`, `push`, `hand-merge`, `pr-closed`, `issue-closed`,
+     `control-file` (`control.json` or the `OFF` file), `config-file` (either settings file, so
+     capacity changes), `restart`, `reconcile` (the migration's approved releases), `rescue`
+     (recorded by hand).
+   - Loop causes: `triage`, `unknown:<why>` (`timeout`, `agent-dead`, `bad-answer`, `api`,
+     `spawn`, `cli`, `github-wait`), `free:<load|usage|slot|breaker>`, `park`, `fix:ci`,
+     `fix:conflict`, `ci-rerun`, `queue:patch`, `queue:linkage`,
+     `guard:<write|push|command>`, `gate-unknown`, `tripwire`, `breaker`, `stalled`,
+     `workspace`, `reconcile` (R1's ghost releases), `reclaim` (a lapsed claim taken again),
+     `wake` (any wake or task that is not a tell or the release task).
+   - Not interventions: the designer, builder and reviewer at work, review-findings fixes, a
+     fixer chosen by triage (the triage already counts), Q1 and Q2, the release task, waiting
+     tells, held steps, `claim-lost`.
+   - Every intervention is derived from a fact the loop already holds, in one module
+     (`rules-interventions.ts`, U4), keyed by that fact, so each is logged once and no other unit
+     emits one. The companion plugin appends its refusals and its gates that could not run to
+     `<loop dir>/companion.jsonl`, which the loop reads; it writes no event itself.
+   - Fleet-level interventions (mode, restart, capacity, breaker) name no issue and are attached
+     to no issue. Their effect on an issue shows as that issue's own interventions (a restart's
+     cut steps each log `free:load`).
+   - Also changed: section 1's goals, 4.1 (pushes), the table's Events column (E2, E3, E4 and P1
+     no longer list touches; a note says interventions are derived), 6.4, 7.1, 7.3 (metrics 1
+     and 2 from `who` and `cause`), 10.4, 10.6, 14.2, property 13 (a happy-path life logs no
+     intervention), the drills' expected interventions, 17.5, appendices B, C and E, and U4's
+     scope.
+   - **The cutover bar is kept:** at least 7 of the first 10 claims merge within 3 hours
+     untouched, meaning no intervention of either kind names the issue. Loop-changing issues are
+     no longer left out. The bar stays consistent because the happy path logs no intervention by
+     construction (property 13), and the planned K change is fleet-level, so it attaches to no
+     issue. It is harder than before: a usage-limit kill, a flaky check or a restart now taints
+     the issues it touched. That is the owner's intent, so no change to 7 of 10 is proposed.
+6. **The companion plugin is enabled through the Coder template** (recommended). 10.9 and 17.5
+   say "pushed at cutover"; the operator or the owner may push it. The workspace restart is still
+   asked of the owner.
+7. **K = 2 at cutover, then 3; default 3** (accepted). 17.5 and appendix A.
+8. **The release task stays in the loop** (recommended). The decision moved into the owner block.
+9. **`fixCap` 3 and `maxTriages` 2 per life** (accepted).
+10. **`In development` is dropped now** (the owner chose the alternative). v2 neither writes nor
+    reads it.
+    - New 3.6 lists every dependency and its change. `callum-flow-claim` no longer adds the label;
+      its no-argument heartbeat finds this device's claims from `callum-flow-factory-state`
+      instead of the label list. `callum-flow-sweep` takes its candidates from the event log and
+      factory-state (the list its closed-issue pass already reads) and never touches labels but
+      `ready`. The factory-state view checks the `factory:*` label of a v2 stage instead. Both
+      tools drop `CALLUM_FLOW_IN_DEV_LABEL`, and the old orchestrator skill's two lines that name
+      the label are updated.
+    - `derive.ts` was checked: it reads no label (`derive.ts:38-50`), so nothing changes there.
+    - 3.4's `clear` keeps the two-device rule with the `factory:*` labels: it removes none while
+      another device holds a live claim.
+    - The migration (6.3) removes `In development` from the issues it releases and proposes
+      removing it where no live claim is left.
+    - Owners: U4 for the claim, sweep, factory-state and skill changes (all in one unit, so no
+      two parallel units share a file); U3 for the migration; U10 removes v1's `inDevLabel` and
+      its env at the delete wave.
+    - v1 is unaffected: no v1 rule reads the label, its removals of the label become no-ops until
+      the delete wave, and the label stays defined in the repos. Rollback after the delete wave
+      is running the previous release (v0.38.x), which still carries the old tools.
+11. **Module layout and a size guard** (structural). New 2.5: one module per area and kind, the
+    planner a thin composer, the table as data, no module shared by two parallel units. U1 adds
+    a check to `npm run lint` that fails on any file under `plugins/factory-loop/hooks/` over 600
+    lines, with an allowlist of today's six (`plan.ts`, `register.ts`, `act-merge.ts`, `act.ts`,
+    `act-agents.ts`, `control.ts`) that only shrinks: a listed file at or under 600 lines fails
+    too. U10 splits the kept `register.ts` into the engine wiring and the pass driver, and any
+    other kept file still over the budget, so the allowlist is empty after cutover. U2's
+    `recordsFromEvents` moved from `derive.ts` (559 lines) to `record.ts` to stay under it.
+    New property 19.
+12. **Structured event payloads (issue #534).** 7.1: every new v2 payload (`transition`,
+    `reviewed`, `intervention`, and the `release` payload on `reclaimed` and `abandoned`) is a
+    `data` object with a schema name and version, a JSON Schema and tests, following #534's guide
+    where it fits. The note is a short line for people; the note codecs are gone. One module,
+    `hooks/v2/events.ts`, builds every v2 event. U4 starts from a branch with #534 merged in; if
+    #534 has not landed, U4 writes today's format through the same module and switches later.
+    The readers (factory-state, evaluate, `docs/metrics.md`, and the loop's own rebuild) read
+    `data`. The migration tool writes its own events with the same schemas, so U3's event test
+    lands with or after U4.
+
+The rule-id count stays 21. No decision added a rule id, a table row, an action kind or a source.
