@@ -2,13 +2,12 @@
 // 17.1 property 18): the query reads this device's transition events in the columns the event rows
 // are read in; the rebuild keeps the newest record per issue (its newest life, then its highest
 // seq), never another device's, and leaves out a record closed past the store's keep time. The
-// note's codec is events.ts's (U4): with it, any history of transitions rebuilds the records it
-// left; without it, nothing is rebuilt.
+// note's codec is events.ts's: any history of transitions rebuilds the records it left.
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { FactoryEvent } from '../hooks/derive'
 import { eventsFromRows } from '../hooks/derive'
-import * as events from '../hooks/v2/events'
+import { eventArgv, parseTransition } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { lifeOf } from '../hooks/v2/keys'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from '../hooks/v2/record'
@@ -84,14 +83,7 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
     expect(recordsFromEvents([], DEVICE, parse)).toEqual([])
   })
 
-  test('property 18 over events.ts\'s own codec: any history of transitions rebuilds the records it left; with no codec yet, nothing is rebuilt', () => {
-    const codec = (events as unknown as { parseTransition?: TransitionParser }).parseTransition
-    if (codec === undefined) {
-      // U4 fills events.ts beside this unit: until its parser is there, a lost store rebuilds no
-      // record and the loop starts from the store alone
-      expect(recordsFromEvents([eventOf(t(record(7)), NOW)], DEVICE)).toEqual([])
-      return
-    }
+  test('property 18 over events.ts\'s own codec: any history of transitions rebuilds the records it left', () => {
     // a history the table makes: a claim, its lease, the design, a build that cannot, a triage
     // retry, a timeout, a second triage retry, the build
     const triage: TableEvent = { kind: 'triage', choice: 'retry', reason: 'flaky', data: { instructions: 'run it again' } }
@@ -113,7 +105,9 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
       r = nextRecord(r, row, e, NOW - 3 * DAY + (i + 1) * MIN)
       const ev: TransitionEvent = { state: 'transition', record: r, row: row.id, from, via }
       list.push(eventOf(ev, NOW - 3 * DAY + (i + 1) * MIN, DEVICE, noteOf(ev)))
+      // the rebuild's default parser is events.ts's own, and each note reads back to its event
       expect(recordsFromEvents(list, DEVICE)).toEqual([r])
+      expect(parseTransition(list.at(-1) as FactoryEvent)).toEqual(ev)
     })
     expect(r).toMatchObject({ state: 'reviewing', round: 1 })
   })
@@ -121,6 +115,6 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
 
 // noteOf: the note events.ts writes for a transition, from its own argv.
 function noteOf(e: TransitionEvent): string {
-  const argv = events.eventArgv(e)
+  const argv = eventArgv(e)
   return argv[argv.indexOf('--note') + 1] ?? ''
 }

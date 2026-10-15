@@ -933,7 +933,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `issue-closed` | E2 | the issue |
 | `control-file` | `control.json` or the `OFF` file changed with no op (its digest against the last one the loop read or wrote, kept as `files:<repo>` beside the records; an op that finds its file already changed keeps that edit to log; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting | none |
-| `restart` | a module load with no `restart-self` in flight | none |
+| `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --note 'who=person cause=rescue reason=<what, spaces as %20>'` (the encoding of 7.1), which the operator playbook adds to each rescue recipe | the issue, when given |
 
@@ -954,7 +954,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
 | `stalled` | an effect used up its attempts and holds its record (4.5) | the issue |
 | `workspace` | the rail held agent steps because the companion is not loaded (10.9) | none |
-| `reconcile` | R1 released a ghost (6.2) | the issue |
+| `reconcile` | R1 released a ghost (6.2): once, from its done release event, the pass after it | the issue |
 | `reclaim` | H1 claimed a lapsed claim again (4.1) | the issue |
 | `wake` | any wake or task that is not a planned step: anything but a `tell` or the release task (O3) | the issue, when there is one |
 
@@ -2285,8 +2285,9 @@ own test.
 16. **The foundation's properties** (v1 SPEC 5.9): determinism, idempotence (planning again with
     the planned actions running adds nothing but the title), purity, tier safety, control safety,
     one wake and the claim limits.
-17. **Reconcile.** A done release plans nothing next pass; R1 never names an issue with a record,
-    a claim in flight, or another device's claim; observe mode executes nothing.
+17. **Reconcile.** A done release begins nothing again: the next pass plans only its `reconcile`
+    intervention (7.2), once; R1 never releases an issue with a record, a claim in flight, or
+    another device's claim; observe mode executes nothing.
 18. **Events.** Every transition's seq logs exactly one `transition` event before the next
     transition, and rebuilding from any history of them gives back the records. Every note
     `events.ts` builds parses back to the same fields and stays within `LOOP_NOTE_MAX`.

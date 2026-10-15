@@ -7,12 +7,12 @@
 //   re-rendered for its linkage, R1's release of a ghost, H1's re-claim of a lapsed claim, an owner
 //   item told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
 // - the records and the PRs: a head on a record's branch that no loop step produced (4.1);
-// - the State: a module load with no restart of the loop's own in flight; the companion's
-//   refusals and the stop gates that could not run (sources-interventions.ts); and the hand edits
-//   of control.json, the OFF file and the settings, against the versions the loop last read or
-//   wrote (fileFacts, below).
-// A transition's own detail (its via: a fixer's reason, an unknown's why) comes with it, so nothing
-// is inferred from other entries.
+// - the State: a module load, after an earlier run of the loop, with no restart of the loop's own
+//   in flight; the companion's refusals and the stop gates that could not run
+//   (sources-interventions.ts); and the hand edits of control.json, the OFF file and the settings,
+//   against the versions the loop last read or wrote (fileFacts, below).
+// A transition's own detail comes with it, in its via code (table.ts viaOf: `unknown:<why>`,
+// `fix:<review|ci|conflict>`, `unpark:<op|label>`), so nothing is inferred from other entries.
 // Owner ops are logged when they land (act-events.ts), not here. Not interventions: the planned
 // work, a fixer for review findings, a fixer chosen by triage (counted as the triage), claim-lost
 // (another device's work), tells for waiting states, and status and help. Pure.
@@ -20,7 +20,8 @@ import { gate, skip } from '../foundation'
 import type { LedgerEntry, Ms } from '../types'
 import { intervention } from './events'
 import type { InterventionEvent } from './events'
-import { factKey, interventionKey, keyParts, lifeAt, short, transitionKey } from './keys'
+import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
+import { isReleaseEntry } from './release'
 import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
 import type { IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
 import { UNKNOWN_WHYS } from './types'
@@ -57,29 +58,30 @@ function transitions(ctx: V2Ctx): Fact[] {
   return out
 }
 
-// whyOf: why the step a transition ended went unknown (7.2), as the transition records it: a
-// timeout says so itself; else its via, the step result's why (types.ts V2Outcome). null when it
-// records none.
+// whyOf: why the step a transition ended went unknown (7.2), as its via code `unknown:<why>` records
+// it (a running step's timeout reaches the table as the unknown `unknown:timeout`; a timeout event
+// says so itself). null when it records none.
 export function whyOf(o: TransitionOutcome): UnknownWhy | null {
   if (o.event === 'timeout') return 'timeout'
-  return UNKNOWN_WHYS.find(w => w === o.via) ?? null
+  const via = o.via ?? ''
+  return via.startsWith('unknown:') ? (UNKNOWN_WHYS.find(w => w === via.slice('unknown:'.length)) ?? null) : null
 }
 
-// What T9's via says a fixer was sent for: red CI or a conflict are interventions, review findings
-// are planned work (7.2). Any other via is a transition that recorded none.
+// What T9's via code says a fixer was sent for (table.ts FIX_REASONS): red CI or a conflict are
+// interventions, review findings are planned work (7.2). Any other via is a transition that
+// recorded none.
 const FIX_FOR: ReadonlyMap<string, 'fix:ci' | 'fix:conflict' | null> = new Map([
-  ['ci-red', 'fix:ci'],
-  ['conflict', 'fix:conflict'],
-  ['changes', null],
+  ['fix:ci', 'fix:ci'],
+  ['fix:conflict', 'fix:conflict'],
+  ['fix:review', null],
 ])
 
-// unparkedByHand: P1 came from the parked label's removal, not from `/factory resume`, whose op is
-// its own intervention: no resume of the issue recorded between the park and the unpark.
-function unparkedByHand(ctx: V2Ctx, f: Fact): boolean {
-  const park = ctx.byKey.get(transitionKey({ issue: f.issue, life: f.life, seq: f.seq - 1 }))
-  const parkedAt = park?.startedAt ?? 0
-  return !ctx.state.control.resumed.some(r => r.subject === `issue:${f.issue}` && r.at >= parkedAt && r.at <= f.entry.startedAt)
-}
+// How P1's via code says the record was unparked: by the parked label's removal (a person's), or by
+// `/factory resume`, whose op is its own intervention (act-events.ts).
+const UNPARK_BY: ReadonlyMap<string, 'label' | 'op'> = new Map([
+  ['unpark:label', 'label'],
+  ['unpark:op', 'op'],
+])
 
 const stepName = (o: TransitionOutcome) => o.step ?? 'the step'
 
@@ -137,9 +139,12 @@ export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
     case 'E4':
       person('pr-closed', `PR${pr === null ? '' : ` #${pr}`} was closed by hand in ${from}`)
       break
-    case 'P1':
-      if (unparkedByHand(ctx, f)) person('unpark', 'factory:parked was removed by hand')
+    case 'P1': {
+      const by = UNPARK_BY.get(o.via ?? '')
+      if (by === undefined) gap(ctx, f, `recorded no via (${o.via ?? 'none'}): whether factory:parked was removed by hand is not known`)
+      if (by === 'label') person('unpark', 'factory:parked was removed by hand')
       break
+    }
   }
   if (o.to === 'parked') {
     const question = record !== undefined && record.seq === f.seq && record.question !== null ? `: ${record.question}` : ''
@@ -182,7 +187,7 @@ function fromLedger(ctx: V2Ctx): Planned[] {
       add(entry, 'loop', 'queue:linkage', 'the PR body was written again after a linkage FAIL', p.life)
     } else if (entry.kind === 'claim' && done && p !== null && p.rest.startsWith('claim/')) {
       add(entry, 'loop', 'reclaim', 'a lapsed claim was claimed again onto its record', p.life)
-    } else if (entry.kind === 'event' && done && /^i[1-9]\d*\/reconcile\/[0-9a-z]+\/event$/.test(entry.key)) {
+    } else if (done && isReleaseEntry(entry)) {
       add(entry, 'loop', 'reconcile', 'R1 released a live claim with no record', null)
     } else if (era !== null && entry.startedAt >= era && entry.kind === 'tell' && TOLD.has(entry.wake ?? '') && !entry.key.includes('iv/')) {
       add(entry, 'loop', TOLD.get(entry.wake ?? '') as string, `the owner was told: ${entry.key}`, null)
@@ -269,10 +274,14 @@ function fromPushes(ctx: V2Ctx): Planned[] {
   return out
 }
 
-// fromRestart: a module load with no restart-self of the loop's own around it (R2's, or v1's H4).
+// fromRestart: a module load that restarted the loop, with no restart-self of the loop's own around
+// it (R2's, or v1's H4). A load is a restart only when the loop ran before it: the ledger it loaded
+// holds an entry from before the load. The first start of a loop with no ledger restarts nothing
+// (the ops that turn it on are logged as ops).
 function fromRestart(ctx: V2Ctx): Planned[] {
   const loaded = ctx.state.loadedAt
   if (ctx.state.now - loaded >= RESTART_PLAN_MS) return []
+  if (!ctx.state.ledger.some(e => e.startedAt < loaded)) return []
   const own = ctx.state.ledger.some(e => e.kind === 'restart-self' && e.endedAt !== null && e.endedAt >= loaded - OWN_RESTART_MS && e.endedAt <= loaded + OWN_RESTART_MS && e.status !== 'failed')
   if (own) return []
   const fact = factKey('restart', 'fleet', Math.trunc(loaded).toString(36))

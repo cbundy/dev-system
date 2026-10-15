@@ -2,14 +2,15 @@
 // no record and no claim in flight is a ghost, released at once: its agents stopped and its factory
 // labels off, then, once those have ended and W2 has freed its slot, `reclaimed` or `abandoned`,
 // last. Property 17 of 17.1 runs over generated factories on every planV2 call here: R1 never names
-// an issue a record holds, a claim in flight or another device's claim; a done release plans nothing
-// next pass, whatever the factory still shows; observe mode executes nothing. The tripwire tells the
-// owner once of each change to the main checkout, and keeps planning its notice until it is told.
+// an issue a record holds, a claim in flight or another device's claim; a done release begins
+// nothing again, whatever the factory still shows, and logs its intervention exactly once (7.2);
+// observe mode executes nothing. The tripwire tells the owner once of each change to the main
+// checkout, and keeps planning its notice until it is told.
 // No test here asserts an exact key: keys come from the key codec.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { Action, AgentView, Checkout, IssueView, LedgerEntry, PlanResult, Stage, State } from '../hooks/types'
-import { claimKey, lifeOf } from '../hooks/v2/keys'
+import { claimKey, interventionKey, lifeOf } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { checkoutBaseOf, checkoutChange, claimOf, ghostsOf, tripwireKey } from '../hooks/v2/reconcile'
@@ -99,6 +100,10 @@ function world(o: World = {}): State {
 }
 
 const r1 = (result: PlanResult) => result.actions.filter(a => a.rule === 'R1')
+// R1's intervention (v2 SPEC 6.4, 7.2): a done release is a loop intervention, cause reconcile,
+// derived from its done event entry (rules-interventions.ts) and so planned once, the pass after it
+const isIv = (a: Action) => a.kind === 'event' && a.event.state === 'intervention'
+const releaseIv = (n: number, fact: string) => ({ kind: 'event', rule: 'R1', issue: n, key: interventionKey(fact), event: { state: 'intervention', who: 'loop', cause: 'reconcile', issue: n, fact } })
 const r1Skips = (result: PlanResult, n?: number) => result.skipped.filter(x => x.rule === 'R1' && (n === undefined || x.issue === n)).map(x => x.why)
 
 // ran: the state after these actions ended with this status
@@ -143,11 +148,17 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
       event: { state: 'abandoned', issue: 470, pr: 621, stage: 'implementing', reason: 'reconcile' },
     })
 
-    // a done release plans nothing next pass, though the factory still shows the claim (property 17)
+    // a done release begins nothing again, though the factory still shows the claim (property 17):
+    // the next pass plans only its intervention, once
     s = ran(s, r1(third))
     const fourth = planV2(s, CFG)
-    expect(r1(fourth)).toEqual([])
+    expect(r1(fourth)).toEqual([expect.objectContaining(releaseIv(470, r1(third)[0]?.key ?? ''))])
     expect(r1Skips(fourth, 470)).toEqual([])
+    // logged: then nothing more
+    s = ran(s, r1(fourth))
+    const fifth = planV2(s, CFG)
+    expect(r1(fifth)).toEqual([])
+    expect(r1Skips(fifth, 470)).toEqual([])
   })
 
   test('labelled ready it goes back to the queue (reclaimed); with its labels not read yet, its event waits for a read', () => {
@@ -207,7 +218,12 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   test('a later claim of the same issue is a release of its own: its keys never reuse an earlier one\'s', () => {
     const s = world({ issues: [held(476, { stageSince: NOW - 3 * HOUR })] })
     const first = r1(planV2(s, CFG))
-    const released = ran(ran(s, first), [releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), ready: false, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')])
+    const event = releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), ready: false, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')
+    let released = ran(ran(s, first), [event])
+    // its intervention, logged once; then nothing
+    const iv = r1(planV2(released, CFG))
+    expect(iv).toEqual([expect.objectContaining(releaseIv(476, event.key))])
+    released = ran(released, iv)
     expect(r1(planV2(released, CFG))).toEqual([])
     // claimed again an hour ago, its record lost with the store: its claim entry, rebuilt from its
     // `claimed` event, dates a ghost of its own, released again under keys of its own
@@ -241,7 +257,11 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     expect(events.map(a => a.kind)).toEqual(['event'])
     expect(releaseClaimOf(479, events[0]?.key ?? '')).toBe(releaseClaimOf(479, label.key))
     s = ran(moved(s, NOW - 20 * MIN), events)
-    // done: the factory still shows it live and its stage keeps moving; nothing is cleared or logged again
+    // done: its intervention is logged once
+    const iv = r1(planV2(moved(s, NOW - 15 * MIN), CFG))
+    expect(iv).toEqual([expect.objectContaining(releaseIv(479, events[0]?.key ?? ''))])
+    s = ran(s, iv)
+    // the factory still shows it live and its stage keeps moving; nothing is cleared or logged again
     for (const since of [NOW - 10 * MIN, NOW - MIN]) {
       const later = moved(s, since)
       expect(ghostsOf(ctxOf(later))).toEqual([])
@@ -254,7 +274,11 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     let s = world({ issues: [held(486, { labels: ['ready'], stage: 'in pipeline', stageSince: NOW - 2 * HOUR })] })
     s = ran(s, r1(planV2(s, CFG)))
     s = ran(s, r1(planV2(s, CFG)))
-    expect(s.ledger.some(e => e.rule === 'R1' && e.kind === 'event' && e.status === 'done')).toBe(true)
+    expect(s.ledger.some(e => isReleaseEntry(e) && e.status === 'done')).toBe(true)
+    // its intervention, logged the pass after
+    const iv = r1(planV2(s, CFG))
+    expect(iv.map(a => (a.kind === 'event' && a.event.state === 'intervention' ? a.event.cause : a.kind))).toEqual(['reconcile'])
+    s = ran(s, iv)
     // still live in the factory view (its run's stage), and no ghost: S1 may claim it
     expect(ghostsOf(ctxOf(s))).toEqual([])
     // S1 claims it: in flight, then done with its record still to make, then held by its record
@@ -380,10 +404,26 @@ describe('R1 names nothing but a ghost (property 17)', () => {
       seen.kept += s.issues.filter(i => i.holder === DEVICE && i.stage !== null && LIVE_STAGES.includes(i.stage) && !ghost(s, i.number)).length
       const ghosts = new Set(s.issues.filter(i => ghost(s, i.number)).map(i => i.number))
       const released = new Map<number, string>()
+      const logged = new Map<number, string>()
+      // R1's interventions: each a done release's, cause reconcile, keyed by its event, planned only
+      // once its event is done and never again once logged (7.2, property 13)
+      const interventions = (all: readonly Action[]) => {
+        const ivs = all.filter(isIv)
+        for (const a of ivs) {
+          const n = a.issue ?? -1
+          const fact = released.get(n)
+          if (fact === undefined) throw new Error(`seed ${seed}: R1 planned ${a.key} for #${n}, whose release is not done`)
+          if (logged.has(n)) throw new Error(`seed ${seed}: R1 planned ${a.key} again after it was logged`)
+          expect(a).toMatchObject(releaseIv(n, fact))
+        }
+        return ivs
+      }
       for (let pass = 0; pass < 6; pass++) {
         const result = planV2(s, CFG)
         expect(planV2(s, CFG)).toEqual(result)
-        const mineR1 = r1(result).filter(a => a.kind !== 'tell')
+        const all = r1(result).filter(a => a.kind !== 'tell')
+        const ivs = interventions(all)
+        const mineR1 = all.filter(a => !isIv(a))
         for (const a of mineR1) {
           if (!ghosts.has(a.issue ?? -1)) throw new Error(`seed ${seed}: R1 named #${a.issue}, not a ghost (${a.key})`)
           if (released.has(a.issue ?? -1)) throw new Error(`seed ${seed}: R1 planned ${a.key} after #${a.issue}'s release was done`)
@@ -402,7 +442,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
           if (a.kind === 'event' && a.event.state !== releaseState(ready)) throw new Error(`seed ${seed}: #${n} released as ${a.event.state}`)
         }
         // idempotent: with its actions running, planning again starts none of them again
-        const again = r1(planV2(ran(s, mineR1, 'running'), CFG)).filter(a => mineR1.some(m => m.key === a.key))
+        const again = r1(planV2(ran(s, all, 'running'), CFG)).filter(a => all.some(m => m.key === a.key))
         if (again.length > 0) throw new Error(`seed ${seed}: planned again while running: ${again.map(a => a.key).join(', ')}`)
         // the act step runs everything; W2 frees the slots; the pool is read
         for (const a of mineR1) {
@@ -410,11 +450,19 @@ describe('R1 names nothing but a ghost (property 17)', () => {
           released.set(a.issue ?? -1, a.key)
           seen[a.event.state === 'reclaimed' ? 'reclaimed' : 'abandoned'] += 1
         }
-        s = withLeases(ran(s, mineR1), [])
+        for (const a of ivs) logged.set(a.issue ?? -1, a.key)
+        s = withLeases(ran(s, all), [])
         s = { ...s, v2: { ...(s.v2 ?? emptyV2State(NOW)), sources: { ...(s.v2 ?? emptyV2State(NOW)).sources, leases: { ok: true, at: NOW } } } }
         // the factory keeps showing a released claim live, and a run's stage moves its time
         s = { ...s, issues: s.issues.map(i => (released.has(i.number) && i.stageSince !== null ? { ...i, stageSince: NOW - (5 - pass) * MIN } : i)) }
       }
+      // a release done on the last pass logs its intervention on the next; every done release has
+      // exactly one
+      const last = interventions(r1(planV2(s, CFG)).filter(a => a.kind !== 'tell'))
+      for (const a of last) logged.set(a.issue ?? -1, a.key)
+      s = ran(s, last)
+      for (const n of released.keys()) if (!logged.has(n)) throw new Error(`seed ${seed}: #${n}'s release logged no intervention`)
+      if (logged.size !== released.size) throw new Error(`seed ${seed}: ${logged.size} interventions for ${released.size} releases`)
       // a done release leaves the issue to S1: no ghost; S1's claim, then its record, start the new life
       const life = lifeOf(NOW)
       for (const n of released.keys()) if (ghostsOf(ctxOf(s)).some(g => g.issue === n)) throw new Error(`seed ${seed}: #${n} is a ghost after its release was done`)
@@ -606,9 +654,14 @@ describe('the release (v2 SPEC 6.4)', () => {
     expect(event).toMatchObject({ kind: 'event', rule: 'R1', class: 'free', issue: 467, key: releaseKey(467, 'tbq3k0', RELEASE_OPS.event) })
     expect(effects.concat(event).map(a => releaseClaimOf(467, a.key))).toEqual(['tbq3k0', 'tbq3k0', 'tbq3k0', 'tbq3k0'])
     expect([releaseClaimOf(46, event.key), releaseClaimOf(467, 'tell:stalled:x'), releaseClaimOf(467, claimKey(467, 'tbq3k0'))]).toEqual([null, null, null])
-    expect(isReleaseEntry({ kind: 'event', rule: 'R1' })).toBe(true)
-    expect(isReleaseEntry({ kind: 'event', rule: 'S3' })).toBe(false)
-    expect(isReleaseEntry({ kind: 'label', rule: 'R1' })).toBe(false)
+    const at = { key: event.key, issue: 467 }
+    expect(isReleaseEntry({ ...at, kind: 'event', rule: 'R1' })).toBe(true)
+    expect(isReleaseEntry({ ...at, kind: 'event', rule: 'S3' })).toBe(false)
+    expect(isReleaseEntry({ ...at, kind: 'label', rule: 'R1' })).toBe(false)
+    // the effects' keys, another issue's, and the intervention the release is (R1's too) are not it
+    expect(effects.map(a => isReleaseEntry({ key: a.key, issue: 467, kind: 'event', rule: 'R1' }))).toEqual([false, false, false])
+    expect(isReleaseEntry({ ...at, issue: 46, kind: 'event', rule: 'R1' })).toBe(false)
+    expect(isReleaseEntry({ key: interventionKey(event.key), issue: 467, kind: 'event', rule: 'R1' })).toBe(false)
   })
 })
 

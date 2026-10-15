@@ -66,10 +66,12 @@ export function releaseClaimOf(issue: number, key: string): string | null {
   return end > before.length ? key.slice(before.length, end) : null
 }
 
-// isReleaseEntry: R1's release event as the ledger keeps it; its done entry is the release, the
-// fact of R1's intervention (7.2).
-export function isReleaseEntry(e: Pick<LedgerEntry, 'kind' | 'rule'>): boolean {
-  return e.kind === 'event' && e.rule === 'R1'
+// isReleaseEntry: R1's release event as the ledger keeps it, keyed by its claim's event op; its done
+// entry is the release, the fact of R1's intervention (7.2). The intervention's own entry
+// (iv/<this key>) is R1's too, and is not one.
+export function isReleaseEntry(e: Pick<LedgerEntry, 'kind' | 'rule' | 'key' | 'issue'>): boolean {
+  const claim = e.issue === null ? null : releaseClaimOf(e.issue, e.key)
+  return e.kind === 'event' && e.rule === 'R1' && e.issue !== null && claim !== null && e.key === releaseKey(e.issue, claim, RELEASE_OPS.event)
 }
 
 // releaseState: reclaimed for an issue still labelled ready, else abandoned (6.4).

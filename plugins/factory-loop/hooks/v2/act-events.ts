@@ -5,8 +5,9 @@
 // (mode, pause of the whole loop, serial) is fleet-level and attached to none. Every event goes
 // through events.ts. What the op wrote to control.json or the settings is kept as the loop's own
 // version when it is written (store.ts noteWritten), so it is never read as a hand edit.
-// logEvent is the one writer of a v2 event, for the `event` executor (act-state.ts) and any other
-// that logs one.
+// logEvent writes a v2 event logged outside a plan's actions. The `event` executor (act-state.ts)
+// runs the same events.ts argv through its ExecCtx, so both carry the actor events.ts names (a
+// fixer's `verdict`, 7.1).
 import { commandOf } from '../act'
 import type { ActEnv } from '../act'
 import type { ExecCtx } from '../exec'

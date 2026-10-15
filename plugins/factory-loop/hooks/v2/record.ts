@@ -8,7 +8,7 @@
 //
 // Pure: the events come in as values.
 import type { FactoryEvent } from '../derive'
-import * as events from './events'
+import { parseTransition } from './events'
 import type { TransitionEvent } from './events'
 import { lifeAt } from './keys'
 import type { IssueRecord } from './types'
@@ -34,15 +34,11 @@ order by ts, seq;
 // A transition event's parser: its row read back into the event, or null when it is not one.
 export type TransitionParser = (row: Pick<FactoryEvent, 'state' | 'issue' | 'branch' | 'pr' | 'head' | 'note'>) => TransitionEvent | null
 
-// events.ts's parser (build unit U4 fills events.ts beside this unit): until it is there, nothing
-// is rebuilt.
-const PARSE = (events as unknown as { parseTransition?: TransitionParser }).parseTransition
-
 // recordsFromEvents: the newest record per issue among this device's transition events: of its
 // newest life, its highest seq (a transition logged again after a re-claim, 4.1, carries the same
-// seq); closed records past the store's keep time are left out.
-export function recordsFromEvents(list: readonly FactoryEvent[], device: string, parse: TransitionParser | undefined = PARSE): IssueRecord[] {
-  if (parse === undefined) return []
+// seq); closed records past the store's keep time are left out. The note is read by events.ts's
+// parser; a test may pass its own.
+export function recordsFromEvents(list: readonly FactoryEvent[], device: string, parse: TransitionParser = parseTransition): IssueRecord[] {
   const newest = new Map<number, { record: IssueRecord; ts: number }>()
   for (const e of list) {
     if (e.state !== 'transition' || (e.device !== null && e.device !== device)) continue

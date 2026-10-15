@@ -490,6 +490,29 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
   }
 
+  test('act mode with planner v2: a load after an earlier run is a person\'s restart, logged once and attached to no issue; a first start restarts nothing (v2 SPEC 7.2)', async ($, on) => {
+    const restarts = (h: ReturnType<typeof host>) => h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention' && (s.argv.at(-1) ?? '').includes('cause=restart'))
+    const clock = mock.clock(on, { now: NOW })
+    const earlier = { v: 1, savedAt: NOW - 30 * MIN, entries: [entry('sweep:0', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })] }
+    const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }, run: world(), store: { [`ledger:${REPO}`]: earlier } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(61_000)
+    const logged = restarts(h)
+    expect(logged).toHaveLength(1)
+    expect(logged[0]?.argv.includes('--issue')).toBe(false)
+    expect(logged[0]?.argv.at(-1)).toMatch(/^who=person cause=restart life=none fact=restart\/fleet\/[0-9a-z]+ reason=/)
+  })
+
+  test('act mode with planner v2: the first start of a loop with no ledger logs no restart', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }, run: world() })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(61_000)
+    expect(h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention')).toEqual([])
+  })
+
   test('/factory planner v2 writes the workspace file; the next pass plans with v2, and status names it', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const h = host(on, { config: { repo: REPO, checkout: '/work' }, run: world() })

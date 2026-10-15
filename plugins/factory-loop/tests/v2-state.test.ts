@@ -15,7 +15,7 @@ import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { applied, commentBody, hiddenKey, issueBranch, labelArgvs, openPrsOf, postedUrl, recordStale, triggerStale } from '../hooks/v2/act-state'
 import { eventArgv } from '../hooks/v2/events'
-import { claimKey, entryKey, followKey, lifeKey, lifeOf, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
+import { claimKey, entryKey, followKey, interventionKey, lifeKey, lifeOf, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
@@ -66,6 +66,8 @@ const of = (r: PlanResult, n: number | null): Action[] => r.actions.filter(a => 
 const kinds = (r: PlanResult, n: number) => of(r, n).map(a => (a.kind === 'label' ? `label ${a.op}` : a.kind === 'event' ? `event ${a.event.state}` : a.kind === 'slot' ? `slot ${a.op}` : a.kind))
 const said = (r: PlanResult, n: number | null) => r.skipped.filter(s => s.issue === n).map(s => s.why)
 const transitionOf = (r: PlanResult, n: number) => r.actions.find((a): a is Extract<Action, { kind: 'transition' }> => a.kind === 'transition' && a.issue === n)
+// ivs: the interventions planned for an issue (rules-interventions.ts, v2 SPEC 7.2), by who and cause
+const ivs = (r: PlanResult, n: number) => of(r, n).flatMap(a => (a.kind === 'event' && a.event.state === 'intervention' ? [`${a.event.who} ${a.event.cause}`] : []))
 
 // done: a ledger entry that ended well, of this record's issue.
 function done(key: string, kind: LedgerEntry['kind'], over: Partial<LedgerEntry> = {}): LedgerEntry {
@@ -82,6 +84,9 @@ function stepDone(r: IssueRecord, step: 'design' | 'build' | 'review' | 'fix' | 
 function transitioned(r: IssueRecord, row: string, from: IssueRecord['state'] | null, via = row.toLowerCase()): LedgerEntry {
   return done(transitionKey(r), 'transition', { issue: r.issue, outcome: { kind: 'transition', row, event: 'ok', cause: null, from, to: r.state, step: null, stored: true, via } })
 }
+
+// ivLogged: the intervention a seq's transition is, once logged (keyed iv/<its transition key>)
+const ivLogged = (r: IssueRecord): LedgerEntry => done(interventionKey(transitionKey(r)), 'event', { issue: r.issue })
 
 // --- S1: claims (v2 SPEC 14.1, 3.5) ---------------------------------------------------------------------
 
@@ -261,7 +266,12 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(notes(73)).toEqual(['merge_ready: round 0'])
     expect(notes(74)).toEqual(['abandoned: dropped'])
     expect(kinds(r, 74)).toEqual(['event transition', 'label clear', 'event abandoned'])
-    expect(kinds(r, 75)).toEqual(['event transition', 'label set', 'comment', 'tell'])
+    // a park is an intervention by the loop, logged beside its entry actions; so is a fixer for red
+    // CI; the planned work (a brief, an approval, a drop) is none (v2 SPEC 7.2)
+    expect(kinds(r, 75)).toEqual(['event transition', 'label set', 'comment', 'tell', 'event intervention'])
+    expect(ivs(r, 75)).toEqual(['loop park'])
+    expect(ivs(r, 72)).toEqual(['loop fix:ci'])
+    for (const n of [71, 73, 74]) expect([n, ivs(r, n)]).toEqual([n, []])
     const comment = of(r, 75).find(a => a.kind === 'comment')
     expect(comment).toMatchObject({ on: 'issue', number: 75, body: expect.stringContaining('which API?') })
     expect((comment as Extract<Action, { kind: 'comment' }>).body).toContain('/factory resume 75')
@@ -282,14 +292,17 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
       child('a', 801),
     ])
     const r = plan(s)
-    expect(kinds(r, 76)).toEqual(['event transition', 'label clear', 'event merged', 'rollout'])
+    // a hand merge is a person's intervention (v2 SPEC 7.2); a split and a lost claim are none
+    expect(kinds(r, 76)).toEqual(['event transition', 'label clear', 'event merged', 'rollout', 'event intervention'])
+    expect(ivs(r, 76)).toEqual(['person hand-merge'])
+    expect([ivs(r, 77), ivs(r, 78)]).toEqual([[], []])
     expect(of(r, 76).find(a => a.kind === 'rollout')).toMatchObject({ pr: 776, key: followKey(merged, 'rollout') })
     expect(of(r, 77).find(a => a.kind === 'release-parent')).toMatchObject({ created: [801, 802] })
     expect(kinds(r, 78)).toEqual(['event transition'])
     // the rollout read run-it, and the factory holds the merge: the later milestone, no merged event
     const read = withLedger(
       { ...s, issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN })], milestone: { open: 1, closed: 0, expected: null } },
-      [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } })],
+      [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } }), ivLogged(merged)],
     )
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
   })
@@ -299,7 +312,9 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const old = entry(stepKey({ ...r, seq: 5 }, 'build', 1), 'agent-step', { issue: 80, class: 'develop', step: 'build', status: 'running', endedAt: null, agentId: 'agent-9', startedAt: NOW - 50 * MIN })
     const s = withLedger(world([r]), [transitioned(r, 'U2', 'building', 'unknown:timeout'), old])
     const first = plan(s)
-    expect(kinds(first, 80)).toEqual(['event transition', 'stop-agent', 'slot kill'])
+    // the unknown is an intervention by the loop, logged once beside the entry actions (v2 SPEC 7.2)
+    expect(kinds(first, 80)).toEqual(['event transition', 'stop-agent', 'slot kill', 'event intervention'])
+    expect(ivs(first, 80)).toEqual(['loop unknown:timeout'])
     const stop = of(first, 80).find(a => a.kind === 'stop-agent')
     expect(stop).toMatchObject({ agentId: 'agent-9', entry: old.key })
     expect(of(first, 80).find(a => a.kind === 'slot')).toMatchObject({ op: 'kill', path: '/slots/80', maxAttempts: 1 })
@@ -307,6 +322,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
       done(entryKey(r, 'event/transition'), 'event', { issue: 80 }),
       entry(stop?.key ?? '', 'stop-agent', { issue: 80, status: 'failed', attempts: 1 }),
       done(entryKey(r, 'kill'), 'slot', { issue: 80, maxAttempts: 1 }),
+      ivLogged(r),
     ])
     expect(kinds(plan(ended), 80)).toEqual(['slot prepare'])
     // the agent ended once its stop ended: the stop stays done with, and the step starts
@@ -322,12 +338,13 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const current = entry(reviewKey(r, 'f00dfeed', 1, 2), 'agent-step', { issue: 79, class: 'drive', step: 'review', status: 'running', endedAt: null, agentId: 'agent-now', startedAt: NOW - MIN / 2 })
     const s = withLedger(world([r]), [transitioned(r, 'U2', 'reviewing', 'unknown:timeout'), reviewer, triage, current])
     const p = plan(s)
-    expect(kinds(p, 79)).toEqual(['event transition', 'stop-agent', 'stop-agent', 'slot kill'])
+    expect(kinds(p, 79)).toEqual(['event transition', 'stop-agent', 'stop-agent', 'slot kill', 'event intervention'])
+    expect(ivs(p, 79)).toEqual(['loop unknown:timeout'])
     const stops = of(p, 79).filter((a): a is Extract<Action, { kind: 'stop-agent' }> => a.kind === 'stop-agent')
     expect(stops.map(a => [a.agentId, a.entry]).sort()).toEqual([['agent-r', reviewer.key], ['agent-t', triage.key]])
     expect(new Set(stops.map(a => a.key)).size).toBe(2)
     // one stop ended, the other did not yet: the step waits for both
-    const one = withLedger(s, [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(stops[0]?.key ?? '', 'stop-agent', { issue: 79 }), done(entryKey(r, 'kill'), 'slot', { issue: 79, maxAttempts: 1 })])
+    const one = withLedger(s, [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(stops[0]?.key ?? '', 'stop-agent', { issue: 79 }), done(entryKey(r, 'kill'), 'slot', { issue: 79, maxAttempts: 1 }), ivLogged(r)])
     expect(kinds(plan(one), 79)).toEqual(['stop-agent'])
   })
 
@@ -860,6 +877,12 @@ describe('the record\'s executors (act-state.ts)', () => {
     expect(w.argvs).toEqual([eventArgv(e)])
     const usage = actWorld([], () => ({ exitCode: 2, stderr: 'callum-flow-event: unknown state' }))
     expect(await usage.run(action)).toMatchObject({ status: 'failed', noRetry: true })
+    // a fixer's disposition is logged as the fixer's (v2 SPEC 7.1): the actor events.ts names
+    const verdict = { state: 'verdict' as const, issue: 500, branch: 'issue-500', pr: 621, head: null, note: 'CORRECT: r1-1 fixed the off-by-one' }
+    const fixer = actWorld([])
+    expect(await fixer.run({ ...action, event: verdict })).toMatchObject({ status: 'done', summary: 'logged verdict' })
+    expect(fixer.argvs).toEqual([eventArgv(verdict)])
+    expect(fixer.argvs[0]?.slice(-4)).toEqual(['--actor', 'fixer', '--note', 'CORRECT: r1-1 fixed the off-by-one'])
   })
 
   test('claim under planner v2: exit 3 is lost; a first claim adopts the newest open PR by a trusted author on a branch of the issue, the others named; a re-claim adopts nothing', async () => {

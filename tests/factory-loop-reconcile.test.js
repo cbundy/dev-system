@@ -499,11 +499,10 @@ test("the pure helpers: issue branches by the repo's convention, spans as people
   assert.equal(mod.parseArgs(["--repo", "a/b", "--act", "all"]).act, "all");
 });
 
-// TODO(U4): the migration writes its events through hooks/v2/events.ts (SPEC 6.4, 7.1), and --act
-// refuses until events.ts reads its notes back and callum-flow-event logs an intervention. Once U4
-// lands both, drop the skip: the tool then runs as the owner will run it, with the real events.ts
-// and the real images/base/callum-flow-event.
-test("the migration's events pass the real callum-flow-event, and parse back with events.ts to the release's fields (U4)", { skip: "TODO(U4): needs events.ts's note parser and the intervention state" }, async () => {
+// The migration writes its events through hooks/v2/events.ts (SPEC 6.4, 7.1). Here the tool runs as
+// the owner will run it, with the real events.ts and the branch's images/base/callum-flow-event,
+// and every line it logged parses back with events.ts's own parser.
+test("the migration's events pass the real callum-flow-event, and parse back with events.ts to the release's fields", async () => {
   const { register } = require("node:module");
   register(
     "data:text/javascript," +

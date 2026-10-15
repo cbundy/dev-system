@@ -22,8 +22,9 @@ import type { FilesSeen, InterventionFacts } from '../hooks/v2/sources-intervent
 import type { PrView } from '../hooks/v2/sources-prs'
 import { newV2Live, noteKillSwitch, noteWritten, notingIo } from '../hooks/v2/store'
 import type { V2StoreIo } from '../hooks/v2/store'
+import { normalize, rowFor, viaOf } from '../hooks/v2/table'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
-import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
+import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, TableEvent, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state } from './fixtures'
 import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host } from './host'
 
@@ -62,13 +63,18 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
   }
 }
 
-type T = { row: string; event: EventKind; from: IssueState | null; to: IssueState; step?: StepKind | null; cause?: OutsideCause | null; via?: string | null; stored?: boolean }
+type T = { row: string; event: EventKind; from: IssueState | null; to: IssueState; step?: StepKind | null; cause?: OutsideCause | null; via?: string; stored?: boolean }
 
-// t: the done transition entry of seq `seq`, at minute `at` before now.
+// t: the done transition entry of seq `seq`, at minute `at` before now. Its via is the code the row
+// gave (table.ts viaOf); with none given, the row's id, as the executor records an action that
+// carried none.
 function t(seq: number, x: T, at = 60 - seq, issue = N, life = LIFE): LedgerEntry {
-  const outcome: V2Outcome = { kind: 'transition', row: x.row, event: x.event, cause: x.cause ?? null, via: x.via ?? null, from: x.from, to: x.to, step: x.step ?? null, stored: x.stored ?? true }
+  const outcome: V2Outcome = { kind: 'transition', row: x.row, event: x.event, cause: x.cause ?? null, via: x.via ?? x.row, from: x.from, to: x.to, step: x.step ?? null, stored: x.stored ?? true }
   return entry(transitionKey({ issue, life, seq }), 'transition', { issue, rule: 'S3', startedAt: NOW - at * MIN, endedAt: NOW - at * MIN + 1000, outcome })
 }
+
+// codeOf: the via code the table gives this event on this record, as rules-state.ts plans it
+const codeOf = (r: IssueRecord, e: TableEvent) => viaOf(rowFor(r, e, config()), normalize(r, e))
 
 function result(event: StepResult['event'], over: Partial<StepResult> = {}): StepResult {
   return { event, reason: null, why: null, head: null, choice: null, data: null, ...over }
@@ -142,7 +148,7 @@ describe('the happy path logs no intervention (property 13)', () => {
 
   test('the planned work is no intervention: a fixer for review findings, a fixer chosen by triage, a decline, a claim lost, a drop, a split, a triage retry', () => {
     const rows: T[] = [
-      { row: 'T9', event: 'not-ok', from: 'reviewing', to: 'fixing', step: 'fix', via: 'changes' },
+      { row: 'T9', event: 'not-ok', from: 'reviewing', to: 'fixing', step: 'fix', via: 'fix:review' },
       { row: 'X2', event: 'triage', from: 'building', to: 'fixing', step: 'fix' },
       { row: 'X1', event: 'triage', from: 'building', to: 'building', step: 'build' },
       { row: 'X3', event: 'triage', from: 'building', to: 'designing', step: 'design' },
@@ -176,20 +182,20 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
       loadedAt: NOW - 10 * MIN,
       ledger: [
         t(1, { row: 'S0', event: 'ok', from: null, to: 'queued' }, 200),
-        t(2, { row: 'U1', event: 'unknown', from: 'building', to: 'building', step: 'build', cause: 'load', via: 'load' }, 50),
-        t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', step: 'build', via: 'bad-answer' }, 45),
-        t(4, { row: 'U3', event: 'unknown', from: 'building', to: 'building', step: 'triage', via: 'spawn' }, 40),
+        t(2, { row: 'U1', event: 'unknown', from: 'building', to: 'building', step: 'build', cause: 'load', via: 'free:load' }, 50),
+        t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', step: 'build', via: 'unknown:bad-answer' }, 45),
+        t(4, { row: 'U3', event: 'unknown', from: 'building', to: 'building', step: 'triage', via: 'unknown:spawn' }, 40),
         t(5, { row: 'T6', event: 'not-ok', from: 'building', to: 'building', step: 'triage' }, 35),
-        t(6, { row: 'U4', event: 'unknown', from: 'building', to: 'parked', via: 'agent-dead' }, 30),
+        t(6, { row: 'U4', event: 'unknown', from: 'building', to: 'parked', via: 'unknown:agent-dead' }, 30),
         t(7, { row: 'T14', event: 'not-ok', from: 'merge-queue', to: 'reviewing', step: 'review', via: 'patch' }, 25),
         t(8, { row: 'E2', event: 'issue-closed', from: 'reviewing', to: 'closed' }, 20),
         t(1, { row: 'E3', event: 'pr-merged', from: 'merge-queue', to: 'closed' }, 20, 572, 'abc'),
         t(1, { row: 'E4', event: 'pr-closed', from: 'reviewing', to: 'parked' }, 20, 573, 'abc'),
-        t(1, { row: 'T9', event: 'not-ok', from: 'merge-queue', to: 'fixing', step: 'fix', via: 'ci-red' }, 20, 574, 'abc'),
+        t(1, { row: 'T9', event: 'not-ok', from: 'merge-queue', to: 'fixing', step: 'fix', via: 'fix:ci' }, 20, 574, 'abc'),
         entry(rerunKey({ issue: N, life: LIFE }, 2, '18342299123'), 'ci-rerun', { issue: N }),
         entry(`i${N}/l${LIFE}/s7/pr/body/a1`, 'pr', { issue: N }),
         entry(reclaimKey({ issue: N, life: LIFE }, 'zz1'), 'claim', { issue: N }),
-        entry(reconcileKey(600, 'ss1x2k', 'event'), 'event', { issue: 600 }),
+        entry(reconcileKey(600, 'ss1x2k', 'event'), 'event', { issue: 600, rule: 'R1' }),
         entry('tell:breaker:steps:1', 'tell', { wake: 'breaker', startedAt: era + MIN }),
         entry('tell:stalled:i571/lx/s3/label', 'tell', { issue: N, wake: 'stalled', startedAt: era + MIN }),
         entry('tell:checkout:1', 'tell', { wake: 'checkout', startedAt: era + MIN }),
@@ -280,8 +286,8 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
   test('a free re-run is logged as unknown only once its attempt\'s free re-run is spent (rate-limited)', () => {
     const w: World = {
       ledger: [
-        t(2, { row: 'U1', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', cause: 'usage', via: 'usage' }, 40),
-        t(3, { row: 'U2', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', via: 'rate-limited' }, 30),
+        t(2, { row: 'U1', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', cause: 'usage', via: 'free:usage' }, 40),
+        t(3, { row: 'U2', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', via: 'unknown:rate-limited' }, 30),
       ],
     }
     expect(causes(w)).toEqual(['loop free:usage', 'loop unknown:rate-limited'])
@@ -291,14 +297,17 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
 // --- why a step went unknown, and what a fixer was sent for: the transition's own via ----------------
 
 describe('unknown:<why> is the transition\'s own via', () => {
-  const unknownAt = (from: IssueState, via: string | null, event: EventKind = 'unknown', more: LedgerEntry[] = []) =>
-    ctxOf({ ledger: [t(2, { row: 'T1', event: 'ok', from: 'queued', to: from }, 50), ...more, t(3, { row: 'U2', event, from, to: from, via }, 30)] })
+  // unknownAt: a U2 whose via code is `unknown:<why>`, or the row's id when it recorded no why
+  const unknownAt = (from: IssueState, why: UnknownWhy | null, event: EventKind = 'unknown', more: LedgerEntry[] = []) =>
+    ctxOf({ ledger: [t(2, { row: 'T1', event: 'ok', from: 'queued', to: from }, 50), ...more, t(3, { row: 'U2', event, from, to: from, ...(why === null ? {} : { via: `unknown:${why}` }) }, 30)] })
 
-  test('every why, as the transition recorded it; a timeout says so itself', () => {
+  test('every why, as the transition\'s via code recorded it (table.ts viaOf); a timeout says so itself', () => {
     for (const why of ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait'] as UnknownWhy[]) {
       expect(interventionsOf(unknownAt('building', why)).map(p => p.event.cause)).toEqual([`unknown:${why}`])
     }
     expect(interventionsOf(unknownAt('fixing', null, 'timeout')).map(p => p.event.cause)).toEqual(['unknown:timeout'])
+    // the code as the table makes it, for a running step's timeout (rules-state.ts)
+    expect(codeOf(record({ state: 'building', step: 'build', attempt: 1 }), { kind: 'unknown', why: 'timeout' })).toBe('unknown:timeout')
   })
 
   test('other entries of the seq never change it: a reviewer\'s agent-dead stays so beside a later re-run or PR entry (no inference)', () => {
@@ -312,7 +321,7 @@ describe('unknown:<why> is the transition\'s own via', () => {
   test('an unknown is logged whatever its why: one the transition did not record is cli, and a recent one is named in the decision log', () => {
     const ctx = unknownAt('building', null)
     expect(interventionsOf(ctx).map(p => [p.event.cause, p.event.reason])).toEqual([['unknown:cli', 'the step in building ended unknown (no why recorded)']])
-    expect(ctx.skipped).toEqual([{ rule: 'S3', issue: N, why: `${transitionKey({ issue: N, life: LIFE, seq: 3 })} (U2) recorded no why (via none): its unknown is logged as unknown:cli` }])
+    expect(ctx.skipped).toEqual([{ rule: 'S3', issue: N, why: `${transitionKey({ issue: N, life: LIFE, seq: 3 })} (U2) recorded no why (via U2): its unknown is logged as unknown:cli` }])
     // an old one is not named again
     const old = ctxOf({ ledger: [t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', via: 'nonsense' }, 90)] })
     expect(interventionsOf(old).map(p => p.event.cause)).toEqual(['unknown:cli'])
@@ -321,34 +330,44 @@ describe('unknown:<why> is the transition\'s own via', () => {
 })
 
 describe('fix:ci and fix:conflict (T9): something did not merge as it should', () => {
-  const t9 = (from: IssueState, via: string | null) => t(2, { row: 'T9', event: 'not-ok', from, to: 'fixing', step: 'fix', via }, 30)
+  const t9 = (from: IssueState, via?: string) => t(2, { row: 'T9', event: 'not-ok', from, to: 'fixing', step: 'fix', ...(via === undefined ? {} : { via }) }, 30)
 
-  test('the transition\'s via says what the fixer is for: red CI or a conflict are interventions, review findings are not', () => {
+  test('the transition\'s via code says what the fixer is for: red CI or a conflict are interventions, review findings are not', () => {
     for (const from of ['reviewing', 'merge-queue'] as const) {
-      expect(causes({ ledger: [t9(from, 'ci-red')] })).toEqual(['loop fix:ci'])
-      expect(causes({ ledger: [t9(from, 'conflict')] })).toEqual(['loop fix:conflict'])
-      expect(causes({ ledger: [t9(from, 'changes')], prs: [pr({ mergeable: 'dirty' })] })).toEqual([])
+      expect(causes({ ledger: [t9(from, 'fix:ci')] })).toEqual(['loop fix:ci'])
+      expect(causes({ ledger: [t9(from, 'fix:conflict')] })).toEqual(['loop fix:conflict'])
+      expect(causes({ ledger: [t9(from, 'fix:review')], prs: [pr({ mergeable: 'dirty' })] })).toEqual([])
     }
+    // the codes as the table makes them from the reviewer's not-ok reasons
+    const r = record({ state: 'reviewing', step: 'review' })
+    const codes = ['ci-red', 'conflict', 'changes'].map(reason => codeOf(r, { kind: 'not-ok', reason }))
+    expect(codes).toEqual(['fix:ci', 'fix:conflict', 'fix:review'])
   })
 
   test('a T9 that recorded no via is named in the decision log, not guessed from the PR as read', () => {
-    const ctx = ctxOf({ ledger: [t9('reviewing', null)], prs: [pr({ mergeable: 'dirty' })] })
+    const ctx = ctxOf({ ledger: [t9('reviewing')], prs: [pr({ mergeable: 'dirty' })] })
     expect(interventionsOf(ctx)).toEqual([])
-    expect(ctx.skipped.map(x => x.why)).toEqual([`${transitionKey({ issue: N, life: LIFE, seq: 2 })} (T9) recorded no via (none): whether its fixer is for red CI or a conflict is not known`])
+    expect(ctx.skipped.map(x => x.why)).toEqual([`${transitionKey({ issue: N, life: LIFE, seq: 2 })} (T9) recorded no via (T9): whether its fixer is for red CI or a conflict is not known`])
   })
 })
 
 // --- what a person did, as GitHub and the owner's files show it ---------------------------------------
 
 describe('person interventions', () => {
-  test('an unpark by the label is a person\'s; an unpark by /factory resume is the op\'s own', () => {
-    const ledger = [t(2, { row: 'T3', event: 'not-ok', from: 'designing', to: 'parked', via: 'question' }, 50), t(3, { row: 'P1', event: 'unpark', from: 'parked', to: 'queued' }, 10)]
-    expect(causes({ ledger })).toEqual(['loop park', 'person unpark'])
-    const resumed = control({ resumed: [{ subject: `issue:${N}`, at: NOW - 20 * MIN }] })
-    expect(causes({ ledger, control: resumed })).toEqual(['loop park'])
-    // a resume from before the park is not this unpark's
-    const old = control({ resumed: [{ subject: `issue:${N}`, at: NOW - 55 * MIN }] })
-    expect(causes({ ledger, control: old })).toEqual(['loop park', 'person unpark'])
+  test('an unpark by the label is a person\'s; an unpark by /factory resume is the op\'s own: P1\'s via code says which', () => {
+    const park = t(2, { row: 'T3', event: 'not-ok', from: 'designing', to: 'parked', via: 'question' }, 50)
+    const unpark = (via?: string) => t(3, { row: 'P1', event: 'unpark', from: 'parked', to: 'queued', ...(via === undefined ? {} : { via }) }, 10)
+    expect(causes({ ledger: [park, unpark('unpark:label')] })).toEqual(['loop park', 'person unpark'])
+    // a resume op, whatever control.json says of it
+    expect(causes({ ledger: [park, unpark('unpark:op')] })).toEqual(['loop park'])
+    expect(causes({ ledger: [park, unpark('unpark:op')], control: control({ resumed: [] }) })).toEqual(['loop park'])
+    // the codes as the table makes them
+    const parked = record({ state: 'parked', step: null, resumeTo: 'designing' })
+    expect(['label', 'op'].map(reason => codeOf(parked, { kind: 'unpark', reason }))).toEqual(['unpark:label', 'unpark:op'])
+    // one that recorded neither is named in the decision log, never guessed
+    const ctx = ctxOf({ ledger: [park, unpark()] })
+    expect(interventionsOf(ctx).map(p => p.event.cause)).toEqual(['park'])
+    expect(ctx.skipped.map(x => x.why)).toEqual([`${transitionKey({ issue: N, life: LIFE, seq: 3 })} (P1) recorded no via (P1): whether factory:parked was removed by hand is not known`])
   })
 
   test('E4 is a person\'s close of the PR and the park it causes', () => {
@@ -360,9 +379,13 @@ describe('person interventions', () => {
     expect(ivs4[1]?.event.reason).toContain('PR #621 was closed by hand')
   })
 
-  test('a restart is a module load with no restart of the loop\'s own around it, logged while it is recent', () => {
-    expect(causes({ loadedAt: NOW - 5 * MIN })).toEqual(['person restart'])
-    expect(causes({ loadedAt: NOW - 2 * 60 * MIN })).toEqual([])
+  test('a restart is a module load after an earlier run, with no restart of the loop\'s own around it, logged while it is recent', () => {
+    // an earlier run: the ledger the load found holds an entry from before it
+    const earlier = entry('sweep:before', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })
+    expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [earlier] })).toEqual(['person restart'])
+    expect(causes({ loadedAt: NOW - 2 * 60 * MIN, ledger: [earlier] })).toEqual([])
+    // the first start of a loop restarts nothing: every entry is this run's own
+    expect(causes({ loadedAt: NOW - 5 * MIN })).toEqual([])
     const own = (over: Partial<LedgerEntry>) => entry('restart:1', 'restart-self', { rule: 'R2', ...over })
     expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'done', endedAt: NOW - 9 * MIN })] })).toEqual([])
     expect(causes({ loadedAt: NOW - 5 * MIN, ledger: [own({ status: 'lost', endedAt: NOW - 5 * MIN })] })).toEqual([])
@@ -371,7 +394,8 @@ describe('person interventions', () => {
   })
 
   test('an intervention is no work a restart would cut: it is written first, and R2 restarts in the same pass', () => {
-    const s = stateOf({ loadedAt: NOW - 5 * MIN, control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) })
+    const earlier = entry('sweep:before', 'sweep', { startedAt: NOW - 30 * MIN, endedAt: NOW - 30 * MIN })
+    const s = stateOf({ loadedAt: NOW - 5 * MIN, ledger: [earlier], control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) })
     const kinds = planV2(s, config({ planner: 'v2', mode: 'act' })).actions.map(a => `${a.kind} ${a.key}`)
     expect(kinds.at(-1)).toBe(`restart-self restart:${NOW - MIN}`)
     expect(kinds.some(k => k.startsWith('event iv/restart/fleet/'))).toBe(true)

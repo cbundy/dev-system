@@ -186,24 +186,24 @@ export type SlotOp = (typeof SLOT_OPS)[number]
 // The outcomes the v2 executors record (one member of types.ts Outcome each).
 export type V2Outcome =
   | { kind: 'step'; step: AgentStep; result: StepResult }
-  // what a transition did, so the breaker and the interventions read it from the ledger (5.3, 7.2).
-  // via: the result detail the row took, filled by the transition executor from its TableEvent: a
-  // not-ok's class (T9 and T10: `changes`, `ci-red` or `conflict`), an unknown's why (U2 to U4: an
-  // UnknownWhy), U1's outside cause, a triage's choice; null when the event carries none
+  // what a transition did, so the breaker and the interventions read it from the ledger (5.3, 7.2)
   | {
       kind: 'transition'
       row: string
       event: EventKind
       cause: OutsideCause | null
-      via: string | null
       from: IssueState | null
       to: IssueState
       step: StepKind | null
       // false from the entry's start until the executor stored the record (a lost entry may carry
       // false: the seq is the record's when the store holds it at that seq)
       stored: boolean
-      // the transition note's via code (table.ts viaOf), which the seq's entry actions log
-      via?: string
+      // the transition note's via code (table.ts viaOf), carried from the entry's start (ledger.ts
+      // start): the row's own code, with the detail its event gave where the row takes one:
+      // `free:<cause>` (U1), `unknown:<why>` (U2 to U4), `fix:<review|ci|conflict>` (T9),
+      // `triage:<choice>` (X1 to X5), `unpark:<op|label>` (P1). The seq's entry actions log it and
+      // the interventions read it (rules-interventions.ts), so nothing is inferred from other entries.
+      via: string
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
