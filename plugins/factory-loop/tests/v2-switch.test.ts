@@ -323,14 +323,15 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const clock = mock.clock(on, { now: NOW })
     // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once (its
     // sweep is not due, so the pass starts nothing else). The factory shows no claim of this
-    // device, so v2's R1 has no ghost to release, which would hold R2 (v2 SPEC 6.2)
+    // device, so v2's R1 has no ghost to release, and the pool holds no loop slot for W2 to free,
+    // either of which would hold R2 (v2 SPEC 6.2, 10.1)
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
     const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work', shadow: 'v2' },
       files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: NOW - MIN } }) },
       store: { [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [running, swept] } },
-      run: world(),
+      run: world({ run: argv => (argv[0] === 'treehouse' ? { stdout: '[]' } : undefined) }),
     })
     h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'running', description: 'Implement #470' })
     await $.session.start(START)

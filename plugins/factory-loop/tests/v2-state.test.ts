@@ -413,7 +413,8 @@ describe('the steps', () => {
     expect(transitionOf(waits, 90)).toBeUndefined()
     expect(said(waits, 90)).toEqual(['queued: waits for a slot (W1)'])
     const long = plan(world([{ ...r, since: NOW - 13 * HOUR }]))
-    expect(of(long, 90)).toEqual([expect.objectContaining({ kind: 'tell', wake: 'waiting', fields: { issue: '90', state: 'queued', hours: '13' } })])
+    // W1 leases its slot beside the tell (rules-slots.ts, tested in v2-slots.test.ts)
+    expect(of(long, 90)).toEqual([expect.objectContaining({ kind: 'tell', wake: 'waiting', fields: { issue: '90', state: 'queued', hours: '13' } }), expect.objectContaining({ kind: 'slot', op: 'lease', rule: 'W1' })])
   })
 
   test('S2: the slot prepared for the attempt, then the step\'s agent spawned in it with the record\'s notes and the owner\'s; a step that admission holds has no clock', () => {
