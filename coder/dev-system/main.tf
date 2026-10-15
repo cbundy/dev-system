@@ -296,7 +296,7 @@ data "coder_parameter" "cpus" {
   order        = 6
   validation {
     min = 1
-    max = 8
+    max = 16
   }
 }
 
