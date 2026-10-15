@@ -900,13 +900,13 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `planner` and `update`. `ownerOp` (`register.ts:1389`) logs it after the op lands | the issues the op names, else none |
+| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `planner` and `update`. `ownerOp` (`register.ts:1389`) logs it after the op lands, when planner v2 in act mode is in force before or after the op, so the ops that turn the loop on (`mode act`, `planner v2`) and off are logged too | the issues the op names, else none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
 | `pr-closed` | E4 | the issue |
 | `issue-closed` | E2 | the issue |
-| `control-file` | `control.json` or the `OFF` file changed with no op (its digest against the last one the loop read or wrote) | the issues whose entries changed, else none |
+| `control-file` | `control.json` or the `OFF` file changed with no op (its digest against the last one the loop read or wrote, kept as `files:<repo>` beside the records; an op that finds its file already changed keeps that edit to log; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting | none |
 | `restart` | a module load with no `restart-self` in flight | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
@@ -981,7 +981,10 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   a saved query in `docs/metrics.md`:
   - interventions per merged issue and per day, by `who` and `cause` (#632 metric 1 is
     `who=person`), with the fleet-level ones per day. A merged issue is **untouched** when no
-    `intervention` names it between its first `claimed` and its `merged`;
+    `intervention` names its merged work: one whose life began by its `merged`, whenever it was
+    logged (a derived intervention comes a pass or more after its fact), or one with no life logged
+    from its first `claimed` to its closing `transition` plus 30 minutes (`docs/metrics.md`,
+    section 9);
   - judgement calls per merged issue, by kind and outcome (#632 metric 2): `reviewed` events,
     `intervention` events with cause `triage`, `transition` events whose fields show a designer
     question or split, and fixer `verdict` events. A judgement is overridden when a person

@@ -1607,7 +1607,7 @@ and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assi
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
+with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder, or, when that tool fails, those this device's own event log shows it claimed and has not released (as the sweep falls back to that log). The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle event per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)

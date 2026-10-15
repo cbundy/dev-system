@@ -103,7 +103,7 @@ import { transitionsOf } from './v2/plan'
 import { stateCounts } from './v2/rules-state'
 import { newSettingsCache, repoLoaded } from './v2/settings'
 import type { SettingsIo } from './v2/settings'
-import { keepV2, loadV2, newV2Live, readStoredV2, storedV2, v2IoOf } from './v2/store'
+import { keepV2, loadV2, newV2Live, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
 import type { V2StoreIo } from './v2/store'
 import { STEP_AGENT } from './v2/types'
 import type { V2Io } from './v2/types'
@@ -783,7 +783,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigge
     rt = await runtime($)
     lastRt = rt
     rearm($, rt.config.passEveryMs)
-    const off = rt.mode === 'off' || (await killed($))
+    const off = rt.mode === 'off' || (await noteKillSwitch(liveV2, v2StoreIo($), rt, await killed($)))
     if (off || rt.repo === '') {
       await setTitle($, offTitle(rt))
     } else {
@@ -1196,7 +1196,7 @@ function summaryOf(a: Action) {
 async function clearUpdate($: EngineInterface, rt: Runtime, at: Ms | null): Promise<boolean> {
   if (at === null) return false
   const run = ops.then(async () => {
-    const fio = fileIo($)
+    const fio = notingIo(fileIo($), noteWritten(liveV2, v2StoreIo($), rt))
     const loaded = await readControl(fio, rt.loopDir)
     if (loaded.error !== null || loaded.control.updateDue?.at !== at) return false
     await writeControl(fio, rt.loopDir, { ...loaded.control, updateDue: null })
@@ -1463,8 +1463,8 @@ const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was still b
 // written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
 // writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
 // decision-log line once it has its answer; retry clears the issue's exhausted entries in the
-// live ledger at once. Under planner v2 the ops take v2's meaning, and in act mode every op that
-// landed is logged as a person intervention (act-events.ts; v2 SPEC 7.2).
+// live ledger at once. Under planner v2 the ops take v2's meaning; an op that landed with v2 acting
+// before or after it is a person intervention (act-events.ts), and its writes the loop's (7.2).
 function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
   const work = (claim: Claim) => {
     const run = ops.then(async (): Promise<OpAnswer> => {
@@ -1475,11 +1475,11 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const planner = rt.config.planner
       const parked = parkedOf(planner, lastState?.v2?.records)
       const from = agentId === undefined ? { last, planner, parked } : { last, agentId, planner, parked }
-      const fio = claimedIo(fileIo($), claim)
+      const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      const landed = reply.op === null ? null : opLanded(planner, rt.mode, reply.logged, issuesOf(reply.op), now)
+      const landed = reply.op === null ? null : opLanded({ planner, mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now)
       const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
       const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
       if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })

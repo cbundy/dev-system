@@ -26,6 +26,14 @@
       "rule": "S3",
       "minutes_in_stage": 60,
       "detail": "parked for more than 30 minutes"
+    },
+    {
+      "repo": "acme/widgets",
+      "issue": 112,
+      "stage": "implementing",
+      "rule": "S2",
+      "minutes_in_stage": 90,
+      "detail": "implementing, with no pipeline run in progress, for more than 60 minutes"
     }
   ],
   "repos": [
@@ -33,7 +41,7 @@
       "repo": "acme/widgets",
       "coverage": {
         "class": "full",
-        "events": 27,
+        "events": 38,
         "runs": 1,
         "last_event_at": "2026-10-10T11:50:00.000Z",
         "last_run_update_at": "2026-10-10T11:55:00.000Z",
@@ -41,18 +49,23 @@
         "devices": [
           {
             "device": "dev-a",
-            "events": 26,
+            "events": 32,
             "last_event_at": "2026-10-10T11:50:00.000Z"
           },
           {
             "device": "dev-b",
+            "events": 5,
+            "last_event_at": "2026-10-10T11:30:00.000Z"
+          },
+          {
+            "device": "dev-c",
             "events": 1,
-            "last_event_at": "2026-10-10T11:00:00.000Z"
+            "last_event_at": "2026-10-10T11:30:00.000Z"
           }
         ],
         "live_issue_sources": {
           "mirror": 0,
-          "event": 8,
+          "event": 10,
           "github": 1
         },
         "notes": []
@@ -118,6 +131,34 @@
             "seq": 0,
             "why": null
           }
+        },
+        {
+          "issue": 111,
+          "stage": "queued",
+          "detail": null,
+          "entered_at": "2026-10-10T11:30:00.000Z",
+          "minutes_in_stage": 30,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:building",
+              "ready"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T11:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         },
         {
           "issue": 106,
@@ -208,6 +249,43 @@
             "step": "build",
             "attempt": 1,
             "life": "t3xq00",
+            "seq": 2,
+            "why": null
+          }
+        },
+        {
+          "issue": 112,
+          "stage": "implementing",
+          "detail": "v2 building, step build, attempt 1",
+          "entered_at": "2026-10-10T10:30:00.000Z",
+          "minutes_in_stage": 90,
+          "holder": "dev-b",
+          "run": null,
+          "pr": null,
+          "stuck": {
+            "rule": "S2",
+            "text": "implementing, with no pipeline run in progress, for more than 60 minutes"
+          },
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:building"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
+          "v2": {
+            "state": "building",
+            "step": "build",
+            "attempt": 1,
+            "life": "t3xq10",
             "seq": 2,
             "why": null
           }

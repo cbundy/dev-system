@@ -1,18 +1,18 @@
 // The events the loop writes outside a plan's actions (docs/factory-loop/v2/SPEC.md 7.2): an owner
 // op's person intervention, which register.ts ownerOp logs here once the op has landed (every op
-// but status and help, in act mode under planner v2; opLanded in ops.ts says which). One event per
-// issue the op names, each attached to its issue; an op that names none (mode, pause of the whole
-// loop, serial) is fleet-level and attached to none. Every event goes through events.ts, and the
-// op is noted first, so the change it made to control.json or the settings is never read as a
-// hand edit (sources-interventions.ts). logEvent is the one writer of a v2 event, for the `event`
-// executor (act-state.ts) and any other that logs one.
+// but status and help, with planner v2 in act mode before or after it; opLanded in ops.ts says
+// which). One event per issue the op names, each attached to its issue; an op that names none
+// (mode, pause of the whole loop, serial) is fleet-level and attached to none. Every event goes
+// through events.ts. What the op wrote to control.json or the settings is kept as the loop's own
+// version when it is written (store.ts noteWritten), so it is never read as a hand edit.
+// logEvent is the one writer of a v2 event, for the `event` executor (act-state.ts) and any other
+// that logs one.
 import { commandOf } from '../act'
 import type { ActEnv } from '../act'
 import type { ExecCtx } from '../exec'
 import { eventArgv, intervention } from './events'
 import type { InterventionEvent, V2Event } from './events'
 import { factKey } from './keys'
-import { noteOpLanded } from './sources-interventions'
 
 // callum-flow-event is one jq call and one append; a minute is ample (act.ts EVENT_TIMEOUT_MS)
 const EVENT_TIMEOUT_MS = 60_000
@@ -47,7 +47,6 @@ export async function logEvent(cmd: ExecCtx['cmd'], e: V2Event): Promise<void> {
 
 // logOwnerOp: the op's interventions, logged; notes on what failed, for the decision log.
 export async function logOwnerOp(env: Pick<ActEnv, 'io' | 'rt' | 'commands'>, op: OpLanded): Promise<string[]> {
-  noteOpLanded(op.at)
   const cmd = commandOf(env.io, env.rt, env.commands)
   const notes: string[] = []
   for (const e of opInterventions(op)) {

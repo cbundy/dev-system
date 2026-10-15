@@ -7,9 +7,12 @@
 //   re-rendered for its linkage, R1's release of a ghost, H1's re-claim of a lapsed claim, an owner
 //   item told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
 // - the records and the PRs: a head on a record's branch that no loop step produced (4.1);
-// - the State: a module load with no restart of the loop's own in flight;
-// - sources-interventions.ts: the companion's refusals and the stop gates that could not run, and
-//   the hand edits of control.json, the OFF file and the settings.
+// - the State: a module load with no restart of the loop's own in flight; the companion's
+//   refusals and the stop gates that could not run (sources-interventions.ts); and the hand edits
+//   of control.json, the OFF file and the settings, against the versions the loop last read or
+//   wrote (fileFacts, below).
+// A transition's own detail (its via: a fixer's reason, an unknown's why) comes with it, so nothing
+// is inferred from other entries.
 // Owner ops are logged when they land (act-events.ts), not here. Not interventions: the planned
 // work, a fixer for review findings, a fixer chosen by triage (counted as the triage), claim-lost
 // (another device's work), tells for waiting states, and status and help. Pure.
@@ -17,8 +20,9 @@ import { gate, skip } from '../foundation'
 import type { LedgerEntry, Ms } from '../types'
 import { intervention } from './events'
 import type { InterventionEvent } from './events'
-import { factKey, interventionKey, keyParts, lifeAt, seqKey, short, transitionKey } from './keys'
-import type { IssueRecord, IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
+import { factKey, interventionKey, keyParts, lifeAt, short, transitionKey } from './keys'
+import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
+import type { IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
 import { UNKNOWN_WHYS } from './types'
 
 const MIN = 60_000
@@ -29,16 +33,15 @@ const OWN_RESTART_MS = 30 * MIN
 // a load is an intervention only on passes this soon after it, so a loop that starts acting long
 // after it loaded does not log a stale restart
 const RESTART_PLAN_MS = HOUR
+// facts older than this are left alone: the ledger keeps an intervention's key 7 days
+// (ledger.ts KEEP_MS), so an older fact would be logged again
+export const FACT_WINDOW_MS = 6 * 24 * HOUR
 
 // One intervention to plan: its event, its ledger key and the rule its fact came from.
 export type Planned = { key: string; rule: string; event: InterventionEvent }
 
 type TransitionOutcome = Extract<V2Outcome, { kind: 'transition' }>
 export type Fact = { entry: LedgerEntry; o: TransitionOutcome; issue: number; life: string; seq: number }
-
-// The step kinds of a seq's own work, whose entries say how the step ended (prepare is part of
-// the attempt, 10.2).
-const STEP_ENTRY_KINDS = ['agent-step', 'slot', 'queue-update', 'queue-merge', 'pr', 'ci-rerun'] as const
 
 // --- the transitions --------------------------------------------------------------------------------
 
@@ -54,59 +57,21 @@ function transitions(ctx: V2Ctx): Fact[] {
   return out
 }
 
-// stepEntries: the entries of the step a transition ended: this life's step work that started in
-// the old seq, from its transition to this one, newest first.
-function stepEntries(ctx: V2Ctx, f: Fact): LedgerEntry[] {
-  const before = ctx.byKey.get(transitionKey({ issue: f.issue, life: f.life, seq: f.seq - 1 }))
-  const from = before?.startedAt ?? 0
-  return ctx.state.ledger
-    .filter(e => {
-      if (e.issue !== f.issue || !(STEP_ENTRY_KINDS as readonly string[]).includes(e.kind)) return false
-      const p = keyParts(e.key)
-      if (p === null || p.life !== f.life) return false
-      if (e.kind === 'slot' && !p.rest.startsWith('prepare/')) return false
-      return e.startedAt >= from && e.startedAt <= f.entry.startedAt
-    })
-    .sort((a, b) => b.startedAt - a.startedAt)
+// whyOf: why the step a transition ended went unknown (7.2), as the transition records it: a
+// timeout says so itself; else its via, the step result's why (types.ts V2Outcome). null when it
+// records none.
+export function whyOf(o: TransitionOutcome): UnknownWhy | null {
+  if (o.event === 'timeout') return 'timeout'
+  return UNKNOWN_WHYS.find(w => w === o.via) ?? null
 }
 
-// unknownWhy: why the step a transition ended went unknown (7.2), from the step's own entry: its
-// result's why; a step still running when it ended (a timeout); a spawn that never started; an
-// agent that failed or was lost; a CLI step that failed. With no entry of its own, a timeout, or a
-// wait on GitHub past its bound in reviewing or at the queue's head.
-export function unknownWhy(ctx: V2Ctx, f: Fact): UnknownWhy {
-  if (f.o.event === 'timeout') return 'timeout'
-  const e = stepEntries(ctx, f)[0]
-  if (e === undefined) return f.o.from === 'reviewing' || f.o.from === 'merge-queue' ? 'github-wait' : 'cli'
-  const o = e.outcome
-  if (o?.kind === 'step' && o.result.event === 'unknown') return UNKNOWN_WHYS.find(w => w === o.result.why) ?? 'cli'
-  if (e.status === 'running' || e.endedAt === null || e.endedAt > f.entry.startedAt || e.status === 'timed-out') return 'timeout'
-  if (e.kind === 'agent-step') return e.agentId === undefined ? 'spawn' : 'agent-dead'
-  return 'cli'
-}
-
-// fixFor: what a fixer was sent for (T9): the fix_requested this seq plans (its note is the
-// answer, 4.5), else the step's own entry (the queue's guard class, a reviewer's not-ok), else
-// the PR as read (a conflict, a failed check), else review findings.
-export function fixFor(ctx: V2Ctx, f: Fact): 'review' | 'ci' | 'conflict' | 'triage' {
-  const prefix = `${seqKey({ issue: f.issue, life: f.life, seq: f.seq })}/`
-  for (const a of ctx.out) {
-    if (a.kind !== 'event' || a.issue !== f.issue || !a.key.startsWith(prefix) || a.event.state !== 'fix_requested') continue
-    const note = a.event.note.trim()
-    if (note === 'review' || note === 'ci' || note === 'conflict' || note === 'triage') return note
-  }
-  for (const e of stepEntries(ctx, f)) {
-    const o = e.outcome
-    if (o?.kind === 'queue' && o.failClass === 'conflict') return 'conflict'
-    if (o?.kind === 'queue' && o.failClass === 'checks') return 'ci'
-    if (o?.kind === 'step' && o.step === 'review' && o.result.event === 'not-ok') return 'review'
-  }
-  const record = ctx.v2.records.find(r => r.issue === f.issue && r.life === f.life)
-  const pr = ctx.v2.prs.prs.find(v => v.issue === f.issue && (record?.pr === null || record?.pr === undefined || v.pr === record.pr))
-  if (pr?.mergeable === 'dirty') return 'conflict'
-  if (pr !== undefined && pr.checks.some(c => c.bucket === 'fail')) return 'ci'
-  return 'review'
-}
+// What T9's via says a fixer was sent for: red CI or a conflict are interventions, review findings
+// are planned work (7.2). Any other via is a transition that recorded none.
+const FIX_FOR: ReadonlyMap<string, 'fix:ci' | 'fix:conflict' | null> = new Map([
+  ['ci-red', 'fix:ci'],
+  ['conflict', 'fix:conflict'],
+  ['changes', null],
+])
 
 // unparkedByHand: P1 came from the parked label's removal, not from `/factory resume`, whose op is
 // its own intervention: no resume of the issue recorded between the park and the unpark.
@@ -117,6 +82,12 @@ function unparkedByHand(ctx: V2Ctx, f: Fact): boolean {
 }
 
 const stepName = (o: TransitionOutcome) => o.step ?? 'the step'
+
+// gap: a recent transition that lacks the detail its intervention needs (a loop bug in the
+// transition executor), named in the decision log while it is recent rather than lost unseen.
+function gap(ctx: V2Ctx, f: Fact, why: string): void {
+  if (ctx.state.now - f.entry.startedAt < HOUR) skip(ctx, f.entry.rule, f.issue, `${f.entry.key} (${f.o.row}) ${why}`)
+}
 
 // fromTransition: the interventions one transition is. The first takes the fact's own key
 // (iv/<transition key>), each further one the key and its cause.
@@ -136,8 +107,11 @@ export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
     case 'U2':
     case 'U3':
     case 'U4': {
-      const why = unknownWhy(ctx, f)
-      loop(`unknown:${why}`, `${stepName(o)} in ${from} ended unknown (${why})`)
+      // an unknown is an intervention whatever its why; one the transition did not record is
+      // logged as cli, the generic why, and named in the decision log
+      const why = whyOf(o)
+      if (why === null) gap(ctx, f, `recorded no why (via ${o.via ?? 'none'}): its unknown is logged as unknown:cli`)
+      loop(`unknown:${why ?? 'cli'}`, `${stepName(o)} in ${from} ended unknown (${why ?? 'no why recorded'})`)
       if (o.row === 'U3') loop('triage', `a triage call after the second unknown in ${from}`)
       break
     }
@@ -145,9 +119,10 @@ export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
       loop('triage', 'a triage call: the builder said it cannot')
       break
     case 'T9': {
-      const why = fixFor(ctx, f)
-      if (why === 'ci') loop('fix:ci', `a fixer for red CI${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
-      if (why === 'conflict') loop('fix:conflict', `a fixer for a merge conflict${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
+      const cause = FIX_FOR.get(o.via ?? '')
+      if (cause === undefined) gap(ctx, f, `recorded no via (${o.via ?? 'none'}): whether its fixer is for red CI or a conflict is not known`)
+      if (cause === 'fix:ci') loop(cause, `a fixer for red CI${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
+      if (cause === 'fix:conflict') loop(cause, `a fixer for a merge conflict${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
       break
     }
     case 'T14':
@@ -220,18 +195,39 @@ function fromLedger(ctx: V2Ctx): Planned[] {
 
 // --- the records, the PRs and the State ------------------------------------------------------------------
 
-// loopHeads: the heads the loop's steps on this issue produced, in any life: what writers
-// confirmed on origin, and what the queue's updates made (4.1, 9.2).
-function loopHeads(ctx: V2Ctx, r: IssueRecord): Set<string> {
-  const heads = new Set<string>()
-  if (r.head !== null) heads.add(r.head)
+// The writer steps, whose result carries the head they left on origin (4.2).
+const WRITERS: readonly string[] = ['build', 'fix']
+
+// One write of the loop's to an issue's branch: a writer agent step or a queue update (4.1, 9.2),
+// with the head its result read on origin; null while it runs, or when it ended with none read
+// (an unknown, a lost agent, a failed update).
+type Write = { startedAt: Ms; endedAt: Ms | null; head: string | null }
+
+function loopWrites(ctx: V2Ctx, issue: number): Write[] {
+  const out: Write[] = []
   for (const e of ctx.state.ledger) {
-    if (e.issue !== r.issue) continue
+    if (e.issue !== issue) continue
     const o = e.outcome
-    if (o?.kind === 'step' && o.result.head !== null) heads.add(o.result.head)
-    if (o?.kind === 'queue' && o.op === 'update' && o.head !== null) heads.add(o.head)
+    const endedAt = e.status === 'running' ? null : e.endedAt
+    if (e.kind === 'agent-step' && (WRITERS.includes(e.step ?? '') || (o?.kind === 'step' && WRITERS.includes(o.step)))) {
+      out.push({ startedAt: e.startedAt, endedAt, head: o?.kind === 'step' ? o.result.head : null })
+    } else if (e.kind === 'queue-update') {
+      out.push({ startedAt: e.startedAt, endedAt, head: o?.kind === 'queue' ? o.head : null })
+    }
   }
-  return heads
+  return out
+}
+
+// loopMayHaveMade: whether a head first seen at `at` may be one of the loop's own writes that
+// read no head: a write still running, or one that ended with no head read, may have pushed any
+// head seen after it started, until a later write that read its head ended (with slack for a read
+// that lags it). The heads that writes read are the loop's own outright.
+function loopMayHaveMade(writes: readonly Write[], at: Ms, slack: Ms): boolean {
+  return writes.some(w => {
+    if (w.head !== null || w.startedAt > at) return false
+    if (w.endedAt === null) return true
+    return !writes.some(l => l.head !== null && l.startedAt > w.startedAt && l.endedAt !== null && l.endedAt + slack < at)
+  })
 }
 
 // The states whose PR head no loop step is moving: a writer's own push is confirmed when its step
@@ -239,13 +235,14 @@ function loopHeads(ctx: V2Ctx, r: IssueRecord): Set<string> {
 const STILL: readonly IssueState[] = ['reviewing', 'merge-queue', 'parked']
 
 // fromPushes: a head on a record's PR that no loop step produced, first seen after the life began,
-// is a person's push (4.1). Judged only on a head observe saw first (heads first seen, 2.4); a
-// head that was there before the life began is not this life's touch. A record that adopted its
-// PR, with no head of its own, takes the first head seen in its life as the loop's start. A queue
-// update still running, or one that ended with no head read, may have made any head seen after
-// it started, so such a head is not judged.
+// is a person's push (4.1). Judged only on a head observe saw first (heads first seen, 2.4), within
+// FACT_WINDOW_MS; a head that was there before the life began is not this life's touch. A record
+// that adopted its PR, with no head of its own, takes the first head seen in its life as the
+// loop's start. The loop's own heads are the record's, those its writes read, and any a write that
+// read none may have made (loopMayHaveMade).
 function fromPushes(ctx: V2Ctx): Planned[] {
   const out: Planned[] = []
+  const slack = Math.max(ctx.config.passEveryMs, ctx.config.githubEveryMs)
   for (const r of ctx.v2.records) {
     if (r.pr === null || !STILL.includes(r.state)) continue
     const view = ctx.v2.prs.prs.find(v => v.pr === r.pr && v.issue === r.issue)
@@ -253,17 +250,15 @@ function fromPushes(ctx: V2Ctx): Planned[] {
     const head = view.head
     const seen = ctx.v2.heads[head]
     const began = lifeAt(r.life) ?? 0
-    if (seen === undefined || seen.at <= began || loopHeads(ctx, r).has(head)) continue
+    if (seen === undefined || seen.at <= began || ctx.state.now - seen.at > FACT_WINDOW_MS || head === r.head) continue
+    const writes = loopWrites(ctx, r.issue)
+    if (writes.some(w => w.head === head) || loopMayHaveMade(writes, seen.at, slack)) continue
     if (r.head === null) {
       const first = Object.entries(ctx.v2.heads)
         .filter(([, h]) => h.pr === r.pr && h.at > began)
         .sort((a, b) => a[1].at - b[1].at)[0]
       if (first === undefined || first[0] === head) continue
     }
-    const updating = ctx.state.ledger.some(
-      e => e.issue === r.issue && e.kind === 'queue-update' && e.startedAt <= seen.at && !(e.outcome?.kind === 'queue' && e.outcome.head !== null),
-    )
-    if (updating) continue
     const fact = factKey('push', `i${r.issue}`, short(head))
     out.push({
       key: interventionKey(fact),
@@ -284,7 +279,7 @@ function fromRestart(ctx: V2Ctx): Planned[] {
   return [{ key: interventionKey(fact), rule: 'R2', event: intervention('person', 'restart', fact, 'the loop loaded with no restart of its own in flight', { issue: null, life: null, pr: null }) }]
 }
 
-// fromSources: the companion's lines and the hand edits sources-interventions.ts judged.
+// fromSources: the companion's lines, and the hand edits of the owner's files (fileFacts).
 function fromSources(ctx: V2Ctx): Planned[] {
   const out: Planned[] = []
   const facts = ctx.v2.interventions
@@ -293,15 +288,129 @@ function fromSources(ctx: V2Ctx): Planned[] {
     const reason = line.reason === '' ? `the companion: ${line.cause}` : line.reason
     out.push({ key: interventionKey(fact), rule: 'S2', event: intervention('loop', line.cause, fact, reason, { issue: line.issue, life: line.life, pr: null }) })
   }
-  for (const c of facts.changes ?? []) {
-    const cause = c.what === 'control' ? 'control-file' : 'config-file'
-    const at = Math.trunc(c.at).toString(36)
-    for (const issue of c.issues.length === 0 ? [null] : c.issues) {
-      const fact = factKey(cause, issue === null ? 'fleet' : `i${issue}`, at)
-      out.push({ key: interventionKey(fact), rule: 'G4', event: intervention('person', cause, fact, c.detail, { issue, life: null, pr: null }) })
+  for (const f of fileFacts(facts)) out.push({ key: interventionKey(f.fact), rule: 'G4', event: intervention('person', f.cause, f.fact, f.detail, { issue: f.issue, life: null, pr: null }) })
+  return out
+}
+
+// --- the owner's files (7.2: control-file, config-file) ----------------------------------------------
+//
+// A hand edit is a difference, that no op explains, between an owner's file and the last version
+// the loop read (an acting pass under planner v2) or wrote (an owner op, the clearing of a done
+// update), which files:<repo> keeps (store.ts). The comparison is of the parsed files, so a change
+// of layout alone is none; the fact is keyed by the new version's digest. Edits found where the
+// loop does not plan are kept in the same record until logged: an op that found its file already
+// changed, and the kill switch (sources-interventions.ts).
+
+// One intervention a file gives: its fact, its cause, the issue it names (none: fleet-level) and
+// its one-line detail.
+export type FileFact = { fact: string; cause: 'control-file' | 'config-file'; issue: number | null; detail: string }
+
+// digest: a short FNV-1a hash of a text: the key of a version of a file.
+export function digest(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+function objectOf(text: string | null): Record<string, unknown> {
+  if (text === null) return {}
+  try {
+    const v: unknown = JSON.parse(text)
+    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+// keysDiff: the top-level keys whose values differ between two JSON object texts, sorted.
+export function keysDiff(before: string, after: string): string[] {
+  const [b, a] = [objectOf(before), objectOf(after)]
+  return [...new Set([...Object.keys(b), ...Object.keys(a)])].sort().filter(k => !same(b[k], a[k]))
+}
+
+// The issues one control field's entries name: numbers, `issue:<N>` subjects, `{ issue }` entries.
+function issuesIn(v: unknown): Map<string, number | null> {
+  const out = new Map<string, number | null>()
+  if (!Array.isArray(v)) return out
+  for (const item of v) {
+    let n: number | null = null
+    if (typeof item === 'number') n = item
+    else if (item !== null && typeof item === 'object') {
+      const o = item as Record<string, unknown>
+      if (typeof o.issue === 'number') n = o.issue
+      else if (typeof o.subject === 'string' && /^issue:\d+$/.test(o.subject)) n = Number(o.subject.slice(6))
     }
+    out.set(JSON.stringify(item), Number.isInteger(n) ? n : null)
   }
   return out
+}
+
+// controlDiff: the fields that changed between two control.json texts, and the issues whose
+// entries came or went; null when none did. An update cleared after its restart ran is the loop's
+// own write (register.ts clearUpdate), never a person's.
+export function controlDiff(before: string, after: string): { fields: string[]; issues: number[] } | null {
+  const [b, a] = [objectOf(before), objectOf(after)]
+  const fields: string[] = []
+  const issues = new Set<number>()
+  for (const k of keysDiff(before, after)) {
+    if (k === 'updateDue' && (a[k] === null || a[k] === undefined)) continue
+    fields.push(k)
+    const [bx, ay] = [issuesIn(b[k]), issuesIn(a[k])]
+    for (const [item, n] of [...bx, ...ay]) if (n !== null && bx.has(item) !== ay.has(item)) issues.add(n)
+  }
+  return fields.length === 0 ? null : { fields, issues: [...issues].sort((m, n) => m - n) }
+}
+
+// editOf: what a person changed in a file, from the version the loop last read or wrote to the
+// one found; null when nothing.
+export function editOf(part: 'control' | 'workspace', before: string, found: string, at: Ms): FileEdit | null {
+  if (part === 'control') {
+    const d = controlDiff(before, found)
+    return d === null ? null : { what: 'control', at, issues: d.issues, detail: `control.json changed with no op: ${d.fields.join(', ')}` }
+  }
+  const keys = keysDiff(before, found)
+  return keys.length === 0 ? null : { what: 'config', at, issues: [], detail: `settings changed with no op: config.json ${keys.join(', ')}` }
+}
+
+// The facts of one change, one per issue it names, else one for the fleet.
+function factsOf(cause: FileFact['cause'], issues: readonly number[], version: string, detail: string): FileFact[] {
+  return (issues.length === 0 ? [null] : [...new Set(issues)]).map(issue => ({ fact: factKey(cause, issue === null ? 'fleet' : `i${issue}`, version), cause, issue, detail }))
+}
+
+// editFacts: a kept edit's facts, keyed by its time.
+export function editFacts(e: FileEdit): FileFact[] {
+  return factsOf(e.what === 'control' ? 'control-file' : 'config-file', e.issues, Math.trunc(e.at).toString(36), e.detail)
+}
+
+// controlFacts and configFacts: the facts of this pass's read against the version kept, keyed by
+// the new version's digest; none when either is unknown or nothing changed.
+export function controlFacts(seen: FilesSeen, facts: InterventionFacts): FileFact[] {
+  const [was, now] = [seen.control, facts.control ?? null]
+  const edit = was === null || now === null ? null : editOf('control', was.text, now.text, 0)
+  return edit === null || now === null ? [] : factsOf('control-file', edit.issues, now.digest, edit.detail)
+}
+
+export function configFacts(seen: FilesSeen, facts: InterventionFacts): FileFact[] {
+  const [ws, st] = [facts.workspace ?? null, facts.settings ?? null]
+  const keys: string[] = []
+  if (seen.workspace !== null && ws !== null) keys.push(...keysDiff(seen.workspace.text, ws.text).map(k => `config.json ${k}`))
+  if (seen.settings !== null && st !== null) keys.push(...keysDiff(seen.settings.text, st.text))
+  if (keys.length === 0) return []
+  const version = digest(`${(ws ?? seen.workspace)?.text ?? ''}\n${(st ?? seen.settings)?.text ?? ''}`)
+  return factsOf('config-file', [], version, `settings changed with no op: ${keys.join(', ')}`)
+}
+
+// fileFacts: every hand edit of the owner's files the State holds: the edits kept, then this
+// pass's read against the versions kept. None before the loop has kept any.
+export function fileFacts(facts: InterventionFacts): FileFact[] {
+  const seen = facts.seen ?? null
+  if (seen === null) return []
+  return [...seen.edits.flatMap(editFacts), ...controlFacts(seen, facts), ...configFacts(seen, facts)]
 }
 
 // --- the rule ---------------------------------------------------------------------------------------

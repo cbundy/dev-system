@@ -392,6 +392,9 @@ test("factory loop v2 (SPEC 3.6, 7.3): the newest transition of the current life
   assert.deepEqual([st(104).stage, r.repos[0].recent.map((i) => i.issue)], ["closed without merge", [104]], "a dropped record has ended");
   assert.deepEqual([st(105).stage, st(105).v2], ["queued", null], "ready after a closed record is a new life before any v2 state");
   assert.deepEqual([st(106).stage, st(106).holder, st(106).v2], ["designing", "dev-b", null], "a claim-lost close is another device's issue");
+  assert.deepEqual([st(111).stage, st(111).v2, st(111).flags], ["queued", null, []], "a ghost a sweep released shows no v2 state, whatever its last transition's to");
+  assert.deepEqual([st(112).stage, st(112).holder, st(112).v2.life, st(112).flags], ["implementing", "dev-b", "t3xq10", []],
+    "an older life's claim-lost close, logged later on another device, never hides the live life's view");
   assert.deepEqual([st(107).stage, st(107).lease], ["queued", { until: "2026-10-10T10:00:00.000Z", lapsed: true }]);
   assert.deepEqual([st(109).stage, st(109).lease.lapsed], ["designing", true], "a v2 record keeps its state while its claim lapsed: the loop claims it again");
   assert.deepEqual([st(108).stage, st(108).source], ["in pipeline", "github"], "an open issue with a factory label and no events is listed from the label");

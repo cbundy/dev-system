@@ -75,6 +75,10 @@ const TOP_KEYS = [
 ];
 // A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
 const OVERRIDE_MS = 60 * 60 * 1000;
+// An intervention or judgement with no life (an op, a hand-recorded rescue, a control-file edit) is a
+// merged issue's when logged from its first claim to its closing transition (else its merge) plus
+// this: an op lands at once, and one the loop derives is logged within a few passes (v2 SPEC 7.2).
+const IV_GRACE_MS = 30 * 60 * 1000;
 // The triage choice each triage-answer row of the factory loop v2's table applies (v2 SPEC 4.3).
 const TRIAGE_ROWS = { X1: 'retry', X2: 'fix', X3: 'redesign', X4: 'park', X5: 'drop' };
 // The release states that end a claim's life without a merge, as claim completion names them.
@@ -797,9 +801,34 @@ function computeV2Metrics(evs, win, merged) {
   const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
   const firstClaim = new Map();
   for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !firstClaim.has(e.issue)) firstClaim.set(e.issue, e.t);
-  // the span of a merged issue: from its first claimed (else its merge) to its merge
-  const spans = merged.map((m) => ({ issue: m.issue, from: firstClaim.has(m.issue) ? Math.min(firstClaim.get(m.issue), m.t) : m.t, to: m.t }));
+  // the span of a merged issue: from its first claimed (else its merge) to its merge; its lives, those
+  // begun by its merge (a transition of the life logged at or before it); and how long an event with
+  // no life may come after: to its closing transition (the first to closed since its last claim
+  // before the merge), else its merge, plus IV_GRACE_MS
+  const spans = merged.map((m) => {
+    const from = firstClaim.has(m.issue) ? Math.min(firstClaim.get(m.issue), m.t) : m.t;
+    const mine = transitions.filter((x) => x.issue === m.issue);
+    const claims = evs.filter((e) => e.state === 'claimed' && e.issue === m.issue && e.t <= m.t).map((e) => e.t);
+    const since = claims.length ? Math.max(...claims) : from;
+    const close = mine.filter((x) => x.f.to === 'closed' && x.t >= since).sort((a, b) => a.t - b.t)[0];
+    return {
+      issue: m.issue, from, to: m.t,
+      lives: new Set(mine.filter((x) => x.t <= m.t && x.f.life).map((x) => x.f.life)),
+      known: new Set(mine.filter((x) => x.f.life).map((x) => x.f.life)),
+      until: Math.max(m.t, close ? close.t : m.t) + IV_GRACE_MS,
+    };
+  });
   const within = (e, s) => e.issue === s.issue && e.t >= s.from && e.t <= s.to;
+  // belongs: an intervention or judgement of the merged issue's work. One that names a known life
+  // is its own when that life began by the merge, whenever it was logged: a derived intervention is
+  // logged a pass or more after its fact, maybe after the merge. Any other counts from the first
+  // claim to the grace after the close.
+  const belongs = (e, s) => {
+    if (e.issue !== s.issue) return false;
+    const life = (e.f || t(e)).life;
+    if (life && s.known.has(life)) return s.lives.has(life);
+    return e.t >= s.from && e.t <= s.until;
+  };
 
   // interventions (#632 metric 1): per merged issue and per day, by who and cause; fleet-level per day
   const ivWin = interventions.filter((e) => inWin(e.t, win));
@@ -814,7 +843,7 @@ function computeV2Metrics(evs, win, merged) {
     days.set(d.day, d);
   }
   const ivIssues = spans.map((s) => {
-    const mine = interventions.filter((e) => within(e, s));
+    const mine = interventions.filter((e) => belongs(e, s));
     const n = (who) => mine.filter((e) => e.f.who === who).length;
     return { issue: s.issue, person: n('person'), loop: n('loop'), untouched: mine.length === 0, causes: [...new Set(mine.map((e) => e.f.cause))].sort() };
   }).sort((a, b) => a.issue - b.issue);
@@ -862,7 +891,7 @@ function computeV2Metrics(evs, win, merged) {
     byKind.set(k, row);
   }
   const callIssues = spans.map((s) => {
-    const mine = calls.filter((c) => within(c.e, s));
+    const mine = calls.filter((c) => belongs(c.e, s));
     return { issue: s.issue, calls: mine.length, overridden: mine.filter(overridden).length };
   }).sort((a, b) => a.issue - b.issue);
   const judgement_calls = {

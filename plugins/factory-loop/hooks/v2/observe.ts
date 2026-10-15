@@ -13,6 +13,7 @@ import { parseCsv } from '../parse'
 import type { Checkout, Ms, Source, State } from '../types'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readInterventions } from './sources-interventions'
+import type { FilesSeen } from './sources-interventions'
 import { readPrs } from './sources-prs'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State } from './types'
@@ -39,8 +40,9 @@ export type SourceCtx = {
 
 // What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
 // holds none (a rebuild may fill it); error when the store could not be read or holds no stored
-// records under the key, so nothing is known of the records.
-export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; error: string | null }
+// records under the key, so nothing is known of the records; files: the owner's files as the loop
+// last read or wrote them (7.2), absent or null when none are kept.
+export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
 // the last rebuild, the comments read per issue read, and the last checkout read (R1's tripwire).
@@ -327,7 +329,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     reads,
     comments,
     prs: prs.read,
-    interventions: facts.read,
+    interventions: { ...facts.read, seen: stored?.files ?? null },
     checkoutBefore,
   }
   return { v2, heads: prs.heads }

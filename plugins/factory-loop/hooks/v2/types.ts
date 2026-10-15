@@ -185,12 +185,16 @@ export type SlotOp = (typeof SLOT_OPS)[number]
 // The outcomes the v2 executors record (one member of types.ts Outcome each).
 export type V2Outcome =
   | { kind: 'step'; step: AgentStep; result: StepResult }
-  // what a transition did, so the breaker and the interventions read it from the ledger (5.3, 7.2)
+  // what a transition did, so the breaker and the interventions read it from the ledger (5.3, 7.2).
+  // via: the result detail the row took, filled by the transition executor from its TableEvent: a
+  // not-ok's class (T9 and T10: `changes`, `ci-red` or `conflict`), an unknown's why (U2 to U4: an
+  // UnknownWhy), U1's outside cause, a triage's choice; null when the event carries none
   | {
       kind: 'transition'
       row: string
       event: EventKind
       cause: OutsideCause | null
+      via: string | null
       from: IssueState | null
       to: IssueState
       step: StepKind | null

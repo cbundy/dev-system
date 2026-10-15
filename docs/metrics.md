@@ -528,8 +528,14 @@ window (its `interventions`, `judgement_calls`, `claim_completion` and `rounds` 
 
 **Interventions** (#632 metric 1): an `intervention` event is any point where a person, or the loop
 with unplanned judgement or recovery, had to step in. A merged issue is **untouched** when no
-intervention of either kind names it between its first `claimed` and its first `merged`; untouched
-merges are the target outcome. Fleet-level interventions (no `issue`) attach to no issue.
+intervention of either kind names its merged work; untouched merges are the target outcome. An
+intervention names the merged work by its `life=` token when that life began by the first `merged` (a
+`transition` of the life logged at or before it), whenever the intervention itself was logged: the
+loop derives most of them a pass or more after their fact, so a hand merge's can land after the
+`merged` event. One with no life (an owner op, a hand-recorded rescue, a control-file edit), or a life
+no `transition` names, counts from the first `claimed` to the issue's closing `transition` (the first
+to `closed` since its last claim before the merge; else the merge) plus 30 minutes. Fleet-level
+interventions (no `issue`) attach to no issue.
 
 ```sql
 -- interventions per repo and day, by who and cause; `fleet` counts those that name no issue
@@ -555,37 +561,58 @@ ORDER BY repo, day, who, cause;
 ```
 
 ```sql
--- per merged issue: its interventions from its first claim to its merge, and whether it was untouched
+-- per merged issue: the interventions that name its merged work, and whether it was untouched
 WITH iv AS (
   SELECT DISTINCT ON (repo, issue, who, cause, coalesce(fact, event_id::text, ts::text))
-         repo, issue, ts, who, cause
+         repo, issue, ts, who, cause, life
   FROM (
     SELECT e.repo, e.issue, e.ts, e.event_id,
            substring(e.note FROM '(?:^| )who=([^ ]+)')                    AS who,
            substring(e.note FROM '(?:^| )cause=([^ ]+)')                  AS cause,
+           nullif(substring(e.note FROM '(?:^| )life=([^ ]+)'), 'none')   AS life,
            nullif(substring(e.note FROM '(?:^| )fact=([^ ]+)'), 'none')   AS fact
     FROM factory.events e
     WHERE e.state = 'intervention' AND e.issue IS NOT NULL
   ) x
   ORDER BY repo, issue, who, cause, coalesce(fact, event_id::text, ts::text), ts
+), tr AS (
+  SELECT repo, issue, ts,
+         substring(note FROM '(?:^| )life=([^ ]+)') AS life,
+         substring(note FROM '(?:^| )to=([^ ]+)')   AS to_state
+  FROM factory.events WHERE state = 'transition' AND issue IS NOT NULL
 ), merged AS (
   SELECT repo, issue, min(ts) AS merged_at
   FROM factory.events WHERE state = 'merged' AND issue IS NOT NULL GROUP BY repo, issue
-), claimed AS (
-  SELECT repo, issue, min(ts) AS claimed_at
-  FROM factory.events WHERE state = 'claimed' AND issue IS NOT NULL GROUP BY repo, issue
+), spans AS (
+  SELECT m.repo, m.issue, m.merged_at,
+    least(coalesce((SELECT min(c.ts) FROM factory.events c
+                    WHERE c.repo = m.repo AND c.issue = m.issue AND c.state = 'claimed'), m.merged_at), m.merged_at) AS from_ts,
+    greatest(m.merged_at, coalesce((
+      SELECT min(t.ts) FROM tr t
+      WHERE t.repo = m.repo AND t.issue = m.issue AND t.to_state = 'closed'
+        AND t.ts >= coalesce((SELECT max(c.ts) FROM factory.events c
+                              WHERE c.repo = m.repo AND c.issue = m.issue AND c.state = 'claimed' AND c.ts <= m.merged_at),
+                             m.merged_at)), m.merged_at)) + interval '30 minutes' AS until_ts
+  FROM merged m
+), mine AS (
+  SELECT s.repo, s.issue, iv.who, iv.cause
+  FROM spans s
+  JOIN iv ON iv.repo = s.repo AND iv.issue = s.issue
+  WHERE CASE
+    WHEN iv.life IS NOT NULL AND EXISTS (SELECT 1 FROM tr t WHERE t.repo = s.repo AND t.issue = s.issue AND t.life = iv.life)
+      THEN EXISTS (SELECT 1 FROM tr t WHERE t.repo = s.repo AND t.issue = s.issue AND t.life = iv.life AND t.ts <= s.merged_at)
+    ELSE iv.ts >= s.from_ts AND iv.ts <= s.until_ts
+  END
 )
-SELECT m.repo, m.issue, m.merged_at,
-  count(iv.ts) FILTER (WHERE iv.who = 'person') AS person,
-  count(iv.ts) FILTER (WHERE iv.who = 'loop')   AS loop,
-  count(iv.ts) = 0                              AS untouched,
-  string_agg(DISTINCT iv.cause, ',')            AS causes
-FROM merged m
-LEFT JOIN claimed c ON c.repo = m.repo AND c.issue = m.issue
-LEFT JOIN iv ON iv.repo = m.repo AND iv.issue = m.issue
-            AND iv.ts >= least(c.claimed_at, m.merged_at) AND iv.ts <= m.merged_at
-GROUP BY m.repo, m.issue, m.merged_at
-ORDER BY m.merged_at DESC;
+SELECT s.repo, s.issue, s.merged_at,
+  count(mine.cause) FILTER (WHERE mine.who = 'person') AS person,
+  count(mine.cause) FILTER (WHERE mine.who = 'loop')   AS loop,
+  count(mine.cause) = 0                                AS untouched,
+  string_agg(DISTINCT mine.cause, ',')                 AS causes
+FROM spans s
+LEFT JOIN mine ON mine.repo = s.repo AND mine.issue = s.issue
+GROUP BY s.repo, s.issue, s.merged_at
+ORDER BY s.merged_at DESC;
 ```
 
 **Judgement calls** (#632 metric 2): the decisions a model made, by kind and outcome: each review
@@ -1287,7 +1314,7 @@ unless a `factory.events` export is passed (see the skill).
   idle, `gate` otherwise.
 - `interventions`, `judgement_calls`, `claim_completion` and `rounds` are section 9's numbers over
   the window: interventions logged in the window by who and cause, per day (with the fleet-level
-  ones) and per merged issue (`untouched` when none named it from its first claim to its merge);
+  ones) and per merged issue (`untouched` when none named its merged work, as section 9 defines it);
   judgement calls made in the window by kind and outcome, with those overridden; the lives claimed
   in the window and how each ended (`open` when it had not by the window's end, censored); and per
   merged issue its review and fix rounds and its time in flight less the time parked. Each counts a

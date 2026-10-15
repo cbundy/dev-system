@@ -84,11 +84,11 @@ describe('loading the records (v2 SPEC 3.3)', () => {
     const live = newV2Live()
     await loadV2(live, failed.io, REPO)
     expect(live).toMatchObject({ loaded: false, error: `${KEY} could not be read: the store is down`, records: [] })
-    expect(await storedV2(live, failed.io, REPO)).toEqual({ records: null, heads: null, error: `${KEY} could not be read: the store is down` })
-    expect(await readStoredV2(failed.io, REPO)).toEqual({ records: null, heads: null, error: `${KEY} could not be read: the store is down` })
+    expect(await storedV2(live, failed.io, REPO)).toEqual({ records: null, heads: null, files: null, error: `${KEY} could not be read: the store is down` })
+    expect(await readStoredV2(failed.io, REPO)).toEqual({ records: null, heads: null, files: null, error: `${KEY} could not be read: the store is down` })
     // the store back: the next pass loads it
     failed.failGet = false
-    expect(await storedV2(live, failed.io, REPO)).toEqual({ records: [record()], heads: null, error: null })
+    expect(await storedV2(live, failed.io, REPO)).toEqual({ records: [record()], heads: null, files: null, error: null })
 
     const bad = storeOf({ [KEY]: { v: 9, records: 'x' } })
     expect(await readStoredV2(bad.io, REPO)).toMatchObject({ records: null, error: `${KEY} holds no stored records: fix or remove it` })
@@ -96,12 +96,26 @@ describe('loading the records (v2 SPEC 3.3)', () => {
     const absent = newV2Live()
     await loadV2(absent, storeOf().io, REPO)
     expect(absent).toMatchObject({ loaded: true, absent: true, records: [] })
-    expect(await storedV2(absent, storeOf().io, REPO)).toEqual({ records: null, heads: null, error: null })
+    expect(await storedV2(absent, storeOf().io, REPO)).toEqual({ records: null, heads: null, files: null, error: null })
 
     const empty = newV2Live()
     const none = storeOf({ [KEY]: recordsToStore([], NOW) })
     await loadV2(empty, none.io, REPO)
-    expect(await storedV2(empty, none.io, REPO)).toEqual({ records: [], heads: null, error: null })
+    expect(await storedV2(empty, none.io, REPO)).toEqual({ records: [], heads: null, files: null, error: null })
+  })
+})
+
+describe('the owner\'s files as the loop last read or wrote them (v2 SPEC 7.2)', () => {
+  test('files:<repo> loads beside the records and goes to observe; a value that does not read is none kept', async () => {
+    const files = { v: 1, control: { digest: 'abc', text: '{}' }, workspace: null, settings: null, edits: [{ what: 'control', at: NOW, issues: [], detail: 'the OFF file was created' }], off: true }
+    const store = storeOf({ [KEY]: recordsToStore([], NOW), [`files:${REPO}`]: files })
+    const live = newV2Live()
+    await loadV2(live, store.io, REPO)
+    expect(live.files).toEqual(files)
+    expect(await storedV2(live, store.io, REPO)).toMatchObject({ files })
+    expect(await readStoredV2(store.io, REPO)).toMatchObject({ files })
+    const bad = storeOf({ [`files:${REPO}`]: { v: 2 } })
+    expect(await readStoredV2(bad.io, REPO)).toMatchObject({ files: null })
   })
 })
 

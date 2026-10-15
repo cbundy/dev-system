@@ -307,10 +307,50 @@ FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat nothing"
 no_calls "heartbeat nothing"
 no_events "heartbeat nothing"
-# factory-state cannot be read: an error, nothing renewed
+# factory-state cannot be read (factory.events unreachable): this device's own event log lists
+# its claims, as the sweep's fallback does, so the sweep never releases a claim still held. #7 is
+# claimed; #8 was claimed and then released; #9 claimed and closed; #10 claimed, then a v2
+# transition (a lifecycle event that is no release); #11 never claimed here.
+reset
+issue 8 OPEN
+issue 9 OPEN
+issue 10 OPEN
+issue 11 OPEN
+for n in 7 8 9 10; do rc_of "$EVENT" claimed --issue "$n" --repo o/r --note 'lease: 120'; done
+rc_of "$EVENT" reclaimed --issue 8 --repo o/r
+rc_of "$EVENT" closed --issue 9 --repo o/r
+rc_of "$EVENT" transition --issue 10 --repo o/r --note 'row=T1 life=a seq=1 from=queued to=designing'
+rc_of "$EVENT" renewed --issue 7 --repo o/r --note 'lease: 120'
+rc_of "$EVENT" ready --issue 11 --repo o/r
+for n in 7 8 9 10 11; do cm "$((100 + n))" devA "$FRESH" "$FRESH" | arr > "$d/comments-$n.json"; done
+before=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat from the local log"
+[ "$(calls | sort | tr '\n' ' ')" = "PATCH 107 PATCH 110 " ] || fail "heartbeat from the local log: only #7 and #10 are this device's unreleased claims: $(calls)"
+grep -q "renewing the claims in this device's event log" "$tmpdir/err" || fail "heartbeat from the local log: warning: $(cat "$tmpdir/err")"
+[ "$(events | wc -l)" = "$((before + 2))" ] || fail "heartbeat from the local log: one renewed event each: $(events)"
+# factory-state cannot be read and this device has no log: nothing claimed here, nothing renewed
 reset
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat, no factory-state and no log"
+no_calls "heartbeat, no factory-state and no log"
+# neither can be read: an error, nothing renewed
+reset
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+cat > "$tmpdir/no-path-event" <<'STUB'
+#!/bin/sh
+[ "$1" != --path ] || exit 2
+exec "$REAL_EVENT" "$@"
+STUB
+chmod +x "$tmpdir/no-path-event"
+set +e
+PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r REAL_EVENT="$EVENT" \
+  CALLUM_FLOW_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+  CALLUM_FLOW_FACTORY_STATE_BIN="$tmpdir/factory-state" CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
+rc=$?
+set -e
 expect_rc 1 "heartbeat list failure"
 no_calls "heartbeat list failure"
 grep -q 'cannot list' "$tmpdir/err" || fail "heartbeat list failure: $(cat "$tmpdir/err")"

@@ -197,16 +197,28 @@ function noteTokens(note) {
   return out;
 }
 
-// The factory loop v2's state of an issue's current life: its newest `transition` event, when one
-// says a state. A closed one is of the current life only while no new life followed it (a
-// `ready`, a claim, a delegation), and a `claim-lost` close is another device's issue, never this
-// one's state.
+// The factory loop v2's state of an issue's current life: the newest `transition` event of its
+// newest life, when one says a state. A `claim-lost` close is another device's issue, never this
+// one's state, so it and the transitions of an older life are left out first: a loop that lost the
+// issue to a second loop never hides the live life's view. The state holds only while nothing
+// released the issue after it: a `ready` or `reclaimed` (a sweep, or R1, put it back in the queue)
+// or a `claimed` newer than the transition shows no v2 state, whatever its `to` (the loop's own
+// re-claim logs the transition again right after, SPEC 4.1). A closed one is of the current life
+// only while no new life followed it (a `ready`, a claim, a delegation).
+const V2_RELEASES = new Set(['ready', 'reclaimed', 'claimed']);
+const lifeStart = (life) => {
+  const n = parseInt(String(life), 36);
+  return /^[0-9a-z]+$/.test(String(life)) && Number.isFinite(n) ? n : -1;
+};
 function v2Of(evs) {
-  const tv = last(evs.filter((e) => e.state === 'transition').map((e) => ({ e, f: noteTokens(e.note) }))
-    .filter((x) => (V2_STAGE[x.f.to] || x.f.to === 'closed') && x.f.life));
-  if (!tv) return null;
+  const tvs = evs.filter((e) => e.state === 'transition').map((e) => ({ e, f: noteTokens(e.note) }))
+    .filter((x) => (V2_STAGE[x.f.to] || x.f.to === 'closed') && x.f.life && !(x.f.to === 'closed' && x.f.why === 'claim-lost'));
+  if (!tvs.length) return null;
+  const newest = Math.max(...tvs.map((x) => lifeStart(x.f.life)));
+  const tv = last(tvs.filter((x) => lifeStart(x.f.life) === newest));
   const f = tv.f;
-  if (f.to === 'closed' && (f.why === 'claim-lost' || evs.some((e) => e.t > tv.e.t && NEW_LIFE_DECISIONS.has(e.state)))) return null;
+  if (evs.some((e) => e.t > tv.e.t && V2_RELEASES.has(e.state))) return null;
+  if (f.to === 'closed' && evs.some((e) => e.t > tv.e.t && NEW_LIFE_DECISIONS.has(e.state))) return null;
   const since = Number(f.since);
   return {
     t: tv.e.t,

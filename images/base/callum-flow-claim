@@ -26,7 +26,11 @@
 # line, through the comment API, never a new comment). With no issue numbers it
 # renews every live claim this device holds on the open issues that
 # `callum-flow-factory-state --github off` lists live with this device as the
-# holder. Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
+# holder. When that tool fails (factory.events unreachable, dev-query not
+# configured), it renews those this device's own event log (`callum-flow-event
+# --path`) shows it claimed and has not released, as callum-flow-sweep falls
+# back to that log too, so the sweep never releases a claim this device still
+# holds. It fails only when neither can be read. Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
 # `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
 # event log, which callum-flow-factory-state reads, can see the lease is live.
 #
@@ -122,15 +126,33 @@ CLAIMS_JQ='
        exp: (($c.updated_at | fromdateiso8601) + ($p.lease | tonumber) * 60)} ]
   | sort_by([.created, .id])'
 
+# local_claims: the issues this device's own event log shows it claimed and has
+# not released: a `claimed` event, and a latest lifecycle event (judged as
+# callum-flow-sweep judges it, housekeeping left out) that is not ready,
+# reclaimed, merged, closed or abandoned. A device with no log has none.
+local_claims() {
+  _lf=$("$EVENT" --path --repo "$repo" 2>/dev/null) || return 1
+  [ -f "$_lf" ] || return 0
+  jq -R -s -r '[split("\n")[] | fromjson? | select(type == "object" and (.issue | type) == "number"
+      and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention") | not))]
+    | group_by(.issue) | map(select(any(.[]; .state == "claimed")) | last)
+    | .[] | select(.state | IN("ready", "reclaimed", "merged", "closed", "abandoned") | not) | .issue' "$_lf"
+}
+
 if [ "$mode" = heartbeat ]; then
   rc=0
   issues="$*"
   listed=
   if [ -z "$issues" ]; then
-    # this device's live claims, as the event log shows them
-    if ! fs=$("$FSTATE" --repo "$repo" --github off --format json </dev/null) ||
-      ! issues=$(printf '%s' "$fs" | jq -r --arg dev "$device" '.repos[]? | .issues[]? | select(.holder == $dev) | .issue'); then
-      err "cannot list this device's live claims (callum-flow-factory-state)"
+    # this device's live claims, as the event log shows them: factory-state's view
+    # of it, else this device's own log
+    if fs=$("$FSTATE" --repo "$repo" --github off --format json </dev/null) &&
+      issues=$(printf '%s' "$fs" | jq -r --arg dev "$device" '.repos[]? | .issues[]? | select(.holder == $dev) | .issue'); then
+      :
+    elif issues=$(local_claims); then
+      err "warning: callum-flow-factory-state failed; renewing the claims in this device's event log"
+    else
+      err "cannot list this device's live claims (callum-flow-factory-state, or this device's event log)"
       exit 1
     fi
     listed=1

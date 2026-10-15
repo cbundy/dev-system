@@ -2,9 +2,9 @@
 // step-in, by a person or by the loop, is one `intervention` event, derived from a fact the loop
 // already holds and logged once for it; the happy path logs none; no interleaving of the loop's
 // own writes and delayed reads makes a person intervention without a person's action. The facts
-// are generated: ledgers of transitions by row and event, step entries, PR reads with stale and
-// fresh heads, the companion's log, and the owner's files between passes.
-import { describe, expect, test } from 'claude-code/testing'
+// are generated: ledgers of transitions by row, event and via, step entries, PR reads with stale and
+// fresh heads, the companion's log, and the owner's files against the versions the loop kept.
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { GITHUB_V2, newCtx } from '../hooks/foundation'
 import type { Runtime } from '../hooks/observe'
@@ -14,15 +14,18 @@ import type { InterventionEvent } from '../hooks/v2/events'
 import { claimKey, factKey, interventionKey, keyParts, reclaimKey, reconcileKey, rerunKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { interventionRules, interventionsOf } from '../hooks/v2/rules-interventions'
+import { opLanded } from '../hooks/v2/ops'
+import { FACT_WINDOW_MS, controlDiff, digest, fileFacts, interventionRules, interventionsOf } from '../hooks/v2/rules-interventions'
 import type { Planned } from '../hooks/v2/rules-interventions'
-import { COMPANION_WINDOW_MS, SETTLE_MS, companionLines, controlDiff, newMemory, noteOpLanded, readInterventions } from '../hooks/v2/sources-interventions'
-import type { InterventionFacts, Memory } from '../hooks/v2/sources-interventions'
+import { COMPANION_WINDOW_MS, EMPTY_FILES, companionLines, filesKey, keepFiles, readInterventions, seenOf } from '../hooks/v2/sources-interventions'
+import type { FilesSeen, InterventionFacts } from '../hooks/v2/sources-interventions'
 import type { PrView } from '../hooks/v2/sources-prs'
+import { newV2Live, noteKillSwitch, noteWritten, notingIo } from '../hooks/v2/store'
+import type { V2StoreIo } from '../hooks/v2/store'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state } from './fixtures'
-import { LOOP_DIR, REPO, TOOLS } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host } from './host'
 
 const N = 571
 const LIFE = (Math.floor(NOW / 1000) - 3 * 3600).toString(36)
@@ -59,11 +62,11 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
   }
 }
 
-type T = { row: string; event: EventKind; from: IssueState | null; to: IssueState; step?: StepKind | null; cause?: OutsideCause | null; stored?: boolean }
+type T = { row: string; event: EventKind; from: IssueState | null; to: IssueState; step?: StepKind | null; cause?: OutsideCause | null; via?: string | null; stored?: boolean }
 
 // t: the done transition entry of seq `seq`, at minute `at` before now.
 function t(seq: number, x: T, at = 60 - seq, issue = N, life = LIFE): LedgerEntry {
-  const outcome: V2Outcome = { kind: 'transition', row: x.row, event: x.event, cause: x.cause ?? null, from: x.from, to: x.to, step: x.step ?? null, stored: x.stored ?? true }
+  const outcome: V2Outcome = { kind: 'transition', row: x.row, event: x.event, cause: x.cause ?? null, via: x.via ?? null, from: x.from, to: x.to, step: x.step ?? null, stored: x.stored ?? true }
   return entry(transitionKey({ issue, life, seq }), 'transition', { issue, rule: 'S3', startedAt: NOW - at * MIN, endedAt: NOW - at * MIN + 1000, outcome })
 }
 
@@ -87,7 +90,7 @@ function v2Of(w: World): V2State {
     ...emptyV2State(NOW, w.records ?? []),
     prs: { prs: w.prs ?? [] },
     heads: w.heads ?? {},
-    interventions: w.facts ?? { companion: [], controlDigest: null, configDigest: null, changes: [] },
+    interventions: w.facts ?? { companion: [], controlDigest: null, configDigest: null },
   }
 }
 
@@ -139,7 +142,7 @@ describe('the happy path logs no intervention (property 13)', () => {
 
   test('the planned work is no intervention: a fixer for review findings, a fixer chosen by triage, a decline, a claim lost, a drop, a split, a triage retry', () => {
     const rows: T[] = [
-      { row: 'T9', event: 'not-ok', from: 'reviewing', to: 'fixing', step: 'fix' },
+      { row: 'T9', event: 'not-ok', from: 'reviewing', to: 'fixing', step: 'fix', via: 'changes' },
       { row: 'X2', event: 'triage', from: 'building', to: 'fixing', step: 'fix' },
       { row: 'X1', event: 'triage', from: 'building', to: 'building', step: 'build' },
       { row: 'X3', event: 'triage', from: 'building', to: 'designing', step: 'design' },
@@ -152,7 +155,9 @@ describe('the happy path logs no intervention (property 13)', () => {
     ]
     for (const x of rows) {
       const review = step(1, 'review', 40, { key: `i${N}/l${LIFE}/review/bbbbbbb/r1/a1`, outcome: { kind: 'step', step: 'review', result: result('not-ok', { reason: 'changes' }) } })
-      expect([x.row, causes({ ledger: [t(1, { row: 'T1', event: 'ok', from: 'queued', to: 'reviewing' }, 50), review, t(2, x, 30)] })]).toEqual([x.row, []])
+      const ctx = ctxOf({ ledger: [t(1, { row: 'T1', event: 'ok', from: 'queued', to: 'reviewing' }, 50), review, t(2, x, 30)] })
+      expect([x.row, interventionsOf(ctx)]).toEqual([x.row, []])
+      expect([x.row, ctx.skipped]).toEqual([x.row, []])
     }
   })
 
@@ -171,21 +176,16 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
       loadedAt: NOW - 10 * MIN,
       ledger: [
         t(1, { row: 'S0', event: 'ok', from: null, to: 'queued' }, 200),
-        t(2, { row: 'U1', event: 'unknown', from: 'building', to: 'building', step: 'build', cause: 'load' }, 50),
-        step(2, 'build', 52, { status: 'lost', agentId: 'x' }),
-        t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', step: 'build' }, 45),
-        step(3, 'build', 49, { outcome: { kind: 'step', step: 'build', result: result('unknown', { why: 'bad-answer' }) } }),
-        t(4, { row: 'U3', event: 'unknown', from: 'building', to: 'building', step: 'triage' }, 40),
-        step(4, 'build', 44, { status: 'failed', agentId: undefined }),
+        t(2, { row: 'U1', event: 'unknown', from: 'building', to: 'building', step: 'build', cause: 'load', via: 'load' }, 50),
+        t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', step: 'build', via: 'bad-answer' }, 45),
+        t(4, { row: 'U3', event: 'unknown', from: 'building', to: 'building', step: 'triage', via: 'spawn' }, 40),
         t(5, { row: 'T6', event: 'not-ok', from: 'building', to: 'building', step: 'triage' }, 35),
-        step(5, 'triage', 33, { status: 'lost', endedAt: NOW - 31 * MIN }),
-        t(6, { row: 'U4', event: 'unknown', from: 'building', to: 'parked' }, 30),
-        t(7, { row: 'T14', event: 'not-ok', from: 'merge-queue', to: 'reviewing', step: 'review' }, 25),
+        t(6, { row: 'U4', event: 'unknown', from: 'building', to: 'parked', via: 'agent-dead' }, 30),
+        t(7, { row: 'T14', event: 'not-ok', from: 'merge-queue', to: 'reviewing', step: 'review', via: 'patch' }, 25),
         t(8, { row: 'E2', event: 'issue-closed', from: 'reviewing', to: 'closed' }, 20),
         t(1, { row: 'E3', event: 'pr-merged', from: 'merge-queue', to: 'closed' }, 20, 572, 'abc'),
         t(1, { row: 'E4', event: 'pr-closed', from: 'reviewing', to: 'parked' }, 20, 573, 'abc'),
-        t(1, { row: 'T9', event: 'not-ok', from: 'merge-queue', to: 'fixing', step: 'fix' }, 20, 574, 'abc'),
-        entry('i574/labc/queue/merge/ccccccc', 'queue-merge', { issue: 574, startedAt: NOW - 22 * MIN, outcome: { kind: 'queue', op: 'merge', merged: false, head: H('c'), failClass: 'checks', lines: [] } }),
+        t(1, { row: 'T9', event: 'not-ok', from: 'merge-queue', to: 'fixing', step: 'fix', via: 'ci-red' }, 20, 574, 'abc'),
         entry(rerunKey({ issue: N, life: LIFE }, 2, '18342299123'), 'ci-rerun', { issue: N }),
         entry(`i${N}/l${LIFE}/s7/pr/body/a1`, 'pr', { issue: N }),
         entry(reclaimKey({ issue: N, life: LIFE }, 'zz1'), 'claim', { issue: N }),
@@ -203,7 +203,8 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
         companion: [{ at: NOW - 3 * MIN, issue: N, life: LIFE, seq: 9, cause: 'guard:push', reason: 'a force push to issue-571' }],
         controlDigest: null,
         configDigest: null,
-        changes: [{ what: 'config', at: NOW - 4 * MIN, issues: [], detail: 'settings changed with no op: maxInFlightIssues' }],
+        settings: seenOf('{"maxInFlightIssues":2}'),
+        seen: { ...EMPTY_FILES, settings: seenOf('{"maxInFlightIssues":3}') },
       },
     }
   }
@@ -279,81 +280,61 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
   test('a free re-run is logged as unknown only once its attempt\'s free re-run is spent (rate-limited)', () => {
     const w: World = {
       ledger: [
-        t(2, { row: 'U1', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', cause: 'usage' }, 40),
-        t(3, { row: 'U2', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix' }, 30),
-        step(3, 'fix', 39, { outcome: { kind: 'step', step: 'fix', result: result('unknown', { why: 'rate-limited' }) } }),
+        t(2, { row: 'U1', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', cause: 'usage', via: 'usage' }, 40),
+        t(3, { row: 'U2', event: 'unknown', from: 'fixing', to: 'fixing', step: 'fix', via: 'rate-limited' }, 30),
       ],
     }
     expect(causes(w)).toEqual(['loop free:usage', 'loop unknown:rate-limited'])
   })
 })
 
-// --- why a step went unknown -------------------------------------------------------------------------
+// --- why a step went unknown, and what a fixer was sent for: the transition's own via ----------------
 
-describe('unknown:<why> from the step\'s own entry', () => {
-  const unknownAt = (from: IssueState, stepEntries: LedgerEntry[], event: EventKind = 'unknown') =>
-    causes({ ledger: [t(2, { row: 'T1', event: 'ok', from: 'queued', to: from }, 50), ...stepEntries, t(3, { row: 'U2', event, from, to: from }, 30)] })
+describe('unknown:<why> is the transition\'s own via', () => {
+  const unknownAt = (from: IssueState, via: string | null, event: EventKind = 'unknown', more: LedgerEntry[] = []) =>
+    ctxOf({ ledger: [t(2, { row: 'T1', event: 'ok', from: 'queued', to: from }, 50), ...more, t(3, { row: 'U2', event, from, to: from, via }, 30)] })
 
-  test('the result\'s why, for every why', () => {
+  test('every why, as the transition recorded it; a timeout says so itself', () => {
     for (const why of ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait'] as UnknownWhy[]) {
-      expect(unknownAt('building', [step(2, 'build', 40, { outcome: { kind: 'step', step: 'build', result: result('unknown', { why }) } })])).toEqual([`loop unknown:${why}`])
+      expect(interventionsOf(unknownAt('building', why)).map(p => p.event.cause)).toEqual([`unknown:${why}`])
     }
+    expect(interventionsOf(unknownAt('fixing', null, 'timeout')).map(p => p.event.cause)).toEqual(['unknown:timeout'])
   })
 
-  test('a step still running when it ended timed out; a timed-out entry too; the timeout event says so itself', () => {
-    expect(unknownAt('fixing', [step(2, 'fix', 40, { status: 'running', endedAt: null })])).toEqual(['loop unknown:timeout'])
-    expect(unknownAt('fixing', [step(2, 'fix', 40, { status: 'timed-out' })])).toEqual(['loop unknown:timeout'])
-    expect(unknownAt('fixing', [], 'timeout')).toEqual(['loop unknown:timeout'])
+  test('other entries of the seq never change it: a reviewer\'s agent-dead stays so beside a later re-run or PR entry (no inference)', () => {
+    const later = [
+      entry(rerunKey({ issue: N, life: LIFE }, 1, '1'), 'ci-rerun', { issue: N, status: 'failed', startedAt: NOW - 35 * MIN, endedAt: NOW - 34 * MIN }),
+      entry(`i${N}/l${LIFE}/s2/pr/ensure/a1`, 'pr', { issue: N, status: 'running', startedAt: NOW - 33 * MIN, endedAt: null }),
+    ]
+    expect(interventionsOf(unknownAt('reviewing', 'agent-dead', 'unknown', later)).map(p => p.event.cause)).toEqual(['unknown:agent-dead'])
   })
 
-  test('an agent that never started is a spawn; one that failed or was lost is dead; a CLI step that failed is cli', () => {
-    expect(unknownAt('designing', [step(2, 'design', 40, { status: 'failed', agentId: undefined })])).toEqual(['loop unknown:spawn'])
-    expect(unknownAt('designing', [step(2, 'design', 40, { status: 'lost' })])).toEqual(['loop unknown:agent-dead'])
-    expect(unknownAt('merge-queue', [entry(`i${N}/l${LIFE}/queue/update/1234567`, 'queue-update', { issue: N, status: 'failed', startedAt: NOW - 40 * MIN, endedAt: NOW - 39 * MIN })])).toEqual(['loop unknown:cli'])
-    expect(unknownAt('building', [entry(`i${N}/l${LIFE}/s2/prepare/a1`, 'slot', { issue: N, status: 'failed', startedAt: NOW - 40 * MIN, endedAt: NOW - 39 * MIN })])).toEqual(['loop unknown:cli'])
-  })
-
-  test('with no entry of its own: a wait on GitHub in reviewing or at the queue\'s head; cli elsewhere', () => {
-    expect(unknownAt('reviewing', [])).toEqual(['loop unknown:github-wait'])
-    expect(unknownAt('merge-queue', [])).toEqual(['loop unknown:github-wait'])
-    expect(unknownAt('building', [])).toEqual(['loop unknown:cli'])
-  })
-
-  test('another seq\'s or another life\'s step is not this step', () => {
-    const other = step(1, 'build', 70, { outcome: { kind: 'step', step: 'build', result: result('unknown', { why: 'api' }) } })
-    const otherLife = entry(stepKey({ issue: N, life: 'zzz', seq: 2 }, 'build', 1), 'agent-step', { issue: N, startedAt: NOW - 40 * MIN, outcome: { kind: 'step', step: 'build', result: result('unknown', { why: 'api' }) } })
-    expect(unknownAt('building', [other, otherLife])).toEqual(['loop unknown:cli'])
+  test('an unknown is logged whatever its why: one the transition did not record is cli, and a recent one is named in the decision log', () => {
+    const ctx = unknownAt('building', null)
+    expect(interventionsOf(ctx).map(p => [p.event.cause, p.event.reason])).toEqual([['unknown:cli', 'the step in building ended unknown (no why recorded)']])
+    expect(ctx.skipped).toEqual([{ rule: 'S3', issue: N, why: `${transitionKey({ issue: N, life: LIFE, seq: 3 })} (U2) recorded no why (via none): its unknown is logged as unknown:cli` }])
+    // an old one is not named again
+    const old = ctxOf({ ledger: [t(3, { row: 'U2', event: 'unknown', from: 'building', to: 'building', via: 'nonsense' }, 90)] })
+    expect(interventionsOf(old).map(p => p.event.cause)).toEqual(['unknown:cli'])
+    expect(old.skipped).toEqual([])
   })
 })
 
-// --- fixers for red CI or a conflict ------------------------------------------------------------------
-
 describe('fix:ci and fix:conflict (T9): something did not merge as it should', () => {
-  const t9 = (from: IssueState) => t(2, { row: 'T9', event: 'not-ok', from, to: 'fixing', step: 'fix' }, 30)
-  const fixRequested = (note: string): Action => ({
-    kind: 'event',
-    key: `i${N}/l${LIFE}/s2/event/fix_requested`,
-    class: 'free',
-    rule: 'S3',
-    reason: 'entry',
-    issue: N,
-    event: { state: 'fix_requested', issue: N, branch: `issue-${N}`, pr: 621, head: null, note },
+  const t9 = (from: IssueState, via: string | null) => t(2, { row: 'T9', event: 'not-ok', from, to: 'fixing', step: 'fix', via }, 30)
+
+  test('the transition\'s via says what the fixer is for: red CI or a conflict are interventions, review findings are not', () => {
+    for (const from of ['reviewing', 'merge-queue'] as const) {
+      expect(causes({ ledger: [t9(from, 'ci-red')] })).toEqual(['loop fix:ci'])
+      expect(causes({ ledger: [t9(from, 'conflict')] })).toEqual(['loop fix:conflict'])
+      expect(causes({ ledger: [t9(from, 'changes')], prs: [pr({ mergeable: 'dirty' })] })).toEqual([])
+    }
   })
 
-  test('the seq\'s own fix_requested says what for', () => {
-    expect(causes({ ledger: [t9('reviewing')], out: [fixRequested('ci')] })).toEqual(['loop fix:ci'])
-    expect(causes({ ledger: [t9('reviewing')], out: [fixRequested('conflict')] })).toEqual(['loop fix:conflict'])
-    expect(causes({ ledger: [t9('reviewing')], out: [fixRequested('review')], prs: [pr({ mergeable: 'dirty' })] })).toEqual([])
-  })
-
-  test('else the queue\'s guard class, else the PR as read', () => {
-    const merge = (failClass: 'conflict' | 'checks') =>
-      entry(`i${N}/l${LIFE}/queue/merge/aaaaaaa`, 'queue-merge', { issue: N, startedAt: NOW - 35 * MIN, outcome: { kind: 'queue', op: 'merge', merged: false, head: H('a'), failClass, lines: [] } })
-    expect(causes({ ledger: [merge('conflict'), t9('merge-queue')] })).toEqual(['loop fix:conflict'])
-    expect(causes({ ledger: [merge('checks'), t9('merge-queue')] })).toEqual(['loop fix:ci'])
-    expect(causes({ ledger: [t9('reviewing')], records: [record({ seq: 2, state: 'fixing' })], prs: [pr({ mergeable: 'dirty' })] })).toEqual(['loop fix:conflict'])
-    const failed = { name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: null }
-    expect(causes({ ledger: [t9('reviewing')], records: [record({ seq: 2, state: 'fixing' })], prs: [pr({ checks: [failed] })] })).toEqual(['loop fix:ci'])
+  test('a T9 that recorded no via is named in the decision log, not guessed from the PR as read', () => {
+    const ctx = ctxOf({ ledger: [t9('reviewing', null)], prs: [pr({ mergeable: 'dirty' })] })
+    expect(interventionsOf(ctx)).toEqual([])
+    expect(ctx.skipped.map(x => x.why)).toEqual([`${transitionKey({ issue: N, life: LIFE, seq: 2 })} (T9) recorded no via (none): whether its fixer is for red CI or a conflict is not known`])
   })
 })
 
@@ -361,7 +342,7 @@ describe('fix:ci and fix:conflict (T9): something did not merge as it should', (
 
 describe('person interventions', () => {
   test('an unpark by the label is a person\'s; an unpark by /factory resume is the op\'s own', () => {
-    const ledger = [t(2, { row: 'T3', event: 'not-ok', from: 'designing', to: 'parked' }, 50), t(3, { row: 'P1', event: 'unpark', from: 'parked', to: 'queued' }, 10)]
+    const ledger = [t(2, { row: 'T3', event: 'not-ok', from: 'designing', to: 'parked', via: 'question' }, 50), t(3, { row: 'P1', event: 'unpark', from: 'parked', to: 'queued' }, 10)]
     expect(causes({ ledger })).toEqual(['loop park', 'person unpark'])
     const resumed = control({ resumed: [{ subject: `issue:${N}`, at: NOW - 20 * MIN }] })
     expect(causes({ ledger, control: resumed })).toEqual(['loop park'])
@@ -397,19 +378,18 @@ describe('person interventions', () => {
   })
 
   test('a hand edit of the owner\'s files is attached to each issue whose entries changed, else to none', () => {
+    const ctl = (c: Partial<Control>) => seenOf(JSON.stringify({ ...control(), ...c }))
     const facts: InterventionFacts = {
       companion: [],
-      controlDigest: 'x',
-      configDigest: 'y',
-      changes: [
-        { what: 'control', at: NOW - 5 * MIN, issues: [571, 572], detail: 'control changed with no op: paused' },
-        { what: 'control', at: NOW - 4 * MIN, issues: [], detail: 'control changed with no op: the OFF file was created' },
-      ],
+      controlDigest: null,
+      configDigest: null,
+      control: ctl({ paused: [571, 572] }),
+      seen: { ...EMPTY_FILES, control: ctl({}), edits: [{ what: 'control', at: NOW - 4 * MIN, issues: [], detail: 'the OFF file was created' }] },
     }
-    expect(ivs({ facts }).map(p => [p.event.cause, p.event.issue])).toEqual([
-      ['control-file', 571],
-      ['control-file', 572],
-      ['control-file', null],
+    expect(ivs({ facts }).map(p => [p.event.cause, p.event.issue, p.event.fact])).toEqual([
+      ['control-file', null, `control-file/fleet/${(NOW - 4 * MIN).toString(36)}`],
+      ['control-file', 571, `control-file/i571/${ctl({ paused: [571, 572] }).digest}`],
+      ['control-file', 572, `control-file/i572/${ctl({ paused: [571, 572] }).digest}`],
     ])
   })
 
@@ -424,6 +404,23 @@ describe('person interventions', () => {
     for (const name of ['status', 'help']) expect(opInterventions({ text: name, name, issues: [], at: NOW })).toEqual([])
     // two ops a millisecond apart are two facts
     expect(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW + 1 })[0]?.fact).not.toBe(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW })[0]?.fact)
+  })
+
+  test('an op is an intervention when v2 acts before it or after it: the ops that turn the loop on and off are logged, those far from it are not', () => {
+    const landed = (planner: 'v1' | 'v2', mode: 'off' | 'observe' | 'act', text: string) => {
+      const [name, word] = text.split(' ')
+      const op = (name === 'mode' ? { op: 'mode', mode: word } : name === 'planner' ? { op: 'planner', planner: word } : { op: 'pause', issues: [] }) as never
+      return opLanded({ planner, mode }, op, text, [], NOW)?.name ?? null
+    }
+    expect(landed('v2', 'observe', 'mode act')).toBe('mode')
+    expect(landed('v1', 'act', 'planner v2')).toBe('planner')
+    expect(landed('v2', 'act', 'mode observe')).toBe('mode')
+    expect(landed('v2', 'act', 'planner v1')).toBe('planner')
+    expect(landed('v2', 'act', 'pause')).toBe('pause')
+    expect(landed('v1', 'observe', 'mode act')).toBeNull()
+    expect(landed('v1', 'act', 'pause')).toBeNull()
+    expect(landed('v2', 'observe', 'planner v1')).toBeNull()
+    expect(opLanded({ planner: 'v2', mode: 'act' }, { op: 'status' } as never, null, [], NOW)).toBeNull()
   })
 })
 
@@ -458,13 +455,56 @@ describe('a push no loop step produced is a person\'s; the loop\'s own heads and
     }
   }
 
-  test('no interleaving of the loop\'s writes and late reads gives a push', () => {
+  // A writer that pushed D and then ended with no head read (unknown, lost or failed), so no step
+  // outcome names D; the record then waits (parked by U4 or triage, or in review or the queue)
+  // with D on its PR, first seen at any time after the writer started. Or a later writer read its
+  // own head B, and D was seen before B's step ended, or within a read's lag of it.
+  function headlessWorld(g: () => number): World {
+    const ended = g()
+    const unknown = { kind: 'step' as const, step: 'fix' as const, result: result('unknown', { why: 'agent-dead' }) }
+    const writer = step(4, g() < 0.5 ? 'build' : 'fix', 45, ended < 0.4 ? { outcome: unknown } : ended < 0.7 ? { status: 'lost' } : { status: 'failed', agentId: undefined })
+    const later = g() < 0.5
+    const dSeen = later ? NOW - 45 * MIN + Math.floor(g() * 29 * MIN) : NOW - 45 * MIN + Math.floor(g() * 45 * MIN)
+    const states = ['reviewing', 'merge-queue', 'parked'] as const
+    return {
+      ledger: [
+        step(2, 'build', 55, { outcome: { kind: 'step', step: 'build', result: result('ok', { head: H('a') }) } }),
+        writer,
+        ...(later ? [step(6, 'fix', 25, { endedAt: NOW - 20 * MIN, outcome: { kind: 'step', step: 'fix', result: result('ok', { head: H('b') }) } })] : []),
+      ],
+      records: [record({ seq: 7, state: states[Math.floor(g() * 3)] as IssueState, step: null, head: later ? H('b') : H('a') })],
+      prs: [pr({ head: later && g() < 0.5 ? H('b') : H('d') })],
+      heads: { [H('a')]: { pr: 621, at: NOW - 50 * MIN }, [H('d')]: { pr: 621, at: dSeen }, ...(later ? { [H('b')]: { pr: 621, at: NOW - 19 * MIN } } : {}) },
+    }
+  }
+
+  test('no interleaving of the loop\'s writes and late reads gives a push: writers that read their head, writers that ended unknown, queue updates', () => {
     let s = 1
     const g = () => {
-      s = (Math.imul(s, 48271) + 11) % 2147483647
+      // unsigned, so every draw is in [0, 1)
+      s = ((Math.imul(s, 48271) + 11) >>> 0) % 2147483647
       return s / 2147483647
     }
     for (let i = 0; i < 400; i += 1) expect(causes(loopWorld(g))).toEqual([])
+    for (let i = 0; i < 400; i += 1) expect(causes(headlessWorld(g))).toEqual([])
+  })
+
+  test('a builder or fixer that ended unknown, then the record parked with its head on the PR: the loop\'s, not a push', () => {
+    const fixer = step(4, 'fix', 45, { outcome: { kind: 'step', step: 'fix', result: result('unknown', { why: 'agent-dead' }) } })
+    const w: World = { ledger: [fixer], records: [record({ state: 'parked', step: null, head: H('a') })], prs: [pr({ head: H('d') })], heads: { [H('a')]: { pr: 621, at: NOW - 50 * MIN }, [H('d')]: { pr: 621, at: NOW - 5 * MIN } } }
+    expect(causes(w)).toEqual([])
+    // a later writer that read its own head bounds it: a new head seen well after that one ended is a person's
+    const later = step(6, 'fix', 30, { endedAt: NOW - 25 * MIN, outcome: { kind: 'step', step: 'fix', result: result('ok', { head: H('b') }) } })
+    expect(causes({ ...w, ledger: [fixer, later], records: [record({ state: 'reviewing', head: H('b') })] })).toEqual(['person push'])
+    // and a head seen before the writer started is not its own
+    expect(causes({ ...w, heads: { ...w.heads, [H('d')]: { pr: 621, at: NOW - 46 * MIN } } })).toEqual(['person push'])
+  })
+
+  test('a head first seen longer ago than the ledger keeps an intervention\'s key is not judged again', () => {
+    const life = (Math.floor(NOW / 1000) - 8 * 24 * 3600).toString(36)
+    const w = (at: number): World => ({ records: [record({ life, head: H('a') })], prs: [pr({ head: H('9') })], heads: { [H('9')]: { pr: 621, at } } })
+    expect(causes(w(NOW - FACT_WINDOW_MS + MIN))).toEqual(['person push'])
+    expect(causes(w(NOW - FACT_WINDOW_MS - MIN))).toEqual([])
   })
 
   test('a person\'s head, first seen in this life, is one push, keyed by the head', () => {
@@ -537,91 +577,224 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
   })
 })
 
-// --- the owner's files between passes (sources-interventions.ts) -------------------------------------
+// --- the owner's files against the versions the loop kept (sources-interventions.ts, store.ts) ---------
 
 describe('hand edits of control.json, the OFF file and the settings', () => {
   const BASE = LOOP_DIR.replace(/\/[^/]+$/, '')
+  const CONTROL = `${LOOP_DIR}/control.json`
+  const WORKSPACE = `${BASE}/config.json`
   function rtOf(over: Partial<Runtime> = {}, cfg = config({ planner: 'v2' })): Runtime {
     return { mode: 'act', repo: REPO, device: DEVICE, runSource: 'local', poolSize: 16, cwd: '/work', loopDir: LOOP_DIR, sink: null, env: {}, toolsDir: TOOLS, pluginRoot: PLUGIN_ROOT, config: cfg, configProblems: [], ...over }
   }
-  // a pass's read over these files, at this minute
-  async function pass(mem: Memory, files: Record<string, string>, at: number, rt: Runtime = rtOf()) {
-    const r = await readInterventions(
-      {
-        now: NOW + at * MIN,
-        rt,
-        run: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
-        readFile: async (path: string) => files[path] ?? null,
-        state: state(),
-        records: [],
-        heads: {},
-        prBudget: 0,
-        limited: () => false,
+  // one pass's read over these files
+  async function read(files: Record<string, string>, rt: Runtime = rtOf(), fail: string[] = []) {
+    return readInterventions({
+      now: NOW,
+      rt,
+      run: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
+      readFile: async (path: string) => {
+        if (fail.includes(path)) throw new Error('EACCES')
+        return files[path] ?? null
       },
-      mem,
-    )
-    return r.read.changes ?? []
+      state: state(),
+      records: [],
+      heads: {},
+      prBudget: 0,
+      limited: () => false,
+    })
   }
-  const ctl = (c: Partial<Control>) => ({ [`${LOOP_DIR}/control.json`]: JSON.stringify({ ...control(), ...c }) })
+  const ctl = (c: Partial<Control>) => JSON.stringify({ ...control(), ...c })
+  // the facts a pass would plan from, with what the loop kept
+  async function factsOf(files: Record<string, string>, seen: FilesSeen | null, rt?: Runtime) {
+    return { ...(await read(files, rt)).read, seen }
+  }
+  const causesOf = (facts: InterventionFacts) => fileFacts(facts).map(f => [f.cause, f.issue, f.detail])
+  // the version a pass would keep, with every intervention it found logged (or none)
+  const kept = (facts: InterventionFacts, logged: boolean) => keepFiles(facts.seen ?? null, facts, () => logged)
+  function memStore(init: Record<string, unknown> = {}) {
+    const m = new Map<string, unknown>(Object.entries(init))
+    const io: V2StoreIo = { get: async k => m.get(k), set: async (k, v) => void m.set(k, v), now: async () => NOW }
+    return { m, io }
+  }
 
-  test('a change no op explains is judged once it settles, with the issues it touched', async () => {
-    const mem = newMemory()
-    expect(await pass(mem, ctl({}), 0)).toEqual([])
-    expect(await pass(mem, ctl({ paused: [571], skip: [9] }), 1)).toEqual([])
-    const judged = await pass(mem, ctl({ paused: [571], skip: [9] }), 1 + SETTLE_MS / MIN)
-    expect(judged.map(c => [c.what, c.issues])).toEqual([['control', [9, 571]]])
-    expect(judged[0]?.detail).toContain('paused')
-    expect((await pass(mem, ctl({ paused: [571], skip: [9] }), 10)).length).toBe(1)
+  test('the read: control.json and the workspace file as they are, and the settings but the keys that file sets and the op-set ones', async () => {
+    const r = await read({ [CONTROL]: ctl({}), [WORKSPACE]: '{"mode":"act","passEvery":"2m"}' }, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2, passEveryMs: 120_000 })))
+    expect(r.source).toEqual({ ok: true, at: NOW })
+    expect(r.read.control).toEqual(seenOf(ctl({})))
+    expect(r.read.workspace?.text).toBe('{"mode":"act","passEvery":"2m"}')
+    const settings = JSON.parse(r.read.settings?.text ?? '{}') as Record<string, unknown>
+    expect(settings.maxInFlightIssues).toBe(2)
+    for (const k of ['mode', 'trace', 'planner', 'passEveryMs']) expect(k in settings).toBe(false)
+    expect(r.read.controlDigest).toBe(digest(ctl({})))
+    // a missing file reads as empty; one that cannot be read is unknown, and the source says why
+    expect((await read({})).read.control).toEqual(seenOf(''))
+    const failed = await read({ [CONTROL]: ctl({}) }, rtOf(), [CONTROL])
+    expect(failed.read.control).toBeNull()
+    expect(failed.source).toMatchObject({ ok: false, error: expect.stringContaining('EACCES') })
+    // settings not read from origin's default branch stand in for this pass only: not compared
+    expect((await read({}, rtOf({ configProblems: ["settings: origin's default branch not read (x); the main checkout's file is used"] }))).read.settings).toBeNull()
   })
 
-  test('an op that landed between the two reads explains its change', async () => {
-    const mem = newMemory()
-    await pass(mem, ctl({}), 0)
-    noteOpLanded(NOW + 0.5 * MIN, mem)
-    await pass(mem, ctl({ paused: [571] }), 1)
-    expect(await pass(mem, ctl({ paused: [571] }), 5)).toEqual([])
+  test('a change against the version kept is one intervention per issue whose entries changed, else one for the fleet, keyed by the new version', async () => {
+    const seen: FilesSeen = { ...EMPTY_FILES, control: seenOf(ctl({})) }
+    const facts = await factsOf({ [CONTROL]: ctl({ paused: [571], skip: [9] }) }, seen)
+    expect(causesOf(facts)).toEqual([
+      ['control-file', 9, 'control.json changed with no op: paused, skip'],
+      ['control-file', 571, 'control.json changed with no op: paused, skip'],
+    ])
+    expect(fileFacts(facts)[0]?.fact).toBe(`control-file/i9/${digest(ctl({ paused: [571], skip: [9] }))}`)
+    expect(causesOf(await factsOf({ [CONTROL]: ctl({ serial: true }) }, seen))).toEqual([['control-file', null, 'control.json changed with no op: serial']])
+    // no version kept yet, a change of layout only, or the loop's own clearing of a done update: none
+    expect(causesOf(await factsOf({ [CONTROL]: ctl({ paused: [1] }) }, null))).toEqual([])
+    expect(causesOf(await factsOf({ [CONTROL]: JSON.stringify({ ...control() }, null, 2) }, seen))).toEqual([])
+    const due: FilesSeen = { ...EMPTY_FILES, control: seenOf(ctl({ updateDue: { reason: 'image', at: 1 } })) }
+    expect(causesOf(await factsOf({ [CONTROL]: ctl({ updateDue: null }) }, due))).toEqual([])
   })
 
-  test('the loop\'s own clearing of a done update is no hand edit; the kill switch is a fleet-level one', async () => {
-    const mem = newMemory()
-    await pass(mem, ctl({ updateDue: { reason: 'image', at: 1 } }), 0)
-    await pass(mem, ctl({ updateDue: null }), 1)
-    expect(await pass(mem, ctl({ updateDue: null }), 5)).toEqual([])
-    await pass(mem, { ...ctl({ updateDue: null }), [`${BASE}/OFF`]: '' }, 6)
-    const off = await pass(mem, { ...ctl({ updateDue: null }), [`${BASE}/OFF`]: '' }, 10)
-    expect(off.map(c => [c.what, c.issues, c.detail])).toEqual([['control', [], 'control changed with no op: the OFF file was created']])
+  test('a settings change is one fleet-level config-file, from the workspace file or the settings the loop runs with', async () => {
+    const before = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, null, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    const seen = kept(before, true) as FilesSeen
+    const repo = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
+    expect(causesOf(repo)).toEqual([['config-file', null, 'settings changed with no op: maxInFlightIssues']])
+    const hand = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    expect(causesOf(hand)).toEqual([['config-file', null, 'settings changed with no op: config.json binDir, config.json mode']])
+    // a pass whose settings were not read keeps the same key for the same edit
+    const blind = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ configProblems: ["settings: origin's default branch not read (x)"] }))
+    expect(fileFacts(blind).map(f => f.fact)).toEqual(fileFacts(hand).map(f => f.fact))
   })
 
-  test('a pass that does not act starts the comparison over: nothing seen in observe, under v1 or across a mode change is logged', async () => {
-    const mem = newMemory()
-    await pass(mem, ctl({}), 0)
-    await pass(mem, ctl({ paused: [1] }), 1, rtOf({ mode: 'observe' }))
-    await pass(mem, ctl({ paused: [1, 2] }), 2, rtOf({}, config({ planner: 'v1' })))
-    await pass(mem, ctl({ paused: [1, 2, 3] }), 3)
-    expect(await pass(mem, ctl({ paused: [1, 2, 3] }), 9)).toEqual([])
+  test('the version read is kept once what it shows is logged; until then the change is planned again', async () => {
+    const seen: FilesSeen = { ...EMPTY_FILES, control: seenOf(ctl({})) }
+    const facts = await factsOf({ [CONTROL]: ctl({ paused: [5] }) }, seen)
+    // not logged yet: nothing changes, so the next pass plans the same fact
+    expect(kept(facts, false)?.control ?? seen.control).toEqual(seen.control)
+    // logged: the version read is kept, and the next pass finds nothing
+    const next = kept(facts, true) as FilesSeen
+    expect(next.control).toEqual(seenOf(ctl({ paused: [5] })))
+    expect(causesOf(await factsOf({ [CONTROL]: ctl({ paused: [5] }) }, next))).toEqual([])
+    // the first acting read keeps what it reads
+    expect(kept(await factsOf({ [CONTROL]: ctl({}) }, null), false)?.control).toEqual(seenOf(ctl({})))
+    // an op that wrote since the pass read keeps the op's version
+    const op = { ...seen, control: seenOf(ctl({ serial: true })) }
+    expect(keepFiles(op, facts, () => true)?.control ?? op.control).toEqual(op.control)
   })
 
-  test('a settings change no op explains is a config-file change; a pass that could not read origin\'s settings judges none', async () => {
-    const mem = newMemory()
-    const ws = { [`${BASE}/config.json`]: '{"mode":"act"}' }
-    await pass(mem, ws, 0)
-    await pass(mem, ws, 1, rtOf({ configProblems: ["settings: origin's default branch not read (x); the main checkout's file is used"] }, config({ planner: 'v2', maxInFlightIssues: 9 })))
-    expect(await pass(mem, ws, 5)).toEqual([])
-    await pass(mem, ws, 6, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
-    const judged = await pass(mem, ws, 10, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
-    expect(judged.map(c => [c.what, c.detail])).toEqual([['config', 'settings changed with no op: maxInFlightIssues']])
-    await pass(mem, { [`${BASE}/config.json`]: '{"mode":"act","binDir":"/x"}' }, 11, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
-    const both = await pass(mem, {}, 20, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
-    expect(both.map(c => c.detail)).toEqual(['settings changed with no op: maxInFlightIssues', 'settings changed with no op: the workspace config.json'])
+  test('an op\'s write is the loop\'s own: the next read finds no edit; one it found already changed by hand is kept and logged once', async () => {
+    const { m, io } = memStore({ [filesKey(REPO)]: { ...EMPTY_FILES, control: seenOf(ctl({})) } })
+    const live = newV2Live()
+    const files: Record<string, string> = { [CONTROL]: ctl({}) }
+    const fio = notingIo({ readFile: async p => files[p] ?? null, writeFile: async (p, b) => void (files[p] = b) }, noteWritten(live, io, rtOf()))
+    await fio.writeFile(CONTROL, ctl({ paused: [7] }))
+    const afterOp = m.get(filesKey(REPO)) as FilesSeen
+    expect(afterOp.control).toEqual(seenOf(ctl({ paused: [7] })))
+    expect(afterOp.edits).toEqual([])
+    expect(causesOf(await factsOf(files, afterOp))).toEqual([])
+    // a person adds a skip by hand, then an op writes over it: the hand edit is kept to log
+    files[CONTROL] = ctl({ paused: [7], skip: [8] })
+    await fio.writeFile(CONTROL, ctl({ paused: [7, 9], skip: [8] }))
+    const afterHand = m.get(filesKey(REPO)) as FilesSeen
+    expect(afterHand.edits).toEqual([{ what: 'control', at: NOW, issues: [8], detail: 'control.json changed with no op: skip' }])
+    const facts = await factsOf(files, afterHand)
+    expect(causesOf(facts)).toEqual([['control-file', 8, 'control.json changed with no op: skip']])
+    // once logged, the edit goes
+    expect(kept(facts, true)?.edits).toEqual([])
+    // the workspace file the same way; another path is not an owner's file
+    files[WORKSPACE] = '{"mode":"act"}'
+    await fio.writeFile(WORKSPACE, '{"mode":"observe"}')
+    expect((m.get(filesKey(REPO)) as FilesSeen).workspace).toEqual(seenOf('{"mode":"observe"}'))
+    await fio.writeFile(`${LOOP_DIR}/other.json`, '{}')
+    // nothing is kept before the loop keeps any
+    const empty = memStore()
+    await notingIo({ readFile: async () => null, writeFile: async () => undefined }, noteWritten(newV2Live(), empty.io, rtOf())).writeFile(CONTROL, ctl({}))
+    expect(empty.m.size).toBe(0)
+  })
+
+  test('the kill switch is a person\'s edit, kept once per use, only while v2 acts', async () => {
+    const { m, io } = memStore()
+    const live = newV2Live()
+    expect(await noteKillSwitch(live, io, rtOf(), true)).toBe(true)
+    expect(await noteKillSwitch(live, io, rtOf(), true)).toBe(true)
+    const f = m.get(filesKey(REPO)) as FilesSeen
+    expect([f.off, f.edits]).toEqual([true, [{ what: 'control', at: NOW, issues: [], detail: 'the OFF file was created' }]])
+    expect(causesOf({ companion: [], controlDigest: null, configDigest: null, seen: f })).toEqual([['control-file', null, 'the OFF file was created']])
+    // the next acting pass clears the flag; the edit goes once logged
+    const facts = await factsOf({ [CONTROL]: ctl({}) }, f)
+    expect(kept(facts, false)).toMatchObject({ off: false, edits: f.edits })
+    expect(kept(facts, true)).toMatchObject({ off: false, edits: [] })
+    // off, observe or planner v1: not kept
+    for (const rt of [rtOf({ mode: 'observe' }), rtOf({}, config({ planner: 'v1' }))]) {
+      const other = memStore()
+      expect(await noteKillSwitch(newV2Live(), other.io, rt, true)).toBe(true)
+      expect(other.m.size).toBe(0)
+    }
+    expect(await noteKillSwitch(newV2Live(), memStore().io, rtOf(), false)).toBe(false)
   })
 
   test('controlDiff names the fields and the issues whose entries came or went', () => {
-    const text = (c: Partial<Control>, off = false) => `${off ? 'OFF' : 'on'}\n${JSON.stringify({ ...control(), ...c })}`
+    const text = (c: Partial<Control>) => JSON.stringify({ ...control(), ...c })
     expect(controlDiff(text({}), text({}))).toBeNull()
     expect(controlDiff(text({ resumed: [{ subject: 'issue:7', at: 1 }] }), text({ resumed: [] }))).toEqual({ fields: ['resumed'], issues: [7] })
     expect(controlDiff(text({}), text({ dropped: [{ issue: 3, at: 1 }], notes: [{ issue: null, text: 'x', at: 1 }] }))).toEqual({ fields: ['dropped', 'notes'], issues: [3] })
-    expect(controlDiff(text({ serial: false }), text({ serial: true }, true))).toEqual({ fields: ['the OFF file was created', 'serial'], issues: [] })
     expect(controlDiff(text({ updateDue: null }), text({ updateDue: { reason: 'x', at: 2 } }))).toEqual({ fields: ['updateDue'], issues: [] })
+    expect(controlDiff('', text({}))).toMatchObject({ fields: expect.arrayContaining(['paused']) })
+  })
+})
+
+// --- the driver: the kill switch, an op, a hand edit (register.ts, v2 SPEC 7.2) ------------------------
+
+describe('the owner\'s files in the pass driver', () => {
+  const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as const
+  const OFF = `${CFG_DIR}/factory-loop/OFF`
+  const USAGE = 'five_hour=40 resets_at=2026-10-13T05:00:00Z resets_in=1 seven_day=60 seven_day_resets_at=2026-10-16T11:00:00Z seven_day_resets_in=1 source=oauth'
+  const quiet = (argv: string[], s: { stdin?: string }) => {
+    switch (argv[0]) {
+      case 'callum-flow-factory-state':
+        return { stdout: factoryDoc([]) }
+      case 'dev-query':
+        return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
+      case `${TOOLS}/queue-watch.sh`:
+        return { stdout: 'queue known=none now=none\n' }
+      case `${TOOLS}/usage-check.sh`:
+        return { stdout: USAGE }
+      case 'callum-flow-issue-read':
+        return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      case 'treehouse':
+        return { stdout: '[]' }
+    }
+    return undefined
+  }
+  const ACT_V2 = { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }
+  const fileIvs = (line: Record<string, unknown>) => (line.actions as { key: string }[]).map(a => a.key).filter(k => /^iv\/(control|config)-file\//.test(k))
+
+  test('the kill switch on for a pass, then off: exactly one control-file intervention, the next acting pass\'s', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: ACT_V2, run: quiet, files: { [OFF]: '' } })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.titles).toEqual(['🔄 dev-system · off'])
+    await clock.advance(60_000)
+    h.files.delete(OFF)
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(fileIvs(h.last())).toEqual([`iv/control-file/fleet/${(NOW + 5_000).toString(36)}`])
+    expect((h.store.get(filesKey(REPO)) as FilesSeen).off).toBe(false)
+  })
+
+  test('an op\'s write is no hand edit; a hand edit between passes is one', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, { config: ACT_V2, run: quiet })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(fileIvs(h.last())).toEqual([])
+    const r = await $.command.run({ command: 'factory', args: 'pause 12', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+    expect(r.text).toStartWith('Paused #12')
+    await clock.advance(61_000)
+    expect(fileIvs(h.last())).toEqual([])
+    // by hand: a skip added to control.json
+    const path = `${LOOP_DIR}/control.json`
+    h.files.set(path, JSON.stringify({ ...JSON.parse(h.files.get(path) ?? '{}'), skip: [13] }))
+    await clock.advance(61_000)
+    expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/control-file\/i13\//)])
   })
 })
 

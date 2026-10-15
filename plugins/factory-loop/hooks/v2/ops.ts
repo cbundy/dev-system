@@ -1,9 +1,10 @@
 // The owner ops under planner v2 (docs/factory-loop/v2/SPEC.md appendix E, 7.2, 11): `resume
 // <N...> ["note"]` unparks (P1) and takes no run id, `drop <N>` closes the record of the life it
 // names (E1) and leaves the issue open, a resume of an issue that is not parked changes nothing,
-// and an op that landed in act mode is a person intervention. control.ts delegates to these when
+// and an op that landed with v2 acting before or after it is a person intervention. control.ts delegates to these when
 // planner v2 is in force, and register.ts asks parkedOf and opLanded; v1's meanings stay in
 // control.ts until the delete wave. Pure.
+import type { Op } from '../control'
 import type { Control, Mode, Ms } from '../types'
 import type { OpLanded } from './act-events'
 import type { IssueRecord, Planner } from './types'
@@ -59,10 +60,17 @@ export function parkedOf(planner: Planner, records: readonly IssueRecord[] | und
   return planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked').map(r => r.issue) : null
 }
 
-// opLanded: an op that landed (logged) in act mode under planner v2, as the person intervention
-// act-events.ts logs (7.2): its text, its name and the issues it names; null for any other.
-export function opLanded(planner: Planner, mode: Mode, logged: string | null, issues: readonly number[], at: Ms): OpLanded | null {
-  if (planner !== 'v2' || mode !== 'act' || logged === null) return null
+// The planner and the mode in force.
+export type InForce = { planner: Planner; mode: Mode }
+
+// opLanded: an op that landed (logged) with planner v2 in act mode in force before it or after it,
+// as the person intervention act-events.ts logs (7.2): its text, its name and the issues it names;
+// null for any other. The op's own effect counts, so the ops that turn the loop on (`mode act`,
+// `planner v2`) and off are logged too.
+export function opLanded(before: InForce, op: Op, logged: string | null, issues: readonly number[], at: Ms): OpLanded | null {
+  const after: InForce = { planner: op.op === 'planner' ? op.planner : before.planner, mode: op.op === 'mode' ? op.mode : before.mode }
+  const acts = (s: InForce) => s.planner === 'v2' && s.mode === 'act'
+  if (logged === null || !(acts(before) || acts(after))) return null
   return { text: logged, name: logged.split(' ')[0] ?? '', issues: [...issues], at }
 }
 

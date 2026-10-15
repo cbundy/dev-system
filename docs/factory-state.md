@@ -73,10 +73,16 @@ newest one:
 | `closed` | `merged` when its `why` is `merged` or `merged-by-hand`, else `closed without merge` |
 
 The detail shows the v2 state, the step and the attempt, and time in stage runs from the record's
-own `since`. A closed one is of the current life only while no new life followed it (a `ready`, a
-claim, a delegation); a `claim-lost` close is another device's issue and never sets the stage. A v2
-issue keeps the loop's state when its claim lapses: the loop claims it again, so the lapse shows in
-the `lease` field, not as `queued`. The stuck rules apply as to any issue.
+own `since`. Only the newest life counts (its `life=` token is the claim's start time): a
+`claim-lost` close is another device's issue and is left out, as are the transitions of an older
+life, so a loop that lost the issue to a second loop never hides the live life's state. The state
+holds only while nothing released the issue after it: a `ready` or `reclaimed` (the sweep, or the
+loop's reconcile, put it back in the queue) or a `claimed` newer than the newest transition shows no
+v2 state, whatever that transition's `to`, so a released ghost never shows its old stage. The loop's
+own re-claim logs the transition again right after its `claimed`. A closed one is of the current
+life only while no new life followed it (a `ready`, a claim, a delegation). A v2 issue keeps the
+loop's state while its claim lapses and no sweep has released it: the loop claims it again, so the
+lapse shows in the `lease` field, not as `queued`. The stuck rules apply as to any issue.
 
 `superseded` (run-scoped, `--run` required) says a run was replaced for the same issue. It is never a
 stage and never final; the named run is dropped when the issue's latest run is chosen, so its stale
