@@ -126,6 +126,12 @@ export function patchIdArgv(ref: string, base: string): string[] {
   return ['callum-flow-patch-id', ref, base]
 }
 
+// The pause between two reads of a PR whose update GitHub applies in the background (9.2): the
+// executors have no timer of their own.
+export function pollPauseArgv(seconds: number): string[] {
+  return ['sleep', String(seconds)]
+}
+
 // --- origin (10.8) --------------------------------------------------------------------------------------------
 
 // A writer's branch on origin, read directly.

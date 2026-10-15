@@ -467,7 +467,8 @@ describe('the steps', () => {
   test('review and the merge queue wait for their units with a skip line that says so', () => {
     const r = plan(world([rec(97, { state: 'reviewing', step: 'review' }), rec(98, { state: 'merge-queue', step: 'queue' })]))
     expect(said(r, 97)).toEqual(['the review step is not built yet (U6)'])
-    expect(said(r, 98)).toEqual(['the queue step is not built yet (U7)'])
+    // U7 is built: a merge-queue record with no PR goes back to reviewing, which ensures one (T14)
+    expect(transitionOf(r, 98)).toMatchObject({ row: 'T14', next: { state: 'reviewing' } })
   })
 })
 
@@ -482,7 +483,7 @@ describe('the events, in 4.1\'s order', () => {
     const merged = world([mq], {}, { prs: pr({ state: 'merged', mergedHead: HEAD }), ...closedRead })
     expect(transitionOf(plan(merged), 100)).toMatchObject({ row: 'E3', event: 'pr-merged', next: { state: 'closed', why: 'merged-by-hand' } })
     const ours = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD })])
-    expect(transitionOf(plan(ours), 100)).toBeUndefined()
+    expect(transitionOf(plan(ours), 100)).toMatchObject({ row: 'T13', event: 'ok', next: { state: 'closed', why: 'merged' } })
     // closed with no merge: the issue's close
     expect(transitionOf(plan(world([mq], {}, closedRead)), 100)).toMatchObject({ row: 'E2', next: { why: 'closed-on-github' } })
   })

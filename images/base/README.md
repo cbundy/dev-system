@@ -1477,6 +1477,27 @@ unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FL
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
 
+`callum-flow-merge-guard <pr> --patch <id>` is the factory loop's mode (v2,
+[`docs/factory-loop/v2/SPEC.md`](../../docs/factory-loop/v2/SPEC.md) 9.4), and `callum-flow-merge <pr> --patch <id>`
+passes it through. It checks only facts the loop owns: no run lookup (no `pipeline-watch.sh`, no
+no-mistakes call), no `head` or `gates` guard, and a `patch` guard that the PR head's patch id is
+`<id>`, the one the loop's reviewer approved. Every FAIL line ends with ` class=<class>`, so the loop
+acts on the class and never on the reason's words: `behind` (the loop updates the head), `conflict`
+(a fixer), `checks` (failed or pending checks), `patch` (back to review), `linkage` (the loop writes
+the PR body again), `read` (a fact the guard could not read, verify, derive or compute; GitHub's
+`BLOCKED` too) and `policy` (only the owner can change it: an untrusted author, another base, a draft,
+a branch with no issue). `--patch` takes no `--run` or `--update-behind`. Without `--patch` the guard is
+unchanged.
+
+`callum-flow-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
+`git diff -U0 <merge base of origin/<base> and the head> <head> | git patch-id --stable`, with no
+colour, external diff, textconv or rename detection, and full object ids. With no context lines, a
+clean merge of the base into the head (`gh pr update-branch`) keeps it, and any change to the PR's own
+lines changes it. It fetches `origin/<base>` and the head (a branch from origin, a sha by its id) into
+the remote-tracking refs and never touches a working tree or HEAD. Exit 1 when it cannot be computed (a
+fetch failed, no merge base, no change against the base), 2 on bad usage. The loop's `prs` source and
+the guard's `patch` check both run it (override: `CALLUM_FLOW_PATCH_ID_BIN`).
+
 `callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]` updates only an open,
 `BEHIND`, nonconflicting PR targeting the default branch or the supplied base. It rebases in a
 throwaway worktree, compares the ordered per-commit `git patch-id --verbatim` values against the

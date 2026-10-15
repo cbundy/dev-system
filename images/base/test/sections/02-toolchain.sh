@@ -27,6 +27,10 @@ check "dev-query is on PATH, prints usage, and exits 78 with no URL configured" 
 check "callum-flow-merge-guard and callum-flow-merge are on PATH, show usage, and reject a bad option" in_image '
   callum-flow-merge-guard --help 2>/dev/null; [ $? = 2 ] && ! callum-flow-merge-guard 7 --bogus 2>/dev/null &&
   [ -x "$(command -v callum-flow-merge)" ] && ! callum-flow-merge 7 --method bogus 2>/dev/null'
+check "callum-flow-patch-id is on PATH, exits 2 on bad usage and 1 outside a repository, and the guard takes --patch" in_image '
+  [ -x "$(command -v callum-flow-patch-id)" ] && callum-flow-patch-id 2>/dev/null; [ $? = 2 ] &&
+  (cd "$(mktemp -d)" && callum-flow-patch-id issue-1 main 2>/dev/null; [ $? = 1 ]) &&
+  callum-flow-merge-guard 7 --patch xyz 2>/dev/null; [ $? = 2 ]'
 check "callum-flow-regate is on PATH, shows usage, and exits 2 on a missing --issue" in_image '
   [ -x "$(command -v callum-flow-regate)" ] && callum-flow-regate --help 2>/dev/null; [ $? = 2 ] &&
   callum-flow-regate 2>/dev/null; [ $? = 2 ]'

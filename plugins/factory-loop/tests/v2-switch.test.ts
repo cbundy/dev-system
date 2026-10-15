@@ -310,7 +310,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     // the workspace file's planner is a setting it may set, so nothing is named
     expect(line.config).toBeUndefined()
     expect(line.shadow).toBeUndefined()
-    expect(sources(line)).toMatchObject({ runs: 'failed: not read: planner v2 has no pipeline runs', 'v2.leases': 'ok', 'v2.store': 'ok', 'v2.prs': 'failed: not built yet (U7)' })
+    expect(sources(line)).toMatchObject({ runs: 'failed: not read: planner v2 has no pipeline runs', 'v2.leases': 'ok', 'v2.store': 'ok', 'v2.prs': 'ok' })
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0) · observe'])
     expect(h.commands().some(c => c.argv[0]?.endsWith('pipeline-watch.sh'))).toBe(false)
     expect(h.commands().some(c => c.argv.includes('reflog'))).toBe(false)

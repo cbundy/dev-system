@@ -90,8 +90,10 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return {}
     case 'callum-flow-claim':
       return {}
-    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor)
+    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor);
+    // a PR alone, its head moved by the update (v2's queue-update)
     case 'callum-flow-issue-read':
+      if (args.includes('--pr') && !args.includes('--comments')) return { stdout: JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: 'def5678' }, user: { login: 'cbundy' } }, stripped: 0 }) }
       return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
@@ -439,6 +441,7 @@ const V2_ARGVS: [Action['kind'], string[]][] = [
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed')],
   ['queue-merge', ARGV.patchIdArgv('issue-470', 'origin/main')],
+  ['queue-update', ARGV.pollPauseArgv(2)],
   ['agent-step', ARGV.lsRemoteArgv('issue-470')],
   ['claim', ARGV.claimArgv(470)],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
