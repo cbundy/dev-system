@@ -11,9 +11,15 @@
 // Usage: callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
 //          [--rule S1..S5=<minutes>]... [--github on|off]
 //
-// Exit codes: 0 ok, 2 bad arguments, 1 a required source (factory.events, nomistakes.runs) that
-// cannot be read. A missing optional source (factory.workers_status, GitHub) shows as `n/a` with the
-// reason and is never an error.
+// Exit codes: 0 ok, 2 bad arguments, 1 the required source (factory.events) that cannot be read.
+// A missing optional source (nomistakes.runs, factory.workers_status, GitHub) shows as `n/a` with
+// the reason and is never an error: no-mistakes data can never blind a reader of the factory
+// (docs/factory-loop/v2/SPEC.md 2.4).
+//
+// The factory loop v2 logs a `transition` event at every change of an issue's state, with the
+// state and the rest of its record as `key=value` tokens in the note (SPEC 7.1). An issue whose
+// current life has one takes its stage from the newest one, above the mirror's runs, and is
+// checked for the `factory:*` label of its state (docs/factory-state.md).
 //
 // With the same database rows, the same --at and the same GitHub answers the output is
 // byte-identical. GitHub facts are read live, so for a past --at they are not as of that time
@@ -60,7 +66,14 @@ const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 
 const NEW_LIFE_RUN_EVENTS = new Set(['run_started', 'parked', 'verdict', 'fix_requested', 'merge_ready']);
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const LABEL_QUEUED = 'ready';
-const LABEL_ACTIVE = 'In development';
+// The factory loop v2's states (SPEC 3.1), each with the stage it shows as; closed shows as merged
+// or closed without merge, by why. Its labels are `factory:<state>` (SPEC 3.4), closed has none.
+const V2_STAGE = {
+  queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
+  'merge-queue': 'ready to merge', parked: 'parked',
+};
+const V2_MERGED = new Set(['merged', 'merged-by-hand']);
+const FACTORY_LABEL = 'factory:';
 const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']);
 
 class UsageError extends Error {}
@@ -165,6 +178,56 @@ const prNumber = (url) => {
   return m ? Number(m[1]) : null;
 };
 
+// A note's `key=value` tokens (the factory loop's notes, SPEC 7.1): values are percent-encoded,
+// and `none` is no value.
+function noteTokens(note) {
+  const out = {};
+  for (const word of String(note || '').split(' ')) {
+    const i = word.indexOf('=');
+    if (i <= 0 || Object.prototype.hasOwnProperty.call(out, word.slice(0, i))) continue;
+    const raw = word.slice(i + 1);
+    let v = raw;
+    try {
+      v = decodeURIComponent(raw);
+    } catch {
+      v = raw;
+    }
+    out[word.slice(0, i)] = raw === 'none' ? null : v;
+  }
+  return out;
+}
+
+// The factory loop v2's state of an issue's current life: its newest `transition` event, when one
+// says a state. A closed one is of the current life only while no new life followed it (a
+// `ready`, a claim, a delegation), and a `claim-lost` close is another device's issue, never this
+// one's state.
+function v2Of(evs) {
+  const tv = last(evs.filter((e) => e.state === 'transition').map((e) => ({ e, f: noteTokens(e.note) }))
+    .filter((x) => (V2_STAGE[x.f.to] || x.f.to === 'closed') && x.f.life));
+  if (!tv) return null;
+  const f = tv.f;
+  if (f.to === 'closed' && (f.why === 'claim-lost' || evs.some((e) => e.t > tv.e.t && NEW_LIFE_DECISIONS.has(e.state)))) return null;
+  const since = Number(f.since);
+  return {
+    t: tv.e.t,
+    since: Number.isFinite(since) && since > 0 && since <= tv.e.t ? since : tv.e.t,
+    view: {
+      state: f.to, step: f.step || null, attempt: Number.isInteger(Number(f.attempt)) ? Number(f.attempt) : null,
+      life: f.life, seq: Number.isInteger(Number(f.seq)) ? Number(f.seq) : null, why: f.why || null,
+    },
+  };
+}
+
+// The newest claim's lease: when it runs out and whether it has (callum-flow-claim records the
+// lease in each `claimed` and `renewed` note; 120 minutes without one).
+function leaseOf(evs, at) {
+  const c = last(evs.filter((e) => e.state === 'claimed' || e.state === 'renewed'));
+  if (!c) return null;
+  const m = /lease: *(\d+)/.exec(c.note || '');
+  const end = c.t + (m && Number(m[1]) > 0 ? Number(m[1]) : DEFAULT_LEASE_MINUTES) * 60000;
+  return { end, lapsed: end <= at };
+}
+
 // ---------------------------------------------------------------- derivation
 
 // What a run looked like at `at`. The mirror holds only each run's latest row, so for a run updated
@@ -232,6 +295,8 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   const final = lastFinalEv && !reopened ? lastFinalEv : null;
   const merged = mergedEv && !(lastClaim && lastClaim.t > mergedEv.t) ? mergedEv : null;
   const latestRun = last(runs.filter((r) => !supersededRuns.has(r.id)).map((r) => runView(r, at)).sort((a, b) => a.created - b.created || cmp(a.id, b.id)));
+  const v2 = v2Of(evs);
+  const lease = leaseOf(evs, at);
 
   let stage = null;
   let detail = null;
@@ -255,6 +320,7 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
     else entered = rv.updated;
   };
 
+  let finalNow = Boolean(final);
   if (final) {
     stage = merged || (final.state === 'closed' && rv && stageOfRun(rv).stage === 'merged') ? 'merged' : 'closed without merge';
     entered = final.t;
@@ -262,6 +328,21 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
   } else if (merged) {
     stage = 'merged';
     entered = merged.t;
+  } else if (v2) {
+    // the factory loop v2's own state, above the mirror: no-mistakes runs no longer place it
+    rv = null;
+    const st = v2.view.state;
+    if (st === 'closed') {
+      stage = V2_MERGED.has(v2.view.why) ? 'merged' : 'closed without merge';
+      finalNow = stage !== 'merged';
+      entered = v2.t;
+      detail = `v2 closed (${v2.view.why || 'no why'})`;
+    } else {
+      stage = V2_STAGE[st];
+      entered = v2.since;
+      detail = `v2 ${st}${v2.view.step ? `, step ${v2.view.step}` : ''}${v2.view.attempt ? `, attempt ${v2.view.attempt}` : ''}`;
+    }
+    source = 'event';
   } else if (rv) {
     const rs = stageOfRun(rv).stage;
     const live = rs === 'parked' || rs === 'in pipeline' || rs === 'ready to merge';
@@ -272,21 +353,14 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
 
   // A `designing` stage that comes from a claim is only as good as the lease behind it: the newest
   // `claimed` or `renewed` event plus its lease (the note's `lease: <minutes>`, else the default)
-  // must still be in the future, or the claim lapsed and the issue is queued again.
-  if (stage === 'designing' && source === 'event') {
-    const c = last(evs.filter((e) => e.state === 'claimed' || e.state === 'renewed'));
-    if (c) {
-      const m = /lease: *(\d+)/.exec(c.note || '');
-      const end = c.t + (m && Number(m[1]) > 0 ? Number(m[1]) : DEFAULT_LEASE_MINUTES) * 60000;
-      if (end <= at) {
-        stage = 'queued';
-        entered = end;
-        detail = `claim lapsed at ${iso(end)}`;
-      }
-    }
+  // must still be in the future, or the claim lapsed and the issue is queued again. A v2 issue keeps
+  // the loop's own state, which claims its lapsed claim again; the lease field says it lapsed.
+  if (stage === 'designing' && source === 'event' && !v2 && lease && lease.lapsed) {
+    stage = 'queued';
+    entered = lease.end;
+    detail = `claim lapsed at ${iso(lease.end)}`;
   }
 
-  const finalNow = Boolean(final);
   let hint = null;
   if (!rv && !finalNow && stage !== 'merged') {
     const h = last(evs.filter((e) => PIPELINE_HINTS.has(e.state) && (!lastClaim || e.t >= lastClaim.t)));
@@ -314,6 +388,8 @@ function deriveIssue(repo, issue, evs, runs, at, rules) {
     pr: rv && prNumber(rv.prUrl) ? prNumber(rv.prUrl) : event ? event.pr : null,
     hasEvents: evs.length > 0,
     hasRun: Boolean(rv),
+    lease: lease ? { until: iso(lease.end), lapsed: lease.lapsed } : null,
+    v2: v2 ? v2.view : null,
   };
 }
 
@@ -338,17 +414,31 @@ function dedupeRuns(runs, at) {
   return [...byId.values()];
 }
 
-function expectedLabelProblem(stage, labels) {
-  const has = (l) => labels.includes(l);
-  if (stage === 'queued' && has(LABEL_ACTIVE)) return `queued, but the issue carries '${LABEL_ACTIVE}'`;
-  if (stage === 'queued' && !has(LABEL_QUEUED)) return `queued, but the issue has no '${LABEL_QUEUED}' label`;
-  if (ACTIVE_STAGES.has(stage) && !has(LABEL_ACTIVE)) return `${stage}, but the issue lacks '${LABEL_ACTIVE}'`;
+// expectedLabelProblem: an issue the factory loop v2 placed must carry exactly the `factory:*`
+// label of its state (none once closed); any other issue is checked for `ready` only, when queued.
+function expectedLabelProblem(d, labels) {
+  if (d.v2) {
+    const want = d.v2.state === 'closed' ? null : `${FACTORY_LABEL}${d.v2.state}`;
+    if (want && !labels.includes(want)) return `v2 ${d.v2.state}, but the issue lacks '${want}'`;
+    const other = labels.filter((l) => l.startsWith(FACTORY_LABEL) && l !== want);
+    if (other.length) return `v2 ${d.v2.state}, but the issue carries ${other.map((l) => `'${l}'`).join(', ')}`;
+    return null;
+  }
+  if (d.stage === 'queued' && !labels.includes(LABEL_QUEUED)) return `queued, but the issue has no '${LABEL_QUEUED}' label`;
   return null;
+}
+
+// labelStage: the stage an open issue's labels say, for one the database has never seen: a
+// `factory:*` label's state, else `ready` is queued.
+function labelStage(labels) {
+  const f = labels.find((l) => l.startsWith(FACTORY_LABEL) && V2_STAGE[l.slice(FACTORY_LABEL.length)]);
+  if (f) return V2_STAGE[f.slice(FACTORY_LABEL.length)];
+  return labels.includes(LABEL_QUEUED) ? 'queued' : null;
 }
 
 // Pure: rows in, the full report out. `github` is null (not read) or { <repo>: { ok, reason, open, states, claims } }.
 function deriveState(input) {
-  const { at, rules, github = null, workers } = input;
+  const { at, rules, github = null, workers, pipeline = { available: true } } = input;
   const events = normalizeEvents(input.events, at);
   const runs = dedupeRuns(input.runs.map((r) => ({ ...r, repo: String(r.repo).toLowerCase() })), at);
   const repoNames = new Set([...input.repos, ...events.map((e) => e.repo), ...runs.map((r) => r.repo)]);
@@ -390,7 +480,7 @@ function deriveState(input) {
       d.flags = [];
       if (!d.final && d.github) {
         if (d.github.state === 'open' && d.github.labels) {
-          const p = expectedLabelProblem(d.stage, d.github.labels);
+          const p = expectedLabelProblem(d, d.github.labels);
           if (p) d.flags.push(`label: ${p}`);
         }
         if (d.github.state === 'unknown') d.flags.push('github: state could not be read');
@@ -409,12 +499,13 @@ function deriveState(input) {
       for (const n of Object.keys(gh.open).map(Number).sort((a, b) => a - b)) {
         if (placed.has(n)) continue;
         const labels = gh.open[n].labels;
-        const stage = labels.includes(LABEL_ACTIVE) ? 'implementing' : labels.includes(LABEL_QUEUED) ? 'queued' : null;
+        const stage = labelStage(labels);
         if (!stage) continue;
         live.push({
           repo, issue: n, stage, detail: 'GitHub label only, no events or runs', entered: null, source: 'github', stuck: null, final: false,
           hint: null, holder: gh.claims[n] ? gh.claims[n].device : null, run: null, runApprox: false, runStatus: null, pr: null,
-          hasEvents: false, hasRun: false, github: { state: 'open', labels: [...labels].sort(), claim: gh.claims[n] || null }, flags: [],
+          hasEvents: false, hasRun: false, lease: null, v2: null,
+          github: { state: 'open', labels: [...labels].sort(), claim: gh.claims[n] || null }, flags: [],
         });
       }
     }
@@ -465,6 +556,8 @@ function deriveState(input) {
       hint: d.hint,
       github: d.github,
       flags: d.flags,
+      lease: d.lease,
+      v2: d.v2,
     });
     repos.push({
       repo,
@@ -498,6 +591,7 @@ function deriveState(input) {
       ? 'a run updated after --at is reconstructed from timestamps (running unless it finished by --at), marked approximate'
       : null,
     workers: workers.available ? workers.data : { 'n/a': workers.reason },
+    runs: pipeline.available ? 'read' : { 'n/a': pipeline.reason },
     stuck: stuckAll,
     repos,
   };
@@ -529,18 +623,19 @@ function queryJson(sql, vars, what) {
 function loadDatabase(opts) {
   const meta = queryJson(SQL_META, {}, 'metadata');
   if (!meta.events) throw new InputError('factory.events does not exist in the database');
-  if (!meta.runs) throw new InputError('nomistakes.runs does not exist in the database');
   const at = opts.at !== undefined ? opts.at : Date.parse(meta.now);
   if (Number.isNaN(at)) throw new InputError('dev-query returned no usable current time');
   const vars = { at: iso(at), repos: opts.repos.join(',') };
   const events = queryJson(SQL_EVENTS, vars, 'events');
-  const runs = queryJson(SQL_RUNS, vars, 'runs');
+  // nomistakes.runs is optional: without it, no run places an issue, and the report says so
+  const pipeline = meta.runs ? { available: true } : { available: false, reason: 'nomistakes.runs does not exist in the database' };
+  const runs = meta.runs ? queryJson(SQL_RUNS, vars, 'runs') : [];
   if (!Array.isArray(events) || !Array.isArray(runs)) throw new InputError('dev-query returned unexpected data');
   // factory.workers_status belongs to #339 and its columns are not read here yet.
   const workers = meta.workers
     ? { available: false, reason: 'factory.workers_status exists but this version does not read it yet' }
     : { available: false, reason: 'factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)' };
-  return { at, atSource: opts.at !== undefined ? '--at' : 'database now()', events, runs, workers };
+  return { at, atSource: opts.at !== undefined ? '--at' : 'database now()', events, runs, workers, pipeline };
 }
 
 function readIssue(repo, args) {
@@ -625,6 +720,10 @@ function renderText(r) {
   out.push('');
   out.push('Workers');
   out.push(r.workers['n/a'] ? `n/a: ${r.workers['n/a']}` : JSON.stringify(r.workers));
+  if (r.runs !== 'read') {
+    out.push('');
+    out.push(`Pipeline runs: n/a: ${r.runs['n/a']}`);
+  }
   for (const repo of r.repos) {
     out.push('');
     out.push(`== ${repo.repo} - coverage: ${repo.coverage.class}`);
@@ -662,7 +761,7 @@ function main(argv) {
     return 0;
   }
   const db = loadDatabase(opts);
-  const base = { ...db, repos: opts.repos, rules: opts.rules, workers: db.workers };
+  const base = { ...db, repos: opts.repos, rules: opts.rules, workers: db.workers, pipeline: db.pipeline };
   let report = deriveState({ ...base, github: null });
   if (opts.github) report = deriveState({ ...base, github: loadGithub(report) });
   process.stdout.write(opts.format === 'json' ? `${JSON.stringify(report, null, 2)}\n` : renderText(report));

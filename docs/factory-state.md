@@ -13,8 +13,10 @@ callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format t
                           [--rule S1..S5=<minutes>]... [--github on|off]
 ```
 
-Exit 0 ok, 2 bad arguments, 1 a required source (`factory.events`, `nomistakes.runs`) that cannot be
-read. An optional source (`factory.workers_status`, GitHub) that is missing shows as `n/a: <reason>`.
+Exit 0 ok, 2 bad arguments, 1 the required source (`factory.events`) that cannot be read. An optional
+source (`nomistakes.runs`, `factory.workers_status`, GitHub) that is missing shows as `n/a: <reason>`
+(`runs` and `workers` in the JSON), so no-mistakes data can never blind a reader of the factory. With
+no `nomistakes.runs`, no run places an issue.
 
 ## Stages
 
@@ -53,6 +55,29 @@ earlier event. Replay-prone events (`failed`, `head_mismatch`, `conflict`, `ci_s
 abandoned run, `superseded`, `usage` and `untrusted_stripped` never start one. `closed` stays final
 unless a later `claimed` follows.
 
+### The factory loop v2
+
+The factory loop v2 logs a `transition` event at every change of an issue's state
+([v2 SPEC 7.1](factory-loop/v2/SPEC.md#71-what-v2-emits)): its note carries the record as
+`key=value` tokens, `to=` the new state. An issue whose current life has one takes its stage from the
+newest one:
+
+| v2 state | Stage |
+| --- | --- |
+| `queued` | `queued` |
+| `designing` | `designing` |
+| `building` | `implementing` |
+| `reviewing`, `fixing` | `in pipeline` |
+| `merge-queue` | `ready to merge` |
+| `parked` | `parked` |
+| `closed` | `merged` when its `why` is `merged` or `merged-by-hand`, else `closed without merge` |
+
+The detail shows the v2 state, the step and the attempt, and time in stage runs from the record's
+own `since`. A closed one is of the current life only while no new life followed it (a `ready`, a
+claim, a delegation); a `claim-lost` close is another device's issue and never sets the stage. A v2
+issue keeps the loop's state when its claim lapses: the loop claims it again, so the lapse shows in
+the `lease` field, not as `queued`. The stuck rules apply as to any issue.
+
 `superseded` (run-scoped, `--run` required) says a run was replaced for the same issue. It is never a
 stage and never final; the named run is dropped when the issue's latest run is chosen, so its stale
 `running` row cannot set the stage.
@@ -64,14 +89,16 @@ Highest first. A lower source never overrides a higher one.
 1. GitHub closure: a `closed` event from the sweep, or the live GitHub read (the tool reads GitHub
    through `callum-flow-issue-read`: open or closed, labels, the claim comment).
 2. `merged` and `abandoned` events.
-3. Pipeline facts from the `nomistakes.runs` mirror: start, status, parked, PR. A run belongs to an
+3. The factory loop v2's state: the newest `transition` event of the current life (see
+   [The factory loop v2](#the-factory-loop-v2)). The mirror's runs no longer set such an issue's stage.
+4. Pipeline facts from the `nomistakes.runs` mirror: start, status, parked, PR. A run belongs to an
    issue by the one definition in [metrics.md](metrics.md#linking-pipeline-runs-to-issues), copied
    verbatim into the tool's SQL (a test fails if the copies drift). The agent-logged `run_started`,
    `parked`, `merge_ready`, `failed`, `head_mismatch`, `conflict` and `ci_stalled` events never set a
    stage; when the mirror has no run they only appear as an `event-only` hint. A `failed` replayed after
    `merged` or `closed` (#344) is therefore ignored.
-4. Factory decisions: `ready`, `claimed`, `briefed`, `design_routed`, `implementer_routed`, `delegated`, `reclaimed`.
-5. Worker liveness is currently `n/a`: this reader checks whether `factory.workers_status` exists
+5. Factory decisions: `ready`, `claimed`, `briefed`, `design_routed`, `implementer_routed`, `delegated`, `reclaimed`.
+6. Worker liveness is currently `n/a`: this reader checks whether `factory.workers_status` exists
    but does not read its rows yet. Use the [fleet status query](metrics.md#workers) for liveness.
 
 A live run (in pipeline, parked, ready to merge) decides the stage. When the latest run has ended and
@@ -109,14 +136,18 @@ This replaces the hardcoded 4 hour stuck query that `metrics.md` used to carry.
 ## Output
 
 Per repo, each live issue: stage, detail, time in stage, holder device (the device of the latest
-`claimed`), run ID, PR, the stuck rule, `source` (`mirror`, `event` or `github`) and `flags`. Flags are
-disagreements between sources and never change the stage: a `ready` or `In development` label that does
-not fit the stage, a GitHub claim comment held by another device than the events say, a GitHub state
-that could not be read. Also per repo: recently ended issues, `other_runs` (running runs on a branch
+`claimed`), run ID, PR, the stuck rule, `source` (`mirror`, `event` or `github`), `flags`, `lease`
+(`{ until, lapsed }` of the newest `claimed` or `renewed` and its lease, or null) and `v2` (the
+factory loop v2's `{ state, step, attempt, life, seq, why }`, or null). Flags are disagreements
+between sources and never change the stage: for a v2 issue, a missing `factory:<state>` label or any
+other `factory:*` label; for any other issue, a `queued` one without `ready`; a GitHub claim comment
+held by another device than the events say; a GitHub state that could not be read. No label marks a
+claim: `In development` is gone (v2 SPEC 3.6). Also per repo: recently ended issues, `other_runs` (running runs on a branch
 with no issue number), and coverage. Across repos: the stuck list, and the workers section.
 
-An open issue labelled `ready` or `In development` that the database has never seen is listed with
-source `github` as `queued` or `implementing`, so a missing event never hides work.
+An open issue labelled `factory:<state>` or `ready` that the database has never seen is listed with
+source `github`, its stage from the `factory:*` label (as in the table above), else `queued`, so a
+missing event never hides work.
 
 ## Coverage
 
@@ -170,6 +201,14 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
   `--at`. At the early `--at` (30 minutes before) the run row is newer than `--at`, so #60 is
   `in pipeline`, marked approximate; at the late one it is `ready to merge`.
 - `github`: #80 is closed on GitHub, so it is `closed without merge` with source `github` although the
-  events say `delegated`. #82 is `queued` but labelled `In development`, #84 is `designing` without
-  that label, #81's claim comment names another device, #86's GitHub state could not be read, #83 is
-  `merged` and still open (kept visible), #90 and #91 carry a label and are unknown to the database.
+  events say `delegated`. #82 is `queued` but has no `ready` label, #84 is `designing` with no label
+  and no flag (no label marks a claim), #81's claim comment names another device, #86's GitHub state
+  could not be read, #83 is `merged` and still open (kept visible), #90 (`ready`) and #91
+  (`factory:building`, so `implementing`) carry a label and are unknown to the database.
+- `v2`: the factory loop v2's issues. #100 is `building` (so `implementing`) although an old run
+  still runs in the mirror, #101 is `parked` for an hour (S3), #102 is `reviewing` but still labelled
+  `factory:building` (flagged), #103 closed as merged with its `merged` event lost (`merged`), #104
+  was dropped (`closed without merge`), #105 was dropped and then labelled `ready` again (`queued`, a
+  new life), #106's record closed as `claim-lost` while another device holds it (`designing`, held by
+  `dev-b`), #107 is `queued` and #109 `designing`, both with a lapsed lease, and #108 is labelled
+  `factory:fixing` with no events (`in pipeline` from GitHub).

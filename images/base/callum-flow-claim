@@ -18,12 +18,15 @@
 # wins, so any interleaving has exactly one winner. The loser deletes only its
 # own comment, leaves labels and assignee alone (the winner owns them) and exits
 # 3. Both exit-3 paths log a `claim_lost` event (the note says who holds it).
-# The winner swaps the labels (`In development` on, `ready` off), assigns @me
-# and logs `callum-flow-event claimed` with the note `lease: <minutes>`.
+# The winner removes `ready`, assigns @me and logs `callum-flow-event claimed`
+# with the note `lease: <minutes>`. It adds no label: the claim is the comment
+# and its events, and the factory loop's `factory:*` labels show the state
+# (docs/factory-loop/v2/SPEC.md 3.6).
 # --heartbeat: edits this device's live claim comment in place (a `renewed:`
 # line, through the comment API, never a new comment). With no issue numbers it
-# renews every live claim this device holds on an open `In development` issue.
-# Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
+# renews every live claim this device holds on the open issues that
+# `callum-flow-factory-state --github off` lists live with this device as the
+# holder. Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
 # `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
 # event log, which callum-flow-factory-state reads, can see the lease is live.
 #
@@ -42,16 +45,16 @@
 #
 # Environment: CALLUM_FLOW_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
 # device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
-# CALLUM_FLOW_READY_LABEL / CALLUM_FLOW_IN_DEV_LABEL (default `ready` /
-# `In development`); for tests CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN,
-# CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read).
+# CALLUM_FLOW_READY_LABEL (default `ready`); for tests CALLUM_FLOW_GH_BIN,
+# CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read),
+# CALLUM_FLOW_FACTORY_STATE_BIN (callum-flow-factory-state).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
+FSTATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
-INDEV=${CALLUM_FLOW_IN_DEV_LABEL:-In development}
 LEASE=${CALLUM_FLOW_LEASE_MINUTES:-120}
 MARKER='<!-- callum-flow-claim -->'
 
@@ -122,19 +125,27 @@ CLAIMS_JQ='
 if [ "$mode" = heartbeat ]; then
   rc=0
   issues="$*"
+  listed=
   if [ -z "$issues" ]; then
-    if ! lj=$("$READ" --json --list --label "$INDEV" --state open) ||
-      ! issues=$(printf '%s' "$lj" | jq -r '.issues[].number'); then
-      err "cannot list $INDEV issues"
+    # this device's live claims, as the event log shows them
+    if ! fs=$("$FSTATE" --repo "$repo" --github off --format json </dev/null) ||
+      ! issues=$(printf '%s' "$fs" | jq -r --arg dev "$device" '.repos[]? | .issues[]? | select(.holder == $dev) | .issue'); then
+      err "cannot list this device's live claims (callum-flow-factory-state)"
       exit 1
     fi
+    listed=1
   fi
   now=$(server_now)
   for n in $issues; do
-    cs=$(comments "$n") && crc=0 || crc=$?
+    cj=$("$READ" --json "$n" --comments) && crc=0 || crc=$?
+    [ "$crc" -ne 0 ] || cs=$(printf '%s' "$cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end') || crc=1
     if [ "$crc" -ne 0 ]; then
       # an untrusted issue is none of our business: nothing to renew
       [ "$crc" -eq 3 ] || { err "cannot read comments of #$n"; rc=1; }
+      continue
+    fi
+    # the log lags a close: a listed issue GitHub has closed has no claim to keep
+    if [ -n "$listed" ] && [ "$(printf '%s' "$cj" | jq -r '.issue.state // "open" | ascii_downcase')" != open ]; then
       continue
     fi
     mine=$(printf '%s' "$cs" | jq -c --argjson now "$now" --arg dev "$device" \
@@ -174,13 +185,14 @@ if [ -n "$foreign" ]; then
   lost "held by $foreign"
   exit 3
 fi
-# A live claim of our own (a restarted orchestrator): keep it, make sure the
-# labels are right, post nothing new.
+# A live claim of our own (a restarted orchestrator, or the factory loop claiming
+# a lapsed claim again onto its record): keep it, make sure `ready` is off and
+# the issue is assigned, post nothing new.
 ownlive=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
   "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | first | .id // empty')
 
 set_labels() {
-  "$GH" issue edit "$n" --add-label "$INDEV" --remove-label "$READY" --add-assignee @me >/dev/null
+  "$GH" issue edit "$n" --remove-label "$READY" --add-assignee @me >/dev/null
 }
 
 if [ -n "$ownlive" ]; then

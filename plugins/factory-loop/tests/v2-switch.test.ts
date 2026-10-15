@@ -483,7 +483,9 @@ describe('the driver (v2 SPEC 2.3)', () => {
       expect(r.text).toBe('Paused #12: no action on it until unpause; its claim still renews.')
       await clock.advance(1_000)
       const control = h.lines().find(l => l.control === 'pause 12')
-      expect(control?.problems).toEqual(planner === 'v2' ? ['intervention op:pause not logged: act-events.ts is not built yet (U4)'] : undefined)
+      expect(control?.problems).toBeUndefined()
+      const logged = h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention').map(s => s.argv.slice(2, 4).concat((s.argv.at(-1) ?? '').split(' ').slice(0, 2)))
+      expect(logged).toEqual(planner === 'v2' ? [['--issue', '12', 'who=person', 'cause=op:pause']] : [])
     })
   }
 

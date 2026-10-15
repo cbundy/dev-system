@@ -1,0 +1,382 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "read": "live",
+    "note": "GitHub labels, state and claim comments are read now, not as of --at"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "runs": "read",
+  "stuck": [
+    {
+      "repo": "acme/widgets",
+      "issue": 101,
+      "stage": "parked",
+      "rule": "S3",
+      "minutes_in_stage": 60,
+      "detail": "parked for more than 30 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "full",
+        "events": 27,
+        "runs": 1,
+        "last_event_at": "2026-10-10T11:50:00.000Z",
+        "last_run_update_at": "2026-10-10T11:55:00.000Z",
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 26,
+            "last_event_at": "2026-10-10T11:50:00.000Z"
+          },
+          {
+            "device": "dev-b",
+            "events": 1,
+            "last_event_at": "2026-10-10T11:00:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 0,
+          "event": 8,
+          "github": 1
+        },
+        "notes": []
+      },
+      "issues": [
+        {
+          "issue": 105,
+          "stage": "queued",
+          "detail": null,
+          "entered_at": "2026-10-10T10:00:00.000Z",
+          "minutes_in_stage": 120,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "ready"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
+        },
+        {
+          "issue": 107,
+          "stage": "queued",
+          "detail": "v2 queued, step lease, attempt 1",
+          "entered_at": "2026-10-10T08:01:00.000Z",
+          "minutes_in_stage": 239,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:queued"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": {
+            "state": "queued",
+            "step": "lease",
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 0,
+            "why": null
+          }
+        },
+        {
+          "issue": 106,
+          "stage": "designing",
+          "detail": null,
+          "entered_at": "2026-10-10T10:00:00.000Z",
+          "minutes_in_stage": 120,
+          "holder": "dev-b",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:00:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
+        },
+        {
+          "issue": 109,
+          "stage": "designing",
+          "detail": "v2 designing, step design, attempt 1",
+          "entered_at": "2026-10-10T11:50:00.000Z",
+          "minutes_in_stage": 10,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:designing"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T10:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": {
+            "state": "designing",
+            "step": "design",
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 1,
+            "why": null
+          }
+        },
+        {
+          "issue": 100,
+          "stage": "implementing",
+          "detail": "v2 building, step build, attempt 1",
+          "entered_at": "2026-10-10T11:20:00.000Z",
+          "minutes_in_stage": 40,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:building"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:50:00.000Z",
+            "lapsed": false
+          },
+          "v2": {
+            "state": "building",
+            "step": "build",
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 2,
+            "why": null
+          }
+        },
+        {
+          "issue": 102,
+          "stage": "in pipeline",
+          "detail": "v2 reviewing, step review, attempt 1",
+          "entered_at": "2026-10-10T11:40:00.000Z",
+          "minutes_in_stage": 20,
+          "holder": "dev-a",
+          "run": null,
+          "pr": 202,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:building"
+            ],
+            "claim": null
+          },
+          "flags": [
+            "label: v2 reviewing, but the issue lacks 'factory:reviewing'"
+          ],
+          "lease": {
+            "until": "2026-10-10T13:00:00.000Z",
+            "lapsed": false
+          },
+          "v2": {
+            "state": "reviewing",
+            "step": "review",
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 3,
+            "why": null
+          }
+        },
+        {
+          "issue": 108,
+          "stage": "in pipeline",
+          "detail": "GitHub label only, no events or runs",
+          "entered_at": null,
+          "minutes_in_stage": null,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "github",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:fixing"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": null,
+          "v2": null
+        },
+        {
+          "issue": 101,
+          "stage": "parked",
+          "detail": "v2 parked, attempt 1",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": {
+            "rule": "S3",
+            "text": "parked for more than 30 minutes"
+          },
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:parked"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
+          "v2": {
+            "state": "parked",
+            "step": null,
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 4,
+            "why": null
+          }
+        },
+        {
+          "issue": 103,
+          "stage": "merged",
+          "detail": "v2 closed (merged)",
+          "entered_at": "2026-10-10T11:30:00.000Z",
+          "minutes_in_stage": 30,
+          "holder": "dev-a",
+          "run": null,
+          "pr": 203,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": {
+            "state": "closed",
+            "step": null,
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 6,
+            "why": "merged"
+          }
+        }
+      ],
+      "recent": [
+        {
+          "issue": 104,
+          "stage": "closed without merge",
+          "detail": "abandoned (reason=dropped note=dropped)",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [],
+            "claim": null
+          },
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": {
+            "state": "closed",
+            "step": null,
+            "attempt": 1,
+            "life": "t3xq00",
+            "seq": 3,
+            "why": "dropped"
+          }
+        }
+      ],
+      "other_runs": []
+    }
+  ]
+}

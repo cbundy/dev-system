@@ -16,6 +16,7 @@
   "workers": {
     "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
   },
+  "runs": "read",
   "stuck": [],
   "repos": [
     {
@@ -56,7 +57,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         }
       ],
       "recent": [],

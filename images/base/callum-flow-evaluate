@@ -45,9 +45,10 @@ const ALIVE_MS = 30 * 60 * 1000; // a device is alive if it logged any event in 
 const STUCK_LEASES = 2; // stuck: no event for longer than this many leases
 const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound with another device idle, means "B"
 const RELEASE_STATES = ['merged', 'abandoned', 'closed', 'reclaimed', 'ready']; // end an in-flight claim
-// Not progress for the stuck test (metrics.md query 6): a lost race, a claim heartbeat, and the
-// factory loop's bookkeeping (DECISIONS D-09). Each still counts as the device being alive.
-const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop']);
+// Not progress for the stuck test (metrics.md query 6): a lost race, a claim heartbeat, the
+// factory loop's bookkeeping (DECISIONS D-09), and the factory loop v2's review results and
+// interventions (v2 SPEC 7.1). Each still counts as the device being alive.
+const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop', 'reviewed', 'intervention']);
 const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
 const ACTION_BASH_RE = new RegExp(
   [
@@ -69,9 +70,15 @@ const VERDICT_PREFIXES = ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'];
 const WAKE_KINDS = ['monitor-event', 'monitor-timeout', 'agent-done', 'bash-done', 'cron', 'owner'];
 const TOP_KEYS = [
   'window', 'throughput', 'first_pass', 'review', 'adjudicator_agreement', 'test_weakened', 'per_device', 'claims',
-  'waiting', 'spend', 'waste',
+  'waiting', 'interventions', 'judgement_calls', 'claim_completion', 'rounds', 'spend', 'waste',
   'pipeline', 'sources',
 ];
+// A judgement is overridden when a person intervention names its issue this soon after it (#632 metric 2).
+const OVERRIDE_MS = 60 * 60 * 1000;
+// The triage choice each triage-answer row of the factory loop v2's table applies (v2 SPEC 4.3).
+const TRIAGE_ROWS = { X1: 'retry', X2: 'fix', X3: 'redesign', X4: 'park', X5: 'drop' };
+// The release states that end a claim's life without a merge, as claim completion names them.
+const CLAIM_ENDS = { merged: 'merged', closed: 'closed', reclaimed: 'released', ready: 'released' };
 
 class UsageError extends Error {}
 class InputError extends Error {}
@@ -578,14 +585,17 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (!f.has('merged') || !inWin(f.get('merged'), win)) continue;
     const rd = readyFor(n, evsByIssue.get(n) || [], readyTimes);
     const ready = rd ? rd.t : f.get('ready');
-    // pipeline start: the first linked run in the no-mistakes source; none means null stages, never a guess
+    // pipeline start: the first linked run in the no-mistakes source; for a factory loop v2 issue,
+    // which has no run, its first transition to reviewing (v2 SPEC 7.3); none means null stages,
+    // never a guess
     const run = runLinks && runLinks.get(n) ? runLinks.get(n)[0] : null;
-    const runAt = run ? run.t : undefined;
+    const toReview = run ? null : (evsByIssue.get(n) || []).find((e) => e.state === 'transition' && noteTokens(e.note).to === 'reviewing');
+    const runAt = run ? run.t : toReview ? toReview.t : undefined;
     merged.push({
       issue: n,
       merged_at: iso(f.get('merged')),
       ready_source: rd ? rd.source : null,
-      run_source: run ? run.source : 'none',
+      run_source: run ? run.source : toReview ? 'transition' : 'none',
       waiting_for_claim: sec(ready, f.get('claimed')),
       design: sec(f.get('claimed'), f.get('delegated')),
       implementation: sec(f.get('delegated'), runAt),
@@ -726,7 +736,222 @@ function computeEventMetrics(allEvents, win, ctx = {}) {
     if (e.issue !== null && e.issue !== undefined && !(mergedAt.issue.get(e.issue) <= t)) mergedAt.issue.set(e.issue, t);
     if (e.run_id && !(mergedAt.run.get(e.run_id) <= t)) mergedAt.run.set(e.run_id, t);
   }
-  return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, mergedAt };
+  const v2 = computeV2Metrics(evs, win, merged.map((m) => ({ issue: m.issue, t: Date.parse(m.merged_at) })));
+  return { throughput, first_pass, review, adjudicator_agreement, test_weakened, per_device, claims, waiting, ...v2, mergedAt };
+}
+
+// ---------------------------------------------------------------- the factory loop v2's events
+
+// A note's `key=value` tokens (v2 SPEC 7.1): values are percent-encoded, and `none` is no value.
+function noteTokens(note) {
+  const out = {};
+  for (const word of String(note || '').split(' ')) {
+    const i = word.indexOf('=');
+    if (i <= 0 || Object.prototype.hasOwnProperty.call(out, word.slice(0, i))) continue;
+    const raw = word.slice(i + 1);
+    let v = raw;
+    try {
+      v = decodeURIComponent(raw);
+    } catch {
+      v = raw;
+    }
+    out[word.slice(0, i)] = raw === 'none' ? null : v;
+  }
+  return out;
+}
+
+// once: the events counted one per identity, the first kept: a retried event can be logged twice
+// (v2 SPEC 7.1), so a transition counts once per (issue, life, seq), an intervention once per
+// fact and cause, a review once per (issue, round, patch).
+function once(evs, idOf) {
+  const seen = new Set();
+  return evs.filter((e) => {
+    const id = idOf(e);
+    if (id === null) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+const statsOf = (xs) => ({ median: median(xs), max: xs.length ? Math.max(...xs) : null, total: sum(xs) });
+const day = (t) => iso(t).slice(0, 10);
+
+// The interventions, judgement calls, claim completion and rounds of #632 and v2 SPEC 7.3, from
+// the `intervention`, `reviewed`, `transition`, `verdict` and claim events. merged: the issues
+// merged in the window, each with its first `merged`.
+function computeV2Metrics(evs, win, merged) {
+  const t = (e) => noteTokens(e.note);
+  const transitions = once(evs.filter((e) => e.state === 'transition'), (e) => {
+    const f = t(e);
+    return f.life && f.seq !== undefined ? `${e.issue}|${f.life}|${f.seq}` : null;
+  }).map((e) => ({ ...e, f: t(e) }));
+  const interventions = once(evs.filter((e) => e.state === 'intervention'), (e) => {
+    const f = t(e);
+    return f.fact ? `${e.issue}|${f.who}|${f.cause}|${f.fact}` : e.event_id || null;
+  }).map((e) => ({ ...e, f: t(e) })).filter((e) => (e.f.who === 'person' || e.f.who === 'loop') && e.f.cause);
+  const reviews = once(evs.filter((e) => e.state === 'reviewed'), (e) => {
+    const f = t(e);
+    return `${e.issue}|${f.round}|${f.patch}`;
+  }).map((e) => ({ ...e, f: t(e) }));
+  const issueOf = (e) => (e.issue === null || e.issue === undefined ? null : e.issue);
+  const firstClaim = new Map();
+  for (const e of evs) if (e.state === 'claimed' && issueOf(e) !== null && !firstClaim.has(e.issue)) firstClaim.set(e.issue, e.t);
+  // the span of a merged issue: from its first claimed (else its merge) to its merge
+  const spans = merged.map((m) => ({ issue: m.issue, from: firstClaim.has(m.issue) ? Math.min(firstClaim.get(m.issue), m.t) : m.t, to: m.t }));
+  const within = (e, s) => e.issue === s.issue && e.t >= s.from && e.t <= s.to;
+
+  // interventions (#632 metric 1): per merged issue and per day, by who and cause; fleet-level per day
+  const ivWin = interventions.filter((e) => inWin(e.t, win));
+  const byCause = new Map();
+  const days = new Map();
+  for (const e of ivWin) {
+    const k = `${e.f.who}\u0000${e.f.cause}`;
+    byCause.set(k, (byCause.get(k) || 0) + 1);
+    const d = days.get(day(e.t)) || { day: day(e.t), person: 0, loop: 0, fleet: 0 };
+    d[e.f.who]++;
+    if (issueOf(e) === null) d.fleet++;
+    days.set(d.day, d);
+  }
+  const ivIssues = spans.map((s) => {
+    const mine = interventions.filter((e) => within(e, s));
+    const n = (who) => mine.filter((e) => e.f.who === who).length;
+    return { issue: s.issue, person: n('person'), loop: n('loop'), untouched: mine.length === 0, causes: [...new Set(mine.map((e) => e.f.cause))].sort() };
+  }).sort((a, b) => a.issue - b.issue);
+  const untouched = ivIssues.filter((i) => i.untouched).length;
+  const perMerged = (k) => (merged.length ? Math.round((100 * sum(ivIssues.map((i) => i[k]))) / merged.length) / 100 : 'n/a (0 merged issues)');
+  const interventionsOut = {
+    total: ivWin.length,
+    person: ivWin.filter((e) => e.f.who === 'person').length,
+    loop: ivWin.filter((e) => e.f.who === 'loop').length,
+    fleet: ivWin.filter((e) => issueOf(e) === null).length,
+    by_cause: [...byCause.entries()].map(([k, count]) => ({ who: k.split('\u0000')[0], cause: k.split('\u0000')[1], count }))
+      .sort((a, b) => cmpStr(a.who, b.who) || cmpStr(a.cause, b.cause)),
+    per_day: [...days.values()].sort((a, b) => cmpStr(a.day, b.day)),
+    merged_issues: merged.length,
+    untouched,
+    untouched_pct: merged.length ? pct(untouched, merged.length) : 'n/a (0 merged issues)',
+    person_per_merged_issue: perMerged('person'),
+    loop_per_merged_issue: perMerged('loop'),
+    issues: ivIssues,
+  };
+
+  // judgement calls (#632 metric 2): reviews, triage calls (with the choice the next triage row
+  // applied), a designer's question or split, a fixer's dispositions; overridden when a person
+  // intervention names the issue within an hour after it
+  const calls = [];
+  for (const e of reviews) calls.push({ e, kind: 'review', outcome: e.f.verdict || 'unknown' });
+  for (const e of interventions.filter((x) => x.f.who === 'loop' && x.f.cause === 'triage')) {
+    const next = transitions.find((x) => x.issue === e.issue && x.t >= e.t && TRIAGE_ROWS[x.f.row]);
+    calls.push({ e, kind: 'triage', outcome: next ? TRIAGE_ROWS[next.f.row] : 'pending' });
+  }
+  for (const e of transitions.filter((x) => x.f.row === 'T3' || x.f.row === 'T4')) calls.push({ e, kind: 'design', outcome: e.f.row === 'T3' ? 'question' : 'split' });
+  for (const e of evs.filter((x) => x.state === 'verdict' && x.actor === 'fixer')) {
+    const p = (/^\s*([A-Z]+)\s*:/.exec(e.note || '') || [])[1];
+    if (p === 'CORRECT' || p === 'WRONG') calls.push({ e, kind: 'fix', outcome: p === 'CORRECT' ? 'fixed' : 'declined' });
+  }
+  const persons = interventions.filter((x) => x.f.who === 'person');
+  const overridden = (c) => persons.some((x) => x.issue === c.e.issue && issueOf(x) !== null && x.t > c.e.t && x.t <= c.e.t + OVERRIDE_MS);
+  const callsWin = calls.filter((c) => inWin(c.e.t, win));
+  const byKind = new Map();
+  for (const c of callsWin) {
+    const k = `${c.kind}\u0000${c.outcome}`;
+    const row = byKind.get(k) || { kind: c.kind, outcome: c.outcome, count: 0, overridden: 0 };
+    row.count++;
+    if (overridden(c)) row.overridden++;
+    byKind.set(k, row);
+  }
+  const callIssues = spans.map((s) => {
+    const mine = calls.filter((c) => within(c.e, s));
+    return { issue: s.issue, calls: mine.length, overridden: mine.filter(overridden).length };
+  }).sort((a, b) => a.issue - b.issue);
+  const judgement_calls = {
+    total: callsWin.length,
+    overridden: callsWin.filter(overridden).length,
+    per_merged_issue: merged.length ? Math.round((100 * sum(callIssues.map((i) => i.calls))) / merged.length) / 100 : 'n/a (0 merged issues)',
+    by_kind: [...byKind.values()].sort((a, b) => cmpStr(a.kind, b.kind) || cmpStr(a.outcome, b.outcome)),
+    issues: callIssues,
+  };
+
+  // claim completion (#632 metric 3): per issue and life, its first claimed, then the first of a
+  // merge, an abandon (by its reason), a close, a release back to the queue or a park; still open
+  // at the window's end is censored, not a failure
+  const lives = [];
+  const byIssue = new Map();
+  for (const e of evs) {
+    if (issueOf(e) === null || e.t >= win.until) continue;
+    if (!byIssue.has(e.issue)) byIssue.set(e.issue, []);
+    byIssue.get(e.issue).push(e);
+  }
+  for (const [n, list] of byIssue) {
+    let open = null;
+    for (const e of list) {
+      if (e.state === 'claimed' && !open) {
+        open = { issue: n, device: e.dev, claimed: e.t, outcome: 'open', ended: null };
+        lives.push(open);
+        continue;
+      }
+      if (!open) continue;
+      let end = CLAIM_ENDS[e.state] || null;
+      if (e.state === 'abandoned') end = `abandoned:${t(e).reason || 'unknown'}`;
+      if (e.state === 'transition' && t(e).to === 'parked') end = 'parked';
+      if (end) {
+        open.outcome = end;
+        open.ended = e.t;
+        open = null;
+      }
+    }
+  }
+  const claimed = lives.filter((l) => inWin(l.claimed, win)).sort((a, b) => a.claimed - b.claimed || a.issue - b.issue);
+  const outcomes = {};
+  for (const l of claimed) outcomes[l.outcome] = (outcomes[l.outcome] || 0) + 1;
+  const resolved = claimed.filter((l) => l.outcome !== 'open');
+  const devices = new Map();
+  for (const l of claimed) {
+    const d = devices.get(l.device) || { device: l.device, claims: 0, merged: 0, open: 0 };
+    d.claims++;
+    if (l.outcome === 'merged') d.merged++;
+    if (l.outcome === 'open') d.open++;
+    devices.set(l.device, d);
+  }
+  const claim_completion = {
+    claims: claimed.length,
+    merged: outcomes.merged || 0,
+    open: outcomes.open || 0,
+    merged_pct_of_resolved: resolved.length ? pct(outcomes.merged || 0, resolved.length) : 'n/a (0 resolved claims)',
+    outcomes: Object.fromEntries(Object.keys(outcomes).sort().map((k) => [k, outcomes[k]])),
+    by_device: [...devices.values()].sort((a, b) => cmpStr(a.device, b.device)),
+    issues: claimed.map((l) => ({ issue: l.issue, device: l.device, claimed_at: iso(l.claimed), outcome: l.outcome, ended_at: l.ended === null ? null : iso(l.ended) })),
+  };
+
+  // rounds and time in flight per merged issue: review rounds from `reviewed`, fix rounds from
+  // `fix_requested`, and the claim-to-merge time less the time parked (a transition to parked
+  // until the issue's next transition)
+  const roundRows = spans.map((s) => {
+    const parked = [];
+    const tr = transitions.filter((x) => x.issue === s.issue).sort((a, b) => a.t - b.t);
+    tr.forEach((x, i) => {
+      if (x.f.to !== 'parked') return;
+      const next = tr.slice(i + 1).find((y) => y.t > x.t);
+      parked.push([x.t, next ? next.t : s.to]);
+    });
+    const parkedMs = lenIv(mergeIv(clipIv(parked, s.from, s.to)));
+    return {
+      issue: s.issue,
+      review_rounds: new Set(reviews.filter((e) => within(e, s)).map((e) => e.f.round)).size,
+      fix_rounds: evs.filter((e) => e.state === 'fix_requested' && within(e, s)).length,
+      in_flight_seconds: secs(s.to - s.from - parkedMs),
+      parked_seconds: secs(parkedMs),
+    };
+  }).sort((a, b) => a.issue - b.issue);
+  const rounds = {
+    merged_issues: roundRows.length,
+    review_rounds: statsOf(roundRows.map((r) => r.review_rounds)),
+    fix_rounds: statsOf(roundRows.map((r) => r.fix_rounds)),
+    in_flight_seconds: statsOf(roundRows.map((r) => r.in_flight_seconds)),
+    issues: roundRows,
+  };
+  return { interventions: interventionsOut, judgement_calls, claim_completion, rounds };
 }
 
 // ---------------------------------------------------------------- waste
@@ -1216,6 +1441,10 @@ function evaluate(opts, env = process.env) {
     per_device: em ? em.per_device : evNa,
     claims: em ? em.claims : evNa,
     waiting: em ? em.waiting : evNa,
+    interventions: em ? em.interventions : evNa,
+    judgement_calls: em ? em.judgement_calls : evNa,
+    claim_completion: em ? em.claim_completion : evNa,
+    rounds: em ? em.rounds : evNa,
     spend: !haveTr && nm.reason ? na('no transcripts and no no-mistakes state') : {
       rows: computeSpend(parsed, pl.invocations),
       sub_agent_model_mismatches: haveTr ? modelMismatches(parsed) : na('no transcripts'),
@@ -1300,6 +1529,31 @@ function toMarkdown(r) {
     }) + '\n' +
     table(['issue', 'device', 'ready_source', 'pipeline_bound', 'dispatcher_bound', 'dispatcher_bound_other_idle', 'agent_work', 'total'],
       w.issues.map((i) => [i.issue, i.device, i.ready_source, i.pipeline_bound, i.dispatcher_bound, i.dispatcher_bound_other_idle, i.agent_work, i.total]))));
+  sec('interventions', guard(r.interventions, (v) =>
+    kv({
+      total: v.total, person: v.person, loop: v.loop, fleet: v.fleet, merged_issues: v.merged_issues, untouched: v.untouched,
+      untouched_pct: v.untouched_pct, person_per_merged_issue: v.person_per_merged_issue, loop_per_merged_issue: v.loop_per_merged_issue,
+    }) + '\n' +
+    table(['who', 'cause', 'count'], v.by_cause.map((c) => [c.who, c.cause, c.count])) + '\n' +
+    table(['day', 'person', 'loop', 'fleet'], v.per_day.map((d) => [d.day, d.person, d.loop, d.fleet])) + '\n' +
+    table(['merged issue', 'person', 'loop', 'untouched', 'causes'], v.issues.map((i) => [i.issue, i.person, i.loop, i.untouched, i.causes.join(',') || 'none']))));
+  sec('judgement_calls', guard(r.judgement_calls, (j) =>
+    kv({ total: j.total, overridden: j.overridden, per_merged_issue: j.per_merged_issue }) + '\n' +
+    table(['kind', 'outcome', 'count', 'overridden'], j.by_kind.map((k) => [k.kind, k.outcome, k.count, k.overridden])) + '\n' +
+    table(['merged issue', 'calls', 'overridden'], j.issues.map((i) => [i.issue, i.calls, i.overridden]))));
+  sec('claim_completion', guard(r.claim_completion, (c) =>
+    kv({ claims: c.claims, merged: c.merged, open: c.open, merged_pct_of_resolved: c.merged_pct_of_resolved }) + '\n' +
+    table(['outcome', 'claims'], Object.entries(c.outcomes)) + '\n' +
+    table(['device', 'claims', 'merged', 'open'], c.by_device.map((d) => [d.device, d.claims, d.merged, d.open])) + '\n' +
+    table(['issue', 'device', 'claimed_at', 'outcome', 'ended_at'], c.issues.map((i) => [i.issue, i.device, i.claimed_at, i.outcome, i.ended_at]))));
+  sec('rounds', guard(r.rounds, (x) =>
+    kv({
+      merged_issues: x.merged_issues, 'review_rounds.median': x.review_rounds.median, 'review_rounds.max': x.review_rounds.max,
+      'fix_rounds.median': x.fix_rounds.median, 'fix_rounds.max': x.fix_rounds.max,
+      'in_flight_seconds.median': x.in_flight_seconds.median, 'in_flight_seconds.max': x.in_flight_seconds.max,
+    }) + '\n' +
+    table(['merged issue', 'review_rounds', 'fix_rounds', 'in_flight_seconds', 'parked_seconds'],
+      x.issues.map((i) => [i.issue, i.review_rounds, i.fix_rounds, i.in_flight_seconds, i.parked_seconds]))));
   sec('spend', guard(r.spend, (s) =>
     table(['role', 'model', 'turns', 'input', 'output', 'cache_read', 'cache_creation'],
       s.rows.map((x) => [x.role, x.model, x.turns, x.input, x.output, x.cache_read, x.cache_creation])) + '\n' +

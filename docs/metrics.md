@@ -41,6 +41,35 @@ skips it, and `callum-flow-factory-state` and `heartbeat-state` ignore it. Only 
 waiting split counts it, since a loop that logs is a device at work. CLI work the loop runs
 (claims, merges, the watchers' states) logs its own states, not `loop`.
 
+The factory loop v2 ([v2 SPEC 7.1](factory-loop/v2/SPEC.md#71-what-v2-emits)) adds three states. Their
+fields are `key=value` tokens in `note`, encoded as `loop` notes are: tokens are split by single
+spaces, `%` and whitespace inside a value are percent-encoded (`%20`), and a missing value is `none`.
+Read one with `substring(note FROM '(?:^| )<key>=([^ ]+)')`, and decode the percent-encoding of
+free text (a reason, a question) when you show it.
+
+- `transition`: every change of an issue's v2 state, and again after a re-claim. `issue`, `branch`,
+  `pr` and `head` are columns; the note has `row` (the table row), `life`, `seq`, `from`, `to` (the new
+  state: `queued`, `designing`, `building`, `reviewing`, `fixing`, `merge-queue`, `parked` or `closed`),
+  `why` (for `closed`: `merged`, `merged-by-hand`, `dropped`, `split`, `closed-on-github` or
+  `claim-lost`), `step`, `attempt`, `round`, `fixes`, `triages` and the rest of the loop's record, the
+  free text (`via`, `brief`, `question`, `notes`) last. A retried event can be logged twice: count one
+  per `(issue, life, seq)`. It is a stage for `callum-flow-factory-state` ([factory-state.md](factory-state.md)).
+- `reviewed`: one review result, with `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`
+  (the patch id reviewed), `errors`, `warnings`, `infos`, `reviewer` and `answer` (the answer's path).
+  Count one per `(issue, round, patch)`.
+- `intervention`: someone had to step in that the plan did not foresee, with `who` (`person` or
+  `loop`), `cause` (a code of [v2 SPEC 7.2](factory-loop/v2/SPEC.md#72-interventions), such as
+  `op:resume`, `push`, `hand-merge`, `restart`, `rescue`, `triage`, `unknown:timeout`, `free:load`,
+  `park` or `fix:ci`), `life`, `fact` (the key of the fact it records) and `reason` (one line).
+  `issue` is null for a fleet-level one (a mode change, a restart, a settings edit). Count one per
+  `(issue, who, cause, fact)`; a hand-recorded `rescue` has no fact, so each row counts.
+
+`reviewed` and `intervention` are never a stage and never progress. The loop's reused states keep
+their meaning and note: `delegated` (`brief <url>`), `fix_requested` (`review`, `ci`, `conflict` or
+`triage`), `merge_ready`, `verdict` (a fixer's `CORRECT:` for a fixed finding, `WRONG:` for a declined
+one, actor `fixer`), `merged`, and `abandoned` and `reclaimed`, whose v2 note starts with
+`reason=<dropped|split|triage|reconcile|other>`.
+
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`, `event_id`, `base_image`, `dev_image`,
 `template_version`, `plugin_version`.
@@ -77,6 +106,9 @@ The pipeline stage starts at the first linked run's `nomistakes.runs.created_at`
 agent-logged event: `implementation` is `delegated` to that start and `pipeline` is that start to
 `merge_ready`. An issue with no linkable run has NULL `implementation` and `pipeline`.
 `ready` can repeat when a watcher restarts with a stale `--known`, so the query uses the first one per issue.
+A factory loop v2 issue has no run: its pipeline stage starts at its first `transition` to
+reviewing, `min(ts) FILTER (WHERE state = 'transition' AND note ~ '(^| )to=reviewing( |$)')`, which
+`callum-flow-evaluate` uses (`run_source` `transition`) when the issue has no linked run.
 
 ```sql
 WITH run_link AS (
@@ -225,7 +257,7 @@ once. A **double-claim** is two devices with a live `claimed` on one issue and n
 `reclaimed`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
 logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
-`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, `renewed` (a heartbeat is not progress) and `loop` (the factory loop's bookkeeping), for more than
+`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, `renewed` (a heartbeat is not progress), `loop` (the factory loop's bookkeeping), and `reviewed` and `intervention` (the factory loop v2's review results and step-ins), for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 `superseded` (a run or branch replaced for the same issue, run-scoped) is none of these: it neither ends an issue nor releases a claim.
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
@@ -485,6 +517,219 @@ SELECT model,
 FROM per_issue
 GROUP BY model
 ORDER BY model;
+```
+
+## 9. Interventions, judgement calls and claim completion
+
+The factory loop v2's effectiveness, as issue #632 asks for it, from `factory.events` alone. Every
+query counts a retried event once (see the `intervention` and `reviewed` states above), and all three
+apply to any regime that logs these states. `callum-flow-evaluate` reports the same numbers over a
+window (its `interventions`, `judgement_calls`, `claim_completion` and `rounds` sections).
+
+**Interventions** (#632 metric 1): an `intervention` event is any point where a person, or the loop
+with unplanned judgement or recovery, had to step in. A merged issue is **untouched** when no
+intervention of either kind names it between its first `claimed` and its first `merged`; untouched
+merges are the target outcome. Fleet-level interventions (no `issue`) attach to no issue.
+
+```sql
+-- interventions per repo and day, by who and cause; `fleet` counts those that name no issue
+WITH iv AS (
+  SELECT DISTINCT ON (repo, coalesce(issue, 0), who, cause, coalesce(fact, event_id::text, ts::text))
+         repo, issue, ts, who, cause
+  FROM (
+    SELECT e.repo, e.issue, e.ts, e.event_id,
+           substring(e.note FROM '(?:^| )who=([^ ]+)')                    AS who,
+           substring(e.note FROM '(?:^| )cause=([^ ]+)')                  AS cause,
+           nullif(substring(e.note FROM '(?:^| )fact=([^ ]+)'), 'none')   AS fact
+    FROM factory.events e
+    WHERE e.state = 'intervention'
+  ) x
+  ORDER BY repo, coalesce(issue, 0), who, cause, coalesce(fact, event_id::text, ts::text), ts
+)
+SELECT repo, date_trunc('day', ts)::date AS day, who, cause,
+  count(*)                              AS interventions,
+  count(*) FILTER (WHERE issue IS NULL) AS fleet
+FROM iv
+GROUP BY repo, day, who, cause
+ORDER BY repo, day, who, cause;
+```
+
+```sql
+-- per merged issue: its interventions from its first claim to its merge, and whether it was untouched
+WITH iv AS (
+  SELECT DISTINCT ON (repo, issue, who, cause, coalesce(fact, event_id::text, ts::text))
+         repo, issue, ts, who, cause
+  FROM (
+    SELECT e.repo, e.issue, e.ts, e.event_id,
+           substring(e.note FROM '(?:^| )who=([^ ]+)')                    AS who,
+           substring(e.note FROM '(?:^| )cause=([^ ]+)')                  AS cause,
+           nullif(substring(e.note FROM '(?:^| )fact=([^ ]+)'), 'none')   AS fact
+    FROM factory.events e
+    WHERE e.state = 'intervention' AND e.issue IS NOT NULL
+  ) x
+  ORDER BY repo, issue, who, cause, coalesce(fact, event_id::text, ts::text), ts
+), merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.events WHERE state = 'merged' AND issue IS NOT NULL GROUP BY repo, issue
+), claimed AS (
+  SELECT repo, issue, min(ts) AS claimed_at
+  FROM factory.events WHERE state = 'claimed' AND issue IS NOT NULL GROUP BY repo, issue
+)
+SELECT m.repo, m.issue, m.merged_at,
+  count(iv.ts) FILTER (WHERE iv.who = 'person') AS person,
+  count(iv.ts) FILTER (WHERE iv.who = 'loop')   AS loop,
+  count(iv.ts) = 0                              AS untouched,
+  string_agg(DISTINCT iv.cause, ',')            AS causes
+FROM merged m
+LEFT JOIN claimed c ON c.repo = m.repo AND c.issue = m.issue
+LEFT JOIN iv ON iv.repo = m.repo AND iv.issue = m.issue
+            AND iv.ts >= least(c.claimed_at, m.merged_at) AND iv.ts <= m.merged_at
+GROUP BY m.repo, m.issue, m.merged_at
+ORDER BY m.merged_at DESC;
+```
+
+**Judgement calls** (#632 metric 2): the decisions a model made, by kind and outcome: each review
+(`reviewed`, by `verdict`), each triage call (an `intervention` with cause `triage`, by the choice the
+next triage row of the loop's table applied: `X1` retry, `X2` fix, `X3` redesign, `X4` park, `X5`
+drop, else `pending`), a designer's question or split (a `transition` by row `T3` or `T4`) and a
+fixer's dispositions (`verdict` events of actor `fixer`, `CORRECT` fixed, `WRONG` declined). A call is
+**overridden** when a person intervention names its issue within an hour after it.
+
+```sql
+WITH calls AS (
+  SELECT DISTINCT ON (repo, issue, kind, key) repo, issue, ts, kind, outcome
+  FROM (
+    SELECT e.repo, e.issue, e.ts, 'review' AS kind,
+           substring(e.note FROM '(?:^| )verdict=([^ ]+)') AS outcome,
+           coalesce(substring(e.note FROM '(?:^| )round=([^ ]+)'), '') || '/' ||
+           coalesce(substring(e.note FROM '(?:^| )patch=([^ ]+)'), '') AS key
+    FROM factory.events e WHERE e.state = 'reviewed'
+    UNION ALL
+    SELECT e.repo, e.issue, e.ts, 'triage',
+           coalesce((SELECT CASE substring(x.note FROM '(?:^| )row=([^ ]+)')
+                              WHEN 'X1' THEN 'retry' WHEN 'X2' THEN 'fix' WHEN 'X3' THEN 'redesign'
+                              WHEN 'X4' THEN 'park' WHEN 'X5' THEN 'drop' END
+                     FROM factory.events x
+                     WHERE x.repo = e.repo AND x.issue = e.issue AND x.state = 'transition' AND x.ts >= e.ts
+                       AND substring(x.note FROM '(?:^| )row=([^ ]+)') IN ('X1', 'X2', 'X3', 'X4', 'X5')
+                     ORDER BY x.ts LIMIT 1), 'pending'),
+           coalesce(substring(e.note FROM '(?:^| )fact=([^ ]+)'), e.event_id::text)
+    FROM factory.events e
+    WHERE e.state = 'intervention' AND e.note ~ '(^| )who=loop( |$)' AND e.note ~ '(^| )cause=triage( |$)'
+    UNION ALL
+    SELECT e.repo, e.issue, e.ts, 'design',
+           CASE substring(e.note FROM '(?:^| )row=([^ ]+)') WHEN 'T3' THEN 'question' ELSE 'split' END,
+           substring(e.note FROM '(?:^| )life=([^ ]+)') || '/' || substring(e.note FROM '(?:^| )seq=([^ ]+)')
+    FROM factory.events e
+    WHERE e.state = 'transition' AND substring(e.note FROM '(?:^| )row=([^ ]+)') IN ('T3', 'T4')
+    UNION ALL
+    SELECT e.repo, e.issue, e.ts, 'fix', CASE WHEN e.note LIKE 'CORRECT%' THEN 'fixed' ELSE 'declined' END,
+           coalesce(e.event_id::text, e.ts::text)
+    FROM factory.events e
+    WHERE e.state = 'verdict' AND e.actor = 'fixer' AND (e.note LIKE 'CORRECT%' OR e.note LIKE 'WRONG%')
+  ) c
+  ORDER BY repo, issue, kind, key, ts
+)
+SELECT c.repo, c.kind, c.outcome,
+  count(*) AS calls,
+  count(*) FILTER (WHERE EXISTS (
+    SELECT 1 FROM factory.events p
+    WHERE p.repo = c.repo AND p.issue = c.issue AND p.state = 'intervention'
+      AND p.note ~ '(^| )who=person( |$)' AND p.ts > c.ts AND p.ts <= c.ts + interval '1 hour')) AS overridden
+FROM calls c
+GROUP BY c.repo, c.kind, c.outcome
+ORDER BY c.repo, c.kind, c.outcome;
+```
+
+**Claim completion** (#632 metric 3): per issue and life, its first `claimed`, then the first of
+`merged`, `abandoned` (by the note's `reason`: `dropped`, `split`, `triage`, `reconcile`), `closed`, a
+release back to the queue (`reclaimed` or `ready`, read as `released`) or a `transition` to parked; a
+claim with none of them yet is `open`. A claim while a life is open is the same life (a re-claim of a
+lapsed claim). Open claims are censored, not failures, so the share merged is of the resolved ones.
+
+```sql
+WITH ends AS (
+  SELECT repo, issue, ts,
+    CASE state WHEN 'merged' THEN 'merged' WHEN 'closed' THEN 'closed'
+               WHEN 'reclaimed' THEN 'released' WHEN 'ready' THEN 'released'
+               WHEN 'abandoned' THEN 'abandoned:' || coalesce(substring(note FROM '(?:^| )reason=([^ ]+)'), 'unknown')
+               ELSE 'parked' END AS outcome
+  FROM factory.events
+  WHERE issue IS NOT NULL
+    AND (state IN ('merged', 'closed', 'reclaimed', 'ready', 'abandoned')
+         OR (state = 'transition' AND note ~ '(^| )to=parked( |$)'))
+), claims AS (
+  SELECT c.repo, c.issue, c.device, c.ts AS claimed_at,
+         (SELECT max(e.ts) FROM ends e WHERE e.repo = c.repo AND e.issue = c.issue AND e.ts < c.ts) AS prev_end
+  FROM factory.events c
+  WHERE c.state = 'claimed' AND c.issue IS NOT NULL
+), lives AS (  -- a claim starts a life when no other claim came between the last end and it
+  SELECT k.* FROM claims k
+  WHERE NOT EXISTS (
+    SELECT 1 FROM claims o
+    WHERE o.repo = k.repo AND o.issue = k.issue AND o.claimed_at < k.claimed_at
+      AND o.claimed_at > coalesce(k.prev_end, '-infinity'::timestamptz))
+), completion AS (  -- one row per life; select from it for the list
+  SELECT l.repo, l.issue, l.device, l.claimed_at,
+    coalesce((SELECT e.outcome FROM ends e
+              WHERE e.repo = l.repo AND e.issue = l.issue AND e.ts > l.claimed_at
+              ORDER BY e.ts LIMIT 1), 'open') AS outcome
+  FROM lives l
+)
+SELECT repo,
+  count(*)                                       AS claims,
+  count(*) FILTER (WHERE outcome = 'merged')     AS merged,
+  count(*) FILTER (WHERE outcome = 'open')       AS open,
+  round(100.0 * count(*) FILTER (WHERE outcome = 'merged')
+        / nullif(count(*) FILTER (WHERE outcome <> 'open'), 0), 1) AS merged_pct_of_resolved
+FROM completion
+GROUP BY repo
+ORDER BY repo;
+```
+
+**Rounds and time in flight** per merged issue, from its first `claimed` to its first `merged`: review
+rounds are the distinct `round` values of its `reviewed` events, fix rounds its `fix_requested`
+events, and time in flight leaves out the time parked (a `transition` to parked until the issue's
+next transition).
+
+```sql
+WITH merged AS (
+  SELECT repo, issue, min(ts) AS merged_at
+  FROM factory.events WHERE state = 'merged' AND issue IS NOT NULL GROUP BY repo, issue
+), claimed AS (
+  SELECT repo, issue, min(ts) AS claimed_at
+  FROM factory.events WHERE state = 'claimed' AND issue IS NOT NULL GROUP BY repo, issue
+), spans AS (
+  SELECT m.repo, m.issue, least(c.claimed_at, m.merged_at) AS from_ts, m.merged_at AS to_ts
+  FROM merged m LEFT JOIN claimed c ON c.repo = m.repo AND c.issue = m.issue
+), tr AS (  -- one row per (issue, life, seq), with the issue's next transition
+  SELECT repo, issue, ts, to_state, lead(ts) OVER (PARTITION BY repo, issue ORDER BY ts) AS next_ts
+  FROM (
+    SELECT DISTINCT ON (repo, issue, life, seq) repo, issue, ts, to_state
+    FROM (
+      SELECT repo, issue, ts,
+             substring(note FROM '(?:^| )life=([^ ]+)') AS life,
+             substring(note FROM '(?:^| )seq=([^ ]+)')  AS seq,
+             substring(note FROM '(?:^| )to=([^ ]+)')   AS to_state
+      FROM factory.events WHERE state = 'transition' AND issue IS NOT NULL
+    ) x
+    ORDER BY repo, issue, life, seq, ts
+  ) y
+)
+SELECT s.repo, s.issue, s.to_ts AS merged_at,
+  (SELECT count(DISTINCT substring(r.note FROM '(?:^| )round=([^ ]+)')) FROM factory.events r
+   WHERE r.repo = s.repo AND r.issue = s.issue AND r.state = 'reviewed'
+     AND r.ts BETWEEN s.from_ts AND s.to_ts)                                  AS review_rounds,
+  (SELECT count(*) FROM factory.events f
+   WHERE f.repo = s.repo AND f.issue = s.issue AND f.state = 'fix_requested'
+     AND f.ts BETWEEN s.from_ts AND s.to_ts)                                  AS fix_rounds,
+  round(extract(epoch FROM s.to_ts - s.from_ts) - coalesce((
+    SELECT sum(extract(epoch FROM least(coalesce(t.next_ts, s.to_ts), s.to_ts) - greatest(t.ts, s.from_ts)))
+    FROM tr t
+    WHERE t.repo = s.repo AND t.issue = s.issue AND t.to_state = 'parked'
+      AND t.ts < s.to_ts AND coalesce(t.next_ts, s.to_ts) > s.from_ts), 0)) AS in_flight_s
+FROM spans s
+ORDER BY s.to_ts DESC;
 ```
 
 ## Workers
@@ -1015,7 +1260,7 @@ ORDER BY r.repo, r.device, r.created_at, r.id;
 
 `callum-flow-evaluate --repo <owner/name> --since <ISO> [--until <ISO>] [--format json|markdown]
 [--events <file>] [--nm-export <file>] [--ready-times <file>]` (base image, `images/base/callum-flow-evaluate`)
-computes queries 1 to 7 for a time window from an events file (`--events`, default the local
+computes queries 1 to 7 and 9 for a time window from an events file (`--events`, default the local
 event log; a `factory.events` export covers every device), plus token spend, waste and pipeline
 numbers from Claude Code transcripts and the no-mistakes `state.sqlite`. It is read-only, makes
 no network calls and is deterministic. The `evaluate-sessions` skill runs it and writes the
@@ -1040,6 +1285,14 @@ unless a `factory.events` export is passed (see the skill).
 - `waiting` (query 7) gives each merged issue's split and the totals, `other_idle_pct_of_wait`
   and a `decision`: `B` when more than 50% of the wait was dispatcher-bound with another device
   idle, `gate` otherwise.
+- `interventions`, `judgement_calls`, `claim_completion` and `rounds` are section 9's numbers over
+  the window: interventions logged in the window by who and cause, per day (with the fleet-level
+  ones) and per merged issue (`untouched` when none named it from its first claim to its merge);
+  judgement calls made in the window by kind and outcome, with those overridden; the lives claimed
+  in the window and how each ended (`open` when it had not by the window's end, censored); and per
+  merged issue its review and fix rounds and its time in flight less the time parked. Each counts a
+  retried event once, as section 9 does. A merged issue's lead-time row takes its pipeline start from
+  its first `transition` to reviewing when it has no linked run (`run_source` `transition`).
 - `--ready-times <file>` is a JSON object `{"<issue>": "<ISO>" | ["<ISO>", ...]}` of the times
   each issue got its `ready` label, from the GitHub timeline. The tool takes the last one at or
   before the issue's first `claimed`, and falls back to the first `ready` event (each lead-time

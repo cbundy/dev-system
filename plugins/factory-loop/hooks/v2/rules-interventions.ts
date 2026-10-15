@@ -1,10 +1,326 @@
 // The interventions (docs/factory-loop/v2/SPEC.md 7.2), derived, never emitted ad hoc: one
-// `intervention` event, keyed iv/<the fact's key>, for each fact in the ledger (a done transition
-// by its row and event, a CI re-run, a release, a re-claim, a body re-render, an exhausted effect),
-// the records, the State (heads, digests, the module load, the rail, the tripwire, the breaker)
-// and the companion's log (sources-interventions.ts).
-//
-// STUB of build unit U1. U4 fills it; until then no intervention is planned.
-import type { V2Ctx } from './types'
+// `intervention` event for each fact, keyed iv/<the fact's key>, so each is logged once however
+// often its fact is seen. The facts, each one the loop already holds:
+// - the ledger: a done, stored `transition` by its row and event (triage, an unknown, a free
+//   re-run, a park, a fixer for red CI or a conflict, a head sent back from the queue, a hand
+//   merge, a hand close of the PR or the issue, an unpark by label), a CI re-run, a PR body
+//   re-rendered for its linkage, R1's release of a ghost, H1's re-claim of a lapsed claim, an owner
+//   item told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
+// - the records and the PRs: a head on a record's branch that no loop step produced (4.1);
+// - the State: a module load with no restart of the loop's own in flight;
+// - sources-interventions.ts: the companion's refusals and the stop gates that could not run, and
+//   the hand edits of control.json, the OFF file and the settings.
+// Owner ops are logged when they land (act-events.ts), not here. Not interventions: the planned
+// work, a fixer for review findings, a fixer chosen by triage (counted as the triage), claim-lost
+// (another device's work), tells for waiting states, and status and help. Pure.
+import { gate, skip } from '../foundation'
+import type { LedgerEntry, Ms } from '../types'
+import { intervention } from './events'
+import type { InterventionEvent } from './events'
+import { factKey, interventionKey, keyParts, lifeAt, seqKey, short, transitionKey } from './keys'
+import type { IssueRecord, IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
+import { UNKNOWN_WHYS } from './types'
 
-export function interventionRules(_ctx: V2Ctx): void {}
+const MIN = 60_000
+const HOUR = 60 * MIN
+// a restart-self that ended this close to the load was the loop's own (D-15: dev-restart-self
+// returns minutes before the container is replaced; one cut by the reload ends lost at the load)
+const OWN_RESTART_MS = 30 * MIN
+// a load is an intervention only on passes this soon after it, so a loop that starts acting long
+// after it loaded does not log a stale restart
+const RESTART_PLAN_MS = HOUR
+
+// One intervention to plan: its event, its ledger key and the rule its fact came from.
+export type Planned = { key: string; rule: string; event: InterventionEvent }
+
+type TransitionOutcome = Extract<V2Outcome, { kind: 'transition' }>
+export type Fact = { entry: LedgerEntry; o: TransitionOutcome; issue: number; life: string; seq: number }
+
+// The step kinds of a seq's own work, whose entries say how the step ended (prepare is part of
+// the attempt, 10.2).
+const STEP_ENTRY_KINDS = ['agent-step', 'slot', 'queue-update', 'queue-merge', 'pr', 'ci-rerun'] as const
+
+// --- the transitions --------------------------------------------------------------------------------
+
+function transitions(ctx: V2Ctx): Fact[] {
+  const out: Fact[] = []
+  for (const entry of ctx.state.ledger) {
+    const o = entry.outcome
+    if (entry.kind !== 'transition' || entry.status !== 'done' || o?.kind !== 'transition' || !o.stored) continue
+    const p = keyParts(entry.key)
+    if (p === null || p.seq === null || p.rest !== 't') continue
+    out.push({ entry, o, issue: p.issue, life: p.life, seq: p.seq })
+  }
+  return out
+}
+
+// stepEntries: the entries of the step a transition ended: this life's step work that started in
+// the old seq, from its transition to this one, newest first.
+function stepEntries(ctx: V2Ctx, f: Fact): LedgerEntry[] {
+  const before = ctx.byKey.get(transitionKey({ issue: f.issue, life: f.life, seq: f.seq - 1 }))
+  const from = before?.startedAt ?? 0
+  return ctx.state.ledger
+    .filter(e => {
+      if (e.issue !== f.issue || !(STEP_ENTRY_KINDS as readonly string[]).includes(e.kind)) return false
+      const p = keyParts(e.key)
+      if (p === null || p.life !== f.life) return false
+      if (e.kind === 'slot' && !p.rest.startsWith('prepare/')) return false
+      return e.startedAt >= from && e.startedAt <= f.entry.startedAt
+    })
+    .sort((a, b) => b.startedAt - a.startedAt)
+}
+
+// unknownWhy: why the step a transition ended went unknown (7.2), from the step's own entry: its
+// result's why; a step still running when it ended (a timeout); a spawn that never started; an
+// agent that failed or was lost; a CLI step that failed. With no entry of its own, a timeout, or a
+// wait on GitHub past its bound in reviewing or at the queue's head.
+export function unknownWhy(ctx: V2Ctx, f: Fact): UnknownWhy {
+  if (f.o.event === 'timeout') return 'timeout'
+  const e = stepEntries(ctx, f)[0]
+  if (e === undefined) return f.o.from === 'reviewing' || f.o.from === 'merge-queue' ? 'github-wait' : 'cli'
+  const o = e.outcome
+  if (o?.kind === 'step' && o.result.event === 'unknown') return UNKNOWN_WHYS.find(w => w === o.result.why) ?? 'cli'
+  if (e.status === 'running' || e.endedAt === null || e.endedAt > f.entry.startedAt || e.status === 'timed-out') return 'timeout'
+  if (e.kind === 'agent-step') return e.agentId === undefined ? 'spawn' : 'agent-dead'
+  return 'cli'
+}
+
+// fixFor: what a fixer was sent for (T9): the fix_requested this seq plans (its note is the
+// answer, 4.5), else the step's own entry (the queue's guard class, a reviewer's not-ok), else
+// the PR as read (a conflict, a failed check), else review findings.
+export function fixFor(ctx: V2Ctx, f: Fact): 'review' | 'ci' | 'conflict' | 'triage' {
+  const prefix = `${seqKey({ issue: f.issue, life: f.life, seq: f.seq })}/`
+  for (const a of ctx.out) {
+    if (a.kind !== 'event' || a.issue !== f.issue || !a.key.startsWith(prefix) || a.event.state !== 'fix_requested') continue
+    const note = a.event.note.trim()
+    if (note === 'review' || note === 'ci' || note === 'conflict' || note === 'triage') return note
+  }
+  for (const e of stepEntries(ctx, f)) {
+    const o = e.outcome
+    if (o?.kind === 'queue' && o.failClass === 'conflict') return 'conflict'
+    if (o?.kind === 'queue' && o.failClass === 'checks') return 'ci'
+    if (o?.kind === 'step' && o.step === 'review' && o.result.event === 'not-ok') return 'review'
+  }
+  const record = ctx.v2.records.find(r => r.issue === f.issue && r.life === f.life)
+  const pr = ctx.v2.prs.prs.find(v => v.issue === f.issue && (record?.pr === null || record?.pr === undefined || v.pr === record.pr))
+  if (pr?.mergeable === 'dirty') return 'conflict'
+  if (pr !== undefined && pr.checks.some(c => c.bucket === 'fail')) return 'ci'
+  return 'review'
+}
+
+// unparkedByHand: P1 came from the parked label's removal, not from `/factory resume`, whose op is
+// its own intervention: no resume of the issue recorded between the park and the unpark.
+function unparkedByHand(ctx: V2Ctx, f: Fact): boolean {
+  const park = ctx.byKey.get(transitionKey({ issue: f.issue, life: f.life, seq: f.seq - 1 }))
+  const parkedAt = park?.startedAt ?? 0
+  return !ctx.state.control.resumed.some(r => r.subject === `issue:${f.issue}` && r.at >= parkedAt && r.at <= f.entry.startedAt)
+}
+
+const stepName = (o: TransitionOutcome) => o.step ?? 'the step'
+
+// fromTransition: the interventions one transition is. The first takes the fact's own key
+// (iv/<transition key>), each further one the key and its cause.
+export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
+  const { o, entry } = f
+  const record = ctx.v2.records.find(r => r.issue === f.issue && r.life === f.life)
+  const pr = record?.pr ?? entry.pr
+  const at = { issue: f.issue, life: f.life, pr }
+  const out: { who: InterventionEvent['who']; cause: string; reason: string }[] = []
+  const loop = (cause: string, reason: string) => out.push({ who: 'loop', cause, reason })
+  const person = (cause: string, reason: string) => out.push({ who: 'person', cause, reason })
+  const from = o.from ?? 'none'
+  switch (o.row) {
+    case 'U1':
+      loop(`free:${o.cause ?? 'load'}`, `${stepName(o)} in ${from} runs again free after ${o.cause ?? 'a cause outside the issue'}`)
+      break
+    case 'U2':
+    case 'U3':
+    case 'U4': {
+      const why = unknownWhy(ctx, f)
+      loop(`unknown:${why}`, `${stepName(o)} in ${from} ended unknown (${why})`)
+      if (o.row === 'U3') loop('triage', `a triage call after the second unknown in ${from}`)
+      break
+    }
+    case 'T6':
+      loop('triage', 'a triage call: the builder said it cannot')
+      break
+    case 'T9': {
+      const why = fixFor(ctx, f)
+      if (why === 'ci') loop('fix:ci', `a fixer for red CI${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
+      if (why === 'conflict') loop('fix:conflict', `a fixer for a merge conflict${pr === null ? '' : ` on PR #${pr}`}, from ${from}`)
+      break
+    }
+    case 'T14':
+      loop('queue:patch', `the queue's head went back to review: its patch is not the approved one`)
+      break
+    case 'E2':
+      person('issue-closed', `the issue was closed on GitHub in ${from}`)
+      break
+    case 'E3':
+      person('hand-merge', `PR${pr === null ? '' : ` #${pr}`} was merged by hand in ${from}`)
+      break
+    case 'E4':
+      person('pr-closed', `PR${pr === null ? '' : ` #${pr}`} was closed by hand in ${from}`)
+      break
+    case 'P1':
+      if (unparkedByHand(ctx, f)) person('unpark', 'factory:parked was removed by hand')
+      break
+  }
+  if (o.to === 'parked') {
+    const question = record !== undefined && record.seq === f.seq && record.question !== null ? `: ${record.question}` : ''
+    loop('park', `parked from ${from} (${o.row})${question}`)
+  }
+  const fact = entry.key
+  return out.map((iv, i) => ({ key: interventionKey(i === 0 ? fact : `${fact}/${iv.cause}`), rule: entry.rule, event: intervention(iv.who, iv.cause, fact, iv.reason, at) }))
+}
+
+// --- the other facts in the ledger ---------------------------------------------------------------------
+
+// The owner items told, by their notice (appendix D): each has its intervention. parked is the
+// transition's own (above).
+const TOLD: ReadonlyMap<string, string> = new Map([
+  ['breaker', 'breaker'],
+  ['stalled', 'stalled'],
+  ['checkout', 'tripwire'],
+  ['workspace', 'workspace'],
+])
+
+// eraOf: when v2 began acting on this ledger: its first transition. Facts v1 could also have left
+// (a notice, a wake) count only from then, so a switch from v1 logs none of v1's.
+function eraOf(ctx: V2Ctx): Ms | null {
+  let era: Ms | null = null
+  for (const e of ctx.state.ledger) if (e.kind === 'transition' && (era === null || e.startedAt < era)) era = e.startedAt
+  return era
+}
+
+function fromLedger(ctx: V2Ctx): Planned[] {
+  const out: Planned[] = []
+  const era = eraOf(ctx)
+  const add = (entry: LedgerEntry, who: InterventionEvent['who'], cause: string, reason: string, life: string | null) =>
+    out.push({ key: interventionKey(entry.key), rule: entry.rule, event: intervention(who, cause, entry.key, reason, { issue: entry.issue, life, pr: entry.pr }) })
+  for (const entry of ctx.state.ledger) {
+    const p = keyParts(entry.key)
+    const done = entry.status === 'done'
+    if (entry.kind === 'ci-rerun' && done && p !== null) {
+      add(entry, 'loop', 'ci-rerun', `a failed check re-run (${p.rest.replace(/^rerun\//, '')})`, p.life)
+    } else if (entry.kind === 'pr' && done && p !== null && /^pr\/body\/a\d+$/.test(p.rest)) {
+      add(entry, 'loop', 'queue:linkage', 'the PR body was written again after a linkage FAIL', p.life)
+    } else if (entry.kind === 'claim' && done && p !== null && p.rest.startsWith('claim/')) {
+      add(entry, 'loop', 'reclaim', 'a lapsed claim was claimed again onto its record', p.life)
+    } else if (entry.kind === 'event' && done && /^i[1-9]\d*\/reconcile\/[0-9a-z]+\/event$/.test(entry.key)) {
+      add(entry, 'loop', 'reconcile', 'R1 released a live claim with no record', null)
+    } else if (era !== null && entry.startedAt >= era && entry.kind === 'tell' && TOLD.has(entry.wake ?? '') && !entry.key.includes('iv/')) {
+      add(entry, 'loop', TOLD.get(entry.wake ?? '') as string, `the owner was told: ${entry.key}`, null)
+    } else if (era !== null && entry.startedAt >= era && (entry.kind === 'judge' || (entry.kind === 'task' && entry.wake !== 'release'))) {
+      add(entry, 'loop', 'wake', `a wake that is not a planned step: ${entry.key}`, null)
+    }
+  }
+  return out
+}
+
+// --- the records, the PRs and the State ------------------------------------------------------------------
+
+// loopHeads: the heads the loop's steps on this issue produced, in any life: what writers
+// confirmed on origin, and what the queue's updates made (4.1, 9.2).
+function loopHeads(ctx: V2Ctx, r: IssueRecord): Set<string> {
+  const heads = new Set<string>()
+  if (r.head !== null) heads.add(r.head)
+  for (const e of ctx.state.ledger) {
+    if (e.issue !== r.issue) continue
+    const o = e.outcome
+    if (o?.kind === 'step' && o.result.head !== null) heads.add(o.result.head)
+    if (o?.kind === 'queue' && o.op === 'update' && o.head !== null) heads.add(o.head)
+  }
+  return heads
+}
+
+// The states whose PR head no loop step is moving: a writer's own push is confirmed when its step
+// ends, so building and fixing are never read for pushes.
+const STILL: readonly IssueState[] = ['reviewing', 'merge-queue', 'parked']
+
+// fromPushes: a head on a record's PR that no loop step produced, first seen after the life began,
+// is a person's push (4.1). Judged only on a head observe saw first (heads first seen, 2.4); a
+// head that was there before the life began is not this life's touch. A record that adopted its
+// PR, with no head of its own, takes the first head seen in its life as the loop's start. A queue
+// update still running, or one that ended with no head read, may have made any head seen after
+// it started, so such a head is not judged.
+function fromPushes(ctx: V2Ctx): Planned[] {
+  const out: Planned[] = []
+  for (const r of ctx.v2.records) {
+    if (r.pr === null || !STILL.includes(r.state)) continue
+    const view = ctx.v2.prs.prs.find(v => v.pr === r.pr && v.issue === r.issue)
+    if (view === undefined || view.state !== 'open' || view.head === null) continue
+    const head = view.head
+    const seen = ctx.v2.heads[head]
+    const began = lifeAt(r.life) ?? 0
+    if (seen === undefined || seen.at <= began || loopHeads(ctx, r).has(head)) continue
+    if (r.head === null) {
+      const first = Object.entries(ctx.v2.heads)
+        .filter(([, h]) => h.pr === r.pr && h.at > began)
+        .sort((a, b) => a[1].at - b[1].at)[0]
+      if (first === undefined || first[0] === head) continue
+    }
+    const updating = ctx.state.ledger.some(
+      e => e.issue === r.issue && e.kind === 'queue-update' && e.startedAt <= seen.at && !(e.outcome?.kind === 'queue' && e.outcome.head !== null),
+    )
+    if (updating) continue
+    const fact = factKey('push', `i${r.issue}`, short(head))
+    out.push({
+      key: interventionKey(fact),
+      rule: 'S6',
+      event: intervention('person', 'push', fact, `head ${short(head)} on ${r.branch} was pushed by no loop step`, { issue: r.issue, life: r.life, pr: r.pr }),
+    })
+  }
+  return out
+}
+
+// fromRestart: a module load with no restart-self of the loop's own around it (R2's, or v1's H4).
+function fromRestart(ctx: V2Ctx): Planned[] {
+  const loaded = ctx.state.loadedAt
+  if (ctx.state.now - loaded >= RESTART_PLAN_MS) return []
+  const own = ctx.state.ledger.some(e => e.kind === 'restart-self' && e.endedAt !== null && e.endedAt >= loaded - OWN_RESTART_MS && e.endedAt <= loaded + OWN_RESTART_MS && e.status !== 'failed')
+  if (own) return []
+  const fact = factKey('restart', 'fleet', Math.trunc(loaded).toString(36))
+  return [{ key: interventionKey(fact), rule: 'R2', event: intervention('person', 'restart', fact, 'the loop loaded with no restart of its own in flight', { issue: null, life: null, pr: null }) }]
+}
+
+// fromSources: the companion's lines and the hand edits sources-interventions.ts judged.
+function fromSources(ctx: V2Ctx): Planned[] {
+  const out: Planned[] = []
+  const facts = ctx.v2.interventions
+  for (const line of facts.companion) {
+    const fact = factKey(line.cause, line.issue === null ? 'fleet' : `i${line.issue}`, Math.trunc(line.at).toString(36))
+    const reason = line.reason === '' ? `the companion: ${line.cause}` : line.reason
+    out.push({ key: interventionKey(fact), rule: 'S2', event: intervention('loop', line.cause, fact, reason, { issue: line.issue, life: line.life, pr: null }) })
+  }
+  for (const c of facts.changes ?? []) {
+    const cause = c.what === 'control' ? 'control-file' : 'config-file'
+    const at = Math.trunc(c.at).toString(36)
+    for (const issue of c.issues.length === 0 ? [null] : c.issues) {
+      const fact = factKey(cause, issue === null ? 'fleet' : `i${issue}`, at)
+      out.push({ key: interventionKey(fact), rule: 'G4', event: intervention('person', cause, fact, c.detail, { issue, life: null, pr: null }) })
+    }
+  }
+  return out
+}
+
+// --- the rule ---------------------------------------------------------------------------------------
+
+// interventionsOf: every intervention the facts hold, done or not; the gate leaves out the done.
+export function interventionsOf(ctx: V2Ctx): Planned[] {
+  return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
+}
+
+// interventionRules: one `event` action per intervention not yet logged. One that used up its
+// attempts (callum-flow-event refused its note: a loop bug) holds no record and is no owner item:
+// its skip line says so, and the executor breaker catches a run of them.
+export function interventionRules(ctx: V2Ctx): void {
+  const seen = new Set<string>()
+  for (const p of interventionsOf(ctx)) {
+    if (seen.has(p.key)) continue
+    seen.add(p.key)
+    const g = gate(ctx, p.key, 'event')
+    if (g === 'go') ctx.out.push({ kind: 'event', key: p.key, class: 'free', rule: p.rule, reason: `intervention: ${p.event.who} ${p.event.cause}`, issue: p.event.issue, event: p.event })
+    else if (g === 'exhausted') skip(ctx, p.rule, p.event.issue, `exhausted: ${p.key}: the intervention ${p.event.who} ${p.event.cause} is not logged`)
+  }
+}

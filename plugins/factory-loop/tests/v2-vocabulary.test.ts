@@ -363,13 +363,14 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
   })
 })
 
-describe('the event seam (v2 SPEC 7.1; U4 fills its format)', () => {
+describe('the event seam (v2 SPEC 7.1; its format is tested in v2-events.test.ts)', () => {
   test('an event carries its issue, branch, PR and head in its own columns, and a note', () => {
-    expect(eventArgv({ state: 'transition', record: record(), row: 'T5', from: 'building', via: 'ok' })).toEqual([
-      'callum-flow-event', 'transition', '--issue', '571', '--branch', 'issue-571', '--pr', '621', '--head', 'abc1234', '--note', 'building -> reviewing (T5)',
-    ])
+    const transition = eventArgv({ state: 'transition', record: record(), row: 'T5', from: 'building', via: 'ok' })
+    expect(transition.slice(0, 10)).toEqual(['callum-flow-event', 'transition', '--issue', '571', '--branch', 'issue-571', '--pr', '621', '--head', 'abc1234'])
+    expect(transition.slice(10, 11)).toEqual(['--note'])
+    expect(transition[11]).toMatch(/^row=T5 life=\S+ seq=\d+ from=building to=reviewing /)
     expect(eventArgv({ state: 'intervention', who: 'loop', cause: 'triage', reason: 'second unknown', issue: 571, life: LIFE, pr: null, fact: 'i571/lss1x2k/s7/t' })).toEqual([
-      'callum-flow-event', 'intervention', '--issue', '571', '--note', 'loop triage: second unknown',
+      'callum-flow-event', 'intervention', '--issue', '571', '--note', `who=loop cause=triage life=${LIFE} fact=i571/lss1x2k/s7/t reason=second%20unknown`,
     ])
     expect(eventArgv({ state: 'fix_requested', issue: 571, branch: 'issue-571', pr: 621, head: null, note: 'review' }).slice(-2)).toEqual(['--note', 'review'])
   })

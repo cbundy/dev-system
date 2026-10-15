@@ -63,7 +63,9 @@ export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null 
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
     return null
   }
-  const starting = kept.filter(a => a.kind !== 'title').map(a => a.key)
+  // an intervention's event is no work a restart would cut: it is written before the restart, in
+  // the same pass (rules-interventions.ts)
+  const starting = kept.filter(a => a.kind !== 'title' && !(a.kind === 'event' && a.key.startsWith('iv/'))).map(a => a.key)
   if (starting.length > 0) {
     skip(ctx, 'R2', null, `update due: this pass starts ${starting.slice(0, 5).join(', ')}${starting.length > 5 ? ` and ${starting.length - 5} more` : ''} first`)
     return null

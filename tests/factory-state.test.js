@@ -151,8 +151,8 @@ test("github: closure beats events, labels and claim holders are cross-checked, 
   const r = derive(input("github"));
   assert.equal(issue(r, A, 80).stage, "closed without merge");
   assert.equal(issue(r, A, 80).source, "github");
-  assert.match(issue(r, A, 82).flags.join(), /carries 'In development'/);
-  assert.match(issue(r, A, 84).flags.join(), /lacks 'In development'/);
+  assert.match(issue(r, A, 82).flags.join(), /queued, but the issue has no 'ready' label/);
+  assert.deepEqual(issue(r, A, 84).flags, [], "a claim needs no label (In development is gone, v2 SPEC 3.6)");
   assert.match(issue(r, A, 81).flags.join(), /dev-b/);
   assert.match(issue(r, A, 86).flags.join(), /could not be read/);
   assert.deepEqual([90, 91].map((n) => issue(r, A, n).stage), ["queued", "implementing"]);
@@ -205,9 +205,9 @@ const vars = Object.fromEntries(a.flatMap((x, i) => (a[i - 1] === "-v" ? [x.spli
 fs.appendFileSync(process.env.FS_LOG, JSON.stringify({ marker: sql.split("\\n")[0], vars }) + "\\n");
 const fx = JSON.parse(fs.readFileSync(process.env.FS_FIXTURE, "utf8"));
 const m = sql.split("\\n")[0];
-if (m === "-- fs:meta") console.log(JSON.stringify({ now: "2026-10-10T12:00:00.000Z", events: true, runs: true, workers: process.env.FS_WORKERS === "1" }));
+if (m === "-- fs:meta") console.log(JSON.stringify({ now: "2026-10-10T12:00:00.000Z", events: true, runs: process.env.FS_NORUNS !== "1", workers: process.env.FS_WORKERS === "1" }));
 else if (m === "-- fs:events") console.log(JSON.stringify(fx.events));
-else if (m === "-- fs:runs") console.log(JSON.stringify(fx.runs));
+else if (m === "-- fs:runs" && process.env.FS_NORUNS !== "1") console.log(JSON.stringify(fx.runs));
 else process.exit(9);
 `, { mode: 0o755 });
   issueRead = path.join(tmp, "issue-read");
@@ -287,6 +287,18 @@ test("CLI: a missing factory.workers_status is n/a with the reason and exit 0; a
   assert.match(JSON.parse(s.stdout).workers["n/a"], /does not read it yet/);
 });
 
+test("CLI: nomistakes.runs is optional: missing, it is n/a with the reason, no run places an issue, and the exit is 0", () => {
+  const r = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"], { FS_NORUNS: "1" });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out.runs, { "n/a": "nomistakes.runs does not exist in the database" });
+  assert.equal(r.calls.some((c) => c.marker === "-- fs:runs"), false, "the runs are not queried");
+  assert.deepEqual(out.repos[0].issues.map((i) => [i.issue, i.stage, i.run]), [[20, "implementing", null], [21, "implementing", null], [22, "implementing", null]]);
+  assert.equal(JSON.parse(cli(["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"]).stdout).runs, "read");
+  const text = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off"], { FS_NORUNS: "1" });
+  assert.match(text.stdout, /\nPipeline runs: n\/a: nomistakes\.runs does not exist in the database\n/);
+});
+
 test("CLI: text output is stable and lists stage, holder, run and PR", () => {
   const r = cli(["--at", "2026-10-10T12:00:00Z", "--github", "off"]);
   assert.match(r.stdout, /#21 +ready to merge +10m +dev-a +r21 +#121 /);
@@ -364,4 +376,25 @@ test("lapsed claim (#465): a claim only counts as designing while its lease is l
   assert.equal(stage(8), "in pipeline", "a running run is not a claim");
   const all = r.repos[0].issues.map((i) => i.stage);
   assert.equal(all.filter((s) => s === "designing").length, 3);
+});
+
+test("factory loop v2 (SPEC 3.6, 7.3): the newest transition of the current life places the issue, above the mirror's runs", () => {
+  const r = derive(input("v2"));
+  const st = (n) => issue(r, A, n);
+  assert.deepEqual([st(100).stage, st(100).source, st(100).run, st(100).detail], ["implementing", "event", null, "v2 building, step build, attempt 1"], "a running v1 run no longer sets the stage");
+  assert.equal(st(100).entered_at, "2026-10-10T11:20:00.000Z", "time in stage from the record's since");
+  assert.deepEqual(st(100).v2, { state: "building", step: "build", attempt: 1, life: "t3xq00", seq: 2, why: null });
+  assert.deepEqual([st(101).stage, st(101).stuck.rule], ["parked", "S3"], "the stuck rules stay as they are");
+  assert.equal(st(102).stage, "in pipeline");
+  assert.deepEqual(st(102).flags, ["label: v2 reviewing, but the issue lacks 'factory:reviewing'"]);
+  assert.deepEqual([100, 101, 107, 109].map((n) => st(n).flags), [[], [], [], []], "the factory label of its state is all a v2 issue needs");
+  assert.equal(st(103).stage, "merged", "closed as merged by its why, with its merged event lost");
+  assert.deepEqual([st(104).stage, r.repos[0].recent.map((i) => i.issue)], ["closed without merge", [104]], "a dropped record has ended");
+  assert.deepEqual([st(105).stage, st(105).v2], ["queued", null], "ready after a closed record is a new life before any v2 state");
+  assert.deepEqual([st(106).stage, st(106).holder, st(106).v2], ["designing", "dev-b", null], "a claim-lost close is another device's issue");
+  assert.deepEqual([st(107).stage, st(107).lease], ["queued", { until: "2026-10-10T10:00:00.000Z", lapsed: true }]);
+  assert.deepEqual([st(109).stage, st(109).lease.lapsed], ["designing", true], "a v2 record keeps its state while its claim lapsed: the loop claims it again");
+  assert.deepEqual([st(108).stage, st(108).source], ["in pipeline", "github"], "an open issue with a factory label and no events is listed from the label");
+  assert.equal(st(110), undefined, "an open issue with neither a factory label nor ready is not in the factory");
+  assert.deepEqual(st(100).lease, { until: "2026-10-10T13:50:00.000Z", lapsed: false }, "the lease runs from the newest renewal");
 });
