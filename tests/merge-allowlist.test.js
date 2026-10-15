@@ -41,14 +41,9 @@ for (const rel of [
 // reader, and the deny list covers the issue reads (bare and `*` forms).
 const settingsFiles = ["templates/.claude/settings.json", ".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"];
 
-// dev-system#571 added `attribution` to the template only; the repo's own copies pick it up
-// from the release bump, so each copy matches the template either before or after that sync.
-test("the three synced settings files are byte-identical, bar the template's unsynced attribution", () => {
-  const [template, ...rest] = settingsFiles.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf-8"));
-  const { attribution, ...synced } = JSON.parse(template);
-  assert.deepEqual(attribution, { commit: "" });
-  const unsynced = JSON.stringify(synced, null, 2) + "\n";
-  for (const other of rest) assert.ok(other === template || other === unsynced, "matches the template, with or without attribution");
+test("the three synced settings files are byte-identical", () => {
+  const [first, ...rest] = settingsFiles.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf-8"));
+  for (const other of rest) assert.equal(other, first);
 });
 
 for (const rel of settingsFiles) {
