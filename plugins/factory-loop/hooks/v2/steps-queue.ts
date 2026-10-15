@@ -8,8 +8,10 @@
 //   try), so a head that comes back to the front after an unknown can try again, and a merge
 //   after a body re-render or a re-run of the same head is a try of its own;
 // - mergeResult and updateResult: a finished try, by the guard's FAIL class (9.3) or the update's
-//   refusal (9.2): ok once merged; not-ok with conflict, patch or policy; again (no transition)
-//   for behind, checks and linkage; unknown for read, a CLI failure or a lost try;
+//   refusal (9.2), each a done try whose outcome carries its class (act-queue.ts): ok once
+//   merged; not-ok with conflict, patch or policy; again (no transition) for behind, checks and
+//   linkage; unknown for read, a failed try (a CLI failure) or a lost one;
+// - mayHaveMerged: a merge try that merged, or may have (running or lost), never a refusal;
 // - ciOf: the checks on the head, each failed or cancelled one after its one re-run per round;
 // - pastWait: the bound on a wait on GitHub with nothing of the head's own running (4.4).
 //
@@ -107,15 +109,23 @@ export function conflictNote(r: IssueRecord, base: string): string {
   return `PR #${r.pr ?? '?'} conflicts with ${base}: merge origin/${base} into ${r.branch}, resolve the conflicts and push; never rebase or force-push`
 }
 
-// mergeResult: a merge try that ended (9.3). Merged is ok; a guard FAIL is read by its class; a
-// try with no class (a CLI failure, a refusal GitHub gave no reason for), or one lost to a reload,
-// is unknown. The PR's own merged state is read before this, so a lost try that merged is ok.
+// mayHaveMerged: a queue-merge try that merged (done, merged), or may have (running, or lost to a
+// reload); a refusal (done, not merged) and a failed or timed-out try never did.
+export function mayHaveMerged(e: LedgerEntry): boolean {
+  if (e.status === 'running' || e.status === 'lost') return true
+  return e.status === 'done' && e.outcome?.kind === 'queue' && e.outcome.merged
+}
+
+// mergeResult: a merge try that ended (9.3). Merged is ok; a refusal, done with the guard's class,
+// is read by its class; a try with no class (a CLI failure, a refusal GitHub gave no reason for),
+// or one lost to a reload, is unknown. The PR's own merged state is read before this, so a lost
+// try that merged is ok.
 export function mergeResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: string): TryRead {
   const o = e.outcome?.kind === 'queue' ? e.outcome : null
   if (e.status === 'done' && o?.merged === true) return { kind: 'result', event: { kind: 'ok', data: { pr: r.pr ?? undefined, head: o.head ?? e.head ?? undefined } } }
   const text = linesOf(e)
   const pr = r.pr ?? undefined
-  switch (e.status === 'done' || e.status === 'running' ? null : (o?.failClass ?? null)) {
+  switch (e.status === 'done' ? (o?.failClass ?? null) : null) {
     case 'policy':
       return notOk('policy', { pr, text })
     case 'patch':
@@ -133,12 +143,13 @@ export function mergeResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: st
   }
 }
 
-// updateResult: an update that ended (9.2): done moved the head (or found it up to date), so the
-// head is read afresh; a refusal for a conflict is not-ok; anything else is unknown.
+// updateResult: an update that ended (9.2): a refusal for a conflict (done, class conflict) is
+// not-ok; any other done update moved the head (or found it up to date), so the head is read
+// afresh; anything else is unknown.
 export function updateResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: string): TryRead {
-  if (e.status === 'done') return { kind: 'again', cls: null }
   const o = e.outcome?.kind === 'queue' ? e.outcome : null
-  if (o?.failClass === 'conflict') return notOk('conflict', { pr: r.pr ?? undefined, text: o.lines.join('; ') || 'the update conflicts', notes: [conflictNote(r, base)] })
+  if (e.status === 'done' && o?.failClass === 'conflict') return notOk('conflict', { pr: r.pr ?? undefined, text: o.lines.join('; ') || 'the update conflicts', notes: [conflictNote(r, base)] })
+  if (e.status === 'done') return { kind: 'again', cls: null }
   return { kind: 'result', event: unknownOf(ctx, r, e, 'cli', `the update of PR #${r.pr ?? '?'} ended ${e.status}: ${e.summary ?? 'no reason given'}`) }
 }
 
@@ -146,9 +157,10 @@ export function updateResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: s
 
 // What the head's checks say: every check on the head counts, required or not, and a failed or
 // cancelled one gets one re-run per round (by its run, rerunKey) before it counts as failed.
-// - red: a check failed after its re-run, or with none possible (no run to re-run, or the
-//   re-run itself failed);
-// - retry: the runs whose failed checks get their one re-run now;
+// - red: a check failed after its re-run, or with none possible (no run to re-run);
+// - retry: the runs whose failed checks get their one re-run now, or again: a re-run that failed
+//   as a command, timed out or was lost re-ran nothing, so the check's result after it is a fact
+//   not read, never red (the step tries the re-run again, or is unknown once it is used up);
 // - pending: a check has not finished, or a re-run's result is not read yet (the read is older
 //   than the re-run);
 // - none: no check on the head yet; green: every check passed or was skipped.
@@ -170,8 +182,8 @@ export function ciOf(r: IssueRecord, checks: readonly CheckRun[], reruns: readon
     }
     const key = rerunKey(r, r.round, c.runId)
     const e = reruns.find(x => x.key === key)
-    if (e === undefined) rerun.add(c.runId)
-    else if (e.status === 'running' || (e.status === 'done' && c.completedAt !== null && c.completedAt < e.startedAt)) waiting = true
+    if (e === undefined || e.status === 'failed' || e.status === 'timed-out' || e.status === 'lost') rerun.add(c.runId)
+    else if (e.status === 'running' || (c.completedAt !== null && c.completedAt < e.startedAt)) waiting = true
     else red.push(c)
   }
   if (red.length > 0) return { kind: 'red', failed: red }

@@ -567,7 +567,9 @@ step waiting on GitHub, with nothing of its own running, is unknown when either 
 - a check has been running for longer than `ciRunMs` (30 min). CI's p90 is 3.0 min (C3:276).
 
 This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with nothing to run
-(`totality/T-10`).
+(`totality/T-10`), and a head whose PR did not read: only a GitHub rate limit, which cut the reads
+short, holds it with no clock. A PR the reader refuses for an untrusted author (exit 3) is a fact,
+not a missing read: `not-ok(policy)` (9.3).
 
 The values are settings (`stateTimeoutMs`, `ciStartMs`, `ciRunMs`; appendix A).
 
@@ -1150,7 +1152,9 @@ is a new `Reviewer` implementation and a setting, nothing more.
 - **One re-run.** A check that fails or is cancelled gets one re-run before it counts as failed:
   action `ci-rerun`, `gh run rerun <run id> --failed --repo R`, keyed by round and run id
   (`failures/F6`, `totality/T-09`). A flaky check then passes without a fixer. A new round, after
-  a fixer, gets its own re-run.
+  a fixer, gets its own re-run. A re-run that failed as a command (an API error, a timeout, a
+  reload that lost it) re-ran nothing, so its check is not read as failed: the re-run is tried
+  once more after its backoff, and once used up the step is `unknown`, never `ci-red`.
 - **A conflict.** GitHub does not run `pull_request` workflows for a PR with a merge conflict, and
   `ci.yml` triggers only on `pull_request` for branches (`.github/workflows/ci.yml:24-27`). So a
   `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.
@@ -2424,7 +2428,7 @@ delete wave.
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
-| `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 1 per key |
+| `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 2 per key: a re-run that failed as a command re-ran nothing (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
 | `queue-merge` | free | `callum-flow-merge <p> --patch <id>` | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |

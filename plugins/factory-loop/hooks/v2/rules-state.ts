@@ -29,6 +29,7 @@ import type { EntryItem } from './rules-entry'
 import { PLANS as QUEUE } from './rules-queue'
 import { PLANS as REVIEW } from './rules-review'
 import { PLANS as WORK } from './rules-work'
+import { mayHaveMerged } from './steps-queue'
 import { nextRecord, normalize, rowFor, viaOf } from './table'
 import { FACTORY_LABELS } from './types'
 import type { IssueRecord, Row, StepKind, TableEvent, Trigger, V2Ctx } from './types'
@@ -76,10 +77,11 @@ const sameSha = (a: string | null, b: string | null) => a !== null && b !== null
 
 // --- the owner's and GitHub's events (4.1) ---------------------------------------------------------------
 
-// loopMerged: a queue-merge of this life is done, running or lost, at this head when one is
-// given: the merge is the queue step's own result, never a hand merge (4.1).
+// loopMerged: a queue-merge of this life merged, or may have (running or lost), at this head when
+// one is given: the merge is the queue step's own result, never a hand merge (4.1). A refusal,
+// done but not merged, is not one.
 function loopMerged(ctx: V2Ctx, r: IssueRecord, head: string | null): boolean {
-  return lifeEntries(ctx, r, 'queue-merge').some(e => e.status !== 'failed' && e.status !== 'timed-out' && (head === null || sameSha(e.head, head)))
+  return lifeEntries(ctx, r, 'queue-merge').some(e => mayHaveMerged(e) && (head === null || sameSha(e.head, head)))
 }
 
 // earlyEvents: the events present before the step's result, in 4.1's order.

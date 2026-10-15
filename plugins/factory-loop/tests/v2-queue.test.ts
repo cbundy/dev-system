@@ -12,18 +12,19 @@ import type { ActIo, RunResult } from '../hooks/exec'
 import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
-import { failClassOf, refusalClass } from '../hooks/v2/act-queue'
+import { failClassOf, failLines, refusalClass } from '../hooks/v2/act-queue'
 import { interventionKey, lifeKey, lifeOf, prKey, rerunKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import type { SourceCtx } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
+import { MERGE_TRIES, RERUN_ATTEMPTS, queueOf } from '../hooks/v2/rules-queue'
 import { checksOf, headsOf, pullOf, readPrs } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES } from '../hooks/v2/types'
 import type { GuardClass, IssueRecord, Lease, V2State } from '../hooks/v2/types'
+import { executorBreaker } from '../hooks/foundation'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state as baseState } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
 
@@ -113,7 +114,8 @@ function tried(r: IssueRecord, op: 'update' | 'merge', over: { status?: LedgerEn
   })
 }
 
-const failed = (lines: string[], cls: GuardClass) => ({ status: 'failed' as const, failClass: cls, lines })
+// refusal: the guard's answer to a merge try: done, not merged, with its class and FAIL lines.
+const refusal = (lines: string[], cls: GuardClass) => ({ status: 'done' as const, failClass: cls, lines })
 
 // --- the order (9.1) ------------------------------------------------------------------------------------
 
@@ -186,7 +188,7 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
 
   test('the guard\'s FAIL classes, one outcome each: policy parks with its lines, patch goes back to review, conflict to a fixer, read is unknown', () => {
     const r = rec(12)
-    const run = (cls: GuardClass, lines: string[]) => transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', failed(lines, cls))])), 12)
+    const run = (cls: GuardClass, lines: string[]) => transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', refusal(lines, cls))])), 12)
     expect(run('policy', ['GUARD author FAIL PR #612 was not opened by a trusted author class=policy'])).toMatchObject({
       row: 'T15',
       next: { state: 'parked', resumeTo: 'merge-queue', question: expect.stringContaining('not opened by a trusted author') },
@@ -204,16 +206,16 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
 
   test('behind and checks are no transition: the head is read afresh, and updated or merged again under a key of its own, at most MERGE_TRIES times', () => {
     const r = rec(13)
-    const behindFail = tried(r, 'merge', failed(['GUARD mergeable FAIL behind main class=behind'], 'behind'))
+    const behindFail = tried(r, 'merge', refusal(['GUARD mergeable FAIL behind main class=behind'], 'behind'))
     const behind = plan(withLedger(world([r], [view(r, { mergeable: 'behind' })]), [behindFail]))
     expect(transitionOf(behind, 13)).toBeUndefined()
     expect(queueActions(behind)).toEqual([expect.objectContaining({ kind: 'queue-update', base: MAIN })])
-    const checksFail = tried(r, 'merge', failed(['GUARD checks FAIL ci=pending class=checks'], 'checks'))
+    const checksFail = tried(r, 'merge', refusal(['GUARD checks FAIL ci=pending class=checks'], 'checks'))
     const green = plan(withLedger(world([r]), [checksFail]))
     expect(transitionOf(green, 13)).toBeUndefined()
     expect(queueActions(green).map(a => queueKeyParts(a.key)?.k)).toEqual([2])
     // the guard refusing a head the loop reads as ready, try after try: unknown
-    const tries = Array.from({ length: MERGE_TRIES }, (_, i) => tried(r, 'merge', { ...failed(['GUARD checks FAIL ci=pending class=checks'], 'checks'), k: i + 1, at: NOW - (10 - i) * MIN }))
+    const tries = Array.from({ length: MERGE_TRIES }, (_, i) => tried(r, 'merge', { ...refusal(['GUARD checks FAIL ci=pending class=checks'], 'checks'), k: i + 1, at: NOW - (10 - i) * MIN }))
     expect(transitionOf(plan(withLedger(world([r]), tries)), 13)).toMatchObject({ row: 'U2', event: 'unknown' })
   })
 
@@ -227,7 +229,7 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
       endedAt: NOW - 45 * MIN,
       outcome: { kind: 'step', step: 'build', result: { event: 'ok', reason: null, why: null, head: HEAD, choice: null, data: { title: 'Fix the queue', summary: 'It merges.', evidence: 'npm test' } } },
     })
-    const linkage = tried(r, 'merge', { ...failed(['GUARD linkage FAIL MISMATCH #614 issue=#14 expect=closing class=linkage'], 'linkage'), at: NOW - 6 * MIN })
+    const linkage = tried(r, 'merge', { ...refusal(['GUARD linkage FAIL MISMATCH #614 issue=#14 expect=closing class=linkage'], 'linkage'), at: NOW - 6 * MIN })
     const first = plan(withLedger(world([r]), [build, linkage]))
     expect(transitionOf(first, 14)).toBeUndefined()
     expect(of(first, 14).filter(a => a.kind === 'pr')).toEqual([
@@ -237,16 +239,39 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
     const body = entry(prKey(r, 'body', 1), 'pr', { issue: 14, startedAt: NOW - 5 * MIN, endedAt: NOW - 4 * MIN })
     const second = plan(withLedger(world([r]), [build, linkage, body]))
     expect(queueActions(second).map(a => queueKeyParts(a.key)?.k)).toEqual([2])
-    const again = tried(r, 'merge', { ...failed(['GUARD linkage FAIL MISMATCH #614 issue=#14 expect=closing class=linkage'], 'linkage'), k: 2, at: NOW - 3 * MIN })
+    const again = tried(r, 'merge', { ...refusal(['GUARD linkage FAIL MISMATCH #614 issue=#14 expect=closing class=linkage'], 'linkage'), k: 2, at: NOW - 3 * MIN })
     expect(transitionOf(plan(withLedger(world([r]), [build, linkage, body, again])), 14)).toMatchObject({
       row: 'T15',
       next: { state: 'parked', question: expect.stringContaining('the linkage still fails after the body was written again') },
     })
   })
 
+  test('linkage: a body write that failed is written again after its backoff, then the merge runs again; one that used up its attempts is stalled and told, never a silent hold', () => {
+    const r = rec(16)
+    const linkage = tried(r, 'merge', { ...refusal(['GUARD linkage FAIL MISMATCH #616 issue=#16 expect=closing class=linkage'], 'linkage'), at: NOW - 8 * MIN })
+    const lost = entry(prKey(r, 'body', 1), 'pr', { issue: 16, status: 'failed', summary: 'gh pr edit: HTTP 502', startedAt: NOW - 6 * MIN, endedAt: NOW - 6 * MIN + 1000 })
+    // the next pass, past the backoff: the body is written again, and the merge waits for it
+    const retry = plan(withLedger(world([r]), [linkage, lost]))
+    expect(transitionOf(retry, 16)).toBeUndefined()
+    expect(of(retry, 16).filter(a => a.kind === 'pr')).toEqual([expect.objectContaining({ kind: 'pr', op: 'body', key: prKey(r, 'body', 1) })])
+    expect(queueActions(retry)).toEqual([])
+    // inside the backoff: held, and says so
+    const soon = plan(withLedger(world([r]), [linkage, { ...lost, endedAt: NOW - 30_000 }]))
+    expect(of(soon, 16).filter(a => a.kind === 'pr')).toEqual([])
+    expect(said(soon, 16)).toContain('merge queue: the body of PR #616 runs again after its backoff')
+    // written on the second try: the merge runs again
+    const written = { ...lost, status: 'done' as const, attempts: 2, endedAt: NOW - 2 * MIN }
+    expect(queueActions(plan(withLedger(world([r]), [linkage, written]))).map(a => queueKeyParts(a.key)?.k)).toEqual([2])
+    // used up: an effect that holds its record as stalled (4.5), and the owner hears once
+    const spent = plan(withLedger(world([r]), [linkage, { ...lost, attempts: 3 }]))
+    expect(transitionOf(spent, 16)).toBeUndefined()
+    expect(said(spent, 16)).toContain(`stalled: ${lost.key}: gh pr edit: HTTP 502`)
+    expect(of(spent, 16)).toContainEqual(expect.objectContaining({ kind: 'tell', wake: 'stalled' }))
+  })
+
   test('a try at a head the PR no longer has says nothing of the head it has now', () => {
     const r = rec(15)
-    const old = tried(r, 'merge', failed(['GUARD mergeable FAIL conflicts with main class=conflict'], 'conflict'))
+    const old = tried(r, 'merge', refusal(['GUARD mergeable FAIL conflicts with main class=conflict'], 'conflict'))
     const moved = plan(withLedger(world([r], [view(r, { head: HEAD2 })]), [old]))
     expect(transitionOf(moved, 15)).toBeUndefined()
     expect(queueActions(moved)).toEqual([expect.objectContaining({ kind: 'queue-merge', head: HEAD2 })])
@@ -287,8 +312,26 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     // a check with no run to re-run counts at once; a cancelled one is re-run too
     expect(transitionOf(plan(world([r], [view(r, { checks: [{ ...red, runId: null, link: null }] })])), 21)).toMatchObject({ row: 'T9', via: 'fix:ci' })
     expect(of(plan(world([r], [view(r, { checks: [{ ...red, bucket: 'cancel' }] })])), 21).map(a => a.kind)).toContain('ci-rerun')
-    // a re-run that could not be made leaves the check failed
-    expect(transitionOf(plan(withLedger(world([r], [view(r, { checks: [red] })]), [{ ...rerun, status: 'failed' }])), 21)).toMatchObject({ row: 'T9' })
+  })
+
+  test('a re-run that failed as a command re-ran nothing: never red; it is tried again after its backoff, and once used up the step is unknown', () => {
+    const r = rec(26)
+    const red = check({ name: 'ci', bucket: 'fail', state: 'FAILURE', completedAt: NOW - 5 * MIN })
+    const reds = [view(r, { checks: [red] })]
+    const broken = (over: Partial<LedgerEntry>) => entry(rerunKey(r, 1, '9001'), 'ci-rerun', { issue: 26, status: 'failed', summary: 'gh run rerun: HTTP 502', startedAt: NOW - 4 * MIN, endedAt: NOW - 4 * MIN + 5000, ...over })
+    for (const status of ['failed', 'timed-out', 'lost'] as const) {
+      const p = plan(withLedger(world([r], reds), [broken({ status })]))
+      expect({ status, t: transitionOf(p, 26) }).toEqual({ status, t: undefined })
+      expect(of(p, 26).filter(a => a.kind === 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(r, 1, '9001'), maxAttempts: RERUN_ATTEMPTS })])
+    }
+    // inside its backoff it waits, and says so
+    const soon = plan(withLedger(world([r], reds), [broken({ endedAt: NOW - 30_000 })]))
+    expect(transitionOf(soon, 26)).toBeUndefined()
+    expect(of(soon, 26).filter(a => a.kind === 'ci-rerun')).toEqual([])
+    expect(said(soon, 26)).toContain('merge queue: the re-run of run 9001 runs again after its backoff')
+    // used up: unknown (cli), triggered by the re-run's entry, never ci-red
+    const spent = broken({ attempts: RERUN_ATTEMPTS })
+    expect(transitionOf(plan(withLedger(world([r], reds), [spent])), 26)).toMatchObject({ row: 'U2', event: 'unknown', via: 'unknown:cli', trigger: { kind: 'entry', key: spent.key } })
   })
 
   test('waits on GitHub are bounded (4.4): a check running past ciRunMs, or nothing started ciStartMs after the latest of the head\'s sighting, its coming to the front, its last action and the last check', () => {
@@ -311,10 +354,38 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     // a GitHub backoff holds the wait with no clock, as admission holds a step
     const backoff = plan(world([r], [view(r, { checks: [{ ...pending, startedAt: NOW - 3 * HOUR }] })], { githubBackoffUntil: NOW + 5 * MIN }))
     expect(transitionOf(backoff, 22)).toBeUndefined()
-    // a PR not read is no fact: held, no clock
-    const unread = plan(world([{ ...r, seqAt: NOW - 3 * HOUR }], [], {}, { sources: { store: OK, leases: OK, prs: { ok: false, at: NOW, error: 'PR #622: exit 1' }, interventions: OK, comments: OK } }))
-    expect(transitionOf(unread, 22)).toBeUndefined()
-    expect(said(unread, 22)).toEqual(['merge queue: PR #622 was not read: PR #622: exit 1'])
+  })
+
+  test('a head whose PR did not read waits on GitHub, bounded: unknown past ciStartMs, so the queue moves on; a rate limit that cut the reads holds it with no clock; an untrusted author is policy', () => {
+    const r = rec(27)
+    const next = rec(28, { seqAt: NOW - MIN })
+    const failing = (seqAt: number, over: Partial<V2State['prs']> = {}) =>
+      world([{ ...r, seqAt }, next], [view(next)], {}, {
+        sources: { store: OK, leases: OK, prs: { ok: false, at: NOW, error: 'PR #627: gh pr checks exit 1: HTTP 502' }, interventions: OK, comments: OK },
+        prs: { prs: [view(next)], main: null, unread: [{ pr: 627, issue: 27, why: 'gh pr checks exit 1: HTTP 502', untrusted: false }], ...over },
+      })
+    // within the bound: held, and nothing behind it is touched
+    const fresh = plan(failing(NOW - 5 * MIN))
+    expect(transitionOf(fresh, 27)).toBeUndefined()
+    expect(said(fresh, 27)).toEqual(['merge queue: PR #627 did not read: gh pr checks exit 1: HTTP 502'])
+    expect(queueActions(fresh)).toEqual([])
+    // past it: unknown (github-wait), and the head goes to the back
+    const stuck = plan(failing(NOW - 3 * HOUR))
+    const t = transitionOf(stuck, 27)
+    expect(t).toMatchObject({ row: 'U2', event: 'unknown', via: 'unknown:github-wait' })
+    expect(queueOf([t?.next ?? r, next], []).map(x => x.issue)).toEqual([28, 27])
+    // a PR the source left out for no reason it gives is bounded the same way
+    const missing = world([{ ...r, seqAt: NOW - 3 * HOUR }], [])
+    expect(transitionOf(plan(missing), 27)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    // a rate limit cut the reads before it: held with no clock, however long
+    const cut = plan(failing(NOW - 3 * HOUR, { unread: undefined, cut: 'GitHub rate limit: no PR is read this pass' }))
+    expect(transitionOf(cut, 27)).toBeUndefined()
+    expect(said(cut, 27)).toEqual(['merge queue: PR #627 was not read: GitHub rate limit: no PR is read this pass'])
+    // as does a GitHub backoff on a failed read
+    expect(transitionOf(plan({ ...failing(NOW - 3 * HOUR), githubBackoffUntil: NOW + 5 * MIN }), 27)).toBeUndefined()
+    // an untrusted author is a fact: policy parks it with the reason (T15), at once
+    const untrusted = plan(failing(NOW - 5 * MIN, { unread: [{ pr: 627, issue: 27, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true }] }))
+    expect(transitionOf(untrusted, 27)).toMatchObject({ row: 'T15', next: { state: 'parked', resumeTo: 'merge-queue', question: expect.stringContaining('not opened by a trusted author') } })
   })
 
   test('a patch id not computed holds the head, never guesses: no merge, unknown once the wait is past its bound', () => {
@@ -384,7 +455,7 @@ describe('Q1: the head is updated when it is behind (v2 SPEC 9.2)', () => {
   test('an update that conflicts goes to a fixer; one that failed otherwise is unknown, unless GitHub applied it after all', () => {
     const r = rec(31)
     const behind = [view(r, { mergeable: 'behind' })]
-    const conflict = tried(r, 'update', { status: 'failed', failClass: 'conflict', lines: ['cannot update PR branch due to conflicts'] })
+    const conflict = tried(r, 'update', { failClass: 'conflict', lines: ['cannot update PR branch due to conflicts'] })
     expect(transitionOf(plan(withLedger(world([r], behind), [conflict])), 31)).toMatchObject({ row: 'T9', via: 'fix:conflict', next: { state: 'fixing' } })
     const stuck = tried(r, 'update', { status: 'failed', lines: ['the head did not move'] })
     expect(transitionOf(plan(withLedger(world([r], behind), [stuck])), 31)).toMatchObject({ row: 'U2', via: 'unknown:cli' })
@@ -566,9 +637,9 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(reads(w.argvs)).toBe(3)
   })
 
-  test('queue-update: a conflict fails with its class; a head that never moves fails with none, within 30 s and a bounded number of reads; up to date is done at the head; any other failure is the CLI\'s', async () => {
+  test('queue-update: a conflict is answered (done) with its class; a head that never moves fails with none, within 30 s and a bounded number of reads; up to date is done at the head; any other failure is the CLI\'s', async () => {
     const conflict = actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'X Cannot update PR branch due to conflicts' } : {}))
-    expect(await conflict.run(UPDATE)).toMatchObject({ status: 'failed', outcome: { kind: 'queue', op: 'update', failClass: 'conflict', lines: ['X Cannot update PR branch due to conflicts'] } })
+    expect(await conflict.run(UPDATE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'update', head: null, failClass: 'conflict', lines: ['X Cannot update PR branch due to conflicts'] } })
     const still = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}), 3000)
     expect(await still.run(UPDATE)).toMatchObject({ status: 'failed', outcome: { failClass: null, head: null }, summary: expect.stringContaining('its head did not move from aaaaaaa in 30 s') })
     expect(reads(still.argvs)).toBeLessThanOrEqual(11)
@@ -583,26 +654,67 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(await limited.run(UPDATE)).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
   })
 
-  test('queue-merge: callum-flow-merge with the approved patch; merged is done; a refusal carries the guard\'s FAIL lines and the class that decides', async () => {
+  test('queue-merge: callum-flow-merge with the approved patch; merged is done; a refusal is answered (done, not merged) with the guard\'s FAIL lines and the class that decides', async () => {
     const ok = actWorld(() => ({}))
     expect(await ok.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: true, head: HEAD, failClass: null } })
     expect(ok.argvs).toEqual([['callum-flow-merge', '660', '--patch', PATCH]])
     const lines = ['GUARD checks FAIL ci=pending class=checks', 'GUARD mergeable FAIL behind main class=behind', 'GUARD author FAIL PR #660 was not opened by a trusted author class=policy']
     const refused = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `GUARD test-weakening WARN abc1234 step=x\n${lines.join('\n')}\n` } : {}))
-    expect(await refused.run(MERGE)).toMatchObject({ status: 'failed', outcome: { kind: 'queue', op: 'merge', merged: false, head: HEAD, failClass: 'policy', lines } })
+    expect(await refused.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: false, head: HEAD, failClass: 'policy', lines } })
     // the refusal's lines are read, never the PR: nothing merged
     expect(reads(refused.argvs)).toBe(0)
   })
 
   test('queue-merge: a refusal after the guard passed names its merge state; one with no reason, or a merge cut off, is read back from the PR; exit 2 is a usage error', async () => {
     const behind = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'callum-flow-merge: GitHub refused: merge state BEHIND (branch rule) - see the guard\'s mergeable action' } : {}))
-    expect(await behind.run(MERGE)).toMatchObject({ status: 'failed', outcome: { failClass: 'behind' } })
+    expect(await behind.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: false, failClass: 'behind' } })
     const mergedAnyway = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ state: 'closed', merged: true }) } : {}))
     expect(await mergedAnyway.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true, head: HEAD } })
     const notMerged = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stderr: 'GitHub refused the merge' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
     expect(await notMerged.run(MERGE)).toMatchObject({ status: 'failed', outcome: { failClass: null, merged: false, lines: ['GitHub refused the merge'] } })
     const usage = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 2, stderr: 'callum-flow-merge-guard: unknown option \'--patch\'' } : {}))
     expect(await usage.run(MERGE)).toMatchObject({ status: 'failed', noRetry: true })
+  })
+
+  test('queue-merge: the class is read from the whole FAIL lines, before the outcome caps them: a long line, and a FAIL after the twentieth line, keep their class', async () => {
+    const warns = Array.from({ length: 25 }, (_, i) => `GUARD test-weakening WARN abc${i} step=x`)
+    const long = `GUARD checks FAIL ${Array.from({ length: 80 }, (_, i) => `check-${i}=fail`).join(' ')} class=checks`
+    const late = 'GUARD patch FAIL head x has patch y, not the approved z class=patch'
+    const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `${warns.join('\n')}\n${long}\n${late}\n` } : {}))
+    const out = await w.run(MERGE)
+    expect(out).toMatchObject({ status: 'done', outcome: { merged: false, failClass: 'patch' } })
+    const kept = out.status === 'done' && out.outcome?.kind === 'queue' ? out.outcome.lines : []
+    expect(kept).toHaveLength(2)
+    expect(kept[0]?.length).toBe(500)
+    expect(kept[1]).toBe(late)
+    expect(reads(w.argvs)).toBe(0)
+    expect(failLines(`${warns.join('\n')}\n${long}\n`)).toEqual([long])
+    expect(failClassOf([long])).toBe('checks')
+  })
+
+  test('the breaker: refusals with a class are answers, so three in a row across the factory never open the executor breaker; three failed commands do', async () => {
+    const answers: LedgerEntry[] = []
+    const cases = ['GUARD linkage FAIL MISMATCH class=linkage', 'GUARD linkage FAIL MISMATCH class=linkage', 'GUARD mergeable FAIL behind main class=behind']
+    for (const [i, line] of cases.entries()) {
+      const w = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `${line}\n` } : {}))
+      const out = await w.run(MERGE)
+      expect(out.status).toBe('done')
+      answers.push(entry(`${MERGE.key}/${i}`, 'queue-merge', { issue: 60 + i, status: 'done', startedAt: NOW - (5 - i) * MIN, endedAt: NOW - (4 - i) * MIN, outcome: out.status === 'done' ? out.outcome : undefined }))
+    }
+    const conflict = await actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'X Cannot update PR branch due to conflicts' } : {})).run(UPDATE)
+    expect(conflict.status).toBe('done')
+    const updates = [0, 1, 2].map(i => entry(`${UPDATE.key}/${i}`, 'queue-update', { issue: 70 + i, status: 'done', startedAt: NOW - (5 - i) * MIN, endedAt: NOW - (4 - i) * MIN, outcome: conflict.status === 'done' ? conflict.outcome : undefined }))
+    const s = baseState({ ledger: [...answers, ...updates] })
+    expect(executorBreaker(s, 'queue-merge')).toBeNull()
+    expect(executorBreaker(s, 'queue-update')).toBeNull()
+    // a refusal is never the loop's merge, so GitHub's merge after it is a hand merge
+    const r = rec(17)
+    const refused = tried(r, 'merge', refusal(['GUARD checks FAIL ci=pending class=checks'], 'checks'))
+    const hand = plan(withLedger(world([r], [view(r, { state: 'merged', mergedHead: HEAD })]), [refused]))
+    expect(transitionOf(hand, 17)).toMatchObject({ event: 'pr-merged' })
+    // three unclassified failures are a broken executor
+    const broken = [0, 1, 2].map(i => ({ ...answers[i], status: 'failed' as const }) as LedgerEntry)
+    expect(executorBreaker(baseState({ ledger: broken }), 'queue-merge')).not.toBeNull()
   })
 
   test('the classes: the guard\'s FAIL lines by their class token, the one that decides first; a merge state from a refusal', () => {

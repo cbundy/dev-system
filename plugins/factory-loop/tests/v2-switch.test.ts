@@ -74,7 +74,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
       reviewFixCap: 3,
     })
     // a step key is one attempt, and a CI re-run, an update and a merge are one per key (appendix B)
-    expect(DEFAULT_CONFIG.maxAttempts).toMatchObject({ 'agent-step': 1, 'ci-rerun': 1, 'queue-update': 1, 'queue-merge': 1 })
+    expect(DEFAULT_CONFIG.maxAttempts).toMatchObject({ 'agent-step': 1, 'ci-rerun': 2, 'queue-update': 1, 'queue-merge': 1 })
   })
 
   test('each v2 key loads from its settings file, durations and all; a bad value is named and left out', () => {

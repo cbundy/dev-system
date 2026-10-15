@@ -2,15 +2,18 @@
 // - `queue-update` runs `gh pr update-branch <p> --repo R`: GitHub merges main into the head's
 //   branch, rewriting no history. It applies the update in the background, so the executor reads
 //   the PR's head until it moves (30 s) and records the new head, a head the loop produced (4.1).
-//   A refusal for a conflict fails with class conflict (the step's not-ok); a head that did not
-//   move, or any other failure, fails with no class (unknown). An update GitHub finds needless
-//   (already up to date) is done at the head as read.
+//   A refusal for a conflict is an answer, not a fault: done, with no head and class conflict
+//   (the step's not-ok). A head that did not move, or any other failure, fails with no class
+//   (unknown). An update GitHub finds needless (already up to date) is done at the head as read.
 // - `queue-merge` runs `callum-flow-merge <p> --patch <approved patch>`: the guard inside it checks
 //   only the loop's facts, and the merge matches the head the guard verified. Merged is done. A
-//   refusal fails with the guard's FAIL lines and their class (9.3; of several, the one whose
-//   outcome decides most), or the class a refusal's merge state names. A merge cut off, or refused
-//   with no reason, is read back from the PR, so one that merged anyway is done: the loop's own
-//   merge, never taken for a hand merge.
+//   refusal with a class is the guard's answer, so it is done too, not merged, with the guard's
+//   FAIL lines and their class (9.3; of several, the one whose outcome decides most), or the class
+//   a refusal's merge state names. A merge cut off, or refused with no reason, is read back from
+//   the PR, so one that merged anyway is done: the loop's own merge, never taken for a hand merge;
+//   one that did not fails with no class.
+// Only a failure with no class is `failed`, so the foundation's executor breaker counts broken
+// commands, never the queue's ordinary refusals (9.1: the queue moves on).
 // Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
 import { detailOf, rateLimited } from '../exec'
@@ -71,6 +74,14 @@ export function linesOf(text: string): string[] {
     .map(l => (l.length > LINE_MAX ? `${l.slice(0, LINE_MAX - 3)}...` : l))
 }
 
+// failLines: every FAIL line of the guard in a command's output, whole and uncapped.
+export function failLines(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => /^GUARD \S+ FAIL /.test(l))
+}
+
 // failClassOf: the class of the guard's FAIL lines (9.4, `GUARD <name> FAIL <reason> class=<c>`),
 // the first of CLASS_ORDER among them; null when no line carries a class.
 export function failClassOf(lines: readonly string[]): GuardClass | null {
@@ -124,7 +135,7 @@ const update: Executor = async (ctx, action) => {
   const said = `${r.r.stdout}\n${r.r.stderr}`
   if (r.r.exitCode !== 0) {
     if (!/conflict/i.test(said)) return commandFailure(argv, r.r)
-    return { status: 'failed', outcome: outcome('update', null, 'conflict', linesOf(detailOf(r.r))), summary: clip(`PR #${action.pr}: the update onto ${short(action.base)} conflicts`) }
+    return { status: 'done', outcome: outcome('update', null, 'conflict', linesOf(detailOf(r.r))), summary: clip(`PR #${action.pr}: the update onto ${short(action.base)} conflicts`) }
   }
   if (/up.to.date/i.test(said)) return { status: 'done', outcome: outcome('update', action.head, null, linesOf(said)), summary: clip(`PR #${action.pr} is up to date at ${short(action.head)}`) }
   const moved = await headMoved(ctx, action.pr, action.head)
@@ -145,22 +156,20 @@ const merge: Executor = async (ctx, action) => {
   }
   // exit 2: a usage error (a guard without --patch), never a fact of the PR
   if (r.ok && r.r.exitCode === 2) return { ...commandFailure(argv, r.r), noRetry: true }
-  const lines = r.ok ? linesOf(r.r.stdout).filter(l => /^GUARD \S+ FAIL /.test(l)) : []
-  const cls = failClassOf(lines) ?? (r.ok ? refusalClass(r.r.stderr) : null)
-  if (cls === null) {
-    // cut off, or refused with no reason: whether it merged anyway is the PR's to say
-    const pull = await readPull(ctx, action.pr)
-    if (typeof pull !== 'string' && pull.state === 'merged' && pull.mergedHead === action.head) {
-      return { status: 'done', outcome: outcome('merge', action.head, null, ['merged, as the PR reads back'], true), summary: clip(`PR #${action.pr} merged at ${short(action.head)} (read back)`) }
-    }
-  }
+  // the class is read from every FAIL line, whole, before the outcome caps what it keeps
+  const fails = r.ok ? failLines(r.r.stdout) : []
+  const cls = failClassOf(fails) ?? (r.ok ? refusalClass(r.r.stderr) : null)
   const detail = r.ok ? detailOf(r.r) : r.exec.summary
-  const kept = lines.length > 0 ? lines : linesOf(detail).slice(-3)
-  const exec: Extract<Exec, { status: 'failed' }> = {
-    status: 'failed',
-    outcome: outcome('merge', action.head, cls, kept),
-    summary: clip(`PR #${action.pr} not merged at ${short(action.head)}${cls === null ? '' : ` (${cls})`}: ${kept[0] ?? 'no reason given'}`),
+  const kept = fails.length > 0 ? linesOf(fails.join('\n')) : linesOf(detail).slice(-3)
+  const summary = clip(`PR #${action.pr} not merged at ${short(action.head)}${cls === null ? '' : ` (${cls})`}: ${kept[0] ?? 'no reason given'}`)
+  // a refusal with a class is the guard's answer: done, not merged
+  if (cls !== null) return { status: 'done', outcome: outcome('merge', action.head, cls, kept), summary }
+  // cut off, or refused with no reason: whether it merged anyway is the PR's to say
+  const pull = await readPull(ctx, action.pr)
+  if (typeof pull !== 'string' && pull.state === 'merged' && pull.mergedHead === action.head) {
+    return { status: 'done', outcome: outcome('merge', action.head, null, ['merged, as the PR reads back'], true), summary: clip(`PR #${action.pr} merged at ${short(action.head)} (read back)`) }
   }
+  const exec: Extract<Exec, { status: 'failed' }> = { status: 'failed', outcome: outcome('merge', action.head, null, kept), summary }
   if (r.ok && rateLimited(r.r.stderr)) exec.rateLimited = true
   return exec
 }

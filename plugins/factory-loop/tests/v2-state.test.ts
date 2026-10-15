@@ -482,14 +482,20 @@ describe('the events, in 4.1\'s order', () => {
   test('a hand merge comes before the issue\'s close; a merge the loop made is the queue step\'s own, never a hand merge', () => {
     const merged = world([mq], {}, { prs: pr({ state: 'merged', mergedHead: HEAD }), ...closedRead })
     expect(transitionOf(plan(merged), 100)).toMatchObject({ row: 'E3', event: 'pr-merged', next: { state: 'closed', why: 'merged-by-hand' } })
-    const ours = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD })])
+    const outcome = (merged: boolean) => ({ kind: 'queue' as const, op: 'merge' as const, merged, head: HEAD, failClass: merged ? null : ('checks' as const), lines: [] })
+    const ours = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD, outcome: outcome(true) })])
     expect(transitionOf(plan(ours), 100)).toMatchObject({ row: 'T13', event: 'ok', next: { state: 'closed', why: 'merged' } })
+    // a try the guard refused (done, not merged) is not the loop's merge: GitHub's merge after it was by hand
+    const refused = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD, outcome: outcome(false) })])
+    expect(transitionOf(plan(refused), 100)).toMatchObject({ row: 'E3', event: 'pr-merged' })
     // closed with no merge: the issue's close
     expect(transitionOf(plan(world([mq], {}, closedRead)), 100)).toMatchObject({ row: 'E2', next: { why: 'closed-on-github' } })
   })
 
   test('a drop applies to the life it names; pr-closed is an edge on GitHub\'s closedAt; a re-claim that exits 3 is claim-lost', () => {
-    expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - 3 * HOUR }] }) })), 100)).toBeUndefined()
+    // (its PR not read for a rate limit, so the head's step holds with no clock)
+    const unread = { prs: { prs: [], cut: 'GitHub rate limit: no PR is read this pass' } }
+    expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - 3 * HOUR }] }) }, unread)), 100)).toBeUndefined()
     expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - MIN }] }) })), 100)).toMatchObject({ row: 'E1', next: { why: 'dropped' } })
     const closedAt = '2026-10-13T02:50:00Z'
     expect(transitionOf(plan(world([mq], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toMatchObject({ row: 'E4', next: { state: 'parked', resumeTo: 'merge-queue', prClosedAt: closedAt } })
