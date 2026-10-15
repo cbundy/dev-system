@@ -11,10 +11,15 @@ export type HandoffFields = { run: string | null; head: string | null; commit: s
 // What a check gives: the outcome the text contract would, or every problem at once, so the
 // model fixes them in one more try.
 export type Check<O> = { ok: true; outcome: O } | { ok: false; problems: string[] }
-export type Contract = 'verdict' | 'design' | 'handoff'
+export type V2ContractName = 'design-v2' | 'build' | 'fix' | 'review' | 'triage'
+export type Contract = 'verdict' | 'design' | 'handoff' | V2ContractName
 // What checking an answer needs beside it: the contract, the review's purpose (a verdict), the
-// repo and issue a brief must be on (a design), the branch a fixer was sent to (a handoff).
-export type Job = { contract: Contract; purpose: AdjudicatorPurpose | null; repo: string; issue: number | null; branch: string | null }
+// repo and issue a brief must be on (a design), the branch a fixer was sent to (a handoff), and
+// for a v2 contract whatever else its check needs (data).
+export type Job = { contract: Contract; purpose: AdjudicatorPurpose | null; repo: string; issue: number | null; branch: string | null; data?: Record<string, unknown> }
+// A v2 contract (v2/contracts-*.mjs): its check, and the answer script's summary of what it
+// recorded.
+export type V2Contract = { check: (input: unknown, job: Job) => Check<unknown>; summary: (input: unknown) => string }
 
 export const VERDICTS: readonly ['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP']
 export const BUMPS: readonly Bump[]
@@ -24,6 +29,7 @@ export const FINDING_ID: RegExp
 export const HANDOFF_SHAPES: Readonly<{ run: RegExp; sha: RegExp; branch: RegExp }>
 export const TEXT_MAX: number
 export const CONTRACT_OF: Readonly<Record<AgentType, Contract>>
+export const V2_CONTRACTS: Readonly<Record<V2ContractName, V2Contract>>
 
 export function isBriefUrl(url: string, repo: string, issue?: number | null): boolean
 export function gatedWithoutRun(fields: Pick<HandoffFields, 'run' | 'gated'>): boolean
@@ -34,6 +40,7 @@ export function checkVerdict(input: unknown, purpose: AdjudicatorPurpose): Check
 export function checkDesign(input: unknown, repo: string, issue: number | null): Check<DesignResult>
 export function checkHandoff(input: unknown, namedBranch: string | null): Check<HandoffOutcome>
 export function checkAnswer(job: Job, input: unknown): Check<AnswerOutcome>
+export function answerSummary(contract: Contract, input: unknown): string
 
 export const ANSWER_SUFFIX: '.answer.json'
 export const JOB_SUFFIX: '.job.json'

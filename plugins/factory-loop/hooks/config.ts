@@ -1,7 +1,9 @@
 // Default settings (SPEC 4.2), and the pure loaders for the settings files and the control
 // state. The repo-local .claude/factory-loop.json overrides any setting; the plugin ships no
-// repo-specific values. Types only are imported, so plan.ts and the replay can use this too.
+// repo-specific values. Types only are imported, so plan.ts and the replay can use this too, and
+// v2's vocabulary (v2/types.ts), which holds constants alone.
 import type { ActionKind, AgentType, AnswerChannel, Config, Control, Ms } from './types'
+import { PLANNERS, SHADOWS, V2_ACTION_KINDS } from './v2/types'
 
 const MIN = 60_000
 
@@ -66,6 +68,13 @@ export const DEFAULT_CONFIG: Config = {
     judge: 1,
     task: 1,
     tell: 1,
+    // v2 (appendix B): a step key is one attempt, the table retries steps (v2 SPEC 5.1); a CI
+    // re-run, an update and a merge are one per key; effects keep the default 3, and a slot op
+    // carries its own cap on its action
+    'agent-step': 1,
+    'ci-rerun': 1,
+    'queue-update': 1,
+    'queue-merge': 1,
   },
   retryBackoffMs: 2 * MIN,
   rateCaps: { start: 30, spawn: 120, wake: 20, perIssueKind: 6 },
@@ -80,7 +89,33 @@ export const DEFAULT_CONFIG: Config = {
   // their answer with bin/factory-answer, checked by the same contract. Set it back to `tool`
   // once the probe shows a timer-spawned agent reaching the tool hook.
   answerChannel: 'script',
+  // v2 (v2 SPEC appendix A): v1 plans until cutover; the shadow is off
+  planner: 'v1',
+  shadow: 'off',
+  stateTimeoutMs: {
+    design: 45 * MIN,
+    build: 90 * MIN,
+    review: 30 * MIN,
+    fix: 60 * MIN,
+    triage: 15 * MIN,
+    queued: 6 * 60 * MIN,
+    queueWait: 2 * 60 * MIN,
+    parked: 24 * 60 * MIN,
+  },
+  ciStartMs: 10 * MIN,
+  ciRunMs: 30 * MIN,
+  maxTriages: 2,
+  triageModel: 'opus',
+  reviewer: 'adjudicator',
+  reviewerModel: 'opus',
+  // the plugin ships no repo's commands: a repo sets its own (dev-system: npm run lint, npm test)
+  gateCommands: [],
+  gateTimeoutMs: 10 * MIN,
 }
+
+// The defaults that differ under planner v2, for a key no settings file sets: K is 3 (v2 SPEC
+// section 15; v1's stays 5).
+export const V2_DEFAULTS: Readonly<Pick<Config, 'maxInFlightIssues'>> = { maxInFlightIssues: 3 }
 
 export const ANSWER_CHANNELS: readonly AnswerChannel[] = ['script', 'tool', 'text']
 
@@ -114,10 +149,11 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fast-forward',
   'update-checkout', 'fix-linkage', 'merge', 'close-issue', 'release-parent', 'abandon', 'milestone-later', 'milestone-expect',
   'pr-reopen', 'pr-comment', 'pr-close', 'release-worktree', 'restart-self', 'rollout', 'stop-agent', 'judge', 'task', 'tell', 'title',
+  ...V2_ACTION_KINDS,
 ]
 // maxAttempts may name any action kind or agent type.
 const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
-const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs'] as const
+const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
 const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 
 export type LoadedConfig = { config: Config; problems: string[] }
@@ -126,7 +162,7 @@ export type LoadedConfig = { config: Config; problems: string[] }
 // setting takes a duration string under its key with "Ms" dropped (`passEvery: "60s"`), or a
 // number of milliseconds under either spelling; the agentTimeout and wakeTimeout maps likewise,
 // per entry. An unknown key or a bad value is left out and named in `problems`, for the
-// decision log (owner, 2026-10-13).
+// decision log (owner, 2026-10-13). Under planner v2 a key no layer sets takes V2_DEFAULTS'.
 export function loadConfig(...layers: unknown[]): LoadedConfig {
   const d = DEFAULT_CONFIG
   const out: Record<string, unknown> = {
@@ -134,9 +170,13 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
     skipLabels: [...d.skipLabels],
     agentTimeoutMs: { ...d.agentTimeoutMs },
     wakeTimeoutMs: { ...d.wakeTimeoutMs },
+    stateTimeoutMs: { ...d.stateTimeoutMs },
     maxAttempts: { ...d.maxAttempts },
     rateCaps: { ...d.rateCaps },
+    gateCommands: [...d.gateCommands],
   }
+  // the V2_DEFAULTS keys a layer set to a value it takes
+  const set = new Set<string>()
   const defaults = d as unknown as Record<string, unknown>
   const problems: string[] = []
   const bad = (key: string, value: unknown, want: string) => problems.push(`${key}: ${JSON.stringify(value) ?? String(value)} is not ${want}`)
@@ -192,11 +232,25 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
         if (value === null || typeof value === 'string') out[key] = value
         else bad(raw, value, 'a device name or null')
       } else if (key === 'maxInFlightIssues') {
-        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)) out[key] = value
-        else bad(raw, value, 'a whole number or null')
+        if (value === null || (typeof value === 'number' && Number.isInteger(value) && value >= 0)) {
+          out[key] = value
+          set.add(key)
+        } else bad(raw, value, 'a whole number or null')
       } else if (key === 'skipLabels') {
         if (Array.isArray(value) && value.every(v => typeof v === 'string')) out[key] = [...value]
         else bad(raw, value, 'a list of labels')
+      } else if (key === 'gateCommands') {
+        if (Array.isArray(value) && value.every(v => typeof v === 'string' && v.trim() !== '')) out[key] = [...value]
+        else bad(raw, value, 'a list of commands')
+      } else if (key === 'planner') {
+        if (PLANNERS.some(p => p === value)) out[key] = value
+        else bad(raw, value, PLANNERS.join(' or '))
+      } else if (key === 'shadow') {
+        if (SHADOWS.some(p => p === value)) out[key] = value
+        else bad(raw, value, SHADOWS.join(' or '))
+      } else if (key === 'maxTriages') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
+        else bad(raw, value, 'a whole number')
       } else if (key === 'answerChannel') {
         const channel = ANSWER_CHANNELS.find(c => c === value)
         if (channel !== undefined) out[key] = channel
@@ -216,6 +270,7 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       }
     }
   }
+  if (out.planner === 'v2') for (const [key, value] of Object.entries(V2_DEFAULTS)) if (!set.has(key)) out[key] = value
   return { config: out as unknown as Config, problems }
 }
 
@@ -250,7 +305,9 @@ export function controlFrom(raw: unknown): Control {
     usageOverride:
       override !== null && at(override.untilPct) && at(override.expiresAt) ? { untilPct: override.untilPct, expiresAt: override.expiresAt } : null,
     updateDue: update !== null && at(update.at) ? { reason: typeof update.reason === 'string' ? update.reason : '', at: update.at } : null,
-    resumed: items(o.resumed).flatMap(r => (typeof r.subject === 'string' && at(r.at) ? [{ subject: r.subject, at: r.at }] : [])),
+    resumed: items(o.resumed).flatMap(r =>
+      typeof r.subject === 'string' && at(r.at) ? [typeof r.note === 'string' ? { subject: r.subject, at: r.at, note: r.note } : { subject: r.subject, at: r.at }] : [],
+    ),
     dropped: items(o.dropped).flatMap(r => (isIssue(r.issue) && at(r.at) ? [{ issue: r.issue, at: r.at }] : [])),
     notes: items(o.notes).flatMap(r =>
       typeof r.text === 'string' && at(r.at) && (r.issue === undefined || r.issue === null || isIssue(r.issue))

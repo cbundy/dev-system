@@ -156,17 +156,6 @@ async function placeOf(to, mods, contract) {
   return { dir, name, job }
 }
 
-// summaryOf: a few words on what was recorded, so the agent sees the loop will read what it meant.
-function summaryOf(contract, input) {
-  const o = input !== null && typeof input === 'object' ? input : {}
-  if (contract === 'verdict') {
-    const n = Array.isArray(o.findings) ? o.findings.length : 0
-    return `action ${o.action?.type}, ${n} finding${n === 1 ? '' : 's'}`
-  }
-  if (contract === 'design') return `brief ${o.brief ?? 'none'}, created ${(o.created ?? []).join(',') || 'none'}, pending decision ${o.pendingDecision ? 'yes' : 'no'}`
-  return `run ${o.run ?? 'none'}, head ${o.head ?? 'none'}, gated ${o.gated ? 'yes' : 'no'}`
-}
-
 // writeAtomically: the body to a new temp file beside the target, flushed, then renamed over it,
 // so the loop reads the whole answer or none. The temp file starts with a dot, so it never has
 // an answer file's name; one left by a failure is removed.
@@ -211,7 +200,7 @@ async function main(argv) {
   const body = contract.answerText(place.job, input)
   if (!body.ok) throw new Refused(body.problems)
   await writeAtomically(mods, place.dir, place.name, body.outcome)
-  process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${summaryOf(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
+  process.stdout.write(`${NAME}: recorded your ${place.job.contract} answer (${contract.answerSummary(place.job.contract, input)}). End your turn now: the factory loop reads it when your turn ends.\n`)
   return 0
 }
 

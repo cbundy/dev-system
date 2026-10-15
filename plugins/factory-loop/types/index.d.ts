@@ -13,6 +13,10 @@ export type PassSummary = {
   title: string
   actions: number
   owner: number
+  // the layer that planned, and the v2 shadow when it planned beside v1 (v2 SPEC 2.3); absent:
+  // written before the switch
+  planner?: 'v1' | 'v2'
+  shadow?: 'off' | 'v2'
 }
 
 declare module 'claude-code' {

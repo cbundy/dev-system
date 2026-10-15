@@ -21,6 +21,10 @@
 //          [--decisions <file>] compare a shadow run's decision log (decisions-*.jsonl) with
 //                               the live orchestrator instead of replaying: the shadow's
 //                               logged actions stand in for plan()'s
+//          [--planner v1|v2]    the layer that plans (docs/factory-loop/v2/SPEC.md 2.3): v1's
+//                               plan(), the default, or v2's planV2() over the same states with
+//                               v2's fields empty (no v2 records in a v1 history), for its
+//                               claims and titles
 const { execFileSync } = require("node:child_process");
 const { register } = require("node:module");
 const fs = require("node:fs");
@@ -56,12 +60,13 @@ order by ts;
 `;
 
 function args(argv) {
-  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked" };
+  const out = { stepMinutes: 2, out: path.join(ROOT, "docs", "factory-loop", "replay"), skipLabels: "parked", planner: "v1" };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i].replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase());
     out[key] = argv[i + 1];
   }
   for (const k of ["repo", "device", "from", "to"]) if (!out[k]) throw new Error(`--${k} is required`);
+  if (out.planner !== "v1" && out.planner !== "v2") throw new Error(`--planner is v1 or v2, not ${out.planner}`);
   return out;
 }
 
@@ -189,15 +194,18 @@ function matches(action, d) {
     case "merge":
     case "update-behind":
       // the merge flow: guard, update-behind, the merge adjudicator (SPEC M4), a sequencing
-      // judge (M5) and the merge itself
+      // judge (M5) and the merge itself; v2's queue update and merge (v2 SPEC 9)
       return (
-        ((["guard", "merge", "update-behind"].includes(action.kind) || action.key.startsWith("adjudicate-merge:")) && action.pr === d.pr) ||
+        ((["guard", "merge", "update-behind", "queue-update", "queue-merge"].includes(action.kind) || action.key.startsWith("adjudicate-merge:")) && action.pr === d.pr) ||
         (action.key.startsWith("judge:sequence:") && action.issue === d.issue)
       );
     case "heartbeat":
       return action.kind === "heartbeat";
     case "delegate":
-      return (action.kind === "delegate" || (action.kind === "spawn" && action.agent === "designer")) && action.issue === d.issue;
+      return (
+        (action.kind === "delegate" || (action.kind === "spawn" && action.agent === "designer") || (action.kind === "agent-step" && (action.step === "design" || action.step === "build"))) &&
+        action.issue === d.issue
+      );
     default:
       return false;
   }
@@ -208,12 +216,16 @@ async function main() {
   const from = Date.parse(a.from);
   const to = Date.parse(a.to);
   const step = Number(a.stepMinutes) * MIN;
-  const { plan } = await import(path.join(HOOKS, "plan.ts"));
+  const v1 = (await import(path.join(HOOKS, "plan.ts"))).plan;
+  const { planV2 } = await import(path.join(HOOKS, "v2", "plan.ts"));
+  const { emptyV2State } = await import(path.join(HOOKS, "v2", "observe.ts"));
   const parse = await import(path.join(HOOKS, "parse.ts"));
   const derive = await import(path.join(HOOKS, "derive.ts"));
   const { buildState } = await import(path.join(HOOKS, "state.ts"));
   const { DEFAULT_CONFIG, EMPTY_CONTROL } = await import(path.join(HOOKS, "config.ts"));
-  const config = { ...DEFAULT_CONFIG, skipLabels: a.skipLabels ? a.skipLabels.split(",") : [] };
+  const config = { ...DEFAULT_CONFIG, skipLabels: a.skipLabels ? a.skipLabels.split(",") : [], planner: a.planner };
+  // the planner the flag picks; v2 plans the state with its own fields empty
+  const plan = a.planner === "v2" ? (state, cfg) => planV2({ ...state, v2: state.v2 ?? emptyV2State(state.now) }, cfg) : v1;
 
   const days = Math.ceil((to - from) / 86_400_000) + 3;
   const vars = ["-v", `repo=${a.repo}`, "-v", `at=${iso(to + LOOKBACK)}`, "-v", `days=${days}`, "-v", `device=${a.device}`];
@@ -298,7 +310,7 @@ async function main() {
       usage: state.usage,
       queue,
       runs: state.runs.map((r) => ({ issue: r.issue, run: r.run, state: r.state, head: r.head })),
-      actions: result.actions.filter((x) => x.kind !== "title").map((x) => ({ key: x.key, kind: x.kind, agent: x.agent, rule: x.rule, issue: x.issue, run: x.run ?? null, pr: x.pr ?? null })),
+      actions: result.actions.filter((x) => x.kind !== "title").map((x) => ({ key: x.key, kind: x.kind, agent: x.agent, step: x.step, rule: x.rule, issue: x.issue, run: x.run ?? null, pr: x.pr ?? null })),
       skipped: result.skipped.filter((s) => s.issue !== null),
     });
     process.stderr.write(".");

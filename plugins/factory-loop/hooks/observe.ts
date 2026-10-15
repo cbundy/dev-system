@@ -4,6 +4,8 @@
 // reads well under the rate limit; a failed source keeps its last value with its old time, so
 // plan can see how stale it is. Every command runs from the main checkout with the runtime's
 // environment (rt.env), which in observe mode sends its event writes to the sink (SPEC 11.1).
+// With planner v2 or the v2 shadow, v2/observe.ts reads what v2 adds (v2 SPEC 2.4), and planner
+// v2 reads no runs and infers no slot's issue from its reflog.
 import { EMPTY_CONTROL, controlFrom } from './config'
 import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
@@ -31,6 +33,9 @@ import { ENDED, LIVE, issueFromBranch, listedLive } from './plan'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
+import { emptyV2Cache, observeV2, readOrder } from './v2/observe'
+import type { V2Cache, V2Stored } from './v2/observe'
+import type { HeadSeen } from './v2/types'
 
 const GITHUB_READS_PER_PASS = 12
 const EVENT_DAYS = 3
@@ -101,10 +106,11 @@ export type Cache = {
   runs?: Timed<SeenRun[]>
   // act mode: the last ledger rebuilt from the event log, and how many entries it found
   rebuilt?: Timed<number>
+  v2: V2Cache
 }
 
 export function emptyCache(): Cache {
-  return { github: new Map(), timelines: new Map(), leaseBranches: new Map() }
+  return { github: new Map(), timelines: new Map(), leaseBranches: new Map(), v2: emptyV2Cache() }
 }
 
 // resetFor: nothing read for one repo may stand in for another's (a queue, a milestone, issue
@@ -123,6 +129,7 @@ function resetFor(cache: Cache, repo: string) {
   cache.github.clear()
   cache.timelines.clear()
   cache.leaseBranches.clear()
+  cache.v2 = emptyV2Cache()
   cache.repo = repo
 }
 
@@ -137,6 +144,8 @@ export type Observation = {
   ledgerSource: LedgerSource
   // a command's stderr showed a GitHub rate limit: register sets the backoff (SPEC 10.2)
   rateLimited: boolean
+  // the PR heads v2 has seen (v2 SPEC 2.4), for act mode to keep; null when v2 read nothing
+  v2Heads: Record<string, HeadSeen> | null
 }
 
 // Io: the engine calls observe needs, built by register.ts (the only module that holds $).
@@ -149,7 +158,8 @@ export type Io = {
 }
 
 // observe: one pass's reads. `stored` is act mode's store (undefined in observe mode): it adds
-// the ledger, the GitHub backoff and the queue's known list.
+// the ledger, the GitHub backoff and the queue's known list. `v2Stored` is what the store holds
+// for v2, read when v2 plans or shadows.
 export async function observe(
   io: Io,
   rt: Runtime,
@@ -157,19 +167,22 @@ export async function observe(
   loadedAt: number,
   lastTitle: string | null,
   stored?: Stored,
+  v2Stored?: V2Stored,
 ): Promise<Observation> {
   resetFor(cache, rt.repo)
   const now = await io.now()
   const cfg = rt.config
+  const v2Only = cfg.planner === 'v2'
+  const v2On = v2Only || cfg.shadow === 'v2'
   const commands: string[] = []
   const sources = {} as Record<SourceName, Source>
   let limited = false
   const mark = (name: SourceName, ok: boolean, at: number | null, error?: string) => {
     sources[name] = error === undefined ? { ok, at } : { ok, at, error }
   }
-  const run = async (argv: string[], stdin?: string, timeoutMs = 60_000) => {
+  const run = async (argv: string[], stdin?: string, timeoutMs = 60_000, env = rt.env) => {
     commands.push(argv.join(' ').slice(0, 160))
-    const r = await io.run(argv, { cwd: rt.cwd, env: rt.env, stdin, timeoutMs })
+    const r = await io.run(argv, { cwd: rt.cwd, env, stdin, timeoutMs })
     if (rateLimited(r.stderr)) limited = true
     return r
   }
@@ -208,6 +221,8 @@ export async function observe(
   // never "no runs", and so is a line the parser cannot read.
   if (rt.runSource === 'events') {
     mark('runs', sources.facts.ok, sources.facts.at)
+  } else if (v2Only) {
+    mark('runs', false, null, 'not read: planner v2 has no pipeline runs')
   } else {
     try {
       const r = await run([tool('pipeline-watch.sh'), '--once'], undefined, PIPELINE_TIMEOUT_MS)
@@ -341,14 +356,17 @@ export async function observe(
       .filter(e => e.key.startsWith('task:run-it:') && !(e.status === 'done' && e.outcome?.kind === 'wake' && e.outcome.decision === 'done'))
       .flatMap(e => (e.issue === null ? [] : [e.issue]))
     const held = mine.map(i => i.number)
-    const wanted = [...new Set([...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
+    // v2's records go first, in v2's read order (v2 SPEC 2.4); then the oldest reads
+    const first = v2On ? readOrder(v2Stored?.records ?? []) : []
+    const wanted = [...new Set([...first, ...working, ...held, ...live, ...runIts, ...queue, ...control.only, ...subIssues])]
+    const rank = (n: number) => (first.includes(n) ? first.indexOf(n) - first.length : 0)
     const due = wanted
       .filter(n => {
         const c = cache.github.get(n)
-        if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n)) return false
+        if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n) && !first.includes(n)) return false
         return c === undefined || now - c.at >= cfg.githubEveryMs
       })
-      .sort((a, b) => (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
+      .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
     let githubOk = true
     // a rate limit seen this pass ends the pass's GitHub reads: each would only hit it again
@@ -469,6 +487,7 @@ export async function observe(
 
   // pool: the shadow cannot see the shadowed device's pool, so it is assumed from its load
   let pool: Pool | null = null
+  let poolJson: string | null = null
   if (rt.runSource === 'events') {
     const busy = mine.filter(i => ['implementing', 'in pipeline', 'parked', 'ready to merge'].includes(i.stage)).length
     pool = { free: Math.max(0, rt.poolSize - busy), total: rt.poolSize, slots: [] }
@@ -477,7 +496,8 @@ export async function observe(
     try {
       const r = await run(['treehouse', 'status', '--json'])
       pool = r.exitCode === 0 ? parsePool(r.stdout, rt.poolSize) : null
-      if (pool !== null) pool = await readSlots(pool)
+      if (pool !== null) poolJson = r.stdout
+      if (pool !== null && !v2Only) pool = await readSlots(pool)
       if (pool !== null) cache.pool = { at: now, value: pool }
       mark('pool', pool !== null, cache.pool?.at ?? null, pool === null ? fail(r) : undefined)
     } catch (err) {
@@ -542,7 +562,13 @@ export async function observe(
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
-  return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited }
+  if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
+  const used = commands.filter(c => c.startsWith('callum-flow-issue-read ')).length
+  const githubBudget = backoffUntil !== null || limited ? 0 : Math.max(0, GITHUB_READS_PER_PASS - used)
+  // a shadow's own reads send their events to the sink, as observe mode's do (v2 SPEC 2.3)
+  const v2Run = v2Only ? run : (argv: string[], stdin?: string, t?: number) => run(argv, stdin, t, { ...rt.env, CALLUM_EVENTS_DIR: `${rt.loopDir}/sink-events` })
+  const read = await observeV2({ io, rt, cache: cache.v2, run: v2Run, state, stored: v2Stored, poolJson, github: cache.github, githubBudget })
+  return { state: { ...state, v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 
 // withSession: the higher of usage-check.sh's reading and the session's own, per window.

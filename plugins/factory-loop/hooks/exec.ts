@@ -6,6 +6,7 @@
 // what happened.
 import type { Runtime } from './observe'
 import type { Action, ActionKind, LedgerEntry, Ms, Outcome, State } from './types'
+import type { V2Io } from './v2/types'
 
 export type RunInit = { cwd?: string; stdin?: string; timeoutMs: number }
 export type RunResult = { exitCode: number; stdout: string; stderr: string }
@@ -36,6 +37,9 @@ export type ActIo = {
   usage: () => Promise<{ fiveHour: number | null; sevenDay: number | null }>
   readFile: (path: string) => Promise<string | null>
   writeFile: (path: string, text: string) => Promise<void>
+  // v2's live records and the driver's ping (v2 SPEC 3.3, 4.6), for the transition executor; absent
+  // where the driver keeps no records (a test's fake, a hook outside act mode)
+  v2?: V2Io
 }
 
 export type ExecCtx = {

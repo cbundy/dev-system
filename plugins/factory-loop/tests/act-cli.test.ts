@@ -179,7 +179,7 @@ describe('stepsOf: the argv templates (SPEC 6.1)', () => {
 
   test('refusals: an issue kind with no issue, restart-self outside H4, a kind that runs no command', () => {
     expect(stepsOf(A.claim(null), REPO, IN_DEV)).toBe('claim names no issue')
-    expect(stepsOf(A.restart('O1'), REPO, IN_DEV)).toBe('restart-self comes only from rule H4, not O1')
+    expect(stepsOf(A.restart('O1'), REPO, IN_DEV)).toBe('restart-self comes only from rule H4 or R2, not O1')
     expect(stepsOf(A.title(), REPO, IN_DEV)).toBe('title runs no command')
   })
 
@@ -525,7 +525,7 @@ describe('restart-self', () => {
   test('from any other rule it is refused and never run', async () => {
     const { result, calls } = await exec(A.restart('A1'))
     expect(calls).toHaveLength(0)
-    expect(result).toEqual({ status: 'failed', summary: 'refused: restart-self comes only from rule H4, not A1', noRetry: true })
+    expect(result).toEqual({ status: 'failed', summary: 'refused: restart-self comes only from rule H4 or R2, not A1', noRetry: true })
   })
 
   test('a refused build (exit 1) is failed; a usage error never retried', async () => {

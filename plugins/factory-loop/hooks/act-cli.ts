@@ -140,10 +140,11 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
         { argv: ['treehouse', 'status', '--json'], timeoutMs: CLI_TIMEOUT_MS['release-worktree'] },
       ]
     case 'restart-self':
-      // only once the drain for an update is complete (rule H4, D-15)
-      return action.rule === 'H4'
+      // only once the drain for an update is complete (rule H4, D-15), or v2's restart without a
+      // drain (rule R2, v2 SPEC 14.1)
+      return action.rule === 'H4' || action.rule === 'R2'
         ? [{ argv: ['dev-restart-self'], timeoutMs: CLI_TIMEOUT_MS['restart-self'] }]
-        : `restart-self comes only from rule H4, not ${action.rule}`
+        : `restart-self comes only from rule H4 or R2, not ${action.rule}`
     default:
       return `${action.kind} runs no command`
   }

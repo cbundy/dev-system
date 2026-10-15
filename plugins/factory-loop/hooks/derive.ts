@@ -437,6 +437,9 @@ function outcomeTokens(o: Outcome | undefined): string[] {
         ...(typeof f.pendingDecision === 'boolean' ? [`pending=${yn(f.pendingDecision)}`] : []),
       ]
     }
+    default:
+      // v2's outcomes: v2 rebuilds its records from their transition events, never its ledger
+      return []
   }
 }
 

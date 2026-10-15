@@ -11,7 +11,9 @@
 // the answer script, in text or through their answer tools, and their repair messages; wake
 // turns) and the owner's controls
 // (/factory, the control and answer tools), and keeps the loop's own agent types (agents/) from
-// the model.
+// the model. The setting `planner` picks the layer whose plan acts (v1's plan.ts or v2/plan.ts),
+// and the v2 shadow plans beside v1 and is only logged (v2 SPEC 2.3); v2's records and the PR heads
+// it has seen live in the store beside the ledger (records:<repo>, heads:<repo>).
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
@@ -27,6 +29,7 @@ import {
   logLoop,
   loggedOf,
   passErrorTell,
+  planPass,
   retried,
   sendNotice,
   transition,
@@ -35,12 +38,12 @@ import {
   wakeEnded,
   wakeStarted,
 } from './act'
-import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, ToolAnswered } from './act'
+import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
-import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
+import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import type { ActIo } from './exec'
@@ -48,7 +51,7 @@ import { finish, load, onLoad, save } from './ledger'
 import type { StoreIo } from './ledger'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from './observe'
 import type { Io, Runtime, Stored } from './observe'
-import { issueFromBranch, plan } from './plan'
+import { issueFromBranch } from './plan'
 import {
   EMPTY_RAIL_MEMORY,
   LOCK_CAS_SCRIPT,
@@ -93,6 +96,12 @@ import {
 } from './trace'
 import type { Tracer } from './trace'
 import type { Action, AgentStatus, AgentType, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
+import { logOwnerOp } from './v2/act-events'
+import { headsFromStore, headsKey, headsToStore, recordsFromStore, recordsKey, recordsToStore } from './v2/observe'
+import type { V2Stored } from './v2/observe'
+import { transitionsOf } from './v2/plan'
+import { stateCounts } from './v2/rules-state'
+import type { HeadSeen, IssueRecord, V2Io } from './v2/types'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -154,6 +163,13 @@ let errorTold = false
 // basis: the act lock as it stood when the store was loaded; a write goes back to the store only
 // while the lock names this session or still stands so (mayWrite)
 const live: Live & { loaded: boolean; repo: string; basis: string | null } = { ledger: [], loaded: false, repo: '', basis: null }
+// v2's records and the heads it has seen (v2 SPEC 3.3, 2.4), kept as the ledger is: loaded from the
+// store with it, the records replaced whole only by the transition executor (ActIo.v2), saved one
+// write at a time
+const liveV2: { records: IssueRecord[]; heads: Record<string, HeadSeen> | null; loaded: boolean } = { records: [], heads: null, loaded: false }
+// the repo-local settings as origin's default branch holds them (v2: nothing keeps the main
+// checkout current), read every githubEveryMs
+let originSettings: { at: Ms; checkout: string; raw: Record<string, unknown> | null } | null = null
 // the last pass's runtime and state, for the hooks between passes
 let lastRt: Runtime | null = null
 let lastState: State | null = null
@@ -200,9 +216,11 @@ type AgentRow = { id: string; type: string; status: AgentStatus }
 type Options = { mode?: unknown; repo?: unknown; shadowDevice?: unknown; runSource?: unknown }
 let options: Options = {}
 
-// The settings of SPEC 4.2 the workspace file may also set, over the repo's file (SPEC 4.1).
-// answerTools, which answerChannel replaced (#561), is passed on only to be named as replaced.
-const WORKSPACE_SETTINGS = ['trace', 'answerChannel', 'answerTools'] as const
+// The workspace file's keys that are not settings: the plugin's options and the runtime's own.
+// Every other key there is a setting, over the repo's file (v2 SPEC section 15: the workspace
+// file may set any key and wins); answerTools, which answerChannel replaced (#561), is passed on
+// only to be named as replaced.
+const RUNTIME_KEYS: readonly string[] = ['mode', 'repo', 'shadowDevice', 'runSource', 'checkout', 'poolSize', 'toolsDir', 'binDir']
 
 async function text($: EngineInterface, path: string): Promise<string | null> {
   try {
@@ -249,11 +267,14 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
-  // the repo-local settings, durations and all (SPEC 4.2), then the few the workspace file may set
-  // over them: trace, which /factory trace writes (#552), and answerChannel (#561). What either
-  // gets wrong is logged.
-  const over = Object.fromEntries(WORKSPACE_SETTINGS.filter(key => key in file).map(key => [key, file[key]]))
-  const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
+  // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
+  // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
+  const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
+  let loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
+  if (loaded.config.planner === 'v2') {
+    const origin = await repoSettings($, checkout, loaded.config.githubEveryMs)
+    if (origin !== null) loaded = loadConfig(origin, over)
+  }
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
@@ -281,6 +302,23 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     config,
     configProblems: loaded.problems,
   }
+}
+
+// repoSettings: the repo-local settings file as origin's default branch holds it, read again every
+// githubEveryMs: {} when it has none, null when origin's branch cannot be read (the tree's stand).
+async function repoSettings($: EngineInterface, checkout: string, everyMs: Ms): Promise<Record<string, unknown> | null> {
+  const now = await $.clock.now()
+  if (originSettings !== null && originSettings.checkout === checkout && now - originSettings.at < everyMs) return originSettings.raw
+  let raw: Record<string, unknown> | null = null
+  try {
+    const r = await $.process.run(['git', 'show', 'origin/HEAD:.claude/factory-loop.json'], { cwd: checkout, timeoutMs: 10_000 })
+    if (r.exitCode === 0) raw = json(r.stdout)
+    else if (/does not exist in|exists on disk, but not in/.test(r.stderr)) raw = {}
+  } catch {
+    raw = null
+  }
+  originSettings = { at: now, checkout, raw }
+  return raw
 }
 
 // originOf: the GitHub repo (owner/name) the checkout's origin names, or '' when it names none.
@@ -380,6 +418,24 @@ function actIo($: EngineInterface): ActIo {
     },
     readFile: path => text($, path),
     writeFile: (path, body) => $.fs.write(path, body),
+    v2: v2Io($),
+  }
+}
+
+// v2Io: the live records for the transition executor, and the driver's ping (v2 SPEC 3.3, 4.6). A
+// change is saved before it resolves; with no records loaded (no act lease) nothing changes.
+function v2Io($: EngineInterface): V2Io {
+  return {
+    records: () => liveV2.records,
+    updateRecords: async fn => {
+      const rt = lastRt
+      if (!liveV2.loaded || !live.loaded || rt === null) return { changed: false, saved: false }
+      const next = fn(liveV2.records)
+      if (next === null) return { changed: false, saved: false }
+      liveV2.records = next
+      return { changed: true, saved: await persistV2($, rt) }
+    },
+    ping: why => ping(why),
   }
 }
 
@@ -439,6 +495,8 @@ const keysOf = (repo: string) => ({
   known: `queue-known:${repo}`,
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
+  records: recordsKey(repo),
+  heads: headsKey(repo),
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
@@ -493,6 +551,10 @@ async function loadLedger($: EngineInterface, rt: Runtime, problems: string[]): 
   live.loaded = true
   live.repo = rt.repo
   live.basis = may.basis
+  // v2's records and heads load with the ledger, whose lease keeps them too
+  liveV2.records = recordsFromStore(await storeGet($, keysOf(rt.repo).records)) ?? []
+  liveV2.heads = headsFromStore(await storeGet($, keysOf(rt.repo).heads))
+  liveV2.loaded = true
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
   // running commands died with the old module; wakes another session submitted went with it
@@ -532,6 +594,26 @@ function persist($: EngineInterface, rt: Runtime): Promise<boolean> {
       return true
     } catch (err) {
       saveProblem = message(err).slice(0, 200)
+      return false
+    }
+  })
+  saving = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run.catch(() => false)
+}
+
+// persistV2: write the live records, after any ledger save queued before them, only while the
+// ledger may be written (mayWrite); whether they were written.
+function persistV2($: EngineInterface, rt: Runtime): Promise<boolean> {
+  const run = saving.then(async (): Promise<boolean> => {
+    if (!liveV2.loaded || !(await mayWrite($, rt))) return false
+    try {
+      await $.store.set(keysOf(rt.repo).records, recordsToStore(liveV2.records, await $.clock.now()))
+      return true
+    } catch {
+      // the transition that changed them reports it, and is tried again
       return false
     }
   })
@@ -842,8 +924,16 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // session restarted, so the first-pass heartbeat (rule H1) is left to real lease timing.
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
   const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
-  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored)
+  // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
+  let v2Stored: V2Stored | undefined
+  if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') {
+    v2Stored = act
+      ? { records: liveV2.records, heads: liveV2.heads }
+      : { records: recordsFromStore(await storeGet($, keys.records)), heads: headsFromStore(await storeGet($, keys.heads)) }
+  }
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored, v2Stored)
   let state = observed.state
+  if (act && rt.config.planner === 'v2') await keepV2(observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
   // ledger no longer (the next pass that holds it reloads the store)
@@ -874,6 +964,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
   let report: ActReport | null = null
   let result: PlanResult
+  let shadow: Shadowed | null = null
   // when plan handed the actions over, for the trace
   let queuedAt: Ms | null = null
   const told: string[] = []
@@ -899,6 +990,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       queuedAt = acted.planned.at
       state = acted.state
       result = acted.result
+      shadow = acted.shadow
       report = acted.report
       lastState = state
       if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) restartAsked = state.now
@@ -918,7 +1010,9 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
       begin(tr, 'plan')
-      result = plan(state, config)
+      const planned = planPass(state, config)
+      result = planned.result
+      shadow = planned.shadow
       begin(tr, 'act')
       await setTitle($, result.title)
     }
@@ -977,20 +1071,28 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     mode: rt.mode,
     executed: act,
     device: rt.device,
+    // the layer whose plan this is (v2 SPEC 2.3)
+    planner: rt.config.planner,
     tier: result.tier,
     digest,
     sources: Object.fromEntries(
-      Object.entries(state.sources).map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
+      [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
-    counts: {
-      queued: state.queue.length,
-      dev: issues.filter(i => i.stage === 'designing' || i.stage === 'implementing').length,
-      pipeline: issues.filter(i => i.stage === 'in pipeline' || i.stage === 'parked').length,
-      merge: issues.filter(i => i.stage === 'ready to merge').length,
-      owner: result.owner,
-    },
+    counts:
+      rt.config.planner === 'v2'
+        ? { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner }
+        : {
+            queued: state.queue.length,
+            dev: issues.filter(i => i.stage === 'designing' || i.stage === 'implementing').length,
+            pipeline: issues.filter(i => i.stage === 'in pipeline' || i.stage === 'parked').length,
+            merge: issues.filter(i => i.stage === 'ready to merge').length,
+            owner: result.owner,
+          },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
+    transitions: rt.config.planner === 'v2' ? transitionsOf(result) : undefined,
     skipped: result.skipped.slice(0, 60),
+    // the v2 shadow's plan, logged and never executed
+    shadow: shadow === null ? undefined : 'error' in shadow ? shadow : { actions: shadow.actions.filter(a => a.kind !== 'title').map(summaryOf), skipped: shadow.skipped.slice(0, 60), transitions: transitionsOf(shadow) },
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
@@ -1031,6 +1133,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     title: result.title,
     actions: line.actions.length,
     owner: result.owner,
+    planner: rt.config.planner,
+    shadow: rt.config.shadow,
   })
   const ledger = act ? live.ledger : state.ledger
   if (tr !== null) {
@@ -1099,6 +1203,21 @@ async function endsCut($: EngineInterface, path: string, cap: number): Promise<b
   return r.exitCode === 0 && isCutLine(r.stdout.trimEnd().split('\n').pop() ?? '', cap)
 }
 
+// keepV2: what a pass acting under planner v2 keeps of v2's reads: the records a lost store was
+// rebuilt into, as the ledger's are (v2 SPEC 3.3), and the PR heads first seen (2.4). A shadow keeps
+// nothing.
+async function keepV2(heads: Record<string, HeadSeen> | null, state: State, keep: (key: string, value: unknown) => Promise<void>) {
+  const keys = keysOf(state.repo)
+  if (state.v2 !== undefined && state.v2.recordsFrom === 'events' && liveV2.loaded && liveV2.records.length === 0) {
+    liveV2.records = [...state.v2.records]
+    await keep(keys.records, recordsToStore(liveV2.records, state.now))
+  }
+  if (heads !== null && liveV2.loaded && JSON.stringify(heads) !== JSON.stringify(liveV2.heads ?? {})) {
+    liveV2.heads = heads
+    await keep(keys.heads, headsToStore(heads))
+  }
+}
+
 function summaryOf(a: Action) {
   return {
     key: a.key,
@@ -1107,6 +1226,7 @@ function summaryOf(a: Action) {
     rule: a.rule,
     issue: a.issue,
     agent: a.kind === 'spawn' ? a.agent : undefined,
+    step: a.kind === 'agent-step' ? a.step : undefined,
     run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
     pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
     reason: a.reason,
@@ -1317,8 +1437,8 @@ function answerLine(r: Answered): Record<string, unknown> | null {
 // as a type it offers the model, and the loop hides its own (agent.offer below), so the agent's
 // type is offered while the message is on its way: hidden, the engine refused every repair of
 // testbed run 3 ("is not offered in this session", #559).
-async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType): Promise<string | null> {
-  const subagent = SUBAGENT_OF[type]
+async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType | `${string}:${string}`): Promise<string | null> {
+  const subagent = type.includes(':') ? type : SUBAGENT_OF[type as AgentType]
   resuming.set(subagent, (resuming.get(subagent) ?? 0) + 1)
   try {
     const r = await within($, REPAIR_TIMEOUT_MS, $.session.send({ to: { agentId }, text }), 'repair message')
@@ -1385,7 +1505,8 @@ const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was still b
 // written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
 // writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
 // decision-log line once it has its answer; retry clears the issue's exhausted entries in the
-// live ledger at once.
+// live ledger at once. Under planner v2 the ops take v2's meaning, and in act mode every op that
+// landed is logged as a person intervention (act-events.ts; v2 SPEC 7.2).
 function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
   const work = (claim: Claim) => {
     const run = ops.then(async (): Promise<OpAnswer> => {
@@ -1393,12 +1514,19 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const paths = { loopDir: rt.loopDir, configDir: await configDir($) }
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
-      const from = agentId === undefined ? { last } : { last, agentId }
+      const planner = rt.config.planner
+      const records = lastState?.v2?.records
+      const parked = planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked').map(r => r.issue) : null
+      const from = agentId === undefined ? { last, planner, parked } : { last, agentId, planner, parked }
       const fio = claimedIo(fileIo($), claim)
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      if (reply.ping && claim()) later($, { rt, line: () => ({ control: reply.logged, text: said }), ping: `owner ${reply.logged ?? ''}` })
+      const op = reply.op
+      const landed = op !== null && reply.logged !== null && planner === 'v2' && rt.mode === 'act'
+      const logOp = landed ? (env: ActEnv) => logOwnerOp(env, { text: reply.logged ?? '', name: (reply.logged ?? '').split(' ')[0] ?? '', issues: issuesOf(op), at: now }) : undefined
+      const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
+      if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })
       return { ok: reply.ok, text: said }
     })
     ops = run.catch(() => undefined)
@@ -1592,6 +1720,22 @@ export const register: Register = (on, opts) => {
     next.called ? next(e) : { isOffered: false },
   )
   on('agent.offer', { agent: 'factory-loop:designer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  // v2's agent types (v2/types.ts STEP_AGENT), hidden the same way
+  on('agent.offer', { agent: 'factory-loop:designer-v2' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'factory-loop:builder' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'factory-loop:reviewer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'factory-loop:fixer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'factory-loop:triage' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
     next.called ? next(e) : { isOffered: false },
   )
 }

@@ -1833,7 +1833,7 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(h.passes()).toHaveLength(2)
 
     const status = await factoryOp($, 'status')
-    expect(status.text).toStartWith('Pass 2, 1s ago: act, tier normal, 0 actions, 0 for the owner.')
+    expect(status.text).toStartWith('Pass 2, 1s ago: act, planner v1, tier normal, 0 actions, 0 for the owner.')
     expect(status.text).toContain('Directives: paused #470.')
 
     const tool = await $.tool.call({ tool: 'mcp__factory-loop__control', op: 'new off' })

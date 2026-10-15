@@ -351,7 +351,7 @@ describe('start and finish (SPEC 5.1, 6.1, 7.1)', () => {
     const merged = finish(started([merge], NOW - 3 * MIN, check([], 1, found(CI), NOW - 10 * MIN)), merge.key, extra, NOW)
     expect(merged.filter(e => e.kind === 'guard').map(e => e.key)).toEqual(['guard:550:head50:2'])
     // a fast-forward refused the same way again replaces the one before; one that moved stays
-    const ff = (n: number): Action => ({ kind: 'fast-forward', key: `fast-forward:550:head50:${n}`, class: 'free', rule: 'M2', reason: 'lag', issue: 50, pr: 550, run: 'R50', head: 'head50', branch: 'b' })
+    const ff = (n: number): Action => ({ kind: 'fast-forward', key: `fast-forward:550:head50:${n}`, class: 'free', rule: 'M2', reason: 'lag', issue: 50, pr: 550, run: 'R50', head: 'head50', origin: 'head50', branch: 'b' })
     const forward = (ledger: LedgerEntry[], n: number, result: 'refused' | 'forwarded', at: number) =>
       finish(start(ledger, ff(n), at).ledger, ff(n).key, { status: 'done', outcome: { kind: 'fast-forward', result, line: `${result.toUpperCase()} wt50 is dirty` }, summary: result }, at + 1000)
     let tries: LedgerEntry[] = []

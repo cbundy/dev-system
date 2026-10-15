@@ -7,6 +7,14 @@
 // tests/answer-contract.test.ts (the loop) and tests/factory-loop-answer.test.js at the repo
 // root (the script, run for real) hold both ends to one table of cases (tests/answer-cases.mjs).
 // It uses ES2023 alone, nothing of Node or the engine. Its types are contract.d.mts's.
+//
+// The v2 rule layer's contracts (docs/factory-loop/v2/SPEC.md 5.2, 8.2, 8.7) live in
+// v2/contracts-*.mjs, one module per area; this module imports them, so the answer script and the
+// loop check a v2 answer alike, and a v2 job's contract is one of their names.
+
+import { CONTRACTS as REVIEW } from './v2/contracts-review.mjs'
+import { CONTRACTS as TRIAGE } from './v2/contracts-triage.mjs'
+import { CONTRACTS as WORK } from './v2/contracts-work.mjs'
 
 export const VERDICTS = Object.freeze(['CORRECT', 'WRONG', 'NIT', 'ENV', 'DUP'])
 export const BUMPS = Object.freeze(['patch', 'minor', 'major'])
@@ -32,7 +40,9 @@ export const TEXT_MAX = 4000
 
 // The contract each agent answers with; each answer tool is named after its contract.
 export const CONTRACT_OF = Object.freeze({ adjudicator: 'verdict', designer: 'design', implementer: 'handoff', fixer: 'handoff' })
-const CONTRACTS = Object.freeze(['verdict', 'design', 'handoff'])
+// v2's contracts by name, each { check(input, job), summary(input) }.
+export const V2_CONTRACTS = Object.freeze({ ...WORK, ...REVIEW, ...TRIAGE })
+const CONTRACTS = Object.freeze(['verdict', 'design', 'handoff', ...Object.keys(V2_CONTRACTS)])
 const PURPOSES = Object.freeze(['gate', 'weakening', 'merge'])
 
 // isBriefUrl: a brief comment's URL on an issue of this repo (on that issue, when given).
@@ -338,6 +348,8 @@ export function checkHandoff(input, namedBranch) {
 // checks through this one call: the tool's hook and the loop's re-check with the job the loop
 // knows from its ledger, the script with the job file the loop wrote at the spawn.
 export function checkAnswer(job, input) {
+  const v2 = Object.hasOwn(V2_CONTRACTS, job.contract) ? V2_CONTRACTS[job.contract] : undefined
+  if (v2 !== undefined) return v2.check(input, job)
   if (job.contract === 'verdict') {
     if (job.purpose === null) return { ok: false, problems: ['the factory loop cannot tell which review this is'] }
     return checkVerdict(input, job.purpose)
@@ -378,9 +390,12 @@ export function jobPathOf(answerPath) {
   return ANSWER_NAME.test(name) ? `${answerPath.slice(0, slash + 1)}${name.slice(0, -ANSWER_SUFFIX.length)}${JOB_SUFFIX}` : null
 }
 
-// jobText: the job file's body.
+// jobText: the job file's body. A v2 job's data (what its contract's check needs beside the
+// answer) goes in only when it has some, so a v1 job's body is as it always was.
 export function jobText(job) {
-  return `${JSON.stringify({ v: FILE_VERSION, contract: job.contract, purpose: job.purpose, repo: job.repo, issue: job.issue, branch: job.branch }, null, 2)}\n`
+  const body = { v: FILE_VERSION, contract: job.contract, purpose: job.purpose, repo: job.repo, issue: job.issue, branch: job.branch }
+  if (job.data !== undefined && job.data !== null) body.data = job.data
+  return `${JSON.stringify(body, null, 2)}\n`
 }
 
 // parseJob: a job file's body as a job, or why it is none.
@@ -397,8 +412,23 @@ export function parseJob(body) {
   const purpose = o.purpose === null ? null : (PURPOSES.find(p => p === o.purpose) ?? undefined)
   const issue = o.issue === null || (Number.isInteger(o.issue) && o.issue > 0) ? o.issue : undefined
   const branch = o.branch === null || (typeof o.branch === 'string' && o.branch !== '') ? o.branch : undefined
-  if (contract === undefined || purpose === undefined || typeof o.repo !== 'string' || issue === undefined || branch === undefined) return 'the job file is not in the shape the factory loop writes'
-  return { contract, purpose, repo: o.repo, issue, branch }
+  const data = o.data === undefined || o.data === null ? null : (record(o.data) ?? undefined)
+  if (contract === undefined || purpose === undefined || typeof o.repo !== 'string' || issue === undefined || branch === undefined || data === undefined) return 'the job file is not in the shape the factory loop writes'
+  return data === null ? { contract, purpose, repo: o.repo, issue, branch } : { contract, purpose, repo: o.repo, issue, branch, data }
+}
+
+// answerSummary: a few words on an answer the script recorded, so the agent sees the loop will
+// read what it meant.
+export function answerSummary(contract, input) {
+  const v2 = Object.hasOwn(V2_CONTRACTS, contract) ? V2_CONTRACTS[contract] : undefined
+  if (v2 !== undefined) return v2.summary(input)
+  const o = input !== null && typeof input === 'object' ? input : {}
+  if (contract === 'verdict') {
+    const n = Array.isArray(o.findings) ? o.findings.length : 0
+    return `action ${o.action?.type}, ${n} finding${n === 1 ? '' : 's'}`
+  }
+  if (contract === 'design') return `brief ${o.brief ?? 'none'}, created ${(o.created ?? []).join(',') || 'none'}, pending decision ${o.pendingDecision ? 'yes' : 'no'}`
+  return `run ${o.run ?? 'none'}, head ${o.head ?? 'none'}, gated ${o.gated ? 'yes' : 'no'}`
 }
 
 // answerText: the answer file's body for an input its job's contract takes, or the problems

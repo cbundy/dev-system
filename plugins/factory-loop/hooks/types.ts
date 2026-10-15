@@ -1,6 +1,10 @@
 // The factory loop's data: what observe builds (State), what plan returns (Action), and
 // what the ledger keeps. docs/factory-loop/SPEC.md is the contract; section numbers below
-// point into it. Types only: plan.ts imports nothing else, so it stays pure.
+// point into it. Types only: plan.ts imports nothing else, so it stays pure. The v2 rule layer's
+// vocabulary (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions,
+// outcomes and State fields join the unions here, so the dispatcher, the ledger and the store
+// carry them as they carry v1's.
+import type { AgentStep, Planner, Shadow, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -123,7 +127,8 @@ export type Control = {
   usageOverride: { untilPct: number; expiresAt: Ms } | null
   // an update is due (rule H4, D-15): set by the reconciler or `/factory update`
   updateDue: { reason: string; at: Ms } | null
-  resumed: { subject: string; at: Ms }[]
+  // a v2 resume carries its note for the issue's next step (v2 SPEC 11, P1)
+  resumed: { subject: string; at: Ms; note?: string }[]
   dropped: { issue: number; at: Ms }[]
   notes: { issue: number | null; text: string; at: Ms }[]
 }
@@ -187,6 +192,7 @@ export type Outcome =
       bumpReason: string | null
       fields: Record<string, string | number | boolean | number[] | null>
     }
+  | V2Outcome
 
 export type ActionKind =
   | 'heartbeat'
@@ -218,6 +224,7 @@ export type ActionKind =
   | 'task'
   | 'tell'
   | 'title'
+  | V2ActionKind
 
 export type LedgerStatus = 'running' | 'done' | 'failed' | 'timed-out' | 'lost'
 
@@ -247,6 +254,10 @@ export type LedgerEntry = {
   session?: string
   // the executor's last few words, for the decision log
   summary?: string
+  // a v2 agent step's kind, which the per-issue rate cap counts by (D-24; v2 appendix B)
+  step?: AgentStep
+  // the key's own attempt cap, when its action set one (a v2 slot op's, appendix B)
+  maxAttempts?: number
 }
 
 export type State = {
@@ -268,6 +279,8 @@ export type State = {
   githubBackoffUntil: Ms | null
   // null: not read (the replay harness, a state built outside a pass)
   checkout: Checkout | null
+  // what v2 reads besides (v2 SPEC 2.4): set when the planner is v2 or the v2 shadow is on
+  v2?: V2State
 }
 
 export type Mode = 'off' | 'observe' | 'act'
@@ -327,17 +340,40 @@ export type Config = {
   // or in text alone; text stays every channel's fallback. The workspace file's own
   // `answerChannel` overrides the repo's
   answerChannel: AnswerChannel
+  // --- v2 (v2 SPEC 2.3, appendix A) ---
+  // the layer whose plan the act step executes, and the v2 shadow that plans beside v1 and is
+  // only logged
+  planner: Planner
+  shadow: Shadow
+  // the step timeouts and the waiting states' tell periods (v2 SPEC 4.4)
+  stateTimeoutMs: StateTimeouts
+  // a wait on GitHub: no check started this long after the head was first seen, or one running
+  // this long, is unknown (v2 SPEC 4.4)
+  ciStartMs: Ms
+  ciRunMs: Ms
+  // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
+  maxTriages: number
+  triageModel: string
+  // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
+  reviewer: string
+  reviewerModel: string
+  // the stop gate's commands in the slot, joined with &&, and their one budget (v2 SPEC 10.6)
+  gateCommands: string[]
+  gateTimeoutMs: Ms
 }
 
 export type AnswerChannel = 'script' | 'tool' | 'text'
 
 export type WakeKind = 'judge' | 'task' | 'tell'
 
+// What every action carries. maxAttempts: the key's own cap, for a kind whose ops differ (v2's
+// slot); otherwise config.maxAttempts holds the kind's.
+export type ActionBase = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null; maxAttempts?: number }
+type Base = ActionBase
+
 // What a wake asks: the line's first word is the action kind (judge, task, tell), the
 // second this wake name, then key=value fields with no spaces. Context lines follow it in
 // the visible prompt: a mod cannot attach hidden context to its own prompt (SPEC 8.1).
-type Base = { key: string; class: ActionClass; rule: string; reason: string; issue: number | null }
-
 export type Action =
   | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
   | (Base & { kind: 'spawn'; agent: 'designer'; model: string | null; notes: string[] })
@@ -413,6 +449,7 @@ export type Action =
   | (Base & { kind: 'stop-agent'; agentId: string; entry: string })
   | (Base & { kind: WakeKind; wake: string; fields: Record<string, string>; context: string[] })
   | (Base & { kind: 'title'; text: string })
+  | V2Action
 
 export type Skip = { rule: string; issue: number | null; why: string }
 

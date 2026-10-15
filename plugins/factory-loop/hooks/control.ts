@@ -3,14 +3,18 @@
 // reads it, applyOp returns the new Control (the old one is never changed) with the effects the
 // driver carries out and the one line the command or tool answers, and runOp makes the round
 // trip over ActIo's readFile and writeFile: `<loop dir>/control.json`, which observe reads each
-// pass, and the workspace config file for `mode` and `trace`. Everything but runOp and its two
-// file wrappers is pure, so the tests and the replay harness drive it without the engine.
+// pass, and the workspace config file for `mode`, `trace` and `planner`. Everything but runOp and
+// its two file wrappers is pure, so the tests and the replay harness drive it without the engine.
+// Under planner v2 three ops take v2's meaning (v2 SPEC appendix E): `resume <N...> ["note"]`
+// unparks (P1), `drop` closes the current life's record (E1), and an issue that is not parked is
+// not resumed; the caller says which planner is in force.
 import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
 import { EMPTY_CONTROL, controlFrom } from './config'
 import type { ActIo } from './exec'
 import type { Control, Mode, Ms } from './types'
+import type { Planner } from './v2/types'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -23,7 +27,7 @@ const NOTE_MAX = 2000
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode', 'trace',
+  'update', 'drop', 'note', 'mode', 'trace', 'planner',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -40,13 +44,14 @@ export const USAGE: Record<OpName, string> = {
   serial: 'serial on|off',
   new: 'new on|off',
   override: 'override <pct> <hours>|off',
-  resume: 'resume <N|run id>',
+  resume: 'resume <N...> ["note"]|<run id>',
   retry: 'retry <N>',
   update: 'update [<reason>]|off',
   drop: 'drop <N>',
   note: 'note [<N>] <text>',
   mode: 'mode off|observe|act',
   trace: 'trace on|off',
+  planner: 'planner v1|v2',
 }
 
 // What each op does, one line each, for `/factory help` (SPEC 4.3).
@@ -61,13 +66,14 @@ export const MEANING: Record<OpName, string> = {
   serial: 'on: one issue in flight at a time',
   new: 'off: claim and start nothing new (work in flight goes on)',
   override: 'run past a usage tier up to <pct> for <hours>; off ends it',
-  resume: 'release a hold that waits on you (an issue, or a run by its id)',
+  resume: 'release what waits on you: under planner v2, unpark issues N (a note goes to their next step); under v1, a hold on an issue or a run',
   retry: "clear issue N's used-up actions, so its rules try again",
   update: 'an update is due: drain, then restart the workspace; off cancels it',
-  drop: 'abandon issue N: its agents stop and its claim is released',
+  drop: 'abandon issue N: its agents stop and its claim is released (under planner v2, for this life only; ready brings it back)',
   note: "an instruction for issue N's agents (for every issue without N)",
   mode: 'off runs nothing, observe plans and logs only, act does the work',
   trace: "on: each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log",
+  planner: 'the layer that plans and acts, in the workspace config file; v1 may run the v2 shadow beside it',
 }
 
 // helpText: `/factory help`, in the shape of a command's --help, built from the same table the
@@ -102,12 +108,15 @@ export type Op =
   | { op: 'update'; reason: string | null }
   | { op: 'note'; issue: number | null; text: string }
   | { op: 'mode'; mode: Mode }
+  | { op: 'planner'; planner: Planner }
+  // v2's resume: unpark these issues, with the note for their next step (v2 SPEC 11, P1)
+  | { op: 'unpark'; issues: number[]; note: string | null }
 
 export type Parsed = { ok: true; op: Op } | { ok: false; error: string }
 
 // What the driver carries out besides writing control.json: retryIssue through the ledger's
-// retryIssue (D-38), mode and trace into the workspace config file (runOp does those).
-export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean }
+// retryIssue (D-38), mode, trace and planner into the workspace config file (runOp does those).
+export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean; planner?: Planner }
 
 export type Applied = { control: Control; effects: Effects; changed: boolean; text: string }
 
@@ -135,8 +144,9 @@ function allUsage(): string {
 // parseOp: one op as the owner types it after `/factory`, or the tool's `op`. The op name and
 // its keywords ignore case, numbers take an optional leading #, and a list may use commas. An
 // empty op is `status`. Anything malformed is an error naming the op and its usage, so a bad
-// op never makes a partial change.
-export function parseOp(text: string): Parsed {
+// op never makes a partial change. Under planner v2, `resume` takes issue numbers and an
+// optional note in double quotes, and no run id.
+export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
   const words = text.trim().split(/\s+/).filter(w => w !== '')
   // the model may pass the command as typed
   if (words[0]?.toLowerCase() === '/factory') words.shift()
@@ -186,6 +196,7 @@ export function parseOp(text: string): Parsed {
       return { ok: true, op: { op: 'override', until: { pct: p, hours: h } } }
     }
     case 'resume': {
+      if (planner === 'v2') return parseUnpark(rest)
       // `issue:<N>` and `run:<id>` (formatOp's spelling) are read too
       const arg = args.length === 1 ? (args[0] ?? '') : ''
       const prefixed = /^(issue|run):(.+)$/i.exec(arg)
@@ -210,7 +221,30 @@ export function parseOp(text: string): Parsed {
     }
     case 'mode':
       return word === 'off' || word === 'observe' || word === 'act' ? { ok: true, op: { op: 'mode', mode: word } } : bad(name)
+    case 'planner':
+      return word === 'v1' || word === 'v2' ? { ok: true, op: { op: 'planner', planner: word } } : bad(name)
   }
+}
+
+// parseUnpark: v2's `resume <N...> ["note"]`: one or more issue numbers, then the note, if any,
+// in double quotes.
+function parseUnpark(rest: string): Parsed {
+  const m = /^([^"]*?)\s*(?:"(.*)")?\s*$/s.exec(rest)
+  const items = (m?.[1] ?? '').split(/[\s,]+/).filter(w => w !== '')
+  const issues = items.map(issueOf)
+  if (m === null || items.length === 0 || issues.some(n => n === null)) return bad('resume', 'under planner v2, takes issue numbers and an optional note in double quotes')
+  const note = (m[2] ?? '').trim()
+  if (note.length > NOTE_MAX) return bad('resume', `the note is at most ${NOTE_MAX} characters`)
+  return { ok: true, op: { op: 'unpark', issues: [...new Set(issues as number[])], note: note === '' ? null : note } }
+}
+
+// issuesOf: the issues an op names, which its intervention attaches to (v2 SPEC 7.2); none for a
+// fleet-level op.
+export function issuesOf(op: Op): number[] {
+  if ('issue' in op) return op.issue === null ? [] : [op.issue]
+  if ('issues' in op) return [...op.issues]
+  if (op.op === 'resume' && op.subject.startsWith('issue:')) return [Number(op.subject.slice('issue:'.length))]
+  return []
 }
 
 // formatOp: the op as canonical text, for the decision log; parseOp reads it back, but for a
@@ -243,6 +277,10 @@ export function formatOp(op: Op): string {
       return `note ${op.issue === null ? '' : `${op.issue} `}${op.text}`
     case 'mode':
       return `mode ${op.mode}`
+    case 'planner':
+      return `planner ${op.planner}`
+    case 'unpark':
+      return `resume ${op.issues.join(' ')}${op.note === null ? '' : ` "${op.note}"`}`
   }
 }
 
@@ -254,8 +292,9 @@ const same = (a: readonly number[], b: readonly number[]) => a.length === b.leng
 // applyOp: the op against the control state as it stands. The input is never changed: a change
 // returns a new Control with new arrays for what changed. `changed` says whether control.json
 // needs writing; an op that changes nothing (pausing a paused issue) answers so and writes
-// nothing. `last` is the last pass, for status.
-export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null): Applied {
+// nothing. `last` is the last pass, for status. Under planner v2 a drop applies to the life it
+// closes, so a drop of an issue claimed again since is recorded again (v2 SPEC 4.1).
+export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1'): Applied {
   const keep = (text: string, effects: Effects = {}): Applied => ({ control, effects, changed: false, text })
   const set = (patch: Partial<Control>, text: string): Applied => ({ control: { ...control, ...patch }, effects: {}, changed: true, text })
 
@@ -327,6 +366,12 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
         `Update due (${op.reason}): the loop drains, then restarts this workspace once nothing is in flight.`,
       )
     case 'drop': {
+      if (planner === 'v2') {
+        return set(
+          { dropped: [...control.dropped.filter(d => d.issue !== op.issue), { issue: op.issue, at: now }] },
+          `Dropped #${op.issue}: its record closes and its factory labels go; the issue stays open, and adding ready brings it back.`,
+        )
+      }
       if (control.dropped.some(d => d.issue === op.issue)) return keep(`#${op.issue} is already dropped.`)
       // a pause holds every action, the abandon too (plan's owner filter)
       const paused = control.paused.includes(op.issue) ? ` It is paused: unpause it for the abandon to run.` : ''
@@ -342,6 +387,13 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       )
     case 'mode':
       return keep(`Mode ${op.mode} set in the workspace config file; it applies from the next pass.`, { mode: op.mode })
+    case 'planner':
+      return keep(`Planner ${op.planner} set in the workspace config file; it plans and acts from the next pass.`, { planner: op.planner })
+    case 'unpark': {
+      const resumed = op.issues.map(n => (op.note === null ? { subject: `issue:${n}`, at: now } : { subject: `issue:${n}`, at: now, note: op.note }))
+      const noted = op.note === null ? '' : ', with your note for its next step'
+      return set({ resumed: [...control.resumed, ...resumed] }, `Resumed ${tags(op.issues)}: back to queued, then on from where it parked${noted}.`)
+    }
     case 'trace':
       return keep(
         op.on
@@ -402,7 +454,8 @@ export function statusText(last: PassSummary | null, control: Control, now: Ms):
     lines.push('Factory loop: no pass yet.')
   } else {
     const noun = last.actions === 1 ? 'action' : 'actions'
-    lines.push(`Pass ${last.pass}, ${ago(now - last.at)} ago: ${last.mode}, tier ${last.tier}, ${last.actions} ${noun}, ${last.owner} for the owner.`)
+    const layer = last.planner === undefined ? '' : `, planner ${last.planner}${last.planner === 'v1' && last.shadow === 'v2' ? ' with the v2 shadow' : ''}`
+    lines.push(`Pass ${last.pass}, ${ago(now - last.at)} ago: ${last.mode}${layer}, tier ${last.tier}, ${last.actions} ${noun}, ${last.owner} for the owner.`)
     lines.push(last.title)
   }
   const d = directives(control, now)
@@ -442,10 +495,13 @@ export function controlText(control: Control): string {
   return JSON.stringify(control, null, 2) + '\n'
 }
 
-// withSetting: the workspace config file's text with one key set (`mode`, `trace`) and every
-// other key kept, in place. A file that is not a JSON object is left alone: the owner's settings
-// matter more than the op.
-export function withSetting(text: string | null, key: 'mode' | 'trace', value: Mode | boolean): { ok: true; text: string } | { ok: false; error: string } {
+// The workspace config file's keys an op writes.
+export type SettingKey = 'mode' | 'trace' | 'planner'
+
+// withSetting: the workspace config file's text with one key set (`mode`, `trace`, `planner`) and
+// every other key kept, in place. A file that is not a JSON object is left alone: the owner's
+// settings matter more than the op.
+export function withSetting(text: string | null, key: SettingKey, value: Mode | Planner | boolean): { ok: true; text: string } | { ok: false; error: string } {
   let raw: unknown = {}
   if (text !== null && text.trim() !== '') {
     try {
@@ -473,7 +529,7 @@ export async function writeControl(io: FileIo, loopDir: string, control: Control
   await io.writeFile(controlPath(loopDir), controlText(control))
 }
 
-export async function writeSetting(io: FileIo, configDir: string, key: 'mode' | 'trace', value: Mode | boolean): Promise<string | null> {
+export async function writeSetting(io: FileIo, configDir: string, key: SettingKey, value: Mode | Planner | boolean): Promise<string | null> {
   const path = configFilePath(configDir)
   const next = withSetting(await io.readFile(path), key, value)
   if (!next.ok) return next.error
@@ -485,8 +541,10 @@ export async function writeSetting(io: FileIo, configDir: string, key: 'mode' | 
 
 export type ControlPaths = { loopDir: string; configDir: string }
 
-// The caller: `last` for status; agentId when the tool call came from inside an agent's loop.
-export type OpFrom = { last?: PassSummary | null; agentId?: string }
+// The caller: `last` for status; agentId when the tool call came from inside an agent's loop; the
+// planner in force (v1 when not said), and under planner v2 the issues parked now, as the last
+// pass's records say (null: not known), so a resume of one that is not parked changes nothing.
+export type OpFrom = { last?: PassSummary | null; agentId?: string; planner?: Planner; parked?: readonly number[] | null }
 
 // What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
 // a retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
@@ -517,9 +575,19 @@ const refused = (text: string, op: Op | null = null): OpReply => ({
 // main conversation changes directives: an agent the loop spawned may read the status, never
 // set an op (SPEC 6.1: the loop's agents act on their own issue only).
 export async function runOp(io: FileIo, paths: ControlPaths, input: string, now: Ms, from: OpFrom = {}): Promise<OpReply> {
-  const parsed = parseOp(input)
+  const planner = from.planner ?? 'v1'
+  const parsed = parseOp(input, planner)
   if (!parsed.ok) return refused(parsed.error)
-  const op = parsed.op
+  let op = parsed.op
+  let aside = ''
+  if (op.op === 'unpark' && from.parked !== undefined && from.parked !== null) {
+    const parked = from.parked
+    const not = op.issues.filter(n => !parked.includes(n))
+    const notes = not.map(n => `#${n} is not parked; use /factory note ${n}.`).join(' ')
+    if (not.length === op.issues.length) return refused(`Not changed: ${notes}`, op)
+    op = { ...op, issues: op.issues.filter(n => parked.includes(n)) }
+    aside = not.length === 0 ? '' : ` ${notes}`
+  }
   if (from.agentId !== undefined && op.op !== 'status') return refused('Not changed: only the main conversation sets owner directives.', op)
   let loaded: LoadedControl
   try {
@@ -533,10 +601,10 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
     return { ok: true, text: text + warning, op, control: loaded.control, ping: false, retryIssue: null, mode: null, logged: null }
   }
   if (loaded.error !== null) return refused(`Not changed: ${loaded.error}; fix or remove it.`, op)
-  const applied = applyOp(loaded.control, op, now)
+  const applied = applyOp(loaded.control, op, now, null, planner)
   try {
     if (applied.changed) await writeControl(io, paths.loopDir, applied.control)
-    for (const key of ['mode', 'trace'] as const) {
+    for (const key of ['mode', 'trace', 'planner'] as const) {
       const value = applied.effects[key]
       const error = value === undefined ? null : await writeSetting(io, paths.configDir, key, value)
       if (error !== null) return refused(`Not changed: ${error}.`, op)
@@ -544,10 +612,10 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   } catch (err) {
     return refused(`Not changed: the write failed (${String(err).slice(0, 200)}).`, op)
   }
-  const ping = applied.changed || applied.effects.mode !== undefined || applied.effects.trace !== undefined || applied.effects.retryIssue !== undefined
+  const ping = applied.changed || Object.keys(applied.effects).length > 0
   return {
     ok: true,
-    text: applied.text,
+    text: `${applied.text}${aside}`,
     op,
     control: applied.control,
     ping,
@@ -569,7 +637,7 @@ export async function controlTool(io: FileIo, paths: ControlPaths, input: unknow
 export const FACTORY_COMMAND: CommandSpec = {
   name: 'factory',
   description:
-    'Factory loop owner controls: status, pause, unpause, skip, noskip, priority, only, serial, new, override, resume, retry, update, drop, note, mode, trace',
+    'Factory loop owner controls: status, pause, unpause, skip, noskip, priority, only, serial, new, override, resume, retry, update, drop, note, mode, trace, planner',
   argumentHint: '<op>',
   immediate: true,
 }
@@ -586,11 +654,12 @@ export const CONTROL_TOOL: ToolSpec = {
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +
-    '(run past the usage tiers up to pct for hours); resume <N|run id> (release a hold on an issue or a run); ' +
+    '(run past the usage tiers up to pct for hours); resume <N...> ["note"]|<run id> (release what waits on you: ' +
+    'under planner v2 unpark issues, the note going to their next step; under v1 a hold on an issue or a run); ' +
     "retry <N> (clear N's exhausted actions); update [<reason>]|off (drain, then restart this workspace for an " +
     'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
     "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
-    'trace file, for troubleshooting).',
+    'trace file, for troubleshooting); planner v1|v2 (the layer that plans and acts, only when the owner asks).',
   inputSchema: {
     type: 'object',
     properties: {
