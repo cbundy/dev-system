@@ -10,7 +10,7 @@ description: >-
   the owner). Use whenever a prompt's first line starts with JUDGE, TASK or
   TELL, when the owner gives the factory an instruction, and at the start of
   an orchestrator session the factory loop drives.
-version: 0.38.1
+version: 0.38.2
 ---
 
 # Judge
