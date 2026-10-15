@@ -14,7 +14,8 @@
 //   turn without a valid answer (D-68); a second miss is unknown (bad-answer).
 // - Every read result is a done entry with the outcome { kind: 'step', step, result }, unknown
 //   ones included, so plan reads why; a turn that ended in error, aborted or refused is unknown
-//   (agent-dead, or api when its words name an API error).
+//   (rate-limited for a 429, api for another API error, else agent-dead), unless a valid answer
+//   was recorded before it, which is the result (a writer's ok excepted: the stop gate never ran).
 // act.ts applies what these give to the live ledger, as it does for v1's agents.
 import { V2_CONTRACTS, jobPathOf, jobText, parseAnswer } from '../contract.mjs'
 import type { Job, V2Contract, V2ContractName } from '../contract.mjs'
@@ -63,12 +64,16 @@ export type StepRecord = {
 
 // One step kind (steps-*.ts). spawn: what to start for this attempt, or why it cannot (a loop
 // bug: the attempt fails, never retried). result: what a checked answer means; a writer's reads
-// its head on origin (10.8), and a failed read is unknown, never not-ok.
+// its head on origin (10.8), and a failed read is unknown, never not-ok. says: what a checked
+// answer claims of itself, pure and before any read of origin; a writer's module gives it, so its
+// not-ok ends the step when read while its ok waits for the turn's end (a writer's module without
+// it has every answer wait).
 export type StepModule = {
   step: AgentStep
   contract: V2ContractName
   spawn: (ctx: ExecCtx, action: AgentStepAction, place: ScriptPlace) => Promise<StepSpawn | string>
   result: (ctx: ExecCtx, record: StepRecord, answer: unknown) => Promise<StepResult>
+  says?: (answer: unknown) => 'ok' | 'not-ok'
 }
 
 export const STEP_MODULES: Partial<Record<AgentStep, StepModule>> = { ...WORK, ...REVIEW, ...TRIAGE, ...QUEUE }
@@ -181,6 +186,20 @@ async function resultOf(ctx: ExecCtx, record: StepRecord, answer: unknown, deps:
   }
 }
 
+// waitsForGate: a writer's answer that says ok (or whose module cannot say) is taken only at its
+// turn's normal end, so the stop gate has its say first (10.6, 10.8). It is decided on the answer
+// itself, before the module reads origin, so nothing runs for it until then.
+function waitsForGate(record: StepRecord, answer: unknown, deps: StepDeps): boolean {
+  if (record.role !== 'writer') return false
+  const says = deps.modules[record.step]?.says
+  if (says === undefined) return true
+  try {
+    return says(answer) !== 'not-ok'
+  } catch {
+    return true
+  }
+}
+
 // stepRecorded: the result of a valid answer already recorded for this entry's attempt, as the
 // Exec that finishes it; null when there is none. Before the turn's end (a pass's read, or an
 // agent the list shows gone), a writer's ok is not taken yet: it waits for the stop gate.
@@ -189,9 +208,21 @@ export async function stepRecorded(ctx: ExecCtx, entry: LedgerEntry, atTurnEnd: 
   if (record === null) return null
   const read = await recordedAnswer(ctx, record, deps)
   if (read === null || 'problem' in read) return null
+  if (!atTurnEnd && waitsForGate(record, read.answer, deps)) return null
   const result = await resultOf(ctx, record, read.answer, deps)
-  if (!atTurnEnd && record.role === 'writer' && result.event === 'ok') return null
   return doneWith(record.step, result, `${record.step} #${record.issue}: ${describe(result)}${atTurnEnd ? '' : ' (read before its turn ended)'}`)
+}
+
+// The running agent steps a pass reads the answers of (10.8): each one whose answer is recorded
+// ends when it is read, a writer's ok excepted, which waits for its turn's end. act.ts applies
+// each Exec to the live ledger while its entry still runs as read.
+export async function stepAnswers(entries: readonly LedgerEntry[], ctxOf: (entry: LedgerEntry) => ExecCtx, deps: StepDeps = STEP_DEPS): Promise<{ entry: LedgerEntry; exec: Exec }[]> {
+  const out: { entry: LedgerEntry; exec: Exec }[] = []
+  for (const entry of entries.filter(e => e.kind === 'agent-step' && e.status === 'running')) {
+    const exec = await stepRecorded(ctxOf(entry), entry, false, deps)
+    if (exec !== null) out.push({ entry, exec })
+  }
+  return out
 }
 
 // agentTypeOf: a recorded agent type, plugin:name, or null.
@@ -203,9 +234,21 @@ function agentTypeOf(text: string | undefined): `${string}:${string}` | null {
 // with a problem and a repair message, the one more ask before it (D-68).
 export type StepTaken = { exec: Exec; problem: string | null; repair: string | null; subagentType: `${string}:${string}` }
 
-// API errors, as a turn's last words name them: the step is unknown (api), and a 429 is the usage
-// cause plan reads with the tier (5.1).
-const API_ERROR = /\b(429|529)\b|rate.?limit|overloaded|API Error/i
+// A rate limit (a 429 or the usage window), as a turn's last words name it: unknown
+// (rate-limited), which plan reads as the outside cause `usage`, a free re-run (5.1). Any other API
+// error (a 5xx, overloaded) is unknown (api) and counts as unexplained (5.3).
+const RATE_LIMIT = /\b429\b|rate.?limit|usage limit|too many requests/i
+const API_ERROR = /\b(500|502|503|504|529)\b|overloaded|API Error/i
+const WORDS_MAX = 120
+
+// lostTurn: the unknown of a turn that ended in error, aborted or refused, with an excerpt of its
+// last words, so triage and the decision log see what it said.
+function lostTurn(answer: AgentAnswer): StepResult {
+  const why: UnknownWhy = RATE_LIMIT.test(answer.answer) ? 'rate-limited' : API_ERROR.test(answer.answer) ? 'api' : 'agent-dead'
+  const words = answer.answer.replace(/\s+/g, ' ').trim()
+  const excerpt = words.length > WORDS_MAX ? `${words.slice(0, WORDS_MAX - 3)}...` : words
+  return unknownResult(why, `its turn ended: ${answer.reason}${excerpt === '' ? '' : `: ${excerpt}`}`)
+}
 
 // stepAnswered: an agent step's turn ended. Its final words are saved for the owner and the
 // triage (exec.ts answerPath), then its recorded answer is read.
@@ -221,12 +264,15 @@ export async function stepAnswered(ctx: ExecCtx, entry: LedgerEntry, answer: Age
   }
   const note = (exec: Exec): Exec => (notes.length === 0 ? exec : { ...exec, summary: clip(`${exec.summary}; ${notes.join('; ')}`) })
   if (record === null) return { exec: refused(`${entry.key}: no step record to read its answer by`), problem: null, repair: null, subagentType }
-  if (answer.reason !== 'answer') {
-    const why: UnknownWhy = API_ERROR.test(answer.answer) ? 'api' : 'agent-dead'
-    const result = unknownResult(why, `its turn ended: ${answer.reason}`)
-    return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}`)), problem: null, repair: null, subagentType }
-  }
   const read = await recordedAnswer(ctx, record, deps)
+  if (answer.reason !== 'answer') {
+    // a valid answer recorded before the turn ended in error is the result (10.8), but a writer's
+    // ok, which the stop gate never passed
+    const kept = read !== null && 'answer' in read && !waitsForGate(record, read.answer, deps) ? read : null
+    const result = kept !== null ? await resultOf(ctx, record, kept.answer, deps) : lostTurn(answer)
+    const tail = kept !== null ? ` (recorded before its turn ended: ${answer.reason})` : ''
+    return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}${tail}`)), problem: null, repair: null, subagentType }
+  }
   if (read !== null && 'answer' in read) {
     const result = await resultOf(ctx, record, read.answer, deps)
     return { exec: note(doneWith(step, result, `${step} #${record.issue}: ${describe(result)}`)), problem: null, repair: null, subagentType }

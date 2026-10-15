@@ -177,9 +177,11 @@ v1's rule layer is a few large files: `plan.ts` 2,541 lines, `register.ts` 1,600
   it adds a call into a v2 module, not logic.
 - **The size guard.** `npm run lint` (`scripts/lint.sh`) fails when any file under
   `plugins/factory-loop/hooks/` is over 600 lines. An explicit allowlist names today's six
-  oversized v1 files. It only ever shrinks: a listed file at or under 600 lines also fails the
-  check, so its entry must go, and nothing is ever added. It must be empty after the delete wave
-  (U10). U1 builds the guard.
+  oversized v1 files, each with a cap: its line count when U1 set it. Both only ever shrink: a
+  listed file over its cap fails (a call into a v2 module goes in, and the logic it replaces comes
+  out), a listed file at or under 600 lines also fails the check, so its entry must go, and nothing
+  is ever added. A cap may be lowered when its file shrinks, never raised. It must be empty after
+  the delete wave (U10). U1 builds the guard.
 
 ## 3. The record and the labels
 
@@ -634,8 +636,8 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   (`failures/F2`, `totality/T-12`, `totality/T-13`):
   - `load`: the step's entry started before this module load and ended `lost` (the loop
     restarted, for whatever reason);
-  - `usage`: the step's entry ended rate-limited (a 429), or the tier was `stop-new` or `stop-all`
-    when it ended;
+  - `usage`: the step's entry ended rate-limited (why `rate-limited`: a 429), or the tier was
+    `stop-new` or `stop-all` when it ended;
   - `breaker`: the step-unknown breaker (5.3) was open when the step ended, or this unknown trips
     it;
   - `slot`: the record's lease vanished while the step ran (10.1).
@@ -914,7 +916,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | Cause | When | Issue |
 |---|---|---|
 | `triage` | every triage call (T6, U3) | the issue |
-| `unknown:<why>` | every step that ended unknown and is not a free re-run. `why` is `timeout`, `agent-dead` (the agent failed, was lost or crashed, or its turn ended in error, aborted or refused), `bad-answer` (no valid answer after the repair message), `api` (an API error, a 429 included), `spawn` (the companion refused the spawn), `cli` (a CLI result outside the step's known outcomes, a failed origin read, a failed prepare, a guard FAIL of class `read`) or `github-wait` (a wait past its bound) | the issue |
+| `unknown:<why>` | every step that ended unknown and is not a free re-run. `why` is `timeout`, `agent-dead` (the agent failed, was lost or crashed, or its turn ended in error, aborted or refused), `bad-answer` (no valid answer after the repair message), `api` (an API error other than a rate limit: a 5xx, overloaded), `rate-limited` (a 429 or the usage window; a free re-run, cause `usage`, so it is logged as `unknown:rate-limited` only once its attempt's free re-run is spent), `spawn` (the companion refused the spawn), `cli` (a CLI result outside the step's known outcomes, a failed origin read, a failed prepare, a guard FAIL of class `read`) or `github-wait` (a wait past its bound) | the issue |
 | `free:<cause>` | every free re-run (U1): `load` (after a restart), `usage` (a usage-limit kill), `slot` (a lost slot) or `breaker` | the issue |
 | `park` | every entry to parked: a question to the owner | the issue |
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
@@ -1752,7 +1754,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs` | `callum-flow-sweep` |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2); the main-checkout tripwire (10.7) |
-| R2 | restart | `updateDue` is set, and no `queue-update`, `queue-merge` or release task runs | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1) |
+| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1) |
 | S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
@@ -1876,7 +1878,8 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** the layout of 2.5: one module per area and kind, the planner a thin composer, the
   table as data, no module shared by two parallel units. `npm run lint` fails on any file under
   `plugins/factory-loop/hooks/` over 600 lines, outside an allowlist of today's six v1 files that
-  only shrinks and is empty after the delete wave (U1, U10).
+  only shrinks and is empty after the delete wave (U1, U10); each listed file is capped at its
+  size when listed, so it can only shrink too.
 - **Why:** today's loop grew into a few large files (`plan.ts` alone is 2,541 lines). A check
   keeps v2 from doing the same.
 
@@ -2129,8 +2132,9 @@ and the owner's two structural decisions. They are settled.
 
 ### Restart without a drain
 
-- **Decision:** R2 restarts at once except during a queue action or the release task; a step it
-  cuts re-runs free (U1).
+- **Decision:** R2 restarts at once except during a queue action or the release task, on a pass
+  that admits nothing else (what it would start would only be cut); a running step it cuts
+  re-runs free (U1).
 - **Alternatives:** v1's drain (D-15, D-53); waiting for agent steps.
 - **Why:** steps are re-runnable and pushed work survives; the drain held the factory for hours.
 
@@ -2253,7 +2257,8 @@ own test.
     transition, and rebuilding from any history of them gives back the records. Every payload
     `events.ts` builds validates against its JSON Schema.
 19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines outside the
-    allowlist, and no listed file is at or under it (2.5; `npm run lint`).
+    allowlist, no listed file is over its cap, and no listed file is at or under 600 (2.5;
+    `npm run lint`).
 
 ### 17.2 Replay of 2026-10-14/15
 

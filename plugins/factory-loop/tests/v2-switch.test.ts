@@ -149,6 +149,31 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     expect(r.shadow).toMatchObject({ error: expect.stringContaining('the v2 shadow threw') })
   })
 
+  test('the v2 shadow plans with the settings v2 runs with: K 3 where no file sets it, the file\'s K where one does', () => {
+    const loaded = loadConfig({ shadow: 'v2' })
+    expect(loaded.config.maxInFlightIssues).toBe(5)
+    expect(loaded.v2.maxInFlightIssues).toBe(3)
+    expect(loadConfig({ shadow: 'v2' }, { maxInFlightIssues: 2 }).v2.maxInFlightIssues).toBe(2)
+    expect(loadConfig({ planner: 'v2' }).v2).toEqual(loadConfig({ planner: 'v2' }).config)
+    const r = planPass(s(), loaded.config, loaded.v2)
+    expect(r.result).toEqual(plan(s(), loaded.config))
+    expect(r.shadow).toEqual(planV2(s(), loaded.v2))
+  })
+
+  test('R2 restarts only on a pass that starts nothing else: a release task due in the same pass holds it, and the task\'s run holds it after (v2 SPEC 14.1)', () => {
+    const cfg = config({ planner: 'v2' })
+    const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }
+    expect(planV2(quiet, cfg).actions.at(-1)).toMatchObject({ kind: 'restart-self', rule: 'R2' })
+    const release: State = { ...quiet, milestone: { open: 0, closed: 3, expected: 'patch' } }
+    const both = planV2(release, cfg)
+    expect(both.actions.map(a => a.kind)).toEqual(['task', 'title'])
+    expect(both.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: this pass starts task:release:3:patch first' })
+    const running = entry('task:release:3:patch', 'task', { class: 'drive', wake: 'release', status: 'running', endedAt: null })
+    const after = planV2({ ...release, ledger: [...release.ledger, running] }, cfg)
+    expect(after.actions.some(a => a.kind === 'restart-self')).toBe(false)
+    expect(after.skipped).toContainEqual({ rule: 'R2', issue: null, why: 'update due: waiting on task:release:3:patch' })
+  })
+
   test('the v2 planner with no v2 fields read plans no rule, and says why', () => {
     const r = planV2(state(), config({ planner: 'v2' }))
     expect(r.skipped).toContainEqual({ rule: 'G2', issue: null, why: 'v2 sources not read: the planner and the shadow are v1' })
@@ -294,12 +319,14 @@ describe('the driver (v2 SPEC 2.3)', () => {
 
   test('the v2 shadow plans beside v1 on the same state: logged, never executed (v2 SPEC 2.3)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
-    // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once
+    // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once (its
+    // sweep is not due, so the pass starts nothing else)
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
+    const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work', shadow: 'v2' },
       files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: NOW - MIN } }) },
-      store: { [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [running] } },
+      store: { [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [running, swept] } },
       run: world({ issues: [{ issue: 470, stage: 'implementing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }] }),
     })
     h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'running', description: 'Implement #470' })
@@ -307,7 +334,9 @@ describe('the driver (v2 SPEC 2.3)', () => {
     await clock.advance(6_000)
     const line = h.last()
     expect(line).toMatchObject({ mode: 'act', executed: true, planner: 'v1' })
-    const shadow = line.shadow as { actions: { key: string; kind: string; rule: string }[]; skipped: unknown[]; transitions: unknown[] }
+    const shadow = line.shadow as { k: number; actions: { key: string; kind: string; rule: string }[]; skipped: unknown[]; transitions: unknown[] }
+    // no file sets K: v1 plans with 5, the shadow with v2's 3
+    expect(shadow.k).toBe(3)
     expect(shadow.actions).toContainEqual(expect.objectContaining({ key: `restart:${NOW - MIN}`, kind: 'restart-self', rule: 'R2' }))
     expect(shadow.transitions).toEqual([])
     expect((line.actions as { key: string }[]).some(a => a.key.startsWith('restart:'))).toBe(false)
@@ -333,6 +362,26 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(comments.map(c => c.env.CALLUM_EVENTS_DIR)).toEqual([`${LOOP_DIR}/sink-events`])
     // the pass's own reads are real ones
     expect(h.commands().find(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80')?.env.CALLUM_EVENTS_DIR).toBeUndefined()
+  })
+
+  test('v2\'s own GitHub reads have budgets of their own: a pass whose issue reads took all 12 still reads an unparked record\'s comments (v2 SPEC 2.4)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const parked = record({ issue: 80, state: 'parked', step: null, since: NOW - HOUR, question: 'which API?' })
+    const issue80 = { issue: { number: 80, title: 'x', state: 'open', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }
+    const reads = (argv: string[]) => (argv.join(' ') === 'callum-flow-issue-read --json 80' ? { stdout: JSON.stringify(issue80) } : undefined)
+    const queue = Array.from({ length: 14 }, (_, i) => 100 + i)
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: recordsToStore([parked], NOW - MIN) },
+      run: world({ queue, run: reads }),
+    })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const issueReads = h.commands().filter(c => c.argv[0] === 'callum-flow-issue-read' && !c.argv.includes('--list') && !c.argv.includes('--comments'))
+    expect(issueReads).toHaveLength(12)
+    // the parked record's issue went first, and its comments still came after the 12
+    expect(issueReads[0]?.argv).toEqual(['callum-flow-issue-read', '--json', '80'])
+    expect(h.commands().filter(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80 --comments')).toHaveLength(1)
   })
 
   test('act mode with planner v2 reads its records from the store, counts them, and keeps the store\'s records as they are', async ($, on) => {
@@ -364,23 +413,65 @@ describe('the driver (v2 SPEC 2.3)', () => {
     expect(h.last().config).toBeUndefined()
   })
 
-  // under planner v2 the repo's settings are origin's default branch's; the tree's stand only when
-  // origin's cannot be read
-  const showCases: [string, { exitCode?: number; stdout?: string; stderr?: string }, string][] = [
-    ['origin has the file', { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'from-origin' }) }, 'from-origin'],
-    ['origin has none', { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/HEAD'" }, 'ready'],
-    ['origin cannot be read', { exitCode: 128, stderr: "fatal: invalid object name 'origin/HEAD'." }, 'from-tree'],
+  // under planner v2 the repo's settings are origin's default branch's (origin/HEAD names it, else
+  // main); the tree's stand only when origin's cannot be read, and the decision log says so
+  const NOT_READ = "settings: origin's default branch not read (origin/main: fatal: invalid object name 'origin/main'.); the main checkout's file is used"
+  const showCases: [string, { exitCode?: number; stdout?: string; stderr?: string }, string, string[] | undefined][] = [
+    ['origin has the file', { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'from-origin' }) }, 'from-origin', undefined],
+    ['origin has none', { exitCode: 128, stderr: "fatal: path '.claude/factory-loop.json' does not exist in 'origin/main'" }, 'ready', undefined],
+    ['origin cannot be read', { exitCode: 128, stderr: "fatal: invalid object name 'origin/main'." }, 'from-tree', [NOT_READ]],
   ]
-  for (const [name, show, label] of showCases) {
+  for (const [name, show, label, problems] of showCases) {
     test(`under planner v2 the repo's settings are origin's default branch's: ${name}`, async ($, on) => {
       const clock = mock.clock(on, { now: NOW })
-      const run = world({ run: argv => (argv.join(' ') === 'git show origin/HEAD:.claude/factory-loop.json' ? show : undefined) })
+      const run = world({ run: argv => (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json' ? show : undefined) })
       const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) }, run })
       await $.session.start(START)
       await clock.advance(6_000)
       expect(h.seen.some(s => s.argv.join(' ') === `callum-flow-issue-read --json --list --label ${label}`)).toBe(true)
+      expect(h.last().config).toEqual(problems)
     })
   }
+
+  test('under planner v2 with no origin/HEAD, origin\'s default branch is taken to be main', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const run = world({
+      run: argv => {
+        const line = argv.join(' ')
+        if (line === 'git symbolic-ref --quiet --short refs/remotes/origin/HEAD') return { exitCode: 1, stderr: 'fatal: ref refs/remotes/origin/HEAD is not a symbolic ref' }
+        return line === 'git show origin/main:.claude/factory-loop.json' ? { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'from-main' }) } : undefined
+      },
+    })
+    const h = host(on, { config: { repo: REPO, checkout: '/work' }, files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2' }) }, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(h.seen.some(s => s.argv.join(' ') === 'callum-flow-issue-read --json --list --label from-main')).toBe(true)
+  })
+
+  test('act mode with planner v2: a records store that cannot be read is no records known, not none; nothing that releases or starts is planned, and nothing is written over it', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const stored = recordsToStore([record()], NOW - MIN)
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: stored },
+      run: world({ queue: [7], issues: [{ issue: 470, stage: 'implementing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }] }),
+    })
+    let down = true
+    h.failGet = key => down && key === `records:${REPO}`
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const line = h.last()
+    expect(line).toMatchObject({ mode: 'act', executed: true, planner: 'v2' })
+    const why = sources(line)['v2.store'] ?? ''
+    expect(why).toStartWith(`failed: records:${REPO} could not be read: `)
+    expect(line.skipped).toContainEqual({ rule: 'G2', issue: null, why: `v2 records not read: ${why.slice('failed: '.length)}; nothing is released, claimed or started` })
+    expect(h.store.get(`records:${REPO}`)).toEqual(stored)
+    // the store back: the next pass loads the records
+    down = false
+    await clock.advance(61_000)
+    expect(sources(h.last())['v2.store']).toBe('ok')
+    expect(h.last().counts).toMatchObject({ flight: 1 })
+  })
 
   for (const planner of ['v2', 'v1'] as const) {
     test(`an owner op in act mode under planner ${planner} ${planner === 'v2' ? 'is logged as an intervention (act-events.ts, U4)' : 'logs no intervention'}`, async ($, on) => {
@@ -416,8 +507,9 @@ describe('the shadow in the act step (act.ts actPass)', () => {
   test('an acting pass with the shadow on runs v1\'s actions alone, and hands the shadow\'s plan back for the log', async () => {
     // an update is due while v1's implementer runs: v1 drains, the v2 shadow's R2 would restart now
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
+    const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const s: State = {
-      ...withLedger(state({ issues: [mine(470, 'implementing')], control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), [running]),
+      ...withLedger(state({ issues: [mine(470, 'implementing')], control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), [running, swept]),
       agents: [{ id: 'agent-1', type: 'callum-flow:implementer', status: 'running' }],
       v2: emptyV2State(NOW),
     }

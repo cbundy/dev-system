@@ -536,7 +536,7 @@ describe('config (SPEC 4.2)', () => {
 
   test('answerChannel: script by default (the workaround, #561); script, tool or text in either file, the later layer winning; a bad value is named and left out', () => {
     expect(DEFAULT_CONFIG.answerChannel).toBe('script')
-    for (const channel of ['script', 'tool', 'text'] as const) expect(loadConfig({ answerChannel: channel })).toEqual({ config: { ...DEFAULT_CONFIG, answerChannel: channel }, problems: [] })
+    for (const channel of ['script', 'tool', 'text'] as const) expect(loadConfig({ answerChannel: channel })).toMatchObject({ config: { ...DEFAULT_CONFIG, answerChannel: channel }, problems: [] })
     expect(loadConfig({ answerChannel: 'tool' }, { answerChannel: 'text' }).config.answerChannel).toBe('text')
     expect(loadConfig({ answerChannel: 'tools' })).toMatchObject({ config: { answerChannel: 'script' }, problems: ['answerChannel: "tools" is not script, tool or text'] })
     expect(loadConfig({ answerChannel: true }).problems).toEqual(['answerChannel: true is not script, tool or text'])
@@ -544,7 +544,7 @@ describe('config (SPEC 4.2)', () => {
 
   test("answerTools, #560's switch, is replaced by answerChannel: named as replaced, and read as nothing (#561)", () => {
     for (const value of [true, false, 'on']) {
-      expect(loadConfig({ answerTools: value })).toEqual({ config: DEFAULT_CONFIG, problems: ['answerTools: replaced by answerChannel (script, tool or text), and ignored'] })
+      expect(loadConfig({ answerTools: value })).toMatchObject({ config: DEFAULT_CONFIG, problems: ['answerTools: replaced by answerChannel (script, tool or text), and ignored'] })
     }
     expect('answerTools' in DEFAULT_CONFIG).toBe(false)
   })

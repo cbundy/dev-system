@@ -222,8 +222,9 @@ async function main() {
   const parse = await import(path.join(HOOKS, "parse.ts"));
   const derive = await import(path.join(HOOKS, "derive.ts"));
   const { buildState } = await import(path.join(HOOKS, "state.ts"));
-  const { DEFAULT_CONFIG, EMPTY_CONTROL } = await import(path.join(HOOKS, "config.ts"));
-  const config = { ...DEFAULT_CONFIG, skipLabels: a.skipLabels ? a.skipLabels.split(",") : [], planner: a.planner };
+  const { EMPTY_CONTROL, loadConfig } = await import(path.join(HOOKS, "config.ts"));
+  // the settings the planner runs with, its own defaults included (v2's K is 3, v1's 5)
+  const config = loadConfig({ planner: a.planner, skipLabels: a.skipLabels ? a.skipLabels.split(",") : [] }).config;
   // the planner the flag picks; v2 plans the state with its own fields empty
   const plan = a.planner === "v2" ? (state, cfg) => planV2({ ...state, v2: state.v2 ?? emptyV2State(state.now) }, cfg) : v1;
 

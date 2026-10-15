@@ -68,6 +68,9 @@ export type Runtime = {
   // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
   pluginRoot: string
   config: Config
+  // the settings v2 runs with (config.ts LoadedConfig.v2), which the v2 shadow plans with; absent:
+  // config's
+  v2Config?: Config
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
 }
@@ -563,11 +566,7 @@ export async function observe(
     checkout,
   })
   if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
-  const used = commands.filter(c => c.startsWith('callum-flow-issue-read ')).length
-  const githubBudget = backoffUntil !== null || limited ? 0 : Math.max(0, GITHUB_READS_PER_PASS - used)
-  // a shadow's own reads send their events to the sink, as observe mode's do (v2 SPEC 2.3)
-  const v2Run = v2Only ? run : (argv: string[], stdin?: string, t?: number) => run(argv, stdin, t, { ...rt.env, CALLUM_EVENTS_DIR: `${rt.loopDir}/sink-events` })
-  const read = await observeV2({ io, rt, cache: cache.v2, run: v2Run, state, stored: v2Stored, poolJson, github: cache.github, githubBudget })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, backoff: backoffUntil !== null, limited: () => limited })
   return { state: { ...state, v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

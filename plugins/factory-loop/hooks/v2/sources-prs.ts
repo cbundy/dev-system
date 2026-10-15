@@ -3,7 +3,9 @@
 // closedAt, head, mergeable_state, author), its check runs (gh pr checks <n> --repo R --json
 // name,state,bucket,startedAt,completedAt,link, the run id from the link) and, when the head
 // moved, its patch id (8.4); and the time observe first saw each head (heads:<repo>), whose
-// entries go when their PR closes. Reads go in 2.4's order, within the pass's budget.
+// entries go when their PR closes. Reads go in 2.4's order (the queue's head first), for at most
+// ctx.prBudget records (K, a budget of their own; none during a GitHub backoff), and stop at a rate
+// limit met this pass (ctx.limited).
 //
 // STUB of build unit U1. U7 fills it; until then the source reads nothing and says so.
 import type { Source } from '../types'

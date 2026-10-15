@@ -438,13 +438,17 @@ function outcomeTokens(o: Outcome | undefined): string[] {
       ]
     }
     default:
-      // v2's outcomes: v2 rebuilds its records from their transition events, never its ledger
+      // v2's outcomes: v2 rebuilds its records from their transition events, and its agent steps
+      // are never rebuilt (entryFromLoop)
       return []
   }
 }
 
 // entryFromLoop: the ledger entry a `loop` event carries (loopNote's inverse), or null when the
-// event is not one or its note does not parse. Left-out free text comes back empty.
+// event is not one or its note does not parse. Left-out free text comes back empty. A v2 agent
+// step's event is for the trail only and is never rebuilt (v2 SPEC 3.3): its result is not in the
+// note, so a rebuilt done entry would hold its key with no result to read; left out, S2 dispatches
+// the key again and the executor takes the answer already recorded for it (10.8).
 export function entryFromLoop(e: FactoryEvent): LedgerEntry | null {
   if (e.state !== 'loop' || e.note === null) return null
   const f = new Map<string, string>()
@@ -459,7 +463,7 @@ export function entryFromLoop(e: FactoryEvent): LedgerEntry | null {
   const attempts = Number(f.get('attempts'))
   const startedAt = Number(f.get('started'))
   const ended = f.get('ended')
-  if (kind === undefined || kind === 'guard' || status === undefined || klass === undefined || key === undefined) return null
+  if (kind === undefined || kind === 'guard' || kind === 'agent-step' || status === undefined || klass === undefined || key === undefined) return null
   if (!Number.isInteger(attempts) || attempts < 0 || !Number.isFinite(startedAt)) return null
   const entry: LedgerEntry = {
     key: dec(key),

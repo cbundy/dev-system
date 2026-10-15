@@ -36,7 +36,8 @@ const SUMMARY_MAX = 300
 
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 // Agents and wakes log a `loop` event (owner notices and rate-cap notices are tells); CLI work
-// logs its own events and gets none (D-09, SPEC 7.4). A v2 agent step is an agent entry.
+// logs its own events and gets none (D-09, SPEC 7.4). A v2 agent step is an agent entry: its
+// events are for the trail, and a lost store never rebuilds it (derive.ts entryFromLoop).
 const LOOP_KINDS: readonly ActionKind[] = ['spawn', 'delegate', 'judge', 'task', 'tell', 'agent-step']
 const STATUSES: readonly LedgerStatus[] = ['running', 'done', 'failed', 'timed-out', 'lost']
 const CLASSES: readonly ActionClass[] = ['free', 'owner', 'drive', 'develop', 'start']

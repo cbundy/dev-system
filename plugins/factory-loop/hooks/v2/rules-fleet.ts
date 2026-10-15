@@ -1,8 +1,9 @@
 // The fleet's rules (docs/factory-loop/v2/SPEC.md 14.1) that name no record: H2 sweeps, O3 wakes
 // the judge for the release task, R2 restarts for an update, and what used up its attempts with no
 // issue to hold is told to the owner. They keep v1's meaning and keys (v1 SPEC 5: H2, O3, H4), with
-// v1's drain gone: R2 waits only for a queue action or the release task to finish (section 15,
-// "Restart without a drain"); a step it cuts re-runs free (row U1). Pure.
+// v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
+// with nothing else to start (section 15, "Restart without a drain"); a running step it cuts
+// re-runs free (row U1). Pure.
 import { gate, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
@@ -49,14 +50,22 @@ export function fleetTells(ctx: PlanCtx): void {
 const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 'queue-update' || e.kind === 'queue-merge' || (e.kind === 'task' && e.wake === 'release'))
 
 // restartOf (R2): the restart for an update that is due, last in the pass, once no queue action or
-// release task runs. A restart that failed is used up (it runs once): the owner hears once
-// (fleetTells), and it waits until the update is asked for again.
-export function restartOf(ctx: PlanCtx): Action | null {
+// release task runs, and only on a pass that admitted nothing else (kept), as v1's H4 did: what
+// starts in the pass the restart ends would only be cut, a release task or a queue action among
+// them, and every agent step would spend its attempt's free re-run for nothing. A restart that
+// failed is used up (it runs once): the owner hears once (fleetTells), and it waits until the
+// update is asked for again.
+export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null {
   const due = ctx.state.control.updateDue
   if (due === null) return null
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
   if (holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
+    return null
+  }
+  const starting = kept.filter(a => a.kind !== 'title').map(a => a.key)
+  if (starting.length > 0) {
+    skip(ctx, 'R2', null, `update due: this pass starts ${starting.slice(0, 5).join(', ')}${starting.length > 5 ? ` and ${starting.length - 5} more` : ''} first`)
     return null
   }
   const key = `restart:${due.at}`

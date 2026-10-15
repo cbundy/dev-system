@@ -97,11 +97,16 @@ import {
 import type { Tracer } from './trace'
 import type { Action, AgentStatus, AgentType, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
 import { logOwnerOp } from './v2/act-events'
-import { headsFromStore, headsKey, headsToStore, recordsFromStore, recordsKey, recordsToStore } from './v2/observe'
 import type { V2Stored } from './v2/observe'
+import { opLanded, parkedOf } from './v2/ops'
 import { transitionsOf } from './v2/plan'
 import { stateCounts } from './v2/rules-state'
-import type { HeadSeen, IssueRecord, V2Io } from './v2/types'
+import { newSettingsCache, repoLoaded } from './v2/settings'
+import type { SettingsIo } from './v2/settings'
+import { keepV2, loadV2, newV2Live, readStoredV2, storedV2, v2IoOf } from './v2/store'
+import type { V2StoreIo } from './v2/store'
+import { STEP_AGENT } from './v2/types'
+import type { V2Io } from './v2/types'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -163,13 +168,10 @@ let errorTold = false
 // basis: the act lock as it stood when the store was loaded; a write goes back to the store only
 // while the lock names this session or still stands so (mayWrite)
 const live: Live & { loaded: boolean; repo: string; basis: string | null } = { ledger: [], loaded: false, repo: '', basis: null }
-// v2's records and the heads it has seen (v2 SPEC 3.3, 2.4), kept as the ledger is: loaded from the
-// store with it, the records replaced whole only by the transition executor (ActIo.v2), saved one
-// write at a time
-const liveV2: { records: IssueRecord[]; heads: Record<string, HeadSeen> | null; loaded: boolean } = { records: [], heads: null, loaded: false }
-// the repo-local settings as origin's default branch holds them (v2: nothing keeps the main
-// checkout current), read every githubEveryMs
-let originSettings: { at: Ms; checkout: string; raw: Record<string, unknown> | null } | null = null
+// v2's records and the heads it has seen, kept as the ledger is (v2/store.ts), and the repo-local
+// settings as origin's default branch holds them under planner v2 (v2/settings.ts)
+const liveV2 = newV2Live()
+const settingsCache = newSettingsCache()
 // the last pass's runtime and state, for the hooks between passes
 let lastRt: Runtime | null = null
 let lastState: State | null = null
@@ -271,10 +273,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
   let loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
-  if (loaded.config.planner === 'v2') {
-    const origin = await repoSettings($, checkout, loaded.config.githubEveryMs)
-    if (origin !== null) loaded = loadConfig(origin, over)
-  }
+  if (loaded.config.planner === 'v2') loaded = await repoLoaded(settingsIo($), settingsCache, checkout, loaded, over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
@@ -300,25 +299,18 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
+    v2Config: { ...loaded.v2, mode: config.mode },
     configProblems: loaded.problems,
   }
 }
 
-// repoSettings: the repo-local settings file as origin's default branch holds it, read again every
-// githubEveryMs: {} when it has none, null when origin's branch cannot be read (the tree's stand).
-async function repoSettings($: EngineInterface, checkout: string, everyMs: Ms): Promise<Record<string, unknown> | null> {
-  const now = await $.clock.now()
-  if (originSettings !== null && originSettings.checkout === checkout && now - originSettings.at < everyMs) return originSettings.raw
-  let raw: Record<string, unknown> | null = null
-  try {
-    const r = await $.process.run(['git', 'show', 'origin/HEAD:.claude/factory-loop.json'], { cwd: checkout, timeoutMs: 10_000 })
-    if (r.exitCode === 0) raw = json(r.stdout)
-    else if (/does not exist in|exists on disk, but not in/.test(r.stderr)) raw = {}
-  } catch {
-    raw = null
-  }
-  originSettings = { at: now, checkout, raw }
-  return raw
+// settingsIo and v2StoreIo: what v2/settings.ts and v2/store.ts run on.
+function settingsIo($: EngineInterface): SettingsIo {
+  return { run: (argv, opts) => $.process.run(argv, opts), now: () => $.clock.now() }
+}
+
+function v2StoreIo($: EngineInterface): V2StoreIo {
+  return { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value), now: () => $.clock.now() }
 }
 
 // originOf: the GitHub repo (owner/name) the checkout's origin names, or '' when it names none.
@@ -422,21 +414,10 @@ function actIo($: EngineInterface): ActIo {
   }
 }
 
-// v2Io: the live records for the transition executor, and the driver's ping (v2 SPEC 3.3, 4.6). A
-// change is saved before it resolves; with no records loaded (no act lease) nothing changes.
+// v2Io: the live records for the transition executor, stored after every ledger save queued
+// before them (v2/store.ts), and the driver's ping (v2 SPEC 3.3, 4.6).
 function v2Io($: EngineInterface): V2Io {
-  return {
-    records: () => liveV2.records,
-    updateRecords: async fn => {
-      const rt = lastRt
-      if (!liveV2.loaded || !live.loaded || rt === null) return { changed: false, saved: false }
-      const next = fn(liveV2.records)
-      if (next === null) return { changed: false, saved: false }
-      liveV2.records = next
-      return { changed: true, saved: await persistV2($, rt) }
-    },
-    ping: why => ping(why),
-  }
+  return v2IoOf(liveV2, v2StoreIo($), { ready: () => live.loaded && lastRt !== null, write: save => afterSaves($, lastRt, save), ping: why => ping(why) })
 }
 
 function fileIo($: EngineInterface): FileIo {
@@ -495,8 +476,6 @@ const keysOf = (repo: string) => ({
   known: `queue-known:${repo}`,
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
-  records: recordsKey(repo),
-  heads: headsKey(repo),
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
@@ -552,9 +531,7 @@ async function loadLedger($: EngineInterface, rt: Runtime, problems: string[]): 
   live.repo = rt.repo
   live.basis = may.basis
   // v2's records and heads load with the ledger, whose lease keeps them too
-  liveV2.records = recordsFromStore(await storeGet($, keysOf(rt.repo).records)) ?? []
-  liveV2.heads = headsFromStore(await storeGet($, keysOf(rt.repo).heads))
-  liveV2.loaded = true
+  await loadV2(liveV2, v2StoreIo($), rt.repo)
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
   // running commands died with the old module; wakes another session submitted went with it
@@ -604,18 +581,13 @@ function persist($: EngineInterface, rt: Runtime): Promise<boolean> {
   return run.catch(() => false)
 }
 
-// persistV2: write the live records, after any ledger save queued before them, only while the
-// ledger may be written (mayWrite); whether they were written.
-function persistV2($: EngineInterface, rt: Runtime): Promise<boolean> {
+// afterSaves: a store write queued after every save before it, run only while this session may
+// still write the store (mayWrite); whether it ran without error.
+function afterSaves($: EngineInterface, rt: Runtime | null, write: () => Promise<void>): Promise<boolean> {
   const run = saving.then(async (): Promise<boolean> => {
-    if (!liveV2.loaded || !(await mayWrite($, rt))) return false
-    try {
-      await $.store.set(keysOf(rt.repo).records, recordsToStore(liveV2.records, await $.clock.now()))
-      return true
-    } catch {
-      // the transition that changed them reports it, and is tried again
-      return false
-    }
+    if (rt === null || !(await mayWrite($, rt))) return false
+    await write()
+    return true
   })
   saving = run.then(
     () => undefined,
@@ -926,14 +898,10 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
   let v2Stored: V2Stored | undefined
-  if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') {
-    v2Stored = act
-      ? { records: liveV2.records, heads: liveV2.heads }
-      : { records: recordsFromStore(await storeGet($, keys.records)), heads: headsFromStore(await storeGet($, keys.heads)) }
-  }
+  if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') v2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
   const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored, v2Stored)
   let state = observed.state
-  if (act && rt.config.planner === 'v2') await keepV2(observed.v2Heads, state, keepInStore)
+  if (act && rt.config.planner === 'v2') await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
   // ledger no longer (the next pass that holds it reloads the store)
@@ -1010,7 +978,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
       begin(tr, 'plan')
-      const planned = planPass(state, config)
+      const planned = planPass(state, config, rt.v2Config)
       result = planned.result
       shadow = planned.shadow
       begin(tr, 'act')
@@ -1091,8 +1059,13 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
     transitions: rt.config.planner === 'v2' ? transitionsOf(result) : undefined,
     skipped: result.skipped.slice(0, 60),
-    // the v2 shadow's plan, logged and never executed
-    shadow: shadow === null ? undefined : 'error' in shadow ? shadow : { actions: shadow.actions.filter(a => a.kind !== 'title').map(summaryOf), skipped: shadow.skipped.slice(0, 60), transitions: transitionsOf(shadow) },
+    // the v2 shadow's plan, logged and never executed, and the K it planned with (v2's own default)
+    shadow:
+      shadow === null
+        ? undefined
+        : 'error' in shadow
+          ? shadow
+          : { k: (rt.v2Config ?? rt.config).maxInFlightIssues, actions: shadow.actions.filter(a => a.kind !== 'title').map(summaryOf), skipped: shadow.skipped.slice(0, 60), transitions: transitionsOf(shadow) },
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
@@ -1201,21 +1174,6 @@ async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string
 async function endsCut($: EngineInterface, path: string, cap: number): Promise<boolean> {
   const r = await $.process.run(['tail', '-c', String(CUT_ROOM), '--', path], { timeoutMs: 10_000 })
   return r.exitCode === 0 && isCutLine(r.stdout.trimEnd().split('\n').pop() ?? '', cap)
-}
-
-// keepV2: what a pass acting under planner v2 keeps of v2's reads: the records a lost store was
-// rebuilt into, as the ledger's are (v2 SPEC 3.3), and the PR heads first seen (2.4). A shadow keeps
-// nothing.
-async function keepV2(heads: Record<string, HeadSeen> | null, state: State, keep: (key: string, value: unknown) => Promise<void>) {
-  const keys = keysOf(state.repo)
-  if (state.v2 !== undefined && state.v2.recordsFrom === 'events' && liveV2.loaded && liveV2.records.length === 0) {
-    liveV2.records = [...state.v2.records]
-    await keep(keys.records, recordsToStore(liveV2.records, state.now))
-  }
-  if (heads !== null && liveV2.loaded && JSON.stringify(heads) !== JSON.stringify(liveV2.heads ?? {})) {
-    liveV2.heads = heads
-    await keep(keys.heads, headsToStore(heads))
-  }
 }
 
 function summaryOf(a: Action) {
@@ -1515,16 +1473,14 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
       const planner = rt.config.planner
-      const records = lastState?.v2?.records
-      const parked = planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked').map(r => r.issue) : null
+      const parked = parkedOf(planner, lastState?.v2?.records)
       const from = agentId === undefined ? { last, planner, parked } : { last, agentId, planner, parked }
       const fio = claimedIo(fileIo($), claim)
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      const op = reply.op
-      const landed = op !== null && reply.logged !== null && planner === 'v2' && rt.mode === 'act'
-      const logOp = landed ? (env: ActEnv) => logOwnerOp(env, { text: reply.logged ?? '', name: (reply.logged ?? '').split(' ')[0] ?? '', issues: issuesOf(op), at: now }) : undefined
+      const landed = reply.op === null ? null : opLanded(planner, rt.mode, reply.logged, issuesOf(reply.op), now)
+      const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
       const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
       if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })
       return { ok: reply.ok, text: said }
@@ -1723,21 +1679,9 @@ export const register: Register = (on, opts) => {
     next.called ? next(e) : { isOffered: false },
   )
   // v2's agent types (v2/types.ts STEP_AGENT), hidden the same way
-  on('agent.offer', { agent: 'factory-loop:designer-v2' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  on('agent.offer', { agent: 'factory-loop:builder' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  on('agent.offer', { agent: 'factory-loop:reviewer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  on('agent.offer', { agent: 'factory-loop:fixer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
-  on('agent.offer', { agent: 'factory-loop:triage' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
-    next.called ? next(e) : { isOffered: false },
-  )
+  for (const agent of new Set(Object.values(STEP_AGENT))) {
+    on('agent.offer', { agent }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
+  }
 }
 
 // for the tests

@@ -119,9 +119,15 @@ export type EventKind = (typeof EVENT_KINDS)[number]
 export const OUTSIDE_CAUSES = ['load', 'usage', 'breaker', 'slot'] as const
 export type OutsideCause = (typeof OUTSIDE_CAUSES)[number]
 
-// Why a step ended unknown (7.2, intervention `unknown:<why>`).
-export const UNKNOWN_WHYS = ['timeout', 'agent-dead', 'bad-answer', 'api', 'spawn', 'cli', 'github-wait'] as const
+// Why a step ended unknown (7.2, intervention `unknown:<why>`). rate-limited is an API rate limit
+// (a 429, or the usage window); api is any other API error (a 5xx, overloaded).
+export const UNKNOWN_WHYS = ['timeout', 'agent-dead', 'bad-answer', 'api', 'rate-limited', 'spawn', 'cli', 'github-wait'] as const
 export type UnknownWhy = (typeof UNKNOWN_WHYS)[number]
+
+// The outside cause an unknown's why is by itself (5.1): a rate limit is `usage`, a free re-run
+// that the step-unknown breaker does not count (5.3). Every other why is unexplained unless a fact
+// plan holds (the load, the tier, the breaker, the lease) says otherwise.
+export const WHY_CAUSE: Readonly<Partial<Record<UnknownWhy, OutsideCause>>> = { 'rate-limited': 'usage' }
 
 // The triage menu (5.2).
 export const TRIAGE_CHOICES = ['retry', 'fix', 'redesign', 'park', 'drop'] as const

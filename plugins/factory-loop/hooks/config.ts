@@ -156,7 +156,9 @@ const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'des
 const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
 const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 
-export type LoadedConfig = { config: Config; problems: string[] }
+// v2: the settings v2 runs with, from the same layers: config itself under planner v2; under v1,
+// V2_DEFAULTS on every key no layer set, which the v2 shadow plans with (v2 SPEC 2.3).
+export type LoadedConfig = { config: Config; problems: string[]; v2: Config }
 
 // loadConfig: DEFAULT_CONFIG with each raw JSON object layered over it, in order. A time
 // setting takes a duration string under its key with "Ms" dropped (`passEvery: "60s"`), or a
@@ -270,8 +272,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       }
     }
   }
-  if (out.planner === 'v2') for (const [key, value] of Object.entries(V2_DEFAULTS)) if (!set.has(key)) out[key] = value
-  return { config: out as unknown as Config, problems }
+  const v2: Record<string, unknown> = { ...out }
+  for (const [key, value] of Object.entries(V2_DEFAULTS)) if (!set.has(key)) v2[key] = value
+  const config = (out.planner === 'v2' ? v2 : out) as unknown as Config
+  return { config, problems, v2: v2 as unknown as Config }
 }
 
 function compiles(pattern: string) {

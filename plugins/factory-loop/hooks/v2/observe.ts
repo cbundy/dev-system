@@ -22,8 +22,9 @@ const DAY = 86_400_000
 export const RECORD_KEEP_MS = 7 * DAY
 
 // What a source module gets (sources-*.ts): the pass's time and runtime, observe's read (its
-// commands logged), the State observe built, the records and heads, and the GitHub reads it may
-// still make this pass (none during a backoff).
+// commands logged), the State observe built, the records and heads, the records whose PR it may
+// read this pass (prBudget: K, a budget of its own beside v1's issue reads; none during a GitHub
+// backoff or after a rate limit this pass), and whether a rate limit met this pass ends its reads.
 export type SourceCtx = {
   now: Ms
   rt: Runtime
@@ -32,11 +33,14 @@ export type SourceCtx = {
   state: State
   records: readonly IssueRecord[]
   heads: Record<string, HeadSeen>
-  githubBudget: number
+  prBudget: number
+  limited: () => boolean
 }
 
-// What the store holds for v2, as register.ts passes it: null where it holds nothing.
-export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null }
+// What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
+// holds none (a rebuild may fill it); error when the store could not be read or holds no stored
+// records under the key, so nothing is known of the records.
+export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
 // the last rebuild, the comments read per issue read, and the last checkout read (R1's tripwire).
@@ -187,40 +191,56 @@ export function readOrder(records: readonly IssueRecord[]): number[] {
 
 // --- one pass's v2 reads ---------------------------------------------------------------------------------
 
+// The source modules' reads, a test's own in place of the real ones.
+export type V2Readers = { prs: typeof readPrs; interventions: typeof readInterventions }
+const READERS: V2Readers = { prs: readPrs, interventions: readInterventions }
+
 export type ObserveV2Input = {
   io: Io
   rt: Runtime
   cache: V2Cache
-  // observe's own run, which logs each command and runs it with the runtime's environment
-  run: SourceCtx['run']
+  // observe's own run, which logs each command and runs it with the environment it is given
+  run: (argv: string[], stdin?: string, timeoutMs?: number, env?: Record<string, string>) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   state: State
   // the store's, as register.ts read it; undefined when it read none
   stored: V2Stored | undefined
   // `treehouse status --json` as observe read it this pass; null when it did not
   poolJson: string | null
   github: Cache['github']
-  // the GitHub reads left this pass (0 during a backoff)
-  githubBudget: number
+  // a GitHub backoff holds this pass's reads; limited: a rate limit met this pass ends them
+  backoff: boolean
+  limited: () => boolean
+  readers?: V2Readers
 }
 
 const NOT_READ = (why: string): Source => ({ ok: false, at: null, error: why })
 
-// observeV2: the State fields v2 reads (2.4), and the heads to keep.
+// observeV2: the State fields v2 reads (2.4), and the heads to keep. Its GitHub reads go in 2.4's
+// order with budgets of their own: the PRs of the queue's head, then of the other records in
+// reviewing and merge-queue (sources-prs.ts, at most K records), then the comments of parked
+// records a person unparked; v1's issue reads before them took the records' issues first
+// (observe.ts, readOrder).
 export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; heads: Record<string, HeadSeen> }> {
   const { rt, cache, state } = input
+  const readers = input.readers ?? READERS
   const now = state.now
   const sources = {} as Record<V2SourceName, Source>
-  let budget = input.githubBudget
+  const blocked = () => input.backoff || input.limited()
+  // a shadow's own reads send their events to the sink, as observe mode's do (2.3)
+  const run: SourceCtx['run'] =
+    rt.config.planner === 'v2' ? (argv, stdin, t) => input.run(argv, stdin, t) : (argv, stdin, t) => input.run(argv, stdin, t, { ...rt.env, CALLUM_EVENTS_DIR: `${rt.loopDir}/sink-events` })
 
-  // the records: the store's, else a rebuild from this device's transition events (3.3)
-  let records: IssueRecord[] = input.stored?.records ?? []
-  let recordsFrom: V2State['recordsFrom'] = input.stored?.records !== null && input.stored?.records !== undefined && records.length > 0 ? 'store' : 'none'
-  sources.store = { ok: true, at: now }
-  if (recordsFrom === 'none' && REBUILD_SQL !== null) {
+  // the records: the store's, else a rebuild from this device's transition events (3.3); none
+  // when the store could not be read, which the planner reads as blind for them
+  const stored = input.stored
+  let records: IssueRecord[] = stored?.records ?? []
+  let recordsFrom: V2State['recordsFrom'] = stored?.records !== null && stored?.records !== undefined ? 'store' : 'none'
+  sources.store = stored?.error ? NOT_READ(stored.error) : { ok: true, at: now }
+  if (recordsFrom === 'none' && !stored?.error && REBUILD_SQL !== null) {
     if (cache.rebuilt === null || now - cache.rebuilt.at >= rt.config.githubEveryMs) {
       try {
         const argv = ['dev-query', '--csv', '-v', `repo=${rt.repo}`, '-v', `device=${rt.device}`, '-v', `at=${new Date(now).toISOString()}`, '-v', `days=${REBUILD_DAYS}`]
-        const r = await input.run(argv, REBUILD_SQL)
+        const r = await run(argv, REBUILD_SQL)
         if (r.exitCode === 0) {
           const events: FactoryEvent[] = eventsFromRows(parseCsv(r.stdout))
           cache.rebuilt = { at: now, records: recordsFromEvents(events, rt.device) }
@@ -245,8 +265,25 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const leases = input.poolJson === null ? null : leasesOf(input.poolJson)
   sources.leases = leases === null ? NOT_READ(input.poolJson === null ? 'the pool was not read' : 'treehouse status did not read') : { ok: true, at: now }
 
-  // a parked record whose label a read newer than its park lacks: its trusted comments, once per
-  // read, for the resume's note (11)
+  // the PRs first: the queue's head, then reviewing and merge-queue, at most K records (2.4)
+  const heads = input.stored?.heads ?? cache.heads
+  const ctx: SourceCtx = {
+    now,
+    rt,
+    run,
+    readFile: input.io.readFile,
+    state,
+    records,
+    heads,
+    prBudget: blocked() ? 0 : (rt.config.maxInFlightIssues ?? rt.poolSize),
+    limited: input.limited,
+  }
+  const prs = await readers.prs(ctx)
+  sources.prs = prs.source
+  cache.heads = prs.heads
+
+  // then parked records whose label a read newer than their park lacks: their trusted comments,
+  // once per read, for the resume's note (11)
   const comments: Record<number, IssueComment[]> = {}
   let commentsOk = true
   for (const r of records.filter(x => x.state === 'parked')) {
@@ -257,10 +294,12 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
       comments[r.issue] = kept.comments
       continue
     }
-    if (budget <= 0) continue
-    budget -= 1
+    if (blocked()) {
+      commentsOk = false
+      continue
+    }
     try {
-      const c = await input.run(['callum-flow-issue-read', '--json', String(r.issue), '--comments'])
+      const c = await run(['callum-flow-issue-read', '--json', String(r.issue), '--comments'])
       const parsed = c.exitCode === 0 ? commentsOf(c.stdout) : null
       if (parsed === null) commentsOk = false
       else {
@@ -272,16 +311,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     }
   }
   for (const n of [...cache.comments.keys()]) if (!records.some(r => r.issue === n && r.state === 'parked')) cache.comments.delete(n)
-  sources.comments = commentsOk ? { ok: true, at: now } : NOT_READ('a comment read failed')
+  sources.comments = commentsOk ? { ok: true, at: now } : NOT_READ(blocked() ? 'GitHub rate limit' : 'a comment read failed')
 
-  // the source modules
-  const heads = input.stored?.heads ?? cache.heads
-  const ctx: SourceCtx = { now, rt, run: input.run, readFile: input.io.readFile, state, records, heads, githubBudget: budget }
-  const prs = await readPrs(ctx)
-  sources.prs = prs.source
-  const facts = await readInterventions({ ...ctx, heads: prs.heads })
+  const facts = await readers.interventions({ ...ctx, heads: prs.heads })
   sources.interventions = facts.source
-  cache.heads = prs.heads
 
   const checkoutBefore = cache.checkout
   cache.checkout = state.checkout

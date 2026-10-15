@@ -11,14 +11,16 @@ import { agentAnswered, ctxOf } from '../hooks/act'
 import type { ActEnv, Between } from '../hooks/act'
 import { jobPathOf, parseJob } from '../hooks/contract.mjs'
 import type { V2Contract } from '../hooks/contract.mjs'
+import { entryFromLoop } from '../hooks/derive'
+import type { FactoryEvent } from '../hooks/derive'
 import { answerPath } from '../hooks/exec'
-import type { ActIo, SpawnInput } from '../hooks/exec'
-import { start } from '../hooks/ledger'
+import type { ActIo, Exec, SpawnInput } from '../hooks/exec'
+import { finish, loopEvent, start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry } from '../hooks/types'
-import { parseStepRecord, stepAnswerPath, stepAnswered, stepExecutor, stepRecordPath, stepRecorded } from '../hooks/v2/steps'
+import { parseStepRecord, stepAnswerPath, stepAnswered, stepAnswers, stepExecutor, stepRecordPath, stepRecorded } from '../hooks/v2/steps'
 import type { StepDeps, StepModule, StepRecord } from '../hooks/v2/steps'
-import { STEP_AGENT } from '../hooks/v2/types'
+import { STEP_AGENT, WHY_CAUSE, unknownResult } from '../hooks/v2/types'
 import type { AgentStep } from '../hooks/v2/types'
 import { DEVICE, NOW, PLUGIN_ROOT, config, state } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
@@ -34,7 +36,7 @@ const contract: V2Contract = {
   summary: () => 'a verdict',
 }
 
-// A module whose answer's verdict is the step's result.
+// A module whose answer's verdict is the step's result, and what the answer says of itself.
 function moduleOf(step: AgentStep, contractName: StepModule['contract']): StepModule {
   return {
     step,
@@ -44,7 +46,22 @@ function moduleOf(step: AgentStep, contractName: StepModule['contract']): StepMo
       const o = answer as { verdict: string; reason?: string }
       return { event: o.verdict === 'ok' ? 'ok' : 'not-ok', reason: o.reason ?? null, why: null, head: null, choice: null, data: answer }
     },
+    says: answer => ((answer as { verdict: string }).verdict === 'ok' ? 'ok' : 'not-ok'),
   }
+}
+
+// A writer's module whose result reads origin, as U5's do: an ok answer with no commit there is
+// not-ok (T6), and a failed read is unknown. It counts its reads.
+function originModule(origin: 'no-commit' | 'unread'): { module: StepModule; reads: () => number } {
+  let reads = 0
+  const module: StepModule = {
+    ...moduleOf('build', 'build'),
+    result: async () => {
+      reads += 1
+      return origin === 'no-commit' ? { event: 'not-ok', reason: 'no commit on origin', why: null, head: null, choice: null, data: null } : unknownResult('cli', 'git ls-remote failed')
+    },
+  }
+  return { module, reads: () => reads }
 }
 
 const DEPS: StepDeps = {
@@ -186,18 +203,46 @@ describe('reading a step\'s answer (v2 SPEC 10.8)', () => {
     expect(w.files.get(answerPath(LOOP_DIR, action.key))).toBe('done')
   })
 
-  test('a turn that ended in error, aborted or refused is unknown with no repair: an API error when its words say so', async () => {
+  test('a turn that ended in error, aborted or refused is unknown with no repair: a rate limit apart from other API errors', async () => {
     const w = world()
     const { entry } = await spawned(w, stepAction('build'))
     const ctx = ctxOf(w.env, state(), entry)
-    const why = async (answer: string, reason: 'error' | 'aborted' | 'refusal') => {
+    const result = async (answer: string, reason: 'error' | 'aborted' | 'refusal') => {
       const r = await stepAnswered(ctx, entry, { agentId: 'agent-1', answer, reason }, DEPS)
       expect(r.repair).toBeNull()
-      return r.exec.status === 'done' && r.exec.outcome?.kind === 'step' ? r.exec.outcome.result.why : null
+      return r.exec.status === 'done' && r.exec.outcome?.kind === 'step' ? r.exec.outcome.result : null
     }
-    expect(await why('API Error: 429 rate limit reached', 'error')).toBe('api')
-    expect(await why('it stopped', 'aborted')).toBe('agent-dead')
-    expect(await why('no', 'refusal')).toBe('agent-dead')
+    // a 429 is the outside cause usage: a free re-run the breaker does not count (5.1, 5.3)
+    const limited = await result('API Error: 429 {"type":"rate_limit_error"}', 'error')
+    expect(limited).toMatchObject({ event: 'unknown', why: 'rate-limited', reason: 'its turn ended: error: API Error: 429 {"type":"rate_limit_error"}' })
+    expect(WHY_CAUSE[limited?.why ?? 'api']).toBe('usage')
+    expect((await result('Claude usage limit reached. Your limit will reset at 2am', 'error'))?.why).toBe('rate-limited')
+    // a 529 or another API error is unexplained, and counts
+    for (const words of ['API Error: 529 {"type":"overloaded_error","message":"Overloaded"}', 'API Error: Connection error.']) {
+      const r = await result(words, 'error')
+      expect(r).toMatchObject({ event: 'unknown', why: 'api', reason: `its turn ended: error: ${words}` })
+      expect(WHY_CAUSE[r?.why ?? 'api']).toBeUndefined()
+    }
+    expect(await result('it stopped', 'aborted')).toMatchObject({ why: 'agent-dead', reason: 'its turn ended: aborted: it stopped' })
+    expect((await result('no', 'refusal'))?.why).toBe('agent-dead')
+    // the words kept are an excerpt
+    expect((await result(`API Error: ${'x'.repeat(400)}`, 'error'))?.reason?.length).toBeLessThanOrEqual(200)
+  })
+
+  test('an answer recorded before the turn ended in error is the result; a writer\'s ok is not, as the stop gate never ran (v2 SPEC 10.8)', async () => {
+    const w = world()
+    const review = await spawned(w, stepAction('review'))
+    const build = await spawned(w, stepAction('build', { key: 'i470/ltbq3k0/s3/build/a1' }))
+    const ended = async (e: LedgerEntry, reason: 'error' | 'aborted') => {
+      const r = await stepAnswered(ctxOf(w.env, state(), e), e, { agentId: 'agent-1', answer: 'API Error: 529 overloaded', reason }, DEPS)
+      return r.exec.status === 'done' && r.exec.outcome?.kind === 'step' ? r.exec.outcome.result : null
+    }
+    recorded(w, review.entry.key, 'review', { verdict: 'ok' })
+    expect(await ended(review.entry, 'aborted')).toMatchObject({ event: 'ok', data: { verdict: 'ok' } })
+    recorded(w, build.entry.key, 'build', { verdict: 'no', reason: 'cannot' })
+    expect(await ended(build.entry, 'error')).toMatchObject({ event: 'not-ok', reason: 'cannot' })
+    recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+    expect(await ended(build.entry, 'error')).toMatchObject({ event: 'unknown', why: 'api' })
   })
 
   test('an answer is read every pass: a reader\'s ends its step at once; a writer\'s ok waits for its turn\'s end, its not-ok does not', async () => {
@@ -215,6 +260,34 @@ describe('reading a step\'s answer (v2 SPEC 10.8)', () => {
     expect(await stepRecorded(ctx(build.entry), build.entry, false, DEPS)).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok', reason: 'cannot' } } })
   })
 
+  test('a writer\'s ok waits for its turn\'s end on what it says, before origin is read: a result that maps it to not-ok or unknown never ends the step mid-turn', async () => {
+    for (const origin of ['no-commit', 'unread'] as const) {
+      const w = world()
+      const { module, reads } = originModule(origin)
+      const deps: StepDeps = { ...DEPS, modules: { ...DEPS.modules, build: module } }
+      const build = await spawned(w, stepAction('build'), deps)
+      recorded(w, build.entry.key, 'build', { verdict: 'ok' })
+      // a pass's read, and the read of every running step a pass makes (act.ts actPass)
+      expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, false, deps)).toBeNull()
+      expect(await stepAnswers([build.entry], e => ctxOf(w.env, state(), e), deps)).toEqual([])
+      expect(reads()).toBe(0)
+      // its turn's end reads origin, and the result is the module's
+      const event = origin === 'no-commit' ? 'not-ok' : 'unknown'
+      expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, deps)).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event } } })
+      expect(reads()).toBe(1)
+    }
+  })
+
+  test('a writer\'s module that cannot say what an answer claims has every answer wait for the turn\'s end', async () => {
+    const w = world()
+    const { says: _says, ...silent } = moduleOf('build', 'build')
+    const deps: StepDeps = { ...DEPS, modules: { ...DEPS.modules, build: silent } }
+    const build = await spawned(w, stepAction('build'), deps)
+    recorded(w, build.entry.key, 'build', { verdict: 'no', reason: 'cannot' })
+    expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, false, deps)).toBeNull()
+    expect(await stepRecorded(ctxOf(w.env, state(), build.entry), build.entry, true, deps)).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'not-ok' } } })
+  })
+
   test('the record reads back exactly as written, and a record that is not one reads as none', async () => {
     const w = world()
     const action = stepAction('build')
@@ -225,6 +298,28 @@ describe('reading a step\'s answer (v2 SPEC 10.8)', () => {
     for (const bad of [null, '{', '[]', JSON.stringify({ ...JSON.parse(text ?? '{}'), v: 1 }), JSON.stringify({ ...JSON.parse(text ?? '{}'), step: 'merge' }), JSON.stringify({ ...JSON.parse(text ?? '{}'), contract: 'design' })]) {
       expect(parseStepRecord(bad, DEPS.contracts)).toBeNull()
     }
+  })
+})
+
+describe('a lost store (v2 SPEC 3.3, 10.8)', () => {
+  test('a done build step whose transition was not stored yet is not rebuilt: S2 starts the attempt again, and the executor takes the recorded answer without a spawn', async () => {
+    const w = world()
+    const action = stepAction('build')
+    const { entry } = await spawned(w, action)
+    recorded(w, action.key, 'build', { verdict: 'ok' })
+    const done = finish([entry], action.key, (await stepRecorded(ctxOf(w.env, state(), entry), entry, true, DEPS)) as Exec, NOW)
+    const ended = done.find(e => e.key === action.key) as LedgerEntry
+    expect(ended).toMatchObject({ status: 'done', outcome: { kind: 'step', result: { event: 'ok' } } })
+    // its loop event is logged for the trail, and gives no entry back
+    const argv = loopEvent(ended) as string[]
+    expect(argv[1]).toBe('loop')
+    const event: FactoryEvent = { ts: NOW, state: 'loop', issue: 470, run: null, branch: null, pr: null, head: null, note: argv[argv.indexOf('--note') + 1] ?? null, actor: null, device: DEVICE }
+    expect(entryFromLoop(event)).toBeNull()
+    // the key dispatched again finds the answer, and spawns nothing
+    const spawns = w.spawns.length
+    const again = await stepExecutor(DEPS)(ctxOf(w.env, state(), start([], action, NOW).entry), action)
+    expect(again).toMatchObject({ status: 'done', outcome: { kind: 'step', step: 'build', result: { event: 'ok' } } })
+    expect(w.spawns).toHaveLength(spawns)
   })
 })
 

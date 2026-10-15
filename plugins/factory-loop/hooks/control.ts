@@ -5,15 +5,17 @@
 // trip over ActIo's readFile and writeFile: `<loop dir>/control.json`, which observe reads each
 // pass, and the workspace config file for `mode`, `trace` and `planner`. Everything but runOp and
 // its two file wrappers is pure, so the tests and the replay harness drive it without the engine.
-// Under planner v2 three ops take v2's meaning (v2 SPEC appendix E): `resume <N...> ["note"]`
-// unparks (P1), `drop` closes the current life's record (E1), and an issue that is not parked is
-// not resumed; the caller says which planner is in force.
+// Under planner v2 three ops take v2's meaning (v2 SPEC appendix E), which v2/ops.ts holds:
+// `resume <N...> ["note"]` unparks (P1), `drop` closes the current life's record (E1), and an issue
+// that is not parked is not resumed; the caller says which planner is in force.
 import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
 import { EMPTY_CONTROL, controlFrom } from './config'
 import type { ActIo } from './exec'
 import type { Control, Mode, Ms } from './types'
+import { applyDrop, applyUnpark, onlyParked, parseUnpark } from './v2/ops'
+import type { Unpark } from './v2/ops'
 import type { Planner } from './v2/types'
 
 const MIN = 60_000
@@ -109,8 +111,8 @@ export type Op =
   | { op: 'note'; issue: number | null; text: string }
   | { op: 'mode'; mode: Mode }
   | { op: 'planner'; planner: Planner }
-  // v2's resume: unpark these issues, with the note for their next step (v2 SPEC 11, P1)
-  | { op: 'unpark'; issues: number[]; note: string | null }
+  // v2's resume (v2/ops.ts)
+  | Unpark
 
 export type Parsed = { ok: true; op: Op } | { ok: false; error: string }
 
@@ -196,7 +198,10 @@ export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
       return { ok: true, op: { op: 'override', until: { pct: p, hours: h } } }
     }
     case 'resume': {
-      if (planner === 'v2') return parseUnpark(rest)
+      if (planner === 'v2') {
+        const unpark = parseUnpark(rest, issueOf, NOTE_MAX)
+        return typeof unpark === 'string' ? bad(name, unpark) : { ok: true, op: unpark }
+      }
       // `issue:<N>` and `run:<id>` (formatOp's spelling) are read too
       const arg = args.length === 1 ? (args[0] ?? '') : ''
       const prefixed = /^(issue|run):(.+)$/i.exec(arg)
@@ -224,18 +229,6 @@ export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
     case 'planner':
       return word === 'v1' || word === 'v2' ? { ok: true, op: { op: 'planner', planner: word } } : bad(name)
   }
-}
-
-// parseUnpark: v2's `resume <N...> ["note"]`: one or more issue numbers, then the note, if any,
-// in double quotes.
-function parseUnpark(rest: string): Parsed {
-  const m = /^([^"]*?)\s*(?:"(.*)")?\s*$/s.exec(rest)
-  const items = (m?.[1] ?? '').split(/[\s,]+/).filter(w => w !== '')
-  const issues = items.map(issueOf)
-  if (m === null || items.length === 0 || issues.some(n => n === null)) return bad('resume', 'under planner v2, takes issue numbers and an optional note in double quotes')
-  const note = (m[2] ?? '').trim()
-  if (note.length > NOTE_MAX) return bad('resume', `the note is at most ${NOTE_MAX} characters`)
-  return { ok: true, op: { op: 'unpark', issues: [...new Set(issues as number[])], note: note === '' ? null : note } }
 }
 
 // issuesOf: the issues an op names, which its intervention attaches to (v2 SPEC 7.2); none for a
@@ -367,10 +360,8 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       )
     case 'drop': {
       if (planner === 'v2') {
-        return set(
-          { dropped: [...control.dropped.filter(d => d.issue !== op.issue), { issue: op.issue, at: now }] },
-          `Dropped #${op.issue}: its record closes and its factory labels go; the issue stays open, and adding ready brings it back.`,
-        )
+        const v2 = applyDrop(control, op.issue, now)
+        return set(v2.patch, v2.text)
       }
       if (control.dropped.some(d => d.issue === op.issue)) return keep(`#${op.issue} is already dropped.`)
       // a pause holds every action, the abandon too (plan's owner filter)
@@ -390,9 +381,8 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
     case 'planner':
       return keep(`Planner ${op.planner} set in the workspace config file; it plans and acts from the next pass.`, { planner: op.planner })
     case 'unpark': {
-      const resumed = op.issues.map(n => (op.note === null ? { subject: `issue:${n}`, at: now } : { subject: `issue:${n}`, at: now, note: op.note }))
-      const noted = op.note === null ? '' : ', with your note for its next step'
-      return set({ resumed: [...control.resumed, ...resumed] }, `Resumed ${tags(op.issues)}: back to queued, then on from where it parked${noted}.`)
+      const v2 = applyUnpark(control, op, now)
+      return set(v2.patch, v2.text)
     }
     case 'trace':
       return keep(
@@ -580,13 +570,11 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   if (!parsed.ok) return refused(parsed.error)
   let op = parsed.op
   let aside = ''
-  if (op.op === 'unpark' && from.parked !== undefined && from.parked !== null) {
-    const parked = from.parked
-    const not = op.issues.filter(n => !parked.includes(n))
-    const notes = not.map(n => `#${n} is not parked; use /factory note ${n}.`).join(' ')
-    if (not.length === op.issues.length) return refused(`Not changed: ${notes}`, op)
-    op = { ...op, issues: op.issues.filter(n => parked.includes(n)) }
-    aside = not.length === 0 ? '' : ` ${notes}`
+  if (op.op === 'unpark') {
+    const only = onlyParked(op, from.parked)
+    if ('refused' in only) return refused(only.refused, op)
+    op = only.op
+    aside = only.aside
   }
   if (from.agentId !== undefined && op.op !== 'status') return refused('Not changed: only the main conversation sets owner directives.', op)
   let loaded: LoadedControl

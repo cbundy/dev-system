@@ -21,6 +21,7 @@ import {
   recordsFromStore,
   recordsToStore,
 } from '../hooks/v2/observe'
+import type { V2Readers, V2Stored } from '../hooks/v2/observe'
 import {
   AGENT_STEPS,
   FACTORY_LABELS,
@@ -38,6 +39,24 @@ import {
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, state } from './fixtures'
 import { LOOP_DIR, REPO, TOOLS } from './host'
+
+function runtimeOf(): Runtime {
+  return {
+    mode: 'act',
+    repo: REPO,
+    device: DEVICE,
+    runSource: 'local',
+    poolSize: 16,
+    cwd: '/work',
+    loopDir: LOOP_DIR,
+    sink: null,
+    env: {},
+    toolsDir: TOOLS,
+    pluginRoot: PLUGIN_ROOT,
+    config: config({ planner: 'v2' }),
+    configProblems: [],
+  }
+}
 
 const DAY = 24 * 60 * MIN
 const LIFE = 'ss1x2k'
@@ -259,7 +278,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const cache = emptyCache()
     cache.github.set(80, { at: NOW - 5 * MIN, value: { facts: { open: true, labels: ['bug'], blockedBy: 0, subIssues: 0, title: 'x' }, trusted: true, brief: null } })
     const pool = JSON.stringify([{ path: '/s/1', status: 'leased', lease_id: 'L1', lease_holder: holderOf(80, LIFE) }])
-    const input = { io, rt, cache: cache.v2, run, state: state(), stored: { records: [parked], heads: null }, poolJson: pool, github: cache.github, githubBudget: 2 }
+    const input = { io, rt, cache: cache.v2, run, state: state(), stored: { records: [parked], heads: null, error: null }, poolJson: pool, github: cache.github, backoff: false, limited: () => false }
     const r = await observeV2(input)
     expect(r.v2).toMatchObject({ records: [parked], recordsFrom: 'store', leases: [{ path: '/s/1', issue: 80, life: LIFE }], reads: { 80: { at: NOW - 5 * MIN, open: true, labels: ['bug'] } } })
     expect(r.v2.comments).toEqual({ 80: [{ body: 'use the old one', at: NOW - MIN, url: null }] })
@@ -276,6 +295,66 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     // the tripwire's memory: the checkout the pass before read
     expect(r.v2.checkoutBefore).toBeNull()
     expect((await observeV2(input)).v2.checkoutBefore).toEqual(state().checkout)
+  })
+
+  test('observeV2 reads GitHub in 2.4\'s order with budgets of its own: the PRs (at most K records) first, then the parked comments; none during a backoff or after a rate limit', async () => {
+    const parked = record({ issue: 80, state: 'parked', step: null, since: NOW - 30 * MIN, question: 'which API?' })
+    const head = record({ issue: 81, state: 'merge-queue', step: 'queue', pr: 900 })
+    const log: string[] = []
+    const budgets: number[] = []
+    const run = async (argv: string[]) => {
+      log.push(argv.join(' '))
+      return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: '' }
+    }
+    const readers: V2Readers = {
+      prs: async ctx => {
+        budgets.push(ctx.prBudget)
+        if (ctx.prBudget > 0) await ctx.run(['callum-flow-issue-read', '--json', '--pr', '900'])
+        return { read: { prs: [] }, source: { ok: true, at: NOW }, heads: ctx.heads }
+      },
+      interventions: async () => ({ read: { companion: [], controlDigest: null, configDigest: null }, source: { ok: true, at: NOW } }),
+    }
+    const rt = (k: number | null): Runtime => ({ ...runtimeOf(), config: config({ planner: 'v2', maxInFlightIssues: k }) })
+    const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
+    const cacheOf = () => {
+      const c = emptyCache()
+      c.github.set(80, { at: NOW - 5 * MIN, value: { facts: { open: true, labels: [], blockedBy: 0, subIssues: 0, title: 'x' }, trusted: true, brief: null } })
+      return c
+    }
+    // a busy pass: v1's issue reads took their 12 (observe.ts) before these, and take nothing of them
+    const busy = cacheOf()
+    const input = { io, rt: rt(3), cache: busy.v2, run, state: state(), stored: { records: [parked, head], heads: null, error: null }, poolJson: null, github: busy.github, backoff: false, limited: () => false, readers }
+    const r = await observeV2(input)
+    expect(budgets).toEqual([3])
+    expect(log).toEqual(['callum-flow-issue-read --json --pr 900', 'callum-flow-issue-read --json 80 --comments'])
+    expect(r.v2.sources).toMatchObject({ prs: { ok: true }, comments: { ok: true }, interventions: { ok: true } })
+    // with no cap on K, the pool bounds the PR reads
+    await observeV2({ ...input, rt: rt(null), cache: cacheOf().v2 })
+    expect(budgets.at(-1)).toBe(16)
+    // a backoff, or a rate limit met this pass, holds them all
+    for (const held of [{ backoff: true, limited: () => false }, { backoff: false, limited: () => true }]) {
+      log.length = 0
+      const c = cacheOf()
+      const h = await observeV2({ ...input, ...held, cache: c.v2, github: c.github })
+      expect(budgets.at(-1)).toBe(0)
+      expect(log).toEqual([])
+      expect(h.v2.sources.comments).toEqual({ ok: false, at: null, error: 'GitHub rate limit' })
+    }
+  })
+
+  test('observeV2 keeps the store\'s three cases apart: not read (no records, the store source failed, no rebuild), absent (a rebuild may fill it) and an empty list (no records)', async () => {
+    const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
+    const runs: string[][] = []
+    const base = { io, rt: { ...runtimeOf(), config: config({ planner: 'v2' }) }, run: async (argv: string[]) => (runs.push(argv), { exitCode: 0, stdout: '', stderr: '' }), state: state(), poolJson: null, backoff: false, limited: () => false }
+    const of = async (stored: V2Stored) => {
+      const c = emptyCache()
+      return (await observeV2({ ...base, cache: c.v2, github: c.github, stored })).v2
+    }
+    const failed = await of({ records: null, heads: null, error: `records:${REPO} could not be read: the store is down` })
+    expect(failed).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: false, error: `records:${REPO} could not be read: the store is down` } } })
+    expect(await of({ records: null, heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'none', sources: { store: { ok: true } } })
+    expect(await of({ records: [], heads: null, error: null })).toMatchObject({ records: [], recordsFrom: 'store', sources: { store: { ok: true } } })
+    expect(runs.filter(a => a[0] === 'dev-query')).toEqual([])
   })
 
   test('with no store records and no rebuild built yet, there are no records, and a state built outside a pass reads nothing', () => {

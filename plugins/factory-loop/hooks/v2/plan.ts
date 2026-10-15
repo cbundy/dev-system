@@ -6,7 +6,8 @@
 // The order is the order the act step runs the actions in: R1 first (6.2), then the record's
 // rules (S0 to S6, H1), the slots (W2 before W1), the merge queue (Q1, Q2), the interventions, and
 // the fleet's (H2, O3); what used up its attempts is told; G4 admits; R2's restart goes last of
-// all, after the title.
+// all, after the title, and only on a pass that admitted nothing else. When the records could not
+// be read, the record's, slot and queue rules plan nothing (G2).
 import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleOf } from '../foundation'
 import type { Config, PlanResult, State } from '../types'
 import { reconcile } from './reconcile'
@@ -29,10 +30,17 @@ export function planV2(state: State, config: Config): PlanResult {
     skip(base, 'G2', null, 'v2 sources not read: the planner and the shadow are v1')
   } else {
     const ctx: V2Ctx = Object.assign(base, { v2: state.v2 })
-    reconcile(ctx)
-    stateRules(ctx)
-    slotRules(ctx)
-    queueRules(ctx)
+    // records not read are blind for them: no rule that could release, claim or start runs, since
+    // every live claim would look like a ghost and every slot like a free one (6.2)
+    const store = state.v2.sources.store
+    if (store.ok) {
+      reconcile(ctx)
+      stateRules(ctx)
+      slotRules(ctx)
+      queueRules(ctx)
+    } else {
+      skip(ctx, 'G2', null, `v2 records not read: ${store.error ?? 'the store failed'}; nothing is released, claimed or started`)
+    }
     interventionRules(ctx)
     fleetRules(ctx)
     restartTells(ctx)
@@ -40,7 +48,7 @@ export function planV2(state: State, config: Config): PlanResult {
     counts = stateTitle(ctx)
   }
   const actions = admit(base)
-  const restart = blind ? null : restartOf(base)
+  const restart = blind ? null : restartOf(base, actions)
   const title = titleOf({
     repo: state.repo,
     counts: counts?.counts ?? null,

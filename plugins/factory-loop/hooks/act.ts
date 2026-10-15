@@ -23,7 +23,7 @@ import type { BreakerNotice } from './rails'
 import type { Action, ActionKind, AgentStatus, AgentType, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { planV2 } from './v2/plan'
 import { V2_EXECUTORS } from './v2/registry'
-import { stepAnswered, stepRecorded } from './v2/steps'
+import { stepAnswered, stepAnswers, stepRecorded } from './v2/steps'
 import { STEP_AGENT, V2_ACTION_KINDS } from './v2/types'
 import { answerTool, expireWakes, onTurnComplete, onTurnStart, wakeExecutors } from './wake'
 import type { TurnEnd } from './wake'
@@ -428,29 +428,25 @@ export type Acted = { state: State; result: PlanResult; report: ActReport; plann
 export type Shadowed = PlanResult | { error: string }
 
 // planPass: the planner's plan (v2 SPEC 2.3), and with planner v1 and the shadow on, the v2
-// shadow's beside it, which is logged and never executed.
-export function planPass(state: State, config: Config): { result: PlanResult; shadow: Shadowed | null } {
+// shadow's beside it, which is logged and never executed. The shadow plans with the settings v2
+// would run with (v2Config: v2's defaults where no file sets a key), in the pass's mode.
+export function planPass(state: State, config: Config, v2Config: Config = config): { result: PlanResult; shadow: Shadowed | null } {
   if (config.planner === 'v2') return { result: planV2(state, config), shadow: null }
   const result = plan(state, config)
   if (config.shadow !== 'v2') return { result, shadow: null }
   try {
-    return { result, shadow: planV2(state, config) }
+    return { result, shadow: planV2(state, { ...v2Config, mode: config.mode }) }
   } catch (err) {
     return { result, shadow: { error: clip(`the v2 shadow threw: ${message(err)}`) } }
   }
 }
 
-// stepAnswers: under planner v2, each running agent step whose answer is recorded ends when it
-// is read (v2 SPEC 10.8), a writer's ok excepted, which waits for its turn's end.
-async function stepAnswers(env: ActEnv, state: State, now: Ms): Promise<LedgerEntry[]> {
-  const moved: LedgerEntry[] = []
-  for (const was of env.live.ledger.filter(e => e.kind === 'agent-step' && e.status === 'running')) {
-    const exec = await stepRecorded(ctxOf(env, state, was), was, false)
-    const current = env.live.ledger.find(e => e.key === was.key)
-    if (exec === null || current?.status !== 'running' || current.startedAt !== was.startedAt) continue
-    moved.push(...transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config })))
-  }
-  return moved
+// finishAsRead: an answer read for an entry, applied only while the entry still runs as it was
+// read (its turn.complete may have finished it during the read); the entries it moved.
+function finishAsRead(env: ActEnv, was: LedgerEntry, exec: Exec, now: Ms): LedgerEntry[] {
+  const current = env.live.ledger.find(e => e.key === was.key)
+  if (current?.status !== 'running' || current.agentId !== was.agentId || current.startedAt !== was.startedAt) return []
+  return transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config }))
 }
 
 // answeredBeforeLost: the agent entries the agent list would mark lost (gone from it, or its turn
@@ -466,10 +462,7 @@ async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly Li
   const moved: LedgerEntry[] = []
   for (const was of lost) {
     const exec = was.kind === 'agent-step' ? await stepRecorded(ctxOf(env, state, was), was, true) : await scriptAnswered(ctxOf(env, state, was), was)
-    if (exec === null) continue
-    const current = env.live.ledger.find(e => e.key === was.key)
-    if (current?.status !== 'running' || current.agentId !== was.agentId || current.startedAt !== was.startedAt) continue
-    moved.push(...transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config })))
+    if (exec !== null) moved.push(...finishAsRead(env, was, exec, now))
   }
   return moved
 }
@@ -486,14 +479,15 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
-  if (env.rt.config.planner === 'v2') moved.push(...(await stepAnswers(env, observed, now)))
+  // under planner v2 a recorded answer ends its step when read (v2 SPEC 10.8)
+  if (env.rt.config.planner === 'v2') for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e))) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {
     await env.save()
     await logLoop(env, moved)
   }
   const state = { ...observed, ledger: env.live.ledger }
   const from = performance.now()
-  const { result, shadow } = planPass(state, env.rt.config)
+  const { result, shadow } = planPass(state, env.rt.config, env.rt.v2Config)
   const planned = { ms: performance.now() - from, at: await env.io.now() }
   const report = await runActions(env, state, result.actions)
   return { state, result, report, planned, shadow }

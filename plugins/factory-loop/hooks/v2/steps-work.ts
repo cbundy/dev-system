@@ -3,7 +3,9 @@
 // contracts (contracts-work.mjs: design-v2, build, fix) and what an answer means: a brief, a
 // question or a split; a build with commits on origin beyond the base, or that it cannot; a fix
 // with a new head on origin, or every finding declined. A writer's result reads origin's branch
-// directly (`git ls-remote origin refs/heads/<branch>`), and a failed read is unknown.
+// directly (`git ls-remote origin refs/heads/<branch>`), and a failed read is unknown. build and
+// fix also give `says` (steps.ts StepModule), so a writer's not-ok ends its step when read while
+// its ok waits for the turn's end and the stop gate (10.8).
 //
 // STUB of build unit U1. U5 fills it; until then each step refuses to start, never retried.
 import type { StepModule } from './steps'
