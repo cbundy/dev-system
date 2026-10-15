@@ -1110,7 +1110,8 @@ in act mode with no kill switch. Only one wake is open at a time (rule `O2`).
   and flags, never the diff. The code reading itself is the adjudicator's (rule `M4`).
 - **Guard FAIL lines no rule maps**, failed CI checks, and unparseable designer reports.
 - **Re-drives** (I-57, I-61): `daemon.log`, rebase, `callum-flow-regate`, a fresh `axi run`.
-- **Releases and Run its** (I-36, I-85), with the owner, through the `release` skill.
+- **Releases and Run its** (I-36, I-85), through the repo's release process (its `release` skill
+  or `RELEASING.md`), with the owner only where that process requires approval.
 - **Owner chat**: relaying `tell` lines, answering questions, turning instructions into control
   calls, and keeping `.claude/orchestrator-memory.md` (I-81).
 

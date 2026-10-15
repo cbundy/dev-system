@@ -10,7 +10,9 @@ the `Release` workflow only verifies, tags and publishes.
 
 1. On a branch from an up-to-date main, use the `release` skill
    (`.claude/skills/release/SKILL.md`) to draft `release-notes/vX.Y.Z.md` from the merged
-   PRs and propose the version. Once you approve the version and notes, run:
+   PRs and pick the version. Agents have standing release authority: they pick the version
+   and notes, ship without waiting for approval, and report the tag, release URL and
+   workflow results to the owner afterwards. Run:
 
    ```
    node scripts/release-bump.js X.Y.Z
@@ -25,7 +27,7 @@ the `Release` workflow only verifies, tags and publishes.
    markers before committing. When the release includes base image changes, add
    `--image A.B.C` (plain MAJOR.MINOR.PATCH; see "The base image" below) so the same PR sets `images/base/VERSION`;
    without `--image` that file is left untouched.
-2. Commit the approved notes in the same bump PR. `npm run lint` validates every file in
+2. Commit the notes in the same bump PR. `npm run lint` validates every file in
    `release-notes/` and requires valid notes for the `package.json` version.
 3. Open a PR with the result and merge it when `ci` is green. Run the `Release` workflow
    (step 4) immediately after: the bumped ref names a tag that does not exist until it runs.
@@ -96,7 +98,7 @@ version and is bumped at release time, never in a feature PR (concurrent PRs eac
 it collide and force a re-gate of every other open PR). The release bump PR sets it:
 `node scripts/release-bump.js X.Y.Z --image A.B.C`. The `release` skill works out whether
 image inputs changed since the last tag (`images/base/` other than `VERSION`, and
-`features/src/callum-tools/`, the same paths the publish workflow builds on) and proposes
+`features/src/callum-tools/`, the same paths the publish workflow builds on) and picks
 the level: patch for fixes, minor for a new tool or capability, major for a breaking
 change. After the bump PR merges, run the `Publish base image` workflow (Actions tab, or
 `gh workflow run publish-base-image.yml`) to push the new tags. The workflow also

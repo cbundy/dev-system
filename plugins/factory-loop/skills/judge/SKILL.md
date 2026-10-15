@@ -143,14 +143,17 @@ of when and why the model was involved (D-13).
   after all: `done`. Anything else: `hold` with what you found.
 - **`run-it`** (`issue pr`): the PR merged with a `run-it` rollout and the issue stays open.
   Its release goes out on its own, never with another `run-it` change; then do the issue's
-  `## Run it` steps, record the result on the issue and close it. A release needs the owner:
-  say in one line what is ready and answer `hold` (`reason: release awaits the owner`), then
-  finish in chat. `done` once the result is recorded and the issue closed. A held Run it keeps
+  `## Run it` steps, record the result on the issue and close it. Cut the release by the repo's
+  release process (its release skill or `RELEASING.md`). Stop for the owner only where that
+  process itself requires approval: then say in one line what is ready and answer `hold`
+  (`reason: release awaits the owner`), and finish in chat once approved. `done` once the
+  result is recorded and the issue closed. A held Run it keeps
   the next `run-it` PR waiting until the issue closes, or until you call the control tool with
   `resume <N>` once its result is recorded.
-- **`release`** (`closed expected`): `Next release` has no open items. Tell the owner in one
-  line and follow the repo's release process (its release skill or `RELEASING.md`) to its
-  owner-approval stop: `hold` while it waits, `done` once released. Never report holding a
+- **`release`** (`closed expected`): `Next release` has no open items. Follow the repo's
+  release process (its release skill or `RELEASING.md`) and tell the owner in one line what
+  shipped. Stop for the owner only where that process itself requires approval: `hold` while it
+  waits. `done` once released. Never report holding a
   release for an issue not in it.
 
 ## TELL: one line to the owner
