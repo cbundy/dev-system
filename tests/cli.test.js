@@ -668,3 +668,43 @@ test("settings.json update with no baseline unions the current deny entries in",
     assert.ok(deny.includes(entry));
   }
 });
+
+test("settings.json: init writes attribution.commit empty and update adds it over an old baseline (dev-system#571)", (t) => {
+  const repo = initRepo(t);
+  assert.deepEqual(JSON.parse(read(repo, ".claude/settings.json")).attribution, { commit: "" });
+
+  // Simulate a consumer from before the key existed: absent from file and baseline.
+  for (const rel of [".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
+    const file = path.join(repo, rel);
+    const s = JSON.parse(fs.readFileSync(file, "utf-8"));
+    delete s.attribution;
+    if (rel === ".claude/settings.json") s.env = { FOO: "bar" };
+    fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
+  }
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.deepEqual(merged.attribution, { commit: "" });
+  assert.deepEqual(merged.env, { FOO: "bar" }, "repo-added key survives");
+});
+
+test("settings.json: update over a consumer-set attribution keeps the template's commit and the repo's other keys (dev-system#571)", (t) => {
+  const repo = initRepo(t);
+
+  // A consumer that set its own attribution before the template had the key.
+  for (const rel of [".claude/settings.json", ".callum-dev/baseline/.claude/settings.json"]) {
+    const file = path.join(repo, rel);
+    const s = JSON.parse(fs.readFileSync(file, "utf-8"));
+    delete s.attribution;
+    if (rel === ".claude/settings.json") {
+      s.attribution = { commit: "Co-Authored-By: X", pr: "custom" };
+      s.env = { FOO: "bar" };
+    }
+    fs.writeFileSync(file, JSON.stringify(s, null, 2) + "\n");
+  }
+  const result = run(repo, "update");
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const merged = JSON.parse(read(repo, ".claude/settings.json"));
+  assert.deepEqual(merged.attribution, { commit: "", pr: "custom" }, "template commit wins, repo-added pr kept");
+  assert.deepEqual(merged.env, { FOO: "bar" }, "repo-added key survives");
+});

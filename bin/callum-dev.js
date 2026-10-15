@@ -34,9 +34,8 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // How `update` treats each file (templates/README.md documents the split per file):
 //   merge         3-way merge; repo-owned edits survive, synced changes come forward
 //   replace       wholesale overwrite; the file is fully synced, never hand-edited
-//   settings-json synced by key path: everything the template defines comes from
-//                 the template, key paths the repo added beyond the old baseline
-//                 survive, and `permissions.allow` is unioned (see `mergeSettingsJson`)
+//   settings-json key-path merge; see `mergeSettingsJson` for ownership and
+//                 permission-array rules
 //   init-only     copied at init as a starting point, then fully repo-owned - update
 //                 never touches it
 //
@@ -268,9 +267,10 @@ async function init(options) {
 // - Every key path the template defines comes from the new template (synced wins),
 //   and a key the template dropped since the old baseline is dropped here too.
 // - Every key path the repo ADDED - present in the current file, absent from the old
-//   baseline - is carried over, e.g. a repo's `extraKnownMarketplaces.callum.autoUpdate`
-//   (dev-system#57). Plain objects are compared key by key; arrays and scalars are
-//   leaves. A repo-added key whose parent the template no longer has keeps its parent.
+//   baseline - is carried over unless the new template defines it, e.g. a repo's
+//   `extraKnownMarketplaces.callum.autoUpdate` (dev-system#57). Plain objects are
+//   compared key by key; arrays and scalars are leaves. A repo-added key whose parent
+//   the template no longer has keeps its parent.
 // - `permissions.allow` and `permissions.deny` are the arrays merged by value: the fresh
 //   synced list, unioned with whatever entries the repo added beyond the old baseline
 //   (an entry the template dropped is dropped; a deny list the repo already had survives

@@ -141,7 +141,7 @@ steps.
 | `.no-mistakes.yaml` | 3-way merge | Pipeline config; see [template ownership rules](../templates/README.md). |
 | `.github/pull_request_template.md` | 3-way merge | Synced: the four-heading PR body skeleton that `pr.template` in `.no-mistakes.yaml` enforces. |
 | `CLAUDE.md` | 3-way merge | Synced: global agent rules, ephemeral-container rules. Repo owns: canonical commands, sub-agent isolation. |
-| `.claude/settings.json` | key-path merge: template keys synced, repo-added keys kept, `permissions.allow` unioned | Synced: marketplace, `callum-flow@callum` enabled, the flow's allow list. Repo owns: any key the template does not have, extra allow entries. |
+| `.claude/settings.json` | key-path merge | Claude Code project settings; see the [settings reference](../templates/README.md#claudesettingsjson---claudesettingsjson) for contents, ownership and merge rules. |
 | `.devcontainer/devcontainer.json` | 3-way merge | Repo owns: name, image or build, env, extra mounts. Synced: the five per-repo `/persist` volumes. |
 | `.gitignore` | 3-way merge | Synced block on top, repo-owned block at the bottom (last match wins) |
 | `treehouse.toml` | init only | Fully repo-owned |

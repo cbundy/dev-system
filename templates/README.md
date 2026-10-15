@@ -86,6 +86,12 @@ load ([plugin manifest reference](https://code.claude.com/docs/en/plugins-refere
 allow list from this synced template is the only mechanism that reaches every
 consumer repo.
 
+The template also owns `attribution.commit` (`""`), which turns off the harness's default
+Co-Authored-By commit trailer for every session and sub-agent in the repo (dev-system#571).
+`callum-dev update` adds it to consumers lacking it and resets a consumer-set commit
+attribution to `""`. Repo-added attribution keys such as `attribution.pr` survive under
+the key-path rules below. PR attribution and the session trailer are unchanged.
+
 JSON has no comment syntax, so the split is documented here instead of inline:
 
 The split is by key path, compared against the pristine baseline in
@@ -100,8 +106,9 @@ values are compared whole):
 - **Repo-owned**: any key the repo adds that the template does not have, at any depth -
   a new top-level key, or one nested inside a synced object, such as
   `"autoUpdate": false` under `extraKnownMarketplaces.callum` (dev-system#57).
-  `callum-dev update` keeps every key present in your file but absent from the old
-  baseline, even if the template later drops its parent object.
+  `callum-dev update` keeps keys present in your file but absent from the old baseline
+  unless the new template defines them, even if the template later drops their parent
+  object. Newly defined template keys win over repo-added values.
 - **Repo-owned**: entries you append to `permissions.allow` beyond the synced list
   above - e.g. this repo's own `Bash(scripts/evidence-upload.sh *)` or
   `Bash(scripts/worktree-bootstrap.sh *)` (see mealplanning#442 for the pattern).
