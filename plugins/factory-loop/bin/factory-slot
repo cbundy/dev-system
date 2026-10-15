@@ -9,9 +9,9 @@
 //     a slot already carries that holder (a retry after a lost answer keeps it). Prints
 //     `LEASED path=<p> lease=<id>`. The branch is checked out by prepare.
 //   factory-slot prepare <path> <lease> <branch> <marker json>
-//     For one step attempt (10.2): ends the slot's processes; saves its uncommitted work (tracked
-//     changes and untracked files) as one binary patch, <loop dir>/leftovers/<N>-<life>-s<seq>-<ms>.patch;
-//     `git fetch --prune origin`, `git reset --hard`, `git clean -fd`, then
+//     For one step attempt (10.2): ends the slot's processes; `git fetch --prune origin`; saves the
+//     slot's leftovers as one binary patch, <loop dir>/leftovers/<N>-<life>-s<seq>-<ms>.patch (see
+//     "Leftovers" below); `git reset --hard`, `git clean -fd`, then
 //     `git switch --ignore-other-worktrees -C <branch> origin/<branch>`, or from origin's default
 //     branch (with no upstream) when origin has no such branch, so a stale slot or a person's
 //     worktree that has the branch checked out does not block it; writes the step marker
@@ -22,14 +22,27 @@
 //     its ancestors), SIGKILL to survivors after 5 seconds (10.8). Prints `KILLED <n>`.
 //   factory-slot free <path> <lease> <loop dir>
 //     W2 (10.1): ends its processes, saves its leftovers (<N>-<life>-free-<ms>.patch), resets and
-//     cleans it, then `treehouse return <path> --if-lease-id <lease> --force`, and checks the pool
-//     shows it back. Prints `FREED path=<p>`, or `GONE path=<p>` when the lease is no longer on the
+//     cleans it, detaches it at the branch's start, then `treehouse return <path> --if-lease-id
+//     <lease> --force`, and checks the pool shows it back. Prints `FREED path=<p>`, and
+//     `LEFTOVERS file=<f>` when it saved any; or `GONE path=<p>` when the lease is no longer on the
 //     slot (it was returned already, or the slot went): nothing is touched then.
+//
+// Leftovers: what a reset would lose, as one binary patch that applies onto the commit the next
+// step starts from (origin's branch, else origin's default branch): the tracked changes and the
+// untracked files, and, while the slot is on the branch, the commits on it that origin has under no
+// ref (an agent that committed, then died, timed out or hit the push guard before it pushed). The
+// patch is taken against the merge base of HEAD and that start, in a scratch index, so the slot's own
+// is not touched; its first line names the base and the HEAD it was taken from.
 //
 // Every op refuses (exit 3) a path that is not a slot of the pool and a lease whose holder is not
 // `factory-loop:`-prefixed; prepare also refuses a lease that is not the one named, or whose holder
 // is not the marker's issue and life. Leftovers older than 7 days are pruned whenever one is saved
 // (D-46). Git runs with the repo's hooks off, so a checkout runs no install.
+//
+// A leading `--budget-ms <n>` bounds the whole op: each command gets what is left of it, and one
+// that would start with none left fails the op. The loop's executor passes a budget inside its own
+// timeout (hooks/v2/act-slots.ts), so the tool ends its commands itself (a `treehouse get` that
+// still fetches is killed, never orphaned to finish a second lease later).
 //
 // Exit codes: 0 done, 1 failed (worth a retry), 2 usage, 3 refused. Environment for tests:
 // CALLUM_FLOW_TREEHOUSE_BIN, CALLUM_FLOW_GIT_BIN, FACTORY_SLOT_KILL_GRACE_MS.
@@ -41,10 +54,10 @@ const os = require('node:os')
 const path = require('node:path')
 
 const ME = 'factory-slot'
-const USAGE = `usage: ${ME} lease <N> <life>
-       ${ME} prepare <path> <lease> <branch> <marker json>
-       ${ME} kill <path>
-       ${ME} free <path> <lease> <loop dir>`
+const USAGE = `usage: ${ME} [--budget-ms <n>] lease <N> <life>
+       ${ME} [--budget-ms <n>] prepare <path> <lease> <branch> <marker json>
+       ${ME} [--budget-ms <n>] kill <path>
+       ${ME} [--budget-ms <n>] free <path> <lease> <loop dir>`
 
 const HOLDER_PREFIX = 'factory-loop:'
 const HOLDER = /^factory-loop:([1-9]\d*):([0-9a-z]+)$/
@@ -70,11 +83,14 @@ function bins(env) {
   return { treehouse: env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse', git: env.CALLUM_FLOW_GIT_BIN || 'git' }
 }
 
-// run: one command, stdin closed (an empty one, so no prompt waits), never through a shell.
-function runner(env) {
+// run: one command, stdin closed (an empty one, so no prompt waits), never through a shell, within
+// CMD_TIMEOUT_MS and what is left of the op's budget (deadline, or null for none).
+function runner(env, deadline) {
   const b = bins(env)
   return (name, args, opts = {}) => {
-    const r = spawnSync(b[name], args, { encoding: 'utf8', cwd: opts.cwd, env: { ...env, ...(opts.env || {}) }, input: '', timeout: CMD_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024 })
+    const left = deadline === null ? CMD_TIMEOUT_MS : Math.min(CMD_TIMEOUT_MS, deadline - Date.now())
+    if (left <= 0) throw new Failed(`out of time: the op's budget ran out before ${name} ${args.filter((a) => !a.startsWith('-')).slice(0, 2).join(' ')}`)
+    const r = spawnSync(b[name], args, { encoding: 'utf8', cwd: opts.cwd, env: { ...env, ...(opts.env || {}) }, input: '', timeout: left, killSignal: 'SIGKILL', maxBuffer: 256 * 1024 * 1024 })
     return { code: r.error ? -1 : r.status === null ? -1 : r.status, stdout: r.stdout || '', stderr: r.error ? String(r.error.message) : r.stderr || '' }
   }
 }
@@ -187,30 +203,62 @@ async function endIn(dir, graceMs) {
 
 // --- leftovers (10.2) ----------------------------------------------------------------------------------
 
-// saveLeftovers: the slot's tracked changes and untracked files as one binary patch against its
-// HEAD, built in a scratch index so the slot's own is not touched; no file when nothing changed.
-// problem: why nothing could be saved.
-function saveLeftovers(io, dir, loopDir, name) {
-  const head = git(io, dir, ['rev-parse', '--verify', '-q', 'HEAD'])
-  if (head.code !== 0) return { file: null, problem: 'no HEAD' }
+const hasRef = (io, dir, ref) => git(io, dir, ['rev-parse', '--verify', '-q', `${ref}^{commit}`]).code === 0
+
+// startOf: the commit a step on this branch starts from (10.2): origin's branch, else origin's
+// default branch; null when origin has neither (as the slot's refs know them).
+function startOf(io, dir, branch) {
+  if (branch !== null && hasRef(io, dir, `refs/remotes/origin/${branch}`)) return `origin/${branch}`
+  const base = defaultBranch(io, dir)
+  return base !== null && hasRef(io, dir, `refs/remotes/origin/${base}`) ? `origin/${base}` : null
+}
+
+// baseOf: what the leftovers are taken against. HEAD, unless the slot is on `branch` with commits
+// that origin has under no ref: then the merge base of HEAD and the start, so those commits are in
+// the patch too and it applies onto the start. unpushed: how many such commits (0 when none or not
+// on the branch). problem: why unpushed commits could not be given a base.
+function baseOf(io, dir, head, branch, start) {
+  const on = git(io, dir, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+  if (branch === null || on.code !== 0 || on.stdout.trim() !== branch) return { base: head, unpushed: 0, problem: null }
+  const ahead = git(io, dir, ['rev-list', '--count', 'HEAD', '--not', '--remotes=origin'])
+  if (ahead.code !== 0) return { base: head, unpushed: 0, problem: `its commits not on origin could not be counted: ${why(ahead)}` }
+  const unpushed = Number(ahead.stdout.trim()) || 0
+  if (unpushed === 0) return { base: head, unpushed, problem: null }
+  const mb = start === null ? null : git(io, dir, ['merge-base', 'HEAD', start])
+  if (mb === null || mb.code !== 0 || mb.stdout.trim() === '') return { base: head, unpushed, problem: `its ${unpushed} commit(s) not on origin have no merge base with ${start ?? "origin's branch"}` }
+  return { base: mb.stdout.trim(), unpushed, problem: null }
+}
+
+// saveLeftovers: what a reset of the slot would lose (see "Leftovers" above) as one binary patch,
+// built in a scratch index so the slot's own is not touched; no file when nothing would be lost.
+// branch: the step's branch; start: the commit the next step starts from. lost: whether anything
+// would be lost (a dirty tree, or unpushed commits). problem: why it could not all be saved.
+function saveLeftovers(io, dir, loopDir, name, branch, start) {
+  const h = git(io, dir, ['rev-parse', '--verify', '-q', 'HEAD'])
+  if (h.code !== 0) return { file: null, lost: !cleanTree(io, dir), problem: 'no HEAD' }
+  const head = h.stdout.trim()
+  const b = baseOf(io, dir, head, branch, start)
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-`))
   const opts = { env: { GIT_INDEX_FILE: path.join(scratch, 'index') } }
+  const lost = () => b.unpushed > 0 || !cleanTree(io, dir)
   try {
     for (const args of [['read-tree', 'HEAD'], ['add', '-A']]) {
       const r = git(io, dir, args, opts)
-      if (r.code !== 0) return { file: null, problem: why(r) }
+      if (r.code !== 0) return { file: null, lost: lost(), problem: why(r) }
     }
-    const d = git(io, dir, ['diff', '--cached', '--binary', 'HEAD'], opts)
-    if (d.code !== 0) return { file: null, problem: why(d) }
-    if (d.stdout === '') return { file: null, problem: null }
+    const d = git(io, dir, ['diff', '--cached', '--binary', b.base], opts)
+    if (d.code !== 0) return { file: null, lost: lost(), problem: why(d) }
+    if (d.stdout === '') return { file: null, lost: lost(), problem: b.problem }
     const out = path.join(loopDir, 'leftovers')
     fs.mkdirSync(out, { recursive: true })
     pruneLeftovers(out)
     const file = path.join(out, `${name}-${Date.now()}.patch`)
-    fs.writeFileSync(file, d.stdout)
-    return { file, problem: null }
+    // git apply skips the text before the first diff header
+    const commits = b.unpushed > 0 && b.problem === null ? `, with its ${b.unpushed} commit(s) not on origin` : ''
+    fs.writeFileSync(file, `${ME} leftovers: against ${b.base}${b.base === head ? ' (HEAD)' : ''}, from HEAD ${head}${commits}. Apply with: git apply --3way <this file>\n\n${d.stdout}`)
+    return { file, lost: lost(), problem: b.problem }
   } catch (err) {
-    return { file: null, problem: String(err && err.message ? err.message : err) }
+    return { file: null, lost: lost(), problem: String(err && err.message ? err.message : err) }
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
@@ -235,17 +283,17 @@ function cleanTree(io, dir) {
   return r.code === 0 && r.stdout.trim() === ''
 }
 
-// clear: the slot's processes ended and its uncommitted work saved, then its tree reset and
-// cleaned. Work that could not be saved is left alone: it fails. The processes ended and the file.
-async function clear(io, dir, loopDir, name, graceMs) {
-  const ended = await endIn(dir, graceMs)
-  const saved = saveLeftovers(io, dir, loopDir, name)
-  if (saved.problem !== null && !cleanTree(io, dir)) throw new Failed(`its uncommitted work could not be saved (${saved.problem}); the slot was left as it is`)
+// clear: with the slot's processes ended, its leftovers saved (against the start of the next step
+// on `branch`), then its tree reset and cleaned. Work that could not be saved is left alone: it
+// fails. The file, or null.
+function clear(io, dir, loopDir, name, branch, start) {
+  const saved = saveLeftovers(io, dir, loopDir, name, branch, start)
+  if (saved.problem !== null && saved.lost) throw new Failed(`its work could not be saved (${saved.problem}); the slot was left as it is`)
   // a rebase, am or cherry-pick an agent left half done would hold the switch; its work is saved
   for (const cmd of ['rebase', 'am', 'cherry-pick']) git(io, dir, [cmd, '--quit'])
   must(git(io, dir, ['reset', '-q', '--hard']), 'git reset --hard')
   must(git(io, dir, ['clean', '-q', '-fd']), 'git clean -fd')
-  return { ended, file: saved.file }
+  return saved.file
 }
 
 // --- ops ------------------------------------------------------------------------------------------------
@@ -307,15 +355,16 @@ async function prepare(io, args, cwd, graceMs) {
   if (leaseOf(w) !== id) throw refuse(`${p} is not on lease ${id} (it is on ${leaseOf(w) || 'no lease'})`)
   if (holderOf(w) !== `factory-loop:${marker.issue}:${marker.life}`) throw refuse(`${p} is leased by ${holderOf(w)}, not for #${marker.issue} life ${marker.life}`)
   const dir = w.path
-  const { file } = await clear(io, dir, marker.loopDir, `${marker.issue}-${marker.life}-s${marker.seq}`, graceMs)
+  await endIn(dir, graceMs)
+  // fetched first, so the leftovers are taken against the commit the step starts from
   must(git(io, dir, ['fetch', '-q', '--prune', 'origin']), 'git fetch origin')
-  const onOrigin = git(io, dir, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`]).code === 0
-  if (onOrigin) {
-    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '-C', branch, `origin/${branch}`]), `git switch to origin/${branch}`)
+  const start = startOf(io, dir, branch)
+  if (start === null) throw new Failed('origin has no default branch the slot can start from')
+  const file = clear(io, dir, marker.loopDir, `${marker.issue}-${marker.life}-s${marker.seq}`, branch, start)
+  if (start === `origin/${branch}`) {
+    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '-C', branch, start]), `git switch to ${start}`)
   } else {
-    const base = defaultBranch(io, dir)
-    if (base === null) throw new Failed('origin has no default branch the slot can start from')
-    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '--no-track', '-C', branch, `origin/${base}`]), `git switch to a new ${branch} from origin/${base}`)
+    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '--no-track', '-C', branch, start]), `git switch to a new ${branch} from ${start}`)
   }
   const head = must(git(io, dir, ['rev-parse', 'HEAD']), 'git rev-parse HEAD').stdout.trim()
   const gitDir = must(git(io, dir, ['rev-parse', '--absolute-git-dir']), 'git rev-parse --absolute-git-dir').stdout.trim()
@@ -338,20 +387,37 @@ async function free(io, args, cwd, graceMs) {
   if (w === null || leaseOf(w) !== id) return [`GONE path=${p}`]
   const m = HOLDER.exec(holderOf(w))
   if (m === null) throw refuse(`${p} is not leased by the factory loop (holder ${holderOf(w) || 'none'})`)
-  await clear(io, w.path, loopDir, `${m[1]}-${m[2]}-free`, graceMs)
+  await endIn(w.path, graceMs)
+  // the loop's branch is the one the slot is on; its start as the slot's refs know it (a push from
+  // the slot moved origin's ref there too, so no fetch is needed to tell what was pushed)
+  const on = git(io, w.path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+  const branch = on.code === 0 ? on.stdout.trim() : null
+  const start = startOf(io, w.path, branch)
+  const file = clear(io, w.path, loopDir, `${m[1]}-${m[2]}-free`, branch, start)
+  // the slot goes back detached at the start, so its next holder does not inherit the branch and its
+  // unpushed commits (they are saved, and the branch keeps them); best effort, the tree is clean
+  if (start !== null) git(io, w.path, ['switch', '-q', '--detach', start])
   const r = io.run('treehouse', ['return', w.path, '--if-lease-id', id, '--force'], { cwd })
   const after = slotAt(poolOf(io), w.path)
-  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`]
+  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
   throw new Failed(r.code !== 0 ? `treehouse return: ${why(r)}` : `treehouse return left it ${after.status || 'held'}`)
 }
 
 // --- main ------------------------------------------------------------------------------------------------
 
 async function cli(argv, env, cwd = process.cwd()) {
-  const io = { run: runner(env) }
+  let rest = argv
+  let deadline = null
+  if (rest[0] === '--budget-ms') {
+    const ms = Number(rest[1])
+    if (!Number.isInteger(ms) || ms <= 0) throw usage('--budget-ms takes a positive number of milliseconds')
+    deadline = Date.now() + ms
+    rest = rest.slice(2)
+  }
+  const io = { run: runner(env, deadline) }
   const grace = Number(env.FACTORY_SLOT_KILL_GRACE_MS)
   const graceMs = Number.isInteger(grace) && grace >= 0 ? grace : KILL_GRACE_MS
-  const [op, ...args] = argv
+  const [op, ...args] = rest
   switch (op) {
     case 'lease':
       return lease(io, args, cwd)

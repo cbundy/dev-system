@@ -12,10 +12,11 @@ import type { ActIo } from '../hooks/exec'
 import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, Config, LedgerEntry, PlanResult, State } from '../hooks/types'
-import { SLOT_SCRIPT, readSlot, slotArgv } from '../hooks/v2/act-slots'
+import { SLOT_MARGIN_MS, SLOT_SCRIPT, SLOT_TIMEOUT_MS, readSlot, slotArgv } from '../hooks/v2/act-slots'
 import { freeKey, leaseKey, lifeOf, prepareKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, holderOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
+import { leftoversOf } from '../hooks/v2/rules-agent'
 import { madeRecord } from '../hooks/v2/table'
 import { ISSUE_STATES, SLOT_STATES } from '../hooks/v2/types'
 import type { IssueRecord, IssueState, Lease, StepMarker, V2State } from '../hooks/v2/types'
@@ -121,11 +122,13 @@ describe('W1: lease', () => {
     expect(slots(p, 'lease')).toEqual([expect.objectContaining({ issue: 40, key: leaseKey(lost, 1), reason: expect.stringContaining('gone') })])
     expect(said(p, 40)).toContain('design waits for its slot (W1)')
     expect(leased(plan(world([...others, lost], { leases, free: 0 })))).toEqual([])
-    // its step still runs in the lost slot: the lease waits, so the step's unknown names the slot
+    // its step still runs in the lost slot: the step ends unknown now, its cause the slot (5.1), and
+    // the lease waits until the stopped step no longer runs
     const step = entry(stepKey(lost, 'design', 1), 'agent-step', { issue: 40, status: 'running', endedAt: null, startedAt: NOW - 5 * MIN, step: 'design' })
     const busy = plan(world([...others, lost], { leases, ledger: [step] }))
     expect(leased(busy)).toEqual([])
     expect(said(busy, 40)).toContain(`W1: its slot is gone and ${stepKey(lost, 'design', 1)} still runs`)
+    expect(busy.actions.filter(a => a.kind === 'transition' && a.issue === 40)).toEqual([expect.objectContaining({ row: 'U1', event: 'unknown', cause: 'slot' })])
   })
 
   test('the tier and the owner: a lease is held while they would hold the step it leads to', () => {
@@ -217,6 +220,120 @@ describe('W2: free', () => {
   })
 })
 
+// --- the attempt's slot (10.1, 10.2, 5.1) ------------------------------------------------------------------
+
+const SHA = '9e01b77c0ffee000000000000000000000000002'
+const transitions = (p: PlanResult, n: number) => p.actions.filter(a => a.kind === 'transition' && a.issue === n)
+const agentSteps = (p: PlanResult, n: number) => p.actions.filter(a => a.kind === 'agent-step' && a.issue === n)
+const UNREAD = { store: OK, leases: { ok: false, at: null, error: 'treehouse status did not read' }, prs: OK, interventions: OK, comments: OK }
+
+// prepared: the attempt's prepare, done in this lease.
+function prepared(r: IssueRecord, l: Lease, attempt = 1): LedgerEntry {
+  return entry(prepareKey(r, attempt), 'slot', { issue: r.issue, rule: 'S2', outcome: { kind: 'slot', op: 'prepare', path: l.path, lease: l.lease, head: SHA, killed: null, leftovers: null } })
+}
+
+describe('the attempt\'s slot', () => {
+  test('a prepare counts only for the lease it ran in: its lease gone before the agent started, the attempt ends unknown (cause slot) and no agent starts in a slot never prepared for it', () => {
+    const r = rec(42)
+    const a = leaseFor(r)
+    const b: Lease = { ...a, path: '/slots/other', lease: 'Lother' }
+    const prep = prepared(r, a)
+    // the prepare's slot is in the pool still: the agent starts there
+    expect(agentSteps(plan(world([r], { leases: [a], ledger: [prep] })), 42)).toEqual([expect.objectContaining({ key: stepKey(r, 'build', 1), slot: a.path })])
+    // its lease vanished: the attempt ends now, free (U1), and W1 leases again
+    const gone = plan(world([r], { leases: [], ledger: [prep] }))
+    expect(agentSteps(gone, 42)).toEqual([])
+    expect(transitions(gone, 42)).toEqual([expect.objectContaining({ row: 'U1', event: 'unknown', cause: 'slot' })])
+    expect(leased(gone)).toEqual([42])
+    // W1 leased it another slot already: still no agent there, and the same unknown
+    const moved = plan(world([r], { leases: [b], ledger: [prep] }))
+    expect(agentSteps(moved, 42)).toEqual([])
+    expect(transitions(moved, 42)).toEqual([expect.objectContaining({ row: 'U1', event: 'unknown', cause: 'slot' })])
+    // the free re-run's seq prepares the new slot under its own key before any agent starts
+    const next = { ...r, seq: 4, seqAt: NOW - MIN, cut: true }
+    const again = plan(world([next], { leases: [b], ledger: [prep] }))
+    expect(slots(again, 'prepare')).toEqual([expect.objectContaining({ key: prepareKey(next, 1), path: b.path, lease: b.lease })])
+    expect(agentSteps(again, 42)).toEqual([])
+    // the pool's leases not read: nothing is concluded, and nothing starts
+    const blind = plan(world([r], { leases: [], ledger: [prep] }, { sources: UNREAD }))
+    expect({ steps: agentSteps(blind, 42), transitions: transitions(blind, 42) }).toEqual({ steps: [], transitions: [] })
+  })
+
+  test('a lease that vanishes while the agent runs ends its step at once, unknown with the cause slot; the next seq stops the agent and kills nothing in a slot it no longer holds; W1 leases once it stopped', () => {
+    const r = rec(43)
+    const run = entry(stepKey(r, 'build', 1), 'agent-step', { issue: 43, status: 'running', endedAt: null, startedAt: NOW - 5 * MIN, step: 'build', agentId: 'ag43' })
+    const lost = plan(world([r], { leases: [], ledger: [prepared(r, leaseFor(r)), run] }))
+    expect(transitions(lost, 43)).toEqual([expect.objectContaining({ row: 'U1', event: 'unknown', cause: 'slot', trigger: expect.objectContaining({ key: run.key, status: 'running' }) })])
+    expect(leased(lost)).toEqual([])
+    // with its lease the step runs on; with the leases not read nothing is concluded
+    expect(transitions(plan(world([r], { ledger: [prepared(r, leaseFor(r)), run] })), 43)).toEqual([])
+    expect(transitions(plan(world([r], { leases: [], ledger: [run] }, { sources: UNREAD })), 43)).toEqual([])
+    // the new seq: its entry actions stop the old agent, and no kill runs in a slot that may be another issue's now
+    const next = { ...r, seq: 4, seqAt: NOW - MIN, cut: true }
+    const t = entry(transitionKey(next), 'transition', { issue: 43, startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'transition', row: 'U1', event: 'unknown', cause: 'slot', from: 'building', to: 'building', step: 'build', stored: true, via: 'free:slot' } })
+    const stopping = plan(world([next], { leases: [], ledger: [run, t] }))
+    expect(stopping.actions.filter(a => a.kind === 'stop-agent' && a.issue === 43)).toEqual([expect.objectContaining({ agentId: 'ag43', entry: run.key })])
+    expect(slots(stopping, 'kill')).toEqual([])
+    expect(leased(stopping)).toEqual([])
+    expect(said(stopping, 43)).toContain(`W1: its slot is gone and ${run.key} still runs`)
+    // the agent ended: W1 leases it a slot
+    const stopped = { ...run, status: 'failed' as const, endedAt: NOW - 1000, summary: 'agent killed' }
+    expect(leased(plan(world([next], { leases: [], ledger: [stopped, t] })))).toEqual([43])
+  })
+
+  test('a lease whose free runs or is done is gone: a record resumed meanwhile does not step onto it (T1), and W1 waits for the slot to go back before it leases again', () => {
+    const r = queued(44, { seq: 6, since: NOW - MIN })
+    const l = leaseFor(r)
+    const free = (over: Partial<LedgerEntry> = {}) => entry(freeKey(l.lease), 'slot', { issue: 44, rule: 'W2', ...over })
+    for (const f of [free({ status: 'running', endedAt: null }), free()]) {
+      const p = plan(world([r], { leases: [l], ledger: [f] }))
+      expect({ status: f.status, transitions: transitions(p, 44), leased: leased(p) }).toEqual({ status: f.status, transitions: [], leased: [] })
+      expect(said(p, 44)).toContain(`W1: its old slot ${l.path} is being freed (${freeKey(l.lease)})`)
+    }
+    // a free that failed left the slot leased and whole: the record takes it (T1), and W2 leaves it
+    const failed = plan(world([r], { leases: [l], ledger: [free({ status: 'failed', attempts: 1, maxAttempts: 2 })] }))
+    expect(transitions(failed, 44)).toEqual([expect.objectContaining({ row: 'T1' })])
+    expect(freed(failed)).toEqual([])
+    // a pool read after the free no longer shows it: W1 leases a new slot
+    expect(leased(plan(world([r], { leases: [], ledger: [free()] })))).toEqual([44])
+  })
+
+  test('a second lease of a live life goes back (W2) once nothing of the life runs; the record keeps the one its prepare named, else the first by path', () => {
+    const r = rec(45)
+    const a = leaseFor(r)
+    const dup: Lease = { ...a, path: '/slots/0-dup', lease: 'Ldup' }
+    const prep = prepared(r, a)
+    const p = plan(world([r], { leases: [dup, a], ledger: [prep] }))
+    expect(slots(p, 'free')).toEqual([expect.objectContaining({ key: freeKey(dup.lease), lease: dup.lease, path: dup.path, reason: expect.stringContaining('second lease') })])
+    expect(agentSteps(p, 45)).toEqual([expect.objectContaining({ slot: a.path })])
+    // while something of the life runs, the second lease waits
+    const run = entry(stepKey(r, 'build', 1), 'agent-step', { issue: 45, status: 'running', endedAt: null, startedAt: NOW - MIN, step: 'build' })
+    const busy = plan(world([r], { leases: [dup, a], ledger: [prep, run] }))
+    expect(freed(busy)).toEqual([])
+    expect(transitions(busy, 45)).toEqual([])
+    // a queued record with two and no prepare: it takes the first by path, and the other goes back
+    const q = queued(46)
+    const qa = leaseFor(q)
+    const qdup: Lease = { ...qa, path: '/slots/0-dup46', lease: 'Ldup46' }
+    const qp = plan(world([q], { leases: [qa, qdup] }))
+    expect(transitions(qp, 46)).toEqual([expect.objectContaining({ row: 'T1', trigger: { kind: 'fact', fact: `lease:${qdup.lease}` } })])
+    expect(freed(qp)).toEqual([qa.lease])
+  })
+
+  test('leftoversOf: the files the life\'s prepares and frees saved, newest first; another life\'s are not its', () => {
+    const r = rec(47)
+    const saved = (key: string, op: 'prepare' | 'free', file: string | null, at: number, life = LIFE): LedgerEntry =>
+      entry(key, 'slot', { issue: 47, startedAt: at - 1000, endedAt: at, outcome: { kind: 'slot', op, path: '/slots/x', lease: 'L', head: null, killed: null, leftovers: file === null ? null : `${LOOP_DIR}/leftovers/47-${life}-${file}.patch` } })
+    const ledger = [
+      saved(prepareKey(r, 1), 'prepare', 's3-1', NOW - 3 * MIN),
+      saved(freeKey('L47'), 'free', 'free-2', NOW - MIN),
+      saved(freeKey('Lold'), 'free', 'free-3', NOW, 'oldlife'),
+      saved(prepareKey(r, 2), 'prepare', null, NOW),
+    ]
+    expect(leftoversOf(ledger, r)).toEqual([`${LOOP_DIR}/leftovers/47-${LIFE}-free-2.patch`, `${LOOP_DIR}/leftovers/47-${LIFE}-s3-1.patch`])
+  })
+})
+
 // --- properties (17.1) -------------------------------------------------------------------------------------
 
 // rng: a small seeded generator, so a failure names its seed.
@@ -231,8 +348,9 @@ function rng(seed: number): () => number {
   }
 }
 
-// generated: records in any state, some holding their lease, stray leases (a released life, a
-// person's), lease attempts in every status, a pool of any size and K of any value.
+// generated: records in any state, some holding their lease (some a second one too), stray leases
+// (a released life, a person's), lease attempts in every status, a pool of any size and K of any
+// value.
 function generated(seed: number): { s: State; cfg: Config } {
   const r = rng(seed)
   const pick = <T>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)] as T
@@ -245,6 +363,7 @@ function generated(seed: number): { s: State; cfg: Config } {
     const rr = rec(n, { life, state: st, step: st === 'queued' ? 'lease' : st === 'parked' || st === 'closed' ? null : 'build', seq: st === 'queued' && r() < 0.5 ? 4 : 2, resumeTo: st === 'queued' ? pick([null, 'reviewing', 'fixing'] as const) : null })
     records.push(rr)
     if (r() < 0.5) leases.push(leaseFor(rr))
+    if (r() < 0.15) leases.push({ ...leaseFor(rr), path: `/slots/0-dup-${n}`, lease: `Ldup${n}` })
     const status = pick(['none', 'running', 'done', 'fresh', 'failed'] as const)
     if (status === 'running') ledger.push(leaseEntry(rr, 1, { status: 'running', endedAt: null }))
     if (status === 'done') ledger.push(leaseEntry(rr, 1))
@@ -273,7 +392,7 @@ function apply(s: State, p: PlanResult): Lease[] {
 const SEEDS = Array.from({ length: 400 }, (_, i) => i + 1)
 
 describe('properties of the slots (v2 SPEC 17.1)', () => {
-  test('property 6, one writer: no two records share a slot, a live record holds at most one, and no slot a record holds is freed', () => {
+  test('property 6, one writer: no two records share a slot, a live record never gains a second, and no slot a record holds is freed', () => {
     const seen = { lease: 0, free: 0 }
     for (const seed of SEEDS) {
       const { s, cfg } = generated(seed)
@@ -287,13 +406,16 @@ describe('properties of the slots (v2 SPEC 17.1)', () => {
         const underWay = s.ledger.some(e => e.kind === 'slot' && e.issue === r.issue && /\/lease\/\d+$/.test(e.key) && (e.status === 'running' || (e.status === 'done' && (e.endedAt ?? 0) >= NOW)))
         const planned = slots(p, 'lease').filter(a => a.issue === r.issue && a.life === r.life).length
         expect({ seed, issue: r.issue, planned: planned <= (before || underWay ? 0 : 1) }).toEqual({ seed, issue: r.issue, planned: true })
-        expect({ seed, issue: r.issue, held: leases.filter(l => l.issue === r.issue && l.life === r.life).length <= 1 }).toEqual({ seed, issue: r.issue, held: true })
+        const had = v2.leases.filter(l => l.issue === r.issue && l.life === r.life).length
+        expect({ seed, issue: r.issue, held: leases.filter(l => l.issue === r.issue && l.life === r.life).length <= Math.max(1, had) }).toEqual({ seed, issue: r.issue, held: true })
       }
       seen.lease += slots(p, 'lease').length
       seen.free += slots(p, 'free').length
       for (const a of slots(p, 'free')) {
+        // the slot a live record holds: the first of its life's by path (no prepare names one here)
         const holder = v2.records.find(r => r.issue === a.issue && r.life === a.life && (r.state === 'queued' || SLOT_STATES.includes(r.state)))
-        expect({ seed, freed: a.lease, holder: holder?.state ?? null }).toEqual({ seed, freed: a.lease, holder: null })
+        const held = holder === undefined ? null : [...v2.leases].filter(l => l.issue === holder.issue && l.life === holder.life).sort((x, y) => x.path.localeCompare(y.path))[0]
+        expect({ seed, freed: a.lease, held: held?.lease === a.lease }).toEqual({ seed, freed: a.lease, held: false })
       }
     }
     // the worlds exercise both rules
@@ -386,13 +508,15 @@ const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/4/dev-system'
 const HEAD = '9e01b77c0ffee000000000000000000000000001'
 const r5 = rec(5)
 const MARKER: StepMarker = { v: 1, repo: REPO, issue: 5, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-5', gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '' }
+// budget: what the executor gives the tool of its op's timeout, so the tool ends its own commands first
+const budget = (op: Slot['op']) => ['--budget-ms', String(SLOT_TIMEOUT_MS[op] - SLOT_MARGIN_MS)]
 const act = (op: Slot['op'], over: Partial<Slot> = {}): Slot => ({ kind: 'slot', op, key: `${op}-key`, class: 'free', rule: 'W1', reason: 'x', issue: 5, life: LIFE, path: SLOT, lease: 'L5', branch: null, marker: null, ...over })
 
 describe('the slot executor (act-slots.ts)', () => {
   test('lease: the plugin\'s tool, from the main checkout, its slot and lease read from LEASED', async () => {
     const w = actWorld(() => ({ stdout: `LEASED path=${SLOT} lease=4a4eae3e\n` }))
     expect(await w.run(act('lease', { path: null, lease: null }))).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'lease', path: SLOT, lease: '4a4eae3e', head: null, killed: null }, summary: `leased ${SLOT} (4a4eae3e)` })
-    expect(w.argvs).toEqual([[BIN, 'lease', '5', LIFE]])
+    expect(w.argvs).toEqual([[BIN, ...budget('lease'), 'lease', '5', LIFE]])
     expect(w.inits[0]).toMatchObject({ cwd: '/work', stdin: '' })
   })
 
@@ -401,7 +525,7 @@ describe('the slot executor (act-slots.ts)', () => {
     const w = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nLEFTOVERS file=${leftovers}\n` }))
     const a = act('prepare', { key: prepareKey(r5, 1), rule: 'S2', branch: 'issue-5', marker: MARKER })
     expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'prepare', path: SLOT, lease: 'L5', head: HEAD, killed: null, leftovers }, summary: `prepared at 9e01b77; leftovers saved to ${leftovers}` })
-    expect(w.argvs).toEqual([[BIN, 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR })]])
+    expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR })]])
     const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\n` }))
     expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, leftovers: null } })
     // the action must name its slot, lease, branch and marker: a loop bug, never retried
@@ -418,12 +542,22 @@ describe('the slot executor (act-slots.ts)', () => {
     expect(none.argvs).toEqual([])
   })
 
-  test('free: the loop dir for the leftovers; FREED or GONE is done, GONE with no lease left', async () => {
+  test('free: the loop dir for the leftovers; FREED or GONE is done, GONE with no lease left; the leftovers file a free saved is recorded', async () => {
     const w = actWorld(() => ({ stdout: `FREED path=${SLOT}\n` }))
     const a = act('free', { key: freeKey('L5'), rule: 'W2' })
-    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: null }, summary: `freed ${SLOT}` })
-    expect(w.argvs).toEqual([[BIN, 'free', SLOT, 'L5', LOOP_DIR]])
+    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: null, leftovers: null }, summary: `freed ${SLOT}` })
+    expect(w.argvs).toEqual([[BIN, ...budget('free'), 'free', SLOT, 'L5', LOOP_DIR]])
+    const file = `${LOOP_DIR}/leftovers/5-${LIFE}-free-1.patch`
+    expect(await actWorld(() => ({ stdout: `FREED path=${SLOT}\nLEFTOVERS file=${file}\n` })).run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: null, leftovers: file }, summary: `freed ${SLOT}; leftovers saved to ${file}` })
     expect(await actWorld(() => ({ stdout: `GONE path=${SLOT}\n` })).run(a)).toMatchObject({ status: 'done', outcome: { lease: null }, summary: expect.stringContaining('gone already') })
+  })
+
+  test('every op\'s tool budget sits inside its timeout, with room for the tool to report', () => {
+    for (const op of ['lease', 'prepare', 'kill', 'free'] as const) {
+      const argv = slotArgv(act(op, { branch: 'issue-5', marker: MARKER }), runtime())
+      expect({ op, argv: Array.isArray(argv) ? argv.slice(1, 3) : argv }).toEqual({ op, argv: budget(op) })
+      expect({ op, room: SLOT_TIMEOUT_MS[op] - (SLOT_TIMEOUT_MS[op] - SLOT_MARGIN_MS) >= 10_000 && SLOT_TIMEOUT_MS[op] - SLOT_MARGIN_MS > 0 }).toEqual({ op, room: true })
+    }
   })
 
   test('failures: a refusal (3) or a usage error (2) is never retried; any other exit, a throw or a missing result line is', async () => {

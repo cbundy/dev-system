@@ -1,7 +1,9 @@
 // The `slot` executor (docs/factory-loop/v2/SPEC.md 10.1, 10.2, 10.8, appendix B): each op runs the
 // plugin's own `bin/factory-slot` once and reads its one result line. The argv is argv.ts's; only
 // its program is resolved to the plugin's copy, since the plugin's bin/ is not on the runtime's
-// PATH (the answer script is called the same way). Each op has its own attempts on its action
+// PATH (the answer script is called the same way), and it is given `--budget-ms`, its op's timeout
+// less a margin, so the tool ends its own commands before this timeout could orphan them (a
+// `treehouse get` that went on to take a second slot). Each op has its own attempts on its action
 // (lease 3, prepare 1, the old step's processes 1 and best effort, free 2).
 //
 // - lease: `LEASED path=<p> lease=<id>`; the tool keeps a lease the holder already has, so a
@@ -10,8 +12,9 @@
 //   `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when the slot held uncommitted work.
 // - the old step's processes (entry action, 4.5): `KILLED <n>`; with no slot known there is nothing
 //   to end.
-// - free: `FREED path=<p>` once the pool shows the slot back, or `GONE path=<p>` when the lease is
-//   no longer on it; either is done.
+// - free: `FREED path=<p>` once the pool shows the slot back, and `LEFTOVERS file=<f>` when the slot
+//   held work a reset would lose; or `GONE path=<p>` when the lease is no longer on it; either is
+//   done.
 //
 // The tool's exit 2 (usage) and 3 (it refused: not the loop's lease, a path outside the pool, a
 // marker that does not match) are never retried; any other failure is.
@@ -28,6 +31,8 @@ const SEC = 1000
 // lease: treehouse fetches origin first; prepare: a fetch, the 5 s grace and a reset; free: the
 // same, then the return
 export const SLOT_TIMEOUT_MS: Readonly<Record<SlotOp, number>> = { lease: 180 * SEC, prepare: 300 * SEC, kill: 60 * SEC, free: 300 * SEC }
+// what the tool is given of it: the margin covers its start and its last pool read
+export const SLOT_MARGIN_MS = 20 * SEC
 const SUMMARY_MAX = 200
 
 type SlotAction = Extract<Action, { kind: 'slot' }>
@@ -59,7 +64,7 @@ export function slotArgv(a: SlotAction, rt: Pick<ExecCtx['rt'], 'pluginRoot' | '
     if (a.path === null) return 'no slot'
     argv = ARGV.slotKillArgv(a.path)
   }
-  return [`${rt.pluginRoot}/${SLOT_SCRIPT}`, ...argv.slice(1)]
+  return [`${rt.pluginRoot}/${SLOT_SCRIPT}`, '--budget-ms', String(SLOT_TIMEOUT_MS[a.op] - SLOT_MARGIN_MS), ...argv.slice(1)]
 }
 
 const field = (text: string, word: string, name: string): string | null => {
@@ -84,7 +89,7 @@ export function readSlot(op: SlotOp, stdout: string, a: Pick<SlotAction, 'path' 
     return head === null || !/^[0-9a-f]{7,64}$/.test(head) ? null : { ...base, head, leftovers: field(stdout, 'LEFTOVERS', 'file') }
   }
   if (op === 'free') {
-    if (field(stdout, 'FREED', 'path') !== null) return base
+    if (field(stdout, 'FREED', 'path') !== null) return { ...base, leftovers: field(stdout, 'LEFTOVERS', 'file') }
     return field(stdout, 'GONE', 'path') === null ? null : { ...base, lease: null }
   }
   const m = /^KILLED (\d+)\s*$/m.exec(stdout)
@@ -98,7 +103,7 @@ function summaryOf(o: SlotOutcome): string {
     case 'prepare':
       return clip(`prepared at ${(o.head ?? '').slice(0, 7)}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
     case 'free':
-      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}`)
+      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
     default:
       return clip(`${o.killed ?? 0} process(es) ended in ${o.path ?? 'the slot'}`)
   }

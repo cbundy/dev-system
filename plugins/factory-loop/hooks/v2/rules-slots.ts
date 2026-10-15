@@ -8,15 +8,20 @@
 //   is queued or in a slot state (designing to merge-queue) and nothing of that life still runs in
 //   it (an agent step, or a slot op). A queued record keeps the lease its step is about to take
 //   (row T1). So a slot is freed however its issue left: parked, dropped, merged, closed by hand,
-//   lost to another device, released by R1, or a record pruned. Keyed by the lease (keys.ts
-//   freeKey), so one lease is freed once.
+//   lost to another device, released by R1, or a record pruned. A second lease of a live life (a
+//   lease whose answer was lost, taken again) is freed too, once nothing of the life runs: the
+//   record holds the one rules-agent.ts leaseOf names. Keyed by the lease (keys.ts freeKey), so one
+//   lease is freed once; from the free's start the lease counts as gone (rules-agent.ts freeing),
+//   so a record resumed meanwhile never steps onto a slot being reset and returned.
 // - W1, lease: first each record in a slot state whose lease vanished (it already counts in
-//   flight; it waits while its step still runs, so that step's unknown names the lost slot as its
-//   cause, 5.1), then each queued record with no lease: resumes first, by the time they parked,
-//   then new claims, by claim time. A queued record is leased only while the records in flight
-//   (designing to merge-queue, a queued record that holds or is taking a lease) number fewer than
-//   K (`maxInFlightIssues`), the pool's free slots exceed `worktreeReserve`, and the tier allows
-//   the class of the step the lease leads to; a vanished one needs one free slot and the tier.
+//   flight; its running step ends unknown with the cause `slot` at once, rules-agent.ts agentStep,
+//   and the lease waits until the stopped step no longer runs), then each queued record with no
+//   lease: resumes first, by the time they parked, then new claims, by claim time. A record whose
+//   life's old slot is being freed waits for the free: the tool would hand that slot back. A
+//   queued record is leased only while the records in flight (designing to merge-queue, a queued
+//   record that holds or is taking a lease) number fewer than K (`maxInFlightIssues`), the pool's
+//   free slots exceed `worktreeReserve`, and the tier allows the class of the step the lease leads
+//   to; a vanished one needs one free slot and the tier.
 // - A lease is keyed by its number in the life (keys.ts leaseKey): a failed one runs again under
 //   its own key; once one is done and a pool read after it no longer shows it, the next number is
 //   taken. A done lease the pool was read before is not leased again: the next pass sees it.
@@ -26,7 +31,7 @@
 import { ALLOWED, gate, skip, want } from '../foundation'
 import type { ActionClass, LedgerEntry, Ms } from '../types'
 import { freeKey, keyParts, leaseKey, lifeAt, lifeKey } from './keys'
-import { leaseOf, lifeEntries } from './rules-agent'
+import { freeing, leaseOf, lifeEntries } from './rules-agent'
 import { AGENT_STEPS, SLOT_STATES, STATE_STEP, STEP_CLASS } from './types'
 import type { AgentStep, IssueRecord, IssueState, Lease, V2Ctx } from './types'
 
@@ -66,6 +71,9 @@ export function leaseEntries(ctx: V2Ctx, r: Pick<IssueRecord, 'issue' | 'life'>)
 type LeaseNext = { kind: 'key'; key: string } | { kind: 'pending'; why: string }
 
 function nextLease(ctx: V2Ctx, r: IssueRecord): LeaseNext {
+  // the tool keeps a slot that carries the life's holder, so a new lease waits for the old one to go
+  const old = ctx.v2.leases.find(l => l.issue === r.issue && l.life === r.life && freeing(ctx, l))
+  if (old !== undefined) return { kind: 'pending', why: `its old slot ${old.path} is being freed (${freeKey(old.lease)})` }
   const last = leaseEntries(ctx, r).at(-1)
   if (last === undefined) return { kind: 'key', key: leaseKey(r, 1) }
   const e = last.entry
@@ -104,9 +112,13 @@ function holds(ctx: V2Ctx, l: Lease): boolean {
 
 function frees(ctx: V2Ctx): void {
   for (const l of [...ctx.v2.leases].sort((a, b) => a.path.localeCompare(b.path))) {
-    if (l.issue === null || l.life === null || holds(ctx, l)) continue
+    if (l.issue === null || l.life === null) continue
     const life = { issue: l.issue, life: l.life }
-    const busy = runningIn(ctx, life)
+    const held = holds(ctx, l)
+    // a live life keeps the one lease leaseOf names; any other of it is a second lease, or one
+    // whose free is under way already
+    if (held && leaseOf(ctx, life)?.lease === l.lease) continue
+    const busy = freeing(ctx, l) ? null : runningIn(ctx, life)
     if (busy !== null) {
       skip(ctx, 'W2', l.issue, `W2: slot ${l.path} of life ${l.life} waits: ${busy.key} still runs in it`)
       continue
@@ -117,7 +129,7 @@ function frees(ctx: V2Ctx): void {
       key: freeKey(l.lease),
       class: 'free',
       rule: 'W2',
-      reason: `no record of #${l.issue} life ${l.life} holds slot ${l.path}`,
+      reason: held ? `slot ${l.path} is a second lease of #${l.issue} life ${l.life}` : `no record of #${l.issue} life ${l.life} holds slot ${l.path}`,
       issue: l.issue,
       life: l.life,
       path: l.path,

@@ -71,7 +71,9 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
   // v2's slot tool, run from the plugin's bin/ (act-slots.ts)
   if (cmd === `${PLUGIN_ROOT}/bin/factory-slot`) {
     const out: Record<string, string> = { lease: `LEASED path=${LEASED} lease=lease-3`, prepare: `PREPARED head=${HEAD}`, kill: 'KILLED 0', free: `FREED path=${SLOT}` }
-    return { stdout: `${out[args[0] ?? ''] ?? ''}\n` }
+    // its op follows the budget the executor gives it (--budget-ms <n>)
+    const op = args[0] === '--budget-ms' ? args[2] : args[0]
+    return { stdout: `${out[op ?? ''] ?? ''}\n` }
   }
   switch (cmd) {
     case 'callum-flow-merge-guard':

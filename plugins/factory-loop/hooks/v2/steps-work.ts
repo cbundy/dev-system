@@ -8,6 +8,9 @@
 // its ok waits for the turn's end and the stop gate (10.8).
 //
 // STUB of build unit U1. U5 fills it; until then each step refuses to start, never retried.
+// For U5 (from U8): a retry's prompt, and a resumed life's first, names the newest file of
+// rules-agent.ts leftoversOf(ledger, record) (5.1, 10.2): a prepare's leftovers, or the free's of a
+// parked life, holding its uncommitted work and its commits that never reached origin.
 import type { StepModule } from './steps'
 import { unknownResult } from './types'
 import type { AgentStep } from './types'

@@ -3,12 +3,13 @@
 // The factory loop v2's slot tool, plugins/factory-loop/bin/factory-slot (docs/factory-loop/v2/SPEC.md
 // 10.1, 10.2, 10.8), over real git: an origin, a main checkout and pool slots that are real
 // worktrees of it, with a fake treehouse that keeps the pool's leases in a file and records each
-// call. A lease is kept across retries; prepare saves a slot's uncommitted work as a patch that
-// applies back, resets the slot onto origin's branch even while another worktree has that branch
-// checked out, starts a new branch from origin's default with no upstream, and writes the step
-// marker into the slot's git dir; kill ends the slot's processes; free saves, resets and returns the
-// slot on its lease only. Every op refuses a slot the loop did not lease. Plugin tests cannot run a
-// command, so this lives here.
+// call. A lease is kept across retries; prepare saves a slot's uncommitted work, and the commits on
+// its branch that origin does not have, as a patch that applies onto the retry's start, resets the
+// slot onto origin's branch even while another worktree has that branch checked out, starts a new
+// branch from origin's default with no upstream, and writes the step marker into the slot's git dir;
+// kill ends the slot's processes; free saves (and names the file), resets and returns the slot on its
+// lease only. Every op refuses a slot the loop did not lease, and stays inside the budget it is given.
+// Plugin tests cannot run a command, so this lives here.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn, spawnSync } = require("node:child_process");
@@ -44,7 +45,10 @@ const args = process.argv.slice(2);
 fs.appendFileSync(path.join(dir, "calls.jsonl"), JSON.stringify({ args, cwd: process.cwd() }) + "\\n");
 const opt = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const save = () => fs.writeFileSync(file, JSON.stringify(pool));
-if (args[0] === "status") {
+if (process.env.FAKE_HANG === args[0]) {
+  // a get that still fetches: it would lease once it ends, which it never does
+  setInterval(() => {}, 1000);
+} else if (args[0] === "status") {
   process.stdout.write(JSON.stringify(pool));
 } else if (args[0] === "get") {
   const w = pool.find((s) => s.status === "available");
@@ -118,6 +122,7 @@ function world() {
     slots,
     loopDir,
     run: (...args) => spawnSync(TOOL, args, { cwd: checkout, encoding: "utf8", env, timeout: 60_000 }),
+    runWith: (extra, ...args) => spawnSync(TOOL, args, { cwd: checkout, encoding: "utf8", env: { ...env, ...extra }, timeout: 60_000 }),
     pool: () => JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")),
     setPool: (fn) => fs.writeFileSync(path.join(dir, "pool.json"), JSON.stringify(fn(JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8"))))),
     calls: () => (fs.existsSync(path.join(dir, "calls.jsonl")) ? fs.readFileSync(path.join(dir, "calls.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l).args) : []),
@@ -195,10 +200,12 @@ test("prepare: leftovers saved as a patch that applies back, the slot reset onto
   // the stale slot keeps its files and its HEAD
   assert.equal(git(w.slots[1], "rev-parse", "HEAD"), staleHead);
   assert.ok(fs.existsSync(path.join(w.slots[1], "stale.txt")));
-  // the leftovers: named for the issue, life and seq, and they apply back onto the head they were on
+  // the leftovers: named for the issue, life and seq, and they apply back onto the head they were on;
+  // the first line names what they were taken against
   const file = field(r.stdout, "LEFTOVERS", "file");
   assert.equal(path.dirname(file), path.join(w.loopDir, "leftovers"));
   assert.match(path.basename(file), new RegExp(`^5-${LIFE}-s4-\\d+\\.patch$`));
+  assert.match(fs.readFileSync(file, "utf8").split("\n")[0], /^factory-slot leftovers: against [0-9a-f]{40} \(HEAD\), from HEAD [0-9a-f]{40}\. Apply with: git apply --3way/);
   const scratch = path.join(w.dir, "apply");
   git(w.checkout, "worktree", "add", "-q", "--detach", scratch, "origin/main");
   git(scratch, "apply", file);
@@ -211,7 +218,7 @@ test("prepare: leftovers saved as a patch that applies back, the slot reset onto
   assert.equal(fs.readdirSync(path.join(w.loopDir, "leftovers")).length, 1);
 });
 
-test("prepare: a branch origin does not have starts from origin's default with no upstream; committed and pushed work survives a retry", () => {
+test("prepare: a branch origin does not have starts from origin's default with no upstream; pushed work survives a retry, and work committed but never pushed is in its leftovers", () => {
   const w = world();
   const s = leased(w, 7);
   const mk = (over) => marker(w, { issue: 7, branch: "issue-7", ...over });
@@ -229,9 +236,49 @@ test("prepare: a branch origin does not have starts from origin's default with n
   fs.writeFileSync(path.join(s.path, "d.txt"), "not pushed\n");
   git(s.path, "add", "d.txt");
   git(s.path, "commit", "-q", "-m", "local only");
+  fs.writeFileSync(path.join(s.path, "e.txt"), "not even committed\n");
+  const local = git(s.path, "rev-parse", "HEAD");
   const retry = w.run("prepare", s.path, s.lease, "issue-7", mk({ seq: 6 }));
   assert.equal(retry.status, 0, retry.stderr);
   assert.equal(field(retry.stdout, "PREPARED", "head"), pushed, "the retry starts from origin's head");
+  assert.ok(!fs.existsSync(path.join(s.path, "d.txt")), "the reset moved the branch past the local commit");
+  // the leftovers hold the local commit and the uncommitted file, taken against origin's head, so they
+  // apply onto the retry's start
+  const file = field(retry.stdout, "LEFTOVERS", "file");
+  assert.ok(file, "the unpushed commit is saved");
+  assert.equal(fs.readFileSync(file, "utf8").split("\n")[0], `factory-slot leftovers: against ${pushed}, from HEAD ${local}, with its 1 commit(s) not on origin. Apply with: git apply --3way <this file>`);
+  git(s.path, "apply", "--check", file);
+  git(s.path, "apply", file);
+  assert.equal(fs.readFileSync(path.join(s.path, "d.txt"), "utf8"), "not pushed\n");
+  assert.equal(fs.readFileSync(path.join(s.path, "e.txt"), "utf8"), "not even committed\n");
+});
+
+test("prepare: commits on a branch origin never had are saved against the merge base with origin's default, and apply onto the new start; a fresh slot's base is never in them", () => {
+  const w = world();
+  const s = leased(w, 9);
+  const mk = (over) => marker(w, { issue: 9, branch: "issue-9", ...over });
+  assert.equal(field(w.run("prepare", s.path, s.lease, "issue-9", mk({})).stdout, "LEFTOVERS", "file"), undefined, "a fresh slot leaves nothing");
+  fs.writeFileSync(path.join(s.path, "f.txt"), "first\n");
+  git(s.path, "add", "f.txt");
+  git(s.path, "commit", "-q", "-m", "one");
+  fs.writeFileSync(path.join(s.path, "g.txt"), "second\n");
+  git(s.path, "add", "g.txt");
+  git(s.path, "commit", "-q", "-m", "two");
+  // main moves on at origin meanwhile: its change is not the slot's work
+  const other = path.join(w.dir, "other");
+  spawnSync("git", ["clone", "-q", w.origin, other]);
+  fs.writeFileSync(path.join(other, "main.txt"), "main moved\n");
+  git(other, "add", "main.txt");
+  git(other, "commit", "-q", "-m", "main moves");
+  git(other, "push", "-q", "origin", "HEAD:main");
+  const r = w.run("prepare", s.path, s.lease, "issue-9", mk({ seq: 2 }));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(field(r.stdout, "PREPARED", "head"), git(w.origin, "rev-parse", "refs/heads/main"));
+  const file = field(r.stdout, "LEFTOVERS", "file");
+  assert.match(fs.readFileSync(file, "utf8"), /with its 2 commit\(s\) not on origin/);
+  assert.doesNotMatch(fs.readFileSync(file, "utf8"), /main\.txt/, "main's own change is not in them");
+  git(s.path, "apply", file);
+  assert.deepEqual(["f.txt", "g.txt", "main.txt"].map((f) => fs.existsSync(path.join(s.path, f))), [true, true, true]);
 });
 
 test("prepare refuses a slot that is not the record's: another lease, another issue's holder, a person's lease, a path outside the pool; a bad marker is a usage error; nothing is touched", () => {
@@ -289,12 +336,13 @@ test("free: the slot's work saved, the slot reset and returned on its lease only
   fs.writeFileSync(path.join(s.path, "a.txt"), "changed\n");
   const r = w.run("free", s.path, s.lease, w.loopDir);
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(r.stdout.trim(), `FREED path=${s.path}`);
+  assert.equal(field(r.stdout, "FREED", "path"), s.path);
   assert.equal(w.pool()[0].status, "available");
   assert.deepEqual(w.calls().filter((a) => a[0] === "return"), [["return", s.path, "--if-lease-id", s.lease, "--force"]]);
   assert.equal(git(s.path, "status", "--porcelain"), "");
   const saved = fs.readdirSync(path.join(w.loopDir, "leftovers")).filter((f) => f.startsWith(`5-${LIFE}-free-`));
   assert.equal(saved.length, 1);
+  assert.equal(field(r.stdout, "LEFTOVERS", "file"), path.join(w.loopDir, "leftovers", saved[0]), "the free names the file it saved");
   assert.ok(!fs.existsSync(old), "a patch older than 7 days is pruned");
   assert.ok(fs.existsSync(recent));
   // a second free finds the lease gone and touches nothing
@@ -312,6 +360,39 @@ test("free: the slot's work saved, the slot reset and returned on its lease only
   w.setPool((p) => p.map((x) => (x.path === s.path ? { ...x, lease_holder: "callum" } : x)));
   assert.equal(w.run("free", s.path, next.lease, w.loopDir).status, 3);
   assert.equal(w.run("free", s.path, next.lease, "relative").status, 2);
+});
+
+test("free: a commit on the slot's branch that was never pushed is saved against origin's branch, and the file is named", () => {
+  const w = world();
+  const s = leased(w);
+  assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w)).status, 0);
+  const start = git(s.path, "rev-parse", "HEAD");
+  fs.writeFileSync(path.join(s.path, "h.txt"), "parked work\n");
+  git(s.path, "add", "h.txt");
+  git(s.path, "commit", "-q", "-m", "parked");
+  const r = w.run("free", s.path, s.lease, w.loopDir);
+  assert.equal(r.status, 0, r.stderr);
+  const file = field(r.stdout, "LEFTOVERS", "file");
+  assert.match(path.basename(file), new RegExp(`^5-${LIFE}-free-\\d+\\.patch$`));
+  assert.match(fs.readFileSync(file, "utf8").split("\n")[0], new RegExp(`^factory-slot leftovers: against ${start}, from HEAD [0-9a-f]{40}, with its 1 commit`));
+  assert.equal(spawnSync("git", ["-C", s.path, "symbolic-ref", "-q", "HEAD"]).status, 1, "it goes back detached");
+  assert.equal(git(s.path, "rev-parse", "HEAD"), start, "at the branch's start");
+  // a clean slot with nothing unpushed frees with no file
+  const t = leased(w, 6);
+  assert.equal(w.run("free", t.path, t.lease, w.loopDir).stdout.trim(), `FREED path=${t.path}`);
+});
+
+test("--budget-ms bounds the whole op: a treehouse get that hangs is ended inside it, and the op fails, worth a retry", () => {
+  const w = world();
+  const began = Date.now();
+  const r = w.runWith({ FAKE_HANG: "get" }, "--budget-ms", "1500", "lease", "5", LIFE);
+  assert.equal(r.status, 1, r.stderr);
+  assert.ok(Date.now() - began < 15_000, "it ended inside the budget, not at the per-command timeout");
+  assert.match(r.stderr, /treehouse get/);
+  assert.deepEqual(w.pool().map((x) => x.status), ["available", "available", "available"], "no lease was taken");
+  for (const bad of [["--budget-ms"], ["--budget-ms", "0", "kill", w.slots[0]], ["--budget-ms", "soon", "kill", w.slots[0]]]) assert.equal(w.run(...bad).status, 2, bad.join(" "));
+  const ok = leased(w);
+  assert.equal(w.run("--budget-ms", "60000", "kill", ok.path).stdout.trim(), "KILLED 0");
 });
 
 test("a failed pool read fails the op, worth a retry; an unknown op is a usage error", () => {
