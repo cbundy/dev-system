@@ -73,8 +73,9 @@ describe('the settings (v2 SPEC appendix A)', () => {
       maxInFlightIssues: 5,
       reviewFixCap: 3,
     })
-    // a step key is one attempt, and a CI re-run, an update and a merge are one per key (appendix B)
-    expect(DEFAULT_CONFIG.maxAttempts).toMatchObject({ 'agent-step': 1, 'ci-rerun': 1, 'queue-update': 1, 'queue-merge': 1 })
+    // a step key is one attempt, an update and a merge are one per key, and a CI re-run's call is
+    // tried three times (appendix B)
+    expect(DEFAULT_CONFIG.maxAttempts).toMatchObject({ 'agent-step': 1, 'ci-rerun': 3, 'queue-update': 1, 'queue-merge': 1 })
   })
 
   test('each v2 key loads from its settings file, durations and all; a bad value is named and left out', () => {
@@ -236,14 +237,16 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
     for (const kind of V2_ACTION_KINDS) expect(EXECUTORS[kind]).toBe(V2_EXECUTORS[kind])
   })
 
-  test('a v2 kind not built yet fails, never retried, before any command; a v1 kind keeps v1\'s executor under planner v2', async () => {
+  test('a v2 kind runs its own executor under either planner, and a v1 kind keeps v1\'s executor under planner v2', async () => {
     const pr: Action = { kind: 'pr', key: 'i470/ltbq3k0/s4/pr/ensure', class: 'free', rule: 'S2', reason: 'x', issue: 470, op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 't', summary: 's', evidence: null, brief: null }
     const sweep: Action = { kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2', reason: 'x', issue: null }
     for (const planner of ['v1', 'v2'] as const) {
       const { env, argvs } = envOf(planner)
       const s = state()
-      expect(await dispatch(ctxOf(env, s, start([], pr, NOW).entry), pr)).toEqual({ status: 'failed', summary: 'pr: not built yet (U5)', noRetry: true })
-      expect(argvs).toEqual([])
+      // the pr executor (U5) lists the branch's PRs first; an answer not in its shape fails, and is retried
+      expect(await dispatch(ctxOf(env, s, start([], pr, NOW).entry), pr)).toMatchObject({ status: 'failed', summary: 'the PRs of issue-470 did not read' })
+      expect(argvs).toEqual([['gh', 'pr', 'list', '--repo', REPO, '--head', 'issue-470', '--state', 'all', '--json', 'number,state,headRefOid']])
+      argvs.length = 0
       expect(await dispatch(ctxOf(env, s, start([], sweep, NOW).entry), sweep)).toMatchObject({ status: 'done' })
       expect(argvs).toEqual([['callum-flow-sweep']])
     }
@@ -310,7 +313,7 @@ describe('the driver (v2 SPEC 2.3)', () => {
     // the workspace file's planner is a setting it may set, so nothing is named
     expect(line.config).toBeUndefined()
     expect(line.shadow).toBeUndefined()
-    expect(sources(line)).toMatchObject({ runs: 'failed: not read: planner v2 has no pipeline runs', 'v2.leases': 'ok', 'v2.store': 'ok', 'v2.prs': 'failed: not built yet (U7)' })
+    expect(sources(line)).toMatchObject({ runs: 'failed: not read: planner v2 has no pipeline runs', 'v2.leases': 'ok', 'v2.store': 'ok', 'v2.prs': 'ok' })
     expect(h.titles).toEqual(['🔄 dev-system (Q:0 - D:0 - M:0) · observe'])
     expect(h.commands().some(c => c.argv[0]?.endsWith('pipeline-watch.sh'))).toBe(false)
     expect(h.commands().some(c => c.argv.includes('reflog'))).toBe(false)

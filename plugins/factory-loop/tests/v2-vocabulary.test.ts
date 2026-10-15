@@ -282,7 +282,7 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const r = await observeV2(input)
     expect(r.v2).toMatchObject({ records: [parked], recordsFrom: 'store', leases: [{ path: '/s/1', issue: 80, life: LIFE }], reads: { 80: { at: NOW - 5 * MIN, open: true, labels: ['bug'] } } })
     expect(r.v2.comments).toEqual({ 80: [{ body: 'use the old one', at: NOW - MIN, url: null }] })
-    expect(r.v2.sources).toMatchObject({ store: { ok: true }, leases: { ok: true }, comments: { ok: true }, prs: { ok: false, error: 'not built yet (U7)' } })
+    expect(r.v2.sources).toMatchObject({ store: { ok: true }, leases: { ok: true }, comments: { ok: true }, prs: { ok: true } })
     expect(runs).toEqual([['callum-flow-issue-read', '--json', '80', '--comments']])
     // read once per issue read: the next pass takes them from memory
     await observeV2(input)

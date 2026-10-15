@@ -20,6 +20,13 @@ import type { IssueState, StepKind } from './types'
 export const COMMAND_RULE =
   'Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no background shell or wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool\'s own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.'
 
+// The test policy of every v2 agent that writes or judges tests, one text for all: a writer may
+// remove a test only when it is clearly and absolutely not required, and then says why in its
+// answer's summary; the reviewer judges that reason (prompts-review.ts). No pipeline term (no
+// ask-user, no adjudicator): v2 has neither.
+export const TEST_POLICY =
+  'TEST POLICY: never delete, skip or weaken an existing test or assertion (no --warn-only, || true, skip/only, commented-out asserts) to make a gate pass; fix the code or the environment instead. Remove a test only if it is clearly and absolutely not required, and then say why in your answer\'s summary, so the reviewer can judge it.'
+
 // One earlier result of the step: its ledger key, kind, status, the executor's summary, an error
 // excerpt, and the loop's files about it.
 export type TriageResult = { key: string; kind: string; status: string; summary: string; error: string | null; files: string[] }

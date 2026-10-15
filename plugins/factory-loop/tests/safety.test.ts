@@ -97,11 +97,20 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return {}
     case 'callum-flow-claim':
       return {}
-    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor)
+    // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor);
+    // a PR alone, its head moved by the update (v2's queue-update); the open issues, none of them a
+    // split's child yet; one issue, with its REST id (v2's split)
     case 'callum-flow-issue-read':
+      if (args.includes('--pr') && !args.includes('--comments')) return { stdout: JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: 'def5678' }, user: { login: 'cbundy' } }, stripped: 0 }) }
+      if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
+      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]) }, stripped: 0 }) }
       return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
+      // v2's pr ensure finds no PR on the branch and opens one; a split's child is created
+      if (args[0] === 'pr' && args[1] === 'list') return { stdout: '[]' }
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/pull/513\n' }
+      if (args[0] === 'issue' && args[1] === 'create') return { stdout: 'https://github.com/cbundy/dev-system/issues/601\n' }
       return { stdout: args[1] === 'comment' ? 'https://github.com/cbundy/dev-system/pull/512#issuecomment-2\n' : '' }
   }
   return {}
@@ -266,6 +275,8 @@ const RECORD: IssueRecord = {
   notes: ['use --yes nowhere'],
   prClosedAt: null,
 }
+// the record's PR as the prs source reads it: the review step reads its head and patch
+const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: 'f00dfeed', readAt: NOW }
 const at = `i470/l${LIFE}/s3`
 const V2_ACTIONS: Action[] = [
   { ...base, kind: 'transition', key: `${at}/t`, class: 'free', rule: 'S3', row: 'T2', event: 'ok', from: { issue: 470, life: LIFE, seq: 2 }, next: RECORD, trigger: { kind: 'entry', key: `i470/l${LIFE}/s2/design/a1`, status: 'done', startedAt: NOW - 2 * MIN } },
@@ -278,7 +289,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'pr', key: `${at}/pr/ensure`, class: 'free', rule: 'S2', op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 'The work', summary: 'Fixes #999 by --yes', evidence: null, brief: BRIEF },
   { ...base, kind: 'pr', key: `${at}/pr/body/a1`, class: 'free', rule: 'Q2', op: 'body', branch: 'issue-470', base: 'main', pr: 512, title: 'The work', summary: 'x', evidence: 'npm test', brief: BRIEF },
   { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
-  ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
+  // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
+  ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
   { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed' },
@@ -310,7 +322,9 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
     case 'split':
       if (is('gh', 'issue', 'create', '--repo', REPO, '--title', text, '--body-file', '-')) return { body: true }
       if (is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', READY)) return { labels: true, ready: true }
-      return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '-F', f => /^(sub_issue_id|issue_id)=[1-9]\d*$/.test(f))
+      // the links, and the reads of the links already there (GET, ids only)
+      return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '-F', f => /^(sub_issue_id|issue_id)=[1-9]\d*$/.test(f)) ||
+        is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
     case 'ci-rerun':
@@ -325,7 +339,9 @@ function world(): { state: State; ledger: LedgerEntry[] } {
   // agents whose answer is in (#548): one still at work, one ended
   const answered = entry('fixer:guard:471:h', 'spawn', { agent: 'fixer', issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
   const ended = entry('fixer:guard:472:h', 'spawn', { agent: 'fixer', issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
-  const ledger = [own, answered, ended]
+  // the life's PR, as a done ensure of an earlier seq named it: a reviewer starts only after it
+  const ensured = entry(`i470/l${LIFE}/s2/pr/ensure`, 'pr', { issue: 470, status: 'done', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'pr', pr: 512, created: true, reopened: false } })
+  const ledger = [own, answered, ended, ensured]
   const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false, lease: null, leasedAt: null, leaseBranch: 'issue-470-x' }] }
   const agents = [
     { id: 'agent-own', type: 'factory-loop:designer', status: 'running' as const },
@@ -335,7 +351,7 @@ function world(): { state: State; ledger: LedgerEntry[] } {
     { id: 'the-models-own-agent', type: 'general-purpose', status: 'running' as const },
   ]
   // the v2 records the pass planned from: the triage step reads its record's counts from them
-  return { state: { ...state({ ledger, pool, agents }), v2: emptyV2State(NOW, [RECORD]) }, ledger }
+  return { state: { ...state({ ledger, pool, agents }), v2: { ...emptyV2State(NOW, [RECORD]), prs: { prs: [PR_VIEW] } } }, ledger }
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles
@@ -415,9 +431,11 @@ function bans(argv: readonly string[], action?: Action): string[] {
   if ((adds.length > 0 || labelWrite || (cmd === 'gh' && args[0] === 'label')) && v2.labels !== true) out.push('a label added')
   if (adds.some(l => l.split(',').some(x => x.trim().toLowerCase() === READY)) && v2.ready !== true) out.push('the readyLabel')
   // git switches a leased slot to its branch, or reads: the origin, the main checkout's default
-  // branch and status (#544), which never move it, and v2's direct read of a branch on origin
+  // branch and status (#544), which never move it, and v2's direct read of a branch on origin, with
+  // the fetch, count and ancestry a writer's answer is confirmed by (10.8), which move no branch
   const verb = args[0] === '--no-optional-locks' ? args[1] : args[0]
-  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '')) out.push(`git ${verb}`)
+  const confirm = (verb === 'fetch' && args.join(' ') === 'fetch --quiet origin') || (verb === 'rev-list' && args[1] === '--count') || (verb === 'merge-base' && args[1] === '--is-ancestor')
+  if (cmd === 'git' && !['switch', 'remote', 'symbolic-ref', 'status', 'ls-remote'].includes(verb ?? '') && !(confirm && action?.kind === 'agent-step')) out.push(`git ${verb}`)
   return out
 }
 
@@ -437,16 +455,26 @@ const V2_ARGVS: [Action['kind'], string[]][] = [
   ['pr', ARGV.prCreateArgv(REPO, 'main', 'issue-470', 'The work')],
   ['pr', ARGV.prBodyArgv(REPO, 512)],
   ['pr', ARGV.prReadArgv(512)],
+  ['pr', ARGV.rolloutArgv(470)],
   ['split', ARGV.issueCreateArgv(REPO, 'Part one')],
   ['split', ARGV.subIssueArgv(REPO, 470, 3_100_200)],
   ['split', ARGV.blockedByArgv(REPO, 471, 3_100_201)],
   ['split', ARGV.childReadyArgv(REPO, 471, READY)],
+  ['split', ARGV.openIssuesArgv()],
+  ['split', ARGV.issueReadArgv(471)],
+  ['split', ARGV.subIssuesReadArgv(REPO, 470)],
+  ['split', ARGV.blockersReadArgv(REPO, 471)],
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
   ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed')],
   ['queue-merge', ARGV.patchIdArgv('issue-470', 'origin/main')],
+  ['queue-update', ARGV.pollPauseArgv(2)],
   ['agent-step', ARGV.lsRemoteArgv('issue-470')],
+  ['agent-step', ARGV.fetchArgv()],
+  ['agent-step', ARGV.beyondBaseArgv('main', 'abc1234')],
+  ['agent-step', ARGV.isAncestorArgv('abc1234', 'def5678')],
+  ['agent-step', ARGV.implementerRouteArgv(470)],
   ['claim', ARGV.claimArgv(470)],
   ['heartbeat', ARGV.heartbeatArgv([470, 471])],
   ['slot', ARGV.slotLeaseArgv(470, LIFE)],

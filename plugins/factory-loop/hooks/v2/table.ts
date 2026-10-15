@@ -46,10 +46,13 @@ export type EventData = {
   brief?: string
   // T5, T11: the head a writer confirmed on origin
   head?: string
-  // T8: the patch id the reviewer approved; T8, T9, T10: the PR the reviewing step ensured
+  // T8: the patch id the reviewer approved; T8, T9, T10: the PR the reviewing step ensured; E3,
+  // E4: the PR GitHub's event is about
   patch?: string
   pr?: number
-  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step
+  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step; a failed
+  // check is one note in the shape prompts-work.ts checkNote gives, so the fixer gets its id and
+  // its run link (the PR source does not cover a record in fixing, 2.4)
   notes?: string[]
   // X1, X2, X3: the triage's instructions
   instructions?: string
@@ -141,6 +144,10 @@ function lastTwo(r: IssueRecord, e: TableEvent): string {
 }
 
 const none = () => ({})
+
+// lifePrOf: the life's PR (E3, E4): the record's, else the one GitHub's event names, which the
+// review step's ensure opened before reviewing ended and set the record's (8.1).
+const lifePrOf = (r: IssueRecord, e: TableEvent): number | null => r.pr ?? dataOf(e).pr ?? null
 
 // --- the rows ----------------------------------------------------------------------------------------------
 
@@ -320,14 +327,14 @@ const ROWS: readonly Row[] = [
   // the owner's and GitHub's events (S6)
   { id: 'E1', states: LIVE_STATES, on: 'drop', next: 'closed', change: () => ({ why: 'dropped', notes: own('dropped') }), emit: EMIT_DROPPED, via: 'drop' },
   { id: 'E2', states: LIVE_STATES, on: 'issue-closed', next: 'closed', change: () => ({ why: 'closed-on-github' }), emit: [], via: 'issue-closed' },
-  { id: 'E3', states: LIVE_STATES, on: 'pr-merged', when: r => r.pr !== null, next: 'closed', change: () => ({ why: 'merged-by-hand' }), emit: [], via: 'pr-merged' },
+  { id: 'E3', states: LIVE_STATES, on: 'pr-merged', when: (r, e) => lifePrOf(r, e) !== null, next: 'closed', change: (r, e) => ({ why: 'merged-by-hand', pr: lifePrOf(r, e) }), emit: [], via: 'pr-merged' },
   {
     id: 'E4',
     states: LIVE_STATES.filter(s => s !== 'parked'),
     on: 'pr-closed',
-    when: r => r.pr !== null,
+    when: (r, e) => lifePrOf(r, e) !== null,
     next: 'parked',
-    change: (r, e) => ({ question: `PR #${r.pr} was closed by hand; a resume reopens it`, resumeTo: sameTarget(r), prClosedAt: dataOf(e).closedAt ?? r.prClosedAt }),
+    change: (r, e) => ({ question: `PR #${lifePrOf(r, e)} was closed by hand; a resume reopens it`, resumeTo: sameTarget(r), pr: lifePrOf(r, e), prClosedAt: dataOf(e).closedAt ?? r.prClosedAt }),
     emit: [],
     via: 'pr-closed',
   },

@@ -51,7 +51,9 @@ function oldSteps(ctx: V2Ctx, r: IssueRecord): LedgerEntry[] {
 }
 
 // stopKey: the entry action that stops one old step's agent, by that step's key within the life.
-function stopKey(r: IssueRecord, step: string): string {
+// The review step stops a reviewer of a patch the head no longer has under the same key
+// (rules-review.ts), so this seq's entry actions then wait for that stop too.
+export function stopKey(r: IssueRecord, step: string): string {
   return `${entryKey(r, 'stop')}/${step.slice(lifeKey(r).length + 1)}`
 }
 

@@ -224,6 +224,9 @@ export type AgentOpts = {
   step: AgentStep
   // the step attempt's key (default stepKey: one per seq and attempt; review's is by patch and round)
   key?: string
+  // the slot's preparation for it (default prepareKey: one per seq and attempt; a reviewer after
+  // another of its seq gets its own, keys.ts reviewPrepareKey)
+  prepare?: string
   // the rule that starts it (S2; S5 for triage)
   rule?: string
 }
@@ -254,7 +257,7 @@ export function agentStep(env: StepEnv, opts: AgentOpts): StepRead {
   const { ctx, r } = env
   const step = opts.step
   const key = opts.key ?? stepKey(r, step, r.attempt)
-  const prep = prepareKey(r, r.attempt)
+  const prep = opts.prepare ?? prepareKey(r, r.attempt)
   const rule = opts.rule ?? (step === 'triage' ? 'S5' : 'S2')
   const timeoutMs = timeoutOf(ctx, step)
   const e = ctx.byKey.get(key)

@@ -80,6 +80,14 @@ function stepDone(r: IssueRecord, step: 'design' | 'build' | 'review' | 'fix' | 
   return done(stepKey(r, step, r.attempt), 'agent-step', { issue: r.issue, class: step === 'design' || step === 'build' ? 'develop' : 'drive', step, agentId: 'agent-1', outcome: { kind: 'step', step, result: full }, ...over })
 }
 
+// designed: a designer's brief answer (contracts-work.mjs design-v2) and its comment, posted with
+// the brief's URL as the comment's detail: the design step is ok once both are there (U5,
+// rules-work.ts).
+const DESIGN = { kind: 'brief', brief: '## Design brief (designer, 2026-10-13)', question: null, children: [] }
+function designed(r: IssueRecord, url: string): LedgerEntry[] {
+  return [stepDone(r, 'design', { event: 'ok', data: DESIGN }), done(entryKey(r, 'comment'), 'comment', { issue: r.issue, outcome: { kind: 'cli', exit: 0, detail: url } })]
+}
+
 // transitioned: the record's seq as a transition left it: its entry, by this row from a state.
 function transitioned(r: IssueRecord, row: string, from: IssueRecord['state'] | null, via = row.toLowerCase()): LedgerEntry {
   return done(transitionKey(r), 'transition', { issue: r.issue, outcome: { kind: 'transition', row, event: 'ok', cause: null, from, to: r.state, step: null, stored: true, via } })
@@ -350,8 +358,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
 
   test('a transition lost to a reload after the store took it keeps its row, its from-state and its via: the seq still logs the row\'s events and the park\'s comment', () => {
     const prev = rec(83, { state: 'designing', step: 'design', seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN })
-    const answer = stepDone(prev, 'design', { event: 'ok', data: { brief: BRIEF(83) } })
-    const plans = plan(withLedger(world([prev]), [transitioned(prev, 'T1', 'queued'), done(entryKey(prev, 'event/transition'), 'event', { issue: 83 }), done(entryKey(prev, 'label'), 'label', { issue: 83 }), answer]))
+    const plans = plan(withLedger(world([prev]), [transitioned(prev, 'T1', 'queued'), done(entryKey(prev, 'event/transition'), 'event', { issue: 83 }), done(entryKey(prev, 'label'), 'label', { issue: 83 }), ...designed(prev, BRIEF(83))]))
     const t = transitionOf(plans, 83)
     expect(t).toMatchObject({ row: 'T2', fromState: 'designing', fromStep: 'design' })
     if (t === undefined) return
@@ -375,8 +382,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
 
   test('the next transition waits until its seq\'s transition event is logged; an effect that used up its attempts holds the record, and the owner hears once', () => {
     const r = rec(81, { state: 'designing', step: 'design', seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN })
-    const answer = stepDone(r, 'design', { event: 'ok', data: { brief: BRIEF(81) } })
-    const unlogged = withLedger(world([r]), [transitioned(r, 'T1', 'queued'), entry(entryKey(r, 'event/transition'), 'event', { issue: 81, status: 'failed', attempts: 1, endedAt: NOW - MIN }), done(entryKey(r, 'label'), 'label', { issue: 81 }), answer])
+    const unlogged = withLedger(world([r]), [transitioned(r, 'T1', 'queued'), entry(entryKey(r, 'event/transition'), 'event', { issue: 81, status: 'failed', attempts: 1, endedAt: NOW - MIN }), done(entryKey(r, 'label'), 'label', { issue: 81 }), ...designed(r, BRIEF(81))])
     const waits = plan(unlogged)
     expect(transitionOf(waits, 81)).toBeUndefined()
     expect(said(waits, 81)).toContain('T2 waits: the transition event of seq 4 is not logged yet')
@@ -437,7 +443,7 @@ describe('the steps', () => {
 
   test('results through the table: a design\'s brief to building, a build that cannot to triage, a step lost to a restart is a free re-run, a refused spawn is unknown', () => {
     const design = rec(94, { state: 'designing', step: 'design' })
-    expect(transitionOf(plan(withLedger(world([design]), [stepDone(design, 'design', { event: 'ok', data: { brief: BRIEF(94) } })])), 94)).toMatchObject({ row: 'T2', next: { state: 'building', brief: BRIEF(94) } })
+    expect(transitionOf(plan(withLedger(world([design]), designed(design, BRIEF(94)))), 94)).toMatchObject({ row: 'T2', next: { state: 'building', brief: BRIEF(94) } })
     const build = rec(95)
     expect(transitionOf(plan(withLedger(world([build]), [stepDone(build, 'build', { event: 'not-ok', reason: 'cannot', data: { text: 'the API is missing' } })])), 95)).toMatchObject({
       row: 'T6',
@@ -465,10 +471,9 @@ describe('the steps', () => {
     expect(transitionOf(plan(withLedger(world([r]), [answer('drop', {})])), 96)).toMatchObject({ row: 'X5', next: { state: 'closed', why: 'dropped', notes: ['triage: flaky tests'] } })
   })
 
-  test('review and the merge queue wait for their units with a skip line that says so', () => {
-    const r = plan(world([rec(97, { state: 'reviewing', step: 'review' }), rec(98, { state: 'merge-queue', step: 'queue' })]))
-    expect(said(r, 97)).toEqual(['the review step is not built yet (U6)'])
-    expect(said(r, 98)).toEqual(['the queue step is not built yet (U7)'])
+  test('a merge-queue record with no PR goes back to reviewing, which ensures one (T14)', () => {
+    const r = plan(world([rec(98, { state: 'merge-queue', step: 'queue' })]))
+    expect(transitionOf(r, 98)).toMatchObject({ row: 'T14', next: { state: 'reviewing' } })
   })
 })
 
@@ -482,14 +487,20 @@ describe('the events, in 4.1\'s order', () => {
   test('a hand merge comes before the issue\'s close; a merge the loop made is the queue step\'s own, never a hand merge', () => {
     const merged = world([mq], {}, { prs: pr({ state: 'merged', mergedHead: HEAD }), ...closedRead })
     expect(transitionOf(plan(merged), 100)).toMatchObject({ row: 'E3', event: 'pr-merged', next: { state: 'closed', why: 'merged-by-hand' } })
-    const ours = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD })])
-    expect(transitionOf(plan(ours), 100)).toBeUndefined()
+    const outcome = (merged: boolean) => ({ kind: 'queue' as const, op: 'merge' as const, merged, head: HEAD, failClass: merged ? null : ('checks' as const), lines: [] })
+    const ours = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD, outcome: outcome(true) })])
+    expect(transitionOf(plan(ours), 100)).toMatchObject({ row: 'T13', event: 'ok', next: { state: 'closed', why: 'merged' } })
+    // a try the guard refused (done, not merged) is not the loop's merge: GitHub's merge after it was by hand
+    const refused = withLedger(merged, [done(`${lifeKey(mq)}/queue/merge/${HEAD.slice(0, 7)}`, 'queue-merge', { issue: 100, head: HEAD, outcome: outcome(false) })])
+    expect(transitionOf(plan(refused), 100)).toMatchObject({ row: 'E3', event: 'pr-merged' })
     // closed with no merge: the issue's close
     expect(transitionOf(plan(world([mq], {}, closedRead)), 100)).toMatchObject({ row: 'E2', next: { why: 'closed-on-github' } })
   })
 
   test('a drop applies to the life it names; pr-closed is an edge on GitHub\'s closedAt; a re-claim that exits 3 is claim-lost', () => {
-    expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - 3 * HOUR }] }) })), 100)).toBeUndefined()
+    // (its PR not read for a rate limit, so the head's step holds with no clock)
+    const unread = { prs: { prs: [], cut: 'GitHub rate limit: no PR is read this pass' } }
+    expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - 3 * HOUR }] }) }, unread)), 100)).toBeUndefined()
     expect(transitionOf(plan(world([mq], { control: control({ dropped: [{ issue: 100, at: NOW - MIN }] }) })), 100)).toMatchObject({ row: 'E1', next: { why: 'dropped' } })
     const closedAt = '2026-10-13T02:50:00Z'
     expect(transitionOf(plan(world([mq], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toMatchObject({ row: 'E4', next: { state: 'parked', resumeTo: 'merge-queue', prClosedAt: closedAt } })

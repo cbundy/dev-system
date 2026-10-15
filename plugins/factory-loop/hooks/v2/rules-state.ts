@@ -27,8 +27,9 @@ import { claimRules, heartbeatRules, reclaimLost } from './rules-claim'
 import { ensureActions, entryDone, entryItems, parkedTell, stalledOf, stalledTell, transitionLogged } from './rules-entry'
 import type { EntryItem } from './rules-entry'
 import { PLANS as QUEUE } from './rules-queue'
-import { PLANS as REVIEW } from './rules-review'
+import { PLANS as REVIEW, lifePr } from './rules-review'
 import { PLANS as WORK } from './rules-work'
+import { mayHaveMerged } from './steps-queue'
 import { nextRecord, normalize, rowFor, viaOf } from './table'
 import { FACTORY_LABELS } from './types'
 import { workspaceHold } from './workspace'
@@ -77,10 +78,11 @@ const sameSha = (a: string | null, b: string | null) => a !== null && b !== null
 
 // --- the owner's and GitHub's events (4.1) ---------------------------------------------------------------
 
-// loopMerged: a queue-merge of this life is done, running or lost, at this head when one is
-// given: the merge is the queue step's own result, never a hand merge (4.1).
+// loopMerged: a queue-merge of this life merged, or may have (running or lost), at this head when
+// one is given: the merge is the queue step's own result, never a hand merge (4.1). A refusal,
+// done but not merged, is not one.
 function loopMerged(ctx: V2Ctx, r: IssueRecord, head: string | null): boolean {
-  return lifeEntries(ctx, r, 'queue-merge').some(e => e.status !== 'failed' && e.status !== 'timed-out' && (head === null || sameSha(e.head, head)))
+  return lifeEntries(ctx, r, 'queue-merge').some(e => mayHaveMerged(e) && (head === null || sameSha(e.head, head)))
 }
 
 // earlyEvents: the events present before the step's result, in 4.1's order.
@@ -88,9 +90,12 @@ function earlyEvents(ctx: V2Ctx, r: IssueRecord): Present[] {
   const out: Present[] = []
   const n = r.issue
   const born = lifeAt(r.life) ?? 0
-  const pr = r.pr === null ? undefined : ctx.v2.prs.prs.find(p => p.pr === r.pr)
+  // the life's PR: the record's, else the one the review step's ensure named (8.1), so a PR merged
+  // or closed by hand during its first review round is seen too
+  const known = lifePr(ctx.state.ledger, r)
+  const pr = known === null ? undefined : ctx.v2.prs.prs.find(p => p.pr === known)
   if (pr?.state === 'merged' && !loopMerged(ctx, r, pr.mergedHead)) {
-    out.push({ event: { kind: 'pr-merged', data: pr.mergedHead === null ? {} : { head: pr.mergedHead } }, trigger: fact(`pr-merged:${pr.pr}@${pr.mergedHead ?? 'unknown'}`) })
+    out.push({ event: { kind: 'pr-merged', data: { pr: pr.pr, ...(pr.mergedHead === null ? {} : { head: pr.mergedHead }) } }, trigger: fact(`pr-merged:${pr.pr}@${pr.mergedHead ?? 'unknown'}`) })
   }
   const read = ctx.v2.reads[n]
   const closedByLoop = loopMerged(ctx, r, null) || ctx.state.ledger.some(e => e.kind === 'close-issue' && e.issue === n && e.startedAt >= born && e.status !== 'failed')
@@ -100,7 +105,7 @@ function earlyEvents(ctx: V2Ctx, r: IssueRecord): Present[] {
   const drop = ctx.state.control.dropped.filter(d => d.issue === n && d.at > born).sort((a, b) => a.at - b.at).at(-1)
   if (drop !== undefined) out.push({ event: { kind: 'drop' }, trigger: fact(`drop:${n}@${drop.at}`) })
   if (pr?.state === 'closed' && pr.closedAt !== null && (r.prClosedAt === null || pr.closedAt > r.prClosedAt)) {
-    out.push({ event: { kind: 'pr-closed', data: { closedAt: pr.closedAt } }, trigger: fact(`pr-closed:${pr.pr}@${pr.closedAt}`) })
+    out.push({ event: { kind: 'pr-closed', data: { pr: pr.pr, closedAt: pr.closedAt } }, trigger: fact(`pr-closed:${pr.pr}@${pr.closedAt}`) })
   }
   return out
 }
