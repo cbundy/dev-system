@@ -68,8 +68,11 @@ function eventsOf(kind: EventKind): TableEvent[] {
     case 'timeout':
       // a running step's timeout may come while the tier stops new work or the breaker is open
       return [undefined, ...OUTSIDE_CAUSES].map(cause => ({ kind, cause }))
+    // GitHub's PR events name the PR they are about, or none (the life has no PR: E7)
     case 'pr-closed':
-      return [{ kind, data: { closedAt: '2026-10-15T10:00:00Z' } }]
+      return [{ kind, data: { closedAt: '2026-10-15T10:00:00Z' } }, { kind, data: { closedAt: '2026-10-15T10:00:00Z', pr: 512 } }]
+    case 'pr-merged':
+      return [{ kind, data: { head: HEAD } }, { kind, data: { head: HEAD, pr: 512 } }]
     case 'unpark':
       return [{ kind, reason: 'op', data: { note: 'use the v2 API' } }]
     default:
@@ -78,6 +81,11 @@ function eventsOf(kind: EventKind): TableEvent[] {
 }
 
 const ALL_EVENTS: TableEvent[] = EVENT_KINDS.flatMap(eventsOf)
+
+// The sweeps over every record and event take a few seconds alone, and more while other suites
+// share the machine (npm test runs them side by side): room past the default 5 s, so a busy
+// machine never fails them.
+const SWEEP = { timeoutMs: 30_000 }
 
 // The rows 4.3's totality grid allows in each cell, by state, whether the record runs its own step
 // or triage, and the event kind. A not-ok whose reason the state's own step cannot give is unknown
@@ -133,7 +141,7 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     for (const r of records()) for (const e of ALL_EVENTS) expect(rowFor(r, e, CFG).id).not.toBe('S0')
   })
 
-  test('property 1, totality: exactly one row for every (state, step, event, guard input), the one 4.3\'s grid names; closed is absorbing', () => {
+  test('property 1, totality: exactly one row for every (state, step, event, guard input), the one 4.3\'s grid names; closed is absorbing', SWEEP, () => {
     const reached = new Map<string, Set<string>>()
     let combos = 0
     for (const r of records()) {
@@ -238,7 +246,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
-  test('every row keeps the record well formed: seq + 1 at now, since moved only with the state, counters within bounds, and the store reads it back', () => {
+  test('every row keeps the record well formed: seq + 1 at now, since moved only with the state, counters within bounds, and the store reads it back', SWEEP, () => {
     for (const r of REACHED) {
       expect({ r: stateKey(r), ok: wellFormed(r) }).toEqual({ r: stateKey(r), ok: true })
       for (const e of ALL_EVENTS) {

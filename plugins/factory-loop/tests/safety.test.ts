@@ -259,6 +259,8 @@ const RECORD: IssueRecord = {
   notes: ['use --yes nowhere'],
   prClosedAt: null,
 }
+// the record's PR as the prs source reads it: the review step reads its head and patch
+const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: 'f00dfeed', readAt: NOW }
 const at = `i470/l${LIFE}/s3`
 const V2_ACTIONS: Action[] = [
   { ...base, kind: 'transition', key: `${at}/t`, class: 'free', rule: 'S3', row: 'T2', event: 'ok', from: { issue: 470, life: LIFE, seq: 2 }, next: RECORD, trigger: { kind: 'entry', key: `i470/l${LIFE}/s2/design/a1`, status: 'done', startedAt: NOW - 2 * MIN } },
@@ -271,7 +273,8 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'pr', key: `${at}/pr/ensure`, class: 'free', rule: 'S2', op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 'The work', summary: 'Fixes #999 by --yes', evidence: null, brief: BRIEF },
   { ...base, kind: 'pr', key: `${at}/pr/body/a1`, class: 'free', rule: 'Q2', op: 'body', branch: 'issue-470', base: 'main', pr: 512, title: 'The work', summary: 'x', evidence: 'npm test', brief: BRIEF },
   { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
-  ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
+  // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
+  ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
   { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed' },
@@ -328,7 +331,7 @@ function world(): { state: State; ledger: LedgerEntry[] } {
     { id: 'the-models-own-agent', type: 'general-purpose', status: 'running' as const },
   ]
   // the v2 records the pass planned from: the triage step reads its record's counts from them
-  return { state: { ...state({ ledger, pool, agents }), v2: emptyV2State(NOW, [RECORD]) }, ledger }
+  return { state: { ...state({ ledger, pool, agents }), v2: { ...emptyV2State(NOW, [RECORD]), prs: { prs: [PR_VIEW] } } }, ledger }
 }
 
 // everything one action sends out: commands, events, spawns, prompts, stops, titles

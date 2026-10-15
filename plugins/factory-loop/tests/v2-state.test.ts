@@ -464,9 +464,8 @@ describe('the steps', () => {
     expect(transitionOf(plan(withLedger(world([r]), [answer('drop', {})])), 96)).toMatchObject({ row: 'X5', next: { state: 'closed', why: 'dropped', notes: ['triage: flaky tests'] } })
   })
 
-  test('review and the merge queue wait for their units with a skip line that says so', () => {
-    const r = plan(world([rec(97, { state: 'reviewing', step: 'review' }), rec(98, { state: 'merge-queue', step: 'queue' })]))
-    expect(said(r, 97)).toEqual(['the review step is not built yet (U6)'])
+  test('the merge queue waits for its unit with a skip line that says so', () => {
+    const r = plan(world([rec(98, { state: 'merge-queue', step: 'queue' })]))
     expect(said(r, 98)).toEqual(['the queue step is not built yet (U7)'])
   })
 })
