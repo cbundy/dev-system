@@ -9,7 +9,7 @@
 // Pure: the time is state.now.
 import { stepBreaker, want } from '../foundation'
 import type { LedgerEntry, Ms } from '../types'
-import { keyParts, lifeAt, prepareKey, stepKey } from './keys'
+import { freeKey, keyParts, lifeAt, prepareKey, stepKey } from './keys'
 import type { EventData } from './table'
 import { AGENT_STEPS, STEP_CLASS, STEP_ROLE, WHY_CAUSE } from './types'
 import type { AgentStep, IssueRecord, Lease, OutsideCause, StepKind, StepMarker, StepResult, TableEvent, Trigger, UnknownWhy, V2Ctx } from './types'
@@ -37,9 +37,34 @@ export type StepPlan = (env: StepEnv) => StepRead
 
 // --- facts a step reads --------------------------------------------------------------------------------
 
-// leaseOf: the slot the record holds: the lease whose holder is factory-loop:<N>:<life> (10.1).
+// freeing: W2's free of this lease runs or is done, so the lease is gone though a pool read made
+// before the free ended still shows it (10.1). A free that failed leaves the slot leased and whole.
+export function freeing(ctx: V2Ctx, l: Pick<Lease, 'lease'>): boolean {
+  const e = ctx.byKey.get(freeKey(l.lease))
+  return e !== undefined && (e.status === 'running' || e.status === 'done')
+}
+
+// leasesOfLife: the life's leases, by holder factory-loop:<N>:<life> (10.1), but those W2 frees.
+export function leasesOfLife(ctx: V2Ctx, r: Pick<IssueRecord, 'issue' | 'life'>): Lease[] {
+  return ctx.v2.leases.filter(l => l.issue === r.issue && l.life === r.life && !freeing(ctx, l))
+}
+
+// leaseOf: the slot the record holds: its life's lease (leasesOfLife). When the life has two (a
+// lease whose answer was lost, taken again), the one its newest done prepare named, else its newest
+// done lease, else the first by path, so the choice holds from pass to pass; W2 frees the other.
 export function leaseOf(ctx: V2Ctx, r: Pick<IssueRecord, 'issue' | 'life'>): Lease | null {
-  return ctx.v2.leases.find(l => l.issue === r.issue && l.life === r.life) ?? null
+  const mine = leasesOfLife(ctx, r)
+  if (mine.length <= 1) return mine[0] ?? null
+  const named = (op: 'prepare' | 'lease') =>
+    lifeEntries(ctx, r, 'slot')
+      .filter(e => e.status === 'done' && e.outcome?.kind === 'slot' && e.outcome.op === op)
+      .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+      .flatMap(e => (e.outcome?.kind === 'slot' && e.outcome.lease !== null ? [e.outcome.lease] : []))
+  for (const id of [...named('prepare'), ...named('lease')]) {
+    const l = mine.find(x => x.lease === id)
+    if (l !== undefined) return l
+  }
+  return [...mine].sort((a, b) => a.path.localeCompare(b.path))[0] ?? null
 }
 
 // lifeEntries: the ledger entries of one life (their keys name it), of one kind or all.
@@ -49,6 +74,22 @@ export function lifeEntries(ctx: V2Ctx, r: Pick<IssueRecord, 'issue' | 'life'>, 
     const p = keyParts(e.key)
     return p !== null && p.issue === r.issue && p.life === r.life
   })
+}
+
+// leftoversOf: the leftovers files the life's slot ops saved (10.2), newest first: each prepare's,
+// and each free's, which a parked or released life's slot left. A retry's or a resumed step's
+// prompt names the newest (5.1). A free is keyed by its lease (keys.ts freeKey), so a file is the
+// life's by its own name, which the tool builds from the lease's holder: <N>-<life>-...
+export function leftoversOf(ledger: readonly LedgerEntry[], r: Pick<IssueRecord, 'issue' | 'life'>): string[] {
+  const prefix = `${r.issue}-${r.life}-`
+  return ledger
+    .flatMap(e => {
+      const o = e.outcome
+      if (e.kind !== 'slot' || e.status !== 'done' || o?.kind !== 'slot' || typeof o.leftovers !== 'string') return []
+      return (o.leftovers.split('/').at(-1) ?? '').startsWith(prefix) ? [{ file: o.leftovers, at: e.endedAt ?? e.startedAt }] : []
+    })
+    .sort((a, b) => b.at - a.at)
+    .map(x => x.file)
 }
 
 // timeoutOf: a running step's timeout (4.4).
@@ -97,9 +138,10 @@ export function causeOf(ctx: V2Ctx, r: IssueRecord, entry: LedgerEntry | null, w
   return null
 }
 
-// unknownOf: an unknown for the table, with why, a reason and its outside cause.
-export function unknownOf(ctx: V2Ctx, r: IssueRecord, entry: LedgerEntry | null, why: UnknownWhy, reason: string): TableEvent {
-  return { kind: 'unknown', why, reason: reason.length > 300 ? `${reason.slice(0, 297)}...` : reason, cause: causeOf(ctx, r, entry, why) ?? undefined }
+// unknownOf: an unknown for the table, with why, a reason and its outside cause: the one given, a
+// fact the caller holds (5.1), else causeOf's.
+export function unknownOf(ctx: V2Ctx, r: IssueRecord, entry: LedgerEntry | null, why: UnknownWhy, reason: string, cause?: OutsideCause): TableEvent {
+  return { kind: 'unknown', why, reason: reason.length > 300 ? `${reason.slice(0, 297)}...` : reason, cause: cause ?? causeOf(ctx, r, entry, why) ?? undefined }
 }
 
 // asEventData: the fields of a step's answer the rows read, each of its own type (table.ts
@@ -182,8 +224,21 @@ export type AgentOpts = {
   step: AgentStep
   // the step attempt's key (default stepKey: one per seq and attempt; review's is by patch and round)
   key?: string
+  // the slot's preparation for it (default prepareKey: one per seq and attempt; a reviewer after
+  // another of its seq gets its own, keys.ts reviewPrepareKey)
+  prepare?: string
   // the rule that starts it (S2; S5 for triage)
   rule?: string
+}
+
+// slotLost: how the attempt's slot is gone, or null: with the pool's leases read, the record holds
+// no lease, or not the one the attempt's prepare (done) ran in.
+function slotLost(ctx: V2Ctx, slot: Lease | null, prep: LedgerEntry | undefined): string | null {
+  if (!ctx.v2.sources.leases.ok) return null
+  const o = prep?.status === 'done' && prep.outcome?.kind === 'slot' ? prep.outcome : null
+  if (slot === null) return `is gone${o?.path ? ` (${o.path})` : ''}`
+  if (o !== null && o.lease !== null && o.lease !== slot.lease) return `is gone: it was prepared on lease ${o.lease}, and the record now holds ${slot.lease} (${slot.path})`
+  return null
 }
 
 // agentStep: one agent step of the record, generic over its kind (S2): the slot prepared for the
@@ -192,23 +247,36 @@ export type AgentOpts = {
 // or the generic agent unknown. A prepare that ended without done is the attempt's unknown
 // (cli): it is part of the attempt, one per key. Nothing starts while env.start is false, so a held
 // step has no running entry and no clock.
+//
+// The attempt's slot gone (slotLost) ends it at once, unknown with the cause `slot` (5.1's free
+// re-run): a running agent then (agent-dead), so the new seq's entry actions stop it rather than let
+// it write on, for up to the step's timeout, in a slot the pool may give another issue (property 6);
+// a done prepare whose agent has not started (spawn), so no agent starts in a slot that was never
+// prepared for it (10.2). The next attempt prepares the slot W1 leases.
 export function agentStep(env: StepEnv, opts: AgentOpts): StepRead {
   const { ctx, r } = env
   const step = opts.step
   const key = opts.key ?? stepKey(r, step, r.attempt)
-  const prep = prepareKey(r, r.attempt)
+  const prep = opts.prepare ?? prepareKey(r, r.attempt)
   const rule = opts.rule ?? (step === 'triage' ? 'S5' : 'S2')
   const timeoutMs = timeoutOf(ctx, step)
   const e = ctx.byKey.get(key)
+  const p = ctx.byKey.get(prep)
+  const lost = slotLost(ctx, env.slot, p)
   if (e !== undefined) {
+    if (e.status === 'running' && lost !== null) {
+      return { kind: 'result', event: unknownOf(ctx, r, e, 'agent-dead', `the slot of ${step} ${lost}; its agent is stopped`, 'slot'), trigger: triggerOf(e) }
+    }
     if (e.status === 'running') return { kind: 'running', since: e.startedAt, timeoutMs, key }
     // a step key is one attempt (maxAttempts 1): whatever it ended with is the attempt's result
     return { kind: 'result', event: stepEvent(ctx, r, e, step), trigger: triggerOf(e) }
   }
-  const p = ctx.byKey.get(prep)
   if (p?.status === 'running') return { kind: 'running', since: p.startedAt, timeoutMs, key: prep }
   if (p !== undefined && p.status !== 'done') {
     return { kind: 'result', event: unknownOf(ctx, r, p, 'cli', `the slot could not be prepared for ${step}: ${p.summary ?? p.status}`), trigger: triggerOf(p) }
+  }
+  if (p !== undefined && lost !== null) {
+    return { kind: 'result', event: unknownOf(ctx, r, p, 'spawn', `the slot prepared for ${step} ${lost}; ${step} never started`, 'slot'), trigger: triggerOf(p) }
   }
   if (!env.start) return { kind: 'held', why: env.hold ?? `${step} is held` }
   const slot = env.slot

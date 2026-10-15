@@ -75,6 +75,11 @@ export function prReadArgv(pr: number): string[] {
   return ['callum-flow-issue-read', '--json', '--pr', String(pr)]
 }
 
+// The issue's Rollout (merge, run-it or keep-open), which the PR body's linkage follows (8.1).
+export function rolloutArgv(issue: number): string[] {
+  return ['callum-flow-rollout', String(issue)]
+}
+
 // --- a split's children (8.7) -------------------------------------------------------------------------
 
 // The child's body, with its hidden key, goes on stdin.
@@ -95,6 +100,27 @@ export function blockedByArgv(repo: string, issue: number, blockerId: number): s
 // A ready child, labelled so S1 can claim it: the one ready label the loop ever adds.
 export function childReadyArgv(repo: string, child: number, readyLabel: string): string[] {
   return ['gh', 'issue', 'edit', String(child), '--repo', repo, '--add-label', readyLabel]
+}
+
+// The open issues by trusted authors, whole, through the reader: a child made before a retry is
+// found again by the hidden key in its body.
+export function openIssuesArgv(): string[] {
+  return ['callum-flow-issue-read', '--json', '--list', '--state', 'open']
+}
+
+// One issue, through the reader: its REST id, which the sub-issue and dependency links take.
+export function issueReadArgv(issue: number): string[] {
+  return ['callum-flow-issue-read', '--json', String(issue)]
+}
+
+// The ids of the parent's sub-issues, so a link made before a retry is not made twice.
+export function subIssuesReadArgv(repo: string, parent: number): string[] {
+  return ['gh', 'api', `repos/${repo}/issues/${parent}/sub_issues`, '--paginate', '--jq', '.[].id']
+}
+
+// The ids of the issues a child is blocked by, likewise.
+export function blockersReadArgv(repo: string, issue: number): string[] {
+  return ['gh', 'api', `repos/${repo}/issues/${issue}/dependencies/blocked_by`, '--paginate', '--jq', '.[].id']
 }
 
 // --- CI (8.5) ----------------------------------------------------------------------------------------------
@@ -139,6 +165,29 @@ export function lsRemoteArgv(branch: string): string[] {
   return ['git', 'ls-remote', 'origin', `refs/heads/${branch}`]
 }
 
+// Origin's commits brought into the slot, so the head read above can be compared with the base
+// and with the head the agent answered. It moves no branch and touches no tree.
+export function fetchArgv(): string[] {
+  return ['git', 'fetch', '--quiet', 'origin']
+}
+
+// How many commits the head has beyond origin's default branch.
+export function beyondBaseArgv(base: string, head: string): string[] {
+  return ['git', 'rev-list', '--count', `origin/${base}..${head}`]
+}
+
+// Whether a commit is the head or one of its ancestors: exit 0 yes, 1 no.
+export function isAncestorArgv(commit: string, head: string): string[] {
+  return ['git', 'merge-base', '--is-ancestor', commit, head]
+}
+
+// --- the builder's model (7.1) ---------------------------------------------------------------------
+
+// The model the builder runs on; the tool logs `implementer_routed` itself.
+export function implementerRouteArgv(issue: number): string[] {
+  return ['callum-flow-implementer-route', String(issue)]
+}
+
 // --- claims (3.5, 4.1) -------------------------------------------------------------------------------------------
 
 export function claimArgv(issue: number): string[] {
@@ -166,6 +215,7 @@ export function slotKillArgv(path: string): string[] {
   return ['factory-slot', 'kill', path]
 }
 
-export function slotFreeArgv(path: string, lease: string): string[] {
-  return ['factory-slot', 'free', path, lease]
+// The loop dir is where the slot's leftovers are saved before it goes back (10.1, 10.2).
+export function slotFreeArgv(path: string, lease: string, loopDir: string): string[] {
+  return ['factory-slot', 'free', path, lease, loopDir]
 }

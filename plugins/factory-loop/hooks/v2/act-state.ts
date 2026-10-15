@@ -16,10 +16,10 @@
 // stop-agent keep v1's executors (act-cli.ts, act-merge.ts). Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
 import type { Exec, ExecCtx, Executor, RunResult } from '../exec'
-import { neutral } from '../prompts'
 import type { ActionKind, Action, LedgerEntry } from '../types'
 import * as ARGV from './argv'
 import { eventArgv } from './events'
+import { neutralBody } from './prompts-work'
 import { FACTORY_LABELS } from './types'
 import type { FactoryLabel, IssueRecord, RecordRef, Trigger } from './types'
 
@@ -138,10 +138,11 @@ export function hiddenKey(key: string): string {
   return `<!-- factory-loop:${key} -->`
 }
 
-// commentBody: the posted text: the body neutralized (no closing keyword before a reference, D-56),
+// commentBody: the posted text: the body neutralized (no closing keyword before a reference, D-56)
+// in blocks of lines, so a long one (a design brief) is not cut at neutral()'s 4 000 characters,
 // then the hidden key on its own line.
 export function commentBody(body: string, key: string): string {
-  return `${neutral(body)}\n\n${hiddenKey(key)}\n`
+  return `${neutralBody(body)}\n\n${hiddenKey(key)}\n`
 }
 
 // postedUrl: the URL of a trusted comment that carries the key, from `callum-flow-issue-read --json

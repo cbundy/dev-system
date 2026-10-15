@@ -397,7 +397,9 @@ describe('R1 names nothing but a ghost (property 17)', () => {
     return world({ issues, records, ledger, leases, agents, leasesOk: r() > 0.1 })
   }
 
-  test('over generated factories: every R1 action and skip line names a ghost; its event comes only after its effects and its slot; a done release plans nothing more; planning is deterministic and idempotent', () => {
+  // about 1 s alone, and past the default 5 s when the host is loaded (a 5.5 s failure seen at
+  // load average 25 on 16 CPUs): a generous bound of its own
+  test('over generated factories: every R1 action and skip line names a ghost; its event comes only after its effects and its slot; a done release plans nothing more; planning is deterministic and idempotent', { timeoutMs: 60_000 }, () => {
     const seen = { ghosts: 0, reclaimed: 0, abandoned: 0, kept: 0 }
     for (let seed = 1; seed <= 300; seed++) {
       let s = generated(seed)

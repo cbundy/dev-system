@@ -567,9 +567,13 @@ step waiting on GitHub, with nothing of its own running, is unknown when either 
 - a check has been running for longer than `ciRunMs` (30 min). CI's p90 is 3.0 min (C3:276).
 
 This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with nothing to run
-(`totality/T-10`), and a head whose PR did not read: only a GitHub rate limit, which cut the reads
-short, holds it with no clock. A PR the reader refuses for an untrusted author (exit 3) is a fact,
-not a missing read: `not-ok(policy)` (9.3).
+(`totality/T-10`). In reviewing, the PR's own read is bounded the same way: a PR not in the
+pass's read, a read older than the seq, no head or no patch id is unknown `ciStartMs` after the
+later of the seq's start and the end of the PR's ensure. The `prs` source not read at all, and a
+GitHub backoff, are admission holds with no clock. At the merge queue's head it bounds a PR that
+did not read too: only a GitHub rate limit, which cut the reads short, holds it with no clock. A
+PR the reader refuses for an untrusted author (exit 3) is a fact, not a missing read:
+`not-ok(policy)` (9.3).
 
 The values are settings (`stateTimeoutMs`, `ciStartMs`, `ciRunMs`; appendix A).
 
@@ -658,7 +662,9 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
     `stop-new` or `stop-all` when it ended;
   - `breaker`: the step-unknown breaker (5.3) was open when the step ended, or this unknown trips
     it;
-  - `slot`: the record's lease vanished while the step ran (10.1).
+  - `slot`: the record's lease vanished while the step ran (10.1). The step ends then, not at its
+    timeout: a running agent is stopped by the next seq's entry actions, and a prepare counts only
+    for the lease it ran in, so no agent starts in a slot that was not prepared for it.
 
   Each is free once per attempt (`cut`), so a step that itself brings the session down meets U2
   on its second cut, and work stays bounded (property 7).
@@ -1142,7 +1148,12 @@ is a new `Reviewer` implementation and a setting, nothing more.
     review, and CI runs on the new head;
   - an unknown CI result does not re-run the reviewer;
   - a review of a patch the head no longer has is simply not the current patch's review, so the
-    step plans the review of the new patch with no transition.
+    step plans the review of the new patch with no transition. When the old patch's reviewer
+    still runs (a push during review), the step stops it first (`stop-agent`, keyed as 4.5's
+    stops, so the seq's entry actions wait for it) and holds, on that reviewer's clock, until it
+    has ended: one reviewer per record at a time (property 6). The new reviewer gets the slot
+    prepared again. A reviewer the loop stopped gives no review: its `reviewed` event is
+    `unknown` and nothing is posted on the PR.
 
 ### 8.5 The CI half
 
@@ -1152,9 +1163,15 @@ is a new `Reviewer` implementation and a setting, nothing more.
 - **One re-run.** A check that fails or is cancelled gets one re-run before it counts as failed:
   action `ci-rerun`, `gh run rerun <run id> --failed --repo R`, keyed by round and run id
   (`failures/F6`, `totality/T-09`). A flaky check then passes without a fixer. A new round, after
-  a fixer, gets its own re-run. A re-run that failed as a command (an API error, a timeout, a
-  reload that lost it) re-ran nothing, so its check is not read as failed: the re-run is tried
-  once more after its backoff, and once used up the step is `unknown`, never `ci-red`.
+  a fixer, gets its own re-run. A run is re-run only once it has finished: GitHub refuses to
+  re-run a run with a job still going. The key keeps it once per round, but the call itself is
+  retried with backoff (3 attempts): a GitHub blip, a `gh` timeout or a restart during the call is
+  not a failed check. Only GitHub's own refusal of the re-run counts the check as failed at once.
+  A re-run whose answer was lost, or a failed call GitHub took anyway (a check of the run ended
+  since), is awaited, within `ciStartMs`. In reviewing, one that uses up its attempts on transient
+  errors holds the record as a stalled effect (4.5). At the merge queue's head it makes the step
+  `unknown`, never `ci-red`, as any queue action that used up its attempts does, so the queue
+  moves past a head that cannot move (9.1).
 - **A conflict.** GitHub does not run `pull_request` workflows for a PR with a merge conflict, and
   `ci.yml` triggers only on `pull_request` for branches (`.github/workflows/ci.yml:24-27`). So a
   `dirty` PR is `not-ok(conflict)` at once and goes to a fixer. It does not wait out `ciStartMs`.
@@ -1331,10 +1348,16 @@ agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings
   prints `LEASED path=<p> lease=<id>`. The branch is checked out by `prepare` (10.2).
 - **W2, free.** A slot with a `factory-loop:<N>:<life>` holder is freed when no record of that
   issue and life is in a slot state and no step entry of it runs. Action `slot` op `free`:
-  `factory-slot free <path> <lease>` kills the slot's processes (10.8), saves leftovers (10.2),
-  runs `git reset --hard` and `git clean -fd`, then `treehouse return <path> --if-lease-id
-  <lease>`, which also ends lingering processes. It is done when the slot shows available. For one
+  `factory-slot free <path> <lease>` kills the slot's processes (10.8), saves leftovers (10.2)
+  and prints their file, runs `git reset --hard` and `git clean -fd`, then `treehouse return
+  <path> --if-lease-id <lease>`, which also ends lingering processes. It is done when the slot
+  shows available. From the free's start the lease counts as gone, so a record resumed meanwhile
+  waits for it to go back rather than step onto it. A second lease of a live life (a lease whose
+  answer was lost, taken again) is freed the same way once nothing of the life runs. For one
   issue, W2 runs before W1 (`totality/T-19`).
+- **Budgets.** The executor gives the tool its op's timeout less a margin (`--budget-ms`), and
+  the tool ends its own commands inside it, so no `treehouse get` it started can finish later and
+  take a second slot.
 - W2 is a rule over the pool, not an entry action, so a slot is freed however its issue left:
   parked, dropped, merged, closed by hand or lost to another device (DB:81, #601).
 
@@ -1344,23 +1367,26 @@ Before every agent step (each attempt and each triage included), action `slot` o
 `factory-slot prepare <path> <lease> <branch> <marker json>`:
 
 1. kill the slot's processes (10.8);
-2. save leftovers: tracked changes and untracked files as one binary patch,
+2. `git fetch origin`;
+3. save leftovers: tracked changes, untracked files and, while the slot is on the branch, its
+   commits that origin has under no ref, as one binary patch against the merge base of HEAD and the
+   step's start (`origin/<branch>`, else `origin/<default>`), so it applies onto the start:
    `<loop dir>/leftovers/<N>-<life>-s<seq>-<ts>.patch`, pruned with the loop's other files after
    7 days (D-46);
-3. `git fetch origin`, `git reset --hard`, `git clean -fd`, then `git switch
+4. `git reset --hard`, `git clean -fd`, then `git switch
    --ignore-other-worktrees -C <branch> origin/<branch>` (or `origin/<default>` when origin has no
    such branch). A stale slot or a person's worktree that still has the branch checked out no
    longer blocks the step. Checked locally on git 2.56.0: without the option the switch fails with
    "is already used by worktree", exit 128 (`totality/T-19`);
-4. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
+5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
    step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir }`;
-5. print `PREPARED head=<sha>`.
+6. print `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when it saved any.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
-retry. Uncommitted work of a failed attempt survives in its leftovers file, which the retry's
-prompt names (5.1). A `prepare` that fails is the attempt's `unknown`: it is part of the attempt,
-keyed with it.
+retry. Uncommitted work of a failed attempt, and work it committed but never pushed, survives in
+its leftovers file, which the retry's prompt names (5.1). A `prepare` that fails is the attempt's
+`unknown`: it is part of the attempt, keyed with it.
 
 ### 10.3 Starting the agent in its slot
 
@@ -2428,7 +2454,7 @@ delete wave.
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
-| `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 2 per key: a re-run that failed as a command re-ran nothing (8.5) |
+| `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
 | `queue-merge` | free | `callum-flow-merge <p> --patch <id>` | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
