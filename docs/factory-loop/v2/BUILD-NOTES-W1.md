@@ -8,9 +8,8 @@ workspace design the spec now uses, and the owner's decisions on the spec.
 
 - **Workflow 2** builds U1 first, then U2 (the state model, table and triage), U3 (reconcile and
   the migration tool) and U4 (events, interventions and the claim tools) in parallel, from
-  [SPEC.md](SPEC.md) section 16. No question for the owner is open.
-- **Before U4 starts,** main is merged into `feat/factory-loop-v2` once issue #534 lands, so U4
-  builds on its structured event format. If #534 is late, U4 uses the stated fallback.
+  [SPEC.md](SPEC.md) section 16. No question for the owner is open. U4 waits on nothing outside
+  the branch: v2 writes today's event format (decision 12).
 - **The owner** sees the migration tool's first report during workflow 2 and approves releases by
   issue, while both live loops stay in observe mode.
 - **Workflow 3** starts U9 with the frameless re-probe described in [SPIKES.md](SPIKES.md), before
@@ -282,14 +281,17 @@ open. What each changed in the spec:
     other kept file still over the budget, so the allowlist is empty after cutover. U2's
     `recordsFromEvents` moved from `derive.ts` (559 lines) to `record.ts` to stay under it.
     New property 19.
-12. **Structured event payloads (issue #534).** 7.1: every new v2 payload (`transition`,
-    `reviewed`, `intervention`, and the `release` payload on `reclaimed` and `abandoned`) is a
-    `data` object with a schema name and version, a JSON Schema and tests, following #534's guide
-    where it fits. The note is a short line for people; the note codecs are gone. One module,
-    `hooks/v2/events.ts`, builds every v2 event. U4 starts from a branch with #534 merged in; if
-    #534 has not landed, U4 writes today's format through the same module and switches later.
-    The readers (factory-state, evaluate, `docs/metrics.md`, and the loop's own rebuild) read
-    `data`. The migration tool writes its own events with the same schemas, so U3's event test
-    lands with or after U4.
+12. **Events in today's format (issue #534 withdrawn).** The owner first chose #534's structured
+    payloads, then withdrew that, and the idea of a new database table, the same day: "it's going
+    to be too complex to add". 7.1: v2's new fields (transitions, interventions with who, cause
+    code and reason, review results, and the release fields on `reclaimed` and `abandoned`) are
+    `key=value` tokens in the note of `callum-flow-event` states, in the encoding of today's
+    `loop` notes (`loopNote`, `derive.ts:369`: space-separated, `%` and whitespace
+    percent-encoded, within `LOOP_NOTE_MAX`). One module, `hooks/v2/events.ts`, builds every v2
+    event and parses its notes, so a later format change touches one module. The readers
+    (factory-state, evaluate, `docs/metrics.md`, and the loop's own rebuild) parse the note as
+    they do today's `loop` notes. No JSON Schemas. U4 depends only on U1 and runs beside U2 and
+    U3. The migration tool's event test parses its notes with `events.ts`, so it lands with or
+    after U4.
 
 The rule-id count stays 21. No decision added a rule id, a table row, an action kind or a source.
