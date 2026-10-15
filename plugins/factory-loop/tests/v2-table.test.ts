@@ -114,6 +114,9 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
   // a not-ok the step cannot give is its unknown, with no outside cause: never a free re-run
   if (kind === 'not-ok') return [...cell.notOk, 'U2', 'U3', 'U4']
   if (kind === 'unknown') return U_OWN
+  // a `timeout` event in the merge queue's own step is a record waiting behind the head (E6); the
+  // head's step runs, and a running step's timeout comes as its unknown (why timeout), the
+  // unknown cell above: U1 to U4 (rules-state.ts)
   if (kind === 'timeout') return state === 'merge-queue' ? ['E6'] : U_OWN
   return ['E7']
 }
@@ -152,6 +155,17 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
       const [state, step, kind] = cell.split('|') as [IssueState, string, EventKind]
       expect({ cell, rows: [...rows].sort() }).toEqual({ cell, rows: [...expected(state, step === 'triage', kind)].sort() })
     }
+  })
+
+  test('a hung merge-queue head is the unknown path, never a tell: its running step\'s timeout comes as unknown (why timeout) and takes U1 to U4', () => {
+    const head = { ...base, state: 'merge-queue' as const, step: 'queue' as const, pr: 512 }
+    const timedOut: TableEvent = { kind: 'unknown', why: 'timeout', reason: 'queue ran past its 30 min' }
+    expect(rowFor(head, timedOut, CFG).id).toBe('U2')
+    expect(rowFor(head, { ...timedOut, cause: 'load' }, CFG).id).toBe('U1')
+    expect(rowFor({ ...head, attempt: 2 }, timedOut, CFG).id).toBe('U3')
+    expect(rowFor({ ...head, attempt: 2, triages: MAX_TRIAGES }, timedOut, CFG).id).toBe('U4')
+    // a record behind the head waits: its period's tell
+    expect(rowFor(head, { kind: 'timeout' }, CFG).id).toBe('E6')
   })
 
   test('every state but closed has a timeout or a tell period: a running step\'s timeout is unknown, a waiting state\'s is E6', () => {
@@ -238,6 +252,19 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
+  test('a triage answer other than park or drop starts a step that is not triage: the state\'s own, at attempt 1 (retry: 2), with no cut, even when the answer leads to the state the record is in', () => {
+    const onTriage = REACHED.filter(r => r.step === 'triage')
+    expect(new Set(onTriage.map(r => r.state))).toEqual(new Set(STEP_STATES))
+    for (const r of onTriage) {
+      for (const e of eventsOf('triage')) {
+        const row = rowFor(r, e, CFG)
+        const n = next(r, e)
+        if (n === null || row.id === 'X4' || row.id === 'X5') continue
+        expect({ from: r.state, row: row.id, step: n.step, attempt: n.attempt, cut: n.cut }).toEqual({ from: r.state, row: row.id, step: STATE_STEP[n.state], attempt: row.id === 'X1' ? 2 : 1, cut: false })
+      }
+    }
+  })
+
   test('property 12, edges: from every reachable parked record an unpark reaches queued, its target kept and its budgets reset; a resumed record is not parked again for the same hand close', () => {
     const parked = REACHED.filter(r => r.state === 'parked')
     expect(parked.length).toBeGreaterThan(0)
@@ -246,7 +273,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
       const n = next(closed, { kind: 'unpark', reason: 'label', data: { note: 'go on', closedAt: '2026-10-15T10:00:00Z' } })
       expect(n).toMatchObject({ state: 'queued', resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, notes: ['go on'], prClosedAt: '2026-10-15T10:00:00Z', question: null })
       // the PR's close is already handled: pr-closed is an edge on its closedAt, never present again
-      expect((n as IssueRecord).prClosedAt >= '2026-10-15T10:00:00Z').toBe(true)
+      expect(((n as IssueRecord).prClosedAt ?? '') >= '2026-10-15T10:00:00Z').toBe(true)
     }
   })
 })
@@ -341,6 +368,24 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     expect(next({ ...triage, head: HEAD, fixes: FIX_CAP }, { kind: 'triage', choice: 'fix', reason: 'needs a fixer' })).toMatchObject({ state: 'parked', question: expect.stringContaining('fix cap') })
     expect(next(triage, { kind: 'triage', choice: 'drop', reason: 'obsolete' })).toMatchObject({ state: 'closed', why: 'dropped', notes: ['triage: obsolete'] })
     expect(next(triage, { kind: 'triage', choice: 'redesign', reason: 'wrong brief', data: { instructions: 'design the v2 API' } })).toMatchObject({ state: 'designing', step: 'design', notes: ['design the v2 API'] })
+  })
+
+  test('a triage answer that leads to the state the record is in starts that state\'s own step: redesign from designing runs the designer, fix from fixing runs the fixer', () => {
+    const designing = { ...base, state: 'designing' as const, step: 'triage' as const, attempt: 2, cut: true, triages: 1, since: NOW - 3_600_000, notes: ['attempt 2 of design ended unknown (timeout): no answer'] }
+    const redesign = next(designing, { kind: 'triage', choice: 'redesign', reason: 'wrong brief', data: { instructions: 'design the v2 API' } }, NOW + 1000)
+    expect(rowFor(designing, { kind: 'triage', choice: 'redesign' }, CFG).id).toBe('X3')
+    expect(redesign).toMatchObject({ state: 'designing', step: 'design', attempt: 1, cut: false, triages: 1, notes: ['design the v2 API'], seq: designing.seq + 1, since: designing.since })
+    const fixing = { ...base, state: 'fixing' as const, step: 'triage' as const, attempt: 2, cut: true, triages: 1, fixes: 1, head: HEAD, pr: 512, since: NOW - 3_600_000 }
+    const fix = next(fixing, { kind: 'triage', choice: 'fix', reason: 'the fixer missed a finding', data: { instructions: 'fix the parser' } }, NOW + 1000)
+    expect(rowFor(fixing, { kind: 'triage', choice: 'fix' }, CFG).id).toBe('X2')
+    expect(fix).toMatchObject({ state: 'fixing', step: 'fix', attempt: 1, cut: false, fixes: 2, notes: ['fix the parser'], since: fixing.since })
+    // bounded: a triage that keeps answering redesign never runs triage again without a step between
+    let r: IssueRecord = designing
+    for (let i = 0; i < 5; i++) {
+      r = next(r, { kind: 'triage', choice: 'redesign', reason: 'again' }) as IssueRecord
+      expect(r.step).toBe('design')
+      r = { ...r, step: 'triage' }
+    }
   })
 
   test('the fix cap: a fixer per round until fixCap, then the next not-ok parks and resumes fixing; a decline costs a round, not a fix', () => {

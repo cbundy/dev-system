@@ -89,6 +89,12 @@ describe('parse', () => {
       [271, 'merged', true, null],
     ])
     expect(f?.issues[1]?.github).toEqual({ open: true, labels: ['enhancement', 'ready'] })
+    // a claim the tool shows lapsed carries its lease end (v2's H1 reads it); any other detail none
+    const lapsed = parseFactoryState(factoryJson([fsIssue(60, 'queued', { detail: `claim lapsed at ${iso(NOW - 5 * MIN)}` }), fsIssue(61, 'queued', { detail: 'ready' })]), REPO)
+    expect(lapsed?.issues.map(i => [i.number, i.lapsedAt])).toEqual([
+      [60, NOW - 5 * MIN],
+      [61, null],
+    ])
     expect(parseFactoryState(json, 'other/repo')).toBeNull()
     expect(parseFactoryState('not json', REPO)).toBeNull()
   })
@@ -350,10 +356,14 @@ describe('derive', () => {
           `${iso(NOW - 20 * MIN)},verdict,45,R45,feat/issue-45-x,,,CORRECT: review-1 x,agent,${DEVICE}`,
           `${iso(NOW - 19 * MIN)},fix_requested,45,R45,feat/issue-45-x,,,review,agent,${DEVICE}`,
           `${iso(NOW - 5 * MIN)},superseded,45,R44,,,,by -v2,agent,${DEVICE}`,
+          `${iso(NOW - 50 * MIN)},reclaimed,46,,,,,lease expired,sweep,${DEVICE}`,
+          `${iso(NOW - 4 * MIN)},reclaimed,46,,,,,lease expired,sweep,${DEVICE}`,
         ].join('\n'),
       ),
     )
     const facts = factsOf(events)
+    // the newest `reclaimed` per issue: v2's H1 reads a lapse from it
+    expect([...facts.reclaimed]).toEqual([[46, NOW - 4 * MIN]])
     expect(facts.briefs.get(45)).toBe('https://github.com/cbundy/dev-system/issues/45#issuecomment-99')
     expect(facts.reviewFixes.get('R45')).toBe(1)
     expect(facts.verdicts.get('R45')).toEqual(['CORRECT: review-1 x'])

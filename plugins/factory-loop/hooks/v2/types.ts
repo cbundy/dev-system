@@ -194,6 +194,8 @@ export type V2Outcome =
       from: IssueState | null
       to: IssueState
       step: StepKind | null
+      // false from the entry's start until the executor stored the record (a lost entry may carry
+      // false: the seq is the record's when the store holds it at that seq)
       stored: boolean
       // the transition note's via code (table.ts viaOf), which the seq's entry actions log
       via?: string
@@ -237,8 +239,21 @@ export type StepMarker = {
 export type SplitChild = { key: string; title: string; body: string; blockedBy: string[]; ready: boolean }
 
 export type V2Action =
-  // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code
-  | (ActionBase & { kind: 'transition'; row: string; event: EventKind; from: RecordRef | null; next: IssueRecord; trigger: Trigger; cause?: OutsideCause | null; via?: string })
+  // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;
+  // fromState and fromStep: the state and step the record leaves, which the entry carries from its
+  // start (ledger.ts start), so a crash before it is saved done loses none of them (3.3)
+  | (ActionBase & {
+      kind: 'transition'
+      row: string
+      event: EventKind
+      from: RecordRef | null
+      next: IssueRecord
+      trigger: Trigger
+      cause?: OutsideCause | null
+      via?: string
+      fromState?: IssueState | null
+      fromStep?: StepKind | null
+    })
   // set: add the state's label and remove the other six; ensure: create the seven; clear: remove
   // every factory label (3.4)
   | (ActionBase & { kind: 'label'; op: 'set' | 'ensure' | 'clear'; label: FactoryLabel | null })

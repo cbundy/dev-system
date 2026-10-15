@@ -32,7 +32,10 @@ function base(r: IssueRecord, key: string, reason: string) {
   return { key, class: 'free' as const, rule: RULE, reason, issue: r.issue }
 }
 
-// The transition entry of the record's current seq, and what it recorded.
+// The transition entry of the record's current seq, and what it recorded. The entry carries the
+// row, the state it left and the via code from its start (ledger.ts start), so a crash after the
+// records store took the seq but before the entry was saved done (the entry is then lost) keeps
+// them, and the seq's events and park comment are not lost (3.3, failures/F12, totality/T-05).
 function transitionOf(ctx: V2Ctx, r: IssueRecord): { entry: LedgerEntry; row: string | null; from: IssueRecord['state'] | null; via: string | null } | null {
   const entry = ctx.byKey.get(transitionKey(r))
   if (entry === undefined) return null
@@ -40,9 +43,33 @@ function transitionOf(ctx: V2Ctx, r: IssueRecord): { entry: LedgerEntry; row: st
   return { entry, row: o?.row ?? null, from: o?.from ?? null, via: o?.via ?? null }
 }
 
-// oldSteps: the agent steps of this life an earlier seq started that still run (10.8).
+// oldSteps: the agent steps of this life an earlier seq started that still run (10.8), by time:
+// anything started before this seq's transition belongs to an earlier seq, whatever its key's
+// shape (a review key names the patch and round, not the seq, keys.ts reviewKey).
 function oldSteps(ctx: V2Ctx, r: IssueRecord): LedgerEntry[] {
-  return lifeEntries(ctx, r, 'agent-step').filter(e => e.status === 'running' && (keyParts(e.key)?.seq ?? r.seq) < r.seq)
+  return lifeEntries(ctx, r, 'agent-step').filter(e => e.status === 'running' && (e.startedAt < r.seqAt || (keyParts(e.key)?.seq ?? r.seq) < r.seq))
+}
+
+// stopKey: the entry action that stops one old step's agent, by that step's key within the life.
+function stopKey(r: IssueRecord, step: string): string {
+  return `${entryKey(r, 'stop')}/${step.slice(lifeKey(r).length + 1)}`
+}
+
+// stops: the seq's stop-agent actions: one for each old step whose agent still runs, and each one
+// planned before, so the step waits until every one has ended (4.5).
+function stops(ctx: V2Ctx, r: IssueRecord): Action[] {
+  const out = new Map<string, Action>()
+  const add = (key: string, agentId: string, entry: string) => {
+    out.set(key, { ...base(r, key, 'the step of the seq before still runs'), kind: 'stop-agent', agentId, entry })
+  }
+  for (const e of oldSteps(ctx, r)) if (e.agentId !== undefined) add(stopKey(r, e.key), e.agentId, e.key)
+  const prefix = `${entryKey(r, 'stop')}/`
+  for (const e of ctx.state.ledger) {
+    if (e.kind !== 'stop-agent' || !e.key.startsWith(prefix) || out.has(e.key)) continue
+    const step = `${lifeKey(r)}/${e.key.slice(prefix.length)}`
+    add(e.key, ctx.byKey.get(step)?.agentId ?? '', step)
+  }
+  return [...out.values()]
 }
 
 // mergedLogged: the factory already holds a `merged` event of this life for the PR: the issue's
@@ -102,18 +129,16 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   if (t === null) return []
   const items: EntryItem[] = []
   const add = (action: Action, soft = false, tell = false) => items.push({ action, soft, tell })
+  // a change of state (since moves only with the state, table.ts nextRecord)
   const changed = r.since === r.seqAt
   const row = t.row === null ? null : (TABLE.find(x => x.id === t.row) ?? null)
   // every new seq: its transition event, first
   add({ ...base(r, entryKey(r, 'event/transition'), `log seq ${r.seq}`), kind: 'event', event: { state: 'transition', record: r, row: t.row ?? 'recovered', from: t.from, via: t.via ?? 'recovered' } })
-  // the old seq's step, if it still runs: its agent stopped, the slot's processes killed
-  const stop = entryKey(r, 'stop')
+  // the old seq's steps, if they still run: each agent stopped, the slot's processes killed
   const kill = entryKey(r, KILL)
-  const agent = oldSteps(ctx, r).find(e => e.agentId !== undefined)
-  if (agent !== undefined || ctx.byKey.has(stop)) {
-    add({ ...base(r, stop, 'the step of the seq before still runs'), kind: 'stop-agent', agentId: agent?.agentId ?? '', entry: agent?.key ?? '' }, true)
-  }
-  if ((agent !== undefined || ctx.byKey.has(stop)) && (slot !== null || ctx.byKey.has(kill))) {
+  const stopping = stops(ctx, r)
+  for (const a of stopping) add(a, true)
+  if (stopping.length > 0 && (slot !== null || ctx.byKey.has(kill))) {
     add({ ...base(r, kill, 'end the processes the old step left in the slot'), kind: 'slot', op: KILL, life: r.life, path: slot?.path ?? null, lease: slot?.lease ?? null, branch: null, marker: null, maxAttempts: 1 }, true)
   }
   // a change of state: its label, or every factory label off a closed record, unless another
@@ -122,7 +147,8 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   const labelKey = entryKey(r, 'label')
   if (changed && label !== null) add({ ...base(r, labelKey, `label ${label}`), kind: 'label', op: 'set', label })
   if (changed && r.state === 'closed' && (!heldByOther(ctx, r) || ctx.byKey.has(labelKey))) add({ ...base(r, labelKey, 'a closed record carries no factory label'), kind: 'label', op: 'clear', label: null })
-  // the events the row logs beside transition (a seq recovered with no outcome logs none)
+  // the events the row logs beside transition (a seq whose entry the ledger rebuilt with no row
+  // logs none)
   for (const spec of row?.emit ?? []) {
     add({ ...base(r, entryKey(r, `event/${spec.state}`), `log ${spec.state}`), kind: 'event', event: { state: spec.state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: emitNote(spec, r, t.via) } })
   }

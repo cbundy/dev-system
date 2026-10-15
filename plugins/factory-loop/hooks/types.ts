@@ -60,6 +60,10 @@ export type IssueView = {
   subIssueList: number[] | null
   brief: Brief | null
   delegatedBrief: string | null
+  // the factory source shows the holder's claim lapsed: its lease ended then, with no renewal (v2 H1)
+  claimLapsedAt: Ms | null
+  // the newest `reclaimed` event of the issue: a sweep or a release gave its claim back (v2 H1)
+  reclaimedAt: Ms | null
 }
 
 export type RunState =

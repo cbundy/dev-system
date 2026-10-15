@@ -53,6 +53,10 @@ export type Started = { ledger: LedgerEntry[]; entry: LedgerEntry; prev: LedgerE
 // which plan compares rather than keys) starts its count over: success resets it. The subject's
 // fields come from the action. prev is the entry as it stood, so a pre-check that refuses the
 // attempt can put it back (finish with status skipped). A wake records the session submitting it.
+// A v2 transition carries its facts (the row, the state and step it leaves, the event, the via
+// code) from its start, marked not yet stored: a crash after the records store took the seq but
+// before the entry was saved done leaves a lost entry that still names them (v2 SPEC 3.3), and
+// the executor's done outcome replaces them.
 export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, session = ''): Started {
   const prev = ledger.find(e => e.key === action.key) ?? null
   const entry: LedgerEntry = {
@@ -73,6 +77,19 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
   if (action.kind === 'spawn') entry.agent = action.agent
   else if (action.kind === 'delegate') entry.agent = 'implementer'
   else if (action.kind === 'agent-step') entry.step = action.step
+  else if (action.kind === 'transition') {
+    entry.outcome = {
+      kind: 'transition',
+      row: action.row,
+      event: action.event,
+      cause: action.cause ?? null,
+      from: action.fromState ?? null,
+      to: action.next.state,
+      step: action.fromStep ?? null,
+      stored: false,
+      via: action.via ?? action.row,
+    }
+  }
   if (action.maxAttempts !== undefined) entry.maxAttempts = action.maxAttempts
   if (action.kind === 'judge' || action.kind === 'task' || action.kind === 'tell') {
     entry.wake = action.wake

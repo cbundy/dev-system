@@ -9,7 +9,7 @@
 // Pure: the time is the caller's `now`, the settings the caller's Config.
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
-import type { EmitSpec, IssueRecord, IssueState, Row, StepKind, TableEvent } from './types'
+import type { EmitSpec, IssueRecord, IssueState, Row, TableEvent } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -74,9 +74,10 @@ export function ownStep(r: IssueRecord): boolean {
 
 const onTriage = (r: IssueRecord) => r.step === 'triage'
 
-// waiting: a waiting state (4.4): queued for its slot, a merge-queue record that runs no step of its
-// own (behind the head; the head has no clock either, its waits on GitHub are bounded), parked. A
-// timeout there is a tell period (E6); anywhere else it is the running step's unknown.
+// waiting: the records whose `timeout` event is a tell period (E6, 4.4): queued for its slot,
+// parked, and a merge-queue record on its queue step, which waits when it is behind the head. The
+// head's step runs: rules-state.ts sends a running step's timeout as its unknown (why timeout),
+// so a hung head takes U1 to U4, never E6. Anywhere else a timeout is the running step's unknown.
 export function waiting(r: IssueRecord): boolean {
   return r.state === 'queued' || r.state === 'parked' || (r.state === 'merge-queue' && r.step === 'queue')
 }
@@ -363,8 +364,8 @@ function laterOf(a: string | null, b: string | null): string | null {
 
 // --- the lookup --------------------------------------------------------------------------------------------
 
-// normalize: the event as the table reads it. A running step's timeout is its unknown (why
-// timeout); a waiting state's stays a timeout (E6). A not-ok whose reason the state's own step
+// normalize: the event as the table reads it. A timeout outside a waiting record is the running
+// step's unknown (why timeout); a waiting record's stays a timeout (E6). A not-ok whose reason the state's own step
 // cannot give is an outcome outside the step's known outcomes, so it is unknown (5.1).
 export function normalize(r: IssueRecord, e: TableEvent): TableEvent {
   if (e.kind === 'timeout' && !waiting(r)) return { ...e, kind: 'unknown', why: e.why ?? 'timeout', reason: e.reason ?? 'the step ran past its timeout' }
@@ -403,24 +404,26 @@ export function viaOf(row: Row, e: TableEvent): string {
 }
 
 // nextRecord: the record a changing row makes (4.6): seq + 1 at now, the state the row names, and
-// the row's own change on top. A change of state starts the new state's own step at attempt 1 with
-// no cut and the row's notes alone; a same-state row keeps the seq's notes unless it adds its own.
-// Leaving parked clears the question; only closed keeps a why.
+// the row's own change on top. A row that names a state (not 'same') enters it, even when it is
+// the state the record is in (X2 from fixing, X3 from designing): the state's own step starts at
+// attempt 1 with no cut and the row's notes alone. A same-state row keeps the step, the attempt,
+// the cut and the seq's notes unless it changes them. `since` moves only with the state, so the
+// label is written only on a change of state. Leaving parked clears the question; only closed
+// keeps a why.
 export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): IssueRecord {
   const ev = normalize(r, e)
   const state: IssueState = row.next === 'same' ? r.state : row.next === 'resumeTo' ? (r.resumeTo ?? 'designing') : row.next
-  const changed = state !== r.state
-  const step: StepKind | null = changed ? STATE_STEP[state] : r.step
+  const entered = row.next !== 'same'
   const base: IssueRecord = {
     ...r,
     seq: r.seq + 1,
     seqAt: now,
     state,
-    since: changed ? now : r.since,
-    step,
-    attempt: changed ? 1 : r.attempt,
-    cut: changed ? false : r.cut,
-    notes: changed ? [] : r.notes,
+    since: state !== r.state ? now : r.since,
+    step: entered ? STATE_STEP[state] : r.step,
+    attempt: entered ? 1 : r.attempt,
+    cut: entered ? false : r.cut,
+    notes: entered ? [] : r.notes,
     question: state === 'parked' ? r.question : null,
     why: state === 'closed' ? r.why : null,
     resumeTo: state === 'parked' || state === 'queued' ? r.resumeTo : null,

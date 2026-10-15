@@ -8,7 +8,8 @@
 // takes the record (rules-agent.ts, and each unit's own step plans); then S0 and S1 make records
 // and claim new work (rules-claim.ts). And O1's counts, which the title and the decision log show.
 //
-// - A running step past its timeout is unknown (timeout); a held step has no clock (4.4).
+// - A running step past its timeout is unknown (timeout), in every state; a waiting record's
+//   timeout is its tell period (E6); a held step has no clock (4.4).
 // - GitHub events are edges (4.1): pr-closed compares GitHub's closedAt with the record's
 //   prClosedAt, a drop and an unpark compare the op's time with the life's claim and the park.
 // - The next transition waits until the seq's `transition` event is logged (3.3), and an effect
@@ -190,6 +191,8 @@ function take(ctx: V2Ctx, r: IssueRecord, p: Present, logged: boolean, why: stri
     row: row.id,
     event: p.event.kind,
     from: { issue: r.issue, life: r.life, seq: r.seq },
+    fromState: r.state,
+    fromStep: r.step,
     next,
     trigger: p.trigger,
     cause: ev.cause ?? null,
@@ -241,7 +244,9 @@ function recordRules(ctx: V2Ctx, r: IssueRecord, items: readonly EntryItem[]): v
       if (state.now - read.since > read.timeoutMs) {
         const entry = ctx.byKey.get(read.key) ?? null
         const reason = `${r.step ?? 'the step'} ran past its ${Math.round(read.timeoutMs / 60_000)} min`
-        const event: TableEvent = { kind: 'timeout', why: 'timeout', reason, cause: causeOf(ctx, r, entry, 'timeout') ?? undefined }
+        // a running step's timeout is its unknown, whatever the state: E6's tell is only for a
+        // record that waits (below), so a hung merge-queue head takes U1 to U4 (4.3, 4.4)
+        const event: TableEvent = { kind: 'unknown', why: 'timeout', reason, cause: causeOf(ctx, r, entry, 'timeout') ?? undefined }
         take(ctx, r, { event, trigger: entry === null ? fact(`timeout:${read.key}`) : triggerOf(entry) }, logged, '')
       }
     } else if (read?.kind === 'result') {

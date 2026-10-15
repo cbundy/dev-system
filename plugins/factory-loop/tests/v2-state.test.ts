@@ -10,12 +10,12 @@ import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
 import type { ActIo, ExecCtx } from '../hooks/exec'
-import { start } from '../hooks/ledger'
+import { onLoad, start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { applied, commentBody, hiddenKey, issueBranch, labelArgvs, openPrsOf, postedUrl, recordStale, triggerStale } from '../hooks/v2/act-state'
 import { eventArgv } from '../hooks/v2/events'
-import { claimKey, entryKey, followKey, lifeKey, lifeOf, prepareKey, reclaimKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
+import { claimKey, entryKey, followKey, lifeKey, lifeOf, prepareKey, reclaimKey, reviewKey, seqKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
@@ -114,8 +114,9 @@ describe('S1: claims', () => {
     ]
     const s = world([rec(31)], { queue: issues.map(i => i.number), issues, control: control({ skip: [29], paused: [30] }) })
     const r = plan(s, { ...CFG, skipLabels: ['parked'], maxInFlightIssues: null })
-    // #31 ready again beside its record is H1's re-claim, never a new claim
-    expect(r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.rule])).toEqual([[31, 'H1']])
+    // #31 listed ready beside its record is never a new claim, and the label list alone is no
+    // lapse either: H1 reads a lapse from facts (the factory source, a `reclaimed` event)
+    expect(r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.rule])).toEqual([])
     expect(Object.fromEntries(issues.map(i => [i.number, said(r, i.number).find(w => !w.startsWith('building'))]))).toEqual({
       21: 'closed',
       22: 'untrusted author',
@@ -146,6 +147,35 @@ describe('S1: claims', () => {
     // queued again after the lost claim: a new claim
     const requeued = { ...s, issues: [issue(40), issue(41), issue(42, { stageSince: NOW - MIN })] }
     expect(plan(requeued, { ...CFG, maxInFlightIssues: null }).actions.filter(a => a.kind === 'claim').map(a => a.issue)).toContain(42)
+  })
+
+  test('a claim that may hold the issue (posted, then the adoption failed; or lost to a reload) is finished whatever the queue says, holds its place under the cap, and is told once its attempts are used up', () => {
+    const life = lifeOf(NOW - 10 * MIN)
+    const posted = entry(claimKey(43, life), 'claim', { issue: 43, class: 'start', status: 'failed', attempts: 1, startedAt: NOW - 10 * MIN, endedAt: NOW - 9 * MIN, outcome: { kind: 'claim', result: 'claimed' }, summary: 'claimed #43, but the PRs to adopt did not read' })
+    const lost = entry(claimKey(44, life), 'claim', { issue: 44, class: 'start', status: 'lost', attempts: 1, startedAt: NOW - 10 * MIN, endedAt: NOW - 9 * MIN })
+    // the claim took `ready` off, so the queue no longer lists either; the cap is full with them
+    const s = withLedger(world([rec(45)], { queue: [46], issues: [issue(43, { labels: ['enhancement'] }), issue(44, { labels: ['enhancement'] }), issue(46)], control: control({ noNewWork: false }) }), [posted, lost])
+    const r = plan(s)
+    expect(r.actions.filter(a => a.kind === 'claim').map(a => [a.issue, a.key, a.class, a.rule])).toEqual([
+      [43, posted.key, 'free', 'S1'],
+      [44, lost.key, 'free', 'S1'],
+    ])
+    expect(said(r, 46)).toEqual(['capacity: 3 of 3 queued or in flight'])
+    // finishing is not new work: no owner hold or tier keeps it from running
+    const held = plan({ ...s, control: control({ noNewWork: true }) })
+    expect(held.actions.filter(a => a.kind === 'claim').map(a => a.issue)).toEqual([43, 44])
+    // the claim tool failed before it posted anything: the queue path retries it while it is ready
+    const plain = withLedger(world([], { queue: [], issues: [issue(47)] }), [entry(claimKey(47, life), 'claim', { issue: 47, class: 'start', status: 'failed', attempts: 1, startedAt: NOW - 10 * MIN, endedAt: NOW - 9 * MIN, outcome: { kind: 'cli', exit: 1 } })])
+    expect(plan(plain).actions.filter(a => a.kind === 'claim')).toEqual([])
+    // used up: told once, and it no longer holds a place (R1 releases it)
+    const spent = withLedger(world([], { queue: [], issues: [issue(43, { labels: ['enhancement'] })] }), [{ ...posted, attempts: 9 }])
+    const told = plan(spent)
+    expect(told.actions.filter(a => a.kind === 'claim')).toEqual([])
+    expect(said(told, 43)).toEqual([`exhausted: ${posted.key}`])
+    expect(of(told, 43)).toEqual([expect.objectContaining({ kind: 'tell', wake: 'stalled' })])
+    // done at last: S0 makes the record from it
+    const finished = withLedger(world([], { queue: [], issues: [issue(43, { labels: ['enhancement'] })] }), [{ ...posted, status: 'done', attempts: 2, endedAt: NOW - MIN, outcome: { kind: 'adopt', branch: 'issue-43', pr: null, others: [] } }])
+    expect(transitionOf(plan(finished), 43)).toMatchObject({ row: 'S0', next: { issue: 43, life, state: 'queued' } })
   })
 
   test('no new work, a stopping tier, serial and Slow each hold claims with a skip line naming the limit; a claim in flight holds its place under the cap', () => {
@@ -270,14 +300,60 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     const s = withLedger(world([r]), [transitioned(r, 'U2', 'building', 'unknown:timeout'), old])
     const first = plan(s)
     expect(kinds(first, 80)).toEqual(['event transition', 'stop-agent', 'slot kill'])
-    expect(of(first, 80).find(a => a.kind === 'stop-agent')).toMatchObject({ agentId: 'agent-9', entry: old.key })
+    const stop = of(first, 80).find(a => a.kind === 'stop-agent')
+    expect(stop).toMatchObject({ agentId: 'agent-9', entry: old.key })
     expect(of(first, 80).find(a => a.kind === 'slot')).toMatchObject({ op: 'kill', path: '/slots/80', maxAttempts: 1 })
     const ended = withLedger(s, [
       done(entryKey(r, 'event/transition'), 'event', { issue: 80 }),
-      entry(entryKey(r, 'stop'), 'stop-agent', { issue: 80, status: 'failed', attempts: 1 }),
+      entry(stop?.key ?? '', 'stop-agent', { issue: 80, status: 'failed', attempts: 1 }),
       done(entryKey(r, 'kill'), 'slot', { issue: 80, maxAttempts: 1 }),
     ])
     expect(kinds(plan(ended), 80)).toEqual(['slot prepare'])
+    // the agent ended once its stop ended: the stop stays done with, and the step starts
+    const gone = { ...ended, ledger: ended.ledger.map(e => (e.key === old.key ? { ...e, status: 'lost' as const, endedAt: NOW } : e)) }
+    expect(kinds(plan(gone), 80)).toEqual(['slot prepare'])
+  })
+
+  test('the old seq\'s steps are found by time, whatever their key: a reviewer keyed by patch and round is stopped when its seq ends, and every old agent is stopped, each once', () => {
+    const r = rec(79, { state: 'reviewing', step: 'review', seq: 6, seqAt: NOW - MIN, since: NOW - 60 * MIN, attempt: 2, pr: 579, round: 1 })
+    const reviewer = entry(reviewKey(r, 'f00dfeed', 1, 1), 'agent-step', { issue: 79, class: 'drive', step: 'review', status: 'running', endedAt: null, agentId: 'agent-r', startedAt: NOW - 40 * MIN })
+    const triage = entry(stepKey({ ...r, seq: 4 }, 'triage', 1), 'agent-step', { issue: 79, class: 'drive', step: 'triage', status: 'running', endedAt: null, agentId: 'agent-t', startedAt: NOW - 50 * MIN })
+    // a step of this seq, started after its transition, runs on
+    const current = entry(reviewKey(r, 'f00dfeed', 1, 2), 'agent-step', { issue: 79, class: 'drive', step: 'review', status: 'running', endedAt: null, agentId: 'agent-now', startedAt: NOW - MIN / 2 })
+    const s = withLedger(world([r]), [transitioned(r, 'U2', 'reviewing', 'unknown:timeout'), reviewer, triage, current])
+    const p = plan(s)
+    expect(kinds(p, 79)).toEqual(['event transition', 'stop-agent', 'stop-agent', 'slot kill'])
+    const stops = of(p, 79).filter((a): a is Extract<Action, { kind: 'stop-agent' }> => a.kind === 'stop-agent')
+    expect(stops.map(a => [a.agentId, a.entry]).sort()).toEqual([['agent-r', reviewer.key], ['agent-t', triage.key]])
+    expect(new Set(stops.map(a => a.key)).size).toBe(2)
+    // one stop ended, the other did not yet: the step waits for both
+    const one = withLedger(s, [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(stops[0]?.key ?? '', 'stop-agent', { issue: 79 }), done(entryKey(r, 'kill'), 'slot', { issue: 79, maxAttempts: 1 })])
+    expect(kinds(plan(one), 79)).toEqual(['stop-agent'])
+  })
+
+  test('a transition lost to a reload after the store took it keeps its row, its from-state and its via: the seq still logs the row\'s events and the park\'s comment', () => {
+    const prev = rec(83, { state: 'designing', step: 'design', seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN })
+    const answer = stepDone(prev, 'design', { event: 'ok', data: { brief: BRIEF(83) } })
+    const plans = plan(withLedger(world([prev]), [transitioned(prev, 'T1', 'queued'), done(entryKey(prev, 'event/transition'), 'event', { issue: 83 }), done(entryKey(prev, 'label'), 'label', { issue: 83 }), answer]))
+    const t = transitionOf(plans, 83)
+    expect(t).toMatchObject({ row: 'T2', fromState: 'designing', fromStep: 'design' })
+    if (t === undefined) return
+    // the store took seq 5, then the loop reloaded before the entry was saved done
+    const started = start([], t, NOW).entry
+    const [lost] = onLoad([started], NOW + MIN)
+    expect(lost).toMatchObject({ status: 'lost', outcome: { kind: 'transition', row: 'T2', from: 'designing', step: 'design', via: 'brief', stored: false } })
+    const after = plan(withLedger({ ...world([t.next]), now: NOW + MIN }, [lost as LedgerEntry]))
+    expect(kinds(after, 83)).toEqual(['event transition', 'label set', 'event delegated'])
+    expect(of(after, 83)[0]).toMatchObject({ event: { row: 'T2', from: 'designing', via: 'brief' } })
+    // a park lost the same way still names what parked it
+    const building = rec(84, { seq: 4, seqAt: NOW - 30 * MIN, since: NOW - 30 * MIN, triages: 9 })
+    const cannot = stepDone(building, 'build', { event: 'not-ok', reason: 'cannot', data: { text: 'the API is missing' } })
+    const parks = transitionOf(plan(withLedger(world([building]), [transitioned(building, 'T5', 'designing'), done(entryKey(building, 'event/transition'), 'event', { issue: 84 }), done(entryKey(building, 'label'), 'label', { issue: 84 }), cannot])), 84)
+    expect(parks).toMatchObject({ row: 'T7', next: { state: 'parked' } })
+    if (parks === undefined) return
+    const [gone] = onLoad([start([], parks, NOW).entry], NOW + MIN)
+    const comment = of(plan(withLedger({ ...world([parks.next]), now: NOW + MIN }, [gone as LedgerEntry])), 84).find(a => a.kind === 'comment')
+    expect(comment).toMatchObject({ body: expect.stringContaining('It parked from building (cannot)') })
   })
 
   test('the next transition waits until its seq\'s transition event is logged; an effect that used up its attempts holds the record, and the owner hears once', () => {
@@ -338,7 +414,7 @@ describe('the steps', () => {
     const runningFor = (min: number) => entry(stepKey(r, 'design', 1), 'agent-step', { issue: 93, class: 'develop', step: 'design', status: 'running', endedAt: null, agentId: 'agent-3', startedAt: NOW - min * MIN })
     expect(of(plan(withLedger(world([r]), [runningFor(30)])), 93)).toEqual([])
     const t = transitionOf(plan(withLedger(world([r]), [runningFor(46)])), 93)
-    expect(t).toMatchObject({ row: 'U2', event: 'timeout', rule: 'S4', via: 'unknown:timeout', trigger: { kind: 'entry', key: stepKey(r, 'design', 1), status: 'running', startedAt: NOW - 46 * MIN }, next: { attempt: 2 } })
+    expect(t).toMatchObject({ row: 'U2', event: 'unknown', rule: 'S4', via: 'unknown:timeout', trigger: { kind: 'entry', key: stepKey(r, 'design', 1), status: 'running', startedAt: NOW - 46 * MIN }, next: { attempt: 2 } })
   })
 
   test('results through the table: a design\'s brief to building, a build that cannot to triage, a step lost to a restart is a free re-run, a refused spawn is unknown', () => {
@@ -474,22 +550,27 @@ describe('H1: claims renewed and claimed again', () => {
     expect(plan(base(NOW - 200 * MIN, [rec(121, { state: 'closed', step: null, why: 'merged' })])).actions.some(a => a.kind === 'heartbeat')).toBe(false)
   })
 
-  test('a lapsed claim is claimed again onto its record: labelled ready again after its claim, or another device showing as holder; the re-claim logs its transition again; none while one runs', () => {
+  test('a lapsed claim is claimed again onto its record: a `reclaimed` event after its claim, the factory showing this device\'s claim lapsed, or another device showing as holder; the re-claim logs its transition again; none while one runs', () => {
     const r = rec(122)
     const claimed = done(claimKey(122, LIFE), 'claim', { issue: 122, startedAt: NOW - 40 * MIN, endedAt: NOW - 40 * MIN, outcome: { kind: 'adopt', branch: 'issue-122', pr: null, others: [] } })
-    const ready = plan(withLedger(world([r], { queue: [122], issues: [issue(122)] }), [claimed]))
-    expect(ready.actions.find(a => a.kind === 'claim')).toMatchObject({ issue: 122, rule: 'H1', class: 'free', reason: 'its claim lapsed: the issue is labelled ready again' })
-    // the queue read before the claim is stale: nothing
-    const stale = { ...withLedger(world([r], { queue: [122], issues: [issue(122)] }), [claimed]), sources: { ...baseState().sources, queue: { ok: true, at: NOW - 50 * MIN } } }
-    expect(plan(stale).actions.some(a => a.kind === 'claim')).toBe(false)
+    const at = (view: Parameters<typeof issue>[1], queue: number[] = []) => plan(withLedger(world([r], { queue, issues: [issue(122, { stage: 'designing', holder: DEVICE, labels: ['enhancement'], ...view })] }), [claimed]))
+    const claims = (p: PlanResult) => p.actions.filter(a => a.kind === 'claim')
+    expect(claims(at({ reclaimedAt: NOW - 5 * MIN }))).toEqual([expect.objectContaining({ issue: 122, rule: 'H1', class: 'free', reason: 'its claim lapsed: the sweep gave it back (reclaimed)' })])
+    expect(claims(at({ claimLapsedAt: NOW - 5 * MIN, stage: 'queued' }))).toEqual([expect.objectContaining({ issue: 122, rule: 'H1', reason: 'its claim lapsed: the factory shows its lease ended' })])
+    // the label list lags behind edits: the issue listed ready just after its claim is no lapse
+    expect(claims(at({ labels: ['enhancement', 'ready'] }, [122]))).toEqual([])
+    // facts from before the last claim are no lapse: a re-claim is not made twice
+    expect(claims(at({ reclaimedAt: NOW - 50 * MIN, claimLapsedAt: NOW - 45 * MIN }))).toEqual([])
+    // another device's claim lapsing says nothing of this one
+    expect(claims(at({ claimLapsedAt: NOW - 5 * MIN, holder: OTHER }, []))).toEqual([expect.objectContaining({ reason: `the factory shows ${OTHER} holding it` })])
     const other = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, stage: 'designing', labels: ['enhancement'] })] }), [claimed]))
     expect(other.actions.find(a => a.kind === 'claim')).toMatchObject({ issue: 122, rule: 'H1' })
     const again = done(reclaimKey(r, lifeOf(NOW - 2 * MIN)), 'claim', { issue: 122, startedAt: NOW - 2 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'claim', result: 'claimed' } })
-    const logged = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, stage: 'designing' })] }), [claimed, again]))
+    const logged = plan(withLedger(world([r], { issues: [issue(122, { holder: OTHER, stage: 'designing', reclaimedAt: NOW - 5 * MIN })] }), [claimed, again]))
     expect(logged.actions.filter(a => a.kind === 'claim')).toEqual([])
     expect(logged.actions.find(a => a.kind === 'event' && a.key === `${again.key}/transition`)).toMatchObject({ event: { state: 'transition', record: r, via: 'reclaim' } })
     const inFlight = entry(reclaimKey(r, lifeOf(NOW - MIN)), 'claim', { issue: 122, status: 'running', endedAt: null, startedAt: NOW - MIN })
-    expect(plan(withLedger(world([r], { queue: [122], issues: [issue(122)] }), [claimed, inFlight])).actions.some(a => a.kind === 'claim')).toBe(false)
+    expect(plan(withLedger(world([r], { issues: [issue(122, { reclaimedAt: NOW - 5 * MIN })] }), [claimed, inFlight])).actions.some(a => a.kind === 'claim')).toBe(false)
   })
 })
 
@@ -797,9 +878,18 @@ describe('the record\'s executors (act-state.ts)', () => {
       return {}
     })
     expect(await w.run(claim)).toMatchObject({ status: 'done', outcome: { kind: 'adopt', branch: 'feat/issue-130-fast', pr: 640, others: [660, 631] } })
-    expect(w.argvs).toEqual([['callum-flow-claim', '130'], ['gh', 'pr', 'list', '--repo', REPO, '--state', 'open', '--json', 'number,headRefName'], ['callum-flow-issue-read', '--json', '--pr', '660'], ['callum-flow-issue-read', '--json', '--pr', '640']])
+    // gh lists 30 by default: the limit keeps the issue's PR on the list however many are open
+    expect(w.argvs).toEqual([['callum-flow-claim', '130'], ['gh', 'pr', 'list', '--repo', REPO, '--state', 'open', '--limit', '1000', '--json', 'number,headRefName'], ['callum-flow-issue-read', '--json', '--pr', '660'], ['callum-flow-issue-read', '--json', '--pr', '640']])
     const none = actWorld([], argv => (argv[0] === 'gh' ? { stdout: '[]' } : {}))
     expect(await none.run(claim)).toMatchObject({ outcome: { kind: 'adopt', branch: 'issue-130', pr: null, others: [] } })
+    // the claim posted, then the PRs did not read: the attempt fails, and says the claim is held
+    const unread = actWorld([], argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'HTTP 502' } : {}))
+    expect(await unread.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'claim', result: 'claimed' }, summary: expect.stringContaining('claimed #130, but the PRs to adopt did not read') })
+    const badRead = actWorld([], argv => (argv[0] === 'gh' ? { stdout: JSON.stringify(list) } : argv[0] === 'callum-flow-issue-read' ? { exitCode: 1 } : {}))
+    expect(await badRead.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'claim', result: 'claimed' } })
+    // the claim tool itself failed: nothing is held
+    const refused = actWorld([], argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1 } : {}))
+    expect(await refused.run(claim)).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 } })
     const again = actWorld([])
     expect(await again.run({ ...claim, rule: 'H1' })).toMatchObject({ status: 'done', outcome: { kind: 'claim', result: 'claimed' } })
     expect(again.argvs).toEqual([['callum-flow-claim', '130']])

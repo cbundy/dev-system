@@ -219,6 +219,14 @@ export function openPrsOf(json: string, issue: number): { pr: number; branch: st
   return out.sort((a, b) => b.pr - a.pr)
 }
 
+// held: an adoption read that failed after the claim tool posted the claim. The attempt fails, and
+// its outcome says the claim is held, so S1 retries it whatever the queue says (rules-claim.ts
+// heldClaims): `ready` is gone, and the claim must not become a ghost.
+function held(n: number, exec: Exec): Exec {
+  if (exec.status !== 'failed') return exec
+  return { ...exec, outcome: { kind: 'claim', result: 'claimed' }, summary: clip(`claimed #${n}, but the PRs to adopt did not read: ${exec.summary}`) }
+}
+
 // claim: `callum-flow-claim N` (exit 3: another device holds it). A first claim (S1) then adopts
 // the newest open PR by a trusted author on a branch of the issue (callum-flow-issue-read refuses
 // an untrusted one with exit 3); the others are named and left alone. A re-claim (H1) adopts
@@ -237,17 +245,17 @@ const claim: Executor = async (ctx, action) => {
   if (action.rule !== 'S1') return { status: 'done', outcome: { kind: 'claim', result: 'claimed' }, summary: `claimed #${n} again` }
   const listArgv = ARGV.openPrsArgv(ctx.rt.repo)
   const listed = await run(ctx, listArgv, GH_MS)
-  if (!listed.ok) return listed.exec
-  if (listed.r.exitCode !== 0) return commandFailure(listArgv, listed.r)
+  if (!listed.ok) return held(n, listed.exec)
+  if (listed.r.exitCode !== 0) return held(n, commandFailure(listArgv, listed.r))
   const prs = openPrsOf(listed.r.stdout, n)
-  if (prs === null) return { status: 'failed', outcome: { kind: 'cli', exit: 0, detail: listed.r.stdout.slice(0, 2000) }, summary: 'gh pr list: the open PRs did not read' }
+  if (prs === null) return held(n, { status: 'failed', summary: 'gh pr list: the open PRs did not read' })
   let adopted: { pr: number; branch: string } | null = null
   for (const candidate of prs) {
     const readArgv = ARGV.prReadArgv(candidate.pr)
     const read = await run(ctx, readArgv, GH_MS)
-    if (!read.ok) return read.exec
+    if (!read.ok) return held(n, read.exec)
     if (read.r.exitCode === 3) continue
-    if (read.r.exitCode !== 0) return commandFailure(readArgv, read.r)
+    if (read.r.exitCode !== 0) return held(n, commandFailure(readArgv, read.r))
     adopted = candidate
     break
   }

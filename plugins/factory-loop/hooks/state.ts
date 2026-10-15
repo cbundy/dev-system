@@ -153,6 +153,8 @@ export function buildState(o: Observed): State {
         subIssueList: subIssuesOf(n, timelines),
         brief: g?.brief ?? null,
         delegatedBrief: o.facts?.briefs.get(n) ?? null,
+        claimLapsedAt: f !== undefined && !f.ended ? f.lapsedAt : null,
+        reclaimedAt: o.facts?.reclaimed.get(n) ?? null,
       }
     })
 

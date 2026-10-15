@@ -50,15 +50,42 @@ const firstClaims = (ctx: V2Ctx) => ctx.state.ledger.filter(e => e.kind === 'cla
 
 const hasRecord = (ctx: V2Ctx, issue: number, life: string) => ctx.v2.records.some(r => r.issue === issue && r.life === life)
 
-// inFlightClaims: the issues whose first claim is in flight: running, or done with no record yet,
-// which row S0 makes this pass. They hold their place under the cap, and R1 (6.2) never takes one
-// for a ghost.
+// mayHold: a first claim that ended without done but may hold the claim on GitHub: the claim tool
+// posted it and the adoption's reads failed after (the claim executor records outcome claim
+// `claimed` on the failed entry), or the loop reloaded mid-claim (lost). The issue's `ready` is
+// gone then, so the queue no longer lists it.
+function mayHold(e: LedgerEntry): boolean {
+  return e.status === 'lost' || (e.status === 'failed' && e.outcome?.kind === 'claim' && e.outcome.result === 'claimed')
+}
+
+// heldClaims: per issue with no record that is not closed, its newest first claim when that one
+// may hold the claim (mayHold). S1 finishes each whatever the queue says, so a v2 claim never
+// becomes a ghost (3.3, totality/T-14): a retry is safe, because callum-flow-claim keeps its own
+// live claim without posting again.
+function heldClaims(ctx: V2Ctx): LedgerEntry[] {
+  const latest = new Map<number, LedgerEntry>()
+  for (const e of firstClaims(ctx)) {
+    const n = claimOf(e.key)?.issue
+    if (n === undefined) continue
+    const seen = latest.get(n)
+    if (seen === undefined || e.startedAt > seen.startedAt) latest.set(n, e)
+  }
+  return [...latest.entries()]
+    .filter(([n, e]) => mayHold(e) && !ctx.v2.records.some(r => r.issue === n && r.state !== 'closed'))
+    .sort(([a], [b]) => a - b)
+    .map(([, e]) => e)
+}
+
+// inFlightClaims: the issues whose first claim is in flight: running, done with no record yet
+// (row S0 makes it this pass), or one that may hold the claim and has attempts left (S1 finishes
+// it). They hold their place under the cap, and R1 (6.2) never takes one for a ghost.
 export function inFlightClaims(ctx: V2Ctx): Set<number> {
   const out = new Set<number>()
   for (const e of firstClaims(ctx)) {
     const got = claimedOf(e)
     if (e.status === 'running' || (got !== null && got !== 'lost' && !hasRecord(ctx, got.issue, got.life))) out.add(claimOf(e.key)?.issue ?? 0)
   }
+  for (const e of heldClaims(ctx)) if (gate(ctx, e.key, 'claim') !== 'exhausted') out.add(e.issue ?? claimOf(e.key)?.issue ?? 0)
   out.delete(0)
   return out
 }
@@ -103,6 +130,27 @@ function makeRecords(ctx: V2Ctx): void {
       via: got.pr === null ? 'claim' : 'adopt',
     })
   }
+}
+
+// --- S1: claims that may be held, finished -------------------------------------------------------------
+
+// finishClaims: each first claim that may hold the claim (heldClaims) runs again under its own key
+// until it is done, then S0 makes its record; one that used up its attempts is told once, and R1
+// releases it. Not new work: no capacity, tier or owner filter holds it. The issues it handled.
+function finishClaims(ctx: V2Ctx): Set<number> {
+  const handled = new Set<number>()
+  for (const e of heldClaims(ctx)) {
+    const n = e.issue ?? claimOf(e.key)?.issue
+    if (n === undefined) continue
+    handled.add(n)
+    if (gate(ctx, e.key, 'claim') === 'exhausted') {
+      skip(ctx, 'S1', n, `exhausted: ${e.key}`)
+      want(ctx, wake('tell', 'stalled', `tell:stalled:${e.key}:${e.endedAt ?? e.startedAt}`, 'S1', n, { issue: n, key: e.key }, [`error: ${e.summary ?? e.status}`]))
+      continue
+    }
+    want(ctx, { kind: 'claim', key: e.key, class: 'free', rule: 'S1', reason: 'finish the claim: it may hold the issue already', issue: n })
+  }
+  return handled
 }
 
 // --- S1: new claims ------------------------------------------------------------------------------------
@@ -150,7 +198,7 @@ function onlyIssues(ctx: V2Ctx, issues: Map<number, IssueView>): number[] {
   return out
 }
 
-function claims(ctx: V2Ctx): void {
+function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const { state, config, tier } = ctx
   for (const source of ['queue', 'github'] as const) {
     if (!state.sources[source].ok) {
@@ -177,7 +225,7 @@ function claims(ctx: V2Ctx): void {
       skip(ctx, 'S1', n, `in the factory as ${record.state}`)
       continue
     }
-    if (inFlight.has(n)) continue
+    if (inFlight.has(n) || handled.has(n)) continue
     const why = candidateProblem(ctx, issues.get(n), n)
     if (why !== null) {
       skip(ctx, 'S1', n, why)
@@ -215,11 +263,11 @@ function claims(ctx: V2Ctx): void {
   }
 }
 
-// claimRules: S0 for the claims that are done, then S1's new claims, last of the record's rules:
-// work in flight goes first.
+// claimRules: S0 for the claims that are done, then S1 finishes the claims that may be held and
+// makes new ones, last of the record's rules: work in flight goes first.
 export function claimRules(ctx: V2Ctx): void {
   makeRecords(ctx)
-  claims(ctx)
+  claims(ctx, finishClaims(ctx))
 }
 
 // --- H1: the heartbeat and the re-claims ---------------------------------------------------------------
@@ -246,10 +294,21 @@ export function reclaimLost(ctx: V2Ctx, r: IssueRecord): LedgerEntry | null {
   return e !== undefined && claimedOf(e) === 'lost' ? e : null
 }
 
-// reclaim: a record whose claim lapsed (the sweep gave it `ready` back, which the queue shows after
-// the record's last claim) or that the factory shows another device holding (after a heartbeat's
-// time, so the factory has seen the record's own claim) is claimed again onto the record (4.1); a
-// done one logs the record's current transition event again.
+// lapsedAt: when the record's claim lapsed after its last claim (4.1), from facts, never from the
+// ready label list, which lags behind edits (3.4): a `reclaimed` event after the last claim (the
+// sweep or a release gave it back), or the factory source showing this device's claim lapsed
+// with its lease ending after the last claim. null: it holds.
+function lapsedAt(ctx: V2Ctx, r: IssueRecord, at: Ms): Ms | null {
+  const view = ctx.state.issues.find(i => i.number === r.issue)
+  if (view === undefined) return null
+  if (view.reclaimedAt !== null && view.reclaimedAt > at) return view.reclaimedAt
+  if (view.claimLapsedAt !== null && view.holder === ctx.state.device && view.claimLapsedAt > at) return view.claimLapsedAt
+  return null
+}
+
+// reclaim: a record whose claim lapsed (lapsedAt) or that the factory shows another device holding
+// (after a heartbeat's time, so the factory has seen the record's own claim) is claimed again onto
+// the record (4.1); a done one logs the record's current transition event again.
 function reclaim(ctx: V2Ctx, r: IssueRecord): void {
   const { state, config } = ctx
   const latest = latestReclaim(ctx, r)
@@ -281,10 +340,10 @@ function reclaim(ctx: V2Ctx, r: IssueRecord): void {
   }
   const at = lastClaimAt(ctx, r)
   const view = state.issues.find(i => i.number === r.issue)
-  const ready = state.queue.includes(r.issue) && (state.sources.queue.at ?? 0) > at
+  const lapsed = lapsedAt(ctx, r, at)
   const other = view !== undefined && view.holder !== null && view.holder !== state.device && state.now - at >= config.heartbeatEveryMs
-  if (!ready && !other) return
-  const reason = ready ? 'its claim lapsed: the issue is labelled ready again' : `the factory shows ${view?.holder ?? 'another device'} holding it`
+  if (lapsed === null && !other) return
+  const reason = lapsed !== null ? (view?.reclaimedAt === lapsed ? 'its claim lapsed: the sweep gave it back (reclaimed)' : 'its claim lapsed: the factory shows its lease ended') : `the factory shows ${view?.holder ?? 'another device'} holding it`
   want(ctx, { kind: 'claim', key: reclaimKey(r, lifeOf(state.now)), class: 'free', rule: 'H1', reason, issue: r.issue })
 }
 

@@ -260,12 +260,17 @@ type IssueRecord = {
 - **The ledger is the outbox.** Every effect of a transition is an entry action of the new seq
   with its own key (4.5): the `transition` event, stopping the old step, the label and the rest.
   A crash after the store write leaves the entry actions planned on the next pass, so no event is
-  lost (`failures/F12`, `totality/T-05`). The next transition of a record waits until its current
+  lost (`failures/F12`, `totality/T-05`). The `transition` entry carries its row, the state and
+  step it leaves and its via code from its start, so an entry the reload marks lost still names
+  them: the row's events, the park's comment and the breaker read them from there. The next transition of a record waits until its current
   seq's `transition` event is logged, so the trail has no gaps.
 - **A record is made from a done claim.** S1's `claim` action runs `callum-flow-claim`; once its
   ledger entry is done, the next pass plans row S0, which makes the queued record. A crash in
-  between leaves the done entry, so S0 is planned again. A v2 claim never becomes a ghost
-  (`totality/T-14`).
+  between leaves the done entry, so S0 is planned again. A claim that may already hold the issue
+  (the claim tool posted, then the adoption's reads failed; or a reload lost it mid-claim) runs
+  again under its own key whatever the queue says, since `ready` is gone, and holds its place
+  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim.
+  A v2 claim never becomes a ghost (`totality/T-14`).
 - **Life.** The start time of the claim action, in base-36 seconds: unique, and needs no counter
   that pruning could reset (`totality/T-14`).
 - **Pruning.** A closed record goes 7 days after it closed, as ledger entries do (v1 SPEC 7.1).
@@ -311,8 +316,8 @@ type IssueRecord = {
 ### 3.5 One branch, one PR, one slot per life
 
 - **The branch is `issue-<N>`, for every life** (OB:65-66; `simplicity/F14`):
-  - At claim, the `claim` executor lists open PRs once (`gh pr list --repo R --state open --json
-    number,headRefName`). An open PR by a trusted author on a branch matching
+  - At claim, the `claim` executor lists open PRs once (`gh pr list --repo R --state open --limit
+    1000 --json number,headRefName`; gh lists 30 without a limit). An open PR by a trusted author on a branch matching
     `(^|/)issue-<N>(-|$)` is adopted: the branch is that PR's head branch, `pr` is set, and
     `resumeTo` is `reviewing` (the review reads the whole diff, 8.3). With several, the newest is
     adopted and the others are named in the transition note and left alone.
@@ -406,7 +411,8 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 **What else runs each pass beside the table:**
 
 - **Re-claim.** H1 renews the claim of every record that is not closed. A record whose claim lapsed
-  (the `factory` source shows it lapsed, or the sweep logged `reclaimed`) is claimed again with
+  (the `factory` source shows this device's claim lapsed, or a `reclaimed` event was logged, after
+  the record's last claim; never the `ready` label list, which lags, 3.4) is claimed again with
   `callum-flow-claim N`. That keeps the record and its state; exit 3 is `claim-lost`. The re-claim
   logs the record's current `transition` event again, so readers see the stage at once
   (`failures/F16`, `totality/T-14`).
@@ -486,6 +492,11 @@ states" are designing, building, reviewing, fixing and the merge-queue head. 33 
 | X4 | park, or fix when X2's guard fails | - | parked | the triage's question, or why fix was not possible with the triage's reason; resumeTo same state | transition |
 | X5 | drop | - | closed | why dropped | transition, `abandoned` (triage) |
 
+A triage answer that names a state enters it, even the state the record is in: X3 from designing
+runs the designer and X2 from fixing runs the fixer, at attempt 1 with no cut. Triage never
+answers into triage again, so a triage that keeps answering redesign still runs a designer each
+time.
+
 **Owner and GitHub events (S6).** Every state but closed, unless the row says otherwise:
 
 | Id | Event | Guard | Next | Record change | Events |
@@ -524,7 +535,9 @@ Interventions (7.2) are not listed per row. `rules-interventions.ts` derives the
 | parked | E7 | E7 | E7 | E7 | E1 | P1 | E2 | E3 | E7 | E5 | E6 |
 | closed | E7 | E7 | E7 | E7 | E7 | E7 | E7 | E7 | E7 | E7 | E7 |
 
-A step-state `timeout` exists only while a step runs (4.4), so a held step raises none.
+A step-state `timeout` exists only while a step runs (4.4), so a held step raises none. A running
+step's timeout reaches the table as that step's unknown (why `timeout`), so the merge queue's head
+takes U1 to U4; only a record behind the head takes E6.
 
 ### 4.4 Timeouts
 
@@ -565,7 +578,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 
 | On | Actions, in order |
 |---|---|
-| every new seq | `event transition` (first); then, when the old seq had a running step, `stop-agent` (TaskStop of its agent) and `slot` op `kill` (10.8), both best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
+| every new seq | `event transition` (first); then, when steps of an earlier seq still run (the life's running agent steps that started before this seq's transition, whatever their key's shape), one `stop-agent` (TaskStop of its agent) for each, and `slot` op `kill` (10.8), all best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
 | a change of state, except to closed | `label` |
 | building | event `delegated --note "brief <url>"` |
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage` |
@@ -613,6 +626,9 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   new seq (4.5).
 - Same-state rows that change the record (U1, U2, U3, T6, X1) are transitions too: they bump `seq`
   and log a `transition` event, so the trail is complete.
+- A row whose next names a state enters it, even when it is the state the record is in (X2 from
+  fixing, X3 from designing): the state's own step starts at attempt 1 with no cut and the row's
+  notes alone. `since` and the label change only with the state.
 - Rows that change nothing (E6, E7) plan only their tell or their log line. They make no
   `transition` and never end a running step.
 

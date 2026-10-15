@@ -82,6 +82,8 @@ export type Facts = {
   pipeline: Map<string, FactoryEvent[]>
   // per run, when a gate of it was last answered (a verdict or a review fix)
   answered: Map<string, number>
+  // per issue, its newest `reclaimed` event: a sweep or a release gave the claim back (v2 H1)
+  reclaimed: Map<number, number>
 }
 
 // factsOf: what plan reads from the log (SPEC 3.3 `facts`).
@@ -93,6 +95,7 @@ export function factsOf(events: FactoryEvent[]): Facts {
     superseded: new Set(),
     pipeline: new Map(),
     answered: new Map(),
+    reclaimed: new Map(),
   }
   for (const e of events) {
     if (e.state === 'delegated' && e.issue !== null) {
@@ -106,6 +109,8 @@ export function factsOf(events: FactoryEvent[]): Facts {
       facts.verdicts.set(e.run, list.slice(-20))
     } else if (e.state === 'superseded' && e.run !== null) {
       facts.superseded.add(e.run)
+    } else if (e.state === 'reclaimed' && e.issue !== null) {
+      facts.reclaimed.set(e.issue, Math.max(facts.reclaimed.get(e.issue) ?? 0, e.ts))
     }
     if ((e.state === 'verdict' || e.state === 'fix_requested') && e.run !== null) {
       facts.answered.set(e.run, Math.max(facts.answered.get(e.run) ?? 0, e.ts))
