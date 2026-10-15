@@ -75,6 +75,13 @@ export function reviewKey(r: Life, patch: string, round: number, attempt: number
   return `${lifeKey(r)}/review/${short(patch)}/r${round}/a${attempt}`
 }
 
+// reviewPrepareKey: the slot's own preparation for a reviewer that is not its seq's first (a push
+// changed the patch under review, 8.4): the seq's prepare was for the old head. It ends like
+// prepareKey, so it is part of its attempt.
+export function reviewPrepareKey(r: RecordRef, patch: string, round: number, k: number, attempt: number): string {
+  return `${seqKey(r)}/review/${short(patch)}/r${round}/a${k}/prepare/a${attempt}`
+}
+
 // prKey: the PR's ensure, once per seq, or a body re-render, once per queue attempt (8.1).
 export function prKey(r: RecordRef, op: 'ensure' | 'body', attempt = 1): string {
   return op === 'ensure' ? `${seqKey(r)}/pr/ensure` : `${seqKey(r)}/pr/body/a${attempt}`

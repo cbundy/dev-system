@@ -77,11 +77,10 @@ export function reviewInput(ctx: ExecCtx, action: AgentStepAction): ReviewInput 
   if (r === undefined) return `#${action.issue} has no record of life ${action.life} in the state the pass planned from`
   const key = reviewKeyOf(action.key)
   if (key === null) return `${action.key} is not a review key (review/<patch>/r<round>/a<k>)`
-  // the life's PR, else the one the prs source read for the issue
-  const prs = ctx.state.v2?.prs.prs ?? []
-  const pr = lifePr(ctx.state.ledger, r) ?? prs.find(p => p.issue === r.issue && p.state === 'open')?.pr ?? null
+  // the life's PR: the plan starts a reviewer only once its ensure is done
+  const pr = lifePr(ctx.state.ledger, r)
   if (pr === null) return `#${action.issue} has no PR to review: its ensure is not done`
-  const pv = prs.find(p => p.pr === pr)
+  const pv = (ctx.state.v2?.prs.prs ?? []).find(p => p.pr === pr)
   if (pv === undefined || pv.head === null || pv.patch === null) return `PR #${pr} has no head and patch in the state the pass planned from`
   if (short(pv.patch) !== key.patch7) return `PR #${pr}'s patch is ${short(pv.patch)}, not the ${key.patch7} its review key names`
   return {

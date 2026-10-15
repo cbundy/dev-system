@@ -7,18 +7,14 @@
 // neutralized (D-56): no closing keyword before a reference survives into the prompt.
 //
 // REVIEW_PROMPTS holds a prompt per reviewer kind (reviewer.ts AgentSpec.prompt); the interim
-// reviewer's is `adjudicator`. Every v2 prompt carries the v2 COMMAND_RULE (prompts-triage.ts). Pure.
+// reviewer's is `adjudicator`. Every v2 prompt carries the v2 COMMAND_RULE, and every one that writes or
+// judges tests the one v2 TEST_POLICY, both from prompts-triage.ts. Pure.
 import { neutral } from '../prompts'
 import type { ScriptPlace } from '../prompts'
 import { BUMPS, LIMITS, SEVERITIES } from './contracts-review.mjs'
 import { short } from './keys'
-import { COMMAND_RULE } from './prompts-triage'
+import { COMMAND_RULE, TEST_POLICY } from './prompts-triage'
 import type { ReviewInput } from './reviewer'
-
-// The test policy every v2 agent that judges or writes tests works under, word for word as
-// plugins/callum-flow/agents/fixer.md states it.
-export const TEST_POLICY =
-  'TEST POLICY: never delete, skip or weaken an existing test or assertion (no --warn-only, || true, skip/only, commented-out asserts) to make a gate pass; fix the code or the environment instead. Remove a test only if it is clearly and absolutely not required, and never as an auto-fix: raise it as ask-user with the justification so the adjudicator can judge it.'
 
 // What a review prompt names beside its input: the repository, the PR's branch, the slot the
 // reviewer reads in, and where it records its answer.
@@ -64,7 +60,7 @@ export function adjudicatorPrompt(i: ReviewInput, env: ReviewPromptEnv): string 
     `PR: read it with \`callum-flow-issue-read --pr ${i.pr}\`; its body carries the builder's summary and evidence.`,
     '',
     `The change: head ${head} of ${branch}, patch ${short(i.patch)}. Your folder is a checkout of the repository for this review. First run \`git fetch origin ${base} ${branch}\`, then read the PR's own change with \`git diff origin/${base}...${head}\` (three dots) and \`git log origin/${base}..${head}\`. Review that head, even if the branch has moved on since.`,
-    `Tests: run \`callum-flow-test-weakening --base origin/${base} --head ${head}\` and judge every line it prints. ${TEST_POLICY} For you, a test deleted, skipped or weakened is an error finding, unless the brief shows the test is absolutely not required.`,
+    `Tests: run \`callum-flow-test-weakening --base origin/${base} --head ${head}\` and judge every line it prints. ${TEST_POLICY} For you, a test deleted, skipped or weakened is an error finding, unless the brief, or the writer's stated reason (in the PR's summary or a fixer's answer), shows the test is absolutely not required: you judge that reason.`,
     ...priorLines(i),
     ...lines('Notes for this round (the owner\'s, and a fixer\'s reasons for what it declined):', i.notes),
     '',

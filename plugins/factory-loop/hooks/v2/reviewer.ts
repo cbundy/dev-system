@@ -196,9 +196,14 @@ export function fixNotes(lead: string, items: readonly string[], rest: string): 
 }
 
 // reviewNotes: a changes review as the fixer's lines: each finding by id, errors first, so the
-// fixer gives a disposition for each (fixed, or declined with its reason).
-export function reviewNotes(d: ReviewData): string[] {
-  return ordered(d.findings).map(f => `${f.id} [${f.severity}]${f.file === '' ? '' : ` ${f.file}${f.line === null ? '' : `:${f.line}`}`}: ${f.text}`)
+// fixer gives a disposition for each (fixed, or declined with its reason). Lines of the same
+// weight as an error (the PR's failed checks, when CI is red too) go right after the errors and
+// before the warnings and infos, so fixNotes cuts a warning before one of them.
+export function reviewNotes(d: ReviewData, withErrors: readonly string[] = []): string[] {
+  const line = (f: Finding) => `${f.id} [${f.severity}]${f.file === '' ? '' : ` ${f.file}${f.line === null ? '' : `:${f.line}`}`}: ${f.text}`
+  const findings = ordered(d.findings)
+  const errors = findings.filter(f => f.severity === 'error')
+  return [...errors.map(line), ...withErrors, ...findings.filter(f => f.severity !== 'error').map(line)]
 }
 
 export function reviewLead(d: ReviewData): string {

@@ -43,8 +43,9 @@ Run only commands known to exit. Read source, docs and `--help` output only from
   behaves is a claim to reproduce, not a fact. Asking for a rewrite of correct code to satisfy a
   false claim is worse than approving it.
 - No test may be deleted, skipped or weakened (an assertion removed, `--warn-only`, `|| true`,
-  skip or only, an assertion commented out). One that was is an error finding, unless the brief
-  shows the test is absolutely not required.
+  skip or only, an assertion commented out). One that was is an error finding, unless the brief,
+  or the writer's stated reason (in the PR's summary or a fixer's answer), shows the test is
+  absolutely not required. You judge that reason.
 - A visible (UI) change needs screenshot or video evidence in the PR body.
 - Style, preference and anything outside the brief are at most warnings or infos: they never hold
   a merge.

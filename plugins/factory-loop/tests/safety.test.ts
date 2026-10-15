@@ -321,7 +321,9 @@ function world(): { state: State; ledger: LedgerEntry[] } {
   // agents whose answer is in (#548): one still at work, one ended
   const answered = entry('fixer:guard:471:h', 'spawn', { agent: 'fixer', issue: 471, status: 'done', agentId: 'agent-answered', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
   const ended = entry('fixer:guard:472:h', 'spawn', { agent: 'fixer', issue: 472, status: 'done', agentId: 'agent-ended', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })
-  const ledger = [own, answered, ended]
+  // the life's PR, as a done ensure of an earlier seq named it: a reviewer starts only after it
+  const ensured = entry(`i470/l${LIFE}/s2/pr/ensure`, 'pr', { issue: 470, status: 'done', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN, outcome: { kind: 'pr', pr: 512, created: true, reopened: false } })
+  const ledger = [own, answered, ended, ensured]
   const pool = { free: 10, total: 16, slots: [{ path: SLOT, branch: 'issue-470-x', state: 'leased', dirty: false, busy: false, lease: null, leasedAt: null, leaseBranch: 'issue-470-x' }] }
   const agents = [
     { id: 'agent-own', type: 'factory-loop:designer', status: 'running' as const },

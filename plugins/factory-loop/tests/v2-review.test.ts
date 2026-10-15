@@ -17,14 +17,14 @@ import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { eventArgv, parseEvent } from '../hooks/v2/events'
-import { lifeOf, prKey, prepareKey, rerunKey, reviewKey, short, stepKey, transitionKey } from '../hooks/v2/keys'
+import { entryKey, lifeOf, prKey, prepareKey, rerunKey, reviewKey, reviewPrepareKey, short, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { REVIEW_PROMPTS, TEST_POLICY, adjudicatorPrompt } from '../hooks/v2/prompts-review'
-import { COMMAND_RULE } from '../hooks/v2/prompts-triage'
+import { REVIEW_PROMPTS, adjudicatorPrompt } from '../hooks/v2/prompts-review'
+import { COMMAND_RULE, TEST_POLICY } from '../hooks/v2/prompts-triage'
 import { COMMENT_MAX, FIX_NOTES_MAX, REVIEWERS, dispositionsOf, readReview, reviewComment, reviewDataOf, reviewedEvent, reviewerOf, verdictEvent } from '../hooks/v2/reviewer'
 import type { ReviewData, ReviewInput } from '../hooks/v2/reviewer'
-import { lifePr } from '../hooks/v2/rules-review'
+import { RERUN_REFUSED, lifePr } from '../hooks/v2/rules-review'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { stepAnswerPath, stepAnswered, stepExecutor, stepRecordPath } from '../hooks/v2/steps'
 import { priorOf, reviewInput, reviewResult } from '../hooks/v2/steps-review'
@@ -180,7 +180,8 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
 
   test('the PR is read before anything is judged: no read of the source, of the PR, a read older than the seq, a PR that shows no head, or no patch id holds the step, never a guess', () => {
     const r = rec(603)
-    const ens = ensured(r)
+    // an ensure that just ended: within the GitHub bound
+    const ens = { ...ensured(r), startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN }
     const hold = (prs: PrView[], v2: Partial<V2State> = {}) => {
       const p = plan(withLedger(world([r], prs, v2), [ens]))
       expect(of(p, 603).filter(a => a.kind !== 'event')).toEqual([])
@@ -191,6 +192,32 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     expect(hold([view(603, { readAt: r.seqAt - MIN })])).toEqual([`review: waits for a read of PR #${PR} newer than seq 5`])
     expect(hold([view(603, { head: null })])).toEqual([`review: PR #${PR} shows no head`])
     expect(hold([view(603, { patch: null })])).toEqual([`review: waits for the patch id of head ${short(HEAD)}`])
+  })
+
+  test('a PR whose own read never becomes usable is a bounded GitHub wait (4.4): ciStartMs after the later of the seq\'s start and the ensure\'s end it is unknown; a backoff or the source not read holds it with no clock', () => {
+    // seq 20 min ago, the ensure ended 14 min ago: past ciStartMs (10 min)
+    const r = rec(604)
+    const old = (prs: PrView[], v2: Partial<V2State> = {}, over: Partial<State> = {}) => plan(withLedger(world([r], prs, v2, over), [ensured(r)]))
+    for (const prs of [[], [view(604, { readAt: r.seqAt - MIN })], [view(604, { head: null })], [view(604, { patch: null })]]) {
+      const t = transitionOf(old(prs), 604)
+      expect(t).toMatchObject({ row: 'U2', via: 'unknown:github-wait', trigger: { kind: 'fact', fact: `github-wait:${PR}/s5` } })
+    }
+    // the source not read is an admission hold: no clock
+    const unread = old([view(604)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'gh failed' }, interventions: OK, comments: OK } })
+    expect(transitionOf(unread, 604)).toBeUndefined()
+    expect(said(unread, 604)).toEqual(['review: the PRs were not read (gh failed)'])
+    // a GitHub backoff holds it too
+    const backoff = old([], {}, { githubBackoffUntil: NOW + MIN })
+    expect(transitionOf(backoff, 604)).toBeUndefined()
+    expect(said(backoff, 604)).toEqual([`review: PR #${PR} was not read this pass`])
+    // a reviewer of this seq still running keeps its own clock: no wait is read, its timeout is
+    const running = { ...reviewed(r, {}), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN }
+    const busy = plan(withLedger(world([r], [view(604, { patch: null })]), [ensured(r), prepared(r), running]))
+    expect(transitionOf(busy, 604)).toBeUndefined()
+    expect(said(busy, 604)).toEqual([`review: waits for the patch id of head ${short(HEAD)}`])
+    const longer = rec(604, { seqAt: NOW - 40 * MIN, since: NOW - 40 * MIN })
+    const hung = plan(withLedger(world([longer], [view(604, { patch: null })]), [ensured(longer), prepared(longer), { ...running, startedAt: NOW - 31 * MIN }]))
+    expect(transitionOf(hung, 604)).toMatchObject({ row: 'U2', via: 'unknown:timeout' })
   })
 })
 
@@ -285,6 +312,74 @@ describe('the reviewer, keyed by patch and round (v2 SPEC 8.3, 8.4)', () => {
     expect(agentSteps(plan(after), 613)).toEqual([expect.objectContaining({ key: reviewKey(cut, PATCH, 1, 2) })])
   })
 
+  test('property 6: a push that changes the patch mid-review has the running reviewer stopped before the new patch\'s starts, in a slot prepared again; the stopped one gives no review', () => {
+    const r = rec(615)
+    const stale = { ...reviewed(r, {}), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN }
+    const moved = [view(615, { head: HEAD2, patch: PATCH2, checks: GREEN })]
+    const s = withLedger(world([r], moved), [ensured(r), prepared(r), stale])
+    const p = plan(s)
+    const stopKey = `${entryKey(r, 'stop')}/review/${short(PATCH)}/r1/a1`
+    expect(of(p, 615)).toEqual([expect.objectContaining({ kind: 'stop-agent', key: stopKey, agentId: 'agent-1', entry: stale.key })])
+    expect(said(p, 615)).toEqual([`review: the reviewer of patch ${short(PATCH)} (1) still runs; it is stopped before the reviewer of patch ${short(PATCH2)} starts`])
+    // stopped, its agent not gone yet: nothing starts, nothing is stopped twice, and its clock runs
+    const stop = done(stopKey, 'stop-agent', { issue: 615 })
+    expect(of(plan(withLedger(s, [stop])), 615)).toEqual([])
+    expect(transitionOf(plan(withLedger(world([r], moved), [ensured(r), prepared(r), { ...stale, startedAt: NOW - 31 * MIN }, stop])), 615)).toMatchObject({ row: 'U2', via: 'unknown:timeout' })
+    // ended: its reviewed event is unknown, with no PR comment, even though it answered approve
+    const ended = { ...approved(r), startedAt: stale.startedAt }
+    const gone = withLedger(world([r], moved), [ensured(r), prepared(r), ended, stop])
+    const p3 = plan(gone)
+    expect(eventsOf(p3, 615, 'reviewed')).toEqual([expect.objectContaining({ event: expect.objectContaining({ verdict: 'unknown', patch: short(PATCH) }) })])
+    expect(of(p3, 615, 'comment')).toEqual([])
+    // the new patch's reviewer: the slot prepared again, then the agent, never the old answer
+    expect(of(p3, 615, 'slot')).toEqual([expect.objectContaining({ op: 'prepare', key: reviewPrepareKey(r, PATCH2, 1, 1, 1) })])
+    expect(agentSteps(p3, 615)).toEqual([])
+    const p4 = plan(withLedger(gone, [done(reviewPrepareKey(r, PATCH2, 1, 1, 1), 'slot', { issue: 615, maxAttempts: 1 })]))
+    expect(agentSteps(p4, 615)).toEqual([expect.objectContaining({ key: reviewKey(r, PATCH2, 1, 1) })])
+    // the head back on the old patch: the stopped reviewer's answer is not used; a fresh one starts
+    const back = plan(withLedger(world([r], [view(615, { checks: GREEN })]), [ensured(r), prepared(r), ended, stop]))
+    expect(transitionOf(back, 615)).toBeUndefined()
+    expect(of(back, 615, 'slot')).toEqual([expect.objectContaining({ op: 'prepare', key: reviewPrepareKey(r, PATCH, 1, 2, 1) })])
+  })
+
+  test('property 6, generated: whatever the pushes during review, no pass leaves two reviewers of the record running', () => {
+    let seed = 11
+    const rand = () => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+      return seed / 2_147_483_648
+    }
+    let stops = 0
+    for (let run = 0; run < 40; run += 1) {
+      const r = rec(616)
+      let ledger: LedgerEntry[] = [ensured(r), prepared(r)]
+      let agents = 0
+      for (let pass = 0; pass < 12; pass += 1) {
+        const at = NOW - (12 - pass) * 10_000
+        const patch = rand() < 0.4 ? PATCH2 : PATCH
+        const p = plan(withLedger(world([r], [view(616, { patch, head: patch === PATCH ? HEAD : HEAD2, checks: GREEN })]), ledger))
+        if (transitionOf(p, 616) !== undefined) break
+        for (const a of of(p, 616)) {
+          if (a.kind === 'agent-step') {
+            agents += 1
+            ledger.push({ ...done(a.key, 'agent-step', { issue: 616, class: 'drive', step: 'review', agentId: `agent-${agents}`, startedAt: at }), status: 'running', endedAt: null })
+          } else if (a.kind === 'stop-agent') {
+            stops += 1
+            ledger.push(done(a.key, 'stop-agent', { issue: 616, startedAt: at, endedAt: at }))
+            // the agent goes now, or on a later pass
+            if (rand() < 0.5) ledger = ledger.map(e => (e.key === a.entry ? { ...e, status: 'failed', endedAt: at, summary: 'agent killed' } : e))
+          } else if (a.kind !== 'tell') {
+            ledger.push(done(a.key, a.kind, { issue: 616, startedAt: at, endedAt: at, ...(a.kind === 'slot' ? { maxAttempts: 1 } : {}) }))
+          }
+        }
+        // a stopped agent that was left running goes on a later pass
+        if (rand() < 0.5) ledger = ledger.map(e => (e.status === 'running' && e.kind === 'agent-step' && ledger.some(x => x.kind === 'stop-agent' && x.key.endsWith(e.key.slice(e.key.indexOf('/review/')))) ? { ...e, status: 'failed', endedAt: at, summary: 'agent killed' } : e))
+        const running = ledger.filter(e => e.kind === 'agent-step' && e.status === 'running')
+        expect(running.length).toBeLessThanOrEqual(1)
+      }
+    }
+    expect(stops).toBeGreaterThan(5)
+  })
+
   test('the reviewer setting must name a reviewer of the registry; another holds the step with a skip line, starting nothing', () => {
     const r = rec(614)
     const p = plan(withLedger(world([r], [view(614)]), [ensured(r), prepared(r)]), { ...CFG, reviewer: 'no-such' })
@@ -357,7 +452,7 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(said(plan(busy), 624)).toEqual([`review: waits for CI on ${short(HEAD)} (1 pending, 1 awaiting a re-run, 0 passed or skipped)`])
     // finished: one re-run of its failed jobs
     const failed = writes(withLedger(world([r], [view(624, { checks: [check('test', 'fail'), check('lint', 'pass')] })]), ledger))
-    expect(of(plan(failed), 624, 'ci-rerun')).toEqual([expect.objectContaining({ kind: 'ci-rerun', key: rerunKey(r, 1, '1801'), pr: PR, runId: '1801', round: 1, maxAttempts: 1, rule: 'S2' })])
+    expect(of(plan(failed), 624, 'ci-rerun')).toEqual([expect.objectContaining({ kind: 'ci-rerun', key: rerunKey(r, 1, '1801'), pr: PR, runId: '1801', round: 1, maxAttempts: 3, rule: 'S2' })])
     const rerun = done(rerunKey(r, 1, '1801'), 'ci-rerun', { issue: 624, startedAt: NOW - 3 * MIN, endedAt: NOW - 3 * MIN })
     // the check still shows the result from before the re-run: it waits
     const stale = withLedger(failed, [rerun])
@@ -375,17 +470,49 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(of(plan(next), 624, 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(round2, 2, '1801'), round: 2 })])
   })
 
-  test('a check that cannot be re-run counts as failed at once: one not from a GitHub Actions run, or one whose re-run could not start', () => {
+  test('a check that cannot be re-run counts as failed at once: one not from a GitHub Actions run, or one whose re-run GitHub refused', () => {
     const r = rec(625)
     const ledger = [ensured(r), prepared(r), approved(r)]
     const s = withLedger(world([r], [view(625, { checks: [check('external', 'fail', { runId: null })] })]), ledger)
     const t = transitionOf(plan(settled(s, plan(s))), 625)
     expect(t).toMatchObject({ row: 'T9', via: 'fix:ci' })
     expect(t?.next.notes[1]).toContain('not a GitHub Actions run')
-    const refused = done(rerunKey(r, 1, '1801'), 'ci-rerun', { issue: 625, status: 'failed', summary: 'gh run rerun: exit 1: run cannot be rerun' })
+    const summary = `${RERUN_REFUSED} of run 1801: run 1801 cannot be rerun; its workflow file may be broken`
+    const refused = done(rerunKey(r, 1, '1801'), 'ci-rerun', { issue: 625, status: 'failed', attempts: 3, maxAttempts: 3, summary })
     const s2 = withLedger(world([r], [view(625, { checks: [check('test', 'cancel')] })]), [...ledger, refused])
     const t2 = transitionOf(plan(settled(s2, plan(s2))), 625)
-    expect(t2?.next.notes[1]).toContain('was cancelled on 9e01b77, and its one re-run could not start (gh run rerun: exit 1: run cannot be rerun)')
+    expect(t2?.next.notes[1]).toContain(`was cancelled on 9e01b77, and GitHub refused its one re-run (${summary})`)
+  })
+
+  test('a re-run that failed on a transient error is retried with backoff, never counted red; one that used up its retries holds the record as a stalled effect; a lost one, or one GitHub took, is awaited', () => {
+    const r = rec(629)
+    const key = rerunKey(r, 1, '1801')
+    const ledger = [ensured(r), prepared(r), approved(r)]
+    const writes = (s: State) => settled(s, plan(s))
+    const red = (extra: LedgerEntry[], checks = [check('test', 'fail')]) => writes(withLedger(world([r], [view(629, { checks })]), [...ledger, ...extra]))
+    const blip = (over: Partial<LedgerEntry>) => done(key, 'ci-rerun', { issue: 629, status: 'failed', attempts: 1, maxAttempts: 3, summary: 'gh run rerun: exit 1: HTTP 502: Bad Gateway', ...over })
+    // within its backoff: it waits, no transition, no fixer
+    const backingOff = plan(red([blip({ startedAt: NOW - MIN, endedAt: NOW - MIN })]))
+    expect(transitionOf(backingOff, 629)).toBeUndefined()
+    expect(of(backingOff, 629, 'ci-rerun')).toEqual([])
+    expect(said(backingOff, 629)).toEqual(['review: the re-run of run 1801 retries after its backoff'])
+    // past it: the same key again, once per round still
+    const retry = plan(red([blip({ startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })]))
+    expect(transitionOf(retry, 629)).toBeUndefined()
+    expect(of(retry, 629, 'ci-rerun')).toEqual([expect.objectContaining({ key, maxAttempts: 3 })])
+    // used up on transient errors: a stalled effect, the owner told, no ci-red
+    const spent = plan(red([blip({ attempts: 3, startedAt: NOW - 7 * MIN, endedAt: NOW - 7 * MIN })]))
+    expect(transitionOf(spent, 629)).toBeUndefined()
+    expect(said(spent, 629).some(w => w.startsWith(`stalled: ${key}: gh run rerun: exit 1: HTTP 502`))).toBe(true)
+    expect(of(spent, 629, 'tell')).toEqual([expect.objectContaining({ wake: 'stalled' })])
+    // lost (a restart during the call): GitHub may have started it, so it is awaited, not run again
+    const lost = plan(red([blip({ status: 'lost', startedAt: NOW - 3 * MIN, endedAt: NOW - 2 * MIN })]))
+    expect(transitionOf(lost, 629)).toBeUndefined()
+    expect(of(lost, 629, 'ci-rerun')).toEqual([])
+    // a failed call GitHub took anyway: a check of the run ended since, so its result counts
+    const took = plan(red([blip({ startedAt: NOW - 5 * MIN, endedAt: NOW - 5 * MIN })], [check('test', 'fail', { completedAt: NOW - MIN })]))
+    expect(of(took, 629, 'ci-rerun')).toEqual([])
+    expect(transitionOf(took, 629)).toMatchObject({ row: 'T9', via: 'fix:ci' })
   })
 
   test('changes and red CI go to one fixer: the review\'s findings and the failed checks together', () => {
@@ -394,8 +521,20 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     const s = withLedger(world([r], [view(626, { checks: [check('test', 'fail', { completedAt: NOW - MIN })] })]), [ensured(r), prepared(r), changed(r), rerun])
     const notes = transitionOf(plan(settled(s, plan(s))), 626)?.next.notes ?? []
     expect(transitionOf(plan(settled(s, plan(s))), 626)).toMatchObject({ row: 'T9', via: 'fix:review' })
-    expect(notes.some(n => n.startsWith('r1-2 [error]'))).toBe(true)
-    expect(notes.some(n => n.includes('CI check "test" failed'))).toBe(true)
+    // the errors, then the failed check, then the warnings
+    expect(notes.slice(1).map(n => n.slice(0, 22))).toEqual(['r1-2 [error] hooks/x.t', 'CI check "test" failed', 'r1-1 [warning] hooks/x'])
+    // many findings: the failed check still comes before every warning, and the overflow line
+    // names both the answer file and the PR's checks
+    const findings = [
+      ...Array.from({ length: 3 }, (_, i) => ({ id: `r1-${i + 1}`, severity: 'error' as const, file: `e${i}.ts`, line: 1, text: `defect ${i + 1}` })),
+      ...Array.from({ length: 9 }, (_, i) => ({ id: `r1-${i + 4}`, severity: 'warning' as const, file: `w${i}.ts`, line: 1, text: `nit ${i + 1}` })),
+    ]
+    const many = reviewed(r, { event: 'not-ok', reason: 'changes', data: reviewData(r, 'changes', { findings }) })
+    const sm = withLedger(world([r], [view(626, { checks: [check('test', 'fail', { completedAt: NOW - MIN })] })]), [ensured(r), prepared(r), many, rerun])
+    const manyNotes = transitionOf(plan(settled(sm, plan(sm))), 626)?.next.notes ?? []
+    expect(manyNotes.length).toBe(FIX_NOTES_MAX)
+    expect(manyNotes[4]).toContain('CI check "test" failed on 9e01b77 after its one re-run')
+    expect(manyNotes.at(-1)).toContain(`${LOOP_DIR}/answers/x.answer.json, and the PR's checks`)
     // changes move at once: a failed check is not re-run on a head a fixer will replace
     const unrun = withLedger(world([r], [view(626, { checks: [check('test', 'fail')] })]), [ensured(r), prepared(r), changed(r)])
     expect(of(plan(unrun), 626, 'ci-rerun')).toEqual([])
@@ -593,6 +732,8 @@ describe('the reviewer\'s prompt (v2 SPEC 8.3)', () => {
     expect(text).toContain(`git diff origin/main...${HEAD}`)
     expect(text).toContain(`callum-flow-test-weakening --base origin/main --head ${HEAD}`)
     expect(text).toContain(TEST_POLICY)
+    expect(text).toContain('unless the brief, or the writer\'s stated reason (in the PR\'s summary or a fixer\'s answer), shows the test is absolutely not required: you judge that reason')
+    expect(text).not.toMatch(/ask-user|the adjudicator can judge/)
     expect(text).toContain(COMMAND_RULE)
   })
 
@@ -731,8 +872,22 @@ describe('the ci-rerun executor (v2 SPEC 8.5, appendix B)', () => {
     expect(await dispatch(ctxOf(ok.env, s, start([], a, NOW).entry), a)).toMatchObject({ status: 'done', summary: `re-ran the failed jobs of run 18342299123 (PR #${PR}, round 1)` })
     expect(ok.argvs).toEqual([ARGV.runRerunArgv(REPO, '18342299123')])
     expect(ok.argvs[0]).toEqual(['gh', 'run', 'rerun', '18342299123', '--failed', '--repo', REPO])
-    const no = actWorld(() => ({ exitCode: 1, stderr: 'run 18342299123 cannot be rerun; its workflow file may be broken' }))
-    expect(await dispatch(ctxOf(no.env, s, start([], a, NOW).entry), a)).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1 }, summary: expect.stringContaining('cannot be rerun') })
+  })
+
+  test('GitHub\'s own refusal is never retried and is named as such; a transient failure is retried', async () => {
+    const run = async (stderr: string) => {
+      const w = actWorld(() => ({ exitCode: 1, stderr }))
+      return dispatch(ctxOf(w.env, s, start([], a, NOW).entry), a)
+    }
+    const no = await run('run 18342299123 cannot be rerun; its workflow file may be broken')
+    expect(no).toMatchObject({ status: 'failed', noRetry: true, outcome: { kind: 'cli', exit: 1 }, summary: `${RERUN_REFUSED} of run 18342299123: run 18342299123 cannot be rerun; its workflow file may be broken` })
+    expect(await run('failed to get run: HTTP 404: Not Found (https://api.github.com/repos/x/y/actions/runs/18342299123)')).toMatchObject({ noRetry: true, summary: expect.stringMatching(new RegExp(`^${RERUN_REFUSED}`)) })
+    for (const stderr of ['failed to rerun: HTTP 502: Bad Gateway', 'HTTP 401: Bad credentials', 'API rate limit exceeded for user', 'error connecting to api.github.com']) {
+      const t = await run(stderr)
+      expect(t.status).toBe('failed')
+      expect(t).not.toHaveProperty('noRetry', true)
+      expect(t.summary.startsWith(RERUN_REFUSED)).toBe(false)
+    }
   })
 
   test('a run id that is not GitHub\'s number is refused before any command', async () => {
