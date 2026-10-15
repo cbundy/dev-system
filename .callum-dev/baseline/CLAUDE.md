@@ -87,6 +87,8 @@ worktree/isolation mechanism, e.g. a treehouse worktree>. Sub-agents delegated a
 follow the `implement-issue` skill for the full working procedure (worktree, build, verify,
 evidence, /no-mistakes pipeline, handoff). Orchestration is driven by the
 `issue-orchestrator` skill.
+Agents the factory loop starts (its designer, builder, fixer, reviewer and triage) follow their
+prompt and agent definition, not `implement-issue`: the loop prepares their worktree and opens the PR.
 
 <REPLACE: note any repo-specific variations to the above (e.g. extra build/boot steps
 before an agent can safely run this repo's app).>

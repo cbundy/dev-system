@@ -50,7 +50,9 @@ export type EventData = {
   // E4: the PR GitHub's event is about
   patch?: string
   pr?: number
-  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step
+  // T9, T12: the findings, failed checks, conflict or decline reasons for the next step; a failed
+  // check is one note in the shape prompts-work.ts checkNote gives, so the fixer gets its id and
+  // its run link (the PR source does not cover a record in fixing, 2.4)
   notes?: string[]
   // X1, X2, X3: the triage's instructions
   instructions?: string

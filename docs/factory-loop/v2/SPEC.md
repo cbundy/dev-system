@@ -659,7 +659,9 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
     `stop-new` or `stop-all` when it ended;
   - `breaker`: the step-unknown breaker (5.3) was open when the step ended, or this unknown trips
     it;
-  - `slot`: the record's lease vanished while the step ran (10.1).
+  - `slot`: the record's lease vanished while the step ran (10.1). The step ends then, not at its
+    timeout: a running agent is stopped by the next seq's entry actions, and a prepare counts only
+    for the lease it ran in, so no agent starts in a slot that was not prepared for it.
 
   Each is free once per attempt (`cut`), so a step that itself brings the session down meets U2
   on its second cut, and work stays bounded (property 7).
@@ -1340,10 +1342,16 @@ agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings
   prints `LEASED path=<p> lease=<id>`. The branch is checked out by `prepare` (10.2).
 - **W2, free.** A slot with a `factory-loop:<N>:<life>` holder is freed when no record of that
   issue and life is in a slot state and no step entry of it runs. Action `slot` op `free`:
-  `factory-slot free <path> <lease>` kills the slot's processes (10.8), saves leftovers (10.2),
-  runs `git reset --hard` and `git clean -fd`, then `treehouse return <path> --if-lease-id
-  <lease>`, which also ends lingering processes. It is done when the slot shows available. For one
+  `factory-slot free <path> <lease>` kills the slot's processes (10.8), saves leftovers (10.2)
+  and prints their file, runs `git reset --hard` and `git clean -fd`, then `treehouse return
+  <path> --if-lease-id <lease>`, which also ends lingering processes. It is done when the slot
+  shows available. From the free's start the lease counts as gone, so a record resumed meanwhile
+  waits for it to go back rather than step onto it. A second lease of a live life (a lease whose
+  answer was lost, taken again) is freed the same way once nothing of the life runs. For one
   issue, W2 runs before W1 (`totality/T-19`).
+- **Budgets.** The executor gives the tool its op's timeout less a margin (`--budget-ms`), and
+  the tool ends its own commands inside it, so no `treehouse get` it started can finish later and
+  take a second slot.
 - W2 is a rule over the pool, not an entry action, so a slot is freed however its issue left:
   parked, dropped, merged, closed by hand or lost to another device (DB:81, #601).
 
@@ -1353,23 +1361,26 @@ Before every agent step (each attempt and each triage included), action `slot` o
 `factory-slot prepare <path> <lease> <branch> <marker json>`:
 
 1. kill the slot's processes (10.8);
-2. save leftovers: tracked changes and untracked files as one binary patch,
+2. `git fetch origin`;
+3. save leftovers: tracked changes, untracked files and, while the slot is on the branch, its
+   commits that origin has under no ref, as one binary patch against the merge base of HEAD and the
+   step's start (`origin/<branch>`, else `origin/<default>`), so it applies onto the start:
    `<loop dir>/leftovers/<N>-<life>-s<seq>-<ts>.patch`, pruned with the loop's other files after
    7 days (D-46);
-3. `git fetch origin`, `git reset --hard`, `git clean -fd`, then `git switch
+4. `git reset --hard`, `git clean -fd`, then `git switch
    --ignore-other-worktrees -C <branch> origin/<branch>` (or `origin/<default>` when origin has no
    such branch). A stale slot or a person's worktree that still has the branch checked out no
    longer blocks the step. Checked locally on git 2.56.0: without the option the switch fails with
    "is already used by worktree", exit 128 (`totality/T-19`);
-4. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
+5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
    step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir }`;
-5. print `PREPARED head=<sha>`.
+6. print `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when it saved any.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
-retry. Uncommitted work of a failed attempt survives in its leftovers file, which the retry's
-prompt names (5.1). A `prepare` that fails is the attempt's `unknown`: it is part of the attempt,
-keyed with it.
+retry. Uncommitted work of a failed attempt, and work it committed but never pushed, survives in
+its leftovers file, which the retry's prompt names (5.1). A `prepare` that fails is the attempt's
+`unknown`: it is part of the attempt, keyed with it.
 
 ### 10.3 Starting the agent in its slot
 

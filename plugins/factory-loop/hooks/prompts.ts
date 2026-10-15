@@ -63,13 +63,23 @@ function participle(word: string): string {
   return word.charAt(0) === word.charAt(0).toUpperCase() ? ing.charAt(0).toUpperCase() + ing.slice(1) : ing
 }
 
+// Whitespace other than a newline, a tab or a space, and the control characters.
+const CONTROL = /[^\S\n\t ]|[\u0000-\u0008\u000b-\u001f\u007f]/g
+
 // neutral: free text made safe for a prompt: control characters dropped, length capped, and
 // each closing keyword before a reference turned into its participle ("Fixes #12" reads
 // "Fixing #12"), so an agent that copies the text into a PR body closes nothing.
 export function neutral(text: string): string {
-  const clean = text.replace(/[^\S\n\t ]|[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim()
+  const clean = text.replace(CONTROL, ' ').trim()
   const capped = clean.length > TEXT_MAX ? `${clean.slice(0, TEXT_MAX - 3)}...` : clean
   return capped.replace(CLOSING, participle)
+}
+
+// neutralWhole: neutral()'s clean-up over a whole text, with no trim and no cap, so every line,
+// blank line and indent stays where it was: for a long text the loop posts itself (v2
+// prompts-work.ts neutralBody), which caps it once at the end.
+export function neutralWhole(text: string): string {
+  return text.replace(CONTROL, ' ').replace(CLOSING, participle)
 }
 
 // Each line of a free-text block, indented under its heading.

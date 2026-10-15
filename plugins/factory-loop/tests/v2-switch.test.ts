@@ -236,14 +236,16 @@ describe('the dispatcher: v2\'s executors (v2 SPEC 2.2, appendix B)', () => {
     for (const kind of V2_ACTION_KINDS) expect(EXECUTORS[kind]).toBe(V2_EXECUTORS[kind])
   })
 
-  test('a v2 kind not built yet fails, never retried, before any command; a v1 kind keeps v1\'s executor under planner v2', async () => {
+  test('a v2 kind runs its own executor under either planner, and a v1 kind keeps v1\'s executor under planner v2', async () => {
     const pr: Action = { kind: 'pr', key: 'i470/ltbq3k0/s4/pr/ensure', class: 'free', rule: 'S2', reason: 'x', issue: 470, op: 'ensure', branch: 'issue-470', base: 'main', pr: null, title: 't', summary: 's', evidence: null, brief: null }
     const sweep: Action = { kind: 'sweep', key: 'sweep:0', class: 'free', rule: 'H2', reason: 'x', issue: null }
     for (const planner of ['v1', 'v2'] as const) {
       const { env, argvs } = envOf(planner)
       const s = state()
-      expect(await dispatch(ctxOf(env, s, start([], pr, NOW).entry), pr)).toEqual({ status: 'failed', summary: 'pr: not built yet (U5)', noRetry: true })
-      expect(argvs).toEqual([])
+      // the pr executor (U5) lists the branch's PRs first; an answer not in its shape fails, and is retried
+      expect(await dispatch(ctxOf(env, s, start([], pr, NOW).entry), pr)).toMatchObject({ status: 'failed', summary: 'the PRs of issue-470 did not read' })
+      expect(argvs).toEqual([['gh', 'pr', 'list', '--repo', REPO, '--head', 'issue-470', '--state', 'all', '--json', 'number,state,headRefOid']])
+      argvs.length = 0
       expect(await dispatch(ctxOf(env, s, start([], sweep, NOW).entry), sweep)).toMatchObject({ status: 'done' })
       expect(argvs).toEqual([['callum-flow-sweep']])
     }
@@ -321,14 +323,15 @@ describe('the driver (v2 SPEC 2.3)', () => {
     const clock = mock.clock(on, { now: NOW })
     // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once (its
     // sweep is not due, so the pass starts nothing else). The factory shows no claim of this
-    // device, so v2's R1 has no ghost to release, which would hold R2 (v2 SPEC 6.2)
+    // device, so v2's R1 has no ghost to release, and the pool holds no loop slot for W2 to free,
+    // either of which would hold R2 (v2 SPEC 6.2, 10.1)
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
     const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work', shadow: 'v2' },
       files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: NOW - MIN } }) },
       store: { [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [running, swept] } },
-      run: world(),
+      run: world({ run: argv => (argv[0] === 'treehouse' ? { stdout: '[]' } : undefined) }),
     })
     h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'running', description: 'Implement #470' })
     await $.session.start(START)
