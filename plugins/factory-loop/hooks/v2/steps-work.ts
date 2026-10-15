@@ -25,6 +25,7 @@ import type { BuildAnswer, DesignAnswer, FixAnswer } from './contracts-work.mjs'
 import { keyParts, prepareKey } from './keys'
 import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
+import { leftoversOf } from './rules-agent'
 import type { AgentStepAction, StepModule, StepRecord } from './steps'
 import { stepFiles } from './steps-triage'
 import { SLOT_STATES, unknownResult } from './types'
@@ -108,7 +109,7 @@ function workInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place:
     attempt: action.attempt,
     notes: action.notes,
     prior: priorOf(ctx, r, action.step, action.key),
-    leftovers: `${ctx.rt.loopDir}/leftovers/${r.issue}-${r.life}-s${action.seq}-*.patch`,
+    leftovers: leftoversOf(ctx.state.ledger, r)[0] ?? null,
     place,
   }
 }

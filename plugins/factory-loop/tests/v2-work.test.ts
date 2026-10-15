@@ -206,7 +206,7 @@ describe('the work prompts (prompts-work.ts)', () => {
 
   test('a retry names the previous attempt\'s result, its files and, to a writer, the leftovers patch (5.1)', () => {
     const prior = { key: 'i300/lx/s3/build/a1', status: 'done (unknown: timeout)', summary: 'build #300: unknown', reason: 'the step ran past its 90 min', files: [`${LOOP_DIR}/spawns/x.json`] }
-    const leftovers = `${LOOP_DIR}/leftovers/300-${LIFE}-s4-*.patch`
+    const leftovers = `${LOOP_DIR}/leftovers/300-${LIFE}-s4-1760000000000.patch`
     for (const p of [buildPrompt(input({ attempt: 2, prior, leftovers })), fixPrompt(fixInput({ attempt: 2, prior, leftovers }))]) {
       expect(p).toContain('This is attempt 2. The previous attempt (i300/lx/s3/build/a1) ended done (unknown: timeout): build #300: unknown')
       expect(p).toContain('    the step ran past its 90 min')
@@ -415,6 +415,26 @@ describe('the build step (4.2, 7.1, 10.8)', () => {
     const exec = await h.early(e)
     expect(exec === null ? null : resultOf(exec)).toMatchObject({ event: 'not-ok', reason: 'cannot', data: { text: 'the API is missing' } })
     expect(h.runs.filter(x => x.argv[0] === 'git')).toEqual([])
+  })
+
+  test('a writer is told the newest leftovers file its life\'s slot ops saved (rules-agent.ts leftoversOf, 5.1, 10.2); none saved, no patch; the designer never', async () => {
+    const saved = (key: string, op: 'prepare' | 'free', file: string | null, at: number) =>
+      done(key, 'slot', { issue: 300, startedAt: at - 1000, endedAt: at, outcome: { kind: 'slot', op, path: SLOT(300), lease: 'L300', head: SHA('a'), killed: 0, leftovers: file } })
+    const older = `${LOOP_DIR}/leftovers/300-${LIFE}-free-1.patch`
+    const newer = `${LOOP_DIR}/leftovers/300-${LIFE}-s3-2.patch`
+    const other = `${LOOP_DIR}/leftovers/300-${lifeOf(NOW - 9 * HOUR)}-s9-3.patch`
+    const ledger = [saved('free:L300', 'free', older, NOW - 10 * MIN), saved(prepareKey(r, 1), 'prepare', newer, NOW - 5 * MIN), saved('free:L9', 'free', other, NOW - MIN)]
+    const h = harness(r, origin('issue-300', SHA('a')), ledger)
+    await h.spawn('build')
+    expect(h.spawns[0]?.prompt).toContain(`saved as a patch: ${newer}.`)
+    expect(h.spawns[0]?.prompt).not.toContain(older)
+    expect(h.spawns[0]?.prompt).not.toContain(other)
+    const clean = harness(r, origin('issue-300', SHA('a')), [saved(prepareKey(r, 1), 'prepare', null, NOW - 5 * MIN)])
+    await clean.spawn('build')
+    expect(clean.spawns[0]?.prompt).not.toContain('saved as a patch')
+    const designer = harness(rec(300, { state: 'designing', step: 'design' }), () => ({}), ledger)
+    await designer.spawn('design')
+    expect(designer.spawns[0]?.prompt).not.toContain(newer)
   })
 })
 

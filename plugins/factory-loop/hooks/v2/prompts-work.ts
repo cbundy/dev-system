@@ -44,7 +44,8 @@ export type WorkInput = {
   // the record's notes for this step, then the owner's
   notes: string[]
   prior: Prior | null
-  // where this attempt's preparation saved the uncommitted work an earlier one left (10.2)
+  // the newest leftovers file the life's slot ops saved (10.2; rules-agent.ts leftoversOf): what an
+  // earlier attempt left uncommitted or committed but never pushed; null when none was saved
   leftovers: string | null
   place: ScriptPlace
 }
@@ -157,7 +158,7 @@ function readerRules(): string {
 }
 
 // priorLines: the previous attempt (5.1), and for a writer the patch of what an earlier attempt
-// left uncommitted; a reader changes nothing in its slot, so it is never asked to apply one.
+// left and never pushed; a reader changes nothing in its slot, so it is never asked to apply one.
 function priorLines(i: WorkInput, role: 'writer' | 'reader'): string[] {
   const out: string[] = []
   if (i.prior !== null) {
@@ -169,7 +170,7 @@ function priorLines(i: WorkInput, role: 'writer' | 'reader'): string[] {
     out.push('Do not repeat what it did that the result above shows was done, and do not repeat what failed.')
   }
   if (role === 'writer' && i.leftovers !== null && PATH.test(i.leftovers)) {
-    out.push(`Uncommitted work an earlier attempt left in this slot, if any, was saved as a patch: ${i.leftovers}. Apply what is useful with \`git apply\`; the slot itself starts clean at origin's head.`)
+    out.push(`Work an earlier attempt left and never pushed (uncommitted changes, or commits origin does not have) was saved as a patch: ${i.leftovers}. Apply what is useful with \`git apply\`; the slot itself starts clean at origin's head.`)
   }
   return out
 }
