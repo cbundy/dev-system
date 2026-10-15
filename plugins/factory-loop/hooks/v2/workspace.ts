@@ -1,10 +1,11 @@
 // The loop's side of the companion plugin `factory-loop-workspace` (docs/factory-loop/v2/SPEC.md
 // 10.3, 10.5, 10.9), pure: the slot line and folder each agent step's spawn carries, the Bash
 // timeout the loop sets for its session, and the workspace rail. The companion writes a handshake
-// for each session it runs in; without this session's, an agent would start in the main checkout,
-// unguarded, so every agent step is held with the skip line `workspace`, and the owner is told
-// once (tell(workspace)). rails.ts reads the handshake, observeV2 puts it in the State, and
-// rules-state.ts and plan.ts hold and tell from it.
+// for each session it runs in, again every minute; without a fresh one for this session, an agent
+// would start in the main checkout, unguarded, so every agent step is held with the skip line
+// `workspace`, and the owner is told once (tell(workspace)). sources-workspace.ts reads and judges
+// the handshake, observeV2 puts it in the State, and rules-state.ts and plan.ts hold and tell
+// from it.
 import { skip, wake, want } from '../foundation'
 import type { Ms } from '../types'
 import { AGENT_STEPS } from './types'
@@ -39,24 +40,9 @@ export function handshakePath(loopBase: string, session: string): string {
   return `${loopBase}/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
-// What the rail read: this session's handshake is there and names it, or why not.
+// What the rail read: this session's handshake is there, names it and is fresh, or why not
+// (sources-workspace.ts workspaceRead).
 export type WorkspaceRead = { session: string; ok: true; version: string | null } | { session: string; ok: false; why: string }
-
-// workspaceRead: the handshake's text (null: no file) for the session.
-export function workspaceRead(text: string | null, session: string): WorkspaceRead {
-  const missing = `the companion plugin factory-loop-workspace is not loaded in this session (${session}): no handshake`
-  if (text === null) return { session, ok: false, why: missing }
-  let o: Record<string, unknown>
-  try {
-    const v: unknown = JSON.parse(text)
-    if (v === null || typeof v !== 'object' || Array.isArray(v)) return { session, ok: false, why: `${missing} that reads` }
-    o = v as Record<string, unknown>
-  } catch {
-    return { session, ok: false, why: `${missing} that reads` }
-  }
-  if (o.session !== session) return { session, ok: false, why: `the companion's handshake names session ${String(o.session)}, not this one (${session})` }
-  return { session, ok: true, version: typeof o.version === 'string' ? o.version : null }
-}
 
 // workspaceHold: why a record's step may not start: an agent step while the rail fails. null: it
 // may (the rail passed, or was not read).

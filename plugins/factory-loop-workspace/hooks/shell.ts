@@ -1,9 +1,11 @@
 // A Bash command line as the simple commands it runs, each as its words, for the write guard
 // (docs/factory-loop/v2/SPEC.md 10.4). Best effort by design: the guard matches commands, not
 // effects. It splits on the shell's separators (; & && | || newlines, subshells, $( ) and
-// backquotes), honours quotes and escapes, skips comments and here-documents, drops redirections,
-// and looks through the wrappers that run another command (env, sudo, timeout, xargs, bash -c,
-// eval and the like), so `cd x && FOO=1 timeout 60 git push -f` still reads as a git push.
+// backquotes), honours quotes and escapes, skips comments and here-document text, drops
+// redirections, and looks through the wrappers that run another command (env, sudo, timeout,
+// xargs, bash -c, eval and the like), so `cd x && FOO=1 timeout 60 git push -f` still reads as a
+// git push. A command substitution the shell runs inside double quotes or in an unquoted
+// here-document (`echo "$(git push -f)"`) is read as a command line of its own.
 
 // One word as read: its text, and whether any of it was quoted (a quoted `>` is no redirection).
 type Word = { text: string; quoted: boolean }
@@ -13,7 +15,9 @@ const MAX_DEPTH = 3
 // simpleCommands: every simple command of a line, outermost first, each as its argv.
 export function simpleCommands(line: string, depth = 0): string[][] {
   const out: string[][] = []
-  for (const words of split(line)) out.push(...unwrap(dropRedirects(words), depth))
+  const { cmds, subs } = split(line)
+  for (const words of cmds) out.push(...unwrap(dropRedirects(words), depth))
+  for (const sub of subs) out.push(...simpleCommands(sub, depth + 1))
   return out
 }
 
@@ -24,12 +28,103 @@ export function program(argv: readonly string[]): string {
 
 // --- splitting ------------------------------------------------------------------------------------
 
-function split(line: string): Word[][] {
+// substEnd: the index of the `)` that closes a `$(` whose body starts at i, past nested
+// parentheses, quotes and backquotes; -1 when it never closes.
+function substEnd(s: string, i: number): number {
+  let depth = 1
+  while (i < s.length) {
+    const c = s[i]
+    if (c === '\\') i += 2
+    else if (c === "'") {
+      const close = s.indexOf("'", i + 1)
+      if (close === -1) return -1
+      i = close + 1
+    } else if (c === '"' || c === '`') {
+      const close = c === '"' ? dquoteEnd(s, i + 1) : backquoteEnd(s, i + 1)
+      if (close === -1) return -1
+      i = close + 1
+    } else {
+      if (c === '(') depth++
+      else if (c === ')' && --depth === 0) return i
+      i++
+    }
+  }
+  return -1
+}
+
+// backquoteEnd: the index of the backquote that closes one whose body starts at i; -1 when none.
+function backquoteEnd(s: string, i: number): number {
+  while (i < s.length) {
+    if (s[i] === '\\') i += 2
+    else if (s[i] === '`') return i
+    else i++
+  }
+  return -1
+}
+
+// dquoteEnd: the index of the `"` that closes a double-quoted string whose text starts at i, past
+// the substitutions in it (which may hold quotes of their own); -1 when none.
+function dquoteEnd(s: string, i: number): number {
+  while (i < s.length) {
+    const c = s[i]
+    if (c === '\\') i += 2
+    else if (c === '"') return i
+    else if (c === '$' && s[i + 1] === '(') {
+      const close = substEnd(s, i + 2)
+      if (close === -1) return -1
+      i = close + 1
+    } else if (c === '`') {
+      const close = backquoteEnd(s, i + 1)
+      if (close === -1) return -1
+      i = close + 1
+    } else i++
+  }
+  return -1
+}
+
+// expansions: text the shell expands (a double-quoted string's, or an unquoted here-document's) as
+// the word it reads as, and the bodies of the command substitutions in it, which the shell runs.
+// escapes: the characters a backslash escapes in this text.
+function expansions(text: string, escapes: string): { text: string; subs: string[] } {
+  let out = ''
+  const subs: string[] = []
+  let j = 0
+  while (j < text.length) {
+    const c = text[j] ?? ''
+    if (c === '\\' && escapes.includes(text[j + 1] ?? '')) {
+      if (text[j + 1] !== '\n') out += text[j + 1]
+      j += 2
+    } else if (c === '$' && text[j + 1] === '(') {
+      const close = substEnd(text, j + 2)
+      const stop = close === -1 ? text.length : close
+      subs.push(text.slice(j + 2, stop))
+      out += text.slice(j, stop + 1)
+      j = stop + 1
+    } else if (c === '`') {
+      const close = backquoteEnd(text, j + 1)
+      const stop = close === -1 ? text.length : close
+      // in backquotes a backslash escapes only $, ` and itself
+      subs.push(text.slice(j + 1, stop).replace(/\\([$`\\])/g, '$1'))
+      out += text.slice(j, stop + 1)
+      j = stop + 1
+    } else {
+      out += c
+      j++
+    }
+  }
+  return { text: out, subs }
+}
+
+// split: a line's simple commands as words, and the bodies of the command substitutions the shell
+// runs from inside double quotes or unquoted here-documents (an unquoted one splits in place).
+function split(line: string): { cmds: Word[][]; subs: string[] } {
   const cmds: Word[][] = []
+  const subs: string[] = []
   let words: Word[] = []
   // the word being read, if any (a holder, so the closures below can change it)
   const at: { word: Word | null } = { word: null }
-  const heredocs: { delim: string; strip: boolean }[] = []
+  // expand: an unquoted delimiter, so the body's substitutions run
+  const heredocs: { delim: string; strip: boolean; expand: boolean }[] = []
   const add = (text: string, quoted = false) => {
     at.word ??= { text: '', quoted: false }
     at.word.text += text
@@ -51,15 +146,19 @@ function split(line: string): Word[][] {
     if (c === '\n') {
       end()
       i++
-      // the here-documents opened on that line: their bodies are text, not commands
+      // the here-documents opened on that line: their bodies are text, not commands, but an
+      // unquoted delimiter's body runs its substitutions
       while (heredocs.length > 0) {
-        const h = heredocs.shift() as { delim: string; strip: boolean }
+        const h = heredocs.shift() as { delim: string; strip: boolean; expand: boolean }
+        const body: string[] = []
         while (i < line.length) {
           const nl = line.indexOf('\n', i)
-          const body = line.slice(i, nl === -1 ? line.length : nl)
+          const text = line.slice(i, nl === -1 ? line.length : nl)
           i = nl === -1 ? line.length : nl + 1
-          if ((h.strip ? body.replace(/^\t+/, '') : body) === h.delim) break
+          if ((h.strip ? text.replace(/^\t+/, '') : text) === h.delim) break
+          body.push(text)
         }
+        if (h.expand) subs.push(...expansions(body.join('\n'), '$`\\\n').subs)
       }
       continue
     }
@@ -83,19 +182,12 @@ function split(line: string): Word[][] {
       continue
     }
     if (c === '"') {
-      let j = i + 1
-      let text = ''
-      while (j < line.length && line[j] !== '"') {
-        if (line[j] === '\\' && '"\\$`\n'.includes(line[j + 1] ?? '')) {
-          if (line[j + 1] !== '\n') text += line[j + 1]
-          j += 2
-        } else {
-          text += line[j]
-          j++
-        }
-      }
-      add(text, true)
-      i = j + 1
+      const close = dquoteEnd(line, i + 1)
+      const stop = close === -1 ? line.length : close
+      const quoted = expansions(line.slice(i + 1, stop), '"\\$`\n')
+      add(quoted.text, true)
+      subs.push(...quoted.subs)
+      i = stop + 1
       continue
     }
     if (c === ' ' || c === '\t') {
@@ -111,11 +203,13 @@ function split(line: string): Word[][] {
       if (strip) j++
       while (line[j] === ' ' || line[j] === '\t') j++
       let delim = ''
+      let expand = true
       while (j < line.length && !' \t\n;&|()<>'.includes(line[j] ?? '')) {
         if (line[j] !== "'" && line[j] !== '"' && line[j] !== '\\') delim += line[j]
+        else expand = false
         j++
       }
-      if (delim !== '') heredocs.push({ delim, strip })
+      if (delim !== '') heredocs.push({ delim, strip, expand })
       i = j
       continue
     }
@@ -144,7 +238,7 @@ function split(line: string): Word[][] {
     i++
   }
   end()
-  return cmds
+  return { cmds, subs }
 }
 
 // dropRedirects: the words that are redirections (>f, 2>&1, < f, &>f), and the target that

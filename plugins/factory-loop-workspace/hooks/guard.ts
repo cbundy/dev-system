@@ -6,7 +6,7 @@
 //   /tmp); a reader writes nowhere in the repository. The repository is the slot and the main
 //   checkout, whose tree holds the pool's other slots.
 // - Every loop agent: no GitHub writes (the loop owns PRs, issues, labels and re-runs), no
-//   no-mistakes, no axi, no push to a remote but origin, no background Agent call.
+//   no-mistakes, no axi, no push to a remote but origin, no background or isolated Agent call.
 // - A writer pushes only its branch to origin, never by force, creates no branch and no worktree.
 // - A reader neither commits nor pushes.
 import { program, simpleCommands } from './shell'
@@ -53,15 +53,20 @@ export function fileRefusal(g: Guarded, path: string): Refusal | null {
 
 // --- commands ---------------------------------------------------------------------------------------
 
-// The gh commands that write to GitHub, by group: the loop owns these (10.4). `*`: every
-// subcommand of the group.
+// The gh commands that write to GitHub, by group, aliases included (`gh pr new` is `gh pr
+// create`): the loop owns these (10.4). `*`: every subcommand of the group.
 const GH_WRITES: Record<string, readonly string[] | '*'> = {
-  pr: ['create', 'edit', 'merge', 'close', 'reopen', 'review', 'update-branch', 'comment', 'ready', 'lock', 'unlock'],
-  issue: ['create', 'edit', 'close', 'comment', 'reopen', 'delete', 'transfer', 'lock', 'unlock', 'pin', 'unpin', 'develop'],
+  pr: ['create', 'new', 'edit', 'merge', 'close', 'reopen', 'review', 'update-branch', 'comment', 'ready', 'revert', 'lock', 'unlock'],
+  issue: ['create', 'new', 'edit', 'close', 'comment', 'reopen', 'delete', 'transfer', 'lock', 'unlock', 'pin', 'unpin', 'develop'],
   label: '*',
   run: ['rerun', 'cancel', 'delete'],
   workflow: ['run', 'enable', 'disable'],
-  release: ['create', 'edit', 'delete', 'upload', 'delete-asset'],
+  release: ['create', 'new', 'edit', 'delete', 'upload', 'delete-asset'],
+  repo: ['create', 'new', 'edit', 'rename', 'archive', 'unarchive', 'delete', 'sync', 'fork', 'deploy-key'],
+  secret: '*',
+  variable: '*',
+  cache: ['delete'],
+  gist: ['create', 'new', 'edit', 'rename', 'delete'],
 }
 const GH_VALUED = ['-R', '--repo', '-H', '--header', '-q', '--jq', '-t', '--template', '-p', '--preview', '--hostname', '--cache']
 const WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
@@ -216,8 +221,12 @@ export function bashRefusal(g: Guarded, command: string, head: string | null = n
 }
 
 // agentRefusal: an Agent call in the background, so a designer cannot end its turn while an
-// explorer still runs (failures/F13).
-export function agentRefusal(input: { run_in_background?: unknown }): Refusal | null {
+// explorer still runs (failures/F13), or with an isolation: `remote` always runs in the
+// background, and `worktree` makes a git worktree, which a writer may not.
+export function agentRefusal(input: { run_in_background?: unknown; isolation?: unknown }): Refusal | null {
+  if (input.isolation !== undefined && input.isolation !== null) {
+    return { cause: 'guard:command', reason: `an Agent call with isolation ${JSON.stringify(input.isolation)} is refused: leave isolation out, run it in the foreground in your own folder and wait for its answer` }
+  }
   if (input.run_in_background !== true) return null
   return { cause: 'guard:command', reason: 'an Agent call in the background is refused: run it in the foreground and wait for its answer' }
 }

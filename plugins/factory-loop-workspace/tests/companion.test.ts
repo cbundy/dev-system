@@ -124,6 +124,18 @@ describe('the handshake', () => {
     await w.clock.advance(60_000)
     expect(JSON.parse(w.written.get(`${CONFIG}/factory-loop/workspace/s2.json`) ?? '{}')).toMatchObject({ session: 's2' })
   })
+
+  test('every beat writes the file again with the time now, so its age shows the companion runs', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    const path = `${CONFIG}/factory-loop/workspace/s1.json`
+    const at = () => (JSON.parse(w.written.get(path) ?? '{}') as { at?: string }).at
+    expect(at()).toBe(new Date(NOW).toISOString())
+    for (const minutes of [1, 2, 3]) {
+      await w.clock.advance(60_000)
+      expect(at()).toBe(new Date(NOW + minutes * 60_000).toISOString())
+    }
+  })
 })
 
 describe('starting an agent in its slot', () => {

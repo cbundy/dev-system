@@ -18,9 +18,9 @@ is left alone.
 | Hook | What it does |
 |---|---|
 | `agent.spawn` | Reads the slot line and the step marker `factory-step.json` that `factory-slot prepare` wrote into the slot's git dir. Starts the agent in the slot when the marker is the loop's agent's (its name `<step>-<N>-s<seq>-a<k>` and its type `factory-loop:*`); refuses the spawn when the marker is missing or names another step. Keeps the agent's id, and its children's, in `$.state`. |
-| `tool.call` | The write guard. A writer writes only inside its slot (or outside the repository, such as `/tmp`); a reader writes nowhere in the repository. Every loop agent is refused GitHub writes (PRs, issues, labels, re-runs), `no-mistakes`, `axi`, a push to any remote but `origin`, and a background `Agent` call. A writer pushes only its branch, never by force, and creates no branch or worktree. A reader neither commits nor pushes. A Bash call with no timeout gets 10 minutes. |
+| `tool.call` | The write guard. A writer writes only inside its slot (or outside the repository, such as `/tmp`); a reader writes nowhere in the repository. Every loop agent is refused GitHub writes (PRs, issues, labels, re-runs), `no-mistakes`, `axi`, a push to any remote but `origin`, and a background or isolated `Agent` call. A writer pushes only its branch, never by force, and creates no branch or worktree. A reader neither commits nor pushes. A Bash call with no timeout gets 10 minutes. |
 | `classic.SubagentStop` | The stop gate. When a writer finishes, it runs the repo's `gateCommands` in the slot, one after another, within `gateTimeoutMs`. While one fails, the finish is refused with the command, its exit code and the last 150 lines of its output. A gate that cannot run lets the agent finish and is logged. |
-| `session.start` | The handshake: writes `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json`, again every minute. The loop holds every agent step while this session's file is missing. |
+| `session.start` | The handshake: writes `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` with the time, again every minute (the first row or turn starts the beat when a `/reload-plugins` added the plugin). The loop holds every agent step while this session's file is missing or older than 3 minutes. |
 
 ## What it writes
 
@@ -41,8 +41,11 @@ The orchestrator-loop Coder template lists it beside `factory-loop` (`coder/push
 other machine:
 
 ```
-/plugin install factory-loop-workspace --marketplace cbundy/dev-system
+/plugin install factory-loop-workspace@callum
 ```
+
+From a shell instead: `claude plugin install factory-loop-workspace@callum --scope user`, then start
+a new session.
 
 Gate commands are repo settings: `gateCommands` (for example `["npm run lint", "npm test"]`) and
 `gateTimeoutMs` in the repo's `.claude/factory-loop.json` or the workspace config. Empty means no

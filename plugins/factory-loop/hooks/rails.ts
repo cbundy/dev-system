@@ -8,8 +8,6 @@ import type { ActIo, Exec, ExecCtx } from './exec'
 import { parseCsv } from './parse'
 import { tierOf } from './plan'
 import type { Action, ActionClass, Config, Control, Ms, Tier } from './types'
-import { handshakePath, workspaceRead } from './v2/workspace'
-import type { WorkspaceRead } from './v2/workspace'
 
 const SECOND = 1_000
 const MINUTE = 60_000
@@ -392,16 +390,6 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
     memory: { heartbeat: guard.spell, watcher: watcherSpell },
     lock,
   }
-}
-
-// --- the workspace rail (v2 SPEC 10.9) -------------------------------------------------------------
-
-// readWorkspace: the companion plugin's handshake for this session, under the loop's base directory
-// (the loop dir's parent). v2's planner holds every agent step while it fails (v2/workspace.ts); a
-// read that fails reads as no handshake, so the rail fails safe.
-export async function readWorkspace(io: Pick<RailIo, 'readFile'>, loopDir: string, session: string): Promise<WorkspaceRead> {
-  const text = await io.readFile(handshakePath(loopDir.replace(/\/[^/]+\/?$/, ''), session)).catch(() => null)
-  return workspaceRead(text, session)
 }
 
 // --- the usage pre-check (SPEC 10.7) -------------------------------------------------------------

@@ -1397,10 +1397,13 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
 - **Refused for every loop agent:**
   - in Bash, `gh pr create|edit|merge|close|reopen|review|update-branch`,
     `gh issue create|edit|close|comment`, `gh label` and `gh api` with a write method or field
-    flags: the loop owns these;
+    flags: the loop owns these. The companion's list (`hooks/guard.ts` `GH_WRITES`) also holds
+    their aliases (`gh pr new`, `gh issue new`) and the other GitHub writes (`gh pr revert`,
+    `gh repo edit`, `gh secret`, `gh variable`, `gh run rerun` and the like);
   - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin` (`simplicity/F2`);
-  - an `Agent` call with `run_in_background: true`, so a designer cannot end its turn while an
-    explorer runs (`failures/F13`).
+  - an `Agent` call with `run_in_background: true` or any `isolation`, so a designer cannot end
+    its turn while an explorer runs (`failures/F13`; `isolation: "remote"` always runs in the
+    background, and `"worktree"` makes a git worktree).
 - **Bash, refused for a writer** (`failures/F7`):
   - `git push` to any ref but `origin <branch>`;
   - any force push (`-f`, `--force`, `--force-with-lease`, a `+ref`);
@@ -1413,6 +1416,9 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
   run3-debug.log:278-286). v2 relies on it and leaves callum-flow's `hooks.json` alone.
 - **Each refusal** is appended to the companion's log, and the loop logs it as an intervention
   (`guard:*`, 7.2).
+- **Command lines.** The rules apply to every simple command a line runs, through separators,
+  subshells, wrappers (`env`, `timeout`, `bash -c`, `eval` and the like) and command
+  substitutions, those inside double quotes and unquoted here-documents included.
 - **Limits.** The Bash rules match commands, not effects. A Bash write into another slot is not
   refused. The tripwire (10.7) covers the main checkout, and each slot is reset at its next
   prepare.
@@ -1494,10 +1500,14 @@ safeguards remain:
 
 ### 10.9 The rail, and the fallbacks
 
-- **The rail.** At its `session.start` the companion writes
-  `<CLAUDE_CONFIG_DIR>/factory-loop/workspace.json` = `{ session, version }`. When that file is
-  missing or names another session, the loop's rails hold every agent step, with the skip line
-  `workspace`, and tell the owner once (`tell(workspace)`). Without the companion, agents would
+- **The rail.** From its `session.start` the companion writes
+  `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` = `{ v, session, version, at }`, and
+  again every minute. It is one file per session, so a second session with the companion never
+  writes over the loop's. When this session's file is missing, names another session, or is
+  stale (its `at` more than 3 minutes old, or more than 90 seconds before the loop's module
+  loaded), the loop's rails hold every agent step, with the skip line `workspace`, and tell the
+  owner once (`tell(workspace)`). The age check catches a session resumed under the same id
+  without the companion. Without the companion, agents would
   start in the main checkout, unguarded. The orchestrator-loop template's plugin list
   (`coder/push.sh:79`) gains `factory-loop-workspace`, pushed at cutover (section 15).
 - **Re-probe.** U9 re-runs the spikes' frameless checks before it builds. Two points are proven

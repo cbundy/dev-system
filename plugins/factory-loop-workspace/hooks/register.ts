@@ -12,7 +12,8 @@
 // - the stop gate (10.6): a writer may not finish while the repo's gate commands fail; a gate that
 //   cannot run lets it finish, logged as gate-unknown; each result goes to factory-gate.json;
 // - the handshake (10.9): <CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json says this
-//   session has the companion, and the loop holds every agent step while its own is missing.
+//   session has the companion, written again every minute; the loop holds every agent step while
+//   its own is missing or stale.
 //
 // It acts only on spawns that carry the slot line, so the loop's v1 agents and every other agent
 // pass untouched.
@@ -30,9 +31,9 @@ export const BASH_TIMEOUT_MS = 600_000
 // the most a single $.process.run may take
 const RUN_MAX_MS = 600_000
 const QUICK_MS = 15_000
-const HANDSHAKE_EVERY_MS = 60_000
-// the handshake is written again this often, so the pruning of old ones never takes a live one
-const HANDSHAKE_TOUCH_MS = 24 * 60 * 60_000
+// the handshake is written again this often: its `at` shows the companion runs now, and the loop
+// takes a handshake a few beats old as missing (factory-loop hooks/v2/sources-workspace.ts)
+export const HANDSHAKE_EVERY_MS = 60_000
 const HANDSHAKE_PRUNE_DAYS = 7
 
 // --- small helpers over $ ---------------------------------------------------------------------------
@@ -73,13 +74,11 @@ export function handshakePath(configDir: string, session: string): string {
   return `${configDir}/factory-loop/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
-let written: { session: string; at: number } | null = null
-
+// handshake: this session's file, written whole with the time now.
 async function handshake($: EngineInterface): Promise<void> {
   const session = await $.session.id()
   const now = await $.clock.now()
   const path = handshakePath(await configDir($), session)
-  if (written !== null && written.session === session && now - written.at < HANDSHAKE_TOUCH_MS && (await $.fs.exists(path))) return
   const manifest = await readText($, `${$.plugin.root}/.claude-plugin/plugin.json`)
   let version = 'unknown'
   try {
@@ -89,7 +88,16 @@ async function handshake($: EngineInterface): Promise<void> {
     // the version is for people reading the file; the loop reads the session
   }
   await writeFile($, path, `${JSON.stringify({ v: 1, session, version, at: new Date(now).toISOString() })}\n`)
-  written = { session, at: now }
+}
+
+let beat: { cancel: () => void } | null = null
+
+// beating: the handshake now and again every minute, so its `at` stays fresh, a /clear's new
+// session gets its own file, and a pruned or deleted one comes back.
+async function beating($: EngineInterface): Promise<void> {
+  beat?.cancel()
+  beat = $.clock.every(HANDSHAKE_EVERY_MS, () => void handshake($).catch(() => undefined))
+  await handshake($).catch(() => undefined)
 }
 
 async function pruneHandshakes($: EngineInterface): Promise<void> {
@@ -201,17 +209,25 @@ async function headSha($: EngineInterface, slot: string): Promise<string | null>
 // --- the hooks --------------------------------------------------------------------------------------
 
 export const register: Register = on => {
-  let beat: { cancel: () => void } | null = null
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
-    await handshake($).catch(() => undefined)
+    await beating($)
     await pruneHandshakes($).catch(() => undefined)
-    // again every minute: a /clear changes the session, and a pruned or deleted file comes back
-    beat?.cancel()
-    beat = $.clock.every(HANDSHAKE_EVERY_MS, () => void handshake($).catch(() => undefined))
     return r
   })
+
+  // session.start does not fire for a plugin a /reload-plugins adds to a running session: the
+  // first row or turn after such a load starts the beat instead
+  on('session.append', async ($, e, next) => {
+    if (beat === null) void beating($).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    if (beat === null) void beating($).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
     // a child of an agent in a slot: the same slot and rules, and its folder is inherited

@@ -10,7 +10,6 @@ import type { FactoryEvent } from '../derive'
 import { eventsFromRows } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import { parseCsv } from '../parse'
-import { readWorkspace } from '../rails'
 import type { Ms, Source, State } from '../types'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
@@ -18,6 +17,7 @@ import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { readPrs } from './sources-prs'
+import { readWorkspace } from './sources-workspace'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State } from './types'
 
@@ -325,7 +325,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   // the tripwire's base moves only past a read with nothing left untold (10.7)
   cache.checkoutBase = checkoutBaseOf(cache.checkoutBase, state.checkout, state.ledger, now)
   // the workspace rail: is the companion loaded in this session (10.9)
-  const workspace = rt.session === undefined ? undefined : await readWorkspace(input.io, rt.loopDir, rt.session)
+  const workspace = rt.session === undefined ? undefined : await readWorkspace(input.io, rt.loopDir, rt.session, now, state.loadedAt)
   const v2: V2State = {
     sources,
     records,

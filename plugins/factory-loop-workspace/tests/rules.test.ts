@@ -38,6 +38,20 @@ describe('reading a command line', () => {
     expect(simpleCommands(heredoc)).toEqual([['git', 'commit', '-F', '-'], ['git', 'status']])
     expect(simpleCommands('npm test > out.txt 2> err.txt')).toEqual([['npm', 'test']])
   })
+
+  test('reads the commands a substitution runs inside double quotes, nested quotes and all', () => {
+    expect(simpleCommands('echo "head: $(git rev-parse "HEAD")" `date`')).toEqual([['echo', 'head: $(git rev-parse "HEAD")'], ['date'], ['git', 'rev-parse', 'HEAD']])
+    expect(simpleCommands('x="$(cd sub && (git push -f origin main))"')).toEqual([['cd', 'sub'], ['git', 'push', '-f', 'origin', 'main']])
+    expect(simpleCommands('echo "`gh pr merge 12`"')).toEqual([['echo', '`gh pr merge 12`'], ['gh', 'pr', 'merge', '12']])
+    // escaped, the text is only text
+    expect(simpleCommands('echo "\\$(gh pr merge 12) \\`gh pr create\\`"')).toEqual([['echo', '$(gh pr merge 12) `gh pr create`']])
+  })
+
+  test('an unquoted here-document runs its substitutions; a quoted one does not', () => {
+    expect(simpleCommands('cat <<EOF\nmerged: $(gh pr merge 12)\n`git push -f`\nEOF\ngit status')).toEqual([['cat'], ['git', 'status'], ['gh', 'pr', 'merge', '12'], ['git', 'push', '-f']])
+    expect(simpleCommands("cat <<'EOF'\nmerged: $(gh pr merge 12)\nEOF")).toEqual([['cat']])
+    expect(simpleCommands('cat <<\\EOF\nmerged: $(gh pr merge 12)\nEOF')).toEqual([['cat']])
+  })
 })
 
 describe('file writes', () => {
@@ -74,6 +88,20 @@ describe('commands refused for every loop agent', () => {
         'gh api -XDELETE repos/o/r/git/refs/heads/x',
         'gh api repos/o/r/issues -f title=x',
         'gh run rerun 123 --failed',
+        'gh pr new --title t --body b',
+        'gh issue new --title t',
+        'gh pr revert 12',
+        'gh repo edit --default-branch x',
+        'gh repo rename y',
+        'gh repo archive o/r --yes',
+        'gh repo delete o/r --yes',
+        'gh repo sync',
+        'gh secret set TOKEN --body x',
+        'gh variable delete X',
+        'gh cache delete --all',
+        'git status; echo "$(gh pr create --fill)"',
+        'echo "merged: $(gh pr merge 12 --squash)"',
+        'cat <<EOF > notes.txt\n$(gh pr create --fill)\nEOF',
         'no-mistakes run',
         '/usr/local/bin/axi start',
       ]) {
@@ -82,16 +110,19 @@ describe('commands refused for every loop agent', () => {
     })
 
     test(`reads pass (${g.role})`, () => {
-      for (const c of ['gh pr view 12 --json state', 'gh api repos/o/r/pulls/12', 'gh api -X GET search/issues -f q=x', 'gh issue view 5', 'git log --oneline -5', 'npm test']) {
+      for (const c of ['gh pr view 12 --json state', 'gh api repos/o/r/pulls/12', 'gh api -X GET search/issues -f q=x', 'gh issue view 5', 'gh repo view o/r', 'git log --oneline -5', 'npm test', 'echo "head: $(git rev-parse HEAD)"', "cat <<'EOF'\n$(gh pr create)\nEOF"]) {
         expect(cause(g, c)).toBeNull()
       }
     })
   }
 
-  test('an Agent call in the background', () => {
+  test('an Agent call in the background, or isolated', () => {
     expect(agentRefusal({ run_in_background: true })?.cause).toBe('guard:command')
     expect(agentRefusal({ run_in_background: false })).toBeNull()
     expect(agentRefusal({})).toBeNull()
+    // remote always runs in the background; worktree makes a git worktree
+    expect(agentRefusal({ isolation: 'remote' })?.cause).toBe('guard:command')
+    expect(agentRefusal({ isolation: 'worktree', run_in_background: false })?.reason).toContain('isolation "worktree"')
   })
 })
 
@@ -113,6 +144,7 @@ describe('a writer pushes only its branch to origin', () => {
 
   test('another ref, another remote, a force push or a deletion is refused', () => {
     for (const c of [
+      'echo "pushed: $(git push -f origin main)"',
       'git push origin main',
       'git push origin issue-571:main',
       'git push upstream issue-571',
