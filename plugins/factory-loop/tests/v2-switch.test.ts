@@ -20,7 +20,7 @@ import { planV2 } from '../hooks/v2/plan'
 import { V2_EXECUTORS } from '../hooks/v2/registry'
 import { V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
-import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, issue, mine, state, withLedger } from './fixtures'
+import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, issue, state, withLedger } from './fixtures'
 import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso } from './host'
 import type { Seen } from './host'
 
@@ -320,14 +320,15 @@ describe('the driver (v2 SPEC 2.3)', () => {
   test('the v2 shadow plans beside v1 on the same state: logged, never executed (v2 SPEC 2.3)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // an update is due while v1's implementer still runs: v1 drains, v2's R2 restarts at once (its
-    // sweep is not due, so the pass starts nothing else)
+    // sweep is not due, so the pass starts nothing else). The factory shows no claim of this
+    // device, so v2's R1 has no ghost to release, which would hold R2 (v2 SPEC 6.2)
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
     const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const h = host(on, {
       config: { repo: REPO, mode: 'act', checkout: '/work', shadow: 'v2' },
       files: { [`${LOOP_DIR}/control.json`]: JSON.stringify({ updateDue: { reason: 'image', at: NOW - MIN } }) },
       store: { [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [running, swept] } },
-      run: world({ issues: [{ issue: 470, stage: 'implementing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr: null, stuck: null, github: null }] }),
+      run: world(),
     })
     h.agents.push({ id: 'agent-1', type: 'callum-flow:implementer', status: 'running', description: 'Implement #470' })
     await $.session.start(START)
@@ -506,10 +507,11 @@ describe('the driver (v2 SPEC 2.3)', () => {
 describe('the shadow in the act step (act.ts actPass)', () => {
   test('an acting pass with the shadow on runs v1\'s actions alone, and hands the shadow\'s plan back for the log', async () => {
     // an update is due while v1's implementer runs: v1 drains, the v2 shadow's R2 would restart now
+    // (no claim of this device shows, so the shadow's R1 has no ghost to release, v2 SPEC 6.2)
     const running = entry('delegate:470:x', 'delegate', { agent: 'implementer', class: 'develop', issue: 470, status: 'running', endedAt: null, agentId: 'agent-1' })
     const swept = entry('sweep:0', 'sweep', { endedAt: NOW - MIN })
     const s: State = {
-      ...withLedger(state({ issues: [mine(470, 'implementing')], control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), [running, swept]),
+      ...withLedger(state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), [running, swept]),
       agents: [{ id: 'agent-1', type: 'callum-flow:implementer', status: 'running' }],
       v2: emptyV2State(NOW),
     }
