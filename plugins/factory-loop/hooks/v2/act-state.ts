@@ -4,7 +4,8 @@
 //   longer holds (an answer that came after the plan) or a record that moved is a skip: nothing
 //   is counted and the next pass plans again (totality/T-17).
 // - `label` writes a state's label in one call (the other six off), clears every factory label
-//   from a closed record, or makes the seven (op ensure, `--force` updates one that exists).
+//   from a closed record, sets R1's release in one call (`ready` or factory:rejected on, the seven
+//   off), or makes the eight (op ensure, `--force` updates one that exists).
 // - `comment` looks for its hidden key, <!-- factory-loop:<ledger key> -->, in the issue's or the
 //   PR's trusted comments before it posts, so a retry never posts twice; the comment's URL is the
 //   outcome's detail.
@@ -20,7 +21,7 @@ import type { ActionKind, Action, LedgerEntry } from '../types'
 import * as ARGV from './argv'
 import { eventArgv } from './events'
 import { neutralBody } from './prompts-work'
-import { FACTORY_LABELS } from './types'
+import { ALL_FACTORY_LABELS, FACTORY_LABELS, REJECTED_LABEL } from './types'
 import type { FactoryLabel, IssueRecord, RecordRef, Trigger } from './types'
 
 const SEC = 1000
@@ -108,11 +109,17 @@ const transition: Executor = async (ctx, action) => {
 // --- label (3.4) -------------------------------------------------------------------------------------------
 
 // labelArgvs: the commands of a label action: set (the state's on, the other six off in the same
-// call), clear (all seven off), or ensure (each of the seven made or updated).
+// call), clear (all seven off), requeue (the repo's ready label on, the seven off), reject
+// (factory:rejected on, the seven off), or ensure (each of the eight made or updated).
 export function labelArgvs(action: Extract<Action, { kind: 'label' }>, repo: string): string[][] | string {
-  if (action.op === 'ensure') return Object.values(FACTORY_LABELS).map(l => ARGV.labelCreateArgv(repo, l))
+  if (action.op === 'ensure') return ALL_FACTORY_LABELS.map(l => ARGV.labelCreateArgv(repo, l))
   if (action.issue === null) return `label ${action.op} names no issue`
   if (action.op === 'clear') return [ARGV.labelClearArgv(repo, action.issue, ALL_LABELS)]
+  if (action.op === 'reject') return [ARGV.labelReleaseArgv(repo, action.issue, REJECTED_LABEL.name, ALL_LABELS)]
+  if (action.op === 'requeue') {
+    if (action.ready === undefined || action.ready.trim() === '') return 'label requeue names no ready label'
+    return [ARGV.labelReleaseArgv(repo, action.issue, action.ready, ALL_LABELS)]
+  }
   if (action.label === null) return 'label set names no label'
   const add = action.label
   return [ARGV.labelSetArgv(repo, action.issue, add, ALL_LABELS.filter(l => l !== add))]
@@ -127,7 +134,16 @@ const label: Executor = async (ctx, action) => {
     if (!ran.ok) return ran.exec
     if (ran.r.exitCode !== 0) return commandFailure(argv, ran.r)
   }
-  const what = action.op === 'ensure' ? `the ${argvs.length} factory labels made` : action.op === 'clear' ? `factory labels cleared from #${action.issue}` : `#${action.issue} labelled ${action.label}`
+  const what =
+    action.op === 'ensure'
+      ? `the ${argvs.length} factory labels made`
+      : action.op === 'clear'
+        ? `factory labels cleared from #${action.issue}`
+        : action.op === 'requeue'
+          ? `#${action.issue} back in the queue: ${action.ready} on, factory labels off`
+          : action.op === 'reject'
+            ? `#${action.issue} rejected: ${REJECTED_LABEL.name} on, factory labels off`
+            : `#${action.issue} labelled ${action.label}`
   return { status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: what }
 }
 

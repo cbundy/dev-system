@@ -851,15 +851,23 @@ describe('the record\'s executors (act-state.ts)', () => {
     expect(recordStale([{ ...made, state: 'building' }], null, { ...made, life: 'zz' })).toContain('not closed')
   })
 
-  test('label: one call sets the state\'s label and removes the other six; a close removes all seven; ensure makes the seven; a failure is a failed attempt with its output', async () => {
+  test('label: one call sets the state\'s label and removes the other six; a close removes all seven; a release requeues (ready on) or rejects (factory:rejected on) with the seven off; ensure makes the eight; a failure is a failed attempt with its output', async () => {
     const set: Action = { kind: 'label', key: 'k', class: 'free', rule: 'S3', reason: 'x', issue: 502, op: 'set', label: 'factory:building' }
     const others = Object.values(FACTORY_LABELS).map(l => l.name).filter(l => l !== 'factory:building')
     expect(labelArgvs(set as Extract<Action, { kind: 'label' }>, REPO)).toEqual([['gh', 'issue', 'edit', '502', '--repo', REPO, '--add-label', 'factory:building', '--remove-label', others.join(',')]])
     const clear: Action = { ...set, op: 'clear', label: null }
     expect(labelArgvs(clear as Extract<Action, { kind: 'label' }>, REPO)).toEqual([['gh', 'issue', 'edit', '502', '--repo', REPO, '--remove-label', Object.values(FACTORY_LABELS).map(l => l.name).join(',')]])
+    const seven = Object.values(FACTORY_LABELS).map(l => l.name).join(',')
+    const requeue: Action = { ...set, op: 'requeue', label: null, ready: 'ready' }
+    expect(labelArgvs(requeue as Extract<Action, { kind: 'label' }>, REPO)).toEqual([['gh', 'issue', 'edit', '502', '--repo', REPO, '--add-label', 'ready', '--remove-label', seven]])
+    expect(labelArgvs({ ...requeue, ready: undefined } as Extract<Action, { kind: 'label' }>, REPO)).toBe('label requeue names no ready label')
+    const reject: Action = { ...set, op: 'reject', label: null }
+    expect(labelArgvs(reject as Extract<Action, { kind: 'label' }>, REPO)).toEqual([['gh', 'issue', 'edit', '502', '--repo', REPO, '--add-label', 'factory:rejected', '--remove-label', seven]])
     const w = actWorld([])
-    expect(await w.run({ ...set, issue: null, op: 'ensure', label: null })).toMatchObject({ status: 'done', summary: 'the 7 factory labels made' })
-    expect(w.argvs.map(a => a.slice(0, 4))).toEqual(Object.values(FACTORY_LABELS).map(l => ['gh', 'label', 'create', l.name]))
+    expect(await w.run({ ...set, issue: null, op: 'ensure', label: null })).toMatchObject({ status: 'done', summary: 'the 8 factory labels made' })
+    expect(w.argvs.map(a => a.slice(0, 4))).toEqual([...Object.values(FACTORY_LABELS).map(l => l.name), 'factory:rejected'].map(name => ['gh', 'label', 'create', name]))
+    expect(await actWorld([]).run(requeue)).toMatchObject({ status: 'done', summary: '#502 back in the queue: ready on, factory labels off' })
+    expect(await actWorld([]).run(reject)).toMatchObject({ status: 'done', summary: '#502 rejected: factory:rejected on, factory labels off' })
     const failing = actWorld([], () => ({ exitCode: 1, stderr: "could not add label: 'factory:building' not found" }))
     expect(await failing.run(set)).toMatchObject({ status: 'failed', outcome: { kind: 'cli', exit: 1, detail: expect.stringContaining('not found') } })
   })

@@ -399,5 +399,6 @@ test("factory loop v2 (SPEC 3.6, 7.3): the newest transition of the current life
   assert.deepEqual([st(109).stage, st(109).lease.lapsed], ["designing", true], "a v2 record keeps its state while its claim lapsed: the loop claims it again");
   assert.deepEqual([st(108).stage, st(108).source], ["in pipeline", "github"], "an open issue with a factory label and no events is listed from the label");
   assert.equal(st(110), undefined, "an open issue with neither a factory label nor ready is not in the factory");
+  assert.equal(st(113), undefined, "factory:rejected names no stage: a rejected issue is out of the factory");
   assert.deepEqual(st(100).lease, { until: "2026-10-10T13:50:00.000Z", lapsed: false }, "the lease runs from the newest renewal");
 });

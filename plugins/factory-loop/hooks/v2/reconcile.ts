@@ -5,11 +5,16 @@
 //    has a timeout, 4.4), and a stuck one goes down the unknown path to a park with a question.
 // 2. A live claim with no record is a ghost: the `factory` source shows the issue live with this
 //    device as the holder, it has no record and no claim action is in flight. R1 releases it at
-//    once (release.ts): its agents stopped and its factory labels off, then, once those have ended
-//    and W2 has freed any loop slot leased for it, `reclaimed` (still labelled ready) or
-//    `abandoned`, last. In observe mode and in the shadow the same plan is logged, not executed.
-//    A release is keyed by the claim it ends (claimOf). Once its event is done the issue is no
-//    ghost of that claim, whatever the factory still shows, so S1 may claim it again.
+//    once (release.ts): its agents stopped and its labels set by the release's outcome, then, once
+//    those have ended and W2 has freed any loop slot leased for it, its event, last. The outcome
+//    (6.4): back in the queue, `ready` re-added (`reclaimed`), unless the owner dropped the issue
+//    since its claim (it leaves, `abandoned`), and unless this was its maxLives-th life (lives.ts):
+//    then it is rejected, factory:rejected on, with one comment and one owner tell listing why
+//    each life ended before its `abandoned`. A requeue waits for a read that shows the issue open
+//    (a closed one is the sweep's, H2). In observe mode and in the shadow the same plan is logged,
+//    not executed. A release is keyed by the claim it ends (claimOf), and keeps the outcome it
+//    began with. Once its event is done the issue is no ghost of that claim, whatever the factory
+//    still shows, so S1 may claim it again.
 // 3. Only this device's claims: another device's claims and labels are never looked at
 //    (totality/T-02).
 // 4. The main-checkout tripwire (10.7): a change to the main checkout since the checkout the
@@ -25,9 +30,12 @@
 import { attemptsKindOf, gate, listedLive, skip, wake, want } from '../foundation'
 import type { Gate } from '../foundation'
 import type { Action, Checkout, IssueView, LedgerEntry, Ms, Stage } from '../types'
-import { claimKey, lifeOf, short } from './keys'
-import { LIVE_STAGES, RELEASE_OPS, releaseClaimOf, releaseEffects, releaseEventAction, releaseKey } from './release'
-import type { ReleaseAgent } from './release'
+import { claimKey, lifeAt, lifeOf, short } from './keys'
+import { claimedAt, livesBefore } from './lives'
+import type { Lives } from './lives'
+import { LIVE_STAGES, RELEASE_OPS, releaseClaimOf, releaseEffects, releaseEventAction, releaseKey, releaseOutcomeOf } from './release'
+import type { ReleaseAgent, ReleaseOutcome } from './release'
+import { REJECTED_LABEL } from './types'
 import type { IssueRecord, Lease, V2Ctx } from './types'
 
 const MIN = 60_000
@@ -47,8 +55,12 @@ export type Ghost = {
   stage: Stage
   // when the factory shows it entered its stage
   since: Ms | null
-  // still labelled ready; null when its labels have not been read
-  ready: boolean | null
+  // open on GitHub; null when not read (a closed one is never a ghost: the sweep ends its claim)
+  open: boolean | null
+  // the owner dropped it (`/factory drop N`) since its claim
+  dropped: boolean
+  // its lives before this claim, since the count last started (lives.ts)
+  lives: Lives
   pr: number | null
   // the loop's agents still at work on it
   agents: ReleaseAgent[]
@@ -70,8 +82,7 @@ export function reconcile(ctx: V2Ctx): void {
 // outlives the release until the factory tools end it, 6.4), and S1 may claim it again, whose
 // claim starts the new life.
 export function ghostsOf(ctx: V2Ctx): Ghost[] {
-  const { state, config } = ctx
-  const ready = config.readyLabel.toLowerCase()
+  const { state } = ctx
   const out: Ghost[] = []
   for (const issue of [...state.issues].sort((a, b) => a.number - b.number)) {
     if (!liveClaim(issue, state.device)) continue
@@ -79,12 +90,15 @@ export function ghostsOf(ctx: V2Ctx): Ghost[] {
     if (claimInFlight(ctx, issue.number)) continue
     const claim = claimOf(state.ledger, issue)
     if (claim !== null && ctx.byKey.get(releaseKey(issue.number, claim, RELEASE_OPS.event))?.status === 'done') continue
+    const claimAt = claim === null ? null : lifeAt(claim)
     out.push({
       issue: issue.number,
       claim,
       stage: issue.stage as Stage,
       since: issue.stageSince,
-      ready: issue.labels === null ? null : issue.labels.some(l => l.toLowerCase() === ready),
+      open: issue.open,
+      dropped: claimAt !== null && state.control.dropped.some(d => d.issue === issue.number && d.at >= claimAt),
+      lives: claim === null ? { count: 0, ended: [], afterReject: false } : livesBefore(ctx.v2.records, state.ledger, issue.number, claim),
       pr: issue.pr,
       agents: agentsOn(ctx, issue.number),
       slots: ctx.v2.leases.filter(l => l.issue === issue.number),
@@ -163,6 +177,23 @@ function agentsOn(ctx: V2Ctx, n: number): ReleaseAgent[] {
 
 // --- the release (6.4) ----------------------------------------------------------------------------
 
+// outcomeOf: how the ghost's release ends: the outcome it began with, else leave when the owner
+// dropped it since its claim, reject at its maxLives-th life, and requeue once a read shows it
+// open; null while that read is missing.
+function outcomeOf(ctx: V2Ctx, g: Ghost, claim: string): ReleaseOutcome | null {
+  const begun = releaseOutcomeOf(key => ctx.byKey.has(key), g.issue, claim)
+  if (begun !== null) return begun
+  if (g.dropped) return 'leave'
+  if (g.lives.count + 1 >= ctx.config.maxLives) return 'reject'
+  return g.open === true ? 'requeue' : null
+}
+
+// What each effect, not yet done, leaves the event waiting for.
+const WAIT: Readonly<Record<string, string>> = {
+  label: 'its labels set',
+  comment: 'its comment posted',
+}
+
 // release: a ghost's effects, then its event once they have ended. A done event plans nothing
 // more, whatever the factory still shows (property 17): ghostsOf leaves its claim out.
 function release(ctx: V2Ctx, g: Ghost): void {
@@ -173,8 +204,14 @@ function release(ctx: V2Ctx, g: Ghost): void {
   }
   const claim = g.claim
   const why = `ghost #${g.issue}: a live claim of this device in ${g.stage}${age} with no record`
+  const outcome = outcomeOf(ctx, g, claim)
+  const lives = g.lives.count + 1
+  const ended = [...g.lives.ended, `life ${lives}, claimed ${claimedAt(claim)}: released: a live claim of this device in ${g.stage} with no record`]
+  const max = ctx.config.maxLives
   const waits: string[] = []
-  for (const action of releaseEffects({ issue: g.issue, claim }, g.agents, why)) {
+  // with no outcome yet, the stops still go: they are the same for every outcome
+  const effects = releaseEffects({ issue: g.issue, claim, outcome: outcome ?? 'leave', lives }, g.agents, why, ctx.config.readyLabel, ended, max)
+  for (const action of outcome === null ? effects.filter(a => a.kind === 'stop-agent') : effects) {
     const at = effect(ctx, action)
     if (action.kind === 'stop-agent') {
       // best effort, as an entry action's stop is (4.5): a stop that failed has ended too
@@ -183,18 +220,31 @@ function release(ctx: V2Ctx, g: Ghost): void {
       stalled(ctx, g.issue, action)
       return
     } else if (at !== 'done') {
-      waits.push('its factory labels off')
+      waits.push(WAIT[action.kind] ?? action.kind)
+    }
+  }
+  if (outcome === null) waits.push(`a read of #${g.issue} that shows it open (it goes back to the queue)`)
+  // a rejection's owner tell, planned until it is told (or its attempts are used up): the event
+  // waits for it, since a done event ends the ghost and with it every plan of this release
+  if (outcome === 'reject') {
+    const tell = wake('tell', 'rejected', `tell:rejected:${releaseKey(g.issue, claim, 'reject')}`, 'R1', g.issue, { issue: g.issue, lives, max }, [
+      ...ended.map(l => `- ${l}`),
+      `bring it back: remove ${REJECTED_LABEL.name} and add ${ctx.config.readyLabel}`,
+    ])
+    const told = gate(ctx, tell.key, attemptsKindOf(tell))
+    if (told !== 'done' && told !== 'exhausted') {
+      want(ctx, tell)
+      waits.push('its owner told')
     }
   }
   if (!ctx.v2.sources.leases.ok) waits.push('a read of the pool (its loop slots are not known)')
   for (const slot of g.slots) waits.push(`slot ${slot.path} freed (W2)`)
-  if (g.ready === null) waits.push(`a read of #${g.issue}'s labels (ready or not)`)
   if (waits.length > 0) {
     skip(ctx, 'R1', g.issue, `the release of ghost #${g.issue} waits for ${waits.join(', ')}`)
     return
   }
   const checked = `this device's live claim has no record and no claim in flight${g.agents.length > 0 ? `; ${g.agents.length} agent(s) stopped` : ''}`
-  const event = releaseEventAction({ issue: g.issue, claim, ready: g.ready === true, stage: g.stage, checked, branch: null, pr: g.pr }, why)
+  const event = releaseEventAction({ issue: g.issue, claim, outcome: outcome ?? 'leave', lives, stage: g.stage, checked, branch: null, pr: g.pr }, why)
   if (effect(ctx, event) === 'exhausted') stalled(ctx, g.issue, event)
 }
 

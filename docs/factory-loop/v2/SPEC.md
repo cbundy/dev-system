@@ -169,7 +169,8 @@ v1's rule layer is a few large files: `plan.ts` 2,541 lines, `register.ts` 1,600
 
 - **One module per area and kind** under `hooks/v2/`: `rules-*` (what to plan), `steps-*` (how a
   step runs and reads its answer), `act-*` (executors), `contracts-*` (answer checks),
-  `prompts-*` (agent prompts), plus `events.ts`, `record.ts`, `reconcile.ts` and `release.ts`.
+  `prompts-*` (agent prompts), plus `events.ts`, `record.ts`, `reconcile.ts`, `release.ts` and
+  `lives.ts`.
 - **The pure planner is a thin composer.** `hooks/v2/plan.ts` calls the `rules-*` modules in a
   fixed order and merges their actions. It holds no rule of its own.
 - **The table is data** (`table.ts`, 4.6), not code paths.
@@ -232,10 +233,14 @@ type IssueRecord = {
   why: ClosedWhy | null        // closed: why
   notes: string[]              // owner, triage and decline notes for the step of this seq
   prClosedAt: string | null    // GitHub's closedAt of the newest hand close the record has handled (E4, P1)
+  lives: number                // this life's number since the issue's count last started (6.4): 1 for the first
 }
 ```
 
 - Step, attempt, round and the approved patch live in the record (OB:42-43).
+- Each claim of an issue is one life, and the record counts lives (owner, 2026-10-15). S0 sets
+  `lives` from the issue's earlier lives (6.4, "Lives"); the count starts again with the first
+  claim after a rejection.
 - The slot is not a record field. A record holds the slot whose lease holder is
   `factory-loop:<N>:<life>` in the `leases` source (10.1).
 - A step's ledger keys follow from the record (appendix C). Their status and start time are the
@@ -285,8 +290,13 @@ type IssueRecord = {
 - **Names.** `factory:queued`, `factory:designing`, `factory:building`, `factory:reviewing`,
   `factory:fixing`, `factory:merge-queue`, `factory:parked` (OB:33-41). Colours and descriptions
   are in appendix D.
-- **Exactly one** `factory:*` label on the issue of an active or parked record; none on a closed
-  one.
+- **`factory:rejected`** (owner, 2026-10-15) is an eighth label and no state: the issue is out of
+  the factory. R1 sets it in place of `ready` when it releases an issue at its `maxLives`-th life
+  (6.4). S1 never claims an issue that carries it, whatever else it carries. The owner removing
+  it and adding `ready` brings the issue back as a first life (a person intervention, `unreject`,
+  7.2). The factory tools take it as no stage (3.6).
+- **Exactly one** `factory:*` state label on the issue of an active or parked record; none on a
+  closed one.
 - **One writer.** The loop is the only writer, except that the owner removing `factory:parked` is
   the resume signal (OB:42-44).
 - **The record is the authority and the label its mirror** (OB:42-43). A state change's entry
@@ -300,7 +310,8 @@ type IssueRecord = {
   edits (`images/base/callum-flow-sweep:37`, `:142`).
 - **Creation.** Action `label` with op `ensure` once per module load, and again after a label write
   fails with a missing label: `gh label create <name> --repo R --color <c> --description <d>
-  --force` for each of the seven. `--force` updates a label that exists.
+  --force` for each of the eight (the seven state labels and `factory:rejected`). `--force`
+  updates a label that exists.
 - **No claim label.** v2 neither writes nor reads `In development` (owner, 2026-10-15). The claim
   is the claim comment and its `claimed` and `renewed` events; the `factory:*` label shows the
   state. The claim tools change to match (3.6). A closed record's `label` op `clear` removes every
@@ -310,8 +321,9 @@ type IssueRecord = {
   convention (`skipLabels`, D-17) is unrelated and unchanged.
 - **Rollback.** Before the delete wave, `planner: v1`; after it, the previous release (OB:117). The
   runbook (17.5) first stops new work and lets v2's records reach parked or closed, because v1
-  ignores v2's records, slot holders and labels (`totality/T-27`). It then deletes the seven
-  labels with `gh label delete <name> --repo R --yes`.
+  ignores v2's records, slot holders and labels (`totality/T-27`). It then deletes the eight
+  labels with `gh label delete <name> --repo R --yes`, after re-adding `ready` to any rejected
+  issue the owner still wants.
 
 ### 3.5 One branch, one PR, one slot per life
 
@@ -351,8 +363,9 @@ tool the loop calls writes or reads the label:
   writer, and a record whose claim lapsed is claimed again onto itself (4.1).
 - **`callum-flow-factory-state`.** For an issue whose life has a `transition` event, the label
   check expects the `factory:*` label of its state. For other issues it checks `ready` only. The
-  "GitHub label only" list takes an open issue with a `factory:*` label (its stage from the label)
-  or `ready`, and no events.
+  "GitHub label only" list takes an open issue with a `factory:*` state label (its stage from the
+  label) or `ready`, and no events. `factory:rejected` names no stage, and is not flagged on a
+  closed record's issue.
 - Both tools drop `CALLUM_FLOW_IN_DEV_LABEL`. The old orchestrator's skill lines that name the
   label (`plugins/callum-flow/skills/issue-orchestrator/SKILL.md:22`, `:77`) are updated.
 - **`derive.ts`** reads no label: `EVENTS_SQL` and the derivation use events only
@@ -743,10 +756,17 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
 
 Every issue that shows as active must have a live step (OB:48-55). An issue that shows as active
 but has had no live agent, slot lease, pipeline or PR activity within its state's timeout is
-released:
+released. A release puts the issue back in the queue by re-adding `ready` (owner, 2026-10-15),
+where S1 claims it as a new life, with two exceptions:
 
-- still labelled `ready`: back to the queue, where S1 claims it and it becomes `factory:queued`;
-- not labelled `ready`: it leaves the factory.
+- the owner dropped it, or the issue is closed: it leaves the factory;
+- it was the issue's `maxLives`-th life (default 3): it is rejected. It gets `factory:rejected`
+  instead of `ready`, and leaves (6.4).
+
+The owner's first rule, "still labelled `ready` goes back to the queue, otherwise it leaves",
+never put an issue back: claiming removes `ready` (`callum-flow-claim:21`), so every claimed
+issue read as not labelled `ready`. The one-shot migration (6.3) requeues nothing: every issue it
+releases leaves (owner, 2026-10-15).
 
 Events are append-only. A release writes a closing event with reason `reconcile` and deletes
 nothing (OB:51-54).
@@ -771,7 +791,10 @@ after a load or a rebuild, S1 and S2 start nothing until R1 has run.
    flight. In act mode R1 releases it at once (6.4); the decision log and the closing event name
    it. In observe mode and in the shadow, the release is planned and logged, not executed.
    After the migration, a ghost can only come from a bug or a lost store with no events, because
-   S0 makes every record from its done claim (3.3).
+   S0 makes every record from its done claim (3.3). The release goes back to the queue unless the
+   owner dropped the issue since its claim (`control.dropped`), and unless this was its
+   `maxLives`-th life; a requeue waits for a read that shows the issue open (a closed one is the
+   sweep's, H2). The cap is what stops such a bug from claiming and releasing one issue forever.
 3. **Only this device's claims.** R1 never looks at another device's claims or labels
    (`totality/T-02`).
 4. **The main-checkout tripwire** (10.7) also runs here: it compares the loop's own record of the
@@ -787,10 +810,13 @@ the issues v1 left behind, with v1's evidence, so v2's every-pass rule never has
 v1-only facts.
 
 - **Observe by default.** `factory-reconcile --repo R` lists this device's live claims (from
-  `callum-flow-factory-state`) that have no v2 record. For each it looks for live evidence within
-  `T`, the timeout of the v2 state its factory-state stage maps to (designing to designing,
-  implementing to building, in pipeline and parked to reviewing, ready to merge to merge-queue;
-  any other stage 2 h):
+  `callum-flow-factory-state`) that have no v2 record, and the issues the view shows as live
+  (queued among them) with no holder at all and no `ready` label (owner, 2026-10-15): no device
+  holds them, so nothing else would ever end them (#286, #289, #290, #468 and #469 on dev-system
+  showed as queued for 3 to 6 days). A no-holder issue labelled `ready` is in the queue and is
+  left out. For each it looks for live evidence within `T`, the timeout of the v2 state its
+  factory-state stage maps to (designing to designing, implementing to building, in pipeline and
+  parked to reviewing, ready to merge to merge-queue; any other stage, queued among them, 2 h):
   - a no-mistakes run of the issue's branch updated within `T`, as the `factory` source reports it;
   - the open PR's head pushed, a check run started or finished, or a review within `T`;
   - a v1 slot checked out on the issue's branch whose tree or HEAD changed within `T`.
@@ -801,14 +827,19 @@ v1-only facts.
   owners from reflogs.
 
   It prints the report and writes it to `<loop dir>/reconcile-<date>.md`. Each issue or slot gets
-  one line: why it shows as active, what was checked, and the proposal. The proposal is `release
-  to queue`, `leave the factory`, `free the slot`, `remove the label`, or `live, no record: check
-  again later`, and the line names the issue's open PR and its v1 slot.
+  one line: why it shows as active, what was checked, and the proposal. The proposal is `leave the
+  factory`, `free the slot`, `remove the label`, or `live: check again later`, and the line names
+  the issue's open PR and its v1 slot.
+- **Nothing is requeued** (owner, 2026-10-15). Every issue the migration releases leaves the
+  factory, whatever its labels, and the report says so: the owner re-adds `ready` for any issue
+  still wanted, and S1 adopts its open PR (3.5). R1's requeue (6.4) is for v2's own releases.
 - **Act on approval.** `factory-reconcile --repo R --act <N...>|all`. It checks each named issue
   again and releases those that still qualify (6.4). It also frees a v1 slot on the issue's
   branch: the slot's processes are killed, its leftovers saved (10.2) and it is returned. Approval
   is by issue, so a proposal that changes between the report and the approval is checked again,
-  and there is no digest to go stale (`totality/T-16`).
+  and there is no digest to go stale (`totality/T-16`). `--act all` leaves every live proposal
+  alone; a live issue named in `--act` is released all the same, since the owner has judged it
+  stalled (the report lists these as "released only when named").
 - **`In development`.** It removes the label from each issue it releases. The report also lists
   the issues that still carry it with no live claim, open or closed, with the proposal `remove
   the label`, approved by issue like the rest (3.6).
@@ -827,24 +858,38 @@ v1-only facts.
 
 ### 6.4 Release
 
-| Case | Actions, in order | Event |
-|---|---|---|
-| labelled `ready` | stop any agent of the loop on it; remove its `factory:*` labels (the migration also removes `In development`); free a `factory-loop:` slot leased for it (W2), or, in the migration, the v1 slot on its branch | `reclaimed`, with the release fields (7.1) |
-| not labelled `ready` | the same | `abandoned`, with the release fields |
+| Outcome | When | Actions, in order | Event |
+|---|---|---|---|
+| requeue | R1's default | stop any agent of the loop on it; in one call, `ready` on and the seven state labels off (`label` op `requeue`); W2 frees a `factory-loop:` slot leased for it | `reclaimed`, with the release fields (7.1) |
+| leave | R1, when the owner dropped the issue since its claim; the migration, always | stop any agent; the seven off (op `clear`); the slot freed. The migration removes every `factory:*` label and `In development`, and frees the v1 slot on the issue's branch | `abandoned`, with the release fields |
+| reject | R1, at the issue's `maxLives`-th life | stop any agent; in one call, `factory:rejected` on and the seven off (op `reject`); one comment on the issue and one owner tell (`rejected`, appendix D), each listing why every life ended and how to bring it back; the slot freed | `abandoned`, with the release fields and outcome `reject` |
 
 - The event is logged last, so it is never logged for a release that did not happen (the order
-  D-48 set for `abandon`). R1's release is keyed `i<N>/reconcile/<claim time>`, and a done key
-  never runs again.
-- Each release is an intervention (`reconcile`, 7.2): by the loop for R1's, by a person for the
-  migration's, which act on the owner's approval. The migration tool is not the loop, so it writes
-  its events itself, in the same note encoding (7.1); its tests parse them with `events.ts`.
+  D-48 set for `abandon`): after the labels, a rejection's comment and tell, and the slot. R1's
+  release is keyed `i<N>/reconcile/<claim time>/<op>`, and a done key never runs again. Its label
+  action's op is the outcome (`requeue`, `leave` or `reject`), so a release once begun keeps the
+  outcome it began with, whatever changes after.
+- Each release is an intervention (7.2): by the loop for R1's, cause `rejected` for a rejection
+  and `reconcile` for any other; by a person for the migration's (`reconcile`), which act on the
+  owner's approval. The migration tool is not the loop, so it writes its events itself, in the
+  same note encoding (7.1); its tests parse them with `events.ts`.
+- **Lives** (owner, 2026-10-15; `hooks/v2/lives.ts`). Each claim of an issue is one life, and
+  `maxLives` (default 3, appendix A) is how many it gets. The record counts them (3.2): S0 sets
+  `lives` to one more than the issue's earlier lives since its count last started. The loop knows
+  an issue's earlier lives from its records and from R1's releases in the ledger, whose ghost
+  lives have no record, each dated by its claim: a record's count stands as it is, and each
+  release after it counts one more. The newest rejection ends the old count, so the first claim
+  after it (the owner lifted `factory:rejected` and added `ready`) is life 1 again, and its S0
+  transition's via is `unreject`, the owner's intervention. A closed record and a ledger entry go
+  7 days after they end, so a life older than both is no longer counted; the cap still catches
+  churn, which comes within hours, and the rejection's comment names the lives that were pruned.
 - After a release the issue no longer shows as active: its labels are off, and its newest decision
   event is `reclaimed` or `abandoned`, which every factory reader takes as the end of a claim
   (`docs/metrics.md:225-247`; `docs/factory-state.md`, "Stages"). No new kind is needed
   (OB:52-54).
 - The release's free-text field reads `no live step in <stage>: <what was checked>`.
-- The issue's open PR is never updated or closed. The report names it, so the owner can re-add
-  `ready` and S1 adopts the PR (3.5).
+- The issue's open PR is never updated or closed. A requeued issue's next claim adopts it (3.5),
+  and the report names it, so the owner can re-add `ready` for an issue that left.
 
 ### 6.5 Today's ghosts
 
@@ -857,8 +902,9 @@ the migration:
 | Limbo: the implementer stopped with no commit and no rule moved it (#613) | in-dev label, no run, no PR | leave (`abandoned`) |
 | Stuck on a refused respond or a dead run, told `agent-failed` (#589, #620, #591) | in-dev label; #589's PR #626 open; no activity since 02:35 | leave; the report names PR #626 |
 | An owner decision (#590) | in-dev label, no step | leave; the report says the decision was asked at 02:24 and that re-adding `ready` with an answer brings it back |
-| Merge holds on clean PRs (#467 with PR #621; #571 with PR #631) | in-dev label, open PR, no activity | #571 has merged since (`dd73ce2`), so it no longer shows as active. #467 leaves unless the owner re-adds `ready`; then S1 adopts PR #621 and review starts |
-| Dropped and re-queued (#533), labelled `ready` | `ready` | back to the queue (`reclaimed`); S1 claims it and adopts any open PR on an `issue-533` branch |
+| Merge holds on clean PRs (#467 with PR #621; #571 with PR #631) | in-dev label, open PR, no activity | #571 has merged since (`dd73ce2`), so it no longer shows as active. #467's run looks live (no-mistakes' CI monitor keeps touching it), so the owner names it in `--act` and it leaves; re-adding `ready` brings it back and S1 adopts PR #621 |
+| Dropped and re-queued (#533), labelled `ready` | queued with `ready`: no live claim | not a ghost: S1 claims it and adopts any open PR on an `issue-533` branch |
+| Queued for days with no holder and no `ready` (#286, #289, #290, #468, #469) | the view shows them queued; no device holds them | leave (`abandoned`) |
 | Abandoned with a dirty slot (#602, slot 8) | no labels; a v1 slot | the slot is freed if it is on #602's branch (its leftovers saved), else listed for the owner |
 
 Whatever the view shows when the tool runs, the same rule applies.
@@ -909,8 +955,8 @@ the note today's queries read:
 |---|---|---|
 | `claimed`, `renewed`, `claim_lost` | `callum-flow-claim` | S1 and H1, unchanged |
 | `ready` | `queue-watch.sh --once` | unchanged |
-| `reclaimed`, `closed` | `callum-flow-sweep`; R1 and the migration for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, the stage, what was checked, the open PR |
-| `abandoned` | v2 executors | drop, split, a triage drop, a release out of the factory (with the release fields) |
+| `reclaimed`, `closed` | `callum-flow-sweep`; R1 for `reclaimed` | unchanged; a release to the queue. A release adds the release fields to the note: reason `reconcile`, its `outcome` (`requeue`, `leave` or `reject`), `lives` (the released life's number; `none` for the migration's), the stage, what was checked, the open PR |
+| `abandoned` | v2 executors; the migration | drop, split, a triage drop, a release out of the factory or a rejection (with the release fields) |
 | `delegated` | entry to building, `--note "brief <url>"` | keeps the metrics' design stage (`docs/metrics.md:108-113`) |
 | `fix_requested` | entry to fixing, `--note review\|ci\|conflict\|triage` | keeps the first-pass query (`docs/metrics.md:120-143`) |
 | `merge_ready` | entry to merge-queue | keeps the merge-ready point of lead time and the waiting split |
@@ -943,6 +989,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
+| `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
 | `rescue` | recorded by hand, for what the loop cannot see: patching a trust file, killing a process, editing a file in the workspace, a hand release. `callum-flow-event intervention [--issue N] --note 'who=person cause=rescue reason=<what, spaces as %20>'` (the encoding of 7.1), which the operator playbook adds to each rescue recipe | the issue, when given |
 
 **By the loop** (`who=loop`). Each comes from a fact the loop already holds:
@@ -962,7 +1009,8 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
 | `stalled` | an effect used up its attempts and holds its record (4.5) | the issue |
 | `workspace` | the rail held agent steps because the companion is not loaded (10.9) | none |
-| `reconcile` | R1 released a ghost (6.2): once, from its done release event, the pass after it | the issue |
+| `reconcile` | R1 released a ghost (6.2) back to the queue or out of the factory: once, from its done release event, the pass after it | the issue |
+| `rejected` | R1 released a ghost at its `maxLives`-th life (6.4): once, from its done release event | the issue |
 | `reclaim` | H1 claimed a lapsed claim again (4.1) | the issue |
 | `wake` | any wake or task that is not a planned step: anything but a `tell` or the release task (O3) | the issue, when there is one |
 
@@ -971,7 +1019,7 @@ work; a fixer for review findings (T9 with changes); a fixer chosen by triage (X
 as `triage`); Q1's updates of the head, Q2's merges, the release task, heartbeats, sweeps, leases
 and frees; tells for waiting states (E6); a held step's skip line; `claim-lost` (E5), which is
 another device's work; `status` and `help`. Each owner item (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`; appendix D) has its intervention.
+`checkout`, `workspace`, `rejected`; appendix D) has its intervention.
 
 **How they are made.** One unit (U4) owns them, so no other unit emits one:
 
@@ -1571,7 +1619,14 @@ safeguards remain:
 - **Drop, and bringing an issue back.** `/factory drop N` closes the current life (E1, `abandoned`
   with note `dropped`) and removes its labels. The issue stays open on GitHub (section 15).
   To bring it back, add `ready`: S1 claims it as a new life, and the old drop does not apply to it
-  (4.1). No edit of `control.json` is needed (`failures/F10`).
+  (4.1). No edit of `control.json` is needed (`failures/F10`). A drop also keeps R1 from putting
+  a ghost of that claim back in the queue (6.4).
+- **Rejected, and bringing an issue back.** An issue R1 released at its `maxLives`-th life carries
+  `factory:rejected`, a comment and an owner tell that list why each life ended (6.4). It waits on
+  the owner but holds no capacity: it is out of the factory, with no record and no slot. To bring
+  it back, remove `factory:rejected` and add `ready`: S1 claims it as life 1, and the claim is
+  logged as the owner's intervention (`unreject`, 7.2). S1 never claims it while the label is
+  there, so adding `ready` alone does nothing.
 
 ## 12. The failures, by generic path
 
@@ -1827,9 +1882,9 @@ Totals: 32 kept, 22 changed, 22 retired.
 | G4 | controls | always | the admission filters: pause, no new work, skip, priority, only, serial, rate caps and the breakers (5.3); a held record's skip line names the filter (foundation) |
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs` | `callum-flow-sweep` |
-| R1 | reconcile | every pass | a live claim of this device with no record is released (6.2); the main-checkout tripwire (10.7) |
+| R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
 | R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1) |
-| S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
+| S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
 | S4 | unknown | an unknown result, a running step's timeout, or a GitHub wait past its bound | U1 to U4 |
@@ -1856,10 +1911,10 @@ revision.
 | Action kinds | 29 | about 15 | 23 | 23: 11 new, 12 reused (appendix B) | C3's list has no events, no CI re-run and no split. v2 logs its own state events (OB decision 3), re-runs flaky checks, and owns briefs and sub-issues so retries cannot repeat them |
 | Key families | about 62 | about 12 | 17 | 13 new, plus the foundation's 5 (appendix C) | the extra families are the CI re-run, the split children and the intervention key |
 | Guard checks | 10 failure classes | 6 | 7 with `--patch` | 7 with `--patch` (9.4) | rollout and linkage check the loop's own Closes or Refs line, which the owner's rule needs (OB:71) |
-| Notice kinds of the new layer | about 24 in all | about 5: parked, breaker, blind, untrusted PR, main red | 9 | 6: parked, breaker, stalled, waiting, checkout, workspace | main red and untrusted PR are gone (no hold; a policy park asks the question). stalled makes an exhausted effect visible; waiting gives waiting states their timeout (OB:44); checkout and workspace are the owner's backstop and the companion's rail |
+| Notice kinds of the new layer | about 24 in all | about 5: parked, breaker, blind, untrusted PR, main red | 9 | 7: parked, breaker, stalled, waiting, checkout, workspace, rejected | main red and untrusted PR are gone (no hold; a policy park asks the question). stalled makes an exhausted effect visible; waiting gives waiting states their timeout (OB:44); checkout and workspace are the owner's backstop and the companion's rail; rejected tells the owner the lives cap was reached (6.4) |
 | Sources | 10 | 6, counted differently, and fewer than 10 | about 15 | 10 (2.4) | `runs` out, `prs` in. The rest are the foundation's, and C3's 6 folds several of them together |
-| Intervention causes | 0 | - | 12 detected touch kinds | 11 person and 16 loop cause families (7.2) | the owner widened the measure to every unplanned step-in, by a person or the loop (section 15). Each cause is an exact fact the loop already holds, derived in one module; none adds a rule id, a row or a source |
-| New settings | - | - | 12 | 11 (appendix A) | |
+| Intervention causes | 0 | - | 12 detected touch kinds | 12 person and 17 loop cause families (7.2) | the owner widened the measure to every unplanned step-in, by a person or the loop (section 15). Each cause is an exact fact the loop already holds, derived in one module; none adds a rule id, a row or a source |
+| New settings | - | - | 12 | 12 (appendix A) | `maxLives`, the owner's cap on lives (6.4) |
 
 Text, by `wc -w`: about 28,500 words in all, against the draft's 21,400 and v1's whole spec at its
 build, 14,003 (`b5f40da`; `simplicity/F10`). The rules themselves, sections 3 to 11, are about
@@ -1889,11 +1944,46 @@ and the owner's two structural decisions. They are settled.
   releases the owner approves run while both live loops stay in observe mode (6.3).
 - **Why:** the ghosts are a big gap now (OB:48), and the tool needs nothing from waves 2 and 3.
 
-### Ghosts without `ready` leave the factory (owner)
+### The migration's ghosts leave the factory (owner)
 
-- **Decision:** they are released out of the factory, and the report names each open PR, so
-  re-adding `ready` brings one back with its PR adopted (3.5, 6.3).
-- **Why:** it is the owner's rule (OB:51), and adoption keeps the work.
+- **Decision:** every issue the one-shot migration releases leaves the factory, whatever its
+  labels, and the report names each open PR, so re-adding `ready` brings one back with its PR
+  adopted (3.5, 6.3). Nothing is requeued (owner, 2026-10-15, superseding "still labelled
+  `ready` goes back to the queue").
+- **Why:** the owner's first rule never requeued anything (claiming removes `ready`), and for
+  what v1 left behind the owner chooses what comes back.
+
+### A release puts the issue back in the queue (owner, 2026-10-15)
+
+- **Decision:** R1's release re-adds `ready` (`reclaimed`), unless the owner dropped the issue or
+  the issue is closed, when it leaves; and unless the lives cap is reached (below). The seven
+  state labels go and `ready` comes back in one call (`label` op `requeue`), the one place the
+  loop adds `ready` but a split's ready child (6.4, appendix B).
+- **Alternatives:** "still labelled `ready` goes back to the queue, otherwise it leaves" (OB:51).
+- **Why:** that rule never fired, because claiming removes `ready`; a ghost of v2's own is a loop
+  bug, not the owner's judgement that the issue is unwanted.
+
+### Three lives, then `factory:rejected` (owner, 2026-10-15)
+
+- **Decision:** each claim of an issue is one life, and the record counts lives (3.2). When an
+  issue's `maxLives`-th life (default 3) ends in a release, the release does not re-add `ready`:
+  the issue gets `factory:rejected`, its factory labels go, and the loop posts one comment and
+  one owner tell listing why each life ended, and logs it as an intervention (`rejected`). The
+  owner removing `factory:rejected` and adding `ready` brings it back as life 1, logged as a
+  person intervention (`unreject`). `factory:rejected` is a label, not a state: the issue is out
+  of the factory, and S1 never claims it (3.4, 6.4).
+- **Alternatives:** no cap (a bug that loses records would claim and release one issue forever);
+  park the issue (a parked record holds a claim and a slot on resume, and a ghost has no record).
+- **Why:** requeueing by default needs a bound, and the owner decides after three tries.
+
+### The migration lists ghosts no device holds (owner, 2026-10-15)
+
+- **Decision:** `factory-reconcile` also lists the issues the factory-state view shows as live,
+  queued among them, with no holder device and no `ready` label, and proposes that they leave
+  (6.3). A live issue named in `--act` is released all the same.
+- **Why:** #286, #289, #290, #468 and #469 showed as queued for days with no holder, and no
+  device's R1 or sweep would ever end them; #467's run looked live only because a monitor touched
+  it, so the owner names it.
 
 ### A red main does not hold the merge queue (owner)
 
@@ -2175,9 +2265,11 @@ and the owner's two structural decisions. They are settled.
 
 ### Releases reuse `reclaimed` and `abandoned`
 
-- **Decision:** 6.4.
-- **Alternatives:** a new `released` kind.
-- **Why:** every reader already ends a claim on them (OB:52-54).
+- **Decision:** 6.4: `reclaimed` for a requeue, `abandoned` for a release that leaves or rejects,
+  each with the release fields (`outcome` and `lives` among them, 7.1).
+- **Alternatives:** a new `released` kind; a new `rejected` kind.
+- **Why:** every reader already ends a claim on them (OB:52-54), and the note's `outcome` tells a
+  rejection apart for the metrics.
 
 ### Three new event states; everything else reused
 
@@ -2295,8 +2387,8 @@ own test.
    a skip line naming why it waits: the admission filter that held it, capacity, its queue
    position, the owner, or a stalled effect. Generated with each admission filter on. No record is
    silent.
-4. **One label.** The label of every reachable record is exactly one `factory:*` label, or none
-   when closed.
+4. **One label.** The label of every reachable record is exactly one `factory:*` state label, or
+   none when closed. `factory:rejected` is set only by R1's rejection.
 5. **Capacity.** After admission, records in slot states number at most K; parked records never
    count; a claim never takes queued plus in-flight records above K.
 6. **One writer.** At most one step per record; never an agent step and a queue action on one
@@ -2325,15 +2417,23 @@ own test.
 16. **The foundation's properties** (v1 SPEC 5.9): determinism, idempotence (planning again with
     the planned actions running adds nothing but the title), purity, tier safety, control safety,
     one wake and the claim limits.
-17. **Reconcile.** A done release begins nothing again: the next pass plans only its `reconcile`
-    intervention (7.2), once; R1 never releases an issue with a record, a claim in flight, or
-    another device's claim; observe mode executes nothing.
+17. **Reconcile.** A done release begins nothing again: the next pass plans only its intervention
+    (`reconcile`, or `rejected` for a rejection, 7.2), once; R1 never releases an issue with a
+    record, a claim in flight, or another device's claim; observe mode executes nothing. Each
+    release ends by its outcome: back in the queue (`ready` on, `reclaimed`) by default and only
+    once the issue reads as open; out of the factory (`abandoned`) when the owner dropped it since
+    its claim; rejected (`factory:rejected` on, its comment and owner tell done, then `abandoned`)
+    at its `maxLives`-th life. A release keeps the outcome it began with.
 18. **Events.** Every transition's seq logs exactly one `transition` event before the next
     transition, and rebuilding from any history of them gives back the records. Every note
     `events.ts` builds parses back to the same fields and stays within `LOOP_NOTE_MAX`.
 19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines outside the
     allowlist, no listed file is over its cap, and no listed file is at or under 600 (2.5;
     `npm run lint`).
+20. **Lives.** S0's record counts one more than the issue's earlier lives since its count last
+    started (a record's count, then one per R1 release after it), and the first claim after a
+    rejection is life 1, logged as `unreject`. S1 never claims an issue that carries
+    `factory:rejected`. No release re-adds `ready` at or past `maxLives`.
 
 ### 17.2 Replay of 2026-10-14/15
 
@@ -2439,6 +2539,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `ciStartMs` | `10m` | 4.4 |
 | `ciRunMs` | `30m` | 4.4 |
 | `maxTriages` | 2 | 5.1 |
+| `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `reviewer` | `adjudicator` | 8.2 |
 | `reviewerModel` | `opus` | 8.3 |
@@ -2458,8 +2559,8 @@ delete wave.
 | Kind | Class | Executor and argv | Attempts |
 |---|---|---|---|
 | `transition` | free | re-checks its trigger, stores the record, pings | 3 |
-| `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force`; op `clear` (3.4) | 3 |
-| `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -` | 3 |
+| `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force` for the eight; op `clear` (3.4); R1's op `requeue`: `--add-label <ready> --remove-label <the seven>`, and op `reject`: `--add-label factory:rejected --remove-label <the seven>` (6.4) | 3 |
+| `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -`; also R1's rejection comment (6.4) | 3 |
 | `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention` | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
@@ -2490,7 +2591,7 @@ as one argv.
 | queue | `i571/lss1x2k/queue/update/9e01b77`, `.../queue/merge/4c2d8aa` |
 | slot | `i571/lss1x2k/lease/1`, `slot/<lease id>/free` |
 | follow-up | `i571/lss1x2k/follow/rollout` |
-| reconcile | `i571/reconcile/ss1x2k/label`, `.../event` |
+| reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
 | heartbeat, sweep, tell, restart, release task | as v1 |
 
@@ -2507,6 +2608,7 @@ as one argv.
 | `factory:fixing` | `d93f0b` | Factory loop: a fixer is at work |
 | `factory:merge-queue` | `5319e7` | Factory loop: approved and green, waiting to merge |
 | `factory:parked` | `b60205` | Factory loop: waits on the owner; remove this label to resume |
+| `factory:rejected` | `6a737d` | Factory loop: its last life ended without a merge; remove this label and add ready to try again. Not a state (3.4, 6.4) |
 
 Notices (TELL kinds), owner items first:
 
@@ -2517,11 +2619,12 @@ Notices (TELL kinds), owner items first:
 | `stalled` | yes | an effect used up its attempts (4.5) |
 | `checkout` | yes | the main-checkout tripwire (10.7) |
 | `workspace` | yes | the companion plugin is not loaded (10.9) |
+| `rejected` | yes | R1 rejected an issue at its `maxLives`-th life, with why each life ended (6.4) |
 | `waiting` | no | E6: queued 6 h, or behind the queue's head 2 h |
 | `task-timeout` | no | the release task timed out |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `pass-error` | no | foundation, unchanged |
 
-6 new kinds, 5 of them owner items, plus the foundation's.
+7 new kinds, 6 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 

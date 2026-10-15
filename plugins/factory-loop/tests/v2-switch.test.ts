@@ -52,6 +52,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     why: null,
     notes: [],
     prClosedAt: null,
+    lives: 1,
     ...over,
   }
 }
@@ -65,6 +66,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
       ciStartMs: 10 * MIN,
       ciRunMs: 30 * MIN,
       maxTriages: 2,
+      maxLives: 3,
       triageModel: 'opus',
       reviewer: 'adjudicator',
       reviewerModel: 'opus',
@@ -86,6 +88,7 @@ describe('the settings (v2 SPEC appendix A)', () => {
         stateTimeout: { build: '2h', triage: '20m' },
         ciStart: '5m',
         maxTriages: 1,
+        maxLives: 2,
         reviewerModel: 'sonnet',
         gateCommands: ['npm run lint', 'npm test'],
         gateTimeout: '15m',
@@ -99,20 +102,22 @@ describe('the settings (v2 SPEC appendix A)', () => {
       stateTimeoutMs: { ...DEFAULT_CONFIG.stateTimeoutMs, build: 2 * HOUR, triage: 20 * MIN, design: HOUR },
       ciStartMs: 5 * MIN,
       maxTriages: 1,
+      maxLives: 2,
       reviewerModel: 'sonnet',
       gateCommands: ['npm run lint', 'npm test'],
       gateTimeoutMs: 15 * MIN,
     })
-    const bad = loadConfig({ planner: 'v3', shadow: 'v1', maxTriages: 1.5, gateCommands: ['npm test', ''], stateTimeout: { review: 'soon', merge: '1h' } })
+    const bad = loadConfig({ planner: 'v3', shadow: 'v1', maxTriages: 1.5, maxLives: 0, gateCommands: ['npm test', ''], stateTimeout: { review: 'soon', merge: '1h' } })
     expect(bad.problems).toEqual([
       'planner: "v3" is not v1 or v2',
       'shadow: "v1" is not off or v2',
       'maxTriages: 1.5 is not a whole number',
+      'maxLives: 0 is not a whole number of at least 1',
       'gateCommands: ["npm test",""] is not a list of commands',
       'stateTimeout.review: "soon" is not a duration (like 60s, 5m, 2h)',
       'stateTimeout.merge: unknown',
     ])
-    expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
+    expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
   test('under planner v2, K is 3 unless a settings file sets it (v2 SPEC section 15); v1 keeps 5', () => {

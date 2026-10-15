@@ -106,6 +106,7 @@ export const DEFAULT_CONFIG: Config = {
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,
   maxTriages: 2,
+  maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
   reviewerModel: 'opus',
@@ -264,6 +265,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'maxTriages') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number')
+      } else if (key === 'maxLives') {
+        if (typeof value === 'number' && Number.isInteger(value) && value >= 1) out[key] = value
+        else bad(raw, value, 'a whole number of at least 1')
       } else if (key === 'answerChannel') {
         const channel = ANSWER_CHANNELS.find(c => c === value)
         if (channel !== undefined) out[key] = channel

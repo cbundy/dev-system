@@ -83,6 +83,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     why: state === 'closed' ? g.pick(CLOSED_WHYS) : null,
     notes: Array.from({ length: g.int(small ? 3 : 8) }, () => text(g, free)),
     prClosedAt: maybe(g, '2026-10-15T09:30:00Z'),
+    lives: 1 + g.int(3),
   }
 }
 
@@ -148,11 +149,12 @@ describe('the note format (v2 SPEC 7.1)', () => {
         why: null,
         notes: ['check ci', 'a,b'],
         prClosedAt: null,
+        lives: 1,
       },
     }
     expect(eventNote(e)).toBe(
       'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
-        'approvedPatch=none prClosedAt=none via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
+        'approvedPatch=none prClosedAt=none lives=1 via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
     )
   })
 })
@@ -219,14 +221,17 @@ describe('every event events.ts builds parses back to the same fields and stays 
         life: maybe(g, 'ss1x2k'),
         pr: maybe(g, 1 + g.int(99)),
       })
+      const outcome = g.pick(['requeue', 'leave', 'reject'] as const)
       const release: ReleaseEvent = {
-        state: g.pick(['reclaimed', 'abandoned'] as const),
+        state: outcome === 'requeue' ? 'reclaimed' : 'abandoned',
         issue: 1 + g.int(999),
         branch: maybe(g, 'issue-7'),
         pr: maybe(g, 12),
         stage: g.pick(['implementing', 'in pipeline', 'ready to merge']),
         checked: text(g, 80),
         reason: 'reconcile',
+        outcome,
+        lives: maybe(g, 1 + g.int(3)),
       }
       const reused: ReusedEvent = { state: g.pick(REUSED_STATES), issue: 1 + g.int(99), branch: maybe(g, 'issue-3'), pr: maybe(g, 4), head: maybe(g, 'abc'), note: text(g, 80) }
       for (const e of [reviewed, iv, release, reused] as V2Event[]) {
@@ -272,13 +277,24 @@ describe('columns and notes per state', () => {
     expect(noteToken(note('triage: the issue is a duplicate'), 'reason')).toBe('triage')
     expect(noteToken(note('reason=dropped'), 'reason')).toBe('dropped')
     expect(noteToken(note('something else'), 'reason')).toBe('other')
-    expect(noteToken(eventNote({ state: 'abandoned', issue: 5, branch: null, pr: 7, stage: 'implementing', checked: 'no run, no PR', reason: 'reconcile' }), 'reason')).toBe('reconcile')
+    expect(noteToken(eventNote({ state: 'abandoned', issue: 5, branch: null, pr: 7, stage: 'implementing', checked: 'no run, no PR', reason: 'reconcile', outcome: 'leave', lives: null }), 'reason')).toBe('reconcile')
     for (const r of ABANDON_REASONS) expect(abandonReason(`reason=${r}`)).toBe(r)
   })
 
-  test('a release says reconcile, its stage, its PR and what was checked', () => {
-    const e: ReleaseEvent = { state: 'reclaimed', issue: 7, branch: 'issue-7', pr: 31, stage: 'in pipeline', checked: 'no run updated in 30 min', reason: 'reconcile' }
-    expect(eventNote(e)).toBe('reason=reconcile stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
+  test('a release says reconcile, how it ended, the life it released, its stage, its PR and what was checked', () => {
+    const e: ReleaseEvent = { state: 'reclaimed', issue: 7, branch: 'issue-7', pr: 31, stage: 'in pipeline', checked: 'no run updated in 30 min', reason: 'reconcile', outcome: 'requeue', lives: 2 }
+    expect(eventNote(e)).toBe('reason=reconcile outcome=requeue lives=2 stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
+    const migration: ReleaseEvent = { ...e, state: 'abandoned', outcome: 'leave', lives: null }
+    expect(eventNote(migration)).toBe('reason=reconcile outcome=leave lives=none stage=in%20pipeline pr=31 checked=no%20run%20updated%20in%2030%20min')
+  })
+
+  test('a note from before the outcome and lives fields reads: a release by its state, with no count; a transition as a first life', () => {
+    const old = (state: string) => ({ state, issue: 7, branch: null, pr: null, head: null, note: 'reason=reconcile stage=implementing pr=none checked=x' })
+    expect(parseEvent(old('reclaimed'))).toMatchObject({ outcome: 'requeue', lives: null })
+    expect(parseEvent(old('abandoned'))).toMatchObject({ outcome: 'leave', lives: null })
+    const row = rowOf(eventArgv(transition(rng(6), true)))
+    expect(parseTransition({ ...row, note: (row.note ?? '').replace(/ lives=\d+/, '') })?.record.lives).toBe(1)
+    expect(parseTransition({ ...row, note: (row.note ?? '').replace(/ lives=\d+/, ' lives=0') })).toBeNull()
   })
 })
 

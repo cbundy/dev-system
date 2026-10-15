@@ -19,8 +19,14 @@ export function labelClearArgv(repo: string, issue: number, remove: readonly str
   return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--remove-label', remove.join(',')]
 }
 
-// One of the seven, made or updated (op ensure).
-export function labelCreateArgv(repo: string, label: { name: FactoryLabel; color: string; description: string }): string[] {
+// R1's release in one call (6.4): `ready` on (requeue) or factory:rejected on (reject), and the
+// seven state labels off.
+export function labelReleaseArgv(repo: string, issue: number, add: string, remove: readonly FactoryLabel[]): string[] {
+  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add, '--remove-label', remove.join(',')]
+}
+
+// One of the eight, made or updated (op ensure).
+export function labelCreateArgv(repo: string, label: { name: string; color: string; description: string }): string[] {
   return ['gh', 'label', 'create', label.name, '--repo', repo, '--color', label.color, '--description', label.description, '--force']
 }
 

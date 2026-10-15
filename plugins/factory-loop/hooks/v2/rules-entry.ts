@@ -18,7 +18,7 @@ import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
 import { FIX_REASONS, TABLE } from './table'
-import { FACTORY_LABELS, labelOf } from './types'
+import { ALL_FACTORY_LABELS, labelOf } from './types'
 import type { EmitSpec, IssueRecord, Lease, V2Ctx } from './types'
 
 // One entry action: soft ones are best effort (a stop, a kill), and a tell never holds the step.
@@ -236,5 +236,5 @@ export function ensureActions(ctx: V2Ctx): Action[] {
     const detail = e.outcome?.kind === 'cli' ? (e.outcome.detail ?? '') : (e.summary ?? '')
     if (e.kind === 'label' && e.status === 'failed' && /not found/i.test(detail)) keys.push(`label/ensure/${e.key}/a${e.attempts}`)
   }
-  return keys.map(key => ({ kind: 'label', op: 'ensure', label: null, key, class: 'free', rule: RULE, reason: `the ${Object.keys(FACTORY_LABELS).length} factory labels exist`, issue: null }))
+  return keys.map(key => ({ kind: 'label', op: 'ensure', label: null, key, class: 'free', rule: RULE, reason: `the ${ALL_FACTORY_LABELS.length} factory labels exist`, issue: null }))
 }

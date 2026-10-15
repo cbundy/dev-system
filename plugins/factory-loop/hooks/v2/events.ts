@@ -66,7 +66,13 @@ export type InterventionEvent = {
   fact: string
 }
 
-// A reconcile release (6.4): reclaimed when the issue is labelled ready, abandoned when it leaves.
+// How a release ends (6.4): back in the queue (requeue), out of the factory (leave), or rejected at
+// the issue's last life (reject).
+export const RELEASE_OUTCOMES = ['requeue', 'leave', 'reject'] as const
+
+// A reconcile release (6.4): reclaimed when it puts the issue back in the queue, abandoned when the
+// issue leaves the factory or is rejected. lives: the released life's number since the issue's
+// count last started, null for the migration's.
 export type ReleaseEvent = {
   state: 'reclaimed' | 'abandoned'
   issue: number
@@ -75,6 +81,8 @@ export type ReleaseEvent = {
   stage: string
   checked: string
   reason: 'reconcile'
+  outcome: (typeof RELEASE_OUTCOMES)[number]
+  lives: number | null
 }
 
 // The reused states, each with the meaning it already has (7.1); the note is today's.
@@ -269,6 +277,7 @@ function transitionNote(e: TransitionEvent): string {
     `why=${str(r.why)}`,
     `approvedPatch=${str(r.approvedPatch)}`,
     `prClosedAt=${str(r.prClosedAt)}`,
+    `lives=${r.lives}`,
   ]
   // the via code, the brief's URL, the question and the notes are clipped, in reverse order, only
   // when the note would not fit otherwise
@@ -305,7 +314,7 @@ function interventionNote(e: InterventionEvent): string {
 }
 
 function releaseNote(e: ReleaseEvent): string {
-  return fit([`reason=${e.reason}`, `stage=${str(e.stage)}`, `pr=${num(e.pr)}`], [{ key: 'checked', value: e.checked }])
+  return fit([`reason=${e.reason}`, `outcome=${e.outcome}`, `lives=${num(e.lives)}`, `stage=${str(e.stage)}`, `pr=${num(e.pr)}`], [{ key: 'checked', value: e.checked }])
 }
 
 // A drop, a split or a triage drop; `reconcile` is a release's alone (releaseNote).
@@ -375,6 +384,8 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   const approvedPatch = unstr(t.get('approvedPatch'))
   const prClosedAt = unstr(t.get('prClosedAt'))
   const notes = unlist(t.get('notes'))
+  // a note from before the field carries no count: its life is read as a first one
+  const lives = t.get('lives') === undefined ? 1 : unnum(t.get('lives'))
   if (typeof life !== 'string' || life === '' || typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null
   if (!isState(to) || (fromRaw !== null && !isState(fromRaw)) || (resumeTo !== null && !isState(resumeTo))) return null
   if (step !== null && !STEP_KINDS.some(s => s === step)) return null
@@ -382,6 +393,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   if (ints.some(n => typeof n !== 'number') || (cut !== 'yes' && cut !== 'no')) return null
   if (typeof rowId !== 'string' || via === undefined || brief === undefined || question === undefined) return null
   if (approvedPatch === undefined || prClosedAt === undefined || notes === undefined) return null
+  if (typeof lives !== 'number' || !Number.isInteger(lives) || lives < 1) return null
   const record: IssueRecord = {
     issue: row.issue,
     life,
@@ -405,6 +417,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     why: why as IssueRecord['why'],
     notes,
     prClosedAt,
+    lives,
   }
   // a via clipped away (a note that could not hold it) reads back empty
   return { state: 'transition', record, row: rowId, from: fromRaw as IssueState | null, via: via ?? '' }
@@ -464,7 +477,10 @@ function parseRelease(row: EventRow): ReleaseEvent | null {
   const checked = unstr(t.get('checked'))
   if (row.state !== 'reclaimed' && row.state !== 'abandoned') return null
   if (t.get('reason') !== 'reconcile' || row.issue === null || typeof stage !== 'string' || pr === undefined || typeof checked !== 'string') return null
-  return { state: row.state, issue: row.issue, branch: row.branch, pr, stage, checked, reason: 'reconcile' }
+  // a release logged before these fields: its state says its outcome, and it carries no count
+  const outcome = RELEASE_OUTCOMES.find(o => o === t.get('outcome')) ?? (row.state === 'reclaimed' ? 'requeue' : 'leave')
+  const lives = unnum(t.get('lives')) ?? null
+  return { state: row.state, issue: row.issue, branch: row.branch, pr, stage, checked, reason: 'reconcile', outcome, lives }
 }
 
 // parseEvent: the v2 event a logged row is, or null when it is not one (another state, a note

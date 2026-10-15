@@ -357,6 +357,9 @@ export type Config = {
   ciRunMs: Ms
   // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
   maxTriages: number
+  // the lives an issue gets: a release at the last one rejects it instead of putting it back in the
+  // queue (v2 SPEC 6.4)
+  maxLives: number
   triageModel: string
   // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
   reviewer: string

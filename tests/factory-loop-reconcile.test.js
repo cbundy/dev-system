@@ -6,7 +6,10 @@
 // record every call, and the pool's slots are real git repositories, whose HEAD and tree times the
 // tool reads. Observe changes nothing; --act re-checks each named issue and does what its proposal
 // now says, in the release's order (labels, the slot, the closing event, the intervention), and
-// refuses to act until every event it writes is one the factory's readers count. The tool runs
+// refuses to act until every event it writes is one the factory's readers count. Every release
+// leaves the factory, whatever the issue's labels: the migration requeues nothing (SPEC 6.3). It
+// also lists the issues that show as active with no holder and no ready label, and releases a
+// live issue only when it is named. The tool runs
 // through a runner that gives it an events.ts with U4's note tokens and parser (TEST_EVENTS below),
 // and a stub callum-flow-event that writes its lines as the real one does. Plugin tests cannot run
 // a command, so this lives here.
@@ -99,6 +102,11 @@ function fixtures() {
           live(17, "implementing", AT - 4 * HOUR),
           live(18, "implementing", AT - 4 * HOUR),
           { ...live(20, "queued", AT - HOUR, { detail: "claim lapsed at 2026-10-15T11:00:00.000Z" }) },
+          // no holder: #40 queued for days with no ready label (a ghost), #41 in the queue (ready),
+          // #42 in a run no claim holds that moved five minutes ago (live)
+          live(40, "queued", AT - 72 * HOUR, { holder: null }),
+          live(41, "queued", AT - 2 * HOUR, { holder: null }),
+          live(42, "in pipeline", AT - HOUR, { holder: null, run: "R42", source: "mirror" }),
         ],
         recent: [{ ...live(21, "merged", AT - 5 * HOUR), holder: DEVICE }],
       },
@@ -113,6 +121,7 @@ function fixtures() {
   const runs = [
     { id: "R11", branch: "feat/issue-11-y", status: "parked", updated_at: iso(AT - 5 * HOUR) },
     { id: "R12", branch: "feat/issue-12-v", status: "running", updated_at: iso(AT - 5 * MIN) },
+    { id: "R42", branch: "feat/issue-42-n", status: "running", updated_at: iso(AT - 5 * MIN) },
   ];
   return {
     slots,
@@ -145,6 +154,9 @@ function fixtures() {
         { match: "^--json 16$", stdout: ghIssue(16, ["factory:designing"]) },
         { match: "^--json 17$", stdout: ghIssue(17, ["In development"], "closed") },
         { match: "^--json 18$", code: 3 },
+        { match: "^--json 40$", stdout: ghIssue(40, ["enhancement"]) },
+        { match: "^--json 41$", stdout: ghIssue(41, ["ready"]) },
+        { match: "^--json 42$", stdout: ghIssue(42, ["bug"]) },
       ],
       treehouse: [
         { match: "^status --json$", stdout: slots },
@@ -192,7 +204,7 @@ const TEST_EVENTS = `"use strict";
 const enc = (v) => encodeURIComponent(String(v));
 const dec = (v) => decodeURIComponent(v);
 function eventArgv(e) {
-  const fields = e.state === "intervention" ? { who: e.who, cause: e.cause, fact: e.fact, reason: e.reason } : { reason: e.reason, stage: e.stage, pr: e.pr ?? "none", checked: e.checked };
+  const fields = e.state === "intervention" ? { who: e.who, cause: e.cause, fact: e.fact, reason: e.reason } : { reason: e.reason, outcome: e.outcome, lives: e.lives ?? "none", stage: e.stage, pr: e.pr ?? "none", checked: e.checked };
   const argv = ["callum-flow-event", e.state];
   if (e.issue !== null && e.issue !== undefined) argv.push("--issue", String(e.issue));
   if (e.branch) argv.push("--branch", e.branch);
@@ -203,7 +215,7 @@ function eventArgv(e) {
 function parseEvent(row) {
   const t = Object.fromEntries((row.note || "").split(" ").map((x) => [x.slice(0, x.indexOf("=")), dec(x.slice(x.indexOf("=") + 1))]));
   if (row.state === "intervention") return { state: row.state, who: t.who, cause: t.cause, fact: t.fact, reason: t.reason, issue: row.issue, life: null, pr: row.pr };
-  return { state: row.state, issue: row.issue, branch: row.branch, pr: t.pr === "none" ? null : Number(t.pr), stage: t.stage, checked: t.checked, reason: t.reason };
+  return { state: row.state, issue: row.issue, branch: row.branch, pr: t.pr === "none" ? null : Number(t.pr), stage: t.stage, checked: t.checked, reason: t.reason, outcome: t.outcome, lives: t.lives === "none" ? null : Number(t.lives) };
 }
 module.exports = { eventArgv, parseEvent };
 `;
@@ -278,21 +290,28 @@ before(() => {
 });
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-test("observe lists this device's live claims with no v2 record, the pool's other slots and the leftover labels, each with its proposal, and changes nothing", () => {
+test("observe lists this device's live claims with no v2 record, the live issues with no holder, the pool's other slots and the leftover labels, each with its proposal, and changes nothing", () => {
   const w = world(fx.answers);
   const r = w.run([]);
   assert.equal(r.status, 0, r.stderr);
   const out = r.stdout;
   assert.match(out, /^# factory-reconcile: acme\/widgets for dev-loop, at 2026-10-15T12:00:00.000Z$/m);
-  assert.match(out, /--act 10 11 17 20 21 30 31`/);
-  // no live step within T: released, by its labels
-  assert.match(line(out, 10), /designing for 3h00m with no v2 record; checked within 45m: no run of its branch; no open PR; slot 1 on feat\/issue-10-x: HEAD moved 10h00m ago, tree changed 9h00m ago\. Proposal: leave the factory \(abandoned: not labelled ready\)\. Labels: bug, In development, factory:designing\. Open PR: none\. Slot: 1\.$/);
-  assert.match(line(out, 11), /checked within 1h30m: run R11 updated 5h00m ago; PR #112 by an untrusted author: not counted; PR #111: head pushed 4h00m ago, a check 3h57m ago, a review 5h00m ago; no slot on its branch\. Proposal: release to queue \(reclaimed: still labelled ready\)\. .*Open PR: #111\./);
+  assert.match(out, /--act 10 11 17 20 21 30 31 40`/);
+  assert.match(out, /^Live, released only when named: #12 #13 #14 #42\.$/m);
+  assert.match(out, /^Nothing is requeued: every release leaves the factory\. Re-add `ready` to bring back an issue still wanted; the loop adopts its open PR\.$/m);
+  // no live step within T: released out of the factory, whatever its labels
+  assert.match(line(out, 10), /designing for 3h00m with no v2 record; checked within 45m: no run of its branch; no open PR; slot 1 on feat\/issue-10-x: HEAD moved 10h00m ago, tree changed 9h00m ago\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: bug, In development, factory:designing\. Open PR: none\. Slot: 1\.$/);
+  assert.match(line(out, 11), /checked within 1h30m: run R11 updated 5h00m ago; PR #112 by an untrusted author: not counted; PR #111: head pushed 4h00m ago, a check 3h57m ago, a review 5h00m ago; no slot on its branch\. Proposal: leave the factory \(abandoned: nothing is requeued\)\. Labels: ready, In development\. Open PR: #111\./);
   assert.ok(!w.calls().some((c) => c.name === "gh" && (c.argv.includes("112") || c.argv.some((a) => a.endsWith("/sha112")))), "nothing of an untrusted PR is read");
   // live evidence within T: a run update, a review, a slot's tree
-  assert.match(line(out, 12), /run R12 updated 5m ago.*Proposal: live, no record: check again later\./);
-  assert.match(line(out, 13), /PR #113: head pushed 6h00m ago, a check never, a review 10m ago.*Proposal: live, no record: check again later\./);
-  assert.match(line(out, 14), /slot 4 on feat\/issue-14-w: HEAD moved 5h00m ago, tree changed 10m ago\. Proposal: live, no record: check again later\. .*Slot: 4\./);
+  assert.match(line(out, 12), /run R12 updated 5m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
+  assert.match(line(out, 13), /PR #113: head pushed 6h00m ago, a check never, a review 10m ago.*Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\./);
+  assert.match(line(out, 14), /slot 4 on feat\/issue-14-w: HEAD moved 5h00m ago, tree changed 10m ago\. Proposal: live, no v2 record: check again later \(named in --act, it leaves the factory\)\. .*Slot: 4\./);
+  // with no holder: a ghost that leaves, one in the queue left out, one live
+  assert.match(out, /^## Live in the factory with no holder and no ready label$/m);
+  assert.match(line(out, 40), /^- #40: queued for 3d with no holder; checked within 2h00m: no run of its branch; no open PR; no slot on its branch\. Proposal: leave the factory \(abandoned: no holder and nothing is requeued\)\. Labels: enhancement\. Open PR: none\. Slot: none\.$/);
+  assert.equal(line(out, 41), "", "an issue in the queue (ready) is no ghost");
+  assert.match(line(out, 42), /in pipeline for 1h00m with no holder; .*run R42 updated 5m ago.*Proposal: live, no holder: check again later \(named in --act, it leaves the factory\)\./);
   assert.match(out, /^- With a v2 record, left to the loop: #16\.$/m);
   assert.match(line(out, 17), /Proposal: closed on GitHub \(the sweep logs it\): remove the label\./);
   assert.match(line(out, 18), /Proposal: not read \(an untrusted author\): check again later\./);
@@ -316,7 +335,7 @@ test("observe lists this device's live claims with no v2 record, the pool's othe
   for (const c of w.calls().filter((x) => x.name === "callum-flow-issue-read")) assert.equal(c.env.CALLUM_FLOW_REPO, REPO);
 });
 
-test("--act re-checks each named issue and releases it in order: labels off, its slot freed (processes killed, leftovers saved, returned on its lease), its closing event, then the intervention", async () => {
+test("--act re-checks each named issue and releases it in order: labels off, its slot freed (processes killed, leftovers saved, returned on its lease), its closing event, then the intervention; every release leaves, and a live issue named is released too", async () => {
   const w = world(fx.answers);
   const slot1 = fx.slots[0].path;
   const sleeper = spawn("sleep", ["60"], { cwd: slot1, stdio: "ignore" });
@@ -352,12 +371,13 @@ test("--act re-checks each named issue and releases it in order: labels off, its
   const patch = fs.readFileSync(path.join(w.loopDir, "leftovers", leftovers[0]), "utf8");
   assert.match(patch, /\+two/);
   assert.match(patch, /new file mode 100644[\s\S]*\+left behind/);
-  // #11: labelled ready, so back to the queue, with its branch and PR
+  // #11: labelled ready, and it leaves all the same (nothing is requeued), with its branch and PR
   const eleven = calls.filter((c) => c.name === "callum-flow-event" && names(c, 11));
-  assert.deepEqual(eleven.map((c) => c.argv[0]), ["reclaimed", "intervention"]);
+  assert.deepEqual(eleven.map((c) => c.argv[0]), ["abandoned", "intervention"]);
   assert.ok(eleven[0].argv.join(" ").includes("--branch feat/issue-11-y --pr 111"), eleven[0].argv.join(" "));
-  // #12 is live now: nothing; #30: its slot alone, with no event
-  assert.match(r.stdout, /^- #12: nothing to do now \(live, no record: check again later\)\.$/m);
+  assert.ok(!w.calls().some((c) => c.name === "gh" && c.argv.includes("--add-label")), "no label is ever added");
+  // #12 is live, but named: it leaves; #30: its slot alone, with no event
+  assert.match(r.stdout, /^- #12: removed In development; logged abandoned; logged the intervention\.$/m);
   assert.deepEqual(calls.filter((c) => c.argv.includes(fx.slots[2].path)).map((c) => c.argv.slice(0, 4)), [["return", fx.slots[2].path, "--if-lease-id", "L3"]]);
   assert.match(r.stdout, /^- #30: slot 3 returned, its HEAD was [0-9a-f]{8}\.$/m);
   assert.match(r.stdout, /^- #10: removed In development, factory:designing; slot 1 returned, 1 process\(es\) killed, leftovers in .*\.patch, its HEAD was [0-9a-f]{8}; logged abandoned; logged the intervention\.$/m);
@@ -367,11 +387,14 @@ test("--act re-checks each named issue and releases it in order: labels off, its
     [
       ["abandoned", 10, "factory-reconcile", "feat/issue-10-x", null],
       ["intervention", 10, "factory-reconcile", null, null],
-      ["reclaimed", 11, "factory-reconcile", "feat/issue-11-y", 111],
+      ["abandoned", 11, "factory-reconcile", "feat/issue-11-y", 111],
       ["intervention", 11, "factory-reconcile", null, 111],
+      ["abandoned", 12, "factory-reconcile", "feat/issue-12-v", null],
+      ["intervention", 12, "factory-reconcile", null, null],
     ],
   );
-  assert.match(w.logged()[0].note, /^reason=reconcile stage=designing pr=none checked=nothing%20within%2045m/);
+  assert.match(w.logged()[0].note, /^reason=reconcile outcome=leave lives=none stage=designing pr=none checked=nothing%20within%2045m/);
+  assert.match(w.logged()[4].note, /checked=live%20within%2030m%2C%20released%20by%20name/);
   assert.match(w.logged()[1].note, /^who=person cause=reconcile fact=i10%2Freconcile%2F[0-9a-z]+%2Fevent reason=abandoned/);
   assert.ok(!fs.existsSync(path.join(w.loopDir, "unlogged-events.jsonl")));
   // the open PRs are never touched
@@ -385,12 +408,13 @@ test("--act all acts on every proposal but a live claim, and leaves a busy slot 
   const r = w.run(["--act", "all"]);
   assert.equal(r.status, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /^## Act on all$/m);
-  for (const n of [10, 11, 17, 20, 21, 30]) assert.match(r.stdout, new RegExp(`^- #${n}: `, "m"));
+  for (const n of [10, 11, 17, 20, 21, 30, 40]) assert.match(r.stdout, new RegExp(`^- #${n}: `, "m"));
+  assert.match(r.stdout, /^- #40: logged abandoned; logged the intervention\.$/m);
   assert.match(r.stdout, /^- #31: slot 8 left alone: it is busy or changed within 2h00m \(name #31 to free it\)\.$/m);
   const writes17 = writes(w.calls()).filter((c) => names(c, 17));
   assert.deepEqual(writes17.map((c) => c.argv.slice(0, 2)), [["issue", "edit"]], "a closed issue's labels go; the sweep logs its close");
   assert.ok(!w.calls().some((c) => c.argv.includes(fx.slots[7].path) && c.argv[0] === "return"));
-  for (const n of [12, 13, 14, 18]) assert.ok(!writes(w.calls()).some((c) => names(c, n)), `#${n} is left alone`);
+  for (const n of [12, 13, 14, 18, 41, 42]) assert.ok(!writes(w.calls()).some((c) => names(c, n)), `#${n} is left alone`);
 
   const named = world(fx.answers).run(["--act", "31"]);
   assert.match(named.stdout, /^- #31: slot 8 returned, its HEAD was [0-9a-f]{8}\.$/m);
@@ -437,7 +461,7 @@ test("an event the CLI did not write fails its issue with exit 1, and is kept to
   assert.equal(r.status, 1, r.stderr + r.stdout);
   const kept = path.join(w.loopDir, "unlogged-events.jsonl");
   assert.match(r.stdout, new RegExp(`^- #10: FAILED: abandoned not logged: not in the log \\(callum-flow-event: warning: cannot write .* - event not recorded\\); kept in ${kept} to log again \\(done before it: .*slot 1 returned.*\\)\\.$`, "m"));
-  assert.match(r.stdout, new RegExp(`^- #11: FAILED: the intervention not logged: not in the log .*; kept in ${kept} to log again \\(done before it: removed In development; logged reclaimed\\)\\.$`, "m"));
+  assert.match(r.stdout, new RegExp(`^- #11: FAILED: the intervention not logged: not in the log .*; kept in ${kept} to log again \\(done before it: removed In development; logged abandoned\\)\\.$`, "m"));
   // #10's intervention is not logged before its event; both are kept, then #11's intervention
   assert.ok(!w.calls().some((c) => c.name === "callum-flow-event" && !probe(c) && c.argv[0] === "intervention" && names(c, 10)));
   const lines = fs.readFileSync(kept, "utf8").trim().split("\n").map((l) => JSON.parse(l));
@@ -446,7 +470,7 @@ test("an event the CLI did not write fails its issue with exit 1, and is kept to
     [REPO, "factory-reconcile", "callum-flow-event", "intervention", "10"],
     [REPO, "factory-reconcile", "callum-flow-event", "intervention", "11"],
   ]);
-  assert.deepEqual(w.logged().map((e) => [e.state, e.issue]), [["reclaimed", 11]]);
+  assert.deepEqual(w.logged().map((e) => [e.state, e.issue]), [["abandoned", 11]]);
 });
 
 test("a write that fails stops that issue's release before its event; the others go on, and the exit is 1", () => {
@@ -455,7 +479,7 @@ test("a write that fails stops that issue's release before its event; the others
   const r = w.run(["--act", "10", "11"]);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /^- #10: FAILED: labels not removed: HTTP 502\.$/m);
-  assert.match(r.stdout, /^- #11: removed In development; logged reclaimed; logged the intervention\.$/m);
+  assert.match(r.stdout, /^- #11: removed In development; logged abandoned; logged the intervention\.$/m);
   assert.ok(!w.calls().some((c) => names(c, 10) && c.name === "callum-flow-event"), "no event for a release that did not happen");
   assert.ok(!w.calls().some((c) => c.name === "treehouse" && c.argv[0] === "return" && c.argv.includes(fx.slots[0].path)));
 });
@@ -524,13 +548,16 @@ test("the migration's events pass the real callum-flow-event, and parse back wit
     [
       ["abandoned", 10, "factory-reconcile", REPO, "feat/issue-10-x", null],
       ["intervention", 10, "factory-reconcile", REPO, null, null],
-      ["reclaimed", 11, "factory-reconcile", REPO, "feat/issue-11-y", 111],
+      ["abandoned", 11, "factory-reconcile", REPO, "feat/issue-11-y", 111],
       ["intervention", 11, "factory-reconcile", REPO, null, 111],
     ],
   );
   const fields = (state, issue) => events.parseEvent(lines.find((e) => e.state === state && e.issue === issue));
-  assert.deepEqual({ reason: fields("abandoned", 10).reason, stage: fields("abandoned", 10).stage }, { reason: "reconcile", stage: "designing" });
-  assert.equal(fields("reclaimed", 11).stage, "implementing");
+  assert.deepEqual(
+    { reason: fields("abandoned", 10).reason, outcome: fields("abandoned", 10).outcome, lives: fields("abandoned", 10).lives, stage: fields("abandoned", 10).stage },
+    { reason: "reconcile", outcome: "leave", lives: null, stage: "designing" },
+  );
+  assert.equal(fields("abandoned", 11).stage, "implementing");
   const iv = fields("intervention", 10);
   assert.deepEqual({ who: iv.who, cause: iv.cause }, { who: "person", cause: "reconcile" });
   assert.match(iv.fact, /^i10\/reconcile\/[0-9a-z]+\/event$/);

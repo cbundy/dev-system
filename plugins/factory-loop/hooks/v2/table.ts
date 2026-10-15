@@ -443,8 +443,9 @@ export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): Is
 export type Claimed = { issue: number; life: string; branch: string; pr: number | null; others: number[] }
 
 // madeRecord: row S0's queued record: a lease leads to designing, or to reviewing for an adopted
-// PR, whose whole diff the review reads (3.5).
-export function madeRecord(claim: Claimed, now: Ms): IssueRecord {
+// PR, whose whole diff the review reads (3.5). lives: its life's number since the issue's count
+// last started (lives.ts).
+export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
   const others = claim.others.length === 0 ? [] : [`other open PRs on this issue's branches, left alone: ${claim.others.map(p => `#${p}`).join(', ')}`]
   return {
     issue: claim.issue,
@@ -469,6 +470,7 @@ export function madeRecord(claim: Claimed, now: Ms): IssueRecord {
     why: null,
     notes: others,
     prClosedAt: null,
+    lives,
   }
 }
 

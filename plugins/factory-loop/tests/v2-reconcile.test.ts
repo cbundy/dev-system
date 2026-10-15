@@ -1,16 +1,20 @@
 // R1 and the release (docs/factory-loop/v2/SPEC.md 6.2, 6.4, 10.7): a live claim of this device with
-// no record and no claim in flight is a ghost, released at once: its agents stopped and its factory
-// labels off, then, once those have ended and W2 has freed its slot, `reclaimed` or `abandoned`,
-// last. Property 17 of 17.1 runs over generated factories on every planV2 call here: R1 never names
-// an issue a record holds, a claim in flight or another device's claim; a done release begins
-// nothing again, whatever the factory still shows, and logs its intervention exactly once (7.2);
-// observe mode executes nothing. The tripwire tells the owner once of each change to the main
-// checkout, and keeps planning its notice until it is told.
+// no record and no claim in flight is a ghost, released at once: its agents stopped and its labels
+// set by the release's outcome, then, once those have ended and W2 has freed its slot, its event,
+// last. The outcome: back in the queue with ready re-added (`reclaimed`), unless the owner dropped
+// it (it leaves, `abandoned`), and unless this was its maxLives-th life (rejected: factory:rejected,
+// a comment and an owner tell, then `abandoned`). Property 17 of 17.1 runs over generated
+// factories on every planV2 call here: R1 never names an issue a record holds, a claim in flight or
+// another device's claim; a done release begins nothing again, whatever the factory still shows,
+// and logs its intervention exactly once (7.2); observe mode executes nothing. The tripwire tells
+// the owner once of each change to the main checkout, and keeps planning its notice until it is
+// told.
 // No test here asserts an exact key: keys come from the key codec.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { Action, AgentView, Checkout, IssueView, LedgerEntry, PlanResult, Stage, State } from '../hooks/types'
-import { claimKey, interventionKey, lifeOf } from '../hooks/v2/keys'
+import { claimKey, interventionKey, lifeAt, lifeOf } from '../hooks/v2/keys'
+import { knownLives, livesBefore } from '../hooks/v2/lives'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { checkoutBaseOf, checkoutChange, claimOf, ghostsOf, tripwireKey } from '../hooks/v2/reconcile'
@@ -18,6 +22,7 @@ import type { CheckoutBase, CheckoutRead } from '../hooks/v2/reconcile'
 import {
   LIVE_STAGES,
   RELEASE_OPS,
+  RELEASE_OUTCOMES,
   isReleaseEntry,
   releaseClaimOf,
   releaseEffects,
@@ -26,9 +31,11 @@ import {
   releaseIntervention,
   releaseKey,
   releaseLabels,
+  releaseOutcomeOf,
   releaseReason,
   releaseState,
 } from '../hooks/v2/release'
+import type { ReleaseOutcome } from '../hooks/v2/release'
 import { GITHUB_V2, newCtx, tierOf } from '../hooks/foundation'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { IssueRecord, Lease, V2Ctx, V2State } from '../hooks/v2/types'
@@ -64,6 +71,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     why: null,
     notes: [],
     prClosedAt: null,
+    lives: 1,
     ...over,
   }
 }
@@ -87,6 +95,8 @@ type World = {
   agents?: AgentView[]
   base?: CheckoutBase | null
   checkout?: Checkout | null
+  // the owner's drops (`/factory drop N`)
+  dropped?: { issue: number; at: number }[]
 }
 
 // world: a v2 pass's State: the factory's issues, the records, the ledger, the loop's leases, the
@@ -96,14 +106,14 @@ function world(o: World = {}): State {
   const s = state({ issues: o.issues ?? [], agents: o.agents ?? [], checkout: o.checkout === undefined ? CLEAN : o.checkout })
   const v2 = { ...emptyV2State(NOW, o.records ?? []), leases: o.leases ?? [], checkoutBase: o.base === undefined ? { checkout: CLEAN, at: NOW - MIN } : o.base }
   v2.sources = { ...v2.sources, leases: o.leasesOk === false ? { ok: false, at: null, error: 'test' } : { ok: true, at: NOW } }
-  return { ...s, ledger: [...s.ledger, ...(o.ledger ?? [])], v2 }
+  return { ...s, control: { ...s.control, dropped: o.dropped ?? [] }, ledger: [...s.ledger, ...(o.ledger ?? [])], v2 }
 }
 
 const r1 = (result: PlanResult) => result.actions.filter(a => a.rule === 'R1')
 // R1's intervention (v2 SPEC 6.4, 7.2): a done release is a loop intervention, cause reconcile,
 // derived from its done event entry (rules-interventions.ts) and so planned once, the pass after it
 const isIv = (a: Action) => a.kind === 'event' && a.event.state === 'intervention'
-const releaseIv = (n: number, fact: string) => ({ kind: 'event', rule: 'R1', issue: n, key: interventionKey(fact), event: { state: 'intervention', who: 'loop', cause: 'reconcile', issue: n, fact } })
+const releaseIv = (n: number, fact: string, cause = 'reconcile') => ({ kind: 'event', rule: 'R1', issue: n, key: interventionKey(fact), event: { state: 'intervention', who: 'loop', cause, issue: n, fact } })
 const r1Skips = (result: PlanResult, n?: number) => result.skipped.filter(x => x.rule === 'R1' && (n === undefined || x.issue === n)).map(x => x.why)
 
 // ran: the state after these actions ended with this status
@@ -117,7 +127,7 @@ function ran(s: State, actions: readonly Action[], status: LedgerEntry['status']
 const withLeases = (s: State, leases: Lease[]): State => ({ ...s, v2: { ...(s.v2 ?? emptyV2State(NOW)), leases } })
 
 describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
-  test('its agents stopped and its factory labels off first; its event last, once they have ended and W2 has freed its slot; then nothing more', () => {
+  test('its agents stopped and its labels set first (ready back on, the factory labels off); its event last, once they have ended and W2 has freed its slot; then nothing more', () => {
     const agent = entry('i470/l0/s3/build/a1', 'agent-step', { issue: 470, status: 'running', agentId: 'agent-7', endedAt: null })
     let s = world({
       issues: [held(470, { stage: 'implementing', pr: 621 })],
@@ -128,9 +138,9 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     const first = planV2(s, CFG)
     expect(r1(first).map(a => a.kind)).toEqual(['stop-agent', 'label'])
     expect(r1(first)[0]).toMatchObject({ kind: 'stop-agent', class: 'free', issue: 470, agentId: 'agent-7', entry: agent.key })
-    expect(r1(first)[1]).toMatchObject({ kind: 'label', class: 'free', issue: 470, op: 'clear', label: null })
+    expect(r1(first)[1]).toMatchObject({ kind: 'label', class: 'free', issue: 470, op: 'requeue', label: null, ready: 'ready' })
     expect(r1Skips(first, 470)).toHaveLength(1)
-    expect(r1Skips(first, 470)[0]).toMatch(/waits for its agent agent-7 stopped, its factory labels off, slot \/slots\/470 freed \(W2\)/)
+    expect(r1Skips(first, 470)[0]).toMatch(/waits for its agent agent-7 stopped, its labels set, slot \/slots\/470 freed \(W2\)/)
 
     // both effects done; W2 has not freed the slot yet
     s = ran(s, r1(first))
@@ -145,7 +155,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     expect(r1(third)[0]).toMatchObject({
       kind: 'event',
       issue: 470,
-      event: { state: 'abandoned', issue: 470, pr: 621, stage: 'implementing', reason: 'reconcile' },
+      event: { state: 'reclaimed', issue: 470, pr: 621, stage: 'implementing', reason: 'reconcile', outcome: 'requeue', lives: 1 },
     })
 
     // a done release begins nothing again, though the factory still shows the claim (property 17):
@@ -161,16 +171,40 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     expect(r1Skips(fifth, 470)).toEqual([])
   })
 
-  test('labelled ready it goes back to the queue (reclaimed); with its labels not read yet, its event waits for a read', () => {
-    const ready = ran(world({ issues: [held(471, { labels: ['Ready', 'bug'] })] }), [])
-    const effects = r1(planV2(ready, CFG))
-    expect(r1(planV2(ran(ready, effects), CFG))).toEqual([expect.objectContaining({ kind: 'event', event: expect.objectContaining({ state: 'reclaimed' }) })])
+  test('open, it goes back to the queue whatever its labels (reclaimed); with its GitHub state not read, its stops go and its labels wait for a read', () => {
+    for (const labels of [['Ready', 'bug'], ['bug'], null]) {
+      const open = world({ issues: [held(471, { labels })] })
+      const effects = r1(planV2(open, CFG))
+      expect(effects.map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['requeue'])
+      expect(r1(planV2(ran(open, effects), CFG))).toEqual([expect.objectContaining({ kind: 'event', event: expect.objectContaining({ state: 'reclaimed', outcome: 'requeue' }) })])
+    }
 
-    const unread = world({ issues: [held(472, { labels: null })] })
-    const done = ran(unread, r1(planV2(unread, CFG)))
-    const next = planV2(done, CFG)
+    const agent = entry('i472/l0/s3/build/a1', 'agent-step', { issue: 472, status: 'running', agentId: 'agent-2', endedAt: null })
+    const unread = world({ issues: [held(472, { open: null })], ledger: [agent] })
+    const first = r1(planV2(unread, CFG))
+    expect(first.map(a => a.kind)).toEqual(['stop-agent'])
+    const next = planV2(ran(unread, first), CFG)
     expect(r1(next)).toEqual([])
-    expect(r1Skips(next, 472)).toEqual([expect.stringMatching(/waits for a read of #472's labels/)])
+    expect(r1Skips(next, 472)).toEqual([expect.stringMatching(/waits for a read of #472 that shows it open/)])
+  })
+
+  test('the owner dropped it since its claim: it leaves the factory (abandoned), its factory labels off and no ready; a drop before its claim does not count', () => {
+    const claim = entry('claim:473:derived:1', 'claim', { issue: 473, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'claim', result: 'claimed' } })
+    const s = world({ issues: [held(473)], ledger: [claim], dropped: [{ issue: 473, at: NOW - 10 * MIN }] })
+    const [label] = r1(planV2(s, CFG))
+    expect(label).toMatchObject({ kind: 'label', op: 'clear', key: releaseKey(473, lifeOf(NOW - HOUR), 'leave') })
+    const [event] = r1(planV2(ran(s, [label as Action]), CFG))
+    expect(event).toMatchObject({ kind: 'event', event: { state: 'abandoned', outcome: 'leave', lives: 1 } })
+    const before = world({ issues: [held(473)], ledger: [claim], dropped: [{ issue: 473, at: NOW - 2 * HOUR }] })
+    expect(r1(planV2(before, CFG))).toEqual([expect.objectContaining({ kind: 'label', op: 'requeue' })])
+  })
+
+  test('a release keeps the outcome it began with: a drop that lands after the requeue began changes nothing', () => {
+    const s = world({ issues: [held(474)] })
+    const [label] = r1(planV2(s, CFG))
+    expect(label).toMatchObject({ op: 'requeue' })
+    const later = { ...ran(s, [label as Action], 'failed', { attempts: 1 }), now: NOW + 10 * MIN, control: { ...s.control, dropped: [{ issue: 474, at: NOW + 5 * MIN }] } }
+    expect(r1(planV2(later, CFG)).map(a => a.key)).toEqual([label?.key])
   })
 
   test('it waits for a read of the pool when the leases were not read, and its effects still go', () => {
@@ -210,7 +244,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     const failed = ran(s, [label], 'failed', { attempts: 1 })
     const result = planV2(failed, CFG)
     expect(r1(result)).toEqual([])
-    expect(r1Skips(result, 475)[0]).toMatch(/waits for its factory labels off/)
+    expect(r1Skips(result, 475)[0]).toMatch(/waits for its labels set/)
     // after its backoff it runs again
     expect(r1(planV2({ ...failed, now: NOW + 10 * MIN }, CFG)).map(a => a.key)).toEqual([label.key])
   })
@@ -218,7 +252,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
   test('a later claim of the same issue is a release of its own: its keys never reuse an earlier one\'s', () => {
     const s = world({ issues: [held(476, { stageSince: NOW - 3 * HOUR })] })
     const first = r1(planV2(s, CFG))
-    const event = releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), ready: false, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')
+    const event = releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), outcome: 'requeue', lives: 1, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')
     let released = ran(ran(s, first), [event])
     // its intervention, logged once; then nothing
     const iv = r1(planV2(released, CFG))
@@ -240,7 +274,7 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
       const s = world({ issues: [held(477, { stageSince })], ledger: [claim] })
       const [g] = ghostsOf(ctxOf(s))
       expect(g?.claim).toBe(lifeOf(NOW - HOUR))
-      expect(r1(planV2(s, CFG)).map(a => a.key)).toEqual([releaseKey(477, lifeOf(NOW - HOUR), RELEASE_OPS.label)])
+      expect(r1(planV2(s, CFG)).map(a => a.key)).toEqual([releaseKey(477, lifeOf(NOW - HOUR), 'requeue')])
     }
   })
 
@@ -292,6 +326,44 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     }
     // its claim dates any later release: a ghost of the new life (its record lost) is released under keys of its own
     expect(claimOf(claimed.ledger, held(486))).toBe(life)
+  })
+
+  test('at its maxLives-th life it is rejected: factory:rejected on, one comment and one owner tell listing why each life ended, then abandoned; its intervention is cause rejected', () => {
+    // two earlier lives: a record dropped by triage, then a ghost R1 put back in the queue
+    const first = record({ issue: 487, life: lifeOf(NOW - 30 * HOUR), state: 'closed', step: null, why: 'dropped', notes: ['triage: needs a decision'], since: NOW - 29 * HOUR, lives: 1 })
+    const second = entry(releaseKey(487, lifeOf(NOW - 20 * HOUR), 'requeue'), 'label', { issue: 487, rule: 'R1', startedAt: NOW - 19 * HOUR, endedAt: NOW - 19 * HOUR })
+    const claim = entry('claim:487:derived:3', 'claim', { issue: 487, startedAt: NOW - 3 * HOUR, endedAt: NOW - 3 * HOUR, outcome: { kind: 'claim', result: 'claimed' } })
+    let s = world({ issues: [held(487, { stage: 'implementing', pr: 701 })], records: [first], ledger: [second, claim] })
+    const plans = r1(planV2(s, CFG))
+    const life = lifeOf(NOW - 3 * HOUR)
+    expect(plans.map(a => [a.kind, a.kind === 'label' ? a.op : a.kind === 'tell' ? a.wake : null])).toEqual([
+      ['label', 'reject'],
+      ['comment', null],
+      ['tell', 'rejected'],
+    ])
+    const [label, comment, tell] = plans
+    expect(label?.key).toBe(releaseKey(487, life, 'reject'))
+    expect(comment).toMatchObject({ kind: 'comment', on: 'issue', number: 487 })
+    const body = comment?.kind === 'comment' ? comment.body : ''
+    expect(body).toMatch(/its 3rd life ended without a merge, so it is labelled `factory:rejected`/)
+    expect(body).toMatch(/^- life 1, claimed .* UTC: dropped: triage: needs a decision$/m)
+    expect(body).toMatch(/^- life 2, claimed .* UTC: released: a live claim with no record, put back in the queue$/m)
+    expect(body).toMatch(/^- life 3, claimed .* UTC: released: a live claim of this device in implementing with no record$/m)
+    expect(body).toMatch(/remove `factory:rejected` and add `ready` to #487/)
+    expect(tell).toMatchObject({ kind: 'tell', wake: 'rejected', class: 'owner', issue: 487, fields: { issue: '487', lives: '3', max: '3' } })
+    expect(planV2(s, CFG).owner).toBeGreaterThanOrEqual(1)
+    // the event waits for the labels, the comment and the tell
+    expect(r1Skips(planV2(ran(s, [label as Action, comment as Action]), CFG), 487)).toEqual([expect.stringMatching(/waits for its owner told$/)])
+    s = ran(s, plans)
+    const [event] = r1(planV2(s, CFG))
+    expect(event).toMatchObject({ kind: 'event', event: { state: 'abandoned', outcome: 'reject', lives: 3, reason: 'reconcile', pr: 701 } })
+    s = ran(s, [event as Action])
+    expect(r1(planV2(s, CFG))).toEqual([expect.objectContaining(releaseIv(487, event?.key ?? '', 'rejected'))])
+    // a lower maxLives rejects sooner; a higher one puts it back in the queue
+    const cfg = (maxLives: number) => config({ planner: 'v2', maxLives })
+    const fresh = world({ issues: [held(488)] })
+    expect(r1(planV2(fresh, cfg(1))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['reject', 'comment', 'tell'])
+    expect(r1(planV2(world({ issues: [held(487, { stage: 'implementing' })], records: [first], ledger: [second, claim] }), cfg(4))).map(a => (a.kind === 'label' ? a.op : a.kind))).toEqual(['requeue'])
   })
 
   test('a ghost with no claim time is named, not released', () => {
@@ -363,7 +435,12 @@ describe('R1 names nothing but a ghost (property 17)', () => {
     const ledger: LedgerEntry[] = []
     const leases: Lease[] = []
     const agents: AgentView[] = []
+    const dropped: { issue: number; at: number }[] = []
     for (let n = 500; n < 508; n++) {
+      // the owner's drop since the claim (it leaves), or two earlier lives R1 released (its third is rejected)
+      if (r() < 0.15) dropped.push({ issue: n, at: NOW - 5 * MIN })
+      const earlier = r() < 0.2
+      if (earlier) for (const h of [30, 20]) ledger.push(entry(releaseKey(n, lifeOf(NOW - h * HOUR), 'requeue'), 'label', { issue: n, rule: 'R1', startedAt: NOW - (h - 1) * HOUR, endedAt: NOW - (h - 1) * HOUR }))
       const since = pick(r, [null, NOW - 2 * HOUR, NOW - 30 * MIN])
       issues.push(
         issue(n, {
@@ -376,11 +453,12 @@ describe('R1 names nothing but a ghost (property 17)', () => {
         }),
       )
       const life = pick(r, ['tbq3k0', 'tbq9z9'])
-      const rec = pick(r, ['none', 'none', 'open', 'closed-old', 'closed-new'])
+      const rec = earlier ? 'none' : pick(r, ['none', 'none', 'open', 'closed-old', 'closed-new'])
       if (rec === 'open') records.push(record({ issue: n, life, state: pick(r, ['queued', 'building', 'parked', 'merge-queue'] as const), step: null }))
       if (rec === 'closed-old') records.push(record({ issue: n, life, state: 'closed', step: null, why: 'dropped', since: NOW - 4 * HOUR }))
       if (rec === 'closed-new') records.push(record({ issue: n, life, state: 'closed', step: null, why: 'merged', since: NOW - 5 * MIN }))
-      const claim = pick(r, ['none', 'running', 'done', 'done-recorded', 'lost', 'v1'])
+      // earlier lives come with a claim of this life, which dates the ghost after them
+      const claim = earlier ? 'v1' : pick(r, ['none', 'running', 'done', 'done-recorded', 'lost', 'v1'])
       const claimed = { kind: 'claim', result: 'claimed' } as const
       if (claim === 'running') ledger.push(entry(claimKey(n, 'tbq1a1'), 'claim', { issue: n, status: 'running', endedAt: null }))
       if (claim === 'done') ledger.push(entry(claimKey(n, 'tbq1a1'), 'claim', { issue: n, outcome: claimed }))
@@ -394,17 +472,29 @@ describe('R1 names nothing but a ghost (property 17)', () => {
       }
       if (r() < 0.3) leases.push(lease(n, life))
     }
-    return world({ issues, records, ledger, leases, agents, leasesOk: r() > 0.1 })
+    return world({ issues, records, ledger, leases, agents, dropped, leasesOk: r() > 0.1 })
+  }
+
+  // outcome: how a ghost's release must end (6.4): it leaves when the owner dropped it since its
+  // claim, it is rejected at its maxLives-th life, and else it goes back to the queue.
+  function outcome(s: State, n: number): ReleaseOutcome {
+    const g = ghostsOf(ctxOf(s)).find(x => x.issue === n)
+    const claimAt = g?.claim === null || g === undefined ? null : lifeAt(g.claim)
+    if (claimAt !== null && s.control.dropped.some(d => d.issue === n && d.at >= claimAt)) return 'leave'
+    if ((g?.lives.count ?? 0) + 1 >= CFG.maxLives) return 'reject'
+    return 'requeue'
   }
 
   // about 1 s alone, and past the default 5 s when the host is loaded (a 5.5 s failure seen at
   // load average 25 on 16 CPUs): a generous bound of its own
   test('over generated factories: every R1 action and skip line names a ghost; its event comes only after its effects and its slot; a done release plans nothing more; planning is deterministic and idempotent', { timeoutMs: 60_000 }, () => {
-    const seen = { ghosts: 0, reclaimed: 0, abandoned: 0, kept: 0 }
+    const seen = { ghosts: 0, requeue: 0, leave: 0, reject: 0, kept: 0 }
     for (let seed = 1; seed <= 300; seed++) {
       let s = generated(seed)
       seen.kept += s.issues.filter(i => i.holder === DEVICE && i.stage !== null && LIVE_STAGES.includes(i.stage) && !ghost(s, i.number)).length
       const ghosts = new Set(s.issues.filter(i => ghost(s, i.number)).map(i => i.number))
+      // each ghost's outcome, fixed when its release begins
+      const outcomes = new Map([...ghosts].map(n => [n, outcome(s, n)]))
       const released = new Map<number, string>()
       const logged = new Map<number, string>()
       // R1's interventions: each a done release's, cause reconcile, keyed by its event, planned only
@@ -416,14 +506,15 @@ describe('R1 names nothing but a ghost (property 17)', () => {
           const fact = released.get(n)
           if (fact === undefined) throw new Error(`seed ${seed}: R1 planned ${a.key} for #${n}, whose release is not done`)
           if (logged.has(n)) throw new Error(`seed ${seed}: R1 planned ${a.key} again after it was logged`)
-          expect(a).toMatchObject(releaseIv(n, fact))
+          expect(a).toMatchObject(releaseIv(n, fact, outcomes.get(n) === 'reject' ? 'rejected' : 'reconcile'))
         }
         return ivs
       }
       for (let pass = 0; pass < 6; pass++) {
         const result = planV2(s, CFG)
         expect(planV2(s, CFG)).toEqual(result)
-        const all = r1(result).filter(a => a.kind !== 'tell')
+        // the tripwire's tells are not a ghost's; a rejection's tell is
+        const all = r1(result).filter(a => a.kind !== 'tell' || a.wake === 'rejected')
         const ivs = interventions(all)
         const mineR1 = all.filter(a => !isIv(a))
         for (const a of mineR1) {
@@ -439,9 +530,17 @@ describe('R1 names nothing but a ghost (property 17)', () => {
           if (!effects.some(e => e.kind === 'label' && e.status === 'done')) throw new Error(`seed ${seed}: #${n}'s event before its labels were off`)
           if (effects.some(e => e.status === 'running')) throw new Error(`seed ${seed}: #${n}'s event while a stop runs`)
           if ((s.v2?.leases ?? []).some(l => l.issue === n) || s.v2?.sources.leases.ok !== true) throw new Error(`seed ${seed}: #${n}'s event before its slot was free`)
-          const i = s.issues.find(x => x.number === n)
-          const ready = (i?.labels ?? []).some(l => l.toLowerCase() === 'ready')
-          if (a.kind === 'event' && a.event.state !== releaseState(ready)) throw new Error(`seed ${seed}: #${n} released as ${a.event.state}`)
+          const want = outcomes.get(n) ?? 'requeue'
+          if (a.kind === 'event' && (a.event.state !== releaseState(want) || !('outcome' in a.event) || a.event.outcome !== want)) throw new Error(`seed ${seed}: #${n} released as ${a.event.state}, not ${want}`)
+          if (want === 'reject' && !s.ledger.some(e => e.issue === n && e.kind === 'tell' && e.status === 'done')) throw new Error(`seed ${seed}: #${n} rejected before the owner was told`)
+          if (want === 'reject' && !s.ledger.some(e => e.issue === n && e.kind === 'comment' && e.status === 'done')) throw new Error(`seed ${seed}: #${n} rejected before its comment`)
+        }
+        // the labels say the outcome: ready back only for a requeue, factory:rejected only for a rejection
+        for (const a of mineR1.filter(x => x.kind === 'label')) {
+          const want = outcomes.get(a.issue ?? -1)
+          const op = a.kind === 'label' ? a.op : null
+          if (op !== { requeue: 'requeue', leave: 'clear', reject: 'reject' }[want ?? 'requeue']) throw new Error(`seed ${seed}: #${a.issue}'s labels by op ${op}, its outcome ${want}`)
+          if (op === 'requeue' && s.issues.find(x => x.number === a.issue)?.open !== true) throw new Error(`seed ${seed}: #${a.issue} requeued with its GitHub state unknown`)
         }
         // idempotent: with its actions running, planning again starts none of them again
         const again = r1(planV2(ran(s, all, 'running'), CFG)).filter(a => all.some(m => m.key === a.key))
@@ -450,7 +549,7 @@ describe('R1 names nothing but a ghost (property 17)', () => {
         for (const a of mineR1) {
           if (a.kind !== 'event') continue
           released.set(a.issue ?? -1, a.key)
-          seen[a.event.state === 'reclaimed' ? 'reclaimed' : 'abandoned'] += 1
+          seen[outcomes.get(a.issue ?? -1) ?? 'requeue'] += 1
         }
         for (const a of ivs) logged.set(a.issue ?? -1, a.key)
         s = withLeases(ran(s, all), [])
@@ -475,9 +574,9 @@ describe('R1 names nothing but a ghost (property 17)', () => {
         const named = [...r1(after).filter(a => a.kind !== 'tell').map(a => a.issue), ...after.skipped.filter(k => k.rule === 'R1').map(k => k.issue)]
         for (const n of released.keys()) if (named.includes(n)) throw new Error(`seed ${seed}: R1 named #${n} after S1 claimed it`)
       }
-      // every ghost whose labels were read ends released
+      // every ghost ends released, but one whose requeue waits for a read of its GitHub state
       for (const n of ghosts) {
-        const read = s.issues.find(x => x.number === n)?.labels !== null
+        const read = s.issues.find(x => x.number === n)?.open === true || outcomes.get(n) !== 'requeue'
         const dated =
           s.issues.find(x => x.number === n)?.stageSince !== null ||
           s.ledger.some(e => e.kind === 'claim' && e.issue === n && e.status === 'done' && !(e.outcome?.kind === 'claim' && e.outcome.result === 'lost'))
@@ -485,10 +584,11 @@ describe('R1 names nothing but a ghost (property 17)', () => {
       }
       seen.ghosts += ghosts.size
     }
-    // the generator reaches every case: ghosts released both ways, and live claims a record or a claim holds
+    // the generator reaches every case: ghosts released all three ways, and live claims a record or a claim holds
     expect(seen.ghosts).toBeGreaterThan(100)
-    expect(seen.reclaimed).toBeGreaterThan(30)
-    expect(seen.abandoned).toBeGreaterThan(15)
+    expect(seen.requeue).toBeGreaterThan(30)
+    expect(seen.leave).toBeGreaterThan(10)
+    expect(seen.reject).toBeGreaterThan(10)
     expect(seen.kept).toBeGreaterThan(300)
   })
 })
@@ -622,11 +722,13 @@ describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
 })
 
 describe('the release (v2 SPEC 6.4)', () => {
-  const input = { issue: 467, claim: 'tbq3k0', ready: false, stage: 'in pipeline', checked: 'no run update,\n no PR push', branch: 'feat/issue-467-x', pr: 621 }
+  const input = { issue: 467, claim: 'tbq3k0', outcome: 'leave' as ReleaseOutcome, lives: null, stage: 'in pipeline', checked: 'no run update,\n no PR push', branch: 'feat/issue-467-x', pr: 621 }
 
-  test('reclaimed when still labelled ready, else abandoned; reason reconcile, the stage and what was checked on one line', () => {
-    expect(releaseEvent(input)).toEqual({ state: 'abandoned', issue: 467, branch: 'feat/issue-467-x', pr: 621, stage: 'in pipeline', checked: 'no run update, no PR push', reason: 'reconcile' })
-    expect(releaseEvent({ ...input, ready: true }).state).toBe('reclaimed')
+  test('reclaimed back to the queue, else abandoned; reason reconcile, its outcome and life, the stage and what was checked on one line', () => {
+    expect(releaseEvent(input)).toEqual({ state: 'abandoned', issue: 467, branch: 'feat/issue-467-x', pr: 621, stage: 'in pipeline', checked: 'no run update, no PR push', reason: 'reconcile', outcome: 'leave', lives: null })
+    expect(releaseEvent({ ...input, outcome: 'requeue', lives: 2 })).toMatchObject({ state: 'reclaimed', outcome: 'requeue', lives: 2 })
+    expect(releaseEvent({ ...input, outcome: 'reject', lives: 3 })).toMatchObject({ state: 'abandoned', outcome: 'reject', lives: 3 })
+    expect(RELEASE_OUTCOMES.map(releaseState)).toEqual(['reclaimed', 'abandoned', 'abandoned'])
     expect(releaseReason('in pipeline', 'a\nb')).toBe('no live step in in pipeline: a b')
   })
 
@@ -636,22 +738,30 @@ describe('the release (v2 SPEC 6.4)', () => {
     expect(releaseLabels(labels, true, 'in development')).toEqual(['factory:building', 'In development', 'FACTORY:parked'])
   })
 
-  test('the intervention a release is: by its who, cause reconcile, keyed by the release\'s event, a reason of at most 200 characters', () => {
+  test('the intervention a release is: by its who, cause reconcile (rejected for a rejection), keyed by the release\'s event, a reason of at most 200 characters', () => {
     const iv = releaseIntervention({ ...input, checked: 'x'.repeat(400) }, 'person')
     expect(iv).toMatchObject({ state: 'intervention', who: 'person', cause: 'reconcile', issue: 467, pr: 621, life: null, fact: releaseKey(467, 'tbq3k0', RELEASE_OPS.event) })
     expect(iv.reason.length).toBeLessThanOrEqual(200)
     expect(iv.reason).toMatch(/^abandoned: no live step in in pipeline: x+\.\.\.$/)
     expect(releaseIntervention(input, 'loop').who).toBe('loop')
+    expect(releaseIntervention({ ...input, outcome: 'reject', lives: 3 }, 'loop')).toMatchObject({ cause: 'rejected', reason: expect.stringMatching(/^rejected at life 3: no live step/) })
   })
 
-  test('its effects in order, each R1\'s and free: a stop per agent, then every factory label off; its event is its own action; its done event entry is the release', () => {
-    const effects = releaseEffects(input, [{ agentId: 'a1', entry: 'k1' }, { agentId: 'a2', entry: 'k2' }], 'why')
+  test('its effects in order, each R1\'s and free: a stop per agent, then the labels by its outcome (a rejection\'s comment after); its event is its own action; its done event entry is the release', () => {
+    const effects = releaseEffects(input, [{ agentId: 'a1', entry: 'k1' }, { agentId: 'a2', entry: 'k2' }], 'why', 'ready', [], 3)
     expect(effects.map(a => [a.kind, a.rule, a.class, a.issue])).toEqual([
       ['stop-agent', 'R1', 'free', 467],
       ['stop-agent', 'R1', 'free', 467],
       ['label', 'R1', 'free', 467],
     ])
     expect(new Set(effects.map(a => a.key)).size).toBe(3)
+    const ops = (o: ReleaseOutcome) => releaseEffects({ ...input, outcome: o, lives: 3 }, [], 'why', 'Ready', ['life 1: x'], 3).map(a => (a.kind === 'label' ? [a.op, a.ready ?? null, a.key] : [a.kind, null, a.key]))
+    expect(ops('requeue')).toEqual([['requeue', 'Ready', releaseKey(467, 'tbq3k0', 'requeue')]])
+    expect(ops('leave')).toEqual([['clear', null, releaseKey(467, 'tbq3k0', 'leave')]])
+    expect(ops('reject')).toEqual([
+      ['reject', null, releaseKey(467, 'tbq3k0', 'reject')],
+      ['comment', null, releaseKey(467, 'tbq3k0', RELEASE_OPS.comment)],
+    ])
     const event = releaseEventAction(input, 'why')
     expect(event).toMatchObject({ kind: 'event', rule: 'R1', class: 'free', issue: 467, key: releaseKey(467, 'tbq3k0', RELEASE_OPS.event) })
     expect(effects.concat(event).map(a => releaseClaimOf(467, a.key))).toEqual(['tbq3k0', 'tbq3k0', 'tbq3k0', 'tbq3k0'])
@@ -664,6 +774,68 @@ describe('the release (v2 SPEC 6.4)', () => {
     expect(effects.map(a => isReleaseEntry({ key: a.key, issue: 467, kind: 'event', rule: 'R1' }))).toEqual([false, false, false])
     expect(isReleaseEntry({ ...at, issue: 46, kind: 'event', rule: 'R1' })).toBe(false)
     expect(isReleaseEntry({ key: interventionKey(event.key), issue: 467, kind: 'event', rule: 'R1' })).toBe(false)
+  })
+})
+
+describe('lives (v2 SPEC 3.2, 6.4)', () => {
+  const at = (h: number) => lifeOf(NOW - h * HOUR)
+  const closed = (h: number, lives: number, why: IssueRecord['why'], notes: string[] = []) => record({ issue: 490, life: at(h), state: 'closed', step: null, why, notes, since: NOW - (h - 1) * HOUR, lives })
+  const released = (h: number, outcome: ReleaseOutcome) => entry(releaseKey(490, at(h), outcome), 'label', { issue: 490, rule: 'R1', startedAt: NOW - (h - 1) * HOUR, endedAt: NOW - (h - 1) * HOUR })
+
+  test('the lives the loop knows: one per record, one per R1 release begun for a claim no record holds, oldest first', () => {
+    const lives = knownLives([closed(10, 1, 'dropped', ['dropped']), record({ issue: 491, life: at(9) })], [released(5, 'requeue'), released(10, 'leave'), entry('i490/reconcile/x/event', 'event', { issue: 490, rule: 'R1' })], 490)
+    expect(lives.map(l => [l.life, l.lives, l.ended, l.rejected])).toEqual([
+      [at(10), 1, 'dropped', false],
+      [at(5), null, 'released: a live claim with no record, put back in the queue', false],
+    ])
+  })
+
+  test('a record\'s count stands, a release counts one more; a rejection starts the count again; pruned lives are named', () => {
+    expect(livesBefore([], [], 490, at(1))).toEqual({ count: 0, ended: [], afterReject: false })
+    const two = livesBefore([closed(10, 1, 'claim-lost')], [released(5, 'requeue')], 490, at(1))
+    expect(two).toMatchObject({ count: 2, afterReject: false })
+    expect(two.ended).toEqual([expect.stringMatching(/^life 1, claimed .* UTC: another device claimed it$/), expect.stringMatching(/^life 2, claimed .* UTC: released: .* put back in the queue$/)])
+    // only lives before the claim count, and not the claim itself
+    expect(livesBefore([closed(10, 1, 'dropped')], [released(5, 'requeue')], 490, at(5)).count).toBe(1)
+    // after a rejection: the next claim is a first life again, and says so
+    expect(livesBefore([closed(10, 1, 'dropped')], [released(5, 'reject')], 490, at(1))).toEqual({ count: 0, ended: [], afterReject: true })
+    const after = livesBefore([closed(3, 1, 'dropped', ['dropped'])], [released(5, 'reject')], 490, at(1))
+    expect(after).toMatchObject({ count: 1, afterReject: false })
+    // a record whose count says earlier lives were pruned
+    const pruned = livesBefore([closed(3, 3, 'split')], [], 490, at(1))
+    expect(pruned.count).toBe(3)
+    expect(pruned.ended[0]).toBe('lives 1 to 2: no longer in the loop\'s records')
+  })
+
+  test('S0 counts the life: after earlier lives its record carries the next number; the first claim after a rejection is life 1, via unreject, a person\'s intervention', () => {
+    const life = lifeOf(NOW - MIN)
+    const done = entry(claimKey(492, life), 'claim', { issue: 492, startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'claim', result: 'claimed' } })
+    const s0 = (records: IssueRecord[], ledger: LedgerEntry[]) =>
+      planV2(world({ issues: [issue(492, { holder: DEVICE, stage: 'designing', stageSince: NOW - MIN })], records, ledger: [...ledger, done] }), CFG).actions.find(a => a.kind === 'transition' && a.issue === 492)
+    const earlier = record({ issue: 492, life: at(10), state: 'closed', step: null, why: 'dropped', since: NOW - 9 * HOUR, lives: 1 })
+    expect(s0([earlier], [])).toMatchObject({ next: { lives: 2 }, via: 'claim' })
+    expect(s0([], [])).toMatchObject({ next: { lives: 1 }, via: 'claim' })
+    const rejected = entry(releaseKey(492, at(5), 'reject'), 'label', { issue: 492, rule: 'R1', startedAt: NOW - 4 * HOUR, endedAt: NOW - 4 * HOUR })
+    const back = s0([earlier], [rejected])
+    expect(back).toMatchObject({ next: { lives: 1 }, via: 'unreject' })
+    // its done transition is the owner's intervention, cause unreject
+    const t = entry(back?.key ?? '', 'transition', { issue: 492, rule: 'S1', startedAt: NOW, endedAt: NOW, outcome: { kind: 'transition', row: 'S0', event: 'ok', cause: null, from: null, to: 'queued', step: null, stored: true, via: 'unreject' } })
+    const next = back?.kind === 'transition' ? back.next : record()
+    const ivs = planV2(world({ records: [earlier, next], ledger: [rejected, done, t] }), config({ planner: 'v2', mode: 'act' })).actions.filter(isIv)
+    expect(ivs.map(a => (a.kind === 'event' && a.event.state === 'intervention' ? [a.event.who, a.event.cause] : []))).toContainEqual(['person', 'unreject'])
+  })
+
+  test('S1 never claims an issue carrying factory:rejected, whatever else it carries', () => {
+    const s = world({ issues: [issue(493, { labels: ['ready', 'factory:rejected'] })] })
+    const result = planV2({ ...s, queue: [493] }, CFG)
+    expect(result.actions.filter(a => a.kind === 'claim')).toEqual([])
+    expect(result.skipped.filter(x => x.rule === 'S1' && x.issue === 493).map(x => x.why)).toEqual(['label factory:rejected: the owner removes it to try again'])
+  })
+
+  test('releaseOutcomeOf: the outcome a release began with, by its label entry', () => {
+    for (const o of RELEASE_OUTCOMES) expect(releaseOutcomeOf(k => k === releaseKey(494, 'tbq3k0', o), 494, 'tbq3k0')).toBe(o)
+    expect(releaseOutcomeOf(() => false, 494, 'tbq3k0')).toBeNull()
+    expect(lifeAt(lifeOf(NOW))).toBe(Math.floor(NOW / 1000) * 1000)
   })
 })
 
@@ -707,7 +879,7 @@ describe('R1 in the driver', () => {
     expect(line).toMatchObject({ mode: 'observe', executed: false, planner: 'v2' })
     const actions = line.actions as { kind: string; rule: string; issue: number | null; reason: string }[]
     expect(actions.filter(a => a.rule === 'R1').map(a => [a.kind, a.issue])).toEqual([['label', 470]])
-    expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in implementing for \d+ min with no record: its factory labels off$/)
+    expect(actions.find(a => a.rule === 'R1')?.reason).toMatch(/^ghost #470: a live claim of this device in implementing for \d+ min with no record: back in the queue \(ready on, its factory labels off\)$/)
     const ran = h.commands().map(c => c.argv.join(' '))
     expect(ran.filter(c => c.startsWith('gh issue edit') || c.startsWith('callum-flow-event'))).toEqual([])
     expect([...h.store.keys()].filter(k => k.startsWith('records:'))).toEqual([])

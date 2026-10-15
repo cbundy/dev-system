@@ -100,6 +100,9 @@ export function recordOf(raw: unknown): IssueRecord | null {
   if (!isStr(o.branch) || o.branch === '' || !(o.pr === null || isInt(o.pr, 1)) || !strOrNull(o.head) || !strOrNull(o.approvedPatch) || !strOrNull(o.brief)) return null
   if (!isInt(o.attempt, 0) || typeof o.cut !== 'boolean' || !isInt(o.triages, 0) || !isInt(o.fixes, 0) || !isInt(o.round, 0)) return null
   if (!strOrNull(o.question) || !Array.isArray(o.notes) || !o.notes.every(isStr) || !strOrNull(o.prClosedAt)) return null
+  // a record stored before the field carries no count: its life is read as a first one
+  const lives = o.lives === undefined ? 1 : o.lives
+  if (!isInt(lives, 1)) return null
   return {
     issue: o.issue,
     life: o.life,
@@ -123,6 +126,7 @@ export function recordOf(raw: unknown): IssueRecord | null {
     why,
     notes: [...o.notes],
     prClosedAt: o.prClosedAt,
+    lives,
   }
 }
 

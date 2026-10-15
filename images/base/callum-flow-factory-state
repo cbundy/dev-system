@@ -74,6 +74,8 @@ const V2_STAGE = {
 };
 const V2_MERGED = new Set(['merged', 'merged-by-hand']);
 const FACTORY_LABEL = 'factory:';
+// an issue the loop rejected at its last life (SPEC 6.4): out of the factory, so not a state
+const LABEL_REJECTED = 'factory:rejected';
 const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']);
 
 class UsageError extends Error {}
@@ -427,12 +429,13 @@ function dedupeRuns(runs, at) {
 }
 
 // expectedLabelProblem: an issue the factory loop v2 placed must carry exactly the `factory:*`
-// label of its state (none once closed); any other issue is checked for `ready` only, when queued.
+// label of its state (none once closed, but `factory:rejected`, which marks an issue out of the
+// factory, not a state); any other issue is checked for `ready` only, when queued.
 function expectedLabelProblem(d, labels) {
   if (d.v2) {
     const want = d.v2.state === 'closed' ? null : `${FACTORY_LABEL}${d.v2.state}`;
     if (want && !labels.includes(want)) return `v2 ${d.v2.state}, but the issue lacks '${want}'`;
-    const other = labels.filter((l) => l.startsWith(FACTORY_LABEL) && l !== want);
+    const other = labels.filter((l) => l.startsWith(FACTORY_LABEL) && l !== want && !(want === null && l === LABEL_REJECTED));
     if (other.length) return `v2 ${d.v2.state}, but the issue carries ${other.map((l) => `'${l}'`).join(', ')}`;
     return null;
   }
@@ -441,7 +444,7 @@ function expectedLabelProblem(d, labels) {
 }
 
 // labelStage: the stage an open issue's labels say, for one the database has never seen: a
-// `factory:*` label's state, else `ready` is queued.
+// `factory:*` label's state (`factory:rejected` names none), else `ready` is queued.
 function labelStage(labels) {
   const f = labels.find((l) => l.startsWith(FACTORY_LABEL) && V2_STAGE[l.slice(FACTORY_LABEL.length)]);
   if (f) return V2_STAGE[f.slice(FACTORY_LABEL.length)];

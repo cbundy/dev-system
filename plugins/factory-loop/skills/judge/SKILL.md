@@ -301,6 +301,10 @@ Owner items (the title counts them until resolved):
   Nothing waits on it; the owner checks what wrote there. Never clean it yourself.
 - `workspace`: the companion plugin `factory-loop-workspace` is not loaded, so every agent step
   is held. The owner enables it in the workspace, then restarts the session.
+- `rejected` (issue, lives, max; detail: why each life ended): the issue's last life ended without
+  a merge, so the loop labelled it `factory:rejected` instead of putting it back in the queue, and
+  said why on the issue. Lead with `[DECISION]`. To try again the owner removes
+  `factory:rejected` and adds `ready`; its life count starts again.
 
 Notices:
 - `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's

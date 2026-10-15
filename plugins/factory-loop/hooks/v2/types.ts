@@ -107,6 +107,9 @@ export type IssueRecord = {
   notes: string[]
   // GitHub's closedAt of the newest hand close the record has handled (E4, P1)
   prClosedAt: string | null
+  // this life's number among the issue's lives since its count last started (6.4, lives.ts): 1
+  // for the first claim, and again for the first claim after the owner lifts factory:rejected
+  lives: number
 }
 
 // A record's identity at one seq: what the transition executor compares before it stores (3.3).
@@ -264,9 +267,10 @@ export type V2Action =
       fromState?: IssueState | null
       fromStep?: StepKind | null
     })
-  // set: add the state's label and remove the other six; ensure: create the seven; clear: remove
-  // every factory label (3.4)
-  | (ActionBase & { kind: 'label'; op: 'set' | 'ensure' | 'clear'; label: FactoryLabel | null })
+  // set: add the state's label and remove the other six; ensure: create the eight; clear: remove
+  // the seven state labels (3.4); requeue: the seven off and `ready` on (ready: the repo's ready
+  // label); reject: the seven off and factory:rejected on (both R1's release, 6.4)
+  | (ActionBase & { kind: 'label'; op: LabelOp; label: FactoryLabel | null; ready?: string })
   // the body carries the hidden key <!-- factory-loop:<ledger key> --> (4.5)
   | (ActionBase & { kind: 'comment'; on: 'issue' | 'pr'; number: number; body: string })
   // built only by events.ts (7.1)
@@ -293,6 +297,9 @@ export type V2Action =
 
 // --- labels and notices (appendix D) ---------------------------------------------------------------
 
+export const LABEL_OPS = ['set', 'ensure', 'clear', 'requeue', 'reject'] as const
+export type LabelOp = (typeof LABEL_OPS)[number]
+
 export const FACTORY_LABEL_PREFIX = 'factory:'
 
 export type FactoryLabel = `factory:${Exclude<IssueState, 'closed'>}`
@@ -308,14 +315,26 @@ export const FACTORY_LABELS: Readonly<Record<Exclude<IssueState, 'closed'>, { na
   parked: { name: 'factory:parked', color: 'b60205', description: 'Factory loop: waits on the owner; remove this label to resume' },
 }
 
+// The label of an issue R1 released at its last life (6.4): not a state, since the issue is out of
+// the factory. S1 never claims an issue carrying it; the owner removing it and adding `ready`
+// brings the issue back with its life count started again.
+export const REJECTED_LABEL: { name: 'factory:rejected'; color: string; description: string } = {
+  name: 'factory:rejected',
+  color: '6a737d',
+  description: 'Factory loop: its last life ended without a merge; remove this label and add ready to try again',
+}
+
+// Every label the loop makes (op ensure): the seven state labels, then factory:rejected.
+export const ALL_FACTORY_LABELS: readonly { name: string; color: string; description: string }[] = [...Object.values(FACTORY_LABELS), REJECTED_LABEL]
+
 // labelOf: a state's label, or null for closed.
 export function labelOf(state: IssueState): FactoryLabel | null {
   return state === 'closed' ? null : FACTORY_LABELS[state].name
 }
 
-// The notice (TELL) kinds v2 adds; the first five are owner items, which go out before any other
+// The notice (TELL) kinds v2 adds; the first six are owner items, which go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -332,9 +351,9 @@ export type InterventionWho = 'person' | 'loop'
 
 // The cause families; `op:<name>`, `unknown:<why>`, `free:<cause>`, `fix:<what>`, `queue:<what>`
 // and `guard:<what>` take their suffix from the lists above or the op's name.
-export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'rescue'] as const
+export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'unreject', 'rescue'] as const
 export const LOOP_CAUSES = [
-  'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'reclaim', 'wake',
+  'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
 ] as const
 
 // --- what v2 reads (SPEC 2.4) ---------------------------------------------------------------------

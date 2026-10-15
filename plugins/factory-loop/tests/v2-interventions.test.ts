@@ -59,6 +59,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     why: null,
     notes: [],
     prClosedAt: null,
+    lives: 1,
     ...over,
   }
 }

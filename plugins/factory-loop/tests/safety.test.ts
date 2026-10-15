@@ -33,7 +33,7 @@ import { checkRails, EMPTY_RAIL_MEMORY } from '../hooks/rails'
 import type { Action, AdjudicatorPurpose, FixerPurpose, LedgerEntry, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
 import { emptyV2State } from '../hooks/v2/observe'
-import { AGENT_STEPS, FACTORY_LABELS, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
+import { ALL_FACTORY_LABELS, AGENT_STEPS, FACTORY_LABELS, REJECTED_LABEL, STEP_AGENT, V2_ACTION_KINDS } from '../hooks/v2/types'
 import type { IssueRecord } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, brief, config, control, entry, mine, review, run as runOf, state } from './fixtures'
 import { LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc } from './host'
@@ -274,6 +274,7 @@ const RECORD: IssueRecord = {
   why: null,
   notes: ['use --yes nowhere'],
   prClosedAt: null,
+  lives: 1,
 }
 // the record's PR as the prs source reads it: the review step reads its head and patch
 const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: 'f00dfeed', readAt: NOW }
@@ -283,6 +284,9 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'label', key: `${at}/label`, class: 'free', rule: 'S3', op: 'set', label: 'factory:building' },
   { ...base, issue: null, kind: 'label', key: 'label/ensure/1', class: 'free', rule: 'S3', op: 'ensure', label: null },
   { ...base, kind: 'label', key: `${at}/label/clear`, class: 'free', rule: 'S3', op: 'clear', label: null },
+  // R1's release (v2 SPEC 6.4): ready back on, or factory:rejected on, the seven state labels off
+  { ...base, kind: 'label', key: 'i470/reconcile/tbq3k0/requeue', class: 'free', rule: 'R1', op: 'requeue', label: null, ready: READY },
+  { ...base, kind: 'label', key: 'i470/reconcile/tbq3k0/reject', class: 'free', rule: 'R1', op: 'reject', label: null },
   { ...base, kind: 'comment', key: `${at}/comment`, class: 'free', rule: 'S3', on: 'issue', number: 470, body: 'Parked: --yes is no answer' },
   { ...base, kind: 'comment', key: `${at}/comment/pr`, class: 'free', rule: 'S3', on: 'pr', number: 512, body: 'Review: approve' },
   { ...base, kind: 'event', key: `${at}/event/transition`, class: 'free', rule: 'S3', event: { state: 'transition', record: RECORD, row: 'T2', from: 'designing', via: 'ok' } },
@@ -301,14 +305,17 @@ const V2_ACTIONS: Action[] = [
 ]
 
 // v2Shape: the argv is one of v2's widened writes, exactly, for its own action's kind (appendix B):
-// which bans it may pass, the others still applying.
-const FACTORY = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
+// which bans it may pass, the others still applying. The ready label comes back only through R1's
+// requeue, with every state label off in the same call.
+const STATE_LABEL = (l: string) => Object.values(FACTORY_LABELS).some(x => x.name === l)
+const FACTORY = (l: string) => ALL_FACTORY_LABELS.some(x => x.name === l)
 function v2Shape(argv: readonly string[], action: Action | undefined): { labels?: boolean; body?: boolean; prEdit?: boolean; api?: boolean; rerun?: boolean; ready?: boolean } {
   const is = (...shape: (string | ((s: string) => boolean))[]) => shape.length === argv.length && shape.every((p, i) => (typeof p === 'string' ? p === argv[i] : p(argv[i] ?? '')))
   const num = (s: string) => /^[1-9]\d*$/.test(s)
   const text = (s: string) => s !== '' && !s.startsWith('-')
   switch (action?.kind) {
     case 'label':
+      if (action.op === 'requeue' && is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', READY, '--remove-label', l => l.split(',').every(STATE_LABEL))) return { labels: true, ready: true }
       return is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', FACTORY) ||
         is('gh', 'issue', 'edit', num, '--repo', REPO, '--add-label', FACTORY, '--remove-label', l => l.split(',').every(FACTORY)) ||
         is('gh', 'label', 'create', FACTORY, '--repo', REPO, '--color', c => /^[0-9a-f]{6}$/.test(c), '--description', text, '--force')
@@ -439,12 +446,17 @@ function bans(argv: readonly string[], action?: Action): string[] {
   return out
 }
 
-// One sample argv of every builder of hooks/v2/argv.ts, with the kind of the action that runs it.
-const V2_ARGVS: [Action['kind'], string[]][] = [
+// R1's requeue, the one label action that may add the ready label (v2 SPEC 6.4)
+const REQUEUE = V2_ACTIONS.find(a => a.kind === 'label' && a.op === 'requeue') as Action
+// One sample argv of every builder of hooks/v2/argv.ts, with the kind of the action that runs it, or
+// the action itself where its op decides the shape.
+const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['label', ARGV.labelSetArgv(REPO, 470, 'factory:building', ['factory:queued', 'factory:designing', 'factory:reviewing', 'factory:fixing', 'factory:merge-queue', 'factory:parked'])],
   ['label', ARGV.labelSetArgv(REPO, 470, 'factory:queued', [])],
   ['label', ARGV.labelClearArgv(REPO, 470, ['factory:building', 'In development'])],
-  ...Object.values(FACTORY_LABELS).map((l): [Action['kind'], string[]] => ['label', ARGV.labelCreateArgv(REPO, l)]),
+  [REQUEUE, ARGV.labelReleaseArgv(REPO, 470, READY, Object.values(FACTORY_LABELS).map(l => l.name))],
+  ['label', ARGV.labelReleaseArgv(REPO, 470, REJECTED_LABEL.name, Object.values(FACTORY_LABELS).map(l => l.name))],
+  ...ALL_FACTORY_LABELS.map((l): [Action['kind'], string[]] => ['label', ARGV.labelCreateArgv(REPO, l)]),
   ['comment', ARGV.issueCommentArgv(REPO, 470)],
   ['comment', ARGV.prCommentArgv(REPO, 512)],
   ['comment', ARGV.commentsReadArgv('issue', 470)],
@@ -482,7 +494,7 @@ const V2_ARGVS: [Action['kind'], string[]][] = [
   ['slot', ARGV.slotKillArgv(SLOT)],
   ['slot', ARGV.slotFreeArgv(SLOT, 'lease-2', LOOP_DIR)],
 ]
-const kindAction = (kind: Action['kind']): Action | undefined => [...V2_ACTIONS, ...ACTIONS].find(a => a.kind === kind)
+const kindAction = (kind: Action['kind'] | Action): Action | undefined => (typeof kind === 'string' ? [...V2_ACTIONS, ...ACTIONS].find(a => a.kind === kind) : kind)
 
 describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
   test('every v2 kind runs under planner v2: an executor not built yet fails, never retried, before any command; one built stays inside the bans and spawns only its step\'s agent', async () => {
@@ -497,8 +509,9 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
   })
 
   test('every builder of argv.ts stays inside the bans for its own kind, and its widened writes are banned for any other', () => {
-    for (const [kind, argv] of V2_ARGVS) {
-      expect({ kind, argv, bans: bans(argv, kindAction(kind)) }).toEqual({ kind, argv, bans: [] })
+    for (const [k, argv] of V2_ARGVS) {
+      const kind = typeof k === 'string' ? k : `${k.kind} ${k.key}`
+      expect({ kind, argv, bans: bans(argv, kindAction(k)) }).toEqual({ kind, argv, bans: [] })
       const widened = bans(argv).length > 0
       if (widened) expect({ kind, argv, banned: bans(argv, kindAction('transition')).length > 0 }).toEqual({ kind, argv, banned: true })
     }
@@ -509,6 +522,11 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
     const bad: [string[], Action | undefined][] = [
       [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'], label],
       [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'factory:building', '--remove-label', 'ready'], label],
+      // the ready label comes back only through a requeue, and only with the state labels off
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready', '--remove-label', 'factory:queued,factory:parked'], label],
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready'], REQUEUE],
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'ready', '--remove-label', 'bug'], REQUEUE],
+      [['gh', 'issue', 'edit', '470', '--repo', REPO, '--add-label', 'bug', '--remove-label', 'factory:queued'], REQUEUE],
       [['gh', 'label', 'create', 'ready', '--repo', REPO, '--color', 'ffffff', '--description', 'x', '--force'], label],
       [['gh', 'label', 'delete', 'factory:queued', '--repo', REPO, '--yes'], label],
       [['gh', 'issue', 'comment', '470', '--repo', REPO, '--body', 'x'], kindAction('comment')],

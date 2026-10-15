@@ -10,7 +10,11 @@
 // - The claim filters are v1's D1 filters (open, trusted, `ready`, no skip label, not blocked, not
 //   a tracker, not skipped or paused, `only` and `priority` order), but a drop applies to the life
 //   it closed (4.1), so re-adding `ready` brings a dropped issue back, and only another device's
-//   live work keeps an issue from a claim; the claim tool is the arbiter.
+//   live work keeps an issue from a claim; the claim tool is the arbiter. An issue carrying
+//   factory:rejected is never claimed (6.4): the owner removes that label to try again.
+// - Each claim is one life (lives.ts): S0's record counts it after the issue's earlier lives, and
+//   the first claim after a rejection starts the count again, its transition's via `unreject`
+//   (a person's intervention, 7.2).
 // - Capacity: records queued or in flight, plus claims in flight, stay under K
 //   (maxInFlightIssues); a parked record never counts. Slow claims once per pass and none within
 //   slowGapMs of the last; merge work never holds a claim back (section 15).
@@ -20,8 +24,10 @@ import { gate, skip, wake, want } from '../foundation'
 import type { IssueView, LedgerEntry, Ms } from '../types'
 import { claimKey, keyParts, lifeOf, reclaimKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
+import { livesBefore } from './lives'
 import { ROW_S0, madeRecord } from './table'
 import type { Claimed } from './table'
+import { REJECTED_LABEL } from './types'
 import type { IssueRecord, V2Ctx } from './types'
 
 const FIRST = /^i([1-9]\d*)\/claim\/([0-9a-z]+)$/
@@ -113,13 +119,15 @@ function makeRecords(ctx: V2Ctx): void {
       skip(ctx, 'S1', got.issue, `claimed ${e.key}, but a record of life ${live.life} is not closed`)
       continue
     }
-    const next = madeRecord(got, ctx.state.now)
+    const before = livesBefore(ctx.v2.records, ctx.state.ledger, got.issue, got.life)
+    const next = madeRecord(got, ctx.state.now, before.count + 1)
+    const back = before.afterReject ? ', back after factory:rejected' : ''
     want(ctx, {
       kind: 'transition',
       key: transitionKey(next),
       class: 'free',
       rule: 'S1',
-      reason: `S0: claimed${got.pr === null ? '' : `, PR #${got.pr} adopted`}`,
+      reason: `S0: claimed${got.pr === null ? '' : `, PR #${got.pr} adopted`}, life ${next.lives}${back}`,
       issue: got.issue,
       row: ROW_S0.id,
       event: 'ok',
@@ -127,7 +135,7 @@ function makeRecords(ctx: V2Ctx): void {
       next,
       trigger: { kind: 'claim', key: e.key },
       cause: null,
-      via: got.pr === null ? 'claim' : 'adopt',
+      via: before.afterReject ? 'unreject' : got.pr === null ? 'claim' : 'adopt',
     })
   }
 }
@@ -167,6 +175,7 @@ function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): 
   if (issue.open !== true) return issue.open === false ? 'closed' : 'GitHub state unknown'
   if (issue.trusted !== true) return issue.trusted === false ? 'untrusted author' : 'author unknown'
   if (issue.labels === null) return 'labels unknown'
+  if (issue.labels.some(l => sameLabel(l, REJECTED_LABEL.name))) return `label ${REJECTED_LABEL.name}: the owner removes it to try again`
   if (!issue.labels.some(l => sameLabel(l, config.readyLabel))) return `no ${config.readyLabel} label`
   const skipLabel = issue.labels.find(l => config.skipLabels.some(s => sameLabel(s, l)))
   if (skipLabel !== undefined) return `label ${skipLabel}`

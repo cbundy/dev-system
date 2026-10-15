@@ -86,7 +86,8 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
   test('property 18 over events.ts\'s own codec: any history of transitions rebuilds the records it left', () => {
     // a history the table makes: a claim, its lease, the design, a build that cannot, a triage
     // retry, a timeout, a second triage retry, the build
-    const triage: TableEvent = { kind: 'triage', choice: 'retry', reason: 'flaky', data: { instructions: 'run it again' } }
+    // short enough that the whole history fits a note (free text past NOTE_MAX is clipped, 7.1)
+    const triage: TableEvent = { kind: 'triage', choice: 'retry', reason: 'flaky', data: { instructions: 'once more' } }
     const steps: TableEvent[] = [
       { kind: 'ok' },
       { kind: 'ok', data: { brief: 'https://github.com/cbundy/dev-system/issues/7#issuecomment-1' } },

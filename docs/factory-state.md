@@ -146,14 +146,15 @@ Per repo, each live issue: stage, detail, time in stage, holder device (the devi
 (`{ until, lapsed }` of the newest `claimed` or `renewed` and its lease, or null) and `v2` (the
 factory loop v2's `{ state, step, attempt, life, seq, why }`, or null). Flags are disagreements
 between sources and never change the stage: for a v2 issue, a missing `factory:<state>` label or any
-other `factory:*` label; for any other issue, a `queued` one without `ready`; a GitHub claim comment
+other `factory:*` label (but `factory:rejected` on a closed one: the loop rejected the issue at its
+last life, v2 SPEC 6.4, and that label is not a state); for any other issue, a `queued` one without `ready`; a GitHub claim comment
 held by another device than the events say; a GitHub state that could not be read. No label marks a
 claim: `In development` is gone (v2 SPEC 3.6). Also per repo: recently ended issues, `other_runs` (running runs on a branch
 with no issue number), and coverage. Across repos: the stuck list, and the workers section.
 
 An open issue labelled `factory:<state>` or `ready` that the database has never seen is listed with
 source `github`, its stage from the `factory:*` label (as in the table above), else `queued`, so a
-missing event never hides work.
+missing event never hides work. `factory:rejected` names no stage.
 
 ## Coverage
 

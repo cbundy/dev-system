@@ -24,7 +24,9 @@ import {
 import type { V2Readers, V2Stored } from '../hooks/v2/observe'
 import {
   AGENT_STEPS,
+  ALL_FACTORY_LABELS,
   FACTORY_LABELS,
+  REJECTED_LABEL,
   ISSUE_STATES,
   SLOT_STATES,
   STATE_STEP,
@@ -86,6 +88,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     why: null,
     notes: ['the owner: keep it small'],
     prClosedAt: null,
+    lives: 1,
     ...over,
   }
 }
@@ -161,7 +164,7 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
     }
     expect(V2_ACTION_KINDS).toHaveLength(11)
     expect(V2_RULES).toHaveLength(21)
-    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace'])
+    expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected'])
   })
 
   test('the seven labels, one per state but closed, with appendix D\'s colours', () => {
@@ -177,6 +180,12 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
     for (const s of ISSUE_STATES) expect(labelOf(s)).toBe(s === 'closed' ? null : `factory:${s}`)
     expect(FACTORY_LABELS.parked.description).toBe('Factory loop: waits on the owner; remove this label to resume')
   })
+
+  test('factory:rejected is an eighth label the loop makes, and no state\'s (6.4, appendix D)', () => {
+    expect([REJECTED_LABEL.name, REJECTED_LABEL.color]).toEqual(['factory:rejected', '6a737d'])
+    expect(ALL_FACTORY_LABELS.map(l => l.name)).toEqual([...Object.values(FACTORY_LABELS).map(l => l.name), 'factory:rejected'])
+    for (const s of ISSUE_STATES) expect(labelOf(s)).not.toBe(REJECTED_LABEL.name)
+  })
 })
 
 describe('the store\'s records and heads (v2 SPEC 3.3, 2.4)', () => {
@@ -189,6 +198,10 @@ describe('the store\'s records and heads (v2 SPEC 3.3, 2.4)', () => {
     expect(recordsFromStore({ v: 1, savedAt: NOW, records: [...bad, record({ issue: 9 })] })).toEqual([record({ issue: 9 })])
     for (const none of [undefined, null, [], { v: 2, records: [] }, { v: 1 }]) expect(recordsFromStore(none)).toBeNull()
     expect(recordOf({ ...record(), extra: 1 })).toEqual(record())
+    // a record stored before its life count reads as a first life; a count below 1 does not read
+    const { lives: _lives, ...uncounted } = record({ lives: 2 })
+    expect(recordOf(uncounted)).toEqual(record({ lives: 1 }))
+    expect(recordOf({ ...record(), lives: 0 })).toBeNull()
   })
 
   test('a closed record goes from the store 7 days after it closed; an open one stays, whatever its age', () => {

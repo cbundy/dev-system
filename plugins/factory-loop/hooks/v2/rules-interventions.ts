@@ -3,16 +3,18 @@
 // often its fact is seen. The facts, each one the loop already holds:
 // - the ledger: a done, stored `transition` by its row and event (triage, an unknown, a free
 //   re-run, a park, a fixer for red CI or a conflict, a head sent back from the queue, a hand
-//   merge, a hand close of the PR or the issue, an unpark by label), a CI re-run, a PR body
-//   re-rendered for its linkage, R1's release of a ghost, H1's re-claim of a lapsed claim, an owner
-//   item told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
+//   merge, a hand close of the PR or the issue, an unpark by label, the first claim after the
+//   owner lifted factory:rejected), a CI re-run, a PR body re-rendered for its linkage, R1's
+//   release of a ghost (a rejection among them), H1's re-claim of a lapsed claim, an owner item
+//   told (breaker, stalled, checkout, workspace) and any wake that is not a planned step;
 // - the records and the PRs: a head on a record's branch that no loop step produced (4.1);
 // - the State: a module load, after an earlier run of the loop, with no restart of the loop's own
 //   in flight; the companion's refusals and the stop gates that could not run
 //   (sources-interventions.ts); and the hand edits of control.json, the OFF file and the settings,
 //   against the versions the loop last read or wrote (fileFacts, below).
 // A transition's own detail comes with it, in its via code (table.ts viaOf: `unknown:<why>`,
-// `fix:<review|ci|conflict>`, `unpark:<op|label>`), so nothing is inferred from other entries.
+// `fix:<review|ci|conflict>`, `unpark:<op|label>`, S0's `unreject`), so nothing is inferred from
+// other entries.
 // Owner ops are logged when they land (act-events.ts), not here. Not interventions: the planned
 // work, a fixer for review findings, a fixer chosen by triage (counted as the triage), claim-lost
 // (another device's work), tells for waiting states, and status and help. Pure.
@@ -21,7 +23,7 @@ import type { LedgerEntry, Ms } from '../types'
 import { intervention } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
-import { isReleaseEntry } from './release'
+import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
 import type { FileEdit, FilesSeen, InterventionFacts } from './sources-interventions'
 import type { IssueState, UnknownWhy, V2Ctx, V2Outcome } from './types'
 import { UNKNOWN_WHYS } from './types'
@@ -103,6 +105,9 @@ export function fromTransition(ctx: V2Ctx, f: Fact): Planned[] {
   const person = (cause: string, reason: string) => out.push({ who: 'person', cause, reason })
   const from = o.from ?? 'none'
   switch (o.row) {
+    case 'S0':
+      if (o.via === 'unreject') person('unreject', 'factory:rejected was removed and ready added by hand: the issue is back, its life count started again')
+      break
     case 'U1':
       loop(`free:${o.cause ?? 'load'}`, `${stepName(o)} in ${from} runs again free after ${o.cause ?? 'a cause outside the issue'}`)
       break
@@ -188,7 +193,10 @@ function fromLedger(ctx: V2Ctx): Planned[] {
     } else if (entry.kind === 'claim' && done && p !== null && p.rest.startsWith('claim/')) {
       add(entry, 'loop', 'reclaim', 'a lapsed claim was claimed again onto its record', p.life)
     } else if (done && isReleaseEntry(entry)) {
-      add(entry, 'loop', 'reconcile', 'R1 released a live claim with no record', null)
+      const claim = releaseClaimOf(entry.issue ?? 0, entry.key)
+      const outcome = claim === null ? null : releaseOutcomeOf(key => ctx.byKey.has(key), entry.issue ?? 0, claim)
+      if (outcome === 'reject') add(entry, 'loop', 'rejected', 'R1 released a live claim with no record at its last life: factory:rejected', null)
+      else add(entry, 'loop', 'reconcile', `R1 released a live claim with no record${outcome === 'requeue' ? ': back in the queue' : outcome === 'leave' ? ': out of the factory' : ''}`, null)
     } else if (era !== null && entry.startedAt >= era && entry.kind === 'tell' && TOLD.has(entry.wake ?? '') && !entry.key.includes('iv/')) {
       add(entry, 'loop', TOLD.get(entry.wake ?? '') as string, `the owner was told: ${entry.key}`, null)
     } else if (era !== null && entry.startedAt >= era && (entry.kind === 'judge' || (entry.kind === 'task' && entry.wake !== 'release'))) {

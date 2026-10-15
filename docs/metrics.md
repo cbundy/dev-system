@@ -68,7 +68,9 @@ free text (a reason, a question) when you show it.
 their meaning and note: `delegated` (`brief <url>`), `fix_requested` (`review`, `ci`, `conflict` or
 `triage`), `merge_ready`, `verdict` (a fixer's `CORRECT:` for a fixed finding, `WRONG:` for a declined
 one, actor `fixer`), `merged`, and `abandoned` and `reclaimed`, whose v2 note starts with
-`reason=<dropped|split|triage|reconcile|other>`.
+`reason=<dropped|split|triage|reconcile|other>`. A `reconcile` release also carries
+`outcome=<requeue|leave|reject>` (`reject`: the lives cap was reached and the issue is labelled
+`factory:rejected`) and `lives=<n|none>`, the released life's number.
 
 Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `pr`, `head`,
 `note`, `session_id`, `actor`, `v`, `raw`, `event_id`, `base_image`, `dev_image`,
