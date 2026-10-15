@@ -68,6 +68,11 @@ function runtime(planner: 'v1' | 'v2' = 'v1'): Runtime {
 // reply: each CLI as it answers on success, so every executor runs every step it has
 function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; stderr?: string } {
   const [cmd, ...args] = argv
+  // v2's slot tool, run from the plugin's bin/ (act-slots.ts)
+  if (cmd === `${PLUGIN_ROOT}/bin/factory-slot`) {
+    const out: Record<string, string> = { lease: `LEASED path=${LEASED} lease=lease-3`, prepare: `PREPARED head=${HEAD}`, kill: 'KILLED 0', free: `FREED path=${SLOT}` }
+    return { stdout: `${out[args[0] ?? ''] ?? ''}\n` }
+  }
   switch (cmd) {
     case 'callum-flow-merge-guard':
       return args.includes('--update-behind')
@@ -445,7 +450,7 @@ const V2_ARGVS: [Action['kind'], string[]][] = [
   ['slot', ARGV.slotLeaseArgv(470, LIFE)],
   ['slot', ARGV.slotPrepareArgv(SLOT, 'lease-2', 'issue-470', '{"v":1}')],
   ['slot', ARGV.slotKillArgv(SLOT)],
-  ['slot', ARGV.slotFreeArgv(SLOT, 'lease-2')],
+  ['slot', ARGV.slotFreeArgv(SLOT, 'lease-2', LOOP_DIR)],
 ]
 const kindAction = (kind: Action['kind']): Action | undefined => [...V2_ACTIONS, ...ACTIONS].find(a => a.kind === kind)
 

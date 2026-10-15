@@ -207,7 +207,9 @@ export type V2Outcome =
     }
   | { kind: 'pr'; pr: number; created: boolean; reopened: boolean }
   | { kind: 'split'; child: number }
-  | { kind: 'slot'; op: SlotOp; path: string | null; lease: string | null; head: string | null; killed: number | null }
+  // leftovers: the patch file a prepare or a free saved the slot's uncommitted work to (10.2), which a
+  // retry's prompt names (5.1); null when the tree was clean
+  | { kind: 'slot'; op: SlotOp; path: string | null; lease: string | null; head: string | null; killed: number | null; leftovers?: string | null }
   | { kind: 'queue'; op: 'update' | 'merge'; merged: boolean; head: string | null; failClass: GuardClass | null; lines: string[] }
   // an open PR adopted at claim (3.5)
   | { kind: 'adopt'; branch: string; pr: number | null; others: number[] }

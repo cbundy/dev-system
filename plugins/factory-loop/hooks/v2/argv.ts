@@ -160,6 +160,7 @@ export function slotKillArgv(path: string): string[] {
   return ['factory-slot', 'kill', path]
 }
 
-export function slotFreeArgv(path: string, lease: string): string[] {
-  return ['factory-slot', 'free', path, lease]
+// The loop dir is where the slot's leftovers are saved before it goes back (10.1, 10.2).
+export function slotFreeArgv(path: string, lease: string, loopDir: string): string[] {
+  return ['factory-slot', 'free', path, lease, loopDir]
 }

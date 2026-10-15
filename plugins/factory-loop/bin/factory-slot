@@ -1,0 +1,381 @@
+#!/usr/bin/env node
+// factory-slot: the factory loop v2's slot tool (docs/factory-loop/v2/SPEC.md 10.1, 10.2, 10.8). The
+// loop's `slot` executor (hooks/v2/act-slots.ts) runs it from the repo's main checkout, one op per
+// call, and reads the one result line it prints. It only ever touches a slot of the main checkout's
+// treehouse pool that the loop leased (holder `factory-loop:<N>:<life>`), never the main checkout.
+//
+//   factory-slot lease <N> <life>
+//     `treehouse get --lease --lease-holder factory-loop:<N>:<life> --base <default> --json`, unless
+//     a slot already carries that holder (a retry after a lost answer keeps it). Prints
+//     `LEASED path=<p> lease=<id>`. The branch is checked out by prepare.
+//   factory-slot prepare <path> <lease> <branch> <marker json>
+//     For one step attempt (10.2): ends the slot's processes; saves its uncommitted work (tracked
+//     changes and untracked files) as one binary patch, <loop dir>/leftovers/<N>-<life>-s<seq>-<ms>.patch;
+//     `git fetch --prune origin`, `git reset --hard`, `git clean -fd`, then
+//     `git switch --ignore-other-worktrees -C <branch> origin/<branch>`, or from origin's default
+//     branch (with no upstream) when origin has no such branch, so a stale slot or a person's
+//     worktree that has the branch checked out does not block it; writes the step marker
+//     `factory-step.json` into the slot's own git dir (never the tree). Prints `PREPARED head=<sha>`,
+//     and `LEFTOVERS file=<f>` when it saved any. Work it could not save is never reset: it fails.
+//   factory-slot kill <path>
+//     SIGTERM to every process whose working directory is the slot or inside it (but this tool and
+//     its ancestors), SIGKILL to survivors after 5 seconds (10.8). Prints `KILLED <n>`.
+//   factory-slot free <path> <lease> <loop dir>
+//     W2 (10.1): ends its processes, saves its leftovers (<N>-<life>-free-<ms>.patch), resets and
+//     cleans it, then `treehouse return <path> --if-lease-id <lease> --force`, and checks the pool
+//     shows it back. Prints `FREED path=<p>`, or `GONE path=<p>` when the lease is no longer on the
+//     slot (it was returned already, or the slot went): nothing is touched then.
+//
+// Every op refuses (exit 3) a path that is not a slot of the pool and a lease whose holder is not
+// `factory-loop:`-prefixed; prepare also refuses a lease that is not the one named, or whose holder
+// is not the marker's issue and life. Leftovers older than 7 days are pruned whenever one is saved
+// (D-46). Git runs with the repo's hooks off, so a checkout runs no install.
+//
+// Exit codes: 0 done, 1 failed (worth a retry), 2 usage, 3 refused. Environment for tests:
+// CALLUM_FLOW_TREEHOUSE_BIN, CALLUM_FLOW_GIT_BIN, FACTORY_SLOT_KILL_GRACE_MS.
+'use strict'
+
+const { spawnSync } = require('node:child_process')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+
+const ME = 'factory-slot'
+const USAGE = `usage: ${ME} lease <N> <life>
+       ${ME} prepare <path> <lease> <branch> <marker json>
+       ${ME} kill <path>
+       ${ME} free <path> <lease> <loop dir>`
+
+const HOLDER_PREFIX = 'factory-loop:'
+const HOLDER = /^factory-loop:([1-9]\d*):([0-9a-z]+)$/
+const MARKER = 'factory-step.json'
+const DAY = 86_400_000
+const LEFTOVERS_KEEP_MS = 7 * DAY
+const KILL_GRACE_MS = 5_000
+const CMD_TIMEOUT_MS = 240_000
+const HOOKS_OFF = ['-c', 'core.hooksPath=/dev/null']
+
+class Failed extends Error {
+  constructor(message, code = 1) {
+    super(message)
+    this.code = code
+  }
+}
+const refuse = (message) => new Failed(message, 3)
+const usage = (message) => new Failed(`${message}\n${USAGE}`, 2)
+
+// --- commands -----------------------------------------------------------------------------------------
+
+function bins(env) {
+  return { treehouse: env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse', git: env.CALLUM_FLOW_GIT_BIN || 'git' }
+}
+
+// run: one command, stdin closed (an empty one, so no prompt waits), never through a shell.
+function runner(env) {
+  const b = bins(env)
+  return (name, args, opts = {}) => {
+    const r = spawnSync(b[name], args, { encoding: 'utf8', cwd: opts.cwd, env: { ...env, ...(opts.env || {}) }, input: '', timeout: CMD_TIMEOUT_MS, maxBuffer: 256 * 1024 * 1024 })
+    return { code: r.error ? -1 : r.status === null ? -1 : r.status, stdout: r.stdout || '', stderr: r.error ? String(r.error.message) : r.stderr || '' }
+  }
+}
+
+const why = (r) => (r.stderr.trim() || r.stdout.trim() || `exit ${r.code}`).split('\n').slice(-3).join(' ').slice(0, 400)
+
+// git: a git command in a slot, the repo's hooks off.
+function git(io, dir, args, opts) {
+  return io.run('git', [...HOOKS_OFF, '-C', dir, ...args], opts)
+}
+
+function must(r, what) {
+  if (r.code !== 0) throw new Failed(`${what}: ${why(r)}`)
+  return r
+}
+
+// --- the pool --------------------------------------------------------------------------------------------
+
+function poolOf(io) {
+  const r = must(io.run('treehouse', ['status', '--json']), 'treehouse status')
+  let list
+  try {
+    list = JSON.parse(r.stdout)
+  } catch {
+    throw new Failed('treehouse status: its output is not JSON')
+  }
+  if (!Array.isArray(list)) throw new Failed('treehouse status: its output is not a list')
+  return list.filter((w) => w !== null && typeof w === 'object' && typeof w.path === 'string')
+}
+
+const real = (p) => {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return path.resolve(p)
+  }
+}
+
+// slotAt: the pool's slot at this path (compared as real paths), or null.
+function slotAt(list, p) {
+  const want = real(p)
+  return list.find((w) => w.path === p || real(w.path) === want) || null
+}
+
+const leaseOf = (w) => (typeof w.lease_id === 'string' ? w.lease_id : '')
+const holderOf = (w) => (typeof w.lease_holder === 'string' ? w.lease_holder : '')
+
+// loopSlot: the slot at this path, leased by the loop; refused otherwise.
+function loopSlot(list, p) {
+  const w = slotAt(list, p)
+  if (w === null) throw refuse(`${p} is not a slot of the pool`)
+  if (!holderOf(w).startsWith(HOLDER_PREFIX)) throw refuse(`${p} is not leased by the factory loop (holder ${holderOf(w) || 'none'})`)
+  return w
+}
+
+// defaultBranch: origin's default branch, as the main checkout knows it, else as origin says.
+function defaultBranch(io, dir) {
+  const sym = git(io, dir, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
+  if (sym.code === 0 && sym.stdout.trim().startsWith('origin/')) return sym.stdout.trim().slice('origin/'.length)
+  const ls = git(io, dir, ['ls-remote', '--symref', 'origin', 'HEAD'])
+  const m = ls.code === 0 ? /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(ls.stdout) : null
+  return m ? m[1] : null
+}
+
+// --- the slot's processes (10.8) --------------------------------------------------------------------
+
+// parentOf: a process's parent, from /proc/<pid>/stat (the field after the command's closing paren).
+function parentOf(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]) || 0
+  } catch {
+    return 0
+  }
+}
+
+// endIn: every process whose working directory is the slot or inside it, but this one and its
+// ancestors: SIGTERM, then SIGKILL for any left after the grace. The number signalled.
+async function endIn(dir, graceMs) {
+  const root = real(dir)
+  const own = new Set([process.pid])
+  for (let p = process.ppid; p > 1 && !own.has(p); p = parentOf(p)) own.add(p)
+  const inside = () =>
+    fs
+      .readdirSync('/proc')
+      .filter((d) => /^\d+$/.test(d))
+      .map(Number)
+      .filter((pid) => {
+        if (own.has(pid)) return false
+        try {
+          const cwd = fs.readlinkSync(`/proc/${pid}/cwd`)
+          return cwd === root || cwd.startsWith(`${root}/`)
+        } catch {
+          return false
+        }
+      })
+  const first = inside()
+  const signal = (pid, sig) => {
+    try {
+      process.kill(pid, sig)
+    } catch {
+      // gone, or not ours to signal
+    }
+  }
+  for (const pid of first) signal(pid, 'SIGTERM')
+  for (let waited = 0; waited < graceMs && inside().some((p) => first.includes(p)); waited += 100) await new Promise((r) => setTimeout(r, 100))
+  for (const pid of inside().filter((p) => first.includes(p))) signal(pid, 'SIGKILL')
+  return first.length
+}
+
+// --- leftovers (10.2) ----------------------------------------------------------------------------------
+
+// saveLeftovers: the slot's tracked changes and untracked files as one binary patch against its
+// HEAD, built in a scratch index so the slot's own is not touched; no file when nothing changed.
+// problem: why nothing could be saved.
+function saveLeftovers(io, dir, loopDir, name) {
+  const head = git(io, dir, ['rev-parse', '--verify', '-q', 'HEAD'])
+  if (head.code !== 0) return { file: null, problem: 'no HEAD' }
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-`))
+  const opts = { env: { GIT_INDEX_FILE: path.join(scratch, 'index') } }
+  try {
+    for (const args of [['read-tree', 'HEAD'], ['add', '-A']]) {
+      const r = git(io, dir, args, opts)
+      if (r.code !== 0) return { file: null, problem: why(r) }
+    }
+    const d = git(io, dir, ['diff', '--cached', '--binary', 'HEAD'], opts)
+    if (d.code !== 0) return { file: null, problem: why(d) }
+    if (d.stdout === '') return { file: null, problem: null }
+    const out = path.join(loopDir, 'leftovers')
+    fs.mkdirSync(out, { recursive: true })
+    pruneLeftovers(out)
+    const file = path.join(out, `${name}-${Date.now()}.patch`)
+    fs.writeFileSync(file, d.stdout)
+    return { file, problem: null }
+  } catch (err) {
+    return { file: null, problem: String(err && err.message ? err.message : err) }
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+// pruneLeftovers: patch files older than 7 days go, as the loop's other files do (D-46).
+function pruneLeftovers(dir) {
+  const cut = Date.now() - LEFTOVERS_KEEP_MS
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.endsWith('.patch')) continue
+    const file = path.join(dir, name)
+    try {
+      if (fs.statSync(file).mtimeMs < cut) fs.rmSync(file, { force: true })
+    } catch {
+      // gone already
+    }
+  }
+}
+
+function cleanTree(io, dir) {
+  const r = git(io, dir, ['--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'])
+  return r.code === 0 && r.stdout.trim() === ''
+}
+
+// clear: the slot's processes ended and its uncommitted work saved, then its tree reset and
+// cleaned. Work that could not be saved is left alone: it fails. The processes ended and the file.
+async function clear(io, dir, loopDir, name, graceMs) {
+  const ended = await endIn(dir, graceMs)
+  const saved = saveLeftovers(io, dir, loopDir, name)
+  if (saved.problem !== null && !cleanTree(io, dir)) throw new Failed(`its uncommitted work could not be saved (${saved.problem}); the slot was left as it is`)
+  // a rebase, am or cherry-pick an agent left half done would hold the switch; its work is saved
+  for (const cmd of ['rebase', 'am', 'cherry-pick']) git(io, dir, [cmd, '--quit'])
+  must(git(io, dir, ['reset', '-q', '--hard']), 'git reset --hard')
+  must(git(io, dir, ['clean', '-q', '-fd']), 'git clean -fd')
+  return { ended, file: saved.file }
+}
+
+// --- ops ------------------------------------------------------------------------------------------------
+
+function lease(io, args, cwd) {
+  const [n, life] = args
+  if (args.length !== 2 || !/^[1-9]\d*$/.test(n || '') || !/^[0-9a-z]+$/.test(life || '')) throw usage('lease takes an issue number and a life')
+  const holder = `factory-loop:${n}:${life}`
+  const kept = poolOf(io).find((w) => holderOf(w) === holder && leaseOf(w) !== '')
+  if (kept) return [`LEASED path=${kept.path} lease=${leaseOf(kept)}`]
+  const base = defaultBranch(io, cwd)
+  const r = must(io.run('treehouse', ['get', '--lease', '--lease-holder', holder, ...(base === null ? [] : ['--base', base]), '--json'], { cwd }), 'treehouse get')
+  let got
+  try {
+    got = JSON.parse(r.stdout)
+  } catch {
+    throw new Failed('treehouse get: its output is not JSON')
+  }
+  if (!got || typeof got.path !== 'string' || typeof got.lease_id !== 'string' || got.path === '' || got.lease_id === '') throw new Failed('treehouse get: no path or lease in its output')
+  return [`LEASED path=${got.path} lease=${got.lease_id}`]
+}
+
+// markerOf: the step marker as the loop wrote it (hooks/v2/types.ts StepMarker), checked.
+function markerOf(text, branch) {
+  let m
+  try {
+    m = JSON.parse(text)
+  } catch {
+    throw usage('the marker is not JSON')
+  }
+  const int = (v, min) => Number.isInteger(v) && v >= min
+  const ok =
+    m !== null &&
+    typeof m === 'object' &&
+    m.v === 1 &&
+    typeof m.repo === 'string' &&
+    int(m.issue, 1) &&
+    typeof m.life === 'string' &&
+    /^[0-9a-z]+$/.test(m.life) &&
+    int(m.seq, 0) &&
+    typeof m.step === 'string' &&
+    (m.role === 'writer' || m.role === 'reader') &&
+    m.branch === branch &&
+    Array.isArray(m.gateCommands) &&
+    m.gateCommands.every((c) => typeof c === 'string') &&
+    int(m.gateTimeoutMs, 0) &&
+    typeof m.loopDir === 'string' &&
+    path.isAbsolute(m.loopDir)
+  if (!ok) throw usage('the marker does not read: it needs v 1, repo, issue, life, seq, step, role, the branch, gateCommands, gateTimeoutMs and an absolute loopDir')
+  return m
+}
+
+async function prepare(io, args, cwd, graceMs) {
+  const [p, id, branch, json] = args
+  if (args.length !== 4 || !p || !id || !branch) throw usage('prepare takes a slot, its lease, the branch and the marker')
+  if (io.run('git', ['check-ref-format', '--branch', branch]).code !== 0) throw usage(`${branch} is not a branch name`)
+  const marker = markerOf(json, branch)
+  const w = loopSlot(poolOf(io), p)
+  if (leaseOf(w) !== id) throw refuse(`${p} is not on lease ${id} (it is on ${leaseOf(w) || 'no lease'})`)
+  if (holderOf(w) !== `factory-loop:${marker.issue}:${marker.life}`) throw refuse(`${p} is leased by ${holderOf(w)}, not for #${marker.issue} life ${marker.life}`)
+  const dir = w.path
+  const { file } = await clear(io, dir, marker.loopDir, `${marker.issue}-${marker.life}-s${marker.seq}`, graceMs)
+  must(git(io, dir, ['fetch', '-q', '--prune', 'origin']), 'git fetch origin')
+  const onOrigin = git(io, dir, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}`]).code === 0
+  if (onOrigin) {
+    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '-C', branch, `origin/${branch}`]), `git switch to origin/${branch}`)
+  } else {
+    const base = defaultBranch(io, dir)
+    if (base === null) throw new Failed('origin has no default branch the slot can start from')
+    must(git(io, dir, ['switch', '-q', '--ignore-other-worktrees', '--no-track', '-C', branch, `origin/${base}`]), `git switch to a new ${branch} from origin/${base}`)
+  }
+  const head = must(git(io, dir, ['rev-parse', 'HEAD']), 'git rev-parse HEAD').stdout.trim()
+  const gitDir = must(git(io, dir, ['rev-parse', '--absolute-git-dir']), 'git rev-parse --absolute-git-dir').stdout.trim()
+  const tmp = path.join(gitDir, `${MARKER}.${process.pid}.tmp`)
+  fs.writeFileSync(tmp, `${JSON.stringify(marker, null, 2)}\n`)
+  fs.renameSync(tmp, path.join(gitDir, MARKER))
+  return [`PREPARED head=${head}`, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
+}
+
+async function end(io, args, graceMs) {
+  if (args.length !== 1 || !args[0]) throw usage('kill takes a slot')
+  const w = loopSlot(poolOf(io), args[0])
+  return [`KILLED ${await endIn(w.path, graceMs)}`]
+}
+
+async function free(io, args, cwd, graceMs) {
+  const [p, id, loopDir] = args
+  if (args.length !== 3 || !p || !id || !loopDir || !path.isAbsolute(loopDir)) throw usage('free takes a slot, its lease and the absolute loop dir')
+  const w = slotAt(poolOf(io), p)
+  if (w === null || leaseOf(w) !== id) return [`GONE path=${p}`]
+  const m = HOLDER.exec(holderOf(w))
+  if (m === null) throw refuse(`${p} is not leased by the factory loop (holder ${holderOf(w) || 'none'})`)
+  await clear(io, w.path, loopDir, `${m[1]}-${m[2]}-free`, graceMs)
+  const r = io.run('treehouse', ['return', w.path, '--if-lease-id', id, '--force'], { cwd })
+  const after = slotAt(poolOf(io), w.path)
+  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`]
+  throw new Failed(r.code !== 0 ? `treehouse return: ${why(r)}` : `treehouse return left it ${after.status || 'held'}`)
+}
+
+// --- main ------------------------------------------------------------------------------------------------
+
+async function cli(argv, env, cwd = process.cwd()) {
+  const io = { run: runner(env) }
+  const grace = Number(env.FACTORY_SLOT_KILL_GRACE_MS)
+  const graceMs = Number.isInteger(grace) && grace >= 0 ? grace : KILL_GRACE_MS
+  const [op, ...args] = argv
+  switch (op) {
+    case 'lease':
+      return lease(io, args, cwd)
+    case 'prepare':
+      return prepare(io, args, cwd, graceMs)
+    case 'kill':
+      return end(io, args, graceMs)
+    case 'free':
+      return free(io, args, cwd, graceMs)
+    default:
+      throw usage(op === undefined ? 'no op' : `unknown op ${op}`)
+  }
+}
+
+if (require.main === module) {
+  cli(process.argv.slice(2), process.env).then(
+    (lines) => {
+      process.stdout.write(`${lines.join('\n')}\n`)
+    },
+    (err) => {
+      process.stderr.write(`${ME}: ${err && err.message ? err.message : String(err)}\n`)
+      process.exitCode = err instanceof Failed ? err.code : 1
+    },
+  )
+}
+
+module.exports = { cli }
