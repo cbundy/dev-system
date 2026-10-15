@@ -10,7 +10,9 @@ import type { FactoryEvent } from '../derive'
 import { eventsFromRows } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import { parseCsv } from '../parse'
-import type { Checkout, Ms, Source, State } from '../types'
+import type { Ms, Source, State } from '../types'
+import { checkoutBaseOf } from './reconcile'
+import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readInterventions } from './sources-interventions'
 import { readPrs } from './sources-prs'
@@ -43,16 +45,17 @@ export type SourceCtx = {
 export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
-// the last rebuild, the comments read per issue read, and the last checkout read (R1's tripwire).
+// the last rebuild, the comments read per issue read, and the checkout R1's tripwire last settled
+// on (reconcile.ts checkoutBaseOf).
 export type V2Cache = {
   heads: Record<string, HeadSeen>
   rebuilt: { at: Ms; records: IssueRecord[] } | null
   comments: Map<number, { readAt: Ms; comments: IssueComment[] }>
-  checkout: Checkout | null
+  checkoutBase: CheckoutBase | null
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkout: null }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -316,8 +319,8 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const facts = await readers.interventions({ ...ctx, heads: prs.heads })
   sources.interventions = facts.source
 
-  const checkoutBefore = cache.checkout
-  cache.checkout = state.checkout
+  // the tripwire's base moves only past a read with nothing left untold (10.7)
+  cache.checkoutBase = checkoutBaseOf(cache.checkoutBase, state.checkout, state.ledger, now)
   const v2: V2State = {
     sources,
     records,
@@ -328,7 +331,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     comments,
     prs: prs.read,
     interventions: facts.read,
-    checkoutBefore,
+    checkoutBase: cache.checkoutBase,
   }
   return { v2, heads: prs.heads }
 }
@@ -365,6 +368,6 @@ export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
     comments: {},
     prs: { prs: [] },
     interventions: { companion: [], controlDigest: null, configDigest: null },
-    checkoutBefore: null,
+    checkoutBase: null,
   }
 }

@@ -3,19 +3,22 @@
 // labels off, then, once those have ended and W2 has freed its slot, `reclaimed` or `abandoned`,
 // last. Property 17 of 17.1 runs over generated factories on every planV2 call here: R1 never names
 // an issue a record holds, a claim in flight or another device's claim; a done release plans nothing
-// next pass; observe mode executes nothing. The tripwire tells the owner once of a new change to the
-// main checkout. No test here asserts an exact key: keys come from the key codec.
+// next pass, whatever the factory still shows; observe mode executes nothing. The tripwire tells the
+// owner once of each change to the main checkout, and keeps planning its notice until it is told.
+// No test here asserts an exact key: keys come from the key codec.
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { Action, AgentView, Checkout, IssueView, LedgerEntry, PlanResult, Stage, State } from '../hooks/types'
 import { claimKey, lifeOf } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
-import { checkoutChange, ghostsOf, tripwireKey } from '../hooks/v2/reconcile'
+import { checkoutBaseOf, checkoutChange, claimOf, ghostsOf, tripwireKey } from '../hooks/v2/reconcile'
+import type { CheckoutBase, CheckoutRead } from '../hooks/v2/reconcile'
 import {
   LIVE_STAGES,
   RELEASE_OPS,
   isReleaseEntry,
+  releaseClaimOf,
   releaseEffects,
   releaseEvent,
   releaseEventAction,
@@ -81,15 +84,16 @@ type World = {
   leases?: Lease[]
   leasesOk?: boolean
   agents?: AgentView[]
-  before?: Checkout | null
+  base?: CheckoutBase | null
   checkout?: Checkout | null
 }
 
 // world: a v2 pass's State: the factory's issues, the records, the ledger, the loop's leases, the
-// session's agents, and the main checkout before and now (both clean unless a test says so).
+// session's agents, the main checkout the tripwire last settled on (read a pass ago) and the one
+// now (both clean unless a test says so).
 function world(o: World = {}): State {
   const s = state({ issues: o.issues ?? [], agents: o.agents ?? [], checkout: o.checkout === undefined ? CLEAN : o.checkout })
-  const v2 = { ...emptyV2State(NOW, o.records ?? []), leases: o.leases ?? [], checkoutBefore: o.before === undefined ? CLEAN : o.before }
+  const v2 = { ...emptyV2State(NOW, o.records ?? []), leases: o.leases ?? [], checkoutBase: o.base === undefined ? { checkout: CLEAN, at: NOW - MIN } : o.base }
   v2.sources = { ...v2.sources, leases: o.leasesOk === false ? { ok: false, at: null, error: 'test' } : { ok: true, at: NOW } }
   return { ...s, ledger: [...s.ledger, ...(o.ledger ?? [])], v2 }
 }
@@ -205,19 +209,65 @@ describe('R1: a ghost is released (v2 SPEC 6.2, 6.4)', () => {
     const first = r1(planV2(s, CFG))
     const released = ran(ran(s, first), [releaseEventAction({ issue: 476, claim: lifeOf(NOW - 3 * HOUR), ready: false, stage: 'designing', checked: 'x', branch: null, pr: null }, 'x')])
     expect(r1(planV2(released, CFG))).toEqual([])
-    // claimed again an hour ago, with no record (a lost store): a ghost again, released again
-    const again = { ...released, issues: [held(476, { stageSince: NOW - HOUR })] }
+    // claimed again an hour ago, its record lost with the store: its claim entry, rebuilt from its
+    // `claimed` event, dates a ghost of its own, released again under keys of its own
+    const claim = entry('claim:476:derived:2', 'claim', { issue: 476, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'claim', result: 'claimed' } })
+    const again = { ...released, issues: [held(476, { stageSince: NOW - HOUR })], ledger: [...released.ledger, claim] }
     const second = r1(planV2(again, CFG))
     expect(second.map(a => a.kind)).toEqual(['label'])
     expect(second.map(a => a.key).some(k => first.some(a => a.key === k))).toBe(false)
   })
 
-  test('the claim\'s own entry dates the release when it is newer than the stage the factory shows', () => {
+  test('the claim\'s own entry dates the release, whatever stage the factory shows', () => {
     const claim = entry('claim:477:derived:1', 'claim', { issue: 477, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'claim', result: 'claimed' } })
-    const s = world({ issues: [held(477, { stageSince: NOW - 3 * HOUR })], ledger: [claim] })
-    const [g] = ghostsOf(ctxOf(s))
-    expect(g?.claim).toBe(lifeOf(NOW - HOUR))
-    expect(r1(planV2(s, CFG)).map(a => a.key)).toEqual([releaseKey(477, lifeOf(NOW - HOUR), RELEASE_OPS.label)])
+    for (const stageSince of [NOW - 3 * HOUR, NOW - 10 * MIN, null]) {
+      const s = world({ issues: [held(477, { stageSince })], ledger: [claim] })
+      const [g] = ghostsOf(ctxOf(s))
+      expect(g?.claim).toBe(lifeOf(NOW - HOUR))
+      expect(r1(planV2(s, CFG)).map(a => a.key)).toEqual([releaseKey(477, lifeOf(NOW - HOUR), RELEASE_OPS.label)])
+    }
+  })
+
+  test('a release once begun keeps its keys when the stage the factory shows moves (a run\'s stage); a done one is never begun again', () => {
+    let s = world({ issues: [held(479, { stage: 'in pipeline', stageSince: NOW - 3 * HOUR })] })
+    const [label] = r1(planV2(s, CFG))
+    if (label === undefined) throw new Error('expected a label')
+    s = ran(s, [label])
+    // the run moved on: the factory shows a later stage time, and the release goes on under its own claim
+    const moved = (st: State, since: number): State => ({ ...st, issues: [held(479, { stage: 'ready to merge', stageSince: since })] })
+    const [g] = ghostsOf(ctxOf(moved(s, NOW - 20 * MIN)))
+    expect(g?.claim).toBe(releaseClaimOf(479, label.key))
+    const events = r1(planV2(moved(s, NOW - 20 * MIN), CFG))
+    expect(events.map(a => a.kind)).toEqual(['event'])
+    expect(releaseClaimOf(479, events[0]?.key ?? '')).toBe(releaseClaimOf(479, label.key))
+    s = ran(moved(s, NOW - 20 * MIN), events)
+    // done: the factory still shows it live and its stage keeps moving; nothing is cleared or logged again
+    for (const since of [NOW - 10 * MIN, NOW - MIN]) {
+      const later = moved(s, since)
+      expect(ghostsOf(ctxOf(later))).toEqual([])
+      expect(r1(planV2(later, CFG))).toEqual([])
+      expect(r1Skips(planV2(later, CFG), 479)).toEqual([])
+    }
+  })
+
+  test('a done release leaves the issue to S1: with the factory still showing it live, S1\'s claim starts the new life', () => {
+    let s = world({ issues: [held(486, { labels: ['ready'], stage: 'in pipeline', stageSince: NOW - 2 * HOUR })] })
+    s = ran(s, r1(planV2(s, CFG)))
+    s = ran(s, r1(planV2(s, CFG)))
+    expect(s.ledger.some(e => e.rule === 'R1' && e.kind === 'event' && e.status === 'done')).toBe(true)
+    // still live in the factory view (its run's stage), and no ghost: S1 may claim it
+    expect(ghostsOf(ctxOf(s))).toEqual([])
+    // S1 claims it: in flight, then done with its record still to make, then held by its record
+    const life = lifeOf(NOW)
+    const claiming = { ...s, ledger: [...s.ledger, entry(claimKey(486, life), 'claim', { issue: 486, status: 'running', startedAt: NOW, endedAt: null })] }
+    const claimed = { ...s, ledger: [...s.ledger, entry(claimKey(486, life), 'claim', { issue: 486, startedAt: NOW, endedAt: NOW, outcome: { kind: 'claim', result: 'claimed' } })] }
+    const recorded = { ...claimed, v2: { ...(claimed.v2 ?? emptyV2State(NOW)), records: [record({ issue: 486, life, state: 'queued', step: null, since: NOW })] } }
+    for (const st of [claiming, claimed, recorded]) {
+      expect(ghostsOf(ctxOf(st))).toEqual([])
+      expect(r1(planV2(st, CFG))).toEqual([])
+    }
+    // its claim dates any later release: a ghost of the new life (its record lost) is released under keys of its own
+    expect(claimOf(claimed.ledger, held(486))).toBe(life)
   })
 
   test('a ghost with no claim time is named, not released', () => {
@@ -362,6 +412,18 @@ describe('R1 names nothing but a ghost (property 17)', () => {
         }
         s = withLeases(ran(s, mineR1), [])
         s = { ...s, v2: { ...(s.v2 ?? emptyV2State(NOW)), sources: { ...(s.v2 ?? emptyV2State(NOW)).sources, leases: { ok: true, at: NOW } } } }
+        // the factory keeps showing a released claim live, and a run's stage moves its time
+        s = { ...s, issues: s.issues.map(i => (released.has(i.number) && i.stageSince !== null ? { ...i, stageSince: NOW - (5 - pass) * MIN } : i)) }
+      }
+      // a done release leaves the issue to S1: no ghost; S1's claim, then its record, start the new life
+      const life = lifeOf(NOW)
+      for (const n of released.keys()) if (ghostsOf(ctxOf(s)).some(g => g.issue === n)) throw new Error(`seed ${seed}: #${n} is a ghost after its release was done`)
+      const claimed: State = { ...s, ledger: [...s.ledger, ...[...released.keys()].map(n => entry(claimKey(n, life), 'claim', { issue: n, startedAt: NOW, endedAt: NOW, outcome: { kind: 'claim', result: 'claimed' } }))] }
+      const recorded: State = { ...claimed, v2: { ...(claimed.v2 ?? emptyV2State(NOW)), records: [...(claimed.v2?.records ?? []), ...[...released.keys()].map(n => record({ issue: n, life, state: 'queued', step: null, since: NOW }))] } }
+      for (const st of [claimed, recorded]) {
+        const after = planV2(st, CFG)
+        const named = [...r1(after).filter(a => a.kind !== 'tell').map(a => a.issue), ...after.skipped.filter(k => k.rule === 'R1').map(k => k.issue)]
+        for (const n of released.keys()) if (named.includes(n)) throw new Error(`seed ${seed}: R1 named #${n} after S1 claimed it`)
       }
       // every ghost whose labels were read ends released
       for (const n of ghosts) {
@@ -382,8 +444,9 @@ describe('R1 names nothing but a ghost (property 17)', () => {
 })
 
 describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
-  const dirty = (paths: string[], over: Partial<Exclude<Checkout, { error: string }>> = {}): Checkout => ({ ...CLEAN, dirty: paths, ...over })
+  const dirty = (paths: string[], over: Partial<CheckoutRead> = {}): CheckoutRead => ({ ...CLEAN, dirty: paths, ...over })
   const tells = (result: PlanResult) => result.actions.filter((a): a is Extract<Action, { kind: 'tell' }> => a.kind === 'tell' && a.wake === 'checkout')
+  const base = (checkout: CheckoutRead, at = NOW - MIN): CheckoutBase => ({ checkout, at })
 
   test('a new tracked change tells the owner once, with its paths and the steps that ran in that window', () => {
     const steps = [
@@ -392,40 +455,119 @@ describe('the main-checkout tripwire (v2 SPEC 10.7)', () => {
       entry('i472/l0/s2/design/a1', 'agent-step', { issue: 472, endedAt: NOW - 30 * MIN }),
     ]
     const now = dirty(['README.md', 'hooks/a.ts'])
-    const s = world({ before: dirty(['hooks/a.ts']), checkout: now, ledger: steps })
+    const s = world({ base: base(dirty(['hooks/a.ts'])), checkout: now, ledger: steps })
     const result = planV2(s, CFG)
     const [tell] = tells(result)
     expect(tells(result)).toHaveLength(1)
-    expect(tell).toMatchObject({ key: tripwireKey(now as Exclude<Checkout, { error: string }>), class: 'owner', rule: 'R1', issue: null, fields: { branch: 'main', moved: 'no', paths: '1', steps: '2' } })
+    expect(tell).toMatchObject({ key: tripwireKey(now), class: 'owner', rule: 'R1', issue: null, fields: { branch: 'main', moved: 'no', paths: '1', steps: '2' } })
     expect(tell?.context).toEqual(['changed:', '- README.md', 'steps in that window:', '- i470/l0/s3/build/a1 (running, #470)', '- i471/l0/s2/design/a1 (done, #471)'])
     expect(result.owner).toBe(1)
-    // told: the same change is not told again
-    expect(tells(planV2(ran(s, tells(result)), CFG))).toEqual([])
+    // told: the same change is not told again, and the base moves past it
+    const told = ran(s, tells(result))
+    expect(tells(planV2(told, CFG))).toEqual([])
+    expect(checkoutBaseOf(base(dirty(['hooks/a.ts'])), now, told.ledger, NOW)).toEqual({ checkout: now, at: NOW })
   })
 
-  test('a moved HEAD tells; nothing new, a first read, a failed read or changes cleaned away do not', () => {
+  test('a moved HEAD tells; nothing new, no base, a failed read or changes cleaned away do not', () => {
     const moved = dirty([], { head: '9e01b77aa45eef8d6c31556c1b5ac3d5dd34f3ff' })
-    const told = tells(planV2(world({ before: CLEAN, checkout: moved }), CFG))
+    const told = tells(planV2(world({ base: base(CLEAN), checkout: moved }), CFG))
     expect(told).toHaveLength(1)
     expect(told[0]?.fields.moved).toBe('yes')
     expect(told[0]?.context[0]).toBe('HEAD moved: 5251b75 -> 9e01b77 on main')
-    for (const [before, now] of [
-      [dirty(['a']), dirty(['a'])],
+    for (const [b, now] of [
+      [base(dirty(['a'])), dirty(['a'])],
       [null, dirty(['a'])],
-      [{ error: 'git status failed' }, dirty(['a'])],
-      [CLEAN, { error: 'git status failed' }],
-      [dirty(['a', 'b']), dirty(['b'])],
-    ] as [Checkout | null, Checkout | null][]) {
-      expect(tells(planV2(world({ before, checkout: now }), CFG))).toEqual([])
+      [base(CLEAN), { error: 'git status failed' }],
+      [base(dirty(['a', 'b'])), dirty(['b'])],
+    ] as [CheckoutBase | null, Checkout | null][]) {
+      expect(tells(planV2(world({ base: b, checkout: now }), CFG))).toEqual([])
     }
+  })
+
+  // passes: the tripwire over several passes, observe's base carried between them as observe
+  // carries it (checkoutBaseOf), with what each pass did to the ledger and the store
+  type Pass = { checkout: Checkout | null; ledger?: LedgerEntry[]; storeOk?: boolean; restart?: boolean }
+  function passes(list: Pass[]): { tells: Action[][]; admitted: Action[][] } {
+    let b: CheckoutBase | null = base(CLEAN, NOW - 10 * MIN)
+    let ledger: LedgerEntry[] = []
+    const out = { tells: [] as Action[][], admitted: [] as Action[][] }
+    list.forEach((p, i) => {
+      const at = NOW + i * MIN
+      const added = p.ledger ?? []
+      ledger = [...ledger.filter(e => !added.some(n => n.key === e.key)), ...added]
+      if (p.restart) b = null
+      b = checkoutBaseOf(b, p.checkout, ledger, at)
+      let s: State = { ...world({ base: b, checkout: p.checkout, ledger }), now: at }
+      if (p.storeOk === false && s.v2 !== undefined) s = { ...s, v2: { ...s.v2, sources: { ...s.v2.sources, store: { ok: false, at: null, error: 'store down' } } } }
+      const result = planV2(s, CFG)
+      out.tells.push(tells(result))
+      out.admitted.push(result.actions.filter(a => a.rule === 'R1'))
+    })
+    return out
+  }
+  const now = dirty(['plugins/x.ts'])
+  const key = tripwireKey(now)
+  const toldAt = (at: number) => entry(key, 'tell', { rule: 'R1', startedAt: at, endedAt: at })
+  const openWake = entry('tell:other:1', 'tell', { status: 'running', startedAt: NOW - MIN, endedAt: null })
+
+  test('a notice a wake held back is planned again on the next pass, and told once', () => {
+    const p = passes([
+      { checkout: now, ledger: [openWake] },
+      { checkout: now, ledger: [{ ...openWake, status: 'done', endedAt: NOW }] },
+      { checkout: now, ledger: [toldAt(NOW + MIN)] },
+      { checkout: now },
+    ])
+    // the first pass planned it, and the open wake held it back
+    expect(p.admitted[0]).toEqual([])
+    expect(p.admitted[1]?.map(a => a.key)).toEqual([key])
+    expect(p.admitted[2]).toEqual([])
+    expect(p.admitted[3]).toEqual([])
+  })
+
+  test('a failed read, a store-blind pass and a restart in between lose nothing', () => {
+    const p = passes([
+      { checkout: now, ledger: [openWake] },
+      { checkout: { error: 'git status failed' } },
+      { checkout: now, storeOk: false },
+      { checkout: null },
+      { checkout: now, restart: true, ledger: [{ ...openWake, status: 'done', endedAt: NOW }] },
+    ])
+    expect(p.admitted.slice(0, 4)).toEqual([[], [], [], []])
+    expect(p.admitted[4]?.map(a => a.key)).toEqual([key])
+  })
+
+  test('after a restart a change already told is not told again; a clean checkout is no change', () => {
+    const p = passes([
+      { checkout: now, ledger: [toldAt(NOW - HOUR)], restart: true },
+      { checkout: CLEAN, restart: true },
+      { checkout: dirty([], { head: '9e01b77aa45eef8d6c31556c1b5ac3d5dd34f3ff' }), restart: true },
+    ])
+    expect(p.tells).toEqual([[], [], []])
+  })
+
+  test('a told change moves the base; a further change is told again; changes cleaned away are no change, and a checkout told before is not told again', () => {
+    const more = dirty(['plugins/x.ts', 'README.md'])
+    const p = passes([{ checkout: now }, { checkout: now, ledger: [toldAt(NOW)] }, { checkout: more }, { checkout: dirty([]) }, { checkout: now }])
+    expect(p.admitted.map(a => a.map(x => x.key))).toEqual([[key], [], [tripwireKey(more)], [], []])
+    expect(p.tells[2]?.[0]?.context).toEqual(['changed:', '- README.md'])
+  })
+
+  test('checkoutBaseOf: a failed or missing read keeps the base; the first read is a clean checkout at its HEAD unless told', () => {
+    const b = base(CLEAN)
+    expect(checkoutBaseOf(b, { error: 'x' }, [], NOW)).toBe(b)
+    expect(checkoutBaseOf(b, null, [], NOW)).toBe(b)
+    expect(checkoutBaseOf(null, now, [], NOW)).toEqual({ checkout: CLEAN, at: NOW })
+    expect(checkoutBaseOf(null, now, [toldAt(NOW - MIN)], NOW)).toEqual({ checkout: now, at: NOW })
+    expect(checkoutBaseOf(b, now, [], NOW)).toBe(b)
+    expect(checkoutBaseOf(b, now, [{ ...toldAt(NOW - MIN), status: 'failed' }], NOW)).toBe(b)
   })
 
   test('checkoutChange and tripwireKey: one key per checkout, another for a different change', () => {
     expect(checkoutChange(CLEAN, dirty(['b', 'a']))).toEqual({ head: CLEAN.head, branch: 'main', moved: null, paths: ['a', 'b'] })
     expect(checkoutChange(CLEAN, dirty([], { branch: null }))?.moved).toEqual({ from: CLEAN.head, to: CLEAN.head })
-    const a = dirty(['x', 'y']) as Exclude<Checkout, { error: string }>
-    expect(tripwireKey(a)).toBe(tripwireKey(dirty(['y', 'x']) as Exclude<Checkout, { error: string }>))
-    expect(tripwireKey(a)).not.toBe(tripwireKey(dirty(['x']) as Exclude<Checkout, { error: string }>))
+    const a = dirty(['x', 'y'])
+    expect(tripwireKey(a)).toBe(tripwireKey(dirty(['y', 'x'])))
+    expect(tripwireKey(a)).not.toBe(tripwireKey(dirty(['x'])))
   })
 })
 
@@ -462,6 +604,8 @@ describe('the release (v2 SPEC 6.4)', () => {
     expect(new Set(effects.map(a => a.key)).size).toBe(3)
     const event = releaseEventAction(input, 'why')
     expect(event).toMatchObject({ kind: 'event', rule: 'R1', class: 'free', issue: 467, key: releaseKey(467, 'tbq3k0', RELEASE_OPS.event) })
+    expect(effects.concat(event).map(a => releaseClaimOf(467, a.key))).toEqual(['tbq3k0', 'tbq3k0', 'tbq3k0', 'tbq3k0'])
+    expect([releaseClaimOf(46, event.key), releaseClaimOf(467, 'tell:stalled:x'), releaseClaimOf(467, claimKey(467, 'tbq3k0'))]).toEqual([null, null, null])
     expect(isReleaseEntry({ kind: 'event', rule: 'R1' })).toBe(true)
     expect(isReleaseEntry({ kind: 'event', rule: 'S3' })).toBe(false)
     expect(isReleaseEntry({ kind: 'label', rule: 'R1' })).toBe(false)

@@ -6,8 +6,9 @@
 // constants only: the pure planner imports this, so nothing here may run a command or read a
 // clock.
 import type { PlanCtx } from '../foundation'
-import type { ActionBase, ActionClass, Checkout, Config, LedgerStatus, Ms, Source } from '../types'
+import type { ActionBase, ActionClass, Config, LedgerStatus, Ms, Source } from '../types'
 import type { V2Event } from './events'
+import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
 
@@ -343,8 +344,9 @@ export type V2State = {
   comments: Record<number, IssueComment[]>
   prs: PrsRead
   interventions: InterventionFacts
-  // the main checkout as the pass before read it, for R1's tripwire (10.7)
-  checkoutBefore: Checkout | null
+  // the main checkout the tripwire last settled on, which R1 compares this pass's read with
+  // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
+  checkoutBase: CheckoutBase | null
 }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.

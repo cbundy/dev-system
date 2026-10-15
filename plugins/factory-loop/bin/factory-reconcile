@@ -32,14 +32,26 @@
 // that. An issue's open PR is never updated or closed; re-adding `ready` brings it back, and the
 // loop adopts the PR (3.5).
 //
+// --act fails closed. Before anything is done it checks that every event it would write is one the
+// factory's readers count: hooks/v2/events.ts must write the release's and the intervention's
+// fields as note tokens and read them back, and the callum-flow-event in use must log an
+// `intervention` (tried against a scratch log). Both come with build unit U4, so the act run comes
+// after U4 lands on feat/factory-loop-v2: run this tool from that branch, with
+// CALLUM_FLOW_EVENT_BIN set to its images/base/callum-flow-event until the base image ships it.
+// Until then --act refuses with exit 1 and changes nothing. A slot is returned only once its
+// leftovers are saved or its tree is clean. Each event is checked in the log after it is written
+// (callum-flow-event exits 0 when its write fails); one that is not there fails its issue, and its
+// argv, with the intervention's, is kept in <loop dir>/unlogged-events.jsonl to log again.
+//
 // Slots are read and freed only on the device whose claims these are (the pool is that machine's):
 // run elsewhere, the report says so and leaves every slot alone. The live loops' agents cannot be
 // stopped from here; both loops are in observe mode while this runs.
 //
 // Exit codes: 0 ok (observe, or every approved action done), 1 a required read or an approved
-// action failed, 2 usage. Environment: DEV_MACHINE_NAME (the device), CLAUDE_CONFIG_DIR (the loop
-// dir); for tests CALLUM_FLOW_FACTORY_STATE_BIN, CALLUM_FLOW_DEV_QUERY_BIN, CALLUM_FLOW_GH_BIN,
-// CALLUM_FLOW_ISSUE_READ_BIN, CALLUM_FLOW_EVENT_BIN and CALLUM_FLOW_TREEHOUSE_BIN.
+// action failed or --act was refused, 2 usage. Environment: DEV_MACHINE_NAME (the device),
+// CLAUDE_CONFIG_DIR (the loop dir), CALLUM_FLOW_EVENT_BIN (the event CLI); for tests
+// CALLUM_FLOW_FACTORY_STATE_BIN, CALLUM_FLOW_DEV_QUERY_BIN, CALLUM_FLOW_GH_BIN,
+// CALLUM_FLOW_ISSUE_READ_BIN, CALLUM_FLOW_TREEHOUSE_BIN and CALLUM_FLOW_GIT_BIN.
 'use strict'
 
 const { spawnSync } = require('node:child_process')
@@ -53,7 +65,8 @@ const ME = 'factory-reconcile'
 const USAGE = `usage: ${ME} --repo <owner/name> [--device <name>] [--checkout <dir>] [--loop-dir <dir>] [--act <N>... | --act all]
   Lists this device's live claims with no v2 record, the pool's other slots and the issues that
   still carry 'In development', each with a proposal, and changes nothing.
-  --act <N>... | all   do what each named issue's proposal says now (all: every proposal but live)
+  --act <N>... | all   do what each named issue's proposal says now (all: every proposal but live);
+                       refused until hooks/v2/events.ts and callum-flow-event carry v2's events (U4)
   --device <name>      the device whose claims to reconcile (default DEV_MACHINE_NAME, else the hostname)
   --checkout <dir>     the repo's main checkout: its pool and settings (default the current directory)
   --loop-dir <dir>     where the report and leftovers go (default <CLAUDE_CONFIG_DIR>/factory-loop/<owner>__<repo>)`
@@ -74,6 +87,8 @@ const KILL_GRACE_MS = 5_000
 
 class UsageError extends Error {}
 class ReadError extends Error {}
+// the file the events that could not be logged are kept in, one JSON line each, to log again
+const UNLOGGED = 'unlogged-events.jsonl'
 
 // --- arguments ------------------------------------------------------------------------------------
 
@@ -395,7 +410,7 @@ function realIo(env) {
     issueRead: env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read',
     event: env.CALLUM_FLOW_EVENT_BIN || 'callum-flow-event',
     treehouse: env.CALLUM_FLOW_TREEHOUSE_BIN || 'treehouse',
-    git: 'git',
+    git: env.CALLUM_FLOW_GIT_BIN || 'git',
   }
   const run = (name, args, opts = {}) => {
     const r = spawnSync(bins[name], args, {
@@ -606,11 +621,17 @@ async function act(report, which, ctx) {
         done.push(await freeSlot(ctx, s, n))
       }
       if (plan.release !== null) {
-        const ev = logEvent(ctx, report.repo, ctx.h.events.eventArgv(ctx.h.release.releaseEvent(plan.release)))
-        if (ev !== null) throw new Error(`${ctx.h.release.releaseState(plan.release.ready)} not logged: ${ev}`)
-        done.push(`logged ${ctx.h.release.releaseState(plan.release.ready)}`)
-        const iv = logEvent(ctx, report.repo, ctx.h.events.eventArgv(ctx.h.release.releaseIntervention(plan.release, 'person')))
-        done.push(iv === null ? 'logged the intervention' : `the intervention not logged (${iv})`)
+        // the closing event, last of the release, then the person intervention it is (6.4, 7.2);
+        // one that is not in the log fails the issue, and is kept to log again
+        const state = ctx.h.release.releaseState(plan.release.ready)
+        const event = ctx.h.events.eventArgv(ctx.h.release.releaseEvent(plan.release))
+        const iv = ctx.h.events.eventArgv(ctx.h.release.releaseIntervention(plan.release, 'person'))
+        const ev = logEvent(ctx, report.repo, event)
+        if (ev !== null) throw new Error(`${state} not logged: ${ev}${keepUnlogged(ctx, report.repo, [event, iv])}`)
+        done.push(`logged ${state}`)
+        const ivWhy = logEvent(ctx, report.repo, iv)
+        if (ivWhy !== null) throw new Error(`the intervention not logged: ${ivWhy}${keepUnlogged(ctx, report.repo, [iv])}`)
+        done.push('logged the intervention')
       }
       lines.push(`- #${n}: ${done.join('; ')}.`)
     } catch (err) {
@@ -623,25 +644,132 @@ async function act(report, which, ctx) {
 
 const recent = (facts, at) => facts !== undefined && [facts.head, facts.tree].some((t) => t !== null && at - t < BUSY_MS)
 
-// logEvent: one event through callum-flow-event (events.ts built its argv); null when logged, else
-// why not.
-function logEvent(ctx, repo, argv) {
-  const r = ctx.io.run('event', argv.slice(1), { env: { CALLUM_FLOW_REPO: repo, CALLUM_FLOW_ACTOR: ACTOR } })
-  return r.code === 0 ? null : why(r)
+// argvRow: an event's argv (events.ts eventArgv) as its line in the log reads: its state, its
+// columns and its note.
+function argvRow(argv) {
+  const flag = (name) => {
+    const i = argv.indexOf(name, 2)
+    return i === -1 || i + 1 >= argv.length ? null : argv[i + 1]
+  }
+  const num = (v) => (v === null ? null : Number(v))
+  return { state: argv[1], issue: num(flag('--issue')), branch: flag('--branch'), pr: num(flag('--pr')), head: flag('--head'), note: flag('--note') }
+}
+
+// logEvent: one event through callum-flow-event (events.ts built its argv); null when its line is
+// in the log, else why not. callum-flow-event exits 0 when its write fails (it never fails its
+// caller), so the log is read: its path (--path), its size before, and a line after that with the
+// event's state, issue and note. env: more environment for the CLI (the readiness check's scratch
+// log).
+function logEvent(ctx, repo, argv, env = {}) {
+  const opts = { env: { CALLUM_FLOW_REPO: repo, CALLUM_FLOW_ACTOR: ACTOR, ...env } }
+  const where = ctx.io.run('event', ['--path', '--repo', repo], opts)
+  const file = where.stdout.trim()
+  if (where.code !== 0 || !path.isAbsolute(file)) return `the event log's path not read: ${why(where)}`
+  const before = sizeOf(file)
+  const r = ctx.io.run('event', argv.slice(1), opts)
+  if (r.code !== 0) return why(r)
+  if (!loggedSince(file, before, argvRow(argv))) return `not in the log${r.stderr.trim() ? ` (${why(r)})` : ''}`
+  return null
+}
+
+function sizeOf(file) {
+  try {
+    return fs.statSync(file).size
+  } catch {
+    return 0
+  }
+}
+
+// loggedSince: a line written to the log after `offset` bytes is this event (other writers may
+// have appended lines too). A log that shrank was replaced: all of it is read.
+function loggedSince(file, offset, row) {
+  let text
+  try {
+    const all = fs.readFileSync(file)
+    text = all.subarray(all.length >= offset ? offset : 0).toString('utf8')
+  } catch {
+    return false
+  }
+  return text.split('\n').some((line) => {
+    try {
+      const e = JSON.parse(line)
+      return e.state === row.state && (e.issue ?? null) === row.issue && (e.note ?? null) === row.note
+    } catch {
+      return false
+    }
+  })
+}
+
+// keepUnlogged: the events that could not be logged, appended to <loop dir>/unlogged-events.jsonl
+// as { at, repo, actor, argv } to log again (CALLUM_FLOW_REPO=<repo> CALLUM_FLOW_ACTOR=<actor>
+// <argv...>); the words the issue's line adds.
+function keepUnlogged(ctx, repo, argvs) {
+  const file = path.join(ctx.loopDir, UNLOGGED)
+  try {
+    fs.mkdirSync(ctx.loopDir, { recursive: true })
+    fs.appendFileSync(file, argvs.map((argv) => `${JSON.stringify({ at: new Date().toISOString(), repo, actor: ACTOR, argv })}\n`).join(''))
+    return `; kept in ${file} to log again`
+  } catch (err) {
+    return `; not kept either (${err.message}): ${argvs.map((a) => a.join(' ')).join(' / ')}`
+  }
+}
+
+// actReady: null when --act may run, else why not. Every event it writes must be one the
+// factory's readers count (6.4, 7.1, 7.2): hooks/v2/events.ts writes a release's fields and an
+// intervention's as note tokens and reads them back (U4 fills it), and the callum-flow-event in
+// use logs an `intervention`, tried against a scratch log so nothing reaches the real one.
+function actReady(h, io, repo, at) {
+  if (typeof h.events.parseEvent !== 'function') return 'hooks/v2/events.ts has no note parser yet (U4 fills it)'
+  const sample = { issue: 1, claim: h.keys.lifeOf(at), ready: false, stage: 'designing', checked: 'a check of the note encoding', branch: 'issue-1', pr: 2 }
+  const read = (e) => {
+    try {
+      return h.events.parseEvent(argvRow(h.events.eventArgv(e)))
+    } catch {
+      return null
+    }
+  }
+  const rel = h.release.releaseEvent(sample)
+  const relBack = read(rel)
+  if (relBack === null || relBack.state !== rel.state || relBack.reason !== 'reconcile' || relBack.stage !== rel.stage || relBack.checked !== rel.checked || relBack.pr !== rel.pr) {
+    return "hooks/v2/events.ts does not read back a release's fields (reason, stage, what was checked, PR)"
+  }
+  const iv = h.release.releaseIntervention(sample, 'person')
+  const ivBack = read(iv)
+  if (ivBack === null || ivBack.state !== 'intervention' || ivBack.who !== iv.who || ivBack.cause !== iv.cause || ivBack.fact !== iv.fact) {
+    return "hooks/v2/events.ts does not read back an intervention's who, cause and fact"
+  }
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), `${ME}-probe-`))
+  try {
+    const why = logEvent({ io }, repo, h.events.eventArgv(iv), { CALLUM_EVENTS_DIR: scratch })
+    return why === null ? null : `the callum-flow-event in use does not log an intervention: ${why}`
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+// cleanTree: the slot has no changed or untracked file, as git reads it now.
+function cleanTree(ctx, dir) {
+  const r = ctx.io.run('git', ['-C', dir, '--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'])
+  return r.code === 0 && r.stdout.trim() === ''
 }
 
 // freeSlot: the slot's processes killed, its leftovers saved, then returned on the lease the
-// report saw (10.1, 10.2). Throws when it was not returned.
+// report saw (10.1, 10.2). The save comes first (6.3): a slot whose leftovers were not saved is
+// returned only when its tree is clean, else it is left for the owner. Throws when it was not
+// returned.
 async function freeSlot(ctx, s, n) {
   const killed = await ctx.kill(s.path)
   const saved = saveLeftovers(ctx, s.path, `${n}-v1-slot${s.name}`)
+  if (saved.problem !== null && !cleanTree(ctx, s.path)) {
+    throw new Error(`leftovers not saved: ${saved.problem}; slot ${s.name} not returned, left for the owner${killed > 0 ? ` (${killed} process(es) killed)` : ''}`)
+  }
   const r = ctx.io.run('treehouse', ['return', s.path, '--if-lease-id', s.lease, '--force'], { cwd: ctx.checkout })
   if (r.code !== 0) throw new Error(`slot ${s.name} not returned: ${why(r)}${saved.file ? ` (its leftovers are in ${saved.file})` : ''}`)
   const parts = [`slot ${s.name} returned`]
   if (killed > 0) parts.push(`${killed} process(es) killed`)
   if (saved.file) parts.push(`leftovers in ${saved.file}`)
   if (saved.head) parts.push(`its HEAD was ${short(saved.head)}`)
-  if (saved.problem) parts.push(`leftovers not saved: ${saved.problem}`)
+  if (saved.problem) parts.push(`nothing to save, the tree was clean (${saved.problem})`)
   return parts.join(', ')
 }
 
@@ -742,13 +870,23 @@ async function main(argv, env = process.env, deps = {}) {
     process.stdout.write(`${USAGE}\n`)
     return 0
   }
-  const h = await loadHooks()
+  const loaded = await loadHooks()
+  const h = deps.withHooks ? deps.withHooks(loaded) : loaded
   const machine = env.DEV_MACHINE_NAME || os.hostname()
   const device = o.device || machine
   const configDir = (env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude')).replace(/\/+$/, '')
   const checkout = path.resolve(o.checkout || process.cwd())
   const loopDir = o.loopDir || h.contract.loopDirOf(configDir, o.repo)
   const io = deps.io || realIo(env)
+  if (o.act !== null) {
+    const refused = actReady(h, io, o.repo, Date.now())
+    if (refused !== null) {
+      throw new ReadError(
+        `--act refused, nothing done: ${refused}. The act run comes after U4 lands on feat/factory-loop-v2: ` +
+          'run this tool from that branch, with CALLUM_FLOW_EVENT_BIN set to its images/base/callum-flow-event until the base image ships it.',
+      )
+    }
+  }
   const settings = settingsOf(h, checkout, configDir, machine)
   const input = gather({ repo: o.repo, device, checkout }, io, settings)
   const report = buildReport(input, h)
@@ -769,8 +907,10 @@ async function main(argv, env = process.env, deps = {}) {
   return code
 }
 
-if (require.main === module) {
-  main(process.argv.slice(2)).then(
+// cli: main as the command runs it, its errors on stderr and its exit code set. deps: main's (a
+// test's runner passes its own hooks).
+function cli(argv, env = process.env, deps = {}) {
+  return main(argv, env, deps).then(
     (code) => {
       process.exitCode = code
     },
@@ -786,4 +926,6 @@ if (require.main === module) {
   )
 }
 
-module.exports = { main, parseArgs, buildReport, renderReport, gather, act, loadHooks, issueOfBranch, killIn, saveLeftovers, dur, UsageError, ReadError }
+if (require.main === module) cli(process.argv.slice(2))
+
+module.exports = { main, cli, parseArgs, actReady, buildReport, renderReport, gather, act, loadHooks, issueOfBranch, killIn, saveLeftovers, dur, UsageError, ReadError }

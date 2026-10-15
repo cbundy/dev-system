@@ -789,7 +789,16 @@ v1-only facts.
   the issues that still carry it with no live claim, open or closed, with the proposal `remove
   the label`, approved by issue like the rest (3.6).
 - **When.** In wave 1, while both live loops stay in observe mode (the owner's choice, section
-  15). Again just before cutover (17.5).
+  15). Again just before cutover (17.5). The act run comes after U4 lands on
+  `feat/factory-loop-v2`: `--act` fails closed, refusing with exit 1 and changing nothing until
+  `events.ts` writes and reads back the release's and the intervention's note fields and the
+  `callum-flow-event` in use logs an `intervention` (the branch's `images/base/callum-flow-event`,
+  through `CALLUM_FLOW_EVENT_BIN`, until the base image ships it).
+- **Nothing is lost.** A slot is returned only once its leftovers are saved or its tree is clean;
+  else its issue fails and the slot is left for the owner. Each event is looked for in the log
+  after it is written, since `callum-flow-event` exits 0 when a write fails. One that is not there
+  fails its issue (exit 1), and its argv is kept in `<loop dir>/unlogged-events.jsonl` to log
+  again.
 - **Deleted** at the delete wave, once both repos' loops have cut over.
 
 ### 6.4 Release
@@ -1421,9 +1430,12 @@ Nothing in v2 runs or reads in the main checkout, so a dirty main checkout holds
 safeguards remain:
 
 - callum-flow's guard refuses sub-agents' writes there (10.4);
-- **the tripwire.** R1 compares the `checkout` source with the last pass. A new change (new tracked
-  changes or a moved HEAD) sends `tell(checkout)` once, with the paths and the steps that ran in
-  that window. No step's outcome changes: a writer's ok already needs its commits on origin, and
+- **the tripwire.** R1 compares the `checkout` source with the checkout it last settled on: the
+  newest read with nothing left untold. A change (new tracked changes or a moved HEAD) sends
+  `tell(checkout)` once, with the paths and the steps that ran in that window. The notice stays
+  planned on every pass until it is told, so a pass that holds it back (one wake at a time, a rate
+  cap, a store-blind pass, a failed read) loses nothing. After a restart, changes not told before
+  are told. No step's outcome changes: a writer's ok already needs its commits on origin, and
   failing every step that overlapped would charge other issues for one agent's mistake
   (`failures/F8`). The loop never cleans the main checkout.
 

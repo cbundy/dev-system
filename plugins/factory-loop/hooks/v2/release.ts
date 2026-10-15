@@ -54,6 +54,18 @@ export function releaseKey(issue: number, claim: string, op: string): string {
   return reconcileKey(issue, claim, op)
 }
 
+// releaseClaimOf: the claim a key of one of this issue's releases is scoped to (releaseKey); null
+// for any other key.
+export function releaseClaimOf(issue: number, key: string): string | null {
+  // the codec's own spelling around the claim: what comes before it, and between it and the op
+  const marked = reconcileKey(issue, '\u0000', '\u0001')
+  const before = marked.slice(0, marked.indexOf('\u0000'))
+  const between = marked.slice(marked.indexOf('\u0000') + 1, marked.indexOf('\u0001'))
+  if (!key.startsWith(before)) return null
+  const end = key.indexOf(between, before.length)
+  return end > before.length ? key.slice(before.length, end) : null
+}
+
 // isReleaseEntry: R1's release event as the ledger keeps it; its done entry is the release, the
 // fact of R1's intervention (7.2).
 export function isReleaseEntry(e: Pick<LedgerEntry, 'kind' | 'rule'>): boolean {
