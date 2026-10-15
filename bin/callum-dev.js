@@ -34,9 +34,8 @@ const BASELINE_DIR = path.join(".callum-dev", "baseline");
 // How `update` treats each file (templates/README.md documents the split per file):
 //   merge         3-way merge; repo-owned edits survive, synced changes come forward
 //   replace       wholesale overwrite; the file is fully synced, never hand-edited
-//   settings-json synced by key path: everything the template defines comes from
-//                 the template, key paths the repo added beyond the old baseline
-//                 survive, and `permissions.allow` is unioned (see `mergeSettingsJson`)
+//   settings-json key-path merge; see `mergeSettingsJson` for ownership and
+//                 permission-array rules
 //   init-only     copied at init as a starting point, then fully repo-owned - update
 //                 never touches it
 //
