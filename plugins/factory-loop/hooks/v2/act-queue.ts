@@ -5,8 +5,9 @@
 //   A refusal for a conflict is an answer, not a fault: done, with no head and class conflict
 //   (the step's not-ok). A head that did not move, or any other failure, fails with no class
 //   (unknown). An update GitHub finds needless (already up to date) is done at the head as read.
-// - `queue-merge` runs `callum-flow-merge <p> --patch <approved patch>`: the guard inside it checks
-//   only the loop's facts, and the merge matches the head the guard verified. Merged is done. A
+// - `queue-merge` runs `callum-flow-merge <p> --patch <approved patch> --issue <N>`: the guard
+//   inside it checks only the loop's facts, the record's issue among them (never read from the
+//   branch name), and the merge matches the head the guard verified. Merged is done. A
 //   refusal with a class is the guard's answer, so it is done too, not merged, with the guard's
 //   FAIL lines and their class (9.3; of several, the one whose outcome decides most), or the class
 //   a refusal's merge state names. A merge cut off, or refused with no reason, is read back from
@@ -149,7 +150,7 @@ const update: Executor = async (ctx, action) => {
 
 const merge: Executor = async (ctx, action) => {
   if (action.kind !== 'queue-merge') return refused(`the queue-merge executor got a ${action.kind} action`)
-  const argv = ARGV.queueMergeArgv(action.pr, action.patch)
+  const argv = ARGV.queueMergeArgv(action.pr, action.patch, action.issue)
   const r = await run(ctx, argv, MERGE_MS)
   if (r.ok && r.r.exitCode === 0) {
     return { status: 'done', outcome: outcome('merge', action.head, null, linesOf(`${r.r.stdout}\n${r.r.stderr}`), true), summary: clip(`PR #${action.pr} merged at ${short(action.head)}`) }

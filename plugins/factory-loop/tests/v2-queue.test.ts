@@ -688,10 +688,12 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(await limited.run(UPDATE)).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
   })
 
-  test('queue-merge: callum-flow-merge with the approved patch; merged is done; a refusal is answered (done, not merged) with the guard\'s FAIL lines and the class that decides', async () => {
+  test('queue-merge: callum-flow-merge with the approved patch and the record\'s issue; merged is done; a refusal is answered (done, not merged) with the guard\'s FAIL lines and the class that decides', async () => {
     const ok = actWorld(() => ({}))
     expect(await ok.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: true, head: HEAD, failClass: null } })
-    expect(ok.argvs).toEqual([['callum-flow-merge', '660', '--patch', PATCH]])
+    // the record's issue goes to the guard: the loop's branch issue-<N> carries no slug, and the
+    // guard never has to read the issue from a branch name (factory drill 1, run 2)
+    expect(ok.argvs).toEqual([['callum-flow-merge', '660', '--patch', PATCH, '--issue', '60']])
     const lines = ['GUARD checks FAIL ci=pending class=checks', 'GUARD mergeable FAIL behind main class=behind', 'GUARD author FAIL PR #660 was not opened by a trusted author class=policy']
     const refused = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: `GUARD test-weakening WARN abc1234 step=x\n${lines.join('\n')}\n` } : {}))
     expect(await refused.run(MERGE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'merge', merged: false, head: HEAD, failClass: 'policy', lines } })

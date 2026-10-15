@@ -479,7 +479,7 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
-  ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed')],
+  ['queue-merge', ARGV.queueMergeArgv(512, 'f00dfeed', 470)],
   ['queue-merge', ARGV.patchIdArgv('issue-470', 'origin/main')],
   ['queue-update', ARGV.pollPauseArgv(2)],
   ['agent-step', ARGV.lsRemoteArgv('issue-470')],

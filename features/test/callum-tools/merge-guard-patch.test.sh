@@ -41,11 +41,12 @@ patch_setup() {
 }
 
 # gp <args...>: the guard, as g runs it, but with the run lookup's tools forbidden; every FAIL
-# line it prints is kept in $tmpdir/all-fails
+# line it prints is kept in $tmpdir/all-fails. LINKAGE_BIN, when set, replaces the linkage stub.
 gp() {
   rc=0
   out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/forbidden" \
-    CALLUM_FLOW_LINKAGE_BIN="$tmpdir/linkage" CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$tmpdir/forbidden" \
+    CALLUM_FLOW_LINKAGE_BIN="${LINKAGE_BIN:-$tmpdir/linkage}" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/gh-linkage" \
+    CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$tmpdir/forbidden" \
     NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
   printf '%s\n' "$out" | grep ' FAIL ' >> "$tmpdir/all-fails" || true
   [ ! -f "$st/forbidden-calls" ] || fail "--patch called the run lookup: $(cat "$st/forbidden-calls")"
@@ -119,6 +120,49 @@ passed=$((passed + 1))
 patch_setup; echo BEHIND > "$st/mss"; g 7
 case "$out" in *class=*) fail "a class without --patch: $out" ;; *"--update-behind"*) ;; *) fail "behind without --patch keeps its recovery: $out" ;; esac
 passed=$((passed + 1))
+
+# --- the loop's branch issue-<N>, against the real linkage check ------------------------------
+# The factory loop names an issue's branch issue-<N>, with no slug (v2 SPEC 3.5). Factory drill 1
+# of run 2 parked two green, approved PRs: the linkage check skipped issue-<N> and the guard then
+# wanted --issue. Here the real check-pr-linkage.sh reads the PR through a stub gh of its own.
+LINKAGE_REAL="$ROOT/features/src/callum-tools/check-pr-linkage.sh"
+for t in bash node; do
+  p=$(command -v "$t") || fail "$t not found"
+  [ -e "$toolbin/$t" ] || ln -s "$p" "$toolbin/$t"
+done
+# the stub gh's `pr view` program, shared with the linkage suites; GitHub's closing references
+# come from the body, as it derives them on the default branch
+export PR_VIEW_JQ="$SCRIPT_DIR/linkage-pr-view.jq"
+cat > "$tmpdir/gh-linkage" <<'STUB'
+#!/bin/sh
+d=${STUB_DIR:?}
+case "$1 $2" in
+  'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
+  'pr view') jq -nc --rawfile head "$d/branch" --rawfile base "$d/base" --rawfile body "$d/body" --arg api '' -f "${PR_VIEW_JQ:?}" ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$tmpdir/gh-linkage"
+# loop_setup <branch>: the PR's head pushed as that branch, which the PR names
+loop_setup() {
+  patch_setup
+  git -C "$work" push -q -f origin "$PH:refs/heads/$1"
+  printf '%s\n' "$1" > "$st/branch"
+}
+# gl <args...>: gp with the real linkage check
+gl() {
+  LINKAGE_BIN=$LINKAGE_REAL
+  gp "$@"
+  LINKAGE_BIN=''
+}
+loop_setup issue-12; gl 7 --patch "$PID"; expect_pass "issue-<N> names its issue: the linkage is checked, no --issue needed"
+loop_setup issue-12; gl 7 --patch "$PID" --issue 12; expect_pass "issue-<N> with the record's --issue (the loop's argv)"
+loop_setup issue-12; gl 7 --patch "$PID" --emit-verified
+[ "$rc" = 0 ] && [ "$out" = "VERIFIED pr=7 branch=issue-12 head=$PH run= issue=12 close_issue= gated_patch= rebased_from=" ] || fail "issue-<N> VERIFIED: rc=$rc out=$out"
+passed=$((passed + 1))
+loop_setup issue-12; printf '%s\n' 'Refs #12' > "$st/body"; gl 7 --patch "$PID" --issue 12
+expect_class "issue-<N> that closes nothing" linkage linkage "MISMATCH #7 issue=#12 expect=closing"
+loop_setup feat/issue-12-x; gl 7 --patch "$PID"; expect_pass "a v1 branch issue-<N>-<slug> is checked as before"
 
 # --- usage ------------------------------------------------------------------------------------
 patch_setup

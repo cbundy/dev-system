@@ -148,9 +148,10 @@ export function updateBranchArgv(repo: string, pr: number): string[] {
   return ['gh', 'pr', 'update-branch', String(pr), '--repo', repo]
 }
 
-// The merge, through the guard, on the approved patch only.
-export function queueMergeArgv(pr: number, patch: string): string[] {
-  return ['callum-flow-merge', String(pr), '--patch', patch]
+// The merge, through the guard, on the approved patch only. The record's issue goes with it, so
+// the guard never reads the issue from the branch name (9.3).
+export function queueMergeArgv(pr: number, patch: string, issue: number): string[] {
+  return ['callum-flow-merge', String(pr), '--patch', patch, '--issue', String(issue)]
 }
 
 // A head's patch id against the base (8.4).

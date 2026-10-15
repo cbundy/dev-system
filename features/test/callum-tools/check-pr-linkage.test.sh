@@ -253,6 +253,14 @@ stale_api_body="Closes #12"
 stale_api_body="Refs #12"
 unset stale_api_body
 run_case "branch without issue segment is skipped" epic/big main "x" "SKIP #7 epic/big" ""
+# the factory loop names an issue's branch issue-<N>, with no slug (v2 SPEC 3.5): the issue is
+# read from it and checked, never skipped
+for h in issue-12 fix/issue-12; do
+  run_case "bare issue-<N> branch is checked ($h)" "$h" main "Closes #12" "MATCH #7 issue=#12 expect=closing via=api actual=[12]" ""
+  run_case "bare issue-<N> branch mismatch ($h)" "$h" main "Refs #12" "MISMATCH #7 issue=#12 expect=closing" ""
+  run_case "bare issue-<N> branch refs ($h)" "$h" main "Refs #12" "MATCH #7 issue=#12 expect=refs" "" --expect refs
+done
+run_case "issue-<N> followed by more than a dash is not an issue" issue-12x main "x" "SKIP #7 issue-12x" ""
 
 fail_node=body
 fix_case "body extraction failure preserves PR body" $H main "Summary${nl}" "" "Summary${nl}" --print-fix

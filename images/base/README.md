@@ -1486,8 +1486,9 @@ acts on the class and never on the reason's words: `behind` (the loop updates th
 (a fixer), `checks` (failed or pending checks), `patch` (back to review), `linkage` (the loop writes
 the PR body again), `read` (a fact the guard could not read, verify, derive or compute; GitHub's
 `BLOCKED` too) and `policy` (only the owner can change it: an untrusted author, another base, a draft,
-a branch with no issue). `--patch` takes no `--run` or `--update-behind`. Without `--patch` the guard is
-unchanged.
+a branch with no issue). `--patch` takes no `--run` or `--update-behind`. The loop also passes
+`--issue <N>`, its record's issue, so the guard never reads the issue from the branch name. Without
+`--patch` the guard is unchanged.
 
 `callum-flow-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
 `git diff -U0 <merge base of origin/<base> and the head> <head> | git patch-id --stable`, with no

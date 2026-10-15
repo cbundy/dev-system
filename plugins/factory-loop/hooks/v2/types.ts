@@ -292,7 +292,7 @@ export type V2Action =
   | (ActionBase & { kind: 'ci-rerun'; pr: number; runId: string; round: number })
   // base: main's head at plan time (the key's); head: the PR's head as observe read it
   | (ActionBase & { kind: 'queue-update'; pr: number; base: string; head: string })
-  | (ActionBase & { kind: 'queue-merge'; pr: number; head: string; patch: string })
+  | (ActionBase & { kind: 'queue-merge'; issue: number; pr: number; head: string; patch: string })
   | (ActionBase & { kind: 'slot'; op: SlotOp; life: string; path: string | null; lease: string | null; branch: string | null; marker: StepMarker | null })
 
 // --- labels and notices (appendix D) ---------------------------------------------------------------

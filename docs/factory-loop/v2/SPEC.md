@@ -1302,10 +1302,13 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 - **When:** the head shows `clean`, every check on its head passed or was skipped (after re-runs,
   8.5), its patch equals `approvedPatch`, and no queue action of the head is running.
-- **Action** `queue-merge`: `callum-flow-merge <p> --patch <approvedPatch>`, keyed
+- **Action** `queue-merge`: `callum-flow-merge <p> --patch <approvedPatch> --issue <N>`, keyed
   `i<N>/l<L>/queue/merge/<head7>`. The guard runs inside it, and the merge uses
   `--match-head-commit`, so a push in between makes GitHub refuse
-  (`images/base/callum-flow-merge:14-17`).
+  (`images/base/callum-flow-merge:14-17`). `--issue` is the record's issue: the guard never has
+  to read it from the branch name. `check-pr-linkage.sh` reads `issue-<N>` from the branch too
+  (the number followed by `-` or the end of the name), so the linkage is checked, never skipped
+  (factory drill 1 of run 2 parked two green, approved PRs on that skip).
 - **Outcomes.** Merged is `ok` (T13). A FAIL line of the guard carries a class (9.4), and each
   class has one outcome (`failures/F3`):
 
@@ -1330,7 +1333,7 @@ the guard checks only facts the loop owns (V:217; OB:60-66):
 |---|---|---|
 | author | the PR's author is trusted | kept |
 | rollout | the issue's Rollout derives | kept |
-| linkage | `check-pr-linkage.sh` reports MATCH for the Rollout's expectation | kept |
+| linkage | `check-pr-linkage.sh` reports MATCH for the Rollout's expectation (it reads the issue from `issue-<N>` or `issue-<N>-...`; the loop also passes `--issue <N>`) | kept |
 | base | the PR targets the default branch | kept |
 | checks | at least one check, all passed or skipped, on the PR head | kept |
 | mergeable | open, not a draft, not conflicting, not behind, branch rules met | kept |
@@ -2581,7 +2584,7 @@ delete wave.
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |
 | `ci-rerun` | free | `gh run rerun <run id> --failed --repo R` | 3 per key, with backoff, in reviewing and at the queue's head; GitHub's own refusal is never retried (8.5) |
 | `queue-update` | free | `gh pr update-branch <p> --repo R`, then reads the PR head until it moves | 1 per key |
-| `queue-merge` | free | `callum-flow-merge <p> --patch <id>` | 1 per key |
+| `queue-merge` | free | `callum-flow-merge <p> --patch <id> --issue <N>` | 1 per key |
 | `slot` | free | `factory-slot lease\|prepare\|kill\|free ...` | lease 3; prepare 1 per key (part of the attempt); kill 1 (best effort); free 2 |
 | `claim`, `heartbeat`, `sweep`, `stop-agent`, `rollout`, `close-issue`, `release-parent`, `milestone-later`, `restart-self`, `task`, `tell`, `title` | as v1 | as v1 (v1 SPEC 6.1); `claim` also lists open PRs for adoption (3.5) | as v1 |
 
