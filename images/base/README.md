@@ -1056,19 +1056,29 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   every minute and on SIGTERM, and `dev-restart-self` does the same before it requests a
   stop or start build, so a session that ends gracefully is remembered too. Until this
   container start's restore has run, the previous snapshot is kept.
-- Once per container start, after the main Claude has started, it resumes each candidate
-  with `claude --resume <session id> --remote-control <name>` in the recorded cwd, with the
-  permission mode (`bypassPermissions` uses `--dangerously-skip-permissions --settings
-  '{"skipDangerousModePermissionPrompt":true}'`), effort and model read from the session's
-  transcript, and marks the cwd as trusted. The session returns to the same claude.ai
-  session (same `bridgeSessionId`) under its name, with its full history, and is sent no
-  message: it waits for you.
+- Once per container start, after the main Claude has started, it brings each candidate
+  back in its recorded cwd, marks the cwd as trusted, and sends it no message: it waits
+  for you. Either way it returns as the same claude.ai session, with its full history.
+  - A session a `server` mode server spawned (record `entrypoint` `sdk-cli`) is reattached
+    with `claude remote-control --session-id cse_<id>` (its claude.ai session), with
+    `--permission-mode bypassPermissions` when `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1`, the
+    server's own mode. Its history comes from claude.ai, so it needs no transcript, and one
+    claude.ai session is reattached once even when the server ran it under several local
+    session IDs. `claude --resume` would not do: such a transcript records neither the
+    claude.ai session nor the permission mode, so it would open a new claude.ai session in
+    the default mode. Verified on 2026-10-16 with a real server-spawned session whose
+    process was killed: it came back online as the same session and answered the message
+    sent while it was down.
+  - Any other session is resumed with `claude --resume <session id> --remote-control
+    <name>`, with the permission mode (`bypassPermissions` uses
+    `--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}'`),
+    effort and model read from its transcript.
 - They run in the tmux session `rc-restored`, one window per session (not in the
   supervisor's `claude` session): `tmux attach -t rc-restored`.
 - Never restored: the supervisor's own sessions (including the Remote Control server
-  process), sessions without a `bridgeSessionId`,
-  non-interactive sessions, sessions with no transcript, and sessions last updated more
-  than `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
+  process), sessions without a `bridgeSessionId`, non-interactive sessions, sessions with
+  no transcript (other than server-spawned ones), and sessions last updated more than
+  `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
   started a second time. The main conversation's selection rules are documented under
   [Resuming the conversation](#resuming-the-conversation). A session is restored once:
   every record considered goes in a ledger under
@@ -1087,9 +1097,7 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   conversation is not restored and `DEV_REMOTE_CONTROL_RESUME` can resume it.
 
 This relies on Claude Code's `sessions/*.json` format, which is not documented; unreadable
-records are skipped with a log line. A server-spawned session is treated like any other
-record: if it has a `bridgeSessionId` and is interactive it is resumed in its recorded cwd
-(not verified against a real server-spawned session).
+records are skipped with a log line.
 Tests: `images/base/test/dev-remote-sessions.test.sh` (part of `npm test`).
 
 **Permissions.** The main Claude and newly spawned sessions use their normal permission

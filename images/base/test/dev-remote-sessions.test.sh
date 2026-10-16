@@ -46,7 +46,7 @@ export TMUX_LOG="$tmp/tmux.log"
 
 export PATH="$tmp/bin:$PATH" HOME="$tmp/home" CLAUDE_CONFIG_DIR="$tmp/cfg" DEV_RESTART_SELF_DIR="$tmp/state" \
   DEV_REMOTE_SESSIONS_MARK_DIR="$tmp/mark" DEV_SYSTEM_SHARE="$tmp/share"
-unset DEV_REMOTE_CONTROL_RESTORE_HOURS DEV_REMOTE_SESSIONS_SOCKET
+unset DEV_REMOTE_CONTROL_RESTORE_HOURS DEV_REMOTE_SESSIONS_SOCKET DEV_REMOTE_CONTROL_MODE DEV_REMOTE_CONTROL_SKIP_PERMISSIONS
 mkdir -p "$HOME"
 
 sleep 600 &
@@ -57,12 +57,13 @@ live_start=$(sed 's/.*) //' "/proc/$live_pid/stat" | cut -d' ' -f20)
 dead_pid=$( (sh -c 'echo $$') )
 now_ms=$(($(date +%s) * 1000))
 
-# rec <file-pid> <sessionId> <cwd> <tmux> <bridge> <kind> <ageHours> <pid> <procStart> [name]
+# rec <file-pid> <sessionId> <cwd> <tmux> <bridge> <kind> <ageHours> <pid> <procStart> [name] [entrypoint]
 rec() {
   jq -n --argjson pid "$8" --arg sid "$2" --arg cwd "$3" --arg tmux "$4" --arg b "$5" --arg kind "$6" \
-    --argjson upd "$((now_ms - $7 * 3600000))" --arg ps "$9" --arg name "${10:-name-$2}" \
+    --argjson upd "$((now_ms - $7 * 3600000))" --arg ps "$9" --arg name "${10:-name-$2}" --arg ep "${11:-}" \
     '{pid:$pid,sessionId:$sid,cwd:$cwd,kind:$kind,name:$name,tmux:$tmux,procStart:$ps,updatedAt:$upd,
-      version:"2.1.299",extra:{unknown:"fields"}} + (if $b == "" then {} else {bridgeSessionId:$b} end)' > "$tmp/cfg/sessions/$1.json"
+      version:"2.1.299",extra:{unknown:"fields"}} + (if $b == "" then {} else {bridgeSessionId:$b} end)
+      + (if $ep == "" then {} else {entrypoint:$ep} end)' > "$tmp/cfg/sessions/$1.json"
 }
 # transcript <sessionId> <cwd> <mode> <effort> <model>
 transcript() {
@@ -288,6 +289,46 @@ rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
 DEV_REMOTE_CONTROL_MODE=server "$HELPER" plan 2>/dev/null
 got=$(ids < "$tmp/state/remote-sessions/pending.json")
 [ "$got" = "$B $M " ] || fail "first start, server mode: pending '$got', want $B and $M"
+
+# --- server-spawned sessions are reattached to the same claude.ai session -------------------------
+# A `claude remote-control` server's children (entrypoint sdk-cli) have no bridge-session or
+# permission-mode record in their transcript, so `claude --resume` would open a new claude.ai session.
+# They come back with `claude remote-control --session-id cse_<id>` and the server's permission mode,
+# once per claude.ai session, and need no transcript.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+G1=f7777777-0000-4000-8000-00000000000a G2=f7777777-0000-4000-8000-00000000000b
+H1=f8888888-0000-4000-8000-00000000000a H2=f8888888-0000-4000-8000-00000000000b
+rec 701 $G1 "$cwd_a" "claude:@0.%0" session_01Gee interactive 2 "$dead_pid" 9001 bridge-g sdk-cli
+rec 702 $G2 "$cwd_a" "claude:@0.%0" session_01Gee interactive 1 "$dead_pid" 9002 bridge-g sdk-cli # same claude.ai session
+rec 703 $H1 "$cwd_b" "claude:@0.%0" session_01Aitch interactive 1 "$dead_pid" 9003 bridge-h sdk-cli
+rec 704 $H2 "$cwd_b" "claude:@0.%0" session_01Aitch interactive 0 "$live_pid" "$live_start" bridge-h sdk-cli # live again
+rec 705 $C "$cwd_c" "dev:@1.%1" session_C interactive 1 "$dead_pid" 9005 "C name" cli
+transcript $C "$cwd_c" plan high m
+got=$("$HELPER" pending 2>/dev/null | ids)
+[ "$got" = "$C $G2 " ] || fail "server-spawned: pending '$got', want $C and $G2 (one per claude.ai session, none live)"
+: > "$TMUX_LOG"
+rm -f "$TMUX_LOG.session"
+DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 "$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
+lg=$(grep -F -- "-c $cwd_a " "$TMUX_LOG") || fail "the server-spawned session was not restored: $(cat "$TMUX_LOG")"
+[ "$(printf '%s\n' "$lg" | wc -l)" = 1 ] || fail "one claude.ai session was reattached more than once: $lg"
+printf '%s\n' "$lg" | grep -qF -- "remote-control --session-id cse_01Gee --permission-mode bypassPermissions" ||
+  fail "the server-spawned session was not reattached by its claude.ai session: $lg"
+printf '%s\n' "$lg" | grep -qF -- "--resume" && fail "the server-spawned session was resumed as a new session: $lg"
+printf '%s\n' "$lg" | grep -qF -- "--dangerously-skip-permissions" && fail "the server-spawned session got the interactive bypass flags: $lg"
+grep -qF -- "cse_01Aitch" "$TMUX_LOG" && fail "a claude.ai session that is live again was reattached: $(cat "$TMUX_LOG")"
+grep -F -- "-c $cwd_c " "$TMUX_LOG" | grep -qF -- "--resume $C --remote-control C name --permission-mode plan" ||
+  fail "an interactive session was not resumed as before: $(cat "$TMUX_LOG")"
+jq -e '.bypassPermissionsModeAccepted == true' "$tmp/cfg/.claude.json" > /dev/null ||
+  fail "the bypass disclaimer was not pre-accepted for the reattached session"
+# Without skip permissions the server's default mode applies.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+rec 711 $G1 "$cwd_a" "claude:@0.%0" session_01Gee interactive 1 "$dead_pid" 9011 bridge-g sdk-cli
+: > "$TMUX_LOG"
+"$HELPER" restore 2>/dev/null
+grep -qF -- "remote-control --session-id cse_01Gee" "$TMUX_LOG" || fail "not reattached without skip permissions: $(cat "$TMUX_LOG")"
+grep -qF -- "--permission-mode" "$TMUX_LOG" && fail "a permission mode was passed without skip permissions: $(cat "$TMUX_LOG")"
 
 # --- the supervisor's tmux session is matched exactly, never by name prefix --------------------------
 # Real tmux on a private socket: a session whose name starts with "claude" is not the supervisor's.

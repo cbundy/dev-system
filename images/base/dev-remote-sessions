@@ -9,11 +9,18 @@
 # container stop SIGKILLs what is still running, so those records stay behind
 # and, until now, nothing read them. This helper reads them (an undocumented
 # format, so it is parsed defensively: a missing field or bad JSON skips that
-# record with a log line, never an error), takes the permission mode, effort and
-# model from the session's transcript, and starts
-# `claude --resume <id> --remote-control <name>` for each in its own cwd, in
-# the tmux session `rc-restored` (one window per session). No message is
-# sent: a resumed session waits for the owner.
+# record with a log line, never an error) and starts each session again in its
+# own cwd, in the tmux session `rc-restored` (one window per session):
+#   - a session a `claude remote-control` server spawned (entrypoint sdk-cli)
+#     is reattached with `claude remote-control --session-id cse_<id>`: the
+#     same claude.ai session comes back online, its history loaded from
+#     claude.ai, with the server's permission mode. Its transcript records
+#     neither its claude.ai session nor its permission mode, so resuming it
+#     as an interactive session would open a new claude.ai session instead.
+#   - any other session is resumed with
+#     `claude --resume <id> --remote-control <name>`, with the permission
+#     mode, effort and model from its transcript.
+# No message is sent: a restored session waits for the owner.
 #
 # Usage: dev-remote-sessions <command>
 #   snapshot  record the live sessions (pid and process start still match) in the
@@ -39,11 +46,12 @@
 #             the ledger.
 #
 # Candidates are the latest snapshot plus stale records (their process is gone),
-# deduplicated by sessionId, minus: sessions that are live, the supervisor's own
-# sessions (in supervisor/), records without a bridgeSessionId,
-# non-interactive sessions, sessions last updated more than
-# DEV_REMOTE_CONTROL_RESTORE_HOURS (default 24, 0 turns restoring off) ago,
-# sessions with no transcript, and records already in the ledger.
+# deduplicated by sessionId (server-spawned ones by bridgeSessionId), minus:
+# sessions that are live, the supervisor's own sessions (in supervisor/),
+# records without a bridgeSessionId, non-interactive sessions, sessions last
+# updated more than DEV_REMOTE_CONTROL_RESTORE_HOURS (default 24, 0 turns
+# restoring off) ago, sessions with no transcript (server-spawned ones need
+# none), and records already in the ledger.
 #
 # State, in ${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}/remote-sessions:
 #   snapshot/  the last snapshot        pending.json  the planned candidates
@@ -118,7 +126,7 @@ load_dir() {
     jq -ce 'select(type == "object" and (.pid | type == "number") and (.sessionId | type == "string"))
       | {pid, procStart: ((.procStart // "") | tostring), sessionId, cwd: (.cwd // ""),
          kind: (.kind // ""), name: (.name // ""), bridgeSessionId: (.bridgeSessionId // ""),
-         tmux: (.tmux // ""), updatedAt: (.updatedAt // 0)}' "$f" 2>/dev/null ||
+         tmux: (.tmux // ""), entrypoint: (.entrypoint // ""), updatedAt: (.updatedAt // 0)}' "$f" 2>/dev/null ||
       log "skipping $f: not a session record"
   done
 }
@@ -180,21 +188,39 @@ candidates() {
   done <<< "$all"
   [ -n "$kept" ] || return 0
   sup=$(find "$STATE/supervisor" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | jq -Rcs 'split("\n") | map(select(. != ""))')
-  jq -cs --argjson live "$(printf '%s\n' "$live" | jq -cs '[.[].sessionId]')" --argjson cutoff "$cutoff" --argjson sup "$sup" '
-    group_by(.sessionId)
+  # A server can run one claude.ai session under more than one local sessionId
+  # over time, so server-spawned records are one per claude.ai session instead.
+  jq -cs --argjson live "$(printf '%s\n' "$live" | jq -cs '[.[] | .sessionId, .bridgeSessionId | select(. != "")]')" \
+    --argjson cutoff "$cutoff" --argjson sup "$sup" '
+    def spawned: .entrypoint == "sdk-cli" and (.bridgeSessionId | test("^session_[A-Za-z0-9]+$"));
+    group_by(if spawned then .bridgeSessionId else .sessionId end)
     | map({keys: map("\(.pid)-\(.procStart)")} + (max_by(.updatedAt)))
     | .[]
     | select(.kind == "interactive" and .bridgeSessionId != "" and .cwd != "" and .updatedAt >= $cutoff
-        and (.sessionId as $s | ($live + $sup) | index($s) | not))' <<< "$kept" |
+        and (.sessionId as $s | ($live + $sup) | index($s) | not)
+        and ((spawned and (.bridgeSessionId as $b | $live | index($b))) | not))' <<< "$kept" |
     while IFS= read -r r; do
       enrich "$r" || true
     done
 }
 
+# Did a `claude remote-control` server spawn the session in record $1? Its
+# children run Claude through the SDK, and claude.ai knows the session as
+# cse_<id> for the record's bridgeSessionId session_<id>.
+server_spawned() {
+  jq -e '.entrypoint == "sdk-cli" and (.bridgeSessionId | test("^session_[A-Za-z0-9]+$"))' <<< "$1" > /dev/null 2>&1
+}
+
 # Adds the transcript's permissionMode, effort and model to candidate $1 and
-# prints it; fails (logged) when the session has no transcript.
+# prints it; fails (logged) when the session has no transcript. A
+# server-spawned session is printed as it is: claude.ai holds its history and
+# the server's permission mode applies.
 enrich() {
   local sid cwd t line mode effort model
+  if server_spawned "$1"; then
+    echo "$1"
+    return 0
+  fi
   sid=$(jq -r .sessionId <<< "$1") cwd=$(jq -r .cwd <<< "$1")
   t=$CFG/projects/${cwd//[^a-zA-Z0-9]/-}/$sid.jsonl
   if [ ! -f "$t" ]; then
@@ -281,15 +307,28 @@ launch() {
     return 1
   fi
   [ -n "$name" ] || name="restored-${sid:0:8}"
-  prepare_claude_config "$cwd"
-  local -a args=(--resume "$sid" --remote-control "$name")
-  case $mode in
-    bypassPermissions) args+=(--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}') ;;
-    "" | default) ;;
-    *) args+=(--permission-mode "$mode") ;;
-  esac
-  [ -z "$effort" ] || args+=(--effort "$effort")
-  [ -z "$model" ] || args+=(--model "$model")
+  local -a args
+  if server_spawned "$1"; then
+    # Reattached as the server would spawn it: same claude.ai session, the
+    # server's permission mode (dev-remote-control's), no --resume.
+    args=(remote-control --session-id "cse_$(jq -r '.bridgeSessionId | ltrimstr("session_")' <<< "$1")")
+    if [ "${DEV_REMOTE_CONTROL_SKIP_PERMISSIONS:-0}" = 1 ]; then
+      prepare_claude_config "$cwd" 1
+      args+=(--permission-mode bypassPermissions)
+    else
+      prepare_claude_config "$cwd"
+    fi
+  else
+    prepare_claude_config "$cwd"
+    args=(--resume "$sid" --remote-control "$name")
+    case $mode in
+      bypassPermissions) args+=(--dangerously-skip-permissions --settings '{"skipDangerousModePermissionPrompt":true}') ;;
+      "" | default) ;;
+      *) args+=(--permission-mode "$mode") ;;
+    esac
+    [ -z "$effort" ] || args+=(--effort "$effort")
+    [ -z "$model" ] || args+=(--model "$model")
+  fi
   # shellcheck disable=SC2016
   local -a cmd=(bash -c ". '$SHARE/telemetry.sh'; claude \"\$@\"" bash "${args[@]}")
   if tm has-session -t "=$RESTORED_SESSION" 2>/dev/null; then
@@ -310,7 +349,7 @@ cmd_restore() {
   marked restored && return 3
   mark restored
   [ "$HOURS" != 0 ] || return 0
-  local r k sid
+  local r k sid bridge
   mkdir -p "$STATE/ledger" || { log "cannot create $STATE"; return 1; }
   if [ ! -f "$STATE/pending.json" ]; then
     candidates > "$STATE/pending.json"
@@ -322,7 +361,9 @@ cmd_restore() {
     for k in $(jq -r '.keys[]?' <<< "$r" 2>/dev/null); do
       echo "$sid $(date +%s)" > "$STATE/ledger/$k"
     done
-    if live_sids | grep -qxF -- "$sid"; then
+    bridge=""
+    ! server_spawned "$r" || bridge=$(jq -r .bridgeSessionId <<< "$r")
+    if live_records | jq -r .sessionId,.bridgeSessionId | grep -qxF -e "$sid" ${bridge:+-e "$bridge"}; then
       log "session $sid is already running: not restoring it"
       continue
     fi
