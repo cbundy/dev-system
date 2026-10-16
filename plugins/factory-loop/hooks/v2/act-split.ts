@@ -4,7 +4,9 @@
 // 1. the child is found again by the hidden key in its body (<!-- factory-loop:<ledger key> -->,
 //    among the open issues by trusted authors), or created with it;
 // 2. it is linked under its parent as a sub-issue, unless the parent's sub-issues hold it already;
-// 3. it is linked as blocked by each sibling plan named, unless already;
+// 3. it is linked as blocked by each issue plan named (a sibling, or an existing issue of the repo),
+//    unless already; a blocker that is closed is skipped (nothing to wait for), one that is a pull
+//    request is refused;
 // 4. it is labelled ready when the designer asked, once every link exists, so S1 claims it only
 //    when its blockers are closed.
 // The outcome names the child, which the parent's release follow-up lists (rules-entry.ts).
@@ -68,6 +70,19 @@ export function issueId(json: string): number | null {
   }
 }
 
+// blockerOf: what `callum-flow-issue-read --json <n>` says of an issue: its REST id, whether it is
+// open, and whether it is a pull request; null when it is not in that shape.
+export function blockerOf(json: string): { id: number; open: boolean; pr: boolean } | null {
+  try {
+    const issue = (JSON.parse(json) as { issue?: { id?: unknown; state?: unknown; pull_request?: unknown } }).issue
+    if (typeof issue?.id !== 'number' || !Number.isInteger(issue.id) || issue.id <= 0) return null
+    if (issue.state !== 'open' && issue.state !== 'closed') return null
+    return { id: issue.id, open: issue.state === 'open', pr: issue.pull_request !== undefined && issue.pull_request !== null }
+  } catch {
+    return null
+  }
+}
+
 // createdIssue: the issue number in `gh issue create`'s output (its URL), or null.
 export function createdIssue(stdout: string, repo: string): number | null {
   const m = new RegExp(`https://github\\.com/${repo.replace(/[.]/g, '\\.')}/issues/(\\d+)`, 'i').exec(stdout)
@@ -119,6 +134,17 @@ async function idOf(ctx: ExecCtx, issue: number): Promise<{ id: number } | { exe
   return id === null ? { exec: failed(`the id of #${issue} did not read`, r.out) } : { id }
 }
 
+// blockerIdOf: a blocker's REST id when it is open; null when it is closed (no link to make); a
+// pull request is refused, since only an issue can block.
+async function blockerIdOf(ctx: ExecCtx, issue: number): Promise<{ id: number | null } | { exec: Exec }> {
+  const r = await ok(ctx, ARGV.issueReadArgv(issue))
+  if ('exec' in r) return r
+  const b = blockerOf(r.out)
+  if (b === null) return { exec: failed(`the state of #${issue} did not read`, r.out) }
+  if (b.pr) return { exec: refused(`#${issue} is a pull request, not an issue`) }
+  return { id: b.open ? b.id : null }
+}
+
 // childOf: the child, found by its hidden key or created.
 async function childOf(ctx: ExecCtx, a: SplitAction): Promise<{ number: number; id: number; made: boolean } | { exec: Exec }> {
   const listed = await ok(ctx, ARGV.openIssuesArgv(), undefined, LIST_MS)
@@ -154,9 +180,14 @@ const split: Executor = async (ctx, action) => {
   if ('exec' in child) return child.exec
   const sub = await linked(ctx, ARGV.subIssuesReadArgv(repo, action.parent), child.id, ARGV.subIssueArgv(repo, action.parent, child.id))
   if ('exec' in sub) return sub.exec
+  const skipped: number[] = []
   for (const blocker of action.blockedBy) {
-    const id = await idOf(ctx, blocker)
+    const id = await blockerIdOf(ctx, blocker)
     if ('exec' in id) return id.exec
+    if (id.id === null) {
+      skipped.push(blocker)
+      continue
+    }
     const link = await linked(ctx, ARGV.blockersReadArgv(repo, child.number), id.id, ARGV.blockedByArgv(repo, child.number, id.id))
     if ('exec' in link) return link.exec
   }
@@ -165,7 +196,8 @@ const split: Executor = async (ctx, action) => {
     if ('exec' in label) return label.exec
   }
   const how = child.made ? 'made' : 'found'
-  const after = action.blockedBy.length === 0 ? '' : `, blocked by ${action.blockedBy.map(n => `#${n}`).join(' ')}`
+  const linkedTo = action.blockedBy.filter(n => !skipped.includes(n))
+  const after = (linkedTo.length === 0 ? '' : `, blocked by ${linkedTo.map(n => `#${n}`).join(' ')}`) + skipped.map(n => `, #${n} is closed, not linked`).join('')
   return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ''}`) }
 }
 

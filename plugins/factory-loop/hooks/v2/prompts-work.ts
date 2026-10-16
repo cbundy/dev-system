@@ -246,9 +246,9 @@ export function designPrompt(i: DesignInput): string {
       'question: at most 2000 characters. brief: a draft written so far, or null.',
     ),
     '',
-    `When the issue is too large or risky for one change, split it: the loop makes each child an issue under #${i.issue}, links each to the siblings it waits on, and labels ready the children you mark ready. Record the split the same way, with jq --rawfile for each long text when that is easier:`,
-    `{"kind": "split", "brief": "<the plan of the whole: what each child does and in what order>", "children": [{"key": "a", "title": "<one line>", "body": "<the child's own brief, in the brief's shape, with its ## Rollout>", "blockedBy": [], "ready": true}, {"key": "b", "title": "...", "body": "...", "blockedBy": ["a"], "ready": true}]}`,
-    'children: 2 to 10, each key short (lower-case letters, digits, dashes) and unique; blockedBy: the keys of the siblings it waits on; ready: false only for a child that carries an open owner decision. Record one answer only, then end your turn.',
+    `When the issue is too large or risky for one change, split it: the loop makes each child an issue under #${i.issue}, links each to what it waits on, and labels ready the children you mark ready. Record the split the same way, with jq --rawfile for each long text when that is easier:`,
+    `{"kind": "split", "brief": "<the plan of the whole: what each child does and in what order>", "children": [{"key": "a", "title": "<one line>", "body": "<the child's own brief, in the brief's shape, with its ## Rollout>", "blockedBy": [], "ready": true}, {"key": "b", "title": "...", "body": "...", "blockedBy": ["a", "#57"], "ready": true}]}`,
+    `children: 2 to 10, each key short (lower-case letters, digits, dashes) and unique; blockedBy: the keys of the siblings it waits on, or #<N> for an existing open issue in this repo it waits on (never #${i.issue}, which stays open); ready: false only for a child that carries an open owner decision. Record one answer only, then end your turn.`,
   ]
   return out.join('\n')
 }

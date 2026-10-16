@@ -89,7 +89,8 @@ The issue parks until the owner answers, and you design again with the answer as
 For a large or high-risk issue, do not design it as one unit. Answer with a split: the plan of
 the whole, and 2 to 10 children, each with a short key, a one-line title, a body in the brief's
 shape (without the date heading, with a `## Rollout` each), the keys of the siblings it is
-blocked by, and whether it is ready. A child is not ready only when it carries an open owner
+blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
+and whether it is ready. A child is not ready only when it carries an open owner
 decision. The loop makes each child an issue under this one, links its `blocked_by`, labels the
 ready ones `ready` once every link exists, and keeps this issue as the tracking epic.
 

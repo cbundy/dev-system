@@ -285,7 +285,7 @@ export type V2Action =
       evidence: string | null
       brief: string | null
     })
-  // one child per action; blockedBy: the issue numbers of the siblings it waits on
+  // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
   | (ActionBase & { kind: 'ci-rerun'; pr: number; runId: string; round: number })

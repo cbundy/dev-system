@@ -89,6 +89,26 @@ describe('the design-v2 contract (8.7)', () => {
     expect(check('design-v2', { kind: 'split', brief: 'the plan', children })).toEqual({ ok: true, outcome: { kind: 'split', brief: 'the plan', question: null, children: children.map(c => ({ ...c, body: c.body.trim() })) } })
   })
 
+  test('a blockedBy entry may be #<N>, an existing issue; the issue being split, a malformed reference and a stranger are each refused', () => {
+    const child = (key: string, blockedBy: unknown[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', children })
+    const out = check('design-v2', split(child('a'), child('b', ['a', '#57'])))
+    expect(out).toMatchObject({ ok: true })
+    if (out.ok) expect(out.outcome.children[1]?.blockedBy).toEqual(['a', '#57'])
+    const dup = check('design-v2', split(child('a', ['#57', '#57']), child('b')))
+    if (dup.ok) expect(dup.outcome.children[0]?.blockedBy).toEqual(['#57'])
+    else throw new Error('refused')
+    // the same external issue on two children forms no cycle
+    expect(problems('design-v2', split(child('a', ['#57']), child('b', ['#57', 'a'])))).toEqual([])
+    for (const bad of ['#0', '#x', '#057']) {
+      expect(problems('design-v2', split(child('a', [bad]), child('b')))).toEqual([`children[0].blockedBy "${bad}" is not an issue reference: write #<N>, N a positive number with no leading zero`])
+    }
+    for (const bad of ['57', 57, 'zz']) {
+      expect(problems('design-v2', split(child('a', [bad]), child('b')))).toEqual([`children[0].blockedBy ${JSON.stringify(bad)} is neither the key of another child nor an existing issue #<N>`])
+    }
+    expect(problems('design-v2', split(child('a', ['#300']), child('b')))).toEqual(['children[0].blockedBy #300 is the issue being split, which stays open, so the child would wait forever'])
+  })
+
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
       'extra is not a field of a design answer (only kind, brief, question, children)',
@@ -104,7 +124,7 @@ describe('the design-v2 contract (8.7)', () => {
   test('a split has 2 to 10 children with unique keys, siblings it is blocked by, and no cycle', () => {
     const child = (key: string, blockedBy: string[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a')] })).toEqual(['children has 1; a split has 2 to 10'])
-    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['c']), child('a')] })).toEqual(['children[0].blockedBy "c" is not the key of another child', 'children[1].key a is used twice'])
+    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['c']), child('a')] })).toEqual(['children[0].blockedBy "c" is neither the key of another child nor an existing issue #<N>', 'children[1].key a is used twice'])
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['b']), child('b', ['a'])] })).toEqual(["children's blockedBy make a cycle: a -> b -> a"])
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('A b'), { ...child('c'), title: 'two\nlines', ready: 'yes' }] })).toEqual([
       'children[0].key "A b" must be a short lower-case key: letters, digits and dashes, at most 24',
@@ -634,6 +654,18 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     if (t === undefined) return
     const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
     expect(of(after, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603] })
+  })
+
+  test('a child blocked by an existing issue is made in the first pass with it, and its sibling follows with both', () => {
+    const children = [
+      { key: 'a', title: 'Part one', body: 'one', blockedBy: ['#57'], ready: true },
+      { key: 'b', title: 'Part two', body: 'two', blockedBy: ['a', '#57'], ready: true },
+    ]
+    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, children } })
+    const made = (a: Action) => (a.kind === 'split' ? [a.child.key, a.blockedBy] : [])
+    expect(of(plan(withLedger(world([r]), [split])), 330).map(made)).toEqual([['a', [57]]])
+    const a = done(childKey(r, 'a'), 'split', { issue: 330, outcome: { kind: 'split', child: 601 } })
+    expect(of(plan(withLedger(world([r]), [split, a])), 330).map(made)).toEqual([['b', [601, 57]]])
   })
 
   test('a design answer with no kind the plan reads goes down the unknown path', () => {
