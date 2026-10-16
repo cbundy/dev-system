@@ -28,6 +28,7 @@ import {
   slot as slotOf,
   state,
   wakeAnswer,
+  titled,
   withLedger,
 } from './fixtures'
 
@@ -56,7 +57,7 @@ const bucketOf = (kind: ActionKind, klass: string) => (klass === 'start' ? 'star
 function startedAll(s: State, r: PlanResult): State {
   let ledger = s.ledger
   for (const a of r.actions) if (a.kind !== 'title') ledger = start(ledger, a, s.now).ledger
-  return { ...s, ledger, lastTitle: r.title }
+  return { ...s, ledger, ...titled(s, r) }
 }
 
 // properties: what SPEC 5.9 asks of every plan, for one state and config.
@@ -1475,6 +1476,41 @@ describe('O: owner and report', () => {
     const first = plan(s, CFG)
     expect(first.actions.some(a => a.kind === 'title')).toBe(true)
     expect(plan({ ...s, lastTitle: first.title }, CFG).actions).toEqual([])
+  })
+
+  describe('the title is a throttle (O1, titleEveryMs)', () => {
+    const at = (s: State, min: number, over: Partial<State> = {}) => ({ ...s, ...over, now: s.now + min * MIN })
+    const titleActions = (r: PlanResult) => r.actions.filter(a => a.kind === 'title')
+    const base = () => state({ lastTitle: 'A', lastTitleAt: NOW })
+    test('changes inside the window plan nothing; the pass after it sets the title then', () => {
+      const b = base()
+      for (const [min, q] of [[1, 1], [2, 2], [4, 3]] as const) {
+        const r = plan(at(b, min, { queue: Array.from({ length: q }, (_, i) => i + 1) }), CFG)
+        expect(r.title).not.toBe('A')
+        expect(titleActions(r)).toEqual([])
+      }
+      const due = plan(at(b, 5, { queue: [1, 2, 3] }), CFG)
+      expect(titleActions(due)).toEqual([expect.objectContaining({ kind: 'title', text: due.title })])
+    })
+    test('a title that reverts to the last one sends nothing, in the window or after it', () => {
+      const b = state({ lastTitle: plan(state(), CFG).title, lastTitleAt: NOW })
+      for (const min of [1, 3, 6]) expect(titleActions(plan(at(b, min), CFG))).toEqual([])
+    })
+    test('the first title after a load goes out at once', () => {
+      expect(titleActions(plan(state({ lastTitle: null, lastTitleAt: null }), CFG))).toHaveLength(1)
+    })
+    test('an hour of changes every 2 minutes renames at most 12 times', () => {
+      let s = state()
+      let renames = 0
+      for (let t = 0; t < 360; t++) {
+        s = { ...s, now: NOW + t * 10_000, queue: Array.from({ length: Math.floor(t / 12) % 50 }, (_, i) => i + 1) }
+        const r = plan(s, CFG)
+        renames += titleActions(r).length
+        s = { ...s, ...titled(s, r) }
+      }
+      expect(renames).toBeGreaterThan(1)
+      expect(renames).toBeLessThanOrEqual(12)
+    })
   })
 
   test('a model task that timed out is reported; a timed-out judge just holds (SPEC 8.2)', () => {

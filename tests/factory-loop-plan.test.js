@@ -182,6 +182,7 @@ test("the v2 planner imports and runs under Node, for the replay harness: a quie
     ledger: [sweep],
     control: EMPTY_CONTROL,
     lastTitle: null,
+    lastTitleAt: null,
     githubBackoffUntil: null,
     checkout: null,
     v2: emptyV2State(NOW),

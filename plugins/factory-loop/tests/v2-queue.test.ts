@@ -19,7 +19,7 @@ import type { SourceCtx } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
 import { RERUN_ATTEMPTS, RERUN_REFUSED } from '../hooks/v2/rules-review'
-import { checksOf, headsOf, pullOf, readPrs } from '../hooks/v2/sources-prs'
+import { checksOf, headsOf, pullOf, readPrs, runsOf, withRuns } from '../hooks/v2/sources-prs'
 import type { CheckRun, PrView } from '../hooks/v2/sources-prs'
 import { mergeKey, queueKeyParts, updateKey } from '../hooks/v2/steps-queue'
 import { madeRecord } from '../hooks/v2/table'
@@ -901,6 +901,7 @@ function prReply(heads: Record<string, string>, extra: (argv: string[]) => Reply
     if (own !== undefined) return own
     if (argv[0] === 'callum-flow-issue-read') return { stdout: pullJson({ head: { sha: heads[argv[3] ?? ''] ?? HEAD }, mergeable_state: 'unknown' }) }
     if (argv[0] === 'gh' && argv[2] === 'checks') return { exitCode: 8, stdout: CHECKS_JSON }
+    if (argv[0] === 'gh' && argv[1] === 'api') return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
     if (argv[0] === 'callum-flow-patch-id') return { stdout: `${PATCH}\n` }
     if (argv[0] === 'git') return { stdout: `${MAIN}\trefs/heads/main\n` }
     return {}
@@ -1090,5 +1091,83 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(checksOf({ exitCode: 1, stdout: JSON.stringify([{ name: 'ci', bucket: 'fail', link: 'https://x/actions/runs/77/job/1' }]), stderr: '' })).toEqual([
       { name: 'ci', state: '', bucket: 'fail', startedAt: null, completedAt: null, runId: '77', link: 'https://x/actions/runs/77/job/1' },
     ])
+  })
+})
+
+// --- a workflow run with no job yet (sources-prs.ts runsOf, withRuns) -------------------------------------
+
+function run(over: Record<string, unknown> = {}) {
+  return { id: 5001, workflow_id: 11, event: 'pull_request', name: 'CI', status: 'completed', conclusion: 'success', html_url: `https://github.com/${REPO}/actions/runs/5001`, run_started_at: new Date(NOW - 5 * MIN).toISOString(), created_at: new Date(NOW - 6 * MIN).toISOString(), updated_at: new Date(NOW - 2 * MIN).toISOString(), ...over }
+}
+const runsReply = (runs: unknown[], total = runs.length): RunResult => ({ exitCode: 0, stdout: JSON.stringify({ total_count: total, workflow_runs: runs }), stderr: '' })
+const kindsOf = (runs: unknown[]) => runsOf(runsReply(runs))?.map(x => x.kind)
+
+describe('the head\'s workflow runs (a run with no job yet is in no gh pr checks view)', () => {
+  test('runsOf: the latest run per workflow and event, classified; a read that fails, does not parse or is truncated is null', () => {
+    for (const status of ['queued', 'in_progress', 'waiting', 'requested', 'pending']) expect(kindsOf([run({ status, conclusion: null })])).toEqual(['pending'])
+    for (const c of ['success', 'skipped', 'neutral']) expect(kindsOf([run({ conclusion: c })])).toEqual(['done'])
+    for (const c of ['failure', 'timed_out', 'startup_failure']) expect(kindsOf([run({ conclusion: c })])).toEqual(['fail'])
+    expect(kindsOf([run({ conclusion: 'cancelled' })])).toEqual(['cancel'])
+    for (const c of ['action_required', 'stale', null]) expect(kindsOf([run({ conclusion: c })])).toEqual(['pending'])
+    // an older cancelled run a newer run of the same workflow and event replaced is ignored, in any order
+    const old = run({ id: 4000, conclusion: 'cancelled' })
+    expect(kindsOf([old, run()])).toEqual(['done'])
+    expect(kindsOf([run(), old])).toEqual(['done'])
+    // another workflow, or another event, counts of its own
+    expect(kindsOf([old, run({ id: 5002, workflow_id: 12 })])).toEqual(['cancel', 'done'])
+    expect(kindsOf([old, run({ id: 5002, event: 'push' })])).toEqual(['cancel', 'done'])
+    expect(runsOf(runsReply([run({ status: 'in_progress', conclusion: null, run_started_at: null })]))?.[0]).toEqual({ id: '5001', name: 'CI', kind: 'pending', link: `https://github.com/${REPO}/actions/runs/5001`, startedAt: NOW - 6 * MIN, completedAt: null })
+    expect(runsOf({ exitCode: 1, stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }), stderr: 'HTTP 502' })).toBeNull()
+    expect(runsOf({ exitCode: 0, stdout: 'not json', stderr: '' })).toBeNull()
+    expect(runsOf({ exitCode: 0, stdout: '{}', stderr: '' })).toBeNull()
+    expect(runsOf(runsReply([run()], 101))).toBeNull()
+    expect(runsOf(runsReply([]))).toEqual([])
+  })
+
+  test('withRuns: a synthetic check for a run no visible check shows, with its start for the run bound; none when a visible check of the run already shows it', () => {
+    const green = check({ runId: '9001' })
+    const runs = runsOf(runsReply([run({ id: 7001, name: 'Deploy', status: 'in_progress', conclusion: null })])) ?? []
+    expect(withRuns([green], runs)).toEqual([green, { name: 'Deploy (workflow run, no job yet)', state: 'PENDING', bucket: 'pending', startedAt: NOW - 5 * MIN, completedAt: null, runId: '7001', link: `https://github.com/${REPO}/actions/runs/5001` }])
+    expect(withRuns([check({ runId: '7001', bucket: 'pending', completedAt: null })], runs)).toHaveLength(1)
+    const failed = runsOf(runsReply([run({ id: 7001, conclusion: 'failure' })])) ?? []
+    expect(withRuns([green], failed)[1]).toMatchObject({ bucket: 'fail', runId: '7001', completedAt: NOW - 2 * MIN })
+    expect(withRuns([check({ runId: '7001', bucket: 'fail' })], failed)).toHaveLength(1)
+    expect(withRuns([green], runsOf(runsReply([run({ conclusion: 'cancelled' })])) ?? [])[1]).toMatchObject({ bucket: 'cancel' })
+    expect(withRuns([green], runsOf(runsReply([run()])) ?? [])).toEqual([green])
+  })
+
+  test('the queue head: every visible check green but a run in progress waits ("CI runs on") and plans no merge; once the run succeeds the merge is planned; a failed run is re-run once, then ci-red; the run bound applies', () => {
+    const r = rec(40)
+    const pending = runsOf(runsReply([run({ id: 7001, workflow_id: 12, name: 'Deploy', status: 'in_progress', conclusion: null })])) ?? []
+    const waiting = plan(world([r], [view(r, { checks: withRuns([check()], pending) })]))
+    expect(transitionOf(waiting, 40)).toBeUndefined()
+    expect(queueActions(waiting)).toEqual([])
+    expect(said(waiting, 40)).toEqual(['merge queue: CI runs on aaaaaaa (1 of 2 checks done)'])
+    const done = runsOf(runsReply([run({ id: 7001, workflow_id: 12, name: 'Deploy' })])) ?? []
+    expect(queueActions(plan(world([r], [view(r, { checks: withRuns([check()], done) })])))).toEqual([expect.objectContaining({ kind: 'queue-merge' })])
+    // a failed run with no visible check: one re-run of that run id, then ci-red
+    const failed = runsOf(runsReply([run({ id: 7001, workflow_id: 12, name: 'Deploy', conclusion: 'failure' })])) ?? []
+    const first = plan(world([r], [view(r, { checks: withRuns([check()], failed) })]))
+    expect(of(first, 40).filter(a => a.kind === 'ci-rerun')).toEqual([expect.objectContaining({ key: rerunKey(r, 1, '7001'), runId: '7001' })])
+    expect(queueActions(first)).toEqual([])
+    const rerun = entry(rerunKey(r, 1, '7001'), 'ci-rerun', { issue: 40, startedAt: NOW - 4 * MIN, endedAt: NOW - 4 * MIN + 5000 })
+    const again = runsOf(runsReply([run({ id: 7001, workflow_id: 12, name: 'Deploy', conclusion: 'failure', updated_at: new Date(NOW - MIN).toISOString() })])) ?? []
+    expect(transitionOf(plan(withLedger(world([r], [view(r, { checks: withRuns([check()], again) })]), [rerun])), 40)).toMatchObject({ row: 'T9', via: 'fix:ci' })
+    // a run held past ciRunMs ends the wait
+    const long = runsOf(runsReply([run({ id: 7001, workflow_id: 12, name: 'Deploy', status: 'queued', conclusion: null, run_started_at: new Date(NOW - 31 * MIN).toISOString() })])) ?? []
+    expect(transitionOf(plan(world([r], [view(r, { checks: withRuns([check()], long) })])), 40)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+  })
+
+  test('the prs source reads the head\'s runs and fails closed: a failed, unparseable or truncated read leaves the PR unread, with why', async () => {
+    const records = [rec(70, { state: 'reviewing', step: 'review', seqAt: NOW - 50 * MIN })]
+    const ok = await readPrs(sourceCtx(records, prReply({ '670': sha('1') }, a => (a[1] === 'api' ? runsReply([run({ status: 'queued', conclusion: null })]) : undefined))).ctx)
+    expect(ok.read.prs[0]?.checks.map(c => c.name)).toEqual(['ci', 'image', 'CI (workflow run, no job yet)'])
+    for (const bad of [{ exitCode: 1, stdout: '', stderr: 'HTTP 502' }, { exitCode: 0, stdout: 'garbage', stderr: '' }, runsReply([run()], 150)]) {
+      const { ctx, argvs } = sourceCtx(records, prReply({ '670': sha('1') }, a => (a[1] === 'api' ? bad : undefined)))
+      const r = await readPrs(ctx)
+      expect(argvs).toContainEqual(['gh', 'api', `repos/${REPO}/actions/runs?head_sha=${sha('1')}&per_page=100`])
+      expect(r.read.prs).toEqual([])
+      expect(r.read.unread).toEqual([expect.objectContaining({ pr: 670, why: expect.stringContaining('gh api actions/runs') })])
+    }
   })
 })

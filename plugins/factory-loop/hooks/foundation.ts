@@ -405,6 +405,12 @@ export type TitleFrame = {
   owner: number
 }
 
+// titleDue: O1 is a throttle (v1 plan.ts has the same condition inline): a title goes out when it
+// differs from the last one and either none was set since the module loaded or titleEveryMs has passed.
+export function titleDue(state: State, config: Config, title: string): boolean {
+  return title !== state.lastTitle && (state.lastTitleAt === null || state.now - state.lastTitleAt >= config.titleEveryMs)
+}
+
 // titleOf: the session title (plan.ts titleOf's frame). No usage numbers: a usage tier shows only
 // when it holds work.
 export function titleOf(f: TitleFrame): string {

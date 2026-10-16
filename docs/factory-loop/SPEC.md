@@ -98,6 +98,7 @@ type State = {
   ledger: LedgerEntry[]           // in-flight and recent actions (section 7)
   control: Control                // owner directives (section 4.3)
   lastTitle: string | null        // the title last set, so it is only set on change
+  lastTitleAt: Ms | null          // when the last plan title was set, for the titleEveryMs throttle
   githubBackoffUntil: Ms | null   // act mode: GitHub writes wait until then (section 10.2)
   checkout: Checkout | null       // the main checkout (#544); null when not read (the replay)
 }
@@ -290,6 +291,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
 | `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (6.3, 7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. The text contract stays the fallback of the other two, and the tools stay registered and served whatever it says. `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13, DECISIONS D-73, D-74). It goes back to `tool` once the timer-spawn probe passes (13). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
+| `titleEveryMs` | `5m` | the session title is renamed at most this often (section 9.1) |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
 | `usageStaleMs` | `15m` | an older reading counts as unavailable |
 | `heartbeatEveryMs`, `sweepEveryMs` | `20m`, `30m` | rules `H1`, `H2`; `heartbeatEveryMs` is also how long `D1` trusts a done claim the factory state has not shown yet (#538) |
@@ -530,7 +532,7 @@ GitHub or the harness is `M6`.
 
 | Rule | When | Then | Key |
 |---|---|---|---|
-| O1 | always, last (before a `restart-self`) | `title` when `titleOf(state, tier)` differs from `lastTitle` (section 9.1) | none (compared, not keyed) |
+| O1 | always, last (before a `restart-self`) | `title` when `titleOf(state, tier)` differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or `lastTitleAt` is null) (section 9.1) | none (compared, not keyed) |
 | O2 | any wake (`judge`, `task`, `tell`) is planned | keep at most one wake per pass and none while another wake is `running`, picked in order: `tell` of an owner decision or action, `judge`, `task`, other `tell`. Notices from outside plan (a rail, the ping breaker, failing passes: section 9.2) go out through the same executor once no wake is open | the wake's own key |
 | O3 | opted in, the milestone has no open items and at least one closed | `task(release)` once per milestone state | `task:release:<closed>:<expected>` |
 
@@ -1150,8 +1152,14 @@ rule `G5`), a usage tier that holds work (`stop new`, `stop all`), `stuck <n>` (
 pass), `at cap`, `capped <bucket>` or `capped <kind>:<issue>` for each rate cap tripped,
 `gh wait`, and `owner <n>` for open owner items. The driver sets `🔄 <name> · off` when the mode
 is off or the kill switch exists, and adds `· error` after a pass that throws, until a pass
-succeeds. The title is set with `/rename` only when the text changes, and the `session.append`
-hook blanks the note the rename leaves for the model (FINDINGS check 3).
+succeeds. The title is set with `/rename` only when the text changes, and at most once every
+`titleEveryMs` (a throttle): a change inside the window waits, the first pass after it sets
+whatever the title is then, and a change that reverts to the last title sends nothing. The
+first title after a load goes out at once (`lastTitle` and `lastTitleAt` start null), and the
+driver's off, kill-switch and error titles go out at once too, and every rename, those
+included, stamps `lastTitleAt`, so the first plan title after them waits until `titleEveryMs`
+has passed. The `session.append` hook blanks the note the rename leaves for the
+model (FINDINGS check 3).
 
 ### 9.2 `tell`
 

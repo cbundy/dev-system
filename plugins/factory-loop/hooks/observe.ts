@@ -170,7 +170,7 @@ export async function observe(
   rt: Runtime,
   cache: Cache,
   loadedAt: number,
-  lastTitle: string | null,
+  lastTitle: string | null, lastTitleAt: number | null,
   stored?: Stored,
   v2Stored?: V2Stored,
 ): Promise<Observation> {
@@ -563,7 +563,7 @@ export async function observe(
     milestone: cache.milestone?.value ?? null,
     ledger,
     control,
-    lastTitle,
+    lastTitle, lastTitleAt,
     githubBackoffUntil: backoffOf(),
     trackerTitle: cfg.trackerTitle,
     checkout,

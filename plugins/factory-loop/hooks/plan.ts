@@ -224,7 +224,7 @@ export function plan(state: State, config: Config): PlanResult {
   const actions = admit(ctx)
   const restart = blind ? null : restartWhenDrained(ctx, actions)
   const title = titleOf(state, config, tier, { owner: ctx.owner.size, blind, capped: ctx.capped, atCap: ctx.atCap })
-  if (title !== state.lastTitle) {
+  if (title !== state.lastTitle && (state.lastTitleAt === null || state.now - state.lastTitleAt >= config.titleEveryMs)) {
     actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   }
   // the restart ends the session, so it goes after everything else, the title included

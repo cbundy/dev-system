@@ -3,14 +3,16 @@
 // ensure named, 8.1, so a PR the ensure just opened is read on the next pass), the PR
 // (callum-flow-issue-read --json --pr <n>: state, merged, merged head, closedAt, head,
 // mergeable_state, author, base commit), its check runs (gh pr checks <n> --repo R --json
-// name,state,bucket,startedAt,completedAt,link, the run id from the link) and, when the head moved,
+// name,state,bucket,startedAt,completedAt,link, the run id from the link) plus its workflow runs
+// (gh api repos/R/actions/runs?head_sha=H, the latest per workflow and event, a synthetic check
+// for a run no visible check shows: one with no job yet is in no `gh pr checks` view) and, when the head moved,
 // its patch id (8.4: callum-flow-patch-id <head> <default branch>, kept per head, so it is computed
 // once); main's head on origin when a merge-queue PR is open, for Q1 (9.2); and the time
 // observe first saw each head (heads:<repo>), whose entries go when their PR closes or its record
 // does. Reads go in 2.4's order, the queue's head first, then the other records in reviewing and
 // the merge queue, for at most ctx.prBudget records (K, a budget of its own; none during a GitHub
 // backoff), and stop at a rate limit met this pass (ctx.limited). A PR whose read fails in any
-// part (the PR, its checks, its patch id) is left out and listed in `unread` with why (and whether
+// part (the PR, its checks, its workflow runs, its patch id) is left out and listed in `unread` with why (and whether
 // the reader refused it for an untrusted author, exit 3): only its own record waits on it, never
 // the others, so the source fails only when `cut` says why reads stopped before every record was
 // read. The rules read a missing PR as not read, never as a fact, except an untrusted author's,
@@ -18,7 +20,7 @@
 // then an earlier pass's view stands for it (ctx.kept), with its own read time.
 import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
-import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv } from './argv'
+import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv, prRunsArgv } from './argv'
 import type { SourceCtx } from './observe'
 import { queueOf } from './rules-queue'
 import { lifePr } from './rules-review'
@@ -142,6 +144,82 @@ export function checksOf(r: RunResult): CheckRun[] | null {
   return out
 }
 
+export type WorkflowRun = {
+  id: string
+  name: string
+  kind: 'pending' | 'done' | 'fail' | 'cancel'
+  link: string | null
+  startedAt: Ms | null
+  completedAt: Ms | null
+}
+
+// runsOf: the head's workflow runs from `gh api repos/R/actions/runs?head_sha=H&per_page=100`,
+// the latest run per (workflow_id, event) only (the highest run id; an older one a newer run
+// replaced, for example one concurrency cancelled, is ignored), each classified. null when the
+// read fails, does not parse, or lists fewer runs than total_count (fail closed).
+export function runsOf(r: RunResult): WorkflowRun[] | null {
+  if (r.exitCode !== 0) return null
+  let o: unknown
+  try {
+    o = JSON.parse(r.stdout)
+  } catch {
+    return null
+  }
+  if (o === null || typeof o !== 'object') return null
+  const { total_count: total, workflow_runs: list } = o as Record<string, unknown>
+  if (!Array.isArray(list) || typeof total !== 'number' || total > list.length) return null
+  const latest = new Map<string, { n: number; run: WorkflowRun }>()
+  for (const raw of list) {
+    const x = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+    if (typeof x.id !== 'number' || !Number.isInteger(x.id)) return null
+    const name = typeof x.name === 'string' && x.name !== '' ? x.name : typeof x.path === 'string' ? x.path : `workflow ${String(x.workflow_id)}`
+    const status = typeof x.status === 'string' ? x.status : ''
+    const conclusion = typeof x.conclusion === 'string' ? x.conclusion : null
+    let kind: WorkflowRun['kind'] = 'pending'
+    if (status === 'completed') {
+      if (conclusion === 'success' || conclusion === 'skipped' || conclusion === 'neutral') kind = 'done'
+      else if (conclusion === 'failure' || conclusion === 'timed_out' || conclusion === 'startup_failure') kind = 'fail'
+      else if (conclusion === 'cancelled') kind = 'cancel'
+    }
+    const link = typeof x.html_url === 'string' && x.html_url !== '' ? x.html_url : null
+    const run: WorkflowRun = {
+      id: String(x.id),
+      name,
+      kind,
+      link,
+      startedAt: timeOf(x.run_started_at) ?? timeOf(x.created_at),
+      completedAt: status === 'completed' ? timeOf(x.updated_at) : null,
+    }
+    const key = `${String(x.workflow_id)}\u0000${String(x.event)}`
+    const seen = latest.get(key)
+    if (seen === undefined || x.id > seen.n) latest.set(key, { n: x.id, run: run })
+  }
+  return [...latest.values()].map(v => v.run)
+}
+
+// withRuns: the visible checks plus one synthetic check for each latest run whose state no visible
+// check of that run shows (a run with no job yet): a pending run when no check of it is pending,
+// a failed or cancelled one when no check of it is fail or cancel.
+export function withRuns(checks: readonly CheckRun[], runs: readonly WorkflowRun[]): CheckRun[] {
+  const out = [...checks]
+  for (const run of runs) {
+    if (run.kind === 'done') continue
+    const mine = checks.filter(c => c.runId === run.id)
+    const shown = run.kind === 'pending' ? mine.some(c => c.bucket === 'pending') : mine.some(c => c.bucket === 'fail' || c.bucket === 'cancel')
+    if (shown) continue
+    out.push({
+      name: `${run.name} (workflow run, no job yet)`,
+      state: run.kind === 'pending' ? 'PENDING' : run.kind === 'fail' ? 'FAILURE' : 'CANCELLED',
+      bucket: run.kind,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      runId: run.id,
+      link: run.link,
+    })
+  }
+  return out
+}
+
 // shaOf: the head `git ls-remote origin refs/heads/<branch>` prints, or null.
 export function shaOf(stdout: string, branch: string): string | null {
   for (const line of stdout.split('\n')) {
@@ -235,6 +313,12 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
     const parsed = checksOf(c)
     if (parsed === null) return failed(`gh pr checks exit ${c.exitCode}: ${lastLine(c)}`)
     checks = parsed
+    if (pull.head !== null) {
+      const w = await ctx.run(prRunsArgv(ctx.rt.repo, pull.head), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
+      const runs = runsOf(w)
+      if (runs === null) return failed(`gh api actions/runs exit ${w.exitCode}: ${lastLine(w) || 'the workflow runs do not read whole'}`)
+      checks = withRuns(parsed, runs)
+    }
     const base = defaultBranch ?? pull.base
     if (pull.head !== null && base !== null) {
       const p = await patchOf(ctx, pull.head, base)

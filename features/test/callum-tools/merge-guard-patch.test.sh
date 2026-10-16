@@ -102,6 +102,13 @@ patch_setup; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; echo 8 > 
 patch_setup; echo '[{"name":"ci","bucket":"fail"}]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "red" checks checks "ci=fail"
 patch_setup; echo '[]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "no checks" checks checks "no checks reported"
 patch_setup; echo 'garbage' > "$st/checks"; gp 7 --patch "$PID"; expect_class "checks unread" checks read "cannot parse checks"
+# a workflow run with no job yet is in no check list: the guard reads the head's runs too
+patch_setup; echo '{"total_count":1,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"in_progress","conclusion":null}]}' > "$st/runs"; gp 7 --patch "$PID"; expect_class "run in progress" checks checks "workflow Deploy=pending"
+patch_setup; echo '{"total_count":1,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"failure"}]}' > "$st/runs"; gp 7 --patch "$PID"; expect_class "run failed" checks checks "workflow Deploy=fail"
+patch_setup; echo '{"total_count":2,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"cancelled"},{"id":6,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"success"}]}' > "$st/runs"; gp 7 --patch "$PID"; [ "$rc" = 0 ] || fail "a superseded cancelled run blocks: $out"
+patch_setup; echo '{"total_count":2,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"success"}]}' > "$st/runs"; gp 7 --patch "$PID"; expect_class "runs truncated" checks read "cannot read workflow runs whole"
+patch_setup; echo 'HTTP 502: Bad Gateway' > "$st/runs-err"; gp 7 --patch "$PID"; expect_class "runs blip" checks read "cannot read workflow runs: HTTP 502"
+patch_setup; echo garbage > "$st/runs"; gp 7 --patch "$PID"; expect_class "runs unparseable" checks read "cannot read workflow runs whole"
 # a read that failed names gh's error, so the loop can tell a GitHub blip (v2 SPEC 5.1)
 patch_setup; echo 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$st/checks-err"; gp 7 --patch "$PID"; expect_class "checks blip" checks read "cannot read checks: HTTP 502: Bad Gateway"
 patch_setup; echo '{"login":"mallory","id":999}' > "$st/pauthor"; gp 7 --patch "$PID"; expect_class "untrusted" author policy "not opened by a trusted author"
