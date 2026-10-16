@@ -59,6 +59,7 @@ url_for() {
 }
 q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "${ADMIN_USER:-}")" -c "$2"; }
 ADMIN_USER=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^\([^:@/?]*\).*@.*/\1/p')
+ADMIN_PW=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^[^:@/?]*:\([^@/?]*\)@.*/\1/p')
 
 # Reads no ambient config.
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL FACTORY_DB_MIGRATIONS_DIR
@@ -142,7 +143,7 @@ cp "$DEV_SECRETS_DIR/factory-db-reader-url" "$DEV_SECRETS_DIR/factory-db-writer-
 check writer
 expect 2 "FAIL" "${db}_reader" "_writer"
 echo "ok: reader URL in the writer slot fails"
-printf '%s\n' "$(url_for "$db" "$ADMIN_USER")" > "$DEV_SECRETS_DIR/factory-db-writer-url"
+printf '%s\n' "$(url_for "$db" "$ADMIN_USER" "$ADMIN_PW")" > "$DEV_SECRETS_DIR/factory-db-writer-url"
 check writer
 expect 2 "FAIL" "expected a role ending in _writer"
 echo "ok: an admin URL fails"
