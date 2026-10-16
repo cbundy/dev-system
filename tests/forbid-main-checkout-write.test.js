@@ -69,6 +69,8 @@ function assertDenied(result, label, rel) {
   assert.match(reason, /same relative path/, "reason should say where the file is in the worktree");
   assert.match(reason, /worktree-absolute paths/, "reason should say to use worktree paths");
   assert.match(reason, /Reading the main checkout .* stays allowed/, "reason should say reads are fine");
+  assert.match(reason, /factory-loop agent's worktree is the slot/, "reason should send a loop agent to its slot");
+  assert.match(reason, /Only on the manual path/, "reason should mark leasing as the manual path");
   assert.doesNotMatch(reason, /—/, "reason must not contain an em dash");
   if (rel) assert.ok(reason.includes(`<your worktree>/${rel}`), `reason should map ${rel} into the worktree: ${reason}`);
 }

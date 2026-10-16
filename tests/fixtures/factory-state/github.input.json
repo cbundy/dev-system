@@ -116,7 +116,6 @@
     },
     "82": {
      "labels": [
-      "ready",
       "In development"
      ]
     },
@@ -135,7 +134,7 @@
     },
     "91": {
      "labels": [
-      "In development"
+      "factory:building"
      ]
     },
     "92": {

@@ -13,8 +13,10 @@
 # a node shebang under the directories above (images/base/callum-flow-evaluate,
 # plugins/factory-loop/bin/factory-answer).
 #
-# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`),
-# and runs terraform fmt and validate on coder/dev-system when terraform is on PATH.
+# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when a
+# file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
+# with its allowlist below), and runs terraform fmt and validate on coder/dev-system when
+# terraform is on PATH.
 #
 # Quiet on success: one summary line, which also names any check skipped on this host.
 set -u
@@ -110,6 +112,21 @@ checked=$((checked + 1))
 # Its success line goes nowhere; a stale skill is reported on stderr.
 if ! node scripts/build-skills.js --check > /dev/null; then
   fail "generated skills out of date (run npm run build:skills)"
+fi
+
+# The factory loop's size guard (docs/factory-loop/v2/SPEC.md 2.5): no file under its hooks over
+# 600 lines, but the six v1 files listed here, which are over it today, each capped at its size
+# when listed. Both only shrink: a listed file over its cap fails (v2 adds a call into a v2
+# module, not logic), a listed file at or under the limit fails too, so its entry goes, and none is
+# ever added. A cap may be lowered as its file shrinks, never raised. The delete wave (build unit
+# U10) splits what is left, and empties the list.
+HOOKS_DIR=plugins/factory-loop/hooks
+HOOKS_MAX_LINES=600
+HOOKS_OVERSIZED="plan.ts:2541 register.ts:1688 act-merge.ts:722 act.ts:745 act-agents.ts:646 control.ts:660"
+checked=$((checked + 1))
+# shellcheck disable=SC2086 # word-splitting the allowlist is intended
+if ! sh scripts/size-guard.sh "$HOOKS_DIR" "$HOOKS_MAX_LINES" $HOOKS_OVERSIZED; then
+  fail "$HOOKS_DIR: a file over $HOOKS_MAX_LINES lines or over its cap, or a stale entry of the size guard's allowlist"
 fi
 
 # Release notes (scripts/release-notes.js): every file valid, and notes for the package.json

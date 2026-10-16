@@ -14,6 +14,10 @@ export const CFG_DIR = '/cfg'
 export const LOOP_DIR = `${CFG_DIR}/factory-loop/cbundy__dev-system`
 export const TOOLS = '/usr/local/share/callum-tools'
 export const SESSION = 'session-1'
+// this process's /proc/self/stat (its comm holds a space), and the id the companion and the loop
+// make of it: pid and start time (v2 SPEC 10.9)
+export const PROC_STAT = '4242 (claude code) S 1 4242 4242 0 -1 4194560 52005 150552 0 2 67 12 101 54 20 0 24 0 342070008 5783855104'
+export const PROCESS = '4242:342070008'
 export const LOCK = `${LOOP_DIR}/act.lock`
 export const iso = (ms: number) => new Date(ms).toISOString()
 
@@ -81,7 +85,7 @@ export function host(on: On, opts: HostOptions = {}) {
   // an empty value leaves the variable unset
   const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', ...opts.env }).filter(([, v]) => v !== '')
   mock.env(on, Object.fromEntries(env))
-  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify(opts.config ?? {})]])
+  const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify(opts.config ?? {})], ['/proc/self/stat', PROC_STAT]])
   for (const [path, body] of Object.entries(opts.files ?? {})) files.set(path, body)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   const seen: Seen[] = []

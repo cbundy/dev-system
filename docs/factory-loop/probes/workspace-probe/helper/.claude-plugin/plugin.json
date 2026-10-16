@@ -1,0 +1,1 @@
+{ "name": "workspace-probe-helper", "version": "0.1.0", "description": "The workspace probe's helper: a second plugin that starts the agent in its slot, guards its writes and gates its finish" }

@@ -1,0 +1,3 @@
+{"at":"2026-10-15T19:01:36.670Z","issue":571,"life":"probe1","seq":7,"cause":"guard:write","reason":"Write: /persist/claude/factory-loop-v2-build/w3/u9-probe/runs-5/companion/repo/outside.txt is outside your slot /persist/claude/factory-loop-v2-build/w3/u9-probe/runs-5/companion/slot: write only inside it"}
+{"at":"2026-10-15T19:01:37.652Z","issue":571,"life":"probe1","seq":7,"cause":"guard:push","reason":"Bash: a push to main is refused: push only your branch, as git push origin issue-571"}
+{"at":"2026-10-15T19:01:38.752Z","issue":571,"life":"probe1","seq":7,"cause":"guard:command","reason":"Bash: gh pr create is refused: the factory loop owns GitHub writes (PRs, issues, labels, re-runs); say what you need in your answer instead"}

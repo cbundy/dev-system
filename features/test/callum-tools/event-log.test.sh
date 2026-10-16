@@ -84,12 +84,13 @@ case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn
 [ "$(wc -l < "$log" | tr -d ' ')" = $((before + 1)) ] || fail "the line must still be written"
 [ "$(tail -n 1 "$log" | jq -r '.event_id')" = null ] || fail "event_id should be null without a source"
 
-# every state of the closed vocabulary is accepted (loop with its required note, tested below)
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop; do
-  ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s" || fail "$s should be accepted"
+# every state of the closed vocabulary is accepted (loop and v2's three with their required
+# notes, tested below)
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention; do
+  ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s life=l seq=1 from=none to=queued verdict=approve round=1 who=loop cause=c" || fail "$s should be accepted"
 done
 [ "$(PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep '^states:')" = "states: $(grep '^STATES=' "$EVENT" | sed 's/^STATES="//; s/"$//')" ] || fail "usage should list the vocabulary"
-PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop$' || fail "the vocabulary should list loop"
+PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop transition reviewed intervention$' || fail "the vocabulary should list loop, then v2's three"
 
 # superseded is run-scoped: --run is required, and the line carries it
 rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
@@ -111,6 +112,33 @@ for bad in "" "kind=spawn key=k1" "kind=spawn status=done" "key=k1 status=done" 
   case "$out" in *"kind=, key= and status="*) ;; *) fail "loop with note '$bad' should say why: $out" ;; esac
 done
 [ "$(wc -l < "$log" | tr -d ' ')" = "$before" ] || fail "a rejected loop event must not write"
+
+# v2's three states (docs/factory-loop/v2/SPEC.md 7.1): each needs its identifying tokens with
+# values; transition and reviewed need --issue, intervention does not (a fleet-level one)
+ev transition --issue 571 --branch issue-571 --note "row=T5 life=lss1x2k seq=7 from=building to=reviewing via=ok" || fail "transition should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .branch]')" = '["transition",571,"issue-571"]' ] || fail "transition line wrong: $(tail -n 1 "$log")"
+ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patch=f00d errors=1" || fail "reviewed should be accepted"
+ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .note]')" = '["intervention",null,"who=person cause=op:mode reason=mode%20act"]' ] || fail "intervention line wrong: $(tail -n 1 "$log")"
+ev intervention --issue 571 --note "who=person cause=rescue reason=patched%20the%20trust%20file" || fail "a hand-recorded rescue should be accepted"
+before=$(wc -l < "$log" | tr -d ' ')
+for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
+  "transition|1|life= seq=1 from=none to=queued|life=, seq=, from= and to=" \
+  "transition||life=l seq=1 from=none to=queued|--issue is required" \
+  "reviewed|1|verdict=approve|verdict= and round=" \
+  "reviewed|1|round=1 verdict=|verdict= and round=" \
+  "intervention||cause=x|who= and cause=" \
+  "intervention||who=loop|who= and cause=" \
+  "intervention||who=robot cause=x|who=person or who=loop"; do
+  state=${bad%%|*} rest=${bad#*|}
+  n=${rest%%|*} rest=${rest#*|}
+  note=${rest%%|*} why=${rest#*|}
+  rc=0
+  if [ -n "$n" ]; then out=$(ev "$state" --issue "$n" --note "$note" 2>&1) || rc=$?; else out=$(ev "$state" --note "$note" 2>&1) || rc=$?; fi
+  [ "$rc" = 2 ] || fail "$state with note '$note' must exit 2, got $rc"
+  case "$out" in *"$why"*) ;; *) fail "$state with note '$note' should say '$why': $out" ;; esac
+done
+[ "$(wc -l < "$log" | tr -d ' ')" = "$before" ] || fail "a rejected v2 event must not write"
 
 # --path prints the file a write appends to, and writes nothing
 before=$(find "$events" -type f | sort | tr '\n' ' ')

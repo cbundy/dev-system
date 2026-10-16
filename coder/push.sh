@@ -6,7 +6,8 @@
 #                                start, starting the issue-orchestrator skill by itself
 #   coder/push.sh orchestrator-loop
 #                                the same session, run by the factory loop: the factory-loop
-#                                plugin drives the repo and the session starts as its judge
+#                                plugin drives the repo and the session starts as its judge;
+#                                its companion factory-loop-workspace guards the loop's agents
 #
 # All three templates are the same Terraform. Each one's name, display name, icon, description
 # and variables live here, so a push never depends on remembering flags. The site's values
@@ -76,7 +77,9 @@ case "$name" in
     prompt=/factory-loop:judge
     resume_prompt='The workspace restarted and this conversation was resumed. The factory loop resumes by itself; answer its wakes as its judge.'
     name_format='🏭 {name} loop'
-    plugins="callum-flow@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref"
+    # factory-loop-workspace is the loop's companion: it starts each agent in its slot and guards it
+    # (docs/factory-loop/v2/SPEC.md 10); the loop holds every agent step without it.
+    plugins="callum-flow@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref factory-loop-workspace@callum=cbundy/dev-system#$plugin_ref"
     ;;
   *) usage ;;
 esac

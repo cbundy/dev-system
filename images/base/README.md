@@ -1404,12 +1404,19 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 ## Factory event log
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
-(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop`;
+(`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
+transition reviewed intervention`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
 and neither ends an issue nor releases a claim; `loop` is the factory loop's own bookkeeping,
 needs a `kind=.. key=.. status=..` note, takes `--issue` optionally and is never a stage or
-progress; see [docs/metrics.md](../../docs/metrics.md) for `rebased_behind` and `loop`
-semantics; `callum-flow-event` with no arguments lists the vocabulary) to
+progress; the factory loop v2's `transition` (an issue's state changed: its note needs `life=`,
+`seq=`, `from=` and `to=`, and carries the loop's record), `reviewed` (one review result: `verdict=`
+and `round=`) and `intervention` (someone had to step in: `who=person|loop` and `cause=`;
+`--issue` optional) carry their fields as `key=value` tokens in the note, percent-encoded, and
+`reviewed` and `intervention` are never a stage or progress. A rescue the loop cannot see is
+recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
+reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
+`loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
@@ -1429,7 +1436,8 @@ line's `v` is 2. After the append it touches `/persist/events/.wake`, which wake
 prints the offline numbers behind an agent-session evaluation (throughput, lead time, first-pass
 rate, reviewer false positives, adjudicator agreement, tests deleted or weakened by auto-fixes, token spend by role and model, wasted
 wakes, pipeline runs, and for a two-device trial per-device merges and claims, double claims,
-lost races, stuck issues and the waiting split; definitions in `docs/metrics.md`). It only reads and makes no network calls,
+lost races, stuck issues and the waiting split; the factory loop v2's interventions, untouched merges,
+judgement calls, claim completion, and review and fix rounds; definitions in `docs/metrics.md`). It only reads and makes no network calls,
 so it is in the synced allow list. Inputs: Claude transcripts under
 `${CLAUDE_CONFIG_DIR:-~/.claude}/projects/` (the project directories of this checkout and its
 `.treehouse` worktrees; override with `--projects-dir`, repeatable), the event log
@@ -1445,14 +1453,16 @@ makes the affected metrics `n/a` with the reason listed under `sources`. `--read
 `callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json] [--rule S1..S5=<minutes>]... [--github on|off]`
 answers "what is the factory doing right now?": per repo, each live issue with its stage (queued,
 designing, implementing, in pipeline, parked, ready to merge, merged, closed without merge), time in stage, holder device, run,
-PR and stuck flag; the stuck items with the rule that tripped; and coverage per repo and device, so a data
-gap never reads as idle. It is read-only. It queries `factory.events` and the `nomistakes` mirror through
-`dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
+PR, stuck flag, the claim's lease (`until`, `lapsed`) and, for an issue the factory loop v2 placed,
+its v2 state, step and attempt (from its newest `transition` event, above the mirror's runs); the stuck items
+with the rule that tripped; and coverage per repo and device, so a data
+gap never reads as idle. It is read-only. It queries `factory.events` and, when it exists, the `nomistakes`
+mirror through `dev-query` (its SQL is in the tool and tested with the image), and reads GitHub (open or closed, labels,
 claim comment) through `callum-flow-issue-read`, so a past `--at` is exact for the database but not for
 GitHub; `--github off` skips it. Stages, source precedence (GitHub closure first), stuck rules and
 coverage classes and the reader's liveness coverage are defined in
-[`docs/factory-state.md`](../../docs/factory-state.md). Unreadable GitHub shows as `n/a` with the reason. Exit 2 is bad arguments, 1 a
-required source that cannot be read. The `factory-state` skill runs it and adds a short narrative. It is in
+[`docs/factory-state.md`](../../docs/factory-state.md). Unreadable GitHub, and a missing `nomistakes.runs`, show as `n/a` with the reason. Exit 2 is bad arguments, 1 when
+`factory.events` cannot be read. The `factory-state` skill runs it and adds a short narrative. It is in
 the synced allow list.
 
 `callum-flow-merge-guard <pr>` checks a PR is safe to merge (run head, author, linkage, CI checks,
@@ -1466,6 +1476,29 @@ checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overr
 unknown mergeability `CALLUM_FLOW_MERGEABLE_TRIES` times (default 5), `CALLUM_FLOW_MERGEABLE_SLEEP`
 seconds apart (default 2). If `gh pr merge` refuses, `callum-flow-merge` says whether the head
 moved since the check or GitHub's branch rules refused, and logs no event.
+
+`callum-flow-merge-guard <pr> --patch <id>` is the factory loop's mode (v2,
+[`docs/factory-loop/v2/SPEC.md`](../../docs/factory-loop/v2/SPEC.md) 9.4), and `callum-flow-merge <pr> --patch <id>`
+passes it through. It checks only facts the loop owns: no run lookup (no `pipeline-watch.sh`, no
+no-mistakes call), no `head` or `gates` guard, and a `patch` guard that the PR head's patch id is
+`<id>`, the one the loop's reviewer approved. Every FAIL line ends with ` class=<class>`, so the loop
+acts on the class and never on the reason's words: `behind` (the loop updates the head), `conflict`
+(a fixer), `checks` (failed or pending checks), `patch` (back to review), `linkage` (the loop writes
+the PR body again), `read` (a fact the guard could not read, verify, derive or compute; GitHub's
+`BLOCKED` too) and `policy` (only the owner can change it: an untrusted author, another base, a draft,
+a branch with no issue). `--patch` takes no `--run` or `--update-behind`. The loop also passes
+`--issue <N>`, its record's issue, so the guard never reads the issue from the branch name. Without
+`--patch` the guard is unchanged.
+
+`callum-flow-patch-id <branch|sha> <base>` prints a head's patch identity: the first field of
+`git diff -U0 <merge base of origin/<base> and the head> <head> | git patch-id --stable`, with no
+colour, external diff, textconv or rename detection, and full object ids. With no context lines, a
+clean merge of the base into the head (`gh pr update-branch`) keeps it, and any change to the PR's own
+lines changes it. It fetches `origin/<base>` and the head (a branch from origin, a sha by its id) into
+the remote-tracking refs and never touches a working tree or HEAD. A head that changes nothing against
+the base (main already has its change) has the zero id (`--stable` adds up one hash per file). Exit 1
+when it cannot be computed (a fetch failed, no merge base), 2 on bad usage. The loop's `prs` source and
+the guard's `patch` check both run it (override: `CALLUM_FLOW_PATCH_ID_BIN`).
 
 `callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]` updates only an open,
 `BEHIND`, nonconflicting PR targeting the default branch or the supplied base. It rebases in a
@@ -1584,7 +1617,7 @@ a brief by anyone else is never seen), `callum-flow-merge-guard` (a new `author`
 not opened by a trusted author and reads nothing further from it), `check-pr-linkage.sh` and
 `callum-flow-fix-linkage` (an untrusted PR is refused with one line, never parsed or rewritten),
 `callum-flow-claim` and `callum-flow-sweep` (only trusted `claimed-by:` comments count; claim
-refuses an untrusted issue, sweep skips it with a count; an untrusted cross-referenced PR or
+refuses an untrusted issue, sweep skips it; an untrusted cross-referenced PR or
 actor never counts as a merge), `callum-flow-design-route` (an untrusted issue's labels are not
 read, so it routes to a sub-agent) and `queue-watch.sh` (an untrusted `ready` issue never enters
 the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
@@ -1593,20 +1626,25 @@ a reader failure: it never treats it as "no comments". Write calls are unchanged
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment
-and exits 3; every exit 3 logs a `claim_lost` event), then swaps `ready` for `In development` and logs `claimed` with the note `lease: <minutes>`. `--heartbeat
-[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events. `callum-flow-sweep` releases stale
-`In development` labels on open and closed issues: closed issues, and open ones with a PR merged
-after the claim (matched by `issue-<N>-` branch name), just lose the
-label, an expired lease goes back to `ready` with a comment and a `reclaimed` event, and an
-issue with no claim comment is left alone. The sweep also records issues closed outside the
-factory: every issue in the event log (this device's file, plus the latest lifecycle event per issue in the
+and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assigns the issue and logs `claimed` with the note `lease: <minutes>`.
+It adds no label: the claim is the comment and its events (`In development` is gone,
+[v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
+[issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
+with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder, or, when that tool fails, those this device's own event log shows it claimed and has not released (as the sweep falls back to that log). The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
+`callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
+candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
-whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed` or `loop`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run), and that GitHub reports closed gets a `closed`
-event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. A failed
-factory-state read adds no candidates; issues already logged as `closed` are excluded, while a
-listed `abandoned` issue has a new life and remains a candidate. It has no
+whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed` or `intervention`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
+factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
+listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
+event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim
+already ended (its last claim event, of `claimed`, `ready`, `reclaimed`, `merged`, `closed` and `abandoned`, is one that ends it;
+no other event revives an ended claim), when it has no claim comment, when its newest claim is live,
+or when a PR merged after the claim on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`); otherwise its
+expired lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
+any other label: the factory loop is the only writer of its `factory:*` labels. It has no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
-latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped and counted; a failed
+latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
 reader exits 1 after the rest are swept. Liveness uses GitHub server times; the lease is
 120 minutes unless `CALLUM_FLOW_LEASE_MINUTES` is set in a repo-owned place (not the synced
 `.claude/settings.json` keys, which `callum-dev update` resets).

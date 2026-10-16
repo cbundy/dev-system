@@ -99,7 +99,7 @@ case "$1 $2" in
           "$b" "$h" "$ba" "$ps" "$dr" "$pm" "$mss" ;;
     esac ;;
   'issue view') slurp "$d/issue.json" ;;
-  'pr checks') slurp "$d/checks"; if [ -f "$d/checks-rc" ]; then read -r rc < "$d/checks-rc"; exit "$rc"; fi ;;
+  'pr checks') [ ! -f "$d/checks-err" ] || { cat "$d/checks-err" >&2; exit 1; }; slurp "$d/checks"; if [ -f "$d/checks-rc" ]; then read -r rc < "$d/checks-rc"; exit "$rc"; fi ;;
   'repo view') echo main ;;
   'pr merge')
     echo "$*" >> "$d/gh-calls"

@@ -9,17 +9,20 @@
 - Every PR MUST link to the issue it addresses using a GitHub keyword in the PR body, so the two stay
   connected for tracking. Use a closing keyword - `Closes #N` (or `Fixes #N` / `Resolves #N`) - when the
   issue should auto-close on merge; use a non-closing keyword instead - `Refs #N` or `Part of #N` - when
-  the issue must stay open (research-only, under review, or one part of a multi-part issue).
+  the issue must stay open (research-only, under review, or one part of a multi-part issue). On the
+  factory loop the loop writes this link itself, and a loop agent never writes a closing keyword anywhere.
 - Before merging, verify the linkage matches intent with `gh pr view <pr> --json closingIssuesReferences`:
   the issue number must appear for a closing PR and be absent for a keep-open PR. Re-check after any
   pipeline rewrite of the PR body - rewrites can silently drop the keyword, and a stray `Closes #N` pasted
-  inside description text can wrongly auto-close the wrong issue.
+  inside description text can wrongly auto-close the wrong issue. On the factory loop, the loop's merge
+  queue runs this check.
 - When making technical decisions, do not give much weight to development cost.
   Instead, prefer quality, simplicity, robustness, scalability, and long term maintainability.
 - When doing bug fixes, always start with reproducing the bug in an E2E setting as closely aligned with how an end user would experience it as possible.
   This makes sure you find the real problem so your fix will actually solve it.
 - When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection.
-  If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way.
+  If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way
+  (a factory loop agent names it in its answer instead, since its change holds only what the brief asks).
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
   using this repo's e2e visual verification tooling (<REPLACE: path to your e2e visual verification doc, e.g.
   `docs/design/e2e-visual-verification.md`>), and attach it to the PR description before the PR is considered ready.
@@ -28,6 +31,7 @@
   (screenshots, and a short video/GIF for animated/interactive changes) when the change is visual.
 - Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+  A factory loop agent fixes it only when it blocks the gates, and otherwise names it in its answer's summary.
 - Questions about factory latency, throughput or pipeline cost are answered from factory data via the
   callum-flow `query-factory-data` skill, not from guesses.
 - When writing to the owner (chat replies, status updates, orchestrator reports, handoffs), lead with what
@@ -58,6 +62,29 @@ dependency, the exact confirmed install commands, and how to bake it into
 - Do NOT edit `.devcontainer/` in the same change that you are doing your feature
   work. Container build changes are applied out of cycle, deliberately, so they do
   not interrupt the container that is currently in use.
+- On the factory loop, a loop agent installs nothing and raises no issue. It names the missing
+  tool, what breaks without it and the install commands it would use in its answer, and carries
+  on with what it can.
+
+## Two ways work gets done
+
+Work in this repo takes one of two paths. A rule that names a path applies only on it.
+
+- **The factory loop.** You are a loop agent when the factory loop started you (your prompt's
+  first line is `factory-slot: <path>`) or a loop agent started you. The loop prepared your slot,
+  a worktree on the issue's branch, and does the rest: when a builder or fixer ends its turn it
+  runs the repo's gate commands in the slot and hands back any failure; it opens the PR and writes
+  its title, body, issue link and evidence from your answer; it runs review, waits on CI and
+  merges through its own queue. Follow your agent definition and your prompt. Work only in your
+  slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
+  never run no-mistakes, and never follow the `implement-issue` or `issue-orchestrator` skills or
+  a section of this file marked as the manual path. Never write to GitHub: where a rule here says
+  to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
+  answer and the loop does it.
+- **The manual path**, for a person or an interactive session. Code changes go in a worktree
+  (the mechanism is in "Implementation sub-agents" below). A sub-agent delegated an issue follows
+  the `implement-issue` skill (worktree, build, verify, evidence, /no-mistakes pipeline, handoff),
+  and an interactive orchestrator follows the `issue-orchestrator` skill.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->
@@ -80,7 +107,7 @@ each gate and when to run e2e locally, so the local command and the CI gate can 
 apart. If you add a new category of tests, extend the single entrypoint here rather than
 adding a bespoke CI step.>
 
-## Implementation sub-agents
+## Implementation sub-agents (manual path)
 
 Any agent making code changes - solo or delegated - works inside a <REPLACE: this repo's
 worktree/isolation mechanism, e.g. a treehouse worktree>. Sub-agents delegated an issue

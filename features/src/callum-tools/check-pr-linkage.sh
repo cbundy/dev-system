@@ -9,7 +9,9 @@
 # "Closes #M" inside description text still counts - GitHub ignores negation).
 #
 # The issue number is derived from the PR's head branch, which follows
-# `<type>/issue-<N>-<slug>`. A branch with no `issue-<N>-` segment is skipped.
+# `<type>/issue-<N>-<slug>`, or `issue-<N>` alone at its end (the factory loop's
+# branch, docs/factory-loop/v2/SPEC.md 3.5). A branch with no `issue-<N>` segment
+# (the number followed by `-` or the end of the name) is skipped.
 #
 #   --expect closing (default)  exactly #N is closed by the PR
 #   --expect refs               references #N and closes nothing (keep-open issue)
@@ -210,10 +212,10 @@ parse head
 split_out HEAD_REF BASE_REF
 [[ -n "$HEAD_REF" ]] || { echo "Error: could not read the branch of PR #${PR}" >&2; exit 1; }
 
-if [[ "$HEAD_REF" =~ issue-([0-9]+)- ]]; then
+if [[ "$HEAD_REF" =~ issue-([0-9]+)(-|$) ]]; then
   ISSUE="${BASH_REMATCH[1]}"
 else
-  echo "PR #${PR} branch '${HEAD_REF}' has no issue-<N>- segment - nothing to check." >&2
+  echo "PR #${PR} branch '${HEAD_REF}' has no issue-<N> segment - nothing to check." >&2
   if [[ "$PRINT_FIX" -eq 1 ]]; then
     print_body || exit 1
   else

@@ -118,6 +118,15 @@ case "$1 $2" in
 esac
 STUB
 chmod +x "$tmpdir/gh"
+# stub callum-flow-factory-state: prints $STUB_DIR/fs-json (its --format json report), or fails
+# without one
+cat > "$tmpdir/factory-state" <<'STUB'
+#!/bin/sh
+echo "factory-state $*" >> "${STUB_DIR:?}/fs-calls"
+[ -f "$STUB_DIR/fs-json" ] || { echo "factory-state: no database" >&2; exit 1; }
+cat "$STUB_DIR/fs-json"
+STUB
+chmod +x "$tmpdir/factory-state"
 
 NOW='2026-10-08T12:00:00Z'
 FRESH='2026-10-08T11:30:00Z' # 30 minutes old: live under a 120 minute lease
@@ -165,6 +174,9 @@ calls() { cat "$d/calls"; }
 no_calls() { [ ! -s "$d/calls" ] || fail "$1: unexpected writes: $(calls)"; }
 events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
 no_events() { [ -z "$(events)" ] || fail "$1: unexpected events: $(events)"; }
+# seed <state> <issue> : append a real event to this device's log; the sweep's candidates are the
+# issues the event log and factory-state list as live (v2 SPEC 3.6), never a label list
+seed() { rc_of "$EVENT" "$1" --issue "$2" --repo o/r; }
 
 # --- usage ----------------------------------------------------------------------
 reset
@@ -185,7 +197,9 @@ brief | arr > "$d/comments-7.json"
 rc_of "$CLAIM" 7
 expect_rc 0 "fresh claim"
 calls | grep -q '^POST 7$' || fail "fresh: no comment posted"
-calls | grep -qx 'issue edit 7 --add-label In development --remove-label ready --add-assignee @me' || fail "fresh: label swap: $(calls)"
+calls | grep -qx 'issue edit 7 --remove-label ready --add-assignee @me' || fail "fresh: ready off and assigned: $(calls)"
+# the claim adds no label: the comment and its events are the claim (v2 SPEC 3.6)
+calls | grep -q -- '--add-label' && fail "fresh: the claim must add no label: $(calls)"
 [ "$(calls | grep -c '^POST')" = 1 ] || fail "fresh: more than one comment"
 jq -e '.[-1].body == "claimed-by: devA at 2026-10-08T12:00:00Z lease: 120\n<!-- callum-flow-claim -->"' "$d/comments-7.json" >/dev/null ||
   fail "fresh: comment format: $(jq -r '.[-1].body' "$d/comments-7.json")"
@@ -234,12 +248,36 @@ calls | grep -q 'DELETE' && fail "winner must not delete anything"
 calls | grep -q 'issue edit 7' || fail "winner must swap labels"
 events | jq -e '.state == "claimed"' >/dev/null || fail "winner event"
 
-# --- own live claim: no second comment ------------------------------------------
+# --- own live claim: kept only while the log shows it held -----------------------
+# held (a restart, a retry of a claim whose adoption failed): no second comment, no second claimed
 reset
+seed claimed 7
+seed delegated 7
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" 7
-expect_rc 0 "own live claim"
-calls | grep -q 'POST' && fail "own live claim posted again"
+expect_rc 0 "own live claim, held"
+calls | grep -q 'POST' && fail "own live claim, held: posted again: $(calls)"
+[ "$(events | jq -s 'map(select(.state == "claimed")) | length')" = 1 ] || fail "own live claim, held: claimed again: $(events)"
+# not held: every other log starts a new life, a fresh comment, lease and one claimed event.
+# nolog and none: a claim interrupted after its POST and before its event (a reload mid-claim),
+# with no log, or a log with no claim event for the issue. An end (R2-F5): the comment and its
+# lease outlive a release, a drop, a rejection or a merge; the end counts whatever follows it
+# (a closing transition logged after merged)
+for end in nolog none reclaimed abandoned merged closed ready; do
+  reset
+  case "$end" in
+    nolog | none) ;;
+    *) seed claimed 7; seed "$end" 7 ;;
+  esac
+  [ "$end" = nolog ] || rc_of "$EVENT" transition --issue 7 --repo o/r --note "life=x seq=2 from=merge-queue to=closed"
+  cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+  rc_of "$CLAIM" 7
+  expect_rc 0 "own live claim after $end"
+  [ "$(calls | grep -v '^issue edit')" = "$(printf 'DELETE 100\nPOST 7')" ] || fail "own live claim after $end: not a fresh claim: $(calls)"
+  jq -e 'map(.id) == [900]' "$d/comments-7.json" >/dev/null || fail "own live claim after $end: comments: $(cat "$d/comments-7.json")"
+  events | jq -s -e 'last | .state == "claimed" and .issue == 7 and .note == "lease: 120"' >/dev/null || fail "own live claim after $end: no new claimed: $(events)"
+  [ "$(events | jq -s 'map(select(.state == "claimed")) | length')" = "$(case "$end" in nolog | none) echo 1 ;; *) echo 2 ;; esac)" ] || fail "own live claim after $end: claimed count: $(events)"
+done
 
 # --- label failure withdraws the claim ------------------------------------------
 reset
@@ -272,49 +310,105 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 1 "heartbeat patch failure"
 no_events "heartbeat patch failure"
 
-# no-argument form: only this device's live claims on open In development issues
+# no-argument form: this device's live claims on the open issues factory-state lists live with
+# this device as the holder (v2 SPEC 3.6), never a label list
+fs_live() { jq -n --argjson i "$1" '{repos: [{repo: "o/r", issues: $i, recent: []}]}' > "$d/fs-json"; }
 reset
-issue 7 OPEN 'In development'
-issue 8 OPEN 'In development'
-printf '7\n8\n' > "$d/list.txt"
+issue 8 OPEN
+issue 9 CLOSED
+fs_live '[{"issue": 7, "holder": "devA"}, {"issue": 8, "holder": "devB"}, {"issue": 9, "holder": "devA"}]'
 { brief; cm 100 devA "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
-{ cm 101 devB "$FRESH" "$FRESH"; } | arr > "$d/comments-8.json"
-rc_of "$CLAIM" --heartbeat
+cm 101 devA "$FRESH" "$FRESH" | arr > "$d/comments-8.json"
+cm 102 devA "$FRESH" "$FRESH" | arr > "$d/comments-9.json"
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all"
-[ "$(calls)" = "PATCH 100" ] || fail "heartbeat all: $(calls)"
+[ "$(calls)" = "PATCH 100" ] || fail "heartbeat all: only #7 (devA's, open) is renewed, not #8 (devB holds it) nor #9 (closed): $(calls)"
 [ "$(events | wc -l)" = 1 ] || fail "heartbeat all: one renewed event per renewed claim: $(events)"
 events | jq -e '.state == "renewed" and .issue == 7' >/dev/null || fail "heartbeat all: renewed event: $(events)"
+grep -q -- '--repo o/r --github off --format json' "$d/fs-calls" || fail "heartbeat all: factory-state call: $(cat "$d/fs-calls")"
 # nothing to renew is still success
 reset
-issue 7 OPEN 'In development'
+fs_live '[{"issue": 7, "holder": "devA"}]'
 cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-rc_of "$CLAIM" --heartbeat
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat nothing"
 no_calls "heartbeat nothing"
 no_events "heartbeat nothing"
+# factory-state cannot be read (factory.events unreachable): this device's own event log lists
+# its claims, as the sweep's fallback does, so the sweep never releases a claim still held. #7 is
+# claimed; #8 was claimed and then released; #9 claimed and closed; #10 claimed, then a v2
+# transition (a lifecycle event that is no release); #11 never claimed here.
+reset
+issue 8 OPEN
+issue 9 OPEN
+issue 10 OPEN
+issue 11 OPEN
+for n in 7 8 9 10; do rc_of "$EVENT" claimed --issue "$n" --repo o/r --note 'lease: 120'; done
+rc_of "$EVENT" reclaimed --issue 8 --repo o/r
+rc_of "$EVENT" closed --issue 9 --repo o/r
+rc_of "$EVENT" transition --issue 10 --repo o/r --note 'row=T1 life=a seq=1 from=queued to=designing'
+rc_of "$EVENT" renewed --issue 7 --repo o/r --note 'lease: 120'
+rc_of "$EVENT" ready --issue 11 --repo o/r
+for n in 7 8 9 10 11; do cm "$((100 + n))" devA "$FRESH" "$FRESH" | arr > "$d/comments-$n.json"; done
+before=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat from the local log"
+[ "$(calls | sort | tr '\n' ' ')" = "PATCH 107 PATCH 110 " ] || fail "heartbeat from the local log: only #7 and #10 are this device's unreleased claims: $(calls)"
+grep -q "renewing the claims in this device's event log" "$tmpdir/err" || fail "heartbeat from the local log: warning: $(cat "$tmpdir/err")"
+[ "$(events | wc -l)" = "$((before + 2))" ] || fail "heartbeat from the local log: one renewed event each: $(events)"
+# factory-state cannot be read and this device has no log: nothing claimed here, nothing renewed
+reset
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat, no factory-state and no log"
+no_calls "heartbeat, no factory-state and no log"
+# neither can be read: an error, nothing renewed
+reset
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+cat > "$tmpdir/no-path-event" <<'STUB'
+#!/bin/sh
+[ "$1" != --path ] || exit 2
+exec "$REAL_EVENT" "$@"
+STUB
+chmod +x "$tmpdir/no-path-event"
+set +e
+PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r REAL_EVENT="$EVENT" \
+  CALLUM_FLOW_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
+  CALLUM_FLOW_FACTORY_STATE_BIN="$tmpdir/factory-state" CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
+  CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
+rc=$?
+set -e
+expect_rc 1 "heartbeat list failure"
+no_calls "heartbeat list failure"
+grep -q 'cannot list' "$tmpdir/err" || fail "heartbeat list failure: $(cat "$tmpdir/err")"
 
 # --- sweep: stale claim is reclaimed ---------------------------------------------
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN 'factory:building'
+seed claimed 7
 { brief; cm 100 devB "$STALE" "$STALE"; } | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep stale"
-calls | grep -q 'issue edit 7 --remove-label In development --add-label ready --remove-assignee cbundy' || fail "stale: swap: $(calls)"
+# ready back and the claimant unassigned; no other label is touched (the loop owns factory:*)
+calls | grep -qx 'issue edit 7 --add-label ready --remove-assignee cbundy' || fail "stale: ready back: $(calls)"
+calls | grep -q -- '--remove-label' && fail "stale: the sweep must remove no label: $(calls)"
+jq -e '.labels | map(.name) == ["factory:building", "ready"]' "$d/issue-7.json" > /dev/null || fail "stale: labels: $(cat "$d/issue-7.json")"
 [ "$(calls | grep -c '^issue comment 7')" = 1 ] || fail "stale: comment count"
 calls | grep "issue comment 7" | grep -q devB || { calls >&2; cat "$tmpdir/err" >&2; fail "stale: comment names the device"; }
-[ "$(events | wc -l)" = 1 ] || fail "stale: event"
-events | jq -e '.state == "reclaimed" and .issue == 7' >/dev/null || fail "stale: event"
-# label-lag debounce: list.txt still returns 7; the second run writes nothing
+[ "$(events | grep -c '"state":"reclaimed"')" = 1 ] || fail "stale: event: $(events)"
+events | tail -n 1 | jq -e '.state == "reclaimed" and .issue == 7' >/dev/null || fail "stale: event"
+# the second run writes nothing: the issue's latest event is now reclaimed
 : > "$d/calls"
-rm -f "$tmpdir/events"/*
+n=$(events | wc -l)
 rc_of "$SWEEP"
 expect_rc 0 "sweep twice"
 no_calls "sweep twice"
-no_events "sweep twice"
+[ "$(events | wc -l)" = "$n" ] || fail "sweep twice wrote: $(events)"
 
 # a live claim is left alone
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep live"
@@ -322,14 +416,34 @@ no_calls "sweep live"
 
 # a renewed claim is live even though it was created long ago
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 no_calls "sweep renewed"
 
-# --- sweep: closed issue loses the label, and the closure is logged (#342) --------
-# seed <state> <issue> : append a real event to this device's log
-seed() { rc_of "$EVENT" "$1" --issue "$2" --repo o/r; }
+# an issue already back in the queue, or merged, is not read for a claim at all
+for last in ready reclaimed merged; do
+  reset
+  issue 7 OPEN
+  seed claimed 7
+  seed "$last" 7
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep released [$last]"
+  no_calls "sweep released [$last]"
+done
+
+# an issue only factory-state lists (no event on this device) with a lapsed claim is reclaimed too
+reset
+issue 7 OPEN
+fs_live '[{"issue": 7, "holder": "devB"}]'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+expect_rc 0 "sweep listed only"
+calls | grep -qx 'issue edit 7 --add-label ready --remove-assignee cbundy' || fail "listed only: $(calls)"
+
+# --- sweep: a closed issue's closure is logged (#342); its labels are left alone ----
 # closed_issue <n> <reason> : a closed issue with GitHub's close reason
 closed_issue() { jq -n --arg r "$2" '{state: "CLOSED", labels: [], state_reason: (if $r == "" then null else $r end)}' > "$d/issue-$1.json"; }
 # stub dev-query: prints $STUB_DIR/central (the DISTINCT ON rows), or fails with $STUB_DIR/central-rc
@@ -347,17 +461,17 @@ reset
 issue 7 CLOSED 'In development'
 rc_of "$SWEEP"
 expect_rc 0 "sweep closed"
-[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "closed: $(calls)"
+no_calls "sweep closed: no event, so no candidate, and no label read"
 no_events "sweep closed (no prior event)"
 
-# In development + closed + a prior claimed: label removed, one closed event, then nothing
+# closed + a label + a prior claimed: one closed event, the labels untouched, then nothing
 reset
 closed_issue 7 completed
-jq '.labels = [{name: "In development"}]' "$d/issue-7.json" > "$d/t" && mv "$d/t" "$d/issue-7.json"
+jq '.labels = [{name: "In development"}, {name: "factory:parked"}]' "$d/issue-7.json" > "$d/t" && mv "$d/t" "$d/issue-7.json"
 seed claimed 7
 rc_of "$SWEEP"
 expect_rc 0 "sweep closed in dev"
-[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "closed in dev: $(calls)"
+no_calls "closed in dev"
 [ "$(events | grep -c '"state":"closed"')" = 1 ] || fail "closed in dev: $(events)"
 events | tail -n 1 | jq -e '.state == "closed" and .issue == 7 and .note == "completed" and .actor == "sweep"' > /dev/null || fail "closed in dev event: $(events)"
 : > "$d/calls"
@@ -461,7 +575,6 @@ rc_of "$SWEEP"
 expect_rc 0 "sweep untrusted candidate"
 events | jq -e 'select(.state == "closed" and .issue == 7)' > /dev/null && fail "untrusted candidate was closed: $(events)"
 events | jq -e 'select(.state == "closed" and .issue == 8)' > /dev/null || fail "trusted candidate not closed: $(events)"
-grep -q 'skipped 1 .*untrusted authors' "$tmpdir/err" || fail "untrusted candidate not counted: $(cat "$tmpdir/err")"
 reset
 closed_issue 7 completed
 closed_issue 8 completed
@@ -495,15 +608,11 @@ n=$(events | wc -l)
 rc_of "$SWEEP"
 [ "$(events | wc -l)" = "$n" ] || fail "final then noise wrote: $(events)"
 # an issue known only from a mirror run (factory-state lists it, no events): closed on GitHub gets closed
-cat > "$tmpdir/factory-state" <<'STUB'
-#!/bin/sh
-cat "${STUB_DIR:?}/fs-json"
-STUB
-chmod +x "$tmpdir/factory-state"
 reset
 closed_issue 7 completed
 closed_issue 8 completed
 issue 9 OPEN
+echo '[]' > "$d/comments-9.json"
 echo '{"repos":[{"repo":"o/r","issues":[{"issue":7,"stage":"in pipeline"},{"issue":9,"stage":"parked"}],"recent":[{"issue":8}]}]}' > "$d/fs-json"
 FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
 expect_rc 0 "sweep mirror-only"
@@ -580,30 +689,58 @@ expect_rc 0 "sweep central failing"
 events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "central failing: $(events)"
 grep -q 'cannot read the central event log' "$tmpdir/err" || fail "central failing: no warning: $(cat "$tmpdir/err")"
 
+# a claim that ended stays ended: a later event that is no claim event (the watcher's
+# head_mismatch after the owner's drop) never brings its lapsed lease back, from either log
+for after in head_mismatch parked central; do
+  reset
+  issue 7 OPEN
+  if [ "$after" = central ]; then
+    printf '%s\n' '2026-10-08T09:00:00Z|7|abandoned' '2026-10-08T09:01:00Z|7|head_mismatch' > "$d/central"
+  else
+    seed claimed 7
+    seed abandoned 7
+    seed "$after" 7
+  fi
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  n=$(events | wc -l)
+  dq
+  expect_rc 0 "sweep ended then $after"
+  no_calls "sweep ended then $after"
+  [ "$(events | wc -l)" = "$n" ] || fail "sweep ended then $after wrote: $(events)"
+done
+
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
 tl() { jq -n --arg m "$1" '[{event: "cross-referenced", actor: {login: "cbundy", id: 13131067}, source: {issue: {number: 55, user: {login: "cbundy", id: 13131067}, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
-reset
-echo feat/issue-7-claim > "$d/head-ref-55"
-issue 7 OPEN 'In development'
-cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
-tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
-rc_of "$SWEEP"
-expect_rc 0 "sweep merged"
-[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "merged: $(calls)"
-no_events "sweep merged"
+# a PR merged after the claim on the issue's own branch (issue-<N>, or issue-<N>-..., after any
+# prefix/) leaves a lapsed claim alone
+for ref in feat/issue-7-claim issue-7 fix/issue-7 issue-7-x; do
+  reset
+  echo "$ref" > "$d/head-ref-55"
+  issue 7 OPEN
+  seed claimed 7
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+  n=$(events | wc -l)
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep merged [$ref]"
+  no_calls "sweep merged [$ref]"
+  [ "$(events | wc -l)" = "$n" ] || fail "sweep merged [$ref] wrote: $(events)"
+done
 # a PR merged before the claim, or not merged at all, does not count
 for m in '2026-10-07T00:00:00Z' ''; do
   reset
-  issue 7 OPEN 'In development'
+  issue 7 OPEN
+  seed claimed 7
   cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
   echo feat/issue-7-claim > "$d/head-ref-55"
   tl "$m" > "$d/timeline-7.json"
   rc_of "$SWEEP"
   calls | grep -q -- '--add-label ready' || fail "PR merged [$m] must not shield a stale claim"
 done
-for ref in release/v0.11.0 feat/issue-77-other; do
+for ref in release/v0.11.0 feat/issue-77-other issue-70 issue-7x feat/notissue-7; do
   reset
-  issue 7 OPEN 'In development'
+  issue 7 OPEN
+  seed claimed 7
   cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
   echo "$ref" > "$d/head-ref-55"
   tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
@@ -613,23 +750,27 @@ done
 
 # an unreadable PR never reclaims the issue
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 rm -f "$d/head-ref-55"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+n=$(events | wc -l)
 rc_of "$SWEEP"
 expect_rc 1 "sweep unreadable PR"
 no_calls "sweep unreadable PR"
-no_events "sweep unreadable PR"
+[ "$(events | wc -l)" = "$n" ] || fail "sweep unreadable PR wrote: $(events)"
 
 # --- sweep: legacy claim without a comment is untouched --------------------------
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 brief | arr > "$d/comments-7.json"
+n=$(events | wc -l)
 rc_of "$SWEEP"
 expect_rc 0 "sweep legacy"
 no_calls "sweep legacy"
-no_events "sweep legacy"
+[ "$(events | wc -l)" = "$n" ] || fail "sweep legacy wrote: $(events)"
 grep -q 'no claim comment' "$tmpdir/err" || fail "legacy: no stderr note"
 
 # --- trust (cbundy/dev-system#310): untrusted text is ignored or refused -----------
@@ -671,9 +812,9 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 0 "heartbeat ignores stranger"
 no_calls "heartbeat ignores stranger"
 reset
-issue 7 OPEN 'In development'
+fs_live '[{"issue": 7, "holder": "devA"}]'
 scm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-rc_of "$CLAIM" --heartbeat
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all ignores stranger"
 no_calls "heartbeat all ignores stranger"
 
@@ -690,13 +831,13 @@ for who in '{"login":"mallory","id":999}' '{"login":"cbundy","id":42}'; do
 done
 # heartbeat skips an untrusted issue silently
 reset
-issue 7 OPEN 'In development'
+fs_live '[{"issue": 7, "holder": "devA"}]'
 echo "$STRANGER" > "$d/author-7"
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" --heartbeat 7
 expect_rc 0 "heartbeat untrusted issue"
 no_calls "heartbeat untrusted issue"
-rc_of "$CLAIM" --heartbeat
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all, untrusted issue"
 no_calls "heartbeat all, untrusted issue"
 
@@ -709,9 +850,10 @@ no_calls "claim reader failure"
 rc_of "$CLAIM" --heartbeat 7
 expect_rc 1 "heartbeat reader failure"
 no_calls "heartbeat reader failure"
-issue 7 OPEN 'In development'
-rc_of "$CLAIM" --heartbeat
-expect_rc 1 "heartbeat list failure"
+fs_live '[{"issue": 7, "holder": "devA"}]'
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 1 "heartbeat all, reader failure"
+no_calls "heartbeat all, reader failure"
 # an unusable trusted list fails closed too
 reset
 TRUSTED='' rc_of "$CLAIM" 7
@@ -726,7 +868,8 @@ unset READ_BIN
 # --- sweep trust ------------------------------------------------------------------
 # a stranger's fresh claim does not shield a stale trusted claim
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 { cm 100 devB "$STALE" "$STALE"; scm 101 devC "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep stranger's fresh claim"
@@ -734,35 +877,39 @@ calls | grep -q -- '--add-label ready' || fail "stranger's fresh claim shielded 
 calls | grep "issue comment 7" | grep -q devB || fail "reclaim must name the trusted claim"
 # a stranger's stale claim alone is no claim: legacy path, nothing reclaimed
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 scm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep stranger's stale claim"
 no_calls "sweep stranger's stale claim"
 grep -q 'no claim comment' "$tmpdir/err" || fail "stranger's claim should read as no claim"
-# an untrusted issue is skipped silently, apart from a count
+# an untrusted issue is skipped silently
 for who in '{"login":"mallory","id":999}' '{"login":"cbundy","id":42}'; do
   reset
-  issue 7 CLOSED 'In development'
+  issue 7 CLOSED
+  seed claimed 7
   echo "$who" > "$d/author-7"
   rc_of "$SWEEP"
   expect_rc 0 "sweep untrusted issue"
   no_calls "sweep untrusted closed issue"
-  grep -q 'skipped 1 ' "$tmpdir/err" || fail "sweep should count the skipped issue: $(cat "$tmpdir/err")"
+  events | jq -e 'select(.state == "closed")' > /dev/null && fail "sweep untrusted closed issue was closed: $(events)"
 done
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 echo "$STRANGER" > "$d/author-7"
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 rc_of "$SWEEP"
 expect_rc 0 "sweep untrusted open issue"
 no_calls "sweep untrusted open issue"
-no_factory_events "sweep untrusted open issue"
+[ -z "$(events | jq -c 'select(.state != "untrusted_stripped" and .state != "claimed")')" ] || fail "sweep untrusted open issue: unexpected events: $(events)"
 # an untrusted PR, or an untrusted actor, never counts as a merge
 reset
 echo feat/issue-7-claim > "$d/head-ref-55"
 echo "$STRANGER" > "$d/pr-author-55"
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
 rc_of "$SWEEP"
@@ -770,14 +917,16 @@ expect_rc 0 "sweep untrusted PR"
 calls | grep -q -- '--add-label ready' || fail "an untrusted merged PR shielded a stale claim: $(calls)"
 reset
 echo feat/issue-7-claim > "$d/head-ref-55"
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' | jq --argjson u "$STRANGER" '.[0].actor = $u' > "$d/timeline-7.json"
 rc_of "$SWEEP"
 calls | grep -q -- '--add-label ready' || fail "an untrusted actor's cross-reference shielded a stale claim: $(calls)"
 reset
 echo feat/issue-7-claim > "$d/head-ref-55"
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' | jq --argjson u "$STRANGER" '.[0].source.issue.user = $u' > "$d/timeline-7.json"
 rc_of "$SWEEP"
@@ -785,14 +934,16 @@ calls | grep -q -- '--add-label ready' || fail "an untrusted source issue shield
 # the trusted merged PR still counts (control)
 reset
 echo feat/issue-7-claim > "$d/head-ref-55"
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
 rc_of "$SWEEP"
-[ "$(calls)" = "issue edit 7 --remove-label In development" ] || fail "trusted merged PR control: $(calls)"
+no_calls "trusted merged PR control"
 # a reader failure is an error for the sweep, never "no comments"
 reset
-issue 7 OPEN 'In development'
+issue 7 OPEN
+seed claimed 7
 cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
 touch "$d/read-fails"
 rc_of "$SWEEP"

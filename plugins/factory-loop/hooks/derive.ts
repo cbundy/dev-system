@@ -33,8 +33,9 @@ export type FactoryEvent = {
   device: string | null
 }
 
-// The events plan and the derivation need, for one repo, up to :'at', over :'days' days.
-// Run through `dev-query --csv -v repo=.. -v at=.. -v days=..` with the SQL on stdin.
+// The events plan and the derivation need, for one repo, up to :'at', over :'days' days, v2's
+// three states among them (v2 SPEC 7.1; v2/record.ts rebuilds records from `transition`). Run
+// through `dev-query --csv -v repo=.. -v at=.. -v days=..` with the SQL on stdin.
 export const EVENTS_SQL = `select
   to_char(ts at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as ts,
   state, issue, run_id, branch, pr, head, note, actor, device
@@ -44,7 +45,7 @@ where repo = :'repo'
   and ts > :'at'::timestamptz - make_interval(days => :'days'::int)
   and state in ('ready', 'claimed', 'renewed', 'reclaimed', 'closed', 'delegated', 'verdict',
     'fix_requested', 'parked', 'failed', 'merge_ready', 'head_mismatch', 'conflict', 'ci_stalled',
-    'merged', 'abandoned', 'superseded', 'rebased_behind', 'loop')
+    'merged', 'abandoned', 'superseded', 'rebased_behind', 'loop', 'transition', 'reviewed', 'intervention')
 order by ts, seq;
 `
 
@@ -81,6 +82,8 @@ export type Facts = {
   pipeline: Map<string, FactoryEvent[]>
   // per run, when a gate of it was last answered (a verdict or a review fix)
   answered: Map<string, number>
+  // per issue, its newest `reclaimed` event: a sweep or a release gave the claim back (v2 H1)
+  reclaimed: Map<number, number>
 }
 
 // factsOf: what plan reads from the log (SPEC 3.3 `facts`).
@@ -92,6 +95,7 @@ export function factsOf(events: FactoryEvent[]): Facts {
     superseded: new Set(),
     pipeline: new Map(),
     answered: new Map(),
+    reclaimed: new Map(),
   }
   for (const e of events) {
     if (e.state === 'delegated' && e.issue !== null) {
@@ -105,6 +109,8 @@ export function factsOf(events: FactoryEvent[]): Facts {
       facts.verdicts.set(e.run, list.slice(-20))
     } else if (e.state === 'superseded' && e.run !== null) {
       facts.superseded.add(e.run)
+    } else if (e.state === 'reclaimed' && e.issue !== null) {
+      facts.reclaimed.set(e.issue, Math.max(facts.reclaimed.get(e.issue) ?? 0, e.ts))
     }
     if ((e.state === 'verdict' || e.state === 'fix_requested') && e.run !== null) {
       facts.answered.set(e.run, Math.max(facts.answered.get(e.run) ?? 0, e.ts))
@@ -437,11 +443,18 @@ function outcomeTokens(o: Outcome | undefined): string[] {
         ...(typeof f.pendingDecision === 'boolean' ? [`pending=${yn(f.pendingDecision)}`] : []),
       ]
     }
+    default:
+      // v2's outcomes: v2 rebuilds its records from their transition events, and its agent steps
+      // are never rebuilt (entryFromLoop)
+      return []
   }
 }
 
 // entryFromLoop: the ledger entry a `loop` event carries (loopNote's inverse), or null when the
-// event is not one or its note does not parse. Left-out free text comes back empty.
+// event is not one or its note does not parse. Left-out free text comes back empty. A v2 agent
+// step's event is for the trail only and is never rebuilt (v2 SPEC 3.3): its result is not in the
+// note, so a rebuilt done entry would hold its key with no result to read; left out, S2 dispatches
+// the key again and the executor takes the answer already recorded for it (10.8).
 export function entryFromLoop(e: FactoryEvent): LedgerEntry | null {
   if (e.state !== 'loop' || e.note === null) return null
   const f = new Map<string, string>()
@@ -456,7 +469,7 @@ export function entryFromLoop(e: FactoryEvent): LedgerEntry | null {
   const attempts = Number(f.get('attempts'))
   const startedAt = Number(f.get('started'))
   const ended = f.get('ended')
-  if (kind === undefined || kind === 'guard' || status === undefined || klass === undefined || key === undefined) return null
+  if (kind === undefined || kind === 'guard' || kind === 'agent-step' || status === undefined || klass === undefined || key === undefined) return null
   if (!Number.isInteger(attempts) || attempts < 0 || !Number.isFinite(startedAt)) return null
   const entry: LedgerEntry = {
     key: dec(key),

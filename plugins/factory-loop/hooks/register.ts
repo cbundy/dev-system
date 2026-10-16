@@ -11,7 +11,9 @@
 // the answer script, in text or through their answer tools, and their repair messages; wake
 // turns) and the owner's controls
 // (/factory, the control and answer tools), and keeps the loop's own agent types (agents/) from
-// the model.
+// the model. The setting `planner` picks the layer whose plan acts (v1's plan.ts or v2/plan.ts),
+// and the v2 shadow plans beside v1 and is only logged (v2 SPEC 2.3); v2's records and the PR heads
+// it has seen live in the store beside the ledger (records:<repo>, heads:<repo>).
 import type { AgentSpawnArgs, EngineInterface, Register } from 'claude-code'
 
 import {
@@ -27,6 +29,7 @@ import {
   logLoop,
   loggedOf,
   passErrorTell,
+  planPass,
   retried,
   sendNotice,
   transition,
@@ -35,12 +38,12 @@ import {
   wakeEnded,
   wakeStarted,
 } from './act'
-import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, ToolAnswered } from './act'
+import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
-import { DEFAULT_CONFIG, EMPTY_CONTROL, loadConfig } from './config'
+import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject } from './config'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
-import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, readControl, retryText, runOp, writeControl } from './control'
+import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
 import type { ActIo } from './exec'
@@ -48,7 +51,7 @@ import { finish, load, onLoad, save } from './ledger'
 import type { StoreIo } from './ledger'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from './observe'
 import type { Io, Runtime, Stored } from './observe'
-import { issueFromBranch, plan } from './plan'
+import { issueFromBranch } from './plan'
 import {
   EMPTY_RAIL_MEMORY,
   LOCK_CAS_SCRIPT,
@@ -93,6 +96,18 @@ import {
 } from './trace'
 import type { Tracer } from './trace'
 import type { Action, AgentStatus, AgentType, Config, LedgerEntry, Ms, PlanResult, SourceName, State } from './types'
+import { logOwnerOp } from './v2/act-events'
+import type { V2Stored } from './v2/observe'
+import { opLanded, parkedOf } from './v2/ops'
+import { transitionsOf } from './v2/plan'
+import { stateCounts } from './v2/rules-state'
+import { newSettingsCache, repoLoaded } from './v2/settings'
+import type { SettingsIo } from './v2/settings'
+import { keepV2, loadV2, newV2Live, noteIdle, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
+import type { V2StoreIo } from './v2/store'
+import { STEP_AGENT } from './v2/types'
+import type { V2Io } from './v2/types'
+import { BASH_TIMEOUT_MS, processIdOf, withSlotLine } from './v2/workspace'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -154,6 +169,10 @@ let errorTold = false
 // basis: the act lock as it stood when the store was loaded; a write goes back to the store only
 // while the lock names this session or still stands so (mayWrite)
 const live: Live & { loaded: boolean; repo: string; basis: string | null } = { ledger: [], loaded: false, repo: '', basis: null }
+// v2's records and the heads it has seen, kept as the ledger is (v2/store.ts), and the repo-local
+// settings as origin's default branch holds them under planner v2 (v2/settings.ts)
+const liveV2 = newV2Live()
+const settingsCache = newSettingsCache()
 // the last pass's runtime and state, for the hooks between passes
 let lastRt: Runtime | null = null
 let lastState: State | null = null
@@ -200,24 +219,17 @@ type AgentRow = { id: string; type: string; status: AgentStatus }
 type Options = { mode?: unknown; repo?: unknown; shadowDevice?: unknown; runSource?: unknown }
 let options: Options = {}
 
-// The settings of SPEC 4.2 the workspace file may also set, over the repo's file (SPEC 4.1).
-// answerTools, which answerChannel replaced (#561), is passed on only to be named as replaced.
-const WORKSPACE_SETTINGS = ['trace', 'answerChannel', 'answerTools'] as const
+// The workspace file's keys that are not settings: the plugin's options and the runtime's own.
+// Every other key there is a setting, over the repo's file (v2 SPEC section 15: the workspace
+// file may set any key and wins); answerTools, which answerChannel replaced (#561), is passed on
+// only to be named as replaced.
+const RUNTIME_KEYS: readonly string[] = ['mode', 'repo', 'shadowDevice', 'runSource', 'checkout', 'poolSize', 'toolsDir', 'binDir']
 
 async function text($: EngineInterface, path: string): Promise<string | null> {
   try {
     return (await $.fs.exists(path)) ? String(await $.fs.read(path)) : null
   } catch {
     return null
-  }
-}
-
-function json(raw: string | null): Record<string, unknown> {
-  try {
-    const v = raw === null ? {} : JSON.parse(raw)
-    return v !== null && typeof v === 'object' ? v : {}
-  } catch {
-    return {}
   }
 }
 
@@ -238,7 +250,7 @@ async function configDir($: EngineInterface) {
 async function runtime($: EngineInterface): Promise<Runtime> {
   const dir = await configDir($)
   const base = loopBaseOf(dir)
-  const file = json(await text($, `${base}/config.json`))
+  const file = jsonObject(await text($, `${base}/config.json`))
   const pick = (key: keyof Options) => (typeof file[key] === 'string' && file[key] !== '' ? file[key] : options[key])
   const checkout = str(file.checkout) || cwd
   let repo = typeof pick('repo') === 'string' && pick('repo') !== '' ? String(pick('repo')) : ''
@@ -249,11 +261,10 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
   const device = shadow !== '' && mode !== 'act' ? shadow : host
-  // the repo-local settings, durations and all (SPEC 4.2), then the few the workspace file may set
-  // over them: trace, which /factory trace writes (#552), and answerChannel (#561). What either
-  // gets wrong is logged.
-  const over = Object.fromEntries(WORKSPACE_SETTINGS.filter(key => key in file).map(key => [key, file[key]]))
-  const loaded = loadConfig(json(await text($, `${checkout}/.claude/factory-loop.json`)), over)
+  // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
+  // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
+  const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
+  const loaded = await repoLoaded(settingsIo($), settingsCache, checkout, jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
@@ -273,14 +284,26 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : 16,
     cwd: checkout,
     loopDir,
+    workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
+    v2Config: { ...loaded.v2, mode: config.mode },
     configProblems: loaded.problems,
+    repoSettings: loaded.raw,
   }
+}
+
+// settingsIo and v2StoreIo: what v2/settings.ts and v2/store.ts run on.
+function settingsIo($: EngineInterface): SettingsIo {
+  return { run: (argv, opts) => $.process.run(argv, opts), now: () => $.clock.now() }
+}
+
+function v2StoreIo($: EngineInterface): V2StoreIo {
+  return { get: key => $.store.get(key), set: (key, value) => $.store.set(key, value), now: () => $.clock.now() }
 }
 
 // originOf: the GitHub repo (owner/name) the checkout's origin names, or '' when it names none.
@@ -345,7 +368,9 @@ function actIo($: EngineInterface): ActIo {
     now: () => $.clock.now(),
     run: (argv, init) => $.process.run(argv, init),
     spawnAgent: async input => {
-      const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: input.prompt, description: input.description }
+      // an agent step starts in its slot: the companion reads the slot line (v2 SPEC 10.3)
+      const args: AgentSpawnArgs = { subagentType: input.subagentType, prompt: withSlotLine(input.prompt, input.cwd), description: input.description }
+      if (input.cwd !== undefined) args.cwd = input.cwd
       if (input.name !== undefined) args.name = input.name
       if (input.model !== undefined) args.model = input.model
       const r = await within($, SPAWN_TIMEOUT_MS, $.agent.spawn(args), 'agent spawn')
@@ -380,7 +405,14 @@ function actIo($: EngineInterface): ActIo {
     },
     readFile: path => text($, path),
     writeFile: (path, body) => $.fs.write(path, body),
+    v2: v2Io($),
   }
+}
+
+// v2Io: the live records for the transition executor, stored after every ledger save queued
+// before them (v2/store.ts), the driver's ping and the live ledger (v2 SPEC 3.3, 4.6).
+function v2Io($: EngineInterface): V2Io {
+  return v2IoOf(liveV2, v2StoreIo($), { ready: () => live.loaded && lastRt !== null, write: save => afterSaves($, lastRt, save), ping: why => ping(why), ledger: () => live.ledger })
 }
 
 function fileIo($: EngineInterface): FileIo {
@@ -493,6 +525,8 @@ async function loadLedger($: EngineInterface, rt: Runtime, problems: string[]): 
   live.loaded = true
   live.repo = rt.repo
   live.basis = may.basis
+  // v2's records and heads load with the ledger, whose lease keeps them too
+  await loadV2(liveV2, v2StoreIo($), rt.repo)
   const now = await $.clock.now()
   const env = hookEnv($, rt, now)
   // running commands died with the old module; wakes another session submitted went with it
@@ -534,6 +568,21 @@ function persist($: EngineInterface, rt: Runtime): Promise<boolean> {
       saveProblem = message(err).slice(0, 200)
       return false
     }
+  })
+  saving = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run.catch(() => false)
+}
+
+// afterSaves: a store write queued after every save before it, run only while this session may
+// still write the store (mayWrite); whether it ran without error.
+function afterSaves($: EngineInterface, rt: Runtime | null, write: () => Promise<void>): Promise<boolean> {
+  const run = saving.then(async (): Promise<boolean> => {
+    if (rt === null || !(await mayWrite($, rt))) return false
+    await write()
+    return true
   })
   saving = run.then(
     () => undefined,
@@ -729,7 +778,8 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigge
     rt = await runtime($)
     lastRt = rt
     rearm($, rt.config.passEveryMs)
-    const off = rt.mode === 'off' || (await killed($))
+    await noteIdle(liveV2, v2StoreIo($), fileIo($), rt)
+    const off = rt.mode === 'off' || (await noteKillSwitch(liveV2, v2StoreIo($), rt, await killed($)))
     if (off || rt.repo === '') {
       await setTitle($, offTitle(rt))
     } else {
@@ -842,8 +892,12 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // session restarted, so the first-pass heartbeat (rule H1) is left to real lease timing.
   const shadowing = rt.device !== ((await $.env.get('DEV_MACHINE_NAME')) || '')
   const reads = tr === null ? io($, listed.agents) : tracedIo(tr, io($, listed.agents))
-  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored)
+  // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
+  let v2Stored: V2Stored | undefined
+  if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') v2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored, v2Stored)
   let state = observed.state
+  if (act && rt.config.planner === 'v2') await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
   // step outlives it; once another session holds it, this pass runs nothing more and keeps the
   // ledger no longer (the next pass that holds it reloads the store)
@@ -874,6 +928,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
 
   let report: ActReport | null = null
   let result: PlanResult
+  let shadow: Shadowed | null = null
   // when plan handed the actions over, for the trace
   let queuedAt: Ms | null = null
   const told: string[] = []
@@ -899,6 +954,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       queuedAt = acted.planned.at
       state = acted.state
       result = acted.result
+      shadow = acted.shadow
       report = acted.report
       lastState = state
       if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) restartAsked = state.now
@@ -918,7 +974,9 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       // a pass that may not act plans as observe mode does, and its title says so
       const config: Config = rt.mode === 'act' ? { ...rt.config, mode: 'observe' } : rt.config
       begin(tr, 'plan')
-      result = plan(state, config)
+      const planned = planPass(state, config, rt.v2Config)
+      result = planned.result
+      shadow = planned.shadow
       begin(tr, 'act')
       await setTitle($, result.title)
     }
@@ -977,20 +1035,33 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     mode: rt.mode,
     executed: act,
     device: rt.device,
+    // the layer whose plan this is (v2 SPEC 2.3)
+    planner: rt.config.planner,
     tier: result.tier,
     digest,
     sources: Object.fromEntries(
-      Object.entries(state.sources).map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
+      [...Object.entries(state.sources), ...Object.entries(state.v2?.sources ?? {}).map(([k, v]) => [`v2.${k}`, v] as const)].map(([k, s]) => [k, s.ok ? 'ok' : `failed${s.error ? `: ${s.error}` : ''}`]),
     ),
-    counts: {
-      queued: state.queue.length,
-      dev: issues.filter(i => i.stage === 'designing' || i.stage === 'implementing').length,
-      pipeline: issues.filter(i => i.stage === 'in pipeline' || i.stage === 'parked').length,
-      merge: issues.filter(i => i.stage === 'ready to merge').length,
-      owner: result.owner,
-    },
+    counts:
+      rt.config.planner === 'v2'
+        ? { queue: state.queue.length, ...stateCounts(state.v2?.records ?? []), owner: result.owner }
+        : {
+            queued: state.queue.length,
+            dev: issues.filter(i => i.stage === 'designing' || i.stage === 'implementing').length,
+            pipeline: issues.filter(i => i.stage === 'in pipeline' || i.stage === 'parked').length,
+            merge: issues.filter(i => i.stage === 'ready to merge').length,
+            owner: result.owner,
+          },
     actions: result.actions.filter(a => a.kind !== 'title').map(summaryOf),
+    transitions: rt.config.planner === 'v2' ? transitionsOf(result) : undefined,
     skipped: result.skipped.slice(0, 60),
+    // the v2 shadow's plan, logged and never executed, and the K it planned with (v2's own default)
+    shadow:
+      shadow === null
+        ? undefined
+        : 'error' in shadow
+          ? shadow
+          : { k: (rt.v2Config ?? rt.config).maxInFlightIssues, actions: shadow.actions.filter(a => a.kind !== 'title').map(summaryOf), skipped: shadow.skipped.slice(0, 60), transitions: transitionsOf(shadow) },
     outcomes: report?.outcomes.filter(o => o.kind !== 'title').map(o => ({ key: o.key, status: o.status, ms: o.ms, summary: o.summary })),
     capped: result.capped.length > 0 ? result.capped : undefined,
     atCap: result.atCap ? true : undefined,
@@ -1031,6 +1102,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     title: result.title,
     actions: line.actions.length,
     owner: result.owner,
+    planner: rt.config.planner,
+    shadow: rt.config.shadow,
   })
   const ledger = act ? live.ledger : state.ledger
   if (tr !== null) {
@@ -1107,6 +1180,7 @@ function summaryOf(a: Action) {
     rule: a.rule,
     issue: a.issue,
     agent: a.kind === 'spawn' ? a.agent : undefined,
+    step: a.kind === 'agent-step' ? a.step : undefined,
     run: 'run' in a && typeof a.run === 'string' ? a.run : undefined,
     pr: 'pr' in a && typeof a.pr === 'number' ? a.pr : undefined,
     reason: a.reason,
@@ -1118,7 +1192,7 @@ function summaryOf(a: Action) {
 async function clearUpdate($: EngineInterface, rt: Runtime, at: Ms | null): Promise<boolean> {
   if (at === null) return false
   const run = ops.then(async () => {
-    const fio = fileIo($)
+    const fio = notingIo(fileIo($), noteWritten(liveV2, v2StoreIo($), rt))
     const loaded = await readControl(fio, rt.loopDir)
     if (loaded.error !== null || loaded.control.updateDue?.at !== at) return false
     await writeControl(fio, rt.loopDir, { ...loaded.control, updateDue: null })
@@ -1317,8 +1391,8 @@ function answerLine(r: Answered): Record<string, unknown> | null {
 // as a type it offers the model, and the loop hides its own (agent.offer below), so the agent's
 // type is offered while the message is on its way: hidden, the engine refused every repair of
 // testbed run 3 ("is not offered in this session", #559).
-async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType): Promise<string | null> {
-  const subagent = SUBAGENT_OF[type]
+async function repairTo($: EngineInterface, agentId: string, text: string, type: AgentType | `${string}:${string}`): Promise<string | null> {
+  const subagent = type.includes(':') ? type : SUBAGENT_OF[type as AgentType]
   resuming.set(subagent, (resuming.get(subagent) ?? 0) + 1)
   try {
     const r = await within($, REPAIR_TIMEOUT_MS, $.session.send({ to: { agentId }, text }), 'repair message')
@@ -1385,7 +1459,8 @@ const OP_UNSURE: OpAnswer = { ok: false, text: 'factory-loop: the op was still b
 // written whole), answered within TOOL_ANSWER_MS (bounded, #558): the queue holds file reads and
 // writes alone, and an op answered late writes nothing. A change pings the loop and gets its own
 // decision-log line once it has its answer; retry clears the issue's exhausted entries in the
-// live ledger at once.
+// live ledger at once. Under planner v2 the ops take v2's meaning; an op that landed with v2 acting
+// before or after it is a person intervention (act-events.ts), and its writes the loop's (7.2).
 function ownerOp($: EngineInterface, input: string | Record<string, unknown>, agentId: string | undefined): Promise<OpAnswer> {
   const work = (claim: Claim) => {
     const run = ops.then(async (): Promise<OpAnswer> => {
@@ -1393,12 +1468,17 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const paths = { loopDir: rt.loopDir, configDir: await configDir($) }
       const now = await $.clock.now()
       const last = (await $.state.get(lastPassRef)).value ?? null
-      const from = agentId === undefined ? { last } : { last, agentId }
-      const fio = claimedIo(fileIo($), claim)
+      const planner = rt.config.planner
+      const parked = parkedOf(planner, lastState?.v2?.records)
+      const from = agentId === undefined ? { last, planner, parked } : { last, agentId, planner, parked }
+      const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text
       if (reply.retryIssue !== null) said = await retry($, reply.retryIssue, claim)
-      if (reply.ping && claim()) later($, { rt, line: () => ({ control: reply.logged, text: said }), ping: `owner ${reply.logged ?? ''}` })
+      const landed = reply.op === null ? null : opLanded({ planner, mode: rt.mode }, reply.op, reply.logged, issuesOf(reply.op), now)
+      const logOp = landed === null ? undefined : (env: ActEnv) => logOwnerOp(env, landed)
+      const line = (problems: string[]) => ({ control: reply.logged, text: said, problems: problems.length > 0 ? problems : undefined })
+      if (reply.ping && claim()) later($, { rt, run: logOp, line, ping: `owner ${reply.logged ?? ''}` })
       return { ok: reply.ok, text: said }
     })
     ops = run.catch(() => undefined)
@@ -1522,6 +1602,9 @@ export const register: Register = (on, opts) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // the 10-minute Bash timeout for every agent the loop starts (v2 SPEC 10.5)
+    await $.env.set('BASH_DEFAULT_TIMEOUT_MS', BASH_TIMEOUT_MS).catch(() => undefined)
+    await $.env.set('BASH_MAX_TIMEOUT_MS', BASH_TIMEOUT_MS).catch(() => undefined)
     cwd = e.cwd
     if (!e.isInteractive) headless = true
     else await ensure($)
@@ -1594,6 +1677,10 @@ export const register: Register = (on, opts) => {
   on('agent.offer', { agent: 'factory-loop:designer' }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) =>
     next.called ? next(e) : { isOffered: false },
   )
+  // v2's agent types (v2/types.ts STEP_AGENT), hidden the same way
+  for (const agent of new Set(Object.values(STEP_AGENT))) {
+    on('agent.offer', { agent }, ($, e, next) => (resuming.has(e.agent) ? next(e) : { isOffered: false })).catch(($, e, next) => (next.called ? next(e) : { isOffered: false }))
+  }
 }
 
 // for the tests

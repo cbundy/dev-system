@@ -16,6 +16,7 @@
   "workers": {
     "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
   },
+  "runs": "read",
   "stuck": [
     {
       "repo": "acme/widgets",
@@ -67,7 +68,9 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": null,
+          "v2": null
         },
         {
           "issue": 40,
@@ -86,7 +89,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 42,
@@ -102,7 +110,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T13:30:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         }
       ],
       "recent": [],

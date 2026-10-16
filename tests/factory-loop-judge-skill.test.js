@@ -23,6 +23,14 @@ const SOURCES = Object.fromEntries(
 );
 const PLAN = SOURCES["plan.ts"];
 const EXEC = SOURCES["exec.ts"];
+// the v2 rule layer (docs/factory-loop/v2/SPEC.md): its sources and its vocabulary
+const V2_SOURCES = Object.fromEntries(
+  fs
+    .readdirSync(path.join(HOOKS, "v2"))
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => [f, fs.readFileSync(path.join(HOOKS, "v2", f), "utf8")]),
+);
+const V2_TYPES = V2_SOURCES["types.ts"];
 
 // section: the text from a heading line to the next heading of the same or a higher level.
 function section(doc, heading) {
@@ -68,6 +76,10 @@ function specDecisions() {
   return out;
 }
 
+const V2 = section(SKILL, "## Under planner v2");
+const V2_TASK = section(SKILL, "### TASK under planner v2");
+const V2_TELL = section(SKILL, "### TELL under planner v2");
+const V2_OWNER = section(SKILL, "### Owner chat under planner v2");
 const JUDGE = section(SKILL, "### JUDGE");
 const TASK = section(SKILL, "### TASK");
 const TELL = section(SKILL, "## TELL: one line to the owner");
@@ -152,4 +164,39 @@ test("the skill quotes the pointer that ends every wake (exec.ts WAKE_POINTER)",
   // and the pointer names this skill
   const name = SKILL.match(/^name:\s*(\S+)/m)[1];
   assert.ok(pointer.includes(`factory-loop:${name}`), `the wake pointer does not name factory-loop:${name}`);
+});
+
+// listOf: the string items of a `const <name> = [...]` in a source, spreads of other lists named.
+function listOf(src, name) {
+  const m = src.match(new RegExp(`export const ${name} = \\[([^\\]]*)\\]`));
+  assert.ok(m, `no list ${name}`);
+  const own = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+  const spread = [...m[1].matchAll(/\.\.\.(\w+)/g)].flatMap((x) => listOf(src, x[1]));
+  return [...spread, ...own];
+}
+
+test("under planner v2: every wake the v2 hooks emit, and every TELL kind of v2's vocabulary, is in the skill's v2 section", () => {
+  const emitted = Object.values(V2_SOURCES).flatMap(wakesOf);
+  for (const name of ["parked", "stalled", "waiting"]) assert.ok(emitted.some((w) => w.kind === "tell" && w.name === name), `no tell ${name} read from hooks/v2/`);
+  assert.ok(emitted.some((w) => w.kind === "task" && w.name === "release"), "no task release read from hooks/v2/");
+  for (const { kind, name } of emitted) {
+    assert.notEqual(kind, "judge", `hooks/v2/ sends a JUDGE wake (${name}): v2 has none`);
+    if (kind === "task") assert.notEqual(bullet(V2_TASK, name), null, `SKILL.md v2 TASK has no bullet for ${name}`);
+    else assert.match(V2_TELL, new RegExp(`^- \`${escape(name)}\``, "m"), `SKILL.md v2 TELL has no item for ${name}`);
+  }
+  const tells = listOf(V2_TYPES, "V2_TELLS");
+  assert.ok(tells.length >= 7, `read only ${tells.length} v2 TELL kinds`);
+  for (const kind of tells) assert.match(V2_TELL, new RegExp(`^- \`${escape(kind)}\``, "m"), `SKILL.md v2 TELL has no item for ${kind}`);
+  // the owner items of v2 are listed as owner items, before the notices
+  const notices = V2_TELL.indexOf("Notices:");
+  for (const kind of listOf(V2_TYPES, "V2_OWNER_TELLS")) assert.ok(V2_TELL.indexOf(`- \`${kind}\``) < notices, `${kind} is an owner item`);
+});
+
+test("under planner v2: the release task does the Run its and never waits on the owner inside its turn; the ops of v2's appendix E are named", () => {
+  const release = bullet(V2_TASK, "release");
+  assert.match(release, /Run it/);
+  assert.match(release, /Never wait on the owner inside this turn/);
+  for (const d of ["done", "failed"]) assert.match(release, new RegExp(`\`${d}\``));
+  for (const op of ["resume", "drop", "retry", "planner"]) assert.match(V2_OWNER, new RegExp(`\`${op}[ \`]`), `the v2 owner chat does not name ${op}`);
+  assert.match(V2, /factory:\*/);
 });

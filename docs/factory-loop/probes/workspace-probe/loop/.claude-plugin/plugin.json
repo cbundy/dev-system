@@ -1,0 +1,1 @@
+{ "name": "factory-loop", "version": "0.0.0", "description": "The workspace probe's stand-in for the factory loop: prepares one slot as factory-slot does and spawns one builder from a timer, for the companion case. Never load it beside the real factory-loop plugin." }

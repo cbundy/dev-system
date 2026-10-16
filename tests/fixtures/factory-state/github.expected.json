@@ -17,6 +17,7 @@
   "workers": {
     "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
   },
+  "runs": "read",
   "stuck": [],
   "repos": [
     {
@@ -61,14 +62,15 @@
           "github": {
             "state": "open",
             "labels": [
-              "In development",
-              "ready"
+              "In development"
             ],
             "claim": null
           },
           "flags": [
-            "label: queued, but the issue carries 'In development'"
-          ]
+            "label: queued, but the issue has no 'ready' label"
+          ],
+          "lease": null,
+          "v2": null
         },
         {
           "issue": 90,
@@ -90,7 +92,9 @@
             ],
             "claim": null
           },
-          "flags": []
+          "flags": [],
+          "lease": null,
+          "v2": null
         },
         {
           "issue": 81,
@@ -119,7 +123,12 @@
           },
           "flags": [
             "claim: GitHub comment says dev-b, events say dev-a"
-          ]
+          ],
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 84,
@@ -139,9 +148,12 @@
             "labels": [],
             "claim": null
           },
-          "flags": [
-            "label: designing, but the issue lacks 'In development'"
-          ]
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 86,
@@ -163,7 +175,12 @@
           },
           "flags": [
             "github: state could not be read"
-          ]
+          ],
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 91,
@@ -181,11 +198,13 @@
           "github": {
             "state": "open",
             "labels": [
-              "In development"
+              "factory:building"
             ],
             "claim": null
           },
-          "flags": []
+          "flags": [],
+          "lease": null,
+          "v2": null
         },
         {
           "issue": 83,
@@ -207,7 +226,12 @@
             ],
             "claim": null
           },
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         }
       ],
       "recent": [
@@ -231,7 +255,12 @@
             ],
             "claim": null
           },
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-10T12:20:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         }
       ],
       "other_runs": []

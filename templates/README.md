@@ -60,10 +60,14 @@ Global agent instructions.
   closing/non-closing keywords and the `closingIssuesReferences` verification step,
   quality-over-dev-cost, E2E-first bug fixing, pixel-perfection UI standard, screenshot
   evidence requirement, brief PR descriptions, engineering-excellence/lint/flakiness
-  standard) and the `## Dev container is ephemeral` section.
-- Repo-owned: `## Canonical commands` and `## Implementation sub-agents` - both ship as
+  standard), the `## Dev container is ephemeral` section and `## Two ways work gets done`,
+  which says what a factory loop agent does and leaves to the loop, and what the manual path
+  (implement-issue, /no-mistakes, worktrees, issue-orchestrator) is for. It is the same for every
+  repo, so it is synced and holds for loop agents whatever the repo-owned block says.
+- Repo-owned: `## Canonical commands` and `## Implementation sub-agents (manual path)` - both ship as
   placeholder headings only. Fill in this repo's actual lint/test/typecheck commands (and
-  which one CI calls, so they can't drift), and this repo's worktree/isolation mechanism.
+  which one CI calls, so they can't drift), and this repo's worktree/isolation mechanism for the
+  manual path. A loop agent works in the loop's slot instead.
 - One placeholder inside the synced screenshot-evidence bullet: the path to this repo's
   e2e visual verification doc. Fill that in even though the surrounding bullet is synced.
 

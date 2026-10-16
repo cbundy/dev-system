@@ -1,0 +1,52 @@
+Factory state at 2026-10-16T05:33:30.615Z (database now())
+Stuck rules (minutes): S1=240 S2=60 S3=30 S4=30 S5=30 S6=n/a
+GitHub: n/a: not read (--github off)
+
+Stuck
+none
+
+Workers
+n/a: factory.workers_status exists but this version does not read it yet
+
+== cbundy/dev-system-scratch - coverage: events only
+events 1343 (last 2026-10-16T05:31:18.000Z), runs 0 (last update -), heartbeat n/a (see workers)
+devices: coder-dev-system-testbed-loop (1343 events, last 2026-10-16T05:31:18.000Z)
+live issues by source: mirror 0, event 0, github 0
+note: the repo has factory events but no mirrored runs: pipeline stages come from agent-logged events only
+
+Live issues
+none
+
+Recently ended (24h)
+issue  stage                 in stage  holder                         run  pr   stuck  source  detail
+#8     merged                2h18m     coder-dev-system-testbed-loop  -    #11  -      event   closed (completed)
+#9     merged                2h18m     coder-dev-system-testbed-loop  -    #10  -      event   closed (completed)
+#12    merged                2h18m     coder-dev-system-testbed-loop  -    #13  -      event   closed (completed)
+#14    merged                1h04m     coder-dev-system-testbed-loop  -    #17  -      event   closed (completed)
+#15    merged                1h04m     coder-dev-system-testbed-loop  -    #16  -      event   closed (completed)
+#18    merged                6h23m     coder-dev-system-testbed-loop  -    #20  -      event   closed (completed)
+#19    merged                1h04m     coder-dev-system-testbed-loop  -    #21  -      event   closed (completed)
+#22    merged                33m       coder-dev-system-testbed-loop  -    #24  -      event   closed (completed)
+#23    merged                1h04m     coder-dev-system-testbed-loop  -    #25  -      event   closed (completed)
+#26    merged                1h04m     coder-dev-system-testbed-loop  -    #28  -      event   closed (completed)
+#27    merged                1h04m     coder-dev-system-testbed-loop  -    #29  -      event   closed (completed)
+#30    merged                1h04m     coder-dev-system-testbed-loop  -    #31  -      event   closed (completed)
+#32    merged                1h04m     coder-dev-system-testbed-loop  -    #34  -      event   closed (completed)
+#33    merged                33m       coder-dev-system-testbed-loop  -    #35  -      event   closed (completed)
+#36    merged                33m       coder-dev-system-testbed-loop  -    #37  -      event   closed (completed)
+#38    merged                33m       coder-dev-system-testbed-loop  -    #39  -      event   closed (completed)
+#40    merged                2h48m     coder-dev-system-testbed-loop  -    #42  -      event   closed (completed)
+#41    merged                2h48m     coder-dev-system-testbed-loop  -    #43  -      event   closed (completed)
+#44    merged                2h48m     coder-dev-system-testbed-loop  -    #46  -      event   closed (completed)
+#45    merged                2h48m     coder-dev-system-testbed-loop  -    #47  -      event   closed (completed)
+#48    merged                2h48m     coder-dev-system-testbed-loop  -    #51  -      event   closed (completed)
+#49    merged                2h48m     coder-dev-system-testbed-loop  -    #50  -      event   closed (completed)
+#52    merged                2h18m     coder-dev-system-testbed-loop  -    #55  -      event   closed (completed)
+#53    merged                2h18m     coder-dev-system-testbed-loop  -    #54  -      event   closed (completed)
+#56    merged                33m       coder-dev-system-testbed-loop  -    #59  -      event   closed (completed)
+#57    merged                33m       coder-dev-system-testbed-loop  -    #58  -      event   closed (completed)
+#60    merged                3m        coder-dev-system-testbed-loop  -    #62  -      event   closed (completed)
+#3     closed without merge  7h55m     coder-dev-system-testbed-loop  -    #6   -      event   closed (not_planned)
+#4     closed without merge  7h55m     coder-dev-system-testbed-loop  -    #5   -      event   closed (not_planned)
+#7     closed without merge  8h56m     coder-dev-system-testbed-loop  -    -    -      event   abandoned (reason=reconcile stage=designing pr=none checked=this%20device's%20live%20claim%20has%20no%20record%20and%20no%20claim%20in%20flight)
+#61    closed without merge  3m        coder-dev-system-testbed-loop  -    -    -      event   closed (not_planned)

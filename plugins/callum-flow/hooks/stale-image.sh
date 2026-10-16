@@ -23,8 +23,9 @@
 mode=${1:-}
 share=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}
 
-# The one wording for the fix; images/base/dev-query and dev-init say the same.
-FIX='rebuild the container (dev-restart-self, or Rebuild Container in a desktop dev container); do not install the tool by hand'
+# The one wording for the fix; images/base/dev-query and dev-init say the same, without the loop
+# clause (they run outside an agent's hooks).
+FIX='rebuild the container (dev-restart-self, or Rebuild Container in a desktop dev container); do not install the tool by hand. A factory-loop agent never restarts the workspace: name the missing tool in your answer and leave the rebuild to the owner'
 
 [ -d "$share" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0

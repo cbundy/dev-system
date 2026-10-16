@@ -16,6 +16,7 @@
   "workers": {
     "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
   },
+  "runs": "read",
   "stuck": [
     {
       "repo": "acme/widgets",
@@ -81,7 +82,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T02:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         },
         {
           "issue": 5,
@@ -97,7 +103,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T06:50:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         },
         {
           "issue": 2,
@@ -113,7 +124,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T08:30:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 3,
@@ -132,7 +148,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T08:00:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 4,
@@ -151,7 +172,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T08:40:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         },
         {
           "issue": 7,
@@ -170,7 +196,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T06:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         },
         {
           "issue": 8,
@@ -186,7 +217,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T07:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": null
         }
       ],
       "recent": [
@@ -204,7 +240,12 @@
           "approximate": false,
           "hint": null,
           "github": null,
-          "flags": []
+          "flags": [],
+          "lease": {
+            "until": "2026-10-12T08:50:00.000Z",
+            "lapsed": false
+          },
+          "v2": null
         }
       ],
       "other_runs": []

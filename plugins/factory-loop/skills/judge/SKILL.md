@@ -267,6 +267,60 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 Releases: to make one wait for an issue, `callum-flow-milestone plan <N> next` when the owner
 says so; answer "what is planned" from `callum-flow-milestone show`.
 
+## Under planner v2
+With the setting `planner: v2` (docs/factory-loop/v2/SPEC.md) every issue has one explicit state,
+mirrored to one `factory:*` label, and a fixed menu replaces the model's judgement calls: a step
+that gives no usable result twice gets one call to the loop's own triage agent, which retries,
+sends a fixer, redesigns, parks with a question or drops. No JUDGE wake is sent, and the only TASK
+is the release. The TELL format above holds; these are v2's kinds. The `/factory status` op says
+which planner is in force.
+
+### TASK under planner v2
+- **`release`** (`closed expected`): the Next milestone has no open item and at least one closed.
+  Cut the release by the repo's release process with its standing release authority, then do the
+  Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps, recording
+  the result on the issue and closing it. Never wait on the owner inside this turn: a Run it that
+  needs the owner (a workspace restart still needs asking) becomes an owner item, a comment on the
+  issue and one `[ACTION]` line to the owner, and the task goes on. Answer `done` once the release
+  is out and every Run it is done or handed to the owner, `failed` (reason) when the release
+  cannot be cut. A merge never waits for a release.
+
+### TELL under planner v2
+Owner items (the title counts them until resolved):
+- `parked` (issue, from, days; detail: the question, how to resume): the issue waits on the owner,
+  its slot freed; `days` above 0 is the daily reminder. Lead with `[DECISION]` and the question.
+  The owner answers on the issue and removes the `factory:parked` label, or you run
+  `resume <N> "<answer>"`; a comment alone does not resume.
+- `stalled` (issue, key; detail: the error): an effect (a label, a comment, an event, a lease, a
+  follow-up) used up its attempts and holds its record. The owner fixes the cause (a login, a
+  rate limit, a missing label), then `retry <N>`.
+- `breaker` (kind): step unknowns across issues (`steps`), or one kind of action that failed three
+  times running, closed agent steps or that kind for 30 minutes. The owner checks for an outage
+  or an expired token; the loop recovers by itself.
+- `checkout` (detail: the paths, the steps that ran): the main checkout changed under the loop.
+  Nothing waits on it; the owner checks what wrote there. Never clean it yourself.
+- `workspace`: the companion plugin `factory-loop-workspace` is not loaded, so every agent step
+  is held. The owner enables it in the workspace, then restarts the session.
+- `rejected` (issue, lives, max; detail: why each life ended): the issue's last life ended without
+  a merge, so the loop labelled it `factory:rejected` instead of putting it back in the queue, and
+  said why on the issue. Lead with `[DECISION]`. To try again the owner removes
+  `factory:rejected` and adds `ready`; its life count starts again.
+
+Notices:
+- `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's
+  head for 2 hours. Nothing is wrong; the factory is full or held.
+- `task-timeout` (key): the release task went unanswered and is not retried. Owner says whether to
+  redo it.
+
+### Owner chat under planner v2
+- `resume <N...> ["note"]`: unpark: the issue goes back to queued and resumes the state it parked
+  from, its budgets reset, with the note for its next step. An issue that is not parked is left
+  alone: use `note <N>`.
+- `drop <N>`: close the issue's current claim; the issue stays open, and re-adding `ready` brings
+  it back.
+- `retry <N>`: clear N's effects that used up their attempts (`stalled`).
+- `planner v1|v2`: only when the owner asks for that layer.
+
 ## Memory
 - `.claude/orchestrator-memory.md` in the main checkout is yours: read it at session start
   (create it if missing). It holds this repo's lessons and context.

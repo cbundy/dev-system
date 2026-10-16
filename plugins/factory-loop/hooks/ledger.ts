@@ -22,6 +22,7 @@ import type {
   Ms,
   Outcome,
 } from './types'
+import { AGENT_STEPS } from './v2/types'
 
 const DAY = 86_400_000
 // Entries are kept 7 days after they end; running entries are never pruned (SPEC 7.1).
@@ -35,8 +36,9 @@ const SUMMARY_MAX = 300
 
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 // Agents and wakes log a `loop` event (owner notices and rate-cap notices are tells); CLI work
-// logs its own events and gets none (D-09, SPEC 7.4).
-const LOOP_KINDS: readonly ActionKind[] = ['spawn', 'delegate', 'judge', 'task', 'tell']
+// logs its own events and gets none (D-09, SPEC 7.4). A v2 agent step is an agent entry: its
+// events are for the trail, and a lost store never rebuilds it (derive.ts entryFromLoop).
+const LOOP_KINDS: readonly ActionKind[] = ['spawn', 'delegate', 'judge', 'task', 'tell', 'agent-step']
 const STATUSES: readonly LedgerStatus[] = ['running', 'done', 'failed', 'timed-out', 'lost']
 const CLASSES: readonly ActionClass[] = ['free', 'owner', 'drive', 'develop', 'start']
 const AGENT_TYPES: readonly AgentType[] = ['designer', 'implementer', 'adjudicator', 'fixer']
@@ -51,6 +53,10 @@ export type Started = { ledger: LedgerEntry[]; entry: LedgerEntry; prev: LedgerE
 // which plan compares rather than keys) starts its count over: success resets it. The subject's
 // fields come from the action. prev is the entry as it stood, so a pre-check that refuses the
 // attempt can put it back (finish with status skipped). A wake records the session submitting it.
+// A v2 transition carries its facts (the row, the state and step it leaves, the event, the via
+// code) from its start, marked not yet stored: a crash after the records store took the seq but
+// before the entry was saved done leaves a lost entry that still names them (v2 SPEC 3.3), and
+// the executor's done outcome replaces them.
 export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, session = ''): Started {
   const prev = ledger.find(e => e.key === action.key) ?? null
   const entry: LedgerEntry = {
@@ -70,6 +76,21 @@ export function start(ledger: readonly LedgerEntry[], action: Action, now: Ms, s
   // a delegate spawns the implementer, so its entry is that agent's (plan reads it so)
   if (action.kind === 'spawn') entry.agent = action.agent
   else if (action.kind === 'delegate') entry.agent = 'implementer'
+  else if (action.kind === 'agent-step') entry.step = action.step
+  else if (action.kind === 'transition') {
+    entry.outcome = {
+      kind: 'transition',
+      row: action.row,
+      event: action.event,
+      cause: action.cause ?? null,
+      from: action.fromState ?? null,
+      to: action.next.state,
+      step: action.fromStep ?? null,
+      stored: false,
+      via: action.via ?? action.row,
+    }
+  }
+  if (action.maxAttempts !== undefined) entry.maxAttempts = action.maxAttempts
   if (action.kind === 'judge' || action.kind === 'task' || action.kind === 'tell') {
     entry.wake = action.wake
     if (session !== '') entry.session = session
@@ -132,7 +153,7 @@ export function finish(
   if ('reminded' in result && result.reminded !== undefined) next.reminded = result.reminded
   if ('attempts' in result && result.attempts !== undefined) next.attempts = result.attempts
   if (result.status === 'failed' && 'noRetry' in result && result.noRetry === true) {
-    next.attempts = Math.max(next.attempts, maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, attemptsKindOf(next)))
+    next.attempts = Math.max(next.attempts, next.maxAttempts ?? maxAttemptsOf(opts.config ?? DEFAULT_CONFIG, attemptsKindOf(next)))
   }
   let out = foldRecheck(put(ledger, next), next)
   for (const extra of 'extra' in result ? (result.extra ?? []) : []) {
@@ -195,14 +216,14 @@ function extraEntry(x: ExtraEntry, parent: LedgerEntry, now: Ms): LedgerEntry {
   }
 }
 
-// classOf: an action kind's class (SPEC 6.1); a spawn's depends on its agent, so it is the
-// caller's.
+// classOf: an action kind's class (SPEC 6.1); a spawn's depends on its agent and a v2 agent
+// step's on its step, so each is the caller's.
 function classOf(kind: ActionKind, spawn: ActionClass): ActionClass {
   if (kind === 'claim') return 'start'
   if (kind === 'delegate') return 'develop'
   if (kind === 'respond' || kind === 'env-retry' || kind === 'judge' || kind === 'task') return 'drive'
   if (kind === 'tell') return 'owner'
-  return kind === 'spawn' ? spawn : 'free'
+  return kind === 'spawn' || kind === 'agent-step' ? spawn : 'free'
 }
 
 // --- what a reload and the agent list prove (SPEC 3.3, 7.5, 10.4) -------------------------
@@ -355,13 +376,13 @@ function noticesOf(entry: LedgerEntry): string[] {
   return out
 }
 
-// exhausted: plan's rule exactly (gate in plan.ts): a failed, timed-out or lost entry whose
-// attempts reached the maximum for its kind or agent. Heartbeat and sweep never are: they retry
-// at their cadence (plan.ts cadenceOf, SPEC 6.1).
+// exhausted: plan's rule exactly (gate in plan.ts, foundation.ts): a failed, timed-out or lost
+// entry whose attempts reached its key's own cap, else the maximum for its kind or agent.
+// Heartbeat and sweep never are: they retry at their cadence (plan.ts cadenceOf, SPEC 6.1).
 export function exhausted(entry: LedgerEntry, config: Config): boolean {
   if (entry.status === 'running' || entry.status === 'done') return false
   if (entry.kind === 'heartbeat' || entry.kind === 'sweep') return false
-  return entry.attempts >= maxAttemptsOf(config, attemptsKindOf(entry))
+  return entry.attempts >= (entry.maxAttempts ?? maxAttemptsOf(config, attemptsKindOf(entry)))
 }
 
 // attemptsKindOf: what plan counts an entry's attempts against: a spawn's agent, the implementer
@@ -458,6 +479,9 @@ function entryOf(raw: unknown): LedgerEntry | null {
   if (typeof o.reminded === 'boolean') entry.reminded = o.reminded
   if (typeof o.session === 'string') entry.session = o.session
   if (typeof o.summary === 'string') entry.summary = o.summary
+  const step = AGENT_STEPS.find(s => s === o.step)
+  if (step !== undefined) entry.step = step
+  if (typeof o.maxAttempts === 'number' && Number.isInteger(o.maxAttempts) && o.maxAttempts >= 1) entry.maxAttempts = o.maxAttempts
   const outcome = record(o.outcome)
   if (outcome !== null && typeof outcome.kind === 'string') entry.outcome = outcome as Outcome
   return entry

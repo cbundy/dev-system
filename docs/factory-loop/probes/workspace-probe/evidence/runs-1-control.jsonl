@@ -1,0 +1,2 @@
+{"at":"2026-10-15T18:36:56.357Z","plugin":"spawner","check":"session.start","run":"/persist/claude/factory-loop-v2-build/w3/u9-probe/runs-1/control","probe":"control","version":"2.1.300"}
+{"at":"2026-10-15T18:37:00.365Z","plugin":"spawner","check":"spawned","probe":"control","error":"HooksError: workspace-probe-spawner: $.tool.call is not available in this mode: no session is bound in this process (the REPL has not mounted and no headless session is built); catch it and carry on"}

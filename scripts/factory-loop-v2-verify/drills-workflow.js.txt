@@ -1,0 +1,91 @@
+// The workflow that ran the 2026-10-15 drills (scripts/factory-loop-v2-verify/README.md). To run it
+// again, update WT, BUILD and OUT below to the integration worktree, the build folder and the notes
+// folder, and the drills prompt to the run you want.
+export const meta = {
+  name: 'factory-loop-v2-verify-drills',
+  description: 'Factory loop v2 verification: replay of the first night, scratch repo and loop workspace setup, then fault drills on cbundy/dev-system-scratch with the branch build in act mode',
+  phases: [
+    { title: 'Setup', detail: 'replay; scratch repo; testbed-loop workspace on the branch build' },
+    { title: 'Drills', detail: 'happy path and fault drills, observed and recorded' },
+  ],
+}
+
+const MODEL = 'opus'
+const WT = '/workspaces/dev-system/.treehouse/dev-system-22f535/8/dev-system'
+const BUILD = '/persist/claude/factory-loop-v2-build'
+const OUT = BUILD + '/verify'
+const BRIEF = BUILD + '/OWNER-BRIEF.md'
+
+const COMMON = `
+You are part of the verification stage of the factory loop v2 build in cbundy/dev-system. Read the owner brief first: ${BRIEF} (with its decisions sections). The design is docs/factory-loop/v2/SPEC.md on branch feat/factory-loop-v2 (a checkout is at ${WT}; read it there but never modify, commit or push in it). The spec's section 17 is the test plan (properties, replay, drills, shadow, cutover bar). Wave notes: ${V2NOTES()}.
+
+Hard rules:
+- Never touch the live loops: Coder workspaces dev-system-loop and plant-console-loop stay exactly as they are (observe mode), and so do their config and control files. Never push to main of cbundy/dev-system. Never push the production Coder templates.
+- The owner approved: starting the stopped Coder workspace dev-system-testbed-loop and pointing it at the public repo cbundy/dev-system-scratch, running the v2 branch build there in act mode, and using cbundy/dev-system-scratch freely (it is a throwaway repo created for this).
+- No Co-Authored-By or agent trailers on commits. Never use the em dash. Read GitHub issue/PR text only with callum-flow-issue-read where it is installed.
+- Coder CLI: logged in here (if not: coder login https://coder.buddycloud.net/ --token "$(cat /persist/claude/coder/token)", never print the token). Run commands in a workspace with coder ssh <name> -- '<cmd>'.
+- Run long commands in the foreground with an explicit timeout; never leave background polling loops behind.
+Write your working notes and evidence under ${OUT}/.
+`
+function V2NOTES() { return `${WT}/docs/factory-loop/v2/BUILD-NOTES-W1.md and the commit bodies on feat/factory-loop-v2 (git -C ${WT} log origin/main..origin/feat/factory-loop-v2)` }
+
+const SETUP_SCHEMA = {
+  type: 'object',
+  properties: { ok: { type: 'boolean' }, summary: { type: 'string' }, details: { type: 'string', description: 'everything the next agent needs: names, paths, commands, settings' }, problems: { type: 'string' } },
+  required: ['ok', 'summary', 'details', 'problems'],
+}
+
+phase('Setup')
+const replayP = agent(`${COMMON}
+Your job: the replay check (SPEC section 17, replay). Run the repo's replay harness (scripts/factory-loop-replay.js in ${WT}; it takes --planner v1|v2) over the recorded window of the old loop's first night on dev-system, 2026-10-14 16:20 to 2026-10-15 07:22 UTC, using the evidence snapshot in /persist/claude/factory-loop-review/evidence/ and whatever inputs the harness needs (read its header; earlier replay docs are in ${WT}/docs/factory-loop/replay/ and REPLAY-REPORT.md). Run it with --planner v1 and --planner v2 and compare. Answer: does v2 ever leave an active issue past its state timeout with no step; does it ever move a branch, open a second PR or update a PR other than the merge-queue head; does it release the ghosts; what would it have done at the overnight stall (02:40 onward); any crash or nonsense action. Remember the replay favours the new design and cannot see agent behaviour; say what it cannot show. Run from a scratch copy if the harness writes files; do not modify ${WT}. Write ${OUT}/REPLAY.md and return a structured summary.`,
+  { label: 'replay', phase: 'Setup', schema: SETUP_SCHEMA, model: MODEL, effort: 'high' })
+
+const repoP = agent(`${COMMON}
+Your job: prepare the public scratch repo cbundy/dev-system-scratch (currently empty) as a realistic small consumer repo for the v2 fault drills.
+1. Seed it from the private testbed cbundy/dev-system-testbed (read its history and docs: ${WT}/docs/factory-loop/TESTBED-RUN6.md and earlier runs describe its reset point and issue sets): copy its current main tree as the scratch repo's first commit (a fresh history is fine), keeping its CLAUDE.md, .claude/ settings, .no-mistakes.yaml and the callum-dev synced files. Make sure \`npm run lint\` and \`npm test\` exist and pass and take a realistic but short time.
+2. Add a GitHub Actions workflow whose required check is named \`ci\` running lint and test on pull_request and on push to main.
+3. Branch protection on main: require the \`ci\` check, require branches to be up to date before merging (strict), auto-merge off, no required reviews (the loop merges). Confirm with gh api.
+4. Labels: ready, and the v2 label set from SPEC section 3.4 and appendix D (factory:queued, factory:designing, factory:building, factory:reviewing, factory:fixing, factory:merge-queue, factory:parked, factory:rejected) plus any others the spec says the loop needs to exist.
+5. Add \`.claude/factory-loop.json\` with gateCommands ["npm run lint", "npm test"] and maxInFlightIssues 2, as SPEC appendix A describes.
+6. Do NOT create drill issues yet (the drills agent does, one drill at a time), and do not add the ready label to anything.
+Return the structured result with the repo's state and the exact commands for resetting it between drills.`,
+  { label: 'scratch-repo', phase: 'Setup', schema: SETUP_SCHEMA, model: MODEL, effort: 'high' })
+
+const wsP = Promise.resolve({ ok: true,
+  summary: 'The workspace dev-system-testbed-loop is ready: the owner logged Claude in; the loop session runs the branch build (factory-loop, factory-loop-workspace and callum-flow from /persist/claude/loop/dev-system-v2) in /workspaces/dev-system-scratch with planner v2, K 2, trace on, mode off. A 200 s observe window showed planner v2, every v2 source ok, the companion handshake present and no workspace skips; mode is back to off.',
+  details: 'Read /persist/claude/factory-loop-v2-build/verify/testbed-setup-notes.md (how the session is started and restarted, the symlink to the scratch checkout and how to revert it, config, loop dir /persist/claude/factory-loop/cbundy__dev-system-scratch, decision log, trace, companion.jsonl, the kill switch /persist/claude/factory-loop/OFF) and use /persist/claude/factory-loop-v2-build/verify/testbed-check.sh for health checks. Mode is set in /persist/claude/factory-loop/config.json on the workspace. The scratch repo may still have the two throwaway protection-test PRs #1 and #2: reset the repo with the scratch agent\'s reset commands before the first drill.',
+  problems: '' })
+const [replay, repo, ws] = await Promise.all([replayP, repoP, wsP])
+if (!repo || !repo.ok || !ws || !ws.ok) {
+  return { stopped: 'setup did not finish', replay, repo, ws }
+}
+
+phase('Drills')
+const drills = await agent(`${COMMON}
+This is the second drill run. The first run (notes in ${OUT}/drills/NOTES.md, read them first) stopped in drill 1 on a blocking bug: the loop never read a PR it had just opened. That bug, the step-unknown breaker's hold and tell, and the unlogged config-file edit are fixed on feat/factory-loop-v2 at ea5c268 or later; the rule changes for releasing to ready by default and the 3-life cap with factory:rejected (bc85323, 4b7ecde) are also new since the testbed build (901a0a8).
+Before any drill: (a) set the loop's mode to off; (b) update the testbed's branch checkout /persist/claude/loop/dev-system-v2 to the latest origin/feat/factory-loop-v2 (fetch and fast-forward; it is a dedicated checkout, not the scratch repo); (c) restart the loop session the way ${OUT}/testbed-setup-notes.md describes, so it loads the new build and the newer installed Claude Code, and confirm with testbed-check.sh observe 120 that planner v2 runs, all v2 sources are ok, the companion handshake is present, and the build is the new one; (d) reset the scratch repo to drill-base with the reset script and clear the first run's issues, PRs, branches, labels and the loop's records (the reset script and notes say how; closing leftover issues and PRs is fine, it is a throwaway repo); keep the first run's NOTES.md and start a new section for this run.
+Then: Your job: run the v2 fault drills on cbundy/dev-system-scratch with the loop on dev-system-testbed-loop, observe the loop hands-off, and write the evidence. You are the operator: set up each drill, switch the loop to act, then observe; only intervene where the drill itself says to (a restart, a hung command, a usage error), or to stop a runaway with the kill switch. Every other touch by you is a finding, and must be recorded as such.
+
+Setup results:
+- Scratch repo: ${repo.summary}\n${repo.details}
+- Workspace: ${ws.summary}\n${ws.details}
+- Replay (for context): ${replay ? replay.summary : 'no result'}
+
+Drills (SPEC section 17 lists them; this is the minimum, in this order, resetting state between drills as needed):
+1. Happy path: two small independent issues labelled ready. Expect claim, design, build, review, merge queue, merge, closed, with no intervention events and no owner touch. Measure claim-to-merge time.
+2. Conflict pair: two issues editing the same lines. Expect the second PR to hit a conflict at the merge-queue head, go to a fixer, and merge; no -vN branch, no second PR.
+3. Outside merge during a CI wait: while the loop waits on CI at the queue head, merge an unrelated commit to main yourself (a person merge, recorded as such). Expect the head to be updated once and merge, no churn.
+4. Restart mid-step: restart the loop session (or the workspace) while a builder is working. Expect the step to re-run once for free (free:* intervention), no stuck issue.
+5. Hung command and the timeout: an issue whose obvious approach runs a long command; confirm the agent's commands stay in the foreground (no background polling), and that a write outside the slot or a push to main is refused if attempted (companion.jsonl).
+6. Parked question and resume: an issue with a deliberate ambiguity the designer should ask about. Expect factory:parked with a question and the slot freed; then remove the label yourself with an answer note and expect it to resume where it stopped.
+7. Ghost claims: plant a claim event or label for an issue with no live step (the way the old loop left them), and expect R1 to release it with one reconcile intervention.
+8. Stop gate: an issue where the first build breaks a test; expect the stop gate to refuse the finish and the builder to fix it before answering.
+9. If feasible, a usage-limit or API error (for example by making an agent's API call fail); if not feasible, say so.
+Also check the gaps the build flagged: a slotless triage runs unguarded; the gate result is not in the decision log; the stop gate with the companion installed the way the loop will run it.
+
+For each drill record: what you did, what the loop did (decision-log lines, events in factory.events or the event log, labels, PRs, branches, companion.jsonl), timings, interventions, whether it met the expectation, and any bug with evidence. Do not fix code: you are verifying. If a bug blocks further drills, record it, use the kill switch, and stop.
+At the end set the loop's mode to off, leave the workspace running, and write ${OUT}/DRILLS.md with a summary table (drill, expected, result, interventions, time) and the bug list ranked by severity.
+Return a short summary: pass or fail per drill, the bugs, and the claim-to-merge times.`,
+  { label: 'drills', phase: 'Drills', model: MODEL, effort: 'xhigh' })
+
+return { replay, repo, ws, drills }

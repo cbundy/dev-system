@@ -1,0 +1,190 @@
+#!/bin/sh
+#
+# Plain-shell tests for callum-flow-merge-guard --patch, the factory loop's mode
+# (docs/factory-loop/v2/SPEC.md 9.4), and callum-flow-merge passing it through. With --patch the
+# guard checks only facts the loop owns: no run lookup (no pipeline-watch.sh, no no-mistakes
+# call), no head or gates guard, a patch guard against the real callum-flow-patch-id, and every
+# FAIL line ends with its class. The shared stubs and real local origin live in merge-guard-lib.sh;
+# the guard's other modes are in merge-guard.test.sh and merge.test.sh.
+# shellcheck disable=SC2015  # A && B || fail is the idiom here
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/merge-guard-lib.sh"
+
+PATCH_ID="$ROOT/images/base/callum-flow-patch-id"
+OTHER=0123456789abcdef0123456789abcdef01234567
+CLASSES='behind|conflict|checks|patch|linkage|read|policy'
+
+# the run lookup's tools, which --patch must never call: each records its call and fails
+cat > "$tmpdir/forbidden" <<'STUB'
+#!/bin/sh
+echo "$0 $*" >> "${STUB_DIR:?}/forbidden-calls"
+exit 1
+STUB
+chmod +x "$tmpdir/forbidden"
+
+# patch_setup: the PR's branch is one real change on main, pushed and clean; PH is its head and
+# PID its patch id, as the loop approved it
+patch_setup() {
+  reset
+  (
+    cd "$work"
+    git checkout -q main && git reset -q --hard "$BASE0" && git push -q -f origin main
+    git checkout -q -B "$B" "$BASE0"
+    echo feature > f.txt && git add f.txt && git commit -q -m feature
+    git push -q -f origin "$B"
+  )
+  PH=$(git -C "$work" rev-parse HEAD)
+  echo "$PH" > "$st/prhead"
+  PID=$(PATH="$toolbin" "$SH" "$PATCH_ID" "$PH" main)
+}
+
+# gp <args...>: the guard, as g runs it, but with the run lookup's tools forbidden; every FAIL
+# line it prints is kept in $tmpdir/all-fails. LINKAGE_BIN, when set, replaces the linkage stub.
+gp() {
+  rc=0
+  out=$(PATH="$toolbin" STUB_DIR="$st" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_NM_BIN="$tmpdir/forbidden" \
+    CALLUM_FLOW_LINKAGE_BIN="${LINKAGE_BIN:-$tmpdir/linkage}" CHECK_PR_LINKAGE_GH_BIN="$tmpdir/gh-linkage" \
+    CALLUM_FLOW_ROLLOUT_BIN="${ROLLOUT_BIN:-$ROLLOUT}" CALLUM_FLOW_WATCH_BIN="$tmpdir/forbidden" \
+    NO_MISTAKES_HOME="$tmpdir/nmhome" CALLUM_FLOW_MERGEABLE_TRIES=3 CALLUM_FLOW_MERGEABLE_SLEEP=0 "$SH" "$GUARD" "$@" 2> "$tmpdir/err") || rc=$?
+  printf '%s\n' "$out" | grep ' FAIL ' >> "$tmpdir/all-fails" || true
+  [ ! -f "$st/forbidden-calls" ] || fail "--patch called the run lookup: $(cat "$st/forbidden-calls")"
+}
+: > "$tmpdir/all-fails"
+
+# expect_class <name> <guard> <class> [reason]: exit 1 and exactly one FAIL line, that guard's,
+# ending with that class (and holding the reason, when given)
+expect_class() {
+  [ "$rc" = 1 ] || fail "$1: exit $rc, out=$out"
+  [ "$(printf '%s\n' "$out" | grep -c ' FAIL ')" = 1 ] || fail "$1: one FAIL line expected: $out"
+  printf '%s\n' "$out" | grep -q "^GUARD $2 FAIL .* class=$3\$" || fail "$1: want GUARD $2 FAIL ... class=$3: $out"
+  [ -z "${4-}" ] || printf '%s\n' "$out" | grep -qF "$4" || fail "$1: reason should hold '$4': $out"
+  passed=$((passed + 1))
+}
+
+# --- the patch guard ------------------------------------------------------------------------
+patch_setup; gp 7 --patch "$PID"; expect_pass "the approved patch, clean and green"
+patch_setup; gp 7 --patch "$PID" --emit-verified
+[ "$rc" = 0 ] && [ "$out" = "VERIFIED pr=7 branch=$B head=$PH run= issue=12 close_issue= gated_patch= rebased_from=" ] || fail "VERIFIED without a run: rc=$rc out=$out"
+passed=$((passed + 1))
+patch_setup; gp 7 --patch "$OTHER"; expect_class "another patch" patch patch "head $PH has patch $PID, not the approved $OTHER"
+# a clean merge of main into the branch (gh pr update-branch) keeps the approved patch
+patch_setup
+(
+  cd "$work"
+  git checkout -q main && echo other > o.txt && git add o.txt && git commit -q -m "main moves on" && git push -q origin main
+  git checkout -q "$B" && git merge -q --no-edit main && git push -q origin "$B"
+)
+git -C "$work" rev-parse HEAD > "$st/prhead"
+gp 7 --patch "$PID"; expect_pass "a merge of main keeps the approved patch"
+# a patch id that cannot be computed is a fact not read
+patch_setup
+printf '#!/bin/sh\necho "callum-flow-patch-id: cannot fetch origin/main" >&2\nexit 1\n' > "$tmpdir/nopatch"; chmod +x "$tmpdir/nopatch"
+CALLUM_FLOW_PATCH_ID_BIN="$tmpdir/nopatch" gp 7 --patch "$PID"; expect_class "patch id not computed" patch read "patch id of $PH not computed: callum-flow-patch-id: cannot fetch origin/main"
+
+# --- no head, no gates, no run --------------------------------------------------------------
+patch_setup; touch "$st/norun"; gp 7 --patch "$PID"; expect_pass "no pipeline run: nothing of a run is checked"
+patch_setup; echo failed > "$st/runstatus"; echo 'ci,awaiting_approval,0' > "$st/step"; gp 7 --patch "$PID"; expect_pass "a failed or parked run is not the loop's"
+patch_setup; git -C "$work" commit -q --allow-empty -m "a slot ahead"; gp 7 --patch "$PID"; expect_pass "a worktree ahead of the head is not checked"
+git -C "$work" reset -q --hard "$PH"
+
+# --- every other guard, with its class -----------------------------------------------------
+patch_setup; echo BEHIND > "$st/mss"; gp 7 --patch "$PID"; expect_class "behind" mergeable behind "behind main"
+case "$out" in *update-behind* | *axi* | *re-gate*) fail "--patch names no pipeline recovery: $out" ;; esac
+patch_setup; echo DIRTY > "$st/mss"; echo CONFLICTING > "$st/pmergeable"; gp 7 --patch "$PID"; expect_class "conflict" mergeable conflict "conflicts with main"
+case "$out" in *re-gate*) fail "--patch names no pipeline recovery: $out" ;; esac
+patch_setup; echo DRAFT > "$st/mss"; gp 7 --patch "$PID"; expect_class "draft" mergeable policy "PR is a draft"
+patch_setup; echo BLOCKED > "$st/mss"; gp 7 --patch "$PID"; expect_class "blocked" mergeable read "branch rules not met"
+patch_setup; echo UNKNOWN > "$st/mss"; gp 7 --patch "$PID"; expect_class "not computed" mergeable read "GitHub has not computed mergeability"
+patch_setup; echo CLOSED > "$st/pstate"; echo UNKNOWN > "$st/mss"; gp 7 --patch "$PID"; expect_class "closed" mergeable read "PR is CLOSED"
+patch_setup; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; echo 8 > "$st/checks-rc"; gp 7 --patch "$PID"; expect_class "pending" checks checks "ci=pending"
+patch_setup; echo '[{"name":"ci","bucket":"fail"}]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "red" checks checks "ci=fail"
+patch_setup; echo '[]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "no checks" checks checks "no checks reported"
+patch_setup; echo 'garbage' > "$st/checks"; gp 7 --patch "$PID"; expect_class "checks unread" checks read "cannot parse checks"
+# a read that failed names gh's error, so the loop can tell a GitHub blip (v2 SPEC 5.1)
+patch_setup; echo 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$st/checks-err"; gp 7 --patch "$PID"; expect_class "checks blip" checks read "cannot read checks: HTTP 502: Bad Gateway"
+patch_setup; echo '{"login":"mallory","id":999}' > "$st/pauthor"; gp 7 --patch "$PID"; expect_class "untrusted" author policy "not opened by a trusted author"
+patch_setup; CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" gp 7 --patch "$PID"; expect_class "author unverified" author read "cannot verify the author"
+patch_setup; echo 'MISMATCH #7 issue=#12 expect=closing' > "$st/linkage"; echo 1 > "$st/linkage-rc"; gp 7 --patch "$PID"; expect_class "linkage" linkage linkage "MISMATCH #7"
+patch_setup; : > "$st/linkage"; echo 1 > "$st/linkage-rc"; gp 7 --patch "$PID"; expect_class "linkage unread" linkage read "no output"
+patch_setup; ROLLOUT_BIN=/bin/false; gp 7 --patch "$PID"; expect_class "rollout not derived" rollout read "cannot derive the Rollout"
+patch_setup; echo epic-x > "$st/base"; gp 7 --patch "$PID"; expect_class "another base" base policy "PR targets epic-x"
+# several at once: each line its own class
+patch_setup; echo BEHIND > "$st/mss"; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; gp 7 --patch "$PID"
+[ "$rc" = 1 ] && printf '%s\n' "$out" | grep -q ' class=behind$' && printf '%s\n' "$out" | grep -q ' class=checks$' || fail "two classes: $out"
+passed=$((passed + 1))
+# every FAIL line printed in --patch mode ends with one of the seven classes
+[ -s "$tmpdir/all-fails" ] || fail "no FAIL line was seen"
+! grep -Ev " class=($CLASSES)\$" "$tmpdir/all-fails" || fail "a FAIL line without its class"
+passed=$((passed + 1))
+# without --patch, the guard is as it was: no class, the pipeline's recovery
+patch_setup; echo BEHIND > "$st/mss"; g 7
+case "$out" in *class=*) fail "a class without --patch: $out" ;; *"--update-behind"*) ;; *) fail "behind without --patch keeps its recovery: $out" ;; esac
+passed=$((passed + 1))
+
+# --- the loop's branch issue-<N>, against the real linkage check ------------------------------
+# The factory loop names an issue's branch issue-<N>, with no slug (v2 SPEC 3.5). Factory drill 1
+# of run 2 parked two green, approved PRs: the linkage check skipped issue-<N> and the guard then
+# wanted --issue. Here the real check-pr-linkage.sh reads the PR through a stub gh of its own.
+LINKAGE_REAL="$ROOT/features/src/callum-tools/check-pr-linkage.sh"
+for t in bash node; do
+  p=$(command -v "$t") || fail "$t not found"
+  [ -e "$toolbin/$t" ] || ln -s "$p" "$toolbin/$t"
+done
+# the stub gh's `pr view` program, shared with the linkage suites; GitHub's closing references
+# come from the body, as it derives them on the default branch
+export PR_VIEW_JQ="$SCRIPT_DIR/linkage-pr-view.jq"
+cat > "$tmpdir/gh-linkage" <<'STUB'
+#!/bin/sh
+d=${STUB_DIR:?}
+case "$1 $2" in
+  'repo view') echo '{"defaultBranchRef":{"name":"main"},"nameWithOwner":"local/repo"}' ;;
+  'pr view') jq -nc --rawfile head "$d/branch" --rawfile base "$d/base" --rawfile body "$d/body" --arg api '' -f "${PR_VIEW_JQ:?}" ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$tmpdir/gh-linkage"
+# loop_setup <branch>: the PR's head pushed as that branch, which the PR names
+loop_setup() {
+  patch_setup
+  git -C "$work" push -q -f origin "$PH:refs/heads/$1"
+  printf '%s\n' "$1" > "$st/branch"
+}
+# gl <args...>: gp with the real linkage check
+gl() {
+  LINKAGE_BIN=$LINKAGE_REAL
+  gp "$@"
+  LINKAGE_BIN=''
+}
+loop_setup issue-12; gl 7 --patch "$PID"; expect_pass "issue-<N> names its issue: the linkage is checked, no --issue needed"
+loop_setup issue-12; gl 7 --patch "$PID" --issue 12; expect_pass "issue-<N> with the record's --issue (the loop's argv)"
+loop_setup issue-12; gl 7 --patch "$PID" --emit-verified
+[ "$rc" = 0 ] && [ "$out" = "VERIFIED pr=7 branch=issue-12 head=$PH run= issue=12 close_issue= gated_patch= rebased_from=" ] || fail "issue-<N> VERIFIED: rc=$rc out=$out"
+passed=$((passed + 1))
+loop_setup issue-12; printf '%s\n' 'Refs #12' > "$st/body"; gl 7 --patch "$PID" --issue 12
+expect_class "issue-<N> that closes nothing" linkage linkage "MISMATCH #7 issue=#12 expect=closing"
+loop_setup feat/issue-12-x; gl 7 --patch "$PID"; expect_pass "a v1 branch issue-<N>-<slug> is checked as before"
+
+# --- usage ------------------------------------------------------------------------------------
+patch_setup
+for args in "7 --patch" "7 --patch xyz" "7 --patch $PID --run RUN1" "7 --patch $PID --update-behind"; do
+  rc=0
+  # shellcheck disable=SC2086
+  PATH="$toolbin" "$SH" "$GUARD" $args > /dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || fail "usage '$args' should exit 2, got $rc"
+done
+passed=$((passed + 1))
+
+# --- callum-flow-merge passes --patch to its guard --------------------------------------------
+patch_setup; m 7 --patch "$PID"
+[ "$rc" = 0 ] || fail "merge with the approved patch: rc=$rc out=$out err=$(cat "$tmpdir/err")"
+[ "$(cat "$st/gh-calls")" = "pr merge 7 --squash --match-head-commit $PH" ] || fail "merge call: $(cat "$st/gh-calls")"
+jq -e --arg sha "$PH" '.state == "merged" and .pr == 7 and .head == $sha and .issue == 12 and ((.run_id // "") == "")' "$events/o__r.jsonl" > /dev/null || fail "merged event: $(cat "$events/o__r.jsonl")"
+passed=$((passed + 1))
+patch_setup; m 7 --patch "$OTHER"
+[ "$rc" = 1 ] && [ ! -f "$st/gh-calls" ] && [ ! -e "$events" ] || fail "merge with another patch must not merge: rc=$rc out=$out"
+printf '%s\n' "$out" | grep -q "^GUARD patch FAIL .* class=patch\$" || fail "the guard's FAIL line reaches the caller: $out"
+passed=$((passed + 1))
+
+echo "merge-guard-patch: $passed groups passed"

@@ -11,6 +11,13 @@
 // liveness probe, `kill -0` by pid, which delivers nothing; `kill switch` alone is the skip reason
 // act.ts logs (#557), never a command. The one rerun is rule P2a's env-retry (#537): its argv is
 // declared once, on ENV_RETRY's line, and only that line may hold `rerun`.
+//
+// The v2 rule layer (hooks/v2/, docs/factory-loop/v2/SPEC.md appendix B) is scanned too. Its
+// writes are allowed deliberately, one argv each: every v2 command is built in hooks/v2/argv.ts,
+// and a word the bans catch there (a label added, a PR body, a body file, a CI re-run, a slot's
+// kill) is allowed only on the lines V2_ALLOWED names, exactly as written. Elsewhere it is caught
+// as before. The v2 kind `ci-rerun` and the key family `/rerun/` are names, not commands, and so is
+// `kill` on the vocabulary lines V2_NAMES names (a slot op, an entry action's key).
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -20,6 +27,25 @@ const HOOKS = path.join(__dirname, "..", "plugins", "factory-loop", "hooks");
 const PROBE = 'kill -0 "$1" 2>/dev/null';
 const KILL_SWITCH = "kill switch";
 const ENV_RETRY = { file: "act-merge.ts", line: "export const ENV_RETRY_ARGV: readonly string[] = ['no-mistakes', 'rerun']" };
+const V2_ARGV = "v2/argv.ts";
+// v2's widened argvs (appendix B), each the one line of argv.ts that builds it
+const V2_ALLOWED = [
+  "  const argv = ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add]",
+  "  return ['gh', 'issue', 'edit', String(issue), '--repo', repo, '--add-label', add, '--remove-label', remove.join(',')]",
+  "  return ['gh', 'issue', 'comment', String(issue), '--repo', repo, '--body-file', '-']",
+  "  return ['gh', 'pr', 'create', '--repo', repo, '--base', base, '--head', branch, '--title', title, '--body-file', '-']",
+  "  return ['gh', 'pr', 'edit', String(pr), '--repo', repo, '--body-file', '-']",
+  "  return ['gh', 'issue', 'create', '--repo', repo, '--title', title, '--body-file', '-']",
+  "  return ['gh', 'issue', 'edit', String(child), '--repo', repo, '--add-label', readyLabel]",
+  "  return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]",
+  "  return ['factory-slot', 'kill', path]",
+];
+const V2_RERUN = "  return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]";
+const V2_NAMES = [
+  { file: "v2/types.ts", line: "export const SLOT_OPS = ['lease', 'prepare', 'kill', 'free'] as const" },
+  { file: "v2/keys.ts", line: "export type EntryAction = 'label' | 'stop' | 'kill' | 'comment' | 'tell' | `event/${string}`" },
+  { file: "v2/rules-entry.ts", line: "const KILL = 'kill' as const" },
+];
 // after these, a `/` starts a regular expression rather than a division
 const REGEX_AFTER = new Set("(,=:[!&|?{};+-*%<>~^".split(""));
 const REGEX_WORDS = new Set(["return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "yield", "await"]);
@@ -150,12 +176,18 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
   const lits = literals(src);
   const lines = src.split("\n");
   const envRetry = (lit) => file === ENV_RETRY.file && lit.text === "rerun" && lines[lit.line - 1] === ENV_RETRY.line;
-  const flag = (lit, what) => found.push(`${file}:${lit.line}: ${what}: ${JSON.stringify(lit.text.slice(0, 80))}`);
+  const v2Allowed = (lit) =>
+    (file === V2_ARGV && V2_ALLOWED.includes(lines[lit.line - 1])) || V2_NAMES.some((n) => n.file === file && n.line === lines[lit.line - 1] && lit.text === "kill");
+  const flag = (lit, what) => {
+    if (!v2Allowed(lit)) found.push(`${file}:${lit.line}: ${what}: ${JSON.stringify(lit.text.slice(0, 80))}`);
+  };
   lits.forEach((lit, n) => {
     const t = lit.text;
     const next = lits[n + 1]?.text;
+    // v2's kind and key family name a re-run; neither is a command
+    const named = t.replace(/\bci-rerun\b/g, "").replace(/\/rerun\//g, "/");
     if (/(^|[\s=])--yes\b/.test(t)) flag(lit, "--yes");
-    if ((/\brerun\b/.test(t) && !envRetry(lit)) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
+    if ((/\brerun\b/.test(named) && !envRetry(lit)) || t === "abort" || /\bno-mistakes\b[^\n]*\babort\b/.test(t)) flag(lit, "rerun or abort");
     if (t === "coder" || /(^|[;&|(]\s*|^\s*)coder\s/.test(t)) flag(lit, "a coder command");
     if (/\b(pkill|killall)\b/.test(t)) flag(lit, "a kill by name");
     if (/(^|[;&|(\s])kill\b/.test(t) && t !== PROBE && t !== KILL_SWITCH) flag(lit, "a kill");
@@ -174,7 +206,8 @@ function problems(file, src = fs.readFileSync(path.join(HOOKS, file), "utf8")) {
 
 // the answer script, by its path from the hooks directory, which problems() reads from
 const SCRIPT = path.join("..", "bin", "factory-answer");
-const files = [...fs.readdirSync(HOOKS).filter((f) => f.endsWith(".ts") || f.endsWith(".mjs")).sort(), SCRIPT];
+const sources = (dir) => fs.readdirSync(path.join(HOOKS, dir)).filter((f) => f.endsWith(".ts") || f.endsWith(".mjs")).sort().map((f) => (dir === "" ? f : `${dir}/${f}`));
+const files = [...sources(""), ...sources("v2"), SCRIPT];
 
 test("the literal scanner reads the hooks' commands and skips comments and regular expressions", () => {
   const cli = literals(fs.readFileSync(path.join(HOOKS, "act-cli.ts"), "utf8")).map((l) => l.text);
@@ -231,9 +264,9 @@ test("the scanner catches each forbidden form, and passes the loop's own", () =>
   }
 });
 
-test("the one rerun is env-retry's argv: declared once in act-merge.ts, used only by its executor and argv list", () => {
+test("the one rerun is env-retry's argv: declared once in act-merge.ts, used only by its executor and argv list; v2's CI re-run is argv.ts's one line", () => {
   const declared = files.flatMap((f) => fs.readFileSync(path.join(HOOKS, f), "utf8").split("\n").filter((l) => l.includes("'rerun'")).map((l) => `${f}: ${l}`));
-  assert.deepEqual(declared, [`${ENV_RETRY.file}: ${ENV_RETRY.line}`]);
+  assert.deepEqual(declared.sort(), [`${ENV_RETRY.file}: ${ENV_RETRY.line}`, `${V2_ARGV}: ${V2_RERUN}`].sort());
   for (const f of files.filter((x) => x !== ENV_RETRY.file)) {
     assert.ok(!fs.readFileSync(path.join(HOOKS, f), "utf8").includes("ENV_RETRY_ARGV"), `${f} names ENV_RETRY_ARGV`);
   }
@@ -247,8 +280,28 @@ test("the one rerun is env-retry's argv: declared once in act-merge.ts, used onl
   assert.ok(executor.includes("action.rule !== 'P2a'"), "the executor refuses any rule but P2a");
 });
 
+test("v2's widened argvs are exactly argv.ts's allowed lines: each is there, and each is caught anywhere else", () => {
+  const lines = fs.readFileSync(path.join(HOOKS, V2_ARGV), "utf8").split("\n");
+  for (const line of V2_ALLOWED) {
+    assert.equal(lines.filter((l) => l === line).length, 1, `${V2_ARGV} must hold, once: ${line}`);
+    assert.deepEqual(problems(V2_ARGV, `${line}\n`), [], line);
+    assert.notDeepEqual(problems("v2/act-pr.ts", `${line}\n`), [], `outside ${V2_ARGV}: ${line}`);
+    assert.notDeepEqual(problems(V2_ARGV, `${line.replace(/\]$/, ", extra]")}\n`), [], `changed: ${line}`);
+  }
+  // a v2 kind and its key family are names, not commands; a re-run anywhere else is caught
+  assert.deepEqual(problems("v2/types.ts", "export const K = ['ci-rerun']\nconst k = `${a}/rerun/r${n}`\n"), []);
+  assert.notDeepEqual(problems("v2/act-ci.ts", "const argv = ['gh', 'run', 'rerun', id]\n"), []);
+  // the two vocabulary lines name a kill: there, and only there, and nothing else on them
+  for (const n of V2_NAMES) {
+    assert.equal(fs.readFileSync(path.join(HOOKS, n.file), "utf8").split("\n").filter((l) => l === n.line).length, 1, `${n.file} must hold, once: ${n.line}`);
+    assert.deepEqual(problems(n.file, `${n.line}\n`), []);
+    assert.notDeepEqual(problems("v2/act-slots.ts", `${n.line}\n`), []);
+  }
+});
+
 test("no hook literal passes --yes, reruns, aborts, merges or edits a PR, adds a label, runs coder or kills by name", () => {
   assert.ok(files.length >= 15, `hooks found: ${files.join(", ")}`);
+  assert.ok(files.includes(V2_ARGV) && files.includes("v2/plan.ts"), "the v2 rule layer is scanned");
   assert.ok(files.includes("contract.mjs") && files.includes(SCRIPT), "the answer contract and the answer script are scanned (#561)");
   const found = files.flatMap((f) => problems(f));
   assert.deepEqual(found, []);
@@ -290,4 +343,8 @@ test("the act step's GitHub kinds are plan's", () => {
   const plan = list("plan.ts", "GITHUB");
   assert.ok(plan.length > 10);
   assert.deepEqual(list("act.ts", "GITHUB_KINDS"), plan);
+  // v2's (act.ts runActions takes it under planner v2): the shared kinds that write GitHub, and v2's
+  const v2 = list("foundation.ts", "GITHUB_V2");
+  for (const kind of ["claim", "heartbeat", "sweep", "label", "comment", "pr", "split", "ci-rerun", "queue-update", "queue-merge"]) assert.ok(v2.includes(kind), `GITHUB_V2 lacks ${kind}`);
+  for (const kind of ["transition", "event", "agent-step", "slot"]) assert.ok(!v2.includes(kind), `GITHUB_V2 holds ${kind}, which writes no GitHub`);
 });

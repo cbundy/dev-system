@@ -1,0 +1,425 @@
+// The foundation's generic plan code (docs/factory-loop/v2/SPEC.md 2.2): the usage tier (tierOf,
+// re-exported from plan.ts), the class matrix, gate and want, the generic admission filters
+// (control, tier, GitHub backoff, the breakers, the rate caps), one wake and the title frame. These
+// are copies of private code in plan.ts (`ALLOWED`, `gate`, `want`, `admit`, `oneWake`,
+// `titleOf`, `blindPass`; FM coupling C1), because plan.ts stays untouched until the delete wave;
+// tests/foundation.test.ts holds the copies to v1's behaviour on v1's fixtures. At the delete wave
+// this module becomes the only copy. The v2 planner (v2/plan.ts) composes its rules with them.
+//
+// One addition of v2's: the executor breaker gains a bucket for step unknowns across issues
+// (v2 SPEC 5.3), which holds every start, develop and drive action for 30 minutes.
+//
+// Pure: no clock (state.now), no I/O, and nothing imported but types and plan.ts's exported pure
+// helpers.
+import { listedLive } from './plan'
+import type { Action, ActionClass, ActionKind, AgentType, Config, LedgerEntry, Ms, Skip, State, Tier } from './types'
+import { AGENT_STEPS } from './v2/types'
+
+export { listedLive, tierOf, turnEnded } from './plan'
+
+const MIN = 60_000
+export const HOUR = 60 * MIN
+
+// The classes each tier allows (v1 SPEC 5.2; rails.ts TIER_CLASSES is the act step's copy).
+export const ALLOWED: Readonly<Record<Tier, readonly ActionClass[]>> = {
+  normal: ['free', 'owner', 'drive', 'develop', 'start'],
+  slow: ['free', 'owner', 'drive', 'develop', 'start'],
+  'stop-new': ['free', 'owner', 'drive'],
+  'stop-all': ['free', 'owner'],
+}
+
+export const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
+
+// The kinds that write to GitHub (or read it heavily) under planner v2: held while GitHub
+// rate-limits us (v1 SPEC 10.2), by plan and, for the rest of a pass that met a limit, by the act
+// step (act.ts runActions). v1's list is plan.ts's GITHUB and act.ts's GITHUB_KINDS.
+export const GITHUB_V2: readonly ActionKind[] = [
+  'claim',
+  'heartbeat',
+  'sweep',
+  'rollout',
+  'close-issue',
+  'release-parent',
+  'milestone-later',
+  'label',
+  'comment',
+  'pr',
+  'split',
+  'ci-rerun',
+  'queue-update',
+  'queue-merge',
+]
+
+// The executor breaker (v1 SPEC 11.4): three failures in a row of one kind hold that kind this long.
+export const BREAKER_MS = 30 * MIN
+
+// The step-unknown breaker (v2 SPEC 5.3): `trips` unexplained unknowns of agent steps, on at least
+// `records` issues, within `windowMs`, close the `classes` for `holdMs` from the newest of them.
+// Unexplained: not caused by a load, a usage limit or a lost slot (5.1).
+export const STEP_BREAKER = {
+  trips: 3,
+  records: 2,
+  windowMs: 15 * MIN,
+  holdMs: 30 * MIN,
+  classes: ['start', 'develop', 'drive'] as readonly ActionClass[],
+  explained: ['load', 'usage', 'slot'] as readonly string[],
+} as const
+
+export type Gate = 'go' | 'running' | 'done' | 'wait' | 'exhausted'
+
+// What a plan builds as its rules run, and what the admission filters read (plan.ts Ctx's
+// generic half). ownerTells: the notice kinds that are owner items (they count in the title and go
+// out first); github: the kinds held during a GitHub backoff.
+export type PlanCtx = {
+  state: State
+  config: Config
+  tier: Tier
+  overridden: boolean
+  out: Action[]
+  skipped: Skip[]
+  owner: Set<string>
+  exhausted: string[]
+  byKey: Map<string, LedgerEntry>
+  capped: string[]
+  atCap: boolean
+  ownerTells: readonly string[]
+  github: readonly ActionKind[]
+}
+
+// newCtx: an empty plan over this state, its tier read, the ledger by key (the latest start wins,
+// as in plan.ts).
+export function newCtx(state: State, config: Config, tier: { tier: Tier; overridden: boolean }, ownerTells: readonly string[], github: readonly ActionKind[]): PlanCtx {
+  const byKey = new Map<string, LedgerEntry>()
+  for (const entry of [...state.ledger].sort((a, b) => a.startedAt - b.startedAt)) byKey.set(entry.key, entry)
+  return {
+    state,
+    config,
+    tier: tier.tier,
+    overridden: tier.overridden,
+    out: [],
+    skipped: [],
+    owner: new Set(),
+    exhausted: [],
+    byKey,
+    capped: [],
+    atCap: false,
+    ownerTells,
+    github,
+  }
+}
+
+export function skip(ctx: PlanCtx, rule: string, issue: number | null, why: string): void {
+  ctx.skipped.push({ rule, issue, why })
+}
+
+// --- gate and want (plan.ts gate, want) ------------------------------------------------------------
+
+// attemptsKindOf: what an action's attempts count against: a spawn's agent, the implementer for a
+// delegate, otherwise its kind (as ledger.ts attemptsKindOf counts an entry's).
+export function attemptsKindOf(action: Action): ActionKind | AgentType {
+  if (action.kind === 'spawn') return action.agent
+  if (action.kind === 'delegate') return 'implementer'
+  return action.kind
+}
+
+// maxAttemptsOf: the key's own cap when its action or entry carries one, else the kind's setting,
+// else 3. v1's two special cases (update-behind, env-retry) are v1's alone (plan.ts maxAttempts).
+export function maxAttemptsOf(config: Config, kind: ActionKind | AgentType, cap?: number): number {
+  return cap ?? config.maxAttempts[kind] ?? 3
+}
+
+// cadenceOf: the interval of a kind that runs on a cadence. Heartbeat and sweep retry at their
+// next due time, so they are never used up (v1 SPEC 6.1). null: any other kind.
+export function cadenceOf(config: Config, kind: ActionKind | AgentType): Ms | null {
+  if (kind === 'heartbeat') return config.heartbeatEveryMs
+  if (kind === 'sweep') return config.sweepEveryMs
+  return null
+}
+
+// gate: whether the action under this key may run now (v1 SPEC 5.1 "blocked"): new keys go; a
+// running or done key is not planned again; a failed, timed-out or lost one runs again after its
+// backoff until its attempts are used up, and an agent's only once the agent list shows it ended.
+export function gate(ctx: PlanCtx, key: string, kind: ActionKind | AgentType, cap?: number): Gate {
+  const entry = ctx.byKey.get(key)
+  if (entry === undefined) return 'go'
+  if (entry.status === 'running') return 'running'
+  if (entry.status === 'done') return 'done'
+  if (entry.agentId !== undefined && listedLive(ctx.state.agents, entry.agentId)) return 'running'
+  const cadence = cadenceOf(ctx.config, kind)
+  if (cadence === null && entry.attempts >= maxAttemptsOf(ctx.config, kind, cap ?? entry.maxAttempts)) return 'exhausted'
+  if (entry.status === 'lost') return 'go'
+  const doubled = ctx.config.retryBackoffMs * 2 ** Math.max(0, entry.attempts - 1)
+  const backoff = cadence === null ? doubled : Math.min(doubled, cadence)
+  if (entry.endedAt !== null && ctx.state.now - entry.endedAt < backoff) return 'wait'
+  return 'go'
+}
+
+// want: plan the action unless its key is blocked, and say what blocked it. An owner notice counts
+// toward the title's owner items whether or not it goes out this pass. An exhausted key is named
+// in the decision log and kept in ctx.exhausted for its rule to tell; a cadenced kind that failed
+// its attempts in a row is kept there too, and keeps trying.
+export function want(ctx: PlanCtx, action: Action): Gate {
+  if (action.kind === 'tell' && ctx.ownerTells.includes(action.wake)) ctx.owner.add(action.key)
+  const kind = attemptsKindOf(action)
+  const g = gate(ctx, action.key, kind, action.maxAttempts)
+  if (g === 'go') ctx.out.push(action)
+  const entry = ctx.byKey.get(action.key)
+  if (g === 'running' && entry !== undefined && entry.status !== 'running') {
+    skip(ctx, action.rule, action.issue, `${action.key}: its agent ${entry.agentId} still runs`)
+  }
+  if (g === 'exhausted') {
+    skip(ctx, action.rule, action.issue, `exhausted: ${action.key}`)
+    if (WAKES.includes(action.kind) && action.kind !== 'task') ctx.owner.add(action.key)
+    else ctx.exhausted.push(action.key)
+  } else if (cadenceOf(ctx.config, kind) !== null) {
+    if (entry !== undefined && entry.status !== 'running' && entry.status !== 'done' && entry.attempts >= maxAttemptsOf(ctx.config, kind, entry.maxAttempts)) {
+      ctx.exhausted.push(action.key)
+    }
+  }
+  return g
+}
+
+// wake: a judge, task or tell action, its fields as text (an empty one dropped).
+export function wake(
+  kind: 'judge' | 'task' | 'tell',
+  name: string,
+  key: string,
+  rule: string,
+  issue: number | null,
+  fields: Record<string, string | number | null>,
+  context: string[] = [],
+  klass: ActionClass = kind === 'tell' ? 'owner' : 'drive',
+): Action {
+  const clean: Record<string, string> = {}
+  for (const [k, v] of Object.entries(fields)) if (v !== null) clean[k] = String(v)
+  return { kind, wake: name, key, class: klass, rule, reason: `${kind} ${name}`, issue, fields: clean, context }
+}
+
+// blindPass (G2): the factory source failed, so the pass plans nothing but the owner's notice
+// once it has failed for blindNoticeAfterMs.
+export function blindPass(ctx: PlanCtx): void {
+  const { state, config } = ctx
+  const since = state.sources.factory.at
+  skip(ctx, 'G2', null, `factory source unavailable${state.sources.factory.error ? `: ${state.sources.factory.error}` : ''}`)
+  if (since === null || state.now - since >= config.blindNoticeAfterMs) {
+    want(ctx, wake('tell', 'blind', `tell:blind:${since ?? 0}`, 'G2', null, { since: since ?? 'never' }))
+  }
+}
+
+// --- the breakers (v1 SPEC 11.4; v2 SPEC 5.3) -------------------------------------------------------
+
+// executorBreaker: the time the newest of this kind's last three ended entries ended, when all
+// three failed within BREAKER_MS of now; else null.
+export function executorBreaker(state: State, kind: ActionKind): Ms | null {
+  const ended = state.ledger
+    .filter(e => e.kind === kind && e.endedAt !== null && e.status !== 'running')
+    .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+  const last3 = ended.slice(-3)
+  const newest = last3[last3.length - 1]
+  if (last3.length < 3 || newest === undefined || !last3.every(e => e.status === 'failed')) return null
+  const at = newest.endedAt ?? 0
+  return state.now - at < BREAKER_MS ? at : null
+}
+
+// An unexplained unknown of an agent step, as the transition that handled it recorded it: its
+// event is unknown or a running step's timeout, its step an agent's, its cause none of a load, a
+// usage limit or a lost slot. A transition lost to a reload counts by the facts it carries from
+// its start (ledger.ts start): either the store took it, or the record's next transition reuses
+// its key and replaces it, so nothing counts twice.
+function unexplained(e: LedgerEntry): boolean {
+  const o = e.outcome
+  if (e.kind !== 'transition' || (e.status !== 'done' && e.status !== 'lost') || o?.kind !== 'transition') return false
+  if (o.event !== 'unknown' && o.event !== 'timeout') return false
+  if (o.step === null || !(AGENT_STEPS as readonly string[]).includes(o.step)) return false
+  return o.cause === null || !STEP_BREAKER.explained.includes(o.cause)
+}
+
+// stepBreaker: when the step-unknown breaker is open (v2 SPEC 5.3): `since` is the newest of the
+// unknowns that tripped it, `until` when it closes. A trip is any `trips` unexplained unknowns, on
+// at least `records` issues, within `windowMs` of each other; it holds `holdMs` from the newest.
+// An unknown that ended while a trip held is the breaker's own (its cause is `breaker`, 5.1) and
+// counts toward no trip, so a trip neither extends itself nor moves its `since`, and is told once.
+// null when it is closed now.
+export function stepBreaker(ledger: readonly LedgerEntry[], now: Ms): { since: Ms; until: Ms } | null {
+  const seen = ledger.filter(unexplained).sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+  const counted: LedgerEntry[] = []
+  let open: { since: Ms; until: Ms } | null = null
+  for (const e of seen) {
+    const at = e.endedAt ?? 0
+    if (open !== null && at < open.until) continue
+    counted.push(e)
+    const window = counted.filter(x => at - (x.endedAt ?? 0) <= STEP_BREAKER.windowMs)
+    const issues = new Set(window.map(x => x.issue))
+    if (window.length >= STEP_BREAKER.trips && issues.size >= STEP_BREAKER.records) open = { since: at, until: at + STEP_BREAKER.holdMs }
+  }
+  return open !== null && now < open.until ? open : null
+}
+
+// --- admitting actions (plan.ts admit's generic filters) ------------------------------------------
+
+// Rate-cap buckets per rolling hour; merges have none (D-24). A v2 agent step spawns an agent, as
+// a spawn or a delegate does.
+export type Bucket = 'start' | 'spawn' | 'wake'
+
+export function bucketOf(kind: ActionKind, klass: ActionClass): Bucket | null {
+  if (klass === 'start') return 'start'
+  if (kind === 'spawn' || kind === 'delegate' || kind === 'agent-step') return 'spawn'
+  if (WAKES.includes(kind)) return 'wake'
+  return null
+}
+
+// perIssueKind: what the per-issue rate cap counts an action or entry under: its kind, and a v2
+// agent step by its step kind (D-24, v2 appendix B).
+function perIssueKind(kind: ActionKind, step: string | undefined): string {
+  return kind === 'agent-step' && step !== undefined ? step : kind
+}
+
+// admit (G4): the planned actions, in order, through the generic filters: a paused issue (all but
+// its heartbeat), no new work (start and develop), the usage tier, the GitHub backoff, the
+// breakers, and the rate caps per bucket and per kind on one issue. Each held action has a skip
+// line naming the filter. A tripped cap or breaker tells the owner once (runaway, breaker); then
+// one wake at most (oneWake).
+export function admit(ctx: PlanCtx): Action[] {
+  const { state, config, tier } = ctx
+  const control = state.control
+  const recent = state.ledger.filter(e => e.startedAt > state.now - HOUR)
+  const counts: Record<Bucket, number> = { start: 0, spawn: 0, wake: 0 }
+  const perIssue = new Map<string, number>()
+  for (const entry of recent) {
+    const bucket = bucketOf(entry.kind, entry.class)
+    if (bucket !== null) counts[bucket] += 1
+    if (entry.issue !== null && bucket !== null) {
+      const k = `${perIssueKind(entry.kind, entry.step)}:${entry.issue}`
+      perIssue.set(k, (perIssue.get(k) ?? 0) + 1)
+    }
+  }
+  const caps: Record<Bucket, number> = config.rateCaps
+  const tripped = new Set<string>()
+  const breakers = new Map<string, Ms>()
+  const backoff = state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil
+  const steps = stepBreaker(state.ledger, state.now)
+  // the step-unknown breaker is a fact of the ledger: the owner hears once it trips, whether or not
+  // this pass asks for anything it holds (v2 SPEC 5.3), and its tell logs the trip (7.2)
+  if (steps !== null) breakers.set('steps', steps.since)
+  const kept: Action[] = []
+  for (const action of ctx.out) {
+    const issue = action.issue
+    if (issue !== null && control.paused.includes(issue) && action.kind !== 'heartbeat') {
+      skip(ctx, action.rule, issue, `owner: paused (${action.kind})`)
+      continue
+    }
+    if (control.noNewWork && (action.class === 'start' || action.class === 'develop')) {
+      skip(ctx, action.rule, issue, `owner: no new work (${action.kind})`)
+      continue
+    }
+    if (!ALLOWED[tier].includes(action.class)) {
+      skip(ctx, action.rule, issue, `tier ${tier} (${action.kind})`)
+      continue
+    }
+    if (backoff && ctx.github.includes(action.kind)) {
+      skip(ctx, action.rule, issue, `GitHub rate limit (${action.kind})`)
+      continue
+    }
+    const breaker = executorBreaker(state, action.kind)
+    if (breaker !== null) {
+      breakers.set(action.kind, breaker)
+      skip(ctx, action.rule, issue, `breaker open (${action.kind})`)
+      continue
+    }
+    if (steps !== null && STEP_BREAKER.classes.includes(action.class)) {
+      skip(ctx, action.rule, issue, `breaker open: step unknowns (${action.kind})`)
+      continue
+    }
+    const bucket = bucketOf(action.kind, action.class)
+    if (bucket !== null && counts[bucket] >= caps[bucket]) {
+      tripped.add(bucket)
+      skip(ctx, action.rule, issue, `rate cap: ${bucket} ${counts[bucket]}/${caps[bucket]}`)
+      continue
+    }
+    if (issue !== null && bucket !== null) {
+      const name = perIssueKind(action.kind, action.kind === 'agent-step' ? action.step : undefined)
+      const k = `${name}:${issue}`
+      const n = perIssue.get(k) ?? 0
+      if (n >= config.rateCaps.perIssueKind) {
+        tripped.add(k)
+        skip(ctx, action.rule, issue, `rate cap: ${name} on #${issue} ${n}/${config.rateCaps.perIssueKind}`)
+        continue
+      }
+      perIssue.set(k, n + 1)
+    }
+    if (bucket !== null) counts[bucket] += 1
+    kept.push(action)
+  }
+  ctx.capped = [...tripped].sort()
+  const hour = Math.floor(state.now / HOUR)
+  for (const bucket of ctx.capped) {
+    const notice = wake('tell', 'runaway', `tell:runaway:${bucket}:${hour}`, 'O2', null, { cap: bucket })
+    if (gate(ctx, notice.key, 'tell') === 'go') kept.push(notice)
+  }
+  for (const [kind, at] of [...breakers.entries()].sort()) {
+    const notice = wake('tell', 'breaker', `tell:breaker:${kind}:${at}`, 'O2', null, { kind })
+    if (ctx.ownerTells.includes('breaker')) ctx.owner.add(notice.key)
+    if (gate(ctx, notice.key, 'tell') === 'go') kept.push(notice)
+  }
+  return oneWake(ctx, kept)
+}
+
+// oneWake (O2): at most one wake per pass, none while one is open; owner notices first, then a
+// judge, then a task, then any other notice.
+export function oneWake(ctx: PlanCtx, actions: readonly Action[]): Action[] {
+  const open = ctx.state.ledger.some(e => WAKES.includes(e.kind) && e.status === 'running')
+  const rank = (a: Action) => {
+    if (a.kind === 'tell') return ctx.ownerTells.includes(a.wake) ? 0 : 3
+    return a.kind === 'judge' ? 1 : 2
+  }
+  let chosen: Action | undefined
+  for (const action of actions) {
+    if (!WAKES.includes(action.kind)) continue
+    if (chosen === undefined || rank(action) < rank(chosen)) chosen = action
+  }
+  return actions.filter(action => {
+    if (!WAKES.includes(action.kind)) return true
+    if (!open && action === chosen) return true
+    skip(ctx, action.rule, action.issue, open ? 'a wake is open' : 'one wake per pass')
+    return false
+  })
+}
+
+// --- the title frame (O1; D-23, D-27) ---------------------------------------------------------------
+
+// What a title says: the repo's short name, the layer's counts (null on a blind pass, whose counts
+// are not to be trusted), and a word for each thing that needs attention. `before` and `after` are
+// the layer's own words, around the usage tier's: v1's main-checkout word and stuck count, v2's
+// parked count.
+export type TitleFrame = {
+  repo: string
+  counts: string | null
+  observe: boolean
+  blind: boolean
+  before: readonly string[]
+  tier: Tier
+  after: readonly string[]
+  atCap: boolean
+  capped: readonly string[]
+  backoff: boolean
+  owner: number
+}
+
+// titleOf: the session title (plan.ts titleOf's frame). No usage numbers: a usage tier shows only
+// when it holds work.
+export function titleOf(f: TitleFrame): string {
+  const name = f.repo.split('/')[1] ?? f.repo
+  const head = f.counts === null ? `🔄 ${name}` : `🔄 ${name} (${f.counts})`
+  const words: string[] = []
+  if (f.observe) words.push('observe')
+  if (f.blind) words.push('blind')
+  words.push(...f.before)
+  if (f.tier === 'stop-new') words.push('stop new')
+  if (f.tier === 'stop-all') words.push('stop all')
+  words.push(...f.after)
+  if (f.atCap) words.push('at cap')
+  for (const c of f.capped) words.push(`capped ${c}`)
+  if (f.backoff) words.push('gh wait')
+  if (f.owner > 0) words.push(`owner ${f.owner}`)
+  return [head, ...words].join(' · ')
+}

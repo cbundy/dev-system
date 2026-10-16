@@ -7,18 +7,24 @@
 // that moves gets its `loop` event, once.
 // register.ts holds $, builds the ActIo and keeps the store; everything here works through the
 // ActIo and the live ledger, so the tests drive whole passes, and the argv safety test every
-// executor, with a recording fake.
+// executor, with a recording fake. The setting `planner` picks the layer that plans (v1's plan.ts,
+// or v2/plan.ts), and with the v2 shadow on, v2 plans beside v1 and is only logged (v2 SPEC 2.3).
 import { cliExecutors } from './act-cli'
 import { agentExecutors, agentOf, interim, onAgentAnswer, onToolAnswer, purposeOfKey, repairAskOf, scriptAnswered } from './act-agents'
 import { mergeExecutors } from './act-merge'
 import type { ActIo, AgentAnswer, EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
+import { GITHUB_V2 } from './foundation'
 import { changedEntries, finish, loopEvent, reconcileAgents, retryIssue, start } from './ledger'
 import type { Runtime } from './observe'
 import { plan, turnEnded } from './plan'
 import { repairPrompt } from './prompts'
 import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
-import type { Action, ActionKind, AgentStatus, AgentType, Control, LedgerEntry, Ms, PlanResult, State } from './types'
+import type { Action, ActionKind, AgentStatus, AgentType, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
+import { planV2 } from './v2/plan'
+import { V2_EXECUTORS, executorOf } from './v2/registry'
+import { stepAnswered, stepAnswers, stepRecorded } from './v2/steps'
+import { STEP_AGENT, V2_ACTION_KINDS } from './v2/types'
 import { answerTool, expireWakes, onTurnComplete, onTurnStart, wakeExecutors } from './wake'
 import type { TurnEnd } from './wake'
 
@@ -27,12 +33,14 @@ const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
 
-// Every kind's executor (SPEC 6.1). act.test.ts checks that no ActionKind lacks one.
+// Every kind's executor (SPEC 6.1): v1's, and v2's for its new kinds (v2/registry.ts). act.test.ts
+// checks that no ActionKind lacks one.
 export const EXECUTORS: Partial<Record<ActionKind, Executor>> = {
   ...cliExecutors,
   ...mergeExecutors,
   ...agentExecutors,
   ...wakeExecutors,
+  ...Object.fromEntries(V2_ACTION_KINDS.map(kind => [kind, V2_EXECUTORS[kind]])),
 }
 
 // The kinds that write to GitHub, held for the rest of a pass once one met a rate limit, as
@@ -58,10 +66,11 @@ export const GITHUB_KINDS: readonly ActionKind[] = [
 
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 
-// dispatch: the action's executor, run once. A kind with no executor, or an executor that throws,
-// is a failed attempt; neither is a reason to stop the pass.
+// dispatch: the action's executor, run once; under planner v2, v2's own for the kind first (a
+// reused kind may have a v2 behaviour), run again after a GitHub blip (registry.ts). A kind with no
+// executor, or an executor that throws, is a failed attempt; neither is a reason to stop the pass.
 export async function dispatch(ctx: ExecCtx, action: Action): Promise<Exec> {
-  const run = EXECUTORS[action.kind]
+  const run = ctx.rt.config.planner === 'v2' ? executorOf(action.kind, EXECUTORS) : EXECUTORS[action.kind]
   if (run === undefined) return { status: 'failed', summary: `no executor for ${action.kind}`, noRetry: true }
   try {
     return await run(ctx, action)
@@ -213,6 +222,7 @@ export type ActReport = {
 // already running finishes, and once the switch is seen every action left is skipped (#557).
 export async function runActions(env: ActEnv, state: State, actions: readonly Action[]): Promise<ActReport> {
   const report: ActReport = { outcomes: [], rateLimited: false, title: null, killed: false }
+  const github = env.rt.config.planner === 'v2' ? GITHUB_V2 : GITHUB_KINDS
   for (const action of actions) {
     if (!report.killed && action.kind !== 'title' && (await env.killed())) report.killed = true
     if (report.killed) {
@@ -223,7 +233,7 @@ export async function runActions(env: ActEnv, state: State, actions: readonly Ac
       report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'held: the act lock is no longer this session\'s' })
       continue
     }
-    if (report.rateLimited && GITHUB_KINDS.includes(action.kind)) {
+    if (report.rateLimited && github.includes(action.kind)) {
       report.outcomes.push({ key: action.key, kind: action.kind, status: 'skipped', ms: 0, summary: 'held: GitHub rate limit met this pass' })
       continue
     }
@@ -411,8 +421,33 @@ export type Between = { answering: Set<string>; completedSeen: Map<string, Ms>; 
 export type Listed = { ok: boolean; agents: ListedAgent[] }
 
 // planned: when plan handed its actions over and how long it took (performance.now()), for the
-// trace (#552)
-export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number } }
+// trace (#552); shadow: the v2 shadow's plan, logged and never executed
+export type Acted = { state: State; result: PlanResult; report: ActReport; planned: { at: Ms; ms: number }; shadow: Shadowed | null }
+
+// The v2 shadow's plan, or why it could not plan: a shadow that throws never fails the pass.
+export type Shadowed = PlanResult | { error: string }
+
+// planPass: the planner's plan (v2 SPEC 2.3), and with planner v1 and the shadow on, the v2
+// shadow's beside it, which is logged and never executed. The shadow plans with the settings v2
+// would run with (v2Config: v2's defaults where no file sets a key), in the pass's mode.
+export function planPass(state: State, config: Config, v2Config: Config = config): { result: PlanResult; shadow: Shadowed | null } {
+  if (config.planner === 'v2') return { result: planV2(state, config), shadow: null }
+  const result = plan(state, config)
+  if (config.shadow !== 'v2') return { result, shadow: null }
+  try {
+    return { result, shadow: planV2(state, { ...v2Config, mode: config.mode }) }
+  } catch (err) {
+    return { result, shadow: { error: clip(`the v2 shadow threw: ${message(err)}`) } }
+  }
+}
+
+// finishAsRead: an answer read for an entry, applied only while the entry still runs as it was
+// read (its turn.complete may have finished it during the read); the entries it moved.
+function finishAsRead(env: ActEnv, was: LedgerEntry, exec: Exec, now: Ms): LedgerEntry[] {
+  const current = env.live.ledger.find(e => e.key === was.key)
+  if (current?.status !== 'running' || current.agentId !== was.agentId || current.startedAt !== was.startedAt) return []
+  return transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config }))
+}
 
 // answeredBeforeLost: the agent entries the agent list would mark lost (gone from it, or its turn
 // ended with no answer read) whose agent recorded an answer with the answer script that passes its
@@ -426,11 +461,8 @@ async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly Li
   const lost = before.filter((e, i) => e.status === 'running' && reconciled[i]?.status === 'lost')
   const moved: LedgerEntry[] = []
   for (const was of lost) {
-    const exec = await scriptAnswered(ctxOf(env, state, was), was)
-    if (exec === null) continue
-    const current = env.live.ledger.find(e => e.key === was.key)
-    if (current?.status !== 'running' || current.agentId !== was.agentId || current.startedAt !== was.startedAt) continue
-    moved.push(...transition(env.live, l => finish(l, was.key, exec, now, { config: env.rt.config })))
+    const exec = was.kind === 'agent-step' ? await stepRecorded(ctxOf(env, state, was), was, true) : await scriptAnswered(ctxOf(env, state, was), was)
+    if (exec !== null) moved.push(...finishAsRead(env, was, exec, now))
   }
   return moved
 }
@@ -447,23 +479,25 @@ export async function actPass(env: ActEnv, observed: State, listed: Listed, betw
     moved.push(...transition(env.live, l => reconcileAgents(l, agents, now)))
   }
   for (const u of expireWakes(env.live.ledger, now, env.rt.config)) moved.push(...transition(env.live, l => finish(l, u.key, u, now)))
+  // under planner v2 a recorded answer ends its step when read (v2 SPEC 10.8)
+  if (env.rt.config.planner === 'v2') for (const r of await stepAnswers(env.live.ledger, e => ctxOf(env, observed, e))) moved.push(...finishAsRead(env, r.entry, r.exec, now))
   if (moved.length > 0) {
     await env.save()
     await logLoop(env, moved)
   }
   const state = { ...observed, ledger: env.live.ledger }
   const from = performance.now()
-  const result = plan(state, env.rt.config)
+  const { result, shadow } = planPass(state, env.rt.config, env.rt.v2Config)
   const planned = { ms: performance.now() - from, at: await env.io.now() }
   const report = await runActions(env, state, result.actions)
-  return { state, result, report, planned }
+  return { state, result, report, planned, shadow }
 }
 
 // --- between passes: the hooks that feed the ledger (SPEC 2, 8.2, 10.4) ----------------------------
 
-// The one repair message to an agent of the loop, of the type it runs as: null once delivered,
-// else why not, in the engine's own words.
-export type Repair = (agentId: string, text: string, type: AgentType) => Promise<string | null>
+// The one repair message to an agent of the loop, of the type it runs as (a v1 agent's, or a v2
+// step's agent type, plugin:name): null once delivered, else why not, in the engine's own words.
+export type Repair = (agentId: string, text: string, type: AgentType | `${string}:${string}`) => Promise<string | null>
 
 // What an agent's answer did: 'applied' (its entry finished; repaired when a repair message went
 // out before it), 'repair' (unreadable, so the agent was asked once more), 'waiting' (interim),
@@ -505,14 +539,16 @@ export async function agentAnswered(
   repair: Repair = async () => 'the loop sends no messages from here',
 ): Promise<Answered> {
   const id = answer.agentId
-  const entry = env.live.ledger.find(e => e.agentId === id && (e.kind === 'spawn' || e.kind === 'delegate'))
+  const entry = env.live.ledger.find(e => e.agentId === id && (e.kind === 'spawn' || e.kind === 'delegate' || e.kind === 'agent-step'))
   if (entry === undefined) return { result: 'not ours' }
   if (entry.status === 'done') return { result: 'recorded', key: entry.key }
   if (entry.status !== 'running') return { result: 'dropped', why: `late answer for ${entry.key} (${entry.status})` }
   between.answering.add(id)
   between.repairing.delete(id)
   try {
-    const read = await onAgentAnswer(ctxOf(env, state, entry), entry, answer)
+    // a v2 agent step's answer is read by steps.ts, and is never interim (v2 SPEC 10.8)
+    const step = entry.kind === 'agent-step' ? await stepAnswered(ctxOf(env, state, entry), entry, answer) : null
+    const read = step === null ? await onAgentAnswer(ctxOf(env, state, entry), entry, answer) : { exec: step.exec, problem: step.problem, via: 'script' as const, channel: 'script' as const }
     let exec = read.exec
     const ours = (e: LedgerEntry | undefined): e is LedgerEntry => e !== undefined && e.agentId === id && e.startedAt === entry.startedAt
     const still = () => {
@@ -525,7 +561,8 @@ export async function agentAnswered(
       return ours(current) && current.status === 'done' ? { result: 'recorded', key: entry.key } : { result: 'dropped', why: `answer for ${entry.key} came after the entry ended` }
     }
     if (still() === null) return ended()
-    if (interim(answer, exec) && (await atWork(id))) {
+    const unread = step === null ? interim(answer, exec) : step.repair !== null
+    if (step === null && unread && (await atWork(id))) {
       return { result: 'waiting', why: `interim answer for ${entry.key}: the agent still works, so its final answer is awaited` }
     }
     const at = await env.io.now()
@@ -534,16 +571,20 @@ export async function agentAnswered(
     const repaired = current.reminded === true
     const type = agentOf(entry)
     let refused: string | undefined
-    if (interim(answer, exec) && !repaired && type !== null) {
+    if (unread && !repaired && (step !== null || type !== null)) {
       const problem = read.problem ?? 'no machine line'
       // the repair is on the entry before it goes out, so a reload never sends a second one
       const marked = transition(env.live, l => finish(l, entry.key, { status: 'running', reminded: true }, at))
       await env.save()
       await logLoop(env, marked)
       // the channel the spawn's prompt asked for (its record); text when it names none, or the
-      // script's job file is gone
-      const { channel, script } = await repairAskOf(env, entry, read.channel)
-      const undelivered = await repair(id, repairPrompt(type, purposeOfKey(entry.key), problem, channel, script), type)
+      // script's job file is gone. A v2 step's own repair asks for the script again.
+      let ask: { text: string; type: AgentType | `${string}:${string}` } = { text: step?.repair ?? '', type: step?.subagentType ?? STEP_AGENT.build }
+      if (step === null && type !== null) {
+        const { channel, script } = await repairAskOf(env, entry, read.channel)
+        ask = { text: repairPrompt(type, purposeOfKey(entry.key), problem, channel, script), type }
+      }
+      const undelivered = await repair(id, ask.text, ask.type)
       if (undelivered === null) {
         // listed idle or completed until the message resumes it, which the list may show late: the
         // passes take it as at work for a while, then count that listing afresh

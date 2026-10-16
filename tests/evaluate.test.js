@@ -741,3 +741,112 @@ test("drift guard: every column the tool reads exists in nm-export's TABLES", ()
   check(mod.NM_OPTIONAL);
   check(mod.NM_EXPORT_SCHEMA);
 });
+
+// ---- the factory loop v2 (v2 SPEC 7.3, #632): tests/fixtures/evaluate/v2, built with the notes
+// plugins/factory-loop/hooks/v2/events.ts writes. Window 2026-10-16 00:00-12:00Z, device L the
+// loop, P another. #10 goes from claim (01:00) to merge (02:20) untouched; #11 (claimed 03:00) times
+// out, its agent dies, triage parks it (04:20), the owner resumes it (04:59), one fix round, merged
+// 06:20; #12 is dropped, #13 still open, #14 (P) reclaimed by the sweep; #15 (claimed 10:30) is
+// merged by hand at 11:10, and the loop derives that intervention a pass later, after the merge. A
+// ci-rerun on #10 the day before, a restart, a config-file edit and a breaker are fleet-level or
+// outside the window, and one transition and one triage intervention are logged twice (a retry).
+const V2_WINDOW = ["--repo", "acme/widgets", "--since", "2026-10-16T00:00:00Z", "--until", "2026-10-16T12:00:00Z",
+  "--events", path.join(FIX, "v2", "events.jsonl")];
+
+test("v2 interventions (#632 metric 1): by who and cause, per day and per merged issue; untouched means none named its merged work", () => {
+  const v = json(V2_WINDOW).interventions;
+  assert.deepEqual([v.total, v.person, v.loop, v.fleet], [10, 5, 5, 3], "the retried triage counts once, the day-before ci-rerun not at all");
+  assert.deepEqual(v.by_cause, [
+    { who: "loop", cause: "breaker", count: 1 }, { who: "loop", cause: "park", count: 1 }, { who: "loop", cause: "triage", count: 1 },
+    { who: "loop", cause: "unknown:agent-dead", count: 1 }, { who: "loop", cause: "unknown:timeout", count: 1 },
+    { who: "person", cause: "config-file", count: 1 }, { who: "person", cause: "hand-merge", count: 1 }, { who: "person", cause: "op:drop", count: 1 },
+    { who: "person", cause: "op:resume", count: 1 }, { who: "person", cause: "restart", count: 1 },
+  ]);
+  assert.deepEqual(v.per_day, [{ day: "2026-10-16", person: 5, loop: 5, fleet: 3 }]);
+  assert.deepEqual([v.merged_issues, v.untouched, v.untouched_pct, v.person_per_merged_issue, v.loop_per_merged_issue], [3, 1, 33.3, 0.67, 1.33]);
+  // #15's hand-merge is logged after its merged event: it names the merged life, so #15 is touched
+  assert.deepEqual(v.issues, [
+    { issue: 10, person: 0, loop: 0, untouched: true, causes: [] },
+    { issue: 11, person: 1, loop: 4, untouched: false, causes: ["op:resume", "park", "triage", "unknown:agent-dead", "unknown:timeout"] },
+    { issue: 15, person: 1, loop: 0, untouched: false, causes: ["hand-merge"] },
+  ]);
+});
+
+test("v2 interventions belong to the merged work by life, else by time to the close plus a grace", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "evaluate-v2-"));
+  try {
+    const base = fs.readFileSync(path.join(FIX, "v2", "events.jsonl"), "utf8").trim().split("\n");
+    const line = (ts, issue, note) => JSON.stringify({ v: 2, ts, repo: "acme/widgets", device: "L", session_id: null, actor: "agent", state: "intervention", issue, run_id: null, branch: null, pr: null, head: null, note });
+    const extra = [
+      // a later life of #10 (begun after its merge) is not its merged work, wherever it was logged
+      line("2026-10-16T02:19:00Z", 10, "who=loop cause=park life=lz fact=i10/llz/s1/t reason=park"),
+      // an op with no life on #10 well after its close is not either; one within the grace is
+      line("2026-10-16T03:30:00Z", 10, "who=person cause=op:note life=none fact=op:note/i10/q9 reason=note"),
+    ];
+    const lz = JSON.stringify({ v: 2, ts: "2026-10-16T11:30:00Z", repo: "acme/widgets", device: "L", session_id: null, actor: "agent", state: "transition", issue: 10, run_id: null, branch: "issue-10", pr: null, head: null, note: "row=S0 life=lz seq=0 from=none to=queued seqAt=1 since=1 resumeTo=none step=lease attempt=1 cut=no triages=0 fixes=0 round=0 why=none approvedPatch=none prClosedAt=none via=S0 brief=none question=none notes=none" });
+    const file = path.join(dir, "events.jsonl");
+    fs.writeFileSync(file, [...base, ...extra, lz].join("\n") + "\n");
+    const at = (events) => json([...V2_WINDOW.slice(0, -1), events]).interventions.issues.find((i) => i.issue === 10);
+    assert.deepEqual(at(file), { issue: 10, person: 0, loop: 0, untouched: true, causes: [] });
+    fs.writeFileSync(file, [...base, line("2026-10-16T02:45:00Z", 10, "who=person cause=op:note life=none fact=op:note/i10/q8 reason=note")].join("\n") + "\n");
+    assert.deepEqual(at(file), { issue: 10, person: 1, loop: 0, untouched: false, causes: ["op:note"] });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("v2 judgement calls (#632 metric 2): reviews, triage with the choice it made, a fixer's dispositions; overridden by a person within an hour", () => {
+  const j = json(V2_WINDOW).judgement_calls;
+  assert.deepEqual([j.total, j.overridden, j.per_merged_issue], [5, 1, 1.67]);
+  assert.deepEqual(j.by_kind, [
+    { kind: "fix", outcome: "fixed", count: 1, overridden: 0 },
+    { kind: "review", outcome: "approve", count: 2, overridden: 0 },
+    { kind: "review", outcome: "changes", count: 1, overridden: 0 },
+    { kind: "triage", outcome: "park", count: 1, overridden: 1 },
+  ]);
+  assert.deepEqual(j.issues, [{ issue: 10, calls: 1, overridden: 0 }, { issue: 11, calls: 4, overridden: 1 }, { issue: 15, calls: 0, overridden: 0 }]);
+});
+
+test("v2 claim completion (#632 metric 3): per life, the first end; open claims are censored, not failures", () => {
+  const c = json(V2_WINDOW).claim_completion;
+  assert.deepEqual([c.claims, c.merged, c.open, c.merged_pct_of_resolved], [6, 2, 1, 40]);
+  assert.deepEqual(c.outcomes, { "abandoned:dropped": 1, merged: 2, open: 1, parked: 1, released: 1 });
+  assert.deepEqual(c.by_device, [{ device: "L", claims: 5, merged: 2, open: 1 }, { device: "P", claims: 1, merged: 0, open: 0 }]);
+  assert.deepEqual(c.issues.map((i) => [i.issue, i.outcome, i.ended_at]), [
+    [10, "merged", "2026-10-16T02:20:00.000Z"], [11, "parked", "2026-10-16T04:20:00.000Z"], [12, "abandoned:dropped", "2026-10-16T07:30:00.000Z"],
+    [13, "open", null], [14, "released", "2026-10-16T09:30:00.000Z"], [15, "merged", "2026-10-16T11:10:00.000Z"],
+  ]);
+});
+
+test("v2 rounds and time in flight per merged issue: review rounds from reviewed, fix rounds from fix_requested, parked time left out", () => {
+  const r = json(V2_WINDOW).rounds;
+  assert.deepEqual(r.issues, [
+    { issue: 10, review_rounds: 1, fix_rounds: 0, in_flight_seconds: 4800, parked_seconds: 0 },
+    { issue: 11, review_rounds: 2, fix_rounds: 1, in_flight_seconds: 9600, parked_seconds: 2400 },
+    { issue: 15, review_rounds: 0, fix_rounds: 0, in_flight_seconds: 2400, parked_seconds: 0 },
+  ]);
+  assert.deepEqual([r.review_rounds, r.fix_rounds, r.in_flight_seconds], [
+    { median: 1, max: 2, total: 3 }, { median: 0, max: 1, total: 1 }, { median: 4800, max: 9600, total: 16800 },
+  ]);
+});
+
+test("v2 lead time: with no run, the pipeline stage starts at the first transition to reviewing", () => {
+  // no no-mistakes source here: the workspace fixture's state.sqlite has runs on issue-10 branches
+  const rows = Object.fromEntries(json(V2_WINDOW, { NO_MISTAKES_HOME: path.join(tmp, "no-nm") }).throughput.issues.map((i) => [i.issue, i]));
+  const stages = (i) => [i.run_source, i.design, i.implementation, i.pipeline, i.waiting_for_merge];
+  assert.deepEqual(stages(rows[10]), ["transition", 1200, 2400, 720, 480]);
+  assert.deepEqual(stages(rows[11]), ["transition", 600, 8400, 2460, 540]);
+  // reviewed and intervention events are no progress: #13 is silent since its last transition
+  const s = json(V2_WINDOW, { CALLUM_FLOW_LEASE_MINUTES: "30" }).claims.stuck.issues.find((i) => i.issue === 13);
+  assert.equal(s.last_state, "transition");
+});
+
+test("v2 sections read n/a with the reason when the events are missing, and show in markdown", () => {
+  const r = json([...V2_WINDOW.slice(0, -2), "--events", path.join(tmp, "absent.jsonl")]);
+  for (const k of ["interventions", "judgement_calls", "claim_completion", "rounds"]) assert.match(r[k]["n/a"], /file not found/, k);
+  const md = run([...V2_WINDOW, "--format", "markdown"]).out;
+  assert.match(md, /\| loop \| unknown:timeout \| 1 \|/);
+  assert.match(md, /\| triage \| park \| 1 \| 1 \|/);
+  assert.match(md, /\| abandoned:dropped \| 1 \|/);
+  assert.match(md, /\| 11 \| 2 \| 1 \| 9600 \| 2400 \|/);
+});
