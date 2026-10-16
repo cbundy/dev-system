@@ -1038,9 +1038,10 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   re-render, an exhausted effect), the records, the State (heads, control and config digests, the
   module load, the rail, the tripwire, the breaker) and the companion's log. Its key is
   `iv/<the fact's key>`, so each is logged once.
-- **The companion's log.** The companion appends one JSON line per refusal and per gate that could
-  not run to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue,
-  life, seq, cause and reason. It writes no event itself.
+- **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
+  to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
+  seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
+  (`gate-pass`, `gate-fail`, 10.6) is not. It writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
   `callum-flow-event`.
 
@@ -1540,8 +1541,11 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   the agent finish and records the gate as unknown. CI stays the authority (OB:83) and decides in
   reviewing. A gate is never passed silently (`totality/T-25`): it is appended to the companion's
   log, an intervention (`gate-unknown`, 7.2).
-- **Each result** (pass, fail, unknown) is written with the slot's HEAD to
-  `<slot git dir>/factory-gate.json`. The decision log and the triage's inputs read it.
+- **Each run** is one line of the companion's log (`<loop dir>/companion.jsonl`, 7.2) with the
+  slot's HEAD, its duration and, for a fail, the command and its exit code: cause `gate-pass`,
+  `gate-fail` or `gate-unknown`. Only `gate-unknown` is an intervention; the loop skips the other
+  two, so the log is the audit of every run. The last result is also written to
+  `<slot git dir>/factory-gate.json`, which the next run overwrites.
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").

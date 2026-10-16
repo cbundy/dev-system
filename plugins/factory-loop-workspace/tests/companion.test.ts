@@ -267,7 +267,20 @@ describe('the stop gate', () => {
       ['npm test', SLOT],
     ])
     expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'fail', command: 'npm test', exitCode: 1, head: '4c2d8aa0000000000000000000000000000000ff' })
-    expect(companionLines(w)).toEqual([])
+  })
+
+  test('every gate run, the refusal and the pass after it, is a line of the companion\'s log', async ($, on) => {
+    // drill 8b (R2 run, #30): factory-gate.json kept only the last run, so the refusal was lost
+    const w = world(on, { gates: [{ exitCode: 0, output: 'lint ok\n' }, { exitCode: 1, output: 'not ok 3\n' }] })
+    await $.agent.spawn(spawn(BUILD))
+    const stop = { agent_id: 'agent-1', agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
+    expect((await $.classic.SubagentStop(stop)).block).toContain('`npm test` exited 1')
+    expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
+    const head = '4c2d8aa0000000000000000000000000000000ff'
+    expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, command: 'npm test', exitCode: 1 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0 },
+    ])
   })
 
   test('a passing gate lets it finish', async ($, on) => {

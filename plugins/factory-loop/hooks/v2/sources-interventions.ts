@@ -1,7 +1,8 @@
 // The facts the interventions of docs/factory-loop/v2/SPEC.md 7.2 come from, beside the ledger and
 // the records: the companion's log (<loop dir>/companion.jsonl: one line per refusal and per stop
-// gate that could not run, 10.4, 10.6), and the owner's files: control.json, the workspace
-// config.json and the settings the loop runs with. rules-interventions.ts turns each fact into one
+// gate run, of which only a gate that could not run is an intervention, 10.4, 10.6), and the
+// owner's files: control.json, the workspace config.json and the settings the loop runs with.
+// rules-interventions.ts turns each fact into one
 // `intervention` event; the pushes no loop step produced are read there, from the records and the
 // PRs.
 //
@@ -24,8 +25,9 @@ export const COMPANION_WINDOW_MS = FACT_WINDOW_MS
 // the companion's log is read whole; past this, only its newest lines
 const COMPANION_MAX_LINES = 2_000
 
-// The causes the companion logs (7.2): a refused file write, push, or command or background agent
-// (10.4), and a stop gate that could not run (10.6).
+// The companion's causes that are interventions (7.2): a refused file write, push, or command or
+// background agent (10.4), and a stop gate that could not run (10.6). Its other lines (every gate
+// run, `gate-pass` and `gate-fail`) are its record for an audit and are skipped here.
 export const COMPANION_CAUSES = ['guard:write', 'guard:push', 'guard:command', 'gate-unknown'] as const
 
 // One line of the companion's log (10.4, 10.6).
