@@ -1488,7 +1488,8 @@ Before every agent step (each attempt and each triage included), action `slot` o
 5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
    step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir }`;
-6. print `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when it saved any.
+6. print `PREPARED head=<sha>`, `KILLED <n>` (step 1's count), and `LEFTOVERS file=<f>` when it
+   saved any.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
 retry. Uncommitted work of a failed attempt, and work it committed but never pushed, survives in
@@ -1621,7 +1622,9 @@ safeguards remain:
   effort (4.5). There is no grace period and no inference from a listed status (D-71 and D-75
   are retired).
 - **`factory-slot kill`** sends SIGTERM to every process whose working directory is the slot or
-  inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`. It refuses a path
+  inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`, as `prepare` and
+  `free` do when they end a slot's processes; the slot action's outcome keeps n and its summary
+  names it, so an agent that left processes behind shows in the decision log. It refuses a path
   outside the pool and a lease whose holder is not `factory-loop:`-prefixed. A process that moved
   its working directory out of the slot survives it until W2's `treehouse return`, which ends
   lingering processes. The 10-minute timeout removes the reason agents left pollers behind

@@ -10,6 +10,8 @@
 //   retry after a lost answer takes no second slot.
 // - prepare: the step marker gets the loop dir (plan leaves it empty, rules-agent.ts markerOf);
 //   `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when the slot held uncommitted work.
+// - Every op that ends the slot's processes (prepare, the old step's processes, free) prints
+//   `KILLED <n>`; the outcome keeps n, and the summary names it when any were ended.
 // - the old step's processes (entry action, 4.5): `KILLED <n>`; with no slot known there is nothing
 //   to end.
 // - free: `FREED path=<p>` once the pool shows the slot back, and `LEFTOVERS file=<f>` when the slot
@@ -78,7 +80,8 @@ const field = (text: string, word: string, name: string): string | null => {
 
 // readSlot: the op's outcome from the tool's output; null when its result line is missing.
 export function readSlot(op: SlotOp, stdout: string, a: Pick<SlotAction, 'path' | 'lease'>): SlotOutcome | null {
-  const base: SlotOutcome = { kind: 'slot', op, path: a.path, lease: a.lease, head: null, killed: null }
+  const k = /^KILLED (\d+)\s*$/m.exec(stdout)?.[1]
+  const base: SlotOutcome = { kind: 'slot', op, path: a.path, lease: a.lease, head: null, killed: k === undefined ? null : Number(k) }
   if (op === 'lease') {
     const path = field(stdout, 'LEASED', 'path')
     const lease = field(stdout, 'LEASED', 'lease')
@@ -92,18 +95,18 @@ export function readSlot(op: SlotOp, stdout: string, a: Pick<SlotAction, 'path' 
     if (field(stdout, 'FREED', 'path') !== null) return { ...base, leftovers: field(stdout, 'LEFTOVERS', 'file') }
     return field(stdout, 'GONE', 'path') === null ? null : { ...base, lease: null }
   }
-  const m = /^KILLED (\d+)\s*$/m.exec(stdout)
-  return m?.[1] === undefined ? null : { ...base, killed: Number(m[1]) }
+  return base.killed === null ? null : base
 }
 
 function summaryOf(o: SlotOutcome): string {
+  const ended = o.killed ? `; ${o.killed} process(es) ended` : ''
   switch (o.op) {
     case 'lease':
       return clip(`leased ${o.path ?? '?'} (${o.lease ?? '?'})`)
     case 'prepare':
-      return clip(`prepared at ${(o.head ?? '').slice(0, 7)}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
+      return clip(`prepared at ${(o.head ?? '').slice(0, 7)}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
     case 'free':
-      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
+      return clip(o.lease === null ? `${o.path ?? 'the slot'}: the lease was gone already` : `freed ${o.path ?? 'the slot'}${ended}${o.leftovers ? `; leftovers saved to ${o.leftovers}` : ''}`)
     default:
       return clip(`${o.killed ?? 0} process(es) ended in ${o.path ?? 'the slot'}`)
   }
