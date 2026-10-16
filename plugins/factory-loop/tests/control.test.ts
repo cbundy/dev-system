@@ -19,6 +19,7 @@ import {
   directives,
   formatOp,
   helpText,
+  hintText,
   issuesOf,
   loadControl,
   parseOp,
@@ -196,9 +197,35 @@ describe('parseOp', () => {
       expect(unknown.error.startsWith('Unknown op "frobnicate". Ops: status, pause <N>,')).toBe(true)
       for (const name of OPS) expect(unknown.error).toContain(USAGE[name])
     }
-    const help = parseOp('help')
-    expect(help.ok ? '' : help.error).toBe(helpText())
-    expect(parseOp('--help')).toEqual(help)
+    for (const name of OPS) expect(helpText()).toContain(USAGE[name])
+    expect(parseOp('help')).toEqual({ ok: true, op: { op: 'help' } })
+    expect(parseOp('--help')).toEqual(parseOp('help'))
+    expect(parseOp('-h')).toEqual(parseOp('help'))
+  })
+
+  test('help, --help and -h answer ok with the help page and touch nothing', async () => {
+    const { io, writes } = files({})
+    for (const input of ['help', '--help', '-h', '/factory help']) {
+      expect(await runOp(io, PATHS, input, NOW)).toEqual({
+        ok: true, text: helpText(), op: null, control: null, ping: false, retryIssue: null, mode: null, logged: null,
+      })
+    }
+    expect(writes).toEqual([])
+  })
+
+  test('the typeahead hint is one short bracketed line of ops parseOp accepts', () => {
+    const hint = hintText()
+    expect(hint.startsWith('[') && hint.endsWith(']')).toBe(true)
+    expect(hint).not.toContain('\n')
+    expect(hint.length).toBeLessThanOrEqual(200)
+    const alternatives = hint.slice(1, -1).split(' | ')
+    expect(alternatives).toContain('help')
+    for (const alt of alternatives) {
+      const name = alt.split(/[ |]/)[0] as string
+      if (name !== 'help') expect(OPS as readonly string[]).toContain(name)
+      const sample = alt.replace('update|off', 'update').replace('<N...>|off', '5').replace('<N...>', '5').replace('<N>', '5').replace('[5] ', '').replace('<text>', 'hi').replace('on|off', 'on').replace('off|observe|act', 'act')
+      expect(parseOp(sample).ok).toBe(true)
+    }
   })
 
   test('formatOp is canonical text that parses back to the same op', () => {
@@ -505,8 +532,8 @@ describe('the command and the tool', () => {
   })
 
   test('the specs: /factory runs at once, and the tool lists every op', () => {
-    expect(FACTORY_COMMAND).toMatchObject({ name: 'factory', argumentHint: '<op>', immediate: true })
-    for (const name of OPS) expect(FACTORY_COMMAND.description).toContain(name)
+    expect(FACTORY_COMMAND).toMatchObject({ name: 'factory', argumentHint: hintText(), immediate: true })
+    expect(FACTORY_COMMAND.description.endsWith('see /factory help')).toBe(true)
     expect(CONTROL_TOOL.name).toBe('control')
     expect(CONTROL_TOOL.inputSchema).toEqual({
       type: 'object',
