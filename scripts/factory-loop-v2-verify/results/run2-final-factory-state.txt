@@ -1,0 +1,24 @@
+Live issues
+issue  stage   in stage  holder                         run  pr   stuck     source  detail
+#8     parked  3h36m     coder-dev-system-testbed-loop  -    #11  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T21:49:13.000Z, no matching run in the mirror
+#9     parked  3h38m     coder-dev-system-testbed-loop  -    #10  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T21:48:12.000Z, no matching run in the mirror
+#12    parked  3h09m     coder-dev-system-testbed-loop  -    #13  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T22:15:30.000Z, no matching run in the mirror
+#14    parked  2h57m     coder-dev-system-testbed-loop  -    #17  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T22:28:33.000Z, no matching run in the mirror
+#15    parked  2h59m     coder-dev-system-testbed-loop  -    #16  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T22:27:32.000Z, no matching run in the mirror
+#19    parked  2h36m     coder-dev-system-testbed-loop  -    #21  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T22:50:30.000Z, no matching run in the mirror
+#22    parked  2h19m     coder-dev-system-testbed-loop  -    #24  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T23:03:06.000Z, no matching run in the mirror
+#23    parked  2h04m     coder-dev-system-testbed-loop  -    #25  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T23:04:33.000Z, no matching run in the mirror
+#26    parked  1h47m     coder-dev-system-testbed-loop  -    #28  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T23:39:34.000Z, no matching run in the mirror
+#27    parked  1h46m     coder-dev-system-testbed-loop  -    #29  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T23:41:38.000Z, no matching run in the mirror
+#30    parked  1h31m     coder-dev-system-testbed-loop  -    #31  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-15T23:53:36.000Z, no matching run in the mirror
+#32    parked  40m       coder-dev-system-testbed-loop  -    #34  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-16T00:45:25.000Z, no matching run in the mirror
+#33    parked  39m       coder-dev-system-testbed-loop  -    #35  STUCK S3  event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-16T00:45:27.000Z, no matching run in the mirror
+#36    parked  11m       coder-dev-system-testbed-loop  -    #37  -         event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-16T01:13:30.000Z, no matching run in the mirror
+#38    parked  0m        coder-dev-system-testbed-loop  -    #39  -         event   v2 parked, attempt 1; event-only: merge_ready at 2026-10-16T01:24:30.000Z, no matching run in the mirror
+
+Recently ended (24h)
+issue  stage                 in stage  holder                         run  pr   stuck  source  detail
+#18    merged                2h18m     coder-dev-system-testbed-loop  -    #20  -      event   closed (completed)
+#3     closed without merge  3h50m     coder-dev-system-testbed-loop  -    #6   -      event   closed (not_planned)
+#4     closed without merge  3h50m     coder-dev-system-testbed-loop  -    #5   -      event   closed (not_planned)
+#7     closed without merge  4h51m     coder-dev-system-testbed-loop  -    -    -      event   abandoned (reason=reconcile stage=designing pr=none checked=this%20device's%20live%20claim%20has%20no%20r

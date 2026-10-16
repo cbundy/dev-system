@@ -40,7 +40,7 @@ You need the `coder` CLI logged in and `gh` logged in as the repo owner.
 | `drills/agentcalls.sh` | An agent's tool calls from its transcript, with errors and refusals. |
 | `drills-workflow.js.txt` | The workflow script (kept as text: a workflow body is not a standalone module, so `node --check` cannot parse it) that ran the 2026-10-15 drills: setup agents, then one operator agent (Opus, xhigh) that runs the drills from its prompt. |
 | `replay/v2-sim.mjs` | Drives the real v2 planner pass by pass over the recorded night against a simulated world and checks invariants. Usage in its header. |
-| `results/` | What each run found: drill notes, replay report, setup logs. |
+| `results/` | What each run found: drill notes and summary, replay report, setup logs, state snapshots. |
 
 ## Running the drills again
 

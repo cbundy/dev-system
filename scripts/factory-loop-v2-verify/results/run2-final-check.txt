@@ -1,0 +1,30 @@
+== logins
+claude loggedIn: True claude.ai
+  ✓ Logged in to github.com account cbundy (/persist/gh/hosts.yml)
+== session
+claude: 1 windows (created Thu Oct 15 22:09:19 2026)
+pid 215502 cwd /workspaces/dev-system-scratch
+claude --remote-control 🏭 dev-system-scratch loop --dangerously-skip-permissions --settings {"skipDangerousModePermissionPrompt":true} --resume 33faa122-3669-4552-b4d0-28ab3c8b75ea The workspace re
+
+dev-remote-control: Claude exited (status unknown) after 2534s - restarting in 5s
+dev-remote-control: resuming the last conversation (33faa122-3669-4552-b4d0-28ab3c8b75ea) in /persist/claude/projects/-workspaces-dev-system-scratch
+dev-remote-control: started Claude with Remote Control (session mode) as "🏭 dev-system-scratch loop" in /workspaces/dev-system-scratch - attach locally: coder ssh dev-system-testbed-loop -- tmux attach -t claude
+== companion handshakes (newest first)
+33faa122-3669-4552-b4d0-28ab3c8b75ea.json: {"v":1,"session":"33faa122-3669-4552-b4d0-28ab3c8b75ea","version":"0.38.2","at":"2026-10-16T01:28:21.107Z"}
+now: 2026-10-16T01:28:52Z
+== config
+{
+  "mode": "off",
+  "repo": "cbundy/dev-system-scratch",
+  "checkout": "/workspaces/dev-system-scratch",
+  "toolsDir": "/persist/claude/loop/dev-system-v2/features/src/callum-tools",
+  "binDir": "/persist/claude/loop/dev-system-v2/images/base",
+  "planner": "v2",
+  "shadow": "off",
+  "maxInFlightIssues": 2,
+  "trace": true
+}
+kill switch off (/persist/claude/factory-loop/OFF absent)
+== last decision-log lines
+{'at': '2026-10-16T01:28:22.106Z', 'pass': 335, 'mode': 'act', 'executed': True, 'planner': 'v2', 'tier': 'normal', 'counts': {'queue': 0, 'queued': 0, 'flight': 1, 'parked': 14, 'owner': 14}, 'rails': None, 'config': None, 'problems': None, 'title': '🔄 dev-system-scratch (Q:0 - D:1 - M:1) · parked 14 · owner 14'}
+   sources: {'factory': 'ok', 'facts': 'ok', 'runs': 'failed: not read: planner v2 has no pipeline runs', 'queue': 'ok', 'github': 'ok', 'usage': 'ok', 'pool': 'ok', 'milestone': 'ok', 'v2.store': 'ok', 'v2.leases': 'ok', 'v2.prs': 'ok', 'v2.comments': 'ok', 'v2.interventions': 'ok'}
