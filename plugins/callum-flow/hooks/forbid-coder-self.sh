@@ -38,7 +38,7 @@ esac
 decision=$(printf '%s' "$input" | awk -f "$script_dir/forbid-coder-self.awk")
 
 if [ "$decision" = "DENY" ]; then
-  reason="Refused: this would stop the Coder workspace this session runs in, which kills the session before it can start the workspace again (the workspace then stays stopped). To pick up a new image or template version on your own workspace, run 'dev-restart-self' instead: it asks Coder for a start build that replaces the container and the session resumes by itself, with a scheduled-restart fallback. Never run 'coder restart', 'coder stop' or 'coder update' on your own workspace."
+  reason="Refused: this would stop the Coder workspace this session runs in, which kills the session before it can start the workspace again (the workspace then stays stopped). Never run 'coder restart', 'coder stop' or 'coder update' on your own workspace. A factory-loop agent never restarts or rebuilds the workspace at all (it would stop the loop and every agent in it): say what you need in your answer. In an interactive session, to pick up a new image or template version, run 'dev-restart-self' instead: it asks Coder for a start build that replaces the container and the session resumes by itself, with a scheduled-restart fallback."
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
 fi
 

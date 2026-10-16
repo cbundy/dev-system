@@ -41,8 +41,8 @@ it; never use run_in_background: your turn ends only with your answer.
 ## Verification
 
 - Run the repo's own lint and test commands (its `CLAUDE.md`, canonical commands) in the
-  foreground and let them finish. When you end your turn the loop runs the repo's gate commands
-  in your slot; while they fail it hands you the failures, and you fix them and end your turn
+  foreground and let them finish. When you end your turn the loop runs the repo's gate commands,
+  when the repo sets them, in your slot; while they fail it hands you the failures, and you fix them and end your turn
   again. CI on the PR is the final gate.
 - For a bug, write the regression test first and see it fail against the broken code: a test
   that only ever passed proves nothing.

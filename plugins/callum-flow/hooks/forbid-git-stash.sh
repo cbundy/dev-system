@@ -55,7 +55,7 @@ input=$(cat)
 decision=$(printf '%s' "$input" | awk -f "$script_dir/forbid-git-stash.awk")
 
 if [ "$decision" = "DENY" ]; then
-  reason="git stash is refused: refs/stash is ONE ref shared by every worktree of this repo, so a stash made in one worktree can be applied or popped by a different parallel agent working in another worktree, silently corrupting or dropping work. Use one of these instead: commit your work-in-progress on your own branch (amend or squash it away later), or save a patch with 'git diff > <file>' (or 'git diff --cached > <file>' for staged changes) and restore it later with 'git apply <file>'."
+  reason="git stash is refused: refs/stash is ONE ref shared by every worktree of this repo, so a stash made in one worktree can be applied or popped by a different parallel agent working in another worktree, silently corrupting or dropping work. Use one of these instead: commit your work-in-progress on your own branch (squash or amend it only while it is unpushed; a factory-loop agent never amends or rebases a commit it pushed), or save a patch outside the repository with 'git diff > /tmp/<unique-name>.patch' (or 'git diff --cached > /tmp/<unique-name>.patch' for staged changes) and restore it later with 'git apply /tmp/<unique-name>.patch'. A factory-loop step that only reads (designer, reviewer, triage) may not commit: use the patch."
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
 fi
 

@@ -1,17 +1,23 @@
 ---
 name: implement-issue
 description: >-
-  End-to-end procedure a delegated sub-agent follows to implement one GitHub
-  issue in a treehouse worktree and ship it via the /no-mistakes pipeline:
-  worktree bootstrap, safe app-boot, verification discipline, private-repo
-  evidence capture, the quality bar, the pipeline's fire-and-forget contract,
-  issue linkage, and handoff shape. Use this when you are a sub-agent that has
-  been delegated a single issue to implement (as opposed to orchestrating a
-  queue of issues).
+  End-to-end procedure for the manual path: a sub-agent that a person, an
+  interactive session or the issue-orchestrator delegated one GitHub issue
+  implements it in a treehouse worktree and ships it via the /no-mistakes
+  pipeline: worktree bootstrap, safe app-boot, verification discipline,
+  private-repo evidence capture, the quality bar, the pipeline's
+  fire-and-forget contract, issue linkage, and handoff shape. Use this when you
+  are such a sub-agent (as opposed to orchestrating a queue of issues). Not for
+  the factory loop's agents (designer, builder, fixer, reviewer, triage): their
+  definition and prompt are their procedure.
 version: 0.38.2
 ---
 
 # Implement issue
+
+This is the manual path. If your prompt says you are the factory loop's builder or
+fixer, stop: do not follow this skill; your agent definition and prompt are your
+procedure.
 
 You have been delegated one issue's implementation, normally as the named
 `callum-flow:implementer` (or `callum-flow:fixer`) agent, which the plugin pins
@@ -115,10 +121,9 @@ report it in your handoff (and raise a `bug` issue if the consumer repo's
   fresh slot on the run's branch.
 
 ## 2. Booting the app (only if you need it for evidence or manual checks)
-- Follow your prompt's command restrictions first. Factory-loop prompts include
-  [`COMMAND_RULE`](../../../factory-loop/hooks/prompts.ts), which prohibits starting
-  servers. In those sessions, skip the boot procedure below and report any manual
-  verification or evidence that this restriction blocks in your handoff.
+- Follow your prompt's command restrictions first. If they forbid starting
+  servers, skip the boot procedure below and report any manual verification or
+  evidence that this blocks in your handoff.
 - Look for a documented boot command first - check `CLAUDE.md`'s canonical
   commands section or `scripts/` for something like `scripts/dev-server.sh`.
   A well-behaved boot script auto-selects a free port, launches the app in

@@ -47,6 +47,9 @@ export type WorkInput = {
   // the newest leftovers file the life's slot ops saved (10.2; rules-agent.ts leftoversOf): what an
   // earlier attempt left uncommitted or committed but never pushed; null when none was saved
   leftovers: string | null
+  // the gate commands the slot's step marker carries (rules-agent.ts markerOf), which the companion's
+  // stop gate runs when a writer ends its turn (10.6); [] when the repo sets none
+  gateCommands: string[]
   place: ScriptPlace
 }
 
@@ -191,8 +194,15 @@ function answerBlock(place: ScriptPlace, lead: string, example: string, fields: 
   ]
 }
 
-const GATE_RULE =
-  "Run the repo's own lint and test commands (CLAUDE.md, canonical commands) in the foreground and let them finish. When you end your turn the loop runs the repo's gate commands in this slot; while they fail it hands you the failures, and you fix them and end your turn again. CI on the PR is the final gate."
+// gateRule: the writer's gate, as the stop gate will hold it (10.6): the commands the marker carries,
+// trimmed and without empty ones as the companion reads them; with none, nothing runs at the turn's end.
+export function gateRule(i: WorkInput): string {
+  const lead = "Run the repo's own lint and test commands (CLAUDE.md, canonical commands) in the foreground and let them finish"
+  const commands = i.gateCommands.map(c => c.replace(/\s+/g, ' ').trim()).filter(c => c !== '')
+  if (commands.length === 0) return `${lead}: they must pass before you answer. CI on the PR is the final gate.`
+  const list = commands.map(c => `\`${c.replace(/`/g, "'")}\``).join(', then ')
+  return `${lead}. When you end your turn the loop runs ${list} in this slot; while they fail it hands you the failures, and you fix them and end your turn again. CI on the PR is the final gate.`
+}
 
 const QUALITY =
   'Meet the quality bar: for a bug, write the regression test first and see it fail against the broken code; make sure a test double honours what the test checks; build the fixture a guard needs when real data cannot reach it; and show that each guard really works.'
@@ -266,7 +276,7 @@ export function buildPrompt(i: WorkInput): string {
     ...notesLines(i),
     ...priorLines(i, 'writer'),
     '',
-    GATE_RULE,
+    gateRule(i),
     QUALITY,
     TEST_POLICY,
     LINKAGE,
@@ -313,7 +323,7 @@ export function fixPrompt(i: FixInput): string {
     ...notesLines(i),
     ...priorLines(i, 'writer'),
     '',
-    GATE_RULE,
+    gateRule(i),
     TEST_POLICY,
     LINKAGE,
     'Make only the changes the findings, checks or instructions call for.',
