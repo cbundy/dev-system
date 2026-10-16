@@ -150,11 +150,11 @@ const GITHUB_RULE =
 
 function writerRules(i: WorkInput): string {
   const b = branchOf(i)
-  return `You work in this slot alone: the loop prepared it on ${b} at origin's head, and it is yours until you end your turn. Commit on ${b} and push only with \`git push origin ${b}\`. Never push another branch or to another remote, never force push, never rebase or amend a commit you pushed, and never create a branch or a worktree: to bring in origin/${baseOf(i)}, merge it. Never start a sub-agent in the background. ${GITHUB_RULE}`
+  return `You work in this slot alone: the loop prepared it on ${b} at origin's head, and it is yours until you end your turn. Commit on ${b} and push only with \`git push origin ${b}\`. Never push another branch or to another remote, never force push, never rebase or amend a commit you pushed, and never create a branch or a worktree: to bring in origin/${baseOf(i)}, merge it. Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
 }
 
 function readerRules(): string {
-  return `You read; you change nothing in the repository: no edit, commit, push, branch switch or reset. You may write scratch files outside the repository, under /tmp. Never start a sub-agent in the background. ${GITHUB_RULE}`
+  return `You read; you change nothing in the repository: no edit, commit, push, branch switch or reset. You may write scratch files outside the repository, under /tmp. Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
 }
 
 // priorLines: the previous attempt (5.1), and for a writer the patch of what an earlier attempt

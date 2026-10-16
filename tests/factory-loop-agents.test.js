@@ -130,7 +130,7 @@ test("every loop agent definition carries the command rule its prompts carry, wo
     const rule = v2 ? V2_COMMAND_RULE : COMMAND_RULE;
     assert.ok(read(`plugins/factory-loop/agents/${file}`).includes(rule), `plugins/factory-loop/agents/${file} must carry ${v2 ? "v2/prompts-triage.ts" : "prompts.ts"} COMMAND_RULE word for word`);
   }
-  assert.ok(!V2_COMMAND_RULE.includes("no-mistakes") && COMMAND_RULE.startsWith(V2_COMMAND_RULE.split(" Leave no background")[0]), "v2's rule is v1's without the no-mistakes exception");
+  assert.ok(!V2_COMMAND_RULE.includes("no-mistakes") && COMMAND_RULE.startsWith(V2_COMMAND_RULE.split(" Leave no ")[0]), "v2's rule is v1's without the no-mistakes exception");
 });
 
 test("a v2 definition names itself, answers with the answer script through Bash (no answer tool), and names nothing of no-mistakes or implement-issue", () => {

@@ -6,7 +6,8 @@
 //   /tmp); a reader writes nowhere in the repository. The repository is the slot and the main
 //   checkout, whose tree holds the pool's other slots.
 // - Every loop agent: no GitHub writes (the loop owns PRs, issues, labels and re-runs), no
-//   no-mistakes, no axi, no push to a remote but origin, no background or isolated Agent call.
+//   no-mistakes, no axi, no push to a remote but origin, no call in the background (Bash or
+//   Agent), no isolated Agent call.
 // - A writer pushes only its branch to origin, never by force, creates no branch and no worktree.
 // - A reader neither commits nor pushes.
 import { program, simpleCommands } from './shell'
@@ -220,13 +221,17 @@ export function bashRefusal(g: Guarded, command: string, head: string | null = n
   return null
 }
 
-// agentRefusal: an Agent call in the background, so a designer cannot end its turn while an
-// explorer still runs (failures/F13), or with an isolation: `remote` always runs in the
-// background, and `worktree` makes a git worktree, which a writer may not.
-export function agentRefusal(input: { run_in_background?: unknown; isolation?: unknown }): Refusal | null {
-  if (input.isolation !== undefined && input.isolation !== null) {
-    return { cause: 'guard:command', reason: `an Agent call with isolation ${JSON.stringify(input.isolation)} is refused: leave isolation out, run it in the foreground in your own folder and wait for its answer` }
-  }
+// backgroundRefusal: any call in the background, Bash or Agent, so an agent neither ends its turn
+// while work it started still runs (failures/F13) nor sits polling for it (R4-O4); a command runs
+// in the foreground under its 10-minute timeout (10.5).
+export function backgroundRefusal(tool: string, input: { run_in_background?: unknown }): Refusal | null {
   if (input.run_in_background !== true) return null
-  return { cause: 'guard:command', reason: 'an Agent call in the background is refused: run it in the foreground and wait for its answer' }
+  return { cause: 'guard:command', reason: `${tool} in the background is refused: run it in the foreground and wait for it, a command with a timeout of up to 600000 ms` }
+}
+
+// agentRefusal: an Agent call with an isolation: `remote` always runs in the background, and
+// `worktree` makes a git worktree, which a writer may not.
+export function agentRefusal(input: { isolation?: unknown }): Refusal | null {
+  if (input.isolation === undefined || input.isolation === null) return null
+  return { cause: 'guard:command', reason: `an Agent call with isolation ${JSON.stringify(input.isolation)} is refused: leave isolation out, run it in the foreground in your own folder and wait for its answer` }
 }
