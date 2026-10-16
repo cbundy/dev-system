@@ -19,7 +19,7 @@ import { GITHUB_BACKOFF_MS } from '../hooks/observe'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
-import { eventArgv, parseEvent } from '../hooks/v2/events'
+import { eventArgv, eventColumns, eventNote, onceKey, parseEvent } from '../hooks/v2/events'
 import { entryKey, lifeOf, prKey, prepareKey, rerunKey, reviewKey, reviewPrepareKey, short, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, recordsToStore } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -639,6 +639,29 @@ describe('the review\'s writes (v2 SPEC 8.3, 7.1)', () => {
     const note = argv[argv.indexOf('--note') + 1] ?? ''
     expect(parseEvent({ state: 'reviewed', issue: 631, branch: 'issue-631', pr: PR, head: HEAD, note })).toEqual(e)
     expect(e).toMatchObject({ verdict: 'changes', errors: 1, warnings: 1, infos: 0 })
+  })
+
+  // drill run 4 (R4-F5, drill 9): the store wiped, the review in flight ran again under its key and
+  // took its recorded answer, and its `reviewed` event was logged a second time
+  test('after a wiped store, a review result the event log holds is settled with no second event; one it lacks is logged (drill run 4, R4-F5)', async () => {
+    const r = rec(635)
+    const s = withLedger(world([r], [view(635, { checks: GREEN })]), [ensured(r), prepared(r), approved(r)])
+    const [planned] = eventsOf(plan(s), 635, 'reviewed')
+    if (planned?.kind !== 'event') throw new Error('no reviewed event planned')
+    expect(planned.logged).toBeUndefined()
+    // the event log holds it, as the pass's read of the log shows
+    const logged = [onceKey({ state: 'reviewed', ...eventColumns(planned.event), note: eventNote(planned.event) }) ?? '']
+    const read = withLedger(world([r], [view(635, { checks: GREEN })], { logged }), [ensured(r), prepared(r), approved(r)])
+    const [settled] = eventsOf(plan(read), 635, 'reviewed')
+    expect(settled).toMatchObject({ key: planned.key, logged: true })
+    const w = actWorld()
+    expect(await dispatch(ctxOf(w.env, read, start([], settled as Action, NOW).entry), settled as Action)).toMatchObject({ status: 'done', summary: 'reviewed already in the event log' })
+    expect(w.argvs).toEqual([])
+    // another review's result (its own answer file) is not that one: it is logged
+    const other = withLedger(world([r], [view(635, { checks: GREEN })], { logged }), [ensured(r), prepared(r), approved(r, {}, { answer: `${LOOP_DIR}/answers/y.answer.json` })])
+    expect(eventsOf(plan(other), 635, 'reviewed').map(a => (a.kind === 'event' ? a.logged : null))).toEqual([undefined])
+    // a transition is logged once by its seq's key alone
+    expect(onceKey({ state: 'transition', issue: 635, branch: 'issue-635', pr: null, head: null, note: 'row=T5 life=x seq=4' })).toBeNull()
   })
 
   test('a write that used up its attempts holds the record and tells the owner once; the result waits for it', () => {

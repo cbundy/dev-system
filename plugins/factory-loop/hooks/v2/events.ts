@@ -510,6 +510,27 @@ export function parseEvent(row: EventRow): V2Event | null {
   }
 }
 
+// --- logged once (7.2) ------------------------------------------------------------------------------
+
+// onceKey: the fact a logged row records, for the events keyed by a fact that outlives the store (a
+// companion line, a recorded answer, a head): an intervention by its cause and fact, a review result
+// by its answer file, one per review attempt. Read from the note as logged, so a planned event and
+// its row read back agree. null for any other event: its ledger key alone logs it once.
+export function onceKey(row: EventRow): string | null {
+  const t = tokensOf(row.note)
+  const id = row.state === 'intervention' ? [t.get('cause'), t.get('fact')] : row.state === 'reviewed' ? [t.get('answer')] : []
+  if (id.length === 0 || id.some(v => v === undefined || v === NONE)) return null
+  return [row.state, row.issue ?? NONE, ...id].join(' ')
+}
+
+// logOnce: an event action's event, marked logged when the event log already holds its fact (its
+// onceKey among those of the pass's read of the log, V2State.logged), whatever the ledger lost (a
+// wiped store, 3.3): the executor then settles it with no second write.
+export function logOnce<E extends V2Event>(logged: readonly string[], event: E): { event: E; logged?: true } {
+  const key = onceKey({ state: event.state, ...eventColumns(event), note: eventNote(event) })
+  return key !== null && logged.includes(key) ? { event, logged: true } : { event }
+}
+
 // --- constructors -----------------------------------------------------------------------------------
 
 // intervention: the event of one intervention, its reason as one line.

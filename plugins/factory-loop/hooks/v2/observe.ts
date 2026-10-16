@@ -1,7 +1,8 @@
 // What v2 reads (docs/factory-loop/v2/SPEC.md 2.4), beside what observe.ts reads for both layers:
 // the records (the store's, else a rebuild from events, 3.3), the heads first seen, the pool's
 // leases by holder (no reflog reads, 10.1), the newest read of each issue, the trusted comments of
-// a parked record whose label a person removed (11), and the source modules: the PRs
+// a parked record whose label a person removed (11), the facts the event log holds as logged (from
+// observe.ts's facts read, 7.2), and the source modules: the PRs
 // (sources-prs.ts) and the interventions' facts (sources-interventions.ts). observe.ts calls
 // observeV2 when the planner is v2 or the v2 shadow is on; register.ts keeps the store keys
 // records:<repo> and heads:<repo> with the codecs here. Commands run through observe's own `run`,
@@ -11,6 +12,7 @@ import { eventsFromRows } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import { parseCsv } from '../parse'
 import type { LedgerEntry, Ms, Source, State } from '../types'
+import { onceKey } from './events'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
@@ -239,6 +241,8 @@ export type ObserveV2Input = {
   // `treehouse status --json` as observe read it this pass; null when it did not
   poolJson: string | null
   github: Cache['github']
+  // the pass's read of the event log (observe.ts, the facts read); none when the caller has none
+  events?: readonly FactoryEvent[]
   // a GitHub backoff holds this pass's reads; limited: a rate limit met this pass ends them
   backoff: boolean
   limited: () => boolean
@@ -374,6 +378,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     prs: prs.read,
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
+    logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
     checkoutBase: cache.checkoutBase,
   }
   if (workspace !== undefined) v2.workspace = workspace
@@ -413,6 +418,7 @@ export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
     prs: { prs: [] },
     changed: {},
     interventions: { companion: [], controlDigest: null, configDigest: null },
+    logged: [],
     checkoutBase: null,
   }
 }

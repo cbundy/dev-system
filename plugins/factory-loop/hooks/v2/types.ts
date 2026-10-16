@@ -271,8 +271,9 @@ export type V2Action =
   | (ActionBase & { kind: 'label'; op: LabelOp; label: FactoryLabel | null; ready?: string })
   // the body carries the hidden key <!-- factory-loop:<ledger key> --> (4.5)
   | (ActionBase & { kind: 'comment'; on: 'issue' | 'pr'; number: number; body: string })
-  // built only by events.ts (7.1)
-  | (ActionBase & { kind: 'event'; event: V2Event })
+  // built only by events.ts (7.1); logged: the event log already holds it (events.ts logOnce), so
+  // the executor settles it done with no second write
+  | (ActionBase & { kind: 'event'; event: V2Event; logged?: true })
   | (ActionBase & {
       kind: 'pr'
       op: 'ensure' | 'body'
@@ -397,6 +398,9 @@ export type V2State = {
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>
   interventions: InterventionFacts
+  // the onceKeys (events.ts) of this device's events in the pass's read of the event log (the facts
+  // read, 2.4): which facts are logged, when a wiped store lost their ledger keys (7.2)
+  logged: string[]
   // the main checkout the tripwire last settled on, which R1 compares this pass's read with
   // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
   checkoutBase: CheckoutBase | null

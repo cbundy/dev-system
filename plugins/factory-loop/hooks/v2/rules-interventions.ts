@@ -1,6 +1,7 @@
 // The interventions (docs/factory-loop/v2/SPEC.md 7.2), derived, never emitted ad hoc: one
 // `intervention` event for each fact, keyed iv/<the fact's key>, so each is logged once however
-// often its fact is seen. The facts, each one the loop already holds:
+// often its fact is seen; one the event log already holds (a wiped store lost its key, events.ts
+// logOnce) is settled with no second write. The facts, each one the loop already holds:
 // - the ledger: a done, stored `transition` by its row and event (triage, an unknown, a free
 //   re-run, a park, a fixer for red CI or a conflict, a head sent back from the queue, a hand
 //   merge, a hand close of the PR or the issue, an unpark by label, the first claim after the
@@ -20,7 +21,7 @@
 // (another device's work), tells for waiting states, and status and help. Pure.
 import { gate, skip } from '../foundation'
 import type { LedgerEntry, Ms } from '../types'
-import { intervention } from './events'
+import { intervention, logOnce } from './events'
 import type { InterventionEvent } from './events'
 import { factKey, interventionKey, keyParts, lifeAt, short } from './keys'
 import { isReleaseEntry, releaseClaimOf, releaseOutcomeOf } from './release'
@@ -37,9 +38,10 @@ const OWN_RESTART_MS = 30 * MIN
 // a load is an intervention only on passes this soon after it, so a loop that starts acting long
 // after it loaded does not log a stale restart
 const RESTART_PLAN_MS = HOUR
-// facts older than this are left alone: the ledger keeps an intervention's key 7 days
-// (ledger.ts KEEP_MS), so an older fact would be logged again
-export const FACT_WINDOW_MS = 6 * 24 * HOUR
+// facts older than this are left alone: whether one is logged is known from the ledger, which
+// keeps an intervention's key 7 days (ledger.ts KEEP_MS), and from the facts read of the event log
+// (observe.ts EVENT_DAYS, 3 days), which a wiped store leaves; an older fact could be logged again
+export const FACT_WINDOW_MS = 2 * 24 * HOUR
 
 // One intervention to plan: its event, its ledger key and the rule its fact came from.
 export type Planned = { key: string; rule: string; event: InterventionEvent }
@@ -430,16 +432,17 @@ export function interventionsOf(ctx: V2Ctx): Planned[] {
   return [...transitions(ctx).flatMap(f => fromTransition(ctx, f)), ...fromLedger(ctx), ...fromPushes(ctx), ...fromRestart(ctx), ...fromSources(ctx)]
 }
 
-// interventionRules: one `event` action per intervention not yet logged. One that used up its
-// attempts (callum-flow-event refused its note: a loop bug) holds no record and is no owner item:
-// its skip line says so, and the executor breaker catches a run of them.
+// interventionRules: one `event` action per intervention the ledger has not logged, marked logged
+// when the event log holds it (logOnce). One that used up its attempts (callum-flow-event refused its
+// note: a loop bug) holds no record and is no owner item: its skip line says so, and the executor
+// breaker catches a run of them.
 export function interventionRules(ctx: V2Ctx): void {
   const seen = new Set<string>()
   for (const p of interventionsOf(ctx)) {
     if (seen.has(p.key)) continue
     seen.add(p.key)
     const g = gate(ctx, p.key, 'event')
-    if (g === 'go') ctx.out.push({ kind: 'event', key: p.key, class: 'free', rule: p.rule, reason: `intervention: ${p.event.who} ${p.event.cause}`, issue: p.event.issue, event: p.event })
+    if (g === 'go') ctx.out.push({ kind: 'event', key: p.key, class: 'free', rule: p.rule, reason: `intervention: ${p.event.who} ${p.event.cause}`, issue: p.event.issue, ...logOnce(ctx.v2.logged, p.event) })
     else if (g === 'exhausted') skip(ctx, p.rule, p.event.issue, `exhausted: ${p.key}: the intervention ${p.event.who} ${p.event.cause} is not logged`)
   }
 }

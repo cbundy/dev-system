@@ -25,14 +25,16 @@
 //   past ciRunMs), read only while nothing of the step's own runs; the PR's own read (not read
 //   this pass, older than the seq, no head, no patch id) is bounded the same way, by ciStartMs
 //   from the later of the seq's start and the ensure's end;
-// - the review's writes (reviewer.ts): each ended reviewer's `reviewed` event and, for a valid
-//   answer, its PR comment, and each done fixer's dispositions as `verdict` events; a result is
-//   taken only once they are done, so leaving reviewing never loses one.
+// - the review's writes (reviewer.ts): each ended reviewer's `reviewed` event (settled with no
+//   second write when the event log holds it: a wiped store lost its key, events.ts logOnce) and, for
+//   a valid answer, its PR comment, and each done fixer's dispositions as `verdict` events; a
+//   result is taken only once they are done, so leaving reviewing never loses one.
 // rules-state.ts takes the review step's plan from PLANS.
 //
 // Pure: the time is state.now.
 import { skip, want } from '../foundation'
 import type { Action, LedgerEntry, State } from '../types'
+import { logOnce } from './events'
 import { keyParts, lifeKey, prKey, rerunKey, reviewKey, reviewPrepareKey, short } from './keys'
 import { agentStep, lifeEntries, timeoutOf, triggerOf, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
@@ -165,7 +167,7 @@ function writes(ctx: V2Ctx, r: IssueRecord, pr: number | null, pv: PrView | unde
         { issue: r.issue, branch: r.branch, pr: at, head, round: d?.round ?? parts.round, patch: d?.patch ?? (same ? (pv?.patch as string) : parts.patch7), reviewer: d?.reviewer ?? ctx.config.reviewer, answer: d?.answer ?? answerName(e.key) },
         d,
       )
-      note(effect(ctx, r, { ...base(r, `${e.key}/reviewed`, `log the review of round ${event.round}`), kind: 'event', event }, 'the review\'s event'))
+      note(effect(ctx, r, { ...base(r, `${e.key}/reviewed`, `log the review of round ${event.round}`), kind: 'event', ...logOnce(ctx.v2.logged, event) }, 'the review\'s event'))
       if (d !== null) note(effect(ctx, r, { ...base(r, `${e.key}/comment`, `post the review of round ${d.round} on PR #${d.pr}`), kind: 'comment', on: 'pr', number: d.pr, body: reviewComment(d) }, 'the review\'s comment'))
     } else if (e.step === 'fix' && e.status === 'done' && e.outcome?.kind === 'step') {
       const result = e.outcome.result

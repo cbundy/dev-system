@@ -7,9 +7,11 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { GITHUB_V2, newCtx } from '../hooks/foundation'
+import { EVENT_DAYS } from '../hooks/observe'
 import type { Runtime } from '../hooks/observe'
 import type { Action, Control, LedgerEntry, State } from '../hooks/types'
 import { logEvent, logOwnerOp, opInterventions } from '../hooks/v2/act-events'
+import { eventNote, intervention, noteToken } from '../hooks/v2/events'
 import type { InterventionEvent } from '../hooks/v2/events'
 import { claimKey, factKey, interventionKey, keyParts, reclaimKey, reconcileKey, rerunKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
@@ -26,7 +28,7 @@ import { normalize, rowFor, viaOf } from '../hooks/v2/table'
 import { V2_OWNER_TELLS } from '../hooks/v2/types'
 import type { EventKind, HeadSeen, IssueRecord, IssueState, OutsideCause, StepKind, StepResult, TableEvent, UnknownWhy, V2Ctx, V2Outcome, V2State } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, control, entry, state } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, TOOLS, factoryDoc, host, iso } from './host'
 
 const N = 571
 const LIFE = (Math.floor(NOW / 1000) - 3 * 3600).toString(36)
@@ -607,6 +609,11 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
     ])
     expect(new Set(p.map(x => x.key)).size).toBe(3)
   })
+
+  test('a fact is judged only while the facts read of the event log shows whether it is logged, so a wiped store cannot log it twice (R4-F5)', () => {
+    expect(FACT_WINDOW_MS).toBeLessThan(EVENT_DAYS * 24 * 60 * MIN)
+    expect(COMPANION_WINDOW_MS).toBe(FACT_WINDOW_MS)
+  })
 })
 
 // --- the owner's files against the versions the loop kept (sources-interventions.ts, store.ts) ---------
@@ -941,6 +948,31 @@ describe('the owner\'s files in the pass driver', () => {
     await byHand({ ...ACT_V2, mode: 'off' })
     await byHand(ACT_V2)
     expect(logged()).toBe(4)
+  })
+
+  // drill run 4 (R4-F5, drill 9): the store wiped, #38's guard interventions, still in
+  // companion.jsonl, were logged a second time: "logged once" lived in the ledger alone
+  test('after a wiped store, a fact the event log already holds is not logged again; a new one is logged once (drill run 4, R4-F5)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const line = (ago: number, cause: string, reason: string) => ({ at: NOW - ago, issue: 38, life: 'tmz7hm', seq: 7, cause, reason })
+    const before = line(3 * 60 * MIN, 'guard:push', 'a push to main')
+    const fresh = line(2 * MIN, 'guard:write', 'wrote outside its slot')
+    const factOf = (l: ReturnType<typeof line>) => factKey(l.cause, 'i38', Math.trunc(l.at).toString(36))
+    // the event log, as the pass reads it: the first line's intervention, logged before the wipe
+    const note = eventNote(intervention('loop', before.cause, factOf(before), before.reason, { issue: 38, life: before.life, pr: null }))
+    const events = `${NO_EVENTS}${iso(before.at + 5_000)},intervention,38,,,,,"${note}",agent,${DEVICE}\n`
+    const h = host(on, {
+      config: ACT_V2,
+      run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : quiet(argv, s)),
+      files: { [`${LOOP_DIR}/companion.jsonl`]: `${[before, fresh].map(l => JSON.stringify(l)).join('\n')}\n` },
+    })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await clock.advance(60_000)
+    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(h.events().filter(e => e[1] === 'intervention').map(e => noteToken(e.at(-1) ?? '', 'fact'))).toEqual([factOf(fresh)])
+    // the ledger holds the logged one again, settled with no write
+    expect(h.entry(interventionKey(factOf(before)))).toMatchObject({ status: 'done', summary: 'intervention already in the event log' })
   })
 })
 

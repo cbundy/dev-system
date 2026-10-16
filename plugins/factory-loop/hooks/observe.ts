@@ -38,7 +38,7 @@ import type { V2Cache, V2Stored } from './v2/observe'
 import type { HeadSeen } from './v2/types'
 
 const GITHUB_READS_PER_PASS = 12
-const EVENT_DAYS = 3
+export const EVENT_DAYS = 3
 // a ledger rebuilt after a lost store reads a week of events: holds older than the facts
 // window (a pending decision, an escalation) must survive it, and entries are kept 7 days
 const REBUILD_DAYS = 7
@@ -569,7 +569,7 @@ export async function observe(
     checkout,
   })
   if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
-  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, backoff: backoffUntil !== null, limited: () => limited })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, events, backoff: backoffUntil !== null, limited: () => limited })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

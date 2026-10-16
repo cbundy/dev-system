@@ -139,7 +139,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | Source | Command | Cadence | In v2 |
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | kept (G2): claims, their holders and lapses. `nomistakes.runs` becomes optional in that tool (U4), so no-mistakes data can never blind v2 (`simplicity/F3`) |
-| `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1) |
+| `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1), and says which facts are logged (7.2) |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | kept |
 | `github` | `callum-flow-issue-read --json N` | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
@@ -1070,6 +1070,11 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   re-render, an exhausted effect), the records, the State (heads, control and config digests, the
   module load, the rail, the tripwire, the breaker) and the companion's log. Its key is
   `iv/<the fact's key>`, so each is logged once.
+- **Logged once is the event log's to say.** A wiped store loses the ledger's keys, but not the
+  facts in the loop dir (the companion's log, the recorded answers). So an `intervention` (by its
+  cause and fact) or a `reviewed` event (by its answer file) that the facts read (2.4) shows
+  logged is settled with no second write (`events.ts` `logOnce`), and its key is in the ledger
+  again. Facts are judged for 2 days, within that read's 3.
 - **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
