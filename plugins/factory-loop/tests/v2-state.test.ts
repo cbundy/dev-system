@@ -287,6 +287,40 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(r.owner).toBeGreaterThanOrEqual(1)
   })
 
+  test('every entry into a state logs that state\'s event, a resume\'s T1 included: fix_requested with the life\'s last fix reason (R4-F1)', () => {
+    const fix = rec(81, { state: 'fixing', step: 'fix', fixes: 1, pr: 781, seq: 21, seqAt: NOW - MIN, since: NOW - MIN })
+    const queue = rec(82, { state: 'merge-queue', step: 'queue', pr: 782, head: HEAD, round: 2, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const triage = rec(83, { state: 'fixing', step: 'fix', fixes: 2, pr: 783, seq: 7, seqAt: NOW - MIN, since: NOW - 10 * MIN })
+    const s = withLedger(world([fix, queue, triage]), [
+      // #81 parked at the fix cap for a conflict, then resumed: the T1 into fixing
+      transitioned({ ...fix, seq: 18, state: 'parked' }, 'T10', 'merge-queue', 'fix-cap:conflict'),
+      transitioned({ ...fix, seq: 20, state: 'queued' }, 'P1', 'parked', 'unpark:label'),
+      transitioned(fix, 'T1', 'queued', 'lease'),
+      // #82 resumed into the merge queue
+      transitioned(queue, 'T1', 'queued', 'lease'),
+      // #83: a triage in fixing chose a fixer (X2 enters fixing from fixing)
+      transitioned({ ...triage, seq: 5 }, 'T9', 'reviewing', 'fix:ci'),
+      transitioned(triage, 'X2', 'fixing', 'triage:fix'),
+    ])
+    const r = plan(s)
+    const notes = (n: number) => of(r, n).flatMap(a => (a.kind === 'event' && a.event.state !== 'transition' && a.event.state !== 'intervention' && 'note' in a.event ? [`${a.event.state}: ${a.event.note}`] : []))
+    expect([notes(81), notes(82), notes(83)]).toEqual([['fix_requested: conflict'], ['merge_ready: round 2'], ['fix_requested: triage']])
+  })
+
+  test('a closed record ends its claim at once: once its entry actions are done the sweep is due, so a merged or closed issue is not live until the next timed sweep (R4-O1)', () => {
+    const r = rec(84, { state: 'closed', step: null, why: 'closed-on-github', seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const at = (sweptAt: number, extra: LedgerEntry[] = []) =>
+      withLedger(world([r]), [transitioned(r, 'E2', 'building', 'issue-closed'), entry('sweep:1', 'sweep', { startedAt: sweptAt, endedAt: sweptAt + 2_000 }), ...extra])
+    const sweeps = (p: PlanResult) => p.actions.filter(a => a.kind === 'sweep').map(a => a.rule)
+    const settled = [done(entryKey(r, 'event/transition'), 'event', { issue: 84 }), done(entryKey(r, 'label'), 'label', { issue: 84 })]
+    // the close's events are not logged yet: the sweep waits for them (the merged fact first, R3-F1)
+    expect(sweeps(plan(at(NOW - 5 * MIN)))).toEqual([])
+    // logged: the sweep is due, though its period has not passed
+    expect(sweeps(plan(at(NOW - 5 * MIN, settled)))).toEqual(['H2'])
+    // a sweep that started after the close saw it: no second one
+    expect(sweeps(plan(at(NOW - 30_000, settled)))).toEqual([])
+  })
+
   test('a closed record\'s follow-ups: a hand merge logs merged when the factory has none, reads the rollout, then a later milestone for run-it; a split releases its parent with its children; another device\'s claim keeps its labels', () => {
     const merged = rec(76, { state: 'closed', step: null, why: 'merged-by-hand', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
     const split = rec(77, { state: 'closed', step: null, why: 'split', seq: 4, seqAt: NOW - MIN, since: NOW - MIN })

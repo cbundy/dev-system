@@ -475,7 +475,9 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
 
 Held as data in `hooks/v2/table.ts` (4.6). The guards on one (state, step, event) are exclusive
 and exhaustive. `fixCap` is 3 (`reviewFixCap`, `config.ts:32`). `maxTriages` is 2 (C3:85). "Step
-states" are designing, building, reviewing, fixing and the merge-queue head. 33 rows.
+states" are designing, building, reviewing, fixing and the merge-queue head. 33 rows. The Events
+column names what a row's seq logs; a state's own entry event (`delegated`, `fix_requested`,
+`merge_ready`) is logged by every row that enters the state, T1 included (4.5).
 
 **A record is made (S1).**
 
@@ -623,10 +625,10 @@ S3 plans these for the record's current seq until each is done. Keys are
 | every new seq | `event transition` (first, after a close's `merged`); then, when steps of an earlier seq still run (the life's running agent steps that started before this seq's transition, whatever their key's shape), one `stop-agent` (TaskStop of its agent) for each, and `slot` op `kill` (10.8), all best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
 | a change of state, except to closed | `label` |
 | building | event `delegated --note "brief <url>"` |
-| fixing | event `fix_requested --note review\|ci\|conflict\|triage` |
+| fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
@@ -652,10 +654,10 @@ type Row = {
   when?: (r: IssueRecord, e: TableEvent, c: Config) => boolean   // pure guard
   next: IssueState | 'same' | 'resumeTo'
   change: (r: IssueRecord, e: TableEvent, now: Ms) => Partial<IssueRecord>   // pure
-  emit: readonly EmitSpec[]                        // events beside `transition`
   via: string                                      // the transition note's `via` code
 }
 export const TABLE: readonly Row[]
+export const ENTRY_EVENTS: Partial<Record<IssueState, EmitState>>   // a state's entry event (4.5)
 export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exactly one row, or it throws
 ```
 
@@ -1943,7 +1945,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | G3 | tier | always | the tier from usage (foundation) |
 | G4 | controls | always | the admission filters: pause, no new work, skip, priority, only, serial, rate caps and the breakers (5.3); a held record's skip line names the filter (foundation) |
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
-| H2 | sweep | every `sweepEveryMs` | `callum-flow-sweep` |
+| H2 | sweep | every `sweepEveryMs`, and once a record closed since the last sweep began and its close's entry actions are done | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
 | R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1) |
 | S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |

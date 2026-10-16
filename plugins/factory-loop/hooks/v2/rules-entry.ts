@@ -1,8 +1,8 @@
 // The entry actions of a record's seq (docs/factory-loop/v2/SPEC.md 4.5), which S3 plans until
 // each is done: the seq's `transition` event first (after a close's `merged`); the old step
 // stopped and the slot's processes killed when the old seq's step still ran, both best effort;
-// the new state's label; the events the row logs beside `transition`; a park's comment and tell;
-// a close's label clear and its follow-ups by why. The ledger is the outbox (3.3): each is a keyed
+// the new state's label; the event the state logs on entry; a park's comment and tell; a close's
+// label clear and its follow-ups by why. The ledger is the outbox (3.3): each is a keyed
 // action of the new seq, so a crash after the record's store write leaves them planned on the next
 // pass.
 //
@@ -18,9 +18,9 @@ import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
-import { FIX_REASONS, TABLE } from './table'
+import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
-import type { EmitSpec, IssueRecord, Lease, V2Ctx } from './types'
+import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
 
 // One entry action: soft ones are best effort (a stop, a kill), and a tell never holds the step.
 export type EntryItem = { action: Action; soft: boolean; tell: boolean }
@@ -92,19 +92,21 @@ function heldByOther(ctx: V2Ctx, r: IssueRecord): boolean {
   return holder !== null && holder !== ctx.state.device
 }
 
-// emitNote: the note of an event a row logs beside `transition`, as today's queries read it.
-function emitNote(spec: EmitSpec, r: IssueRecord, via: string | null): string {
-  if (spec.note !== null) return spec.note
-  switch (spec.state) {
-    case 'delegated':
-      return `brief ${r.brief ?? 'none'}`
-    case 'fix_requested':
-      return Object.values(FIX_REASONS).find(k => via === `fix:${k}`) ?? 'review'
-    case 'merge_ready':
-      return `round ${r.round}`
-    default:
-      return r.notes[0] ?? spec.state
-  }
+// fixReason: why the life last sent its PR to a fixer (7.1): the via of its newest transition that
+// did (fix:<kind>, triage:fix) or that parked at the fix cap (fix-cap:<kind>), so a resume into
+// fixing logs the reason it parked with; review once the ledger no longer holds one.
+function fixReason(ctx: V2Ctx, r: IssueRecord): string {
+  const vias = lifeEntries(ctx, r, 'transition')
+    .flatMap(e => (e.outcome?.kind === 'transition' ? [{ seq: keyParts(e.key)?.seq ?? 0, via: e.outcome.via ?? '' }] : []))
+    .filter(t => t.via === 'triage:fix' || /^fix(-cap)?:/.test(t.via))
+  const via = vias.sort((a, b) => a.seq - b.seq).at(-1)?.via
+  return via === undefined ? 'review' : via === 'triage:fix' ? 'triage' : via.slice(via.indexOf(':') + 1)
+}
+
+// emitted: an event the seq logs beside `transition`, with the note today's queries read.
+function emitted(ctx: V2Ctx, r: IssueRecord, state: EmitState): Action {
+  const note = state === 'delegated' ? `brief ${r.brief ?? 'none'}` : state === 'fix_requested' ? fixReason(ctx, r) : state === 'merge_ready' ? `round ${r.round}` : (r.notes[0] ?? state)
+  return { ...base(r, entryKey(r, `event/${state}`), `log ${state}`), kind: 'event', event: { state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note } }
 }
 
 // parkText: the park's comment: the question, what parked it and how to resume (4.5, 11).
@@ -154,11 +156,10 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   const labelKey = entryKey(r, 'label')
   if (changed && label !== null) add({ ...base(r, labelKey, `label ${label}`), kind: 'label', op: 'set', label })
   if (changed && r.state === 'closed' && (!heldByOther(ctx, r) || ctx.byKey.has(labelKey))) add({ ...base(r, labelKey, 'a closed record carries no factory label'), kind: 'label', op: 'clear', label: null })
-  // the events the row logs beside transition (a seq whose entry the ledger rebuilt with no row
-  // logs none)
-  for (const spec of row?.emit ?? []) {
-    add({ ...base(r, entryKey(r, `event/${spec.state}`), `log ${spec.state}`), kind: 'event', event: { state: spec.state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: emitNote(spec, r, t.via) } })
-  }
+  // the event of the state a row entered, a same-state entry (X2) included (a seq whose entry the
+  // ledger rebuilt with no row logs none)
+  const entered = row === null || row.next === 'same' ? undefined : ENTRY_EVENTS[r.state]
+  if (entered !== undefined) add(emitted(ctx, r, entered))
   if (changed && r.state === 'parked') {
     add({ ...base(r, entryKey(r, 'comment'), 'the park\'s question on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: parkText(r, t.from, t.via) })
     add(parkedTell(r, 0), false, true)
@@ -178,12 +179,13 @@ function mergedItem(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   return [{ action: { ...base(r, merged, 'the merge has no merged event'), kind: 'event', event: { state: 'merged', issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.why === 'merged' ? 'merged by the factory loop' : 'merged by hand' } }, soft: false, tell: false }]
 }
 
-// closedItems: a closed record's follow-ups by why (4.5): a merge's rollout read, then a close for
-// an epic base or a later milestone for a run-it or keep-open rollout (D-29); a split's parent
-// released.
+// closedItems: a closed record's follow-ups by why (4.5): a drop's `abandoned`; a merge's rollout
+// read, then a close for an epic base or a later milestone for a run-it or keep-open rollout
+// (D-29); a split's parent released.
 function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   const items: EntryItem[] = []
   const add = (action: Action) => items.push({ action, soft: false, tell: false })
+  if (r.why === 'dropped') add(emitted(ctx, r, 'abandoned'))
   if (r.why === 'merged' || r.why === 'merged-by-hand') {
     const rolloutKey = followKey(r, 'rollout')
     add({ ...base(r, rolloutKey, 'read the merged issue\'s rollout'), kind: 'rollout', pr: r.pr })
