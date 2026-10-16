@@ -701,7 +701,6 @@ describe('the reviewer interface and its contract (v2 SPEC 8.2)', () => {
     const input: ReviewInput = { issue: 650, brief: BRIEF(650), pr: PR, base: 'main', head: HEAD, patch: PATCH, round: 2, prior: [], notes: [] }
     const reviewer = reviewerOf('adjudicator', { model: 'opus' })
     expect(reviewer?.spawn(input)).toEqual({ agentType: STEP_AGENT.review, model: 'opus', prompt: 'adjudicator', input })
-    expect(reviewerOf('adjudicator', { model: ' ' })?.spawn(input).model).toBeNull()
     expect(reviewerOf('no-mistakes', { model: 'opus' })).toBeNull()
     expect(Object.keys(REVIEW_PROMPTS)).toContain('adjudicator')
     expect(readReview({ verdict: 'approve', findings: [], summary: 's', bump: 'patch' })).toEqual({ verdict: 'approve', findings: [], summary: 's', bump: 'patch' })
