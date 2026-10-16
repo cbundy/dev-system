@@ -1,0 +1,97 @@
+now 2026-10-16T03:45:15Z mode=off OFF=off
+P833 03:45:00 act ex=True tier=normal counts={'queue': 0, 'queued': 1, 'flight': 2, 'parked': 1, 'owner': 1} err=None
+   sources: {'v2.prs': 'failed: the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main'}
+   S {"rule": "S6", "issue": 22, "why": "parked: waits on the owner"}
+   S {"rule": "S2", "issue": 33, "why": "review: the PRs were not read (the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main)"}
+   S {"rule": "S2", "issue": 36, "why": "review: the PRs were not read (the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main)"}
+   S {"rule": "S2", "issue": 38, "why": "queued: waits for a slot (W1)"}
+   S {"rule": "W1", "issue": 38, "why": "W1: capacity: 2 of 2 in flight"}
+P834 03:45:10 act ex=True tier=normal counts={'queue': 0, 'queued': 1, 'flight': 2, 'parked': 1, 'owner': 1} err=None
+   sources: {'v2.prs': 'failed: the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main'}
+   S {"rule": "S6", "issue": 22, "why": "parked: waits on the owner"}
+   S {"rule": "S2", "issue": 33, "why": "review: the PRs were not read (the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main)"}
+   S {"rule": "S2", "issue": 36, "why": "review: the PRs were not read (the patch id of PR #35 at f3165ab did not compute: callum-flow-patch-id: f3165ab8c06e0b30aa1ee158339e414b4a4047e3 changes nothing against origin/main)"}
+   S {"rule": "S2", "issue": 38, "why": "queued: waits for a slot (W1)"}
+   S {"rule": "W1", "issue": 38, "why": "W1: capacity: 2 of 2 in flight"}
+== events (/persist/events/cbundy__dev-system-scratch.jsonl)
+03:30:32 usage #None pr=None watcher five_hour=8 resets_at=2026-10-16T06:00:00Z resets_in=8967 seven_day=25 seven_day_resets_at=2026-10-16T11:00:01Z seven_day_resets_in=26968 source=oauth
+03:30:36 transition #33 pr=35 agent row=P1 life=tmz3yy seq=8 from=parked to=queued seqAt=1792121430208 since=1792121430208 resumeTo=merge-queue step=lease attempt=1 cut=no triages=0 fixes=0 round=1 why=none approvedPatch=33213358339646dd7ceeb360804d2797aff
+03:30:38 transition #36 pr=37 agent row=P1 life=tmz68r seq=12 from=parked to=queued seqAt=1792121430208 since=1792121430208 resumeTo=merge-queue step=lease attempt=1 cut=no triages=0 fixes=0 round=2 why=none approvedPatch=cb9f891ca4cb38f71281de6fcc5794a929
+03:30:40 transition #38 pr=39 agent row=P1 life=tmz7hm seq=7 from=parked to=queued seqAt=1792121430208 since=1792121430208 resumeTo=merge-queue step=lease attempt=1 cut=no triages=0 fixes=0 round=1 why=none approvedPatch=78ae5b4d156c2a28416cff0fc613c58131b
+03:30:43 intervention #33 pr=35 agent who=person cause=unpark life=tmz3yy fact=i33/ltmz3yy/s8/t reason=factory:parked%20was%20removed%20by%20hand
+03:30:43 intervention #36 pr=37 agent who=person cause=unpark life=tmz68r fact=i36/ltmz68r/s12/t reason=factory:parked%20was%20removed%20by%20hand
+03:30:43 intervention #38 pr=39 agent who=person cause=unpark life=tmz7hm fact=i38/ltmz7hm/s7/t reason=factory:parked%20was%20removed%20by%20hand
+03:30:52 transition #33 pr=35 agent row=T1 life=tmz3yy seq=9 from=queued to=merge-queue seqAt=1792121443593 since=1792121443593 resumeTo=none step=queue attempt=1 cut=no triages=0 fixes=0 round=1 why=none approvedPatch=33213358339646dd7ceeb360804d2797affda
+03:30:54 transition #36 pr=37 agent row=T1 life=tmz68r seq=13 from=queued to=merge-queue seqAt=1792121443593 since=1792121443593 resumeTo=none step=queue attempt=1 cut=no triages=0 fixes=0 round=2 why=none approvedPatch=cb9f891ca4cb38f71281de6fcc5794a9297f
+03:31:03 transition #33 pr=35 agent row=T9 life=tmz3yy seq=10 from=merge-queue to=fixing seqAt=1792121456430 since=1792121456430 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none approvedPatch=33213358339646dd7ceeb360804d2797affda3
+03:31:05 fix_requested #33 pr=35 agent conflict
+03:31:05 intervention #33 pr=35 agent who=loop cause=fix:conflict life=tmz3yy fact=i33/ltmz3yy/s10/t reason=a%20fixer%20for%20a%20merge%20conflict%20on%20PR%20#35,%20from%20merge-queue
+03:31:08 transition #36 pr=37 agent row=T9 life=tmz68r seq=14 from=merge-queue to=fixing seqAt=1792121461414 since=1792121461414 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=2 why=none approvedPatch=cb9f891ca4cb38f71281de6fcc5794a9297f6b
+03:31:10 fix_requested #36 pr=37 agent conflict
+03:31:10 intervention #36 pr=37 agent who=loop cause=fix:conflict life=tmz68r fact=i36/ltmz68r/s14/t reason=a%20fixer%20for%20a%20merge%20conflict%20on%20PR%20#37,%20from%20merge-queue
+03:31:13 loop #33 pr=None agent kind=agent-step key=i33/ltmz3yy/s10/fix/a1 status=running attempts=1 class=drive rule=S2 started=1792121473308 agentId=ad15b6d7d375c05fa
+03:31:20 loop #36 pr=None agent kind=agent-step key=i36/ltmz68r/s14/fix/a1 status=running attempts=1 class=drive rule=S2 started=1792121480880 agentId=a98f8efbe83f2713e
+03:31:49 loop #33 pr=None agent kind=agent-step key=i33/ltmz3yy/s10/fix/a1 status=done attempts=1 class=drive rule=S2 started=1792121473308 ended=1792121509228 agentId=ad15b6d7d375c05fa
+03:31:57 transition #33 pr=35 agent row=T11 life=tmz3yy seq=11 from=fixing to=reviewing seqAt=1792121509415 since=1792121509415 resumeTo=none step=review attempt=1 cut=no triages=0 fixes=1 round=2 why=none approvedPatch=33213358339646dd7ceeb360804d2797affd
+03:31:58 loop #36 pr=None agent kind=agent-step key=i36/ltmz68r/s14/fix/a1 status=done attempts=1 class=drive rule=S2 started=1792121480880 ended=1792121518804 agentId=a98f8efbe83f2713e
+03:31:58 verdict #33 pr=35 fixer CORRECT: conflict Resolved docs/api.md by taking origin/main's version, which already documents sameSlug with options; branch's older section was obsolete.
+03:32:09 transition #36 pr=37 agent row=T11 life=tmz68r seq=15 from=fixing to=reviewing seqAt=1792121519375 since=1792121519375 resumeTo=none step=review attempt=1 cut=no triages=0 fixes=1 round=3 why=none approvedPatch=cb9f891ca4cb38f71281de6fcc5794a9297f
+03:32:11 verdict #36 pr=37 fixer CORRECT: conflict Resolved docs/api.md keeping both sides' content; merge commit pushed.
+03:35:31 usage #None pr=None watcher five_hour=8 resets_at=2026-10-16T06:00:00Z resets_in=8668 seven_day=25 seven_day_resets_at=2026-10-16T11:00:01Z seven_day_resets_in=26669 source=oauth
+03:39:44 intervention #None pr=None agent who=person cause=config-file life=none fact=config-file/fleet/mvaf4ys2 reason=settings%20changed%20with%20no%20op:%20config.json%20mode
+03:39:54 intervention #None pr=None agent who=person cause=config-file life=none fact=config-file/fleet/mvaf5ly6 reason=settings%20changed%20with%20no%20op:%20config.json%20mode
+03:40:31 usage #None pr=None watcher five_hour=8 resets_at=2026-10-16T05:59:59Z resets_in=8367 seven_day=25 seven_day_resets_at=2026-10-16T11:00:01Z seven_day_resets_in=26369 source=oauth
+03:40:36 renewed #22 pr=None agent lease: 120
+03:40:38 renewed #33 pr=None agent lease: 120
+03:40:39 renewed #36 pr=None agent lease: 120
+03:40:41 renewed #38 pr=None agent lease: 120
+03:40:45 intervention #None pr=None agent who=person cause=config-file life=none fact=config-file/fleet/mvaf6ojh reason=settings%20changed%20with%20no%20op:%20config.json%20mode
+== companion.jsonl
+{"at":"2026-10-16T03:05:25.892Z","issue":26,"life":"tmz2kx","seq":9,"cause":"gate-pass","reason":"the stop gate passed","head":"ee7af966f1ea035e0c248e7ecd4247e3d285816b","ms":8590}
+{"at":"2026-10-16T03:06:44.329Z","issue":22,"life":"tmz0q9","seq":16,"cause":"gate-pass","reason":"the stop gate passed","head":"94437437214f81ff538baa08a69d882d72d50122","ms":10793}
+{"at":"2026-10-16T03:25:13.800Z","issue":32,"life":"tmz3yy","seq":11,"cause":"gate-pass","reason":"the stop gate passed","head":"42339cc801ddbbfd278702a8e4b01caf4bf37985","ms":8611}
+{"at":"2026-10-16T03:31:48.441Z","issue":33,"life":"tmz3yy","seq":10,"cause":"gate-pass","reason":"the stop gate passed","head":"f3165ab8c06e0b30aa1ee158339e414b4a4047e3","ms":9281}
+{"at":"2026-10-16T03:31:58.021Z","issue":36,"life":"tmz68r","seq":14,"cause":"gate-pass","reason":"the stop gate passed","head":"499aad3ec5bd706d3ee63e814992f55970993f84","ms":9011}
+== slots
+== github
+#53 CLOSED []
+#52 CLOSED []
+#49 CLOSED []
+#48 CLOSED []
+#45 CLOSED []
+#44 CLOSED []
+#41 CLOSED []
+#40 CLOSED []
+#38 OPEN [factory:queued]
+#36 OPEN [factory:reviewing]
+#33 OPEN [factory:reviewing]
+#32 CLOSED []
+#30 CLOSED []
+#27 CLOSED []
+#26 CLOSED []
+#23 CLOSED []
+#22 OPEN [factory:parked]
+#19 CLOSED []
+#18 CLOSED []
+#15 CLOSED []
+PR55 MERGED issue-52 UNKNOWN
+PR54 MERGED issue-53 UNKNOWN
+PR51 MERGED issue-48 UNKNOWN
+PR50 MERGED issue-49 UNKNOWN
+PR47 MERGED issue-45 UNKNOWN
+PR46 MERGED issue-44 UNKNOWN
+PR43 MERGED issue-41 UNKNOWN
+PR42 MERGED issue-40 UNKNOWN
+PR39 OPEN issue-38 DIRTY
+PR37 OPEN issue-36 CLEAN
+PR35 OPEN issue-33 CLEAN
+PR34 MERGED issue-32 UNKNOWN
+PR31 MERGED issue-30 UNKNOWN
+PR29 MERGED issue-27 UNKNOWN
+PR28 MERGED issue-26 UNKNOWN
+PR25 MERGED issue-23 UNKNOWN
+PR24 OPEN issue-22 DIRTY
+PR21 MERGED issue-19 UNKNOWN
+PR20 MERGED issue-18 UNKNOWN
+PR17 MERGED issue-14 UNKNOWN
+issue-8 issue-9 issue-12 issue-14 issue-15 issue-18 issue-19 issue-22 issue-23 issue-26 issue-27 issue-30 issue-32 issue-33 issue-36 issue-38 issue-40 issue-41 issue-44 issue-45 issue-48 issue-49 issue-52 issue-53 main
