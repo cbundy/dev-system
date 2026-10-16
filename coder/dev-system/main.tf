@@ -32,9 +32,9 @@
 # - an opt-in Template Admin token for push-next.sh (variable
 #   template_tester_secrets_dir, parameter template_testing), mounted only into
 #   workspaces that turn the parameter on (cbundy/dev-system#118);
-# - an optional shared gh login (variable gh_volume_name): a named volume over
-#   /persist/gh, shared by every workspace using that name
-#   (cbundy/dev-system#195);
+# - an optional shared gh login, chosen per workspace (parameter gh_login,
+#   default shared; shared volume named by variable gh_volume_name): a named
+#   volume over /persist/gh (cbundy/dev-system#195);
 # - an optional shared Claude login, chosen per workspace (parameter
 #   claude_login, shared volume named by variable claude_auth_volume_name):
 #   only Claude's login directory is shared, so history and settings stay per
@@ -166,14 +166,16 @@ variable "secrets_dir" {
 
 # gh state normally lives in /persist/gh on the workspace's own persist volume,
 # so every workspace needs its own gh login. A named Docker volume mounted over
-# it instead shares one login between every workspace using the same name, as
-# the desktop devcontainer's dev-system-gh volume does per Docker host. It is
+# it instead shares one login between every workspace that keeps the gh_login
+# parameter's default, shared, as the desktop devcontainer's dev-system-gh
+# volume does per Docker host. Empty offers no choice: every workspace keeps
+# its own gh login. It is
 # deliberately not a docker_volume resource: one tied to a workspace would be
 # deleted, login and all, with that workspace. Docker creates it on first use
 # and copies the image's node-owned /persist/gh into it.
 variable "gh_volume_name" {
   default     = ""
-  description = "Named Docker volume mounted at /persist/gh in every workspace, so workspaces using the same name share one gh login (and one token). Created by Docker on first use, never deleted with a workspace. Empty keeps gh state on each workspace's own persist volume."
+  description = "Named Docker volume that workspaces choosing the shared gh login (parameter gh_login, the default) mount at /persist/gh, so they share one gh login (and one token). Created by Docker on first use, never deleted with a workspace. Empty keeps gh state on each workspace's own persist volume and hides the choice."
   type        = string
   validation {
     # Docker's volume name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
@@ -368,6 +370,30 @@ data "coder_parameter" "claude_login" {
   }
 }
 
+# Shared or private gh login (variable gh_volume_name). The default is shared,
+# which is what every workspace got before the choice existed, and Coder gives
+# an existing workspace the default on its next update (#268), so nothing
+# changes for it. A private login is a token of its own, one of GitHub's 10
+# per user for the GitHub CLI app (docs/spikes/gh-auth/).
+data "coder_parameter" "gh_login" {
+  count        = var.gh_volume_name == "" ? 0 : 1
+  name         = "gh_login"
+  display_name = "GitHub login"
+  description  = "shared: this workspace uses the one GitHub CLI login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in. private: it has its own GitHub CLI login, which uses one of GitHub's 10 tokens per user for the GitHub CLI; past that, GitHub revokes the least recently used one. Anyone who can open a shared workspace holds that login. Takes effect on the next workspace start."
+  type         = "string"
+  default      = "shared"
+  mutable      = true
+  order        = 11
+  option {
+    name  = "Shared with other workspaces"
+    value = "shared"
+  }
+  option {
+    name  = "Private to this workspace"
+    value = "private"
+  }
+}
+
 # The rollout ring (cbundy/dev-system#338), passed in as DEV_RING. Coder ignores
 # parameter changes on an existing workspace's update or restart (#268), so the
 # default is the right value for every workspace that never sets it.
@@ -420,6 +446,9 @@ locals {
   # and only its login, in the shared volume at /persist/claude-auth.
   claude_login_shared = try(data.coder_parameter.claude_login[0].value, "private") == "shared"
   claude_auth_env     = local.claude_login_shared ? ["CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth"] : []
+
+  # The shared gh login (parameter gh_login, default shared).
+  gh_login_shared = try(data.coder_parameter.gh_login[0].value, "private") == "shared"
 
   # Docker labels, to trace orphaned resources back to their workspace.
   labels = {
@@ -675,10 +704,11 @@ resource "docker_container" "workspace" {
     container_path = "/workspaces"
     volume_name    = docker_volume.workspace.name
   }
-  # One gh login shared between workspaces (variable gh_volume_name), over the
-  # persist volume's gh directory. Not managed here: see the variable.
+  # The shared gh login, for a workspace that keeps it (parameter gh_login),
+  # over the persist volume's gh directory. Not managed here: see
+  # gh_volume_name.
   dynamic "volumes" {
-    for_each = var.gh_volume_name == "" ? [] : [var.gh_volume_name]
+    for_each = local.gh_login_shared ? [var.gh_volume_name] : []
     content {
       container_path = "/persist/gh"
       volume_name    = volumes.value
