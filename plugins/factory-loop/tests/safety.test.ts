@@ -277,7 +277,7 @@ const RECORD: IssueRecord = {
   lives: 1,
 }
 // the record's PR as the prs source reads it: the review step reads its head and patch
-const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: 'f00dfeed', readAt: NOW }
+const PR_VIEW = { pr: 512, issue: 470, state: 'open' as const, head: 'abc1234def', mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [], patch: 'f00dfeed', readAt: NOW }
 const at = `i470/l${LIFE}/s3`
 const V2_ACTIONS: Action[] = [
   { ...base, kind: 'transition', key: `${at}/t`, class: 'free', rule: 'S3', row: 'T2', event: 'ok', from: { issue: 470, life: LIFE, seq: 2 }, next: RECORD, trigger: { kind: 'entry', key: `i470/l${LIFE}/s2/design/a1`, status: 'done', startedAt: NOW - 2 * MIN } },

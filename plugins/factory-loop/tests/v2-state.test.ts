@@ -481,7 +481,7 @@ describe('the steps', () => {
 
 describe('the events, in 4.1\'s order', () => {
   const mq = rec(100, { state: 'merge-queue', step: 'queue', pr: 700, head: HEAD, seq: 9 })
-  const pr = (over: Record<string, unknown>) => ({ prs: [{ pr: 700, issue: 100, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: null, readAt: NOW, ...over }] })
+  const pr = (over: Record<string, unknown>) => ({ prs: [{ pr: 700, issue: 100, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [], patch: null, readAt: NOW, ...over }] })
   const closedRead = { reads: { 100: { at: NOW - MIN, open: false, labels: [] } } }
 
   test('a hand merge comes before the issue\'s close; a merge the loop made is the queue step\'s own, never a hand merge', () => {
@@ -1059,7 +1059,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     // opened (8.1), with that PR's checks and merge state
     const rv = rec(153, { state: 'reviewing', step: 'triage', head: HEAD, seq: 7 })
     const ensured = done(prKey(rv, 'ensure'), 'pr', { issue: 153, outcome: { kind: 'pr', pr: 753, created: true, reopened: false } })
-    const read = { pr: 753, issue: 153, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [{ name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: 'https://x/actions/runs/1/job/2' }], patch: null, readAt: NOW }
+    const read = { pr: 753, issue: 153, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [{ name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: 'https://x/actions/runs/1/job/2' }], patch: null, readAt: NOW }
     const seen: ExecCtx = { ...env, state: withLedger(world([rv], {}, { prs: { prs: [read] } }), [ensured]) }
     expect(triageInput(seen, { ...action, issue: 153, branch: 'issue-153' }, input().place)).toMatchObject({ pr: 753, mergeable: 'clean', checks: [{ name: 'ci', bucket: 'fail', link: 'https://x/actions/runs/1/job/2' }], fixValid: true })
   })

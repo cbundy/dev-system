@@ -67,7 +67,7 @@ function check(over: Partial<CheckRun> = {}): CheckRun {
 // view: the record's open PR as the prs source reads it: clean, green, at HEAD with the approved
 // patch.
 function view(r: IssueRecord, over: Partial<PrView> = {}): PrView {
-  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [check()], patch: PATCH, readAt: NOW, ...over }
+  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, checks: [check()], patch: PATCH, readAt: NOW, ...over }
 }
 
 const OK = { ok: true, at: NOW }
@@ -498,6 +498,19 @@ describe('Q1: the head is updated when it is behind (v2 SPEC 9.2)', () => {
     expect(transitionOf(plan(withLedger(world([r], [view(r, { head: HEAD2 })]), [stuck])), 31)).toBeUndefined()
   })
 
+  test('a head whose base is not main\'s head is behind while GitHub still computes its mergeability: updated at once (R3-O1); one on main\'s head waits for GitHub', () => {
+    const r = rec(33)
+    // main moved past the PR's base (the merge before it); GitHub shows mergeable_state unknown
+    const stale = view(r, { mergeable: 'unknown', base: MAIN2 })
+    expect(queueActions(plan(world([r], [stale])))).toEqual([expect.objectContaining({ kind: 'queue-update', rule: 'Q1', pr: 633, base: MAIN, head: HEAD })])
+    // a conflict is GitHub's to say: dirty goes to a fixer, never updated
+    expect(transitionOf(plan(world([r], [{ ...stale, mergeable: 'dirty' }])), 33)).toMatchObject({ row: 'T9', via: 'fix:conflict' })
+    // based on main's head, unknown is GitHub's lag: green CI waits for it, nothing is updated
+    const current = plan(world([r], [view(r, { mergeable: 'unknown' })]))
+    expect(queueActions(current)).toEqual([])
+    expect(said(current, 33)).toEqual([`merge queue: CI is green on ${HEAD.slice(0, 7)}, and GitHub shows it unknown`])
+  })
+
   test('main\'s head not read holds the update, bounded like any wait', () => {
     const r = rec(32)
     const p = plan(world([r], [view(r, { mergeable: 'behind' })], {}, { prs: { prs: [view(r, { mergeable: 'behind' })], main: null } }))
@@ -657,7 +670,7 @@ function actWorld(reply: (argv: string[]) => Reply, tick = 0) {
   return { argvs, run }
 }
 
-const pullJson = (over: Record<string, unknown> = {}) => JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: HEAD }, user: { login: 'cbundy' }, mergeable_state: 'clean', base: { ref: 'main' }, ...over }, stripped: 0 })
+const pullJson = (over: Record<string, unknown> = {}) => JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: HEAD }, user: { login: 'cbundy' }, mergeable_state: 'clean', base: { ref: 'main', sha: MAIN2 }, ...over }, stripped: 0 })
 const r60 = rec(60)
 const UPDATE: Action = { kind: 'queue-update', key: updateKey(r60, MAIN), class: 'free', rule: 'Q1', reason: 'x', issue: 60, pr: 660, base: MAIN, head: HEAD, maxAttempts: 1 }
 const MERGE: Action = { kind: 'queue-merge', key: mergeKey(r60, HEAD, 1), class: 'free', rule: 'Q2', reason: 'x', issue: 60, pr: 660, head: HEAD, patch: PATCH, maxAttempts: 1 }
@@ -877,7 +890,7 @@ function prReply(heads: Record<string, string>, extra: (argv: string[]) => Reply
   return (argv: string[]): Reply => {
     const own = extra(argv)
     if (own !== undefined) return own
-    if (argv[0] === 'callum-flow-issue-read') return { stdout: pullJson({ head: { sha: heads[argv[3] ?? ''] ?? HEAD }, mergeable_state: 'behind' }) }
+    if (argv[0] === 'callum-flow-issue-read') return { stdout: pullJson({ head: { sha: heads[argv[3] ?? ''] ?? HEAD }, mergeable_state: 'unknown' }) }
     if (argv[0] === 'gh' && argv[2] === 'checks') return { exitCode: 8, stdout: CHECKS_JSON }
     if (argv[0] === 'callum-flow-patch-id') return { stdout: `${PATCH}\n` }
     if (argv[0] === 'git') return { stdout: `${MAIN}\trefs/heads/main\n` }
@@ -886,7 +899,7 @@ function prReply(heads: Record<string, string>, extra: (argv: string[]) => Reply
 }
 
 describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
-  test('the queue\'s head first, then reviewing and the queue, at most the budget; each PR, its checks, its patch id against the default branch, and main\'s head when a queue PR is behind', async () => {
+  test('the queue\'s head first, then reviewing and the queue, at most the budget; each PR, its checks, its patch id against the default branch, and main\'s head when a queue PR is open, whatever GitHub shows', async () => {
     const records = [
       rec(70, { state: 'reviewing', step: 'review', seqAt: NOW - 50 * MIN }),
       rec(71, { seqAt: NOW - 10 * MIN }),
@@ -911,8 +924,9 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
       head: sha('2'),
       mergedHead: null,
       closedAt: null,
-      mergeable: 'behind',
+      mergeable: 'unknown',
       author: 'cbundy',
+      base: MAIN2,
       checks: [
         { name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: Date.parse('2026-10-13T02:40:00Z'), completedAt: Date.parse('2026-10-13T02:43:00Z'), runId: '123', link: 'https://github.com/cbundy/dev-system/actions/runs/123/job/9' },
         { name: 'image', state: 'QUEUED', bucket: 'pending', startedAt: null, completedAt: null, runId: null, link: null },
@@ -988,7 +1002,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
   })
 
   test('the parsers: the REST pull and gh pr checks, whose exit 8 and 1 still carry the list; no checks yet is an empty list', () => {
-    expect(pullOf(pullJson({ state: 'closed', merged: false, closed_at: 'T' }))).toMatchObject({ state: 'closed', mergedHead: null, closedAt: 'T', base: 'main' })
+    expect(pullOf(pullJson({ state: 'closed', merged: false, closed_at: 'T' }))).toMatchObject({ state: 'closed', mergedHead: null, closedAt: 'T', base: 'main', baseSha: MAIN2 })
     expect(pullOf(JSON.stringify({ comments: [] }))).toBeNull()
     expect(pullOf('not json')).toBeNull()
     expect(checksOf({ exitCode: 1, stdout: '', stderr: 'no checks reported on the \'issue-7\' branch' })).toEqual([])
