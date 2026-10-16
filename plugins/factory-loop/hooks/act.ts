@@ -22,7 +22,7 @@ import { preCheck } from './rails'
 import type { BreakerNotice } from './rails'
 import type { Action, ActionKind, AgentStatus, AgentType, Config, Control, LedgerEntry, Ms, PlanResult, State } from './types'
 import { planV2 } from './v2/plan'
-import { V2_EXECUTORS } from './v2/registry'
+import { V2_EXECUTORS, executorOf } from './v2/registry'
 import { stepAnswered, stepAnswers, stepRecorded } from './v2/steps'
 import { STEP_AGENT, V2_ACTION_KINDS } from './v2/types'
 import { answerTool, expireWakes, onTurnComplete, onTurnStart, wakeExecutors } from './wake'
@@ -67,10 +67,10 @@ export const GITHUB_KINDS: readonly ActionKind[] = [
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 
 // dispatch: the action's executor, run once; under planner v2, v2's own for the kind first (a
-// reused kind may have a v2 behaviour). A kind with no executor, or an executor that throws, is a
-// failed attempt; neither is a reason to stop the pass.
+// reused kind may have a v2 behaviour), run again after a GitHub blip (registry.ts). A kind with no
+// executor, or an executor that throws, is a failed attempt; neither is a reason to stop the pass.
 export async function dispatch(ctx: ExecCtx, action: Action): Promise<Exec> {
-  const run = (ctx.rt.config.planner === 'v2' ? V2_EXECUTORS[action.kind] : undefined) ?? EXECUTORS[action.kind]
+  const run = ctx.rt.config.planner === 'v2' ? executorOf(action.kind, EXECUTORS) : EXECUTORS[action.kind]
   if (run === undefined) return { status: 'failed', summary: `no executor for ${action.kind}`, noRetry: true }
   try {
     return await run(ctx, action)

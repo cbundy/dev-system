@@ -667,6 +667,14 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   ended in error, aborted or refused; an API error, a 429 included; an answer that fails its
   contract after its repair message; a CLI result outside the step's known outcomes; a GitHub
   wait past its bound (4.4).
+- **A GitHub blip is not a result.** Under planner v2, an action whose attempt fails on a
+  transient GitHub error runs again inside the attempt, after 5 s and then 15 s, before its
+  failure counts (`registry.ts` `executorOf`): a 5xx, GraphQL's "Something went wrong", a gateway
+  or connection timeout. A rate limit is not retried there, since its 15-minute backoff holds
+  GitHub (v1 SPEC 10.2), and neither are credentials, a 404, a validation error or a refusal. So a
+  blip never ends a step unknown or holds an effect, and logs no intervention (drill finding
+  R2-F4: one `gh pr update-branch` error made the head's step unknown). Running an action again is
+  safe: each reads what a try before it did before it acts, as the ledger's own retries need.
 - **Causes outside the issue** (U1), each from a fact the loop already holds, never inferred
   (`failures/F2`, `totality/T-12`, `totality/T-13`):
   - `load`: the step's entry started before this module load and ended `lost` (the loop
@@ -1225,8 +1233,8 @@ is a new `Reviewer` implementation and a setting, nothing more.
   (`failures/F6`, `totality/T-09`). A flaky check then passes without a fixer. A new round, after
   a fixer, gets its own re-run. A run is re-run only once it has finished: GitHub refuses to
   re-run a run with a job still going. The key keeps it once per round, but the call itself is
-  retried with backoff (3 attempts): a GitHub blip, a `gh` timeout or a restart during the call is
-  not a failed check. Only GitHub's own refusal of the re-run counts the check as failed at once.
+  retried: a GitHub blip inside the attempt (5.1), and a `gh` timeout or a restart during the call
+  with backoff (3 attempts), so none of them is a failed check. Only GitHub's own refusal of the re-run counts the check as failed at once.
   A re-run whose answer was lost, or a failed call GitHub took anyway (a check of the run ended
   since), is awaited, within `ciStartMs`. In reviewing, one that uses up its attempts on transient
   errors holds the record as a stalled effect (4.5). At the merge queue's head it makes the step
@@ -1295,7 +1303,7 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 - **Outcomes:** GitHub's update is asynchronous, so the executor reads the PR's head until it
   moves (30 s bound) and records the new head in its ledger entry. That makes it a head the loop
   produced (4.1). A refusal for a conflict is `not-ok(conflict)`; a head that did not move, or any
-  other failure, is `unknown`.
+  other failure, is `unknown`, once a GitHub blip has been tried again (5.1).
 - A head that already shows `dirty` is `not-ok(conflict)` without an update.
 
 ### 9.3 Q2: merge the head
@@ -1322,7 +1330,8 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   | `read` | any "cannot read", "cannot verify", "cannot derive" or "not computed" line; `blocked` with checks pending | `unknown` |
   | `policy` | author not trusted; base not the default branch; draft | `not-ok(policy)` (T15): parked with the FAIL lines, since only the owner can change these |
 
-  A refusal GitHub gives no reason for, or a CLI failure, is `unknown`.
+  A refusal GitHub gives no reason for, or a CLI failure, is `unknown`, once a GitHub blip has
+  been tried again (5.1).
 
 ### 9.4 The guard
 
@@ -2146,6 +2155,15 @@ and the owner's two structural decisions. They are settled.
 - **Alternatives:** the ledger's same-key retries for steps, as v1 did.
 - **Why:** one retry mechanism per thing. A step's second attempt is the table's decision (U2),
   visible in the record and the events.
+
+### A GitHub blip is retried inside the attempt
+
+- **Decision:** 5.1: one rule for every action, in the dispatcher, read from the attempt's result.
+- **Alternatives:** retry each command (a comment or a child issue GitHub made before its 5xx
+  would be made twice); more ledger attempts for the queue's actions (minutes of hold, and a head
+  that cannot move would hold the queue longer).
+- **Why:** a blip says nothing about the issue, so it must not cost a triage or count as an
+  intervention; the whole action runs again because each action already reads what it did.
 
 ### An exhausted effect holds its record and tells the owner
 

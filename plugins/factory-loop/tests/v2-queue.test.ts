@@ -712,6 +712,37 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(await usage.run(MERGE)).toMatchObject({ status: 'failed', noRetry: true })
   })
 
+  test('a GitHub blip runs the action again inside its attempt, after a short pause, so the head\'s step never ends unknown for it (drill R2-F4)', async () => {
+    const GRAPHQL = 'GraphQL: Something went wrong while executing your query. This may be the result of a timeout, or it could be a GitHub bug.'
+    const updateArgv = ['gh', 'pr', 'update-branch', '660', '--repo', REPO]
+    let blips = 1
+    const w = actWorld(argv => (argv[2] === 'update-branch' && blips-- > 0 ? { exitCode: 1, stderr: GRAPHQL } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}))
+    const out = await w.run(UPDATE)
+    // the plan reads the attempt as the drill's next pass did: a failed one is U2, unknown (cli)
+    const tried = entry(UPDATE.key, 'queue-update', { issue: 60, pr: 660, head: HEAD, status: out.status === 'running' ? 'failed' : out.status, outcome: 'outcome' in out ? out.outcome : undefined, summary: out.summary, startedAt: NOW - MIN, endedAt: NOW - MIN + 30_000 })
+    const next = plan(withLedger(world([r60], [view(r60, { mergeable: 'behind' })]), [tried]))
+    expect({ status: out.status, transition: transitionOf(next, 60)?.via }).toEqual({ status: 'done', transition: undefined })
+    expect(out).toMatchObject({ outcome: { kind: 'queue', op: 'update', head: HEAD2 } })
+    expect(w.argvs.slice(0, 3)).toEqual([updateArgv, ['sleep', '5'], updateArgv])
+    // the merge too: a blip GitHub did not act on is tried again, and merges
+    let mergeBlips = 1
+    const merge = actWorld(argv => (argv[0] === 'callum-flow-merge' && mergeBlips-- > 0 ? { exitCode: 1, stderr: 'gh pr merge: HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
+    expect(await merge.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true } })
+    expect(merge.argvs.filter(a => a[0] === 'callum-flow-merge')).toHaveLength(2)
+  })
+
+  test('only a GitHub blip runs again, at most twice; credentials, a 404, a validation error, a rate limit (its backoff holds GitHub) and a refusal end the attempt at once', async () => {
+    const tries = async (stderr: string) => {
+      const w = actWorld(argv => (argv[2] === 'update-branch' ? { exitCode: 1, stderr } : {}))
+      const out = await w.run(UPDATE)
+      return { stderr, status: out.status, tries: w.argvs.filter(a => a[2] === 'update-branch').length, pauses: w.argvs.filter(a => a[0] === 'sleep').map(a => a[1]) }
+    }
+    const blips = ['HTTP 502: Bad Gateway (https://api.github.com/graphql)', 'GraphQL: Something went wrong while executing your query.', 'HTTP 504: Gateway Timeout', 'Post "https://api.github.com/graphql": context deadline exceeded', 'HTTP 503: Service Unavailable']
+    for (const stderr of blips) expect(await tries(stderr)).toEqual({ stderr, status: 'failed', tries: 3, pauses: ['5', '15'] })
+    const answers = ['HTTP 401: Bad credentials (https://api.github.com/graphql)', 'HTTP 404: Not Found', 'HTTP 422: Validation Failed', 'HTTP 403: You have exceeded a secondary rate limit', 'API rate limit exceeded for user', 'GraphQL: Pull Request is not mergeable (mergePullRequest)', 'X Cannot update PR branch due to conflicts']
+    for (const stderr of answers) expect(await tries(stderr)).toMatchObject({ stderr, tries: 1, pauses: [] })
+  })
+
   test('queue-merge: the class is read from the whole FAIL lines, before the outcome caps them: a long line, and a FAIL after the twentieth line, keep their class', async () => {
     const warns = Array.from({ length: 25 }, (_, i) => `GUARD test-weakening WARN abc${i} step=x`)
     const long = `GUARD checks FAIL ${Array.from({ length: 80 }, (_, i) => `check-${i}=fail`).join(' ')} class=checks`
