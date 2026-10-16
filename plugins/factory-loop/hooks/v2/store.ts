@@ -126,7 +126,7 @@ export async function readStoredV2(io: V2StoreIo, repo: string): Promise<V2Store
 
 // keepV2: what a pass acting under planner v2 keeps of v2's reads: the records a lost store was
 // rebuilt into, as the ledger's are (3.3), the PR heads first seen (2.4), and the owner's files
-// once what they show is logged (7.2, keepFiles). A shadow keeps nothing.
+// with the edits they show, to log (7.2, keepFiles). A shadow keeps nothing.
 export async function keepV2(live: V2Live, heads: Record<string, HeadSeen> | null, state: State, keep: (key: string, value: unknown) => Promise<void>): Promise<void> {
   if (!live.loaded) return
   if (state.v2 !== undefined && state.v2.recordsFrom === 'events' && live.absent) {
@@ -140,7 +140,7 @@ export async function keepV2(live: V2Live, heads: Record<string, HeadSeen> | nul
   }
   const facts = state.v2?.interventions
   const logged = new Set(state.ledger.filter(e => e.status === 'done').map(e => e.key))
-  const files = facts === undefined ? null : keepFiles(live.files, facts, key => logged.has(key))
+  const files = facts === undefined ? null : keepFiles(live.files, facts, state.now, key => logged.has(key))
   if (files !== null) {
     live.files = files
     await keep(filesKey(state.repo), files)

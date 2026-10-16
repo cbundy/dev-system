@@ -244,41 +244,11 @@ export async function observe(
     }
   }
 
-  // queue: every queueEveryMs. Act mode reads it through queue-watch.sh --once, which logs a
-  // `ready` event for each member the stored list lacks (SPEC 3.4); observe mode keeps the
-  // plain reader, so the shadow logs no ready events of its own.
-  let queueKnown: number[] | null = null
-  if (backoffUntil !== null) {
-    mark('queue', false, cache.queue?.at ?? null, waiting)
-  } else if (cache.queue === undefined || now - cache.queue.at >= cfg.queueEveryMs) {
-    try {
-      if (stored !== undefined) {
-        const known = stored.queueKnown !== null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
-        const r = await run([tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known])
-        const line = r.exitCode === 0 ? parseQueueOnce(r.stdout) : null
-        if (line !== null) {
-          cache.queue = { at: now, value: line.now }
-          queueKnown = line.now
-        }
-        mark('queue', line !== null, cache.queue?.at ?? null, line === null ? fail(r) : undefined)
-      } else {
-        const r = await run(['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel])
-        const queue = r.exitCode === 0 ? parseQueue(r.stdout) : null
-        if (queue !== null) cache.queue = { at: now, value: queue }
-        mark('queue', queue !== null, cache.queue?.at ?? null, queue === null ? fail(r) : undefined)
-      }
-    } catch (err) {
-      mark('queue', false, cache.queue?.at ?? null, String(err))
-    }
-  } else {
-    mark('queue', true, cache.queue.at)
-  }
-
   // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
   // store's whenever it holds one; when it holds none, the ledger is rebuilt from a week of
   // events (the facts window would lose older holds). An empty store after a rebuild that found
-  // nothing is simply empty: the week is not read again every pass. Read before GitHub, which
-  // reads the issues of the loop's running work.
+  // nothing is simply empty: the week is not read again every pass. Read before the queue and
+  // GitHub: a read older than a label write of the loop's own is due, so it sees what GitHub took.
   let chosen: { ledger: LedgerEntry[]; source: LedgerSource }
   if (stored === undefined) {
     chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, factory, facts, rt.device) : null)
@@ -314,6 +284,37 @@ export async function observe(
   const agents = (await io.agents())
     .filter(a => ledger.some(e => e.agentId === a.id))
     .map(a => ({ id: a.id, type: a.type, status: a.status }))
+  const lastLabelWrite = (n?: number) => Math.max(-Infinity, ...ledger.filter(e => e.kind === 'label' && e.status === 'done' && (n === undefined || e.issue === n)).map(e => e.endedAt ?? -Infinity))
+
+  // queue: every queueEveryMs, and the pass after a label write. Act mode reads it through
+  // queue-watch.sh --once, which logs a `ready` event for each member the stored list lacks
+  // (SPEC 3.4); observe mode keeps the plain reader, so the shadow logs no ready events of its own.
+  let queueKnown: number[] | null = null
+  if (backoffUntil !== null) {
+    mark('queue', false, cache.queue?.at ?? null, waiting)
+  } else if (cache.queue === undefined || now - cache.queue.at >= cfg.queueEveryMs || lastLabelWrite() >= cache.queue.at) {
+    try {
+      if (stored !== undefined) {
+        const known = stored.queueKnown !== null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
+        const r = await run([tool('queue-watch.sh'), '--once', '--repo', rt.repo, '--label', cfg.readyLabel, '--known', known])
+        const line = r.exitCode === 0 ? parseQueueOnce(r.stdout) : null
+        if (line !== null) {
+          cache.queue = { at: now, value: line.now }
+          queueKnown = line.now
+        }
+        mark('queue', line !== null, cache.queue?.at ?? null, line === null ? fail(r) : undefined)
+      } else {
+        const r = await run(['callum-flow-issue-read', '--json', '--list', '--label', cfg.readyLabel])
+        const queue = r.exitCode === 0 ? parseQueue(r.stdout) : null
+        if (queue !== null) cache.queue = { at: now, value: queue }
+        mark('queue', queue !== null, cache.queue?.at ?? null, queue === null ? fail(r) : undefined)
+      }
+    } catch (err) {
+      mark('queue', false, cache.queue?.at ?? null, String(err))
+    }
+  } else {
+    mark('queue', true, cache.queue.at)
+  }
 
   // GitHub per issue, oldest reads first, and first of all the issues the loop may act on or
   // counts as live, so a closed one is known before plan drives it (#556): those of its running
@@ -369,7 +370,7 @@ export async function observe(
       .filter(n => {
         const c = cache.github.get(n)
         if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n) && !first.includes(n)) return false
-        return c === undefined || now - c.at >= cfg.githubEveryMs
+        return c === undefined || now - c.at >= cfg.githubEveryMs || lastLabelWrite(n) >= c.at
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
