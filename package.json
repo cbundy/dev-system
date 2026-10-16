@@ -13,6 +13,7 @@
   "scripts": {
     "lint": "sh scripts/lint.sh",
     "build:skills": "node scripts/build-skills.js",
+    "build:events": "node scripts/build-event-docs.js",
     "test": "sh scripts/test.sh"
   },
   "engines": {

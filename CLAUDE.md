@@ -103,7 +103,9 @@ has passed.
   under `images/base/`, `features/src/callum-tools/`, `features/test/`,
   `plugins/callum-flow/hooks/`, `coder/` and `scripts/`, runs `node --check` on the
   JavaScript under `bin/`, `plugins/` and `scripts/`, and fails if a generated skill is
-  out of date (`scripts/build-skills.js --check`) (`scripts/lint.sh`). The base image
+  out of date (`scripts/build-skills.js --check`) or the factory event docs, version lock and
+  shapes are stale or a schema breaks its rules (`scripts/build-event-docs.js --check`; fix with
+  `npm run build:events`) (`scripts/lint.sh`). The base image
   ships shellcheck; where it is not on PATH, lint falls back to `sh -n` / `bash -n`
   syntax checks and says so. When `terraform` is on PATH (the dev image has it) it also
   runs `terraform fmt -check`, `init` and `validate` on `coder/dev-system`; without it,
@@ -155,6 +157,9 @@ architecture). Rules specific to working here:
 - The `onboard` skill's `SKILL.md` is generated from `docs/onboarding.md` (plus
   `SKILL.src.md` beside it) by `scripts/build-skills.js`. Edit those, then run
   `npm run build:skills`; `npm run lint` fails while the generated file is stale.
+- The factory event reference, version lock and reader shapes are generated from
+  `docs/factory-events/schemas/` by `scripts/build-event-docs.js`. Edit the schemas, then run
+  `npm run build:events`; `npm run lint` fails while they are stale (docs/factory-events/README.md).
 - Test Coder template changes only with `coder/dev-system/push-next.sh` (pushes
   `dev-system-next`). Never run `coder templates push` for `dev-system` yourself, even
   though the token could: promoting to the production template is the owner's step.
