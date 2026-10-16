@@ -248,8 +248,10 @@ dpid=$!
 sample_argv "$dpid" "$tmpdir/decoy"
 grep -qF -- "decoy-$WPW" "$tmpdir/decoy" || fail "the argv sampler does not see a process's arguments"
 pass_part=$(printf '%s' "$ADMIN" | sed -n 's#^[a-z]*://[^:@/]*:\([^@/]*\)@.*#\1#p')
-for secret in "$WPW" "$RPW" "$ADMIN" "$pass_part"; do
-  [ -n "$secret" ] || continue
+# The bare admin password may be a common word (CI uses "postgres", also a database
+# name in argv), so it is matched in the credential position ":pw@" only.
+for secret in "$WPW" "$RPW" "$ADMIN" ":$pass_part@"; do
+  [ "$secret" != ":@" ] || continue
   grep -qF -- "$secret" "$tmpdir/sout" && fail "a secret reached the output"
   grep -qF -- "$secret" "$tmpdir/argv" && fail "a secret reached a process's argv"
 done
