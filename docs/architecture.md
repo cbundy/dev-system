@@ -97,6 +97,10 @@ the run. With no server and no binaries the database tests skip and the summary 
 `TEST_REQUIRE_POSTGRES=1` (CI), where the run fails.
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
+Standing up a factory database for real (provision, `factory-db-bootstrap`, the per-role secrets
+`factory-db-writer-url` and `factory-db-reader-url`, the `dev-doctor` check) is documented in
+[factory-db.md](factory-db.md).
+
 ## Versioning and release
 
 Ordinary PRs never bump the main release version. Releasing is a separate, deliberate step: a bump PR made

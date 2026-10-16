@@ -32,7 +32,10 @@ has pushed can both log it, so count identical consecutive rows once.
 
 `loop` is the factory loop's own bookkeeping (`plugins/factory-loop`, see
 [DECISIONS D-09](factory-loop/DECISIONS.md)): agent starts and ends, judgment wakes and their
-answers (with the wake's cause), owner notices and rate-cap holds. Its `note` carries
+answers (with the wake's cause), owner notices and rate-cap holds, and once a minute a pass summary (`kind=passes`: how many
+passes ended in the minute, their mean, p50, p90 and max duration in ms, how many acted and
+errored, and the mode, planner and pass interval; `passes=0` for a minute with none; sent only
+while the loop acts). Its `note` carries
 `kind=<kind> key=<idempotency key> status=<status>` (more fields may follow), and `issue` is null
 for work that names no issue (a release wake, a hold on a whole class). It shows when an agent started or the model was
 woken without the loop's local files, and rebuilds the loop's ledger after a lost store. It is

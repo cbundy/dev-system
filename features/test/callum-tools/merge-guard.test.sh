@@ -53,6 +53,12 @@ reset; echo '[]' > "$st/checks"; g 7; expect_fail "zero checks" checks
 reset; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; echo 8 > "$st/checks-rc"; g 7; expect_fail "pending" checks
 printf '%s' "$out" | grep -q 'ci=pending' || fail "checks reason should name the check"
 reset; echo '[{"name":"ci","bucket":"pass"},{"name":"lint","bucket":"skipping"}]' > "$st/checks"; g 7; expect_pass "skipping mixed"
+# a workflow run with no job yet is in no check list: the guard reads the head's runs too
+reset; echo '{"total_count":1,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"in_progress","conclusion":null}]}' > "$st/runs"; g 7; expect_fail "run in progress" checks
+printf '%s' "$out" | grep -q 'workflow Deploy=pending' || fail "runs reason should name the workflow: $out"
+reset; echo '{"total_count":1,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"failure"}]}' > "$st/runs"; g 7; expect_fail "run failed" checks
+reset; echo '{"total_count":2,"workflow_runs":[{"id":5,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"cancelled"},{"id":6,"workflow_id":2,"event":"push","name":"Deploy","status":"completed","conclusion":"success"}]}' > "$st/runs"; g 7; expect_pass "superseded cancelled run"
+reset; echo 'HTTP 502: Bad Gateway' > "$st/runs-err"; g 7; expect_fail "runs unread" checks
 reset; echo 'MISMATCH #7 issue=#12 expect=closing' > "$st/linkage"; echo 1 > "$st/linkage-rc"; g 7; expect_fail "linkage" linkage
 printf '%s' "$out" | grep -q 'MISMATCH #7' || fail "linkage reason should carry the report"
 reset; echo bogus > "$st/prhead"; g 7; expect_fail "pr head differs" head

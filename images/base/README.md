@@ -700,6 +700,13 @@ on every failure:
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
+- the factory database, for each of the writer and reader URLs (`factory-db-writer-url`,
+  `factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`; never the
+  agentsview URL): a `WARN` naming both files when none is configured; a `FAIL` when a file is empty or
+  unreadable, the server cannot be reached (psql's last line, masked), the role is not the `_writer` /
+  `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
+  version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
+  role and version. See [docs/factory-db.md](../../docs/factory-db.md);
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), and
   [worker heartbeat status](#worker-heartbeat);
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
@@ -1587,7 +1594,7 @@ the synced allow list.
 gates, base, mergeable) and prints `GUARD <name> FAIL <reason>` per failed guard. Checking is read-only;
 the command is in the synced allow list. Its one writing mode, `--update-behind`, is reserved for
 the orchestrator as described in the [merge workflow](../../plugins/callum-flow/skills/issue-orchestrator/SKILL.md#merge).
-Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
+The `checks` guard also reads the head's workflow runs (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`), because a run whose jobs have no check yet (queued on a `concurrency` group) is in no `gh pr checks` list: the latest run per workflow and event must be completed with success, skipped or neutral, else `GUARD checks FAIL workflow <name>=<pending|fail|cancel>`; a failed or unparseable read, or a list shorter than `total_count`, fails with class `read`. It applies in every mode, `--patch` included. Follow the recovery guidance in its `head`, `base` and `mergeable` FAIL lines. Without `--expect` it derives the linkage (`merge` means closing, `run-it` and `keep-open` mean refs) from the issue's `## Rollout` through `callum-flow-rollout`, and fails the `rollout` guard on a conflict or a failed derivation; an `--expect` that contradicts it fails too. Without `--run` it finds the PR branch's newest pipeline run
 through `pipeline-watch.sh --resolve <branch>` (override: `CALLUM_FLOW_WATCH_BIN`). `callum-flow-merge <pr>` runs it, squash-merges with
 `--match-head-commit` on the verified sha and logs `merged`; it is allowed only in the main
 checkout's `settings.local.json`. `--method` or `CALLUM_FLOW_MERGE_METHOD` overrides squash. The `mergeable` guard and `--update-behind` re-read an
@@ -1896,7 +1903,11 @@ server. Nothing calls it yet: the push loops, the heartbeat and `dev-query` stil
 database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
-the agentsview database by accident. Running it again changes nothing.
+the agentsview database by accident. Running it again changes nothing. The full procedure (provision
+the server, run the bootstrap, place each role's URL as the secret `factory-db-writer-url` or
+`factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
+password, upgrade the schema) is in [docs/factory-db.md](../../docs/factory-db.md); `dev-doctor` checks
+both URLs (see [`dev-doctor`](#dev-doctor)).
 
 | Role | Login | Grants |
 |---|---|---|
