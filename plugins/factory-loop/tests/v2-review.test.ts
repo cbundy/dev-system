@@ -15,6 +15,7 @@ import { V2_CONTRACTS } from '../hooks/contract.mjs'
 import type { Job } from '../hooks/contract.mjs'
 import type { ActIo, SpawnInput } from '../hooks/exec'
 import { start } from '../hooks/ledger'
+import { GITHUB_BACKOFF_MS } from '../hooks/observe'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import * as ARGV from '../hooks/v2/argv'
@@ -194,13 +195,13 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     expect(hold([view(603)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'not built yet (U7)' }, interventions: OK, comments: OK } })).toEqual(['review: the PRs were not read (not built yet (U7))'])
     expect(hold([])).toEqual([`review: PR #${PR} was not read this pass`])
     // its own read failed: only this record waits, and says why (drill run 3, R3-F3)
-    expect(hold([], { prs: { prs: [], unread: [{ pr: PR, issue: 603, why: 'gh pr checks exit 1: HTTP 502', untrusted: false }] } })).toEqual([`review: PR #${PR} did not read: gh pr checks exit 1: HTTP 502`])
+    expect(hold([], { prs: { prs: [], unread: [{ pr: PR, issue: 603, why: 'gh pr checks exit 1: HTTP 502', untrusted: false, since: NOW - MIN }] } })).toEqual([`review: PR #${PR} did not read: gh pr checks exit 1: HTTP 502`])
     expect(hold([view(603, { readAt: r.seqAt - MIN })])).toEqual([`review: waits for a read of PR #${PR} newer than seq 5`])
     expect(hold([view(603, { head: null })])).toEqual([`review: PR #${PR} shows no head`])
     expect(hold([view(603, { patch: null })])).toEqual([`review: waits for the patch id of head ${short(HEAD)}`])
   })
 
-  test('a PR whose own read never becomes usable is a bounded GitHub wait (4.4): ciStartMs after the later of the seq\'s start and the ensure\'s end it is unknown; a backoff or the source not read holds it with no clock', () => {
+  test('a PR whose own read never becomes usable is a bounded GitHub wait (4.4): ciStartMs after the latest of the seq\'s start, the ensure\'s end and its first failed read it is unknown; a backoff or the source not read holds it with no clock', () => {
     // seq 20 min ago, the ensure ended 14 min ago: past ciStartMs (10 min)
     const r = rec(604)
     const old = (prs: PrView[], v2: Partial<V2State> = {}, over: Partial<State> = {}) => plan(withLedger(world([r], prs, v2, over), [ensured(r)]))
@@ -208,9 +209,13 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
       const t = transitionOf(old(prs), 604)
       expect(t).toMatchObject({ row: 'U2', via: 'unknown:github-wait', trigger: { kind: 'fact', fact: `github-wait:${PR}/s5` } })
     }
-    // a read of its own that keeps failing too, so it cannot hold its slot for good
-    const failing = { prs: [], unread: [{ pr: PR, issue: 604, why: 'the patch id of 9e01b77 did not compute: exit 1', untrusted: false }] }
-    expect(transitionOf(old([], { prs: failing }), 604)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    // a read of its own that keeps failing past the bound too, so it cannot hold its slot for good;
+    // the bound counts from its first failed read, so one failed read of an old seq holds
+    const failing = (since: number) => ({ prs: [], unread: [{ pr: PR, issue: 604, why: 'the patch id of 9e01b77 did not compute: exit 1', untrusted: false, since }] })
+    expect(transitionOf(old([], { prs: failing(NOW - 11 * MIN) }), 604)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    const blip = old([], { prs: failing(NOW) })
+    expect(transitionOf(blip, 604)).toBeUndefined()
+    expect(said(blip, 604)).toEqual([`review: PR #${PR} did not read: the patch id of 9e01b77 did not compute: exit 1`])
     // the source not read is an admission hold: no clock
     const unread = old([view(604)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'gh failed' }, interventions: OK, comments: OK } })
     expect(transitionOf(unread, 604)).toBeUndefined()
@@ -1052,5 +1057,93 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     const said = (n: number) => (line.skipped as { issue: number | null; why: string }[]).filter(x => x.issue === n).map(x => x.why)
     expect(said(36)).toEqual([])
     expect(said(33)).toEqual([`review: PR #35 did not read: the patch id of ${short(HEAD)} did not compute: ${empty}`])
+  })
+
+  // A record in reviewing whose seq began, and whose ensure ended, an hour ago, so nothing of its
+  // step runs and a wait counted from the seq is long past its bound; `checks` answers its PR's
+  // checks read. Review of the R3-F3 fix: one failed read, or one met under a rate limit, ended
+  // such a step unknown (github-wait) in the pass it failed.
+  function oldReview(on: Parameters<typeof host>[0], checks: { exitCode: number; stderr: string }) {
+    const clock = mock.clock(on, { now: NOW })
+    const n = 41
+    const pr = 43
+    const life = lifeOf(NOW - 2 * HOUR)
+    const r: IssueRecord = { ...madeRecord({ issue: n, life, branch: `issue-${n}`, pr, others: [] }, NOW - 2 * HOUR), seq: 4, seqAt: NOW - HOUR, since: NOW - HOUR, state: 'reviewing', step: 'review', round: 1, head: HEAD, brief: BRIEF(n) }
+    const t5 = entry(transitionKey(r), 'transition', { issue: n, rule: 'S3', startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'transition', row: 'T5', event: 'ok', cause: null, from: 'building', to: 'reviewing', step: 'build', stored: true, via: 'build' } })
+    const ens = entry(prKey(r, 'ensure'), 'pr', { issue: n, rule: 'S2', pr, startedAt: NOW - HOUR, endedAt: NOW - HOUR, outcome: { kind: 'pr', pr, created: true, reopened: false } })
+    const slot = { name: '1', path: '/slots/1', status: 'leased', branch: `issue-${n}`, lease_id: 'L1', lease_holder: `factory-loop:${n}:${life}`, leased_at: iso(NOW - 2 * HOUR), processes: [] }
+    const pull = { pr: { number: pr, state: 'open', merged: false, head: { sha: HEAD, ref: `issue-${n}`, repo: { full_name: REPO } }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean', body: '' }, stripped: 0 }
+    const run = (argv: string[], s: Seen) => {
+      const line = argv.join(' ')
+      switch (argv[0]) {
+        case 'callum-flow-factory-state':
+          return { stdout: factoryDoc([{ issue: n, stage: 'reviewing', entered_at: iso(NOW - HOUR), holder: DEVICE, run: null, pr, stuck: null, github: null }]) }
+        case 'dev-query':
+          return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
+        case `${TOOLS}/queue-watch.sh`:
+          return { stdout: 'queue known=none now=none\n' }
+        case `${TOOLS}/usage-check.sh`:
+          return { stdout: USAGE }
+        case 'treehouse':
+          return { stdout: JSON.stringify([slot]) }
+        case 'callum-flow-rollout':
+          return { stdout: 'ROLLOUT merge source=issue\n' }
+        case 'callum-flow-patch-id':
+          return { stdout: `${PATCH}\n` }
+        case 'callum-flow-issue-read':
+          return { stdout: JSON.stringify(line === `callum-flow-issue-read --json --pr ${pr}` ? pull : { issues: [], stripped: 0 }) }
+      }
+      if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: HEAD }]) }
+      if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return checks
+      return undefined
+    }
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: recordsToStore([r], NOW - HOUR), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - HOUR, entries: [t5, ens] } },
+      run,
+    })
+    let at = NOW
+    const pass = async (ms: number) => {
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      at += ms
+      await clock.advance(ms)
+    }
+    const said = () => (h.last().skipped as { issue: number | null; why: string }[]).filter(x => x.issue === n).map(x => x.why)
+    // the step's end: the transition out of seq 4
+    const ended = () => h.entry(transitionKey({ ...r, seq: 5 }))
+    return { h, pr, pass, said, ended, checksRead: ARGV.prChecksArgv(REPO, pr).join(' ') }
+  }
+
+  test('one failed PR read holds a record long in review; a read that keeps failing ends its step unknown ciStartMs after its first failure', async ($, on) => {
+    const w = oldReview(on, { exitCode: 1, stderr: 'HTTP 502: Bad Gateway' })
+    await $.session.start(START)
+    await w.pass(6_000)
+    expect((w.h.last().sources as Record<string, string>)['v2.prs']).toBe('ok')
+    expect(w.said()).toEqual([`review: PR #${w.pr} did not read: gh pr checks exit 1: HTTP 502: Bad Gateway`])
+    expect(w.ended()).toBeUndefined()
+    // it keeps failing: held while the run of failed reads is within ciStartMs (10 min) ...
+    for (let i = 0; i < 9; i++) await w.pass(60_000)
+    expect(w.said()).toEqual([`review: PR #${w.pr} did not read: gh pr checks exit 1: HTTP 502: Bad Gateway`])
+    expect(w.ended()).toBeUndefined()
+    // ... and unknown (github-wait) once it is past it, so the record cannot hold its slot for good
+    for (let i = 0; i < 2 && w.ended() === undefined; i++) await w.pass(60_000)
+    expect(w.ended()).toMatchObject({ status: 'done', outcome: { kind: 'transition', row: 'U2', via: 'unknown:github-wait' } })
+  })
+
+  test('a PR read that meets a GitHub rate limit holds a record long in review with no clock: the backoff starts in that pass', async ($, on) => {
+    const w = oldReview(on, { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' })
+    await $.session.start(START)
+    await w.pass(6_000)
+    expect(w.h.commands().map(c => c.argv.join(' '))).toContain(w.checksRead)
+    expect(w.said()).toContain(`review: PR #${w.pr} did not read: gh pr checks exit 1: gh: API rate limit exceeded for user ID 1234. (HTTP 403)`)
+    expect(w.ended()).toBeUndefined()
+    // the pass's own backoff, kept for the next passes
+    expect(w.h.store.get(`backoff:${REPO}`)).toBeGreaterThan(NOW + GITHUB_BACKOFF_MS)
+    // the next passes read no PR while the backoff lasts, and the record still holds
+    const before = w.h.seen.length
+    for (let i = 0; i < 3; i++) await w.pass(60_000)
+    expect(w.h.seen.slice(before).map(c => c.argv.join(' '))).not.toContain(w.checksRead)
+    expect(w.said()).toContain('review: the PRs were not read (GitHub rate limit: no PR is read this pass)')
+    expect(w.ended()).toBeUndefined()
   })
 })

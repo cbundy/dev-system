@@ -47,9 +47,12 @@ export type PrView = {
   readAt: number
 }
 
-// A PR whose read was tried this pass and failed: why, and whether the reader refused it because
-// its author is not trusted (callum-flow-issue-read exit 3).
-export type PrUnread = { pr: number; issue: number; why: string; untrusted: boolean }
+// A PR whose read was tried this pass and failed: why, whether the reader refused it because its
+// author is not trusted (callum-flow-issue-read exit 3), and since when its reads have failed: the
+// first of the passes in a row that tried it and failed (ctx.unread, the last pass's), which the
+// rules' bound on its wait counts from, so one failed read holds and only one that keeps failing
+// ends the step.
+export type PrUnread = { pr: number; issue: number; why: string; untrusted: boolean; since: Ms }
 
 // main: the default branch and its head on origin, read when a merge-queue PR shows behind (sha
 // null when that read failed); absent when nothing needed it. unread: the PRs tried that did not
@@ -183,7 +186,8 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
     }
     const v = await readOne(ctx, r, defaultBranch)
     if ('why' in v) {
-      unread.push({ pr: r.pr, issue: r.issue, why: v.why, untrusted: v.untrusted })
+      const since = ctx.unread.find(u => u.pr === r.pr && u.issue === r.issue)?.since ?? now
+      unread.push({ pr: r.pr, issue: r.issue, why: v.why, untrusted: v.untrusted, since })
       continue
     }
     prs.push(v.view)

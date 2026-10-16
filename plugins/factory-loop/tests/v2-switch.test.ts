@@ -557,7 +557,9 @@ describe('the driver (v2 SPEC 2.3)', () => {
     }
     expect(reasons.filter(r => /park/.test(r))).toEqual([])
     expect(reasons).toContain('intervention: person issue-closed')
-    expect((h.store.get(`records:${REPO}`) as { records: IssueRecord[] }).records.find(r => r.issue === 470)).toMatchObject({ state: 'closed', why: 'closed-on-github', seq: 6 })
+    // one transition, E2: the checks read this world does not answer is one failed read, which holds
+    // (it once ended the step unknown at once, as the seq was ciStartMs old)
+    expect((h.store.get(`records:${REPO}`) as { records: IssueRecord[] }).records.find(r => r.issue === 470)).toMatchObject({ state: 'closed', why: 'closed-on-github', seq: 5 })
   })
 
   test('/factory planner v2 writes the workspace file; the next pass plans with v2, and status names it', async ($, on) => {

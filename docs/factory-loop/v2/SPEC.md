@@ -591,11 +591,13 @@ This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with noth
 (`totality/T-10`). In reviewing, the PR's own read is bounded the same way: a PR not in the
 pass's read (a PR whose read, checks or patch id failed is left out: its own record's wait, never
 another's), a read older than the seq, no head or no patch id is unknown `ciStartMs` after the
-later of the seq's start and the end of the PR's ensure. The `prs` source not read at all (a
-GitHub rate limit cut the reads), and a GitHub backoff, are admission holds with no clock. At the
-merge queue's head it bounds a PR that did not read too: only a GitHub rate limit, which cut the
-reads short, holds it with no clock. A PR the reader refuses for an untrusted author (exit 3) is a
-fact, not a missing read: `not-ok(policy)` (9.3).
+latest of the seq's start, the end of the PR's ensure and, for a PR whose reads fail, the first
+of the passes in a row that tried it and failed: one failed read holds, a read that keeps failing
+ends the step. The `prs` source not read at all (a GitHub rate limit cut the reads), and a GitHub
+backoff, are admission holds with no clock; the backoff starts in the pass that met the limit,
+the PR reads included. At the merge queue's head it bounds a PR that did not read too, counted
+the same way: only a GitHub rate limit holds it with no clock. A PR the reader refuses for an
+untrusted author (exit 3) is a fact, not a missing read: `not-ok(policy)` (9.3).
 
 The values are settings (`stateTimeoutMs`, `ciStartMs`, `ciRunMs`; appendix A).
 

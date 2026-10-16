@@ -395,9 +395,10 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
   test('a head whose PR did not read waits on GitHub, bounded: unknown past ciStartMs, so the queue moves on; a rate limit that cut the reads holds it with no clock; an untrusted author is policy', () => {
     const r = rec(27)
     const next = rec(28, { seqAt: NOW - MIN })
+    // its read has failed since the seq began, unless a test says otherwise
     const failing = (seqAt: number, over: Partial<V2State['prs']> = {}) =>
       world([{ ...r, seqAt }, next], [view(next)], {}, {
-        prs: { prs: [view(next)], main: null, unread: [{ pr: 627, issue: 27, why: 'gh pr checks exit 1: HTTP 502', untrusted: false }], ...over },
+        prs: { prs: [view(next)], main: null, unread: [{ pr: 627, issue: 27, why: 'gh pr checks exit 1: HTTP 502', untrusted: false, since: seqAt }], ...over },
       })
     // within the bound: held, and nothing behind it is touched
     const fresh = plan(failing(NOW - 5 * MIN))
@@ -409,6 +410,10 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const t = transitionOf(stuck, 27)
     expect(t).toMatchObject({ row: 'U2', event: 'unknown', via: 'unknown:github-wait' })
     expect(queueOf([t?.next ?? r, next], []).map(x => x.issue)).toEqual([28, 27])
+    // one failed read of a head long at the front holds: the bound counts from its first failed read
+    const blip = plan(failing(NOW - 3 * HOUR, { unread: [{ pr: 627, issue: 27, why: 'gh pr checks exit 1: HTTP 502', untrusted: false, since: NOW }] }))
+    expect(transitionOf(blip, 27)).toBeUndefined()
+    expect(said(blip, 27)).toEqual(['merge queue: PR #627 did not read: gh pr checks exit 1: HTTP 502'])
     // a PR the source left out for no reason it gives is bounded the same way
     const missing = world([{ ...r, seqAt: NOW - 3 * HOUR }], [])
     expect(transitionOf(plan(missing), 27)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
@@ -419,7 +424,7 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     // as does a GitHub backoff on a failed read
     expect(transitionOf(plan({ ...failing(NOW - 3 * HOUR), githubBackoffUntil: NOW + 5 * MIN }), 27)).toBeUndefined()
     // an untrusted author is a fact: policy parks it with the reason (T15), at once
-    const untrusted = plan(failing(NOW - 5 * MIN, { unread: [{ pr: 627, issue: 27, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true }] }))
+    const untrusted = plan(failing(NOW - 5 * MIN, { unread: [{ pr: 627, issue: 27, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true, since: NOW }] }))
     expect(transitionOf(untrusted, 27)).toMatchObject({ row: 'T15', next: { state: 'parked', resumeTo: 'merge-queue', question: expect.stringContaining('not opened by a trusted author') } })
   })
 
@@ -862,6 +867,7 @@ function sourceCtx(records: IssueRecord[], reply: (argv: string[]) => Reply, ove
     heads: {},
     prBudget: 3,
     limited: () => false,
+    unread: [],
     ...over,
   }
   return { ctx, argvs }
@@ -939,7 +945,17 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const out = await readPrs(moved.ctx)
     expect(out.source).toEqual({ ok: true, at: NOW })
     expect(out.read.prs.map(v => [v.pr, v.patch])).toEqual([[676, PATCH]])
-    expect(out.read.unread).toEqual([{ pr: 675, issue: 75, why: 'the patch id of 5555555 did not compute: callum-flow-patch-id: no merge base between origin/main and x', untrusted: false }])
+    const why = 'the patch id of 5555555 did not compute: callum-flow-patch-id: no merge base between origin/main and x'
+    expect(out.read.unread).toEqual([{ pr: 675, issue: 75, why, untrusted: false, since: NOW }])
+    // a read that keeps failing keeps the start of its run (the last pass's unread), which the
+    // rules' bound counts from; one that read again, or another life's PR, starts afresh
+    const again = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'callum-flow-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'x' } : undefined)), {
+      unread: [{ pr: 675, issue: 75, why, untrusted: false, since: NOW - 7 * MIN }, { pr: 676, issue: 76, why, untrusted: false, since: NOW - 7 * MIN }],
+    })
+    const next = await readPrs(again.ctx)
+    expect(next.read.unread?.map(u => [u.pr, u.since])).toEqual([[675, NOW - 7 * MIN]])
+    const other75 = sourceCtx([r], prReply({ '675': sha('5') }, a => (a[0] === 'callum-flow-patch-id' ? { exitCode: 1, stderr: 'x' } : undefined)), { unread: [{ pr: 675, issue: 74, why, untrusted: false, since: NOW - 7 * MIN }] })
+    expect((await readPrs(other75.ctx)).read.unread?.map(u => [u.pr, u.since])).toEqual([[675, NOW]])
   })
 
   test('a closed or merged PR is read without its checks; heads go when their PR closes or their record does', async () => {
@@ -969,7 +985,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const bad = sourceCtx(records, prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '678' ? { exitCode: 3 } : undefined)))
     const out = await readPrs(bad.ctx)
     expect(out.read.prs.map(v => v.pr)).toEqual([677])
-    expect(out.read.unread).toEqual([{ pr: 678, issue: 78, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true }])
+    expect(out.read.unread).toEqual([{ pr: 678, issue: 78, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true, since: NOW }])
     expect(out.source).toEqual({ ok: true, at: NOW })
     // no record in reviewing or the queue: nothing to read, and nothing wrong
     expect((await readPrs(sourceCtx([rec(79, { state: 'fixing', step: 'fix' })], prReply({})).ctx)).source).toEqual({ ok: true, at: NOW })

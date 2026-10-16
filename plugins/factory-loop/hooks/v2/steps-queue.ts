@@ -244,10 +244,10 @@ export function becameHead(ctx: V2Ctx, r: IssueRecord): Ms {
 
 // pastWait: why a wait on GitHub with nothing of the head's own running is past its bound (4.4),
 // or null: a check has run longer than ciRunMs; or no check has started ciStartMs after the
-// latest of the head's first sighting, the head coming to the front, the end of its last action
-// and the last check's completion. Bounding the wait also bounds a head GitHub shows blocked,
-// unknown or draft with nothing to run.
-export function pastWait(ctx: V2Ctx, r: IssueRecord, view: PrView | undefined, facts: HeadFacts): string | null {
+// latest of the head's first sighting, the head coming to the front, the end of its last action,
+// the last check's completion and `since` (the first of its PR's failed reads in a row). Bounding
+// the wait also bounds a head GitHub shows blocked, unknown or draft with nothing to run.
+export function pastWait(ctx: V2Ctx, r: IssueRecord, view: PrView | undefined, facts: HeadFacts, since = 0): string | null {
   const now = ctx.state.now
   const { ciStartMs, ciRunMs } = ctx.config
   const checks = view?.checks ?? []
@@ -257,8 +257,8 @@ export function pastWait(ctx: V2Ctx, r: IssueRecord, view: PrView | undefined, f
   if (runs.length > 0) return null
   const seen = view?.head === null || view?.head === undefined ? undefined : ctx.v2.heads[view.head]?.at
   const completed = checks.flatMap(c => (c.completedAt === null ? [] : [c.completedAt]))
-  const since = Math.max(becameHead(ctx, r), seen ?? 0, facts.lastEnd ?? 0, ...completed)
-  return now - since > ciStartMs ? `nothing started on GitHub for ${minutes(now - since)} min, past its ${minutes(ciStartMs)}` : null
+  const from = Math.max(becameHead(ctx, r), seen ?? 0, facts.lastEnd ?? 0, since, ...completed)
+  return now - from > ciStartMs ? `nothing started on GitHub for ${minutes(now - from)} min, past its ${minutes(ciStartMs)}` : null
 }
 
 function minutes(ms: Ms): number {

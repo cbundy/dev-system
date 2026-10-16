@@ -541,9 +541,9 @@ export async function observe(
   }
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
 
-  // act mode holds GitHub writes while the backoff lasts, and from the pass that met a limit
-  let githubBackoffUntil = backoffUntil
-  if (stored !== undefined && limited) githubBackoffUntil = Math.max(backoffUntil ?? 0, now + GITHUB_BACKOFF_MS)
+  // act mode holds GitHub writes and waits while the backoff lasts, and from the pass that met a
+  // limit: v2's reads below too, so a wait one of them could not read holds with no clock
+  const backoffOf = () => (stored !== undefined && limited ? Math.max(backoffUntil ?? 0, now + GITHUB_BACKOFF_MS) : backoffUntil)
 
   const state = buildState({
     now,
@@ -564,13 +564,13 @@ export async function observe(
     ledger,
     control,
     lastTitle,
-    githubBackoffUntil,
+    githubBackoffUntil: backoffOf(),
     trackerTitle: cfg.trackerTitle,
     checkout,
   })
   if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
   const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, backoff: backoffUntil !== null, limited: () => limited })
-  return { state: { ...state, v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
+  return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 
 // withSession: the higher of usage-check.sh's reading and the session's own, per window.

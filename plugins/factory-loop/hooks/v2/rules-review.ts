@@ -358,11 +358,13 @@ function ciWait(env: StepEnv, pv: PrView, head: string, patch: string): string |
 }
 
 // viewWait: a hold on the PR's own read (not read this pass, a read older than the seq, no head,
-// no patch id) is a GitHub wait too (4.4): past ciStartMs from the later of the seq's start and
-// the ensure's end it is unknown (github-wait), so a PR whose read never comes cannot hold its
-// slot for good. Within the bound, or during a GitHub backoff (an admission hold), the step holds
-// with its skip line. A reviewer or a re-run of the step that still runs keeps its own clock.
-function viewWait(env: StepEnv, pr: number, why: string): StepRead {
+// no patch id) is a GitHub wait too (4.4): past ciStartMs from the latest of the seq's start, the
+// ensure's end and, for a PR whose reads fail, the first of them in a row (`since`) it is unknown
+// (github-wait), so a PR whose read never comes cannot hold its slot for good, and one failed read
+// does not end the step. Within the bound, or during a GitHub backoff (an admission hold), the
+// step holds with its skip line. A reviewer or a re-run of the step that still runs keeps its own
+// clock.
+function viewWait(env: StepEnv, pr: number, why: string, since = 0): StepRead {
   const { ctx, r } = env
   const now = ctx.state.now
   const rerun = `${lifeKey(r)}/rerun/r${r.round}/`
@@ -374,9 +376,9 @@ function viewWait(env: StepEnv, pr: number, why: string): StepRead {
     return { kind: 'running', since: own.startedAt, timeoutMs: timeoutOf(ctx, 'review'), key: own.key }
   }
   const backoff = ctx.state.githubBackoffUntil !== null && now < ctx.state.githubBackoffUntil
-  const anchor = Math.max(r.seqAt, ctx.byKey.get(prKey(r, 'ensure'))?.endedAt ?? 0)
+  const anchor = Math.max(r.seqAt, ctx.byKey.get(prKey(r, 'ensure'))?.endedAt ?? 0, since)
   if (backoff || now - anchor <= ctx.config.ciStartMs) return held(`review: ${why}`)
-  const reason = `${why}, ${Math.round((now - anchor) / MIN)} min after the seq's start or the PR's ensure, past ${Math.round(ctx.config.ciStartMs / MIN)} min`
+  const reason = `${why}, ${Math.round((now - anchor) / MIN)} min after the seq's start, the PR's ensure or its first failed read, past ${Math.round(ctx.config.ciStartMs / MIN)} min`
   return { kind: 'result', event: unknownOf(ctx, r, null, 'github-wait', reason), trigger: fact(`github-wait:${pr}/s${r.seq}`) }
 }
 
@@ -404,12 +406,12 @@ export const reviewStep: StepPlan = env => {
   if (!source.ok) return held(`review: the PRs were not read (${source.error ?? 'no reason given'})`)
   // the PR's own read: a GitHub wait, bounded (viewWait)
   const pv = ctx.v2.prs.prs.find(p => p.pr === pr)
-  const unread = (why: string) => {
-    const read = viewWait(env, pr, why)
+  const unread = (why: string, since?: number) => {
+    const read = viewWait(env, pr, why, since)
     return read.kind === 'result' ? result(read.event, read.trigger) : read
   }
   const failed = ctx.v2.prs.unread?.find(u => u.pr === pr && u.issue === r.issue)
-  if (pv === undefined) return unread(failed === undefined ? `PR #${pr} was not read this pass` : `PR #${pr} did not read: ${failed.why}`)
+  if (pv === undefined) return unread(failed === undefined ? `PR #${pr} was not read this pass` : `PR #${pr} did not read: ${failed.why}`, failed?.since)
   if (pv.readAt < r.seqAt) return unread(`waits for a read of PR #${pr} newer than seq ${r.seq}`)
   // merged or closed: GitHub's own events take the record (rules-state.ts, E3, E4)
   if (pv.state !== 'open') return held(`review: PR #${pr} is ${pv.state}`)

@@ -17,6 +17,7 @@ import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { readPrs } from './sources-prs'
+import type { PrUnread } from './sources-prs'
 import { readWorkspace } from './sources-workspace'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State } from './types'
@@ -28,7 +29,8 @@ export const RECORD_KEEP_MS = 7 * DAY
 // What a source module gets (sources-*.ts): the pass's time and runtime, observe's read (its
 // commands logged), the State observe built, the records and heads, the records whose PR it may
 // read this pass (prBudget: K, a budget of its own beside v1's issue reads; none during a GitHub
-// backoff or after a rate limit this pass), and whether a rate limit met this pass ends its reads.
+// backoff or after a rate limit this pass), whether a rate limit met this pass ends its reads, and
+// the PRs the last pass tried that did not read (sources-prs.ts, PrUnread.since).
 export type SourceCtx = {
   now: Ms
   rt: Runtime
@@ -39,6 +41,7 @@ export type SourceCtx = {
   heads: Record<string, HeadSeen>
   prBudget: number
   limited: () => boolean
+  unread: readonly PrUnread[]
 }
 
 // What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
@@ -48,8 +51,9 @@ export type SourceCtx = {
 export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, HeadSeen> | null; files?: FilesSeen | null; error: string | null }
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
-// the last rebuild, the comments read per issue read, and the checkout R1's tripwire last settled
-// on (reconcile.ts checkoutBaseOf).
+// the last rebuild, the comments read per issue read, the checkout R1's tripwire last settled on
+// (reconcile.ts checkoutBaseOf), and the PRs the last pass tried that did not read, so a run of
+// failed reads keeps its start (a new session starts it afresh).
 export type V2Cache = {
   heads: Record<string, HeadSeen>
   rebuilt: { at: Ms; records: IssueRecord[] } | null
@@ -57,10 +61,11 @@ export type V2Cache = {
   checkoutBase: CheckoutBase | null
   // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
   changed: Record<number, Ms>
+  unread: PrUnread[]
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {} }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, unread: [] }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -289,10 +294,12 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     heads,
     prBudget: blocked() ? 0 : (rt.config.maxInFlightIssues ?? rt.poolSize),
     limited: input.limited,
+    unread: cache.unread,
   }
   const prs = await readers.prs(ctx)
   sources.prs = prs.source
   cache.heads = prs.heads
+  cache.unread = prs.read.unread ?? []
   cache.changed = {}
   for (const p of prs.read.prs) if (p.state !== 'open' && p.closedAt !== null) cache.changed[p.issue] = Date.parse(p.closedAt)
 

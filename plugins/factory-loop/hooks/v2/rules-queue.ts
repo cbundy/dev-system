@@ -126,7 +126,7 @@ function unread(env: StepEnv, facts: HeadFacts, pr: number): StepRead {
     const text = `PR #${pr} was not opened by a trusted author: the reader refused it (callum-flow-issue-read exit 3)`
     return result({ kind: 'not-ok', reason: 'policy', data: { pr, text } }, fact(`queue-untrusted:${pr}:s${r.seq}`))
   }
-  if (failed !== undefined) return wait(env, facts, undefined, `merge queue: PR #${pr} did not read: ${failed.why}`)
+  if (failed !== undefined) return wait(env, facts, undefined, `merge queue: PR #${pr} did not read: ${failed.why}`, failed.since)
   if (prs.cut !== undefined) return held(`merge queue: PR #${pr} was not read: ${prs.cut}`)
   const why = ctx.v2.sources.prs.ok ? 'not read this pass' : `not read: ${ctx.v2.sources.prs.error ?? 'the prs source failed'}`
   return wait(env, facts, undefined, `merge queue: PR #${pr} was ${why}`)
@@ -282,12 +282,13 @@ function planned(env: StepEnv, g: Gate, key: string, what: string): StepRead {
 }
 
 // wait: the head waits on GitHub with nothing of its own running; past the bound (4.4) it is
-// unknown (github-wait). A GitHub backoff holds it with no clock, as admission holds a step.
-function wait(env: StepEnv, facts: HeadFacts, view: PrView | undefined, why: string): StepRead {
+// unknown (github-wait), counted from no earlier than `since` (the first of a PR's failed reads in
+// a row). A GitHub backoff holds it with no clock, as admission holds a step.
+function wait(env: StepEnv, facts: HeadFacts, view: PrView | undefined, why: string, since?: number): StepRead {
   const { ctx, r } = env
   const s = ctx.state
   if (s.githubBackoffUntil !== null && s.now < s.githubBackoffUntil) return held(`${why}; GitHub reads wait out a rate limit`)
-  const past = pastWait(ctx, r, view, facts)
+  const past = pastWait(ctx, r, view, facts, since)
   if (past === null) return held(why)
   return result(unknownOf(ctx, r, null, 'github-wait', `${why}: ${past}`), fact(`queue-wait:${r.issue}:s${r.seq}`))
 }
