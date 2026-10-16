@@ -1042,7 +1042,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
 | `ci-rerun` | a failed or cancelled check re-run (8.5) | the issue |
 | `queue:patch`, `queue:linkage` | the queue's head went back to review because its patch changed (T14), or its body was re-rendered after a `linkage` FAIL (9.3) | the issue |
-| `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, or a command or background agent (10.4). An agent did something strange | the issue |
+| `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, a command, or a call in the background (10.4). An agent did something strange | the issue |
 | `gate-unknown` | a stop gate that could not run (10.6) | the issue |
 | `tripwire` | the main-checkout tripwire fired (10.7) | none |
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
@@ -1527,9 +1527,12 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
     their aliases (`gh pr new`, `gh issue new`) and the other GitHub writes (`gh pr revert`,
     `gh repo edit`, `gh secret`, `gh variable`, `gh run rerun` and the like);
   - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin` (`simplicity/F2`);
-  - an `Agent` call with `run_in_background: true` or any `isolation`, so a designer cannot end
-    its turn while an explorer runs (`failures/F13`; `isolation: "remote"` always runs in the
-    background, and `"worktree"` makes a git worktree).
+  - any call with `run_in_background: true`, `Bash` and `Agent` alike: a loop agent works in the
+    foreground, a command under its 10-minute timeout (10.5), so it neither ends its turn while
+    work it started runs (`failures/F13`) nor sits polling for it (drill run 4, R4-O4). The
+    reason tells it to run the call in the foreground with a timeout;
+  - an `Agent` call with any `isolation` (`"remote"` always runs in the background, and
+    `"worktree"` makes a git worktree).
 - **Bash, refused for a writer** (`failures/F7`):
   - `git push` to any ref but `origin <branch>`;
   - any force push (`-f`, `--force`, `--force-with-lease`, a `+ref`);
