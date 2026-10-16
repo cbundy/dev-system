@@ -1,0 +1,56 @@
+
+$ gh --version
+gh version 2.102.0 (2026-09-30)
+
+$ echo $GH_CONFIG_DIR
+/persist/gh
+
+$ findmnt -T /persist/gh -o TARGET,SOURCE
+TARGET      SOURCE
+/persist/gh <host disk>[/var/lib/docker/volumes/dev-system-gh/_data]
+
+$ find /persist/gh -printf %m %u:%g %s %TY-%Tm-%Td %p
+700 node:node 4096 2026-10-14 /persist/gh
+600 node:node 204 2026-10-14 /persist/gh/hosts.yml
+600 node:node 1780 2026-10-14 /persist/gh/config.yml
+
+$ hosts.yml, each token shown as <prefix>... (<length>)
+github.com:
+    users:
+        cbundy:
+            oauth_token: gho_... (40 chars)
+    git_protocol: https
+    oauth_token: gho_... (40 chars)
+    user: cbundy
+
+$ config.yml, non-comment lines
+version: 1
+git_protocol: https
+editor:
+prompt: enabled
+prefer_editor_prompt: disabled
+pager:
+aliases:
+    co: pr checkout
+http_unix_socket:
+browser:
+clipboard: enabled
+color_labels: disabled
+accessible_colors: disabled
+accessible_prompter: disabled
+spinner: enabled
+
+$ find ~/.local/state/gh   (gh's state dir: outside GH_CONFIG_DIR, in the container's home)
+755 node:node 4096 /home/node/.local/state/gh
+600 node:node 36 /home/node/.local/state/gh/device-id
+
+$ ls ~/.local/share/gh ~/.config/gh
+ls: cannot access '/home/node/.local/share/gh': No such file or directory
+ls: cannot access '/home/node/.config/gh': No such file or directory
+
+$ gh auth status --json hosts --hostname github.com   (token itself not printed)
+{"state":"success","active":true,"login":"cbundy","tokenSource":"/persist/gh/hosts.yml","scopes":"gist, read:org, repo, workflow"}
+
+$ is a keyring service available?
+DBUS_SESSION_BUS_ADDRESS=unset
+no keyring daemon binaries on PATH

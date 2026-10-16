@@ -1,0 +1,40 @@
+
+## gh version
+gh version 2.102.0 (2026-09-30)
+
+## 1. What a config write creates in an empty GH_CONFIG_DIR
+./config.yml f 600 1781 inode=4200299
+state dir (XDG_STATE_HOME/gh), outside GH_CONFIG_DIR:
+(none)
+
+## 2. hosts.yml holds the login; the token is read from it with no keyring
+gh auth token returns: alice
+
+## 3. A hosts.yml write is in place (same inode), not temp file + rename
+inode before=4200311 after=4200311 SAME
+hosts.yml updated
+gh auth switch: inode SAME, active token now: bob
+config.yml untouched by host writes? 1 git_protocol line(s) in config.yml (the global default)
+
+## 4. hosts.yml as a symlink into another directory (login split from config)
+read through symlink: alice
+after switch + config set:
+./config.yml f 600 11 inode=4200352
+./hosts.yml l 777 34 inode=4200351
+symlink still a symlink? yes
+target now active: bob
+config.yml written beside the symlink, not in the auth dir: yes / auth dir: hosts.yml
+
+## 5. A dangling symlink (shared volume empty): what gh does
+gh auth token on empty: error: no oauth token found for github.com
+after a host write: link=yes, target created=yes mode=600
+
+## 6. Concurrent writers and a reader on one hosts.yml (in-place truncate window)
+reads=151 not-alice=0
+file still valid after the race: alice, users kept: 2
+
+## 6b. The same race seen by a fast reader (plain file reads, no gh start-up cost)
+reads=5944 saw an empty or partial hosts.yml: 4
+
+## 7. Two concurrent logical updates (lost update): switch vs config set
+rounds=40 where one of the two updates was lost: 30
