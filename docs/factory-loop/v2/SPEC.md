@@ -1042,7 +1042,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `fix:ci`, `fix:conflict` | a fixer sent for red CI or a conflict, in reviewing or the merge queue (T9). Something did not merge as it should | the issue |
 | `ci-rerun` | a failed or cancelled check re-run (8.5) | the issue |
 | `queue:patch`, `queue:linkage` | the queue's head went back to review because its patch changed (T14), or its body was re-rendered after a `linkage` FAIL (9.3) | the issue |
-| `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, or a command or background agent (10.4). An agent did something strange | the issue |
+| `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, a command, or a call in the background (10.4). An agent did something strange | the issue |
 | `gate-unknown` | a stop gate that could not run (10.6) | the issue |
 | `tripwire` | the main-checkout tripwire fired (10.7) | none |
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
@@ -1488,7 +1488,8 @@ Before every agent step (each attempt and each triage included), action `slot` o
 5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
    step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir }`;
-6. print `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when it saved any.
+6. print `PREPARED head=<sha>`, `KILLED <n>` (step 1's count), and `LEFTOVERS file=<f>` when it
+   saved any.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
 retry. Uncommitted work of a failed attempt, and work it committed but never pushed, survives in
@@ -1527,9 +1528,12 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
     their aliases (`gh pr new`, `gh issue new`) and the other GitHub writes (`gh pr revert`,
     `gh repo edit`, `gh secret`, `gh variable`, `gh run rerun` and the like);
   - in Bash, `no-mistakes`, `axi` and a push to any remote but `origin` (`simplicity/F2`);
-  - an `Agent` call with `run_in_background: true` or any `isolation`, so a designer cannot end
-    its turn while an explorer runs (`failures/F13`; `isolation: "remote"` always runs in the
-    background, and `"worktree"` makes a git worktree).
+  - any call with `run_in_background: true`, `Bash` and `Agent` alike: a loop agent works in the
+    foreground, a command under its 10-minute timeout (10.5), so it neither ends its turn while
+    work it started runs (`failures/F13`) nor sits polling for it (drill run 4, R4-O4). The
+    reason tells it to run the call in the foreground with a timeout;
+  - an `Agent` call with any `isolation` (`"remote"` always runs in the background, and
+    `"worktree"` makes a git worktree).
 - **Bash, refused for a writer** (`failures/F7`):
   - `git push` to any ref but `origin <branch>`;
   - any force push (`-f`, `--force`, `--force-with-lease`, a `+ref`);
@@ -1621,7 +1625,9 @@ safeguards remain:
   effort (4.5). There is no grace period and no inference from a listed status (D-71 and D-75
   are retired).
 - **`factory-slot kill`** sends SIGTERM to every process whose working directory is the slot or
-  inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`. It refuses a path
+  inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`, as `prepare` and
+  `free` do when they end a slot's processes; the slot action's outcome keeps n and its summary
+  names it, so an agent that left processes behind shows in the decision log. It refuses a path
   outside the pool and a lease whose holder is not `factory-loop:`-prefixed. A process that moved
   its working directory out of the slot survives it until W2's `treehouse return`, which ends
   lingering processes. The 10-minute timeout removes the reason agents left pollers behind

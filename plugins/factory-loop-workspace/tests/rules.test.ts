@@ -5,7 +5,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { blockText, gateRecord, runGates, tail } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
-import { agentRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
+import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
 import { mismatch, parseMarker, slotLine } from '../hooks/marker'
 import { simpleCommands } from '../hooks/shell'
@@ -116,13 +116,18 @@ describe('commands refused for every loop agent', () => {
     })
   }
 
-  test('an Agent call in the background, or isolated', () => {
-    expect(agentRefusal({ run_in_background: true })?.cause).toBe('guard:command')
-    expect(agentRefusal({ run_in_background: false })).toBeNull()
+  test('any call in the background, Bash or Agent', () => {
+    expect(backgroundRefusal('Bash', { run_in_background: true })?.cause).toBe('guard:command')
+    expect(backgroundRefusal('Agent', { run_in_background: true })?.reason).toBe('Agent in the background is refused: run it in the foreground and wait for it, a command with a timeout of up to 600000 ms')
+    expect(backgroundRefusal('Bash', { run_in_background: false })).toBeNull()
+    expect(backgroundRefusal('Bash', {})).toBeNull()
+  })
+
+  test('an Agent call isolated', () => {
     expect(agentRefusal({})).toBeNull()
     // remote always runs in the background; worktree makes a git worktree
     expect(agentRefusal({ isolation: 'remote' })?.cause).toBe('guard:command')
-    expect(agentRefusal({ isolation: 'worktree', run_in_background: false })?.reason).toContain('isolation "worktree"')
+    expect(agentRefusal({ isolation: 'worktree' })?.reason).toContain('isolation "worktree"')
   })
 })
 

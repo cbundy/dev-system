@@ -225,15 +225,18 @@ describe('the guard', () => {
     await $.agent.spawn(spawn(BUILD))
     await call($, { tool: 'Bash', command: 'npm test', agentId: 'agent-1' })
     await call($, { tool: 'Bash', command: 'npm test', timeout: 5000, agentId: 'agent-1' })
-    await call($, { tool: 'Bash', command: 'npm test', run_in_background: true, agentId: 'agent-1' })
-    expect(w.calls.map(c => c.timeout)).toEqual([600_000, 5000, undefined])
+    expect(w.calls.map(c => c.timeout)).toEqual([600_000, 5000])
   })
 
-  test('a background Agent call is refused', async ($, on) => {
-    world(on)
+  test('a background call is refused, Bash and Agent alike, and logged', async ($, on) => {
+    const w = world(on)
     await $.agent.spawn(spawn(BUILD))
-    const r = await call($, { tool: 'Agent', description: 'x', prompt: 'x', subagent_type: 'Explore', run_in_background: true, agentId: 'agent-1' })
-    expect(r.deny).toContain('background')
+    const bash = await call($, { tool: 'Bash', command: 'sleep 420', run_in_background: true, agentId: 'agent-1' })
+    expect(bash.deny).toContain('run it in the foreground and wait for it, a command with a timeout')
+    const agent = await call($, { tool: 'Agent', description: 'x', prompt: 'x', subagent_type: 'Explore', run_in_background: true, agentId: 'agent-1' })
+    expect(agent.deny).toContain('in the foreground')
+    expect(w.calls).toEqual([])
+    expect(companionLines(w).map(l => [l.cause, String(l.reason).split(':')[0]])).toEqual([['guard:command', 'Bash'], ['guard:command', 'Agent']])
   })
 
   test('the session\'s own calls and other agents\' are left alone', async ($, on) => {
