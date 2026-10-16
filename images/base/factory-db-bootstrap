@@ -1,0 +1,311 @@
+#!/bin/bash
+#
+# factory-db-bootstrap: sets up a factory database from nothing on any PostgreSQL server
+# (cbundy/dev-system#646). It creates three roles named after the database, creates the
+# database when it is missing, applies the numbered SQL migrations shipped beside it and
+# records each in factory.schema_migrations. Running it again changes nothing.
+#
+# Usage: factory-db-bootstrap --db NAME [--admin-url-file PATH]
+#   --db NAME             the database to set up: ^[a-z][a-z0-9_]{0,47}$. Required; there is
+#                         no default, so the factory never lands in another database by accident.
+#   --admin-url-file PATH read the admin connection URL from PATH (first line)
+#   -h, --help            print this text
+# Environment:
+#   FACTORY_DB_ADMIN_URL         the admin connection URL (a role with CREATEDB and CREATEROLE,
+#                                or a superuser), used when --admin-url-file is not given. The
+#                                URL never comes from argv, and neither it nor a password is
+#                                ever printed.
+#   FACTORY_DB_WRITER_PASSWORD   when set, becomes NAME_writer's password
+#   FACTORY_DB_READER_PASSWORD   when set, becomes NAME_reader's password
+#                                (a password that is not set is left alone)
+#   FACTORY_DB_MIGRATIONS_DIR    the migrations (default: factory-db/migrations beside this
+#                                command, else /usr/local/share/dev-system/factory-db/migrations)
+#
+# Roles (all named after the database, so databases share a server without colliding):
+#   NAME_owner   NOLOGIN. Owns the database, the factory schema and every object a migration
+#                creates; only this command uses it, through SET ROLE.
+#   NAME_writer  LOGIN. SELECT, INSERT and UPDATE on the factory tables (SELECT only on
+#                schema_migrations), USAGE on sequences. No DELETE, TRUNCATE or DDL.
+#   NAME_reader  LOGIN. SELECT on every factory table and view.
+# Grants are re-applied on every run, and default privileges give later migrations' objects
+# the same grants. CONNECT and TEMP on the database and CREATE on schema public are revoked
+# from PUBLIC.
+#
+# Migrations: NNNN_<name>.sql, applied in numeric order, each in one transaction with its
+# schema_migrations row, as NAME_owner, under a session advisory lock (two concurrent runs
+# serialise). An applied file whose sha256 changed, or a recorded version with no file, is
+# refused with a non-zero exit.
+#
+# Output: one summary line on success; on failure one error line naming the step (or the
+# migration file and psql's error), and a non-zero exit.
+set -u
+
+SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
+if [ -f "$SELF_DIR/agentsview.sh" ]; then
+  # shellcheck source=agentsview.sh
+  . "$SELF_DIR/agentsview.sh"
+else
+  # shellcheck source=agentsview.sh
+  . "$SHARE/agentsview.sh"
+fi
+
+die() {
+  echo "factory-db-bootstrap: $*" >&2
+  exit 1
+}
+
+name=''
+url_file=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --db)
+      [ $# -ge 2 ] || die "--db needs a name"
+      name=$2
+      shift 2
+      ;;
+    --admin-url-file)
+      [ $# -ge 2 ] || die "--admin-url-file needs a path"
+      url_file=$2
+      shift 2
+      ;;
+    -h | --help)
+      sed -n '3,/^set -u/p' "$0" | sed '$d; s/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) die "unknown argument '$1' (see --help)" ;;
+  esac
+done
+
+[ -n "$name" ] || die "--db NAME is required"
+[[ $name =~ ^[a-z][a-z0-9_]{0,47}$ ]] \
+  || die "database name '$name' is not valid: it must match ^[a-z][a-z0-9_]{0,47}\$"
+owner="${name}_owner"
+writer="${name}_writer"
+reader="${name}_reader"
+
+if [ -n "$url_file" ]; then
+  [ -r "$url_file" ] || die "cannot read the admin URL file"
+  admin_url=$(head -n 1 -- "$url_file")
+else
+  admin_url=${FACTORY_DB_ADMIN_URL:-}
+fi
+admin_url="${admin_url#"${admin_url%%[![:space:]]*}"}"
+admin_url="${admin_url%"${admin_url##*[![:space:]]}"}"
+[ -n "$admin_url" ] || die "no admin URL: set FACTORY_DB_ADMIN_URL or pass --admin-url-file PATH"
+
+mig_dir=${FACTORY_DB_MIGRATIONS_DIR:-}
+if [ -z "$mig_dir" ]; then
+  if [ -d "$SELF_DIR/factory-db/migrations" ]; then
+    mig_dir="$SELF_DIR/factory-db/migrations"
+  else
+    mig_dir="$SHARE/factory-db/migrations"
+  fi
+fi
+[ -d "$mig_dir" ] || die "migrations directory not found: $mig_dir"
+case "$mig_dir" in
+  *\'* | *$'\n'*) die "migrations directory path may not contain a quote or a newline" ;;
+esac
+
+# The migration files: versions, names, digests and paths, in numeric order.
+versions=()
+files=()
+shas=()
+paths=()
+while IFS= read -r f; do
+  base=${f##*/}
+  [[ $base =~ ^([0-9]{4})_[a-z0-9_]+\.sql$ ]] || die "migration file '$base' is not named NNNN_<name>.sql"
+  v=$((10#${BASH_REMATCH[1]}))
+  for seen in "${versions[@]+"${versions[@]}"}"; do
+    [ "$seen" != "$v" ] || die "two migration files have version $v"
+  done
+  sum=$(sha256sum -- "$f") || die "cannot read migration file '$base'"
+  versions+=("$v")
+  files+=("$base")
+  shas+=("${sum%% *}")
+  paths+=("$mig_dir/$base")
+done < <(find "$mig_dir" -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
+
+# psql runs; its output never reaches the log unmasked.
+mask_out() {
+  local text=$1 pw
+  for pw in "${FACTORY_DB_WRITER_PASSWORD:-}" "${FACTORY_DB_READER_PASSWORD:-}" "$admin_url"; do
+    [ -z "$pw" ] || text=${text//"$pw"/***}
+  done
+  printf '%s\n' "$text" | mask_secrets
+}
+
+# first_error TEXT: the first ERROR line, else the first line, squeezed to one line.
+first_error() {
+  local line
+  line=$(printf '%s\n' "$1" | grep -m1 'ERROR' || true)
+  [ -n "$line" ] || line=$(printf '%s\n' "$1" | grep -m1 . || true)
+  printf '%s' "$line" | tr -s '[:space:]' ' ' | cut -c1-400
+}
+
+# step_fail STEP OUTPUT: the one error line, then exit.
+step_fail() {
+  local msg
+  msg=$(first_error "$(mask_out "$2")")
+  die "$1 failed${msg:+: $msg}"
+}
+
+# sql_run URL STEP: runs stdin as a psql script; on failure exits with the step's error line.
+sql_run() {
+  local url=$1 step=$2 out
+  out=$(run_psql "$url" 2>&1) || step_fail "$step" "$out"
+}
+
+# Phase 1, on the admin connection: the roles, the database. The lock serialises two runs for
+# the same name; the global one serialises every CREATE DATABASE on the server (concurrent
+# creates from template1 can fail).
+sql=$(
+  cat << 'SQL'
+COMMIT;
+\set db '@DB@'
+\set owner '@DB@_owner'
+\set writer '@DB@_writer'
+\set reader '@DB@_reader'
+SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:' || :'db'));
+SELECT format('CREATE ROLE %I NOLOGIN', :'owner')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'owner') \gexec
+SELECT format('CREATE ROLE %I LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE', r)
+  FROM unnest(ARRAY[:'writer', :'reader']) AS r
+  WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \gexec
+SELECT format('GRANT %I TO CURRENT_USER WITH INHERIT TRUE, SET TRUE', :'owner')
+  WHERE current_setting('server_version_num')::int >= 160000 \gexec
+SELECT format('GRANT %I TO CURRENT_USER', :'owner')
+  WHERE current_setting('server_version_num')::int < 160000 \gexec
+SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:create-database'));
+SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'owner')
+  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
+SELECT pg_advisory_unlock(hashtext('factory-db-bootstrap:create-database'));
+@PASSWORDS@
+BEGIN;
+SQL
+)
+pw_sql=''
+if [ -n "${FACTORY_DB_WRITER_PASSWORD:-}" ]; then
+  export FACTORY_DB_WRITER_PASSWORD
+  pw_sql+="\\getenv wpass FACTORY_DB_WRITER_PASSWORD
+SELECT format('ALTER ROLE %I PASSWORD %L', :'writer', :'wpass') \\gexec
+"
+fi
+if [ -n "${FACTORY_DB_READER_PASSWORD:-}" ]; then
+  export FACTORY_DB_READER_PASSWORD
+  pw_sql+="\\getenv rpass FACTORY_DB_READER_PASSWORD
+SELECT format('ALTER ROLE %I PASSWORD %L', :'reader', :'rpass') \\gexec
+"
+fi
+sql=${sql//@PASSWORDS@/$pw_sql}
+sql=${sql//@DB@/$name}
+sql_run "$admin_url" "creating the roles and the database" <<< "$sql"
+
+# From here on, the database itself.
+case "$admin_url" in
+  *\?*) db_url="$admin_url&dbname=$name" ;;
+  *) db_url="$admin_url?dbname=$name" ;;
+esac
+
+# Refuse an edited migration or a recorded version with no file, before changing anything.
+out=$(run_psql "$db_url" -At 2>&1 << 'SQL'
+SELECT to_regclass('factory.schema_migrations') IS NOT NULL AS has \gset
+\if :has
+SELECT version, name, sha256 FROM factory.schema_migrations ORDER BY version;
+\endif
+SQL
+) || step_fail "reading factory.schema_migrations" "$out"
+while IFS='|' read -r rv rname rsha; do
+  [ -n "$rv" ] || continue
+  found=''
+  for i in "${!versions[@]}"; do
+    [ "${versions[$i]}" = "$rv" ] && found=$i
+  done
+  [ -n "$found" ] || die "migration version $rv (${rname}) is recorded as applied but has no file in $mig_dir"
+  [ "${shas[$found]}" = "$rsha" ] \
+    || die "migration ${files[$found]} (version $rv) was applied and its file has changed since"
+done <<< "$out"
+
+# Phase 2: the migrations, then the grants, in one session that holds the advisory lock. The
+# script leaves psql's own single transaction at once and opens one per migration, so each
+# runs with its schema_migrations row, and ends inside a transaction for psql's final COMMIT.
+sql=$(
+  cat << 'SQL'
+COMMIT;
+SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:migrate'));
+BEGIN;
+SET LOCAL ROLE "@DB@_owner";
+CREATE SCHEMA IF NOT EXISTS factory;
+CREATE TABLE IF NOT EXISTS factory.schema_migrations (
+  version int PRIMARY KEY,
+  name text NOT NULL,
+  sha256 text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+COMMIT;
+SQL
+)
+sql=${sql//@DB@/$name}
+for i in "${!versions[@]}"; do
+  sql+="
+SELECT EXISTS (SELECT 1 FROM factory.schema_migrations WHERE version = ${versions[$i]}) AS done \\gset
+\\if :done
+\\else
+BEGIN;
+SET LOCAL ROLE \"${owner}\";
+\\i '${paths[$i]}'
+INSERT INTO factory.schema_migrations (version, name, sha256)
+  VALUES (${versions[$i]}, '${files[$i]%.sql}', '${shas[$i]}');
+COMMIT;
+\\endif
+"
+done
+sql+=$(
+  cat << 'SQL'
+
+BEGIN;
+SET LOCAL ROLE "@DB@_owner";
+REVOKE CONNECT, TEMPORARY ON DATABASE "@DB@" FROM PUBLIC;
+GRANT CONNECT ON DATABASE "@DB@" TO "@DB@_writer", "@DB@_reader";
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA factory TO "@DB@_writer", "@DB@_reader";
+ALTER DEFAULT PRIVILEGES FOR ROLE "@DB@_owner" IN SCHEMA factory
+  GRANT SELECT, INSERT, UPDATE ON TABLES TO "@DB@_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "@DB@_owner" IN SCHEMA factory
+  GRANT SELECT ON TABLES TO "@DB@_reader";
+ALTER DEFAULT PRIVILEGES FOR ROLE "@DB@_owner" IN SCHEMA factory
+  GRANT USAGE ON SEQUENCES TO "@DB@_writer";
+DO $grants$
+DECLARE
+  r record;
+BEGIN
+  FOR r IN SELECT c.oid::regclass AS rel, c.relname, c.relkind FROM pg_class c
+           WHERE c.relnamespace = 'factory'::regnamespace AND c.relkind IN ('r', 'p', 'f', 'v', 'm', 'S') LOOP
+    IF r.relkind = 'S' THEN
+      EXECUTE format('GRANT USAGE ON SEQUENCE %s TO %I', r.rel, '@DB@_writer');
+      CONTINUE;
+    END IF;
+    EXECUTE format('GRANT SELECT ON %s TO %I, %I', r.rel, '@DB@_writer', '@DB@_reader');
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON %s FROM %I', r.rel, '@DB@_reader');
+    EXECUTE format('REVOKE DELETE, TRUNCATE, REFERENCES, TRIGGER ON %s FROM %I', r.rel, '@DB@_writer');
+    IF r.relkind IN ('r', 'p', 'f') AND r.relname <> 'schema_migrations' THEN
+      EXECUTE format('GRANT INSERT, UPDATE ON %s TO %I', r.rel, '@DB@_writer');
+    ELSE
+      EXECUTE format('REVOKE INSERT, UPDATE ON %s FROM %I', r.rel, '@DB@_writer');
+    END IF;
+  END LOOP;
+END
+$grants$;
+COMMIT;
+BEGIN;
+SQL
+)
+sql=${sql//@DB@/$name}
+out=$(run_psql "$db_url" 2>&1 <<< "$sql") || {
+  # A migration's own error names its file: psql reports the \i file and line.
+  step_fail "applying migrations" "$out"
+}
+
+version=$(run_psql "$db_url" -At 2>&1 <<< "SELECT coalesce(max(version), 0) FROM factory.schema_migrations;") \
+  || step_fail "reading the schema version" "$version"
+echo "factory-db-bootstrap: database $name ready (roles $owner, $writer, $reader), schema version $version"

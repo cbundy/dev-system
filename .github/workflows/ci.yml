@@ -39,6 +39,20 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
+    # A real PostgreSQL for the database tests (scripts/test-pg.sh, cbundy/dev-system#646): they
+    # make and drop their own databases on this shared server, and npm test fails on a leftover.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -86,4 +100,6 @@ jobs:
       - name: Test
         env:
           TEST_REQUIRE_CLAUDE: "1"
+          TEST_REQUIRE_POSTGRES: "1"
+          FACTORY_TEST_PG_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: npm test
