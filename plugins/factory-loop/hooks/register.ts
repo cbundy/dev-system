@@ -284,7 +284,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : 16,
     cwd: checkout,
     loopDir,
-    session: await $.session.id(),
+    workspace: { session: await $.session.id(), process: await $.env.get('FACTORY_LOOP_WORKSPACE_PROCESS') },
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,

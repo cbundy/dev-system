@@ -14,6 +14,8 @@ export const CFG_DIR = '/cfg'
 export const LOOP_DIR = `${CFG_DIR}/factory-loop/cbundy__dev-system`
 export const TOOLS = '/usr/local/share/callum-tools'
 export const SESSION = 'session-1'
+// the process's id, as the companion keeps it in the environment (v2 SPEC 10.9)
+export const PROCESS = 'process-1'
 export const LOCK = `${LOOP_DIR}/act.lock`
 export const iso = (ms: number) => new Date(ms).toISOString()
 
@@ -79,7 +81,7 @@ type Stored = { key: string; status: string; attempts: number; agentId?: string;
 
 export function host(on: On, opts: HostOptions = {}) {
   // an empty value leaves the variable unset
-  const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', ...opts.env }).filter(([, v]) => v !== '')
+  const env = Object.entries({ CLAUDE_CONFIG_DIR: CFG_DIR, DEV_MACHINE_NAME: DEVICE, DEV_ROLE: 'orchestrator', FACTORY_LOOP_WORKSPACE_PROCESS: PROCESS, ...opts.env }).filter(([, v]) => v !== '')
   mock.env(on, Object.fromEntries(env))
   const files = new Map<string, string>([[`${CFG_DIR}/factory-loop/config.json`, JSON.stringify(opts.config ?? {})]])
   for (const [path, body] of Object.entries(opts.files ?? {})) files.set(path, body)

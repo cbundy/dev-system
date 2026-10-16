@@ -13,8 +13,8 @@
 //   cannot run lets it finish, logged as gate-unknown; every run is a line of companion.jsonl, the
 //   last also in factory-gate.json;
 // - the handshake (10.9): <CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json says this
-//   session has the companion, written again every minute; the loop holds every agent step while
-//   its own is missing or stale.
+//   session has the companion, and in which process, written again every minute; the loop holds
+//   every agent step while its own is missing, from another process or stale.
 //
 // It acts only on spawns that carry the slot line, so the loop's v1 agents and every other agent
 // pass untouched.
@@ -75,9 +75,21 @@ export function handshakePath(configDir: string, session: string): string {
   return `${configDir}/factory-loop/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
-// handshake: this session's file, written whole with the time now.
+// processId: this process's id, made by the first companion module to run in it and kept in its
+// environment, where the loop, a plugin of the same process, reads it: the loop takes only a
+// handshake that names its own process.
+async function processId($: EngineInterface): Promise<string> {
+  const known = await $.env.get('FACTORY_LOOP_WORKSPACE_PROCESS')
+  if (known) return known
+  const made = `${(await $.clock.now()).toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  await $.env.set('FACTORY_LOOP_WORKSPACE_PROCESS', made)
+  return made
+}
+
+// handshake: this session's file, written whole with this process's id and the time now.
 async function handshake($: EngineInterface): Promise<void> {
   const session = await $.session.id()
+  const proc = await processId($)
   const now = await $.clock.now()
   const path = handshakePath(await configDir($), session)
   const manifest = await readText($, `${$.plugin.root}/.claude-plugin/plugin.json`)
@@ -86,9 +98,9 @@ async function handshake($: EngineInterface): Promise<void> {
     const v = (JSON.parse(manifest ?? '{}') as { version?: unknown }).version
     if (typeof v === 'string') version = v
   } catch {
-    // the version is for people reading the file; the loop reads the session
+    // the version is for people reading the file; the loop reads the rest
   }
-  await writeFile($, path, `${JSON.stringify({ v: 1, session, version, at: new Date(now).toISOString() })}\n`)
+  await writeFile($, path, `${JSON.stringify({ v: 1, session, process: proc, version, at: new Date(now).toISOString() })}\n`)
 }
 
 let beat: { cancel: () => void } | null = null

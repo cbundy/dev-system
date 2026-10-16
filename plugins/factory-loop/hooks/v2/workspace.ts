@@ -40,8 +40,8 @@ export function handshakePath(loopBase: string, session: string): string {
   return `${loopBase}/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
-// What the rail read: this session's handshake is there, names it and is fresh, or why not
-// (sources-workspace.ts workspaceRead).
+// What the rail read: this session's handshake is there, names it and this process, and is
+// fresh, or why not (sources-workspace.ts workspaceRead).
 export type WorkspaceRead = { session: string; ok: true; version: string | null } | { session: string; ok: false; why: string }
 
 // workspaceHold: why a record's step may not start: an agent step while the rail fails. null: it

@@ -40,11 +40,19 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[] } = {}) {
+function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; env?: Record<string, string> } = {}) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node' })
+  // the process's environment, which the companion writes and the loop reads
+  const env = new Map(Object.entries({ CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node', ...opts.env }))
+  on('env.get', ($, e) => ({ value: env.get(e.name) }))
+  on('env.set', ($, e) => {
+    if (e.value === undefined) env.delete(e.name)
+    else env.set(e.name, e.value)
+    return { value: undefined }
+  })
   const w = {
     clock,
+    env,
     session: 's1',
     spawned: [] as { name?: string; cwd?: string; parentAgentId?: string }[],
     calls: [] as Record<string, unknown>[],
@@ -123,6 +131,24 @@ describe('the handshake', () => {
     w.session = 's2'
     await w.clock.advance(60_000)
     expect(JSON.parse(w.written.get(`${CONFIG}/factory-loop/workspace/s2.json`) ?? '{}')).toMatchObject({ session: 's2' })
+  })
+
+  test('the file names this process by an id the companion keeps in its environment, where the loop reads it', async ($, on) => {
+    const w = world(on)
+    await $.session.start(START)
+    const path = `${CONFIG}/factory-loop/workspace/s1.json`
+    const id = w.env.get('FACTORY_LOOP_WORKSPACE_PROCESS')
+    expect(id).toMatch(/^\S+$/)
+    expect(JSON.parse(w.written.get(path) ?? '{}')).toMatchObject({ process: id })
+    await w.clock.advance(60_000)
+    expect(JSON.parse(w.written.get(path) ?? '{}')).toMatchObject({ process: id })
+  })
+
+  test('a companion loaded again in the same process keeps the process\'s id', async ($, on) => {
+    const w = world(on, { env: { FACTORY_LOOP_WORKSPACE_PROCESS: 'p0' } })
+    await $.session.start(START)
+    expect(JSON.parse(w.written.get(`${CONFIG}/factory-loop/workspace/s1.json`) ?? '{}')).toMatchObject({ process: 'p0' })
+    expect(w.env.get('FACTORY_LOOP_WORKSPACE_PROCESS')).toBe('p0')
   })
 
   test('every beat writes the file again with the time now, so its age shows the companion runs', async ($, on) => {

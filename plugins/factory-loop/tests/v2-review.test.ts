@@ -36,7 +36,7 @@ import { SLOT_STATES, STEP_AGENT, unknownResult } from '../hooks/v2/types'
 import type { IssueRecord, Lease, StepResult, V2State } from '../hooks/v2/types'
 import { handshakePath } from '../hooks/v2/workspace'
 import { DEVICE, MIN, NOW, PLUGIN_ROOT, config, entry, state as baseState } from './fixtures'
-import { CFG_DIR, LOOP_DIR, NO_EVENTS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso } from './host'
+import { CFG_DIR, LOOP_DIR, NO_EVENTS, PROCESS, QUIET_BEATS, REPO, SESSION, TOOLS, factoryDoc, host, iso } from './host'
 import type { Seen } from './host'
 
 const HOUR = 60 * MIN
@@ -972,7 +972,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     // the companion runs in the session: its handshake, written every minute (10.9)
     let at = NOW
     const pass = async (ms: number) => {
-      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: iso(at) }))
       at += ms
       await clock.advance(ms)
     }
@@ -1045,7 +1045,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     })
     let at = NOW
     const pass = async (ms: number) => {
-      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: iso(at) }))
       at += ms
       await clock.advance(ms)
     }
@@ -1108,7 +1108,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     })
     let at = NOW
     const pass = async (ms: number) => {
-      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: iso(at) }))
       at += ms
       await clock.advance(ms)
     }

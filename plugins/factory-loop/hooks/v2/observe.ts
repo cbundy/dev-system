@@ -361,8 +361,8 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
 
   // the tripwire's base moves only past a read with nothing left untold (10.7)
   cache.checkoutBase = checkoutBaseOf(cache.checkoutBase, state.checkout, state.ledger, now)
-  // the workspace rail: is the companion loaded in this session (10.9)
-  const workspace = rt.session === undefined ? undefined : await readWorkspace(input.io, rt.loopDir, rt.session, now, state.loadedAt)
+  // the workspace rail: does the companion run in this session and process (10.9)
+  const workspace = rt.workspace === undefined ? undefined : await readWorkspace(input.io, rt.loopDir, rt.workspace.session, rt.workspace.process, now)
   const v2: V2State = {
     sources,
     records,

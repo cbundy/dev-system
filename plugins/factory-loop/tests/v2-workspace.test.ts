@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { companionLines } from '../hooks/v2/sources-interventions'
-import { HANDSHAKE_LOAD_GRACE_MS, HANDSHAKE_STALE_MS, readWorkspace, workspaceRead } from '../hooks/v2/sources-workspace'
+import { HANDSHAKE_STALE_MS, readWorkspace, workspaceRead } from '../hooks/v2/sources-workspace'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { lifeOf, prepareKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
@@ -23,10 +23,10 @@ const LIFE = lifeOf(NOW - 120 * MIN)
 const SESSION = 'session-1'
 const OK = { ok: true, at: NOW }
 const UP: WorkspaceRead = { session: SESSION, ok: true, version: '0.38.2' }
-// the loop's module loaded an hour ago; the companion's last beat was a minute ago
-const LOADED = NOW - 60 * MIN
-const DOWN: WorkspaceRead = workspaceRead(null, SESSION, NOW, LOADED)
-const handshake = (over: Record<string, unknown> = {}) => JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: new Date(NOW - MIN).toISOString(), ...over })
+// this process's id, as the companion keeps it in the environment; its last beat was a minute ago
+const PROCESS = 'p-now'
+const DOWN: WorkspaceRead = workspaceRead(null, SESSION, PROCESS, NOW)
+const handshake = (over: Record<string, unknown> = {}) => JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: new Date(NOW - MIN).toISOString(), ...over })
 
 function rec(n: number, over: Partial<IssueRecord> = {}): IssueRecord {
   return { ...madeRecord({ issue: n, life: LIFE, branch: `issue-${n}`, pr: null, others: [] }, NOW - 30 * MIN), seq: 3, seqAt: NOW - 20 * MIN, state: 'building', step: 'build', since: NOW - 20 * MIN, ...over }
@@ -60,31 +60,35 @@ describe('the slot line (v2 SPEC 10.3)', () => {
 
 describe('the handshake (v2 SPEC 10.9)', () => {
   test('it passes only for this session\'s own file', () => {
-    expect(workspaceRead(handshake(), SESSION, NOW, LOADED)).toEqual(UP)
+    expect(workspaceRead(handshake(), SESSION, PROCESS, NOW)).toEqual(UP)
     expect(DOWN).toMatchObject({ ok: false, why: expect.stringContaining('not loaded') })
-    expect(workspaceRead(handshake({ session: 'other' }), SESSION, NOW, LOADED)).toMatchObject({ ok: false, why: expect.stringContaining('other') })
-    expect(workspaceRead('{', SESSION, NOW, LOADED).ok).toBe(false)
+    expect(workspaceRead(handshake({ session: 'other' }), SESSION, PROCESS, NOW)).toMatchObject({ ok: false, why: expect.stringContaining('other') })
+    expect(workspaceRead('{', SESSION, PROCESS, NOW).ok).toBe(false)
   })
 
   test('a stale handshake for this same session reads as missing', () => {
-    // the companion stopped beating: a session resumed under its id without it, or a failed load
-    const old = workspaceRead(handshake({ at: new Date(NOW - HANDSHAKE_STALE_MS - 1).toISOString() }), SESSION, NOW, LOADED)
+    // the companion stopped beating in this process: a reload without it, or a beat that stopped
+    const old = workspaceRead(handshake({ at: new Date(NOW - HANDSHAKE_STALE_MS - 1).toISOString() }), SESSION, PROCESS, NOW)
     expect(old).toMatchObject({ ok: false, why: expect.stringContaining('stale') })
-    expect(workspaceRead(handshake({ at: new Date(NOW - HANDSHAKE_STALE_MS).toISOString() }), SESSION, NOW, LOADED).ok).toBe(true)
-    // written before this process's loop loaded: a restart within the stale window still holds
-    const restarted = NOW - MIN
-    const before = workspaceRead(handshake({ at: new Date(restarted - HANDSHAKE_LOAD_GRACE_MS - 1).toISOString() }), SESSION, NOW, restarted)
-    expect(before).toMatchObject({ ok: false, why: expect.stringContaining('before the loop loaded') })
-    // a live companion's beat just before the load passes
-    expect(workspaceRead(handshake({ at: new Date(restarted - 50_000).toISOString() }), SESSION, NOW, restarted).ok).toBe(true)
+    expect(workspaceRead(handshake({ at: new Date(NOW - HANDSHAKE_STALE_MS).toISOString() }), SESSION, PROCESS, NOW).ok).toBe(true)
     // no time, or one that does not read: stale
-    expect(workspaceRead(handshake({ at: undefined }), SESSION, NOW, LOADED)).toMatchObject({ ok: false, why: expect.stringContaining('no time') })
-    expect(workspaceRead(handshake({ at: 'yesterday' }), SESSION, NOW, LOADED).ok).toBe(false)
+    expect(workspaceRead(handshake({ at: undefined }), SESSION, PROCESS, NOW)).toMatchObject({ ok: false, why: expect.stringContaining('no time') })
+    expect(workspaceRead(handshake({ at: 'yesterday' }), SESSION, PROCESS, NOW).ok).toBe(false)
+  })
+
+  test('a restart without the companion: the old process\'s handshake, 20 s old, does not pass (R4-F3)', () => {
+    // the session resumed under its id without the companion, so no id in this process; the old
+    // process's companion wrote its last beat 20 s ago
+    const old = handshake({ process: 'p-before', at: new Date(NOW - 20_000).toISOString() })
+    expect(workspaceRead(old, SESSION, undefined, NOW)).toMatchObject({ ok: false, why: expect.stringContaining('written by another one') })
+    // with the companion the old file does not pass either, until its first beat replaces it
+    expect(workspaceRead(old, SESSION, PROCESS, NOW).ok).toBe(false)
+    expect(workspaceRead(handshake(), SESSION, PROCESS, NOW).ok).toBe(true)
   })
 
   test('a stale handshake holds agent steps as a missing one does', () => {
     const r = rec(97, { state: 'designing', step: 'design' })
-    const stale = workspaceRead(handshake({ at: new Date(NOW - 10 * MIN).toISOString() }), SESSION, NOW, LOADED)
+    const stale = workspaceRead(handshake({ at: new Date(NOW - 10 * MIN).toISOString() }), SESSION, PROCESS, NOW)
     const held = plan(world([r], stale))
     expect(of(held, 97).filter(a => a.kind === 'slot' || a.kind === 'agent-step')).toEqual([])
     expect(said(held, 97)).toEqual([expect.stringMatching(/^workspace: .*stale/)])
@@ -98,11 +102,11 @@ describe('the handshake (v2 SPEC 10.9)', () => {
         return handshake()
       },
     }
-    expect((await readWorkspace(io, '/cfg/factory-loop/cbundy__dev-system', SESSION, NOW, LOADED)).ok).toBe(true)
+    expect((await readWorkspace(io, '/cfg/factory-loop/cbundy__dev-system', SESSION, PROCESS, NOW)).ok).toBe(true)
     expect(read).toEqual(['/cfg/factory-loop/workspace/session-1.json'])
     expect(handshakePath('/cfg/factory-loop', 'a/b c')).toBe('/cfg/factory-loop/workspace/a_b_c.json')
     const failing = { readFile: async () => Promise.reject(new Error('EIO')) }
-    expect((await readWorkspace(failing, '/cfg/factory-loop/cbundy__dev-system', SESSION, NOW, LOADED)).ok).toBe(false)
+    expect((await readWorkspace(failing, '/cfg/factory-loop/cbundy__dev-system', SESSION, PROCESS, NOW)).ok).toBe(false)
   })
 })
 
