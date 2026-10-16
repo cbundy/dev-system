@@ -315,6 +315,12 @@ export const FACTORY_LABELS: Readonly<Record<Exclude<IssueState, 'closed'>, { na
   parked: { name: 'factory:parked', color: 'b60205', description: 'Factory loop: waits on the owner; remove this label to resume' },
 }
 
+// resumeStep: how the owner resumes a parked issue (11), one text for every message that says so:
+// the park comment, its tell and reminders, and the triage prompt's park choice.
+export function resumeStep(issue: number): string {
+  return `answer on the issue and remove the \`factory:parked\` label, or run \`/factory resume ${issue} "your answer"\`; a comment alone does not resume`
+}
+
 // The label of an issue R1 released at its last life (6.4): not a state, since the issue is out of
 // the factory. S1 never claims an issue carrying it; the owner removing it and adding `ready`
 // brings the issue back with its life count started again.
@@ -424,6 +430,9 @@ export const PLANNERS = ['v1', 'v2'] as const
 export type Planner = (typeof PLANNERS)[number]
 export const SHADOWS = ['off', 'v2'] as const
 export type Shadow = (typeof SHADOWS)[number]
+// the model aliases the agent tool accepts; a setting named *Model takes one of them
+export const MODELS = ['sonnet', 'opus', 'haiku', 'fable'] as const
+export type Model = (typeof MODELS)[number]
 
 // The timeouts and tell periods of 4.4, by step and waiting state.
 export type StateTimeouts = { design: Ms; build: Ms; review: Ms; fix: Ms; triage: Ms; queued: Ms; queueWait: Ms; parked: Ms }
