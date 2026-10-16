@@ -33,7 +33,7 @@ GitHub through its API: the loop does every GitHub write. Read issues, comments 
 write a closing keyword (close, fix or resolve and their forms) before an issue reference
 anywhere: the loop links the PR to the issue itself.
 
-Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit.
 
 Run every command and sub-agent (such as `callum-flow:explorer`) in the foreground and wait for
 it; never use run_in_background: your turn ends only with your answer.
@@ -52,8 +52,10 @@ it; never use run_in_background: your turn ends only with your answer.
 - Never delete, skip or weaken an existing test or assertion to make a gate pass; fix the code
   or the environment instead. Remove a test only if it is clearly and absolutely not required,
   and then say why in your answer's summary.
-- For a visible change, capture the evidence a reviewer needs and say where it is in your
-  answer.
+- For a visible change, capture the evidence a reviewer needs and give it in your answer's
+  evidence, which the loop puts in the PR body. An image there needs a URL: follow the repo's
+  documented evidence route, and link a capture committed on the branch by its commit-pinned
+  blob URL (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
 - Never install toolchains or system packages: a tool that looks missing is a container bug.
   Say so in your answer and carry on with what you can.
 

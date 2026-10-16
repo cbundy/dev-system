@@ -243,6 +243,12 @@ export function designPrompt(i: DesignInput): string {
   return out.join('\n')
 }
 
+// evidenceRule: how a writer's evidence reaches the PR body the loop writes, where the reviewer
+// looks for it (8.1): the newest a build or a fix gives is the PR's, and an image needs a URL.
+function evidenceRule(i: WorkInput): string {
+  return `For a visible change, give the evidence a reviewer needs in your answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it whole. An image there needs a URL: follow the repo's documented evidence route (its CLAUDE.md), and link a capture committed on the branch by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true.`
+}
+
 // --- the builder (4.2, 8.1) ------------------------------------------------------------------------------------
 
 export function buildPrompt(i: WorkInput): string {
@@ -264,7 +270,8 @@ export function buildPrompt(i: WorkInput): string {
     QUALITY,
     TEST_POLICY,
     LINKAGE,
-    'Keep the change to what the brief asks: nothing unrelated. For a visible change, give the evidence a reviewer needs in your answer.',
+    'Keep the change to what the brief asks: nothing unrelated.',
+    evidenceRule(i),
     `When the work is committed and pushed, check that \`git ls-remote origin refs/heads/${b}\` shows your head.`,
     '',
     ...answerBlock(
@@ -310,13 +317,14 @@ export function fixPrompt(i: FixInput): string {
     TEST_POLICY,
     LINKAGE,
     'Make only the changes the findings, checks or instructions call for.',
+    evidenceRule(i),
     `When you have pushed, check that \`git ls-remote origin refs/heads/${b}\` shows your head.`,
     '',
     ...answerBlock(
       i.place,
       'Then',
-      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
-      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters.',
+      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<what you ran and what it showed, or null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
+      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters, or null.',
     ),
     'If you judge every finding wrong and push nothing, record {"result": "declined", "summary": "...", "findings": [...]} the same way, each disposition declined with its evidence: the PR goes back to review with your reasons.',
   ]

@@ -136,7 +136,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 
   test('fix: each finding fixed or declined with a reason; a declined fix pushes nothing and declines all; the job names the findings each needing a disposition', () => {
     const fixed = { result: 'fixed', head: SHA('b'), summary: 'fixed the parser', findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done' }, { id: 'r2-2', disposition: 'declined', reason: 'wrong' }] }
-    expect(check('fix', fixed, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: fixed })
+    expect(check('fix', fixed, { findings: ['r2-1', 'r2-2'] })).toEqual({ ok: true, outcome: { ...fixed, evidence: null } })
     expect(problems('fix', fixed, { findings: ['r2-1', 'r2-3'] })).toEqual(['finding r2-3 has no disposition: fix it, or decline it with a reason'])
     expect(problems('fix', { result: 'declined', summary: 's', findings: [] })).toEqual(['a declined fix names each finding it declines, with its reason'])
     expect(problems('fix', { result: 'declined', summary: 's', head: SHA('c'), findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'x' }] })).toEqual([
@@ -149,6 +149,16 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
       'findings[0].reason is required',
       'findings[1].id r2-1 is given twice',
     ])
+  })
+
+  test('fix: the answer may give the PR\'s evidence, as a build does, fixed or declined', () => {
+    const shot = 'Screenshot: ![page](https://github.com/o/r/blob/abc1234/docs/shot.png?raw=true)'
+    const fixed = { result: 'fixed', head: SHA('b'), summary: 'added the screenshot', evidence: shot, findings: [{ id: 'r2-1', disposition: 'fixed', reason: 'done' }] }
+    expect(check('fix', fixed)).toEqual({ ok: true, outcome: fixed })
+    const declined = { result: 'declined', summary: 's', evidence: shot, findings: [{ id: 'r2-1', disposition: 'declined', reason: 'it was there' }] }
+    expect(check('fix', declined)).toEqual({ ok: true, outcome: { ...declined, head: null } })
+    expect(problems('fix', { ...fixed, evidence: 'e'.repeat(4001) })).toEqual(['evidence is 4001 characters; at most 4000'])
+    expect(problems('fix', { ...fixed, evidence: 7 })).toEqual([expect.stringMatching(/^evidence /)])
   })
 })
 
@@ -193,6 +203,16 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(design).toContain('  issue-301, for issue #301')
     expect(design).not.toContain('issue-300, for issue #300')
     expect(design).toContain(`jq -n --rawfile brief /tmp/factory-design-300.md '{"kind": "brief", "brief": $brief}' | ${BIN} --to ${PLACE.file}`)
+  })
+
+  test('writers are told how an image reaches the PR body the loop writes: by a URL, the repo\'s route, a commit-pinned blob URL', () => {
+    for (const p of [buildPrompt(input()), fixPrompt(fixInput())]) {
+      expect(p).toContain(`https://github.com/${REPO}/blob/<sha>/<path>?raw=true`)
+      expect(p).toContain('the repo\'s documented evidence route')
+    }
+    expect(fixPrompt(fixInput())).toContain('"evidence"')
+    // a repo's own screenshot command starts its server and stops it: the command rule lets it run
+    expect(COMMAND_RULE).toContain('A repo command that starts what it needs and stops it before it exits counts as a command known to exit.')
   })
 
   test('free text is neutralized: a closing keyword in a note or a check name links nothing; ids that are not ids are dropped', () => {

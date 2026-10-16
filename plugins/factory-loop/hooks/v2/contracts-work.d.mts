@@ -27,6 +27,6 @@ export type DesignChild = { key: string; title: string; body: string; blockedBy:
 export type DesignAnswer = { kind: (typeof DESIGN_KINDS)[number]; brief: string | null; question: string | null; children: DesignChild[] }
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }
 export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string }
-export type FixAnswer = { result: (typeof FIX_RESULTS)[number]; head: string | null; summary: string; findings: FixFinding[] }
+export type FixAnswer = { result: (typeof FIX_RESULTS)[number]; head: string | null; summary: string; evidence: string | null; findings: FixFinding[] }
 
 export const CONTRACTS: Readonly<Record<'design-v2' | 'build' | 'fix', V2Contract>>

@@ -1168,7 +1168,7 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
   Design brief: <brief URL>
 
   ## Evidence
-  <the builder's evidence block, when it gave one>
+  <the newest evidence a build or a fix gave, when one did>
 
   Opened by the factory loop for #N.
   ```

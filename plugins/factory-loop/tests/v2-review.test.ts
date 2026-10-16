@@ -176,6 +176,26 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     expect(of(adopted, 601)).toEqual([expect.objectContaining({ kind: 'pr', op: 'ensure', pr: 77, title: 'Factory loop work for #601', summary: '', evidence: null })])
   })
 
+  test('the PR\'s evidence is the newest a build or a fix gave: a fix that answers a missing-evidence finding updates the body; one that gives none keeps the build\'s', () => {
+    const r = rec(603, { round: 2 })
+    const step = (seq: number, kind: 'build' | 'fix', endedAt: number, data: Record<string, unknown>, event: 'ok' | 'not-ok' = 'ok') =>
+      done(stepKey({ ...r, seq }, kind, 1), 'agent-step', {
+        issue: 603,
+        step: kind,
+        endedAt,
+        outcome: { kind: 'step', step: kind, result: { event, reason: event === 'ok' ? null : 'declined', why: null, head: HEAD, choice: null, data } },
+      })
+    const build = step(1, 'build', NOW - 50 * MIN, { title: 'Add the page', summary: 'Adds the page.', evidence: 'npm test: ok' })
+    const shot = 'Screenshot: ![page](https://github.com/o/r/blob/abc1234/docs/shot.png?raw=true)'
+    const ensureOf = (entries: LedgerEntry[]) => of(plan(withLedger(world([r], [view(603)]), entries)), 603, 'pr')
+    expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'fixed', summary: 'Added the screenshot.', evidence: shot })])).toEqual([
+      expect.objectContaining({ op: 'ensure', title: 'Add the page', summary: 'Adds the page.', evidence: shot }),
+    ])
+    // a declined fix may answer a finding with the evidence too
+    expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'declined', summary: 'It was there.', evidence: shot }, 'not-ok')])).toEqual([expect.objectContaining({ op: 'ensure', evidence: shot })])
+    expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'fixed', summary: 'Fixed the parser.', evidence: null })])).toEqual([expect.objectContaining({ op: 'ensure', evidence: 'npm test: ok' })])
+  })
+
   test('a held step starts nothing: the seq\'s transition event not logged yet holds the ensure, and the skip line says why', () => {
     const r = rec(602)
     const t = done(transitionKey(r), 'transition', { issue: 602, outcome: { kind: 'transition', row: 'T5', event: 'ok', cause: null, from: 'building', to: 'reviewing', step: 'build', stored: true, via: 'build' } })

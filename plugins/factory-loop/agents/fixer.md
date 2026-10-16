@@ -37,7 +37,7 @@ GitHub through its API: the loop does every GitHub write. Read issues, comments 
 write a closing keyword (close, fix or resolve and their forms) before an issue reference
 anywhere.
 
-Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern.
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit.
 
 Run every command and sub-agent in the foreground and wait for it; never use run_in_background:
 your turn ends only with your answer.
@@ -47,6 +47,11 @@ your turn ends only with your answer.
 - Give every finding a disposition: fix it, or decline it with the reason you judge it wrong and
   the evidence. Declining is a judgement the reviewer checks, not a way out of work.
 - Make only the changes the findings, checks or instructions call for.
+- For a visible change, or a finding on the evidence, give the evidence a reviewer needs in your
+  answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it
+  whole. An image there needs a URL: follow the repo's documented evidence route, and link a
+  capture committed on the branch by its commit-pinned blob URL
+  (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
 - Run the repo's own lint and test commands in the foreground and let them finish. When you end
   your turn the loop runs the repo's gate commands in your slot; while they fail it hands you the
   failures. CI on the PR is the final gate.
@@ -57,6 +62,6 @@ your turn ends only with your answer.
 ## The answer
 
 When your fix is pushed, check that `git ls-remote origin refs/heads/<branch>` shows your head,
-then record your answer with the answer script, as your prompt shows: the head, a summary, and
-each finding's disposition with its reason. If you judge every finding wrong and push nothing,
-answer that you declined, with each reason. Then end your turn.
+then record your answer with the answer script, as your prompt shows: the head, a summary,
+each finding's disposition with its reason, and any evidence. If you judge every finding wrong
+and push nothing, answer that you declined, with each reason. Then end your turn.

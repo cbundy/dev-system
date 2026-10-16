@@ -1,7 +1,8 @@
 // The plan side of the review step (docs/factory-loop/v2/SPEC.md 4.2 reviewing, 4.4, 8.1 to 8.6,
 // property 15): in reviewing, each pass,
 // - the PR first: action `pr` op `ensure`, once per seq (8.1), whose done entry names the PR; the
-//   builder's title, summary and evidence ride on it from the build step's done entry;
+//   builder's title and summary ride on it from the build step's done entry, and the newest
+//   evidence a build or a fix gave;
 // - the reviewer, keyed by patch and round (keys.ts reviewKey, 8.4): a done review of the head's
 //   patch in this round is used, whatever its attempt, seq or head, so a head that moved without
 //   changing the patch, an unknown CI result or a retry never buys a second review; otherwise this
@@ -90,16 +91,18 @@ export function baseOf(state: Pick<State, 'checkout'>): string {
   return c !== null && c !== undefined && 'defaultBranch' in c && c.defaultBranch !== '' ? c.defaultBranch : 'main'
 }
 
-// workOf: the builder's title, summary and evidence for the PR (8.1), from the life's newest done
-// build that answered ok; a title of the loop's own and no summary when there is none (an adopted
-// PR, or a record rebuilt from events), so the PR keeps its own (act-pr.ts bodyWork).
+// workOf: the builder's title and summary for the PR (8.1), from the life's newest done build that
+// answered ok, and the newest evidence a build or a fix gave (a fix may answer a finding on the
+// evidence); a title of the loop's own and no summary when there is none (an adopted PR, or a
+// record rebuilt from events), so the PR keeps its own (act-pr.ts bodyWork).
 function workOf(ctx: V2Ctx, r: IssueRecord): { title: string; summary: string; evidence: string | null } {
-  const build = lifeEntries(ctx, r, 'agent-step')
-    .filter(e => e.status === 'done' && e.outcome?.kind === 'step' && e.outcome.step === 'build' && e.outcome.result.event === 'ok')
-    .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]
-  const d = build?.outcome?.kind === 'step' ? record(build.outcome.result.data) : null
+  const steps = lifeEntries(ctx, r, 'agent-step')
+    .flatMap(e => (e.status === 'done' && e.outcome?.kind === 'step' ? [{ at: e.endedAt ?? 0, step: e.outcome.step, ok: e.outcome.result.event === 'ok', d: record(e.outcome.result.data) }] : []))
+    .sort((a, b) => b.at - a.at)
   const text = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v : null)
-  return { title: text(d?.title) ?? `Factory loop work for #${r.issue}`, summary: text(d?.summary) ?? '', evidence: text(d?.evidence) }
+  const d = steps.find(s => s.step === 'build' && s.ok)?.d
+  const evidence = steps.map(s => ((s.step === 'build' && s.ok) || s.step === 'fix' ? text(s.d?.evidence) : null)).find(v => v !== null) ?? null
+  return { title: text(d?.title) ?? `Factory loop work for #${r.issue}`, summary: text(d?.summary) ?? '', evidence }
 }
 
 // The rest of a review key within its life: review/<patch7>/r<round>/a<k>.

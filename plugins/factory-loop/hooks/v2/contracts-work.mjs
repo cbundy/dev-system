@@ -16,8 +16,9 @@
 //     { "result": "cannot", "reason": "..." }
 // - `fix`: each finding fixed or declined, with a reason (8.6, 9.7). A fix that pushed gives its
 //   head; one that declined everything pushes nothing. The job's data may name the finding ids that
-//   must each have a disposition (the review's error findings).
-//     { "result": "fixed", "head": "<sha>", "summary": "...",
+//   must each have a disposition (the review's error findings). Either may give the PR's evidence,
+//   as a build does: the newest given is the PR's (rules-review.ts workOf).
+//     { "result": "fixed", "head": "<sha>", "summary": "...", "evidence": "..." | null,
 //       "findings": [{ "id": "r2-1", "disposition": "fixed", "reason": "..." }] }
 //     { "result": "declined", "summary": "...",
 //       "findings": [{ "id": "r2-1", "disposition": "declined", "reason": "..." }] }
@@ -294,13 +295,14 @@ function findingsOf(v, problems) {
 
 function checkFix(input, job) {
   const o = record(input)
-  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"result": "fixed" | "declined", "head", "summary", "findings"}'] }
+  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"result": "fixed" | "declined", "head", "summary", "evidence", "findings"}'] }
   const problems = []
-  strays(o, ['result', 'head', 'summary', 'findings'], 'a fix answer', problems)
+  strays(o, ['result', 'head', 'summary', 'evidence', 'findings'], 'a fix answer', problems)
   const result = FIX_RESULTS.find(r => r === o.result)
   if (result === undefined) problems.push(`result ${show(o.result)} is not one of ${FIX_RESULTS.join(', ')}`)
   const head = sha(o, 'head', result === 'fixed' ? 'required' : 'none', problems)
   const summary = text(o, 'summary', LIMITS.fixSummary, 'required', problems)
+  const evidence = text(o, 'evidence', LIMITS.evidence, 'optional', problems)
   const findings = findingsOf(o.findings, problems)
   if (result === 'declined') {
     if (Array.isArray(o.findings) && o.findings.length === 0) problems.push('a declined fix names each finding it declines, with its reason')
@@ -308,7 +310,7 @@ function checkFix(input, job) {
   }
   const given = new Set(findings.map(f => f.id))
   for (const id of expectedIds(job)) if (!given.has(id)) problems.push(`finding ${id} has no disposition: fix it, or decline it with a reason`)
-  return checked(problems, () => ({ result, head, summary, findings }))
+  return checked(problems, () => ({ result, head, summary, evidence, findings }))
 }
 
 function summaryOfFix(input) {
