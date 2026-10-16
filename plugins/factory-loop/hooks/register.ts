@@ -1009,6 +1009,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   const at = new Date(state.now).toISOString()
   const issues = state.issues
   begin(tr, 'log')
+  const passMs = Math.round(performance.now() - t0)
   const line = {
     v: 1,
     at,
@@ -1017,7 +1018,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     loaded: new Date(loadedAt).toISOString(),
     // what asked for the pass, and its time up to this line (#552)
     trigger,
-    ms: Math.round(performance.now() - t0),
+    ms: passMs,
     mode: rt.mode,
     executed: act,
     device: rt.device,
@@ -1121,7 +1122,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // the title says error until the store takes the ledger again (SPEC 10.9)
   if (act && saveProblem !== null) throw new Error(`ledger: not saved: ${saveProblem}`)
   holdsLock(act)
-  recordPass(await $.clock.now(), Math.round(performance.now() - t0), report?.outcomes.some(o => o.kind !== 'title') ?? false, false)
+  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false)
 }
 
 // writeTrace: the pass's trace record beside its decision log, within config traceMaxBytes
