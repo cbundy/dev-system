@@ -287,6 +287,11 @@ carries on by itself: there is no watcher to re-arm.
   (the image's tini is bypassed with the entrypoint) and reaps orphaned processes.
   `DEV_DESKTOP` stays unset: the workspace is headless, so `dev-doctor` runs its headless
   checks.
+- **Stop.** The container gets a 30 s stop grace (`destroy_grace_seconds`), and a
+  "Heartbeat stop" `coder_script` on the agent (`run_on_stop`) runs
+  `/usr/local/share/dev-system/heartbeat-loop --final` under a 10 s `timeout` before
+  the container stops, if the script is executable. It attempts to write the worker's
+  `stopped` row on a best-effort basis and always exits 0, even if the heartbeat fails.
 - **Log in app.** `dev-init` serves dev-login's page on port 8765 (`DEV_LOGIN_PORT`),
   kept up as a status page (`DEV_LOGIN_PAGE_EXIT=0`). The app proxies it through Coder's
   path-based app URL, owner only, with a health check on `/healthz`; nothing is published

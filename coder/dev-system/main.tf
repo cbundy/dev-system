@@ -516,6 +516,18 @@ resource "coder_agent" "main" {
   }
 }
 
+# On a workspace stop the agent runs this before the container goes: the worker's last
+# heartbeat (state = 'stopped') is written while the network is still up. Bounded and
+# best effort, so its timeout limits the stop delay and heartbeat failure cannot fail the stop
+# (#467). heartbeat-loop is not on PATH.
+resource "coder_script" "heartbeat_stop" {
+  agent_id     = coder_agent.main.id
+  display_name = "Heartbeat stop"
+  icon         = "/icon/memory.svg"
+  run_on_stop  = true
+  script       = file("${path.module}/heartbeat-stop.sh")
+}
+
 # dev-login's page, behind Coder's own authentication: no port is published
 # on the Docker host. The page's links are relative, so the path-based app
 # URL works (subdomain apps would need a wildcard domain).
@@ -605,6 +617,10 @@ resource "docker_container" "workspace" {
   init       = true
   entrypoint = ["sh", "-c", coder_agent.main.init_script]
   env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env)
+
+  # Room for the agent's stop script (heartbeat_stop) to write the worker's final heartbeat
+  # before the container is killed (#467).
+  destroy_grace_seconds = 30
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)

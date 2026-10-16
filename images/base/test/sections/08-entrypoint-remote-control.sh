@@ -18,6 +18,44 @@ check "a command runs after dev-init, in its own directory, with its exit status
   echo \"rc=\$rc stdout=\$out\"
   [ \$rc = 7 ] && [ \"\$out\" = /tmp ]"
 
+# A stop reaches the command through the entrypoint (#467): TERM is forwarded and the exit status is 128+15.
+check "docker stop forwards TERM to the command and the container exits 143" bash -c "
+  c=\$(docker run -d --label '$RUN_ID' '$IMAGE' bash -c 'sleep infinity')
+  sleep 3
+  docker stop -t 30 \"\$c\" >/dev/null
+  rc=\$(docker inspect -f '{{.State.ExitCode}}' \"\$c\")
+  echo \"exit code \$rc\"
+  [ \"\$rc\" = 143 ]"
+
+check "the command reads the container's stdin" bash -c "
+  out=\$(echo stdin-reaches-the-command | docker run --rm -i '$IMAGE' cat 2>/dev/null)
+  echo \"stdout=\$out\"
+  [ \"\$out\" = stdin-reaches-the-command ]"
+
+check "INT is forwarded to a command with the default INT action and the container exits 130" bash -c "
+  c=\$(docker run -d --label '$RUN_ID' '$IMAGE' sleep infinity)
+  sleep 3
+  docker kill -s INT \"\$c\" >/dev/null
+  for _ in \$(seq 20); do [ \"\$(docker inspect -f '{{.State.Running}}' \"\$c\")\" = false ] && break; sleep 1; done
+  rc=\$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' \"\$c\")
+  echo \"state \$rc\"
+  [ \"\$rc\" = 'false 130' ]"
+
+# A heartbeat-loop --final that hangs is cut off by timeout 10: the stop still finishes, and the stub's output never reaches stdout.
+hbstub=$(mktemp -d)
+chmod 755 "$hbstub"
+printf '#!/bin/sh\necho STUB-HEARTBEAT-STDOUT\nsleep 100\n' > "$hbstub/heartbeat-loop"
+chmod 755 "$hbstub/heartbeat-loop"
+check "a hanging heartbeat-loop --final is bounded: the stop finishes in about 12s and its stdout stays out of the command's" bash -c "
+  c=\$(docker run -d --label '$RUN_ID' -v '$hbstub/heartbeat-loop:/usr/local/share/dev-system/heartbeat-loop:ro' '$IMAGE' bash -c 'sleep infinity')
+  sleep 3
+  start=\$(date +%s)
+  docker stop -t 30 \"\$c\" >/dev/null
+  took=\$((\$(date +%s) - start))
+  echo \"docker stop took \${took}s\"
+  [ \"\$took\" -lt 15 ] && [ \"\$took\" -ge 9 ] && ! docker logs \"\$c\" 2>/dev/null | grep -q STUB-HEARTBEAT-STDOUT"
+rm -rf "$hbstub"
+
 check "as root the entrypoint skips dev-init, leaving nothing root-owned in /persist" bash -c "
   out=\$(docker run --rm --user root '$IMAGE' find /persist -mindepth 1 -user root 2>&1)
   echo \"\$out\"

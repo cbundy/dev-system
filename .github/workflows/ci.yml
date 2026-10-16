@@ -18,7 +18,8 @@ name: CI
 #   merges/conflicts, check) in scratch dirs, so template shape changes that
 #   break the CLI's assumptions fail here, plus plugins/callum-flow's hook tests
 #   (dev-system#52), the callum-tools script tests and every mod's validation and
-#   tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1).
+#   tests (claude plugin validate / test; TEST_REQUIRE_CLAUDE=1), and the Coder
+#   template's terraform test (TEST_REQUIRE_TERRAFORM=1).
 # The heavy, path-filtered image and feature workflows stay separate and
 # optional.
 on:
@@ -86,4 +87,5 @@ jobs:
       - name: Test
         env:
           TEST_REQUIRE_CLAUDE: "1"
+          TEST_REQUIRE_TERRAFORM: "1"
         run: npm test
