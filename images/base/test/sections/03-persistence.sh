@@ -6,11 +6,12 @@
 
 echo "== 3. persistence contract"
 check "env vars point at /persist/*" in_image '
-  [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ "$CODEX_HOME" = /persist/codex ] &&
+  [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ "$CLAUDE_SECURESTORAGE_CONFIG_DIR" = /persist/claude-auth ] &&
+  [ "$CODEX_HOME" = /persist/codex ] &&
   [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ] &&
   [ "$AGENTSVIEW_DATA_DIR" = /persist/agentsview ]'
 check "every /persist dir exists, is owned 1000:1000 with mode 0700 and is writable by node" in_image '
-  for d in /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self; do
+  for d in /persist/claude /persist/claude-auth /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events /persist/dev-restart-self; do
     [ "$(stat -c %u:%g:%a "$d")" = 1000:1000:700 ] || { echo "$d: $(stat -c %u:%g:%a "$d")"; exit 1; }
     touch "$d/.probe" && rm "$d/.probe" || exit 1
   done'
@@ -21,7 +22,7 @@ check "no tool binary lives under /persist" in_image '
   for b in claude codex gh git no-mistakes treehouse uv uvx agentsview node; do
     case "$(readlink -f "$(command -v $b)")" in /persist/*) echo "$b under /persist"; exit 1 ;; esac
   done'
-check "the persistence list file, the label and PERSIST_NAMES agree on the seven dirs" bash -c "
+check "the persistence list file, the label and PERSIST_NAMES agree on the eight dirs" bash -c "
   want=\$(for n in $PERSIST_NAMES; do printf '/persist/%s,' \"\$n\"; done); want=\${want%,}
   [ \"\$(docker image inspect -f '{{index .Config.Labels \"dev.cbundy.persist\"}}' '$IMAGE')\" = \"\$want\" ] &&
   [ \"\$(docker run --rm --entrypoint '' '$IMAGE' cat /usr/local/share/dev-system/persist-dirs | paste -sd,)\" = \"\$want\" ]"
@@ -40,3 +41,14 @@ check "OCI labels carry source, revision, version, created and the mutability no
 check "Claude login state (.claude.json) lands inside CLAUDE_CONFIG_DIR" in_image '
   timeout 60 claude -p hi >/dev/null 2>&1 || true
   test -f /persist/claude/.claude.json && ! test -e "$HOME/.claude.json"'
+# The image relies on CLAUDE_SECURESTORAGE_CONFIG_DIR, which is not in Claude
+# Code's public docs, to keep Claude's login apart from the rest of its state
+# (so a runtime can share just the login): every build proves the Claude it
+# ships reads the login from there, and no longer from CLAUDE_CONFIG_DIR.
+check "Claude reads its login from CLAUDE_SECURESTORAGE_CONFIG_DIR, and not from CLAUDE_CONFIG_DIR" in_image '
+  printf "%s\n" "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-test\",\"refreshToken\":\"r\",\"expiresAt\":4102444800000,\"scopes\":[\"user:inference\"],\"subscriptionType\":\"max\"}}" \
+    > /persist/claude-auth/.credentials.json
+  claude auth status --json | jq -e ".loggedIn == true and .authMethod == \"claude.ai\"" || exit 1
+  [ ! -e /persist/claude/.credentials.json ] || { echo "Claude wrote a login into CLAUDE_CONFIG_DIR"; exit 1; }
+  mv /persist/claude-auth/.credentials.json /persist/claude/.credentials.json
+  claude auth status --json | jq -e ".loggedIn == false"' --entrypoint ""

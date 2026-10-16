@@ -65,6 +65,7 @@ privacy defaults are in
 | `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system` and `orchestrator`; for `orchestrator-loop`, callum-flow and factory-loop pinned to the pushing checkout's package version. |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `gh_volume_name` | empty (off) | Named Docker volume mounted at `/persist/gh` in every workspace, so all workspaces using the name share one gh login. Empty keeps each workspace's gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
+| `claude_auth_volume_name` | empty (off) | Named Docker volume mounted at `/persist/claude-auth`, Claude's login directory, in every workspace, so all workspaces using the name share one Claude login while keeping their own history and settings. Empty keeps each workspace's Claude login on its own `/persist` volume. See [Sharing one Claude login](#sharing-one-claude-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
 | `registry_auth_address` | `ghcr.io` | Registry the credentials are for. Only used with `registry_auth_config`. |
@@ -272,7 +273,8 @@ carries on by itself: there is no watcher to re-arm.
     volume that ownership. An older image has no such directory, so the volume comes up
     root-owned, and the startup script `chown`s it (with `sudo -n`) only in that case.
 
-  For optional shared gh storage, see [Sharing one gh login](#sharing-one-gh-login).
+  For optional shared login storage, see [Sharing one gh login](#sharing-one-gh-login) and
+  [Sharing one Claude login](#sharing-one-claude-login).
 
   There is deliberately **no home volume**. The image's tools (Claude Code, codex,
   no-mistakes, treehouse) live under `/home/node`, and a volume there would keep the
@@ -332,8 +334,9 @@ image ignores the mount. See "Central session history" in the
 ## First-run logins
 
 Each new workspace needs its own logins; they land in its `/persist` volume and survive
-stops, starts and image updates. gh can instead share one login between workspaces: see
-[Sharing one gh login](#sharing-one-gh-login).
+stops, starts and image updates. gh and Claude can instead share one login between
+workspaces: see [Sharing one gh login](#sharing-one-gh-login) and
+[Sharing one Claude login](#sharing-one-claude-login).
 
 1. Open the workspace in the dashboard and click **Log in**.
 2. Claude: "Open sign-in page", approve, paste the code shown back into the page.
@@ -375,6 +378,33 @@ the Docker host (`docker volume rm <name>`) if you ever want to.
   (cbundy/dev-system#182) has no `workflow` scope, so it cannot push workflow changes.
   Log in fresh on the shared volume, or run `gh auth refresh --scopes workflow` once in
   any workspace.
+
+### Sharing one Claude login
+
+By default each workspace keeps its own Claude login. Set `claude_auth_volume_name` in
+`terraform.tfvars` (the homelab's is `dev-system-claude-auth`) and push every template.
+Workspaces using the updated template mount that Docker volume at `/persist/claude-auth`,
+Claude's login directory (`CLAUDE_SECURESTORAGE_CONFIG_DIR`), so one Claude login serves
+them all and a new workspace starts Remote Control with no sign-in. Only the login is
+shared: each workspace keeps its own history, settings, plugins and Remote Control machine
+in `/persist/claude`. Update existing workspaces to that template version and start them to
+apply the mount. Needs a base image with `/persist/claude-auth`; an older image ignores the
+mount. The volume name follows the same rule as `gh_volume_name`, Docker creates it on
+first use, and deleting a workspace never deletes it.
+
+- **The first workspace to start keeps its login.** `dev-init` moves a workspace's existing
+  Claude login into the shared volume while that holds none, so the first workspace started
+  with the mount seeds it and needs no new sign-in. Every later one uses that login; its own
+  older login stays on its persist volume, unused.
+- **Token refreshes are coordinated.** Every Claude sharing the volume takes the same lock
+  around a token refresh and re-reads the login when another one changed it, as several
+  sessions on one machine do, so one workspace's refresh never logs the others out.
+- **One login for every workspace.** Whoever can open any workspace using the volume can
+  read the shared Claude token and act as that claude.ai account, and `claude auth logout`
+  in one workspace logs them all out. Only share it between workspaces you would trust with
+  the same account.
+- **Switching it off** shows each workspace its own `/persist/claude-auth` again, which is
+  empty for a workspace whose login moved into the shared volume: log in once there.
 
 ### GitHub through Coder external auth
 

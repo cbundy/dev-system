@@ -10,9 +10,9 @@ if [ "${SKIP_DEVCONTAINER:-}" = 1 ]; then
 else
   WORKDIR=$(mktemp -d)
   # Fresh volume names per run so the test never touches a developer's real
-  # dev-system-* login volumes; the metadata's default (only the shared gh
-  # volume) is checked separately against the label below.
-  check "devcontainer metadata label declares only the shared gh and read-only secrets volumes, dev-init, Remote Control off, DEV_SHARED_DIR and DEV_SECRETS_DIR" bash -c "
+  # dev-system-* login volumes; the metadata's default (only the shared gh and
+  # Claude login volumes) is checked separately against the label below.
+  check "devcontainer metadata label declares only the shared gh and Claude login and read-only secrets volumes, dev-init, Remote Control off, DEV_SHARED_DIR and DEV_SECRETS_DIR" bash -c "
     docker image inspect -f '{{index .Config.Labels \"devcontainer.metadata\"}}' '$IMAGE' | jq -e '
       .[-1] as \$m
       | \$m.remoteUser == \"node\"
@@ -23,7 +23,9 @@ else
       and \$m.containerEnv.DEV_SECRETS_DIR == \"/run/secrets/dev-system\"
       and (\$m.containerEnv | has(\"AGENTSVIEW_PG_URL\") | not)
       and \$m.updateRemoteUserUID == false
+      and \$m.containerEnv.CLAUDE_SECURESTORAGE_CONFIG_DIR == \"/persist/claude-auth\"
       and \$m.mounts == [{\"type\": \"volume\", \"source\": \"dev-system-gh\", \"target\": \"/persist/gh\"},
+        {\"type\": \"volume\", \"source\": \"dev-system-claude-auth\", \"target\": \"/persist/claude-auth\"},
         \"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]'"
 
   # The five per-repo mounts exactly as the synced base-image template ships
@@ -35,7 +37,7 @@ else
 
   # dc_up <name> [extra devcontainer.json lines] [extra mounts]: `devcontainer
   # up` on a minimal image config in its own workspace folder; sets $cid. The
-  # shared gh and secrets volumes are overridden (same target) with per-run
+  # shared gh, Claude login and secrets volumes are overridden (same target) with per-run
   # ones, which also proves a consumer can override them and keeps the test
   # away from a developer's real dev-system-secrets. The secrets volume holds
   # a URL to a host that does not exist, so the push starts but reaches no
@@ -52,6 +54,7 @@ else
   "mounts": [
 $template_mounts,
     { "type": "volume", "source": "$RUN_ID-gh", "target": "/persist/gh" },
+    { "type": "volume", "source": "$RUN_ID-claude-auth", "target": "/persist/claude-auth" },
     "type=volume,source=$RUN_ID-secrets,target=/run/secrets/dev-system,readonly"${3:+,
     $3}
   ],
@@ -90,7 +93,7 @@ EOF
     pass "devcontainer up succeeds"
     check "volumes are mounted at every /persist dir (consumer overrides win over image defaults)" bash -c "
       mounts=\$(docker inspect -f '{{json .Mounts}}' '$cid')
-      for t in claude codex gh no-mistakes agentsview; do
+      for t in claude claude-auth codex gh no-mistakes agentsview; do
         echo \"\$mounts\" | jq -e --arg t \"/persist/\$t\" 'map(select(.Destination == \$t and .Type == \"volume\" and (.Name | startswith(\"$RUN_ID-\")))) | length == 1' >/dev/null || { echo \"no volume at /persist/\$t: \$mounts\"; exit 1; }
       done"
     # node must stay UID 1000 even when the host user is not (CI runners are
@@ -157,15 +160,17 @@ EOF
     rc_volumes=$(persist_volumes)
     dc_down
     # Two workspace folders stand for two repos on one Docker host.
-    check "two workspaces get their own claude, codex, no-mistakes and agentsview volumes, and share gh" bash -c '
+    check "two workspaces get their own claude, codex, no-mistakes and agentsview volumes, and share gh and the Claude login" bash -c '
       echo "workspace 1:"; echo "$1"; echo "workspace 2:"; echo "$2"
       for t in claude codex no-mistakes agentsview; do
         a=$(echo "$1" | sed -n "s|^/persist/$t=||p"); b=$(echo "$2" | sed -n "s|^/persist/$t=||p")
         [[ "$a" =~ ^$3-[a-z0-9]+-$t$ ]] && [[ "$b" =~ ^$3-[a-z0-9]+-$t$ ]] && [ "$a" != "$b" ] ||
           { echo "$t: \"$a\" vs \"$b\""; exit 1; }
       done
-      [ "$(echo "$1" | grep "^/persist/gh=")" = "/persist/gh=$3-gh" ] &&
-      [ "$(echo "$2" | grep "^/persist/gh=")" = "/persist/gh=$3-gh" ]' \
+      for t in gh claude-auth; do
+        [ "$(echo "$1" | grep "^/persist/$t=")" = "/persist/$t=$3-$t" ] &&
+        [ "$(echo "$2" | grep "^/persist/$t=")" = "/persist/$t=$3-$t" ] || exit 1
+      done' \
       _ "${default_volumes:-}" "$rc_volumes" "$RUN_ID"
   else
     fail "devcontainer up succeeds with DEV_REMOTE_CONTROL=1"

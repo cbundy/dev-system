@@ -32,3 +32,8 @@ registry_auth_config = "/run/secrets/ghcr-config.json"
 # login" in README.md): GitHub keeps at most 10 tokens per user for the GitHub CLI app,
 # so with a login per workspace each new sign-in revoked the oldest workspace's token.
 gh_volume_name = "dev-system-gh"
+
+# One Claude login shared between all workspaces on the Docker host (see "Sharing one
+# Claude login" in README.md): only Claude's login directory, so each workspace keeps its
+# own history and settings, and a new workspace needs no Claude sign-in.
+claude_auth_volume_name = "dev-system-claude-auth"

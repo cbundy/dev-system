@@ -17,9 +17,11 @@
 #
 # 1. oauth - GET https://api.anthropic.com/api/oauth/usage, the endpoint
 #    Claude Code's /usage calls, with the claude.ai OAuth token from
-#    CLAUDE_CODE_OAUTH_TOKEN or $CLAUDE_CONFIG_DIR/.credentials.json
-#    (default ~/.claude). Claude Code keeps that file's token refreshed while
-#    a session runs.
+#    CLAUDE_CODE_OAUTH_TOKEN or .credentials.json in Claude Code's login
+#    directory: CLAUDE_SECURESTORAGE_CONFIG_DIR when set (the base image's
+#    /persist/claude-auth), else CLAUDE_CONFIG_DIR (default ~/.claude), as
+#    Claude Code itself resolves it. Claude Code keeps that file's token
+#    refreshed while a session runs.
 # 2. statusline - a snapshot written by this script's --record mode (below),
 #    used only while it is younger than CALLUM_USAGE_MAX_AGE seconds
 #    (default 900): 5-hour utilization only rises until its reset, so an old
@@ -38,7 +40,8 @@
 #
 # Environment: CALLUM_USAGE_STATE (snapshot path, default
 # ${XDG_STATE_HOME:-~/.local/state}/callum-tools/usage.json),
-# CALLUM_USAGE_MAX_AGE, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_CONFIG_DIR.
+# CALLUM_USAGE_MAX_AGE, CLAUDE_CODE_OAUTH_TOKEN, CLAUDE_SECURESTORAGE_CONFIG_DIR,
+# CLAUDE_CONFIG_DIR.
 set -eu
 
 URL=https://api.anthropic.com/api/oauth/usage
@@ -93,7 +96,12 @@ reasons=
 # from_oauth: print the line from the OAuth usage endpoint, or add a reason.
 from_oauth() {
   token=${CLAUDE_CODE_OAUTH_TOKEN-}
-  creds=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json
+  # Set but empty means ~/.claude to Claude Code, so test for set, not empty.
+  if [ "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" = set ]; then
+    creds=${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}/.credentials.json
+  else
+    creds=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json
+  fi
   if [ -z "$token" ] && [ -r "$creds" ]; then
     token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds" 2>/dev/null || true)
   fi
