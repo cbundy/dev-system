@@ -10,7 +10,8 @@
 //   each refusal appended to <loop dir>/companion.jsonl, which the loop logs as an intervention;
 // - the timeout (10.5): a Bash call with no timeout gets 10 minutes;
 // - the stop gate (10.6): a writer may not finish while the repo's gate commands fail; a gate that
-//   cannot run lets it finish, logged as gate-unknown; each result goes to factory-gate.json;
+//   cannot run lets it finish, logged as gate-unknown; every run is a line of companion.jsonl, the
+//   last also in factory-gate.json;
 // - the handshake (10.9): <CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json says this
 //   session has the companion, written again every minute; the loop holds every agent step while
 //   its own is missing or stale.
@@ -19,7 +20,7 @@
 // pass untouched.
 import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
-import { blockText, gateRecord, oneLine, runGates } from './gate'
+import { blockText, gateLine, gateRecord, oneLine, runGates } from './gate'
 import type { Ran } from './gate'
 import { FILE_TOOLS, agentRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
@@ -185,8 +186,8 @@ async function refusalOf($: EngineInterface, a: WorkspaceAgent, e: Record<string
 }
 
 // logLine: one line of the companion's log, which the loop reads (v2/sources-interventions.ts).
-async function logLine($: EngineInterface, a: WorkspaceAgent, cause: string, reason: string): Promise<void> {
-  const line = { at: new Date(await $.clock.now()).toISOString(), issue: a.issue, life: a.life, seq: a.seq, cause, reason: oneLine(reason, 500) }
+async function logLine($: EngineInterface, a: WorkspaceAgent, cause: string, reason: string, fields: Record<string, unknown> = {}): Promise<void> {
+  const line = { at: new Date(await $.clock.now()).toISOString(), issue: a.issue, life: a.life, seq: a.seq, cause, reason: oneLine(reason, 500), ...fields }
   await appendFile($, `${a.loopDir}/companion.jsonl`, `${JSON.stringify(line)}\n`).catch(() => undefined)
 }
 
@@ -272,10 +273,12 @@ export const register: Register = on => {
     const a = await agentOf($, e.agent_id)
     if (a === null || a.root !== e.agent_id || a.role !== 'writer' || a.gateCommands.length === 0) return next(e)
     const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
-    const record = gateRecord(result, await headSha($, a.slot), await $.clock.now(), a.gateCommands)
+    const head = await headSha($, a.slot)
+    const record = gateRecord(result, head, await $.clock.now(), a.gateCommands)
     await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
+    const line = gateLine(result, head)
+    await logLine($, a, line.cause, line.reason, line.fields)
     if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
-    if (result.result === 'unknown') await logLine($, a, 'gate-unknown', `the stop gate could not run: ${result.why}`)
     return next(e)
   }).catch(async ($, e, next) => {
     // a gate that could not run is never passed silently

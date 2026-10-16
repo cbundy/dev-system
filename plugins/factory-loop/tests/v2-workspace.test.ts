@@ -193,4 +193,15 @@ describe('the companion\'s log, as the loop reads it (v2 SPEC 7.2)', () => {
       ['gate-unknown', 571, 'ss1x2k', 8, NOW - MIN],
     ])
   })
+
+  test('a gate that passed or failed is in the log but is no intervention (7.2)', () => {
+    const at = new Date(NOW - MIN).toISOString()
+    const text = [
+      { at, issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', reason: 'the stop gate refused the finish: `npm test` exited 1', head: 'abc', ms: 9000, command: 'npm test', exitCode: 1 },
+      { at, issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', reason: 'the stop gate passed', head: 'def', ms: 7600 },
+    ]
+      .map(l => JSON.stringify(l))
+      .join('\n')
+    expect(companionLines(`${text}\n`, NOW)).toEqual([])
+  })
 })

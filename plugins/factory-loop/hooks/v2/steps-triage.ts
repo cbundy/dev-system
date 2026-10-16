@@ -59,7 +59,7 @@ export function resultsOf(ctx: ExecCtx, r: Pick<IssueRecord, 'issue' | 'life'>):
       const seq = keyParts(e.key)?.seq ?? null
       const files = e.kind === 'agent-step' ? stepFiles(loopDir, e.key) : []
       if (seq !== null) files.push(`${loopDir}/leftovers/${r.issue}-${r.life}-s${seq}-*.patch (uncommitted work an attempt left, if any)`)
-      if (e.kind === 'agent-step' && (e.step === 'build' || e.step === 'fix')) files.push('factory-gate.json in the slot\'s git dir (the stop gate\'s last result)')
+      if (e.kind === 'agent-step' && (e.step === 'build' || e.step === 'fix')) files.push(`${loopDir}/companion.jsonl (the stop gate's runs: lines with cause gate-pass, gate-fail or gate-unknown, and this step's issue and seq)`)
       const error = errorOf(e)
       return { key: e.key, kind: e.step ?? e.kind, status: e.status, summary: e.summary ?? '', error: error === null ? null : error.slice(0, ERROR_MAX), files }
     })
