@@ -689,6 +689,26 @@ expect_rc 0 "sweep central failing"
 events | tail -n 1 | jq -e '.state == "closed" and .issue == 7' > /dev/null || fail "central failing: $(events)"
 grep -q 'cannot read the central event log' "$tmpdir/err" || fail "central failing: no warning: $(cat "$tmpdir/err")"
 
+# a claim that ended stays ended: a later event that is no claim event (the watcher's
+# head_mismatch after the owner's drop) never brings its lapsed lease back, from either log
+for after in head_mismatch parked central; do
+  reset
+  issue 7 OPEN
+  if [ "$after" = central ]; then
+    printf '%s\n' '2026-10-08T09:00:00Z|7|abandoned' '2026-10-08T09:01:00Z|7|head_mismatch' > "$d/central"
+  else
+    seed claimed 7
+    seed abandoned 7
+    seed "$after" 7
+  fi
+  cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+  n=$(events | wc -l)
+  dq
+  expect_rc 0 "sweep ended then $after"
+  no_calls "sweep ended then $after"
+  [ "$(events | wc -l)" = "$n" ] || fail "sweep ended then $after wrote: $(events)"
+done
+
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
 tl() { jq -n --arg m "$1" '[{event: "cross-referenced", actor: {login: "cbundy", id: 13131067}, source: {issue: {number: 55, user: {login: "cbundy", id: 13131067}, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
 # a PR merged after the claim on the issue's own branch (issue-<N>, or issue-<N>-..., after any

@@ -25,8 +25,10 @@
 #      event is not final. The pass has no time limit, so the first run is the
 #      backfill. Two devices sweeping before either has pushed can both log
 #      `closed`; consumers count identical consecutive rows once.
-#   2. Open, already released (its latest event is ready, reclaimed, merged
-#      or final): left alone.
+#   2. Open, its claim already ended (the last of its claim events - claimed,
+#      ready, reclaimed, merged, closed, abandoned - is one that ends it; no
+#      other event, such as a watcher's head_mismatch after a drop, revives an
+#      ended claim, as in callum-flow-claim's held_in_log): left alone.
 #   3. Open with no claim comment (legacy or hand claims): left alone, one
 #      stderr note. Never flipped to `ready`.
 #   4. Open, newest claim comment live (server updated_at + the comment's own
@@ -68,6 +70,8 @@ READY=${CALLUM_FLOW_READY_LABEL:-ready}
 # the states that are no lifecycle event of an issue: housekeeping, the factory
 # loop's bookkeeping, and its review results and interventions
 NOISE="'untrusted_stripped', 'usage', 'watcher_error', 'test_weakened', 'claim_lost', 'renewed', 'loop', 'reviewed', 'intervention'"
+# the claim's own events: the last of them says whether a claim holds
+CLAIMEV="'claimed', 'ready', 'reclaimed', 'merged', 'closed', 'abandoned'"
 
 err() { echo "callum-flow-sweep: $*" >&2; }
 if [ $# -ne 0 ]; then
@@ -91,13 +95,14 @@ tmp=$(mktemp -d 2>/dev/null) || { err "cannot create a temporary directory"; exi
 trap 'rm -rf "$tmp"' EXIT
 
 # latest_open_issues: the issues whose latest event is not final, from this
-# device's log and (best effort) the central factory.events.
+# device's log and (best effort) the central factory.events (per issue its
+# latest event and its latest claim event).
 : > "$tmp/central"
 if command -v "$DEVQ" >/dev/null 2>&1; then
   crc=0
-  "$DEVQ" -At -v "repo=$repo" -c "SELECT DISTINCT ON (issue) to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') || '|' || issue || '|' || state
+  "$DEVQ" -At -v "repo=$repo" -c "SELECT DISTINCT ON (issue, state IN ($CLAIMEV)) to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') || '|' || issue || '|' || state
     FROM factory.events WHERE repo = :'repo' AND issue IS NOT NULL
-      AND state NOT IN ($NOISE) ORDER BY issue, ts DESC, seq DESC" \
+      AND state NOT IN ($NOISE) ORDER BY issue, state IN ($CLAIMEV), ts DESC, seq DESC" \
     > "$tmp/central.raw" 2> "$tmp/central.err" < /dev/null || crc=$?
   if [ "$crc" -eq 0 ]; then
     jq -R -c 'split("|") | select(length == 3) | {ts: .[0], issue: (.[1] | tonumber), state: .[2]}' "$tmp/central.raw" > "$tmp/central" 2>/dev/null || : > "$tmp/central"
@@ -115,13 +120,15 @@ fi
 # watcher_error, test_weakened, claim_lost, renewed, the factory loop's loop, reviewed and
 # intervention) never decide whether an issue is final, or a recurring one would hide a closed
 # issue for good. By ts; jq sorts stably, so equal timestamps keep file order
-# (central first, then this device's log).
-cat "$tmp/central" "$tmp/local" | jq -s -r 'sort_by(.ts) | group_by(.issue) | map(last) | .[] | "\(.issue) \(.state)"' > "$tmp/latest" 2>/dev/null || : > "$tmp/latest"
+# (central first, then this device's log). A third column is the latest claim
+# event, or none.
+cat "$tmp/central" "$tmp/local" | jq -s -r 'sort_by(.ts) | group_by(.issue) | .[]
+  | "\(last | .issue) \(last | .state) \(map(select(.state | IN("claimed", "ready", "reclaimed", "merged", "closed", "abandoned"))) | last | .state // "none")"' > "$tmp/latest" 2>/dev/null || : > "$tmp/latest"
 # is_final N: the issue's latest event is closed or abandoned
 is_final() { awk -v n="$1" '$1 == n && ($2 == "closed" || $2 == "abandoned") { f = 1 } END { exit !f }' "$tmp/latest"; }
-# released N: the issue's latest event says no claim holds it: back in the queue
+# released N: the issue's latest claim event ended its claim: back in the queue
 # (ready, reclaimed), merged, or final
-released() { awk -v n="$1" '$1 == n && ($2 == "ready" || $2 == "reclaimed" || $2 == "merged" || $2 == "closed" || $2 == "abandoned") { f = 1 } END { exit !f }' "$tmp/latest"; }
+released() { awk -v n="$1" '$1 == n && $3 != "claimed" && $3 != "none" { f = 1 } END { exit !f }' "$tmp/latest"; }
 # log_closed N VIEW: log the closed event with GitHub's close reason
 log_closed() {
   reason=$(printf '%s' "$2" | jq -r '.state_reason // empty')
