@@ -16,9 +16,10 @@
 # issue `callum-flow-factory-state --github off` lists live (which also covers
 # an issue known only from a mirror run, and a new life after abandonment). The
 # log is this device's file (`callum-flow-event --path`) plus, when dev-query
-# is configured, the latest lifecycle event per issue in factory.events, so
-# issues only another device saw are found too. A failed central read warns
-# and falls back to the local log; a failed factory-state read adds nothing.
+# is configured, the latest lifecycle event and the latest claim event per
+# issue in factory.events, so issues only another device saw are found too. A
+# failed central read warns and falls back to the local log; a failed
+# factory-state read adds nothing.
 # Each candidate is read directly, and these rules apply in order:
 #   1. Closed: log `callum-flow-event closed --note <GitHub's state_reason:
 #      completed, not_planned or duplicate> --actor sweep` when its latest
