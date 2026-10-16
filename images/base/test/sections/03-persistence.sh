@@ -6,7 +6,7 @@
 
 echo "== 3. persistence contract"
 check "env vars point at /persist/*" in_image '
-  [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ "$CLAUDE_SECURESTORAGE_CONFIG_DIR" = /persist/claude-auth ] &&
+  [ "$CLAUDE_CONFIG_DIR" = /persist/claude ] && [ -z "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ] &&
   [ "$CODEX_HOME" = /persist/codex ] &&
   [ "$GH_CONFIG_DIR" = /persist/gh ] && [ "$NM_HOME" = /persist/no-mistakes ] &&
   [ "$AGENTSVIEW_DATA_DIR" = /persist/agentsview ]'
@@ -41,14 +41,16 @@ check "OCI labels carry source, revision, version, created and the mutability no
 check "Claude login state (.claude.json) lands inside CLAUDE_CONFIG_DIR" in_image '
   timeout 60 claude -p hi >/dev/null 2>&1 || true
   test -f /persist/claude/.claude.json && ! test -e "$HOME/.claude.json"'
-# The image relies on CLAUDE_SECURESTORAGE_CONFIG_DIR, which is not in Claude
-# Code's public docs, to keep Claude's login apart from the rest of its state
-# (so a runtime can share just the login): every build proves the Claude it
-# ships reads the login from there, and no longer from CLAUDE_CONFIG_DIR.
-check "Claude reads its login from CLAUDE_SECURESTORAGE_CONFIG_DIR, and not from CLAUDE_CONFIG_DIR" in_image '
+# A shared Claude login relies on CLAUDE_SECURESTORAGE_CONFIG_DIR, which is
+# not in Claude Code's public docs, to keep the login apart from the rest of
+# Claude's state: every build proves the Claude it ships reads the login from
+# there when a runtime sets it, and from CLAUDE_CONFIG_DIR when it does not.
+check "Claude reads its login from CLAUDE_SECURESTORAGE_CONFIG_DIR when set, and from CLAUDE_CONFIG_DIR when not" in_image '
   printf "%s\n" "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-test\",\"refreshToken\":\"r\",\"expiresAt\":4102444800000,\"scopes\":[\"user:inference\"],\"subscriptionType\":\"max\"}}" \
     > /persist/claude-auth/.credentials.json
   claude auth status --json | jq -e ".loggedIn == true and .authMethod == \"claude.ai\"" || exit 1
   [ ! -e /persist/claude/.credentials.json ] || { echo "Claude wrote a login into CLAUDE_CONFIG_DIR"; exit 1; }
   mv /persist/claude-auth/.credentials.json /persist/claude/.credentials.json
-  claude auth status --json | jq -e ".loggedIn == false"' --entrypoint ""
+  claude auth status --json | jq -e ".loggedIn == false" || exit 1
+  env -u CLAUDE_SECURESTORAGE_CONFIG_DIR claude auth status --json | jq -e ".loggedIn == true"' \
+  -e CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth --entrypoint ""
