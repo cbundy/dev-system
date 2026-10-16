@@ -31,7 +31,7 @@ SH=$(command -v sh)
 BASH=$(command -v bash)
 
 events="$tmpdir/events"
-ev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="${EV_VERSIONS:-$tmpdir/no-versions.json}" "$SH" "$EVENT" "$@"; }
+ev() { PATH="$toolbin" CLAUDE_CODE_SESSION_ID='' CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box DEV_VERSIONS_FILE="${EV_VERSIONS:-$tmpdir/no-versions.json}" "$SH" "$EVENT" "$@"; }
 log="$events/o__r.jsonl"
 
 # --- callum-flow-event ------------------------------------------------------
@@ -154,9 +154,11 @@ rc=0
 ev --path --bogus 2> /dev/null || rc=$?
 [ "$rc" = 2 ] || fail "--path with a bad option should exit 2, got $rc"
 
-# session id: CLAUDE_SESSION_ID, else the newest transcript of the working directory
+# session id: CLAUDE_SESSION_ID, else CLAUDE_CODE_SESSION_ID, else the newest transcript of the working directory
 CLAUDE_SESSION_ID=sess-1 ev ready --issue 3
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = sess-1 ] || fail "CLAUDE_SESSION_ID not used"
+PATH="$toolbin" CLAUDE_CODE_SESSION_ID=top-1 CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" ready --issue 3
+[ "$(tail -n 1 "$log" | jq -r .session_id)" = top-1 ] || fail "CLAUDE_CODE_SESSION_ID not used: $(tail -n 1 "$log")"
 work="$tmpdir/work dir"
 mkdir -p "$work"
 proj="$tmpdir/claude/projects/$(cd "$work" && pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
@@ -164,7 +166,7 @@ mkdir -p "$proj"
 : > "$proj/old.jsonl"
 sleep 1
 : > "$proj/new.jsonl"
-(cd "$work" && PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" ready --issue 4)
+(cd "$work" && PATH="$toolbin" CLAUDE_CODE_SESSION_ID='' CLAUDE_CONFIG_DIR="$tmpdir/claude" CALLUM_EVENTS_DIR="$events" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" ready --issue 4)
 [ "$(tail -n 1 "$log" | jq -r .session_id)" = new ] || fail "newest transcript not used: $(tail -n 1 "$log")"
 
 # an unwritable log is a warning, exit 0
@@ -185,7 +187,7 @@ git -C "$tmpdir/repo" remote add origin git@github.com:acme/widgets.git
 
 # --if-changed (cbundy/dev-system#344): skip a line that repeats the subject's newest one
 ic="$tmpdir/ic"
-icev() { PATH="$toolbin" CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
+icev() { PATH="$toolbin" CLAUDE_CODE_SESSION_ID='' CLAUDE_CONFIG_DIR="$tmpdir/no-claude" CALLUM_EVENTS_DIR="$ic" CALLUM_FLOW_REPO=o/r DEV_MACHINE_NAME=dev-box "$SH" "$EVENT" "$@"; }
 iclog="$ic/o__r.jsonl"
 iclines() { wc -l < "$iclog" | tr -d ' '; }
 icev failed --branch fix/issue-9-a --head h1 --run r1 --note cancelled --if-changed || fail "if-changed with no log should exit 0"

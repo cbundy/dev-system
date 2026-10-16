@@ -1420,6 +1420,10 @@ reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `re
 `/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
 fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
+`session_id` is the top-level Claude session (`CLAUDE_CODE_SESSION_ID`, which its sub-agents and
+background commands inherit), else a guess from the newest transcript. `actor` says who wrote the line:
+`orchestrator` (the orchestrator itself, and `callum-flow-claim`, `callum-flow-merge` and
+`callum-flow-design-route`), `watcher`, `sweep`, else `agent`.
 A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
 `--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
 restart never replays old events; transitions a watcher observes are always logged.

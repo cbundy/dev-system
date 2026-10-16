@@ -76,6 +76,17 @@ Columns: `device`, `repo`, `seq`, `ts`, `state`, `issue`, `run_id`, `branch`, `p
 `note`, `session_id`, `actor`, `v`, `raw`, `event_id`, `base_image`, `dev_image`,
 `template_version`, `plugin_version`.
 
+`actor` is `orchestrator` on the events the orchestrator writes itself, so its current session
+per device is the `session_id` of its newest such event (rows from earlier images say `agent` and
+may carry a guessed `session_id`):
+
+```sql
+SELECT DISTINCT ON (device) device, session_id, ts
+FROM factory.events
+WHERE actor = 'orchestrator' AND session_id IS NOT NULL
+ORDER BY device, ts DESC, seq DESC;
+```
+
 The four version columns (what `dev-version --json` calls the running base image, dev image,
 Coder template version and callum-flow plugin version) are filled for events written by
 base image 2.26.0 and later; earlier rows, and rows pushed by older images, are null. To compare
