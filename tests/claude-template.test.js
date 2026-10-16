@@ -19,3 +19,12 @@ test('template and root CLAUDE.md carry the plain-language rule', () => {
     assert.match(s, /markdown link to it, never a bare `#N`/, p);
   }
 });
+
+// Consumers rewrite the repo-owned block, so `callum-dev update`'s 3-way merge conflicts on any
+// line the template changes inside it. A shared rule goes in the synced part above the block.
+// Change this pin only when a release deliberately reshapes the block and says so in its notes.
+test('the template repo-owned block is unchanged, so consumer updates merge cleanly', () => {
+  const blocks = read('templates/CLAUDE.md').match(/<!-- repo-owned[\s\S]*?<!-- end repo-owned -->/g);
+  const sha = require('node:crypto').createHash('sha256').update(blocks.join('\n')).digest('hex');
+  assert.strictEqual(sha, '49e919eb8552000ed1ebe5c74f4d9d388c7d8518bf498f1e375dafd53adc7fbe');
+});
