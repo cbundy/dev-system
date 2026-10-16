@@ -107,7 +107,7 @@ import { keepV2, loadV2, newV2Live, noteIdle, noteKillSwitch, noteWritten, notin
 import type { V2StoreIo } from './v2/store'
 import { STEP_AGENT } from './v2/types'
 import type { V2Io } from './v2/types'
-import { BASH_TIMEOUT_MS, withSlotLine } from './v2/workspace'
+import { BASH_TIMEOUT_MS, processIdOf, withSlotLine } from './v2/workspace'
 import { ANSWER_TOOL, orphanedWakes } from './wake'
 
 const HOUR = 3_600_000
@@ -284,7 +284,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     poolSize: typeof file.poolSize === 'number' ? file.poolSize : 16,
     cwd: checkout,
     loopDir,
-    workspace: { session: await $.session.id(), process: await $.env.get('FACTORY_LOOP_WORKSPACE_PROCESS') },
+    workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },
     sink,
     env,
     toolsDir: str(file.toolsDir) || DEFAULT_TOOLS_DIR,

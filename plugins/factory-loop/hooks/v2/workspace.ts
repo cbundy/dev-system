@@ -40,6 +40,15 @@ export function handshakePath(loopBase: string, session: string): string {
   return `${loopBase}/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
+// processIdOf: the process that /proc/<pid>/stat describes, by its pid and start time, as the
+// companion names its own in the handshake (its hooks/register.ts processIdOf). No other process
+// has it: not a child, not a later one given the same pid. undefined: no stat to read.
+export function processIdOf(stat: string | null): string | undefined {
+  const pid = stat?.split(' ', 1)[0] ?? ''
+  const start = stat?.slice(stat.lastIndexOf(') ') + 2).split(' ')[19] ?? ''
+  return /^\d+$/.test(pid) && /^\d+$/.test(start) ? `${pid}:${start}` : undefined
+}
+
 // What the rail read: this session's handshake is there, names it and this process, and is
 // fresh, or why not (sources-workspace.ts workspaceRead).
 export type WorkspaceRead = { session: string; ok: true; version: string | null } | { session: string; ok: false; why: string }

@@ -14,9 +14,9 @@ import type { WorkspaceRead } from './workspace'
 export const HANDSHAKE_STALE_MS = 3 * 60_000
 
 // workspaceRead: the handshake's text (null: no file) for the session, judged at now for this
-// process, whose id the companion keeps in its environment (undefined: no companion ran in it).
-// Only a handshake that names this process passes: after a restart without the companion, the old
-// process's file names the old process.
+// process, by its pid and start time (workspace.ts processIdOf; undefined: unknown, and nothing
+// passes). Only a handshake that names this process passes: after a restart without the
+// companion, the old process's file names the old process.
 export function workspaceRead(text: string | null, session: string, processId: string | undefined, now: Ms): WorkspaceRead {
   const missing = `the companion plugin factory-loop-workspace is not loaded in this session (${session}): no handshake`
   if (text === null) return { session, ok: false, why: missing }

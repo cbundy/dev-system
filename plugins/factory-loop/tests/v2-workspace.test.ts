@@ -14,7 +14,7 @@ import { planV2 } from '../hooks/v2/plan'
 import { madeRecord } from '../hooks/v2/table'
 import { SLOT_STATES } from '../hooks/v2/types'
 import type { IssueRecord, Lease, V2State } from '../hooks/v2/types'
-import { WORKSPACE_GRACE_MS, handshakePath, withSlotLine } from '../hooks/v2/workspace'
+import { WORKSPACE_GRACE_MS, handshakePath, processIdOf, withSlotLine } from '../hooks/v2/workspace'
 import type { WorkspaceRead } from '../hooks/v2/workspace'
 import { MIN, NOW, config, entry, state as baseState } from './fixtures'
 
@@ -23,8 +23,8 @@ const LIFE = lifeOf(NOW - 120 * MIN)
 const SESSION = 'session-1'
 const OK = { ok: true, at: NOW }
 const UP: WorkspaceRead = { session: SESSION, ok: true, version: '0.38.2' }
-// this process's id, as the companion keeps it in the environment; its last beat was a minute ago
-const PROCESS = 'p-now'
+// this process's id, its pid and start time; the companion's last beat was a minute ago
+const PROCESS = '4242:342070008'
 const DOWN: WorkspaceRead = workspaceRead(null, SESSION, PROCESS, NOW)
 const handshake = (over: Record<string, unknown> = {}) => JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: new Date(NOW - MIN).toISOString(), ...over })
 
@@ -77,13 +77,25 @@ describe('the handshake (v2 SPEC 10.9)', () => {
   })
 
   test('a restart without the companion: the old process\'s handshake, 20 s old, does not pass (R4-F3)', () => {
-    // the session resumed under its id without the companion, so no id in this process; the old
-    // process's companion wrote its last beat 20 s ago
-    const old = handshake({ process: 'p-before', at: new Date(NOW - 20_000).toISOString() })
-    expect(workspaceRead(old, SESSION, undefined, NOW)).toMatchObject({ ok: false, why: expect.stringContaining('written by another one') })
-    // with the companion the old file does not pass either, until its first beat replaces it
-    expect(workspaceRead(old, SESSION, PROCESS, NOW).ok).toBe(false)
+    // the session resumed under its id in a new process without the companion; the old process's
+    // companion wrote its last beat 20 s ago
+    const old = handshake({ process: '4100:341000000', at: new Date(NOW - 20_000).toISOString() })
+    expect(workspaceRead(old, SESSION, PROCESS, NOW)).toMatchObject({ ok: false, why: expect.stringContaining('written by another one') })
+    // with the companion, its first beat replaces the old file
     expect(workspaceRead(handshake(), SESSION, PROCESS, NOW).ok).toBe(true)
+    // a process that cannot read its own id takes no handshake
+    expect(workspaceRead(handshake(), SESSION, undefined, NOW).ok).toBe(false)
+  })
+
+  test('a process is named by its pid and start time, from /proc/self/stat, which no child inherits', () => {
+    // the command name may hold spaces and parentheses; the start time is field 22
+    const stat = '4242 (claude (x) y) S 1 4242 4242 0 -1 4194560 52005 150552 0 2 67 12 101 54 20 0 24 0 342070008 5783855104'
+    expect(processIdOf(stat)).toBe(PROCESS)
+    // the same pid started later is another process
+    expect(processIdOf(stat.replace('342070008', '342099999'))).not.toBe(PROCESS)
+    expect(processIdOf(null)).toBeUndefined()
+    expect(processIdOf('')).toBeUndefined()
+    expect(processIdOf('4242 (claude) S 1')).toBeUndefined()
   })
 
   test('a stale handshake holds agent steps as a missing one does', () => {

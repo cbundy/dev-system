@@ -75,21 +75,21 @@ export function handshakePath(configDir: string, session: string): string {
   return `${configDir}/factory-loop/workspace/${session.replace(/[^A-Za-z0-9._-]/g, '_')}.json`
 }
 
-// processId: this process's id, made by the first companion module to run in it and kept in its
-// environment, where the loop, a plugin of the same process, reads it: the loop takes only a
-// handshake that names its own process.
-async function processId($: EngineInterface): Promise<string> {
-  const known = await $.env.get('FACTORY_LOOP_WORKSPACE_PROCESS')
-  if (known) return known
-  const made = `${(await $.clock.now()).toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  await $.env.set('FACTORY_LOOP_WORKSPACE_PROCESS', made)
-  return made
+// processIdOf: the process that /proc/<pid>/stat describes, by its pid and start time, which no
+// other process has: not a child, which has its own, and not a later one given the same pid. Its
+// field 22 is counted after the command name, which may hold spaces. undefined: no stat to read.
+export function processIdOf(stat: string | null): string | undefined {
+  const pid = stat?.split(' ', 1)[0] ?? ''
+  const start = stat?.slice(stat.lastIndexOf(') ') + 2).split(' ')[19] ?? ''
+  return /^\d+$/.test(pid) && /^\d+$/.test(start) ? `${pid}:${start}` : undefined
 }
 
-// handshake: this session's file, written whole with this process's id and the time now.
+// handshake: this session's file, written whole with this process's id and the time now (no id:
+// null, which the loop never takes).
 async function handshake($: EngineInterface): Promise<void> {
   const session = await $.session.id()
-  const proc = await processId($)
+  // this process, as the loop, a plugin of the same process, reads it too
+  const proc = processIdOf(await readText($, '/proc/self/stat')) ?? null
   const now = await $.clock.now()
   const path = handshakePath(await configDir($), session)
   const manifest = await readText($, `${$.plugin.root}/.claude-plugin/plugin.json`)

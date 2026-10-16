@@ -1632,15 +1632,15 @@ safeguards remain:
 - **The rail.** From its `session.start` the companion writes
   `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` = `{ v, session, process, version,
   at }`, and again every minute. It is one file per session, so a second session with the
-  companion never writes over the loop's. `process` is this process's id: the first companion
-  module to run in a process makes it and keeps it in the process's environment
-  (`FACTORY_LOOP_WORKSPACE_PROCESS`), where the loop, a plugin of the same process, reads it. When
-  this session's file is missing, names another session or another process, or is stale (its
-  `at` more than 3 minutes old), the loop's rails hold every agent step, with the skip line
-  `workspace`, and tell the owner once (`tell(workspace)`). The process check catches a session
-  resumed under the same id without the companion: the old process's file names the old process.
-  The age check catches a companion that stopped in this process. Without the companion, agents
-  would start in the main checkout, unguarded. The orchestrator-loop template's plugin list
+  companion never writes over the loop's. `process` is this process's id, `<pid>:<start time>`
+  from `/proc/self/stat`, which the loop, a plugin of the same process, reads the same way. No
+  other process has it: a child has its own, and a later process given the same pid has another
+  start time. When this session's file is missing, names another session or another process, or
+  is stale (its `at` more than 3 minutes old), the loop's rails hold every agent step, with the
+  skip line `workspace`, and tell the owner once (`tell(workspace)`). The process check catches a
+  session resumed under the same id without the companion: the old process's file names the old
+  process. The age check catches a companion that stopped in this process. Without the companion,
+  agents would start in the main checkout, unguarded. The orchestrator-loop template's plugin list
   (`coder/push.sh:79`) gains `factory-loop-workspace`, pushed at cutover (section 15).
 - **Re-probe.** U9 re-runs the spikes' frameless checks before it builds. Two points are proven
   only in nearby shapes: a long `$.process.run` inside a second plugin's `classic.SubagentStop`,
