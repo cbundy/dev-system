@@ -292,7 +292,6 @@ if command -v claude >/dev/null 2>&1; then
     [ -z "$bad" ] || warn "DEV_DEFAULT_PLUGINS entry \"$bad\" is not <plugin>@<marketplace>=<marketplace source>, so it is not installed" \
       "correct DEV_DEFAULT_PLUGINS in the image or the runtime's environment"
   done < <(invalid_default_plugins)
-  level=warn
   defaults=$(wanted_default_plugins "$settings")
   wanted=$(not_installed "$wanted" "$(printf '%s\n' "$defaults" | cut -d' ' -f1)") || wanted=""
   if [ -n "$wanted$defaults" ] && ! installed=$(installed_plugins); then
@@ -307,28 +306,30 @@ if command -v claude >/dev/null 2>&1; then
         ok "Claude plugins enabled in $settings are installed"
       fi
     fi
+    level=warn
+    [ "${DEV_DEFAULT_PLUGIN_REFS_WIN:-}" != 1 ] || level=fail
     if [ -n "$defaults" ]; then
-      level=warn
-      [ "${DEV_DEFAULT_PLUGIN_REFS_WIN:-}" != 1 ] || level=fail
       if absent=$(not_installed "$defaults" "$installed"); then
         $level "default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: $(printf '%s\n' "$absent" | cut -d' ' -f1 | paste -sd ' ')" \
           "run: dev-init --plugins (or by hand: $(default_plugin_fix "$absent")), then start a new Claude session"
       else
         ok "default Claude plugins are installed: $(printf '%s\n' "$defaults" | cut -d' ' -f1 | paste -sd ' ')"
       fi
-      if mlist=$(claude plugin marketplace list --json 2>/dev/null) && [ -n "$mlist" ]; then
-        while read -r mkt src; do
-          [ -n "$src" ] || continue
-          want_ref=""
-          [[ "$src" != *#* ]] || want_ref="${src#*#}"
-          # An entry at another location is the repo's own business: skipped.
-          have=$(printf '%s\n' "$mlist" | jq -r --arg m "$mkt" --arg l "${src%%#*}" '.[] | select(.name == $m and (.repo // .url) == $l) | .ref // ""' 2>/dev/null | head -n1)
-          printf '%s\n' "$mlist" | jq -e --arg m "$mkt" --arg l "${src%%#*}" 'any(.[]; .name == $m and (.repo // .url) == $l)' >/dev/null 2>&1 || continue
-          [ "$have" != "$want_ref" ] || continue
-          $level "Claude plugin marketplace $mkt is installed at ${have:-no ref}, but ${want_ref:-no ref} is wanted" \
-            "run: dev-init --plugins, then start a new Claude session"
-        done < <(wanted_marketplaces "$settings" "" "$defaults")
-      fi
+    fi
+    # The marketplaces of every default, also one the repo took over: the
+    # template owns their ref too (DEV_DEFAULT_PLUGIN_REFS_WIN=1).
+    if mlist=$(CLAUDE_PLUGIN_LIMIT=30 claude_plugin_cli marketplace list --json 2>/dev/null) && [ -n "$mlist" ]; then
+      while read -r mkt src; do
+        [ -n "$src" ] || continue
+        want_ref=""
+        [[ "$src" != *#* ]] || want_ref="${src#*#}"
+        # An entry at another location is the repo's own business: skipped.
+        have=$(printf '%s\n' "$mlist" | jq -r --arg m "$mkt" --arg l "${src%%#*}" '.[] | select(.name == $m and (.repo // .url) == $l) | .ref // ""' 2>/dev/null | head -n1)
+        printf '%s\n' "$mlist" | jq -e --arg m "$mkt" --arg l "${src%%#*}" 'any(.[]; .name == $m and (.repo // .url) == $l)' >/dev/null 2>&1 || continue
+        [ "$have" != "$want_ref" ] || continue
+        $level "Claude plugin marketplace $mkt is installed at ${have:-no ref}, but ${want_ref:-no ref} is wanted" \
+          "run: dev-init --plugins, then start a new Claude session"
+      done < <(wanted_marketplaces "$settings" "" "$(default_plugins)")
     fi
   fi
 fi

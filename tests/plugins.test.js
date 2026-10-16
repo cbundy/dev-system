@@ -893,3 +893,61 @@ test("an orphaned project install does not touch the repo's settings", (t) => {
   run(ctx, "install_plugins");
   assert.deepEqual(fs.readFileSync(file), before);
 });
+
+// dev-doctor's marketplace-ref check, driven outside the image: a copy of dev-doctor whose
+// libraries are read from the checkout, run against the stub claude. Only its plugin lines
+// are looked at.
+function doctorLines(ctx, env) {
+  const copy = path.join(ctx.dir, "dev-doctor");
+  fs.writeFileSync(
+    copy,
+    fs.readFileSync(path.join(BASE, "dev-doctor"), "utf8").replaceAll("/usr/local/share/dev-system", BASE),
+    { mode: 0o755 },
+  );
+  const r = spawnSync("bash", [copy, "--warn-only"], {
+    encoding: "utf8",
+    cwd: ctx.ws,
+    env: {
+      ...process.env,
+      PATH: `${path.join(ctx.dir, "bin")}:${process.env.PATH}`,
+      STUB: ctx.dir,
+      CLAUDE_CONFIG_DIR: path.join(ctx.dir, "config"),
+      DEV_WORKSPACE: ctx.ws,
+      DEV_REPO_URL: "",
+      HOME: ctx.dir,
+      XDG_CONFIG_HOME: path.join(ctx.dir, "xdg"),
+      AGENTSVIEW_DATA_DIR: path.join(ctx.dir, "agentsview"),
+      NO_MISTAKES_HOME: path.join(ctx.dir, "no-mistakes"),
+      DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0`,
+      ...env,
+    },
+  });
+  return r.stdout.split("\n").filter((l) => /is installed at/.test(l));
+}
+
+test("dev-doctor: the switch on and the marketplace at another ref is a FAIL naming both refs", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const lines = doctorLines(ctx, { DEV_DEFAULT_PLUGIN_REFS_WIN: "1" });
+  assert.deepEqual(lines, [
+    "dev-doctor: FAIL Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted",
+  ]);
+});
+
+test("dev-doctor: the marketplace at another ref is a WARN with the switch off, and nothing at the wanted ref", (t) => {
+  const ctx = setup(t, { settings: { enabledPlugins: {} } });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  assert.deepEqual(doctorLines(ctx, {}), [
+    "dev-doctor: WARN Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted",
+  ]);
+  const ok = setup(t, { settings: { enabledPlugins: {} } });
+  withMarketplaceAt(ok, "cbundy/dev-system#v0.41.0");
+  assert.deepEqual(doctorLines(ok, {}), []);
+});
+
+test("dev-doctor: the ref check also covers a default the repo took over", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const lines = doctorLines(ctx, { DEV_DEFAULT_PLUGIN_REFS_WIN: "1", DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0` });
+  assert.ok(lines.some((l) => /FAIL Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted/.test(l)), lines.join("\n"));
+});
