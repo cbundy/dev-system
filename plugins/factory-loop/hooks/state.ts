@@ -45,6 +45,7 @@ export type Observed = {
   ledger: LedgerEntry[]
   control: Control
   lastTitle: string | null
+  lastTitleAt: number | null
   githubBackoffUntil: number | null
   // config trackerTitle: a title matching it marks a tracker
   trackerTitle: string
@@ -175,6 +176,7 @@ export function buildState(o: Observed): State {
     ledger: o.ledger,
     control: o.control,
     lastTitle: o.lastTitle,
+    lastTitleAt: o.lastTitleAt,
     githubBackoffUntil: o.githubBackoffUntil,
     checkout: o.checkout ?? null,
   }
@@ -183,7 +185,7 @@ export function buildState(o: Observed): State {
 // digestOf: a short hash of the state without its clock readings, so a pass that saw nothing
 // new is easy to spot in the decision log (SPEC 12). FNV-1a over a stable rendering.
 export function digestOf(state: State): string {
-  const { now: _now, sources, lastTitle: _title, ...rest } = state
+  const { now: _now, sources, lastTitle: _title, lastTitleAt: _titleAt, ...rest } = state
   const quiet = { ...rest, sources: Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, v.ok])) }
   let hash = 0x811c9dc5
   for (const ch of stable(quiet)) {

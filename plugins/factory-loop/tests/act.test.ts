@@ -1040,6 +1040,7 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
   const env: ActEnv = { io, rt, live, commands: [], wakeId: () => `w${++wakes}`, session: 'session-1', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const cache = emptyCache()
   let lastTitle: string | null = null
+  let lastTitleAt: number | null = null
   let queueKnown: number[] | null = null
   let last: Acted | null = null
   const h = {
@@ -1054,11 +1055,14 @@ function harness(run: (argv: string[], s: Seen) => { exitCode?: number; stdout?:
     },
     async pass(): Promise<Acted> {
       const stored = { ledger: live.ledger.length > 0 ? live.ledger : null, githubBackoffUntil: null, queueKnown }
-      const observed = await observe(observeIo, rt, cache, NOW, lastTitle, stored)
+      const observed = await observe(observeIo, rt, cache, NOW, lastTitle, lastTitleAt, stored)
       if (observed.queueKnown !== null) queueKnown = observed.queueKnown
       const listed = { ok: true, agents: agents.map(a => ({ id: a.id, status: a.status })) }
       last = await actPass(env, observed.state, listed, between)
-      if (last.report.title !== null) lastTitle = last.report.title
+      if (last.report.title !== null) {
+        lastTitle = last.report.title
+        lastTitleAt = observed.state.now
+      }
       return last
     },
     keys: () => (last?.result.actions ?? []).filter(a => a.kind !== 'title').map(a => a.key),

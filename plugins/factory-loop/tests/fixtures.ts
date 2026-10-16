@@ -68,6 +68,7 @@ export function state(over: Partial<State> = {}): State {
     ],
     control: control(),
     lastTitle: null,
+    lastTitleAt: null,
     githubBackoffUntil: null,
     checkout: CLEAN,
     ...over,
@@ -182,6 +183,12 @@ export function find(result: PlanResult, key: string): Action | undefined {
   return result.actions.find(a => a.key === key)
 }
 
+// titled: the title fields once a plan ran, as the driver sets them: only a planned title action
+// renames, and it stamps the time.
+export function titled(s: State, result: PlanResult): Pick<State, 'lastTitle' | 'lastTitleAt'> {
+  return result.actions.some(a => a.kind === 'title') ? { lastTitle: result.title, lastTitleAt: s.now } : { lastTitle: s.lastTitle, lastTitleAt: s.lastTitleAt }
+}
+
 // running: the ledger after every planned action started, for the idempotence property.
 export function running(s: State, result: PlanResult): State {
   const started: LedgerEntry[] = result.actions
@@ -202,5 +209,5 @@ export function running(s: State, result: PlanResult): State {
       startedAt: s.now,
       endedAt: null,
     }))
-  return { ...s, ledger: [...s.ledger.filter(e => !started.some(n => n.key === e.key)), ...started], lastTitle: result.title }
+  return { ...s, ledger: [...s.ledger.filter(e => !started.some(n => n.key === e.key)), ...started], ...titled(s, result) }
 }

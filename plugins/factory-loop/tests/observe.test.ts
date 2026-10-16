@@ -474,6 +474,7 @@ describe('state', () => {
       ledger: deriveLedger(events, factory, facts, DEVICE),
       control: control(),
       lastTitle: null,
+      lastTitleAt: null,
       githubBackoffUntil: null,
       trackerTitle: config().trackerTitle,
     }
@@ -498,6 +499,11 @@ describe('config (SPEC 4.2)', () => {
       500, 60_000, 300_000, 7_200_000, 86_400_000, 5_400_000,
     ])
     expect([parseDuration('5'), parseDuration('5x'), parseDuration('m5'), parseDuration('')]).toEqual([null, null, null, null])
+  })
+
+  test('titleEvery takes a duration and defaults to five minutes', () => {
+    expect(loadConfig({ titleEvery: '5m' }).config.titleEveryMs).toBe(300_000)
+    expect(loadConfig({}).config.titleEveryMs).toBe(300_000)
   })
 
   test('a time setting takes a duration under its short key, or milliseconds under either key', () => {
@@ -830,7 +836,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     const pass = (rt: Runtime, stored?: Stored, at = now): Promise<Observation> => {
       now = at
       calls.length = 0
-      return observe(io, rt, cache, NOW - 60 * MIN, null, stored)
+      return observe(io, rt, cache, NOW - 60 * MIN, null, null, stored)
     }
     const commands = () => calls.map(c => c.argv.join(' '))
     return { world, calls, cache, pass, commands }
@@ -1336,7 +1342,7 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
       sessionLimits: async () => [],
       agents: async () => agents,
     }
-    const obs = await observe(io, runtime(), emptyCache(), NOW, null, stored({ ledger: [spawned] }))
+    const obs = await observe(io, runtime(), emptyCache(), NOW, null, null, stored({ ledger: [spawned] }))
     expect(obs.state.agents).toEqual([agents[0]])
   })
 })
@@ -1363,6 +1369,7 @@ function observedFrom(factory: NonNullable<ReturnType<typeof parseFactoryState>>
     ledger: [],
     control: control(),
     lastTitle: null,
+    lastTitleAt: null,
     githubBackoffUntil: null,
     trackerTitle: config().trackerTitle,
   }

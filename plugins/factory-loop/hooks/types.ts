@@ -280,6 +280,8 @@ export type State = {
   ledger: LedgerEntry[]
   control: Control
   lastTitle: string | null
+  // when the last rename went out; null until one has since the module loaded
+  lastTitleAt: Ms | null
   githubBackoffUntil: Ms | null
   // null: not read (the replay harness, a state built outside a pass)
   checkout: Checkout | null
@@ -302,6 +304,8 @@ export type Config = {
   usageStopNewPct: number
   usageStopAllPct: number
   passEveryMs: Ms
+  // the title is renamed at most this often (O1 is a throttle)
+  titleEveryMs: Ms
   queueEveryMs: Ms
   githubEveryMs: Ms
   usageEveryMs: Ms

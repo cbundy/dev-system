@@ -1172,3 +1172,36 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(recordOf(JSON.parse(JSON.stringify(nextRecord(r, rowFor(r, { kind: 'not-ok', reason: 'cannot' }, CFG), { kind: 'not-ok', reason: 'cannot' }, NOW))))).not.toBeNull()
   })
 })
+
+describe('the title is a throttle (O1, titleEveryMs)', () => {
+  const titleActions = (r: PlanResult) => r.actions.filter(a => a.kind === 'title')
+  const at = (min: number, over: Partial<State> = {}) => ({ ...world([], { lastTitle: 'A', lastTitleAt: NOW, ...over }), now: NOW + min * MIN })
+  test('changes inside the window plan nothing; the pass after it sets the title then', () => {
+    for (const [min, q] of [[1, 1], [2, 2], [4, 3]] as const) {
+      const r = plan(at(min, { queue: Array.from({ length: q }, (_, i) => i + 1) }))
+      expect(r.title).not.toBe('A')
+      expect(titleActions(r)).toEqual([])
+    }
+    const due = plan(at(5, { queue: [1, 2, 3] }))
+    expect(titleActions(due)).toEqual([expect.objectContaining({ kind: 'title', text: due.title })])
+  })
+  test('a title that reverts to the last one sends nothing, in the window or after it', () => {
+    const last = plan(world([])).title
+    for (const min of [1, 3, 6]) expect(titleActions(plan({ ...at(min), lastTitle: last }))).toEqual([])
+  })
+  test('the first title after a load goes out at once', () => {
+    expect(titleActions(plan(world([], { lastTitle: null, lastTitleAt: null })))).toHaveLength(1)
+  })
+  test('an hour of changes every 2 minutes renames at most 12 times', () => {
+    let s = world([])
+    let renames = 0
+    for (let t = 0; t < 360; t++) {
+      s = { ...s, now: NOW + t * 10_000, queue: Array.from({ length: Math.floor(t / 12) % 50 }, (_, i) => i + 1) }
+      const r = plan(s)
+      renames += titleActions(r).length
+      if (titleActions(r).length > 0) s = { ...s, lastTitle: r.title, lastTitleAt: s.now }
+    }
+    expect(renames).toBeGreaterThan(1)
+    expect(renames).toBeLessThanOrEqual(12)
+  })
+})

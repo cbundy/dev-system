@@ -150,7 +150,7 @@ let headless = false
 let loadedAt = 0
 let cwd = '.'
 let passNo = 0
-let lastTitle: string | null = null
+let lastTitle: string | null = null, lastTitleAt: Ms | null = null
 let lastDigest: string | null = null
 // states written today, and the day the loop dir was last pruned (YYYY-MM-DD)
 let statesToday = { day: '', count: 0 }
@@ -437,10 +437,11 @@ function offTitle(rt: Runtime): string {
   return `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`
 }
 
-async function setTitle($: EngineInterface, title: string) {
+async function setTitle($: EngineInterface, title: string) { // every rename, the driver's own included, starts the throttle window
   if (title === lastTitle) return
   await $.command.run({ command: 'rename', args: title })
   lastTitle = title
+  lastTitleAt = await $.clock.now()
 }
 
 // wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (SPEC 8.1).
@@ -749,7 +750,7 @@ function bareState(rt: Runtime, now: Ms): State {
     milestone: null,
     ledger: live.ledger,
     control: EMPTY_CONTROL,
-    lastTitle,
+    lastTitle, lastTitleAt,
     githubBackoffUntil: null,
     checkout: null,
   }
@@ -881,7 +882,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // v2's records and heads: act mode's own, else the store's, read and never written (v2 SPEC 2.3)
   let v2Stored: V2Stored | undefined
   if (rt.config.planner === 'v2' || rt.config.shadow === 'v2') v2Stored = await (act ? storedV2(liveV2, v2StoreIo($), rt.repo) : readStoredV2(v2StoreIo($), rt.repo))
-  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, stored, v2Stored)
+  const observed = await observe(reads, passRt, cache, shadowing ? 0 : loadedAt, lastTitle, lastTitleAt, stored, v2Stored)
   let state = observed.state
   if (act && rt.config.planner === 'v2') await keepV2(liveV2, observed.v2Heads, state, keepInStore)
   // an acting pass renews its lease before every action and on a timer while it runs, so no
@@ -944,7 +945,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       report = acted.report
       lastState = state
       if (report.outcomes.some(o => o.kind === 'restart-self' && o.status === 'done')) restartAsked = state.now
-      if (report.title !== null) lastTitle = report.title
+      if (report.title !== null) [lastTitle, lastTitleAt] = [report.title, state.now]
       // the kill switch stopped the pass between actions: the title says off now, not next pass
       if (report.killed) await setTitle($, offTitle(rt))
       // a rate-cap hold has no entry of its own: one loop event per cap per hour (SPEC 11.4)
@@ -964,7 +965,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       result = planned.result
       shadow = planned.shadow
       begin(tr, 'act')
-      await setTitle($, result.title)
+      if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
     }
 
     // notices from outside plan go out once no wake is open, acting or not (SPEC 9.2, 11.2), until a

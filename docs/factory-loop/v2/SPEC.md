@@ -2028,7 +2028,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | Q2 | merge | the head is clean, green and approved | `queue-merge` keyed by its head |
 | W1 | lease | a queued record with capacity, or a record in a slot state with no lease | `slot` op `lease` |
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
-| O1 | title | always, last | `title` |
+| O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
 | O3 | release | the Next milestone has no open item and one closed | `task(release)` |
 
