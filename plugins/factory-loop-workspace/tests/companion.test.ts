@@ -278,8 +278,8 @@ describe('the stop gate', () => {
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate:fail', head, ms: 0, command: 'npm test', exitCode: 1 },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate:pass', head, ms: 0 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, command: 'npm test', exitCode: 1 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0 },
     ])
   })
 
