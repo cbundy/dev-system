@@ -1136,7 +1136,9 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
      none, it creates one (`gh pr create --repo R --base <default> --head <branch> --title <title>
      --body-file -`);
   3. it writes the loop's body when the PR's body differs from it (`gh pr edit <p> --repo R
-     --body-file -`), so an adopted PR's linkage is the loop's own.
+     --body-file -`), so an adopted PR's linkage is the loop's own. With no done build of the life
+     to describe the work (an adopted PR, or a record rebuilt from events, 3.3), the body keeps the
+     PR's own summary and evidence.
 
   A re-run never makes a second PR (`totality/T-04`). The PR's number is in the done `pr` entry, so
   plan sees it at once, and the row that ends the reviewing step (T8, T9, T10) writes it to the
