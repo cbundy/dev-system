@@ -188,6 +188,7 @@ test("prepare: leftovers saved as a patch that applies back, the slot reset onto
   const r = w.run("prepare", s.path, s.lease, "issue-5", marker(w));
   assert.equal(r.status, 0, r.stderr);
   assert.equal(field(r.stdout, "PREPARED", "head"), git(w.origin, "rev-parse", "refs/heads/issue-5"));
+  assert.match(r.stdout, /^KILLED 1$/m, "the process it ended is counted");
   assert.equal(git(s.path, "symbolic-ref", "--short", "HEAD"), "issue-5");
   assert.equal(git(s.path, "rev-parse", "--abbrev-ref", "@{upstream}"), "origin/issue-5");
   assert.equal(git(s.path, "status", "--porcelain"), "", "the tree is clean: the marker is not in it");
@@ -215,6 +216,7 @@ test("prepare: leftovers saved as a patch that applies back, the slot reset onto
   const again = w.run("prepare", s.path, s.lease, "issue-5", marker(w, { seq: 5 }));
   assert.equal(again.status, 0, again.stderr);
   assert.equal(field(again.stdout, "LEFTOVERS", "file"), undefined);
+  assert.match(again.stdout, /^KILLED 0$/m);
   assert.equal(fs.readdirSync(path.join(w.loopDir, "leftovers")).length, 1);
 });
 
@@ -325,7 +327,7 @@ test("kill: every process in the slot ends, a stubborn one by SIGKILL after the 
   assert.equal(w.run("kill", s.path).stdout.trim(), "KILLED 0");
 });
 
-test("free: the slot's work saved, the slot reset and returned on its lease only; again, or on another lease, it is gone and nothing is touched; old leftovers are pruned", () => {
+test("free: the slot's work saved, the slot reset and returned on its lease only; again, or on another lease, it is gone and nothing is touched; old leftovers are pruned", async () => {
   const w = world();
   const s = leased(w);
   const old = path.join(w.loopDir, "leftovers", "1-old-s1-1.patch");
@@ -334,9 +336,14 @@ test("free: the slot's work saved, the slot reset and returned on its lease only
   for (const f of [old, recent]) fs.writeFileSync(f, "x\n");
   fs.utimesSync(old, (Date.now() - 8 * DAY) / 1000, (Date.now() - 8 * DAY) / 1000);
   fs.writeFileSync(path.join(s.path, "a.txt"), "changed\n");
+  const left = sleeper(s.path);
+  await settle();
   const r = w.run("free", s.path, s.lease, w.loopDir);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(field(r.stdout, "FREED", "path"), s.path);
+  assert.match(r.stdout, /^KILLED 1$/m, "the process it ended is counted");
+  await settle();
+  assert.ok(!alive(left.pid));
   assert.equal(w.pool()[0].status, "available");
   assert.deepEqual(w.calls().filter((a) => a[0] === "return"), [["return", s.path, "--if-lease-id", s.lease, "--force"]]);
   assert.equal(git(s.path, "status", "--porcelain"), "");
@@ -379,7 +386,7 @@ test("free: a commit on the slot's branch that was never pushed is saved against
   assert.equal(git(s.path, "rev-parse", "HEAD"), start, "at the branch's start");
   // a clean slot with nothing unpushed frees with no file
   const t = leased(w, 6);
-  assert.equal(w.run("free", t.path, t.lease, w.loopDir).stdout.trim(), `FREED path=${t.path}`);
+  assert.equal(w.run("free", t.path, t.lease, w.loopDir).stdout.trim(), `FREED path=${t.path}\nKILLED 0`);
 });
 
 test("--budget-ms bounds the whole op: a treehouse get that hangs is ended inside it, and the op fails, worth a retry", () => {
