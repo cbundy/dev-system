@@ -673,8 +673,11 @@ export function rowFor(r: IssueRecord, e: TableEvent, c: Config): Row   // exact
   or connection timeout. A rate limit is not retried there, since its 15-minute backoff holds
   GitHub (v1 SPEC 10.2), and neither are credentials, a 404, a validation error or a refusal. So a
   blip never ends a step unknown or holds an effect, and logs no intervention (drill finding
-  R2-F4: one `gh pr update-branch` error made the head's step unknown). Running an action again is
-  safe: each reads what a try before it did before it acts, as the ledger's own retries need.
+  R2-F4: one `gh pr update-branch` error made the head's step unknown). The result must carry the
+  error's text: a command's output, or the merge guard's FAIL reason, which names what its read
+  printed (9.4). Running an action again is safe: each reads what a try before it did before it
+  acts or records, as the ledger's own retries need (an update found up to date reads its head
+  back, since GitHub may have made it before its error, 9.2).
 - **Causes outside the issue** (U1), each from a fact the loop already holds, never inferred
   (`failures/F2`, `totality/T-12`, `totality/T-13`):
   - `load`: the step's entry started before this module load and ended `lost` (the loop
@@ -1302,7 +1305,9 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   update twice (`failures/F4`).
 - **Outcomes:** GitHub's update is asynchronous, so the executor reads the PR's head until it
   moves (30 s bound) and records the new head in its ledger entry. That makes it a head the loop
-  produced (4.1). A refusal for a conflict is `not-ok(conflict)`; a head that did not move, or any
+  produced (4.1). An update GitHub finds needless (already up to date) records the head it reads
+  back, never the head planned at: an earlier try of the attempt may have made it (5.1). A refusal
+  for a conflict is `not-ok(conflict)`; a head that did not move or was not read back, or any
   other failure, is `unknown`, once a GitHub blip has been tried again (5.1).
 - A head that already shows `dirty` is `not-ok(conflict)` without an update.
 
@@ -1327,7 +1332,7 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   | `checks` | checks: a check failed | no transition; next pass reads the checks and re-runs or ends as `ci-red` |
   | `patch` | patch | `not-ok(patch)` (T14) |
   | `linkage` | linkage | re-render the body once per attempt (8.1), then Q2 again; a second `linkage` is `policy` |
-  | `read` | any "cannot read", "cannot verify", "cannot derive" or "not computed" line; `blocked` with checks pending | `unknown` |
+  | `read` | any "cannot read", "cannot verify", "cannot derive" or "not computed" line; `blocked` with checks pending | `unknown`: no answer about the PR, so a failed try, its reason naming the read's error (a GitHub blip is tried again, 5.1) |
   | `policy` | author not trusted; base not the default branch; draft | `not-ok(policy)` (T15): parked with the FAIL lines, since only the owner can change these |
 
   A refusal GitHub gives no reason for, or a CLI failure, is `unknown`, once a GitHub blip has
@@ -1357,7 +1362,8 @@ the guard checks only facts the loop owns (V:217; OB:60-66):
   neither (`simplicity/F3`).
 - **Classes.** In `--patch` mode each FAIL line ends with `class=<class>`, one of `behind`,
   `conflict`, `checks`, `patch`, `linkage`, `read` and `policy` (9.3). So the loop never parses
-  the reasons' wording (`failures/F3`).
+  the reasons' wording (`failures/F3`). A `read` reason ends with what the read printed on
+  stderr, so a GitHub blip in it is tried again like any other (5.1).
 - Without `--patch` the guard behaves as today, for people and the old orchestrator
   (`images/base/callum-flow-merge-guard:20-43`).
 

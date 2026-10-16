@@ -10,7 +10,8 @@
 // - mergeResult and updateResult: a finished try, by the guard's FAIL class (9.3) or the update's
 //   refusal (9.2), each a done try whose outcome carries its class (act-queue.ts): ok once
 //   merged; not-ok with conflict, patch or policy; again (no transition) for behind, checks and
-//   linkage; unknown for read, a failed try (a CLI failure) or a lost one;
+//   linkage; unknown for a failed try (a CLI failure, a guard that could not read, class read) or
+//   a lost one;
 // - mayHaveMerged: a merge try that merged, or may have (running or lost), never a refusal;
 // - ciOf: the checks on the head, each failed or cancelled one after its one re-run per round, read
 //   as the review step reads its own (8.5);
@@ -119,9 +120,9 @@ export function mayHaveMerged(e: LedgerEntry): boolean {
 }
 
 // mergeResult: a merge try that ended (9.3). Merged is ok; a refusal, done with the guard's class,
-// is read by its class; a try with no class (a CLI failure, a refusal GitHub gave no reason for),
-// or one lost to a reload, is unknown. The PR's own merged state is read before this, so a lost
-// try that merged is ok.
+// is read by its class; a failed try (a CLI failure, a refusal GitHub gave no reason for, a guard
+// that could not read: class read, act-queue.ts), or one lost to a reload, is unknown. The PR's
+// own merged state is read before this, so a lost try that merged is ok.
 export function mergeResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: string): TryRead {
   const o = e.outcome?.kind === 'queue' ? e.outcome : null
   if (e.status === 'done' && o?.merged === true) return { kind: 'result', event: { kind: 'ok', data: { pr: r.pr ?? undefined, head: o.head ?? e.head ?? undefined } } }
@@ -138,8 +139,6 @@ export function mergeResult(ctx: V2Ctx, r: IssueRecord, e: LedgerEntry, base: st
     case 'checks':
     case 'linkage':
       return { kind: 'again', cls: o?.failClass ?? null }
-    case 'read':
-      return { kind: 'result', event: unknownOf(ctx, r, e, 'cli', `the merge guard could not read what it checks: ${text}`) }
     default:
       return { kind: 'result', event: unknownOf(ctx, r, e, 'cli', `the merge of PR #${r.pr ?? '?'} at ${short(e.head ?? '')} ended ${e.status}: ${text}`) }
   }

@@ -41,8 +41,9 @@ function blip(exec: Exec): boolean {
 // executorOf: what a kind runs under planner v2: its own executor here, else v1's, run again after
 // each pause of BLIP_PAUSES_S while it fails on a GitHub blip (5.1), so a blip never ends a step
 // unknown or holds an effect. Running one again is safe: each reads what a try before it did (a
-// comment's hidden key, the PR its ensure opened, a child's key, the PR an update or a merge
-// moved) before it acts, as the ledger's own retries need.
+// comment's hidden key, the PR its ensure opened, a child's key, the head an update moved, read
+// back even when GitHub finds it up to date, the PR a merge merged) before it acts or records,
+// as the ledger's own retries need.
 export function executorOf(kind: ActionKind, v1: Partial<Record<ActionKind, Executor>>): Executor | undefined {
   const run = V2_EXECUTORS[kind] ?? v1[kind]
   if (run === undefined) return undefined

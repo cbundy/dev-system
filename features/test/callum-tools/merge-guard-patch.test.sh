@@ -102,6 +102,8 @@ patch_setup; echo '[{"name":"ci","bucket":"pending"}]' > "$st/checks"; echo 8 > 
 patch_setup; echo '[{"name":"ci","bucket":"fail"}]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "red" checks checks "ci=fail"
 patch_setup; echo '[]' > "$st/checks"; gp 7 --patch "$PID"; expect_class "no checks" checks checks "no checks reported"
 patch_setup; echo 'garbage' > "$st/checks"; gp 7 --patch "$PID"; expect_class "checks unread" checks read "cannot parse checks"
+# a read that failed names gh's error, so the loop can tell a GitHub blip (v2 SPEC 5.1)
+patch_setup; echo 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' > "$st/checks-err"; gp 7 --patch "$PID"; expect_class "checks blip" checks read "cannot read checks: HTTP 502: Bad Gateway"
 patch_setup; echo '{"login":"mallory","id":999}' > "$st/pauthor"; gp 7 --patch "$PID"; expect_class "untrusted" author policy "not opened by a trusted author"
 patch_setup; CALLUM_FLOW_ISSUE_READ_BIN="$tmpdir/missing-reader" gp 7 --patch "$PID"; expect_class "author unverified" author read "cannot verify the author"
 patch_setup; echo 'MISMATCH #7 issue=#12 expect=closing' > "$st/linkage"; echo 1 > "$st/linkage-rc"; gp 7 --patch "$PID"; expect_class "linkage" linkage linkage "MISMATCH #7"

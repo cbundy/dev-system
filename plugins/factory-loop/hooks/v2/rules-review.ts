@@ -44,9 +44,10 @@ import type { IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
 
 const RULE = 'S2'
 const MIN = 60_000
-// a re-run's attempts: a GitHub blip, a gh timeout or a restart during the call is retried with
-// backoff; the key stays one per round and run. The merge queue's head re-runs its checks with the
-// same cap (rules-queue.ts).
+// a re-run's attempts: a gh timeout, a restart during the call or a longer outage is retried
+// across attempts, with backoff (a GitHub blip is retried inside the attempt, registry.ts
+// executorOf, 5.1); the key stays one per round and run. The merge queue's head re-runs its checks
+// with the same cap (rules-queue.ts).
 export const RERUN_ATTEMPTS = 3
 
 // The start of a failed re-run's summary when GitHub itself refused it (act-ci.ts): retrying

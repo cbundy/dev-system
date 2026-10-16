@@ -4,7 +4,8 @@
 //   the PR's head until it moves (30 s) and records the new head, a head the loop produced (4.1).
 //   A refusal for a conflict is an answer, not a fault: done, with no head and class conflict
 //   (the step's not-ok). A head that did not move, or any other failure, fails with no class
-//   (unknown). An update GitHub finds needless (already up to date) is done at the head as read.
+//   (unknown). An update GitHub finds needless (already up to date) reads the PR's head back and
+//   is done at it: an earlier try of the attempt may have made it (5.1).
 // - `queue-merge` runs `callum-flow-merge <p> --patch <approved patch> --issue <N>`: the guard
 //   inside it checks only the loop's facts, the record's issue among them (never read from the
 //   branch name), and the merge matches the head the guard verified. Merged is done. A
@@ -12,9 +13,10 @@
 //   FAIL lines and their class (9.3; of several, the one whose outcome decides most), or the class
 //   a refusal's merge state names. A merge cut off, or refused with no reason, is read back from
 //   the PR, so one that merged anyway is done: the loop's own merge, never taken for a hand merge;
-//   one that did not fails with no class.
-// Only a failure with no class is `failed`, so the foundation's executor breaker counts broken
-// commands, never the queue's ordinary refusals (9.1: the queue moves on).
+//   one that did not fails with no class. A refusal of class read (the guard could not read a fact,
+//   its FAIL line naming the read's error) fails too: it is no answer about the PR.
+// Only a failure with no class, or of class read, is `failed`, so the foundation's executor breaker
+// counts broken commands, never the queue's ordinary refusals (9.1: the queue moves on).
 // Executors decide nothing: plan did.
 import { commandFailure, NO_EXIT } from '../act-cli'
 import { detailOf, rateLimited } from '../exec'
@@ -107,7 +109,7 @@ export function refusalClass(stderr: string): GuardClass | null {
 async function readPull(ctx: ExecCtx, pr: number): Promise<Pull | string> {
   const r = await run(ctx, ARGV.prReadArgv(pr), READ_MS)
   if (!r.ok) return r.exec.summary
-  if (r.r.exitCode !== 0) return `the PR read exited ${r.r.exitCode}`
+  if (r.r.exitCode !== 0) return `the PR read exited ${r.r.exitCode}: ${detailOf(r.r)}`
   return pullOf(r.r.stdout) ?? 'the PR read does not parse'
 }
 
@@ -138,10 +140,18 @@ const update: Executor = async (ctx, action) => {
     if (!/conflict/i.test(said)) return commandFailure(argv, r.r)
     return { status: 'done', outcome: outcome('update', null, 'conflict', linesOf(detailOf(r.r))), summary: clip(`PR #${action.pr}: the update onto ${short(action.base)} conflicts`) }
   }
-  if (/up.to.date/i.test(said)) return { status: 'done', outcome: outcome('update', action.head, null, linesOf(said)), summary: clip(`PR #${action.pr} is up to date at ${short(action.head)}`) }
+  if (/up.to.date/i.test(said)) {
+    // read back, never assumed: an earlier try of the attempt may have updated it (5.1)
+    const pull = await readPull(ctx, action.pr)
+    if (typeof pull === 'string' || pull.head === null) {
+      const why = typeof pull === 'string' ? pull : 'the PR has no head'
+      return { status: 'failed', outcome: outcome('update', null, null, linesOf(why)), summary: clip(`PR #${action.pr} is up to date, but its head was not read back: ${why}`) }
+    }
+    return { status: 'done', outcome: outcome('update', pull.head, null, linesOf(said)), summary: clip(`PR #${action.pr} is up to date at ${short(pull.head)}`) }
+  }
   const moved = await headMoved(ctx, action.pr, action.head)
   if (moved.head === null) {
-    return { status: 'failed', outcome: outcome('update', null, null, [moved.why]), summary: clip(`PR #${action.pr}: updated, but its head did not move from ${short(action.head)} in ${MOVE_MS / SEC} s: ${moved.why}`) }
+    return { status: 'failed', outcome: outcome('update', null, null, linesOf(moved.why)), summary: clip(`PR #${action.pr}: updated, but its head did not move from ${short(action.head)} in ${MOVE_MS / SEC} s: ${moved.why}`) }
   }
   return { status: 'done', outcome: outcome('update', moved.head, null, linesOf(said)), summary: clip(`PR #${action.pr} updated onto ${short(action.base)}: ${short(action.head)} -> ${short(moved.head)}`) }
 }
@@ -163,15 +173,15 @@ const merge: Executor = async (ctx, action) => {
   const detail = r.ok ? detailOf(r.r) : r.exec.summary
   const kept = fails.length > 0 ? linesOf(fails.join('\n')) : linesOf(detail).slice(-3)
   const summary = clip(`PR #${action.pr} not merged at ${short(action.head)}${cls === null ? '' : ` (${cls})`}: ${kept[0] ?? 'no reason given'}`)
-  // a refusal with a class is the guard's answer: done, not merged
-  if (cls !== null) return { status: 'done', outcome: outcome('merge', action.head, cls, kept), summary }
+  // a refusal with a class is the guard's answer: done, not merged; one of class read is no answer
+  if (cls !== null && cls !== 'read') return { status: 'done', outcome: outcome('merge', action.head, cls, kept), summary }
   // cut off, or refused with no reason: whether it merged anyway is the PR's to say
-  const pull = await readPull(ctx, action.pr)
-  if (typeof pull !== 'string' && pull.state === 'merged' && pull.mergedHead === action.head) {
+  const pull = cls === 'read' ? null : await readPull(ctx, action.pr)
+  if (pull !== null && typeof pull !== 'string' && pull.state === 'merged' && pull.mergedHead === action.head) {
     return { status: 'done', outcome: outcome('merge', action.head, null, ['merged, as the PR reads back'], true), summary: clip(`PR #${action.pr} merged at ${short(action.head)} (read back)`) }
   }
-  const exec: Extract<Exec, { status: 'failed' }> = { status: 'failed', outcome: outcome('merge', action.head, null, kept), summary }
-  if (r.ok && rateLimited(r.r.stderr)) exec.rateLimited = true
+  const exec: Extract<Exec, { status: 'failed' }> = { status: 'failed', outcome: outcome('merge', action.head, cls, kept), summary }
+  if (r.ok && rateLimited(`${r.r.stderr}\n${fails.join('\n')}`)) exec.rateLimited = true
   return exec
 }
 

@@ -17,7 +17,7 @@
 #   one the loop's reviewer approved. Every FAIL line ends with ` class=<class>`, one of behind,
 #   conflict, checks, patch, linkage, read and policy, so the loop acts on the class and never
 #   parses the reason's words: read is a fact the guard could not read, verify, derive or
-#   compute; policy is what only the owner can change (an untrusted author, another base, a
+#   compute, its reason ending with what the read printed on stderr; policy is what only the owner can change (an untrusted author, another base, a
 #   draft, a branch without an issue). Without --patch the guard is as before.
 #   --update-behind is the one mode that writes (cbundy/dev-system#476): for a PR that is
 #   only BEHIND its base it rebases the branch in a throwaway worktree, proves the patch
@@ -150,6 +150,13 @@ fail() {
 # one_line: collapse stdin to a single trimmed line
 one_line() { tr '\n' ' ' | sed 's/[[:space:]]*$//'; }
 clean() { awk '{gsub(/\033\[[0-9;]*m/, ""); print}'; }
+
+# A read of GitHub's keeps its stderr in $errf, and said names it in the read's FAIL reason, so a
+# reason says why it could not read (a 5xx or a timeout reads as GitHub's, v2 SPEC 5.1).
+errf=$(mktemp) || errf=/dev/null
+trap '[ "$errf" = /dev/null ] || rm -f "$errf"' EXIT
+# said: ": <what the last read printed on stderr>", on one line and capped; nothing if it printed none
+said() { _s=$(clean < "$errf" | one_line | cut -c1-300); [ -z "$_s" ] || printf ': %s' "$_s"; }
 field() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" | sed -n 1p | tr -d '"'; }
 
 # run_clean: the run reached ci and every step before it finished (completed or
@@ -230,11 +237,12 @@ worktree_gated() {
 }
 
 branch='' pr_head='' pr_base='' pj=''
-if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus 2> /dev/null); then
+if pj=$($GH pr view "$pr" --json headRefName,headRefOid,baseRefName,state,isDraft,mergeable,mergeStateStatus 2> "$errf"); then
   branch=$(printf '%s' "$pj" | jq -r '.headRefName // empty')
   pr_head=$(printf '%s' "$pj" | jq -r '.headRefOid // empty')
   pr_base=$(printf '%s' "$pj" | jq -r '.baseRefName // empty')
 fi
+pj_said=$(said)
 
 # --- run lookup (head and gates) ---------------------------------------------
 # --patch checks no run: no pipeline-watch.sh and no no-mistakes call (v2 SPEC 9.4)
@@ -275,7 +283,7 @@ case "$msleep" in '' | *[!0-9.]*) msleep=2 ;; esac
 if [ -n "$update_behind" ]; then
   ub_fail() { printf 'UPDATE-BEHIND FAIL %s; fall back to a full re-gate: %s\n' "$1" "$REBASE_FIX"; exit 1; }
   ub_skip() { printf 'UPDATE-BEHIND SKIP %s\n' "$1"; exit 1; }
-  [ -n "$branch" ] || ub_skip "cannot read PR #$pr, retry"
+  [ -n "$branch" ] || ub_skip "cannot read PR #$pr$pj_said, retry"
   default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
   [ "$pr_base" = "$default_branch" ] || [ "$pr_base" = "$base" ] || ub_skip "PR targets $pr_base, not the default branch${base:+ or --base $base}; pass --base $pr_base if that is intended"
   ub_j=$pj
@@ -334,7 +342,7 @@ fi
 if [ -n "$patch" ]; then
   :
 elif [ -z "$branch" ]; then
-  fail head "cannot read PR #$pr"
+  fail head "cannot read PR #$pr$pj_said"
 elif [ -z "$status_out" ]; then
   fail head "no pipeline run found for $branch"
 else
@@ -372,20 +380,21 @@ else
 fi
 gated_patch=${gated_patch-} rebased_from=${rebased_from-}
 
-default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> /dev/null) || default_branch=''
+default_branch=$($GH repo view --json defaultBranchRef -q .defaultBranchRef.name 2> "$errf") || default_branch=''
+default_said=$(said)
 
 # --- author ------------------------------------------------------------------
 # Only a PR opened by a trusted author is read any further (the reader exits 3
 # for an untrusted author and 1 when it cannot tell; both fail closed).
 author_ok=1
-"$READ" --json --pr "$pr" > /dev/null 2>&1
+"$READ" --json --pr "$pr" > /dev/null 2> "$errf"
 a_rc=$?
 if [ "$a_rc" -eq 3 ]; then
   author_ok=0
   fail author "PR #$pr was not opened by a trusted author" policy
 elif [ "$a_rc" -ne 0 ]; then
   author_ok=0
-  fail author "cannot verify the author of PR #$pr (reader exit $a_rc)" read
+  fail author "cannot verify the author of PR #$pr (reader exit $a_rc)$(said)" read
 fi
 
 # --- rollout -----------------------------------------------------------------
@@ -403,7 +412,7 @@ elif [ -z "$r_issue" ]; then
     rollout_ok=0
   fi
 else
-  r_out=$("$ROLLOUT" "$r_issue" 2> /dev/null)
+  r_out=$("$ROLLOUT" "$r_issue" 2> "$errf")
   r_rc=$?
   r_line=$(printf '%s\n' "$r_out" | sed -n 1p)
   derived=''
@@ -414,7 +423,7 @@ else
     esac
   fi
   if [ -z "$derived" ]; then
-    fail rollout "cannot derive the Rollout of #$r_issue: ${r_line:-exit $r_rc, no output}" read
+    fail rollout "cannot derive the Rollout of #$r_issue: ${r_line:-exit $r_rc, no output}$(said)" read
     rollout_ok=0
   elif [ -z "$explicit" ]; then
     expect=$derived
@@ -425,25 +434,25 @@ fi
 
 # --- linkage -----------------------------------------------------------------
 if [ "$rollout_ok" -eq 1 ]; then
-lk_out=$("$LINKAGE" "$pr" --expect "$expect" 2> /dev/null)
+lk_out=$("$LINKAGE" "$pr" --expect "$expect" 2> "$errf")
 lk_rc=$?
 lk_line=$(printf '%s\n' "$lk_out" | sed -n 1p)
 case "$lk_line" in
-  MATCH*) [ "$lk_rc" -eq 0 ] || fail linkage "exit $lk_rc: $lk_line" read ;;
+  MATCH*) [ "$lk_rc" -eq 0 ] || fail linkage "exit $lk_rc: $lk_line$(said)" read ;;
   SKIP*)
     if [ "$lk_rc" -ne 0 ]; then
       fail linkage "${lk_line:-no output}" linkage
     elif [ -z "$issue" ]; then
       fail linkage "$lk_line (branch names no issue, pass --issue N)" linkage
     else
-      lj=$($GH pr view "$pr" --json body,closingIssuesReferences 2> /dev/null) || lj=''
+      lj=$($GH pr view "$pr" --json body,closingIssuesReferences 2> "$errf") || lj=''
       api=$(printf '%s' "$lj" | jq -r '[.closingIssuesReferences[]?.number] | sort | join(",")' 2> /dev/null) || api=x
       body_t=$(printf '%s' "$lj" | jq -r '.body // ""' 2> /dev/null |
         grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+' |
         sed -E 's/^[A-Za-z]+[[:space:]]*:?[[:space:]]*//' | sort -u | tr '\n' ',' | sed 's/,$//')
       has_ref=$(printf '%s' "$lj" | jq -r '.body // ""' 2> /dev/null | grep -ciE "\\b(Refs|Part of)[[:space:]]+#$issue\\b")
       if [ -z "$lj" ] || [ "$api" = x ]; then
-        fail linkage "cannot read PR #$pr body" read
+        fail linkage "cannot read PR #$pr body$(said)" read
       elif [ "$expect" = closing ]; then
         if [ "$body_t" != "#$issue" ] || { [ "$pr_base" = "$default_branch" ] && [ "$api" != "$issue" ]; }; then
           fail linkage "$lk_line (PR must close exactly #$issue: api=[$api] body=[$body_t])" linkage
@@ -457,7 +466,7 @@ case "$lk_line" in
     # no report at all is a fact not read; a report is a linkage that does not match
     lk_class=linkage
     [ -n "$lk_line" ] || lk_class='read'
-    fail linkage "${lk_line:-exit $lk_rc, no output}" "$lk_class"
+    fail linkage "${lk_line:-exit $lk_rc, no output$(said)}" "$lk_class"
     ;;
 esac
 fi
@@ -466,9 +475,9 @@ if [ -z "$issue" ]; then
 fi
 
 # --- checks ------------------------------------------------------------------
-if cj=$($GH pr checks "$pr" --json name,bucket 2> /dev/null) || [ -n "${cj-}" ]; then
+if cj=$($GH pr checks "$pr" --json name,bucket 2> "$errf") || [ -n "${cj-}" ]; then
   if ! printf '%s' "$cj" | jq -e 'type == "array"' > /dev/null 2>&1; then
-    fail checks "cannot parse checks" read
+    fail checks "cannot parse checks$(said)" read
   elif [ "$(printf '%s' "$cj" | jq 'length')" = 0 ]; then
     fail checks "no checks reported" checks
   else
@@ -476,7 +485,7 @@ if cj=$($GH pr checks "$pr" --json name,bucket 2> /dev/null) || [ -n "${cj-}" ];
     [ -z "$bad" ] || fail checks "$bad" checks
   fi
 else
-  fail checks "cannot read checks" read
+  fail checks "cannot read checks$(said)" read
 fi
 
 # --- gates -------------------------------------------------------------------
@@ -528,9 +537,9 @@ fi
 # so a clean merge of the base keeps the approval and any other change to the PR's lines fails.
 if [ -n "$patch" ]; then
   if [ -z "$pr_head" ]; then
-    fail patch "cannot read the PR head, so its patch id was not computed" read
+    fail patch "cannot read the PR head, so its patch id was not computed$pj_said" read
   elif [ -z "$default_branch" ]; then
-    fail patch "cannot read the default branch, so the patch id of $pr_head was not computed" read
+    fail patch "cannot read the default branch, so the patch id of $pr_head was not computed$default_said" read
   elif ! p_out=$("$PATCH_ID" "$pr_head" "$default_branch" 2>&1); then
     fail patch "patch id of $pr_head not computed: $(printf '%s' "$p_out" | one_line)" read
   elif [ "$p_out" != "$patch" ]; then
@@ -540,7 +549,7 @@ fi
 
 # --- base --------------------------------------------------------------------
 if [ -z "$pr_base" ]; then
-  fail base "cannot read the PR base" read
+  fail base "cannot read the PR base$pj_said" read
 else
   default=$default_branch
   if [ "$pr_base" != "$default" ] && [ "$pr_base" != "$base" ]; then
@@ -553,6 +562,7 @@ fi
 # strict branch protection refuses it (cbundy/dev-system#246).
 mbase=${pr_base:-its base}
 mj=$pj
+mj_said=$pj_said
 mtry=1
 # the recovery the reason names: the pipeline's without --patch; the loop owns its own with it
 rebase_fix=", rebase and re-gate: $REBASE_FIX" behind_fix=", $BEHIND_FIX"
@@ -560,7 +570,7 @@ rebase_fix=", rebase and re-gate: $REBASE_FIX" behind_fix=", $BEHIND_FIX"
 while :; do
   mstate='' mmerge='' mmss='' mreason='' mclass=read mverdict=unknown
   if [ -z "$mj" ]; then
-    mverdict=fail mreason="cannot read merge state"
+    mverdict=fail mreason="cannot read merge state$mj_said"
   else
     mstate=$(printf '%s' "$mj" | jq -r '.state // empty' 2> /dev/null)
     mmerge=$(printf '%s' "$mj" | jq -r '.mergeable // empty' 2> /dev/null)
@@ -589,7 +599,8 @@ while :; do
   fi
   mtry=$((mtry + 1))
   sleep "$msleep"
-  mj=$($GH pr view "$pr" --json state,isDraft,mergeable,mergeStateStatus 2> /dev/null) || mj=''
+  mj=$($GH pr view "$pr" --json state,isDraft,mergeable,mergeStateStatus 2> "$errf") || mj=''
+  mj_said=$(said)
 done
 [ "$mverdict" != fail ] || fail mergeable "$mreason" "$mclass"
 

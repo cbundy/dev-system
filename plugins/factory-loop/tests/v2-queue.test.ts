@@ -200,7 +200,9 @@ describe('Q2: the head is merged when it is clean, green and its patch is the ap
       via: 'fix:conflict',
       next: { state: 'fixing', fixes: 1, notes: [expect.stringContaining('merge origin/main into issue-12')] },
     })
-    expect(run('read', ['GUARD author FAIL cannot verify the author of PR #612 (reader exit 1) class=read'])).toMatchObject({ row: 'U2', event: 'unknown', next: { state: 'merge-queue', step: 'queue', attempt: 2 } })
+    // a guard that could not read fails its try (act-queue.ts): no answer about the PR, so unknown
+    const unread = { status: 'failed' as const, failClass: 'read' as const, lines: ['GUARD author FAIL cannot verify the author of PR #612 (reader exit 1) class=read'] }
+    expect(transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', unread)])), 12)).toMatchObject({ row: 'U2', event: 'unknown', next: { state: 'merge-queue', step: 'queue', attempt: 2 } })
     // a CLI failure, or a refusal GitHub gave no reason for, is unknown too
     expect(transitionOf(plan(withLedger(world([r]), [tried(r, 'merge', { status: 'failed', failClass: null, lines: ['callum-flow-merge: GitHub refused the merge'] })])), 12)).toMatchObject({ row: 'U2' })
   })
@@ -671,7 +673,7 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     expect(reads(w.argvs)).toBe(3)
   })
 
-  test('queue-update: a conflict is answered (done) with its class; a head that never moves fails with none, within 30 s and a bounded number of reads; up to date is done at the head; any other failure is the CLI\'s', async () => {
+  test('queue-update: a conflict is answered (done) with its class; a head that never moves fails with none, within 30 s and a bounded number of reads; up to date is done at the head it reads back; any other failure is the CLI\'s', async () => {
     const conflict = actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'X Cannot update PR branch due to conflicts' } : {}))
     expect(await conflict.run(UPDATE)).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'update', head: null, failClass: 'conflict', lines: ['X Cannot update PR branch due to conflicts'] } })
     const still = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}), 3000)
@@ -681,9 +683,12 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     const frozen = actWorld(argv => (argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}), 0)
     expect(await frozen.run(UPDATE)).toMatchObject({ status: 'failed' })
     expect(reads(frozen.argvs)).toBe(16)
-    const current = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : {}))
+    const current = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
     expect(await current.run(UPDATE)).toMatchObject({ status: 'done', outcome: { head: HEAD, failClass: null } })
-    expect(reads(current.argvs)).toBe(0)
+    expect(reads(current.argvs)).toBe(1)
+    // a head not read back is no answer: the update may have moved it
+    const unread = actWorld(argv => (argv[0] === 'gh' ? { stderr: '✓ PR branch already up-to-date' } : argv[0] === 'callum-flow-issue-read' ? { exitCode: 1, stderr: 'HTTP 404: Not Found' } : {}))
+    expect(await unread.run(UPDATE)).toMatchObject({ status: 'failed', outcome: { head: null, failClass: null, lines: ['the PR read exited 1: HTTP 404: Not Found'] } })
     const limited = actWorld(argv => (argv[0] === 'gh' ? { exitCode: 1, stderr: 'HTTP 403: API rate limit exceeded' } : {}))
     expect(await limited.run(UPDATE)).toMatchObject({ status: 'failed', rateLimited: true, outcome: { kind: 'cli', exit: 1 } })
   })
@@ -729,6 +734,37 @@ describe('the executors (act-queue.ts, v2 SPEC 9.2, 9.3)', () => {
     const merge = actWorld(argv => (argv[0] === 'callum-flow-merge' && mergeBlips-- > 0 ? { exitCode: 1, stderr: 'gh pr merge: HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson() } : {}))
     expect(await merge.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true } })
     expect(merge.argvs.filter(a => a[0] === 'callum-flow-merge')).toHaveLength(2)
+  })
+
+  test('an update GitHub made before its blip is found on the next try as up to date; the head it reads back is the loop\'s, never a person\'s push (review R2-F4)', async () => {
+    const updateArgv = ['gh', 'pr', 'update-branch', '660', '--repo', REPO]
+    let tries = 0
+    const w = actWorld(argv => {
+      if (argv[2] === 'update-branch') return ++tries === 1 ? { exitCode: 1, stderr: 'HTTP 502: Bad Gateway (https://api.github.com/graphql)' } : { stderr: '✓ PR branch already up-to-date' }
+      return argv[0] === 'callum-flow-issue-read' ? { stdout: pullJson({ head: { sha: HEAD2 } }) } : {}
+    })
+    const out = await w.run(UPDATE)
+    expect(out).toMatchObject({ status: 'done', outcome: { kind: 'queue', op: 'update', head: HEAD2, failClass: null } })
+    expect(w.argvs.slice(0, 3)).toEqual([updateArgv, ['sleep', '5'], updateArgv])
+    // the next passes see HEAD2 on the PR, first seen during the update: the loop's own head
+    const done = entry(UPDATE.key, 'queue-update', { issue: 60, pr: 660, head: HEAD, status: 'done', outcome: 'outcome' in out ? out.outcome : undefined, summary: out.summary, startedAt: NOW - 2 * MIN, endedAt: NOW - 2 * MIN + 30_000 })
+    const moved = world([r60], [view(r60, { head: HEAD2 })], {}, { heads: { [HEAD2]: { pr: 660, at: NOW - 2 * MIN + 10_000 } } })
+    expect(ivs(plan(withLedger(moved, [done])), 60)).toEqual([])
+    // had it kept the head it planned at, HEAD2 would have been a person's push
+    const stale = { ...done, outcome: { kind: 'queue' as const, op: 'update' as const, merged: false, head: HEAD, failClass: null, lines: [] } }
+    expect(ivs(plan(withLedger(moved, [stale])), 60)).toEqual(['person push'])
+  })
+
+  test('a guard that could not read a fact for a GitHub blip names gh\'s error, so the merge runs again inside its attempt (review R2-F4)', async () => {
+    let refusals = 1
+    const fail = 'GUARD checks FAIL cannot read checks: HTTP 502: Bad Gateway (https://api.github.com/graphql) class=read'
+    const w = actWorld(argv => (argv[0] === 'callum-flow-merge' && refusals-- > 0 ? { exitCode: 1, stdout: `${fail}\n` } : {}))
+    expect(await w.run(MERGE)).toMatchObject({ status: 'done', outcome: { merged: true, head: HEAD } })
+    expect(w.argvs.filter(a => a[0] === 'callum-flow-merge')).toHaveLength(2)
+    // a read refusal is no answer about the PR: a failed try, its lines kept, nothing read back
+    const unread = actWorld(argv => (argv[0] === 'callum-flow-merge' ? { exitCode: 1, stdout: 'GUARD author FAIL cannot verify the author of PR #660 (reader exit 1) class=read\n' } : {}))
+    expect(await unread.run(MERGE)).toMatchObject({ status: 'failed', outcome: { merged: false, failClass: 'read', lines: ['GUARD author FAIL cannot verify the author of PR #660 (reader exit 1) class=read'] } })
+    expect({ merges: unread.argvs.filter(a => a[0] === 'callum-flow-merge').length, reads: reads(unread.argvs) }).toEqual({ merges: 1, reads: 0 })
   })
 
   test('only a GitHub blip runs again, at most twice; credentials, a 404, a validation error, a rate limit (its backoff holds GitHub) and a refusal end the attempt at once', async () => {
