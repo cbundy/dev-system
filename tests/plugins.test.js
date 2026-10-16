@@ -624,6 +624,61 @@ test("an image default with no ref leaves a no-ref declaration unchanged", (t) =
   assert.equal(wanted(setup(t, { settings: PIN(null) }), { DEV_DEFAULT_PLUGINS: DEFAULT }), "callum cbundy/dev-system");
 });
 
+// DEV_DEFAULT_PLUGIN_REFS_WIN=1 (the orchestrator-loop template): the template's pin beats the
+// ref the checkout's committed settings declare, so the loop's stale checkout cannot hold the plugins back.
+const WIN = { DEV_DEFAULT_PLUGIN_REFS_WIN: "1" };
+
+test("refs win: the default's ref beats a declared ref", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), WIN), "callum cbundy/dev-system#v0.26.0");
+});
+
+test("refs win: any value but 1 leaves the declared ref winning", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { DEV_DEFAULT_PLUGIN_REFS_WIN: "true" }), "callum cbundy/dev-system#v0.30.0");
+});
+
+test("refs win: a declaration at another location keeps its source", (t) => {
+  const settings = { extraKnownMarketplaces: { callum: { source: { source: "github", repo: "someone/else", ref: "v1" } } } };
+  assert.equal(wanted(setup(t, { settings }), WIN), "callum someone/else#v1");
+});
+
+test("refs win: a default with no ref leaves a declared ref alone", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { ...WIN, DEV_DEFAULT_PLUGINS: DEFAULT }), "callum cbundy/dev-system#v0.30.0");
+});
+
+test("refs win: the candidate ref still wins", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { ...WIN, DEV_CANDIDATE_PLUGIN_REF: "v0.40.0-rc.1" }), "callum cbundy/dev-system#v0.40.0-rc.1");
+});
+
+test("refs win: a plugin the repo takes over is still wanted at the template's ref", (t) => {
+  const settings = { ...PIN("v0.30.0"), enabledPlugins: { "callum-flow@callum": true } };
+  assert.equal(wanted(setup(t, { settings }), WIN), "callum cbundy/dev-system#v0.26.0");
+});
+
+const LOOP_DEFAULTS = ["callum-flow", "factory-loop", "factory-loop-workspace"].map((p) => `${p}@callum=cbundy/dev-system#v0.41.0`).join(" ");
+
+test("a stale committed pin on a loop workspace: with refs win the marketplace moves to the template's pin", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: LOOP_DEFAULTS, ...WIN });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.41.0",
+    "/ install callum-flow@callum",
+    "/ install factory-loop@callum",
+    "/ install factory-loop-workspace@callum",
+  ]);
+  assert.doesNotMatch(r.log, /WARNING/);
+});
+
+test("a stale committed pin without refs win: the marketplace stays at the declared ref", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: LOOP_DEFAULTS });
+  assert.equal(r.status, 0, r.log);
+  assert.ok(!changes(r.calls).includes("/ marketplace remove callum"), r.calls.join("\n"));
+});
+
 test("a no-ref declaration and an older no-ref install: the marketplace moves to the image's pin and callum-flow is reinstalled", (t) => {
   const ctx = setup(t, { settings: PIN(null) });
   withMarketplaceAt(ctx, "cbundy/dev-system");

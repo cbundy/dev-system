@@ -49,6 +49,7 @@ case "$name" in
     resume_prompt=
     name_format=
     plugins=
+    refs_win=false
     ;;
   orchestrator)
     role=orchestrator
@@ -64,6 +65,7 @@ case "$name" in
     resume_prompt='The workspace restarted and this conversation was resumed. Re-read .claude/orchestrator-memory.md, re-arm the watcher and continue the issue-orchestrator loop.'
     name_format='🔄 {name} orchestrator'
     plugins=
+    refs_win=false
     ;;
   orchestrator-loop)
     role=orchestrator
@@ -80,6 +82,7 @@ case "$name" in
     # factory-loop-workspace is the loop's companion: it starts each agent in its slot and guards it
     # (docs/factory-loop/v2/SPEC.md 10); the loop holds every agent step without it.
     plugins="callum-flow@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref factory-loop-workspace@callum=cbundy/dev-system#$plugin_ref"
+    refs_win=true
     ;;
   *) usage ;;
 esac
@@ -104,7 +107,8 @@ set -- templates push "$name" --directory "$TEMPLATE_DIR" --yes \
   --variable "$(csv "remote_control_prompt=$prompt")" \
   --variable "$(csv "remote_control_resume_prompt=$resume_prompt")" \
   --variable "$(csv "remote_control_name_format=$name_format")" \
-  --variable "$(csv "default_plugins=$plugins")"
+  --variable "$(csv "default_plugins=$plugins")" \
+  --variable "$(csv "default_plugin_refs_win=$refs_win")"
 version_name_sh="$(dirname "$0")/version-name.sh"
 version=$("$version_name_sh" "$TEMPLATE_DIR")
 message=$("$version_name_sh" --message push.sh "$TEMPLATE_DIR")
