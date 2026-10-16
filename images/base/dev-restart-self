@@ -31,9 +31,9 @@
 #                                           changed, so later restarts resume again.
 #                                           --fresh affects only the main conversation: the other live
 #                                           Remote Control sessions (started in claude.ai) are recorded
-#                                           before the restart and resumed after it, in their own cwd
-#                                           with their permission mode, effort and model, and are sent
-#                                           no message (dev-remote-sessions, cbundy/dev-system#533).
+#                                           before the restart and brought back without a message.
+#                                           See images/base/README.md, "Restoring Remote Control
+#                                           sessions after a restart", for eligibility and settings.
 #   dev-restart-self --dry-run ...          print each request (method, path, body) and send nothing.
 #
 # Why this exists: `coder restart|stop|update <your own workspace>` stops the workspace first,

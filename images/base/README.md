@@ -1102,9 +1102,10 @@ records are skipped with a log line.
 Tests: `images/base/test/dev-remote-sessions.test.sh` (part of `npm test`).
 
 **Permissions.** The main Claude and newly spawned sessions use their normal permission
-mode unless `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1`; restored sessions keep their recorded
-permission mode as described above. In a mode that requires approvals, an unattended session
-**waits for you to approve** each tool use that needs approval; approve from claude.ai or
+mode unless `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1`; for restored sessions, see the
+[restoration rules above](#restoring-remote-control-sessions-after-a-restart). In a mode
+that requires approvals, an unattended session **waits for you to approve** each tool use
+that needs approval; approve from claude.ai or
 the Claude app (or attach locally). Set `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1` only if
 you accept Claude acting without approvals in that container.
 
