@@ -692,9 +692,14 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect(causesOf(repo)).toEqual([['config-file', null, 'settings changed with no op: maxInFlightIssues']])
     const hand = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
     expect(causesOf(hand)).toEqual([['config-file', null, 'settings changed with no op: config.json binDir, config.json mode']])
-    // a pass whose settings were not read keeps the same key for the same edit
+    // a pass whose settings were not read keeps the settings it had and logs the workspace edit once;
+    // the next pass that reads them finds no edit of its own
     const blind = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ configProblems: ["settings: origin's default branch not read (x)"] }))
-    expect(editsAfter(blind).map(f => f.fact)).toEqual(editsAfter(hand).map(f => f.fact))
+    const afterBlind = kept(blind, false) as FilesSeen
+    expect(afterBlind.settings).toEqual(seen.settings)
+    expect(afterBlind.edits).toEqual([{ what: 'config', at: NOW, issues: [], detail: 'settings changed with no op: config.json binDir, config.json mode' }])
+    const sighted = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, afterBlind, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    expect((keepFiles(afterBlind, sighted, NOW + 1, () => false) ?? afterBlind).edits).toEqual(afterBlind.edits)
   })
 
   // drill run 2 (R2-F6): a change back to a version logged before was taken as logged, its fact
