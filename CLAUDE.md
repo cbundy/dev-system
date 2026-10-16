@@ -150,8 +150,6 @@ Any agent making code changes - solo or delegated - works inside a treehouse wor
 Sub-agents delegated an issue follow the `implement-issue` skill for the full working
 procedure (worktree, build, verify, evidence, /no-mistakes pipeline, handoff).
 Orchestration is driven by the `issue-orchestrator` skill.
-Agents the factory loop starts (its designer, builder, fixer, reviewer and triage) follow their
-prompt and agent definition, not `implement-issue`: the loop prepares their worktree and opens the PR.
 
 There is no app to boot here. Image, devcontainer and feature changes cannot be exercised
 locally (see "No Docker in the dev environment" above), so their evidence is the PR's CI run.
