@@ -469,7 +469,7 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
   test('a GitHub rate limit is kept in the store: the next passes skip the GitHub reads and say gh wait (SPEC 10.2)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory({ queue: [470], run: argv => (argv[0] === 'callum-flow-claim' ? { exitCode: 1, stderr: 'gh: API rate limit exceeded for user ID 1234. (HTTP 403)' } : undefined) })
-    const h = host(on, { config: ACT, run })
+    const h = host(on, { config: { ...ACT, titleEvery: '1s' }, run })
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.store.get(`backoff:${REPO}`)).toBe(NOW + 5_000 + 15 * MIN)

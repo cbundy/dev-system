@@ -9,7 +9,7 @@
 // workspace rail, 10.9: its hold is in the record's rules); G4 admits; R2's restart goes last of
 // all, after the title, and only on a pass that admitted nothing else. When the records could not
 // be read, the record's, slot and queue rules plan nothing (G2).
-import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleOf } from '../foundation'
+import { GITHUB_V2, admit, blindPass, newCtx, skip, tierOf, titleDue, titleOf } from '../foundation'
 import type { Config, PlanResult, State } from '../types'
 import { reconcile } from './reconcile'
 import { fleetRules, fleetTells, restartOf, restartTells } from './rules-fleet'
@@ -65,7 +65,7 @@ export function planV2(state: State, config: Config): PlanResult {
     backoff: state.githubBackoffUntil !== null && state.now < state.githubBackoffUntil,
     owner: base.owner.size,
   })
-  if (title !== state.lastTitle) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
+  if (titleDue(state, config, title)) actions.push({ kind: 'title', key: 'title', class: 'free', rule: 'O1', reason: 'status changed', issue: null, text: title })
   // the restart ends the session, so it goes after everything else, the title included
   if (restart !== null) actions.push(restart)
   return { tier: base.tier, overridden: base.overridden, actions, skipped: base.skipped, title, owner: base.owner.size, capped: base.capped, atCap: base.atCap }

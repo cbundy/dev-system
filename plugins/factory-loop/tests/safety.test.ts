@@ -701,7 +701,7 @@ describe('the argv safety net (SPEC 6.1)', () => {
       sessionLimits: async () => [],
       agents: async () => [],
     }
-    await observe(io, runtime(), emptyCache(), NOW, null, { ledger: null, githubBackoffUntil: null, queueKnown: null })
+    await observe(io, runtime(), emptyCache(), NOW, null, null, { ledger: null, githubBackoffUntil: null, queueKnown: null })
     for (const argv of [...own, ...seen]) expect({ argv, bans: bans(argv) }).toEqual({ argv, bans: [] })
   })
 
