@@ -187,11 +187,11 @@ export const FIX_NOTES_MAX = 8
 const NOTE_MAX = 900
 
 // fixNotes: what a fixer is told: a lead line, then the items, each clipped, within FIX_NOTES_MAX;
-// items past it are counted in the last line, with where to find them.
+// items past it are counted in the last line, with where to look for them.
 export function fixNotes(lead: string, items: readonly string[], rest: string): string[] {
   const room = FIX_NOTES_MAX - 1
   if (items.length <= room) return [lead, ...items].map(n => clip(n, NOTE_MAX))
-  return [lead, ...items.slice(0, room - 1), `... and ${items.length - room + 1} more: ${rest}`].map(n => clip(n, NOTE_MAX))
+  return [lead, ...items.slice(0, room - 1), `... and ${items.length - room + 1} more (see ${rest})`].map(n => clip(n, NOTE_MAX))
 }
 
 // reviewNotes: a changes review as the fixer's lines: each finding by id, errors first, so the
@@ -206,13 +206,14 @@ export function reviewNotes(d: ReviewData, withErrors: readonly string[] = []): 
 }
 
 export function reviewLead(d: ReviewData): string {
-  return `review round ${d.round} asked for changes on patch ${short(d.patch)}: fix each error finding, or decline it with your reason; every finding is in ${reviewPlace(d)}`
+  return `review round ${d.round} asked for changes on patch ${short(d.patch)}: fix each error finding, or decline it with your reason; the findings are in ${reviewPlace(d)}`
 }
 
 // reviewPlace: where a review's findings are, in words the owner can follow on GitHub too (the
-// fixer's prompt names the answer file itself).
-export function reviewPlace(d: Pick<ReviewData, 'pr'>): string {
-  return `the review comment on PR #${d.pr}`
+// fixer's prompt names the answer file itself). The comment shows what fits within COMMENT_MAX and
+// counts the rest, so no text that points to it says every finding is there.
+export function reviewPlace(d: Pick<ReviewData, 'pr' | 'round'>): string {
+  return `round ${d.round}'s review comment on PR #${d.pr}`
 }
 
 // --- the events (7.1) -----------------------------------------------------------------------------------

@@ -126,10 +126,10 @@ function distinct(notes: readonly (string | null | undefined)[]): string[] {
 }
 
 // clauses: the notes given (distinct) as one line of clauses, each without its own closing mark, so
-// a sentence ends nowhere but at the line's end.
+// a sentence ends nowhere but at the line's end; a clipped note keeps its '...'.
 function clauses(notes: readonly (string | null | undefined)[]): string {
   return distinct(notes)
-    .map(n => n.replace(/[\s.;:,]+$/, ''))
+    .map(n => n.replace(/(?<!\.)[.;:,]$/, ''))
     .join('; ')
 }
 

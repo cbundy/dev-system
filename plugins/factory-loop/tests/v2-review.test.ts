@@ -420,13 +420,13 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(of(after, 620, 'comment')).toEqual([])
   })
 
-  test('changes moves at once, CI or not: T9 to fixing, each finding in the notes by id, errors first, where every finding is named, within the record\'s notes', () => {
+  test('changes moves at once, CI or not: T9 to fixing, each finding in the notes by id, errors first, where the findings are named, within the record\'s notes', () => {
     const r = rec(621)
     const s = withLedger(world([r], [view(621, { checks: [check('ci', 'pending')] })]), [ensured(r), prepared(r), changed(r)])
     const t = transitionOf(plan(settled(s, plan(s))), 621)
     expect(t).toMatchObject({ row: 'T9', via: 'fix:review', next: { state: 'fixing', fixes: 1, pr: PR } })
     const notes = t?.next.notes ?? []
-    expect(notes[0]).toContain(`every finding is in the review comment on PR #${PR}`)
+    expect(notes[0]).toContain(`the findings are in round 1's review comment on PR #${PR}`)
     expect(notes.slice(1)).toEqual(['r1-2 [error] hooks/x.ts:40: a moved HEAD is accepted: `node t.js` exits 0 on a stale head', 'r1-1 [warning] hooks/x.ts:3: a name could be clearer'])
     // at the fix cap, the same parks with the findings in the question
     const capped = { ...r, fixes: CFG.reviewFixCap }
@@ -434,29 +434,41 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(transitionOf(plan(settled(s2, plan(s2))), 621)).toMatchObject({ row: 'T10', next: { state: 'parked', resumeTo: 'fixing', question: expect.stringContaining('r1-2 [error]') } })
   })
 
-  test('a fix-cap park reads cleanly on GitHub: parts join without a stray ".;", and no workspace path is named (drill run 4, #73)', () => {
+  test('a fix-cap park reads cleanly on GitHub: parts join without a stray ".;", a clipped part keeps its "...", and no workspace path is named (drill run 4, #73)', () => {
     const r = { ...rec(625), fixes: CFG.reviewFixCap }
-    const findings = [{ id: 'r4-1', severity: 'error' as const, file: 'src/slug.ts', line: 3, text: 'Add one more test case, as the owner asks for this finding.' }]
+    const findings = [
+      { id: 'r4-0', severity: 'error' as const, file: '', line: null, text: `long ${'y'.repeat(1000)}` },
+      { id: 'r4-1', severity: 'error' as const, file: 'src/slug.ts', line: 3, text: 'Add one more test case, as the owner asks for this finding.' },
+    ]
     const ask = reviewed(r, { event: 'not-ok', reason: 'changes', data: reviewData(r, 'changes', { findings }) })
     const s = withLedger(world([r], [view(625)]), [ensured(r), prepared(r), ask])
     const t = transitionOf(plan(settled(s, plan(s))), 625)
     expect(t).toMatchObject({ row: 'T10', next: { state: 'parked' } })
     const body = parkText(t?.next as IssueRecord, 'reviewing', 'fix-cap:review')
     expect(body).toContain('asks for this finding; review round 1 asked for changes')
-    expect(body).not.toMatch(/[.;:,];/)
+    expect(body).not.toMatch(/[^.][.;:,];/)
+    expect(body).toContain('yyy...; r4-1 [error]')
     expect(body).not.toContain(LOOP_DIR)
     expect(body).not.toContain('answer.json')
-    expect(body).toContain(`the review comment on PR #${PR}`)
+    expect(body).toContain(`round 1's review comment on PR #${PR}`)
   })
 
-  test('many findings come to at most the record\'s notes: the rest are counted, with where to find them', () => {
+  test('many findings come to at most the record\'s notes: the rest are counted, with where to look for them, never said to be all there', () => {
     const r = rec(622)
-    const findings = Array.from({ length: 20 }, (_, i) => ({ id: `r1-${i + 1}`, severity: 'error' as const, file: `f${i}.ts`, line: i + 1, text: `defect ${i + 1}` }))
-    const many = reviewed(r, { event: 'not-ok', reason: 'changes', data: reviewData(r, 'changes', { findings }) })
+    const findings = Array.from({ length: 20 }, (_, i) => ({ id: `r1-${i + 1}`, severity: 'error' as const, file: `f${i}.ts`, line: i + 1, text: `defect ${i + 1} ${'z'.repeat(500)}` }))
+    const data = reviewData(r, 'changes', { findings })
+    // more findings than the review comment can hold: it counts the rest, so no pointer to it says every finding is there
+    expect(reviewComment(data)).toMatch(/- \.\.\. and \d+ more findings not shown here$/)
+    const many = reviewed(r, { event: 'not-ok', reason: 'changes', data })
     const s = withLedger(world([r], [view(622)]), [ensured(r), prepared(r), many])
     const notes = transitionOf(plan(settled(s, plan(s))), 622)?.next.notes ?? []
     expect(notes.length).toBe(FIX_NOTES_MAX)
-    expect(notes.at(-1)).toContain('and 14 more')
+    expect(notes.at(-1)).toBe(`... and 14 more (see round 1's review comment on PR #${PR})`)
+    const capped = { ...r, fixes: CFG.reviewFixCap }
+    const s2 = withLedger(world([capped], [view(622)]), [ensured(capped), prepared(capped), reviewed(capped, { event: 'not-ok', reason: 'changes', data })])
+    const question = transitionOf(plan(settled(s2, plan(s2))), 622)?.next.question ?? ''
+    expect(question).toContain(`the fix cap (${CFG.reviewFixCap} fix rounds) is reached`)
+    expect([...notes, question].join('\n')).not.toMatch(/\bevery\b/)
   })
 
   test('a conflict ends the step at once, even while the reviewer runs: T9 for the conflict, with the merge to make', () => {
@@ -564,7 +576,7 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     const manyNotes = transitionOf(plan(settled(sm, plan(sm))), 626)?.next.notes ?? []
     expect(manyNotes.length).toBe(FIX_NOTES_MAX)
     expect(manyNotes[4]).toContain('CI check "test" failed on 9e01b77 after its one re-run')
-    expect(manyNotes.at(-1)).toContain(`the review comment on PR #${PR}, and the PR's checks`)
+    expect(manyNotes.at(-1)).toContain(`(see round 1's review comment on PR #${PR}, and the PR's checks)`)
     // changes move at once: a failed check is not re-run on a head a fixer will replace
     const unrun = withLedger(world([r], [view(626, { checks: [check('test', 'fail')] })]), [ensured(r), prepared(r), changed(r)])
     expect(of(plan(unrun), 626, 'ci-rerun')).toEqual([])
