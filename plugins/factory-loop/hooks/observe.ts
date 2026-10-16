@@ -369,7 +369,8 @@ export async function observe(
       .filter(n => {
         const c = cache.github.get(n)
         if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n) && !first.includes(n)) return false
-        return c === undefined || now - c.at >= cfg.githubEveryMs
+        // a label write of the loop's own that ended since the last read makes it due: the next pass sees what GitHub took
+        return c === undefined || now - c.at >= cfg.githubEveryMs || ledger.some(e => e.kind === 'label' && e.issue === n && e.status === 'done' && (e.endedAt ?? 0) >= c.at)
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)
