@@ -1023,6 +1023,14 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(valid).toContain('GUARD checks FAIL ci failed class=checks')
   })
 
+  test('the park choice names the resume step the park comment gives the owner, so the two never disagree (drill run 2, #36)', () => {
+    const p = triagePrompt(input())
+    const park = p.split('\n').find(l => l.startsWith('- park:')) ?? ''
+    expect(park).toContain('remove the `factory:parked` label')
+    expect(park).toContain('/factory resume 150')
+    expect(park).not.toContain('ready')
+  })
+
   test('its inputs come from the state the pass planned from: the record\'s counts, its last two results with their files, a fixer\'s validity; no record is a loop bug', () => {
     const r = rec(151, { step: 'triage', triages: 1, attempt: 1, head: HEAD, seq: 7 })
     const ledger = [

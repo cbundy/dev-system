@@ -18,7 +18,7 @@ import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { lifeEntries } from './rules-agent'
 import { FIX_REASONS, TABLE } from './table'
-import { ALL_FACTORY_LABELS, labelOf } from './types'
+import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
 import type { EmitSpec, IssueRecord, Lease, V2Ctx } from './types'
 
 // One entry action: soft ones are best effort (a stop, a kill), and a tell never holds the step.
@@ -114,14 +114,14 @@ export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via:
     '',
     `**Question:** ${r.question ?? 'none given'}`,
     '',
-    `It parked${where}. To resume, answer here and remove the \`factory:parked\` label, or run \`/factory resume ${r.issue} "your answer"\`. A comment alone does not resume.${resumes}`,
+    `It parked${where}. To resume, ${resumeStep(r.issue)}.${resumes}`,
   ].join('\n')
 }
 
 // parkedTell: the park's tell, and each daily reminder (k >= 1, E6), an owner item.
 export function parkedTell(r: IssueRecord, k: number): Action {
   const key = k === 0 ? entryKey(r, 'tell') : `${entryKey(r, 'tell')}/${k}`
-  const lines = [`question: ${r.question ?? 'none given'}`, `resume: remove the factory:parked label, or /factory resume ${r.issue} "note"; a comment alone does not resume`]
+  const lines = [`question: ${r.question ?? 'none given'}`, `resume: ${resumeStep(r.issue)}`]
   return wake('tell', 'parked', key, k === 0 ? RULE : 'S6', r.issue, { issue: r.issue, from: r.resumeTo ?? 'none', days: k }, lines)
 }
 
