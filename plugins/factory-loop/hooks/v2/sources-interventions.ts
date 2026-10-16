@@ -7,7 +7,7 @@
 //
 // A hand edit is a difference between an owner's file and the last version the loop read or wrote,
 // which the store keeps beside the records (files:<repo>, store.ts): an acting pass under planner
-// v2 keeps what it read once the edit it found is logged (keepFiles); an owner op and the clearing
+// v2 keeps what it read with the edit it found, to log (keepFiles); an owner op and the clearing
 // of a done update keep what they wrote (store.ts noteWritten), and an op that finds its file
 // already changed keeps that edit to log. The loop never writes the OFF file, so the kill switch is
 // an edit of its own, kept when a pass finds it (store.ts noteKillSwitch). Nothing here is held in
@@ -16,8 +16,7 @@
 import type { Ms, Source } from '../types'
 import { interventionKey } from './keys'
 import type { SourceCtx } from './observe'
-import { FACT_WINDOW_MS, configFacts, controlFacts, digest, editFacts } from './rules-interventions'
-import type { FileFact } from './rules-interventions'
+import { FACT_WINDOW_MS, digest, editFacts, editsOf } from './rules-interventions'
 
 // the companion's lines older than this are left alone (rules-interventions.ts FACT_WINDOW_MS)
 export const COMPANION_WINDOW_MS = FACT_WINDOW_MS
@@ -90,23 +89,23 @@ export function filesFromStore(raw: unknown): FilesSeen | null {
 const sameSeen = (a: FileSeen | null, b: FileSeen | null) => (a === null ? b === null : b !== null && a.digest === b.digest)
 
 // keepFiles: what an acting pass under planner v2 keeps once it has read the files (store.ts
-// keepV2). kept: the record as it is now (an op may have written it since the pass read it);
-// facts: the pass's reads, with the record as the pass found it; logged: whether an intervention
-// key is done. Each version read is kept once nothing in it is left to log, so a change is
-// compared again until its interventions are logged; a part an op wrote since the read keeps the
-// op's version; a part not read keeps the last. An edit kept goes once logged, and the kill
+// keepV2), at `at`. kept: the record as it is now (an op may have written it since the pass read
+// it); facts: the pass's reads, with the record as the pass found it; logged: whether an
+// intervention key is done. Each version read is kept at once, with what changed since the version
+// before as an edit found at `at`, which the next pass logs, so a change is logged once whatever
+// version it goes back to; a part an op wrote since the read keeps the op's version (the op keeps
+// what it found); a part not read keeps the last. An edit kept goes once logged, and the kill
 // switch's flag clears: an acting pass runs only without it. null: nothing changes.
-export function keepFiles(kept: FilesSeen | null, facts: InterventionFacts, logged: (key: string) => boolean): FilesSeen | null {
+export function keepFiles(kept: FilesSeen | null, facts: InterventionFacts, at: Ms, logged: (key: string) => boolean): FilesSeen | null {
   const base = kept ?? EMPTY_FILES
   const found = facts.seen ?? null
-  const read = { control: facts.control ?? null, workspace: facts.workspace ?? null, settings: facts.settings ?? null }
-  const done = (fs: FileFact[]) => fs.every(f => logged(interventionKey(f.fact)))
-  const at = found ?? EMPTY_FILES
-  const control = read.control !== null && sameSeen(base.control, found?.control ?? null) && done(controlFacts(at, facts)) ? read.control : base.control
-  const configLogged = done(configFacts(at, facts))
-  const workspace = read.workspace !== null && sameSeen(base.workspace, found?.workspace ?? null) && configLogged ? read.workspace : base.workspace
-  const settings = read.settings !== null && configLogged ? read.settings : base.settings
-  const next: FilesSeen = { v: 1, control, workspace, settings, edits: base.edits.filter(e => !done(editFacts(e))), off: false }
+  const take = (part: 'control' | 'workspace') => {
+    const read = facts[part] ?? null
+    return read !== null && sameSeen(base[part], found?.[part] ?? null) ? read : base[part]
+  }
+  const taken = { control: take('control'), workspace: take('workspace'), settings: facts.settings ?? base.settings }
+  const edits = [...base.edits.filter(e => !editFacts(e).every(f => logged(interventionKey(f.fact)))), ...editsOf(base, taken, at)]
+  const next: FilesSeen = { v: 1, ...taken, edits, off: false }
   return JSON.stringify(next) === JSON.stringify(kept) ? null : next
 }
 
