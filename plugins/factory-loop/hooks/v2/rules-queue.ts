@@ -133,7 +133,9 @@ function unread(env: StepEnv, facts: HeadFacts, pr: number): StepRead {
 }
 
 // openHead: the head's open PR, read: Q2 only when its patch is the approved one, it does not
-// conflict, it is not behind and every check passed or was skipped.
+// conflict, it is not behind and every check passed or was skipped. Behind is a fact the loop
+// reads itself: the PR's base is not main's head (GitHub computes mergeability lazily, so it shows
+// unknown for a while after main moves), or GitHub says so.
 function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, base: string | null): StepRead {
   const { ctx, r } = env
   const at = `${view.pr}@${short(head)}`
@@ -153,7 +155,9 @@ function openHead(env: StepEnv, facts: HeadFacts, view: PrView, head: string, ba
     const linkage = linkageStep(env, view, tries, base)
     if (linkage !== null) return linkage
   }
-  if (view.mergeable === 'behind') return update(env, facts, view, head)
+  const main = ctx.v2.prs.main?.sha ?? null
+  const moved = main !== null && view.base !== null && !sameSha(view.base, main)
+  if (moved || view.mergeable === 'behind') return update(env, facts, view, head)
   const ci = ciOf(r, view.checks, facts.reruns)
   switch (ci.kind) {
     case 'red': {

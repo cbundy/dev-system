@@ -147,7 +147,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -608,13 +608,13 @@ S3 plans these for the record's current seq until each is done. Keys are
 
 | On | Actions, in order |
 |---|---|
-| every new seq | `event transition` (first); then, when steps of an earlier seq still run (the life's running agent steps that started before this seq's transition, whatever their key's shape), one `stop-agent` (TaskStop of its agent) for each, and `slot` op `kill` (10.8), all best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
+| every new seq | `event transition` (first, after a close's `merged`); then, when steps of an earlier seq still run (the life's running agent steps that started before this seq's transition, whatever their key's shape), one `stop-agent` (TaskStop of its agent) for each, and `slot` op `kill` (10.8), all best effort: a gone agent or a refused kill is logged, never a failure (`failures/F12`, `totality/T-06`) |
 | a change of state, except to closed | `label` |
 | building | event `delegated --note "brief <url>"` |
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage` |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. merged and merged-by-hand: event `merged` when the `facts` source has none for the PR (a merge whose log was lost, `totality/T-05`), `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
@@ -1310,8 +1310,11 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 ### 9.2 Q1: update the head
 
-- **When:** the head's PR shows `mergeable_state` `behind`, and no queue action of the head is
-  running.
+- **When:** the head is behind, and no queue action of the head is running. Behind is read from
+  facts the loop has: the PR's base commit (`base.sha`) is not main's head on origin, or GitHub
+  shows `mergeable_state` `behind`. GitHub computes mergeability lazily and shows `unknown` for up
+  to two minutes after main moves, so the loop does not wait for it (drill run 3, R3-O1). A
+  conflict (`dirty`) is still GitHub's to say.
 - **Action** `queue-update`: `gh pr update-branch <p> --repo R`. GitHub merges main into the
   branch; no history is rewritten (OB:61).
 - **Key:** `i<N>/l<L>/queue/update/<base7>`, where `<base7>` is main's head at plan time. Each

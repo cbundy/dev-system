@@ -74,7 +74,7 @@ const OK = { ok: true, at: NOW }
 // view: the record's PR as the prs source reads it, read a minute ago: open, clean, on HEAD with
 // PATCH, and no checks unless a test gives some.
 function view(n: number, over: Partial<PrView> = {}): PrView {
-  return { pr: PR, issue: n, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: PATCH, readAt: NOW - MIN, ...over }
+  return { pr: PR, issue: n, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [], patch: PATCH, readAt: NOW - MIN, ...over }
 }
 
 // check: one check run on the head; a pending one has not completed.

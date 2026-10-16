@@ -301,7 +301,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     ])
     const r = plan(s)
     // a hand merge is a person's intervention (v2 SPEC 7.2); a split and a lost claim are none
-    expect(kinds(r, 76)).toEqual(['event transition', 'label clear', 'event merged', 'rollout', 'event intervention'])
+    expect(kinds(r, 76)).toEqual(['event merged', 'event transition', 'label clear', 'rollout', 'event intervention'])
     expect(ivs(r, 76)).toEqual(['person hand-merge'])
     expect([ivs(r, 77), ivs(r, 78)]).toEqual([[], []])
     expect(of(r, 76).find(a => a.kind === 'rollout')).toMatchObject({ pr: 776, key: followKey(merged, 'rollout') })
@@ -313,6 +313,25 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
       [done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout: 'run-it', closeIssue: null } }), ivLogged(merged)],
     )
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
+  })
+
+  test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
+    const r = rec(79, { state: 'closed', step: null, why: 'merged', pr: 779, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const closed = transitioned(r, 'T13', 'merge-queue', 'merged')
+    const at = (stageSince: number | null, extra: LedgerEntry[] = []) => withLedger(world([r], { issues: stageSince === null ? [] : [issue(79, { stage: 'merged', stageSince })] }), [closed, ...extra])
+    // the close: callum-flow-merge logged merged before it
+    expect(kinds(plan(at(NOW - 2 * MIN)), 79)).toEqual(['event transition', 'label clear', 'rollout'])
+    // the entry actions done; then the sweep's `closed` (the view's stage time moves past the close),
+    // then the view's 24 h window drops the issue: nothing more
+    const settled = [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(entryKey(r, 'label'), 'label', { issue: 79 }), done(followKey(r, 'rollout'), 'rollout', { issue: 79, outcome: { kind: 'rollout', rollout: null, closeIssue: null } })]
+    expect([kinds(plan(at(NOW, settled)), 79), kinds(plan(at(null, settled)), 79)]).toEqual([[], []])
+    // a merge whose log was lost: the close logs it before its transition (the merge came first),
+    // so a pass stopped once it started (kill switch, lost act lock, crash) still plans it, and it
+    // stays planned until done
+    expect(kinds(plan(at(null)), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
+    const merged = entry(entryKey(r, 'event/merged'), 'event', { issue: 79, status: 'lost', attempts: 1, startedAt: NOW - MIN, endedAt: NOW })
+    expect(kinds(plan(at(NOW, [merged])), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
+    expect(kinds(plan(at(NOW, [...settled, merged])), 79)).toEqual(['event merged'])
   })
 
   test('a new seq stops the old step that still runs and kills its slot\'s processes, best effort: the step starts once both ended, however they ended', () => {
@@ -481,7 +500,7 @@ describe('the steps', () => {
 
 describe('the events, in 4.1\'s order', () => {
   const mq = rec(100, { state: 'merge-queue', step: 'queue', pr: 700, head: HEAD, seq: 9 })
-  const pr = (over: Record<string, unknown>) => ({ prs: [{ pr: 700, issue: 100, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [], patch: null, readAt: NOW, ...over }] })
+  const pr = (over: Record<string, unknown>) => ({ prs: [{ pr: 700, issue: 100, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [], patch: null, readAt: NOW, ...over }] })
   const closedRead = { reads: { 100: { at: NOW - MIN, open: false, labels: [] } } }
 
   test('a hand merge comes before the issue\'s close; a merge the loop made is the queue step\'s own, never a hand merge', () => {
@@ -1059,7 +1078,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     // opened (8.1), with that PR's checks and merge state
     const rv = rec(153, { state: 'reviewing', step: 'triage', head: HEAD, seq: 7 })
     const ensured = done(prKey(rv, 'ensure'), 'pr', { issue: 153, outcome: { kind: 'pr', pr: 753, created: true, reopened: false } })
-    const read = { pr: 753, issue: 153, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', checks: [{ name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: 'https://x/actions/runs/1/job/2' }], patch: null, readAt: NOW }
+    const read = { pr: 753, issue: 153, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [{ name: 'ci', state: 'FAILURE', bucket: 'fail' as const, startedAt: null, completedAt: null, runId: '1', link: 'https://x/actions/runs/1/job/2' }], patch: null, readAt: NOW }
     const seen: ExecCtx = { ...env, state: withLedger(world([rv], {}, { prs: { prs: [read] } }), [ensured]) }
     expect(triageInput(seen, { ...action, issue: 153, branch: 'issue-153' }, input().place)).toMatchObject({ pr: 753, mergeable: 'clean', checks: [{ name: 'ci', bucket: 'fail', link: 'https://x/actions/runs/1/job/2' }], fixValid: true })
   })

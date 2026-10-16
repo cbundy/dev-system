@@ -284,6 +284,16 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
       expect(((n as IssueRecord).prClosedAt ?? '') >= '2026-10-15T10:00:00Z').toBe(true)
     }
   })
+
+  test('each distinct note is kept and asked once: a conflict whose text is also its note parks with it once (drill run 3, #22)', () => {
+    const note = 'PR #24 conflicts with main: merge origin/main into issue-471, resolve the conflicts and push'
+    const conflict: TableEvent = { kind: 'not-ok', reason: 'conflict', data: { pr: 512, text: note, notes: [note] } }
+    const queue: IssueRecord = { ...base, state: 'merge-queue', step: 'queue', pr: 512, head: HEAD, notes: [note] }
+    const parked = next({ ...queue, fixes: FIX_CAP }, conflict)
+    expect(parked).toMatchObject({ state: 'parked' })
+    expect((parked?.question ?? '').split(note).length - 1).toBe(1)
+    expect(next(queue, { ...conflict, data: { pr: 512, notes: [note, 'other', note] } })?.notes).toEqual(['other', note])
+  })
 })
 
 // --- bounded work (property 7) and the unknown path (property 10) ------------------------------------

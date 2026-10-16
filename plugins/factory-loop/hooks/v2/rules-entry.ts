@@ -1,9 +1,10 @@
 // The entry actions of a record's seq (docs/factory-loop/v2/SPEC.md 4.5), which S3 plans until
-// each is done: the seq's `transition` event first; the old step stopped and the slot's processes
-// killed when the old seq's step still ran, both best effort; the new state's label; the events
-// the row logs beside `transition`; a park's comment and tell; a close's label clear and its
-// follow-ups by why. The ledger is the outbox (3.3): each is a keyed action of the new seq, so a
-// crash after the record's store write leaves them planned on the next pass.
+// each is done: the seq's `transition` event first (after a close's `merged`); the old step
+// stopped and the slot's processes killed when the old seq's step still ran, both best effort;
+// the new state's label; the events the row logs beside `transition`; a park's comment and tell;
+// a close's label clear and its follow-ups by why. The ledger is the outbox (3.3): each is a keyed
+// action of the new seq, so a crash after the record's store write leaves them planned on the next
+// pass.
 //
 // - A seq whose transition entry the ledger no longer holds (a record rebuilt from events, or one
 //   pruned after 7 days) has nothing left to do.
@@ -75,12 +76,13 @@ function stops(ctx: V2Ctx, r: IssueRecord): Action[] {
 }
 
 // mergedLogged: the factory already holds a `merged` event of this life for the PR: the issue's
-// stage is merged from before this seq's transition (a `merged` event outranks the transition's
-// own stage, docs/factory-state.md "Source precedence").
+// stage is merged since the life began (a `merged` event outranks a later `closed`,
+// docs/factory-state.md "Source precedence"). Read only at the close, before the seq's own
+// transition is planned, so that transition never shows as the merge (mergedItem).
 function mergedLogged(ctx: V2Ctx, r: IssueRecord): boolean {
   const view = ctx.state.issues.find(i => i.number === r.issue)
   const since = view?.stageSince ?? null
-  return view?.stage === 'merged' && since !== null && since < r.seqAt && since >= (lifeAt(r.life) ?? 0)
+  return view?.stage === 'merged' && since !== null && since >= (lifeAt(r.life) ?? 0)
 }
 
 // heldByOther: another device holds a live claim on the issue: its labels are the winner's, so a
@@ -134,6 +136,9 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   // a change of state (since moves only with the state, table.ts nextRecord)
   const changed = r.since === r.seqAt
   const row = t.row === null ? null : (TABLE.find(x => x.id === t.row) ?? null)
+  // a merge's `merged` event, when the factory had none at the close, comes before the close's
+  // transition (mergedItem)
+  if (changed && r.state === 'closed') items.push(...mergedItem(ctx, r))
   // every new seq: its transition event, first
   add({ ...base(r, entryKey(r, 'event/transition'), `log seq ${r.seq}`), kind: 'event', event: { state: 'transition', record: r, row: t.row ?? 'recovered', from: t.from, via: t.via ?? 'recovered' } })
   // the old seq's steps, if they still run: each agent stopped, the slot's processes killed
@@ -162,17 +167,24 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   return items
 }
 
-// closedItems: a closed record's follow-ups by why (4.5): a merge's `merged` event when the factory
-// has none, its rollout read, then a close for an epic base or a later milestone for a run-it or
-// keep-open rollout (D-29); a split's parent released.
+// mergedItem: a merge's `merged` event when the factory had none at the close (a merge whose log
+// was lost, T-05). Decided once, while the seq's transition event is not yet planned: a later view
+// (the sweep's `closed`, the view's 24 h window) never logs the merge again (R3-F1). It is planned
+// before that transition event, so its entry is saved first and keeps it planned until done.
+function mergedItem(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
+  if (r.why !== 'merged' && r.why !== 'merged-by-hand') return []
+  const merged = entryKey(r, 'event/merged')
+  if (!ctx.byKey.has(merged) && (ctx.byKey.has(entryKey(r, 'event/transition')) || mergedLogged(ctx, r))) return []
+  return [{ action: { ...base(r, merged, 'the merge has no merged event'), kind: 'event', event: { state: 'merged', issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.why === 'merged' ? 'merged by the factory loop' : 'merged by hand' } }, soft: false, tell: false }]
+}
+
+// closedItems: a closed record's follow-ups by why (4.5): a merge's rollout read, then a close for
+// an epic base or a later milestone for a run-it or keep-open rollout (D-29); a split's parent
+// released.
 function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   const items: EntryItem[] = []
   const add = (action: Action) => items.push({ action, soft: false, tell: false })
   if (r.why === 'merged' || r.why === 'merged-by-hand') {
-    const merged = entryKey(r, 'event/merged')
-    if (!mergedLogged(ctx, r) || ctx.byKey.has(merged)) {
-      add({ ...base(r, merged, 'the merge has no merged event'), kind: 'event', event: { state: 'merged', issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.why === 'merged' ? 'merged by the factory loop' : 'merged by hand' } })
-    }
     const rolloutKey = followKey(r, 'rollout')
     add({ ...base(r, rolloutKey, 'read the merged issue\'s rollout'), kind: 'rollout', pr: r.pr })
     const read = ctx.byKey.get(rolloutKey)

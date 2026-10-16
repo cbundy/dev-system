@@ -2,10 +2,10 @@
 // queue whose life has a PR (rules-review.ts lifePr: the record's, else the one the life's done
 // ensure named, 8.1, so a PR the ensure just opened is read on the next pass), the PR
 // (callum-flow-issue-read --json --pr <n>: state, merged, merged head, closedAt, head,
-// mergeable_state, author), its check runs (gh pr checks <n> --repo R --json
+// mergeable_state, author, base commit), its check runs (gh pr checks <n> --repo R --json
 // name,state,bucket,startedAt,completedAt,link, the run id from the link) and, when the head moved,
 // its patch id (8.4: callum-flow-patch-id <head> <default branch>, kept per head, so it is computed
-// once); main's head on origin when a merge-queue PR shows behind, for Q1's key (9.2); and the time
+// once); main's head on origin when a merge-queue PR is open, for Q1 (9.2); and the time
 // observe first saw each head (heads:<repo>), whose entries go when their PR closes or its record
 // does. Reads go in 2.4's order, the queue's head first, then the other records in reviewing and
 // the merge queue, for at most ctx.prBudget records (K, a budget of its own; none during a GitHub
@@ -42,6 +42,8 @@ export type PrView = {
   closedAt: string | null
   mergeable: string | null
   author: string | null
+  // the commit of main the PR's head was last based on (the REST pull's base.sha)
+  base: string | null
   checks: CheckRun[]
   patch: string | null
   readAt: number
@@ -54,7 +56,7 @@ export type PrView = {
 // ends the step.
 export type PrUnread = { pr: number; issue: number; why: string; untrusted: boolean; since: Ms }
 
-// main: the default branch and its head on origin, read when a merge-queue PR shows behind (sha
+// main: the default branch and its head on origin, read when a merge-queue PR is open (sha
 // null when that read failed); absent when nothing needed it. unread: the PRs tried that did not
 // read. cut: why the reads stopped before every record's PR was tried (a GitHub rate limit, or no
 // budget during a backoff); absent when none was left untried.
@@ -70,7 +72,7 @@ const PATCH_MS = 120_000
 
 // The REST pull object as callum-flow-issue-read --json --pr prints it ({ pr, stripped }), read
 // for what the loop needs; null when it does not read.
-export type Pull = { state: PrView['state']; head: string | null; mergedHead: string | null; closedAt: string | null; mergeable: string | null; author: string | null; base: string | null }
+export type Pull = { state: PrView['state']; head: string | null; mergedHead: string | null; closedAt: string | null; mergeable: string | null; author: string | null; base: string | null; baseSha: string | null }
 
 export function pullOf(json: string): Pull | null {
   let o: Record<string, unknown>
@@ -95,6 +97,7 @@ export function pullOf(json: string): Pull | null {
     mergeable: str(o.mergeable_state)?.toLowerCase() ?? null,
     author: str(sub(o.user, 'login')),
     base: str(sub(o.base, 'ref')),
+    baseSha: str(sub(o.base, 'sha')),
   }
 }
 
@@ -166,7 +169,7 @@ export function prRecords(records: readonly IssueRecord[], paused: readonly numb
     })
 }
 
-// readPrs: the PRs of the records that have one, main's head when a merge-queue PR is behind, and
+// readPrs: the PRs of the records that have one, main's head when a merge-queue PR is open, and
 // the heads first seen, updated.
 export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: Source; heads: Record<string, HeadSeen> }> {
   const now = ctx.now
@@ -194,9 +197,9 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
     bases.push(v.base)
   }
   let main: PrsRead['main'] = null
-  const behind = prs.findIndex(v => v.state === 'open' && v.mergeable === 'behind' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))
-  const branch = defaultBranch ?? bases[behind] ?? null
-  if (behind >= 0 && branch !== null && !ctx.limited()) {
+  const queued = prs.findIndex(v => v.state === 'open' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))
+  const branch = defaultBranch ?? bases[queued] ?? null
+  if (queued >= 0 && branch !== null && !ctx.limited()) {
     const r = await ctx.run(lsRemoteArgv(branch), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
     // a sha that did not read holds that head alone (rules-queue.ts update)
     main = { branch, sha: r.exitCode === 0 ? shaOf(r.stdout, branch) : null }
@@ -235,7 +238,7 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
       patch = p
     }
   }
-  const view: PrView = { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, checks, patch, readAt: ctx.now }
+  const view: PrView = { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, base: pull.baseSha, checks, patch, readAt: ctx.now }
   return { view, base: pull.base }
 }
 
