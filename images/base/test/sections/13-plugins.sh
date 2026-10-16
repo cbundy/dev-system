@@ -179,6 +179,14 @@ plugin_check "no network: dev-init warns and starts, and dev-doctor warns naming
   echo "$out" | grep -qxF "dev-doctor: WARN default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: callum-flow@callum" &&
   echo "$out" | grep -qxF "dev-doctor:        fix: run: dev-init --plugins (or by hand: claude plugin marketplace add cbundy/dev-system; claude plugin install callum-flow@callum), then start a new Claude session"' \
   -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}'
+plugin_check "DEV_DEFAULT_PLUGIN_REFS_WIN=1: a missing default plugin is a FAIL, and dev-doctor exits non-zero" "$DEFAULT_PLUGINS"'
+  printf "%s\n" "#!/bin/bash" "[ \"\$1 \$2 \$3\" = \"plugin marketplace add\" ] && { echo \"✘ Failed to add marketplace: could not resolve host\"; exit 1; }" "[ \"\$1\" = plugin ] && { echo []; exit 0; }" "exit 0" > /tmp/stub/claude
+  out=$(dev-init 2>&1); rc=$?; echo "$out" | grep -A1 -iE "plugin"
+  [ $rc = 0 ] &&
+  echo "$out" | grep -qxF "dev-doctor: FAIL default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: callum-flow@callum" &&
+  ! echo "$out" | grep -qxF "dev-doctor: WARN default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: callum-flow@callum" &&
+  ! dev-doctor >/dev/null 2>&1' \
+  -e SETTINGS='{"enabledPlugins":{"callum-flow@callum":true}}' -e DEV_DEFAULT_PLUGIN_REFS_WIN=1
 # The one real install (the network, GitHub and the real claude CLI, no
 # login): a workspace with every setting at its default and no repo comes up
 # with the callum-flow skills installed and enabled. command docker keeps the

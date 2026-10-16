@@ -254,7 +254,11 @@ dev_system_location() {
   return 1
 }
 
-# wanted_marketplaces: "<marketplace> <source>" per marketplace. A repo's
+# wanted_marketplaces: "<marketplace> <source>" per marketplace. With
+# DEV_DEFAULT_PLUGIN_REFS_WIN=1 (the orchestrator-loop template's opt-in) the
+# image default's ref, when it has one, beats the ref a repo declares at the same
+# location, so the template owns the plugin version there; a default with no ref
+# never overrides. Without it: a repo's
 # declaration with no ref, at the same location as the image default's source,
 # takes the default's ref: the image's pin, not main's HEAD. A declared ref
 # wins, and so does a declaration at another location. With
@@ -268,14 +272,15 @@ wanted_marketplaces() {
       # The ref a no-ref declaration inherits is the image default's, even for a
       # plugin the repo took over from the image (so $defaults lacks it).
       inherit=$(default_plugins | awk -v m="$mkt" '{ n = $1; sub(/^.*@/, "", n); if (n == m) { print $2; exit } }')
-      declared=$(jq -r --arg m "$mkt" --arg fallback "$src" --arg inherit "$inherit" '
+      declared=$(jq -r --arg m "$mkt" --arg fallback "$src" --arg inherit "$inherit" --arg win "${DEV_DEFAULT_PLUGIN_REFS_WIN:-}" '
         ($inherit | split("#")[0]) as $fallbackLocation |
         ($inherit | if contains("#") then sub("^[^#]*#"; "") else "" end) as $fallbackRef |
         .extraKnownMarketplaces[$m] as $declaration |
         if $declaration == null then $fallback
         else $declaration.source |
           (if .source == "github" then .repo elif .source == "git" then .url else "" end) as $location |
-          (if (.ref // "") != "" then .ref
+          (if $win == "1" and $fallbackRef != "" and ($location // "") == $fallbackLocation then $fallbackRef
+           elif (.ref // "") != "" then .ref
            elif ($location // "") == $fallbackLocation then $fallbackRef
            else "" end) as $ref |
           if ($location // "") == "" then ""
