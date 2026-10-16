@@ -41,7 +41,7 @@ import {
 import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
-import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject, loadConfig } from './config'
+import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject } from './config'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
@@ -264,8 +264,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
   // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
-  let loaded = loadConfig(jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
-  if (loaded.config.planner === 'v2') loaded = await repoLoaded(settingsIo($), settingsCache, checkout, loaded, over)
+  const loaded = await repoLoaded(settingsIo($), settingsCache, checkout, jsonObject(await text($, `${checkout}/.claude/factory-loop.json`)), over)
   const config: Config = { ...loaded.config, mode: mode as Config['mode'] }
   const loopDir = loopDirOf(dir, repo)
   const sink = mode === 'act' ? null : `${loopDir}/sink-events`
@@ -294,6 +293,7 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     config,
     v2Config: { ...loaded.v2, mode: config.mode },
     configProblems: loaded.problems,
+    repoSettings: loaded.raw,
   }
 }
 

@@ -1,7 +1,7 @@
 // The facts the interventions of docs/factory-loop/v2/SPEC.md 7.2 come from, beside the ledger and
 // the records: the companion's log (<loop dir>/companion.jsonl: one line per refusal and per stop
 // gate run, of which only a gate that could not run is an intervention, 10.4, 10.6), and the
-// owner's files: control.json, the workspace config.json and the settings the loop runs with.
+// owner's files: control.json, the workspace config.json and the repo-local settings file.
 // rules-interventions.ts turns each fact into one
 // `intervention` event; the pushes no loop step produced are read there, from the records and the
 // PRs.
@@ -48,9 +48,8 @@ export type InterventionFacts = {
   // the digests of this pass's control.json and settings, for the decision log
   controlDigest: string | null
   configDigest: string | null
-  // this pass's reads: control.json, the workspace config.json, and the settings the loop runs
-  // with but the keys that file sets and the op-set mode, trace and planner; absent or null when
-  // not read
+  // this pass's reads: control.json, the workspace config.json, and what the repo-local settings
+  // file says; absent or null when not read
   control?: FileSeen | null
   workspace?: FileSeen | null
   settings?: FileSeen | null
@@ -152,29 +151,6 @@ export function baseOf(loopDir: string): string {
   return loopDir.replace(/\/[^/]+\/?$/, '')
 }
 
-// The settings only ops write, in the workspace file: the workspace file's own version holds them.
-const OP_SETTINGS = ['mode', 'trace', 'planner']
-
-// settingsOf: the settings v2 runs with (runtime()'s, under the workspace file's keys), but the
-// keys the workspace file sets (whose changes its own version shows) and the op-set ones, as one
-// text. null when origin's default branch could not be read, so the checkout's file stands in for
-// this pass only (v2/settings.ts).
-function settingsOf(ctx: SourceCtx, workspace: string): string | null {
-  if (ctx.rt.configProblems.some(p => p.startsWith("settings: origin's default branch not read"))) return null
-  const own = new Set(Object.keys(objectOf(workspace)).flatMap(k => [k, `${k}Ms`]))
-  const config = (ctx.rt.v2Config ?? ctx.rt.config) as unknown as Record<string, unknown>
-  return JSON.stringify(Object.fromEntries(Object.entries(config).filter(([k]) => !own.has(k) && !OP_SETTINGS.includes(k))))
-}
-
-function objectOf(text: string): Record<string, unknown> {
-  try {
-    const v: unknown = JSON.parse(text)
-    return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
-  } catch {
-    return {}
-  }
-}
-
 // readInterventions: the companion's lines and the owner's files as they are now. A file that
 // could not be read is null, and the source says why.
 export async function readInterventions(ctx: SourceCtx): Promise<{ read: InterventionFacts; source: Source }> {
@@ -195,8 +171,10 @@ export async function readInterventions(ctx: SourceCtx): Promise<{ read: Interve
   ])
   const controlSeen = control === undefined ? null : seenOf(control ?? '')
   const workspaceSeen = workspace === undefined ? null : seenOf(workspace ?? '')
-  const settings = workspace === undefined ? null : settingsOf(ctx, workspace ?? '')
-  const settingsSeen = settings === null ? null : seenOf(settings)
+  // the settings are what the repo-local file says, which a person edits, never the defaults a build
+  // fills in; not read when origin's default branch was not, so the checkout's file stands in for
+  // this pass only (v2/settings.ts)
+  const settingsSeen = ctx.rt.repoSettings == null ? null : seenOf(JSON.stringify(ctx.rt.repoSettings))
   const facts: InterventionFacts = {
     companion: companionLines(companion ?? null, now),
     controlDigest: controlSeen?.digest ?? null,

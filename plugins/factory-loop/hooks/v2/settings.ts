@@ -61,13 +61,15 @@ export async function originSettings(io: SettingsIo, cache: SettingsCache, check
   return read
 }
 
-// repoLoaded: the settings under planner v2: origin's repo-local file under the workspace file's
-// keys (over), or, when origin's branch cannot be read, the main checkout's as loaded, with a
-// problem that names it.
-export async function repoLoaded(io: SettingsIo, cache: SettingsCache, checkout: string, fromTree: LoadedConfig, over: Record<string, unknown>): Promise<LoadedConfig> {
+// repoLoaded: the repo-local file (the checkout's, tree) under the workspace file's keys (over),
+// with what that file says (raw). Under planner v2 the file is origin's, or, when origin's branch
+// cannot be read, the main checkout's stands, with a problem that names it and no raw.
+export async function repoLoaded(io: SettingsIo, cache: SettingsCache, checkout: string, tree: Record<string, unknown>, over: Record<string, unknown>): Promise<LoadedConfig & { raw: Record<string, unknown> | null }> {
+  const fromTree = loadConfig(tree, over)
+  if (fromTree.config.planner !== 'v2') return { ...fromTree, raw: tree }
   const read = await originSettings(io, cache, checkout, fromTree.config.githubEveryMs)
-  if (read.ok) return loadConfig(read.raw, over)
-  return { ...fromTree, problems: [...fromTree.problems, `settings: origin's default branch not read (${read.error}); the main checkout's file is used`] }
+  if (read.ok) return { ...loadConfig(read.raw, over), raw: read.raw }
+  return { ...fromTree, problems: [...fromTree.problems, `settings: origin's default branch not read (${read.error}); the main checkout's file is used`], raw: null }
 }
 
 function objectOf(text: string): Record<string, unknown> {

@@ -47,8 +47,7 @@ const PIPELINE_TIMEOUT_MS = 120_000
 // how long GitHub reads wait after a rate limit (SPEC 10.2)
 export const GITHUB_BACKOFF_MS = 15 * 60_000
 
-// Runtime: what one pass runs as, from the plugin options, the workspace config file and the
-// repo-local settings (SPEC 4.1).
+// Runtime: what one pass runs as, from the plugin options and both settings files (SPEC 4.1).
 export type Runtime = {
   mode: 'off' | 'observe' | 'act'
   repo: string
@@ -70,11 +69,12 @@ export type Runtime = {
   // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
   pluginRoot: string
   config: Config
-  // the settings v2 runs with (config.ts LoadedConfig.v2), which the v2 shadow plans with; absent:
-  // config's
+  // the settings v2 runs with (config.ts LoadedConfig.v2), the v2 shadow's; absent: config's
   v2Config?: Config
   // what loadConfig left out of the repo-local settings, for the decision log
   configProblems: string[]
+  // what the repo-local settings file says, no defaults (settings.ts repoLoaded); null: not read
+  repoSettings?: Record<string, unknown> | null
 }
 
 // Stored: what act mode keeps in $.store across passes and reloads. register.ts reads it

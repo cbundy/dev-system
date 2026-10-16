@@ -651,14 +651,12 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     return { m, io }
   }
 
-  test('the read: control.json and the workspace file as they are, and the settings but the keys that file sets and the op-set ones', async () => {
-    const r = await read({ [CONTROL]: ctl({}), [WORKSPACE]: '{"mode":"act","passEvery":"2m"}' }, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2, passEveryMs: 120_000 })))
+  test('the read: control.json, the workspace file and the repo-local settings file as they are', async () => {
+    const r = await read({ [CONTROL]: ctl({}), [WORKSPACE]: '{"mode":"act","passEvery":"2m"}' }, rtOf({ repoSettings: { maxInFlightIssues: 2 } }, config({ planner: 'v2', maxInFlightIssues: 2, passEveryMs: 120_000 })))
     expect(r.source).toEqual({ ok: true, at: NOW })
     expect(r.read.control).toEqual(seenOf(ctl({})))
     expect(r.read.workspace?.text).toBe('{"mode":"act","passEvery":"2m"}')
-    const settings = JSON.parse(r.read.settings?.text ?? '{}') as Record<string, unknown>
-    expect(settings.maxInFlightIssues).toBe(2)
-    for (const k of ['mode', 'trace', 'planner', 'passEveryMs']) expect(k in settings).toBe(false)
+    expect(r.read.settings).toEqual(seenOf('{"maxInFlightIssues":2}'))
     expect(r.read.controlDigest).toBe(digest(ctl({})))
     // a missing file reads as empty; one that cannot be read is unknown, and the source says why
     expect((await read({})).read.control).toEqual(seenOf(''))
@@ -666,7 +664,7 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect(failed.read.control).toBeNull()
     expect(failed.source).toMatchObject({ ok: false, error: expect.stringContaining('EACCES') })
     // settings not read from origin's default branch stand in for this pass only: not compared
-    expect((await read({}, rtOf({ configProblems: ["settings: origin's default branch not read (x); the main checkout's file is used"] }))).read.settings).toBeNull()
+    expect((await read({}, rtOf({ repoSettings: null }))).read.settings).toBeNull()
   })
 
   test('a change against the version kept is one intervention per issue whose entries changed, else one for the fleet, keyed by when it was found', async () => {
@@ -685,21 +683,33 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect(causesOf(await factsOf({ [CONTROL]: ctl({ updateDue: null }) }, due))).toEqual([])
   })
 
-  test('a settings change is one fleet-level config-file, from the workspace file or the settings the loop runs with', async () => {
-    const before = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, null, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+  test('a settings change is one fleet-level config-file, from the workspace file or the repo-local settings file', async () => {
+    const before = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, null, rtOf({ repoSettings: { maxInFlightIssues: 3 } }))
     const seen = kept(before, true) as FilesSeen
-    const repo = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 2 })))
+    const repo = await factsOf({ [WORKSPACE]: '{"mode":"act"}' }, seen, rtOf({ repoSettings: { maxInFlightIssues: 2 } }))
     expect(causesOf(repo)).toEqual([['config-file', null, 'settings changed with no op: maxInFlightIssues']])
-    const hand = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    const hand = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ repoSettings: { maxInFlightIssues: 3 } }))
     expect(causesOf(hand)).toEqual([['config-file', null, 'settings changed with no op: config.json binDir, config.json mode']])
     // a pass whose settings were not read keeps the settings it had and logs the workspace edit once;
     // the next pass that reads them finds no edit of its own
-    const blind = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ configProblems: ["settings: origin's default branch not read (x)"] }))
+    const blind = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ repoSettings: null }))
     const afterBlind = kept(blind, false) as FilesSeen
     expect(afterBlind.settings).toEqual(seen.settings)
     expect(afterBlind.edits).toEqual([{ what: 'config', at: NOW, issues: [], detail: 'settings changed with no op: config.json binDir, config.json mode' }])
-    const sighted = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, afterBlind, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    const sighted = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, afterBlind, rtOf({ repoSettings: { maxInFlightIssues: 3 } }))
     expect((keepFiles(afterBlind, sighted, NOW + 1, () => false) ?? afterBlind).edits).toEqual(afterBlind.edits)
+  })
+
+  // drill run 2 (R2-F1): a new build that adds a setting's default (maxLives) was logged as a
+  // person's edit of the settings, which no one had changed
+  test('a loop upgrade that adds a default is not an edit: only what the files say is compared', async () => {
+    const files = { [WORKSPACE]: '{"mode":"act"}' }
+    const repoSettings = { maxInFlightIssues: 2 }
+    const runs = config({ planner: 'v2', maxInFlightIssues: 2 })
+    const { maxLives: _added, ...oldBuild } = runs
+    const before = await factsOf(files, null, rtOf({ repoSettings }, oldBuild as Runtime['config']))
+    const seen = kept(before, true) as FilesSeen
+    expect(causesOf(await factsOf(files, seen, rtOf({ repoSettings }, runs)))).toEqual([])
   })
 
   // drill run 2 (R2-F6): a change back to a version logged before was taken as logged, its fact
