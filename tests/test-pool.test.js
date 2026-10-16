@@ -205,7 +205,7 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-sh-"));
   const scripts = path.join(root, "scripts");
   fs.mkdirSync(scripts);
-  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh"]) {
+  for (const name of ["test.sh", "test-pool.sh", "test-job.sh", "test-reporter.js", "test-sandbox.sh", "test-pg.sh"]) {
     fs.copyFileSync(path.join(__dirname, "..", "scripts", name), path.join(scripts, name));
   }
   fs.mkdirSync(path.join(root, "tests"));
@@ -218,6 +218,11 @@ function fakeRepo({ nodeTests = {}, suites = {} }) {
   // Without node:test's own marker, so the nested `node --test` runs as a top-level run.
   const env = { ...process.env, TEST_JOBS: "2", TMPDIR: tmp };
   delete env.NODE_TEST_CONTEXT;
+  // These fixtures drive the pool, not the database: no server, so scripts/test-pg.sh takes its
+  // skip path instead of starting a PostgreSQL cluster for every fixture run.
+  delete env.FACTORY_TEST_PG_ADMIN_URL;
+  delete env.TEST_REQUIRE_POSTGRES;
+  env.TEST_PG_BIN_ROOT = path.join(root, "no-postgres");
   return { root, tmp, env, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 

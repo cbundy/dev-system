@@ -252,9 +252,12 @@ COPY --chmod=0755 \
   images/base/callum-flow-sweep \
   images/base/callum-flow-evaluate \
   images/base/callum-flow-factory-state \
+  images/base/factory-db-bootstrap \
   images/base/systemctl \
   /usr/local/bin/
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
+# The migrations factory-db-bootstrap applies (cbundy/dev-system#646); it finds them here.
+COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-system/factory-db/migrations/
 # models.env is the baked copy of the no-mistakes models: dev-init pins from
 # the copy it fetches from main on every start, and falls back to this one
 # (models.sh parses both).

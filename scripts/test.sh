@@ -13,7 +13,8 @@
 # the failing node tests (name, file:line, assertion - see scripts/test-reporter.js) and the
 # output of each failing shell suite or mod, each as one contiguous block in a stable order,
 # plus `FAIL test isolation: <file>` for each entry left in the sandboxed shared-state
-# directories, then `test: N failed`, and exits non-zero.
+# directories and `FAIL test isolation: database|role <name>` for each factory_test_* database or
+# role left on the test PostgreSQL server (scripts/test-pg.sh), then `test: N failed`, and exits non-zero.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
@@ -34,7 +35,8 @@ SERIAL=""
 
 results=$(mktemp -d) || exit 1
 . ./scripts/test-sandbox.sh
-trap 'test_sandbox_clean; rm -rf "$results"' EXIT
+. ./scripts/test-pg.sh
+trap 'test_pg_clean; test_sandbox_clean; rm -rf "$results"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -48,6 +50,11 @@ TEST_RESULTS_DIR=$results
 TMPDIR=$results/tmp
 export TEST_RESULTS_DIR TMPDIR
 test_sandbox_setup || exit 1
+# A real PostgreSQL for the database tests: FACTORY_TEST_PG_ADMIN_URL when it is set (CI), else
+# a private cluster (scripts/test-pg.sh). Each test makes and drops its own database.
+TEST_REPO_ROOT=$(pwd)
+export TEST_REPO_ROOT
+test_pg_setup || exit 1
 
 failed=0
 
@@ -116,10 +123,12 @@ esac
 
 # Isolation: nothing may have written into the sandboxed shared-state directories.
 test_sandbox_check || failed=$((failed + 1))
+# ... and no test may have left a database or a role on the server.
+test_pg_check || failed=$((failed + 1))
 
 if [ "$failed" -gt 0 ]; then
   echo "test: $failed failed" >&2
   exit 1
 fi
 node_total=$(cat "$results/node-total" 2>/dev/null || echo 0)
-echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note"
+echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE"
