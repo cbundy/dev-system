@@ -1657,9 +1657,9 @@ safeguards remain:
   other process has it: a child has its own, and a later process given the same pid has another
   start time. When this session's file is missing, names another session or another process, or
   is stale (its `at` more than 3 minutes old), the loop's rails hold every agent step, with the
-  skip line `workspace`, and tell the owner once (`tell(workspace)`). The process check catches a
-  session resumed under the same id without the companion: the old process's file names the old
-  process. The age check catches a companion that stopped in this process. Without the companion,
+  skip line `workspace`, and tell the owner once for each process (`tell(workspace)`, keyed by
+  session and process). The process check catches a session resumed under the same id without the
+  companion: the old process's file names the old process, and each such restart is told. The age check catches a companion that stopped in this process. Without the companion,
   agents would start in the main checkout, unguarded. The orchestrator-loop template's plugin list
   (`coder/push.sh:79`) gains `factory-loop-workspace`, pushed at cutover (section 15).
 - **Re-probe.** U9 re-runs the spikes' frameless checks before it builds. Two points are proven

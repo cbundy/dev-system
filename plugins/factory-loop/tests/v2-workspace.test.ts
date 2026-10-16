@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { companionLines } from '../hooks/v2/sources-interventions'
 import { HANDSHAKE_STALE_MS, readWorkspace, workspaceRead } from '../hooks/v2/sources-workspace'
-import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
+import type { Action, LedgerEntry, Ms, PlanResult, State } from '../hooks/types'
 import { lifeOf, prepareKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -22,9 +22,9 @@ const CFG = config({ planner: 'v2', mode: 'act', maxInFlightIssues: 3 })
 const LIFE = lifeOf(NOW - 120 * MIN)
 const SESSION = 'session-1'
 const OK = { ok: true, at: NOW }
-const UP: WorkspaceRead = { session: SESSION, ok: true, version: '0.38.2' }
 // this process's id, its pid and start time; the companion's last beat was a minute ago
 const PROCESS = '4242:342070008'
+const UP: WorkspaceRead = { session: SESSION, process: PROCESS, ok: true, version: '0.38.2' }
 const DOWN: WorkspaceRead = workspaceRead(null, SESSION, PROCESS, NOW)
 const handshake = (over: Record<string, unknown> = {}) => JSON.stringify({ v: 1, session: SESSION, process: PROCESS, version: '0.38.2', at: new Date(NOW - MIN).toISOString(), ...over })
 
@@ -154,7 +154,7 @@ describe('the workspace rail holds agent steps (v2 SPEC 10.9)', () => {
     expect(tells(plan(world([r], undefined)))).toEqual([])
   })
 
-  test('the owner is told once per session, after the grace, as an owner item', () => {
+  test('the owner is told once per process, after the grace, as an owner item', () => {
     const r = rec(96, { state: 'designing', step: 'design' })
     // the companion's session.start may land after the loop's first pass: no tell yet
     const early = plan(world([r], DOWN, { loadedAt: NOW - MIN }))
@@ -164,11 +164,34 @@ describe('the workspace rail holds agent steps (v2 SPEC 10.9)', () => {
     const [tell] = tells(late)
     expect(tell).toMatchObject({ kind: 'tell', wake: 'workspace', class: 'owner', issue: null, fields: { session: SESSION } })
     expect(late.owner).toBeGreaterThan(0)
-    // told: not again in this session
+    // told: not again in this process
     const told = withLedger(world([r], DOWN), [entry(tell?.key ?? 'none', 'tell', { status: 'done', startedAt: NOW - 5 * MIN, endedAt: NOW - 4 * MIN, wake: 'workspace' })])
     expect(tells(plan(told))).toEqual([])
     // nothing to tell while the companion is there
     expect(tells(plan(world([r], UP)))).toEqual([])
+  })
+
+  test('each restart without the companion in one resumed session is told once and logged once (R5-F1)', () => {
+    const r = rec(98, { state: 'designing', step: 'design' })
+    const era = entry('i98/l1/s1/transition', 'transition', { issue: 98, startedAt: NOW - 60 * MIN })
+    const told = (key: string, at: Ms) => entry(key, 'tell', { status: 'done', startedAt: at, endedAt: at, wake: 'workspace' })
+    const down = (process: string) => workspaceRead(null, SESSION, process, NOW)
+    // the first outage, in one process, is told once
+    const [first] = tells(plan(withLedger(world([r], down('4100:341000000')), [era])))
+    expect(first).toBeDefined()
+    const once = withLedger(world([r], down('4100:341000000')), [era, told(first?.key ?? 'none', NOW - 30 * MIN)])
+    expect(tells(plan(once))).toEqual([])
+    // the supervisor restarts the same conversation in a new process, again without the companion:
+    // this outage is told too, once
+    const later = withLedger(world([r], DOWN), [era, told(first?.key ?? 'none', NOW - 30 * MIN)])
+    const [second] = tells(plan(later))
+    expect(second).toMatchObject({ kind: 'tell', wake: 'workspace' })
+    expect(second?.key).not.toBe(first?.key)
+    const both = withLedger(world([r], DOWN), [era, told(first?.key ?? 'none', NOW - 30 * MIN), told(second?.key ?? 'none', NOW - 5 * MIN)])
+    const after = plan(both)
+    expect(tells(after)).toEqual([])
+    // each tell is one workspace intervention
+    expect(after.actions.filter(a => a.kind === 'event' && a.reason === 'intervention: loop workspace')).toHaveLength(2)
   })
 })
 
