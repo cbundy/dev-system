@@ -55,10 +55,12 @@ export type V2Cache = {
   rebuilt: { at: Ms; records: IssueRecord[] } | null
   comments: Map<number, { readAt: Ms; comments: IssueComment[] }>
   checkoutBase: CheckoutBase | null
+  // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
+  changed: Record<number, Ms>
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {} }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -291,6 +293,8 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const prs = await readers.prs(ctx)
   sources.prs = prs.source
   cache.heads = prs.heads
+  cache.changed = {}
+  for (const p of prs.read.prs) if (p.state !== 'open' && p.closedAt !== null) cache.changed[p.issue] = Date.parse(p.closedAt)
 
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
@@ -339,6 +343,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     reads,
     comments,
     prs: prs.read,
+    changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     checkoutBase: cache.checkoutBase,
   }
@@ -377,6 +382,7 @@ export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
     reads: {},
     comments: {},
     prs: { prs: [] },
+    changed: {},
     interventions: { companion: [], controlDigest: null, configDigest: null },
     checkoutBase: null,
   }

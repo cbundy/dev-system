@@ -13,6 +13,7 @@
 import { neutral } from '../prompts'
 import type { ScriptPlace } from '../prompts'
 import { CHOICES } from './contracts-triage.mjs'
+import { resumeStep } from './types'
 import type { IssueState, StepKind } from './types'
 
 // Two incidents on 2026-10-14: an agent ran `claude remote-control --help`, which starts a session
@@ -77,7 +78,7 @@ function menu(i: TriageInput): string[] {
       ? `- fix: a fixer works on ${i.branch} with your instructions, then the PR goes back to review. Valid here (fix round ${i.fixes + 1} of ${i.fixCap}).`
       : `- fix: not valid here (${i.head === null && i.pr === null ? 'the branch has no commits beyond the base' : `the fix cap of ${i.fixCap} rounds is reached`}): choosing it parks the issue with your reason.`,
     `- redesign: the designer designs the issue again with your instructions; the branch and its commits are kept. Always valid.`,
-    `- park: the issue waits on the owner with your question, and frees its slot. Always valid.`,
+    `- park: the issue waits on the owner with your question, and frees its slot; the loop's park comment tells the owner how to resume: ${resumeStep(i.issue)}. Always valid.`,
     `- drop: the factory steps away from this claim; the issue stays open, and re-adding ready brings it back. Always valid.`,
   ]
 }

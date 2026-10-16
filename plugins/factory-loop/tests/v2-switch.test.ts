@@ -120,6 +120,16 @@ describe('the settings (v2 SPEC appendix A)', () => {
     expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
+  test('a model setting takes only an alias the agent tool accepts; any other is named and left out (R2-F8)', () => {
+    expect(loadConfig({ reviewerModel: 'haiku', triageModel: 'sonnet' })).toMatchObject({ problems: [], config: { reviewerModel: 'haiku', triageModel: 'sonnet' } })
+    const bad = loadConfig({ reviewerModel: 'claude-nonexistent-9', triageModel: 'Opus' })
+    expect(bad.problems).toEqual([
+      'reviewerModel: "claude-nonexistent-9" is not sonnet, opus, haiku or fable',
+      'triageModel: "Opus" is not sonnet, opus, haiku or fable',
+    ])
+    expect(bad.config).toMatchObject({ reviewerModel: 'opus', triageModel: 'opus' })
+  })
+
   test('under planner v2, K is 3 unless a settings file sets it (v2 SPEC section 15); v1 keeps 5', () => {
     expect(V2_DEFAULTS).toEqual({ maxInFlightIssues: 3 })
     expect(loadConfig({ planner: 'v2' }).config.maxInFlightIssues).toBe(3)
@@ -520,6 +530,34 @@ describe('the driver (v2 SPEC 2.3)', () => {
     await clock.advance(6_000)
     await clock.advance(61_000)
     expect(h.seen.filter(s => s.argv[0] === 'callum-flow-event' && s.argv[1] === 'intervention')).toEqual([])
+  })
+
+  test('an issue a person closes with its PR closes (E2), without parking first: the PR read makes the issue read due, and E4 waits for it (v2 SPEC 4.1; drill run 2, R2-F2)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const head = 'a'.repeat(40)
+    const mq = record({ state: 'merge-queue', step: 'queue', pr: 900, head, approvedPatch: 'p1' })
+    let closedAt: string | null = null
+    const issue470 = () => ({ issue: { number: 470, title: 'x', state: closedAt === null ? 'open' : 'closed', labels: [], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 })
+    const pr900 = () => ({ pr: { state: closedAt === null ? 'open' : 'closed', merged: false, merged_at: null, closed_at: closedAt, head: { sha: head }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean' }, stripped: 0 })
+    const reads = (argv: string[]) => {
+      const line = argv.join(' ')
+      if (line === 'callum-flow-issue-read --json 470') return { stdout: JSON.stringify(issue470()) }
+      if (line === 'callum-flow-issue-read --json --pr 900') return { stdout: JSON.stringify(pr900()) }
+      return undefined
+    }
+    const h = host(on, { config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' }, store: { [`records:${REPO}`]: recordsToStore([mq], NOW - MIN) }, run: world({ run: reads }) })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    // a person closes the issue, then its PR, between two passes
+    closedAt = iso(NOW + 20_000)
+    const reasons: string[] = []
+    for (let i = 0; i < 3; i++) {
+      await clock.advance(61_000)
+      reasons.push(...((h.last().actions as { reason: string }[] | undefined) ?? []).map(a => a.reason))
+    }
+    expect(reasons.filter(r => /park/.test(r))).toEqual([])
+    expect(reasons).toContain('intervention: person issue-closed')
+    expect((h.store.get(`records:${REPO}`) as { records: IssueRecord[] }).records.find(r => r.issue === 470)).toMatchObject({ state: 'closed', why: 'closed-on-github', seq: 6 })
   })
 
   test('/factory planner v2 writes the workspace file; the next pass plans with v2, and status names it', async ($, on) => {

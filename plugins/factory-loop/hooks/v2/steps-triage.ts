@@ -126,8 +126,7 @@ const triage: StepModule = {
   spawn: async (ctx, action, place) => {
     const input = triageInput(ctx, action, place)
     if (typeof input === 'string') return input
-    const model = ctx.rt.config.triageModel.trim()
-    return { prompt: triagePrompt(input), model: model === '' ? null : model, data: null }
+    return { prompt: triagePrompt(input), model: ctx.rt.config.triageModel, data: null }
   },
   result: async (_ctx, _record, answer) => triageResult(answer),
 }

@@ -15,7 +15,7 @@
 // Pure: the plan imports this, so nothing here may run a command, read a file or read a clock.
 import type { ReusedEvent, ReviewedEvent } from './events'
 import { short } from './keys'
-import { STEP_AGENT } from './types'
+import { STEP_AGENT, type Model } from './types'
 
 // --- the interface (8.2) ------------------------------------------------------------------------------
 
@@ -40,8 +40,8 @@ export type ReviewInput = {
 }
 
 // What a reviewer starts: its agent type (the loop spawns the review step's own, types.ts
-// STEP_AGENT), its model (null: the definition's), and its prompt's kind with the input.
-export type AgentSpec = { agentType: string; model: string | null; prompt: string; input: ReviewInput }
+// STEP_AGENT), its model, and its prompt's kind with the input.
+export type AgentSpec = { agentType: string; model: Model; prompt: string; input: ReviewInput }
 
 export interface Reviewer {
   id: string
@@ -82,15 +82,14 @@ export function readReview(answer: unknown): ReviewResult | null {
 
 // --- the registry -------------------------------------------------------------------------------------
 
-export type ReviewerOpts = { model: string }
+export type ReviewerOpts = { model: Model }
 
 // The interim reviewer (8.3): the merge adjudicator's judgement, given the brief and the PR's whole
 // diff, in agents/reviewer.md; its prompt is prompts-review.ts's `adjudicator`.
 function adjudicator(opts: ReviewerOpts): Reviewer {
-  const model = opts.model.trim()
   return {
     id: 'adjudicator',
-    spawn: input => ({ agentType: STEP_AGENT.review, model: model === '' ? null : model, prompt: 'adjudicator', input }),
+    spawn: input => ({ agentType: STEP_AGENT.review, model: opts.model, prompt: 'adjudicator', input }),
     read: readReview,
   }
 }

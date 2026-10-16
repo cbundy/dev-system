@@ -505,6 +505,11 @@ describe('the events, in 4.1\'s order', () => {
     const closedAt = '2026-10-13T02:50:00Z'
     expect(transitionOf(plan(world([mq], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toMatchObject({ row: 'E4', next: { state: 'parked', resumeTo: 'merge-queue', prClosedAt: closedAt } })
     expect(transitionOf(plan(world([{ ...mq, prClosedAt: closedAt }], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toBeUndefined()
+    // a PR read newer than the issue's read: E4 waits for the issue's read, which may show it closed too (E2 first)
+    const late = { prs: pr({ state: 'closed', closedAt }), changed: { 100: Date.parse(closedAt) }, reads: { 100: { at: Date.parse(closedAt) - MIN, open: true, labels: [] } } }
+    expect(transitionOf(plan(world([mq], {}, late)), 100)).toBeUndefined()
+    expect(said(plan(world([mq], {}, late)), 100)).toEqual(['E4 waits: issue #100 is not read since PR #700 closed'])
+    expect(transitionOf(plan(world([mq], {}, { ...late, reads: { 100: { at: NOW, open: true, labels: [] } } })), 100)).toMatchObject({ row: 'E4' })
     const lost = done(reclaimKey(mq, lifeOf(NOW - 5 * MIN)), 'claim', { issue: 100, outcome: { kind: 'claim', result: 'lost' }, summary: 'lost #100: held by other' })
     expect(transitionOf(plan(withLedger(world([mq]), [lost])), 100)).toMatchObject({ row: 'E5', next: { why: 'claim-lost' }, trigger: { kind: 'entry', key: lost.key } })
   })
@@ -1021,6 +1026,14 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(valid).toContain('mergeable state: clean')
     expect(valid).toContain('- ci: fail https://github.com/o/r/actions/runs/1/job/2')
     expect(valid).toContain('GUARD checks FAIL ci failed class=checks')
+  })
+
+  test('the park choice names the resume step the park comment gives the owner, so the two never disagree (drill run 2, #36)', () => {
+    const p = triagePrompt(input())
+    const park = p.split('\n').find(l => l.startsWith('- park:')) ?? ''
+    expect(park).toContain('remove the `factory:parked` label')
+    expect(park).toContain('/factory resume 150')
+    expect(park).not.toContain('ready')
   })
 
   test('its inputs come from the state the pass planned from: the record\'s counts, its last two results with their files, a fixer\'s validity; no record is a loop bug', () => {

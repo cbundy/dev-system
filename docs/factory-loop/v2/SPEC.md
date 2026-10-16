@@ -141,7 +141,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | kept (G2): claims, their holders and lapses. `nomistakes.runs` becomes optional in that tool (U4), so no-mistakes data can never blind v2 (`simplicity/F3`) |
 | `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1) |
 | `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | kept |
-| `github` | `callum-flow-issue-read --json N` | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
+| `github` | `callum-flow-issue-read --json N` | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) or a `prs` read showed its PR closed or merged after the issue's last read (4.1) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | v1's `pool` without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
@@ -402,6 +402,10 @@ in this order. Rows that change nothing (E6, E7) run beside it and never stop it
 
 `pr-merged` comes first because a merge cannot be undone, and before `issue-closed` because a merge
 with `Closes #N` closes the issue in the same instant (`failures/F14`).
+
+The order holds across sources. The PRs are read every pass and the issue less often, so a
+`pr-closed` waits while the issue's last read is older than the PR's `closedAt`; that read is due on
+the next pass (2.4). An issue closed with its PR then closes (E2) and never parks first.
 
 | Event | Raised by | Meaning |
 |---|---|---|
