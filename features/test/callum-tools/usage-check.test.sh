@@ -65,6 +65,7 @@ run() {
   rc=0
   out=$(env -i HOME="$home" PATH="${RUN_PATH:-$fakebin:$toolbin}" \
     CLAUDE_CONFIG_DIR="$config" CALLUM_USAGE_STATE="$state" \
+    ${AUTH_DIR+CLAUDE_SECURESTORAGE_CONFIG_DIR="$AUTH_DIR"} \
     ${TOKEN:+CLAUDE_CODE_OAUTH_TOKEN="$TOKEN"} ${MAX_AGE:+CALLUM_USAGE_MAX_AGE="$MAX_AGE"} \
     FAKE_CURL_BODY="$body" FAKE_CURL_CODE="${CODE:-200}" FAKE_CURL_LOG="$log" \
     ${CURL_FAIL:+FAKE_CURL_FAIL=1} \
@@ -120,6 +121,17 @@ grep -q 'https://api.anthropic.com/api/oauth/usage' "$log.args" || fail "wrong e
 # 2. CLAUDE_CODE_OAUTH_TOKEN wins over the credentials file.
 TOKEN=secret-from-env run
 grep -qx 'Authorization: Bearer secret-from-env' "$log.stdin" || fail "env token not preferred"
+
+# 2b. With CLAUDE_SECURESTORAGE_CONFIG_DIR set, the login is read from there
+# only, as Claude Code reads it; set but empty means ~/.claude.
+mkdir -p "$tmpdir/auth" "$home/.claude"
+printf '{"claudeAiOauth":{"accessToken":"secret-from-auth-dir"}}\n' > "$tmpdir/auth/.credentials.json"
+AUTH_DIR="$tmpdir/auth" run
+grep -qx 'Authorization: Bearer secret-from-auth-dir' "$log.stdin" || fail "login not read from CLAUDE_SECURESTORAGE_CONFIG_DIR"
+printf '{"claudeAiOauth":{"accessToken":"secret-from-home"}}\n' > "$home/.claude/.credentials.json"
+AUTH_DIR='' run
+grep -qx 'Authorization: Bearer secret-from-home' "$log.stdin" || fail "an empty CLAUDE_SECURESTORAGE_CONFIG_DIR should mean ~/.claude"
+rm -rf "$tmpdir/auth" "$home/.claude"
 
 # 3. A reset already passed reads as resets_in=0, never negative.
 cat > "$tmpdir/past.json" <<EOF

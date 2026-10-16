@@ -35,6 +35,9 @@
 # - an optional shared gh login (variable gh_volume_name): a named volume over
 #   /persist/gh, shared by every workspace using that name
 #   (cbundy/dev-system#195);
+# - an optional shared Claude login (variable claude_auth_volume_name): a
+#   named volume over /persist/claude-auth, Claude's login directory only, so
+#   history and settings stay per workspace;
 # - optional registry credentials (variable registry_auth_config), read from a
 #   file on the Coder server, so private per-repo images can be used.
 
@@ -175,6 +178,24 @@ variable "gh_volume_name" {
     # Docker's volume name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
     condition     = var.gh_volume_name == "" || can(regex("^[a-zA-Z0-9][a-zA-Z0-9_.-]+$", var.gh_volume_name))
     error_message = "gh_volume_name must be empty or a Docker volume name: at least two characters, starting with a letter or digit, then letters, digits, '_', '.' or '-'."
+  }
+}
+
+# Claude's login (CLAUDE_SECURESTORAGE_CONFIG_DIR, the image's
+# /persist/claude-auth) normally lives on the workspace's own persist volume.
+# A named Docker volume mounted over it shares one login between every
+# workspace using the same name, as the desktop devcontainer's
+# dev-system-claude-auth volume does per Docker host. Only the login moves:
+# CLAUDE_CONFIG_DIR, with history, settings and plugins, stays per workspace.
+# Not a docker_volume resource, for the reason given for gh_volume_name.
+variable "claude_auth_volume_name" {
+  default     = ""
+  description = "Named Docker volume mounted at /persist/claude-auth (Claude's login directory) in every workspace, so workspaces using the same name share one Claude login. Created by Docker on first use, never deleted with a workspace. Empty keeps each workspace's Claude login on its own persist volume."
+  type        = string
+  validation {
+    # Docker's volume name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
+    condition     = var.claude_auth_volume_name == "" || can(regex("^[a-zA-Z0-9][a-zA-Z0-9_.-]+$", var.claude_auth_volume_name))
+    error_message = "claude_auth_volume_name must be empty or a Docker volume name: at least two characters, starting with a letter or digit, then letters, digits, '_', '.' or '-'."
   }
 }
 
@@ -395,6 +416,12 @@ resource "coder_agent" "main" {
     # Docker creates the volume root-owned: fix that once.
     [ -w /workspaces ] || sudo -n chown "$(id -u):$(id -g)" /workspaces \
       || echo "WARNING: /workspaces is not writable by $(id -un)"
+    # The same for a shared Claude login volume (claude_auth_volume_name)
+    # first mounted by an image older than /persist/claude-auth: Docker
+    # creates it root-owned, and it would stay so for every newer image.
+    [ ! -d /persist/claude-auth ] || [ -w /persist/claude-auth ] \
+      || sudo -n install -d -o "$(id -u)" -g "$(id -g)" -m 0700 /persist/claude-auth \
+      || echo "WARNING: /persist/claude-auth is not writable by $(id -un)"
 
     # With a repo URL (the repo_url parameter or the image's own), the image
     # works in /workspaces/<repo name> and names the Remote Control session
@@ -626,6 +653,16 @@ resource "docker_container" "workspace" {
     for_each = var.gh_volume_name == "" ? [] : [var.gh_volume_name]
     content {
       container_path = "/persist/gh"
+      volume_name    = volumes.value
+    }
+  }
+  # One Claude login shared between workspaces (variable
+  # claude_auth_volume_name), over the persist volume's claude-auth directory.
+  # Not managed here: see the variable.
+  dynamic "volumes" {
+    for_each = var.claude_auth_volume_name == "" ? [] : [var.claude_auth_volume_name]
+    content {
+      container_path = "/persist/claude-auth"
       volume_name    = volumes.value
     }
   }

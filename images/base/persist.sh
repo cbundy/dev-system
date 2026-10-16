@@ -21,6 +21,7 @@ persist_dirs() {
     fi
     case "$d" in
       /persist/claude) d=${CLAUDE_CONFIG_DIR:-$d} ;;
+      /persist/claude-auth) d=${CLAUDE_SECURESTORAGE_CONFIG_DIR-$d} ;;
       /persist/codex) d=${CODEX_HOME:-$d} ;;
       /persist/gh) d=${GH_CONFIG_DIR:-$d} ;;
       /persist/no-mistakes) d=${NM_HOME:-$d} ;;
