@@ -346,8 +346,8 @@ Code's built-in `/loop`, which the released orchestrator uses as a cron for its 
 pings the loop and gets its own decision-log line (`control`). Today these directives are free
 text in the memory file (I-90).
 
-- An empty op is `status`: the last pass and the directives in force. `help` lists the ops and
-  changes nothing.
+- An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
+  answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` also reads `issue:<N>` and
   `run:<id>`; a run id that is all digits needs the `run:` prefix.
 - Limits, refused rather than cut: an override's percentage above 0 and at most 100 and its
