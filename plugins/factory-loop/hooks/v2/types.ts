@@ -421,6 +421,9 @@ export const PLANNERS = ['v1', 'v2'] as const
 export type Planner = (typeof PLANNERS)[number]
 export const SHADOWS = ['off', 'v2'] as const
 export type Shadow = (typeof SHADOWS)[number]
+// the model aliases the agent tool accepts; a setting named *Model takes one of them
+export const MODELS = ['sonnet', 'opus', 'haiku', 'fable'] as const
+export type Model = (typeof MODELS)[number]
 
 // The timeouts and tell periods of 4.4, by step and waiting state.
 export type StateTimeouts = { design: Ms; build: Ms; review: Ms; fix: Ms; triage: Ms; queued: Ms; queueWait: Ms; parked: Ms }

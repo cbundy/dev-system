@@ -120,6 +120,16 @@ describe('the settings (v2 SPEC appendix A)', () => {
     expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
+  test('a model setting takes only an alias the agent tool accepts; any other is named and left out (R2-F8)', () => {
+    expect(loadConfig({ reviewerModel: 'haiku', triageModel: 'sonnet' })).toMatchObject({ problems: [], config: { reviewerModel: 'haiku', triageModel: 'sonnet' } })
+    const bad = loadConfig({ reviewerModel: 'claude-nonexistent-9', triageModel: 'Opus' })
+    expect(bad.problems).toEqual([
+      'reviewerModel: "claude-nonexistent-9" is not sonnet, opus, haiku or fable',
+      'triageModel: "Opus" is not sonnet, opus, haiku or fable',
+    ])
+    expect(bad.config).toMatchObject({ reviewerModel: 'opus', triageModel: 'opus' })
+  })
+
   test('under planner v2, K is 3 unless a settings file sets it (v2 SPEC section 15); v1 keeps 5', () => {
     expect(V2_DEFAULTS).toEqual({ maxInFlightIssues: 3 })
     expect(loadConfig({ planner: 'v2' }).config.maxInFlightIssues).toBe(3)

@@ -4,7 +4,7 @@
 // vocabulary (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions,
 // outcomes and State fields join the unions here, so the dispatcher, the ledger and the store
 // carry them as they carry v1's.
-import type { AgentStep, Planner, Shadow, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, Model, Planner, Shadow, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -360,10 +360,10 @@ export type Config = {
   // the lives an issue gets: a release at the last one rejects it instead of putting it back in the
   // queue (v2 SPEC 6.4)
   maxLives: number
-  triageModel: string
+  triageModel: Model
   // the review step's implementation and its model (v2 SPEC 8.2, 8.3)
   reviewer: string
-  reviewerModel: string
+  reviewerModel: Model
   // the stop gate's commands in the slot, joined with &&, and their one budget (v2 SPEC 10.6)
   gateCommands: string[]
   gateTimeoutMs: Ms

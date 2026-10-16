@@ -3,7 +3,7 @@
 // repo-specific values. Types only are imported, so plan.ts and the replay can use this too, and
 // v2's vocabulary (v2/types.ts), which holds constants alone.
 import type { ActionKind, AgentType, AnswerChannel, Config, Control, Ms } from './types'
-import { PLANNERS, SHADOWS, V2_ACTION_KINDS } from './v2/types'
+import { MODELS, PLANNERS, SHADOWS, V2_ACTION_KINDS } from './v2/types'
 
 const MIN = 60_000
 
@@ -262,6 +262,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'shadow') {
         if (SHADOWS.some(p => p === value)) out[key] = value
         else bad(raw, value, SHADOWS.join(' or '))
+      } else if (key.endsWith('Model')) {
+        if (MODELS.some(m => m === value)) out[key] = value
+        else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
       } else if (key === 'maxTriages') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number')
