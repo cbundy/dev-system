@@ -53,8 +53,8 @@ your turn ends only with your answer.
   capture committed on the branch by its commit-pinned blob URL
   (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
 - Run the repo's own lint and test commands in the foreground and let them finish. When you end
-  your turn the loop runs the repo's gate commands in your slot; while they fail it hands you the
-  failures. CI on the PR is the final gate.
+  your turn the loop runs the repo's gate commands, when the repo sets them, in your slot; while
+  they fail it hands you the failures. CI on the PR is the final gate.
 - Never delete, skip or weaken an existing test or assertion to make a gate pass; fix the code or
   the environment instead. Remove a test only if it is clearly and absolutely not required, and
   then say why in your answer's summary.

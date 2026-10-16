@@ -166,7 +166,7 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 
 const PLACE = { bin: BIN, file: `${LOOP_DIR}/answers/x.answer.json` }
 function input(over: Partial<WorkInput> = {}): WorkInput {
-  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, place: PLACE, ...over }
+  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], place: PLACE, ...over }
 }
 const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], ...over })
 
@@ -195,7 +195,12 @@ describe('the work prompts (prompts-work.ts)', () => {
     for (const p of [buildPrompt(input()), fixPrompt(fixInput())]) {
       expect(p).toContain('push only with `git push origin issue-300`')
       expect(p).toContain(TEST_POLICY)
-      expect(p).toContain('the loop runs the repo\'s gate commands in this slot')
+      expect(p).toContain('When you end your turn the loop runs `npm run lint`, then `npm test` in this slot')
+    }
+    // a repo that sets no gate commands has no stop gate: the writer is not told one backs it
+    for (const p of [buildPrompt(input({ gateCommands: [] })), fixPrompt({ ...fixInput(), gateCommands: [' ', ''] })]) {
+      expect(p).toContain('in the foreground and let them finish: they must pass before you answer. CI on the PR is the final gate.')
+      expect(p).not.toContain('When you end your turn the loop runs')
     }
     const design = designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }, { issue: 300, branch: 'issue-300' }] })
     expect(design).toContain('you change nothing in the repository')

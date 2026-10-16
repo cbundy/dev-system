@@ -19,3 +19,12 @@ test('template and root CLAUDE.md carry the plain-language rule', () => {
     assert.match(s, /markdown link to it, never a bare `#N`/, p);
   }
 });
+
+test('template and root CLAUDE.md say what a loop agent leaves to the loop, in the synced part', () => {
+  for (const p of ['templates/CLAUDE.md', 'CLAUDE.md']) {
+    const synced = read(p).split('<!-- end synced -->')[0].replace(/\s+/g, ' ');
+    assert.match(synced, /## Two ways work gets done/, p);
+    assert.match(synced, /never run no-mistakes/, p);
+    assert.match(synced, /\*\*The manual path\*\*/, p);
+  }
+});
