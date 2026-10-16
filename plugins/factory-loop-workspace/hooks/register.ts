@@ -22,7 +22,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
 import { blockText, gateLine, gateRecord, oneLine, runGates } from './gate'
 import type { Ran } from './gate'
-import { FILE_TOOLS, agentRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
+import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
 import { MARKER_FILE, mismatch, parseMarker, slotLine } from './marker'
 
@@ -177,6 +177,8 @@ async function headBranch($: EngineInterface, slot: string): Promise<string | nu
 
 async function refusalOf($: EngineInterface, a: WorkspaceAgent, e: Record<string, unknown>, tool: string): Promise<Refusal | null> {
   const g = guardedOf(a)
+  const background = backgroundRefusal(tool, e)
+  if (background !== null) return background
   if (tool === 'Agent') return agentRefusal(e)
   if ((FILE_TOOLS as readonly string[]).includes(tool)) {
     const raw = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : null
@@ -277,7 +279,7 @@ export const register: Register = on => {
       await logLine($, a, refused.cause, `${e.tool}: ${refused.reason}`)
       return { deny: `${ME}: ${refused.reason}` }
     }
-    if (e.tool === 'Bash' && e.timeout === undefined && e.run_in_background !== true) return next({ ...e, timeout: BASH_TIMEOUT_MS })
+    if (e.tool === 'Bash' && e.timeout === undefined) return next({ ...e, timeout: BASH_TIMEOUT_MS })
     return next(e)
   }).catch(($, e, next) => (next.called || e.agentId === undefined ? next(e) : { deny: `${ME}: its guard failed, so the call is refused` }))
 

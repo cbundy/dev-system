@@ -16,15 +16,16 @@
 //     branch (with no upstream) when origin has no such branch, so a stale slot or a person's
 //     worktree that has the branch checked out does not block it; writes the step marker
 //     `factory-step.json` into the slot's own git dir (never the tree). Prints `PREPARED head=<sha>`,
-//     and `LEFTOVERS file=<f>` when it saved any. Work it could not save is never reset: it fails.
+//     `KILLED <n>` as kill does, and `LEFTOVERS file=<f>` when it saved any. Work it could not save
+//     is never reset: it fails.
 //   factory-slot kill <path>
 //     SIGTERM to every process whose working directory is the slot or inside it (but this tool and
 //     its ancestors), SIGKILL to survivors after 5 seconds (10.8). Prints `KILLED <n>`.
 //   factory-slot free <path> <lease> <loop dir>
 //     W2 (10.1): ends its processes, saves its leftovers (<N>-<life>-free-<ms>.patch), resets and
 //     cleans it, detaches it at the branch's start, then `treehouse return <path> --if-lease-id
-//     <lease> --force`, and checks the pool shows it back. Prints `FREED path=<p>`, and
-//     `LEFTOVERS file=<f>` when it saved any; or `GONE path=<p>` when the lease is no longer on the
+//     <lease> --force`, and checks the pool shows it back. Prints `FREED path=<p>`, `KILLED <n>` as
+//     kill does, and `LEFTOVERS file=<f>` when it saved any; or `GONE path=<p>` when the lease is no longer on the
 //     slot (it was returned already, or the slot went): nothing is touched then.
 //
 // Leftovers: what a reset would lose, as one binary patch that applies onto the commit the next
@@ -168,7 +169,8 @@ function parentOf(pid) {
 }
 
 // endIn: every process whose working directory is the slot or inside it, but this one and its
-// ancestors: SIGTERM, then SIGKILL for any left after the grace. The number signalled.
+// ancestors: SIGTERM, then SIGKILL for any left after the grace. Its result line, `KILLED <n>` with
+// the number signalled, which every op that ends a slot's processes prints.
 async function endIn(dir, graceMs) {
   const root = real(dir)
   const own = new Set([process.pid])
@@ -198,7 +200,7 @@ async function endIn(dir, graceMs) {
   for (const pid of first) signal(pid, 'SIGTERM')
   for (let waited = 0; waited < graceMs && inside().some((p) => first.includes(p)); waited += 100) await new Promise((r) => setTimeout(r, 100))
   for (const pid of inside().filter((p) => first.includes(p))) signal(pid, 'SIGKILL')
-  return first.length
+  return `KILLED ${first.length}`
 }
 
 // --- leftovers (10.2) ----------------------------------------------------------------------------------
@@ -355,7 +357,7 @@ async function prepare(io, args, cwd, graceMs) {
   if (leaseOf(w) !== id) throw refuse(`${p} is not on lease ${id} (it is on ${leaseOf(w) || 'no lease'})`)
   if (holderOf(w) !== `factory-loop:${marker.issue}:${marker.life}`) throw refuse(`${p} is leased by ${holderOf(w)}, not for #${marker.issue} life ${marker.life}`)
   const dir = w.path
-  await endIn(dir, graceMs)
+  const killed = await endIn(dir, graceMs)
   // fetched first, so the leftovers are taken against the commit the step starts from
   must(git(io, dir, ['fetch', '-q', '--prune', 'origin']), 'git fetch origin')
   const start = startOf(io, dir, branch)
@@ -371,13 +373,13 @@ async function prepare(io, args, cwd, graceMs) {
   const tmp = path.join(gitDir, `${MARKER}.${process.pid}.tmp`)
   fs.writeFileSync(tmp, `${JSON.stringify(marker, null, 2)}\n`)
   fs.renameSync(tmp, path.join(gitDir, MARKER))
-  return [`PREPARED head=${head}`, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
+  return [`PREPARED head=${head}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
 }
 
 async function end(io, args, graceMs) {
   if (args.length !== 1 || !args[0]) throw usage('kill takes a slot')
   const w = loopSlot(poolOf(io), args[0])
-  return [`KILLED ${await endIn(w.path, graceMs)}`]
+  return [await endIn(w.path, graceMs)]
 }
 
 async function free(io, args, cwd, graceMs) {
@@ -387,7 +389,7 @@ async function free(io, args, cwd, graceMs) {
   if (w === null || leaseOf(w) !== id) return [`GONE path=${p}`]
   const m = HOLDER.exec(holderOf(w))
   if (m === null) throw refuse(`${p} is not leased by the factory loop (holder ${holderOf(w) || 'none'})`)
-  await endIn(w.path, graceMs)
+  const killed = await endIn(w.path, graceMs)
   // the loop's branch is the one the slot is on; its start as the slot's refs know it (a push from
   // the slot moved origin's ref there too, so no fetch is needed to tell what was pushed)
   const on = git(io, w.path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
@@ -399,7 +401,7 @@ async function free(io, args, cwd, graceMs) {
   if (start !== null) git(io, w.path, ['switch', '-q', '--detach', start])
   const r = io.run('treehouse', ['return', w.path, '--if-lease-id', id, '--force'], { cwd })
   const after = slotAt(poolOf(io), w.path)
-  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
+  if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]
   throw new Failed(r.code !== 0 ? `treehouse return: ${why(r)}` : `treehouse return left it ${after.status || 'held'}`)
 }
 

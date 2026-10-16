@@ -520,14 +520,14 @@ describe('the slot executor (act-slots.ts)', () => {
     expect(w.inits[0]).toMatchObject({ cwd: '/work', stdin: '' })
   })
 
-  test('prepare: the marker gets the loop dir; the head, and the leftovers file when one was saved', async () => {
+  test('prepare: the marker gets the loop dir; the head, the processes it ended, and the leftovers file when one was saved', async () => {
     const leftovers = `${LOOP_DIR}/leftovers/5-${LIFE}-s3-1.patch`
-    const w = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nLEFTOVERS file=${leftovers}\n` }))
+    const w = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 1\nLEFTOVERS file=${leftovers}\n` }))
     const a = act('prepare', { key: prepareKey(r5, 1), rule: 'S2', branch: 'issue-5', marker: MARKER })
-    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'prepare', path: SLOT, lease: 'L5', head: HEAD, killed: null, leftovers }, summary: `prepared at 9e01b77; leftovers saved to ${leftovers}` })
+    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'prepare', path: SLOT, lease: 'L5', head: HEAD, killed: 1, leftovers }, summary: `prepared at 9e01b77; 1 process(es) ended; leftovers saved to ${leftovers}` })
     expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR })]])
-    const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\n` }))
-    expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, leftovers: null } })
+    const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 0\n` }))
+    expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, killed: 0, leftovers: null }, summary: 'prepared at 9e01b77' })
     // the action must name its slot, lease, branch and marker: a loop bug, never retried
     expect(await actWorld().run({ ...a, marker: null })).toMatchObject({ status: 'failed', noRetry: true, summary: expect.stringContaining('refused') })
   })
@@ -543,12 +543,12 @@ describe('the slot executor (act-slots.ts)', () => {
   })
 
   test('free: the loop dir for the leftovers; FREED or GONE is done, GONE with no lease left; the leftovers file a free saved is recorded', async () => {
-    const w = actWorld(() => ({ stdout: `FREED path=${SLOT}\n` }))
+    const w = actWorld(() => ({ stdout: `FREED path=${SLOT}\nKILLED 0\n` }))
     const a = act('free', { key: freeKey('L5'), rule: 'W2' })
-    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: null, leftovers: null }, summary: `freed ${SLOT}` })
+    expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: 0, leftovers: null }, summary: `freed ${SLOT}` })
     expect(w.argvs).toEqual([[BIN, ...budget('free'), 'free', SLOT, 'L5', LOOP_DIR]])
     const file = `${LOOP_DIR}/leftovers/5-${LIFE}-free-1.patch`
-    expect(await actWorld(() => ({ stdout: `FREED path=${SLOT}\nLEFTOVERS file=${file}\n` })).run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: null, leftovers: file }, summary: `freed ${SLOT}; leftovers saved to ${file}` })
+    expect(await actWorld(() => ({ stdout: `FREED path=${SLOT}\nKILLED 2\nLEFTOVERS file=${file}\n` })).run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'free', path: SLOT, lease: 'L5', head: null, killed: 2, leftovers: file }, summary: `freed ${SLOT}; 2 process(es) ended; leftovers saved to ${file}` })
     expect(await actWorld(() => ({ stdout: `GONE path=${SLOT}\n` })).run(a)).toMatchObject({ status: 'done', outcome: { lease: null }, summary: expect.stringContaining('gone already') })
   })
 

@@ -37,7 +37,7 @@ import { keyParts, lifeKey, prKey, rerunKey, reviewKey, reviewPrepareKey, short 
 import { agentStep, lifeEntries, timeoutOf, triggerOf, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
 import { stalledTell, stopKey } from './rules-entry'
-import { REVIEWERS, answerName, dispositionsOf, fixNotes, reviewComment, reviewDataOf, reviewLead, reviewNotes, reviewedEvent, reviewerOf, verdictEvent } from './reviewer'
+import { REVIEWERS, answerName, dispositionsOf, fixNotes, reviewComment, reviewDataOf, reviewLead, reviewNotes, reviewPlace, reviewedEvent, reviewerOf, verdictEvent } from './reviewer'
 import type { ReviewData } from './reviewer'
 import type { CheckRun, PrView } from './sources-prs'
 import type { IssueRecord, StepKind, TableEvent, Trigger, V2Ctx } from './types'
@@ -426,7 +426,7 @@ export const reviewStep: StepPlan = env => {
   if (pv.mergeable === 'dirty') {
     const main = baseOf(ctx.state)
     const lead = `PR #${pr} conflicts with ${main} at head ${short(head)}: merge origin/${main} into ${r.branch}, resolve every conflict keeping both sides' intent, run the gates and push ${r.branch}`
-    return result(notOk('conflict', pr, lead, changes === null ? [] : reviewNotes(changes), changes?.answer ?? 'the PR'), fact(`conflict:${pr}@${head}`))
+    return result(notOk('conflict', pr, lead, changes === null ? [] : reviewNotes(changes), changes === null ? 'the PR' : reviewPlace(changes)), fact(`conflict:${pr}@${head}`))
   }
   const seen = ciHalf(env, pv, head, false)
   // changes at once: a fixer will push a new head, whatever CI says of this one; a check that
@@ -434,7 +434,7 @@ export const reviewStep: StepPlan = env => {
   // the overflow line names where both are
   if (changes !== null && done !== null) {
     const ci = seen.kind === 'red' ? seen.notes : []
-    const rest = ci.length === 0 ? changes.answer : `${changes.answer}, and the PR's checks`
+    const rest = ci.length === 0 ? reviewPlace(changes) : `${reviewPlace(changes)}, and the PR's checks`
     return result(notOk('changes', pr, reviewLead(changes), reviewNotes(changes, ci), rest), triggerOf(done.entry))
   }
   if (done === null) {

@@ -1,4 +1,5 @@
-// The fleet's rules (docs/factory-loop/v2/SPEC.md 14.1) that name no record: H2 sweeps, O3 wakes
+// The fleet's rules (docs/factory-loop/v2/SPEC.md 14.1) that name no record: H2 sweeps (on its
+// period, and once a record closed, so the claim of a merged or closed issue ends at once), O3 wakes
 // the judge for the release task, R2 restarts for an update, and what used up its attempts with no
 // issue to hold is told to the owner. They keep v1's meaning and keys (v1 SPEC 5: H2, O3, H4), with
 // v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
@@ -7,6 +8,8 @@
 import { gate, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
+import { entryDone, entryItems } from './rules-entry'
+import type { EntryItem } from './rules-entry'
 import type { V2Ctx } from './types'
 
 // lastDone: the newest done entry of a kind.
@@ -22,10 +25,14 @@ function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
 // fleetRules: H2 and O3.
 export function fleetRules(ctx: V2Ctx): void {
   const { state, config } = ctx
-  // H2: the sweep, every sweepEveryMs
+  // H2: the sweep, every sweepEveryMs, and once a close's entry actions (the merged fact first,
+  // R3-F1) all ended after the last sweep began: the sweep ends the claim with the event it logs on
+  // its period (3.6)
   const sweep = lastDone(ctx, 'sweep')
-  if (sweep === undefined || state.now - (sweep.endedAt ?? 0) >= config.sweepEveryMs) {
-    want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: 'sweep due', issue: null })
+  const settledAt = (items: EntryItem[]) => (entryDone(ctx, items) ? Math.max(0, ...items.map(i => ctx.byKey.get(i.action.key)?.endedAt ?? 0)) : 0)
+  const closed = ctx.v2.records.find(r => r.state === 'closed' && settledAt(entryItems(ctx, r, null)) > (sweep?.startedAt ?? 0))
+  if (sweep === undefined || state.now - (sweep.endedAt ?? 0) >= config.sweepEveryMs || closed !== undefined) {
+    want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
   const m = state.milestone

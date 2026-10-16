@@ -1,6 +1,6 @@
 // The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 33 rows, each
-// naming the states it applies to, the event it takes, a pure guard, the next state, the pure
-// change to the record and the events it logs beside `transition`. rowFor is the only lookup:
+// naming the states it applies to, the event it takes, a pure guard, the next state and the pure
+// change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
 // are exclusive and exhaustive, so rowFor finds exactly one row or throws, which is a test failure,
 // never a runtime path: plan first brings an event into the domain the table covers (normalize).
@@ -9,7 +9,7 @@
 // Pure: the time is the caller's `now`, the settings the caller's Config.
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
-import type { EmitSpec, IssueRecord, IssueState, Row, TableEvent } from './types'
+import type { EmitState, IssueRecord, IssueState, Row, TableEvent } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -125,6 +125,14 @@ function distinct(notes: readonly (string | null | undefined)[]): string[] {
   return kept.filter((n, i) => kept.lastIndexOf(n) === i)
 }
 
+// clauses: the notes given (distinct) as one line of clauses, each without its own closing mark, so
+// a sentence ends nowhere but at the line's end; a clipped note keeps its '...'.
+function clauses(notes: readonly (string | null | undefined)[]): string {
+  return distinct(notes)
+    .map(n => n.replace(/(?<!\.)[.;:,]$/, ''))
+    .join('; ')
+}
+
 // added: the record's notes with these added (a same-state row keeps the seq's notes).
 function added(r: IssueRecord, ...more: (string | null | undefined)[]): string[] {
   return distinct([...r.notes, ...more]).slice(-NOTES_MAX)
@@ -146,7 +154,7 @@ const ATTEMPT = /^attempt \d+ of /
 function lastTwo(r: IssueRecord, e: TableEvent): string {
   const earlier = r.notes.filter(n => ATTEMPT.test(n)).slice(-1)
   const step = r.step === 'triage' ? `the triage of ${r.state}` : `${r.step ?? 'the step'} in ${r.state}`
-  return clip(`${step} gave no usable result twice: ${distinct([...earlier, attemptNote(r, e)]).join('; ')}`, 2000)
+  return clip(`${step} gave no usable result twice: ${clauses([...earlier, attemptNote(r, e)])}`, 2000)
 }
 
 const none = () => ({})
@@ -157,12 +165,9 @@ const lifePrOf = (r: IssueRecord, e: TableEvent): number | null => r.pr ?? dataO
 
 // --- the rows ----------------------------------------------------------------------------------------------
 
-const EMIT_DELEGATED: readonly EmitSpec[] = [{ state: 'delegated', note: null }]
-const EMIT_MERGE_READY: readonly EmitSpec[] = [{ state: 'merge_ready', note: null }]
-const EMIT_FIX: readonly EmitSpec[] = [{ state: 'fix_requested', note: null }]
-const EMIT_FIX_TRIAGE: readonly EmitSpec[] = [{ state: 'fix_requested', note: 'triage' }]
-const EMIT_ABANDONED: readonly EmitSpec[] = [{ state: 'abandoned', note: null }]
-const EMIT_DROPPED: readonly EmitSpec[] = [{ state: 'abandoned', note: 'dropped' }]
+// The event a state logs on entry beside `transition` (4.5): every row that enters the state logs
+// it, a resume's T1 and a same-state entry (X2) included, so a reader counts every entry (7.1).
+export const ENTRY_EVENTS: Readonly<Partial<Record<IssueState, EmitState>>> = { building: 'delegated', fixing: 'fix_requested', 'merge-queue': 'merge_ready' }
 
 // T1 leads where resumeTo says, counting an entry to reviewing as a round and an entry to fixing as
 // a fix, as every other entry to them counts (3.2: round counts entries to reviewing, fixes entries
@@ -175,10 +180,10 @@ function leased(r: IssueRecord): Partial<IssueRecord> {
 // The rows of 4.3. S0 makes a record from its claim and is never matched by rowFor (madeRecord);
 // E7 is the fallback, one row per event kind (E7_ROWS).
 const ROWS: readonly Row[] = [
-  { id: 'S0', states: [], on: 'ok', next: 'queued', change: none, emit: [], via: 'claim' },
+  { id: 'S0', states: [], on: 'ok', next: 'queued', change: none, via: 'claim' },
   // step results (S3)
-  { id: 'T1', states: ['queued'], on: 'ok', when: r => ownStep(r), next: 'resumeTo', change: leased, emit: [], via: 'lease' },
-  { id: 'T2', states: ['designing'], on: 'ok', when: r => ownStep(r), next: 'building', change: (r, e) => ({ brief: dataOf(e).brief ?? r.brief }), emit: EMIT_DELEGATED, via: 'brief' },
+  { id: 'T1', states: ['queued'], on: 'ok', when: r => ownStep(r), next: 'resumeTo', change: leased, via: 'lease' },
+  { id: 'T2', states: ['designing'], on: 'ok', when: r => ownStep(r), next: 'building', change: (r, e) => ({ brief: dataOf(e).brief ?? r.brief }), via: 'brief' },
   {
     id: 'T3',
     states: ['designing'],
@@ -186,11 +191,10 @@ const ROWS: readonly Row[] = [
     when: (r, e) => ownStep(r) && e.reason === 'question',
     next: 'parked',
     change: (_r, e) => ({ question: clip(dataOf(e).question ?? textOf(e, 'the designer asks the owner'), 2000), resumeTo: 'designing' }),
-    emit: [],
     via: 'question',
   },
-  { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), emit: [], via: 'split' },
-  { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), emit: [], via: 'build' },
+  { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), via: 'split' },
+  { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'build' },
   {
     id: 'T6',
     states: ['building'],
@@ -198,7 +202,6 @@ const ROWS: readonly Row[] = [
     when: (r, _e, c) => ownStep(r) && r.triages < c.maxTriages,
     next: 'same',
     change: (r, e) => ({ step: 'triage', attempt: 1, triages: r.triages + 1, cut: false, notes: added(r, `the builder could not finish (${e.reason ?? 'cannot'}): ${textOf(e, 'no reason given')}`) }),
-    emit: [],
     via: 'cannot',
   },
   {
@@ -208,7 +211,6 @@ const ROWS: readonly Row[] = [
     when: (r, _e, c) => ownStep(r) && r.triages >= c.maxTriages,
     next: 'parked',
     change: (_r, e) => ({ question: clip(`the builder could not finish (${e.reason ?? 'cannot'}): ${textOf(e, 'no reason given')}`, 2000), resumeTo: 'building' }),
-    emit: [],
     via: 'cannot',
   },
   {
@@ -218,7 +220,6 @@ const ROWS: readonly Row[] = [
     when: r => ownStep(r),
     next: 'merge-queue',
     change: (r, e) => ({ approvedPatch: dataOf(e).patch ?? r.approvedPatch, pr: dataOf(e).pr ?? r.pr }),
-    emit: EMIT_MERGE_READY,
     via: 'approve',
   },
   {
@@ -228,7 +229,6 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes < c.reviewFixCap,
     next: 'fixing',
     change: (r, e) => ({ fixes: r.fixes + 1, pr: dataOf(e).pr ?? r.pr, notes: own(...(dataOf(e).notes ?? [textOf(e, e.reason ?? 'changes')])) }),
-    emit: EMIT_FIX,
     via: 'fix:',
   },
   {
@@ -238,14 +238,13 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes >= c.reviewFixCap,
     next: 'parked',
     change: (r, e) => ({
-      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${distinct([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')]).join('; ')}`, 2000),
+      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${clauses([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')])}`, 2000),
       resumeTo: 'fixing',
       pr: dataOf(e).pr ?? r.pr,
     }),
-    emit: [],
     via: 'fix-cap:',
   },
-  { id: 'T11', states: ['fixing'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), emit: [], via: 'fix' },
+  { id: 'T11', states: ['fixing'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'fix' },
   {
     id: 'T12',
     states: ['fixing'],
@@ -253,11 +252,10 @@ const ROWS: readonly Row[] = [
     when: r => ownStep(r),
     next: 'reviewing',
     change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'every finding declined')])) }),
-    emit: [],
     via: 'declined',
   },
-  { id: 'T13', states: ['merge-queue'], on: 'ok', when: r => ownStep(r), next: 'closed', change: () => ({ why: 'merged' }), emit: [], via: 'merged' },
-  { id: 'T14', states: ['merge-queue'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'patch', next: 'reviewing', change: r => ({ approvedPatch: null, round: r.round + 1 }), emit: [], via: 'patch' },
+  { id: 'T13', states: ['merge-queue'], on: 'ok', when: r => ownStep(r), next: 'closed', change: () => ({ why: 'merged' }), via: 'merged' },
+  { id: 'T14', states: ['merge-queue'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'patch', next: 'reviewing', change: r => ({ approvedPatch: null, round: r.round + 1 }), via: 'patch' },
   {
     id: 'T15',
     states: ['merge-queue'],
@@ -265,12 +263,11 @@ const ROWS: readonly Row[] = [
     when: (r, e) => ownStep(r) && e.reason === 'policy',
     next: 'parked',
     change: (_r, e) => ({ question: clip(`the merge guard refused what only the owner can change: ${textOf(e, 'policy')}`, 2000), resumeTo: 'merge-queue' }),
-    emit: [],
     via: 'policy',
   },
   // the unknown path (S4, section 5)
-  { id: 'U1', states: STEP_STATES, on: 'unknown', when: (r, e) => u1(r, e), next: 'same', change: (r, e) => ({ cut: true, notes: added(r, attemptNote(r, e)) }), emit: [], via: 'free:' },
-  { id: 'U2', states: STEP_STATES, on: 'unknown', when: (r, e) => !u1(r, e) && r.attempt <= 1, next: 'same', change: (r, e) => ({ attempt: 2, cut: false, notes: added(r, attemptNote(r, e)) }), emit: [], via: 'unknown:' },
+  { id: 'U1', states: STEP_STATES, on: 'unknown', when: (r, e) => u1(r, e), next: 'same', change: (r, e) => ({ cut: true, notes: added(r, attemptNote(r, e)) }), via: 'free:' },
+  { id: 'U2', states: STEP_STATES, on: 'unknown', when: (r, e) => !u1(r, e) && r.attempt <= 1, next: 'same', change: (r, e) => ({ attempt: 2, cut: false, notes: added(r, attemptNote(r, e)) }), via: 'unknown:' },
   {
     id: 'U3',
     states: STEP_STATES,
@@ -278,7 +275,6 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => !u1(r, e) && r.attempt >= 2 && r.step !== 'triage' && r.triages < c.maxTriages,
     next: 'same',
     change: (r, e) => ({ step: 'triage', attempt: 1, triages: r.triages + 1, cut: false, notes: added(r, attemptNote(r, e)) }),
-    emit: [],
     via: 'unknown:',
   },
   {
@@ -288,7 +284,6 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => !u1(r, e) && r.attempt >= 2 && (r.step === 'triage' || r.triages >= c.maxTriages),
     next: 'parked',
     change: (r, e) => ({ question: lastTwo(r, e), resumeTo: sameTarget(r) }),
-    emit: [],
     via: 'unknown:',
   },
   // the triage's answers (S5)
@@ -299,7 +294,6 @@ const ROWS: readonly Row[] = [
     when: (r, e) => onTriage(r) && e.choice === 'retry',
     next: 'same',
     change: (r, e) => ({ step: STATE_STEP[r.state], attempt: 2, cut: false, notes: added(r, dataOf(e).instructions) }),
-    emit: [],
     via: 'triage:',
   },
   {
@@ -309,10 +303,9 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => onTriage(r) && e.choice === 'fix' && fixValid(r, e, c),
     next: 'fixing',
     change: (r, e) => ({ fixes: r.fixes + 1, notes: own(dataOf(e).instructions) }),
-    emit: EMIT_FIX_TRIAGE,
     via: 'triage:',
   },
-  { id: 'X3', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'redesign', next: 'designing', change: (_r, e) => ({ notes: own(dataOf(e).instructions) }), emit: [], via: 'triage:' },
+  { id: 'X3', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'redesign', next: 'designing', change: (_r, e) => ({ notes: own(dataOf(e).instructions) }), via: 'triage:' },
   {
     id: 'X4',
     states: STEP_STATES,
@@ -326,14 +319,13 @@ const ROWS: readonly Row[] = [
           : clip(`the triage chose a fixer, which is not possible here (${commits(r, e) ? `the fix cap of ${r.fixes} rounds is reached` : 'the branch has no commits beyond the base'}): ${e.reason ?? ''}`, 2000),
       resumeTo: sameTarget(r),
     }),
-    emit: [],
     via: 'triage:',
   },
-  { id: 'X5', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'drop', next: 'closed', change: (_r, e) => ({ why: 'dropped', notes: own(`triage: ${e.reason ?? 'dropped'}`) }), emit: EMIT_ABANDONED, via: 'triage:' },
+  { id: 'X5', states: STEP_STATES, on: 'triage', when: (r, e) => onTriage(r) && e.choice === 'drop', next: 'closed', change: (_r, e) => ({ why: 'dropped', notes: own(`triage: ${e.reason ?? 'dropped'}`) }), via: 'triage:' },
   // the owner's and GitHub's events (S6)
-  { id: 'E1', states: LIVE_STATES, on: 'drop', next: 'closed', change: () => ({ why: 'dropped', notes: own('dropped') }), emit: EMIT_DROPPED, via: 'drop' },
-  { id: 'E2', states: LIVE_STATES, on: 'issue-closed', next: 'closed', change: () => ({ why: 'closed-on-github' }), emit: [], via: 'issue-closed' },
-  { id: 'E3', states: LIVE_STATES, on: 'pr-merged', when: (r, e) => lifePrOf(r, e) !== null, next: 'closed', change: (r, e) => ({ why: 'merged-by-hand', pr: lifePrOf(r, e) }), emit: [], via: 'pr-merged' },
+  { id: 'E1', states: LIVE_STATES, on: 'drop', next: 'closed', change: () => ({ why: 'dropped', notes: own('dropped') }), via: 'drop' },
+  { id: 'E2', states: LIVE_STATES, on: 'issue-closed', next: 'closed', change: () => ({ why: 'closed-on-github' }), via: 'issue-closed' },
+  { id: 'E3', states: LIVE_STATES, on: 'pr-merged', when: (r, e) => lifePrOf(r, e) !== null, next: 'closed', change: (r, e) => ({ why: 'merged-by-hand', pr: lifePrOf(r, e) }), via: 'pr-merged' },
   {
     id: 'E4',
     states: LIVE_STATES.filter(s => s !== 'parked'),
@@ -341,11 +333,10 @@ const ROWS: readonly Row[] = [
     when: (r, e) => lifePrOf(r, e) !== null,
     next: 'parked',
     change: (r, e) => ({ question: `PR #${lifePrOf(r, e)} was closed by hand; a resume reopens it`, resumeTo: sameTarget(r), pr: lifePrOf(r, e), prClosedAt: dataOf(e).closedAt ?? r.prClosedAt }),
-    emit: [],
     via: 'pr-closed',
   },
-  { id: 'E5', states: LIVE_STATES, on: 'claim-lost', next: 'closed', change: () => ({ why: 'claim-lost' }), emit: [], via: 'claim-lost' },
-  { id: 'E6', states: ['queued', 'merge-queue', 'parked'], on: 'timeout', when: r => waiting(r), next: 'same', change: none, emit: [], via: 'timeout' },
+  { id: 'E5', states: LIVE_STATES, on: 'claim-lost', next: 'closed', change: () => ({ why: 'claim-lost' }), via: 'claim-lost' },
+  { id: 'E6', states: ['queued', 'merge-queue', 'parked'], on: 'timeout', when: r => waiting(r), next: 'same', change: none, via: 'timeout' },
   // the parked state (S6)
   {
     id: 'P1',
@@ -353,7 +344,6 @@ const ROWS: readonly Row[] = [
     on: 'unpark',
     next: 'queued',
     change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
-    emit: [],
     via: 'unpark:',
   },
 ]
@@ -361,7 +351,7 @@ const ROWS: readonly Row[] = [
 // E7: an event with no meaning in the state (a late result of an ended seq, pr-closed while parked,
 // an unpark of a record that is not parked, pr-merged or pr-closed with no PR, every event in
 // closed). It changes nothing: plan logs it in the decision log. One row per event kind, all E7.
-const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE_STATES, on, next: 'same', change: none, emit: [], via: 'none' }))
+const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE_STATES, on, next: 'same', change: none, via: 'none' }))
 
 export const TABLE: readonly Row[] = [...ROWS, ...E7_ROWS]
 
