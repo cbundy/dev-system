@@ -310,59 +310,62 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 1 "heartbeat patch failure"
 no_events "heartbeat patch failure"
 
-# no-argument form: this device's live claims on the open issues factory-state lists live with
-# this device as the holder (v2 SPEC 3.6), never a label list
+# no-argument form: the claims this device still holds, as its own event log shows them (the
+# test callum-flow-claim <N> uses: the last of its claimed, ready, reclaimed, merged, closed and
+# abandoned events is claimed), never a label list and never factory.events, so a lagging push
+# cannot stop the renewals (M2). #7 is claimed and renewed; #8 was claimed and then released; #9
+# claimed and closed; #10 claimed, then a v2 transition (a lifecycle event that is no release);
+# #11 never claimed here; #12 claimed by this device but devB holds the comment; #13 claimed but
+# GitHub has closed it (the log lags a close).
 fs_live() { jq -n --argjson i "$1" '{repos: [{repo: "o/r", issues: $i, recent: []}]}' > "$d/fs-json"; }
 reset
-issue 8 OPEN
-issue 9 CLOSED
-fs_live '[{"issue": 7, "holder": "devA"}, {"issue": 8, "holder": "devB"}, {"issue": 9, "holder": "devA"}]'
-{ brief; cm 100 devA "$FRESH" "$FRESH"; } | arr > "$d/comments-7.json"
-cm 101 devA "$FRESH" "$FRESH" | arr > "$d/comments-8.json"
-cm 102 devA "$FRESH" "$FRESH" | arr > "$d/comments-9.json"
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
-expect_rc 0 "heartbeat all"
-[ "$(calls)" = "PATCH 100" ] || fail "heartbeat all: only #7 (devA's, open) is renewed, not #8 (devB holds it) nor #9 (closed): $(calls)"
-[ "$(events | wc -l)" = 1 ] || fail "heartbeat all: one renewed event per renewed claim: $(events)"
-events | jq -e '.state == "renewed" and .issue == 7' >/dev/null || fail "heartbeat all: renewed event: $(events)"
-grep -q -- '--repo o/r --github off --format json' "$d/fs-calls" || fail "heartbeat all: factory-state call: $(cat "$d/fs-calls")"
-# nothing to renew is still success
-reset
-fs_live '[{"issue": 7, "holder": "devA"}]'
-cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
-expect_rc 0 "heartbeat nothing"
-no_calls "heartbeat nothing"
-no_events "heartbeat nothing"
-# factory-state cannot be read (factory.events unreachable): this device's own event log lists
-# its claims, as the sweep's fallback does, so the sweep never releases a claim still held. #7 is
-# claimed; #8 was claimed and then released; #9 claimed and closed; #10 claimed, then a v2
-# transition (a lifecycle event that is no release); #11 never claimed here.
-reset
-issue 8 OPEN
-issue 9 OPEN
-issue 10 OPEN
-issue 11 OPEN
-for n in 7 8 9 10; do rc_of "$EVENT" claimed --issue "$n" --repo o/r --note 'lease: 120'; done
+for n in 8 9 10 11 12; do issue "$n" OPEN; done
+issue 13 CLOSED
+for n in 7 8 9 10 12 13; do rc_of "$EVENT" claimed --issue "$n" --repo o/r --note 'lease: 120'; done
 rc_of "$EVENT" reclaimed --issue 8 --repo o/r
 rc_of "$EVENT" closed --issue 9 --repo o/r
 rc_of "$EVENT" transition --issue 10 --repo o/r --note 'row=T1 life=a seq=1 from=queued to=designing'
 rc_of "$EVENT" renewed --issue 7 --repo o/r --note 'lease: 120'
 rc_of "$EVENT" ready --issue 11 --repo o/r
-for n in 7 8 9 10 11; do cm "$((100 + n))" devA "$FRESH" "$FRESH" | arr > "$d/comments-$n.json"; done
+for n in 7 8 9 10 11 13; do cm "$((100 + n))" devA "$FRESH" "$FRESH" | arr > "$d/comments-$n.json"; done
+cm 112 devB "$FRESH" "$FRESH" | arr > "$d/comments-12.json"
+# factory.events lags this device's push: factory-state reads fine and lists none of them
+fs_live '[]'
 before=$(events | wc -l)
 FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
-expect_rc 0 "heartbeat from the local log"
-[ "$(calls | sort | tr '\n' ' ')" = "PATCH 107 PATCH 110 " ] || fail "heartbeat from the local log: only #7 and #10 are this device's unreleased claims: $(calls)"
-grep -q "renewing the claims in this device's event log" "$tmpdir/err" || fail "heartbeat from the local log: warning: $(cat "$tmpdir/err")"
-[ "$(events | wc -l)" = "$((before + 2))" ] || fail "heartbeat from the local log: one renewed event each: $(events)"
-# factory-state cannot be read and this device has no log: nothing claimed here, nothing renewed
+expect_rc 0 "heartbeat all"
+[ "$(calls | sort | tr '\n' ' ')" = "PATCH 107 PATCH 110 " ] || fail "heartbeat all: only #7 and #10 are this device's held claims: $(calls)"
+[ "$(events | wc -l)" = "$((before + 2))" ] || fail "heartbeat all: one renewed event per renewed claim: $(events)"
+# an issue merged but left open (research, Refs) is no longer held, though factory-state lists it
+# live at stage merged with this device as the holder (M2)
+reset
+issue 7 OPEN
+rc_of "$EVENT" claimed --issue 7 --repo o/r --note 'lease: 120'
+rc_of "$EVENT" merged --issue 7 --repo o/r
+rc_of "$EVENT" transition --issue 7 --repo o/r --note 'life=x seq=2 from=merge-queue to=closed'
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+fs_live '[{"issue": 7, "stage": "merged", "holder": "devA"}]'
+before=$(events | wc -l)
+FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat, merged and open"
+no_calls "heartbeat, merged and open"
+[ "$(events | wc -l)" = "$before" ] || fail "heartbeat, merged and open: renewed: $(events)"
+# nothing to renew is still success
+reset
+rc_of "$EVENT" claimed --issue 7 --repo o/r --note 'lease: 120'
+cm 100 devB "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+before=$(events | wc -l)
+rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat nothing"
+no_calls "heartbeat nothing"
+[ "$(events | wc -l)" = "$before" ] || fail "heartbeat nothing: renewed: $(events)"
+# this device has no log: nothing claimed here, nothing renewed
 reset
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
-expect_rc 0 "heartbeat, no factory-state and no log"
-no_calls "heartbeat, no factory-state and no log"
-# neither can be read: an error, nothing renewed
+rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat, no log"
+no_calls "heartbeat, no log"
+# the log cannot be located: an error, nothing renewed
 reset
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 cat > "$tmpdir/no-path-event" <<'STUB'
@@ -374,7 +377,7 @@ chmod +x "$tmpdir/no-path-event"
 set +e
 PATH="$toolbin" STUB_DIR="$d" CALLUM_FLOW_GH_BIN="$tmpdir/gh" CALLUM_FLOW_REPO=o/r REAL_EVENT="$EVENT" \
   CALLUM_FLOW_EVENT_BIN="$tmpdir/no-path-event" CALLUM_EVENTS_DIR="$tmpdir/events" DEV_MACHINE_NAME=devA \
-  CALLUM_FLOW_FACTORY_STATE_BIN="$tmpdir/factory-state" CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
+  CALLUM_FLOW_ISSUE_READ_BIN="$READER" CALLUM_FLOW_SHARE_DIR="$SHARE" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$CLAIM" --heartbeat >"$tmpdir/out" 2>"$tmpdir/err"
 rc=$?
 set -e
@@ -792,9 +795,9 @@ rc_of "$CLAIM" --heartbeat 7
 expect_rc 0 "heartbeat ignores stranger"
 no_calls "heartbeat ignores stranger"
 reset
-fs_live '[{"issue": 7, "holder": "devA"}]'
+seed claimed 7
 scm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all ignores stranger"
 no_calls "heartbeat all ignores stranger"
 
@@ -811,13 +814,13 @@ for who in '{"login":"mallory","id":999}' '{"login":"cbundy","id":42}'; do
 done
 # heartbeat skips an untrusted issue silently
 reset
-fs_live '[{"issue": 7, "holder": "devA"}]'
+seed claimed 7
 echo "$STRANGER" > "$d/author-7"
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" --heartbeat 7
 expect_rc 0 "heartbeat untrusted issue"
 no_calls "heartbeat untrusted issue"
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+rc_of "$CLAIM" --heartbeat
 expect_rc 0 "heartbeat all, untrusted issue"
 no_calls "heartbeat all, untrusted issue"
 
@@ -830,8 +833,8 @@ no_calls "claim reader failure"
 rc_of "$CLAIM" --heartbeat 7
 expect_rc 1 "heartbeat reader failure"
 no_calls "heartbeat reader failure"
-fs_live '[{"issue": 7, "holder": "devA"}]'
-FS_BIN="$tmpdir/factory-state" rc_of "$CLAIM" --heartbeat
+seed claimed 7
+rc_of "$CLAIM" --heartbeat
 expect_rc 1 "heartbeat all, reader failure"
 no_calls "heartbeat all, reader failure"
 # an unusable trusted list fails closed too
