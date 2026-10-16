@@ -63,7 +63,8 @@ function briefComment(r: IssueRecord, body: string) {
 }
 
 // order: the children in an order where each comes after the siblings it is blocked by (the
-// contract refuses a cycle; any left over keep their order).
+// contract refuses a cycle; any left over keep their order). An entry that is no sibling's key (an
+// existing issue, "#<N>") never waits.
 function order(children: readonly SplitChild[]): SplitChild[] {
   const out: SplitChild[] = []
   const left = [...children]
@@ -87,7 +88,8 @@ function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
       made.set(c.key, done)
       continue
     }
-    const blockers = c.blockedBy.map(b => made.get(b))
+    // a sibling key resolves through the made children, "#<N>" straight to N
+    const blockers = c.blockedBy.map(b => (b.startsWith('#') ? Number(b.slice(1)) : made.get(b)))
     if (blockers.some(n => n === undefined)) {
       waits.push({ kind: 'held', why: `split: child ${c.key} waits for the siblings it is blocked by` })
       continue
