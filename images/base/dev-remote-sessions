@@ -11,12 +11,22 @@
 # format, so it is parsed defensively: a missing field or bad JSON skips that
 # record with a log line, never an error) and starts each session again in its
 # own cwd, in the tmux session `rc-restored` (one window per session):
-#   - a session a `claude remote-control` server spawned (entrypoint sdk-cli)
-#     is reattached with `claude remote-control --session-id cse_<id>`: the
-#     same claude.ai session comes back online, its history loaded from
-#     claude.ai, with the server's permission mode. Its transcript records
-#     neither its claude.ai session nor its permission mode, so resuming it
-#     as an interactive session would open a new claude.ai session instead.
+#   - a session a `claude remote-control` server spawned (entrypoint sdk-cli),
+#     when no supervisor server runs (session mode), is reattached with
+#     `claude remote-control --session-id cse_<id>`: the same claude.ai
+#     session comes back online, its history loaded from claude.ai, with the
+#     server's permission mode. Its transcript records neither its claude.ai
+#     session nor its permission mode, so resuming it as an interactive
+#     session would open a new claude.ai session instead.
+#   - in server mode (DEV_REMOTE_CONTROL_MODE=server) such a session is NOT
+#     started: the supervisor's server registers again on its prior
+#     environment, reconnects the sessions it lists itself and picks up the
+#     others when work arrives. A `--session-id` reattach would register on
+#     that same environment from the session's worktree, where its "already
+#     served" guard (it reads the bridge pointer of its own cwd) never fires,
+#     so it would poll the server's work and tear the environment down when
+#     it ends. The session is only written to the ledger, and its worktree is
+#     kept (see cwds) for DEV_REMOTE_CONTROL_RESTORE_HOURS.
 #   - any other session is resumed with
 #     `claude --resume <id> --remote-control <name>`, with the permission
 #     mode, effort and model from its transcript.
@@ -40,11 +50,13 @@
 #             the frozen plan in pending.json.
 #   taken     print the sessionIds the supervisor must not resume: the live
 #             sessions, the planned restores and the sessions already restored.
-#   cwds      print "live<TAB>dir" / "pending<TAB>dir" for every live session
-#             and every planned (or, before `plan`, candidate) restore:
-#             dev-prune-worktrees keeps these.
+#   cwds      print "live<TAB>dir" / "pending<TAB>dir" for every live session,
+#             every planned (or, before `plan`, candidate) restore and every
+#             server-spawned session `restore` left to the server (within the
+#             window): dev-prune-worktrees keeps these.
 #   restore   once per boot (exit 3 when already done): start each planned
-#             session that is not live, record every record it considered in
+#             session that is not live (server mode: except server-spawned
+#             ones, left to the server), record every record it considered in
 #             the ledger.
 #
 # Candidates are the latest snapshot plus stale records (their process is gone),
@@ -264,7 +276,8 @@ cmd_snapshot() {
 # own sessions in session mode are the stale records in its tmux session: they
 # are recorded in supervisor/, so they are never restored and stay the
 # conversation DEV_REMOTE_CONTROL_RESUME resumes. In server mode such records
-# are the server's spawned sessions, which are restored.
+# are the server's spawned sessions, which the server takes back
+# (restore leaves them to it).
 adopt_supervisor_records() {
   local r sid
   [ "${DEV_REMOTE_CONTROL_MODE:-session}" = session ] || return 0
@@ -300,6 +313,22 @@ cmd_cwds() {
   while IFS= read -r r; do
     [ -z "$r" ] || printf 'pending\t%s\n' "$(jq -r .cwd <<< "$r")"
   done < <(if [ -f "$STATE/pending.json" ]; then cat "$STATE/pending.json"; else candidates; fi)
+  # Server-spawned sessions left to the server keep their worktree for the
+  # window, so a server restart later in the boot cannot prune it. Ledger line:
+  # "<sid> <epoch> server-left <cwd>".
+  local f sid epoch tag cwd live now
+  live=$(live_sids)
+  now=$(date +%s)
+  for f in "$STATE/ledger"/*; do
+    [ -f "$f" ] || continue
+    IFS=' ' read -r sid epoch tag cwd < "$f" || true
+    [ "${tag:-}" = server-left ] || continue
+    [ -n "${cwd:-}" ] || continue
+    case $epoch in '' | *[!0-9]*) continue ;; esac
+    [ $((now - epoch)) -lt $((HOURS * 3600)) ] || continue
+    ! grep -qxF -e "$sid" <<< "$live" || continue
+    printf 'pending\t%s\n' "$cwd"
+  done
 }
 
 launch() {
@@ -353,7 +382,8 @@ cmd_restore() {
   marked restored && return 3
   mark restored
   [ "$HOURS" != 0 ] || return 0
-  local r k sid bridge
+  local r k sid bridge cwd mode_server=0 m
+  [ "${DEV_REMOTE_CONTROL_MODE:-session}" != server ] || mode_server=1
   mkdir -p "$STATE/ledger" || { log "cannot create $STATE"; return 1; }
   if [ ! -f "$STATE/pending.json" ]; then
     candidates > "$STATE/pending.json"
@@ -362,13 +392,30 @@ cmd_restore() {
     [ -n "$r" ] || continue
     sid=$(jq -r .sessionId <<< "$r" 2>/dev/null) || continue
     # Ledger first: whatever happens next, this record is never tried again.
+    bridge="" cwd=""
+    if server_spawned "$r"; then
+      bridge=$(jq -r .bridgeSessionId <<< "$r")
+      cwd=$(jq -r .cwd <<< "$r")
+    fi
     for k in $(jq -r '.keys[]?' <<< "$r" 2>/dev/null); do
-      echo "$sid $(date +%s)" > "$STATE/ledger/$k"
+      if [ "$mode_server" = 1 ] && [ -n "$bridge" ]; then
+        echo "$sid $(date +%s) server-left $cwd" > "$STATE/ledger/$k"
+      else
+        echo "$sid $(date +%s)" > "$STATE/ledger/$k"
+      fi
     done
-    bridge=""
-    ! server_spawned "$r" || bridge=$(jq -r .bridgeSessionId <<< "$r")
-    if live_records | jq -r .sessionId,.bridgeSessionId | grep -qxF -e "$sid" ${bridge:+-e "$bridge"}; then
-      log "session $sid is already running: not restoring it"
+    if [ "$mode_server" = 1 ] && [ -n "$bridge" ]; then
+      log "session $sid (claude.ai $bridge) is left to the Remote Control server, which serves its environment"
+      continue
+    fi
+    if m=$(live_records | jq -r --arg s "$sid" \
+      'select(.sessionId == $s) | "its local conversation \($s) is open in live session pid \(.pid) (claude.ai \(.bridgeSessionId))"' | head -n 1) && [ -n "$m" ]; then
+      log "session $sid is already running: $m: not restoring it"
+      continue
+    fi
+    if [ -n "$bridge" ] && m=$(live_records | jq -r --arg b "$bridge" \
+      'select(.bridgeSessionId == $b) | "claude.ai session \($b) is already online (pid \(.pid))"' | head -n 1) && [ -n "$m" ]; then
+      log "session $sid is already running: $m: not restoring it"
       continue
     fi
     launch "$r" || true
