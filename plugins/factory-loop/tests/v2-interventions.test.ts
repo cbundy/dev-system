@@ -87,7 +87,7 @@ function step(seq: number, kind: 'design' | 'build' | 'review' | 'fix' | 'triage
 }
 
 function pr(over: Partial<PrView> = {}): PrView {
-  return { pr: 621, issue: N, state: 'open', head: H('a'), mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, checks: [], patch: null, readAt: NOW, ...over }
+  return { pr: 621, issue: N, state: 'open', head: H('a'), mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, baseRef: 'main', checks: [], patch: null, readAt: NOW, ...over }
 }
 
 type World = { ledger?: LedgerEntry[]; records?: IssueRecord[]; prs?: PrView[]; heads?: Record<string, HeadSeen>; facts?: InterventionFacts; control?: Control; loadedAt?: number; out?: Action[] }

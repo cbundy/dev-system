@@ -45,6 +45,8 @@ export type PrView = {
   author: string | null
   // the commit of main the PR's head was last based on (the REST pull's base.sha)
   base: string | null
+  // the branch the PR targets (the REST pull's base.ref)
+  baseRef: string | null
   checks: CheckRun[]
   patch: string | null
   readAt: number
@@ -182,8 +184,6 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
   const prs: PrView[] = []
   const unread: PrUnread[] = []
   let cut: string | undefined
-  // each PR's base, the default branch's name when the main checkout's read failed
-  const bases: (string | null)[] = []
   if (due.length > 0 && ctx.prBudget <= 0) cut = 'GitHub rate limit: no PR is read this pass'
   for (const r of due.slice(0, Math.max(0, ctx.prBudget))) {
     if (ctx.limited()) {
@@ -196,13 +196,13 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
       unread.push({ pr: r.pr, issue: r.issue, why: v.why, untrusted: v.untrusted, since })
       continue
     }
-    prs.push(v.view)
-    bases.push(v.base)
+    prs.push(v)
   }
   prs.push(...kept)
   let main: PrsRead['main'] = null
   const queued = prs.findIndex(v => v.state === 'open' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))
-  const branch = defaultBranch ?? bases[queued] ?? null
+  // the default branch's name, the head's base when the main checkout's read failed
+  const branch = defaultBranch ?? prs[queued]?.baseRef ?? null
   if (queued >= 0 && branch !== null && !ctx.limited()) {
     const r = await ctx.run(lsRemoteArgv(branch), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
     // a sha that did not read holds that head alone (rules-queue.ts update)
@@ -221,7 +221,7 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
 }
 
 // readOne: one record's PR: the PR itself, and for an open one its checks and its head's patch id.
-async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultBranch: string | null): Promise<{ view: PrView; base: string | null } | { why: string; untrusted: boolean }> {
+async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultBranch: string | null): Promise<PrView | { why: string; untrusted: boolean }> {
   const failed = (why: string, untrusted = false) => ({ why, untrusted })
   const read = await ctx.run(prReadArgv(r.pr), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
   if (read.exitCode === 3) return failed('not by a trusted author (callum-flow-issue-read exit 3)', true)
@@ -242,8 +242,7 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
       patch = p
     }
   }
-  const view: PrView = { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, base: pull.baseSha, checks, patch, readAt: ctx.now }
-  return { view, base: pull.base }
+  return { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, base: pull.baseSha, baseRef: pull.base, checks, patch, readAt: ctx.now }
 }
 
 async function patchOf(ctx: SourceCtx, head: string, base: string): Promise<string | { why: string }> {

@@ -67,7 +67,7 @@ function check(over: Partial<CheckRun> = {}): CheckRun {
 // view: the record's open PR as the prs source reads it: clean, green, at HEAD with the approved
 // patch.
 function view(r: IssueRecord, over: Partial<PrView> = {}): PrView {
-  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, checks: [check()], patch: PATCH, readAt: NOW, ...over }
+  return { pr: r.pr ?? 0, issue: r.issue, state: 'open', head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: MAIN, baseRef: 'main', checks: [check()], patch: PATCH, readAt: NOW, ...over }
 }
 
 const OK = { ok: true, at: NOW }
@@ -936,6 +936,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
       mergeable: 'unknown',
       author: 'cbundy',
       base: MAIN2,
+      baseRef: 'main',
       checks: [
         { name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: Date.parse('2026-10-13T02:40:00Z'), completedAt: Date.parse('2026-10-13T02:43:00Z'), runId: '123', link: 'https://github.com/cbundy/dev-system/actions/runs/123/job/9' },
         { name: 'image', state: 'QUEUED', bucket: 'pending', startedAt: null, completedAt: null, runId: null, link: null },
@@ -1032,6 +1033,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const mains: number[] = []
     let main = MAIN
     let failing = false
+    let checkout: State['checkout'] = baseState().checkout
     const pass = async (s: number, r: IssueRecord, ledger: LedgerEntry[] = []) => {
       const run = async (argv: string[]) => {
         if (argv[0] === 'callum-flow-issue-read') reads.push(s)
@@ -1040,7 +1042,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
         if (failing && argv[0] === 'gh') return { exitCode: 1, stdout: '', stderr: 'HTTP 502' }
         return { exitCode: 0, stdout: '', stderr: '', ...prReply({})(argv) }
       }
-      const state = { ...baseState(), now: NOW + s * 1000, ledger }
+      const state = { ...baseState(), now: NOW + s * 1000, ledger, checkout }
       return (await observeV2({ io, rt: runtime(), cache, run, state, stored: { records: [r], heads: null, error: null }, poolJson: null, github: new Map(), backoff: false, limited: () => false })).v2.prs
     }
     const r = rec(82, { state: 'reviewing', step: 'review' })
@@ -1071,6 +1073,12 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect((await pass(250, queued, [rerun])).main).toEqual({ branch: 'main', sha: MAIN2 })
     expect(reads).toEqual([230])
     expect(mains).toEqual([230, 240, 250])
+    // the main checkout unreadable (no origin/HEAD): main's branch is the head's base, from its
+    // view, kept or read, so main is still read on every pass
+    checkout = { error: 'origin/HEAD is not set' }
+    for (const s of [260, 270, 280]) expect((await pass(s, queued, [rerun])).main).toEqual({ branch: 'main', sha: MAIN2 })
+    expect(reads).toEqual([230, 260])
+    expect(mains).toEqual([230, 240, 250, 260, 270, 280])
   })
 
   test('the parsers: the REST pull and gh pr checks, whose exit 8 and 1 still carry the list; no checks yet is an empty list', () => {
