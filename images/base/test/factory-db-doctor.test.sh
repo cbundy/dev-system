@@ -57,7 +57,7 @@ url_for() {
   if [ -n "${2:-}" ]; then cred="$2${3:+:$3}@"; fi
   printf '%s://%s%s/%s%s\n' "$scheme" "$cred" "$hostpart" "$1" "${query:+?$query}"
 }
-q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "${ADMIN_USER:-}")" -c "$2"; }
+q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "${ADMIN_USER:-}" "${ADMIN_PW:-}")" -c "$2"; }
 ADMIN_USER=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^\([^:@/?]*\).*@.*/\1/p')
 ADMIN_PW=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^[^:@/?]*:\([^@/?]*\)@.*/\1/p')
 
