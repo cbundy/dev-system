@@ -9,6 +9,7 @@ import { gate, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
 import { entryDone, entryItems } from './rules-entry'
+import type { EntryItem } from './rules-entry'
 import type { V2Ctx } from './types'
 
 // lastDone: the newest done entry of a kind.
@@ -24,11 +25,12 @@ function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
 // fleetRules: H2 and O3.
 export function fleetRules(ctx: V2Ctx): void {
   const { state, config } = ctx
-  // H2: the sweep, every sweepEveryMs, and once a record closed since the last one began and its
-  // close's entry actions are done (the merged fact first, R3-F1): the sweep ends the claim with the
-  // event it logs on its period (3.6)
+  // H2: the sweep, every sweepEveryMs, and once a close's entry actions (the merged fact first,
+  // R3-F1) all ended after the last sweep began: the sweep ends the claim with the event it logs on
+  // its period (3.6)
   const sweep = lastDone(ctx, 'sweep')
-  const closed = ctx.v2.records.find(r => r.state === 'closed' && r.seqAt > (sweep?.startedAt ?? 0) && entryDone(ctx, entryItems(ctx, r, null)))
+  const settledAt = (items: EntryItem[]) => (entryDone(ctx, items) ? Math.max(0, ...items.map(i => ctx.byKey.get(i.action.key)?.endedAt ?? 0)) : 0)
+  const closed = ctx.v2.records.find(r => r.state === 'closed' && settledAt(entryItems(ctx, r, null)) > (sweep?.startedAt ?? 0))
   if (sweep === undefined || state.now - (sweep.endedAt ?? 0) >= config.sweepEveryMs || closed !== undefined) {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }

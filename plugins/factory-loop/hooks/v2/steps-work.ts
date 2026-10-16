@@ -25,7 +25,7 @@ import type { BuildAnswer, DesignAnswer, FixAnswer } from './contracts-work.mjs'
 import { keyParts, prepareKey } from './keys'
 import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
-import { leftoversOf } from './rules-agent'
+import { fixWhyOf, leftoversOf } from './rules-agent'
 import { lifePr } from './rules-review'
 import type { AgentStepAction, StepModule, StepRecord } from './steps'
 import { stepFiles } from './steps-triage'
@@ -119,33 +119,6 @@ function workInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place:
 // inFlightOf: the other records in a slot state, by issue, with their branches.
 function inFlightOf(state: State, issue: number): { issue: number; branch: string }[] {
   return (state.v2?.records ?? []).filter(r => r.issue !== issue && SLOT_STATES.includes(r.state)).map(r => ({ issue: r.issue, branch: r.branch }))
-}
-
-// sentToFix: why a transition sent the record toward a fixer, or null when it is not one that
-// does: T9 into fixing (fix:<kind>), X2 into fixing (triage:fix), or T10 parking at the fix cap
-// (fix-cap:<kind>), whose resume leads back to fixing through queued (T1). X4 shares X2's via but
-// parks, so the state it went to counts too.
-function sentToFix(to: string, via: string): FixWhy | null {
-  if (to === 'fixing' && via === 'triage:fix') return 'triage'
-  const kind = (to === 'fixing' ? /^fix:(review|ci|conflict)$/ : to === 'parked' ? /^fix-cap:(review|ci|conflict)$/ : null)?.exec(via)?.[1]
-  return kind === undefined ? null : (kind as FixWhy)
-}
-
-// fixWhyOf: why the record is in fixing: the newest transition of its life, up to its seq, that
-// sent it toward a fixer (sentToFix). A retry inside fixing (U1's free re-run, U2's second
-// attempt, X1's triage retry) and a resume (T1) are their own seqs with their own vias, so they
-// keep the reason the fixing began with. null when no such transition is in the ledger (a
-// rebuild, a pruned ledger).
-export function fixWhyOf(state: State, r: IssueRecord): FixWhy | null {
-  let newest: { seq: number; why: FixWhy } | null = null
-  for (const e of state.ledger) {
-    if (e.kind !== 'transition' || e.status !== 'done' || e.outcome?.kind !== 'transition') continue
-    const p = keyParts(e.key)
-    if (p === null || p.issue !== r.issue || p.life !== r.life || p.seq === null || p.seq > r.seq) continue
-    const why = sentToFix(e.outcome.to, e.outcome.via)
-    if (why !== null && (newest === null || p.seq > newest.seq)) newest = { seq: p.seq, why }
-  }
-  return newest?.why ?? null
 }
 
 // latestReview: the life's newest done review, whose answer a fixer reads.

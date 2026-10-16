@@ -17,7 +17,7 @@
 import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
-import { lifeEntries } from './rules-agent'
+import { fixWhyOf, lifeEntries } from './rules-agent'
 import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
 import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
@@ -92,20 +92,9 @@ function heldByOther(ctx: V2Ctx, r: IssueRecord): boolean {
   return holder !== null && holder !== ctx.state.device
 }
 
-// fixReason: why the life last sent its PR to a fixer (7.1): the via of its newest transition that
-// did (fix:<kind>, triage:fix) or that parked at the fix cap (fix-cap:<kind>), so a resume into
-// fixing logs the reason it parked with; review once the ledger no longer holds one.
-function fixReason(ctx: V2Ctx, r: IssueRecord): string {
-  const vias = lifeEntries(ctx, r, 'transition')
-    .flatMap(e => (e.outcome?.kind === 'transition' ? [{ seq: keyParts(e.key)?.seq ?? 0, via: e.outcome.via ?? '' }] : []))
-    .filter(t => t.via === 'triage:fix' || /^fix(-cap)?:/.test(t.via))
-  const via = vias.sort((a, b) => a.seq - b.seq).at(-1)?.via
-  return via === undefined ? 'review' : via === 'triage:fix' ? 'triage' : via.slice(via.indexOf(':') + 1)
-}
-
 // emitted: an event the seq logs beside `transition`, with the note today's queries read.
 function emitted(ctx: V2Ctx, r: IssueRecord, state: EmitState): Action {
-  const note = state === 'delegated' ? `brief ${r.brief ?? 'none'}` : state === 'fix_requested' ? fixReason(ctx, r) : state === 'merge_ready' ? `round ${r.round}` : (r.notes[0] ?? state)
+  const note = state === 'delegated' ? `brief ${r.brief ?? 'none'}` : state === 'fix_requested' ? (fixWhyOf(ctx.state, r) ?? 'review') : state === 'merge_ready' ? `round ${r.round}` : (r.notes[0] ?? state)
   return { ...base(r, entryKey(r, `event/${state}`), `log ${state}`), kind: 'event', event: { state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note } }
 }
 

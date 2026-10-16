@@ -8,8 +8,9 @@
 //
 // Pure: the time is state.now.
 import { stepBreaker, want } from '../foundation'
-import type { LedgerEntry, Ms } from '../types'
+import type { LedgerEntry, Ms, State } from '../types'
 import { freeKey, keyParts, lifeAt, prepareKey, stepKey } from './keys'
+import type { FixWhy } from './prompts-work'
 import type { EventData } from './table'
 import { AGENT_STEPS, STEP_CLASS, STEP_ROLE, WHY_CAUSE } from './types'
 import type { AgentStep, IssueRecord, Lease, OutsideCause, StepKind, StepMarker, StepResult, TableEvent, Trigger, UnknownWhy, V2Ctx } from './types'
@@ -74,6 +75,33 @@ export function lifeEntries(ctx: V2Ctx, r: Pick<IssueRecord, 'issue' | 'life'>, 
     const p = keyParts(e.key)
     return p !== null && p.issue === r.issue && p.life === r.life
   })
+}
+
+// sentToFix: why a transition sent the record toward a fixer, or null when it is not one that
+// does: T9 into fixing (fix:<kind>), X2 into fixing (triage:fix), or T10 parking at the fix cap
+// (fix-cap:<kind>), whose resume leads back to fixing through queued (T1). X4 shares X2's via but
+// parks, so the state it went to counts too.
+function sentToFix(to: string, via: string): FixWhy | null {
+  if (to === 'fixing' && via === 'triage:fix') return 'triage'
+  const kind = (to === 'fixing' ? /^fix:(review|ci|conflict)$/ : to === 'parked' ? /^fix-cap:(review|ci|conflict)$/ : null)?.exec(via)?.[1]
+  return kind === undefined ? null : (kind as FixWhy)
+}
+
+// fixWhyOf: why the record is in fixing, which the fixer's prompt and the fix_requested note read:
+// the newest transition of its life, up to its seq, that sent it toward a fixer (sentToFix). A
+// retry inside fixing (U1's free re-run, U2's second attempt, X1's triage retry) and a resume (T1)
+// are their own seqs with their own vias, so they keep the reason the fixing began with. null when
+// no such transition is in the ledger (a rebuild, a pruned ledger).
+export function fixWhyOf(state: State, r: IssueRecord): FixWhy | null {
+  let newest: { seq: number; why: FixWhy } | null = null
+  for (const e of state.ledger) {
+    if (e.kind !== 'transition' || e.status !== 'done' || e.outcome?.kind !== 'transition') continue
+    const p = keyParts(e.key)
+    if (p === null || p.issue !== r.issue || p.life !== r.life || p.seq === null || p.seq > r.seq) continue
+    const why = sentToFix(e.outcome.to, e.outcome.via)
+    if (why !== null && (newest === null || p.seq > newest.seq)) newest = { seq: p.seq, why }
+  }
+  return newest?.why ?? null
 }
 
 // leftoversOf: the leftovers files the life's slot ops saved (10.2), newest first: each prepare's,

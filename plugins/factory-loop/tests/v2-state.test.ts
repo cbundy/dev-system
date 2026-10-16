@@ -308,17 +308,32 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
   })
 
   test('a closed record ends its claim at once: once its entry actions are done the sweep is due, so a merged or closed issue is not live until the next timed sweep (R4-O1)', () => {
-    const r = rec(84, { state: 'closed', step: null, why: 'closed-on-github', seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
-    const at = (sweptAt: number, extra: LedgerEntry[] = []) =>
-      withLedger(world([r]), [transitioned(r, 'E2', 'building', 'issue-closed'), entry('sweep:1', 'sweep', { startedAt: sweptAt, endedAt: sweptAt + 2_000 }), ...extra])
     const sweeps = (p: PlanResult) => p.actions.filter(a => a.kind === 'sweep').map(a => a.rule)
-    const settled = [done(entryKey(r, 'event/transition'), 'event', { issue: 84 }), done(entryKey(r, 'label'), 'label', { issue: 84 })]
-    // the close's events are not logged yet: the sweep waits for them (the merged fact first, R3-F1)
+    const sweep = (startedAt: number) => entry('sweep:1', 'sweep', { startedAt, endedAt: startedAt + 2_000 })
+    const ended = (key: string, kind: LedgerEntry['kind'], issue: number, over: Partial<LedgerEntry> = {}) => done(key, kind, { issue, startedAt: NOW - 25_000, endedAt: NOW - 20_000, ...over })
+    // a close on GitHub (E2), stored a minute ago; its entry actions ended 20 s ago
+    const r = rec(84, { state: 'closed', step: null, why: 'closed-on-github', seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const at = (sweptAt: number, extra: LedgerEntry[] = []) => withLedger(world([r]), [transitioned(r, 'E2', 'building', 'issue-closed'), sweep(sweptAt), ...extra])
+    const settled = [ended(entryKey(r, 'event/transition'), 'event', 84), ended(entryKey(r, 'label'), 'label', 84)]
+    // the close's events are not logged yet: the sweep waits for them
     expect(sweeps(plan(at(NOW - 5 * MIN)))).toEqual([])
-    // logged: the sweep is due, though its period has not passed
-    expect(sweeps(plan(at(NOW - 5 * MIN, settled)))).toEqual(['H2'])
-    // a sweep that started after the close saw it: no second one
-    expect(sweeps(plan(at(NOW - 30_000, settled)))).toEqual([])
+    // logged: the sweep is due, though its period has not passed; so too when the last sweep began
+    // after the close was stored but before its events were logged (it could not see them)
+    expect([sweeps(plan(at(NOW - 5 * MIN, settled))), sweeps(plan(at(NOW - 40_000, settled)))]).toEqual([['H2'], ['H2']])
+    // a sweep that began after the close's events were logged saw it: no second one
+    expect(sweeps(plan(at(NOW - 10_000, settled)))).toEqual([])
+    // a merge (T13) whose log was lost: the sweep waits for the merged fact and the rollout's
+    // follow-ups too, not the transition alone, so its `closed` never comes first (R3-F1)
+    const m = rec(85, { state: 'closed', step: null, why: 'merged', pr: 785, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const merged = (over: Partial<LedgerEntry> = {}) => ended(entryKey(m, 'event/merged'), 'event', 85, over)
+    const rollout = ended(followKey(m, 'rollout'), 'rollout', 85, { outcome: { kind: 'rollout', rollout: null, closeIssue: null } })
+    const logged = [ended(entryKey(m, 'event/transition'), 'event', 85), ended(entryKey(m, 'label'), 'label', 85)]
+    const mergedAt = (extra: LedgerEntry[]) => withLedger(world([m]), [transitioned(m, 'T13', 'merge-queue', 'merged'), sweep(NOW - 5 * MIN), ...logged, ...extra])
+    expect([
+      sweeps(plan(mergedAt([merged({ status: 'running', endedAt: null }), rollout]))),
+      sweeps(plan(mergedAt([merged()]))),
+      sweeps(plan(mergedAt([merged(), rollout]))),
+    ]).toEqual([[], [], ['H2']])
   })
 
   test('a closed record\'s follow-ups: a hand merge logs merged when the factory has none, reads the rollout, then a later milestone for run-it; a split releases its parent with its children; another device\'s claim keeps its labels', () => {
