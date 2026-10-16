@@ -355,6 +355,8 @@ export type Config = {
   // this long, is unknown (v2 SPEC 4.4)
   ciStartMs: Ms
   ciRunMs: Ms
+  // a PR's read stands this long, unless something the loop knows makes it due sooner (v2 SPEC 2.4)
+  prEveryMs: Ms
   // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
   maxTriages: number
   // the lives an issue gets: a release at the last one rejects it instead of putting it back in the

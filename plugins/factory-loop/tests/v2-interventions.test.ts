@@ -634,6 +634,7 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
       prBudget: 0,
       limited: () => false,
       unread: [],
+      kept: [],
     })
   }
   const ctl = (c: Partial<Control>) => JSON.stringify({ ...control(), ...c })

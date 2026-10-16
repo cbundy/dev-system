@@ -147,10 +147,19 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
+- **The PR cadence.** A PR read costs about two GitHub calls, so at a 10 s pass a PR read every
+  pass took about 720 calls an hour, and K PRs most of the account's shared 5,000 (drill run 3).
+  A PR's read stands, with its own time, until it is due: `prEveryMs` (30 s) after it, or at once
+  when something the loop knows changed it, its record's transition (any change of the record) or
+  an action of the loop's own on the PR (an ensure, an update, a merge, a CI re-run) that ended
+  after it. The queue and the issue reads take the same rule with their own cadences and signals
+  (a label write, a PR's close). Main's head on origin (9.2) is read every pass a merge-queue PR
+  is open, whatever the PR's cadence, so Q1 sees main move at once; its update is an action on the
+  PR, so the head's read is due on the next pass. A wait on GitHub is judged at the read (4.4).
 - **Read order.** GitHub reads are taken in this order until the pass's budget is spent: the merge
   queue's head, the other records in reviewing and merge-queue, parked records, the other
   records, then the queue and the rest. The PR reads are bounded by K records; the issue reads
@@ -403,7 +412,7 @@ in this order. Rows that change nothing (E6, E7) run beside it and never stop it
 `pr-merged` comes first because a merge cannot be undone, and before `issue-closed` because a merge
 with `Closes #N` closes the issue in the same instant (`failures/F14`).
 
-The order holds across sources. The PRs are read every pass and the issue less often, so a
+The order holds across sources. The PRs are read more often than the issue, so a
 `pr-closed` waits while the issue's last read is older than the PR's `closedAt`; that read is due on
 the next pass (2.4). An issue closed with its PR then closes (E2) and never parks first.
 
@@ -586,6 +595,9 @@ step waiting on GitHub, with nothing of its own running, is unknown when either 
 - no check has started on its head `ciStartMs` (10 min) after the latest of: the head's first
   sighting (2.4), the end of the step's last action, and the last check's completion;
 - a check has been running for longer than `ciRunMs` (30 min). CI's p90 is 3.0 min (C3:276).
+
+Both are judged at the PR's read, not at the pass: a read an earlier pass took (2.4) cannot show
+a check that started since it, so the bound counts to the read's time.
 
 This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with nothing to run
 (`totality/T-10`). In reviewing, the PR's own read is bounded the same way: a PR not in the
@@ -2599,6 +2611,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `stateTimeoutMs` | design 45m, build 90m, review 30m, fix 60m, triage 15m, queued 6h, queueWait 2h, parked 24h | 4.4 |
 | `ciStartMs` | `10m` | 4.4 |
 | `ciRunMs` | `30m` | 4.4 |
+| `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
 | `maxTriages` | 2 | 5.1 |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |

@@ -14,7 +14,8 @@
 // the reader refused it for an untrusted author, exit 3): only its own record waits on it, never
 // the others, so the source fails only when `cut` says why reads stopped before every record was
 // read. The rules read a missing PR as not read, never as a fact, except an untrusted author's,
-// which is one (9.3, policy).
+// which is one (9.3, policy). A PR is read only when its read is due (observe.ts readDue): until
+// then an earlier pass's view stands for it (ctx.kept), with its own read time.
 import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
 import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv } from './argv'
@@ -174,6 +175,8 @@ export function prRecords(records: readonly IssueRecord[], paused: readonly numb
 export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: Source; heads: Record<string, HeadSeen> }> {
   const now = ctx.now
   const want = prRecords(ctx.records, ctx.state.control.paused, ctx.state.ledger)
+  const kept = ctx.kept.filter(v => want.some(r => r.pr === v.pr && r.issue === v.issue))
+  const due = want.filter(r => !kept.some(v => v.pr === r.pr && v.issue === r.issue))
   const checkout = ctx.state.checkout
   const defaultBranch = checkout !== null && !('error' in checkout) ? checkout.defaultBranch : null
   const prs: PrView[] = []
@@ -181,8 +184,8 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
   let cut: string | undefined
   // each PR's base, the default branch's name when the main checkout's read failed
   const bases: (string | null)[] = []
-  if (want.length > 0 && ctx.prBudget <= 0) cut = 'GitHub rate limit: no PR is read this pass'
-  for (const r of want.slice(0, Math.max(0, ctx.prBudget))) {
+  if (due.length > 0 && ctx.prBudget <= 0) cut = 'GitHub rate limit: no PR is read this pass'
+  for (const r of due.slice(0, Math.max(0, ctx.prBudget))) {
     if (ctx.limited()) {
       cut = 'a GitHub rate limit met this pass ended the PR reads'
       break
@@ -196,6 +199,7 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
     prs.push(v.view)
     bases.push(v.base)
   }
+  prs.push(...kept)
   let main: PrsRead['main'] = null
   const queued = prs.findIndex(v => v.state === 'open' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))
   const branch = defaultBranch ?? bases[queued] ?? null

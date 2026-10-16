@@ -342,10 +342,11 @@ function rerunAction(r: IssueRecord, pr: number, runId: string): Action {
 
 // ciWait: a GitHub wait past its bound (4.4), read while nothing of the step's own runs: a check
 // running past ciRunMs, or none started ciStartMs after the latest of the head's first sighting,
-// the step's last action and the last check's completion. null within the bounds.
+// the step's last action and the last check's completion. null within the bounds. Judged at the
+// PR's read, which may be an earlier pass's (2.4): it cannot show a check started since.
 function ciWait(env: StepEnv, pv: PrView, head: string, patch: string): string | null {
   const { ctx, r } = env
-  const now = ctx.state.now
+  const now = pv.readAt
   const pending = pv.checks.filter(c => c.bucket === 'pending')
   const long = pending.find(c => c.startedAt !== null && now - c.startedAt > ctx.config.ciRunMs)
   if (long !== undefined) return `${checkName(long)} has run for ${Math.round((now - (long.startedAt ?? now)) / MIN)} min on ${short(head)}, past ${Math.round(ctx.config.ciRunMs / MIN)} min`

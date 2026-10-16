@@ -10,14 +10,14 @@ import type { FactoryEvent } from '../derive'
 import { eventsFromRows } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
 import { parseCsv } from '../parse'
-import type { Ms, Source, State } from '../types'
+import type { LedgerEntry, Ms, Source, State } from '../types'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
-import { readPrs } from './sources-prs'
-import type { PrUnread } from './sources-prs'
+import { EMPTY_PRS, readPrs } from './sources-prs'
+import type { PrView, PrsRead, PrUnread } from './sources-prs'
 import { readWorkspace } from './sources-workspace'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State } from './types'
@@ -29,8 +29,9 @@ export const RECORD_KEEP_MS = 7 * DAY
 // What a source module gets (sources-*.ts): the pass's time and runtime, observe's read (its
 // commands logged), the State observe built, the records and heads, the records whose PR it may
 // read this pass (prBudget: K, a budget of its own beside v1's issue reads; none during a GitHub
-// backoff or after a rate limit this pass), whether a rate limit met this pass ends its reads, and
-// the PRs the last pass tried that did not read (sources-prs.ts, PrUnread.since).
+// backoff or after a rate limit this pass), whether a rate limit met this pass ends its reads, the
+// PRs the last pass tried that did not read (sources-prs.ts, PrUnread.since), and the views of
+// earlier passes whose read is not due, which stand for this pass's (observeV2).
 export type SourceCtx = {
   now: Ms
   rt: Runtime
@@ -42,6 +43,7 @@ export type SourceCtx = {
   prBudget: number
   limited: () => boolean
   unread: readonly PrUnread[]
+  kept: readonly PrView[]
 }
 
 // What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
@@ -52,8 +54,9 @@ export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, He
 
 // What survives between passes in the module: the heads (an observe pass keeps none in the store),
 // the last rebuild, the comments read per issue read, the checkout R1's tripwire last settled on
-// (reconcile.ts checkoutBaseOf), and the PRs the last pass tried that did not read, so a run of
-// failed reads keeps its start (a new session starts it afresh).
+// (reconcile.ts checkoutBaseOf), and the last pass's PR read: its views, which stand until their
+// read is due, and the PRs it tried that did not read, so a run of failed reads keeps its start (a
+// new session starts both afresh).
 export type V2Cache = {
   heads: Record<string, HeadSeen>
   rebuilt: { at: Ms; records: IssueRecord[] } | null
@@ -61,11 +64,11 @@ export type V2Cache = {
   checkoutBase: CheckoutBase | null
   // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
   changed: Record<number, Ms>
-  unread: PrUnread[]
+  prs: PrsRead
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, unread: [] }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -193,7 +196,19 @@ export function leasesOf(json: string): Lease[] | null {
   }
 }
 
-// --- the read order (2.4) -------------------------------------------------------------------------------
+// --- the read cadence and order (2.4) ------------------------------------------------------------------
+
+// readDue: a read is due when there is none, it is everyMs old, or something the loop knows
+// changed what it read at or after it was taken (changedAt). The queue, issue and PR reads all
+// take this one rule (2.4).
+export function readDue(at: Ms | undefined, now: Ms, everyMs: Ms, changedAt: Ms): boolean {
+  return at === undefined || now - at >= everyMs || changedAt >= at
+}
+
+// lastEnded: when the newest ledger entry `pick` takes ended; -Infinity when none has.
+export function lastEnded(ledger: readonly LedgerEntry[], pick: (e: LedgerEntry) => boolean): Ms {
+  return Math.max(-Infinity, ...ledger.flatMap(e => (pick(e) && e.endedAt !== null ? [e.endedAt] : [])))
+}
 
 // readOrder: the records' issues in the order GitHub reads take them: the merge queue's head, the
 // other records in reviewing and merge-queue, parked records, then the other live ones. The
@@ -282,8 +297,14 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const leases = input.poolJson === null ? null : leasesOf(input.poolJson)
   sources.leases = leases === null ? NOT_READ(input.poolJson === null ? 'the pool was not read' : 'treehouse status did not read') : { ok: true, at: now }
 
-  // the PRs first: the queue's head, then reviewing and merge-queue, at most K records (2.4)
+  // the PRs first: the queue's head, then reviewing and merge-queue, at most K records (2.4); a
+  // view stands until its read is due: prEveryMs, or its record's transition or an action of the
+  // loop's own on its PR since
   const heads = input.stored?.heads ?? cache.heads
+  const kept = cache.prs.prs.filter(v => {
+    const r = records.find(x => x.issue === v.issue)
+    return r !== undefined && !readDue(v.readAt, now, rt.config.prEveryMs, Math.max(r.seqAt, lastEnded(state.ledger, e => e.pr === v.pr)))
+  })
   const ctx: SourceCtx = {
     now,
     rt,
@@ -294,12 +315,13 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     heads,
     prBudget: blocked() ? 0 : (rt.config.maxInFlightIssues ?? rt.poolSize),
     limited: input.limited,
-    unread: cache.unread,
+    unread: cache.prs.unread ?? [],
+    kept,
   }
   const prs = await readers.prs(ctx)
   sources.prs = prs.source
   cache.heads = prs.heads
-  cache.unread = prs.read.unread ?? []
+  cache.prs = prs.read
   cache.changed = {}
   for (const p of prs.read.prs) if (p.state !== 'open' && p.closedAt !== null) cache.changed[p.issue] = Date.parse(p.closedAt)
 

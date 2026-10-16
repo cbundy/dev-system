@@ -246,9 +246,10 @@ export function becameHead(ctx: V2Ctx, r: IssueRecord): Ms {
 // or null: a check has run longer than ciRunMs; or no check has started ciStartMs after the
 // latest of the head's first sighting, the head coming to the front, the end of its last action,
 // the last check's completion and `since` (the first of its PR's failed reads in a row). Bounding
-// the wait also bounds a head GitHub shows blocked, unknown or draft with nothing to run.
+// the wait also bounds a head GitHub shows blocked, unknown or draft with nothing to run. Judged
+// at the PR's read, which may be an earlier pass's (2.4): it cannot show a check started since.
 export function pastWait(ctx: V2Ctx, r: IssueRecord, view: PrView | undefined, facts: HeadFacts, since = 0): string | null {
-  const now = ctx.state.now
+  const now = view?.readAt ?? ctx.state.now
   const { ciStartMs, ciRunMs } = ctx.config
   const checks = view?.checks ?? []
   const runs = checks.filter(c => c.startedAt !== null && c.completedAt === null)

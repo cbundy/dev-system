@@ -105,6 +105,7 @@ export const DEFAULT_CONFIG: Config = {
   },
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,
+  prEveryMs: 30_000,
   maxTriages: 2,
   maxLives: 3,
   triageModel: 'opus',

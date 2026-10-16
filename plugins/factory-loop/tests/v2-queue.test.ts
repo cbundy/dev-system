@@ -10,11 +10,11 @@ import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import type { ActIo, RunResult } from '../hooks/exec'
 import { start } from '../hooks/ledger'
-import type { Runtime } from '../hooks/observe'
+import type { Io, Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { failClassOf, failLines, refusalClass } from '../hooks/v2/act-queue'
 import { interventionKey, lifeKey, lifeOf, prKey, rerunKey, transitionKey } from '../hooks/v2/keys'
-import { emptyV2State } from '../hooks/v2/observe'
+import { emptyV2Cache, emptyV2State, observeV2 } from '../hooks/v2/observe'
 import type { SourceCtx } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { MERGE_TRIES, queueOf } from '../hooks/v2/rules-queue'
@@ -383,6 +383,9 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     expect(transitionOf(blocked(5), 22)).toBeUndefined()
     expect(said(blocked(5), 22)).toEqual(['merge queue: CI is green on aaaaaaa, and GitHub shows it blocked'])
     expect(transitionOf(blocked(11), 22)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    // judged at the PR's read: an earlier pass's view, read a minute ago, says nothing of since
+    const kept = plan(world([r], [view(r, { readAt: NOW - MIN, mergeable: 'blocked', checks: [check({ completedAt: NOW - 10.5 * MIN })] })]))
+    expect(transitionOf(kept, 22)).toBeUndefined()
     // a record that waited behind another for an hour counts from when the head before it left
     const left = entry(transitionKey({ issue: 99, life: LIFE, seq: 8 }), 'transition', { issue: 99, endedAt: NOW - 2 * MIN, outcome: { kind: 'transition', row: 'T13', event: 'ok', cause: null, from: 'merge-queue', to: 'closed', step: 'queue', stored: true, via: 'merged' } })
     const waited = { ...r, seqAt: NOW - HOUR }
@@ -881,6 +884,7 @@ function sourceCtx(records: IssueRecord[], reply: (argv: string[]) => Reply, ove
     prBudget: 3,
     limited: () => false,
     unread: [],
+    kept: [],
     ...over,
   }
   return { ctx, argvs }
@@ -1018,6 +1022,55 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(out.heads).toEqual({ [sha('6')]: { pr: 680, at: NOW } })
     // dropped before reviewing ended, the record never named the PR: its head still goes
     expect(headsOf(out.heads, [{ ...r, state: 'closed' }], [], NOW, [opened])).toEqual({})
+  })
+
+  test('the PR reads have a cadence of their own (prEveryMs, 30 s): at a 10 s pass an idle reviewing PR is read every 30 s, and at once after its transition or an action of the loop\'s own on it', async () => {
+    // drill run 3: every PR in review or the queue was read on every 10 s pass, ~720 GitHub calls an hour each
+    const io: Io = { now: async () => NOW, run: async () => ({ exitCode: 0, stdout: '', stderr: '' }), readFile: async () => null, sessionLimits: async () => [], agents: async () => [] }
+    const cache = emptyV2Cache()
+    const reads: number[] = []
+    const mains: number[] = []
+    let main = MAIN
+    let failing = false
+    const pass = async (s: number, r: IssueRecord, ledger: LedgerEntry[] = []) => {
+      const run = async (argv: string[]) => {
+        if (argv[0] === 'callum-flow-issue-read') reads.push(s)
+        if (argv[0] === 'git') mains.push(s)
+        if (argv[0] === 'git') return { exitCode: 0, stdout: `${main}\trefs/heads/main\n`, stderr: '' }
+        if (failing && argv[0] === 'gh') return { exitCode: 1, stdout: '', stderr: 'HTTP 502' }
+        return { exitCode: 0, stdout: '', stderr: '', ...prReply({})(argv) }
+      }
+      const state = { ...baseState(), now: NOW + s * 1000, ledger }
+      return (await observeV2({ io, rt: runtime(), cache, run, state, stored: { records: [r], heads: null, error: null }, poolJson: null, github: new Map(), backoff: false, limited: () => false })).v2.prs
+    }
+    const r = rec(82, { state: 'reviewing', step: 'review' })
+    // a view read on an earlier pass stands for the passes it is not due on, with its own time
+    for (let s = 0; s <= 100; s += 10) expect((await pass(s, r)).prs.map(v => [v.pr, (v.readAt - NOW) / 1000])).toEqual([[682, reads.at(-1)]])
+    expect(reads).toEqual([0, 30, 60, 90])
+    // a transition at 105 s: read on the next pass, then every 30 s again
+    const next = { ...r, seq: r.seq + 1, seqAt: NOW + 105_000 }
+    for (let s = 110; s <= 150; s += 10) await pass(s, next)
+    expect(reads).toEqual([0, 30, 60, 90, 110, 140])
+    // an action of the loop's own on the PR (a CI re-run) that ended at 155 s: read on the next pass
+    const rerun = entry('i82/rerun', 'ci-rerun', { issue: 82, pr: 682, startedAt: NOW + 151_000, endedAt: NOW + 155_000 })
+    for (let s = 160; s <= 180; s += 10) await pass(s, next, [rerun])
+    expect(reads).toEqual([0, 30, 60, 90, 110, 140, 160])
+    // a read that fails has no view to stand: it is tried on every pass, its run's start kept (4.4)
+    failing = true
+    for (const s of [190, 200]) expect((await pass(s, next, [rerun])).unread?.map(u => [u.pr, (u.since - NOW) / 1000])).toEqual([[682, 190]])
+    failing = false
+    for (const s of [210, 220]) await pass(s, next, [rerun])
+    expect(reads.slice(-3)).toEqual([190, 200, 210])
+    // in the merge queue (its transition at 225 s), main's head is read on every pass whatever the
+    // PR's cadence, so Q1 sees main move at once (its update then makes the PR's read due)
+    const queued = { ...next, seq: next.seq + 1, seqAt: NOW + 225_000, state: 'merge-queue' as const, step: 'queue' as const }
+    reads.length = 0
+    mains.length = 0
+    for (const s of [230, 240]) await pass(s, queued, [rerun])
+    main = MAIN2
+    expect((await pass(250, queued, [rerun])).main).toEqual({ branch: 'main', sha: MAIN2 })
+    expect(reads).toEqual([230])
+    expect(mains).toEqual([230, 240, 250])
   })
 
   test('the parsers: the REST pull and gh pr checks, whose exit 8 and 1 still carry the list; no checks yet is an empty list', () => {

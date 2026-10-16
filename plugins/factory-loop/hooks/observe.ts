@@ -33,7 +33,7 @@ import { ENDED, LIVE, issueFromBranch, listedLive } from './plan'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
 import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
-import { emptyV2Cache, observeV2, readOrder } from './v2/observe'
+import { emptyV2Cache, lastEnded, observeV2, readDue, readOrder } from './v2/observe'
 import type { V2Cache, V2Stored } from './v2/observe'
 import type { HeadSeen } from './v2/types'
 
@@ -284,7 +284,7 @@ export async function observe(
   const agents = (await io.agents())
     .filter(a => ledger.some(e => e.agentId === a.id))
     .map(a => ({ id: a.id, type: a.type, status: a.status }))
-  const lastLabelWrite = (n?: number) => Math.max(-Infinity, ...ledger.filter(e => e.kind === 'label' && e.status === 'done' && (n === undefined || e.issue === n)).map(e => e.endedAt ?? -Infinity))
+  const lastLabelWrite = (n?: number) => lastEnded(ledger, e => e.kind === 'label' && e.status === 'done' && (n === undefined || e.issue === n))
 
   // queue: every queueEveryMs, and the pass after a label write. Act mode reads it through
   // queue-watch.sh --once, which logs a `ready` event for each member the stored list lacks
@@ -292,7 +292,7 @@ export async function observe(
   let queueKnown: number[] | null = null
   if (backoffUntil !== null) {
     mark('queue', false, cache.queue?.at ?? null, waiting)
-  } else if (cache.queue === undefined || now - cache.queue.at >= cfg.queueEveryMs || lastLabelWrite() >= cache.queue.at) {
+  } else if (readDue(cache.queue?.at, now, cfg.queueEveryMs, lastLabelWrite())) {
     try {
       if (stored !== undefined) {
         const known = stored.queueKnown !== null && stored.queueKnown.length > 0 ? stored.queueKnown.join(',') : 'none'
@@ -313,7 +313,7 @@ export async function observe(
       mark('queue', false, cache.queue?.at ?? null, String(err))
     }
   } else {
-    mark('queue', true, cache.queue.at)
+    mark('queue', true, cache.queue?.at ?? null)
   }
 
   // GitHub per issue, oldest reads first, and first of all the issues the loop may act on or
@@ -370,7 +370,7 @@ export async function observe(
       .filter(n => {
         const c = cache.github.get(n)
         if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n) && !first.includes(n)) return false
-        return c === undefined || now - c.at >= cfg.githubEveryMs || Math.max(lastLabelWrite(n), cache.v2.changed[n] ?? -Infinity) >= c.at
+        return readDue(c?.at, now, cfg.githubEveryMs, Math.max(lastLabelWrite(n), cache.v2.changed[n] ?? -Infinity))
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)

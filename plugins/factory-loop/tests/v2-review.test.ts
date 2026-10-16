@@ -567,11 +567,15 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     const fresh = at({ [HEAD]: { pr: PR, at: NOW - 5 * MIN } }, [])
     expect(transitionOf(fresh, 627)).toBeUndefined()
     expect(said(fresh, 627)).toEqual([`review: waits for CI on ${short(HEAD)} (no check yet)`])
+    // the bounds are judged at the PR's read, a minute ago here (an earlier pass's view stands
+    // for this one, 2.4): a check may have started since it
+    expect(transitionOf(at({ [HEAD]: { pr: PR, at: NOW - 10.5 * MIN } }, []), 627)).toBeUndefined()
     // a check queued, none started: the same bound
     expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: null })]), 627)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
     // a check running: no start bound, but the running bound
     expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: NOW - 20 * MIN })]), 627)).toBeUndefined()
-    expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: NOW - 31 * MIN })]), 627)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: NOW - 30.5 * MIN })]), 627)).toBeUndefined()
+    expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: NOW - 32 * MIN })]), 627)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
   })
 
   test('no GitHub wait is read while the reviewer runs, however old the head', () => {
