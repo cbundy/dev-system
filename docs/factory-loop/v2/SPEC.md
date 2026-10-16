@@ -294,6 +294,11 @@ type IssueRecord = {
   carries every record field (7.1); `recordsFromEvents` in `hooks/v2/record.ts` parses it with
   `events.ts`. A step in flight is not rebuilt: S2 starts the same attempt again, and an
   agent step first looks for an answer already recorded for its key (10.8).
+- **A rebuilt record's free text is clipped.** The note keeps the free text (the question, the
+  notes) only as far as it fits (7.1), so a rebuilt record may hold it cut short, ending in
+  `...`. Nothing restores it, and every reader copes: the park comment holds the question whole,
+  and the park's tell and each reminder point at it; an agent step works from the notes that are
+  left, beside the brief, the PR and its review comment.
 
 ### 3.4 Labels
 
@@ -627,7 +632,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | building | event `delegated --note "brief <url>"` |
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
-| parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
+| parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)`, which points at that comment for the whole question |
 | closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
@@ -964,7 +969,8 @@ notes use (`loopNote` and its inverse `entryFromLoop`, `derive.ts:369` and `:445
   percent-encoded (`enc`, `derive.ts:352`). A missing value is `none`, a list is comma-joined, a
   flag is `yes` or `no`.
 - The note stays within `LOOP_NOTE_MAX` (500 characters, `derive.ts:342`). Free text (a reason, a
-  question, notes) comes last and is clipped first, so the identifying fields always fit.
+  question, notes) comes last and is clipped first, so the identifying fields always fit. A
+  record rebuilt from its note keeps the clipped text (3.3).
 - `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
   and `status=` for `loop` (`images/base/callum-flow-event:147-155`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
@@ -978,7 +984,7 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
 
 | State | When | Columns | Note fields |
 |---|---|---|---|
-| `transition` | every record change (4.6), and again after a re-claim (4.1) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
+| `transition` | every record change (4.6), and again after a re-claim (4.1) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), its free text clipped to fit, so a record can be rebuilt from it (3.3) |
 | `reviewed` | each review result (8.3) | issue, branch, pr, head | `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`, the counts of error, warning and info findings, the reviewer's id, the answer's path |
 | `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person` or `loop`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 

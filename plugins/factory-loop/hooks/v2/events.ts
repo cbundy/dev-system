@@ -30,8 +30,8 @@ export const REASON_MAX = 200
 
 // --- the events ---------------------------------------------------------------------------------
 
-// A state change (4.6), and again after a re-claim (4.1): every record field travels with it, so
-// a record can be rebuilt from its newest one (3.3).
+// A state change (4.6), and again after a re-claim (4.1): every record field travels with it, its
+// free text clipped to fit, so a record can be rebuilt from its newest one (3.3).
 export type TransitionEvent = { state: 'transition'; record: IssueRecord; row: string; from: IssueState | null; via: string }
 
 // One review result (8.3).

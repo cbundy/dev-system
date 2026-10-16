@@ -9,6 +9,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
+import type { FactoryEvent } from '../hooks/derive'
 import type { ActIo, ExecCtx } from '../hooks/exec'
 import { onLoad, start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
@@ -20,6 +21,8 @@ import { emptyV2State, recordOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { COMMAND_RULE, triagePrompt } from '../hooks/v2/prompts-triage'
 import type { TriageInput } from '../hooks/v2/prompts-triage'
+import { recordsFromEvents } from '../hooks/v2/record'
+import { parkText } from '../hooks/v2/rules-entry'
 import { resultsOf, stepFiles, triageInput, triageResult } from '../hooks/v2/steps-triage'
 import { stepAnswerPath, stepRecordPath } from '../hooks/v2/steps'
 import { madeRecord, rowFor, nextRecord } from '../hooks/v2/table'
@@ -637,9 +640,25 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     expect(of(r, 110)).toEqual([expect.objectContaining({ kind: 'tell', wake: 'parked', rule: 'S6', fields: { issue: '110', from: 'designing', days: '2' }, context: [expect.stringContaining('which API?'), expect.any(String)] })])
     expect(r.owner).toBe(1)
   })
+
+  test('a record rebuilt from its transition event keeps what fits the note (3.3, 7.1): a long question is clipped, and the reminder points at the park comment, which holds it whole', () => {
+    const question = `which of these APIs should the client use? ${'one option, with its trade-offs spelled out at length. '.repeat(15)}`.trim()
+    expect(question.length).toBeGreaterThan(800)
+    const long = { ...p, question, since: NOW - 50 * HOUR, seqAt: NOW - 50 * HOUR }
+    const argv = eventArgv({ state: 'transition', record: long, row: 'T3', from: 'designing', via: 'question' })
+    const logged: FactoryEvent = { ts: long.seqAt, state: 'transition', issue: 110, run: null, branch: long.branch, pr: null, head: null, note: argv[argv.indexOf('--note') + 1] ?? null, actor: null, device: DEVICE }
+    const [rebuilt] = recordsFromEvents([logged], DEVICE)
+    expect(rebuilt).toEqual({ ...long, question: expect.stringMatching(/^which of these APIs .*\.\.\.$/) })
+    expect((rebuilt?.question ?? '').length).toBeLessThan(question.length)
+    // the park comment, posted at the park from the whole record, has the question whole
+    expect(parkText(long, 'designing', 'question')).toContain(question)
+    const [tell] = of(plan(world(rebuilt === undefined ? [] : [rebuilt])), 110)
+    expect(tell).toMatchObject({ kind: 'tell', wake: 'parked', rule: 'S6' })
+    expect(tell?.kind === 'tell' ? tell.context[0] : '').toMatch(/^question \(whole in the park comment on #110\): which of these APIs .*\.\.\.$/)
+  })
 })
 
-// --- H1: the heartbeat and re-claims (4.1) -----------------------------------------------------------------------
+// --- H1: the heartbeat and re-claims (4.1)-----------------------------------------------------------------------
 
 describe('H1: claims renewed and claimed again', () => {
   test('the records\' claims are renewed when a lease is due and on the first pass after a load; a closed record\'s never', () => {
