@@ -318,7 +318,7 @@ if command -v claude >/dev/null 2>&1; then
     fi
     # The marketplaces of every default, also one the repo took over: the
     # template owns their ref too (DEV_DEFAULT_PLUGIN_REFS_WIN=1).
-    if mlist=$(CLAUDE_PLUGIN_LIMIT=30 claude_plugin_cli marketplace list --json 2>/dev/null) && [ -n "$mlist" ]; then
+    if [ -n "$wanted$defaults" ] && mlist=$(CLAUDE_PLUGIN_LIMIT=30 claude_plugin_cli marketplace list --json 2>/dev/null) && [ -n "$mlist" ]; then
       while read -r mkt src; do
         [ -n "$src" ] || continue
         want_ref=""
