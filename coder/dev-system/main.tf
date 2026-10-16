@@ -163,13 +163,14 @@ variable "remote_control_name_format" {
 }
 
 # The image reads runtime secrets (agentsview-pg-url: the agentsview session
-# push) from DEV_SECRETS_DIR, /run/secrets/dev-system. This host directory is
+# push; factory-db-writer-url and factory-db-reader-url: the factory database roles, see
+# docs/factory-db.md) from DEV_SECRETS_DIR, /run/secrets/dev-system. This host directory is
 # mounted there read-only, so a file put on the Docker host once reaches every
 # workspace and never passes through Terraform state or Coder. Docker creates
 # a missing directory (empty, so the push stays off).
 variable "secrets_dir" {
   default     = "/etc/dev-system/secrets"
-  description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url (owned 1000:1000, mode 0600). Empty mounts nothing."
+  description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url, factory-db-writer-url and factory-db-reader-url (owned 1000:1000, mode 0600). Empty mounts nothing."
   type        = string
 }
 

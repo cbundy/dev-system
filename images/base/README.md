@@ -700,6 +700,13 @@ on every failure:
   and how to turn it on; with one, the central database is reachable and a push is running
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
+- the factory database, for each of the writer and reader URLs (`factory-db-writer-url`,
+  `factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`; never the
+  agentsview URL): a `WARN` naming both files when none is configured; a `FAIL` when a file is empty or
+  unreadable, the server cannot be reached (psql's last line, masked), the role is not the `_writer` /
+  `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
+  version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
+  role and version. See [docs/factory-db.md](../../docs/factory-db.md);
 - event and no-mistakes push status (see [Factory event log](#factory-event-log)), and
   [worker heartbeat status](#worker-heartbeat);
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
@@ -1894,7 +1901,11 @@ server. Nothing calls it yet: the push loops, the heartbeat and `dev-query` stil
 database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
-the agentsview database by accident. Running it again changes nothing.
+the agentsview database by accident. Running it again changes nothing. The full procedure (provision
+the server, run the bootstrap, place each role's URL as the secret `factory-db-writer-url` or
+`factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
+password, upgrade the schema) is in [docs/factory-db.md](../../docs/factory-db.md); `dev-doctor` checks
+both URLs (see [`dev-doctor`](#dev-doctor)).
 
 | Role | Login | Grants |
 |---|---|---|
