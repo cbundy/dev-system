@@ -171,10 +171,11 @@ export const ENTRY_EVENTS: Readonly<Partial<Record<IssueState, EmitState>>> = { 
 
 // T1 leads where resumeTo says, counting an entry to reviewing as a round and an entry to fixing as
 // a fix, as every other entry to them counts (3.2: round counts entries to reviewing, fixes entries
-// to fixing).
+// to fixing). Queued's own step, the lease, reads no notes: its notes (S0's, P1's resume note) are
+// for the step T1 leads to, so they are T1's notes.
 function leased(r: IssueRecord): Partial<IssueRecord> {
   const to = r.resumeTo ?? 'designing'
-  return { round: to === 'reviewing' ? r.round + 1 : r.round, fixes: to === 'fixing' ? r.fixes + 1 : r.fixes, resumeTo: null }
+  return { round: to === 'reviewing' ? r.round + 1 : r.round, fixes: to === 'fixing' ? r.fixes + 1 : r.fixes, resumeTo: null, notes: r.notes }
 }
 
 // The rows of 4.3. S0 makes a record from its claim and is never matched by rowFor (madeRecord);

@@ -491,7 +491,7 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 
 | Id | State | Event | Guard | Next | Record change | Events |
 |---|---|---|---|---|---|---|
-| T1 | queued | ok | - | `resumeTo` (default designing) | round +1 when it leads to reviewing | transition |
+| T1 | queued | ok | - | `resumeTo` (default designing) | round +1 when it leads to reviewing; queued's notes (S0's, P1's) kept: the lease reads none, so they are for the step T1 leads to | transition |
 | T2 | designing | ok | - | building | brief set | transition, `delegated` |
 | T3 | designing | not-ok | a question | parked | question; resumeTo designing | transition |
 | T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ...) |

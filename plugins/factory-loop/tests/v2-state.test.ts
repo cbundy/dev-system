@@ -9,7 +9,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { ctxOf, dispatch } from '../hooks/act'
 import type { ActEnv } from '../hooks/act'
 import { V2_CONTRACTS } from '../hooks/contract.mjs'
-import type { ActIo, ExecCtx } from '../hooks/exec'
+import type { ActIo, ExecCtx, SpawnInput } from '../hooks/exec'
 import { onLoad, start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
@@ -474,9 +474,10 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
 describe('the steps', () => {
   test('queued: ok once its lease exists, to designing, or to reviewing for an adopted PR; waiting for a slot, told once per 6 hours', () => {
     const r = rec(90, { state: 'queued', step: 'lease' })
-    expect(transitionOf(plan(world([r], {}, { leases: [leaseFor(r)] })), 90)).toMatchObject({ row: 'T1', next: { state: 'designing', step: 'design', round: 0 } })
-    const adopted = { ...r, pr: 690, resumeTo: 'reviewing' as const }
-    expect(transitionOf(plan(world([adopted], {}, { leases: [leaseFor(r)] })), 90)).toMatchObject({ row: 'T1', next: { state: 'reviewing', step: 'review', round: 1, resumeTo: null } })
+    expect(transitionOf(plan(world([r], {}, { leases: [leaseFor(r)] })), 90)).toMatchObject({ row: 'T1', next: { state: 'designing', step: 'design', round: 0, notes: [] } })
+    // S0's note on the PRs it left alone is for the step T1 leads to, as a resume's note is
+    const adopted = madeRecord({ issue: 90, life: LIFE, branch: 'issue-90', pr: 690, others: [689] }, NOW - 30 * MIN)
+    expect(transitionOf(plan(world([adopted], {}, { leases: [leaseFor(r)] })), 90)).toMatchObject({ row: 'T1', next: { state: 'reviewing', step: 'review', round: 1, resumeTo: null, notes: [expect.stringContaining('#689')] } })
     const waits = plan(world([r]))
     expect(transitionOf(waits, 90)).toBeUndefined()
     expect(said(waits, 90)).toEqual(['queued: waits for a slot (W1)'])
@@ -630,6 +631,32 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     const unread = plan(withLedger(world([p], {}, lacks(NOW - 5 * MIN)), settledPark))
     expect(transitionOf(unread, 110)).toBeUndefined()
     expect(said(unread, 110)).toEqual(['unpark: the label is off; waits for the trusted comments to be read'])
+  })
+
+  test('the resume note reaches the step the resume leads to: P1 puts it on queued, T1 carries it into designing, fixing or reviewing, and that step\'s prompt says it (R5-F2)', async () => {
+    const note = 'The earlier drill note no longer applies: review the PR on its merits.'
+    const PATCH = 'f00dfeed00000000000000000000000000000001'
+    for (const [n, to] of [[120, 'designing'], [121, 'fixing'], [122, 'reviewing']] as const) {
+      const pr = to === 'designing' ? null : 700 + n
+      const parked = rec(n, { state: 'parked', step: null, question: 'which API?', resumeTo: to, pr, head: pr === null ? null : HEAD, fixes: 3, seq: 6, seqAt: parkAt, since: parkAt })
+      const resumed = control({ resumed: [{ subject: `issue:${n}`, at: NOW - MIN, note }] })
+      const queued = transitionOf(plan(world([parked], { control: resumed })), n)?.next as IssueRecord
+      expect(queued).toMatchObject({ state: 'queued', notes: [note] })
+      const t1 = transitionOf(plan(world([queued], {}, { leases: [leaseFor(queued)] })), n)
+      expect(t1).toMatchObject({ row: 'T1', next: { state: to, notes: [note] } })
+      // stored a few minutes ago: the step runs in its prepared slot; a review once its PR is
+      // ensured and read since
+      const entered = { ...(t1?.next as IssueRecord), seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN }
+      const view = { pr: pr ?? 0, issue: n, state: 'open' as const, head: HEAD, mergedHead: null, closedAt: null, mergeable: 'clean', author: 'cbundy', base: null, baseRef: 'main', checks: [], patch: PATCH, readAt: NOW - MIN }
+      const ready = [done(prepareKey(entered, 1), 'slot', { issue: n, maxAttempts: 1 }), done(prKey(entered, 'ensure'), 'pr', { issue: n, outcome: { kind: 'pr', pr: pr ?? 0, created: false, reopened: false } })]
+      const s = withLedger(world([entered], {}, { prs: { prs: pr === null ? [] : [view] } }), ready)
+      const step = of(plan(s), n).find((a): a is Extract<Action, { kind: 'agent-step' }> => a.kind === 'agent-step')
+      expect(step?.notes).toEqual([note])
+      const w = actWorld([entered])
+      await w.run(step as Action, s)
+      expect(w.spawns).toHaveLength(1)
+      expect(w.spawns[0]?.prompt).toContain(note)
+    }
   })
 
   test('a parked record is reminded once a day, an owner item counted once; its own question rides along', () => {
@@ -852,6 +879,7 @@ function actWorld(records: IssueRecord[] = [], reply: (argv: string[], stdin?: s
   const argvs: string[][] = []
   const stdins: (string | undefined)[] = []
   const pings: string[] = []
+  const spawns: SpawnInput[] = []
   const live = { records: [...records], refuse: false, ledger: [] as LedgerEntry[] }
   const v2: V2Io = {
     records: () => live.records,
@@ -871,7 +899,10 @@ function actWorld(records: IssueRecord[] = [], reply: (argv: string[], stdin?: s
       stdins.push(init.stdin)
       return { exitCode: 0, stdout: '', stderr: '', ...reply(argv, init.stdin) }
     },
-    spawnAgent: async () => ({ agentId: 'a1' }),
+    spawnAgent: async input => {
+      spawns.push(input)
+      return { agentId: 'a1' }
+    },
     stopAgent: async () => ({ stopped: true }),
     submit: async () => undefined,
     rename: async () => undefined,
@@ -882,7 +913,7 @@ function actWorld(records: IssueRecord[] = [], reply: (argv: string[], stdin?: s
   }
   const env: ActEnv = { io, rt: runtime(), live: { ledger: [] }, commands: [], wakeId: () => 'w1', session: 's', save: async () => true, holds: async () => true, killed: async () => false, problems: [] }
   const run = (action: Action, s: State = world(records)) => dispatch(ctxOf(env, s, start([], action, NOW).entry), action)
-  return { argvs, stdins, pings, live, run }
+  return { argvs, stdins, pings, live, spawns, run }
 }
 
 describe('the record\'s executors (act-state.ts)', () => {
