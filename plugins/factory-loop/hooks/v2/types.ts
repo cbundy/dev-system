@@ -389,6 +389,9 @@ export type V2State = {
   // trusted comments of parked records whose label a person removed, by issue number
   comments: Record<number, IssueComment[]>
   prs: PrsRead
+  // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
+  // an older read of the issue is due at once, and pr-closed waits for it (4.1)
+  changed: Record<number, Ms>
   interventions: InterventionFacts
   // the main checkout the tripwire last settled on, which R1 compares this pass's read with
   // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail

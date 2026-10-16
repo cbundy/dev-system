@@ -12,6 +12,9 @@
 //   timeout is its tell period (E6); a held step has no clock (4.4).
 // - GitHub events are edges (4.1): pr-closed compares GitHub's closedAt with the record's
 //   prClosedAt, a drop and an unpark compare the op's time with the life's claim and the park.
+// - 4.1's order holds across sources: the PRs are read every pass, the issue less often, so a
+//   PR's close waits for a read of its issue made after it (observe makes that read due), and an
+//   issue closed with its PR closes rather than parks.
 // - The next transition waits until the seq's `transition` event is logged (3.3), and an effect
 //   that used up its attempts holds the record's step (4.5).
 // - Every record that is not closed ends a pass with a running step, a planned action or a skip
@@ -55,8 +58,9 @@ const PLANS: Readonly<Record<StepKind, StepPlan>> = {
   triage: agentPlan('triage'),
 }
 
-// An event present for a record this pass, and what its transition re-checks.
-type Present = { event: TableEvent; trigger: Trigger }
+// An event present for a record this pass, and what its transition re-checks; wait: why the
+// record holds instead, when an event before it in 4.1's order may not be read yet.
+type Present = { event: TableEvent; trigger: Trigger; wait?: string }
 
 const fact = (f: string): Trigger => ({ kind: 'fact', fact: f })
 
@@ -105,7 +109,9 @@ function earlyEvents(ctx: V2Ctx, r: IssueRecord): Present[] {
   const drop = ctx.state.control.dropped.filter(d => d.issue === n && d.at > born).sort((a, b) => a.at - b.at).at(-1)
   if (drop !== undefined) out.push({ event: { kind: 'drop' }, trigger: fact(`drop:${n}@${drop.at}`) })
   if (pr?.state === 'closed' && pr.closedAt !== null && (r.prClosedAt === null || pr.closedAt > r.prClosedAt)) {
-    out.push({ event: { kind: 'pr-closed', data: { pr: pr.pr, closedAt: pr.closedAt } }, trigger: fact(`pr-closed:${pr.pr}@${pr.closedAt}`) })
+    const since = ctx.v2.changed[n]
+    const wait = since !== undefined && (read === undefined || read.at <= since) ? { wait: `issue #${n} is not read since PR #${pr.pr} closed` } : {}
+    out.push({ event: { kind: 'pr-closed', data: { pr: pr.pr, closedAt: pr.closedAt } }, trigger: fact(`pr-closed:${pr.pr}@${pr.closedAt}`), ...wait })
   }
   return out
 }
@@ -180,8 +186,8 @@ function take(ctx: V2Ctx, r: IssueRecord, p: Present, logged: boolean, why: stri
     return false
   }
   const rule = ruleOf(row)
-  if (!logged) {
-    skip(ctx, rule, r.issue, `${row.id} waits: the transition event of seq ${r.seq} is not logged yet`)
+  if (!logged || p.wait !== undefined) {
+    skip(ctx, rule, r.issue, `${row.id} waits: ${p.wait ?? `the transition event of seq ${r.seq} is not logged yet`}`)
     return true
   }
   const ev = normalize(r, p.event)

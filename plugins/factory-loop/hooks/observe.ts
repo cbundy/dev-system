@@ -324,7 +324,7 @@ export async function observe(
   // runs add none. Then the queue, and the issues `only` names with the sub-issues their trackers
   // stand for (D-35). An issue known closed is not read again unless the queue, which lists open
   // issues only, names it, or this device holds it (it may be reopened); a failed read keeps the
-  // last value.
+  // last value. A read older than a label write of the loop's own or a PR's close is due at once.
   const control = await readControl(io, rt)
   const tracker = new RegExp(cfg.trackerTitle, 'i')
   const isTracker = (n: number) => {
@@ -370,7 +370,7 @@ export async function observe(
       .filter(n => {
         const c = cache.github.get(n)
         if (c !== undefined && c.value.facts?.open === false && !queue.includes(n) && !held.includes(n) && !first.includes(n)) return false
-        return c === undefined || now - c.at >= cfg.githubEveryMs || lastLabelWrite(n) >= c.at
+        return c === undefined || now - c.at >= cfg.githubEveryMs || Math.max(lastLabelWrite(n), cache.v2.changed[n] ?? -Infinity) >= c.at
       })
       .sort((a, b) => rank(a) - rank(b) || (cache.github.get(a)?.at ?? 0) - (cache.github.get(b)?.at ?? 0))
       .slice(0, GITHUB_READS_PER_PASS)

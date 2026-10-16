@@ -505,6 +505,11 @@ describe('the events, in 4.1\'s order', () => {
     const closedAt = '2026-10-13T02:50:00Z'
     expect(transitionOf(plan(world([mq], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toMatchObject({ row: 'E4', next: { state: 'parked', resumeTo: 'merge-queue', prClosedAt: closedAt } })
     expect(transitionOf(plan(world([{ ...mq, prClosedAt: closedAt }], {}, { prs: pr({ state: 'closed', closedAt }) })), 100)).toBeUndefined()
+    // a PR read newer than the issue's read: E4 waits for the issue's read, which may show it closed too (E2 first)
+    const late = { prs: pr({ state: 'closed', closedAt }), changed: { 100: Date.parse(closedAt) }, reads: { 100: { at: Date.parse(closedAt) - MIN, open: true, labels: [] } } }
+    expect(transitionOf(plan(world([mq], {}, late)), 100)).toBeUndefined()
+    expect(said(plan(world([mq], {}, late)), 100)).toEqual(['E4 waits: issue #100 is not read since PR #700 closed'])
+    expect(transitionOf(plan(world([mq], {}, { ...late, reads: { 100: { at: NOW, open: true, labels: [] } } })), 100)).toMatchObject({ row: 'E4' })
     const lost = done(reclaimKey(mq, lifeOf(NOW - 5 * MIN)), 'claim', { issue: 100, outcome: { kind: 'claim', result: 'lost' }, summary: 'lost #100: held by other' })
     expect(transitionOf(plan(withLedger(world([mq]), [lost])), 100)).toMatchObject({ row: 'E5', next: { why: 'claim-lost' }, trigger: { kind: 'entry', key: lost.key } })
   })
