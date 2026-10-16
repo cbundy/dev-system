@@ -301,7 +301,7 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     ])
     const r = plan(s)
     // a hand merge is a person's intervention (v2 SPEC 7.2); a split and a lost claim are none
-    expect(kinds(r, 76)).toEqual(['event transition', 'label clear', 'event merged', 'rollout', 'event intervention'])
+    expect(kinds(r, 76)).toEqual(['event merged', 'event transition', 'label clear', 'rollout', 'event intervention'])
     expect(ivs(r, 76)).toEqual(['person hand-merge'])
     expect([ivs(r, 77), ivs(r, 78)]).toEqual([[], []])
     expect(of(r, 76).find(a => a.kind === 'rollout')).toMatchObject({ pr: 776, key: followKey(merged, 'rollout') })
@@ -325,9 +325,12 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     // then the view's 24 h window drops the issue: nothing more
     const settled = [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(entryKey(r, 'label'), 'label', { issue: 79 }), done(followKey(r, 'rollout'), 'rollout', { issue: 79, outcome: { kind: 'rollout', rollout: null, closeIssue: null } })]
     expect([kinds(plan(at(NOW, settled)), 79), kinds(plan(at(null, settled)), 79)]).toEqual([[], []])
-    // a merge whose log was lost: the close logs it, and keeps it planned until done
-    expect(kinds(plan(at(null)), 79)).toContain('event merged')
+    // a merge whose log was lost: the close logs it before its transition (the merge came first),
+    // so a pass stopped once it started (kill switch, lost act lock, crash) still plans it, and it
+    // stays planned until done
+    expect(kinds(plan(at(null)), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
     const merged = entry(entryKey(r, 'event/merged'), 'event', { issue: 79, status: 'lost', attempts: 1, startedAt: NOW - MIN, endedAt: NOW })
+    expect(kinds(plan(at(NOW, [merged])), 79)).toEqual(['event merged', 'event transition', 'label clear', 'rollout'])
     expect(kinds(plan(at(NOW, [...settled, merged])), 79)).toEqual(['event merged'])
   })
 
