@@ -87,6 +87,14 @@ order, the currently empty serial list, and the shared per-run environment block
 block sets up the per-run sandbox (`scripts/test-sandbox.sh`): `CALLUM_EVENTS_DIR`,
 `NO_MISTAKES_HOME`, `NM_PUSH_STATE_DIR` and `AGENTSVIEW_DATA_DIR` each point to an empty
 temporary directory, which is checked after the suites and removed on exit.
+The sandbox also gives the database tests a real PostgreSQL (`scripts/test-pg.sh`). When
+`FACTORY_TEST_PG_ADMIN_URL` is set (CI's `postgres:17` service) the run uses that server; otherwise it
+starts a private cluster from the highest `/usr/lib/postgresql/*/bin`, on a unix socket only, and stops and
+removes it on exit. Each test makes its own `factory_test_*` database with the real
+`images/base/factory-db-bootstrap` (`factory_test_db_new` in shell, `tests/lib/factory-db.js` in node) and
+drops it afterwards; a leftover database or role prints `FAIL test isolation: database|role <name>` and fails
+the run. With no server and no binaries the database tests skip and the summary line says so, unless
+`TEST_REQUIRE_POSTGRES=1` (CI), where the run fails.
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
 ## Versioning and release

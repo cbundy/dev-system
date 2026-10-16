@@ -1887,6 +1887,37 @@ pidfile (waiting up to 8 s) and, if none is running or it has not exited after t
 writes that beat itself when a URL is configured. A desktop stop has no hook, so readers use
 the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
+### factory-db-bootstrap
+
+`factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
+server. Nothing calls it yet: the push loops, the heartbeat and `dev-query` still use the agentsview
+database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
+`FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
+password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
+the agentsview database by accident. Running it again changes nothing.
+
+| Role | Login | Grants |
+|---|---|---|
+| `NAME_owner` | no | owns the database, the `factory` schema and every object the migrations create; only the bootstrap uses it, through `SET ROLE` |
+| `NAME_writer` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT`, `INSERT`, `UPDATE` on every table except `schema_migrations` (`SELECT` only there), `USAGE` on sequences; no `DELETE`, `TRUNCATE` or DDL |
+| `NAME_reader` | yes | `CONNECT`, `USAGE` on `factory`, `SELECT` on every table and view |
+
+The roles are named after the database, so several databases (and parallel test databases) share one
+server. Default privileges give later migrations' objects the same grants, and every run re-applies them.
+`CONNECT` and `TEMP` on the database and `CREATE` on schema `public` are revoked from `PUBLIC`.
+`FACTORY_DB_WRITER_PASSWORD` and `FACTORY_DB_READER_PASSWORD`, when set, become the roles' passwords
+(through psql variables); otherwise passwords are left alone.
+
+The migrations are `NNNN_<name>.sql` files in `/usr/local/share/dev-system/factory-db/migrations/` (or
+`factory-db/migrations` beside the command in a checkout; `FACTORY_DB_MIGRATIONS_DIR` overrides). Each pending
+one runs in one transaction with its `factory.schema_migrations` row (`version`, `name`, `sha256`,
+`applied_at`), as `NAME_owner`, under a session advisory lock, so two concurrent runs serialise. An applied
+file whose sha256 changed, or a recorded version with no file, is refused by name and version with a
+non-zero exit. On success it prints one line with the database, the three roles and the schema version; on
+failure one error line naming the step (or the migration file and psql's error). `0001_events_and_workers`
+creates `factory.event_store`, the view `factory.event_log` ([event design](../../docs/factory-events/README.md)),
+and `factory.workers` with its view and notify triggers.
+
 ## dev-query
 
 `dev-query` (base image 2.15.0 and later) runs SQL against the central agentsview
