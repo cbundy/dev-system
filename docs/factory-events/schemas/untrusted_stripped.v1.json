@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "untrusted_stripped.v1.json",
+  "title": "untrusted_stripped",
+  "description": "A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. Written by callum-flow-issue-read. A security trail: the dropped text itself is never logged.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source", "refused", "count", "pr"],
+  "properties": {
+    "source": { "enum": ["issue", "pr", "comment", "comments", "timeline", "list"], "description": "What was being read: an issue, a pull request or a comment (refused whole), or an issue's comments, its timeline or an issue list (items dropped)." },
+    "refused": { "type": "boolean", "description": "true: the whole item was refused because its author is untrusted; false: untrusted items were dropped from it." },
+    "count": { "type": ["integer", "null"], "minimum": 0, "description": "How many items were dropped; null when refused." },
+    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The pull request read, when it was one.", "x-column": true }
+  },
+  "examples": [
+    { "source": "timeline", "refused": false, "count": 2, "pr": null }
+  ]
+}

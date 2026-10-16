@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "finding_handled.v1.json",
+  "title": "finding_handled",
+  "description": "The fixer fixed or declined one review finding. Written by the loop from the fixer's answer (actor fixer), one per finding. Declined findings over all handled ones is the reviewer's false-positive rate.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["branch", "pr", "head", "finding", "outcome", "detail"],
+  "properties": {
+    "branch": { "type": "string", "minLength": 1, "description": "The branch the fixer worked on.", "x-column": true },
+    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The pull request, when there is one.", "x-column": true },
+    "head": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$", "description": "The head after the fix step, when known.", "x-column": true },
+    "finding": { "type": "string", "minLength": 1, "description": "The finding's id in the review, for example r1-2 (round 1, finding 2)." },
+    "outcome": { "enum": ["fixed", "declined"], "description": "fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change.", "x-column": true },
+    "detail": { "type": "string", "description": "The fixer's one-line reason, for people; never parse it." }
+  },
+  "examples": [
+    { "branch": "issue-92-tunnel-token", "pr": 143, "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff", "finding": "r1-2", "outcome": "declined", "detail": "Info, not blocking: the secrets are hex, so quotes or backslashes cannot occur; no change made." }
+  ]
+}

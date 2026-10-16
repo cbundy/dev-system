@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "envelope.v1.json",
+  "title": "envelope",
+  "description": "One factory event: the fields every event has, with its payload in data. One line in the local event log, one row in the factory database.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelope", "event_id", "ts", "type", "type_version", "repo", "device", "actor", "session_id", "issue", "base_image", "dev_image", "template_version", "plugin_version", "data"],
+  "properties": {
+    "envelope": { "const": 1, "description": "The version of this envelope. A reader refuses one it does not know." },
+    "event_id": { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "A UUID the writer makes. The event's identity: a re-push or a retried insert never makes a second row." },
+    "ts": { "type": "string", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "description": "When the event was written: UTC, ISO 8601, always with exactly three millisecond digits (2026-10-16T15:45:19.123Z), so times sort and compare as text." },
+    "type": { "type": "string", "pattern": "^[a-z][a-z_]*$", "description": "The event type, for example claimed or transition. Names the payload's schema with type_version." },
+    "type_version": { "type": "integer", "minimum": 1, "description": "The version of this type's payload. data is valid against schemas/<type>.v<type_version>.json." },
+    "repo": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$", "description": "The repository whose factory wrote it, as owner/name." },
+    "device": { "type": "string", "minLength": 1, "description": "The machine that wrote it: DEV_MACHINE_NAME, else the hostname." },
+    "actor": { "type": "string", "minLength": 1, "description": "The tool or role that wrote it, for example sweep, watcher, fixer or factory-reconcile; agent when the caller named none. For provenance only: what a reader needs to know is in the type and the payload." },
+    "session_id": { "type": ["string", "null"], "description": "The Claude session that wrote it, from CLAUDE_SESSION_ID; null when that is unset. Never guessed." },
+    "issue": { "type": ["integer", "null"], "minimum": 1, "description": "The GitHub issue the event is about; null for a fleet-level event. Each type's schema says whether it is required (x-issue)." },
+    "base_image": { "type": ["string", "null"], "description": "The base image version running when it was written; null when unknown." },
+    "dev_image": { "type": ["string", "null"], "description": "The repo's dev image version running when it was written; null when unknown or none." },
+    "template_version": { "type": ["string", "null"], "description": "The Coder template version running when it was written; null when unknown." },
+    "plugin_version": { "type": ["string", "null"], "description": "The callum-flow plugin version running when it was written; null when unknown." },
+    "data": { "type": "object", "description": "The payload: a flat object whose fields the type's schema describes." }
+  },
+  "examples": [
+    {
+      "envelope": 1,
+      "event_id": "3f1c9a52-8b0e-4f7a-9d21-6c4e2b7a1f08",
+      "ts": "2026-10-16T15:45:19.123Z",
+      "type": "claimed",
+      "type_version": 1,
+      "repo": "cbundy/plant-console",
+      "device": "coder-plant-console-loop",
+      "actor": "agent",
+      "session_id": null,
+      "issue": 92,
+      "base_image": "2.31.0",
+      "dev_image": null,
+      "template_version": "dev-system-v41",
+      "plugin_version": "0.40.0",
+      "data": { "lease_minutes": 120 }
+    }
+  ]
+}

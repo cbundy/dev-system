@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ready.v1.json",
+  "title": "ready",
+  "description": "The issue was seen with the ready label: it is in the factory's queue. Written by queue-watch, which the loop runs each pass, once per issue newly seen. Starts the clock for lead time.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [],
+  "properties": {},
+  "examples": [
+    {}
+  ]
+}

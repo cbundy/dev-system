@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "abandoned.v1.json",
+  "title": "abandoned",
+  "description": "The factory stopped work on the issue and it left the factory without a merge: its factory labels are off and no device will take it until someone labels it ready again. Written by the loop (an owner drop, a designer's split, a triage drop, a reconcile release) and by factory-reconcile. Ends the claim. The GitHub issue is not closed by this. A reconcile release that puts the issue back in the queue is requeued instead.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reason", "split_into", "stage", "lives", "branch", "pr", "detail"],
+  "properties": {
+    "reason": { "enum": ["dropped", "split", "triage", "reconcile", "rejected", "other"], "description": "Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other.", "x-column": true },
+    "split_into": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "description": "split: the new issues it was split into; empty otherwise." },
+    "stage": { "type": ["string", "null"], "description": "reconcile and rejected: the stage callum-flow-factory-state showed the issue in, in its words, not a transition state; null otherwise." },
+    "lives": { "type": ["integer", "null"], "minimum": 1, "description": "reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise." },
+    "branch": { "type": ["string", "null"], "description": "The abandoned work's branch, when known.", "x-column": true },
+    "pr": { "type": ["integer", "null"], "minimum": 1, "description": "The abandoned work's pull request, when there is one.", "x-column": true },
+    "detail": { "type": ["string", "null"], "description": "One line for people: the owner's note, or what reconcile checked. Never parse it." }
+  },
+  "examples": [
+    { "reason": "dropped", "split_into": [], "stage": null, "lives": null, "branch": null, "pr": null, "detail": "dropped" },
+    { "reason": "split", "split_into": [84, 85], "stage": null, "lives": null, "branch": null, "pr": null, "detail": null },
+    { "reason": "reconcile", "split_into": [], "stage": "queued", "lives": null, "branch": null, "pr": null, "detail": "nothing within 2h00m: no run of its branch; no open PR; no slot" }
+  ]
+}
