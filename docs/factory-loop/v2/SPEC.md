@@ -274,7 +274,8 @@ type IssueRecord = {
   between leaves the done entry, so S0 is planned again. A claim that may already hold the issue
   (the claim tool posted, then the adoption's reads failed; or a reload lost it mid-claim) runs
   again under its own key whatever the queue says, since `ready` is gone, and holds its place
-  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim.
+  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim once `claimed` is logged and
+  otherwise makes it fresh.
   A v2 claim never becomes a ghost (`totality/T-14`).
 - **Life.** The start time of the claim action, in base-36 seconds: unique, and needs no counter
   that pruning could reset (`totality/T-14`).
@@ -350,10 +351,10 @@ use it as the fleet's claim marker (`images/base/callum-flow-claim:21`, `:126`;
 tool the loop calls writes or reads the label:
 
 - **`callum-flow-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
-  `In development`. A device's own live claim after a restart does the same. An own live claim
-  that this device's event log shows ended (`ready`, `reclaimed`, `merged`, `closed` or
-  `abandoned` after its last `claimed`) is deleted and the claim made fresh, so every life starts
-  with one `claimed` event.
+  `In development`. A device's own live claim after a restart does the same while this device's
+  event log shows it held (its last claim event is `claimed`). Any other own live claim (one
+  interrupted before its event, or left behind by `ready`, `reclaimed`, `merged`, `closed` or
+  `abandoned`) is deleted and the claim made fresh, so every life starts with one `claimed` event.
 - **`callum-flow-claim --heartbeat`** with no numbers renews this device's live claims on the open
   issues that `callum-flow-factory-state --github off` lists live with this device as the holder,
   not the label list. v2's H1 passes numbers, as now (14.1).

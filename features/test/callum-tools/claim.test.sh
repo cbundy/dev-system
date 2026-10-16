@@ -248,35 +248,35 @@ calls | grep -q 'DELETE' && fail "winner must not delete anything"
 calls | grep -q 'issue edit 7' || fail "winner must swap labels"
 events | jq -e '.state == "claimed"' >/dev/null || fail "winner event"
 
-# --- own live claim: no second comment ------------------------------------------
-reset
-cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
-rc_of "$CLAIM" 7
-expect_rc 0 "own live claim"
-calls | grep -q 'POST' && fail "own live claim posted again"
-# still held by the log (a restart, a retry of a claim whose adoption failed): no second claimed
+# --- own live claim: kept only while the log shows it held -----------------------
+# held (a restart, a retry of a claim whose adoption failed): no second comment, no second claimed
 reset
 seed claimed 7
 seed delegated 7
 cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" 7
 expect_rc 0 "own live claim, held"
+calls | grep -q 'POST' && fail "own live claim, held: posted again: $(calls)"
 [ "$(events | jq -s 'map(select(.state == "claimed")) | length')" = 1 ] || fail "own live claim, held: claimed again: $(events)"
-# ended in the log (R2-F5): the comment and its lease outlive a release, a drop, a rejection or a
-# merge, but a claim after the end starts a new life: the ended comment goes and the claim is a
-# fresh one, with its own comment, lease and claimed event; the end counts whatever follows it
+# not held: every other log starts a new life, a fresh comment, lease and one claimed event.
+# nolog and none: a claim interrupted after its POST and before its event (a reload mid-claim),
+# with no log, or a log with no claim event for the issue. An end (R2-F5): the comment and its
+# lease outlive a release, a drop, a rejection or a merge; the end counts whatever follows it
 # (a closing transition logged after merged)
-for end in reclaimed abandoned merged closed ready; do
+for end in nolog none reclaimed abandoned merged closed ready; do
   reset
-  seed claimed 7
-  seed "$end" 7
-  rc_of "$EVENT" transition --issue 7 --repo o/r --note "life=x seq=2 from=merge-queue to=closed"
+  case "$end" in
+    nolog | none) ;;
+    *) seed claimed 7; seed "$end" 7 ;;
+  esac
+  [ "$end" = nolog ] || rc_of "$EVENT" transition --issue 7 --repo o/r --note "life=x seq=2 from=merge-queue to=closed"
   cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
   rc_of "$CLAIM" 7
   expect_rc 0 "own live claim after $end"
   [ "$(calls | grep -v '^issue edit')" = "$(printf 'DELETE 100\nPOST 7')" ] || fail "own live claim after $end: not a fresh claim: $(calls)"
   jq -e 'map(.id) == [900]' "$d/comments-7.json" >/dev/null || fail "own live claim after $end: comments: $(cat "$d/comments-7.json")"
   events | jq -s -e 'last | .state == "claimed" and .issue == 7 and .note == "lease: 120"' >/dev/null || fail "own live claim after $end: no new claimed: $(events)"
+  [ "$(events | jq -s 'map(select(.state == "claimed")) | length')" = "$(case "$end" in nolog | none) echo 1 ;; *) echo 2 ;; esac)" ] || fail "own live claim after $end: claimed count: $(events)"
 done
 
 # --- label failure withdraws the claim ------------------------------------------
