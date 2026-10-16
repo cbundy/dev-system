@@ -626,6 +626,21 @@ describe('the step\'s result: review and CI (v2 SPEC 4.2, 8.5, 4.4)', () => {
     expect(transitionOf(at({}, [check('ci', 'pending', { startedAt: NOW - 32 * MIN })]), 627)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
   })
 
+  test('a run with no job yet (a synthetic pending check beside green ones) holds the review step on CI and past the run bound ends it unknown; once it is done the step goes on', () => {
+    const r = rec(629, { seqAt: NOW - 40 * MIN, since: NOW - 40 * MIN })
+    const ledger = [ensured(r), prepared(r), approved(r, { startedAt: NOW - 30 * MIN, endedAt: NOW - 20 * MIN })]
+    const queued = (startedAt: number) => check('Deploy (workflow run, no job yet)', 'pending', { startedAt, completedAt: null, runId: '7001' })
+    const at = (checks: CheckRun[]) => {
+      const s = withLedger(world([r], [view(629, { checks })], { heads: { [HEAD]: { pr: PR, at: NOW - 25 * MIN } } }), ledger)
+      return plan(settled(s, plan(s)))
+    }
+    const held = at([check('ci', 'pass'), queued(NOW - 5 * MIN)])
+    expect(transitionOf(held, 629)).toBeUndefined()
+    expect(said(held, 629)).toEqual([expect.stringContaining('review: waits for CI')])
+    expect(transitionOf(at([check('ci', 'pass'), queued(NOW - 32 * MIN)]), 629)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
+    expect(said(at([check('ci', 'pass')]), 629)).not.toEqual(said(held, 629))
+  })
+
   test('no GitHub wait is read while the reviewer runs, however old the head', () => {
     const r = rec(628, { seqAt: NOW - 60 * MIN })
     const runningReview = { ...reviewed(r, {}), status: 'running' as const, endedAt: null, outcome: undefined, startedAt: NOW - 5 * MIN }
@@ -1033,6 +1048,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
         return { stdout: `https://github.com/${REPO}/pull/${pr}\n` }
       }
       if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return { stdout: JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: iso(NOW - MIN), completedAt: iso(NOW), link: `https://github.com/${REPO}/actions/runs/7/job/1` }]) }
+      if (line.startsWith(`gh api repos/${REPO}/actions/runs?`)) return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
       return undefined
     }
     const h = host(on, {
@@ -1107,6 +1123,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
         if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: r.pr, state: 'OPEN', headRefOid: r.head }]) }
         if (line === ARGV.prChecksArgv(REPO, r.pr ?? 0).join(' ')) return { stdout: JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: iso(NOW - MIN), completedAt: iso(NOW), link: `https://github.com/${REPO}/actions/runs/7/job/1` }]) }
       }
+      if (line.startsWith(`gh api repos/${REPO}/actions/runs?`)) return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
       return undefined
     }
     const h = host(on, {
@@ -1170,6 +1187,7 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
       }
       if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: pr, state: 'OPEN', headRefOid: HEAD }]) }
       if (line === ARGV.prChecksArgv(REPO, pr).join(' ')) return checks
+      if (line.startsWith(`gh api repos/${REPO}/actions/runs?`)) return { stdout: JSON.stringify({ total_count: 0, workflow_runs: [] }) }
       return undefined
     }
     const h = host(on, {

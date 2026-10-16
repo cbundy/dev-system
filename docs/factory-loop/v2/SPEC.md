@@ -147,7 +147,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -1276,6 +1276,18 @@ is a new `Reviewer` implementation and a setting, nothing more.
 - **The checks.** Every check run on the head counts, required or not. Non-required checks matter
   here: `publish-base-image.yml` runs the image tests on PRs that change `images/base/` (CLAUDE.md,
   "No Docker in the dev environment").
+- **Workflow runs.** A workflow run whose jobs have no check run yet, for example one queued on a
+  `concurrency` group, is in no `gh pr checks` view, so the `prs` source also reads the head's
+  workflow runs (`gh api repos/R/actions/runs?head_sha=<head>&per_page=100`). Only the latest run per
+  workflow and event counts (the highest run id), so a run a newer one replaced, for example one
+  concurrency cancelled, is ignored. A latest run not completed (or completed with another
+  conclusion than the ones below) is pending, one completed with `success`, `skipped` or `neutral`
+  is done, with `failure`, `timed_out` or `startup_failure` is failed, with `cancelled` is
+  cancelled. When no visible check of a pending run is pending, or none of a failed or cancelled run
+  is failed or cancelled, the source adds one synthetic check named `<workflow> (workflow run, no
+  job yet)` with the run's id, link and start time, so the one re-run, the pending wait and the
+  `ciRunMs` bound apply to it as to any check. The read fails closed: a failed or unparseable call,
+  or a list shorter than `total_count`, leaves the PR unread like a failed `gh pr checks`.
 - **One re-run.** A check that fails or is cancelled gets one re-run before it counts as failed:
   action `ci-rerun`, `gh run rerun <run id> --failed --repo R`, keyed by round and run id
   (`failures/F6`, `totality/T-09`). A flaky check then passes without a fixer. A new round, after
@@ -1397,7 +1409,7 @@ the guard checks only facts the loop owns (V:217; OB:60-66):
 | rollout | the issue's Rollout derives | kept |
 | linkage | `check-pr-linkage.sh` reports MATCH for the Rollout's expectation (it reads the issue from `issue-<N>` or `issue-<N>-...`; the loop also passes `--issue <N>`) | kept |
 | base | the PR targets the default branch | kept |
-| checks | at least one check, all passed or skipped, on the PR head | kept |
+| checks | at least one check, all passed or skipped, on the PR head; and the head's latest workflow run per workflow and event (`gh api repos/{owner}/{repo}/actions/runs?head_sha=<head>`) completed with success, skipped or neutral (a run with no job yet is in no check list); a failed, unparseable or truncated read is class `read` | kept |
 | mergeable | open, not a draft, not conflicting, not behind, branch rules met | kept |
 | patch | the head's patch id (8.4) equals `--patch` | new |
 | head | the run's head against origin, the PR and every worktree | not run |
