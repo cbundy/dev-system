@@ -1,13 +1,13 @@
 # Factory loop: specification
 
-Phase 1 of the [conversion brief](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md)
+Phase 1 of the [conversion brief](../spikes/reconcile-mod/CONVERSION-BRIEF.md)
 ([tracking issue](https://github.com/cbundy/dev-system/issues/521)). It turns the issue
 orchestrator into one code loop that runs as a mod in its Claude Code session. Every row of
 [INVENTORY.md](INVENTORY.md) maps to something here. The choices made without the owner, with
 their alternatives, are in [DECISIONS.md](DECISIONS.md).
 
 Proven platform facts come from the spike's
-[FINDINGS.md](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/FINDINGS.md)
+[FINDINGS.md](../spikes/reconcile-mod/FINDINGS.md)
 on Claude Code 2.1.296: a mod loads in the orchestrators' launch mode, ticks on a timer at no
 cost, survives `dev-restart-self`, sets the session title through `/rename` (with the model's
 note blanked), and spawns agents whose reports reach only the mod in bypass mode.

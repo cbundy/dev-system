@@ -1,7 +1,7 @@
 # Factory loop conversion: status
 
 Tracking issue: [Convert the issue orchestrator into a deterministic mod loop (#521)](https://github.com/cbundy/dev-system/issues/521).
-Plan: [CONVERSION-BRIEF.md](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md).
+Plan: [CONVERSION-BRIEF.md](../spikes/reconcile-mod/CONVERSION-BRIEF.md).
 
 ## What needs to happen next
 

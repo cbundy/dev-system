@@ -1,6 +1,6 @@
 # Factory loop: shadow run
 
-Phase 4 of the [conversion brief](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md).
+Phase 4 of the [conversion brief](../spikes/reconcile-mod/CONVERSION-BRIEF.md).
 The loop runs in observe mode in the throwaway `spike-reconcile-mod` workspace, in the
 orchestrators' exact launch mode. It shadows the live dev-system orchestrator, planning as that
 device from the same database and GitHub. This report covers the start, on 2026-10-12 from

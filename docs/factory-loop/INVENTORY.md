@@ -1,6 +1,6 @@
 # Factory loop: inventory of orchestrator responsibilities
 
-Phase 0 of the [conversion brief](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md)
+Phase 0 of the [conversion brief](../spikes/reconcile-mod/CONVERSION-BRIEF.md)
 ([tracking issue](https://github.com/cbundy/dev-system/issues/521)). One row per thing the
 orchestrator does today, where it lives, what triggers it, who does it, and where it goes in the
 loop. The new homes are named by their ID in [SPEC.md](SPEC.md):
