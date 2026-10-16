@@ -125,6 +125,14 @@ function distinct(notes: readonly (string | null | undefined)[]): string[] {
   return kept.filter((n, i) => kept.lastIndexOf(n) === i)
 }
 
+// clauses: the notes given (distinct) as one line of clauses, each without its own closing mark, so
+// a sentence ends nowhere but at the line's end.
+function clauses(notes: readonly (string | null | undefined)[]): string {
+  return distinct(notes)
+    .map(n => n.replace(/[\s.;:,]+$/, ''))
+    .join('; ')
+}
+
 // added: the record's notes with these added (a same-state row keeps the seq's notes).
 function added(r: IssueRecord, ...more: (string | null | undefined)[]): string[] {
   return distinct([...r.notes, ...more]).slice(-NOTES_MAX)
@@ -146,7 +154,7 @@ const ATTEMPT = /^attempt \d+ of /
 function lastTwo(r: IssueRecord, e: TableEvent): string {
   const earlier = r.notes.filter(n => ATTEMPT.test(n)).slice(-1)
   const step = r.step === 'triage' ? `the triage of ${r.state}` : `${r.step ?? 'the step'} in ${r.state}`
-  return clip(`${step} gave no usable result twice: ${distinct([...earlier, attemptNote(r, e)]).join('; ')}`, 2000)
+  return clip(`${step} gave no usable result twice: ${clauses([...earlier, attemptNote(r, e)])}`, 2000)
 }
 
 const none = () => ({})
@@ -238,7 +246,7 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes >= c.reviewFixCap,
     next: 'parked',
     change: (r, e) => ({
-      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${distinct([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')]).join('; ')}`, 2000),
+      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${clauses([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')])}`, 2000),
       resumeTo: 'fixing',
       pr: dataOf(e).pr ?? r.pr,
     }),

@@ -206,7 +206,13 @@ export function reviewNotes(d: ReviewData, withErrors: readonly string[] = []): 
 }
 
 export function reviewLead(d: ReviewData): string {
-  return `review round ${d.round} asked for changes on patch ${short(d.patch)}: fix each error finding, or decline it with your reason; every finding is in ${d.answer}`
+  return `review round ${d.round} asked for changes on patch ${short(d.patch)}: fix each error finding, or decline it with your reason; every finding is in ${reviewPlace(d)}`
+}
+
+// reviewPlace: where a review's findings are, in words the owner can follow on GitHub too (the
+// fixer's prompt names the answer file itself).
+export function reviewPlace(d: Pick<ReviewData, 'pr'>): string {
+  return `the review comment on PR #${d.pr}`
 }
 
 // --- the events (7.1) -----------------------------------------------------------------------------------
