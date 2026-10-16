@@ -12,6 +12,8 @@ import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
 import { EMPTY_CONTROL, controlFrom } from './config'
+import { clock, configText } from './config-view'
+import type { ConfigView } from './config-view'
 import { OPS, USAGE, helpText, hintText } from './control-help'
 import type { OpName } from './control-help'
 import type { ActIo } from './exec'
@@ -35,6 +37,7 @@ export type { OpName } from './control-help'
 // One op, parsed. An empty priority or only list clears it.
 export type Op =
   | { op: 'status' }
+  | { op: 'config' }
   | { op: 'help' }
   | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop'; issue: number }
   | { op: 'priority' | 'only'; issues: number[] }
@@ -101,7 +104,8 @@ export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
 
   switch (name) {
     case 'status':
-      return args.length === 0 ? { ok: true, op: { op: 'status' } } : bad(name)
+    case 'config':
+      return args.length === 0 ? { ok: true, op: { op: name } } : bad(name)
     case 'pause':
     case 'unpause':
     case 'skip':
@@ -182,7 +186,8 @@ export function issuesOf(op: Op): number[] {
 export function formatOp(op: Op): string {
   switch (op.op) {
     case 'status':
-      return 'status'
+    case 'config':
+      return op.op
     case 'help':
       return 'help'
     case 'pause':
@@ -226,13 +231,15 @@ const same = (a: readonly number[], b: readonly number[]) => a.length === b.leng
 // needs writing; an op that changes nothing (pausing a paused issue) answers so and writes
 // nothing. `last` is the last pass, for status. Under planner v2 a drop applies to the life it
 // closes, so a drop of an issue claimed again since is recorded again (v2 SPEC 4.1).
-export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1'): Applied {
+export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | null = null, planner: Planner = 'v1', view: ConfigView | null = null): Applied {
   const keep = (text: string, effects: Effects = {}): Applied => ({ control, effects, changed: false, text })
   const set = (patch: Partial<Control>, text: string): Applied => ({ control: { ...control, ...patch }, effects: {}, changed: true, text })
 
   switch (op.op) {
     case 'status':
       return keep(statusText(last, control, now))
+    case 'config':
+      return keep(configText(view, control, now))
     case 'help':
       return keep(helpText())
     case 'pause':
@@ -345,13 +352,6 @@ export function retryText(issue: number, cleared: readonly string[]): string {
 }
 
 // --- status ----------------------------------------------------------------------------------
-
-// clock: a time as HH:MM UTC, with the date when it is not today's.
-function clock(at: Ms, now: Ms): string {
-  const iso = new Date(at).toISOString()
-  const day = iso.slice(0, 10) === new Date(now).toISOString().slice(0, 10) ? '' : `${iso.slice(0, 10)} `
-  return `${day}${iso.slice(11, 16)} UTC`
-}
 
 function ago(ms: Ms): string {
   if (ms < MIN) return `${Math.max(0, Math.round(ms / 1000))}s`
@@ -475,7 +475,7 @@ export type ControlPaths = { loopDir: string; configDir: string }
 // The caller: `last` for status; agentId when the tool call came from inside an agent's loop; the
 // planner in force (v1 when not said), and under planner v2 the issues parked now, as the last
 // pass's records say (null: not known), so a resume of one that is not parked changes nothing.
-export type OpFrom = { last?: PassSummary | null; agentId?: string; planner?: Planner; parked?: readonly number[] | null }
+export type OpFrom = { last?: PassSummary | null; agentId?: string; planner?: Planner; parked?: readonly number[] | null; view?: ConfigView | null }
 
 // What `/factory` or the tool answers. ping: something changed (control.json, the mode, trace, or
 // a retry to run), so the driver pings the loop and logs `logged` (SPEC 4.3). retryIssue: the
@@ -519,15 +519,15 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
     op = only.op
     aside = only.aside
   }
-  if (from.agentId !== undefined && op.op !== 'status') return refused('Not changed: only the main conversation sets owner directives.', op)
+  if (from.agentId !== undefined && op.op !== 'status' && op.op !== 'config') return refused('Not changed: only the main conversation sets owner directives.', op)
   let loaded: LoadedControl
   try {
     loaded = await readControl(io, paths.loopDir)
   } catch (err) {
     loaded = { control: EMPTY_CONTROL, error: `control.json could not be read (${String(err).slice(0, 200)})` }
   }
-  if (op.op === 'status') {
-    const text = statusText(from.last ?? null, loaded.control, now)
+  if (op.op === 'status' || op.op === 'config') {
+    const text = op.op === 'status' ? statusText(from.last ?? null, loaded.control, now) : configText(from.view ?? null, loaded.control, now)
     const warning = loaded.error === null ? '' : `\n${loaded.error}: fix or remove it.`
     return { ok: true, text: text + warning, op, control: loaded.control, ping: false, retryIssue: null, mode: null, logged: null }
   }
@@ -581,7 +581,7 @@ export const CONTROL_TOOL: ToolSpec = {
   description:
     "Set the factory loop's owner directives (control.json) when the owner asks, as `/factory <op>` does; " +
     'one op per call, answered in one line, and a malformed op changes nothing. Ops: ' +
-    'status (what the loop is doing); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
+    'status (what the loop is doing); config (the settings it runs with, each with its source; read-only); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +

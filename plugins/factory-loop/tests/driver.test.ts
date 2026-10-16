@@ -1862,6 +1862,27 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(await factoryOp($, 'pause')).toMatchObject({ text: 'pause: takes one issue number. Usage: pause <N>' })
   })
 
+  test('/factory config shows the settings of the last pass, not the files as they are now (#698)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const file = `${CFG_DIR}/factory-loop/config.json`
+    const before = (await factoryOp($, 'config')).text
+    expect(before).toContain('passEvery       1m')
+    expect(before).toContain('act')
+    // the file changes after the pass, and no pass has run since
+    h.files.set(file, JSON.stringify({ ...JSON.parse(h.files.get(file) ?? '{}'), passEvery: '5m' }))
+    expect((await factoryOp($, 'config')).text).toBe(before)
+    const control = h.files.get(`${LOOP_DIR}/control.json`)
+    const tool = await $.tool.call({ tool: 'mcp__factory-loop__control', op: 'config', agentId: 'agent-1' })
+    expect(tool).toMatchObject({ result: before })
+    expect(h.files.get(`${LOOP_DIR}/control.json`)).toBe(control)
+    await clock.advance(61_000)
+    expect((await factoryOp($, 'config')).text).toContain('passEvery       5m')
+  })
+
   test('/factory retry clears the issue\'s exhausted entries in the ledger', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const { run } = factory()
