@@ -119,14 +119,20 @@ function textOf(e: TableEvent, fallback: string): string {
   return clip(d.text ?? d.question ?? e.reason ?? fallback)
 }
 
+// distinct: the notes given, each clipped and each once (at its last place), the empty left out.
+function distinct(notes: readonly (string | null | undefined)[]): string[] {
+  const kept = notes.filter((n): n is string => typeof n === 'string' && n !== '').map(n => clip(n))
+  return kept.filter((n, i) => kept.lastIndexOf(n) === i)
+}
+
 // added: the record's notes with these added (a same-state row keeps the seq's notes).
 function added(r: IssueRecord, ...more: (string | null | undefined)[]): string[] {
-  return [...r.notes, ...more.filter((n): n is string => typeof n === 'string' && n !== '').map(n => clip(n))].slice(-NOTES_MAX)
+  return distinct([...r.notes, ...more]).slice(-NOTES_MAX)
 }
 
 // own: the notes of a row that changes the state (they replace the old seq's).
 function own(...notes: (string | null | undefined)[]): string[] {
-  return notes.filter((n): n is string => typeof n === 'string' && n !== '').map(n => clip(n)).slice(-NOTES_MAX)
+  return distinct(notes).slice(-NOTES_MAX)
 }
 
 // attemptNote: an unknown's line, which U4's question repeats as one of the last two results.
@@ -140,7 +146,7 @@ const ATTEMPT = /^attempt \d+ of /
 function lastTwo(r: IssueRecord, e: TableEvent): string {
   const earlier = r.notes.filter(n => ATTEMPT.test(n)).slice(-1)
   const step = r.step === 'triage' ? `the triage of ${r.state}` : `${r.step ?? 'the step'} in ${r.state}`
-  return clip(`${step} gave no usable result twice: ${[...earlier, attemptNote(r, e)].join('; ')}`, 2000)
+  return clip(`${step} gave no usable result twice: ${distinct([...earlier, attemptNote(r, e)]).join('; ')}`, 2000)
 }
 
 const none = () => ({})
@@ -232,7 +238,7 @@ const ROWS: readonly Row[] = [
     when: (r, e, c) => ownStep(r) && fixable(e) && r.fixes >= c.reviewFixCap,
     next: 'parked',
     change: (r, e) => ({
-      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${[...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')].join('; ')}`, 2000),
+      question: clip(`the fix cap (${r.fixes} fix rounds) is reached and the PR still needs changes: ${distinct([...(dataOf(e).notes ?? []), textOf(e, e.reason ?? 'changes')]).join('; ')}`, 2000),
       resumeTo: 'fixing',
       pr: dataOf(e).pr ?? r.pr,
     }),

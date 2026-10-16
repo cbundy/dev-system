@@ -147,7 +147,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
-| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
+| `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link); the head's patch id (8.4) when the head moved | every pass | new |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -1305,8 +1305,11 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 ### 9.2 Q1: update the head
 
-- **When:** the head's PR shows `mergeable_state` `behind`, and no queue action of the head is
-  running.
+- **When:** the head is behind, and no queue action of the head is running. Behind is read from
+  facts the loop has: the PR's base commit (`base.sha`) is not main's head on origin, or GitHub
+  shows `mergeable_state` `behind`. GitHub computes mergeability lazily and shows `unknown` for up
+  to two minutes after main moves, so the loop does not wait for it (drill run 3, R3-O1). A
+  conflict (`dirty`) is still GitHub's to say.
 - **Action** `queue-update`: `gh pr update-branch <p> --repo R`. GitHub merges main into the
   branch; no history is rewritten (OB:61).
 - **Key:** `i<N>/l<L>/queue/update/<base7>`, where `<base7>` is main's head at plan time. Each
