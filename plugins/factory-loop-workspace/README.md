@@ -20,14 +20,22 @@ is left alone.
 | `agent.spawn` | Reads the slot line and the step marker `factory-step.json` that `factory-slot prepare` wrote into the slot's git dir. Starts the agent in the slot when the marker is the loop's agent's (its name `<step>-<N>-s<seq>-a<k>` and its type `factory-loop:*`); refuses the spawn when the marker is missing or names another step. Keeps the agent's id, and its children's, in `$.state`. |
 | `tool.call` | The write guard. A writer writes only inside its slot (or outside the repository, such as `/tmp`); a reader writes nowhere in the repository. Every loop agent is refused GitHub writes (PRs, issues, labels, re-runs), `no-mistakes`, `axi`, a push to any remote but `origin`, any call in the background (Bash or `Agent`), and an isolated `Agent` call. A writer pushes only its branch, never by force, and creates no branch or worktree. A reader neither commits nor pushes. A Bash call with no timeout gets 10 minutes. |
 | `classic.SubagentStop` | The stop gate. When a writer finishes, it runs the repo's `gateCommands` in the slot, one after another, within `gateTimeoutMs`. While one fails, the finish is refused with the command, its exit code and the last 150 lines of its output. A gate that cannot run lets the agent finish and is logged. |
+| `tool.check` | Prompts nobody answers (SPEC 10.10). Calls `next(e)` once; when the call is from a mapped loop agent (or its child) and Claude Code answered `ask`, it returns a deny instead, saying the call would wait on a person nobody watches, quoting Claude Code's reason, and telling the agent to find another way or end its step saying what it needed. Any other result, and any caller not in the map (the owner's own session), is returned unchanged. |
+| `classic.Notification` | A `permission_prompt` (or `worker_permission_prompt`) notification from a mapped agent is logged as a `prompt_waiting` event. Returns `next(e)` always. |
+| `classic.SubagentStart` | Learns each agent's transcript path for the notes above. |
 | `session.start` | The handshake: writes `<CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json` with the time and this process's id (its pid and start time, from `/proc/self/stat`), again every minute (the first row or turn starts the beat when a `/reload-plugins` added the plugin). The loop holds every agent step while this session's file is missing, names another process or is older than 3 minutes. |
 
 ## What it writes
 
 - `<loop dir>/companion.jsonl`: one line per refusal (`guard:write`, `guard:push`,
-  `guard:command`) and per gate run (`gate-pass`, `gate-fail`, `gate-unknown`, with the head, the
-  duration and a failing command), with the issue, life and seq. The loop logs each refusal and
+  `guard:command`), per refused prompt (`prompt-denied`) and per gate run (`gate-pass`, `gate-fail`, `gate-unknown`, with the head, the
+  duration and a failing command), with the issue, life and seq. The loop logs each refusal, each `prompt-denied` and
   each `gate-unknown` as an intervention; a gate that passed or failed is not one.
+- `callum-flow-event prompt_denied` (one per refused prompt) and `prompt_waiting` (one per prompt a
+  mapped agent waits on), with the issue, branch and pr, and a note of `key=value` tokens (`life`,
+  `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`, `input`, `why`, `slot`, `session`,
+  `transcript`; `none` when unknown). An image whose `callum-flow-event` lacks the states still gets
+  the deny and its `companion.jsonl` line. There is no `prompt_answered`: no hook shows the answer.
 - `factory-gate.json` in the slot's git dir: the last gate result (pass, fail or unknown) with the
   slot's HEAD.
 - The handshake file above. Files older than 7 days are pruned at session start.

@@ -988,6 +988,10 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
 
 - `transition` sets a stage for the factory tools (7.3). `reviewed` and `intervention` set no
   stage and are not progress for the stuck test.
+- The companion writes two more states, `prompt_denied` and `prompt_waiting` (10.10), through
+  `callum-flow-event` itself, not through `events.ts`: `--issue` required, a `key=value` note with no
+  required token. They set no stage, are not progress for the stuck test and never decide whether an
+  issue is final. The loop does not read them: it reads the companion's log (7.2 `prompt-denied`).
 - A retried event can be logged twice (a crash between the CLI's exit and the ledger's save).
   `transition` notes carry `life` and `seq`, and `intervention` notes their fact's key, so
   readers count one per (issue, life, seq) or per key, as they already count identical
@@ -1008,7 +1012,7 @@ the note today's queries read:
 | `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md:145-159`) |
 | `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
-| `loop` | agent and wake entries, rate caps, breakers, owner operations | unchanged (D-09) |
+| `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
 
 The loop no longer logs `superseded`, `rebased_behind` or `run_started`, and no watcher states
 (there are no pipeline runs).
@@ -1050,6 +1054,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `queue:patch`, `queue:linkage` | the queue's head went back to review because its patch changed (T14), or its body was re-rendered after a `linkage` FAIL (9.3) | the issue |
 | `guard:write`, `guard:push`, `guard:command` | the companion refused a file write, a push, a command, or a call in the background (10.4). An agent did something strange | the issue |
 | `gate-unknown` | a stop gate that could not run (10.6) | the issue |
+| `prompt-denied` | the companion refused a call that would have waited on a prompt nobody answers (10.10). The agent was told to find another way | the issue |
 | `tripwire` | the main-checkout tripwire fired (10.7) | none |
 | `breaker` | the step-unknown breaker or the foundation's executor breaker tripped (5.3) | none |
 | `stalled` | an effect used up its attempts and holds its record (4.5) | the issue |
@@ -1676,6 +1681,38 @@ safeguards remain:
   - if no hook route fires at all: the owner's fallback (OB:86-87). The loop runs the gates after
     the answer, resumes the agent with the failures, and fails a step that leaves the main
     checkout dirty.
+
+### 10.10 Prompts nobody answers
+
+A loop agent runs unattended, so a call Claude Code would put to a person waits for ever. The
+companion's `tool.check` hook calls `next(e)` once. When the call is from an agent in its map (a
+loop agent or its child) and the result is `ask`, it returns `{ decision: 'deny', reason }`. Any
+other result, and any caller not in the map (no `agentId`, an unmapped id: the owner's own session),
+gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but always honours a deny.
+
+- **The reason** starts `factory-loop-workspace:`, says the call would wait on a person nobody
+  watches, quotes Claude Code's own `reason`, `rule` or `decider` when there is one, names the safe
+  rewrite for a Bash `rm` of a glob under a variable (`"${VAR:?}"/*` or the literal path), and ends
+  by telling the agent to find another way or, failing that, to end its step saying what it needed.
+- **Each deny** writes one `prompt_denied` event (`callum-flow-event prompt_denied --issue N --branch B
+  [--pr P] --note <tokens>`) and one line of `companion.jsonl`, cause `prompt-denied`, which is an
+  intervention (7.2). Note tokens are `key=value` encoded as `events.ts` `enc`, `none` when unknown:
+  `life`, `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`, `input` (a Bash command, else the
+  JSON input, clipped to 2000 characters), `why`, `slot`, `session` and `transcript` (the agent's
+  own: `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`, learned from
+  `classic.SubagentStart`). Writing either never throws out of the hook and never turns the deny back
+  into an ask: an image whose `callum-flow-event` does not know the state still gets the deny and the
+  log line. A hook that fails for a mapped agent after `next` returned `ask` still denies.
+- **`classic.Notification`** with `notification_type` `permission_prompt` or
+  `worker_permission_prompt` and an `agent_id` in the map writes one `prompt_waiting` event with the
+  same columns and tokens (`input` is the message). Without an `agent_id`, or with an unmapped one,
+  it writes nothing. It always returns `next(e)`. There is no `prompt_answered`: the engine shows a
+  mapped agent's answer to its prompt through no hook the companion could tie to the prompt.
+- **The map** keeps what the note needs: `agentType` (per agent, children included), `attempt` (the
+  name's `a<k>`), `pr` (the step marker's, `null` when the issue has none or an older loop wrote the
+  marker) and `transcript`. A record kept before this change logs `none` for them.
+- **The rule.** The v2 command rule gains: "Never `rm` a glob under an unguarded variable: use
+  `"${VAR:?}"/*` or a literal path.", in every v2 prompt and agent definition.
 
 ## 11. Releases and parking
 

@@ -72,6 +72,8 @@ import {
   waitOver,
 } from './rails'
 import type { BreakerNotice, LockIo, Notice, PassSource, RailEnv, RailMemory } from './rails'
+import { armSummary, holdsLock, recordPass } from './pass-summary'
+import { within } from './within'
 import { digestOf } from './state'
 import {
   CUT_ROOM,
@@ -327,23 +329,6 @@ function observing(rt: Runtime): Runtime {
 function acting(rt: Runtime): Runtime {
   const { CALLUM_EVENTS_DIR: _sink, ...env } = rt.env
   return { ...rt, sink: null, env }
-}
-
-// within: the work, or a rejection once ms pass on $.clock.
-function within<T>($: EngineInterface, ms: Ms, work: Promise<T>, what: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = $.clock.after(ms, () => reject(new Error(`${what}: no answer within ${ms / 1000} s`)))
-    work.then(
-      v => {
-        t.cancel()
-        resolve(v)
-      },
-      err => {
-        t.cancel()
-        reject(err)
-      },
-    )
-  })
 }
 
 function message(err: unknown): string {
@@ -794,6 +779,7 @@ async function runPass($: EngineInterface, breaker: BreakerNotice | null, trigge
     const now = await $.clock.now()
     failingSince ??= now
     if (rt !== undefined) {
+      recordPass(now, Math.round(performance.now() - t0), false, true)
       await appendLine($, rt, { pass: passNo, trigger, ms: Math.round(performance.now() - t0), error: String(err).slice(0, 500), failures })
       const name = rt.repo.split('/')[1] ?? 'loop'
       const title = lastTitle === null ? `🔄 ${name} · error` : lastTitle.endsWith(' · error') ? lastTitle : `${lastTitle} · error`
@@ -1023,6 +1009,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   const at = new Date(state.now).toISOString()
   const issues = state.issues
   begin(tr, 'log')
+  const passMs = Math.round(performance.now() - t0)
   const line = {
     v: 1,
     at,
@@ -1031,7 +1018,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     loaded: new Date(loadedAt).toISOString(),
     // what asked for the pass, and its time up to this line (#552)
     trigger,
-    ms: Math.round(performance.now() - t0),
+    ms: passMs,
     mode: rt.mode,
     executed: act,
     device: rt.device,
@@ -1134,6 +1121,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   prevPassAt = state.now
   // the title says error until the store takes the ledger again (SPEC 10.9)
   if (act && saveProblem !== null) throw new Error(`ledger: not saved: ${saveProblem}`)
+  holdsLock(act)
+  recordPass(await $.clock.now(), passMs, report?.outcomes.some(o => o.kind !== 'title') ?? false, false)
 }
 
 // writeTrace: the pass's trace record beside its decision log, within config traceMaxBytes
@@ -1591,6 +1580,7 @@ function ensure($: EngineInterface) {
     // the first pass after a load: a session start or a reload
     $.clock.after(FIRST_PASS_AFTER_MS, () => void request($, 'timer', 'first').catch(() => undefined))
     rearm($, DEFAULT_CONFIG.passEveryMs)
+    armSummary($, { rt: () => lastRt, killed: () => killed($), send: (rt, argv) => commandOf(actIo($), acting(rt), [])(argv, { timeoutMs: 60_000 }) })
   })().catch(() => {
     started = undefined
   })

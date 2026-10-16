@@ -507,7 +507,7 @@ const BIN = `${PLUGIN_ROOT}/${SLOT_SCRIPT}`
 const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/4/dev-system'
 const HEAD = '9e01b77c0ffee000000000000000000000000001'
 const r5 = rec(5)
-const MARKER: StepMarker = { v: 1, repo: REPO, issue: 5, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-5', gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '' }
+const MARKER: StepMarker = { v: 1, repo: REPO, issue: 5, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-5', pr: null, gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '' }
 // budget: what the executor gives the tool of its op's timeout, so the tool ends its own commands first
 const budget = (op: Slot['op']) => ['--budget-ms', String(SLOT_TIMEOUT_MS[op] - SLOT_MARGIN_MS)]
 const act = (op: Slot['op'], over: Partial<Slot> = {}): Slot => ({ kind: 'slot', op, key: `${op}-key`, class: 'free', rule: 'W1', reason: 'x', issue: 5, life: LIFE, path: SLOT, lease: 'L5', branch: null, marker: null, ...over })

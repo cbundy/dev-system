@@ -4,6 +4,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { AgentSpawnInput, On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
+import { INPUT_CLIP } from '../hooks/prompt'
 
 const CONFIG = '/c'
 const MAIN = '/w/dev-system'
@@ -43,7 +44,7 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[] } = {}) {
+function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number } = {}) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node' })
   const w = {
@@ -54,6 +55,10 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     written: new Map<string, string>(),
     appended: new Map<string, string>(),
     gateRuns: [] as { command: string; cwd?: string; timeoutMs?: number }[],
+    // callum-flow-event's argv, and the engine's own answer to a tool.check
+    events: [] as string[][],
+    checked: [] as Record<string, unknown>[],
+    decided: { decision: 'ask' } as Record<string, unknown>,
     ids: 0,
   }
   const files = new Map<string, string>([[`${GIT_DIR}/factory-step.json`, JSON.stringify(opts.marker ?? MARKER)], ['/proc/self/stat', PROC_STAT]])
@@ -80,6 +85,10 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     if (cmd === 'git' && e.argv.includes('symbolic-ref')) return ran(`${opts.head ?? 'issue-571'}\n`)
     if (cmd === 'git' && e.argv.at(-1) === 'HEAD') return ran('4c2d8aa0000000000000000000000000000000ff\n')
     if (cmd === 'find') return ran('')
+    if (cmd === 'callum-flow-event') {
+      w.events.push(e.argv)
+      return ran('', opts.eventExit ?? 0)
+    }
     if (cmd === 'sh' && a1 === '-c' && a2?.startsWith('exec 2>&1\n')) {
       w.gateRuns.push({ command: a2.slice('exec 2>&1\n'.length), cwd: e.init?.cwd, timeoutMs: e.init?.timeoutMs })
       const g = gates.shift() ?? { exitCode: 0, output: 'ok\n' }
@@ -105,7 +114,13 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     w.calls.push(e as unknown as Record<string, unknown>)
     return { result: 'ran', text: 'ran' }
   })
+  on('tool.check', ($, e) => {
+    w.checked.push(e as unknown as Record<string, unknown>)
+    return w.decided as { decision: 'ask' }
+  })
   on('classic.SubagentStop', () => ({}))
+  on('classic.SubagentStart', () => ({}))
+  on('classic.Notification', () => ({}))
   return w
 }
 
@@ -323,5 +338,146 @@ describe('the stop gate', () => {
     await $.classic.SubagentStop({ agent_id: 'agent-2', agent_type: 'Explore', agent_transcript_path: '', stop_hook_active: false })
     await $.classic.SubagentStop({ agent_id: 'unknown', agent_type: 'Explore', agent_transcript_path: '', stop_hook_active: false })
     expect(w.gateRuns).toEqual([])
+  })
+})
+
+// check: a tool.check as the engine raises it from an agent's loop
+const check = ($: Engine, input: Record<string, unknown>) => $.tool.check(input as unknown as Parameters<Engine['tool']['check']>[0])
+const SESSION_TRANSCRIPT = '/c/projects/p/s1.jsonl'
+const AGENT_TRANSCRIPT = '/c/projects/p/s1/subagents/agent-agent-1.jsonl'
+const RM = { tool: 'Bash', input: { command: 'rm -f $D/*' }, agentId: 'agent-1' }
+const noteOf = (argv: string[]) => Object.fromEntries((argv[argv.indexOf('--note') + 1] ?? '').split(' ').map(t => [t.slice(0, t.indexOf('=')), decodeURIComponent(t.slice(t.indexOf('=') + 1))]))
+
+describe('prompts nobody answers', () => {
+  test('a loop agent\'s call that Claude Code would ask about is denied, said, written and logged', async ($, on) => {
+    // #674: `rm -f $D/*` waited for ever on a prompt nobody answered
+    const w = world(on)
+    w.decided = { decision: 'ask', reason: 'rm of a glob under a variable', decider: 'permission-check' }
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
+    const r = await check($, RM)
+    expect(r.decision).toBe('deny')
+    const reason = (r as { reason: string }).reason
+    expect(reason.startsWith('factory-loop-workspace:')).toBe(true)
+    expect(reason).toContain('"${D:?}"/*')
+    expect(reason).toContain('rm of a glob under a variable')
+    expect(reason).toContain('Find another way')
+    expect(reason).toContain('end your step saying what you needed')
+    expect(w.events).toHaveLength(1)
+    const argv = w.events[0] as string[]
+    expect(argv.slice(0, 2)).toEqual(['callum-flow-event', 'prompt_denied'])
+    expect(argv.join(' ')).toContain('--issue 571 --branch issue-571')
+    expect(argv).not.toContain('--pr')
+    expect(noteOf(argv)).toEqual({
+      life: 'ss1x2k',
+      seq: '7',
+      step: 'build',
+      attempt: '1',
+      agent: 'agent-1',
+      agent_type: 'factory-loop:builder',
+      tool: 'Bash',
+      slot: SLOT,
+      session: 's1',
+      transcript: AGENT_TRANSCRIPT,
+      why: expect.stringContaining('rm of a glob under a variable'),
+      input: 'rm -f $D/*',
+    })
+    expect(companionLines(w)).toEqual([expect.objectContaining({ issue: 571, life: 'ss1x2k', seq: 7, cause: 'prompt-denied', reason: expect.stringContaining('Bash: factory-loop-workspace:') })])
+  })
+
+  test('the safe rewrite of the same command is allowed, with no event and no line', async ($, on) => {
+    const w = world(on)
+    w.decided = { decision: 'allow' }
+    await $.agent.spawn(spawn(BUILD))
+    expect(await check($, { tool: 'Bash', input: { command: 'rm -f "${D:?}"/*' }, agentId: 'agent-1' })).toEqual({ decision: 'allow' })
+    expect(w.events).toEqual([])
+    expect(companionLines(w)).toEqual([])
+  })
+
+  test('a deny of Claude Code\'s own comes back as it was, untouched', async ($, on) => {
+    const w = world(on)
+    w.decided = { decision: 'deny', reason: 'no' }
+    await $.agent.spawn(spawn(BUILD))
+    expect(await check($, RM)).toEqual({ decision: 'deny', reason: 'no' })
+    expect(w.events).toEqual([])
+  })
+
+  test('a command that is no rm of a glob gets no rewrite, and one without a reason quotes none', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    const r = (await check($, { tool: 'Bash', input: { command: 'curl https://example.com' }, agentId: 'agent-1' })) as { reason: string }
+    expect(r.reason).not.toContain(':?')
+    expect(r.reason).not.toContain("Claude Code's own reason")
+    expect(noteOf(w.events[0] as string[])).toMatchObject({ why: 'none', transcript: 'none' })
+  })
+
+  test('a child of the loop agent is denied and logged with its own agent type', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await $.agent.spawn(spawn({ subagentType: 'Explore', description: 'look', prompt: 'look around', parentAgentId: 'agent-1' }))
+    expect((await check($, { ...RM, agentId: 'agent-2' })).decision).toBe('deny')
+    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-2', agent_type: 'Explore', step: 'build', attempt: '1' })
+  })
+
+  test('the main session and an agent the companion does not know are left to Claude Code', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    expect(await check($, { tool: 'Bash', input: { command: 'rm -f $D/*' } })).toEqual({ decision: 'ask' })
+    expect(await check($, { ...RM, agentId: 'someone-else' })).toEqual({ decision: 'ask' })
+    expect(w.events).toEqual([])
+    expect(companionLines(w)).toEqual([])
+    // each asked the engine once
+    expect(w.checked).toHaveLength(2)
+  })
+
+  test('a long input is clipped to the constant', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await check($, { tool: 'Bash', input: { command: `echo ${'x'.repeat(5000)}` }, agentId: 'agent-1' })
+    expect(noteOf(w.events[0] as string[]).input).toHaveLength(INPUT_CLIP)
+    await check($, { tool: 'Write', input: { file_path: '/x', content: 'y'.repeat(5000) }, agentId: 'agent-1' })
+    const input = noteOf(w.events[1] as string[]).input as string
+    expect(input).toHaveLength(INPUT_CLIP)
+    expect(input.startsWith('{"file_path":"/x"')).toBe(true)
+  })
+
+  test('an image whose callum-flow-event refuses the state still gets the deny and the line', async ($, on) => {
+    const w = world(on, { eventExit: 2 })
+    await $.agent.spawn(spawn(BUILD))
+    expect((await check($, RM)).decision).toBe('deny')
+    expect(w.events).toHaveLength(1)
+    expect(companionLines(w).map(l => l.cause)).toEqual(['prompt-denied'])
+  })
+
+  test('a marker with a pr gives --pr, and one without gives none', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, pr: 612 } })
+    await $.agent.spawn(spawn(BUILD))
+    await check($, RM)
+    expect(w.events[0]?.join(' ')).toContain('--pr 612')
+  })
+})
+
+describe('permission prompts waiting', () => {
+  const note = { message: 'Claude needs your permission to use Bash', title: 'Permission needed', hook_event_name: 'Notification' as const }
+
+  test('a mapped agent\'s permission prompt is a prompt_waiting event, and passes on', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.SubagentStart({ agent_id: 'agent-1', agent_type: 'factory-loop:builder', transcript_path: SESSION_TRANSCRIPT } as never)
+    await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'agent-1' } as never)
+    expect(w.events).toHaveLength(1)
+    expect((w.events[0] as string[]).slice(0, 2)).toEqual(['callum-flow-event', 'prompt_waiting'])
+    expect(noteOf(w.events[0] as string[])).toMatchObject({ agent: 'agent-1', agent_type: 'factory-loop:builder', input: note.message, transcript: AGENT_TRANSCRIPT, tool: 'none', seq: '7' })
+    await $.classic.Notification({ ...note, notification_type: 'worker_permission_prompt', agent_id: 'agent-1' } as never)
+    expect(w.events).toHaveLength(2)
+  })
+
+  test('no agent, an unmapped one, or another kind of notification logs nothing', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await $.classic.Notification({ ...note, notification_type: 'permission_prompt' } as never)
+    await $.classic.Notification({ ...note, notification_type: 'permission_prompt', agent_id: 'someone-else' } as never)
+    await $.classic.Notification({ ...note, notification_type: 'idle_prompt', agent_id: 'agent-1' } as never)
+    expect(w.events).toEqual([])
   })
 })

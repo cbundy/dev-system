@@ -111,6 +111,16 @@ test("the v2 loop's transition, reviewed and intervention events never decide an
   assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
 });
 
+test("the companion's prompt_denied and prompt_waiting are no progress and decide no issue", () => {
+  // a refusal logged after a release must not reopen #5; on claimed #6 it leaves it claimed
+  const later = (state, issue) => ev(state, issue, { ts: "2026-10-12T11:00:00Z" });
+  writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev("reclaimed", 5), later("prompt_denied", 5),
+    ev("claimed", 6), later("prompt_denied", 6), later("prompt_waiting", 6),
+    ev("merged", 7), later("prompt_waiting", 7)]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
+});
+
 test("another device's lines are ignored", () => {
   writeEvents([ev("claimed", 5, { device: "other" })]);
   assert.equal(run().out.state, "idle");

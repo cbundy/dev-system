@@ -593,6 +593,7 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
       JSON.stringify({ at: NOW - MIN, issue: N, cause: 'guard:teleport', reason: 'no such cause' }),
       JSON.stringify({ at: NOW - COMPANION_WINDOW_MS - MIN, issue: N, cause: 'guard:push', reason: 'too old' }),
       JSON.stringify({ at: NOW - 3 * MIN, issue: N, life: LIFE, seq: 4, cause: 'guard:command', reason: 'gh pr merge' }),
+      JSON.stringify({ at: NOW - 4 * MIN, issue: N, life: LIFE, seq: 4, cause: 'prompt-denied', reason: 'Bash: factory-loop-workspace: this Bash call would wait on a person nobody watches' }),
       '',
     ].join('\n')
     const lines = companionLines(text, NOW)
@@ -600,14 +601,16 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
       ['guard:write', N],
       ['gate-unknown', null],
       ['guard:command', N],
+      ['prompt-denied', N],
     ])
     const p = ivs({ facts: { companion: lines, controlDigest: null, configDigest: null } })
     expect(p.map(x => [x.event.who, x.event.cause, x.event.issue])).toEqual([
       ['loop', 'guard:write', N],
       ['loop', 'gate-unknown', null],
       ['loop', 'guard:command', N],
+      ['loop', 'prompt-denied', N],
     ])
-    expect(new Set(p.map(x => x.key)).size).toBe(3)
+    expect(new Set(p.map(x => x.key)).size).toBe(4)
   })
 
   test('a fact is judged only while the rebuild of a wiped store reads whether it is logged, so it cannot log it twice (R4-F5)', () => {
@@ -1013,7 +1016,7 @@ describe('logOwnerOp writes each op\'s interventions through events.ts', () => {
 
 // every intervention this file builds is a well-formed event
 test('every intervention has a who, a cause of 7.2 and a one-line reason', () => {
-  const families = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'rescue', 'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'tripwire', 'breaker', 'stalled', 'workspace', 'reclaim', 'wake']
+  const families = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'rescue', 'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'prompt-denied', 'tripwire', 'breaker', 'stalled', 'workspace', 'reclaim', 'wake']
   const check = (e: InterventionEvent) => {
     expect(families).toContain(e.cause.split(':')[0])
     expect(e.reason).not.toMatch(/\n/)
