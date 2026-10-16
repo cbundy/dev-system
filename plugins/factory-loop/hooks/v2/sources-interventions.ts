@@ -25,9 +25,10 @@ export const COMPANION_WINDOW_MS = FACT_WINDOW_MS
 const COMPANION_MAX_LINES = 2_000
 
 // The companion's causes that are interventions (7.2): a refused file write, push, command, or
-// call in the background (10.4), and a stop gate that could not run (10.6). Its other lines
+// call in the background (10.4), a stop gate that could not run (10.6), and a call refused because
+// it would have waited on a prompt nobody answers (10.10, `prompt-denied`). Its other lines
 // (every gate run, `gate-pass` and `gate-fail`) are its record for an audit and are skipped here.
-export const COMPANION_CAUSES = ['guard:write', 'guard:push', 'guard:command', 'gate-unknown'] as const
+export const COMPANION_CAUSES = ['guard:write', 'guard:push', 'guard:command', 'gate-unknown', 'prompt-denied'] as const
 
 // One line of the companion's log (10.4, 10.6).
 export type CompanionLine = { at: number; issue: number | null; life: string | null; seq: number | null; cause: string; reason: string }

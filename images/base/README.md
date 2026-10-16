@@ -1515,7 +1515,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
 (`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
-transition reviewed intervention`;
+transition reviewed intervention prompt_denied prompt_waiting`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
 and neither ends an issue nor releases a claim; `loop` is the factory loop's own bookkeeping,
 needs a `kind=.. key=.. status=..` note, takes `--issue` optionally and is never a stage or
@@ -1523,7 +1523,9 @@ progress; the factory loop v2's `transition` (an issue's state changed: its note
 `seq=`, `from=` and `to=`, and carries the loop's record), `reviewed` (one review result: `verdict=`
 and `round=`) and `intervention` (someone had to step in: `who=person|loop` and `cause=`;
 `--issue` optional) carry their fields as `key=value` tokens in the note, percent-encoded, and
-`reviewed` and `intervention` are never a stage or progress. A rescue the loop cannot see is
+`reviewed` and `intervention` are never a stage or progress. `prompt_denied` and `prompt_waiting` are
+the factory loop companion's (a loop agent's call refused, or waiting, on a prompt nobody answers):
+`--issue` required, a `key=value` note with no token required, never a stage, progress or final. A rescue the loop cannot see is
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
@@ -1744,7 +1746,7 @@ with no numbers it renews the open issues `callum-flow-factory-state --github of
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
-whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed` or `intervention`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
+whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed`, `intervention`, `prompt_denied` or `prompt_waiting`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim

@@ -238,6 +238,8 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(fixPrompt(fixInput())).toContain('"evidence"')
     // a repo's own screenshot command starts its server and stops it: the command rule lets it run
     expect(COMMAND_RULE).toContain('A repo command that starts what it needs and stops it before it exits counts as a command known to exit.')
+    // the rule about a glob under a variable ends it (#674): the agents' definitions carry it word for word
+    expect(COMMAND_RULE.endsWith('Never `rm` a glob under an unguarded variable: use `"${VAR:?}"/*` or a literal path.')).toBe(true)
   })
 
   test('free text is neutralized: a closing keyword in a note or a check name links nothing; ids that are not ids are dropped', () => {

@@ -20,6 +20,8 @@ export type Marker = {
   step: Step
   role: Role
   branch: string
+  // the issue's PR, null when it has none or the loop that wrote the marker did not say
+  pr: number | null
   gateCommands: string[]
   gateTimeoutMs: number
   loopDir: string
@@ -62,6 +64,7 @@ export function parseMarker(text: string | null): Marker | null {
     step: o.step as Step,
     role: o.role,
     branch: o.branch,
+    pr: int(o.pr, 1) ? o.pr : null,
     gateCommands: (o.gateCommands as string[]).map(c => c.trim()).filter(c => c !== ''),
     gateTimeoutMs: o.gateTimeoutMs,
     loopDir: o.loopDir.replace(/\/+$/, ''),
@@ -69,9 +72,9 @@ export function parseMarker(text: string | null): Marker | null {
 }
 
 // nameParts: what the loop puts in an agent step's name (v2/steps.ts): `<step>-<N>-s<seq>-a<k>`.
-export function nameParts(name: string | undefined): { step: string; issue: number; seq: number } | null {
-  const m = /^([a-z]+)-(\d+)-s(\d+)-a\d+$/.exec(name ?? '')
-  return m === null ? null : { step: m[1] ?? '', issue: Number(m[2]), seq: Number(m[3]) }
+export function nameParts(name: string | undefined): { step: string; issue: number; seq: number; attempt: number } | null {
+  const m = /^([a-z]+)-(\d+)-s(\d+)-a(\d+)$/.exec(name ?? '')
+  return m === null ? null : { step: m[1] ?? '', issue: Number(m[2]), seq: Number(m[3]), attempt: Number(m[4]) }
 }
 
 // mismatch: why the marker does not belong to this spawn, or null when it does.

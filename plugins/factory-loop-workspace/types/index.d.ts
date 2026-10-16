@@ -22,6 +22,14 @@ export type WorkspaceAgent = {
   gateCommands: string[]
   gateTimeoutMs: number
   loopDir: string
+  // from the step marker; an older marker has none
+  pr?: number | null
+  // the spawn's subagentType, per agent (a child has its own)
+  agentType?: string
+  // the step attempt, from the agent's name (`a<k>`)
+  attempt?: number
+  // this agent's own transcript, learned from classic.SubagentStart
+  transcript?: string
 }
 
 declare module 'claude-code' {

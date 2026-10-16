@@ -221,6 +221,7 @@ describe('the companion\'s log, as the loop reads it (v2 SPEC 7.2)', () => {
       { at, issue: 571, life: 'ss1x2k', seq: 7, cause: 'guard:push', reason: 'Bash: a push to main is refused' },
       { at, issue: 571, life: 'ss1x2k', seq: 7, cause: 'guard:command', reason: 'Bash: gh pr create is refused' },
       { at, issue: 571, life: 'ss1x2k', seq: 8, cause: 'gate-unknown', reason: 'the stop gate could not run: `npm test` did not finish' },
+      { at, issue: 571, life: 'ss1x2k', seq: 8, cause: 'prompt-denied', reason: 'Bash: factory-loop-workspace: this Bash call would wait on a person nobody watches' },
     ]
       .map(l => JSON.stringify(l))
       .join('\n')
@@ -230,6 +231,7 @@ describe('the companion\'s log, as the loop reads it (v2 SPEC 7.2)', () => {
       ['guard:push', 571, 'ss1x2k', 7, NOW - MIN],
       ['guard:command', 571, 'ss1x2k', 7, NOW - MIN],
       ['gate-unknown', 571, 'ss1x2k', 8, NOW - MIN],
+      ['prompt-denied', 571, 'ss1x2k', 8, NOW - MIN],
     ])
   })
 

@@ -115,6 +115,7 @@ Renamed where the old name misled: `renewed` to `claim_renewed`; `loop` to `loop
 | `loop` with `kind=breaker` (`plugins/factory-loop/hooks/act.ts:356-357`) | The breaker opening is already an `intervention` with cause `breaker`. |
 | `loop` with `key=cap:...` and `status=held` (`act.ts:346-352`) | A rate-cap hold is a planner notice, not a ledger entry. [#655](https://github.com/cbundy/dev-system/issues/655) removes this writer and the breaker's. |
 | `loop` with kind spawn, delegate or judge; `verdict` with NIT, DUP or ENV | v1 ledger kinds and the v1 adjudicator's prefixes, last written on 2026-10-15. |
+| `prompt_denied`, `prompt_waiting` | The companion's record of a refused or waiting permission prompt ([v2 SPEC 10.10](../factory-loop/v2/SPEC.md)), first written on 2026-10-16. No new-format event type exists for them yet, so they are skipped by name, not missed. The same refusal is also an `intervention` with cause `prompt-denied`, which does translate. |
 | `briefed`, `design_routed`, `run_started`, `parked`, `failed`, `head_mismatch`, `conflict`, `ci_stalled`, `rebased_behind`, `superseded`, `watcher_error` | Dead or v1-only, last written by 2026-10-15. |
 
 Not carried over, since only v1 code reads them or they can be derived: `run_id`, the v1 `loop`

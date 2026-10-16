@@ -7,7 +7,8 @@ import { blockText, gateRecord, runGates, tail } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
-import { mismatch, parseMarker, slotLine } from '../hooks/marker'
+import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
+import { INPUT_CLIP, clip, enc, inputOf, promptNote, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { simpleCommands } from '../hooks/shell'
 
 const MAIN = '/w/dev-system'
@@ -204,6 +205,18 @@ describe('the spawn and its marker', () => {
     expect(parseMarker(JSON.stringify({ ...MARKER, loopDir: '' }))).toBeNull()
   })
 
+  test('a marker\'s pr is a number, and null when it has none or an older loop wrote it', () => {
+    expect(parseMarker(JSON.stringify(MARKER))?.pr).toBeNull()
+    expect(parseMarker(JSON.stringify({ ...MARKER, pr: null }))?.pr).toBeNull()
+    expect(parseMarker(JSON.stringify({ ...MARKER, pr: 612 }))?.pr).toBe(612)
+    expect(parseMarker(JSON.stringify({ ...MARKER, pr: 'x' }))?.pr).toBeNull()
+  })
+
+  test('the name says the step, issue, seq and attempt', () => {
+    expect(nameParts('build-571-s7-a2')).toEqual({ step: 'build', issue: 571, seq: 7, attempt: 2 })
+    expect(nameParts('build-571-s7')).toBeNull()
+  })
+
   test('it must be the loop\'s agent, for the marker\'s issue, seq and step', () => {
     const m = parseMarker(JSON.stringify(MARKER))
     expect(mismatch(m, { name: 'build-571-s7-a2', subagentType: 'factory-loop:builder' })).toBeNull()
@@ -270,5 +283,51 @@ describe('the stop gate', () => {
     expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5 })
     expect(gateRecord({ result: 'unknown', ms: 5, why: 'x' }, null, 0, [])).toMatchObject({ result: 'unknown', why: 'x', head: null })
     expect(tail('a\nb\nc\n\n', 2)).toBe('b\nc')
+  })
+})
+
+describe('prompts nobody answers', () => {
+  test('enc leaves no space or percent in a value', () => {
+    expect(enc('rm -f $D/* 100%')).toBe('rm%20-f%20$D/*%20100%25')
+    expect(enc('a\nb\tc')).toBe('a%0Ab%09c')
+  })
+
+  test('the reason names the rewrite for an rm of a glob under a variable, with the command\'s own variable', () => {
+    for (const command of ['rm -f $D/*', 'rm -rf ${OUT}/build/*', 'cd x && rm -f "$DIR"/*.log']) {
+      expect(unguardedGlob('Bash', { command })).not.toBeNull()
+    }
+    expect(promptReason('Bash', { command: 'rm -f $D/*' }, {})).toContain('`"${D:?}"/*`')
+    // guarded, literal, not an rm, or not Bash
+    for (const command of ['rm -f "${D:?}"/*', 'rm -f /tmp/x/*', 'ls $D/*', 'echo rm']) expect(unguardedGlob('Bash', { command })).toBeNull()
+    expect(unguardedGlob('Write', { command: 'rm $D/*' })).toBeNull()
+  })
+
+  test('the reason starts with the companion, quotes Claude Code\'s and ends with what to do', () => {
+    const r = promptReason('Bash', { command: 'git status' }, { reason: 'needs approval', rule: 'Bash(git:*)', decider: 'auto' })
+    expect(r.startsWith('factory-loop-workspace: ')).toBe(true)
+    expect(r).toContain('person nobody watches')
+    expect(r).toContain('needs approval; rule Bash(git:*); decided by auto')
+    expect(r.endsWith('Find another way to do it or, failing that, end your step saying what you needed.')).toBe(true)
+    expect(whyOf({})).toBeNull()
+  })
+
+  test('the note has every token, none for the unknown, and a value with no space in it', () => {
+    expect(promptNote({ life: 'ss1x2k', seq: 7, tool: 'Bash', input: 'rm -f $D/*', agent_type: 'none' })).toBe(
+      'life=ss1x2k seq=7 step=none attempt=none agent=none agent_type=%6Eone tool=Bash slot=none session=none transcript=none why=none input=rm%20-f%20$D/*',
+    )
+  })
+
+  test('an input is a Bash command, else JSON, and clipped', () => {
+    expect(inputOf('Bash', { command: 'ls' })).toBe('ls')
+    expect(inputOf('Write', { file_path: '/x' })).toBe('{"file_path":"/x"}')
+    expect(inputOf('Bash', { command: 'x'.repeat(INPUT_CLIP + 1) })).toHaveLength(INPUT_CLIP)
+    expect(clip('abc', 2)).toBe('ab')
+    expect(INPUT_CLIP).toBe(2000)
+  })
+
+  test('a subagent\'s transcript is beside the session\'s', () => {
+    expect(transcriptOf('/c/projects/p/s1.jsonl', 'a1')).toBe('/c/projects/p/s1/subagents/agent-a1.jsonl')
+    expect(transcriptOf(undefined, 'a1')).toBeNull()
+    expect(transcriptOf('', 'a1')).toBeNull()
   })
 })
