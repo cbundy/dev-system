@@ -75,12 +75,13 @@ function stops(ctx: V2Ctx, r: IssueRecord): Action[] {
 }
 
 // mergedLogged: the factory already holds a `merged` event of this life for the PR: the issue's
-// stage is merged from before this seq's transition (a `merged` event outranks the transition's
-// own stage, docs/factory-state.md "Source precedence").
+// stage is merged since the life began (a `merged` event outranks a later `closed`,
+// docs/factory-state.md "Source precedence"). Read only at the close, before the seq's own
+// transition is logged, so that transition never shows as the merge (closedItems).
 function mergedLogged(ctx: V2Ctx, r: IssueRecord): boolean {
   const view = ctx.state.issues.find(i => i.number === r.issue)
   const since = view?.stageSince ?? null
-  return view?.stage === 'merged' && since !== null && since < r.seqAt && since >= (lifeAt(r.life) ?? 0)
+  return view?.stage === 'merged' && since !== null && since >= (lifeAt(r.life) ?? 0)
 }
 
 // heldByOther: another device holds a live claim on the issue: its labels are the winner's, so a
@@ -163,14 +164,17 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
 }
 
 // closedItems: a closed record's follow-ups by why (4.5): a merge's `merged` event when the factory
-// has none, its rollout read, then a close for an epic base or a later milestone for a run-it or
-// keep-open rollout (D-29); a split's parent released.
+// had none at the close, its rollout read, then a close for an epic base or a later milestone for a
+// run-it or keep-open rollout (D-29); a split's parent released.
 function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   const items: EntryItem[] = []
   const add = (action: Action) => items.push({ action, soft: false, tell: false })
   if (r.why === 'merged' || r.why === 'merged-by-hand') {
+    // decided once, at the close (the pass that first plans the seq's transition event): a later
+    // view (the sweep's `closed`, the view's 24 h window) never logs the merge again (R3-F1)
     const merged = entryKey(r, 'event/merged')
-    if (!mergedLogged(ctx, r) || ctx.byKey.has(merged)) {
+    const atClose = !ctx.byKey.has(entryKey(r, 'event/transition'))
+    if ((atClose && !mergedLogged(ctx, r)) || ctx.byKey.has(merged)) {
       add({ ...base(r, merged, 'the merge has no merged event'), kind: 'event', event: { state: 'merged', issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note: r.why === 'merged' ? 'merged by the factory loop' : 'merged by hand' } })
     }
     const rolloutKey = followKey(r, 'rollout')

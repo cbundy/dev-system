@@ -611,7 +611,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage` |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. merged and merged-by-hand: event `merged` when the `facts` source has none for the PR (a merge whose log was lost, `totality/T-05`), `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. merged and merged-by-hand: event `merged` when the factory view at the close (before the seq's `transition` is logged) has none for the life, read once so a later `closed` never logs the merge again (a merge whose log was lost, `totality/T-05`), `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor

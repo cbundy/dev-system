@@ -315,6 +315,22 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
   })
 
+  test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
+    const r = rec(79, { state: 'closed', step: null, why: 'merged', pr: 779, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
+    const closed = transitioned(r, 'T13', 'merge-queue', 'merged')
+    const at = (stageSince: number | null, extra: LedgerEntry[] = []) => withLedger(world([r], { issues: stageSince === null ? [] : [issue(79, { stage: 'merged', stageSince })] }), [closed, ...extra])
+    // the close: callum-flow-merge logged merged before it
+    expect(kinds(plan(at(NOW - 2 * MIN)), 79)).toEqual(['event transition', 'label clear', 'rollout'])
+    // the entry actions done; then the sweep's `closed` (the view's stage time moves past the close),
+    // then the view's 24 h window drops the issue: nothing more
+    const settled = [done(entryKey(r, 'event/transition'), 'event', { issue: 79 }), done(entryKey(r, 'label'), 'label', { issue: 79 }), done(followKey(r, 'rollout'), 'rollout', { issue: 79, outcome: { kind: 'rollout', rollout: null, closeIssue: null } })]
+    expect([kinds(plan(at(NOW, settled)), 79), kinds(plan(at(null, settled)), 79)]).toEqual([[], []])
+    // a merge whose log was lost: the close logs it, and keeps it planned until done
+    expect(kinds(plan(at(null)), 79)).toContain('event merged')
+    const merged = entry(entryKey(r, 'event/merged'), 'event', { issue: 79, status: 'lost', attempts: 1, startedAt: NOW - MIN, endedAt: NOW })
+    expect(kinds(plan(at(NOW, [...settled, merged])), 79)).toEqual(['event merged'])
+  })
+
   test('a new seq stops the old step that still runs and kills its slot\'s processes, best effort: the step starts once both ended, however they ended', () => {
     const r = rec(80, { seq: 6, seqAt: NOW - MIN, since: NOW - 30 * MIN, attempt: 2 })
     const old = entry(stepKey({ ...r, seq: 5 }, 'build', 1), 'agent-step', { issue: 80, class: 'develop', step: 'build', status: 'running', endedAt: null, agentId: 'agent-9', startedAt: NOW - 50 * MIN })
