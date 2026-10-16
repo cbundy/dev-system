@@ -4,7 +4,7 @@
 #
 # Wires up the state that cannot be baked into the image: it checks the
 # /persist volumes, seeds tool config that must exist before first use,
-# moves an older Claude login into Claude's login directory,
+# moves an older Claude login into a shared Claude login directory,
 # points codex's telemetry at OTEL_EXPORTER_OTLP_ENDPOINT when the runtime
 # sets one, re-points git at gh's credentials, clones the workspace repo
 # (DEV_REPO_URL) on first start, recovers no-mistakes runtime state, starts
@@ -135,9 +135,10 @@ seed_claude_config() {
   rm -f "$tmp"
 }
 
-# 2b. Claude's login lives in CLAUDE_SECURESTORAGE_CONFIG_DIR (the image's
-#     /persist/claude-auth), which a runtime may share between containers. A
-#     login made before that, in CLAUDE_CONFIG_DIR, moves there when the
+# 2b. A runtime that opts in to a shared Claude login sets
+#     CLAUDE_SECURESTORAGE_CONFIG_DIR (/persist/claude-auth, a shared volume).
+#     Unset, nothing here runs and the login stays in CLAUDE_CONFIG_DIR. Set,
+#     a login made before, in CLAUDE_CONFIG_DIR, moves there when the
 #     directory holds none yet, so the first container to start keeps its
 #     login and every other one sharing the directory uses it too. A hard
 #     link publishes it, so two containers starting at once never overwrite

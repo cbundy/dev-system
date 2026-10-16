@@ -101,6 +101,16 @@ test("a loop event (the factory loop's bookkeeping, D-09) never decides an issue
   assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
 });
 
+test("the v2 loop's transition, reviewed and intervention events never decide an issue", () => {
+  // an intervention derived after a release must not reopen #5; bookkeeping on claimed #6 leaves it claimed
+  const later = (state, issue) => ev(state, issue, { ts: "2026-10-12T11:00:00Z" });
+  writeEvents([ev("claimed", 5, { ts: "2026-10-12T09:00:00Z" }), ev("reclaimed", 5), later("intervention", 5),
+    ev("claimed", 6), later("transition", 6), later("reviewed", 6), later("intervention", 6),
+    ev("merged", 7), later("transition", 7), later("intervention", 7)]);
+  const { out } = run();
+  assert.deepEqual(out.in_flight.map((i) => [i.issue, i.state]), [[6, "claimed"]]);
+});
+
 test("another device's lines are ignored", () => {
   writeEvents([ev("claimed", 5, { device: "other" })]);
   assert.equal(run().out.state, "idle");

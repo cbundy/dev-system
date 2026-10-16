@@ -35,9 +35,10 @@
 # - an optional shared gh login (variable gh_volume_name): a named volume over
 #   /persist/gh, shared by every workspace using that name
 #   (cbundy/dev-system#195);
-# - an optional shared Claude login (variable claude_auth_volume_name): a
-#   named volume over /persist/claude-auth, Claude's login directory only, so
-#   history and settings stay per workspace;
+# - an optional shared Claude login, chosen per workspace (parameter
+#   claude_login, shared volume named by variable claude_auth_volume_name):
+#   only Claude's login directory is shared, so history and settings stay per
+#   workspace;
 # - optional registry credentials (variable registry_auth_config), read from a
 #   file on the Coder server, so private per-repo images can be used.
 
@@ -181,16 +182,16 @@ variable "gh_volume_name" {
   }
 }
 
-# Claude's login (CLAUDE_SECURESTORAGE_CONFIG_DIR, the image's
-# /persist/claude-auth) normally lives on the workspace's own persist volume.
-# A named Docker volume mounted over it shares one login between every
-# workspace using the same name, as the desktop devcontainer's
-# dev-system-claude-auth volume does per Docker host. Only the login moves:
-# CLAUDE_CONFIG_DIR, with history, settings and plugins, stays per workspace.
-# Not a docker_volume resource, for the reason given for gh_volume_name.
+# The volume behind the claude_login parameter's "shared" choice: a named
+# Docker volume mounted at /persist/claude-auth, with
+# CLAUDE_SECURESTORAGE_CONFIG_DIR pointing Claude's login (and only its
+# login) there, in every workspace that picks shared. A "private" workspace
+# gets neither and keeps its login in CLAUDE_CONFIG_DIR, as before. Not a
+# docker_volume resource, for the reason given for gh_volume_name. Empty
+# offers no choice: every workspace is private.
 variable "claude_auth_volume_name" {
   default     = ""
-  description = "Named Docker volume mounted at /persist/claude-auth (Claude's login directory) in every workspace, so workspaces using the same name share one Claude login. Created by Docker on first use, never deleted with a workspace. Empty keeps each workspace's Claude login on its own persist volume."
+  description = "Named Docker volume that workspaces choosing the shared Claude login (parameter claude_login) mount at /persist/claude-auth, so they share one Claude login. Created by Docker on first use, never deleted with a workspace. Empty keeps every workspace's Claude login private and hides the choice."
   type        = string
   validation {
     # Docker's volume name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
@@ -345,6 +346,28 @@ data "coder_parameter" "template_testing" {
   order        = 8
 }
 
+# Shared or private Claude login (variable claude_auth_volume_name). Coder
+# gives an existing workspace the default on its next update (#268), so every
+# workspace that predates the choice stays private, exactly as before.
+data "coder_parameter" "claude_login" {
+  count        = var.claude_auth_volume_name == "" ? 0 : 1
+  name         = "claude_login"
+  display_name = "Claude login"
+  description  = "private: this workspace has its own Claude login, as before. shared: it uses the one Claude login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in; its history and settings stay its own. Anyone who can open a shared workspace holds that login, and signing out in one signs out all. Takes effect on the next workspace start."
+  type         = "string"
+  default      = "private"
+  mutable      = true
+  order        = 10
+  option {
+    name  = "Private to this workspace"
+    value = "private"
+  }
+  option {
+    name  = "Shared with other workspaces"
+    value = "shared"
+  }
+}
+
 # The rollout ring (cbundy/dev-system#338), passed in as DEV_RING. Coder ignores
 # parameter changes on an existing workspace's update or restart (#268), so the
 # default is the right value for every workspace that never sets it.
@@ -393,6 +416,11 @@ locals {
     "CALLUM_FLOW_TRUSTED_AUTHORS=${var.trusted_authors}",
   ]
 
+  # The shared Claude login (parameter claude_login): Claude keeps its login,
+  # and only its login, in the shared volume at /persist/claude-auth.
+  claude_login_shared = try(data.coder_parameter.claude_login[0].value, "private") == "shared"
+  claude_auth_env     = local.claude_login_shared ? ["CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth"] : []
+
   # Docker labels, to trace orphaned resources back to their workspace.
   labels = {
     "coder.owner"        = data.coder_workspace_owner.me.name
@@ -416,7 +444,7 @@ resource "coder_agent" "main" {
     # Docker creates the volume root-owned: fix that once.
     [ -w /workspaces ] || sudo -n chown "$(id -u):$(id -g)" /workspaces \
       || echo "WARNING: /workspaces is not writable by $(id -un)"
-    # The same for a shared Claude login volume (claude_auth_volume_name)
+    # The same for the shared Claude login volume (parameter claude_login)
     # first mounted by an image older than /persist/claude-auth: Docker
     # creates it root-owned, and it would stay so for every newer image.
     [ ! -d /persist/claude-auth ] || [ -w /persist/claude-auth ] \
@@ -631,7 +659,7 @@ resource "docker_container" "workspace" {
   # own init is PID 1: it reaps the orphans tmux and Claude leave behind.
   init       = true
   entrypoint = ["sh", "-c", coder_agent.main.init_script]
-  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env)
+  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)
@@ -656,11 +684,10 @@ resource "docker_container" "workspace" {
       volume_name    = volumes.value
     }
   }
-  # One Claude login shared between workspaces (variable
-  # claude_auth_volume_name), over the persist volume's claude-auth directory.
-  # Not managed here: see the variable.
+  # The shared Claude login, for a workspace that picks it (parameter
+  # claude_login). Not managed here: see claude_auth_volume_name.
   dynamic "volumes" {
-    for_each = var.claude_auth_volume_name == "" ? [] : [var.claude_auth_volume_name]
+    for_each = local.claude_login_shared ? [var.claude_auth_volume_name] : []
     content {
       container_path = "/persist/claude-auth"
       volume_name    = volumes.value
