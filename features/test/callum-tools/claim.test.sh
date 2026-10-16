@@ -174,6 +174,9 @@ calls() { cat "$d/calls"; }
 no_calls() { [ ! -s "$d/calls" ] || fail "$1: unexpected writes: $(calls)"; }
 events() { cat "$tmpdir/events"/*.jsonl 2>/dev/null || true; }
 no_events() { [ -z "$(events)" ] || fail "$1: unexpected events: $(events)"; }
+# seed <state> <issue> : append a real event to this device's log; the sweep's candidates are the
+# issues the event log and factory-state list as live (v2 SPEC 3.6), never a label list
+seed() { rc_of "$EVENT" "$1" --issue "$2" --repo o/r; }
 
 # --- usage ----------------------------------------------------------------------
 reset
@@ -251,6 +254,30 @@ cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
 rc_of "$CLAIM" 7
 expect_rc 0 "own live claim"
 calls | grep -q 'POST' && fail "own live claim posted again"
+# still held by the log (a restart, a retry of a claim whose adoption failed): no second claimed
+reset
+seed claimed 7
+seed delegated 7
+cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+rc_of "$CLAIM" 7
+expect_rc 0 "own live claim, held"
+[ "$(events | jq -s 'map(select(.state == "claimed")) | length')" = 1 ] || fail "own live claim, held: claimed again: $(events)"
+# ended in the log (R2-F5): the comment and its lease outlive a release, a drop, a rejection or a
+# merge, but a claim after the end starts a new life: the ended comment goes and the claim is a
+# fresh one, with its own comment, lease and claimed event; the end counts whatever follows it
+# (a closing transition logged after merged)
+for end in reclaimed abandoned merged closed ready; do
+  reset
+  seed claimed 7
+  seed "$end" 7
+  rc_of "$EVENT" transition --issue 7 --repo o/r --note "life=x seq=2 from=merge-queue to=closed"
+  cm 100 devA "$FRESH" "$FRESH" | arr > "$d/comments-7.json"
+  rc_of "$CLAIM" 7
+  expect_rc 0 "own live claim after $end"
+  [ "$(calls | grep -v '^issue edit')" = "$(printf 'DELETE 100\nPOST 7')" ] || fail "own live claim after $end: not a fresh claim: $(calls)"
+  jq -e 'map(.id) == [900]' "$d/comments-7.json" >/dev/null || fail "own live claim after $end: comments: $(cat "$d/comments-7.json")"
+  events | jq -s -e 'last | .state == "claimed" and .issue == 7 and .note == "lease: 120"' >/dev/null || fail "own live claim after $end: no new claimed: $(events)"
+done
 
 # --- label failure withdraws the claim ------------------------------------------
 reset
@@ -356,9 +383,6 @@ no_calls "heartbeat list failure"
 grep -q 'cannot list' "$tmpdir/err" || fail "heartbeat list failure: $(cat "$tmpdir/err")"
 
 # --- sweep: stale claim is reclaimed ---------------------------------------------
-# seed <state> <issue> : append a real event to this device's log; the sweep's candidates are the
-# issues the event log and factory-state list as live (v2 SPEC 3.6), never a label list
-seed() { rc_of "$EVENT" "$1" --issue "$2" --repo o/r; }
 reset
 issue 7 OPEN 'factory:building'
 seed claimed 7

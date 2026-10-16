@@ -207,9 +207,12 @@ if [ -n "$foreign" ]; then
   lost "held by $foreign"
   exit 3
 fi
-# A live claim of our own (a restarted orchestrator, or the factory loop claiming
-# a lapsed claim again onto its record): keep it, make sure `ready` is off and
-# the issue is assigned, post nothing new.
+# A live claim of our own (a restarted orchestrator, a retried claim): keep it,
+# make sure `ready` is off and the issue is assigned, post nothing new - unless
+# this device's event log shows the claim ended (a release, a drop, a rejection
+# and a merge leave the comment and its lease behind): then the comment is
+# deleted and this claim is a fresh one, so a new life starts with its own
+# comment, lease and `claimed` event.
 ownlive=$(printf '%s' "$cs" | jq -r --argjson now "$now" --arg dev "$device" \
   "$CLAIMS_JQ"' | map(select(.dev == $dev and .exp > $now)) | first | .id // empty')
 
@@ -217,9 +220,20 @@ set_labels() {
   "$GH" issue edit "$n" --remove-label "$READY" --add-assignee @me >/dev/null
 }
 
-if [ -n "$ownlive" ]; then
+# ended_in_log: of this device's claim events for #$n, the last is an end
+# (ready, reclaimed, merged, closed or abandoned, whatever follows it).
+ended_in_log() {
+  _lf=$("$EVENT" --path --repo "$repo" 2>/dev/null) && [ -f "$_lf" ] || return 1
+  jq -R -s -e --argjson n "$n" '[split("\n")[] | fromjson? | select(type == "object" and .issue == $n)
+    | .state | select(IN("claimed", "ready", "reclaimed", "merged", "closed", "abandoned"))] | last | . != null and . != "claimed"' "$_lf" >/dev/null
+}
+
+if [ -n "$ownlive" ] && ! ended_in_log; then
   set_labels || { err "cannot update the labels of #$n"; exit 1; }
   exit 0
+fi
+if [ -n "$ownlive" ]; then
+  "$GH" api -X DELETE "repos/$repo/issues/comments/$ownlive" >/dev/null || { err "cannot delete the ended claim comment on #$n"; exit 1; }
 fi
 
 body="claimed-by: $device at $(iso "$now") lease: $LEASE

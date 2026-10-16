@@ -350,7 +350,10 @@ use it as the fleet's claim marker (`images/base/callum-flow-claim:21`, `:126`;
 tool the loop calls writes or reads the label:
 
 - **`callum-flow-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
-  `In development`. A device's own live claim after a restart does the same.
+  `In development`. A device's own live claim after a restart does the same. An own live claim
+  that this device's event log shows ended (`ready`, `reclaimed`, `merged`, `closed` or
+  `abandoned` after its last `claimed`) is deleted and the claim made fresh, so every life starts
+  with one `claimed` event.
 - **`callum-flow-claim --heartbeat`** with no numbers renews this device's live claims on the open
   issues that `callum-flow-factory-state --github off` lists live with this device as the holder,
   not the label list. v2's H1 passes numbers, as now (14.1).
