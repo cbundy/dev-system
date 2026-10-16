@@ -18,23 +18,25 @@ export const HANDSHAKE_STALE_MS = 3 * 60_000
 // passes). Only a handshake that names this process passes: after a restart without the
 // companion, the old process's file names the old process.
 export function workspaceRead(text: string | null, session: string, processId: string | undefined, now: Ms): WorkspaceRead {
+  const process = processId ?? null
+  const fail = (why: string): WorkspaceRead => ({ session, process, ok: false, why })
   const missing = `the companion plugin factory-loop-workspace is not loaded in this session (${session}): no handshake`
-  if (text === null) return { session, ok: false, why: missing }
+  if (text === null) return fail(missing)
   let o: Record<string, unknown>
   try {
     const v: unknown = JSON.parse(text)
-    if (v === null || typeof v !== 'object' || Array.isArray(v)) return { session, ok: false, why: `${missing} that reads` }
+    if (v === null || typeof v !== 'object' || Array.isArray(v)) return fail(`${missing} that reads`)
     o = v as Record<string, unknown>
   } catch {
-    return { session, ok: false, why: `${missing} that reads` }
+    return fail(`${missing} that reads`)
   }
-  if (o.session !== session) return { session, ok: false, why: `the companion's handshake names session ${String(o.session)}, not this one (${session})` }
-  if (!processId || o.process !== processId) return { session, ok: false, why: `the companion plugin factory-loop-workspace is not running in this process: this session's (${session}) handshake was written by another one` }
+  if (o.session !== session) return fail(`the companion's handshake names session ${String(o.session)}, not this one (${session})`)
+  if (!processId || o.process !== processId) return fail(`the companion plugin factory-loop-workspace is not running in this process: this session's (${session}) handshake was written by another one`)
   const at = isoMs(o.at)
   const stale = `the companion plugin factory-loop-workspace is not running in this session (${session}): its handshake is stale`
-  if (at === null) return { session, ok: false, why: `${stale}, with no time` }
-  if (now - at > HANDSHAKE_STALE_MS) return { session, ok: false, why: `${stale}, written ${new Date(at).toISOString()}, ${Math.round((now - at) / 60_000)} minutes ago (it writes one every minute)` }
-  return { session, ok: true, version: typeof o.version === 'string' ? o.version : null }
+  if (at === null) return fail(`${stale}, with no time`)
+  if (now - at > HANDSHAKE_STALE_MS) return fail(`${stale}, written ${new Date(at).toISOString()}, ${Math.round((now - at) / 60_000)} minutes ago (it writes one every minute)`)
+  return { session, process, ok: true, version: typeof o.version === 'string' ? o.version : null }
 }
 
 // readWorkspace: the companion plugin's handshake for this session, under the loop's base directory

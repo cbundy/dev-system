@@ -9,17 +9,20 @@
 - Every PR MUST link to the issue it addresses using a GitHub keyword in the PR body, so the two stay
   connected for tracking. Use a closing keyword - `Closes #N` (or `Fixes #N` / `Resolves #N`) - when the
   issue should auto-close on merge; use a non-closing keyword instead - `Refs #N` or `Part of #N` - when
-  the issue must stay open (research-only, under review, or one part of a multi-part issue).
+  the issue must stay open (research-only, under review, or one part of a multi-part issue). On the
+  factory loop the loop writes this link itself, and a loop agent never writes a closing keyword anywhere.
 - Before merging, verify the linkage matches intent with `gh pr view <pr> --json closingIssuesReferences`:
   the issue number must appear for a closing PR and be absent for a keep-open PR. Re-check after any
   pipeline rewrite of the PR body - rewrites can silently drop the keyword, and a stray `Closes #N` pasted
-  inside description text can wrongly auto-close the wrong issue.
+  inside description text can wrongly auto-close the wrong issue. On the factory loop, the loop's merge
+  queue runs this check.
 - When making technical decisions, do not give much weight to development cost.
   Instead, prefer quality, simplicity, robustness, scalability, and long term maintainability.
 - When doing bug fixes, always start with reproducing the bug in an E2E setting as closely aligned with how an end user would experience it as possible.
   This makes sure you find the real problem so your fix will actually solve it.
 - When end-to-end testing a product, be picky about the UI you see and be obsessed with pixel perfection.
-  If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way.
+  If something clearly looks off, even if it is not directly related to what you are doing, try to get it fixed along the way
+  (a factory loop agent names it in its answer instead, since its change holds only what the brief asks).
 - For any PR that changes UI, capture a screenshot (and a short video/GIF for animated/interactive changes)
   using this repo's e2e visual verification tooling (n/a - no UI), and attach it to the PR description before the PR is considered ready.
 - Keep PR descriptions brief and concise. They are reviewed by a head of engineering, not an engineer,
@@ -27,6 +30,7 @@
   (screenshots, and a short video/GIF for animated/interactive changes) when the change is visual.
 - Apply that same high standard to engineering excellence: lint, test failures, and test flakiness.
   If you see one, even if it is not caused by what you are working on right now, still get it fixed.
+  A factory loop agent fixes it only when it blocks the gates, and otherwise names it in its answer's summary.
 - Questions about factory latency, throughput or pipeline cost are answered from factory data via the
   callum-flow `query-factory-data` skill, not from guesses.
 - When writing to the owner (chat replies, status updates, orchestrator reports, handoffs), lead with what
@@ -57,6 +61,29 @@ dependency, the exact confirmed install commands, and how to bake it into
 - Do NOT edit `.devcontainer/` in the same change that you are doing your feature
   work. Container build changes are applied out of cycle, deliberately, so they do
   not interrupt the container that is currently in use.
+- On the factory loop, a loop agent installs nothing and raises no issue. It names the missing
+  tool, what breaks without it and the install commands it would use in its answer, and carries
+  on with what it can.
+
+## Two ways work gets done
+
+Work in this repo takes one of two paths. A rule that names a path applies only on it.
+
+- **The factory loop.** You are a loop agent when the factory loop started you (your prompt's
+  first line is `factory-slot: <path>`) or a loop agent started you. The loop prepared your slot,
+  a worktree on the issue's branch, and does the rest: when a builder or fixer ends its turn it
+  runs the repo's gate commands in the slot and hands back any failure; it opens the PR and writes
+  its title, body, issue link and evidence from your answer; it runs review, waits on CI and
+  merges through its own queue. Follow your agent definition and your prompt. Work only in your
+  slot and push only the issue's branch to `origin`. Never lease, return or create a worktree,
+  never run no-mistakes, and never follow the `implement-issue` or `issue-orchestrator` skills or
+  a section of this file marked as the manual path. Never write to GitHub: where a rule here says
+  to link, describe, attach to, label, merge or raise an issue or a PR, put what it needs in your
+  answer and the loop does it.
+- **The manual path**, for a person or an interactive session. Code changes go in a worktree
+  (the mechanism is in "Implementation sub-agents" below). A sub-agent delegated an issue follows
+  the `implement-issue` skill (worktree, build, verify, evidence, /no-mistakes pipeline, handoff),
+  and an interactive orchestrator follows the `issue-orchestrator` skill.
 <!-- end synced -->
 
 <!-- repo-owned: edit freely - fill in the sections below for this repo -->
@@ -83,8 +110,9 @@ has passed.
   sandboxed (shared defaults for events, no-mistakes, push state and agentsview use temporary
   directories) and fails if any entries remain in those directories after the suites.
 
-The no-mistakes lint and test steps (`.no-mistakes.yaml`) call exactly these two commands,
-and CI runs both: `ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
+The factory loop's stop gate (`gateCommands` in `.claude/factory-loop.json`), the no-mistakes lint
+and test steps of the manual path (`.no-mistakes.yaml`) and CI all run exactly these two commands:
+`ci.yml` runs `npm run lint` (with shellcheck and terraform) and `npm test`
 on every pull request and every push to main. Its `ci` check is the one branch protection
 requires. A new test or script check belongs inside one of these entrypoints, not in a
 bespoke CI step.
@@ -113,8 +141,10 @@ architecture). Rules specific to working here:
   tooling in `images/base/`. The scripts in `features/src/callum-tools/` are still the
   image's source, so fixing them is fine.
 - Feature PRs never bump `images/base/VERSION`: the release bump PR does
-  (`node scripts/release-bump.js X.Y.Z --image A.B.C`, RELEASING.md). A PR that is only behind
-  main goes through `callum-flow-merge-guard <pr> --update-behind`, not a new pipeline run.
+  (`node scripts/release-bump.js X.Y.Z --image A.B.C`, RELEASING.md). On the manual path, a PR that
+  is only behind main goes through `callum-flow-merge-guard <pr> --update-behind`, not a new pipeline
+  run. On the factory loop, the merge queue brings the PR at its head up to date itself, and a loop
+  agent leaves a PR that is only behind main alone.
 - Templates in `templates/` must keep a clear split between synced content and repo-owned
   values so `callum-dev update` can merge cleanly.
 - The `onboard` skill's `SKILL.md` is generated from `docs/onboarding.md` (plus
@@ -136,20 +166,23 @@ The dev environment has no Docker access yet (tracked under #114). Changes under
 `publish-base-image.yml` builds the image and runs `images/base/test/test.sh`,
 `publish-dev-image.yml` builds and smoke-tests the dev image, `ci.yml` lints the
 Coder template, and `test-features.yml` runs the feature tests. Never claim an image, devcontainer or feature-in-container test ran
-locally - point to the PR's CI run instead.
+locally - point to the PR's CI run instead. A loop agent, which answers before the loop opens the PR,
+names in its answer's evidence the CI workflow that covers the change.
 
 ## Trying skill changes
 
 Sessions in this repo run the *released* callum-flow plugin from the marketplace, not this
-checkout, so editing `plugins/callum-flow/` does not change the running session. To try a
-skill or hook change, start a session with `claude --plugin-dir plugins/callum-flow`.
+checkout, so editing `plugins/callum-flow/` does not change the running session. In an interactive
+session, try a skill or hook change by starting a session with `claude --plugin-dir plugins/callum-flow`.
+A loop agent cannot start one, and checks the change with `npm test`.
 
-## Implementation sub-agents
+## Implementation sub-agents (manual path)
 
-Any agent making code changes - solo or delegated - works inside a treehouse worktree.
-Sub-agents delegated an issue follow the `implement-issue` skill for the full working
-procedure (worktree, build, verify, evidence, /no-mistakes pipeline, handoff).
-Orchestration is driven by the `issue-orchestrator` skill.
+On the manual path, any agent making code changes - solo or delegated - works inside a treehouse
+worktree it leases itself. Sub-agents delegated an issue follow the `implement-issue` skill for the
+full working procedure (worktree, build, verify, evidence, /no-mistakes pipeline, handoff).
+Interactive orchestration is driven by the `issue-orchestrator` skill. A factory loop agent does
+none of this (see "Two ways work gets done").
 
 There is no app to boot here. Image, devcontainer and feature changes cannot be exercised
 locally (see "No Docker in the dev environment" above), so their evidence is the PR's CI run.

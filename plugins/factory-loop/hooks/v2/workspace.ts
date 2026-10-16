@@ -49,9 +49,9 @@ export function processIdOf(stat: string | null): string | undefined {
   return /^\d+$/.test(pid) && /^\d+$/.test(start) ? `${pid}:${start}` : undefined
 }
 
-// What the rail read: this session's handshake is there, names it and this process, and is
-// fresh, or why not (sources-workspace.ts workspaceRead).
-export type WorkspaceRead = { session: string; ok: true; version: string | null } | { session: string; ok: false; why: string }
+// What the rail read for this session and this process (null: its id is unknown): the handshake
+// is there, names both, and is fresh, or why not (sources-workspace.ts workspaceRead).
+export type WorkspaceRead = { session: string; process: string | null } & ({ ok: true; version: string | null } | { ok: false; why: string })
 
 // workspaceHold: why a record's step may not start: an agent step while the rail fails. null: it
 // may (the rail passed, or was not read).
@@ -61,7 +61,8 @@ export function workspaceHold(ctx: V2Ctx, step: StepKind | null): string | null 
   return `workspace: ${w.why}; agent steps are held`
 }
 
-// workspaceTell: the owner told once per session while the rail fails, after the grace.
+// workspaceTell: the owner told once per process the rail failed in, after the grace: the
+// supervisor resumes the same session in each new process, and each outage is told.
 export function workspaceTell(ctx: V2Ctx): void {
   const w = ctx.v2.workspace
   if (w === undefined || w.ok) return
@@ -70,7 +71,7 @@ export function workspaceTell(ctx: V2Ctx): void {
     skip(ctx, 'O2', null, `workspace: told after ${WORKSPACE_GRACE_MS / 60_000} minutes without the companion: ${w.why}`)
     return
   }
-  const key = `tell:workspace:${w.session.replace(/[^A-Za-z0-9._-]/g, '_')}`
+  const key = `tell:workspace:${`${w.session}/${w.process ?? 'unknown'}`.replace(/[^A-Za-z0-9._-]/g, '_')}`
   const context = [w.why, 'Enable the factory-loop-workspace plugin beside factory-loop in this workspace, then restart the session. Until then no agent step starts.']
   want(ctx, wake('tell', 'workspace', key, 'O2', null, { session: w.session }, context))
 }
