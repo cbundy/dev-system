@@ -16,11 +16,13 @@
 # only brings in the base's changes around the PR's lines) keeps it, while any change to the PR's
 # own lines changes it. The diff is pinned so no git setting changes the id: no colour, no external
 # diff or textconv driver, no rename detection, and full object ids (a binary change is identified
-# by its blobs, whose abbreviation would otherwise grow with the repo).
+# by its blobs, whose abbreviation would otherwise grow with the repo). --stable adds up one hash
+# per changed file, so a head that changes nothing against the base (main already has its change)
+# has the zero id, which git patch-id leaves unprinted.
 #
 # Output: the id (40 hex characters) on one line.
-# Exit codes: 0 printed; 1 it cannot be computed (a fetch failed, the head is not on origin, no
-# merge base, or the head changes nothing against the base), with the reason on stderr; 2 usage.
+# Exit codes: 0 printed; 1 it cannot be computed (a fetch failed, the head is not on origin, or no
+# merge base), with the reason on stderr; 2 usage.
 set -u
 
 ME=callum-flow-patch-id
@@ -56,7 +58,7 @@ fi
 
 mb=$(git merge-base "refs/remotes/origin/$base" "$head" 2> /dev/null) || die "no merge base between origin/$base and $ref"
 diff=$(git diff -U0 --no-color --no-ext-diff --no-textconv --no-renames --full-index "$mb" "$head") || die "cannot diff $ref against origin/$base"
-[ -n "$diff" ] || die "$ref changes nothing against origin/$base"
+[ -n "$diff" ] || { printf '%040d\n' 0; exit 0; }
 id=$(printf '%s\n' "$diff" | git patch-id --stable | cut -d' ' -f1)
 printf '%s\n' "$id" | grep -Eqx '[0-9a-f]{40}|[0-9a-f]{64}' || die "cannot compute the patch id of $ref"
 printf '%s\n' "$id"

@@ -1495,8 +1495,9 @@ a branch with no issue). `--patch` takes no `--run` or `--update-behind`. The lo
 colour, external diff, textconv or rename detection, and full object ids. With no context lines, a
 clean merge of the base into the head (`gh pr update-branch`) keeps it, and any change to the PR's own
 lines changes it. It fetches `origin/<base>` and the head (a branch from origin, a sha by its id) into
-the remote-tracking refs and never touches a working tree or HEAD. Exit 1 when it cannot be computed (a
-fetch failed, no merge base, no change against the base), 2 on bad usage. The loop's `prs` source and
+the remote-tracking refs and never touches a working tree or HEAD. A head that changes nothing against
+the base (main already has its change) has the zero id (`--stable` adds up one hash per file). Exit 1
+when it cannot be computed (a fetch failed, no merge base), 2 on bad usage. The loop's `prs` source and
 the guard's `patch` check both run it (override: `CALLUM_FLOW_PATCH_ID_BIN`).
 
 `callum-flow-merge-guard <pr> --update-behind [--run ID] [--base BRANCH]` updates only an open,

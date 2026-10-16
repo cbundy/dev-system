@@ -398,7 +398,8 @@ export const reviewStep: StepPlan = env => {
   const ensured = ensure(env)
   if (typeof ensured !== 'number') return ensured.kind === 'result' ? result(ensured.event, ensured.trigger) : ensured
   const pr = ensured
-  // an admission hold: no PR was read this pass
+  // an admission hold: a rate limit cut the PR reads short, or none ran; a PR whose own read
+  // failed is its record's wait alone (below)
   const source = ctx.v2.sources.prs
   if (!source.ok) return held(`review: the PRs were not read (${source.error ?? 'no reason given'})`)
   // the PR's own read: a GitHub wait, bounded (viewWait)
@@ -407,7 +408,8 @@ export const reviewStep: StepPlan = env => {
     const read = viewWait(env, pr, why)
     return read.kind === 'result' ? result(read.event, read.trigger) : read
   }
-  if (pv === undefined) return unread(`PR #${pr} was not read this pass`)
+  const failed = ctx.v2.prs.unread?.find(u => u.pr === pr && u.issue === r.issue)
+  if (pv === undefined) return unread(failed === undefined ? `PR #${pr} was not read this pass` : `PR #${pr} did not read: ${failed.why}`)
   if (pv.readAt < r.seqAt) return unread(`waits for a read of PR #${pr} newer than seq ${r.seq}`)
   // merged or closed: GitHub's own events take the record (rules-state.ts, E3, E4)
   if (pv.state !== 'open') return held(`review: PR #${pr} is ${pv.state}`)

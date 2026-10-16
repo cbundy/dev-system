@@ -149,11 +149,30 @@ test("a head the checkout lacks is fetched from origin by its id; the checkout k
   assert.equal(git(w.loop, "symbolic-ref", "--short", "HEAD"), "main");
 });
 
+// Drill run 3 (R3-F3): a fixer merged main into issue-33, whose change main already had, so the head
+// changed nothing against main; the script failed, and that failure stalled every PR the loop read.
+test("a head that changes nothing against main, as after a merge of main that already had its change, has the zero id; a change on top has its own", () => {
+  const w = world();
+  const { push } = pr(w);
+  push();
+  // the same change reaches main another way, then the branch takes main in
+  moveMain(w, { 10: "ten" });
+  git(w.writer, "fetch", "-q", "origin");
+  git(w.writer, "merge", "-q", "--no-edit", "origin/main");
+  git(w.writer, "push", "-q", "origin", "issue-7");
+  const zero = "0".repeat(40);
+  assert.deepEqual(patchId(w.loop, "issue-7", "main"), { code: 0, out: zero, err: "" });
+  assert.deepEqual(patchId(w.loop, "main", "main"), { code: 0, out: zero, err: "" });
+  write(w.writer, "f.txt", lines(20, { 10: "ten", 15: "fifteen" }));
+  const more = commit(w.writer, "a change on top");
+  git(w.writer, "push", "-q", "origin", "issue-7");
+  const after = patchId(w.loop, more, "main");
+  assert.equal(after.code, 0, after.err);
+  assert.notEqual(after.out, zero);
+});
+
 test("what cannot be computed exits 1 with the reason; bad usage exits 2", () => {
   const w = world();
-  const none = patchId(w.loop, "main", "main");
-  assert.equal(none.code, 1);
-  assert.match(none.err, /main changes nothing against origin\/main/);
   const missing = patchId(w.loop, "issue-404", "main");
   assert.equal(missing.code, 1);
   assert.match(missing.err, /cannot fetch origin\/issue-404/);

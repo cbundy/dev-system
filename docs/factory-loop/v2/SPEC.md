@@ -589,12 +589,13 @@ step waiting on GitHub, with nothing of its own running, is unknown when either 
 
 This also bounds a head whose PR shows `blocked`, `unknown` or `draft` with nothing to run
 (`totality/T-10`). In reviewing, the PR's own read is bounded the same way: a PR not in the
-pass's read, a read older than the seq, no head or no patch id is unknown `ciStartMs` after the
-later of the seq's start and the end of the PR's ensure. The `prs` source not read at all, and a
-GitHub backoff, are admission holds with no clock. At the merge queue's head it bounds a PR that
-did not read too: only a GitHub rate limit, which cut the reads short, holds it with no clock. A
-PR the reader refuses for an untrusted author (exit 3) is a fact, not a missing read:
-`not-ok(policy)` (9.3).
+pass's read (a PR whose read, checks or patch id failed is left out: its own record's wait, never
+another's), a read older than the seq, no head or no patch id is unknown `ciStartMs` after the
+later of the seq's start and the end of the PR's ensure. The `prs` source not read at all (a
+GitHub rate limit cut the reads), and a GitHub backoff, are admission holds with no clock. At the
+merge queue's head it bounds a PR that did not read too: only a GitHub rate limit, which cut the
+reads short, holds it with no clock. A PR the reader refuses for an untrusted author (exit 3) is a
+fact, not a missing read: `not-ok(policy)` (9.3).
 
 The values are settings (`stateTimeoutMs`, `ciStartMs`, `ciRunMs`; appendix A).
 
@@ -1215,7 +1216,9 @@ is a new `Reviewer` implementation and a setting, nothing more.
 
 - **Patch id** of a head: `git diff -U0 --no-color --no-ext-diff $(git merge-base
   origin/<default> <head>) <head> | git patch-id --stable`, first field. A new image script,
-  `callum-flow-patch-id <branch|sha> <base>`, computes it for both the loop and the guard.
+  `callum-flow-patch-id <branch|sha> <base>`, computes it for both the loop and the guard. A head
+  that changes nothing against main (main already has its change) has the zero id: `--stable` adds
+  up one hash per file. It goes through review like any other patch.
 - `-U0` leaves context lines out, so a clean `gh pr update-branch`, which only brings in main's
   changes around the PR's lines, keeps the id. With context lines, git's patch id changes whenever
   main touched a line within three lines of a hunk (C3:441).

@@ -397,7 +397,6 @@ describe('the head as read: patch, conflict and CI (v2 SPEC 4.2, 8.4, 8.5, 9.5)'
     const next = rec(28, { seqAt: NOW - MIN })
     const failing = (seqAt: number, over: Partial<V2State['prs']> = {}) =>
       world([{ ...r, seqAt }, next], [view(next)], {}, {
-        sources: { store: OK, leases: OK, prs: { ok: false, at: NOW, error: 'PR #627: gh pr checks exit 1: HTTP 502' }, interventions: OK, comments: OK },
         prs: { prs: [view(next)], main: null, unread: [{ pr: 627, issue: 27, why: 'gh pr checks exit 1: HTTP 502', untrusted: false }], ...over },
       })
     // within the bound: held, and nothing behind it is touched
@@ -926,7 +925,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect((await readPrs(one.ctx)).read.prs.map(v => v.pr)).toEqual([671])
   })
 
-  test('a head\'s patch id is computed once, and again when the head moves; one that does not compute is null and named', async () => {
+  test('a head\'s patch id is computed once, and again when the head moved; one that does not compute leaves that PR alone unread, with why, and the source read', async () => {
     const r = rec(75, { state: 'reviewing', step: 'review' })
     const head = { '675': sha('4') }
     const first = sourceCtx([r], prReply(head))
@@ -934,10 +933,13 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const kept = sourceCtx([r], prReply(head), { heads: { [sha('4')]: { pr: 675, at: NOW - MIN } } })
     expect((await readPrs(kept.ctx)).read.prs[0]?.patch).toBe(PATCH)
     expect(kept.argvs.filter(a => a[0] === 'callum-flow-patch-id')).toEqual([])
-    const moved = sourceCtx([r], prReply({ '675': sha('5') }, a => (a[0] === 'callum-flow-patch-id' ? { exitCode: 1, stderr: 'callum-flow-patch-id: no merge base between origin/main and x' } : undefined)))
+    // drill run 3 (R3-F3): one PR's patch id failed the whole source, so no record's PR counted as read
+    const other = rec(76, { state: 'reviewing', step: 'review' })
+    const moved = sourceCtx([r, other], prReply({ '675': sha('5'), '676': sha('6') }, a => (a[0] === 'callum-flow-patch-id' && a[1] === sha('5') ? { exitCode: 1, stderr: 'callum-flow-patch-id: no merge base between origin/main and x' } : undefined)))
     const out = await readPrs(moved.ctx)
-    expect(out.read.prs[0]?.patch).toBeNull()
-    expect(out.source).toMatchObject({ ok: false, error: expect.stringContaining('the patch id of PR #675 at 5555555 did not compute: callum-flow-patch-id: no merge base') })
+    expect(out.source).toEqual({ ok: true, at: NOW })
+    expect(out.read.prs.map(v => [v.pr, v.patch])).toEqual([[676, PATCH]])
+    expect(out.read.unread).toEqual([{ pr: 675, issue: 75, why: 'the patch id of 5555555 did not compute: callum-flow-patch-id: no merge base between origin/main and x', untrusted: false }])
   })
 
   test('a closed or merged PR is read without its checks; heads go when their PR closes or their record does', async () => {
@@ -956,7 +958,7 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     expect(headsOf({ [HEAD]: { pr: 676, at: 1 } }, [], [], NOW, [])).toEqual({ [HEAD]: { pr: 676, at: 1 } })
   })
 
-  test('nothing is read with no budget or after a rate limit; a PR that does not read is left out and named; an untrusted author too', async () => {
+  test('nothing is read with no budget or after a rate limit, and the source is not read; a PR that does not read is left out and named, an untrusted author too, and the source is', async () => {
     const records = [rec(77), rec(78, { seqAt: NOW - HOUR })]
     const none = sourceCtx(records, prReply({}), { prBudget: 0 })
     expect(await readPrs(none.ctx)).toMatchObject({ read: { prs: [] }, source: { ok: false, error: 'GitHub rate limit: no PR is read this pass' } })
@@ -967,7 +969,8 @@ describe('the prs source (sources-prs.ts, v2 SPEC 2.4)', () => {
     const bad = sourceCtx(records, prReply({}, a => (a[0] === 'callum-flow-issue-read' && a[3] === '678' ? { exitCode: 3 } : undefined)))
     const out = await readPrs(bad.ctx)
     expect(out.read.prs.map(v => v.pr)).toEqual([677])
-    expect(out.source).toMatchObject({ ok: false, error: expect.stringContaining('PR #678: not by a trusted author') })
+    expect(out.read.unread).toEqual([{ pr: 678, issue: 78, why: 'not by a trusted author (callum-flow-issue-read exit 3)', untrusted: true }])
+    expect(out.source).toEqual({ ok: true, at: NOW })
     // no record in reviewing or the queue: nothing to read, and nothing wrong
     expect((await readPrs(sourceCtx([rec(79, { state: 'fixing', step: 'fix' })], prReply({})).ctx)).source).toEqual({ ok: true, at: NOW })
   })

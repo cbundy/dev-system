@@ -9,11 +9,12 @@
 // observe first saw each head (heads:<repo>), whose entries go when their PR closes or its record
 // does. Reads go in 2.4's order, the queue's head first, then the other records in reviewing and
 // the merge queue, for at most ctx.prBudget records (K, a budget of its own; none during a GitHub
-// backoff), and stop at a rate limit met this pass (ctx.limited). A PR that does not read is left
-// out, named in the source's error and listed in `unread` with why (and whether the reader refused
-// it for an untrusted author, exit 3); `cut` says why reads stopped before every record was read.
-// The rules read a missing PR as not read, never as a fact, except an untrusted author's, which is
-// one (9.3, policy).
+// backoff), and stop at a rate limit met this pass (ctx.limited). A PR whose read fails in any
+// part (the PR, its checks, its patch id) is left out and listed in `unread` with why (and whether
+// the reader refused it for an untrusted author, exit 3): only its own record waits on it, never
+// the others, so the source fails only when `cut` says why reads stopped before every record was
+// read. The rules read a missing PR as not read, never as a fact, except an untrusted author's,
+// which is one (9.3, policy).
 import type { RunResult } from '../exec'
 import type { LedgerEntry, Ms, Source } from '../types'
 import { lsRemoteArgv, patchIdArgv, prChecksArgv, prReadArgv } from './argv'
@@ -61,7 +62,6 @@ export const EMPTY_PRS: PrsRead = { prs: [] }
 const READ_MS = 60_000
 // a patch id fetches the head and main first
 const PATCH_MS = 120_000
-const ERROR_MAX = 400
 
 // --- parsing what the CLIs print ----------------------------------------------------------------------
 
@@ -170,7 +170,6 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
   const want = prRecords(ctx.records, ctx.state.control.paused, ctx.state.ledger)
   const checkout = ctx.state.checkout
   const defaultBranch = checkout !== null && !('error' in checkout) ? checkout.defaultBranch : null
-  const errors: string[] = []
   const prs: PrView[] = []
   const unread: PrUnread[] = []
   let cut: string | undefined
@@ -182,31 +181,28 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
       cut = 'a GitHub rate limit met this pass ended the PR reads'
       break
     }
-    const v = await readOne(ctx, r, defaultBranch, errors)
+    const v = await readOne(ctx, r, defaultBranch)
     if ('why' in v) {
-      errors.push(`PR #${r.pr}: ${v.why}`)
       unread.push({ pr: r.pr, issue: r.issue, why: v.why, untrusted: v.untrusted })
       continue
     }
     prs.push(v.view)
     bases.push(v.base)
   }
-  if (cut !== undefined) errors.push(cut)
   let main: PrsRead['main'] = null
   const behind = prs.findIndex(v => v.state === 'open' && v.mergeable === 'behind' && want.some(r => r.pr === v.pr && r.state === 'merge-queue'))
   const branch = defaultBranch ?? bases[behind] ?? null
   if (behind >= 0 && branch !== null && !ctx.limited()) {
     const r = await ctx.run(lsRemoteArgv(branch), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
-    const sha = r.exitCode === 0 ? shaOf(r.stdout, branch) : null
-    if (sha === null) errors.push(`main's head on origin did not read: ${lastLine(r) || `exit ${r.exitCode}`}`)
-    main = { branch, sha }
+    // a sha that did not read holds that head alone (rules-queue.ts update)
+    main = { branch, sha: r.exitCode === 0 ? shaOf(r.stdout, branch) : null }
   }
   const heads = headsOf(ctx.heads, ctx.records, prs, now, ctx.state.ledger)
   for (const k of [...PATCHES.keys()]) {
     const sha = k.split(' ').at(-1) ?? ''
     if (heads[sha] === undefined) PATCHES.delete(k)
   }
-  const source: Source = errors.length === 0 ? { ok: true, at: now } : { ok: false, at: now, error: clip(errors.join('; ')) }
+  const source: Source = cut === undefined ? { ok: true, at: now } : { ok: false, at: now, error: cut }
   const read: PrsRead = { prs, main }
   if (unread.length > 0) read.unread = unread
   if (cut !== undefined) read.cut = cut
@@ -214,8 +210,7 @@ export async function readPrs(ctx: SourceCtx): Promise<{ read: PrsRead; source: 
 }
 
 // readOne: one record's PR: the PR itself, and for an open one its checks and its head's patch id.
-// A failed patch id leaves the patch null (rules hold on it, never guess) and is named.
-async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultBranch: string | null, errors: string[]): Promise<{ view: PrView; base: string | null } | { why: string; untrusted: boolean }> {
+async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultBranch: string | null): Promise<{ view: PrView; base: string | null } | { why: string; untrusted: boolean }> {
   const failed = (why: string, untrusted = false) => ({ why, untrusted })
   const read = await ctx.run(prReadArgv(r.pr), undefined, READ_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
   if (read.exitCode === 3) return failed('not by a trusted author (callum-flow-issue-read exit 3)', true)
@@ -230,22 +225,23 @@ async function readOne(ctx: SourceCtx, r: IssueRecord & { pr: number }, defaultB
     if (parsed === null) return failed(`gh pr checks exit ${c.exitCode}: ${lastLine(c)}`)
     checks = parsed
     const base = defaultBranch ?? pull.base
-    if (pull.head !== null && base !== null) patch = await patchOf(ctx, pull.head, base, r.pr, errors)
+    if (pull.head !== null && base !== null) {
+      const p = await patchOf(ctx, pull.head, base)
+      if (typeof p !== 'string') return failed(p.why)
+      patch = p
+    }
   }
   const view: PrView = { pr: r.pr, issue: r.issue, state: pull.state, head: pull.head, mergedHead: pull.mergedHead, closedAt: pull.closedAt, mergeable: pull.mergeable, author: pull.author, checks, patch, readAt: ctx.now }
   return { view, base: pull.base }
 }
 
-async function patchOf(ctx: SourceCtx, head: string, base: string, pr: number, errors: string[]): Promise<string | null> {
+async function patchOf(ctx: SourceCtx, head: string, base: string): Promise<string | { why: string }> {
   const key = `${ctx.rt.repo} ${base} ${head}`
   const kept = PATCHES.get(key)
   if (kept !== undefined) return kept
   const r = await ctx.run(patchIdArgv(head, base), undefined, PATCH_MS).catch((err: unknown) => ({ exitCode: -1, stdout: '', stderr: String(err) }))
   const id = r.stdout.trim()
-  if (r.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(id)) {
-    errors.push(`the patch id of PR #${pr} at ${head.slice(0, 7)} did not compute: ${lastLine(r) || `exit ${r.exitCode}`}`)
-    return null
-  }
+  if (r.exitCode !== 0 || !/^[0-9a-f]{40,64}$/.test(id)) return { why: `the patch id of ${head.slice(0, 7)} did not compute: ${lastLine(r) || `exit ${r.exitCode}`}` }
   PATCHES.set(key, id)
   return id
 }
@@ -267,8 +263,4 @@ export function headsOf(before: Readonly<Record<string, HeadSeen>>, records: rea
 
 function lastLine(r: { stdout: string; stderr: string }): string {
   return (r.stderr.trim() || r.stdout.trim()).split('\n').pop()?.slice(0, 200) ?? ''
-}
-
-function clip(text: string): string {
-  return text.length > ERROR_MAX ? `${text.slice(0, ERROR_MAX - 3)}...` : text
 }

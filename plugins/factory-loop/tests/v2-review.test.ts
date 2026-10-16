@@ -193,6 +193,8 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     }
     expect(hold([view(603)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'not built yet (U7)' }, interventions: OK, comments: OK } })).toEqual(['review: the PRs were not read (not built yet (U7))'])
     expect(hold([])).toEqual([`review: PR #${PR} was not read this pass`])
+    // its own read failed: only this record waits, and says why (drill run 3, R3-F3)
+    expect(hold([], { prs: { prs: [], unread: [{ pr: PR, issue: 603, why: 'gh pr checks exit 1: HTTP 502', untrusted: false }] } })).toEqual([`review: PR #${PR} did not read: gh pr checks exit 1: HTTP 502`])
     expect(hold([view(603, { readAt: r.seqAt - MIN })])).toEqual([`review: waits for a read of PR #${PR} newer than seq 5`])
     expect(hold([view(603, { head: null })])).toEqual([`review: PR #${PR} shows no head`])
     expect(hold([view(603, { patch: null })])).toEqual([`review: waits for the patch id of head ${short(HEAD)}`])
@@ -206,6 +208,9 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
       const t = transitionOf(old(prs), 604)
       expect(t).toMatchObject({ row: 'U2', via: 'unknown:github-wait', trigger: { kind: 'fact', fact: `github-wait:${PR}/s5` } })
     }
+    // a read of its own that keeps failing too, so it cannot hold its slot for good
+    const failing = { prs: [], unread: [{ pr: PR, issue: 604, why: 'the patch id of 9e01b77 did not compute: exit 1', untrusted: false }] }
+    expect(transitionOf(old([], { prs: failing }), 604)).toMatchObject({ row: 'U2', via: 'unknown:github-wait' })
     // the source not read is an admission hold: no clock
     const unread = old([view(604)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'gh failed' }, interventions: OK, comments: OK } })
     expect(transitionOf(unread, 604)).toBeUndefined()
@@ -979,5 +984,73 @@ describe('the review step in the pass driver (v2 SPEC 2.4, 8.1)', () => {
     expect((line.sources as Record<string, string>)['v2.prs']).toBe('ok')
     expect((line.skipped as { why: string }[]).map(x => x.why).filter(w => w.includes(`PR #${pr}`))).toEqual([])
     expect((line.actions as { key: string; kind: string }[]).filter(a => a.kind === 'slot' || a.kind === 'agent-step').map(a => a.key)).toEqual([prepareKey(r, 1)])
+  })
+
+  // Drill run 3 (2026-10-16, R3-F3): #33's fixer merged main into its branch, whose change main
+  // already had, so the patch id of its head did not compute. That one failure failed the whole prs
+  // source, and from 03:32 every record in reviewing and the queue was held "the PRs were not read",
+  // #36 too, with no step and no tell.
+  test('a PR whose read fails holds only its own record: the other record\'s reviewer starts, and the failed one says why', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const life = lifeOf(NOW - HOUR)
+    const prOf = (n: number) => n + 2
+    const headOf = (n: number) => (n === 33 ? HEAD : HEAD2)
+    const recs = [33, 36].map((n): IssueRecord => ({ ...madeRecord({ issue: n, life, branch: `issue-${n}`, pr: prOf(n), others: [] }, NOW - HOUR), seq: 4, seqAt: NOW - MIN, since: NOW - MIN, state: 'reviewing', step: 'review', round: 1, head: headOf(n), brief: BRIEF(n) }))
+    const [failing, other] = recs as [IssueRecord, IssueRecord]
+    const t5 = (r: IssueRecord) => entry(transitionKey(r), 'transition', { issue: r.issue, rule: 'S3', startedAt: NOW - MIN, endedAt: NOW - MIN, outcome: { kind: 'transition', row: 'T5', event: 'ok', cause: null, from: 'building', to: 'reviewing', step: 'build', stored: true, via: 'build' } })
+    const slot = (r: IssueRecord, name: string) => ({ name, path: `/slots/${name}`, status: 'leased', branch: r.branch, lease_id: `L${name}`, lease_holder: `factory-loop:${r.issue}:${life}`, leased_at: iso(NOW - HOUR), processes: [] })
+    const pull = (n: number) => ({ pr: { number: prOf(n), state: 'open', merged: false, head: { sha: headOf(n), ref: `issue-${n}`, repo: { full_name: REPO } }, base: { ref: 'main' }, user: { login: 'cbundy' }, mergeable_state: 'clean', body: '' }, stripped: 0 })
+    const empty = `callum-flow-patch-id: ${HEAD} changes nothing against origin/main`
+    const run = (argv: string[], s: Seen) => {
+      const line = argv.join(' ')
+      switch (argv[0]) {
+        case 'callum-flow-factory-state':
+          return { stdout: factoryDoc(recs.map(r => ({ issue: r.issue, stage: 'reviewing', entered_at: iso(NOW - MIN), holder: DEVICE, run: null, pr: r.pr, stuck: null, github: null }))) }
+        case 'dev-query':
+          return { stdout: (s.stdin ?? '').includes('workers_status') ? QUIET_BEATS : NO_EVENTS }
+        case `${TOOLS}/queue-watch.sh`:
+          return { stdout: 'queue known=none now=none\n' }
+        case `${TOOLS}/usage-check.sh`:
+          return { stdout: USAGE }
+        case 'treehouse':
+          return { stdout: JSON.stringify([slot(failing, '1'), slot(other, '2')]) }
+        case 'callum-flow-rollout':
+          return { stdout: 'ROLLOUT merge source=issue\n' }
+        case 'callum-flow-patch-id':
+          return argv[1] === HEAD ? { exitCode: 1, stderr: empty } : { stdout: `${PATCH2}\n` }
+        case 'callum-flow-issue-read': {
+          const r = recs.find(x => line === `callum-flow-issue-read --json --pr ${x.pr}`)
+          return { stdout: JSON.stringify(r === undefined ? { issues: [], stripped: 0 } : pull(r.issue)) }
+        }
+      }
+      for (const r of recs) {
+        if (line === ARGV.branchPrsArgv(REPO, r.branch).join(' ')) return { stdout: JSON.stringify([{ number: r.pr, state: 'OPEN', headRefOid: r.head }]) }
+        if (line === ARGV.prChecksArgv(REPO, r.pr ?? 0).join(' ')) return { stdout: JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass', startedAt: iso(NOW - MIN), completedAt: iso(NOW), link: `https://github.com/${REPO}/actions/runs/7/job/1` }]) }
+      }
+      return undefined
+    }
+    const h = host(on, {
+      config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
+      store: { [`records:${REPO}`]: recordsToStore(recs, NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: recs.map(t5) } },
+      run,
+    })
+    let at = NOW
+    const pass = async (ms: number) => {
+      h.files.set(handshakePath(`${CFG_DIR}/factory-loop`, SESSION), JSON.stringify({ v: 1, session: SESSION, version: '0.38.2', at: iso(at) }))
+      at += ms
+      await clock.advance(ms)
+    }
+    await $.session.start(START)
+    await pass(6_000)
+    for (let i = 0; i < 4 && recs.some(r => h.entry(prKey(r, 'ensure'))?.status !== 'done'); i++) await pass(60_000)
+    expect(recs.map(r => h.entry(prKey(r, 'ensure'))?.status)).toEqual(['done', 'done'])
+    // the next pass reads both PRs: #33's patch id fails, #36's reviewer starts all the same
+    await pass(60_000)
+    const line = h.last()
+    expect((line.sources as Record<string, string>)['v2.prs']).toBe('ok')
+    expect((line.actions as { key: string; kind: string }[]).filter(a => a.kind === 'slot' || a.kind === 'agent-step').map(a => a.key)).toEqual([prepareKey(other, 1)])
+    const said = (n: number) => (line.skipped as { issue: number | null; why: string }[]).filter(x => x.issue === n).map(x => x.why)
+    expect(said(36)).toEqual([])
+    expect(said(33)).toEqual([`review: PR #35 did not read: the patch id of ${short(HEAD)} did not compute: ${empty}`])
   })
 })
