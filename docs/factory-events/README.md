@@ -8,7 +8,7 @@ versioned payload, stored in the factory database and read through one view. Des
 - [`schemas/`](schemas/) is the catalogue and the single source: the envelope
   ([`envelope.v1.json`](schemas/envelope.v1.json)) and one JSON Schema per event type and version
   (`<type>.v<N>.json`), each with the event's description, every field's description and examples.
-  Once the tooling exists, `REFERENCE.md` beside this file is generated from them; read that.
+  [`REFERENCE.md`](REFERENCE.md) beside this file is generated from them; read that.
 - [`translator.md`](translator.md): how today's `callum-flow-event` lines map onto these, during
   the switch only.
 
@@ -135,11 +135,24 @@ Checks fail whenever code and docs disagree, so nobody has to remember a process
 - **Generated reference.** `scripts/build-event-docs.js` writes `REFERENCE.md` from the schemas,
   the way `scripts/build-skills.js` writes SKILL.md: a type index, the envelope, the view's columns,
   and for each type its description, versions and fields. `npm run build:events` writes it.
-  `npm run lint` fails when it is stale, when a schema or field lacks a description or an example,
-  or when a field outside `required` cannot be null.
+  `npm run lint` (`node scripts/build-event-docs.js --check`) fails when it is stale, when a schema
+  or field lacks a description or an example, or when a field outside `required` cannot be null.
 - **Version lock.** The script keeps `schemas/versions.lock.json`: each version's shape without
-  descriptions and examples. Lint fails on any shape change to an existing version other than the
-  four the bump rule allows, and says "add `<type>.v<N+1>.json`".
+  its annotations. Lint fails on any shape change to an existing version other than the
+  ones the bump rule allows (a new optional nullable field, a new enum value, a looser bound), and
+  says "add `<type>.v<N+1>.json`". It also fails when a version is missing, a version file is gone,
+  or an older version has no upgrade step to the next one in the reader.
+- **Reader shapes.** The plugin cannot read `docs/` at run time, so the script also writes
+  `plugins/factory-loop/hooks/v2/event-schemas.ts`, the same shapes as a typed constant plus each
+  type's current version. The shared reader is `plugins/factory-loop/hooks/v2/event-reader.ts`: it
+  reads only that file and exports `readEvent`, `UPGRADES` (one step per `<type>.v<N>`) and
+  `validateStrict`.
+- **Supported keywords.** The generator and the reader's validator know only these. Checked:
+  `type` (a string or an array, including `"null"`), `enum`, `const`, `properties`, `required`,
+  `additionalProperties: false`, `items`, `pattern`, `minimum`, `maximum`, `minLength`,
+  `maxLength`, `minItems`, `maxItems` and `format: date-time`. Annotations: `$schema`, `$id`,
+  `title`, `description`, `examples`, `x-column` and `x-issue` (`required`, `optional` or `none`).
+  Lint fails on any other keyword.
 - **Tests (`npm test`).** Every example validates strictly against its own schema and, through the
   shared reader's upgrade, against the type's current version. Every event fixture of a producer
   (`tests/factory-loop-v2-events.test.js` for the loop, and the shell producers' own tests) goes
