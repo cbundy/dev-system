@@ -1146,8 +1146,9 @@ succeeds. The title is set with `/rename` only when the text changes, and at mos
 `titleEveryMs` (a throttle): a change inside the window waits, the first pass after it sets
 whatever the title is then, and a change that reverts to the last title sends nothing. The
 first title after a load goes out at once (`lastTitle` and `lastTitleAt` start null), and the
-driver's off and error titles go out at once and leave the window open, so the first plan title
-after them is not held. The `session.append` hook blanks the note the rename leaves for the
+driver's off, kill-switch and error titles go out at once too, and every rename, those
+included, stamps `lastTitleAt`, so the first plan title after them waits until `titleEveryMs`
+has passed. The `session.append` hook blanks the note the rename leaves for the
 model (FINDINGS check 3).
 
 ### 9.2 `tell`
