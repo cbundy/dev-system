@@ -24,8 +24,10 @@
 #
 # Usage: dev-remote-sessions <command>
 #   snapshot  record the live sessions (pid and process start still match) in the
-#             state dir, replacing the last snapshot. A session that ends
-#             gracefully is thereby remembered until the next snapshot. The
+#             state dir, replacing the last snapshot, each with updatedAt
+#             raised to the snapshot time (when it was last seen live). A
+#             session that ends gracefully is thereby remembered until the
+#             next snapshot. The
 #             session of the supervisor's own Claude (or Remote Control server)
 #             process is also recorded in supervisor/, for good (`plan` adopts
 #             the stale records in tmux session `claude` while it is empty). A no-op
@@ -49,9 +51,10 @@
 # deduplicated by sessionId (server-spawned ones by bridgeSessionId), minus:
 # sessions that are live, the supervisor's own sessions (in supervisor/),
 # records without a bridgeSessionId, non-interactive sessions, sessions last
-# updated more than DEV_REMOTE_CONTROL_RESTORE_HOURS (default 24, 0 turns
-# restoring off) ago, sessions with no transcript (server-spawned ones need
-# none), and records already in the ledger.
+# seen live (last updated, or last snapshotted) more than
+# DEV_REMOTE_CONTROL_RESTORE_HOURS (default 24, 0 turns restoring off) ago,
+# sessions with no transcript (server-spawned ones need none), and records
+# already in the ledger.
 #
 # State, in ${DEV_RESTART_SELF_DIR:-/persist/dev-restart-self}/remote-sessions:
 #   snapshot/  the last snapshot        pending.json  the planned candidates
@@ -239,13 +242,14 @@ enrich() {
 
 cmd_snapshot() {
   marked restored || return 0
-  local tmp r pane sid
+  local tmp r pane sid now_ms
   mkdir -p "$STATE" || { log "cannot create $STATE"; return 1; }
   tmp=$(mktemp -d "$STATE/.snapshot.XXXXXX") || return 1
   pane=$(supervisor_pane)
+  now_ms=$(($(date +%s) * 1000))
   while IFS= read -r r; do
     [ -n "$r" ] || continue
-    echo "$r" > "$tmp/$(rec_key "$r").json"
+    jq -c --argjson now "$now_ms" '.updatedAt = ([.updatedAt, $now] | max)' <<< "$r" > "$tmp/$(rec_key "$r").json"
     if [ -n "$pane" ] && is_supervisor "$r" "$pane"; then
       sid=$(jq -r .sessionId <<< "$r")
       case $sid in '' | *[!A-Za-z0-9-]*) ;; *) mkdir -p "$STATE/supervisor" && : > "$STATE/supervisor/$sid" ;; esac

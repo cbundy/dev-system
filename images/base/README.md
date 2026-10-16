@@ -994,7 +994,7 @@ Headless, the supervisor logs to the container log (`docker logs`, `kubectl logs
 | `DEV_REMOTE_CONTROL_RESUME` | `0` | `session` mode: `1` resumes the workspace's last conversation on every start, when there is one. See [Resuming the conversation](#resuming-the-conversation). |
 | `DEV_REMOTE_CONTROL_PROMPT` | unset | `session` mode: the first message of a fresh conversation, e.g. a slash command such as `/callum-flow:issue-orchestrator`. Not sent when a conversation is resumed. |
 | `DEV_REMOTE_CONTROL_RESUME_PROMPT` | unset | `session` mode: the message sent when a conversation is resumed, e.g. to re-arm a loop that did not survive the restart. |
-| `DEV_REMOTE_CONTROL_RESTORE_HOURS` | `24` | After a container restart, the other Remote Control sessions that were live at the restart and last active within this many hours are resumed. `0` turns it off. See [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart). |
+| `DEV_REMOTE_CONTROL_RESTORE_HOURS` | `24` | After a container restart, the other Remote Control sessions that were live at the restart and last seen live within this many hours are resumed, however long they sat idle. `0` turns it off. See [Restoring Remote Control sessions after a restart](#restoring-remote-control-sessions-after-a-restart). |
 | `DEV_REMOTE_CONTROL_SKIP_PERMISSIONS` | `0` | `1` runs Claude with `--dangerously-skip-permissions` (and skips its one-time consent dialog); in `server` mode, with `--permission-mode bypassPermissions` for the sessions it spawns, and `bypassPermissionsModeAccepted` set in `.claude.json`, since `claude remote-control` takes no `--settings` to skip the dialog per run. Only for a container you are happy to let act unsupervised. |
 | `DEV_REMOTE_CONTROL_POLL` | `30` | Seconds between login checks. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` with `DEV_REPO_URL` set, else the start directory, or `$HOME` if that is `/` | Where `dev-init` and Claude run (see [Workspace and repo](#workspace-and-repo)). Re-read at every Claude start, so a workspace cloned after start-up is used from the next restart. |
@@ -1077,8 +1077,9 @@ cwd, name, tmux target, `bridgeSessionId`, `procStart`) and deletes it on a grac
   supervisor's `claude` session): `tmux attach -t rc-restored`.
 - Never restored: the supervisor's own sessions (including the Remote Control server
   process), sessions without a `bridgeSessionId`, non-interactive sessions, sessions with
-  no transcript (other than server-spawned ones), and sessions last updated more than
-  `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago. A session that is already running is not
+  no transcript (other than server-spawned ones), and sessions last seen live more than
+  `DEV_REMOTE_CONTROL_RESTORE_HOURS` ago (a session live at the restart counts as seen
+  live then, however long it sat idle). A session that is already running is not
   started a second time. The main conversation's selection rules are documented under
   [Resuming the conversation](#resuming-the-conversation). A session is restored once:
   every record considered goes in a ledger under

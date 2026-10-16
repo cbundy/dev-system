@@ -67,8 +67,9 @@
 #   DEV_REMOTE_CONTROL_RESTORE_HOURS
 #                            after a container restart, sessions started in
 #                            claude.ai that were live at the restart and last
-#                            active within this many hours (default 24) are
-#                            resumed, see dev-remote-sessions; 0 turns it off
+#                            seen live within this many hours (default 24) are
+#                            resumed, however long they sat idle, see
+#                            dev-remote-sessions; 0 turns it off
 #   DEV_REMOTE_CONTROL_SKIP_PERMISSIONS
 #                            1 runs Claude with --dangerously-skip-permissions
 #                            (server mode: --permission-mode bypassPermissions

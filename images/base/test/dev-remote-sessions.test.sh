@@ -330,6 +330,32 @@ rec 711 $G1 "$cwd_a" "claude:@0.%0" session_01Gee interactive 1 "$dead_pid" 9011
 grep -qF -- "remote-control --session-id cse_01Gee" "$TMUX_LOG" || fail "not reattached without skip permissions: $(cat "$TMUX_LOG")"
 grep -qF -- "--permission-mode" "$TMUX_LOG" && fail "a permission mode was passed without skip permissions: $(cat "$TMUX_LOG")"
 
+# --- the window counts from when a session was last seen live, not its last status change -----------
+# A, idle for 30h but live at the snapshot, comes back after its process dies; B, a stale record 30h
+# old that no snapshot saw live, does not.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+sleep 600 &
+idle_pid=$!
+pids="$pids $idle_pid"
+sleep 1
+idle_start=$(sed 's/.*) //' "/proc/$idle_pid/stat" | cut -d' ' -f20)
+rec 801 $A "$cwd_a" "dev:@1.%1" session_A interactive 30 "$idle_pid" "$idle_start"
+transcript $A "$cwd_a" default high m
+rec 802 $B "$cwd_b" "dev:@2.%2" session_B interactive 30 "$dead_pid" 10002
+transcript $B "$cwd_b" default high m
+"$HELPER" plan 2>/dev/null
+"$HELPER" restore 2>/dev/null
+"$HELPER" snapshot 2>/dev/null
+kill "$idle_pid"
+wait "$idle_pid" 2>/dev/null || :
+rm -f "$tmp/mark"/*
+got=$("$HELPER" pending 2>/dev/null | ids)
+[ "$got" = "$A " ] || fail "last seen live: pending '$got', want only $A (live at the snapshot, idle past the window)"
+rm -f "$tmp/cfg/sessions/801.json"
+got=$("$HELPER" pending 2>/dev/null | ids)
+[ "$got" = "$A " ] || fail "last seen live, graceful exit: pending '$got', want only $A from the snapshot"
+
 # --- the supervisor's tmux session is matched exactly, never by name prefix --------------------------
 # Real tmux on a private socket: a session whose name starts with "claude" is not the supervisor's.
 sock="dev-remote-sessions-test-$$"
