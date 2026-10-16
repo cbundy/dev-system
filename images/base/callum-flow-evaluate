@@ -47,8 +47,8 @@ const IDLE_SHARE_THRESHOLD = 50; // percent of wait that, when dispatcher-bound 
 const RELEASE_STATES = ['merged', 'abandoned', 'closed', 'reclaimed', 'ready']; // end an in-flight claim
 // Not progress for the stuck test (metrics.md query 6): a lost race, a claim heartbeat, the
 // factory loop's bookkeeping (DECISIONS D-09), and the factory loop v2's review results and
-// interventions (v2 SPEC 7.1). Each still counts as the device being alive.
-const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop', 'reviewed', 'intervention']);
+// interventions, and its prompt_denied and prompt_waiting (v2 SPEC 7.1, 10.10). Each still counts as the device being alive.
+const NOT_PROGRESS = new Set(['claim_lost', 'renewed', 'loop', 'reviewed', 'intervention', 'prompt_denied', 'prompt_waiting']);
 const ACTION_TOOLS = new Set(['Agent', 'Edit', 'Write']);
 const ACTION_BASH_RE = new RegExp(
   [

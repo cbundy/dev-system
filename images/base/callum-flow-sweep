@@ -11,7 +11,7 @@
 # live (docs/factory-loop/v2/SPEC.md 3.6), never a label list: every issue in
 # the log whose latest event (judged by lifecycle events only:
 # untrusted_stripped, usage, watcher_error, test_weakened, claim_lost, renewed,
-# loop, reviewed and intervention are ignored) is not final (`closed` or
+# loop, reviewed, intervention, prompt_denied and prompt_waiting are ignored) is not final (`closed` or
 # `abandoned`; `merged` is not final, the issue may still be open), plus every
 # issue `callum-flow-factory-state --github off` lists live (which also covers
 # an issue known only from a mirror run, and a new life after abandonment). The
@@ -70,7 +70,7 @@ FSTATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
 # the states that are no lifecycle event of an issue: housekeeping, the factory
 # loop's bookkeeping, and its review results and interventions
-NOISE="'untrusted_stripped', 'usage', 'watcher_error', 'test_weakened', 'claim_lost', 'renewed', 'loop', 'reviewed', 'intervention'"
+NOISE="'untrusted_stripped', 'usage', 'watcher_error', 'test_weakened', 'claim_lost', 'renewed', 'loop', 'reviewed', 'intervention', 'prompt_denied', 'prompt_waiting'"
 # the claim's own events: the last of them says whether a claim holds
 CLAIMEV="'claimed', 'ready', 'reclaimed', 'merged', 'closed', 'abandoned'"
 
@@ -115,11 +115,11 @@ fi
 logfile=$("$EVENT" --path --repo "$repo" 2>/dev/null) || logfile=
 if [ -n "$logfile" ] && [ -f "$logfile" ]; then
   jq -R -c 'fromjson? | select(type == "object" and (.issue | type) == "number"
-    and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention") | not)) | {ts: .ts, issue: .issue, state: .state}' "$logfile" > "$tmp/local" 2>/dev/null || : > "$tmp/local"
+    and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention", "prompt_denied", "prompt_waiting") | not)) | {ts: .ts, issue: .issue, state: .state}' "$logfile" > "$tmp/local" 2>/dev/null || : > "$tmp/local"
 fi
 # Latest lifecycle event per issue: housekeeping events (untrusted_stripped, usage,
-# watcher_error, test_weakened, claim_lost, renewed, the factory loop's loop, reviewed and
-# intervention) never decide whether an issue is final, or a recurring one would hide a closed
+# watcher_error, test_weakened, claim_lost, renewed, the factory loop's loop, reviewed,
+# intervention, prompt_denied and prompt_waiting) never decide whether an issue is final, or a recurring one would hide a closed
 # issue for good. By ts; jq sorts stably, so equal timestamps keep file order
 # (central first, then this device's log). A third column is the latest claim
 # event, or none.

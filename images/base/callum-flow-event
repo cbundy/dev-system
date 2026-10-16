@@ -27,7 +27,7 @@
 # States (closed vocabulary): ready claimed briefed delegated run_started
 #   parked verdict fix_requested failed merge_ready head_mismatch conflict
 #   ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop
-#   transition reviewed intervention
+#   transition reviewed intervention prompt_denied prompt_waiting
 #   (`superseded`: a run or branch was replaced for the same issue, --run names the old run; it does not end the issue)
 #   (`rebased_behind`: see the lifecycle semantics in docs/metrics.md)
 #   (`renewed`: a claim heartbeat extended the lease; housekeeping, never a stage)
@@ -49,6 +49,11 @@
 #   (a fleet-level one names none); never a stage, never progress. A rescue the loop cannot see
 #   is recorded by hand: callum-flow-event intervention --issue N --note
 #   'who=person cause=rescue reason=what%20was%20done')
+#   (`prompt_denied`: the factory loop's companion refused a loop agent's tool call, because the
+#   engine would have asked a person nobody watches; `prompt_waiting`: a loop agent is waiting on
+#   such a prompt now. --issue is required; the note is `key=value` tokens (life, seq, step,
+#   attempt, agent, agent_type, tool, input, why, slot, session, transcript), none required;
+#   never a stage, never progress, never final)
 #
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
@@ -82,7 +87,7 @@
 # override of /proc/sys/kernel/random/uuid).
 set -u
 
-STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention"
+STATES="ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention prompt_denied prompt_waiting"
 
 usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2

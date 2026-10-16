@@ -241,6 +241,8 @@ export type StepMarker = {
   step: AgentStep
   role: Role
   branch: string
+  // the issue's PR, when it has one (the companion's notes carry it); an older marker has none
+  pr: number | null
   gateCommands: string[]
   gateTimeoutMs: Ms
   loopDir: string
@@ -358,7 +360,7 @@ export type InterventionWho = 'person' | 'loop'
 // and `guard:<what>` take their suffix from the lists above or the op's name.
 export const PERSON_CAUSES = ['op', 'unpark', 'push', 'hand-merge', 'pr-closed', 'issue-closed', 'control-file', 'config-file', 'restart', 'reconcile', 'unreject', 'rescue'] as const
 export const LOOP_CAUSES = [
-  'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
+  'triage', 'unknown', 'free', 'park', 'fix', 'ci-rerun', 'queue', 'guard', 'gate-unknown', 'prompt-denied', 'tripwire', 'breaker', 'stalled', 'workspace', 'reconcile', 'rejected', 'reclaim', 'wake',
 ] as const
 
 // --- what v2 reads (SPEC 2.4) ---------------------------------------------------------------------

@@ -12,6 +12,11 @@
 // - the stop gate (10.6): a writer may not finish while the repo's gate commands fail; a gate that
 //   cannot run lets it finish, logged as gate-unknown; every run is a line of companion.jsonl, the
 //   last also in factory-gate.json;
+// - prompts nobody answers (10.10): a call of a mapped agent that Claude Code would put to a person
+//   (tool.check answered `ask`) is denied instead, with a reason that tells the agent to find another
+//   way, and written as a `prompt_denied` event and a `prompt-denied` line of companion.jsonl; a
+//   permission_prompt notification of a mapped agent is a `prompt_waiting` event. A caller that is
+//   not in the map (the owner's own session) is never touched;
 // - the handshake (10.9): <CLAUDE_CONFIG_DIR>/factory-loop/workspace/<session>.json says this
 //   session has the companion, and in which process, written again every minute; the loop holds
 //   every agent step while its own is missing, from another process or stale.
@@ -24,7 +29,9 @@ import { blockText, gateLine, gateRecord, oneLine, runGates } from './gate'
 import type { Ran } from './gate'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
-import { MARKER_FILE, mismatch, parseMarker, slotLine } from './marker'
+import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marker'
+import { PROMPT_NOTIFICATIONS, inputOf, promptNote, promptReason, transcriptOf, whyOf } from './prompt'
+import type { Decided, NoteFields } from './prompt'
 
 const ME = 'factory-loop-workspace'
 const AGENTS = { plugin: 'factory-loop-workspace', key: 'agents' } as const
@@ -205,6 +212,55 @@ async function logLine($: EngineInterface, a: WorkspaceAgent, cause: string, rea
   await appendFile($, `${a.loopDir}/companion.jsonl`, `${JSON.stringify(line)}\n`).catch(() => undefined)
 }
 
+// --- prompts nobody answers (10.10) -----------------------------------------------------------------
+
+// the transcripts SubagentStart reported before the agent was in the map, by agent id (the newest
+// 200); the map's own record has it once it is
+const transcripts = new Map<string, string>()
+const TRANSCRIPTS_KEPT = 200
+
+function transcriptSeen(agentId: string, a: WorkspaceAgent): string | null {
+  return a.transcript ?? transcripts.get(agentId) ?? null
+}
+
+// eventLine: one factory event through `callum-flow-event`, in the issue's repository. A failure
+// (an image that does not know the state exits 2, a missing command) is swallowed: the caller has
+// already done what it must.
+async function eventLine($: EngineInterface, a: WorkspaceAgent, state: string, note: string): Promise<void> {
+  const argv = ['callum-flow-event', state, '--issue', String(a.issue), '--branch', a.branch, ...(typeof a.pr === 'number' ? ['--pr', String(a.pr)] : []), '--repo', a.repo, '--note', note]
+  await run($, argv, { cwd: a.slot }).catch(() => undefined)
+}
+
+// promptFields: the note's tokens for this agent; what cannot be read is none.
+async function promptFields($: EngineInterface, a: WorkspaceAgent, agentId: string): Promise<NoteFields> {
+  const session = await $.session.id().catch(() => null)
+  return {
+    life: a.life,
+    seq: a.seq,
+    step: a.step,
+    attempt: a.attempt,
+    agent: agentId,
+    agent_type: a.agentType,
+    slot: a.slot,
+    session,
+    transcript: transcriptSeen(agentId, a),
+  }
+}
+
+// refusePrompt: the deny for a mapped agent's call that Claude Code answered `ask`, with its event
+// and its line. Whatever of those fails, the deny stands.
+async function refusePrompt($: EngineInterface, a: WorkspaceAgent, e: { tool: string; input?: unknown; agentId?: string }, decided: Decided): Promise<{ decision: 'deny'; reason: string }> {
+  const reason = promptReason(e.tool, e.input, decided)
+  try {
+    const note = promptNote({ ...(await promptFields($, a, e.agentId ?? '')), tool: e.tool, why: whyOf(decided), input: inputOf(e.tool, e.input) })
+    await eventLine($, a, 'prompt_denied', note)
+  } catch {
+    // the deny is what matters
+  }
+  await logLine($, a, 'prompt-denied', `${e.tool}: ${reason}`).catch(() => undefined)
+  return { decision: 'deny', reason }
+}
+
 // --- the stop gate (10.6) ---------------------------------------------------------------------------
 
 async function runIn($: EngineInterface, slot: string, command: string, budgetMs: number): Promise<Ran> {
@@ -250,7 +306,9 @@ export const register: Register = on => {
       const parent = await agentOf($, e.parentAgentId)
       if (parent !== null) {
         const r = await next(e)
-        if (r.agentId !== undefined) await keep($, r.agentId, parent)
+        // its own type; its transcript is its own too, learned when it starts
+        const { transcript: _t, ...inherited } = parent
+        if (r.agentId !== undefined) await keep($, r.agentId, { ...inherited, agentType: e.subagentType })
         return r
       }
     }
@@ -264,7 +322,8 @@ export const register: Register = on => {
     const r = await next({ ...e, cwd: slot })
     if (r.agentId !== undefined) {
       const { v: _v, ...fields } = marker
-      await keep($, r.agentId, { ...fields, root: r.agentId, slot, real: place.real, roots: place.roots, gitDir: place.gitDir })
+      const attempt = nameParts(e.name)?.attempt
+      await keep($, r.agentId, { ...fields, root: r.agentId, slot, real: place.real, roots: place.roots, gitDir: place.gitDir, agentType: e.subagentType, ...(attempt === undefined ? {} : { attempt }) })
     }
     return r
   }).catch(($, e, next) => (next.called ? next(e) : slotLine(e.prompt) !== null ? { deny: `${ME}: its spawn hook failed, so the agent was not started outside its slot` } : next(e)))
@@ -282,6 +341,47 @@ export const register: Register = on => {
     if (e.tool === 'Bash' && e.timeout === undefined) return next({ ...e, timeout: BASH_TIMEOUT_MS })
     return next(e)
   }).catch(($, e, next) => (next.called || e.agentId === undefined ? next(e) : { deny: `${ME}: its guard failed, so the call is refused` }))
+
+  // the call Claude Code would ask a person about: a mapped agent has nobody to ask
+  on('tool.check', async ($, e, next) => {
+    const r = await next(e)
+    if (r.decision !== 'ask' || e.agentId === undefined) return r
+    const a = await agentOf($, e.agentId)
+    if (a === null) return r
+    return refusePrompt($, a, e, r)
+  }).catch(async ($, e, next) => {
+    // a failure after `ask` came back, for a mapped agent, is still a deny
+    const r = await next(e)
+    if (r.decision !== 'ask' || e.agentId === undefined) return r
+    const a = await agentOf($, e.agentId).catch(() => null)
+    return a === null ? r : { decision: 'deny', reason: promptReason(e.tool, e.input, r) }
+  })
+
+  // a subagent's transcript is beside the session's: the hook's transcript_path is the session's
+  on('classic.SubagentStart', async ($, e, next) => {
+    const transcript = transcriptOf((e as { transcript_path?: unknown }).transcript_path, e.agent_id)
+    if (transcript !== null) {
+      transcripts.delete(e.agent_id)
+      transcripts.set(e.agent_id, transcript)
+      for (const old of [...transcripts.keys()].slice(0, Math.max(0, transcripts.size - TRANSCRIPTS_KEPT))) transcripts.delete(old)
+      const a = await agentOf($, e.agent_id)
+      if (a !== null) await keep($, e.agent_id, { ...a, transcript })
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // a mapped agent's permission prompt, waiting: written, never answered
+  on('classic.Notification', async ($, e, next) => {
+    const agentId = (e as { agent_id?: unknown }).agent_id
+    if (typeof agentId === 'string' && PROMPT_NOTIFICATIONS.includes(e.notification_type)) {
+      const a = await agentOf($, agentId)
+      if (a !== null) {
+        const note = promptNote({ ...(await promptFields($, a, agentId)), input: e.message })
+        await eventLine($, a, 'prompt_waiting', note)
+      }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('classic.SubagentStop', async ($, e, next) => {
     const a = await agentOf($, e.agent_id)

@@ -511,6 +511,20 @@ for fin in closed abandoned; do
   [ "$(events | wc -l)" = "$n" ] || fail "final $fin: $(events)"
 done
 
+# the companion's prompt_denied and prompt_waiting are no lifecycle event: after closed they do not
+# make the issue a candidate for a second closed
+for noise in prompt_denied prompt_waiting; do
+  reset
+  closed_issue 7 completed
+  seed claimed 7
+  seed closed 7
+  seed "$noise" 7
+  n=$(events | wc -l)
+  rc_of "$SWEEP"
+  expect_rc 0 "sweep closed then $noise"
+  [ "$(events | wc -l)" = "$n" ] || fail "closed then $noise: $(events)"
+done
+
 # merged is not final: a merged issue GitHub closed gets closed (owner decision on #345) ...
 reset
 closed_issue 7 completed
