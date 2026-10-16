@@ -396,6 +396,11 @@ its next update, so it stays private. A shared workspace mounts that Docker volu
 machine stay in its own `/persist/claude`. The volume name follows the same rule as
 `gh_volume_name`, Docker creates it on first use, and deleting a workspace never deletes it.
 
+- **Switching an existing workspace.** Update it to a template version with the choice,
+  then change **Claude login** in the dashboard (the workspace's Settings, Parameters) or
+  run `dev-restart-self --parameter claude_login=shared` inside it; either restarts it with
+  the new value. `coder restart --parameter` does not work (see
+  [Changing a parameter on an existing workspace](#changing-a-parameter-on-an-existing-workspace)).
 - **Switching a workspace to shared.** While the shared volume holds no login, `dev-init`
   moves the workspace's own login into it, so the first one seeds it. Once it holds one, a
   workspace switching to shared uses it, and its own login stays on its persist volume,
