@@ -1008,7 +1008,7 @@ the note today's queries read:
 | `verdict` | after a fix step, one per finding the fixer handled, actor `fixer`: `CORRECT: <id> <reason>` (fixed) or `WRONG: <id> <reason>` (declined) | keeps the reviewer false-positive query (`docs/metrics.md:145-159`) |
 | `merged` | `callum-flow-merge`; the loop for a merge whose log was lost (4.5) | unchanged |
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
-| `loop` | agent and wake entries, rate caps, breakers, owner operations | unchanged (D-09) |
+| `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
 
 The loop no longer logs `superseded`, `rebased_behind` or `run_started`, and no watcher states
 (there are no pipeline runs).

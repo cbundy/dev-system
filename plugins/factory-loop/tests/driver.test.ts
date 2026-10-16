@@ -1941,3 +1941,91 @@ describe('act mode: the owner\'s controls (SPEC 4.3, D-38)', () => {
     expect(h.lines().some(l => l.control === 'skip 471')).toBe(true)
   })
 })
+
+describe('the pass summary event (#680)', () => {
+  const passesEvents = (h: Host) => h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes '))
+  const field = (argv: string[], name: string) => (argv.at(-1) ?? '').split(' ').find(t => t.startsWith(`${name}=`))?.slice(name.length + 1)
+
+  test('act mode sends one per minute, its count the decision log lines whose time falls in the minute', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: { ...ACT, passEveryMs: 20_000 }, run })
+    await $.session.start(START)
+    await clock.advance(5 * 60_000 + 1_000)
+    const events = passesEvents(h)
+    // the minutes that ended: the first at NOW + 1 min, none from the one still open
+    expect(events).toHaveLength(5)
+    expect(events[0]).toEqual(['callum-flow-event', 'loop', '--note', expect.stringContaining('kind=passes key=passes:')])
+    const lines = h.passes()
+    expect(lines.length).toBeGreaterThan(10)
+    events.forEach((e, i) => {
+      const from = NOW + i * 60_000
+      expect(field(e, 'key')).toBe(`passes:${from}`)
+      expect(field(e, 'status')).toBe('done')
+      expect(field(e, 'from')).toBe(iso(from))
+      expect(field(e, 'to')).toBe(iso(from + 60_000))
+      const inMinute = lines.filter(l => Date.parse(String(l.at)) >= from && Date.parse(String(l.at)) < from + 60_000)
+      expect(Number(field(e, 'passes'))).toBe(inMinute.length)
+      expect(field(e, 'mode')).toBe('act')
+      expect(field(e, 'planner')).toBe('v1')
+      expect(field(e, 'pass_every_ms')).toBe('20000')
+    })
+    // no per-pass event: only the minutes' summaries
+    expect(h.events().filter(e => (e.at(-1) ?? '').startsWith('kind=passes'))).toHaveLength(5)
+  })
+
+  test('a minute in which a pass hangs sends passes=0', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(resolve => (release = resolve))
+    let hang = false
+    const { run } = factory({
+      run: argv => {
+        if (hang && argv[0] === 'callum-flow-factory-state') return gate.then(() => ({ stdout: factoryDoc([]) }))
+        return undefined
+      },
+    })
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(10_000)
+    expect(h.passes()).toHaveLength(1)
+    hang = true
+    await clock.advance(4 * 60_000)
+    const counts = passesEvents(h).map(e => field(e, 'passes'))
+    expect(counts.length).toBeGreaterThanOrEqual(3)
+    expect(counts[0]).toBe('1')
+    expect(counts.slice(2)).toContain('0')
+    const empty = passesEvents(h).find(e => field(e, 'passes') === '0')
+    expect(field(empty ?? [], 'mean_ms')).toBe('none')
+    expect(field(empty ?? [], 'acting_mean_ms')).toBe('none')
+    release()
+  })
+
+  for (const [name, config, files] of [
+    ['mode off', { ...ACT, mode: 'off' }, {}],
+    ['the kill switch', ACT, { [`${CFG_DIR}/factory-loop/OFF`]: '' }],
+    ['observe mode', { ...ACT, mode: 'observe' }, {}],
+  ] as const) {
+    test(`${name} sends none`, async ($, on) => {
+      const clock = mock.clock(on, { now: NOW })
+      const { run } = factory()
+      const h = host(on, { config, run, files })
+      await $.session.start(START)
+      await clock.advance(4 * 60_000)
+      expect(passesEvents(h)).toEqual([])
+    })
+  }
+
+  test('the kill switch set after passes ran stops the summaries', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(2 * 60_000 + 1_000)
+    const before = passesEvents(h).length
+    expect(before).toBe(2)
+    h.files.set(`${CFG_DIR}/factory-loop/OFF`, '')
+    await clock.advance(3 * 60_000)
+    expect(passesEvents(h)).toHaveLength(before)
+  })
+})

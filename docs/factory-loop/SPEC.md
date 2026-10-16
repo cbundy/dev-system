@@ -962,7 +962,17 @@ transitions (DECISIONS D-09):
 - a rate-cap hold, once per capped bucket (or kind and issue) per hour:
   `kind=<bucket|kind> key=cap:<capped>:<hour> status=held`, with `--issue` for a per-issue cap;
 - the ping-storm breaker opening:
-  `kind=breaker key=breaker:pings:<since> status=open passes=<n> until=<ms>`.
+  `kind=breaker key=breaker:pings:<since> status=open passes=<n> until=<ms>`;
+- the pass summary, once a minute (`plugins/factory-loop/hooks/passes.ts`, #680), from its own
+  timer aligned to the UTC minute: `kind=passes key=passes:<from-epoch-ms> status=done from=<ISO>
+  to=<ISO> passes=<n> mean_ms=<n> p50_ms=<n> p90_ms=<n> max_ms=<n> acting=<n> acting_mean_ms=<n>
+  idle_mean_ms=<n> errors=<n> mode=<mode> planner=<v1|v2> pass_every_ms=<n>`. It sums up the passes
+  that ended in the minute (`acting` are those with a non-`title` outcome, `idle_*` the rest,
+  error passes included; percentiles are nearest-rank; a value with nothing behind it is
+  `none`, and a minute with no pass ends sends `passes=0`). Sent only while the loop runs in act
+  mode, the kill switch is off and the last pass held the act lock; otherwise the minute is
+  dropped. It is bookkeeping, never a stage or progress, and builds no ledger entry; the reader
+  does any weighting.
 
 An entry's note is `kind=<kind> key=<key> status=<status> attempts=<n> class=<class> rule=<rule>
 started=<ms>[ ended=<ms>][ agent=<type>][ agentId=<id>][ wake=<name>]` and then its outcome's

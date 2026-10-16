@@ -4,8 +4,8 @@
 // pass callum-flow-event's own check of a loop note (kind=, key= and status=, no field split by a
 // space): one refused is a usage error the loop only notes. This runs the real
 // images/base/callum-flow-event, into a scratch log, with the notes the plugin builds for an entry
-// of every loop kind (ledger.ts loopEvent), a rate-cap hold (act.ts capEventArgv) and the ping
-// breaker (act.ts breakerEventArgv). Plugin tests cannot run a command, so this lives here.
+// of every loop kind (ledger.ts loopEvent), a rate-cap hold (act.ts capEventArgv) the ping
+// breaker (act.ts breakerEventArgv) and the minute's pass summary (passes.ts). Plugin tests cannot run a command, so this lives here.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
@@ -35,10 +35,12 @@ const RUN = "01K7S1AAAAAAAAAAAAAAAAAAAA";
 
 let ledger;
 let act;
+let passes;
 let dir;
 
 before(async () => {
   ledger = await import(path.join(HOOKS, "ledger.ts"));
+  passes = await import(path.join(HOOKS, "passes.ts"));
   act = await import(path.join(HOOKS, "act.ts"));
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-events-"));
 });
@@ -74,6 +76,14 @@ test("every loop note the plugin builds is one callum-flow-event takes", () => {
     act.capEventArgv("spawn", NOW),
     act.capEventArgv("claim:470", NOW),
     act.breakerEventArgv({ kind: "breaker", since: NOW, until: NOW + 600_000, passes: 31 }),
+    // the minute's pass summary (passes.ts), one with passes and one with none
+    ...(() => {
+      const settings = { mode: "act", planner: "v2", passEveryMs: 60_000 };
+      const book = new Map();
+      passes.notePass(book, NOW + 1_000, 120, true, false);
+      passes.notePass(book, NOW + 2_000, 80, false, true);
+      return [passes.passesEventArgv(passes.closeMinute(book, NOW, settings)), passes.passesEventArgv(passes.closeMinute(book, NOW + 60_000, settings))];
+    })(),
   ];
   for (const argv of argvs) {
     assert.ok(Array.isArray(argv), "every entry here logs a loop event");
