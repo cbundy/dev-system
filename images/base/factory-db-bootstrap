@@ -5,6 +5,8 @@
 # database when it is missing, applies the numbered SQL migrations shipped beside it and
 # records each in factory.schema_migrations. Running it again changes nothing.
 #
+# The whole procedure, from a fresh server to a healthy dev-doctor, is in docs/factory-db.md.
+#
 # Usage: factory-db-bootstrap --db NAME [--admin-url-file PATH]
 #   --db NAME             the database to set up: ^[a-z][a-z0-9_]{0,47}$. Required; there is
 #                         no default, so the factory never lands in another database by accident.
@@ -18,6 +20,9 @@
 #   FACTORY_DB_WRITER_PASSWORD   when set, becomes NAME_writer's password
 #   FACTORY_DB_READER_PASSWORD   when set, becomes NAME_reader's password
 #                                (a password that is not set is left alone)
+#                                The roles' URLs go in the secrets directory as factory-db-writer-url
+#                                and factory-db-reader-url (or FACTORY_DB_WRITER_URL / _READER_URL); the
+#                                admin URL never goes into a workspace.
 #   FACTORY_DB_MIGRATIONS_DIR    the migrations (default: factory-db/migrations beside this
 #                                command, else /usr/local/share/dev-system/factory-db/migrations)
 #
