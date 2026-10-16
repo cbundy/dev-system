@@ -2458,7 +2458,7 @@ Notes:
   event format (7.1).
 - Workflow 3 runs U5, U6 and U7 beside U8 and U9. Only U9 touches `register.ts`, `rails.ts`,
   `exec.ts`, the marketplace and `coder/`. Only U7 touches `images/base/README.md` in that
-  workflow. Only U5 touches `CLAUDE.md`.
+  workflow.
 - U9 starts with the re-probe. If it fails, U9 builds the stated fallback for that point (10.9) and
   notes it in its PR.
 - Image changes (U4, U7) reach the loop through a base image release, or earlier on the scratch
