@@ -1,7 +1,8 @@
 # Reconcile-mod spike: findings
 
 Investigation of 2026-10-12 (all times UTC), Claude Code 2.1.296, Coder workspaces. Throwaway
-work on branch `spike/reconcile-mod`, never to be merged. The raw log of every check is in
+work originally kept on the unmerged branch `spike/reconcile-mod`, now archived here. Runtime
+paths and workspace commands below describe the setup on that branch. The raw log of every check is in
 [`evidence/log.jsonl`](evidence/log.jsonl) (353 lines).
 
 ## Summary
@@ -230,5 +231,5 @@ coder ssh spike-reconcile-mod -- git -C /persist/claude/spike/dev-system pull --
 
 ## 9. Cleanup
 
-When done: delete the `spike-reconcile-mod` workspace, leave this branch unmerged, and
+Original cleanup plan: delete the `spike-reconcile-mod` workspace, leave the experimental branch unmerged, and
 rotate the Coder token used for the setup (it appears in the session that ran the spike).

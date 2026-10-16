@@ -8,7 +8,7 @@ it ready for the owner to review in the morning. You do not cut over, merge or r
 
 ## Read first, in this order
 
-1. `spikes/reconcile-mod/FINDINGS.md` on branch `spike/reconcile-mod`: what was proven about
+1. [FINDINGS.md](FINDINGS.md): what was proven about
    mods in the orchestrators' exact launch mode. Treat its results as facts and its open
    questions as your risks.
 2. `CLAUDE.md` at the repo root: the rules you work under.

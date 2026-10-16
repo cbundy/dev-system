@@ -1,15 +1,8 @@
-// Throwaway spike, never merged: can a mod drive the orchestrator loop in a
+// Archived throwaway spike: can a mod drive the orchestrator loop in a
 // Remote Control session? Every check appends a JSON line to LOG, and the
 // session title shows the latest state so it can be followed from the phone.
 //
-//   1 loaded   session.start fires: a "loaded" line (again after each restart)
-//   2 tick     a "tick" line every minute, also while the session sits idle
-//   3 title    $.mcp.call sets the session title, with no permission prompt
-//   4 handback on request (touch REQUEST), a built-in and a callum-flow agent
-//              are spawned at once; two minutes later a "handback-result" line
-//              says what reached the main conversation besides the mod's own
-//              renames, and how many model turns ran
-//   5 restart  after dev-restart-self: a new "loaded" line and ticks resume
+// Check results and the original runtime setup are recorded in ../FINDINGS.md.
 import type { EngineInterface, McpToolResult, Register } from 'claude-code'
 
 const LOG = '/persist/claude/spike/log.jsonl'
