@@ -6,6 +6,9 @@
 - Never manually modify CHANGELOG.md files or any files that are marked as auto-generated
 - If an issue is research-only, do not close it when its PR merges - leave the issue open
   after the PR is merged so follow-up work can continue.
+- Keep a spike's raw notes, probe code and evidence in the repo under `docs/spikes/<topic>/`, never only on a
+  branch, in `/persist` or in a session's memory. Carry its conclusions into the lasting docs (specs, decision
+  records, READMEs) and link back to the spike folder.
 - Every PR MUST link to the issue it addresses using a GitHub keyword in the PR body, so the two stay
   connected for tracking. Use a closing keyword - `Closes #N` (or `Fixes #N` / `Resolves #N`) - when the
   issue should auto-close on merge; use a non-closing keyword instead - `Refs #N` or `Part of #N` - when

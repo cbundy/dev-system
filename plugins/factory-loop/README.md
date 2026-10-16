@@ -144,7 +144,7 @@ script. `answerTools`, the setting it replaced, is no longer read.
 ## Pinned Claude Code version
 
 Proven on **Claude Code 2.1.296**, the version the
-[spike](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/FINDINGS.md)
+[spike](../../docs/spikes/reconcile-mod/FINDINGS.md)
 tested in the orchestrators' exact launch mode. The mod API is early access and may change
 between releases. Before running the loop on a newer Claude Code:
 

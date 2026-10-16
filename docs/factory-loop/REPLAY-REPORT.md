@@ -1,6 +1,6 @@
 # Factory loop: replay against the live orchestrator
 
-Phase 2 of the [conversion brief](https://github.com/cbundy/dev-system/blob/spike/reconcile-mod/spikes/reconcile-mod/CONVERSION-BRIEF.md).
+Phase 2 of the [conversion brief](../spikes/reconcile-mod/CONVERSION-BRIEF.md).
 `scripts/factory-loop-replay.js` rebuilds the factory's state at past moments and runs `plan()`
 on it, then compares what the loop would have done with what the live dev-system orchestrator
 did next. Raw results are in [`replay/`](replay/): `comparison.json` per window, and every
