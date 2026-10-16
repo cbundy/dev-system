@@ -21,6 +21,10 @@ Rules:
   not name is a miss too, warned with the token's name, so a field added on the old path is never
   dropped quietly. A miss is a bug to fix in the translator or the producer. The lines under
   "Lines that make no new event" are skipped by name, not missed.
+- **Old writers are dropped, not translated.** The replay starts at 2026-10-16 02:00Z (owner). A
+  line from v1 or an older orchestrator in that window is one of the named skips below, so it is
+  dropped and counted, never a miss. On 2026-10-16 the window held none: every line came from the
+  two v2 loops, a usage watcher or a hand merge.
 - **The dual-write check** ([#649](https://github.com/cbundy/dev-system/issues/649)): every old line
   is translated or skipped by name, misses are zero, and the new events of each type equal the old
   lines of the mapped state minus the named skips.
@@ -32,7 +36,7 @@ Rules:
 | Today | New |
 |---|---|
 | `v` | dropped; `envelope` is 1 |
-| `event_id` | `event_id`. The replay covers lines from 2026-10-15 03:00Z, which all have one; a line without one is a miss. |
+| `event_id` | `event_id`. The replay covers lines from 2026-10-16 02:00Z, which all have one; a line without one is a miss. |
 | `ts` | `ts`. In dual write, the writer's own time with milliseconds; in the replay, the stored second with `.000Z`. |
 | `state` | `type`, by the tables below; `type_version` is 1 |
 | `session_id` | In dual write, `CLAUDE_SESSION_ID` or null, never today's guess from the newest transcript. The replay copies the stored value. |
