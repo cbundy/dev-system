@@ -73,3 +73,13 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
   if (r.result === 'unknown') return { ...base, why: r.why }
   return base
 }
+
+// gateLine: every run as one line of the companion's log, which outlives factory-gate.json (the
+// next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
+// intervention (SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
+export function gateLine(r: GateResult, head: string | null): { cause: string; reason: string; fields: Record<string, unknown> } {
+  const fields = { head, ms: r.ms }
+  if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
+  if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode } }
+  return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }
+}

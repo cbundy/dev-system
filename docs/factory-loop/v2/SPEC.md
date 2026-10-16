@@ -274,7 +274,8 @@ type IssueRecord = {
   between leaves the done entry, so S0 is planned again. A claim that may already hold the issue
   (the claim tool posted, then the adoption's reads failed; or a reload lost it mid-claim) runs
   again under its own key whatever the queue says, since `ready` is gone, and holds its place
-  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim.
+  under the cap until it is done. A retry is safe: `callum-flow-claim` keeps its own live claim once `claimed` is logged and
+  otherwise makes it fresh.
   A v2 claim never becomes a ghost (`totality/T-14`).
 - **Life.** The start time of the claim action, in base-36 seconds: unique, and needs no counter
   that pruning could reset (`totality/T-14`).
@@ -350,7 +351,10 @@ use it as the fleet's claim marker (`images/base/callum-flow-claim:21`, `:126`;
 tool the loop calls writes or reads the label:
 
 - **`callum-flow-claim <N>`.** The winner removes `ready` and assigns @me. It no longer adds
-  `In development`. A device's own live claim after a restart does the same.
+  `In development`. A device's own live claim after a restart does the same while this device's
+  event log shows it held (its last claim event is `claimed`). Any other own live claim (one
+  interrupted before its event, or left behind by `ready`, `reclaimed`, `merged`, `closed` or
+  `abandoned`) is deleted and the claim made fresh, so every life starts with one `claimed` event.
 - **`callum-flow-claim --heartbeat`** with no numbers renews this device's live claims on the open
   issues that `callum-flow-factory-state --github off` lists live with this device as the holder,
   not the label list. v2's H1 passes numbers, as now (14.1).
@@ -990,7 +994,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `hand-merge` | E3 | the issue |
 | `pr-closed` | E4 | the issue |
 | `issue-closed` | E2 | the issue |
-| `control-file` | `control.json` or the `OFF` file changed with no op (its digest against the last one the loop read or wrote, kept as `files:<repo>` beside the records; an op that finds its file already changed keeps that edit to log; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
+| `control-file` | `control.json` or the `OFF` file changed with no op (against the last version the loop read or wrote, kept as `files:<repo>` beside the records; each change found, by an acting pass or by an op that finds its file already changed, is kept there as an edit to log, keyed by when it was found, so a change back to an earlier version is logged too; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
 | `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
@@ -1034,9 +1038,10 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   re-render, an exhausted effect), the records, the State (heads, control and config digests, the
   module load, the rail, the tripwire, the breaker) and the companion's log. Its key is
   `iv/<the fact's key>`, so each is logged once.
-- **The companion's log.** The companion appends one JSON line per refusal and per gate that could
-  not run to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue,
-  life, seq, cause and reason. It writes no event itself.
+- **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
+  to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
+  seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
+  (`gate-pass`, `gate-fail`, 10.6) is not. It writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
   `callum-flow-event`.
 
@@ -1536,8 +1541,11 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   the agent finish and records the gate as unknown. CI stays the authority (OB:83) and decides in
   reviewing. A gate is never passed silently (`totality/T-25`): it is appended to the companion's
   log, an intervention (`gate-unknown`, 7.2).
-- **Each result** (pass, fail, unknown) is written with the slot's HEAD to
-  `<slot git dir>/factory-gate.json`. The decision log and the triage's inputs read it.
+- **Each run** is one line of the companion's log (`<loop dir>/companion.jsonl`, 7.2) with the
+  slot's HEAD, its duration and, for a fail, the command and its exit code: cause `gate-pass`,
+  `gate-fail` or `gate-unknown`. Only `gate-unknown` is an intervention; the loop skips the other
+  two, so the log is the audit of every run. The last result is also written to
+  `<slot git dir>/factory-gate.json`, which the next run overwrites.
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").

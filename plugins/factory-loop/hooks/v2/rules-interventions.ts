@@ -316,9 +316,10 @@ function fromSources(ctx: V2Ctx): Planned[] {
 // A hand edit is a difference, that no op explains, between an owner's file and the last version
 // the loop read (an acting pass under planner v2) or wrote (an owner op, the clearing of a done
 // update), which files:<repo> keeps (store.ts). The comparison is of the parsed files, so a change
-// of layout alone is none; the fact is keyed by the new version's digest. Edits found where the
-// loop does not plan are kept in the same record until logged: an op that found its file already
-// changed, and the kill switch (sources-interventions.ts).
+// of layout alone is none. Every edit is kept in the same record, with the version it found, until
+// it is logged, and keyed by when it was found, so each change is logged once, an edit back to an
+// earlier version too: the acting read's (sources-interventions.ts keepFiles), an op that found its
+// file already changed, and the kill switch (store.ts).
 
 // One intervention a file gives: its fact, its cause, the issue it names (none: fleet-level) and
 // its one-line detail.
@@ -406,30 +407,20 @@ export function editFacts(e: FileEdit): FileFact[] {
   return factsOf(e.what === 'control' ? 'control-file' : 'config-file', e.issues, Math.trunc(e.at).toString(36), e.detail)
 }
 
-// controlFacts and configFacts: the facts of this pass's read against the version kept, keyed by
-// the new version's digest; none when either is unknown or nothing changed.
-export function controlFacts(seen: FilesSeen, facts: InterventionFacts): FileFact[] {
-  const [was, now] = [seen.control, facts.control ?? null]
-  const edit = was === null || now === null ? null : editOf('control', was.text, now.text, 0)
-  return edit === null || now === null ? [] : factsOf('control-file', edit.issues, now.digest, edit.detail)
-}
-
-export function configFacts(seen: FilesSeen, facts: InterventionFacts): FileFact[] {
-  const [ws, st] = [facts.workspace ?? null, facts.settings ?? null]
+// editsOf: the hand edits from the versions kept to those taken, found at `at`; a part either
+// lacks is not compared.
+export function editsOf(kept: Pick<FilesSeen, 'control' | 'workspace' | 'settings'>, taken: Pick<FilesSeen, 'control' | 'workspace' | 'settings'>, at: Ms): FileEdit[] {
+  const control = kept.control === null || taken.control === null ? null : editOf('control', kept.control.text, taken.control.text, at)
   const keys: string[] = []
-  if (seen.workspace !== null && ws !== null) keys.push(...keysDiff(seen.workspace.text, ws.text).map(k => `config.json ${k}`))
-  if (seen.settings !== null && st !== null) keys.push(...keysDiff(seen.settings.text, st.text))
-  if (keys.length === 0) return []
-  const version = digest(`${(ws ?? seen.workspace)?.text ?? ''}\n${(st ?? seen.settings)?.text ?? ''}`)
-  return factsOf('config-file', [], version, `settings changed with no op: ${keys.join(', ')}`)
+  if (kept.workspace !== null && taken.workspace !== null) keys.push(...keysDiff(kept.workspace.text, taken.workspace.text).map(k => `config.json ${k}`))
+  if (kept.settings !== null && taken.settings !== null) keys.push(...keysDiff(kept.settings.text, taken.settings.text))
+  const config: FileEdit | null = keys.length === 0 ? null : { what: 'config', at, issues: [], detail: `settings changed with no op: ${keys.join(', ')}` }
+  return [control, config].filter((e): e is FileEdit => e !== null)
 }
 
-// fileFacts: every hand edit of the owner's files the State holds: the edits kept, then this
-// pass's read against the versions kept. None before the loop has kept any.
+// fileFacts: every hand edit of the owner's files the State holds, kept to log.
 export function fileFacts(facts: InterventionFacts): FileFact[] {
-  const seen = facts.seen ?? null
-  if (seen === null) return []
-  return [...seen.edits.flatMap(editFacts), ...controlFacts(seen, facts), ...configFacts(seen, facts)]
+  return (facts.seen?.edits ?? []).flatMap(editFacts)
 }
 
 // --- the rule ---------------------------------------------------------------------------------------

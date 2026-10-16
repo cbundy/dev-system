@@ -15,7 +15,7 @@ import { claimKey, factKey, interventionKey, keyParts, reclaimKey, reconcileKey,
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { opLanded } from '../hooks/v2/ops'
-import { FACT_WINDOW_MS, controlDiff, digest, fileFacts, interventionRules, interventionsOf } from '../hooks/v2/rules-interventions'
+import { FACT_WINDOW_MS, controlDiff, digest, editFacts, fileFacts, interventionRules, interventionsOf } from '../hooks/v2/rules-interventions'
 import type { Planned } from '../hooks/v2/rules-interventions'
 import { COMPANION_WINDOW_MS, EMPTY_FILES, companionLines, filesKey, keepFiles, readInterventions, seenOf } from '../hooks/v2/sources-interventions'
 import type { FilesSeen, InterventionFacts } from '../hooks/v2/sources-interventions'
@@ -211,7 +211,7 @@ describe('each intervention of 7.2 comes from its fact and is logged exactly onc
         controlDigest: null,
         configDigest: null,
         settings: seenOf('{"maxInFlightIssues":2}'),
-        seen: { ...EMPTY_FILES, settings: seenOf('{"maxInFlightIssues":3}') },
+        seen: { ...EMPTY_FILES, settings: seenOf('{"maxInFlightIssues":2}'), edits: [{ what: 'config', at: NOW - MIN, issues: [], detail: 'settings changed with no op: maxInFlightIssues' }] },
       },
     }
   }
@@ -409,12 +409,19 @@ describe('person interventions', () => {
       controlDigest: null,
       configDigest: null,
       control: ctl({ paused: [571, 572] }),
-      seen: { ...EMPTY_FILES, control: ctl({}), edits: [{ what: 'control', at: NOW - 4 * MIN, issues: [], detail: 'the OFF file was created' }] },
+      seen: {
+        ...EMPTY_FILES,
+        control: ctl({}),
+        edits: [
+          { what: 'control', at: NOW - 4 * MIN, issues: [], detail: 'the OFF file was created' },
+          { what: 'control', at: NOW - MIN, issues: [571, 572], detail: 'control.json changed with no op: paused' },
+        ],
+      },
     }
     expect(ivs({ facts }).map(p => [p.event.cause, p.event.issue, p.event.fact])).toEqual([
       ['control-file', null, `control-file/fleet/${(NOW - 4 * MIN).toString(36)}`],
-      ['control-file', 571, `control-file/i571/${ctl({ paused: [571, 572] }).digest}`],
-      ['control-file', 572, `control-file/i572/${ctl({ paused: [571, 572] }).digest}`],
+      ['control-file', 571, `control-file/i571/${(NOW - MIN).toString(36)}`],
+      ['control-file', 572, `control-file/i572/${(NOW - MIN).toString(36)}`],
     ])
   })
 
@@ -633,9 +640,11 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
   async function factsOf(files: Record<string, string>, seen: FilesSeen | null, rt?: Runtime) {
     return { ...(await read(files, rt)).read, seen }
   }
-  const causesOf = (facts: InterventionFacts) => fileFacts(facts).map(f => [f.cause, f.issue, f.detail])
-  // the version a pass would keep, with every intervention it found logged (or none)
-  const kept = (facts: InterventionFacts, logged: boolean) => keepFiles(facts.seen ?? null, facts, () => logged)
+  // the version a pass would keep at NOW, with every intervention it found logged (or none)
+  const kept = (facts: InterventionFacts, logged: boolean) => keepFiles(facts.seen ?? null, facts, NOW, () => logged)
+  // the hand edits a pass's read gives, logged from the next pass on (none logged yet)
+  const editsAfter = (facts: InterventionFacts) => fileFacts({ ...facts, seen: kept(facts, false) ?? facts.seen ?? null })
+  const causesOf = (facts: InterventionFacts) => editsAfter(facts).map(f => [f.cause, f.issue, f.detail])
   function memStore(init: Record<string, unknown> = {}) {
     const m = new Map<string, unknown>(Object.entries(init))
     const io: V2StoreIo = { get: async k => m.get(k), set: async (k, v) => void m.set(k, v), now: async () => NOW }
@@ -660,14 +669,14 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect((await read({}, rtOf({ configProblems: ["settings: origin's default branch not read (x); the main checkout's file is used"] }))).read.settings).toBeNull()
   })
 
-  test('a change against the version kept is one intervention per issue whose entries changed, else one for the fleet, keyed by the new version', async () => {
+  test('a change against the version kept is one intervention per issue whose entries changed, else one for the fleet, keyed by when it was found', async () => {
     const seen: FilesSeen = { ...EMPTY_FILES, control: seenOf(ctl({})) }
     const facts = await factsOf({ [CONTROL]: ctl({ paused: [571], skip: [9] }) }, seen)
     expect(causesOf(facts)).toEqual([
       ['control-file', 9, 'control.json changed with no op: paused, skip'],
       ['control-file', 571, 'control.json changed with no op: paused, skip'],
     ])
-    expect(fileFacts(facts)[0]?.fact).toBe(`control-file/i9/${digest(ctl({ paused: [571], skip: [9] }))}`)
+    expect(editsAfter(facts)[0]?.fact).toBe(`control-file/i9/${NOW.toString(36)}`)
     expect(causesOf(await factsOf({ [CONTROL]: ctl({ serial: true }) }, seen))).toEqual([['control-file', null, 'control.json changed with no op: serial']])
     // no version kept yet, a change of layout only, or the loop's own clearing of a done update: none
     expect(causesOf(await factsOf({ [CONTROL]: ctl({ paused: [1] }) }, null))).toEqual([])
@@ -683,25 +692,39 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect(causesOf(repo)).toEqual([['config-file', null, 'settings changed with no op: maxInFlightIssues']])
     const hand = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
     expect(causesOf(hand)).toEqual([['config-file', null, 'settings changed with no op: config.json binDir, config.json mode']])
-    // a pass whose settings were not read keeps the same key for the same edit
+    // a pass whose settings were not read keeps the settings it had and logs the workspace edit once;
+    // the next pass that reads them finds no edit of its own
     const blind = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, seen, rtOf({ configProblems: ["settings: origin's default branch not read (x)"] }))
-    expect(fileFacts(blind).map(f => f.fact)).toEqual(fileFacts(hand).map(f => f.fact))
+    const afterBlind = kept(blind, false) as FilesSeen
+    expect(afterBlind.settings).toEqual(seen.settings)
+    expect(afterBlind.edits).toEqual([{ what: 'config', at: NOW, issues: [], detail: 'settings changed with no op: config.json binDir, config.json mode' }])
+    const sighted = await factsOf({ [WORKSPACE]: '{"mode":"observe","binDir":"/x"}' }, afterBlind, rtOf({}, config({ planner: 'v2', maxInFlightIssues: 3 })))
+    expect((keepFiles(afterBlind, sighted, NOW + 1, () => false) ?? afterBlind).edits).toEqual(afterBlind.edits)
   })
 
-  test('the version read is kept once what it shows is logged; until then the change is planned again', async () => {
+  // drill run 2 (R2-F6): a change back to a version logged before was taken as logged, its fact
+  // keyed by the new version's digest
+  test('the version read is kept at once, with its change as an edit kept until logged; a change back is an edit again', async () => {
     const seen: FilesSeen = { ...EMPTY_FILES, control: seenOf(ctl({})) }
     const facts = await factsOf({ [CONTROL]: ctl({ paused: [5] }) }, seen)
-    // not logged yet: nothing changes, so the next pass plans the same fact
-    expect(kept(facts, false)?.control ?? seen.control).toEqual(seen.control)
-    // logged: the version read is kept, and the next pass finds nothing
-    const next = kept(facts, true) as FilesSeen
+    const next = kept(facts, false) as FilesSeen
     expect(next.control).toEqual(seenOf(ctl({ paused: [5] })))
-    expect(causesOf(await factsOf({ [CONTROL]: ctl({ paused: [5] }) }, next))).toEqual([])
-    // the first acting read keeps what it reads
-    expect(kept(await factsOf({ [CONTROL]: ctl({}) }, null), false)?.control).toEqual(seenOf(ctl({})))
-    // an op that wrote since the pass read keeps the op's version
+    expect(next.edits).toEqual([{ what: 'control', at: NOW, issues: [5], detail: 'control.json changed with no op: paused' }])
+    // the next pass plans it, and keeps it until it is logged; then it goes
+    const again = await factsOf({ [CONTROL]: ctl({ paused: [5] }) }, next)
+    expect(fileFacts(again).map(f => f.fact)).toEqual([`control-file/i5/${NOW.toString(36)}`])
+    expect(keepFiles(next, again, NOW + 1, () => false)).toBeNull()
+    const done = keepFiles(next, again, NOW + 1, () => true) as FilesSeen
+    expect(done.edits).toEqual([])
+    // a change back to the version before is an edit of its own, with its own key
+    const back = keepFiles(done, await factsOf({ [CONTROL]: ctl({}) }, done), NOW + 2, () => true) as FilesSeen
+    expect(back.control).toEqual(seenOf(ctl({})))
+    expect(back.edits.flatMap(editFacts).map(f => f.fact)).toEqual([`control-file/i5/${(NOW + 2).toString(36)}`])
+    // the first acting read keeps what it reads, with no edit
+    expect(kept(await factsOf({ [CONTROL]: ctl({}) }, null), false)).toMatchObject({ control: seenOf(ctl({})), edits: [] })
+    // an op that wrote since the pass read keeps the op's version, and no edit (the op keeps what it found)
     const op = { ...seen, control: seenOf(ctl({ serial: true })) }
-    expect(keepFiles(op, facts, () => true)?.control ?? op.control).toEqual(op.control)
+    expect(keepFiles(op, facts, NOW, () => true)).toMatchObject({ control: op.control, edits: [] })
   })
 
   test('an op\'s write is the loop\'s own: the next read finds no edit; one it found already changed by hand is kept and logged once', async () => {
@@ -819,13 +842,16 @@ describe('the owner\'s files in the pass driver', () => {
     const path = `${LOOP_DIR}/control.json`
     h.files.set(path, JSON.stringify({ ...JSON.parse(h.files.get(path) ?? '{}'), skip: [13] }))
     await clock.advance(61_000)
+    // the pass that finds it keeps it; the next logs it
+    expect(fileIvs(h.last())).toEqual([])
+    await clock.advance(61_000)
     expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/control-file\/i13\//)])
   })
 
   // fault drill 1 (2026-10-15): the operator's hand edit of config.json, mode off -> act, was not
   // logged: the loop had kept no version of the file, so the first acting read had nothing to
   // compare against
-  test('a hand edit that turns the loop on is one config-file intervention, the first acting pass\'s; an op that turns it on is not', async ($, on) => {
+  test('a hand edit that turns the loop on is one config-file intervention, found by the first acting pass; an op that turns it on is not', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const path = `${CFG_DIR}/factory-loop/config.json`
     const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
@@ -836,6 +862,8 @@ describe('the owner\'s files in the pass driver', () => {
     h.files.set(path, JSON.stringify(ACT_V2))
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(fileIvs(h.last())).toEqual([])
+    await clock.advance(60_000)
     expect(fileIvs(h.last())).toEqual([expect.stringMatching(/^iv\/config-file\/fleet\//)])
     const iv = h.events().find(e => e[1] === 'intervention' && (e.at(-1) ?? '').includes('cause=config-file'))
     expect(iv?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20config.json%20mode')
@@ -853,6 +881,31 @@ describe('the owner\'s files in the pass driver', () => {
     expect(h.last()).toMatchObject({ mode: 'act', executed: true })
     expect(fileIvs(h.last())).toEqual([])
     expect(h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))).toHaveLength(1)
+  })
+
+  // drill run 2 (R2-F3, R2-F6): an edit back to a version logged before (mode act -> off -> act, a
+  // lowered setting restored) was taken as logged, its fact keyed by the new version's digest
+  test('every hand edit is one config-file intervention, an edit back to an earlier version too', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const path = `${CFG_DIR}/factory-loop/config.json`
+    const h = host(on, { config: { ...ACT_V2, mode: 'off' }, run: quiet })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const logged = () => h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file')).length
+    const byHand = async (cfg: Record<string, unknown>) => {
+      h.files.set(path, JSON.stringify(cfg))
+      for (let i = 0; i < 3; i += 1) await clock.advance(60_000)
+    }
+    await byHand(ACT_V2)
+    expect(logged()).toBe(1)
+    await byHand({ ...ACT_V2, usageSlowPct: 10 })
+    expect(logged()).toBe(2)
+    await byHand(ACT_V2)
+    expect(logged()).toBe(3)
+    // off is not seen by an acting pass; the edit that turns the loop on again is
+    await byHand({ ...ACT_V2, mode: 'off' })
+    await byHand(ACT_V2)
+    expect(logged()).toBe(4)
   })
 })
 

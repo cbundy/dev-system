@@ -25,8 +25,9 @@ is left alone.
 ## What it writes
 
 - `<loop dir>/companion.jsonl`: one line per refusal (`guard:write`, `guard:push`,
-  `guard:command`) and per gate that could not run (`gate-unknown`), with the issue, life and
-  seq. The loop logs each as an intervention.
+  `guard:command`) and per gate run (`gate-pass`, `gate-fail`, `gate-unknown`, with the head, the
+  duration and a failing command), with the issue, life and seq. The loop logs each refusal and
+  each `gate-unknown` as an intervention; a gate that passed or failed is not one.
 - `factory-gate.json` in the slot's git dir: the last gate result (pass, fail or unknown) with the
   slot's HEAD.
 - The handshake file above. Files older than 7 days are pruned at session start.
