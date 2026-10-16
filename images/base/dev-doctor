@@ -384,6 +384,24 @@ else
 fi
 unset av_url
 
+# Factory database (cbundy/dev-system#647): per role, the secret and the database behind it.
+# The check logic is factory_db_check in factory-db.sh; this only maps its result onto the
+# report. Not configured is a WARN while nothing uses the database.
+# shellcheck source=factory-db.sh
+. /usr/local/share/dev-system/factory-db.sh
+for fdb_role in writer reader; do
+  fdb_rc=0
+  fdb_out=$(factory_db_check "$fdb_role") || fdb_rc=$?
+  fdb_msg=$(printf '%s\n' "$fdb_out" | sed -n '1s/^[A-Z]* *//p')
+  fdb_fix=$(printf '%s\n' "$fdb_out" | sed -n '2s/^fix: //p')
+  case "$fdb_rc" in
+    0) ok "$fdb_msg" ;;
+    1) warn "$fdb_msg" "$fdb_fix" ;;
+    *) fail "$fdb_msg" "$fdb_fix" ;;
+  esac
+done
+unset fdb_role fdb_rc fdb_out fdb_msg fdb_fix
+
 # Factory event log (cbundy/dev-system#218): when it was last written and last
 # pushed, and how many lines still wait. Information only, except that a
 # configured push whose loop is not running is a failure.

@@ -16,6 +16,13 @@ check "dev-doctor exits non-zero with no auth and prints a hint per failure" bas
   echo \"\$out\" | grep -q 'claude auth login' &&
   echo \"\$out\" | grep -q 'codex login' &&
   echo \"\$out\" | grep -q 'gh auth login'"
+check "dev-doctor WARNs, naming both files and docs/factory-db.md, when no factory database secret is set, and factory-db.sh is installed" in_image '
+  test -f /usr/local/share/dev-system/factory-db.sh
+  out=$(env -u FACTORY_DB_WRITER_URL -u FACTORY_DB_READER_URL -u AGENTSVIEW_PG_URL dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "WARN factory database (writer) is not configured.*factory-db-writer-url" &&
+  echo "$out" | grep -q "WARN factory database (reader) is not configured" &&
+  echo "$out" | grep -q "fix: put the writer URL in .*factory-db-writer-url.*factory-db-reader-url.*docs/factory-db.md" &&
+  ! echo "$out" | grep -q "FAIL factory database"' --entrypoint ""
 check "dev-doctor warns, without failing, for each /persist dir with no volume behind it" bash -c "
   vol=\$(docker volume create --label '$RUN_ID')
   out=\$(docker run --rm --entrypoint '' -v \"\$vol:/persist/claude\" '$IMAGE' dev-doctor 2>&1)
