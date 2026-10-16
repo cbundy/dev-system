@@ -29,6 +29,11 @@
 #                                           resuming the last one, once. Leaves a marker that
 #                                           dev-remote-control consumes; remote_control_resume is not
 #                                           changed, so later restarts resume again.
+#                                           --fresh affects only the main conversation: the other live
+#                                           Remote Control sessions (started in claude.ai) are recorded
+#                                           before the restart and brought back without a message.
+#                                           See images/base/README.md, "Restoring Remote Control
+#                                           sessions after a restart", for eligibility and settings.
 #   dev-restart-self --dry-run ...          print each request (method, path, body) and send nothing.
 #
 # Why this exists: `coder restart|stop|update <your own workspace>` stops the workspace first,
@@ -203,6 +208,14 @@ write_fresh() {
 }
 drop_fresh() { if [ "$WANT_FRESH" = 1 ] && [ "$DRY" = 0 ]; then rm -f "$FRESH"; fi; }
 
+# Records the live Remote Control sessions so they are resumed after the restart.
+# A failure is a warning: it must never keep the restart from happening.
+snapshot_sessions() {
+  [ "$DRY" = 0 ] || return 0
+  command -v dev-remote-sessions >/dev/null 2>&1 || return 0
+  dev-remote-sessions snapshot >&2 || say "warning: could not record the live Remote Control sessions; they may not come back after the restart."
+}
+
 # rich_parameter_values JSON array from PARAMS.
 params_json() {
   printf '%s\n' "$PARAMS" | jq -Rn '[inputs | select(length > 0) | index("=") as $i | {name: .[:$i], value: .[$i + 1:]}]'
@@ -281,6 +294,7 @@ do_start() {
     _body=$(jq -cn --arg v "$_v" '{transition:"start",template_version_id:$v}')
   fi
   write_fresh
+  snapshot_sessions
   print_goodbye
   api POST "$WS_PATH/builds" "$_body"
   if ok; then
@@ -329,6 +343,7 @@ do_restart() {
   fi
 
   write_fresh
+  snapshot_sessions
 
   api PUT "$WS_PATH/autostart" "$(jq -cn --arg s "$_cron" '{schedule:$s}')"
   ok || { undo "could not set the one-off autostart (HTTP $API_CODE $(api_message))"; }

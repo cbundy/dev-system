@@ -55,6 +55,15 @@ printf '%s' "$code"
 STUB
 chmod +x "$tmp/bin/curl"
 
+# Fake dev-remote-sessions: records how many POSTs had been sent when `snapshot` ran, and fails
+# when $FAKE/snapshot-fails exists.
+cat > "$tmp/bin/dev-remote-sessions" <<'STUB'
+#!/bin/sh
+echo "$1 posts=$(grep -c '^POST' "$FAKE/calls")" >> "$FAKE/snapshots"
+[ ! -e "$FAKE/snapshot-fails" ]
+STUB
+chmod +x "$tmp/bin/dev-remote-sessions"
+
 WS=11111111-2222-3333-4444-555555555555
 TPL=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
 VER=99999999-8888-7777-6666-555555555555
@@ -217,6 +226,25 @@ GET WS
 GET TPL
 X
 [ ! -e "$C/state/pending.json" ] || fail "restart-noautostart: wrote a marker"
+
+# --- live Remote Control sessions are recorded before the stop or start build (#533) ---------
+new_case snap-start
+run
+assert_status 0 snap-start
+[ "$(cat "$C/snapshots")" = "snapshot posts=0" ] || fail "start: snapshot not taken once before the builds POST: $(cat "$C/snapshots")"
+new_case snap-restart
+ENVX="DEV_RESTART_SELF_NOW=1767225600" run --restart
+assert_status 0 snap-restart
+[ "$(cat "$C/snapshots")" = "snapshot posts=0" ] || fail "restart: snapshot not taken before the stop build: $(cat "$C/snapshots")"
+new_case snap-fails
+: > "$C/snapshot-fails"
+run
+assert_status 0 snap-fails
+grep -q "could not record the live Remote Control sessions" "$C/out" || fail "a failing snapshot did not warn"
+grep -q '^POST' "$C/calls" || fail "a failing snapshot stopped the start build"
+new_case snap-dry
+run --dry-run
+[ ! -e "$C/snapshots" ] || fail "--dry-run took a snapshot"
 
 # --- --dry-run sends nothing ------------------------------------------------------------------
 new_case dry

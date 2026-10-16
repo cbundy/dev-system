@@ -38,6 +38,13 @@ sha=$(printf '%s' "$2" | sed -n 's|.*/commits/\([0-9a-f]*\)/pulls|\1|p')
 exit 0
 GH
 chmod +x "$tmp/bin/gh"
+# Fake dev-remote-sessions: `cwds` prints the "live<TAB>dir" / "pending<TAB>dir" lines in $tmp/held.
+cat > "$tmp/bin/dev-remote-sessions" <<'DRS'
+#!/bin/sh
+[ "$1" = cwds ] && cat "${HELD_FILE:-/dev/null}"
+exit 0
+DRS
+chmod +x "$tmp/bin/dev-remote-sessions"
 export PATH="$tmp/bin:$PATH" GH_MERGED="$tmp/merged"
 : > "$GH_MERGED"
 
@@ -65,7 +72,7 @@ dead_pid=$( (sh -c 'echo $$') )
 
 for n in bridge-live bridge-recycled bridge-dead bridge-unlocked bridge-dirty \
   bridge-unpushed bridge-merged bridge-young bridge-old bridge-nolockpid \
-  bridge-startmatch bridge-startmismatch; do
+  bridge-startmatch bridge-startmismatch bridge-held-live bridge-held-pending; do
   add_wt "$n"
 done
 git -C "$ws" worktree add -q -b feature "$ws/other" main
@@ -86,7 +93,7 @@ git -C "$ws/.claude/worktrees/bridge-merged" commit -q --allow-empty -m squash-m
 git -C "$ws/.claude/worktrees/bridge-merged" rev-parse HEAD > "$GH_MERGED"
 
 for n in bridge-live bridge-recycled bridge-dead bridge-unlocked bridge-dirty \
-  bridge-unpushed bridge-merged bridge-old bridge-nolockpid bridge-startmatch bridge-startmismatch; do
+  bridge-unpushed bridge-merged bridge-old bridge-nolockpid bridge-startmatch bridge-startmismatch bridge-held-live bridge-held-pending; do
   age "$n" 100
 done
 # bridge-recycled: the pid is alive, but the lock predates the process, so it was recycled.
@@ -94,6 +101,12 @@ touch -d '1 day ago' "$(git -C "$ws/.claude/worktrees/bridge-recycled" rev-parse
 age bridge-young 5 # older than nothing, younger than 72h
 # The live server's lock was taken after it started, whatever the worktree's age.
 touch "$(git -C "$ws/.claude/worktrees/bridge-live" rev-parse --absolute-git-dir)/locked"
+
+# A live Claude session works in a subdirectory of one, a pending restore in another: both are
+# orphaned, clean, pushed and idle 100h, so only the session keeps them.
+mkdir "$ws/.claude/worktrees/bridge-held-live/sub"
+printf 'live\t%s\npending\t%s\n' "$ws/.claude/worktrees/bridge-held-live/sub" "$ws/.claude/worktrees/bridge-held-pending" > "$tmp/held"
+export HELD_FILE="$tmp/held"
 
 before=$(git -C "$ws" worktree list --porcelain)
 
@@ -113,6 +126,10 @@ row bridge-unlocked | grep -q 'orphaned' || fail "unlocked is not orphaned"
 row bridge-dirty | grep -q 'unsafe' || fail "dirty is not unsafe"
 row bridge-unpushed | grep -q 'unsafe' || fail "unpushed is not unsafe"
 row bridge-merged | grep -q 'merged pull request' || fail "squash-merged is not safe"
+row bridge-held-live | grep -q 'live Claude session' || fail "a live session's worktree is not held"
+row bridge-held-live | grep -q 'keep' || fail "a live session's worktree is not kept"
+row bridge-held-pending | grep -q 'pending restore' || fail "a pending restore's worktree is not held"
+row bridge-held-pending | grep -q 'keep' || fail "a pending restore's worktree is not kept"
 row bridge-young | grep -q 'idle under' || fail "young is not kept for its age"
 row bridge-old | grep -q 'remove' || fail "old is not marked for removal"
 printf '%s\n' "$out" | grep -q 'would remove 6' || fail "dry run should list 6 removals: $out"
@@ -124,7 +141,7 @@ for n in bridge-recycled bridge-dead bridge-unlocked bridge-merged bridge-old br
   [ ! -e "$ws/.claude/worktrees/$n" ] || fail "$n was not removed"
   git -C "$ws" rev-parse --verify -q "worktree-$n" >/dev/null && fail "branch worktree-$n was not deleted"
 done
-for n in bridge-live bridge-nolockpid bridge-startmatch bridge-dirty bridge-unpushed bridge-young; do
+for n in bridge-live bridge-nolockpid bridge-startmatch bridge-dirty bridge-unpushed bridge-young bridge-held-live bridge-held-pending; do
   [ -d "$ws/.claude/worktrees/$n" ] || fail "$n was removed but must be kept"
   git -C "$ws" rev-parse --verify -q "worktree-$n" >/dev/null || fail "branch worktree-$n was deleted"
 done

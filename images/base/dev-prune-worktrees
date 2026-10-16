@@ -38,6 +38,10 @@
 #             started after the lock is a recycled pid. A lock whose reason
 #             has no pid cannot be proven dead, so it counts as in use.
 #   orphaned  unlocked, or locked by a dead (or recycled) pid.
+#   held      orphaned, but the working directory of a live Claude session or
+#             of a session dev-remote-sessions is about to restore after a
+#             restart (cbundy/dev-system#533): kept whatever its age. A session
+#             resumed in a bridge worktree does not hold the old pid lock.
 # Content, for the worktrees that are not in use:
 #   unsafe    uncommitted or untracked changes, or commits that are on no
 #             remote branch - unless the commit is the head of a merged pull
@@ -264,6 +268,30 @@ collect() {
 }
 collect
 
+# Working directories of live and pending-restore Claude sessions, as
+# "live<TAB>dir" / "pending<TAB>dir" lines (dev-remote-sessions cwds).
+HELD=""
+if command -v dev-remote-sessions >/dev/null 2>&1; then
+  HELD=$(dev-remote-sessions cwds 2>/dev/null) || HELD=""
+fi
+# held_by <worktree path>: prints "live" or "pending" when a session works in it
+# (or in a directory below it).
+held_by() {
+  local kind dir found=""
+  while IFS="$(printf '\t')" read -r kind dir; do
+    [ -n "$dir" ] || continue
+    case "$dir/" in
+      "$1"/*)
+        [ "$kind" = live ] && { echo live; return 0; }
+        found=pending
+        ;;
+    esac
+  done <<EOF
+$HELD
+EOF
+  [ -z "$found" ] || echo "$found"
+}
+
 ROWS=() REMOVE_IDX=()
 n=${#W_PATH[@]}
 i=0
@@ -280,6 +308,9 @@ while [ "$i" -lt "$n" ]; do
   action=keep
   if [ "$LOCK_CLASS" = inuse ]; then
     class="in use" content="-" why="$LOCK_WHY"
+  elif holder=$(held_by "$path") && [ -n "$holder" ]; then
+    class=held content="-"
+    if [ "$holder" = live ]; then why="a live Claude session works in it - kept"; else why="a Claude session is pending restore in it - kept"; fi
   else
     classify_content "$path"
     content=$([ "$SAFE" = yes ] && echo safe || echo unsafe)
