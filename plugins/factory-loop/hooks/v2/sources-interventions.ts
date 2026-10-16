@@ -41,7 +41,8 @@ export type FileEdit = { what: 'control' | 'config'; at: Ms; issues: number[]; d
 
 // files:<repo>: the last version of each file the loop read or wrote (null: none yet), the edits
 // found outside an acting read, still to log, and whether the kill switch is already kept as one.
-export type FilesSeen = { v: 1; control: FileSeen | null; workspace: FileSeen | null; settings: FileSeen | null; edits: FileEdit[]; off: boolean }
+// v 2: settings is the repo-local file as written (v 1 kept it resolved, and reads as none).
+export type FilesSeen = { v: 2; control: FileSeen | null; workspace: FileSeen | null; settings: FileSeen | null; edits: FileEdit[]; off: boolean }
 
 export type InterventionFacts = {
   companion: CompanionLine[]
@@ -59,7 +60,7 @@ export type InterventionFacts = {
 
 export const EMPTY_INTERVENTIONS: InterventionFacts = { companion: [], controlDigest: null, configDigest: null }
 
-export const EMPTY_FILES: FilesSeen = { v: 1, control: null, workspace: null, settings: null, edits: [], off: false }
+export const EMPTY_FILES: FilesSeen = { v: 2, control: null, workspace: null, settings: null, edits: [], off: false }
 
 export function seenOf(text: string): FileSeen {
   return { digest: digest(text), text }
@@ -82,9 +83,9 @@ function editOfStore(v: unknown): FileEdit | null {
 // filesFromStore: files:<repo> as the store holds it; null when it holds none, or nothing that reads.
 export function filesFromStore(raw: unknown): FilesSeen | null {
   const o = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : null
-  if (o === null || o.v !== 1 || !isSeen(o.control) || !isSeen(o.workspace) || !isSeen(o.settings) || !Array.isArray(o.edits)) return null
+  if (o === null || o.v !== 2 || !isSeen(o.control) || !isSeen(o.workspace) || !isSeen(o.settings) || !Array.isArray(o.edits)) return null
   const edits = o.edits.map(editOfStore).filter((e): e is FileEdit => e !== null)
-  return { v: 1, control: o.control, workspace: o.workspace, settings: o.settings, edits, off: o.off === true }
+  return { v: 2, control: o.control, workspace: o.workspace, settings: o.settings, edits, off: o.off === true }
 }
 
 const sameSeen = (a: FileSeen | null, b: FileSeen | null) => (a === null ? b === null : b !== null && a.digest === b.digest)
@@ -106,7 +107,7 @@ export function keepFiles(kept: FilesSeen | null, facts: InterventionFacts, at: 
   }
   const taken = { control: take('control'), workspace: take('workspace'), settings: facts.settings ?? base.settings }
   const edits = [...base.edits.filter(e => !editFacts(e).every(f => logged(interventionKey(f.fact)))), ...editsOf(base, taken, at)]
-  const next: FilesSeen = { v: 1, ...taken, edits, off: false }
+  const next: FilesSeen = { v: 2, ...taken, edits, off: false }
   return JSON.stringify(next) === JSON.stringify(kept) ? null : next
 }
 

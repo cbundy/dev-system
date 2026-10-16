@@ -108,15 +108,16 @@ describe('loading the records (v2 SPEC 3.3)', () => {
 
 describe('the owner\'s files as the loop last read or wrote them (v2 SPEC 7.2)', () => {
   test('files:<repo> loads beside the records and goes to observe; a value that does not read is none kept', async () => {
-    const files = { v: 1, control: { digest: 'abc', text: '{}' }, workspace: null, settings: null, edits: [{ what: 'control', at: NOW, issues: [], detail: 'the OFF file was created' }], off: true }
+    const files = { v: 2, control: { digest: 'abc', text: '{}' }, workspace: null, settings: null, edits: [{ what: 'control', at: NOW, issues: [], detail: 'the OFF file was created' }], off: true }
     const store = storeOf({ [KEY]: recordsToStore([], NOW), [`files:${REPO}`]: files })
     const live = newV2Live()
     await loadV2(live, store.io, REPO)
     expect(live.files).toEqual(files)
     expect(await storedV2(live, store.io, REPO)).toMatchObject({ files })
     expect(await readStoredV2(store.io, REPO)).toMatchObject({ files })
-    const bad = storeOf({ [`files:${REPO}`]: { v: 2 } })
-    expect(await readStoredV2(bad.io, REPO)).toMatchObject({ files: null })
+    // v 1 kept the settings as resolved, defaults and all: it reads as none, so a build that adds a
+    // default finds no edit against it (drill run 2, R2-F1)
+    for (const bad of [{ v: 2 }, { ...files, v: 1 }]) expect(await readStoredV2(storeOf({ [`files:${REPO}`]: bad }).io, REPO)).toMatchObject({ files: null })
   })
 })
 

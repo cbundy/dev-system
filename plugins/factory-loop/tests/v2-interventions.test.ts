@@ -700,18 +700,6 @@ describe('hand edits of control.json, the OFF file and the settings', () => {
     expect((keepFiles(afterBlind, sighted, NOW + 1, () => false) ?? afterBlind).edits).toEqual(afterBlind.edits)
   })
 
-  // drill run 2 (R2-F1): a new build that adds a setting's default (maxLives) was logged as a
-  // person's edit of the settings, which no one had changed
-  test('a loop upgrade that adds a default is not an edit: only what the files say is compared', async () => {
-    const files = { [WORKSPACE]: '{"mode":"act"}' }
-    const repoSettings = { maxInFlightIssues: 2 }
-    const runs = config({ planner: 'v2', maxInFlightIssues: 2 })
-    const { maxLives: _added, ...oldBuild } = runs
-    const before = await factsOf(files, null, rtOf({ repoSettings }, oldBuild as Runtime['config']))
-    const seen = kept(before, true) as FilesSeen
-    expect(causesOf(await factsOf(files, seen, rtOf({ repoSettings }, runs)))).toEqual([])
-  })
-
   // drill run 2 (R2-F6): a change back to a version logged before was taken as logged, its fact
   // keyed by the new version's digest
   test('the version read is kept at once, with its change as an edit kept until logged; a change back is an edit again', async () => {
@@ -891,6 +879,41 @@ describe('the owner\'s files in the pass driver', () => {
     expect(h.last()).toMatchObject({ mode: 'act', executed: true })
     expect(fileIvs(h.last())).toEqual([])
     expect(h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))).toHaveLength(1)
+  })
+
+  // drill run 2 (R2-F1): a new build that adds a setting's default (maxLives) was logged as a
+  // person's edit of the settings, which no one had changed. What is kept and compared is the
+  // repo-local file as written (origin's under planner v2), never the settings this build resolves
+  // from it; a pass that cannot read origin's file compares none.
+  test('the settings compared are origin\'s file as written: a kept version without the defaults is no edit, one key changed is one', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const written = JSON.stringify({ planner: 'v2', readyLabel: 'from-origin' })
+    let origin: { exitCode?: number; stdout?: string; stderr?: string } = { stdout: written }
+    const h = host(on, {
+      config: ACT_V2,
+      run: (argv, s) => (argv.join(' ') === 'git show origin/main:.claude/factory-loop.json' ? origin : quiet(argv, s)),
+      files: { '/work/.claude/factory-loop.json': JSON.stringify({ planner: 'v2', readyLabel: 'from-tree' }) },
+      store: { [filesKey(REPO)]: { ...EMPTY_FILES, settings: seenOf(written) } },
+    })
+    const logged = () => h.events().filter(e => (e.at(-1) ?? '').includes('cause=config-file'))
+    const passes = async (n: number) => {
+      for (let i = 0; i < n; i += 1) await clock.advance(60_000)
+    }
+    await $.session.start(START)
+    await clock.advance(6_000)
+    await passes(2)
+    expect(h.last()).toMatchObject({ executed: true, planner: 'v2' })
+    expect(logged()).toEqual([])
+    // origin's branch not read (past githubEveryMs): the checkout's file stands, and is not compared
+    origin = { exitCode: 128, stderr: "fatal: invalid object name 'origin/main'." }
+    await passes(6)
+    expect(h.last().config).toEqual([expect.stringContaining("settings: origin's default branch not read")])
+    expect(logged()).toEqual([])
+    // read again, one key changed: one config-file, naming that key alone
+    origin = { stdout: JSON.stringify({ planner: 'v2', readyLabel: 'go' }) }
+    await passes(6)
+    expect(logged()).toHaveLength(1)
+    expect(logged()[0]?.at(-1)).toContain('reason=settings%20changed%20with%20no%20op:%20readyLabel')
   })
 
   // drill run 2 (R2-F3, R2-F6): an edit back to a version logged before (mode act -> off -> act, a
