@@ -963,8 +963,10 @@ notes use (`loopNote` and its inverse `entryFromLoop`, `derive.ts:369` and `:445
 - Tokens are separated by single spaces. A value holds no spaces: `%` and whitespace are
   percent-encoded (`enc`, `derive.ts:352`). A missing value is `none`, a list is comma-joined, a
   flag is `yes` or `no`.
-- The note stays within `LOOP_NOTE_MAX` (500 characters, `derive.ts:342`). Free text (a reason, a
-  question, notes) comes last and is clipped first, so the identifying fields always fit.
+- The identifying tokens come first and free text (a reason, a question, notes) last. Nothing is
+  clipped: each field is bounded where it is made (the table keeps a question to 2000
+  characters and at most 8 notes of 1000; a reason is one line of 200), and `callum-flow-event`
+  and `factory.events` put no bound on a note. So a note carries every field whole.
 - `callum-flow-event` checks each new state's identifying tokens, as it checks `kind=`, `key=`
   and `status=` for `loop` (`images/base/callum-flow-event:147-155`): `transition` needs `life=`,
   `seq=`, `from=` and `to=`; `reviewed` needs `verdict=` and `round=`; `intervention` needs
@@ -1140,7 +1142,9 @@ Every reader parses v2's fields from the note's `key=value` tokens (7.1), as it 
      none, it creates one (`gh pr create --repo R --base <default> --head <branch> --title <title>
      --body-file -`);
   3. it writes the loop's body when the PR's body differs from it (`gh pr edit <p> --repo R
-     --body-file -`), so an adopted PR's linkage is the loop's own.
+     --body-file -`), so an adopted PR's linkage is the loop's own. With no done build of the life
+     to describe the work (an adopted PR, or a record rebuilt from events, 3.3), the body keeps the
+     PR's own summary and evidence.
 
   A re-run never makes a second PR (`totality/T-04`). The PR's number is in the done `pr` entry, so
   plan sees it at once, and the row that ends the reviewing step (T8, T9, T10) writes it to the
@@ -2516,7 +2520,7 @@ own test.
     at its `maxLives`-th life. A release keeps the outcome it began with.
 18. **Events.** Every transition's seq logs exactly one `transition` event before the next
     transition, and rebuilding from any history of them gives back the records. Every note
-    `events.ts` builds parses back to the same fields and stays within `LOOP_NOTE_MAX`.
+    `events.ts` builds parses back to the same fields, whole.
 19. **Size.** No file under `plugins/factory-loop/hooks/` is over 600 lines outside the
     allowlist, no listed file is over its cap, and no listed file is at or under 600 (2.5;
     `npm run lint`).

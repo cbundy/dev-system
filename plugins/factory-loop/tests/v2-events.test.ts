@@ -1,14 +1,12 @@
 // The event seam (docs/factory-loop/v2/SPEC.md 7.1, property 18 of 17.1): every event v2 writes is
-// built by hooks/v2/events.ts in today's format, and its note parses back to the same fields and
-// stays within LOOP_NOTE_MAX. Properties over generated events, not exact notes: the one exact
+// built by hooks/v2/events.ts in today's format, and its note parses back to the same fields,
+// whole. Properties over generated events, not exact notes: the one exact
 // note is the format's own example. tests/factory-loop-v2-events.test.js runs the same argvs
 // through the real callum-flow-event.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { LOOP_NOTE_MAX } from '../hooks/derive'
 import {
   ABANDON_REASONS,
-  NOTE_MAX,
   REASON_MAX,
   REUSED_STATES,
   abandonReason,
@@ -107,10 +105,6 @@ const roundTrip = (e: V2Event) => parseEvent(rowOf(eventArgv(e)))
 // --- the format ----------------------------------------------------------------------------------------
 
 describe('the note format (v2 SPEC 7.1)', () => {
-  test('its bound is the loop notes\' bound', () => {
-    expect(NOTE_MAX).toBe(LOOP_NOTE_MAX)
-  })
-
   test('a value never holds a space and decodes back to itself', () => {
     const g = rng(7)
     for (let i = 0; i < 300; i += 1) {
@@ -161,40 +155,12 @@ describe('the note format (v2 SPEC 7.1)', () => {
 
 // --- property 18: every note parses back, and fits ----------------------------------------------------
 
-describe('every event events.ts builds parses back to the same fields and stays within LOOP_NOTE_MAX (property 18)', () => {
-  test('transitions whose free text fits: the whole record comes back', () => {
+describe('every event events.ts builds parses back to the same fields (property 18)', () => {
+  test('transitions, short or with long free text: the whole record comes back, nothing clipped', () => {
     const g = rng(18)
-    for (let i = 0; i < 500; i += 1) {
-      const e = transition(g, true)
-      const note = eventNote(e)
-      expect(note.length).toBeLessThanOrEqual(NOTE_MAX)
+    for (let i = 0; i < 800; i += 1) {
+      const e = transition(g, i % 2 === 0)
       expect(roundTrip(e)).toEqual(e)
-    }
-  })
-
-  test('transitions with long free text: within the bound, identifying fields intact, free text clipped from the end', () => {
-    const g = rng(1018)
-    for (let i = 0; i < 300; i += 1) {
-      const e = transition(g, false)
-      const note = eventNote(e)
-      expect(note.length).toBeLessThanOrEqual(NOTE_MAX)
-      const back = roundTrip(e) as TransitionEvent
-      expect(back).not.toBeNull()
-      const { question, notes, brief, ...fixed } = e.record
-      const { question: q2, notes: n2, brief: b2, ...fixed2 } = back.record
-      expect(fixed2).toEqual(fixed)
-      expect(back.row).toBe(e.row)
-      expect(back.from).toBe(e.from)
-      // what was kept is the start of what was there: whole notes, then one cut with `...`
-      expect(n2.length).toBeLessThanOrEqual(notes.length)
-      n2.forEach((n, k) => {
-        if (k < n2.length - 1 || n === notes[k]) expect(n).toBe(notes[k] as string)
-        else expect(n.endsWith('...') && (notes[k] as string).startsWith(n.slice(0, -3))).toBe(true)
-      })
-      if (q2 !== null && q2 !== question) expect(q2.endsWith('...') && (question as string).startsWith(q2.slice(0, -3))).toBe(true)
-      if (b2 !== brief) expect(b2 === null || (b2.endsWith('...') && (brief as string).startsWith(b2.slice(0, -3)))).toBe(true)
-      // the notes go before the question, the question before the brief
-      if (q2 !== question) expect(n2).toEqual([])
     }
   })
 
@@ -235,7 +201,6 @@ describe('every event events.ts builds parses back to the same fields and stays 
       }
       const reused: ReusedEvent = { state: g.pick(REUSED_STATES), issue: 1 + g.int(99), branch: maybe(g, 'issue-3'), pr: maybe(g, 4), head: maybe(g, 'abc'), note: text(g, 80) }
       for (const e of [reviewed, iv, release, reused] as V2Event[]) {
-        expect(eventNote(e).length).toBeLessThanOrEqual(NOTE_MAX)
         expect(roundTrip(e)).toEqual(e)
       }
     }
@@ -245,7 +210,6 @@ describe('every event events.ts builds parses back to the same fields and stays 
     const long = intervention('loop', 'park', 'i5/lx/s3/t', `first line\nsecond ${'x'.repeat(400)}`, { issue: 5, life: 'x', pr: null })
     expect(long.reason.length).toBe(REASON_MAX)
     expect(long.reason).toMatch(/^first line second x+\.\.\.$/)
-    expect(eventNote(long).length).toBeLessThanOrEqual(NOTE_MAX)
   })
 })
 

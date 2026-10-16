@@ -13,7 +13,7 @@ import type { ActIo } from '../hooks/exec'
 import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action } from '../hooks/types'
-import { candidates, createdPr, footer, listedPrs, prBody, prRead, prTitle, refusedReopen, rolloutLinkage, summaryOf } from '../hooks/v2/act-pr'
+import { bodyWork, candidates, createdPr, footer, listedPrs, prBody, prRead, prTitle, refusedReopen, rolloutLinkage } from '../hooks/v2/act-pr'
 import { childBody, childTitle, createdIssue, foundChild, ids, issueId } from '../hooks/v2/act-split'
 import { hiddenKey } from '../hooks/v2/act-state'
 import { childKey, lifeOf, prKey } from '../hooks/v2/keys'
@@ -177,11 +177,11 @@ describe('the PR body and title (8.1)', () => {
     expect(prTitle('', 300)).toBe('Work on #300')
   })
 
-  test('the summary an adopted PR keeps: the loop\'s own part of its body, else the PR\'s own text', () => {
-    const own = prBody({ issue: 300, summary: 'The summary.\n\nTwo paragraphs.', linkage: 'Closes', brief: BRIEF, evidence: 'e' })
-    expect(summaryOf(own, 300)).toBe('The summary.\n\nTwo paragraphs.')
-    expect(summaryOf(prBody({ issue: 300, summary: '', linkage: 'Refs', brief: null, evidence: null }), 300)).toBe('')
-    expect(summaryOf('A hand-written PR.\r\n\r\nCloses #300', 300)).toBe('A hand-written PR.\n\nCloses #300')
+  test('the work a body keeps when the action brings none: the loop\'s own summary and evidence of its body, else the PR\'s own text', () => {
+    const own = prBody({ issue: 300, summary: 'The summary.\n\nTwo paragraphs.', linkage: 'Closes', brief: BRIEF, evidence: 'npm test: 3 pass\n\n## Evidence\nmore' })
+    expect(bodyWork(own, 300)).toEqual({ summary: 'The summary.\n\nTwo paragraphs.', evidence: 'npm test: 3 pass\n\n## Evidence\nmore' })
+    expect(bodyWork(prBody({ issue: 300, summary: '', linkage: 'Refs', brief: null, evidence: null }), 300)).toEqual({ summary: '', evidence: null })
+    expect(bodyWork('A hand-written PR.\r\n\r\nCloses #300', 300)).toEqual({ summary: 'A hand-written PR.\n\nCloses #300', evidence: null })
   })
 
   test('the readers: a branch\'s PRs newest first, a PR\'s fields, a created PR\'s number', () => {
@@ -218,6 +218,19 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     // its body is the loop's now: ensured again, the same body, so nothing is written
     expect(await act(g).run(ensure({ title: '', summary: '', evidence: null }))).toMatchObject({ status: 'done', summary: expect.stringContaining('its body is the loop\'s') })
     expect(g.writes).toHaveLength(1)
+  })
+
+  test('an action with no work of its own (a record rebuilt without its build entry) keeps the PR\'s own summary and evidence', async () => {
+    const own = prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Closes', brief: BRIEF, evidence: 'npm test: 3 pass' })
+    const g = gh({ prs: [{ number: 621, state: 'OPEN', ref: 'issue-300', repo: REPO, trusted: true, body: own, title: 'x' }] })
+    // the plan's action when the ledger has no done build of the life (rules-review.ts workOf)
+    const bare = { title: 'Factory loop work for #300', summary: '', evidence: null }
+    expect(await act(g).run(ensure({ ...bare, pr: 621 }))).toMatchObject({ status: 'done', summary: expect.stringContaining('its body is the loop\'s') })
+    expect(g.writes).toEqual([])
+    // a linkage FAIL's rewrite keeps them too
+    g.rollout = 'ROLLOUT keep-open source=brief'
+    expect(await act(g).run({ ...ensure({ ...bare, op: 'body', pr: 621 }), key: prKey(REF, 'body', 1) })).toMatchObject({ status: 'done' })
+    expect(g.prs[0]?.body).toBe(prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Refs', brief: BRIEF, evidence: 'npm test: 3 pass' }))
   })
 
   test('a PR closed unmerged is reopened (a resume after a hand close, E4); a merged one is never reused', async () => {

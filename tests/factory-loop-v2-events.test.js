@@ -89,7 +89,8 @@ const events = () => [
   { state: "transition", record: record(), row: "T7", from: "building", via: "not-ok" },
   { state: "transition", record: record({ state: "queued", seq: 0, pr: null, head: null, resumeTo: null, step: "lease", question: null, notes: [] }), row: "S0", from: null, via: "claim" },
   { state: "transition", record: record({ state: "closed", why: "merged", step: null, question: null }), row: "T13", from: "merge-queue", via: "ok" },
-  { state: "transition", record: record({ notes: Array.from({ length: 30 }, (_, i) => `note ${i} with 100% of it`) }), row: "U4", from: "building", via: "unknown" },
+  // a record at the table's bounds: a question of 2000 characters and 8 notes of 1000, each whole
+  { state: "transition", record: record({ question: "which API, at 100%? ".repeat(100), notes: Array.from({ length: 8 }, (_, i) => `check-${i}, red at 100% `.repeat(50).slice(0, 1000)) }), row: "U4", from: "building", via: "unknown" },
   { state: "reviewed", issue: 571, branch: "issue-571", pr: 621, head: "abc1234", verdict: "changes", round: 2, patch: "3fa2c1d0e9b8a7f6e5d4c3b2a1f0e9d8c7b6a5f4", errors: 1, warnings: 2, infos: 0, reviewer: "adjudicator", answer: "/home/x/.claude/factory-loop/o__r/answers/i571_review.json" },
   ev.intervention("loop", "unknown:timeout", "i571/lss1x2k/s7/t", "the build ran past 90 minutes", { issue: 571, life: "ss1x2k", pr: null }),
   ev.intervention("person", "op:mode", "op/fleet/mode-act", "mode act", { issue: null, life: null, pr: null }),
@@ -111,14 +112,6 @@ test("every event v2 builds is one callum-flow-event takes, and reads back from 
     assert.equal(line.state, e.state);
     const row = { state: line.state, issue: line.issue, branch: line.branch, pr: line.pr, head: line.head, note: line.note };
     const back = ev.parseEvent(row);
-    if (e.state === "transition" && e.record.notes.length > 10) {
-      // clipped to fit: the identifying fields come back, the notes are cut from the end
-      assert.ok(line.note.length <= ev.NOTE_MAX);
-      assert.equal(back.record.seq, e.record.seq);
-      assert.equal(back.record.state, e.record.state);
-      assert.ok(back.record.notes.length < e.record.notes.length);
-      continue;
-    }
     // the log keeps an empty note as null; the parser reads it as empty
     assert.deepEqual(back, e, `${e.state} did not read back`);
   }
