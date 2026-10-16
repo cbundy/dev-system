@@ -94,8 +94,8 @@ Terraform state, template variables or workspace parameters:
    registry_auth_config = "/etc/coder/registry/config.json"
    ```
 
-   Set it in `terraform.tfvars` (the line is there, commented out) and push every template
-   again.
+   Set it in `terraform.tfvars` and push every template again. This Coder server keeps the
+   file at `/run/secrets/ghcr-config.json`, which `terraform.tfvars` names.
 
 Only the path is stored in the template; the file is read on each build. It covers the
 digest lookup and the image pull. The Docker host itself needs no login. For a registry

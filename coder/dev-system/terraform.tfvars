@@ -23,8 +23,10 @@ trusted_authors = "cbundy:13131067"
 # "Testing template changes from a workspace" in README.md).
 template_tester_secrets_dir = "/etc/dev-system/template-tester"
 
-# Uncomment for private per-repo images (see "Private images" in README.md).
-# registry_auth_config = "/etc/coder/registry/config.json"
+# Credentials for private per-repo images (see "Private images" in README.md). The
+# dev-system and Orchestrator templates were pushed with this path by hand; setting it here
+# keeps every push, orchestrator-loop included, able to pull a private image.
+registry_auth_config = "/run/secrets/ghcr-config.json"
 
 # One gh login shared between all workspaces on the Docker host (see "Sharing one gh
 # login" in README.md): GitHub keeps at most 10 tokens per user for the GitHub CLI app,
