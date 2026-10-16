@@ -33,7 +33,7 @@ registry_auth_config = "/run/secrets/ghcr-config.json"
 # so with a login per workspace each new sign-in revoked the oldest workspace's token.
 gh_volume_name = "dev-system-gh"
 
-# One Claude login shared between all workspaces on the Docker host (see "Sharing one
-# Claude login" in README.md): only Claude's login directory, so each workspace keeps its
-# own history and settings, and a new workspace needs no Claude sign-in.
+# The volume for the "Claude login: shared" workspace choice (see "Sharing one Claude
+# login" in README.md). Each workspace picks shared or private (the default); shared
+# ones use one Claude login and keep their own history and settings.
 claude_auth_volume_name = "dev-system-claude-auth"

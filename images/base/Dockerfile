@@ -283,14 +283,14 @@ USER node
 # DEV_SHARED_DIR names the shared files mount point, so scripts and agents
 # never hard-code /shared; DEV_SECRETS_DIR names the runtime secrets mount
 # point the same way.
-# CLAUDE_SECURESTORAGE_CONFIG_DIR moves only Claude's login out of
-# CLAUDE_CONFIG_DIR: .credentials.json and the locks Claude takes around a
-# token refresh, so a runtime can share that one directory between containers
-# while session history and settings stay per container. The variable is not
-# in Claude Code's public docs, so the image tests check that every build
-# still honours it.
+# CLAUDE_SECURESTORAGE_CONFIG_DIR is deliberately not set here: Claude's
+# login stays in CLAUDE_CONFIG_DIR unless the runtime opts in to a shared
+# login, by setting it to /persist/claude-auth and mounting a shared volume
+# there. It moves only .credentials.json and the locks Claude takes around a
+# token refresh, so session history and settings stay per container. The
+# variable is not in Claude Code's public docs, so the image tests check that
+# every build still honours it.
 ENV CLAUDE_CONFIG_DIR=/persist/claude \
-  CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth \
   CODEX_HOME=/persist/codex \
   GH_CONFIG_DIR=/persist/gh \
   NM_HOME=/persist/no-mistakes \
@@ -338,9 +338,8 @@ CMD ["dev-remote-control"]
 # user is not UID 1000, the devcontainer CLI would otherwise renumber node to
 # the host UID, and node could no longer write the 1000-owned /persist volumes.
 #
-# Its mounts are the volumes shared by every repo on the Docker host: gh, the
-# Claude login (dev-system-claude-auth, only CLAUDE_SECURESTORAGE_CONFIG_DIR),
-# and dev-system-secrets read-only at DEV_SECRETS_DIR, so a secret written into
+# Its mounts are the volumes shared by every repo on the Docker host: gh, and
+# dev-system-secrets read-only at DEV_SECRETS_DIR, so a secret written into
 # it once (the agentsview URL, cbundy/dev-system#103) reaches every repo; an
 # absent volume is created empty, which leaves the push off. The string form
 # is the one that can say readonly. The other
@@ -379,4 +378,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   dev.cbundy.persist="${PERSIST_DIRS}" \
   dev.cbundy.shared="/shared" \
   dev.cbundy.secrets="/run/secrets/dev-system" \
-  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CLAUDE_SECURESTORAGE_CONFIG_DIR\":\"/persist/claude-auth\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\",\"NO_MISTAKES_NO_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},{\"type\":\"volume\",\"source\":\"dev-system-claude-auth\",\"target\":\"/persist/claude-auth\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"
+  devcontainer.metadata="[{\"remoteUser\":\"node\",\"updateRemoteUserUID\":false,\"containerEnv\":{\"CLAUDE_CONFIG_DIR\":\"/persist/claude\",\"CODEX_HOME\":\"/persist/codex\",\"GH_CONFIG_DIR\":\"/persist/gh\",\"NM_HOME\":\"/persist/no-mistakes\",\"NO_MISTAKES_HOME\":\"/persist/no-mistakes\",\"DEV_SHARED_DIR\":\"/shared\",\"DEV_SECRETS_DIR\":\"/run/secrets/dev-system\",\"DEV_REMOTE_CONTROL\":\"0\",\"DEV_DESKTOP\":\"1\",\"AGENTSVIEW_DATA_DIR\":\"/persist/agentsview\",\"AGENTSVIEW_TELEMETRY_ENABLED\":\"0\",\"AGENTSVIEW_DISABLE_UPDATE_CHECK\":\"1\",\"NO_MISTAKES_NO_UPDATE_CHECK\":\"1\"},\"postStartCommand\":\"dev-init && dev-remote-control --post-start\",\"mounts\":[{\"type\":\"volume\",\"source\":\"dev-system-gh\",\"target\":\"/persist/gh\"},\"type=volume,source=dev-system-secrets,target=/run/secrets/dev-system,readonly\"]}]"

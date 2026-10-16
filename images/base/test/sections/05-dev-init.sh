@@ -44,9 +44,9 @@ check "dev-init seeds installMethod into an existing .claude.json without touchi
   [ "$(jq -c "{keep, installMethod}" /persist/claude/.claude.json)" = "{\"keep\":1,\"installMethod\":\"native\"}" ]
   [ "$(stat -c %a /persist/claude/.claude.json)" = 600 ]'
 # Claude's login directory (CLAUDE_SECURESTORAGE_CONFIG_DIR) shared by two
-# containers, each with its own CLAUDE_CONFIG_DIR volume, as on the desktop and
-# with Coder's claude_auth_volume_name: the first to start moves its older
-# login in; the second keeps its own, unused.
+# containers, each with its own CLAUDE_CONFIG_DIR volume, as Coder's "shared"
+# Claude login sets it up: the first to start moves its older login in; the
+# second keeps its own, unused. Without the variable nothing moves.
 authvol=$(docker volume create --label "$RUN_ID")
 cfga=$(docker volume create --label "$RUN_ID")
 cfgb=$(docker volume create --label "$RUN_ID")
@@ -59,14 +59,24 @@ check "dev-init moves an older Claude login into an empty shared login dir, whic
   [ "$(stat -c %u:%a /persist/claude-auth/.credentials.json)" = 1000:600 ]
   ! ls -A /persist/claude-auth | grep "^\.credentials\.json\."
   claude auth status --json | jq -e ".loggedIn == true and .authMethod == \"claude.ai\""' \
-  -e CREDS="$CREDS" -v "$cfga:/persist/claude" -v "$authvol:/persist/claude-auth" --entrypoint ""
+  -e CREDS="$CREDS" -e CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth \
+  -v "$cfga:/persist/claude" -v "$authvol:/persist/claude-auth" --entrypoint ""
 check "dev-init in a second container leaves the shared login and its own older one as they are" in_image '
   set -e
   printf "{\"claudeAiOauth\":{\"accessToken\":\"sk-ant-oat01-second\"}}\n" > /persist/claude/.credentials.json
   dev-init >/dev/null 2>&1
   grep -q sk-ant-oat01-second /persist/claude/.credentials.json
   grep -q sk-ant-oat01-first /persist/claude-auth/.credentials.json' \
+  -e CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth \
   -v "$cfgb:/persist/claude" -v "$authvol:/persist/claude-auth" --entrypoint ""
+check "without CLAUDE_SECURESTORAGE_CONFIG_DIR (a private login) dev-init leaves the Claude login where it is" in_image '
+  set -e
+  printf "%s\n" "$CREDS" > /persist/claude/.credentials.json
+  dev-init >/dev/null 2>&1
+  grep -q sk-ant-oat01-first /persist/claude/.credentials.json
+  [ ! -e /persist/claude-auth/.credentials.json ]
+  claude auth status --json | jq -e ".loggedIn == true"' \
+  -e CREDS="$CREDS" --entrypoint ""
 check "dev-init keeps an existing top-level sandbox_mode and ignores one inside a table" in_image '
   set -e
   printf "sandbox_mode = \"workspace-write\"\n" > /persist/codex/config.toml
@@ -272,11 +282,11 @@ check "dev-init warns (exit 0) naming every /persist dir with no volume, only th
   out=\$(docker run --rm --entrypoint '' '$IMAGE' bash -c 'dev-init; echo rc=\$?' 2>&1)
   echo \"\$out\"
   echo \"\$out\" | grep -qx 'rc=0' &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/claude-auth /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - ' &&
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - ' &&
   ! echo \"\$out\" | grep -E 'no volume behind.*(dev-restart-self)' &&
   echo \"\$out\" | grep -qF 'npx callum-dev update --devcontainer base-image' &&
   out=\$(docker run --rm --entrypoint '' -v \"\$(docker volume create --label '$RUN_ID'):/persist/claude\" '$IMAGE' dev-init 2>&1) &&
-  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/claude-auth /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - '"
+  echo \"\$out\" | grep -qF 'dev-init: WARNING: no volume behind /persist/codex /persist/gh /persist/no-mistakes /persist/agentsview /persist/events - '"
 check "dev-init: no volume warning with one volume for all of /persist (the k8s / Coder shape)" in_image '
   out=$(dev-init 2>&1); echo "$out"
   ! echo "$out" | grep -q "no volume behind"' \

@@ -113,8 +113,8 @@ environment variable set in the image.
 
 | Directory | Tool | How the tool finds it | What persists |
 |---|---|---|---|
-| `/persist/claude` | Claude Code | `CLAUDE_CONFIG_DIR` | account profile and onboarding (`.claude.json`), settings, plugins, sessions |
-| `/persist/claude-auth` | Claude Code | `CLAUDE_SECURESTORAGE_CONFIG_DIR` | the login only (`.credentials.json`, with MCP server logins) and the locks Claude takes around a token refresh |
+| `/persist/claude` | Claude Code | `CLAUDE_CONFIG_DIR` | login (`.credentials.json`, unless shared), account profile (`.claude.json`), settings, plugins, sessions |
+| `/persist/claude-auth` | Claude Code | `CLAUDE_SECURESTORAGE_CONFIG_DIR`, set only by a runtime that opts in to a [shared Claude login](#sharing-one-claude-login) | the shared login only (`.credentials.json`, with MCP server logins) and the locks Claude takes around a token refresh; empty and unused otherwise |
 | `/persist/codex` | codex | `CODEX_HOME` | login, `config.toml` |
 | `/persist/gh` | GitHub CLI | `GH_CONFIG_DIR` | login (`hosts.yml`), config |
 | `/persist/no-mistakes` | no-mistakes | `NM_HOME` (also `NO_MISTAKES_HOME`, read by the callum-tools pipeline watcher) | global `config.yaml`, repo registrations, gates, run logs |
@@ -147,9 +147,9 @@ declared by this contract and the devcontainer metadata instead.
 
 ### What is shared and what is per repo
 
-Only `/persist/gh` and `/persist/claude-auth` (the logins) can be shared between repos.
-Every other directory is per repo (or per workspace): one volume each for a repo's
-containers, never shared with another repo. Sharing those breaks:
+Only `/persist/gh` and, when a runtime opts in, `/persist/claude-auth` (the logins) can be
+shared between repos. Every other directory is per repo (or per workspace): one volume each
+for a repo's containers, never shared with another repo. Sharing those breaks:
 
 | Directory | What breaks when two repos share it |
 |---|---|
@@ -158,53 +158,62 @@ containers, never shared with another repo. Sharing those breaks:
 | `/persist/codex` | Its SQLite state, `sessions/` and `history` would be mixed across repos. |
 | `/persist/agentsview` | Its installation ID is the machine in the viewer, so it must follow the Claude and codex volumes (see [One machine per workspace](#one-machine-per-workspace)). |
 
-The logins are what can be shared, each for its own reason:
+By default the cost of per-repo state is one Claude login and one codex login per repo (or
+workspace), kept after that. Several logins on one account are fine: each is its own grant,
+like logging in on several machines. `CLAUDE_CODE_OAUTH_TOKEN` is shareable, but Remote
+Control refuses it. gh is the exception: `hosts.yml` holds a token that is rarely
+rewritten, and the whole directory is mounted, so sharing it is safe.
 
-- **Claude.** `CLAUDE_SECURESTORAGE_CONFIG_DIR` moves Claude's login, and nothing else, out
-  of `CLAUDE_CONFIG_DIR`: `.credentials.json` (the OAuth tokens, plus any MCP server
-  logins) and the lock files Claude takes around writing it and refreshing a token. Every
-  Claude using the directory serialises its refreshes on those locks and re-reads the file
-  when another one has changed it, the way several sessions on one machine share one
-  login, so one container's refresh never logs the others out. History, settings,
-  plugins, trust and the Remote Control machine ID stay in `CLAUDE_CONFIG_DIR`, per
-  container; Claude fills in each container's account profile in `.claude.json` from the
-  shared login on first use. The variable is not in Claude Code's public docs, so the
-  image tests check that every build honours it. Sharing the whole `/persist/claude`
-  instead, or a symlink to a shared file, does not work: Claude refuses to read a
-  symlinked `.credentials.json`.
-- **gh.** `hosts.yml` holds a token that is rarely rewritten, and the whole directory is
-  mounted, so sharing it is safe.
-- **codex** keeps its login next to the rest of its state (`$CODEX_HOME/auth.json`), with no
-  separate path setting, and its refresh guard works within one process only: two
-  containers refreshing at once can spend the same refresh token and leave one logged
-  out. So codex stays one login per repo (or workspace).
+codex keeps its login next to the rest of its state (`$CODEX_HOME/auth.json`), with no
+separate path setting, and its refresh guard works within one process only: two containers
+refreshing at once can spend the same refresh token and leave one logged out. So codex
+stays one login per repo (or workspace).
 
-`CLAUDE_CODE_OAUTH_TOKEN` is shareable too, but Remote Control refuses it. Several logins
-on one account are fine: each is its own grant, like logging in on several machines.
+#### Sharing one Claude login
 
-`dev-init` moves a login made before the split, in `/persist/claude`, into
-`/persist/claude-auth` when that holds none yet, so the first container to start keeps its
-login and the others use it. A container whose own login predates a shared one keeps it in
-`/persist/claude`, unused. Logging out (`claude auth logout`) in one container logs out every
-container sharing the directory.
+Claude's login can be shared on its own, as an opt-in per container. The runtime sets
+`CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth` and mounts one shared volume there.
+That moves Claude's login, and nothing else, out of `CLAUDE_CONFIG_DIR`: `.credentials.json`
+(the OAuth tokens, plus any MCP server logins) and the lock files Claude takes around
+writing it and refreshing a token. Every Claude using the directory serialises its refreshes
+on those locks and re-reads the file when another one has changed it, the way several
+sessions on one machine share one login, so one container's refresh never logs the others
+out. History, settings, plugins, trust and the Remote Control machine ID stay in
+`CLAUDE_CONFIG_DIR`, per container; Claude fills in each container's account profile in
+`.claude.json` from the shared login on first use. The variable is not in Claude Code's
+public docs, so the image tests check that every build honours it. Sharing the whole
+`/persist/claude` instead, or a symlink to a shared file, does not work: Claude refuses to
+read a symlinked `.credentials.json`.
+
+With the variable set, `dev-init` moves a login the container already has in
+`/persist/claude` into `/persist/claude-auth` when that holds none yet, so the first
+container to opt in seeds the shared login and the others use it. A container whose own
+login predates a shared one keeps it in `/persist/claude`, unused, and uses it again if it
+stops sharing. Without the variable nothing moves. Anyone who can open a sharing container
+holds the shared login, and logging out (`claude auth logout`) in one logs out every one.
+
+- **Coder**: the workspace's [Claude login](../../coder/dev-system/README.md#sharing-one-claude-login)
+  choice.
+- **Desktop**: in the repo's `devcontainer.json`, `"containerEnv": {"CLAUDE_SECURESTORAGE_CONFIG_DIR":
+  "/persist/claude-auth"}` and the mount `{ "type": "volume", "source": "dev-system-claude-auth",
+  "target": "/persist/claude-auth" }`; every repo with both shares one login per Docker host.
+- **docker run, compose**: the same variable, plus `-v dev-system-claude-auth:/persist/claude-auth`.
 
 ### How runtimes should mount it
 
-- **Docker (desktop)**: one named volume per directory. `dev-system-gh` and
-  `dev-system-claude-auth` are shared by every repo and come from the image's devcontainer
-  metadata; the other five are per repo and
+- **Docker (desktop)**: one named volume per directory. `dev-system-gh` is shared by every
+  repo and comes from the image's devcontainer metadata; the other five are per repo and
   come from the consumer's `devcontainer.json`, named after its `${devcontainerId}` (see
   [Extending the image](#extending-the-image)). A new named volume copies the image
   directory's ownership on first use, which is why the directories exist in the image
   owned by 1000.
 - **Docker (headless: `docker run`, compose)**: the same split by hand - per-project volumes
-  for claude, codex, no-mistakes, agentsview and events, plus the shared `dev-system-gh` and
-  `dev-system-claude-auth`. See
+  for claude, codex, no-mistakes, agentsview and events, plus the shared `dev-system-gh`. See
   [First start, headless](#first-start-headless).
 - **Kubernetes**: one PVC per workspace mounted at `/persist`, with
   `securityContext.fsGroup: 1000` so `node` can write to it. `dev-init` creates any missing
-  subdirectory on first start. gh and the Claude login are per workspace too, unless the
-  runtime supplies `GH_TOKEN` instead, or mounts one shared volume at `/persist/claude-auth`.
+  subdirectory on first start. gh is per workspace too, unless the runtime supplies
+  `GH_TOKEN` instead.
 - **Coder**: see the [template's storage reference](../../coder/dev-system/README.md#what-the-template-does)
   and its [gh](../../coder/dev-system/README.md#sharing-one-gh-login) and
   [Claude](../../coder/dev-system/README.md#sharing-one-claude-login) login sharing options.
@@ -1035,7 +1044,7 @@ inside the session ends that Claude, and the supervisor starts a new one after t
 
 #### First start, headless
 
-Per-project volumes for everything but the gh and Claude logins (see
+Per-project volumes for everything but gh (see
 [What is shared and what is per repo](#what-is-shared-and-what-is-per-repo)), here for a
 project called `my-repo`:
 
@@ -1043,8 +1052,7 @@ project called `my-repo`:
 docker run -d --name my-repo \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
-  -v dev-system-gh:/persist/gh -v dev-system-claude-auth:/persist/claude-auth \
-  -v my-repo-workspaces:/workspaces \
+  -v dev-system-gh:/persist/gh -v my-repo-workspaces:/workspaces \
   -v dev-system-secrets:/run/secrets/dev-system:ro \
   -e DEV_REPO_URL=https://github.com/me/my-repo.git -e DEV_MACHINE_NAME=docker-my-repo \
   ghcr.io/cbundy/dev-system/base:2
@@ -1064,8 +1072,8 @@ VPN only: see [Security](#security)); a second container then needs another host
 
 The same with docker compose. Compose prefixes volume names with the project name, which
 keeps the five per-project volumes apart from other projects'; `name:` turns that off for
-the shared gh, Claude login and secrets volumes, so every project uses the same
-`dev-system-gh`, `dev-system-claude-auth` and `dev-system-secrets`:
+the shared gh and secrets volumes, so every project uses the same `dev-system-gh` and
+`dev-system-secrets`:
 
 ```yaml
 services:
@@ -1081,7 +1089,6 @@ services:
       - agentsview:/persist/agentsview
       - events:/persist/events
       - gh:/persist/gh
-      - claude-auth:/persist/claude-auth
       - workspaces:/workspaces
       - secrets:/run/secrets/dev-system:ro
 volumes:
@@ -1093,8 +1100,6 @@ volumes:
   workspaces:
   gh:
     name: dev-system-gh   # shared by every project on this Docker host
-  claude-auth:
-    name: dev-system-claude-auth   # the Claude login, shared likewise
   secrets:
     name: dev-system-secrets   # the agentsview URL, shared likewise
 ```
@@ -1158,10 +1163,9 @@ container.
 
 ## First-run logins
 
-Claude and gh need one login per shared volume (on the desktop, one per Docker host), or
-per workspace when their storage is private; see [runtime mounts](#how-runtimes-should-mount-it).
-codex, if you use it, needs one login per repo on the desktop (per workspace on Kubernetes
-or Coder).
+Each repo on the desktop (each workspace on Kubernetes or Coder) needs one Claude login
+and, if you use codex, one codex login. gh needs one login per shared volume, or per
+workspace when its storage is private; see [runtime mounts](#how-runtimes-should-mount-it).
 The logins land in `/persist`, so they survive container rebuilds and image updates. `dev-login` does them
 without a shell in the container:
 
@@ -1296,8 +1300,7 @@ docker run -d --name my-repo --network dev \
   -e DEV_LOGIN_PORT=8765 -e DEV_LOGIN_PAGE_URL=https://<host>/login/my-repo/ \
   -v my-repo-claude:/persist/claude -v my-repo-codex:/persist/codex \
   -v my-repo-no-mistakes:/persist/no-mistakes -v my-repo-agentsview:/persist/agentsview -v my-repo-events:/persist/events \
-  -v dev-system-gh:/persist/gh -v dev-system-claude-auth:/persist/claude-auth \
-  -v dev-system-secrets:/run/secrets/dev-system:ro \
+  -v dev-system-gh:/persist/gh -v dev-system-secrets:/run/secrets/dev-system:ro \
   ghcr.io/cbundy/dev-system/base:2
 ```
 
@@ -1378,13 +1381,12 @@ it is:
 
 The image's metadata label supplies `remoteUser: node`, `updateRemoteUserUID: false`,
 `containerEnv` with the `/persist` variables, `DEV_SHARED_DIR` and `DEV_REMOTE_CONTROL: "0"`,
-`postStartCommand: dev-init && dev-remote-control --post-start` and the shared gh, Claude
-login and secrets volumes, which the devcontainer CLI and VS Code merge into your config:
+`postStartCommand: dev-init && dev-remote-control --post-start` and the shared gh and
+secrets volumes, which the devcontainer CLI and VS Code merge into your config:
 
 | Named volume | Target | Scope |
 |---|---|---|
 | `dev-system-gh` | `/persist/gh` | every repo on the Docker host (image metadata) |
-| `dev-system-claude-auth` | `/persist/claude-auth` | every repo on the Docker host (image metadata) |
 | `dev-system-secrets` | `/run/secrets/dev-system`, read-only | every repo on the Docker host (image metadata) |
 | `dev-system-<devcontainerId>-claude` | `/persist/claude` | this repo (your `devcontainer.json`) |
 | `dev-system-<devcontainerId>-codex` | `/persist/codex` | this repo (your `devcontainer.json`) |
@@ -1402,8 +1404,8 @@ folder and the path of the devcontainer config file, so:
   starts with new, empty ones (one more login);
 - a repo with several configs (say `.devcontainer/devcontainer.json` and
   `.devcontainer/gpu/devcontainer.json`) gets separate volumes for each, so a separate
-  codex login for each. gh and Claude are the exception: `dev-system-gh` and
-  `dev-system-claude-auth` are shared by all of them. Moving or renaming a config file also starts it on new, empty volumes.
+  Claude and codex login for each. gh is the exception: `dev-system-gh` is shared by
+  all of them. Moving or renaming a config file also starts it on new, empty volumes.
 
 To list a repo's volumes: `docker volume ls --filter name=dev-system-`. To delete a repo's
 state, remove its five volumes once its container is gone.
@@ -1413,9 +1415,8 @@ another UID. Otherwise the devcontainer CLI renumbers `node` to the host UID and
 longer write the 1000-owned volumes. On such a host, files `node` creates in a bind-mounted
 workspace are owned by UID 1000 on the host.
 
-To give a repo its own gh or Claude login too, list a mount with the target `/persist/gh`
-or `/persist/claude-auth` in its `devcontainer.json`; the consumer's mount replaces the
-image default. If a consumer
+To give a repo its own gh login too, list a mount with the target `/persist/gh` in its
+`devcontainer.json`; the consumer's mount replaces the image default. If a consumer
 Dockerfile sets its own `devcontainer.metadata` label, it replaces this one, so copy these
 entries into it.
 
