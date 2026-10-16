@@ -1,10 +1,10 @@
 // The records rebuilt from this device's `transition` events (docs/factory-loop/v2/SPEC.md 3.3):
 // the newest per issue over REBUILD_DAYS, every record field read from its note by events.ts, the
-// one seam that writes and parses v2's events (7.1); free text the note clipped stays clipped.
-// Act mode rebuilds when the store holds no records; observe mode and the shadow read the store's,
-// else this. A step in flight is not rebuilt: S2 starts the same attempt again, and an agent step
-// first looks for an answer already recorded for its key (10.8). A record closed more than
-// RECORD_KEEP_MS ago is left out, as the store prunes it.
+// one seam that writes and parses v2's events (7.1). Act mode rebuilds when the store holds no
+// records; observe mode and the shadow read the store's, else this. A step in flight is not
+// rebuilt: S2 starts the same attempt again, and an agent step first looks for an answer already
+// recorded for its key (10.8). A record closed more than RECORD_KEEP_MS ago is left out, as the
+// store prunes it.
 //
 // Pure: the events come in as values.
 import type { FactoryEvent } from '../derive'

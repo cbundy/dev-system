@@ -271,7 +271,7 @@ export function dispositionsOf(data: unknown): Disposition[] {
   return out
 }
 
-// A verdict note within one event row's note (events.ts NOTE_MAX).
+// A verdict note is one short line: the false-positive query reads its id and verdict.
 const VERDICT_NOTE_MAX = 500
 
 // verdictEvent: a fixer's disposition as the reviewer false-positive query reads it (section 15):

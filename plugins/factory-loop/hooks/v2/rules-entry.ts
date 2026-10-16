@@ -111,12 +111,10 @@ export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via:
   ].join('\n')
 }
 
-// parkedTell: the park's tell, and each daily reminder (k >= 1, E6), an owner item. It points at
-// the park comment, which holds the question whole: a record rebuilt from events keeps only what
-// fit the note (3.3).
+// parkedTell: the park's tell, and each daily reminder (k >= 1, E6), an owner item.
 export function parkedTell(r: IssueRecord, k: number): Action {
   const key = k === 0 ? entryKey(r, 'tell') : `${entryKey(r, 'tell')}/${k}`
-  const lines = [`question (whole in the park comment on #${r.issue}): ${r.question ?? 'none given'}`, `resume: ${resumeStep(r.issue)}`]
+  const lines = [`question: ${r.question ?? 'none given'}`, `resume: ${resumeStep(r.issue)}`]
   return wake('tell', 'parked', key, k === 0 ? RULE : 'S6', r.issue, { issue: r.issue, from: r.resumeTo ?? 'none', days: k }, lines)
 }
 

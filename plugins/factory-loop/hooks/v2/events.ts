@@ -12,8 +12,9 @@
 //   percent-encoded (a list item's `,` too);
 // - a missing value is `none` (a string that is literally `none` is written `%6Eone`), a list is
 //   comma-joined (`none` when empty), a flag is `yes` or `no`;
-// - the note stays within NOTE_MAX (derive.ts LOOP_NOTE_MAX): the identifying tokens come first,
-//   free text (a question, notes, a reason, a path) comes last and is clipped first.
+// - the identifying tokens come first, free text (a question, notes, a reason, a path) last;
+//   nothing is clipped: each field is bounded where it is made (a record's free text by the
+//   table, a reason by oneLine), so a note carries every field whole.
 // The reused states keep the note today's queries read (`brief <url>`, `review`, `CORRECT: ..`),
 // verbatim; only `abandoned`, which no query parses, gains a `reason=` token, so the metrics can
 // tell a drop, a split, a triage drop and a reconcile release apart (7.3).
@@ -23,15 +24,13 @@ import type { FactoryEvent } from '../derive'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { IssueRecord, IssueState } from './types'
 
-// derive.ts LOOP_NOTE_MAX: one event row's note (tests/v2-events.test.ts checks they agree)
-export const NOTE_MAX = 500
 // an intervention's reason is one line of at most this many characters (7.1)
 export const REASON_MAX = 200
 
 // --- the events ---------------------------------------------------------------------------------
 
-// A state change (4.6), and again after a re-claim (4.1): every record field travels with it, its
-// free text clipped to fit, so a record can be rebuilt from its newest one (3.3).
+// A state change (4.6), and again after a re-claim (4.1): every record field travels with it, so
+// a record can be rebuilt from its newest one (3.3).
 export type TransitionEvent = { state: 'transition'; record: IssueRecord; row: string; from: IssueState | null; via: string }
 
 // One review result (8.3).
@@ -188,51 +187,6 @@ export function noteToken(note: string | null, key: string): string | null | und
   return unstr(tokensOf(note).get(key))
 }
 
-// --- fitting a note into NOTE_MAX ------------------------------------------------------------------
-
-// clipText: the text cut, with `...`, until its encoded form is at most max characters; null when
-// not even one character and the `...` fit.
-function clipText(text: string, max: number, encode: (v: string) => string): string | null {
-  if (encode(text).length <= max) return text
-  let keep = Math.min(text.length - 1, max)
-  while (keep > 0) {
-    const cut = `${text.slice(0, keep)}...`
-    if (encode(cut).length <= max) return cut
-    keep -= Math.max(1, encode(cut).length - max)
-  }
-  return null
-}
-
-// A free-text token: its key, its value, and whether it is a list.
-type Free = { key: string; value: string | null } | { key: string; items: readonly string[] }
-
-// fit: the fixed tokens, then the free ones, clipped from the last to the first until the note
-// is within NOTE_MAX. A list loses items from its end, and the first item it lost is cut to the
-// room left; a text is cut, with `...`; what cannot fit at all is `none`.
-function fit(fixed: readonly string[], free: readonly Free[]): string {
-  const values = free.map(f => ('items' in f ? list(f.items) : str(f.value)))
-  const note = () => [...fixed, ...free.map((f, i) => `${f.key}=${values[i]}`)].join(' ')
-  for (let i = free.length - 1; i >= 0 && note().length > NOTE_MAX; i -= 1) {
-    const f = free[i] as Free
-    const room = Math.max(0, (values[i] as string).length - (note().length - NOTE_MAX))
-    if ('items' in f) {
-      const kept = [...f.items]
-      while (kept.length > 0 && list(kept).length > room) kept.pop()
-      const next = f.items[kept.length]
-      if (next !== undefined) {
-        const used = kept.length === 0 ? 0 : list(kept).length + 1
-        const cut = clipText(next, room - used, v => str(v).replace(/,/g, '%2C'))
-        if (cut !== null) kept.push(cut)
-      }
-      values[i] = list(kept)
-    } else {
-      const cut = f.value === null ? null : clipText(f.value, room, str)
-      values[i] = str(cut)
-    }
-  }
-  return note()
-}
-
 // --- the notes --------------------------------------------------------------------------------------
 
 // What travels in an event's own columns.
@@ -259,7 +213,7 @@ export function eventActor(e: V2Event): string | null {
 
 function transitionNote(e: TransitionEvent): string {
   const r = e.record
-  const fixed = [
+  return [
     `row=${str(e.row)}`,
     `life=${str(r.life)}`,
     `seq=${r.seq}`,
@@ -278,19 +232,15 @@ function transitionNote(e: TransitionEvent): string {
     `approvedPatch=${str(r.approvedPatch)}`,
     `prClosedAt=${str(r.prClosedAt)}`,
     `lives=${r.lives}`,
-  ]
-  // the via code, the brief's URL, the question and the notes are clipped, in reverse order, only
-  // when the note would not fit otherwise
-  return fit(fixed, [
-    { key: 'via', value: e.via },
-    { key: 'brief', value: r.brief },
-    { key: 'question', value: r.question },
-    { key: 'notes', items: r.notes },
-  ])
+    `via=${str(e.via)}`,
+    `brief=${str(r.brief)}`,
+    `question=${str(r.question)}`,
+    `notes=${list(r.notes)}`,
+  ].join(' ')
 }
 
 function reviewedNote(e: ReviewedEvent): string {
-  const fixed = [
+  return [
     `verdict=${e.verdict}`,
     `round=${e.round}`,
     `patch=${str(e.patch)}`,
@@ -298,8 +248,8 @@ function reviewedNote(e: ReviewedEvent): string {
     `warnings=${e.warnings}`,
     `infos=${e.infos}`,
     `reviewer=${str(e.reviewer)}`,
-  ]
-  return fit(fixed, [{ key: 'answer', value: e.answer }])
+    `answer=${str(e.answer)}`,
+  ].join(' ')
 }
 
 // oneLine: a reason as one line of at most REASON_MAX characters.
@@ -309,18 +259,17 @@ export function oneLine(text: string): string {
 }
 
 function interventionNote(e: InterventionEvent): string {
-  const fixed = [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`]
-  return fit(fixed, [{ key: 'reason', value: oneLine(e.reason) }])
+  return [`who=${e.who}`, `cause=${str(e.cause)}`, `life=${str(e.life)}`, `fact=${str(e.fact)}`, `reason=${str(oneLine(e.reason))}`].join(' ')
 }
 
 function releaseNote(e: ReleaseEvent): string {
-  return fit([`reason=${e.reason}`, `outcome=${e.outcome}`, `lives=${num(e.lives)}`, `stage=${str(e.stage)}`, `pr=${num(e.pr)}`], [{ key: 'checked', value: e.checked }])
+  return [`reason=${e.reason}`, `outcome=${e.outcome}`, `lives=${num(e.lives)}`, `stage=${str(e.stage)}`, `pr=${num(e.pr)}`, `checked=${str(e.checked)}`].join(' ')
 }
 
 // A drop, a split or a triage drop; `reconcile` is a release's alone (releaseNote).
 function abandonedNote(e: ReusedEvent): string {
   const reason = abandonReason(e.note)
-  return fit([`reason=${reason === 'reconcile' ? 'other' : reason}`], [{ key: 'note', value: e.note }])
+  return [`reason=${reason === 'reconcile' ? 'other' : reason}`, `note=${str(e.note)}`].join(' ')
 }
 
 // eventNote: the note an event carries.
@@ -419,7 +368,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     prClosedAt,
     lives,
   }
-  // a via clipped away (a note that could not hold it) reads back empty
+  // a via an older, clipped note lost reads back empty
   return { state: 'transition', record, row: rowId, from: fromRaw as IssueState | null, via: via ?? '' }
 }
 

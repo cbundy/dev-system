@@ -10,8 +10,10 @@ import { eventsFromRows } from '../hooks/derive'
 import { eventArgv, parseTransition } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { lifeOf } from '../hooks/v2/keys'
+import { checkIdsOf, checkNote } from '../hooks/v2/prompts-work'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from '../hooks/v2/record'
 import type { TransitionParser } from '../hooks/v2/record'
+import { parkedTell } from '../hooks/v2/rules-entry'
 import { madeRecord, nextRecord, normalize, rowFor, viaOf } from '../hooks/v2/table'
 import type { IssueRecord, TableEvent } from '../hooks/v2/types'
 import { DEVICE, MIN, NOW, OTHER, config } from './fixtures'
@@ -86,7 +88,6 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
   test('property 18 over events.ts\'s own codec: any history of transitions rebuilds the records it left', () => {
     // a history the table makes: a claim, its lease, the design, a build that cannot, a triage
     // retry, a timeout, a second triage retry, the build
-    // short enough that the whole history fits a note (free text past NOTE_MAX is clipped, 7.1)
     const triage: TableEvent = { kind: 'triage', choice: 'retry', reason: 'flaky', data: { instructions: 'once more' } }
     const steps: TableEvent[] = [
       { kind: 'ok' },
@@ -111,6 +112,20 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
       expect(parseTransition(list.at(-1) as FactoryEvent)).toEqual(ev)
     })
     expect(r).toMatchObject({ state: 'reviewing', round: 1 })
+  })
+
+  test('a record rebuilt from its note is the record, its free text whole: a CI fixer gets every failed check, the next build the whole triage instruction, a reminder the whole question (drill R4-O5)', () => {
+    const checks = [checkNote('lint', 'https://github.com/o/r/actions/runs/41/job/1'), checkNote('test (node 22)', 'https://github.com/o/r/actions/runs/41/job/2')]
+    const instruction = `make the slug test deterministic first, then ${'keep each change small and say why in its commit. '.repeat(18)}`.trim()
+    const question = `which of these APIs should the client use? ${'one option, with its trade-offs spelled out at length. '.repeat(30)}`.trim()
+    const fixing = record(7, { seq: 9, state: 'fixing', step: 'fix', pr: 12, head: 'abc1234', fixes: 1, notes: [instruction, ...checks] })
+    const parked = record(8, { seq: 4, state: 'parked', step: null, resumeTo: 'designing', question, notes: [instruction] })
+    const list = [fixing, parked].map(r => eventOf(t(r), NOW - DAY, DEVICE, noteOf(t(r))))
+    const rebuilt = recordsFromEvents(list, DEVICE)
+    expect(rebuilt).toEqual([fixing, parked])
+    expect(checkIdsOf(rebuilt[0]?.notes ?? [])).toEqual(['check:41-1', 'check:41-2'])
+    const tell = parkedTell(rebuilt[1] as IssueRecord, 2)
+    expect(tell.kind === 'tell' ? tell.context[0] : '').toBe(`question: ${question}`)
   })
 })
 
