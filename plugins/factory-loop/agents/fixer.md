@@ -37,7 +37,7 @@ GitHub through its API: the loop does every GitHub write. Read issues, comments 
 write a closing keyword (close, fix or resolve and their forms) before an issue reference
 anywhere.
 
-Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit.
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit. Never `rm` a glob under an unguarded variable: use `"${VAR:?}"/*` or a literal path.
 
 Run every command and sub-agent in the foreground and wait for it; never use run_in_background:
 your turn ends only with your answer.

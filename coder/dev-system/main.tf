@@ -147,6 +147,15 @@ variable "default_plugins" {
   type        = string
 }
 
+# Whether the template's default_plugins refs beat a ref the workspace repo's committed
+# .claude/settings.json declares (DEV_DEFAULT_PLUGIN_REFS_WIN, the image's plugins.sh), so the
+# template owns the plugin version. coder/push.sh turns it on for orchestrator-loop only.
+variable "default_plugin_refs_win" {
+  default     = false
+  description = "Whether the default_plugins refs win over a ref the workspace repo declares (DEV_DEFAULT_PLUGIN_REFS_WIN=1), and dev-doctor fails on a missing default plugin or a marketplace at another ref."
+  type        = bool
+}
+
 variable "remote_control_name_format" {
   default     = ""
   description = "Session mode: the Remote Control session name, with {name} replaced by the default name (DEV_REMOTE_CONTROL_NAME_FORMAT), e.g. '🔄 {name} orchestrator'. Empty keeps the default name."
@@ -553,6 +562,7 @@ resource "coder_agent" "main" {
     var.remote_control_resume_prompt != "" ? { DEV_REMOTE_CONTROL_RESUME_PROMPT = var.remote_control_resume_prompt } : {},
     var.remote_control_name_format != "" ? { DEV_REMOTE_CONTROL_NAME_FORMAT = var.remote_control_name_format } : {},
     var.default_plugins != "" ? { DEV_DEFAULT_PLUGINS = var.default_plugins } : {},
+    var.default_plugin_refs_win ? { DEV_DEFAULT_PLUGIN_REFS_WIN = "1" } : {},
   )
 
   # One line, e.g. "claude: in, codex: out (optional), gh: out". The text form

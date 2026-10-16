@@ -369,6 +369,7 @@ work in progress.
 | `DEV_REPO_BRANCH` | the remote's default branch | The branch the clone checks out. Only the first clone uses it. |
 | `DEV_WORKSPACE` | `/workspaces/<repo name>` when `DEV_REPO_URL` is set | Where the repo is cloned, and where `dev-init` and Claude run. `<repo name>` is the last part of the URL without `.git` (`my-repo` for `https://github.com/me/my-repo.git`). |
 | `DEV_DEFAULT_PLUGINS` | `callum-flow@callum=cbundy/dev-system#<latest release tag>` (pinned at image build) | The Claude plugins every workspace gets, with or without a repo (see "Claude plugins" below): whitespace-separated `<plugin>@<marketplace>=<marketplace source>` entries, where the source is what `claude plugin marketplace add` takes (a GitHub `owner/repo`, optionally `#ref`, or a git URL). A per-repo image (`ENV DEV_DEFAULT_PLUGINS=...`) or the runtime's environment can change it; empty disables image defaults, while repo-enabled plugins still install. |
+| `DEV_DEFAULT_PLUGIN_REFS_WIN` | unset (off) | `1` makes the ref in a `DEV_DEFAULT_PLUGINS` entry win over the ref a workspace repo's committed settings declare for the same marketplace location (see the pinning rule under "Claude plugins"), and makes `dev-doctor` fail on a missing default plugin or a marketplace installed at another ref. Runtime only; the Coder `orchestrator-loop` template sets it (`default_plugin_refs_win`). Anything but `1` leaves it off. |
 | `DEV_PLUGIN_INSTALL_TIMEOUT` | `120` | Seconds `dev-init` may spend in all on installing the Claude plugins, the default ones and the repo's (see "Claude plugins" below). Once they are spent, the plugins not yet installed get one `WARNING`. |
 | `DEV_CANDIDATE_PLUGIN_REF` | unset (no effect) | A ref (`[A-Za-z0-9._/-]+`, for example a release candidate tag such as `v0.28.0-rc.1`) that every `cbundy/dev-system` marketplace (the github repo or its https git URL) is wanted at, replacing both the repo's declared ref and the image's default. Runtime only, set by candidate Coder template versions; not a build argument (do not confuse it with `DEV_PLUGIN_REF`). An invalid value logs one `WARNING` and is ignored. The ref goes through the same resolvability check as any pin (see "Claude plugins"). |
 
@@ -425,7 +426,11 @@ they land in `/persist/claude` and stay across rebuilds:
   `update-dev`) and the plugin's hooks in its first Claude session, with no manual step.
   It is the one plugin the image itself asks for. **Pinning rule:** the install is pinned to
   the release tag current at image build, never to main, and a repo's committed settings ref
-  wins when it declares one. A repo that declares the marketplace with no ref, at the image
+  wins when it declares one - unless `DEV_DEFAULT_PLUGIN_REFS_WIN=1` (the Coder
+  `orchestrator-loop` template), where an entry's `#ref` wins over the declared ref at the
+  same location, for plugins the repo takes over too, so the template owns the plugin
+  version there (an entry with no `#ref` never overrides; `DEV_CANDIDATE_PLUGIN_REF` still
+  beats both). A repo that declares the marketplace with no ref, at the image
   default's exact location string, takes the image's pin (not main's HEAD). A GitHub
   `owner/repo` and its git URL are different strings; a declaration at another location
   keeps its own source without inheriting a ref. A plugin first installed from a matching
@@ -700,6 +705,7 @@ on every failure:
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
   with the count when some would be removed, `OK` when there are none, nothing when the
   workspace has no bridge worktrees;
+- the Claude plugins: a `WARN` for a default plugin that is not installed and for a default marketplace installed at another ref than wanted (naming both refs; fix `dev-init --plugins`, then a new Claude session). With `DEV_DEFAULT_PLUGIN_REFS_WIN=1` both are a `FAIL`;
 - an `INFO` line, never a failure, on telemetry export (see
   [Telemetry](#telemetry-opentelemetry-export)): off, or on with the endpoint, the protocol
   and whether it is reachable;
@@ -1515,7 +1521,7 @@ Image 1.x's metadata mounted the shared `dev-system-claude`, `-codex`, `-no-mist
 
 `callum-flow-event <state> --issue N ...` appends one JSON line per lifecycle transition
 (`ready claimed ... closed ... test_weakened ... usage superseded renewed rebased_behind loop
-transition reviewed intervention`;
+transition reviewed intervention prompt_denied prompt_waiting`;
 `renewed` is a claim heartbeat and housekeeping only; `superseded` is run-scoped, needs `--run`
 and neither ends an issue nor releases a claim; `loop` is the factory loop's own bookkeeping,
 needs a `kind=.. key=.. status=..` note, takes `--issue` optionally and is never a stage or
@@ -1523,7 +1529,9 @@ progress; the factory loop v2's `transition` (an issue's state changed: its note
 `seq=`, `from=` and `to=`, and carries the loop's record), `reviewed` (one review result: `verdict=`
 and `round=`) and `intervention` (someone had to step in: `who=person|loop` and `cause=`;
 `--issue` optional) carry their fields as `key=value` tokens in the note, percent-encoded, and
-`reviewed` and `intervention` are never a stage or progress. A rescue the loop cannot see is
+`reviewed` and `intervention` are never a stage or progress. `prompt_denied` and `prompt_waiting` are
+the factory loop companion's (a loop agent's call refused, or waiting, on a prompt nobody answers):
+`--issue` required, a `key=value` note with no token required, never a stage, progress or final. A rescue the loop cannot see is
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
@@ -1744,7 +1752,7 @@ with no numbers it renews the open issues `callum-flow-factory-state --github of
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
-whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed` or `intervention`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
+whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed`, `intervention`, `prompt_denied` or `prompt_waiting`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim

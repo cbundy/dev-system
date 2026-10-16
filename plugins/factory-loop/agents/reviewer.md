@@ -31,7 +31,7 @@ push, switch or reset a branch, and never comment on, review, label, edit, close
 or a PR: the loop posts your review. You may run the tests and other read-only commands, and write
 throwaway files only under the system temp dir.
 
-Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit.
+Run only commands known to exit. Read source, docs and `--help` output only from such commands, and bound any exploratory command with `timeout 30`. Never start a server, a watcher, a Remote Control session (`claude remote-control`, `claude --remote-control`) or any interactive or long-running command. Leave no wait loop running when you hand in your answer. Wait on a PID you recorded or on the tool's own status, never with `pgrep -f <pattern>` from a shell whose command line contains the pattern. A repo command that starts what it needs and stops it before it exits counts as a command known to exit. Never `rm` a glob under an unguarded variable: use `"${VAR:?}"/*` or a literal path.
 
 ## Judgment rules
 

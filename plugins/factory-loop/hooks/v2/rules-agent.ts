@@ -242,6 +242,7 @@ export function markerOf(ctx: V2Ctx, r: IssueRecord, step: AgentStep): StepMarke
     step,
     role: STEP_ROLE[step],
     branch: r.branch,
+    pr: r.pr,
     gateCommands: [...ctx.config.gateCommands],
     gateTimeoutMs: ctx.config.gateTimeoutMs,
     loopDir: '',

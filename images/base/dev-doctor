@@ -270,7 +270,10 @@ fi
 # The Claude plugins dev-init installs (plugins.sh): the ones the workspace
 # repo enables in its committed .claude/settings.json (cbundy/dev-system#112)
 # and the image's default plugins (DEV_DEFAULT_PLUGINS, #148).
-# One that is still missing is a WARN with the way to retry -
+# One that is still missing is a WARN with the way to retry (a FAIL with
+# DEV_DEFAULT_PLUGIN_REFS_WIN=1, where the template owns the plugins; there a
+# wanted marketplace installed at another ref than wanted is a FAIL too, a WARN
+# otherwise) -
 # Claude runs without it, just without its skills. The CLI runs only when
 # something is wanted, so with no repo plugins and DEV_DEFAULT_PLUGINS empty
 # nothing is checked.
@@ -303,13 +306,30 @@ if command -v claude >/dev/null 2>&1; then
         ok "Claude plugins enabled in $settings are installed"
       fi
     fi
+    level=warn
+    [ "${DEV_DEFAULT_PLUGIN_REFS_WIN:-}" != 1 ] || level=fail
     if [ -n "$defaults" ]; then
       if absent=$(not_installed "$defaults" "$installed"); then
-        warn "default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: $(printf '%s\n' "$absent" | cut -d' ' -f1 | paste -sd ' ')" \
+        $level "default Claude plugins (DEV_DEFAULT_PLUGINS) are not installed: $(printf '%s\n' "$absent" | cut -d' ' -f1 | paste -sd ' ')" \
           "run: dev-init --plugins (or by hand: $(default_plugin_fix "$absent")), then start a new Claude session"
       else
         ok "default Claude plugins are installed: $(printf '%s\n' "$defaults" | cut -d' ' -f1 | paste -sd ' ')"
       fi
+    fi
+    # The marketplaces of every default, also one the repo took over: the
+    # template owns their ref too (DEV_DEFAULT_PLUGIN_REFS_WIN=1).
+    if [ -n "$wanted$defaults" ] && mlist=$(CLAUDE_PLUGIN_LIMIT=30 claude_plugin_cli marketplace list --json 2>/dev/null) && [ -n "$mlist" ]; then
+      while read -r mkt src; do
+        [ -n "$src" ] || continue
+        want_ref=""
+        [[ "$src" != *#* ]] || want_ref="${src#*#}"
+        # An entry at another location is the repo's own business: skipped.
+        have=$(printf '%s\n' "$mlist" | jq -r --arg m "$mkt" --arg l "${src%%#*}" '.[] | select(.name == $m and (.repo // .url) == $l) | .ref // ""' 2>/dev/null | head -n1)
+        printf '%s\n' "$mlist" | jq -e --arg m "$mkt" --arg l "${src%%#*}" 'any(.[]; .name == $m and (.repo // .url) == $l)' >/dev/null 2>&1 || continue
+        [ "$have" != "$want_ref" ] || continue
+        $level "Claude plugin marketplace $mkt is installed at ${have:-no ref}, but ${want_ref:-no ref} is wanted" \
+          "run: dev-init --plugins, then start a new Claude session"
+      done < <(wanted_marketplaces "$settings" "" "$(default_plugins)")
     fi
   fi
 fi

@@ -86,11 +86,11 @@ case "$out" in *warning*event_id*) ;; *) fail "a missing UUID source should warn
 
 # every state of the closed vocabulary is accepted (loop and v2's three with their required
 # notes, tested below)
-for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention; do
+for s in ready claimed briefed delegated run_started parked verdict fix_requested failed merge_ready head_mismatch conflict ci_stalled merged abandoned closed reclaimed claim_lost untrusted_stripped design_routed implementer_routed test_weakened watcher_error usage superseded renewed rebased_behind loop transition reviewed intervention prompt_denied prompt_waiting; do
   ev "$s" --issue 1 --run r1 --note "kind=k key=k status=s life=l seq=1 from=none to=queued verdict=approve round=1 who=loop cause=c" || fail "$s should be accepted"
 done
 [ "$(PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep '^states:')" = "states: $(grep '^STATES=' "$EVENT" | sed 's/^STATES="//; s/"$//')" ] || fail "usage should list the vocabulary"
-PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop transition reviewed intervention$' || fail "the vocabulary should list loop, then v2's three"
+PATH="$toolbin" "$SH" "$EVENT" 2>&1 | grep -q '^states: .* loop transition reviewed intervention prompt_denied prompt_waiting$' || fail "the vocabulary should list loop, v2's three, then the companion's two"
 
 # superseded is run-scoped: --run is required, and the line carries it
 rc=0; out=$(ev superseded --issue 1 2>&1) || rc=$?
@@ -121,6 +121,11 @@ ev reviewed --issue 571 --pr 621 --head abc --note "verdict=changes round=2 patc
 ev intervention --note "who=person cause=op:mode reason=mode%20act" || fail "a fleet-level intervention should be accepted"
 [ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .note]')" = '["intervention",null,"who=person cause=op:mode reason=mode%20act"]' ] || fail "intervention line wrong: $(tail -n 1 "$log")"
 ev intervention --issue 571 --note "who=person cause=rescue reason=patched%20the%20trust%20file" || fail "a hand-recorded rescue should be accepted"
+# the companion's two (v2 SPEC 10.10): --issue is required, no note token is
+ev prompt_denied --issue 571 --branch issue-571 --pr 621 --note "life=l seq=7 tool=Bash input=rm%20-f%20\$D/*" || fail "prompt_denied should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue, .branch, .pr]')" = '["prompt_denied",571,"issue-571",621]' ] || fail "prompt_denied line wrong: $(tail -n 1 "$log")"
+ev prompt_waiting --issue 571 --branch issue-571 || fail "prompt_waiting with no note should be accepted"
+[ "$(tail -n 1 "$log" | jq -c '[.state, .issue]')" = '["prompt_waiting",571]' ] || fail "prompt_waiting line wrong: $(tail -n 1 "$log")"
 before=$(wc -l < "$log" | tr -d ' ')
 for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   "transition|1|life= seq=1 from=none to=queued|life=, seq=, from= and to=" \
@@ -129,7 +134,9 @@ for bad in "transition|1|life=l seq=1 from=none|life=, seq=, from= and to=" \
   "reviewed|1|round=1 verdict=|verdict= and round=" \
   "intervention||cause=x|who= and cause=" \
   "intervention||who=loop|who= and cause=" \
-  "intervention||who=robot cause=x|who=person or who=loop"; do
+  "intervention||who=robot cause=x|who=person or who=loop" \
+  "prompt_denied||life=l|--issue is required" \
+  "prompt_waiting||life=l|--issue is required"; do
   state=${bad%%|*} rest=${bad#*|}
   n=${rest%%|*} rest=${rest#*|}
   note=${rest%%|*} why=${rest#*|}

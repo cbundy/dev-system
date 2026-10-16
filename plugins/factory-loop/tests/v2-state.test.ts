@@ -491,7 +491,11 @@ describe('the steps', () => {
     const s = world([r], { control: control({ notes: [{ issue: 91, text: 'keep it small', at: NOW - 10 * MIN }, { issue: 92, text: 'not this one', at: NOW - 10 * MIN }] }) })
     const prep = of(plan(s), 91)
     expect(prep).toEqual([expect.objectContaining({ kind: 'slot', op: 'prepare', key: prepareKey(r, 1), path: '/slots/91', lease: 'L91', branch: 'issue-91', maxAttempts: 1 })])
-    expect((prep[0] as Extract<Action, { kind: 'slot' }>).marker).toMatchObject({ v: 1, issue: 91, life: LIFE, seq: 3, step: 'design', role: 'reader', branch: 'issue-91' })
+    expect((prep[0] as Extract<Action, { kind: 'slot' }>).marker).toMatchObject({ v: 1, issue: 91, life: LIFE, seq: 3, step: 'design', role: 'reader', branch: 'issue-91', pr: null })
+    // the companion's notes carry the issue's PR, when it has one
+    const withPr = rec(93, { state: 'fixing', step: 'fix', pr: 612 })
+    const prepPr = of(plan(world([withPr])), 93).find(a => a.kind === 'slot') as Extract<Action, { kind: 'slot' }> | undefined
+    expect(prepPr?.marker).toMatchObject({ issue: 93, pr: 612 })
     const prepared = withLedger(s, [done(prepareKey(r, 1), 'slot', { issue: 91, maxAttempts: 1 })])
     const spawn = of(plan(prepared), 91)
     expect(spawn).toEqual([expect.objectContaining({ kind: 'agent-step', key: stepKey(r, 'design', 1), class: 'develop', rule: 'S2', step: 'design', slot: '/slots/91', notes: ['use the v2 API', 'owner: keep it small'] })])

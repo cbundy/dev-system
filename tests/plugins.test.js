@@ -624,6 +624,61 @@ test("an image default with no ref leaves a no-ref declaration unchanged", (t) =
   assert.equal(wanted(setup(t, { settings: PIN(null) }), { DEV_DEFAULT_PLUGINS: DEFAULT }), "callum cbundy/dev-system");
 });
 
+// DEV_DEFAULT_PLUGIN_REFS_WIN=1 (the orchestrator-loop template): the template's pin beats the
+// ref the checkout's committed settings declare, so the loop's stale checkout cannot hold the plugins back.
+const WIN = { DEV_DEFAULT_PLUGIN_REFS_WIN: "1" };
+
+test("refs win: the default's ref beats a declared ref", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), WIN), "callum cbundy/dev-system#v0.26.0");
+});
+
+test("refs win: any value but 1 leaves the declared ref winning", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { DEV_DEFAULT_PLUGIN_REFS_WIN: "true" }), "callum cbundy/dev-system#v0.30.0");
+});
+
+test("refs win: a declaration at another location keeps its source", (t) => {
+  const settings = { extraKnownMarketplaces: { callum: { source: { source: "github", repo: "someone/else", ref: "v1" } } } };
+  assert.equal(wanted(setup(t, { settings }), WIN), "callum someone/else#v1");
+});
+
+test("refs win: a default with no ref leaves a declared ref alone", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { ...WIN, DEV_DEFAULT_PLUGINS: DEFAULT }), "callum cbundy/dev-system#v0.30.0");
+});
+
+test("refs win: the candidate ref still wins", (t) => {
+  assert.equal(wanted(setup(t, { settings: PIN("v0.30.0") }), { ...WIN, DEV_CANDIDATE_PLUGIN_REF: "v0.40.0-rc.1" }), "callum cbundy/dev-system#v0.40.0-rc.1");
+});
+
+test("refs win: a plugin the repo takes over is still wanted at the template's ref", (t) => {
+  const settings = { ...PIN("v0.30.0"), enabledPlugins: { "callum-flow@callum": true } };
+  assert.equal(wanted(setup(t, { settings }), WIN), "callum cbundy/dev-system#v0.26.0");
+});
+
+const LOOP_DEFAULTS = ["callum-flow", "factory-loop", "factory-loop-workspace"].map((p) => `${p}@callum=cbundy/dev-system#v0.41.0`).join(" ");
+
+test("a stale committed pin on a loop workspace: with refs win the marketplace moves to the template's pin", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: LOOP_DEFAULTS, ...WIN });
+  assert.equal(r.status, 0, r.log);
+  assert.deepEqual(changes(r.calls), [
+    "/ marketplace remove callum",
+    "/ marketplace add cbundy/dev-system#v0.41.0",
+    "/ install callum-flow@callum",
+    "/ install factory-loop@callum",
+    "/ install factory-loop-workspace@callum",
+  ]);
+  assert.doesNotMatch(r.log, /WARNING/);
+});
+
+test("a stale committed pin without refs win: the marketplace stays at the declared ref", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const r = run(ctx, "install_plugins", { DEV_DEFAULT_PLUGINS: LOOP_DEFAULTS });
+  assert.equal(r.status, 0, r.log);
+  assert.ok(!changes(r.calls).includes("/ marketplace remove callum"), r.calls.join("\n"));
+});
+
 test("a no-ref declaration and an older no-ref install: the marketplace moves to the image's pin and callum-flow is reinstalled", (t) => {
   const ctx = setup(t, { settings: PIN(null) });
   withMarketplaceAt(ctx, "cbundy/dev-system");
@@ -837,4 +892,62 @@ test("an orphaned project install does not touch the repo's settings", (t) => {
   const before = fs.readFileSync(file);
   run(ctx, "install_plugins");
   assert.deepEqual(fs.readFileSync(file), before);
+});
+
+// dev-doctor's marketplace-ref check, driven outside the image: a copy of dev-doctor whose
+// libraries are read from the checkout, run against the stub claude. Only its plugin lines
+// are looked at.
+function doctorLines(ctx, env) {
+  const copy = path.join(ctx.dir, "dev-doctor");
+  fs.writeFileSync(
+    copy,
+    fs.readFileSync(path.join(BASE, "dev-doctor"), "utf8").replaceAll("/usr/local/share/dev-system", BASE),
+    { mode: 0o755 },
+  );
+  const r = spawnSync("bash", [copy, "--warn-only"], {
+    encoding: "utf8",
+    cwd: ctx.ws,
+    env: {
+      ...process.env,
+      PATH: `${path.join(ctx.dir, "bin")}:${process.env.PATH}`,
+      STUB: ctx.dir,
+      CLAUDE_CONFIG_DIR: path.join(ctx.dir, "config"),
+      DEV_WORKSPACE: ctx.ws,
+      DEV_REPO_URL: "",
+      HOME: ctx.dir,
+      XDG_CONFIG_HOME: path.join(ctx.dir, "xdg"),
+      AGENTSVIEW_DATA_DIR: path.join(ctx.dir, "agentsview"),
+      NO_MISTAKES_HOME: path.join(ctx.dir, "no-mistakes"),
+      DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0`,
+      ...env,
+    },
+  });
+  return r.stdout.split("\n").filter((l) => /is installed at/.test(l));
+}
+
+test("dev-doctor: the switch on and the marketplace at another ref is a FAIL naming both refs", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const lines = doctorLines(ctx, { DEV_DEFAULT_PLUGIN_REFS_WIN: "1" });
+  assert.deepEqual(lines, [
+    "dev-doctor: FAIL Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted",
+  ]);
+});
+
+test("dev-doctor: the marketplace at another ref is a WARN with the switch off, and nothing at the wanted ref", (t) => {
+  const ctx = setup(t, { settings: { enabledPlugins: {} } });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  assert.deepEqual(doctorLines(ctx, {}), [
+    "dev-doctor: WARN Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted",
+  ]);
+  const ok = setup(t, { settings: { enabledPlugins: {} } });
+  withMarketplaceAt(ok, "cbundy/dev-system#v0.41.0");
+  assert.deepEqual(doctorLines(ok, {}), []);
+});
+
+test("dev-doctor: the ref check also covers a default the repo took over", (t) => {
+  const ctx = setup(t, { settings: PIN("v0.38.1") });
+  withMarketplaceAt(ctx, "cbundy/dev-system#v0.38.1");
+  const lines = doctorLines(ctx, { DEV_DEFAULT_PLUGIN_REFS_WIN: "1", DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0` });
+  assert.ok(lines.some((l) => /FAIL Claude plugin marketplace callum is installed at v0.38.1, but v0.41.0 is wanted/.test(l)), lines.join("\n"));
 });

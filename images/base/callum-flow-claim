@@ -134,7 +134,7 @@ local_claims() {
   _lf=$("$EVENT" --path --repo "$repo" 2>/dev/null) || return 1
   [ -f "$_lf" ] || return 0
   jq -R -s -r '[split("\n")[] | fromjson? | select(type == "object" and (.issue | type) == "number"
-      and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention") | not))]
+      and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention", "prompt_denied", "prompt_waiting") | not))]
     | group_by(.issue) | map(select(any(.[]; .state == "claimed")) | last)
     | .[] | select(.state | IN("ready", "reclaimed", "merged", "closed", "abandoned") | not) | .issue' "$_lf"
 }

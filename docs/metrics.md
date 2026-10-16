@@ -67,7 +67,18 @@ free text (a reason, a question) when you show it.
   `issue` is null for a fleet-level one (a mode change, a restart, a settings edit). Count one per
   `(issue, who, cause, fact)`; a hand-recorded `rescue` has no fact, so each row counts.
 
-`reviewed` and `intervention` are never a stage and never progress. The loop's reused states keep
+- `prompt_denied`: the factory loop companion refused a loop agent's tool call, because Claude Code
+  would have asked a person nobody watches ([v2 SPEC 10.10](factory-loop/v2/SPEC.md)). `--issue` and
+  `--branch` as every event, `--pr` when the issue has one. The note is `key=value` tokens, none
+  required, `none` when unknown: `life`, `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`,
+  `input` (clipped to 2000 characters), `why` (Claude Code's own reason), `slot`, `session`,
+  `transcript`. The same refusal is an `intervention` with cause `prompt-denied`, derived by the
+  loop from the companion's log.
+- `prompt_waiting`: the same columns and tokens, for a loop agent that is waiting on a permission
+  prompt now (`input` is the prompt's message).
+
+`reviewed`, `intervention`, `prompt_denied` and `prompt_waiting` are never a stage and never progress,
+and never decide whether an issue is final. The loop's reused states keep
 their meaning and note: `delegated` (`brief <url>`), `fix_requested` (`review`, `ci`, `conflict` or
 `triage`), `merge_ready`, `verdict` (a fixer's `CORRECT:` for a fixed finding, `WRONG:` for a declined
 one, actor `fixer`), `merged`, and `abandoned` and `reclaimed`, whose v2 note starts with
@@ -262,7 +273,7 @@ once. A **double-claim** is two devices with a live `claimed` on one issue and n
 `reclaimed`, `merged`, `abandoned` or `closed` between them. A **lost race** is a `claim_lost` event,
 logged by `callum-flow-claim` on exit 3 (the note says who holds the issue): it proves the lanes
 contended. An issue is **stuck** when it is claimed (a `claimed` after its last `ready`,
-`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, `renewed` (a heartbeat is not progress), `loop` (the factory loop's bookkeeping), and `reviewed` and `intervention` (the factory loop v2's review results and step-ins), for more than
+`reclaimed`, `merged`, `abandoned` or `closed`) and has had no event, other than `claim_lost`, `renewed` (a heartbeat is not progress), `loop` (the factory loop's bookkeeping), and `reviewed`, `intervention`, `prompt_denied` and `prompt_waiting` (the factory loop v2's review results, step-ins and prompts nobody answers), for more than
 twice the claim lease (2 x 120 minutes by default, `CALLUM_FLOW_LEASE_MINUTES`).
 `superseded` (a run or branch replaced for the same issue, run-scoped) is none of these: it neither ends an issue nor releases a claim.
 `callum-flow-evaluate` applies exactly this test over a window. For the factory's state right now,
