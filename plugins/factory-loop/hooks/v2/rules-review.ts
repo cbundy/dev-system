@@ -89,7 +89,8 @@ export function baseOf(state: Pick<State, 'checkout'>): string {
 }
 
 // workOf: the builder's title, summary and evidence for the PR (8.1), from the life's newest done
-// build that answered ok; a title of the loop's own when there is none (an adopted PR).
+// build that answered ok; a title of the loop's own and no summary when there is none (an adopted
+// PR, or a record rebuilt from events), so the PR keeps its own (act-pr.ts bodyWork).
 function workOf(ctx: V2Ctx, r: IssueRecord): { title: string; summary: string; evidence: string | null } {
   const build = lifeEntries(ctx, r, 'agent-step')
     .filter(e => e.status === 'done' && e.outcome?.kind === 'step' && e.outcome.step === 'build' && e.outcome.result.event === 'ok')

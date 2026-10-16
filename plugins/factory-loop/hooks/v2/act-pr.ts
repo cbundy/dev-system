@@ -61,13 +61,15 @@ export function prBody(b: BodyInput): string {
   ].join('\n')
 }
 
-// summaryOf: the summary a body keeps when the action brings none (an adopted PR, which no builder
-// of this life described): the loop's own summary part of a body it wrote, else the PR's own text.
-export function summaryOf(body: string, issue: number): string {
+// bodyWork: the work a body keeps when the action brings none (an adopted PR, which no builder of
+// this life described, or a record rebuilt without its build's entry): the loop's own summary and
+// evidence of a body it wrote, else the PR's own text as the summary.
+export function bodyWork(body: string, issue: number): { summary: string; evidence: string | null } {
   const text = body.replace(/\r\n?/g, '\n').trim()
-  if (!text.endsWith(footer(issue))) return text
-  const m = new RegExp(`^([\\s\\S]*?)(?:^|\\n\\n)(?:Closes|Refs) #${issue}\\n`).exec(`${text}\n`)
-  return m?.[1]?.trim() ?? ''
+  if (!text.endsWith(footer(issue))) return { summary: text, evidence: null }
+  const m = new RegExp(`^([\\s\\S]*?)(?:^|\\n\\n)(?:Closes|Refs) #${issue}\\n([\\s\\S]*)$`).exec(text.slice(0, -footer(issue).length))
+  const evidence = /\n## Evidence\n([\s\S]*)$/.exec(m?.[2] ?? '')?.[1]?.trim() ?? ''
+  return { summary: m?.[1]?.trim() ?? '', evidence: evidence === '' ? null : evidence }
 }
 
 const same = (a: string, b: string) => a.replace(/\r\n?/g, '\n').trim() === b.replace(/\r\n?/g, '\n').trim()
@@ -259,8 +261,8 @@ async function ensure(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
 
 // used: an open or reopened PR made the loop's: its body written when it differs.
 async function used(ctx: ExecCtx, a: PrAction, n: number, pr: number, read: PrRead, linkage: Linkage, reopened: boolean): Promise<Exec> {
-  const summary = a.summary.trim() === '' ? summaryOf(read.body, n) : a.summary
-  const body = prBody({ issue: n, summary, linkage, brief: a.brief, evidence: a.evidence })
+  const work = a.summary.trim() === '' ? bodyWork(read.body, n) : a
+  const body = prBody({ issue: n, summary: work.summary, linkage, brief: a.brief, evidence: work.evidence })
   const how = reopened ? 'reopened' : 'uses'
   if (same(read.body, body)) return done(pr, false, reopened, `${how} PR #${pr} for #${n}; its body is the loop's`)
   const wrote = await writeBody(ctx, pr, body)
@@ -273,14 +275,14 @@ async function rewrite(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
   if (a.pr === null) return refused(`${a.key}: a body rewrite names no PR`)
   const link = await linkageOf(ctx, n)
   if ('exec' in link) return link.exec
-  let summary = a.summary
-  if (summary.trim() === '') {
+  let work: { summary: string; evidence: string | null } = a
+  if (a.summary.trim() === '') {
     const r = await readPr(ctx, a.pr)
     if ('exec' in r) return r.exec
     if (r.read === null) return refused(`PR #${a.pr} is by an untrusted author`)
-    summary = summaryOf(r.read.body, n)
+    work = bodyWork(r.read.body, n)
   }
-  const wrote = await writeBody(ctx, a.pr, prBody({ issue: n, summary, linkage: link.linkage, brief: a.brief, evidence: a.evidence }))
+  const wrote = await writeBody(ctx, a.pr, prBody({ issue: n, summary: work.summary, linkage: link.linkage, brief: a.brief, evidence: work.evidence }))
   if (wrote !== null) return wrote
   return done(a.pr, false, false, `the loop's body written on PR #${a.pr} (${link.linkage} #${n})`)
 }
