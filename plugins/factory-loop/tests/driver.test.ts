@@ -509,8 +509,25 @@ describe('act mode: the pass (SPEC 2, 7, 12)', () => {
     expect(h.prompts.filter(p => p.startsWith('TELL pass-error id=w'))).toHaveLength(1)
     expect(h.prompts[0]).toContain('passes=3')
     h.failAppends = false
+    // the error title started the throttle window: the plan title returns once titleEveryMs has passed
     await clock.advance(60_000)
+    expect(h.titles.at(-1)).toBe(`${good} · error`)
+    await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).toBe(good)
+  })
+
+  test('passes that fail now and then never rename more than once per titleEveryMs (O1)', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const { run } = factory()
+    const h = host(on, { config: ACT, run })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    const before = h.titles.length
+    for (let i = 0; i < 20; i++) {
+      h.failAppends = i % 2 === 0
+      await clock.advance(60_000)
+    }
+    expect(h.titles.length - before).toBeLessThanOrEqual(8) // the error title goes out at once, the plan title waits: two renames per window, not one per pass (was 20)
   })
 
   test('session.end releases this session\'s act lock, so the next session acts at once', async ($, on) => {
@@ -668,6 +685,8 @@ describe('act mode: the one writer, and reads that fail (SPEC 3.3, 7.5, 11.2)', 
     h.failSet = () => false
     await clock.advance(60_000)
     expect(h.commands().some(s => s.argv[0] === 'callum-flow-claim')).toBe(true)
+    // the error title started the throttle window: the plan title returns once titleEveryMs has passed
+    await clock.advance(5 * MIN)
     expect(h.titles.at(-1)).not.toContain('error')
   })
 

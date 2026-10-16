@@ -474,7 +474,6 @@ describe('state', () => {
       ledger: deriveLedger(events, factory, facts, DEVICE),
       control: control(),
       lastTitle: null,
-    lastTitleAt: null,
       lastTitleAt: null,
       githubBackoffUntil: null,
       trackerTitle: config().trackerTitle,

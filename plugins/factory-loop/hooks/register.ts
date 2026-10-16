@@ -452,11 +452,11 @@ function offTitle(rt: Runtime): string {
   return `🔄 ${rt.repo.split('/')[1] ?? 'loop'} · off`
 }
 
-async function setTitle($: EngineInterface, title: string, planned = false) { // planned: O1's title starts the throttle window; off and error titles leave it open
+async function setTitle($: EngineInterface, title: string) { // every rename, the driver's own included, starts the throttle window
   if (title === lastTitle) return
   await $.command.run({ command: 'rename', args: title })
   lastTitle = title
-  lastTitleAt = planned ? await $.clock.now() : null
+  lastTitleAt = await $.clock.now()
 }
 
 // wakeIdAt: a fresh wake id, from the clock so it stays unique across restarts (SPEC 8.1).
@@ -979,7 +979,7 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       result = planned.result
       shadow = planned.shadow
       begin(tr, 'act')
-      if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title, true)
+      if (result.actions.some(a => a.kind === 'title')) await setTitle($, result.title)
     }
 
     // notices from outside plan go out once no wake is open, acting or not (SPEC 9.2, 11.2), until a
