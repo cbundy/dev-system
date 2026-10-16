@@ -44,7 +44,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed', 'loop']);
+// transition, reviewed and intervention are the v2 loop's bookkeeping: a claim and its release
+// (claimed, merged, abandoned, closed, reclaimed) already say whether an issue is in flight, and an
+// intervention derived a pass after a release must not reopen it.
+const NOISE = new Set(['usage', 'untrusted_stripped', 'watcher_error', 'test_weakened', 'superseded', 'renewed', 'loop',
+  'transition', 'reviewed', 'intervention']);
 const isNoise = (s) => NOISE.has(s) || /^(upgrade|drain)/.test(s);
 const DONE = new Set(['merged', 'abandoned', 'claim_lost', 'owner_wait', 'closed', 'ready', 'reclaimed']);
 const TERMINAL = new Set(['merged', 'abandoned', 'closed', 'claim_lost']);
