@@ -2,8 +2,9 @@
 #
 # callum-flow-sweep: release lapsed claims so no issue stays claimed forever
 # (cbundy/dev-system#220), and record issues closed outside the factory
-# (cbundy/dev-system#342). Pairs with callum-flow-claim, whose claim comments
-# carry the lease. Handles open AND closed issues.
+# (cbundy/dev-system#342) and this device's claims merged outside it. Pairs
+# with callum-flow-claim, whose claim comments carry the lease. Handles open AND
+# closed issues.
 #
 # Usage: callum-flow-sweep
 #
@@ -26,23 +27,33 @@
 #      backfill. Two devices sweeping before either has pushed can both log
 #      `closed`; consumers count identical consecutive rows once.
 #   2. Open, already released (its latest event is ready, reclaimed, merged
-#      or final): left alone.
+#      or final) and not held by this device (below): left alone.
 #   3. Open with no claim comment (legacy or hand claims): left alone, one
 #      stderr note. Never flipped to `ready`.
-#   4. Open, newest claim comment live (server updated_at + the comment's own
-#      `lease:`): left alone.
-#   5. Open, with a PR merged after the newest claim comment was created (a
+#   4. Open, with a PR merged after the newest claim comment was created (a
 #      merged PR that closes or just references the issue shows up as a
 #      `cross-referenced` timeline event) whose head branch is this issue's
 #      (`issue-<N>`, or `issue-<N>-...`, after any `<prefix>/`; matching is by
 #      branch name, so release or other PRs that merely mention the issue do
-#      not count): left alone (`merged` is logged elsewhere).
+#      not count): the claim ended with the merge. When this device still
+#      holds the issue, log `callum-flow-event merged --pr <P> --actor sweep`,
+#      as rule 1 records a close made outside the factory, so a merge this
+#      device never logged (merged by hand, from another device, or a merge
+#      whose event was lost) ends its claim and its heartbeat stops renewing
+#      it. Otherwise left alone: the holder's own sweep logs it.
+#   5. Open, newest claim comment live (server updated_at + the comment's own
+#      `lease:`): left alone.
 #   6. Open, newest claim expired: add `ready`, unassign the claimant, comment
 #      why, and log `callum-flow-event reclaimed`.
+# This device holds an issue by callum-flow-claim's test: in its own log, the
+# last of the issue's claimed, ready, reclaimed, merged, closed and abandoned
+# events is `claimed`. Its own claim is judged by its own log, which its
+# heartbeat reads, so a release logged only on another device never hides it.
 # The sweep never adds or removes any other label: the factory loop is the only
 # writer of the `factory:*` labels, and a loop record whose claim lapsed is
 # claimed again onto itself. A second run right after the first writes nothing:
-# a reclaimed issue's latest event is `reclaimed`, and a closed one's `closed`.
+# a reclaimed issue's latest event is `reclaimed`, a closed one's `closed`, and
+# a merged one's `merged`.
 #
 # Exit codes: 0 ok, 1 a gh failure (the other issues are still swept), 2 usage
 # error.
@@ -117,6 +128,10 @@ fi
 # issue for good. By ts; jq sorts stably, so equal timestamps keep file order
 # (central first, then this device's log).
 cat "$tmp/central" "$tmp/local" | jq -s -r 'sort_by(.ts) | group_by(.issue) | map(last) | .[] | "\(.issue) \(.state)"' > "$tmp/latest" 2>/dev/null || : > "$tmp/latest"
+# holds N: this device still holds the issue (its log's last claim event is `claimed`)
+jq -s -r 'map(select(.state | IN("claimed", "ready", "reclaimed", "merged", "closed", "abandoned")))
+  | group_by(.issue) | .[] | last | select(.state == "claimed") | .issue' "$tmp/local" > "$tmp/held" 2>/dev/null || : > "$tmp/held"
+holds() { grep -qx "$1" "$tmp/held"; }
 # is_final N: the issue's latest event is closed or abandoned
 is_final() { awk -v n="$1" '$1 == n && ($2 == "closed" || $2 == "abandoned") { f = 1 } END { exit !f }' "$tmp/latest"; }
 # released N: the issue's latest event says no claim holds it: back in the queue
@@ -160,7 +175,7 @@ for n in $cands; do
     if ! is_final "$n" || listed "$n"; then log_closed "$n" "$view"; fi
     continue
   fi
-  released "$n" && continue
+  released "$n" && ! holds "$n" && continue
 
   if ! cj=$("$READ" --json "$n" --comments) ||
     ! cs=$(printf '%s' "$cj" | jq -ce 'if (.comments | type) == "array" then .comments else error("shape") end'); then
@@ -182,9 +197,6 @@ for n in $cands; do
     err "note: #$n is live in the event log with no claim comment (legacy or hand claim) - left alone"
     continue
   fi
-  if printf '%s' "$claim" | jq -e --argjson now "$now" '.exp > $now' >/dev/null; then
-    continue
-  fi
   created=$(printf '%s' "$claim" | jq -r .created)
 
   if ! tj=$("$READ" --json --timeline "$n") ||
@@ -193,7 +205,7 @@ for n in $cands; do
     rc=1
     continue
   fi
-  merged=0
+  merged=
   failed=0
   for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
       .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
@@ -208,7 +220,7 @@ for n in $cands; do
       break
     fi
     if printf '%s\n' "$ref" | grep -Eq "(^|/)issue-$n(-|\$)"; then
-      merged=1
+      merged=$pr
       break
     fi
   done
@@ -216,7 +228,15 @@ for n in $cands; do
     rc=1
     continue
   fi
-  [ "$merged" = 0 ] || continue
+  if [ -n "$merged" ]; then
+    if holds "$n"; then
+      "$EVENT" merged --issue "$n" --pr "$merged" --actor sweep >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
+    fi
+    continue
+  fi
+  if printf '%s' "$claim" | jq -e --argjson now "$now" '.exp > $now' >/dev/null; then
+    continue
+  fi
 
   user=$(printf '%s' "$claim" | jq -r .user)
   set -- --add-label "$READY"

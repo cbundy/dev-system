@@ -695,7 +695,8 @@ grep -q 'cannot read the central event log' "$tmpdir/err" || fail "central faili
 # --- sweep: merged PR (closing or Refs cross-reference) --------------------------
 tl() { jq -n --arg m "$1" '[{event: "cross-referenced", actor: {login: "cbundy", id: 13131067}, source: {issue: {number: 55, user: {login: "cbundy", id: 13131067}, pull_request: {merged_at: (if $m == "" then null else $m end)}}}}]'; }
 # a PR merged after the claim on the issue's own branch (issue-<N>, or issue-<N>-..., after any
-# prefix/) leaves a lapsed claim alone
+# prefix/) ends the claim: never reclaimed, and the merge this device's log holds the claim for is
+# logged (by hand, from another device, or a lost event), once
 for ref in feat/issue-7-claim issue-7 fix/issue-7 issue-7-x; do
   reset
   echo "$ref" > "$d/head-ref-55"
@@ -707,8 +708,55 @@ for ref in feat/issue-7-claim issue-7 fix/issue-7 issue-7-x; do
   rc_of "$SWEEP"
   expect_rc 0 "sweep merged [$ref]"
   no_calls "sweep merged [$ref]"
-  [ "$(events | wc -l)" = "$n" ] || fail "sweep merged [$ref] wrote: $(events)"
+  [ "$(events | wc -l)" = "$((n + 1))" ] || fail "sweep merged [$ref]: one event: $(events)"
+  events | tail -n 1 | jq -e '.state == "merged" and .issue == 7 and .pr == 55 and .actor == "sweep"' > /dev/null || fail "sweep merged [$ref]: $(events)"
+  rc_of "$SWEEP"
+  [ "$(events | wc -l)" = "$((n + 1))" ] || fail "sweep merged [$ref] twice: $(events)"
 done
+# the merge of a claim this device does not hold (another device's, known from factory-state) is
+# left alone and not logged here: the holder's own sweep logs it
+reset
+echo issue-7 > "$d/head-ref-55"
+issue 7 OPEN
+fs_live '[{"issue": 7, "holder": "devB"}]'
+cm 100 devB "$STALE" "$STALE" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+FS_BIN="$tmpdir/factory-state" rc_of "$SWEEP"
+expect_rc 0 "sweep merged, not held"
+no_calls "sweep merged, not held"
+no_events "sweep merged, not held"
+# a merge this device never logged, while its own claim is live and renewed: the sweep logs it,
+# so the no-argument heartbeat stops renewing a merged issue left open (research, Refs)
+reset
+echo feat/issue-7-x > "$d/head-ref-55"
+issue 7 OPEN
+seed claimed 7
+cm 100 devA "$STALE" "$FRESH" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+rc_of "$CLAIM" --heartbeat
+[ "$(calls)" = "PATCH 100" ] || fail "merged live claim: renewed before the sweep: $(calls)"
+: > "$d/calls"
+rc_of "$SWEEP"
+expect_rc 0 "sweep merged, live claim"
+no_calls "sweep merged, live claim"
+events | tail -n 1 | jq -e '.state == "merged" and .issue == 7 and .pr == 55' > /dev/null || fail "merged live claim: $(events)"
+rc_of "$CLAIM" --heartbeat
+expect_rc 0 "heartbeat after the sweep's merged"
+no_calls "heartbeat after the sweep's merged"
+# another device logged the merge (factory.events): this device's own claim is judged by its own
+# log, so its sweep logs the merge here too and its heartbeat stops
+reset
+echo issue-7 > "$d/head-ref-55"
+issue 7 OPEN
+seed claimed 7
+echo '2999-01-01T00:00:00Z|7|merged' > "$d/central"
+cm 100 devA "$STALE" "$FRESH" | arr > "$d/comments-7.json"
+tl '2026-10-08T09:00:00Z' > "$d/timeline-7.json"
+dq
+expect_rc 0 "sweep merged centrally"
+events | tail -n 1 | jq -e '.state == "merged" and .issue == 7 and .actor == "sweep"' > /dev/null || fail "merged centrally: $(events)"
+rc_of "$CLAIM" --heartbeat
+no_calls "heartbeat after a merge logged elsewhere"
 # a PR merged before the claim, or not merged at all, does not count
 for m in '2026-10-07T00:00:00Z' ''; do
   reset

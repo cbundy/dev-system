@@ -26,7 +26,8 @@
 # line, through the comment API, never a new comment). With no issue numbers it
 # renews this device's live claim comments on the open issues it still holds
 # (see held below), read from its own event log, so neither a lagging push to
-# factory.events nor an issue merged but left open changes what is renewed. It
+# factory.events nor an issue merged but left open changes what is renewed
+# (callum-flow-sweep logs `merged` for a merge this device never logged). It
 # fails only when the log cannot be located. Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
 # `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
 # event log, which callum-flow-factory-state reads, can see the lease is live.
