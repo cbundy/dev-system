@@ -28,9 +28,10 @@ template_tester_secrets_dir = "/etc/dev-system/template-tester"
 # keeps every push, orchestrator-loop included, able to pull a private image.
 registry_auth_config = "/run/secrets/ghcr-config.json"
 
-# One gh login shared between all workspaces on the Docker host (see "Sharing one gh
-# login" in README.md): GitHub keeps at most 10 tokens per user for the GitHub CLI app,
-# so with a login per workspace each new sign-in revoked the oldest workspace's token.
+# The volume for the "GitHub login: shared" workspace choice, its default (see "Sharing
+# one gh login" in README.md): GitHub keeps at most 10 tokens per user for the GitHub CLI
+# app, so with a login per workspace each new sign-in revoked the oldest workspace's
+# token. A workspace that picks private gets a login of its own.
 gh_volume_name = "dev-system-gh"
 
 # The volume for the "Claude login: shared" workspace choice (see "Sharing one Claude

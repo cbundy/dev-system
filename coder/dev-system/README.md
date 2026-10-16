@@ -64,7 +64,7 @@ privacy defaults are in
 | `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🔄 {name} orchestrator` for `orchestrator`). |
 | `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system` and `orchestrator`; for `orchestrator-loop`, callum-flow and factory-loop pinned to the pushing checkout's package version. |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
-| `gh_volume_name` | empty (off) | Named Docker volume mounted at `/persist/gh` in every workspace, so all workspaces using the name share one gh login. Empty keeps each workspace's gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
+| `gh_volume_name` | empty (off) | Named Docker volume behind the per-workspace **GitHub login** choice: workspaces that keep the default, *shared*, mount it at `/persist/gh` and share one gh login. Empty hides the choice, and every workspace keeps its own gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
 | `claude_auth_volume_name` | empty (off) | Named Docker volume behind the per-workspace **Claude login** choice: workspaces that pick *shared* mount it at `/persist/claude-auth` and share one Claude login, keeping their own history and settings. Empty hides the choice, and every workspace keeps its own login. See [Sharing one Claude login](#sharing-one-claude-login). |
 | `template_tester_secrets_dir` | empty (off) | Directory on the Docker host holding the Template Admin token and push variables for `push-next.sh`, mounted read-only at `/run/secrets/dev-system-template-tester` only into workspaces with `template_testing` on. See [Testing template changes from a workspace](#testing-template-changes-from-a-workspace). |
 | `registry_auth_config` | empty (off) | Path, on the Coder server / provisioner, to a Docker `config.json` with registry credentials, used to resolve and pull private images. See [Private images](#private-images). |
@@ -334,9 +334,9 @@ image ignores the mount. See "Central session history" in the
 ## First-run logins
 
 Each new workspace needs its own logins; they land in its `/persist` volume and survive
-stops, starts and image updates. gh can instead share one login between all workspaces
-([Sharing one gh login](#sharing-one-gh-login)), and Claude between the workspaces that
-choose it ([Sharing one Claude login](#sharing-one-claude-login)).
+stops, starts and image updates, unless the workspace shares a login: gh is shared by
+default ([Sharing one gh login](#sharing-one-gh-login)), and Claude is shared between the
+workspaces that choose it ([Sharing one Claude login](#sharing-one-claude-login)).
 
 1. Open the workspace in the dashboard and click **Log in**.
 2. Claude: "Open sign-in page", approve, paste the code shown back into the page.
@@ -350,13 +350,27 @@ and `coder ssh <ws> -- dev-login <code>` finishes Claude's login.
 
 ### Sharing one gh login
 
-By default each workspace keeps its own gh login. Leaving `gh_volume_name` empty adds no
-mount and causes no plan change for existing workspaces. Set it in `terraform.tfvars`
-(e.g. `gh_volume_name = "dev-system-gh"`) and push every template. Workspaces using the
-updated template mount that Docker volume at `/persist/gh`, so one gh login on the
-**Log in** page serves them all. Update existing workspaces to that template version and
-start them to apply the mount. Sharing is limited to workspaces using the same volume
-name on the same Docker host.
+Each workspace chooses its **GitHub login** when it is created, and can change it later:
+
+- **Shared with other workspaces** (the default): the one gh login used by every workspace
+  that picks shared, so a new workspace needs no GitHub sign-in once any of them is signed
+  in.
+- **Private to this workspace**: its own gh login. Each private login is its own token, and
+  GitHub keeps at most 10 per user for the GitHub CLI app, revoking the least recently used
+  one past that, so a private workspace left stopped is the first to lose its login. The
+  reasoning is in the [gh login spike](../../docs/spikes/gh-auth/).
+
+The choice exists when `gh_volume_name` is set in `terraform.tfvars` (the homelab's is
+`dev-system-gh`). Shared is what every workspace got before the choice existed, and a
+workspace that predates it gets the default on its next update, so nothing changes for it.
+A shared workspace mounts that Docker volume at `/persist/gh`. Leaving `gh_volume_name`
+empty adds no mount and offers no choice: each workspace keeps its own gh login. Sharing is
+limited to workspaces using the same volume name on the same Docker host.
+
+To switch an existing workspace, change **GitHub login** in the dashboard (the workspace's
+Settings, Parameters) or run `dev-restart-self --parameter gh_login=private` inside it;
+`coder restart --parameter` does not work (see
+[Changing a parameter on an existing workspace](#changing-a-parameter-on-an-existing-workspace)).
 
 The name must have at least two characters: a letter or digit first, followed by letters,
 digits, `_`, `.` or `-`. Docker creates the volume on first use, copying in the image's
@@ -365,15 +379,17 @@ The template does not manage the volume, so deleting a workspace never deletes t
 shared login; remove it by hand on
 the Docker host (`docker volume rm <name>`) if you ever want to.
 
-- **One token for every workspace.** Whoever can open any workspace using the volume can
-  read the shared gh token and act as that GitHub account. Only share it between
-  workspaces you would trust with the same token.
-- **Concurrent writes.** gh rewrites `hosts.yml` on login, logout or a token refresh,
-  so two workspaces writing at once is rare but possible; if a login looks lost, log in
-  again from one workspace.
-- **Switching it on hides the old logins.** A workspace's existing gh login stays on its
-  persist volume, hidden under the shared mount, and comes back if the variable is
-  cleared.
+- **One token for every shared workspace.** Whoever can open any of them can read the
+  shared gh token and act as that GitHub account. Only share it between workspaces you
+  would trust with the same token.
+- **Concurrent writes.** gh rewrites `hosts.yml` only on a sign-in, sign-out, account switch
+  or `gh auth refresh` (its tokens never expire or refresh by themselves), so two workspaces
+  writing at once is rare but possible; if a login looks lost, log in again from one
+  workspace.
+- **Switching to private, or back.** A workspace's own gh login stays on its persist volume,
+  hidden under the shared mount while it is shared. Switching to private shows it again: a
+  login from before the workspace shared, which GitHub may have revoked since, or none. Sign
+  in once if `dev-login status` says so. Switching back to shared hides it again.
 - **Seed it with a current login.** A gh login made before dev-system v0.9.0
   (cbundy/dev-system#182) has no `workflow` scope, so it cannot push workflow changes.
   Log in fresh on the shared volume, or run `gh auth refresh --scopes workflow` once in
