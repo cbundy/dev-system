@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "implementer_routed.v1.json",
+  "title": "implementer_routed",
+  "description": "The model for the issue's build step was chosen. Written by callum-flow-implementer-route before each build. Issues routed by hash are the fair sample for comparing the models.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model", "reason", "bucket", "opus_pct"],
+  "properties": {
+    "model": { "type": "string", "minLength": 1, "description": "The model alias chosen, for example sonnet or opus." },
+    "reason": { "enum": ["label", "default", "hash", "fallback"], "description": "label: a model:<alias> label on the issue; default: no Opus share is set; hash: the issue's bucket against the Opus share; fallback: the labels could not be read.", "x-column": true },
+    "bucket": { "type": ["integer", "null"], "minimum": 0, "maximum": 99, "description": "hash: the issue's stable bucket, 0 to 99 (Opus when below opus_pct); null otherwise." },
+    "opus_pct": { "type": "integer", "minimum": 0, "maximum": 100, "description": "The configured share of issues routed to Opus, in percent." }
+  },
+  "examples": [
+    { "model": "sonnet", "reason": "default", "bucket": null, "opus_pct": 0 }
+  ]
+}

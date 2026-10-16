@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loop_entry.v1.json",
+  "title": "loop_entry",
+  "description": "Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. Written by the loop's ledger. Never a stage or progress; it shows the device is at work, and the loop rebuilds its ledger's tells and tasks from it after a lost store.",
+  "x-issue": "optional",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "key", "status", "attempts", "class", "rule", "started_at", "ended_at", "agent_id", "wake"],
+  "properties": {
+    "kind": { "enum": ["agent-step", "tell", "task"], "description": "agent-step: an agent ran one step of an issue; tell: a message to the owner; task: a wake of the loop's model outside a planned step." },
+    "key": { "type": "string", "minLength": 1, "description": "The ledger key: the work's identity across retries, for example i92/ltn0brb/review/0821e6a/r2/a1." },
+    "status": { "enum": ["running", "done", "failed", "timed-out", "lost"], "description": "The status it changed to." },
+    "attempts": { "type": "integer", "minimum": 0, "description": "Attempts of this key so far." },
+    "class": { "enum": ["free", "owner", "drive", "develop", "start"], "description": "The planner's class for the work." },
+    "rule": { "type": "string", "minLength": 1, "description": "The planner rule that planned it, for example S2 or S3." },
+    "started_at": { "type": "string", "description": "When this attempt started.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$" },
+    "ended_at": { "type": ["string", "null"], "description": "When it ended; null while running.", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$" },
+    "agent_id": { "type": ["string", "null"], "description": "The agent's id, for an agent step; null otherwise." },
+    "wake": { "type": ["string", "null"], "description": "The wake's name, for a tell or task, for example parked; null otherwise." }
+  },
+  "examples": [
+    { "kind": "agent-step", "key": "i92/ltn0brb/review/0821e6a/r2/a1", "status": "done", "attempts": 1, "class": "drive", "rule": "S2", "started_at": "2026-10-16T15:59:42.324Z", "ended_at": "2026-10-16T16:00:11.254Z", "agent_id": "a20142b8cd21d3b2b", "wake": null }
+  ]
+}

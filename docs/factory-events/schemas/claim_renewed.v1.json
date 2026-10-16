@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "claim_renewed.v1.json",
+  "title": "claim_renewed",
+  "description": "A heartbeat extended this device's claim on the issue. Written by callum-flow-claim --heartbeat. Housekeeping: not progress on the issue.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lease_minutes"],
+  "properties": {
+    "lease_minutes": { "type": "integer", "minimum": 1, "description": "How long the claim now holds from this event, in minutes." }
+  },
+  "examples": [
+    { "lease_minutes": 120 }
+  ]
+}

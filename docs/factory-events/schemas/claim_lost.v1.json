@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "claim_lost.v1.json",
+  "title": "claim_lost",
+  "description": "This device tried to claim the issue and another device holds it. Written by callum-flow-claim. Proof that two devices contended for one issue; this device does not work on it.",
+  "x-issue": "required",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["holder", "holder_since", "race"],
+  "properties": {
+    "holder": { "type": ["string", "null"], "description": "The device that holds the claim; null when it could not be read." },
+    "holder_since": { "type": ["string", "null"], "description": "When the holder claimed it, as its claim comment says; null when not known." },
+    "race": { "type": "boolean", "description": "true: both devices claimed at once and the other won; false: the issue was already held." }
+  },
+  "examples": [
+    { "holder": "coder-dev-system-loop", "holder_since": "2026-10-16T09:12:40Z", "race": false }
+  ]
+}

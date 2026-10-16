@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "usage.v1.json",
+  "title": "usage",
+  "description": "A reading of the Claude subscription's usage windows. Written by usage-check, which the loop runs on its schedule. Shows how close the device is to a rate limit.",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["available", "five_hour_pct", "five_hour_resets_at", "seven_day_pct", "seven_day_resets_at", "source", "reasons"],
+  "properties": {
+    "available": { "type": "boolean", "description": "true when a reading was had; false when no source gave one (then every reading field is null)." },
+    "five_hour_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the five-hour window used, rounded up." },
+    "five_hour_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When the five-hour window resets." },
+    "seven_day_pct": { "type": ["integer", "null"], "minimum": 0, "description": "Percent of the most used seven-day window, rounded up." },
+    "seven_day_resets_at": { "type": ["string", "null"], "format": "date-time", "description": "When that seven-day window resets." },
+    "source": { "enum": ["oauth", "statusline", null], "description": "Where the reading came from; null when unavailable." },
+    "reasons": { "type": "array", "items": { "type": "string" }, "description": "When unavailable: why, one code per source tried, for example statusline:bad-snapshot; empty otherwise." }
+  },
+  "examples": [
+    { "available": true, "five_hour_pct": 21, "five_hour_resets_at": "2026-10-16T16:00:00.000Z", "seven_day_pct": 4, "seven_day_resets_at": "2026-10-23T11:00:00.000Z", "source": "oauth", "reasons": [] }
+  ]
+}
