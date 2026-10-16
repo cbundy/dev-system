@@ -370,9 +370,11 @@ tool the loop calls writes or reads the label:
 - **`callum-flow-sweep`.** Its candidates are the issues the event log and factory-state list as
   live, the list its closed-issue pass already reads (`callum-flow-sweep:224-236`), not the label
   list. Rules: a closed issue logs `closed` when its latest event is not final; an open issue with
-  a PR merged on its branch after the newest claim is left alone; an open issue whose newest claim
-  expired gets `ready` back, is unassigned, gets a comment and logs `reclaimed`; an open issue with
-  no claim comment is left alone. It never touches `factory:*` labels: the loop is their only
+  a PR merged on its branch after the newest claim is left alone; an open issue whose last claim
+  event (`claimed`, `ready`, `reclaimed`, `merged`, `closed` or `abandoned`) is not `claimed` is
+  left alone, and no other event revives an ended claim; an open issue whose newest claim expired
+  gets `ready` back, is unassigned, gets a comment and logs `reclaimed`; an open issue with no
+  claim comment is left alone. It never touches `factory:*` labels: the loop is their only
   writer, and a record whose claim lapsed is claimed again onto itself (4.1).
 - **`callum-flow-factory-state`.** For an issue whose life has a `transition` event, the label
   check expects the `factory:*` label of its state. For other issues it checks `ready` only. The

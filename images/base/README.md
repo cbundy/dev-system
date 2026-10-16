@@ -1632,13 +1632,14 @@ It adds no label: the claim is the comment and its events (`In development` is g
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
 with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder, or, when that tool fails, those this device's own event log shows it claimed and has not released (as the sweep falls back to that log). The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
-candidates are every issue in the event log (this device's file, plus the latest lifecycle event per issue in the
+candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
 whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`, `test_weakened`, `claim_lost`, `renewed`, `loop`, `reviewed` or `intervention`) is not `closed` or `abandoned`, plus every issue `callum-flow-factory-state` still lists as live (so one known only from a mirror run); a failed
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
-event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its latest
-event already released it (`ready`, `reclaimed`, `merged`), when it has no claim comment, when its newest claim is live,
+event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim
+already ended (its last claim event, of `claimed`, `ready`, `reclaimed`, `merged`, `closed` and `abandoned`, is one that ends it;
+no other event revives an ended claim), when it has no claim comment, when its newest claim is live,
 or when a PR merged after the claim on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`); otherwise its
 expired lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
 any other label: the factory loop is the only writer of its `factory:*` labels. It has no
