@@ -6,7 +6,8 @@
 //   /tmp); a reader writes nowhere in the repository. The repository is the slot and the main
 //   checkout, whose tree holds the pool's other slots.
 // - Every loop agent: no GitHub writes (the loop owns PRs, issues, labels and re-runs), no
-//   no-mistakes, no axi, no push to a remote but origin, no background or isolated Agent call.
+//   no-mistakes, no axi, no push to a remote but origin, no call in the background (Bash or
+//   Agent), no isolated Agent call.
 // - A writer pushes only its branch to origin, never by force, creates no branch and no worktree.
 // - A reader neither commits nor pushes.
 import { program, simpleCommands } from './shell'
