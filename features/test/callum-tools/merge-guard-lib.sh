@@ -76,6 +76,11 @@ if [ "$1" = api ]; then
       jq --argjson u "$OWNER" '{number: 12, state: "open", title: "t", body: .body, user: $u, labels: []}' "$d/issue.json" ;;
     repos/o/r/issues/12/comments)
       jq --argjson u "$OWNER" '.comments | to_entries | map({id: (.key + 1), user: (.value.user // $u), body: .value.body})' "$d/issue.json" ;;
+    'repos/{owner}/{repo}/actions/runs?'*)
+      # the head's workflow runs; default: one completed success run
+      [ ! -f "$d/runs-err" ] || { cat "$d/runs-err" >&2; exit 1; }
+      if [ -f "$d/runs" ]; then slurp "$d/runs"; else echo '{"total_count":1,"workflow_runs":[{"id":1,"workflow_id":1,"event":"pull_request","name":"CI","status":"completed","conclusion":"success"}]}'; fi
+      if [ -f "$d/runs-rc" ]; then read -r rc < "$d/runs-rc"; exit "$rc"; fi ;;
     *) echo "no fixture for $1" >&2; exit 1 ;;
   esac
   exit

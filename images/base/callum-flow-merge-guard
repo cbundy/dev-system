@@ -44,7 +44,9 @@
 #            GUARD head PASS gated_patch=<id> rebased_from=<run head>
 #   linkage  check-pr-linkage.sh reports MATCH; on SKIP (no issue in the branch
 #          name) --issue N is required and the PR must link #N as --expect says
-#   checks   at least one CI check, all pass or skipping
+#   checks   at least one CI check, all pass or skipping; and the head's latest workflow
+#          run per workflow and event is completed with success, skipped or neutral (a run
+#          with no job yet is in no check list)
 #   gates    the run has no step parked at a gate and is not failed or aborted
 #   base     the PR targets the default branch, or --base BRANCH
 #   mergeable  GitHub would merge it now: open, not a draft, not conflicting,
@@ -486,6 +488,25 @@ if cj=$($GH pr checks "$pr" --json name,bucket 2> "$errf") || [ -n "${cj-}" ]; t
   fi
 else
   fail checks "cannot read checks$(said)" read
+fi
+# a workflow run whose jobs have no check yet (queued on a concurrency group) is in no `gh pr checks`
+# view, so the head's workflow runs are read too: the latest run per workflow and event must be done
+if [ -z "$pr_head" ]; then
+  fail checks "cannot read workflow runs: no PR head" read
+elif rj=$($GH api "repos/{owner}/{repo}/actions/runs?head_sha=$pr_head&per_page=100" 2> "$errf"); then
+  if ! printf '%s' "$rj" | jq -e '(.workflow_runs | type == "array") and (.total_count | type == "number") and (.total_count <= (.workflow_runs | length))' > /dev/null 2>&1; then
+    fail checks "cannot read workflow runs whole$(said)" read
+  else
+    bad=$(printf '%s' "$rj" | jq -r '[.workflow_runs | group_by([.workflow_id, .event])[] | max_by(.id)
+      | (if .status != "completed" then "pending"
+         elif (.conclusion == "success" or .conclusion == "skipped" or .conclusion == "neutral") then "pass"
+         elif .conclusion == "cancelled" then "cancel"
+         else "fail" end) as $k
+      | select($k != "pass") | "workflow \(.name // .path)=\($k)"] | join(", ")')
+    [ -z "$bad" ] || fail checks "$bad" checks
+  fi
+else
+  fail checks "cannot read workflow runs$(said)" read
 fi
 
 # --- gates -------------------------------------------------------------------

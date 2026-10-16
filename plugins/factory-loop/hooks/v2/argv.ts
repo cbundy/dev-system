@@ -136,6 +136,12 @@ export function prChecksArgv(repo: string, pr: number): string[] {
   return ['gh', 'pr', 'checks', String(pr), '--repo', repo, '--json', 'name,state,bucket,startedAt,completedAt,link']
 }
 
+// The head's workflow runs: a run whose jobs have no check run yet (queued on a concurrency group)
+// is in no `gh pr checks` view, so the loop reads the runs too (sources-prs.ts runsOf).
+export function prRunsArgv(repo: string, head: string): string[] {
+  return ['gh', 'api', `repos/${repo}/actions/runs?head_sha=${head}&per_page=100`]
+}
+
 // The one re-run of a failed or cancelled check per round: its failed jobs only.
 export function runRerunArgv(repo: string, runId: string): string[] {
   return ['gh', 'run', 'rerun', runId, '--failed', '--repo', repo]
