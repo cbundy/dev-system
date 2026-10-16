@@ -7,7 +7,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { GITHUB_V2, newCtx } from '../hooks/foundation'
-import { EVENT_DAYS } from '../hooks/observe'
+import { REBUILD_DAYS } from '../hooks/observe'
 import type { Runtime } from '../hooks/observe'
 import type { Action, Control, LedgerEntry, State } from '../hooks/types'
 import { logEvent, logOwnerOp, opInterventions } from '../hooks/v2/act-events'
@@ -610,8 +610,8 @@ describe('what v1 left in the ledger, and the companion\'s log', () => {
     expect(new Set(p.map(x => x.key)).size).toBe(3)
   })
 
-  test('a fact is judged only while the facts read of the event log shows whether it is logged, so a wiped store cannot log it twice (R4-F5)', () => {
-    expect(FACT_WINDOW_MS).toBeLessThan(EVENT_DAYS * 24 * 60 * MIN)
+  test('a fact is judged only while the rebuild of a wiped store reads whether it is logged, so it cannot log it twice (R4-F5)', () => {
+    expect(FACT_WINDOW_MS).toBeLessThan(REBUILD_DAYS * 24 * 60 * MIN)
     expect(COMPANION_WINDOW_MS).toBe(FACT_WINDOW_MS)
   })
 })
@@ -955,15 +955,16 @@ describe('the owner\'s files in the pass driver', () => {
   test('after a wiped store, a fact the event log already holds is not logged again; a new one is logged once (drill run 4, R4-F5)', async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     const line = (ago: number, cause: string, reason: string) => ({ at: NOW - ago, issue: 38, life: 'tmz7hm', seq: 7, cause, reason })
-    const before = line(3 * 60 * MIN, 'guard:push', 'a push to main')
+    // logged 4 days ago: past the facts read's 3 days, within the rebuild's week
+    const before = line(4 * 24 * 60 * MIN, 'guard:push', 'a push to main')
     const fresh = line(2 * MIN, 'guard:write', 'wrote outside its slot')
     const factOf = (l: ReturnType<typeof line>) => factKey(l.cause, 'i38', Math.trunc(l.at).toString(36))
-    // the event log, as the pass reads it: the first line's intervention, logged before the wipe
+    // the event log: the first line's intervention, logged before the wipe, which only the week read holds
     const note = eventNote(intervention('loop', before.cause, factOf(before), before.reason, { issue: 38, life: before.life, pr: null }))
     const events = `${NO_EVENTS}${iso(before.at + 5_000)},intervention,38,,,,,"${note}",agent,${DEVICE}\n`
     const h = host(on, {
       config: ACT_V2,
-      run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: events } : quiet(argv, s)),
+      run: (argv, s) => (argv[0] === 'dev-query' && !(s.stdin ?? '').includes('workers_status') ? { stdout: argv.includes(`days=${REBUILD_DAYS}`) ? events : NO_EVENTS } : quiet(argv, s)),
       files: { [`${LOOP_DIR}/companion.jsonl`]: `${[before, fresh].map(l => JSON.stringify(l)).join('\n')}\n` },
     })
     await $.session.start(START)

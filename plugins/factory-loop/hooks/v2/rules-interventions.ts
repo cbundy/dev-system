@@ -38,10 +38,10 @@ const OWN_RESTART_MS = 30 * MIN
 // a load is an intervention only on passes this soon after it, so a loop that starts acting long
 // after it loaded does not log a stale restart
 const RESTART_PLAN_MS = HOUR
-// facts older than this are left alone: whether one is logged is known from the ledger, which
-// keeps an intervention's key 7 days (ledger.ts KEEP_MS), and from the facts read of the event log
-// (observe.ts EVENT_DAYS, 3 days), which a wiped store leaves; an older fact could be logged again
-export const FACT_WINDOW_MS = 2 * 24 * HOUR
+// facts older than this are left alone: the ledger keeps an intervention's key 7 days (ledger.ts
+// KEEP_MS), and a wiped store's rebuild reads 7 days of the event log (observe.ts REBUILD_DAYS,
+// events.ts logOnce), so an older fact would be logged again
+export const FACT_WINDOW_MS = 6 * 24 * HOUR
 
 // One intervention to plan: its event, its ledger key and the rule its fact came from.
 export type Planned = { key: string; rule: string; event: InterventionEvent }

@@ -38,10 +38,10 @@ import type { V2Cache, V2Stored } from './v2/observe'
 import type { HeadSeen } from './v2/types'
 
 const GITHUB_READS_PER_PASS = 12
-export const EVENT_DAYS = 3
+const EVENT_DAYS = 3
 // a ledger rebuilt after a lost store reads a week of events: holds older than the facts
 // window (a pending decision, an escalation) must survive it, and entries are kept 7 days
-const REBUILD_DAYS = 7
+export const REBUILD_DAYS = 7
 // one poll probes every watched branch's newest run, GitHub included
 const PIPELINE_TIMEOUT_MS = 120_000
 // how long GitHub reads wait after a rate limit (SPEC 10.2)
@@ -245,11 +245,11 @@ export async function observe(
   }
 
   // The ledger. Observe mode: what the device's own events prove (SPEC 7.5). Act mode: the
-  // store's whenever it holds one; when it holds none, the ledger is rebuilt from a week of
-  // events (the facts window would lose older holds). An empty store after a rebuild that found
-  // nothing is simply empty: the week is not read again every pass. Read before the queue and
-  // GitHub: a read older than a label write of the loop's own is due, so it sees what GitHub took.
-  let chosen: { ledger: LedgerEntry[]; source: LedgerSource }
+  // store's whenever it holds one; else it is rebuilt from a `week` of events (the facts window
+  // would lose older holds), where v2 reads its logged facts too (7.2). A rebuild that found nothing
+  // leaves it empty, and the week is not read every pass. Read before the queue and GitHub: a read
+  // older than a label write of the loop's own is due, so it sees what GitHub took.
+  let chosen: { ledger: LedgerEntry[]; source: LedgerSource }, week: FactoryEvent[] | null = null
   if (stored === undefined) {
     chosen = choose(null, factory !== null && facts !== null ? deriveLedger(events, factory, facts, rt.device) : null)
   } else if (stored.ledger !== null && stored.ledger.length > 0) {
@@ -265,7 +265,7 @@ export async function observe(
       try {
         const r = await run(eventsSince(REBUILD_DAYS), EVENTS_SQL)
         if (r.exitCode === 0) {
-          const week = eventsFromRows(parseCsv(r.stdout))
+          week = eventsFromRows(parseCsv(r.stdout))
           derived = deriveLedger(week, factory, factsOf(week), rt.device)
           cache.rebuilt = { at: now, value: derived.length }
         } else {
@@ -569,7 +569,7 @@ export async function observe(
     checkout,
   })
   if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
-  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, events, backoff: backoffUntil !== null, limited: () => limited })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, events: week ?? events, backoff: backoffUntil !== null, limited: () => limited })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

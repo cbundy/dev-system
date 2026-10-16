@@ -1072,9 +1072,10 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   `iv/<the fact's key>`, so each is logged once.
 - **Logged once is the event log's to say.** A wiped store loses the ledger's keys, but not the
   facts in the loop dir (the companion's log, the recorded answers). So an `intervention` (by its
-  cause and fact) or a `reviewed` event (by its answer file) that the facts read (2.4) shows
-  logged is settled with no second write (`events.ts` `logOnce`), and its key is in the ledger
-  again. Facts are judged for 2 days, within that read's 3.
+  cause and fact) or a `reviewed` event (by its answer file) that the pass's read of the event log
+  shows logged is settled with no second write (`events.ts` `logOnce`), and its key is in the
+  ledger again. That read is the week of events the ledger is rebuilt from on the pass after a
+  wipe, else the facts read (2.4), so every fact judged (6 days) is in the ledger or in the read.
 - **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
@@ -2651,7 +2652,7 @@ delete wave.
 | `transition` | free | re-checks its trigger, stores the record, pings | 3 |
 | `label` | free | `gh issue edit <N> --repo R --add-label <l> --remove-label <l,...>`; op `ensure`: `gh label create <name> --repo R --color <c> --description <d> --force` for the eight; op `clear` (3.4); R1's op `requeue`: `--add-label <ready> --remove-label <the seven>`, and op `reject`: `--add-label factory:rejected --remove-label <the seven>` (6.4) | 3 |
 | `comment` | free | reads comments for its hidden key, then `gh issue comment <N> --repo R --body-file -` or `gh pr comment <p> --repo R --body-file -`; also R1's rejection comment (6.4) | 3 |
-| `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention` | 3 |
+| `event` | free | `callum-flow-event <state> --note <key=value tokens> ...`, built only by `events.ts` (7.1), for `transition`, `delegated`, `fix_requested`, `merge_ready`, `abandoned`, `reclaimed`, `merged`, `reviewed`, `verdict`, `intervention`; an action marked logged (7.2, `events.ts` `logOnce`) is settled done with no command | 3 |
 | `pr` | free | op `ensure`: `gh pr list --repo R --head <b> --state all ...`, then `gh pr reopen <p> --repo R` or `gh pr create --repo R --base <d> --head <b> --title <t> --body-file -`, and `gh pr edit <p> --repo R --body-file -`; op `body`: the edit alone | 3 |
 | `split` | free | per child: find it by its hidden key, else `gh issue create --repo R --title <t> --body-file -`; link it as a sub-issue and add `blocked_by` (`gh api` with the sub-issue and dependency endpoints); `gh issue edit <c> --repo R --add-label ready` for a ready child | 3 |
 | `agent-step` | develop (design, build) or drive (review, fix, triage) | `$.agent.spawn` with the step's agent type, through v1's spawn half (`act-agents.ts:538`), after looking for a recorded answer (10.8) | 1 per key |

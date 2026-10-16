@@ -399,7 +399,8 @@ export type V2State = {
   changed: Record<number, Ms>
   interventions: InterventionFacts
   // the onceKeys (events.ts) of this device's events in the pass's read of the event log (the facts
-  // read, 2.4): which facts are logged, when a wiped store lost their ledger keys (7.2)
+  // read, 2.4, or the rebuild's week): which facts are logged, when a wiped store lost their ledger
+  // keys (7.2)
   logged: string[]
   // the main checkout the tripwire last settled on, which R1 compares this pass's read with
   // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
