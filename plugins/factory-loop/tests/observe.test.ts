@@ -1296,6 +1296,20 @@ describe('observe for act mode (SPEC 3.3, 3.4, 7.5, 10.2)', () => {
     expect(issueReads(h)).toEqual([])
   })
 
+  test("an issue the loop put back in the queue is listed on the next pass, not a queue period later (drill run 2, R2-O2)", async () => {
+    const h = host({ queue: { stdout: 'queue known=114 now=470\n' } })
+    expect((await h.pass(runtime(), stored())).state.queue).toEqual([470])
+    // the loop's own requeue of 114 (ready on) ended done after that read
+    h.world.queue = { stdout: 'queue known=470 now=114,470\n' }
+    const requeue = entry('label:114:release', 'label', { issue: 114, status: 'done', startedAt: NOW + MIN, endedAt: NOW + MIN })
+    const next = await h.pass(runtime(), stored({ ledger: [...(stored().ledger ?? []), requeue] }), NOW + 1.5 * MIN)
+    expect(next.state.queue).toEqual([114, 470])
+    expect(next.state.issues.find(i => i.number === 114)?.labels).toEqual(['ready'])
+    // once read after it, the op makes no further queue read due
+    await h.pass(runtime(), stored({ ledger: [...(stored().ledger ?? []), requeue] }), NOW + 1.8 * MIN)
+    expect(h.commands().some(c => c.includes('queue-watch'))).toBe(false)
+  })
+
   test("a merged Run it not answered done is read until it closes, so the owner closing it ends rule M5's wait (#556)", async () => {
     const task = (n: number, decision: string) => entry(`task:run-it:${n}`, 'task', { wake: 'run-it', class: 'drive', issue: n, outcome: wakeAnswer(decision) })
     const kept = stored({ ledger: [...(stored().ledger ?? []), task(50, 'hold'), task(51, 'done')] })

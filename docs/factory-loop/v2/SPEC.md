@@ -140,8 +140,8 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 |---|---|---|---|
 | `factory` | `callum-flow-factory-state --format json --github off` | every pass | kept (G2): claims, their holders and lapses. `nomistakes.runs` becomes optional in that tool (U4), so no-mistakes data can never blind v2 (`simplicity/F3`) |
 | `facts` | `dev-query` with `EVENTS_SQL` | every pass | kept; gains the three new states (7.1) |
-| `queue` | `queue-watch.sh --once` | `queueEveryMs` | kept |
-| `github` | `callum-flow-issue-read --json N` | `githubEveryMs` | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
+| `queue` | `queue-watch.sh --once` | `queueEveryMs`, and on the next pass after any `label` action of the loop's own ended done | kept |
+| `github` | `callum-flow-issue-read --json N` | `githubEveryMs`, and on the next pass after a `label` action of the loop's own on the issue ended done (so the loop sees what GitHub took, not its cached view) | kept; the read set is the records' issues (their state, for `issue-closed`; for a parked record its labels, the unpark signal, 4.1), the queue and `only` |
 | `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | v1's `pool` without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
@@ -305,8 +305,8 @@ type IssueRecord = {
   mirror check and no label-drift intervention. Stale label reads made such a check undo parks
   and log false touches (`totality/T-01`, `simplicity/F6`, `simplicity/F9`).
 - **The one label read.** For a parked record, the `github` source reads the issue directly. A
-  read made after the park's `label` action finished that lacks `factory:parked` is the unpark
-  signal (4.1). Older reads are ignored. The label list is not used, because it lags behind
+  read made after the park's `label` action finished (it comes on the next pass, 2.4) that lacks
+  `factory:parked` is the unpark signal (4.1). Older reads are ignored. The label list is not used, because it lags behind
   edits (`images/base/callum-flow-sweep:37`, `:142`).
 - **Creation.** Action `label` with op `ensure` once per module load, and again after a label write
   fails with a missing label: `gh label create <name> --repo R --color <c> --description <d>
