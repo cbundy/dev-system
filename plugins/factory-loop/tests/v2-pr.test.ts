@@ -29,7 +29,8 @@ const READY = 'ready'
 
 // gone: its head branch was deleted or recreated after it closed, so GitHub refuses to reopen it
 type Pr = { number: number; state: 'OPEN' | 'CLOSED' | 'MERGED'; ref: string; repo: string; trusted: boolean; body: string; title: string; gone?: boolean }
-type Issue = { number: number; id: number; title: string; body: string; labels: string[] }
+// closed and pr: a closed issue, and a pull request (which the issues API lists beside issues)
+type Issue = { number: number; id: number; title: string; body: string; labels: string[]; closed?: boolean; pr?: boolean }
 // down: GitHub answers every gh command with a 502
 type Gh = { prs: Pr[]; issues: Issue[]; subs: Map<number, number[]>; blockers: Map<number, number[]>; rollout: string; writes: string[][]; down: boolean }
 
@@ -53,7 +54,7 @@ function answer(g: Gh, argv: string[], stdin: string | undefined): { exitCode?: 
     }
     if (a.includes('--list')) return json({ issues: g.issues.map(i => ({ number: i.number, id: i.id, title: i.title, body: i.body })), stripped: 0 })
     const issue = g.issues.find(i => i.number === Number(a[1]))
-    return issue === undefined ? { exitCode: 1, stderr: 'cannot read issue' } : json({ issue: { number: issue.number, id: issue.id }, stripped: 0 })
+    return issue === undefined ? { exitCode: 1, stderr: 'cannot read issue' } : json({ issue: { number: issue.number, id: issue.id, state: issue.closed === true ? 'closed' : 'open', ...(issue.pr === true ? { pull_request: { url: 'x' } } : {}) }, stripped: 0 })
   }
   if (cmd !== 'gh') return {}
   if (g.down) return { exitCode: 1, stderr: 'HTTP 502' }
@@ -356,6 +357,29 @@ describe('the split executor (8.7)', () => {
     expect(g.writes.slice(writes).map(a => a.slice(0, 3).join(' '))).toEqual(['gh issue edit'])
     expect(g.subs.get(300)).toEqual([9_000_602])
     expect(g.blockers.get(602)).toEqual([9_000_601])
+  })
+
+  test('an existing open issue blocks the child like a sibling; a closed one is skipped; a pull request is refused with no retry', async () => {
+    const parent = { number: 300, id: 9_000_300, title: 'parent', body: 'p', labels: [] }
+    const open = gh({ issues: [parent, { number: 57, id: 9_000_057, title: 'old', body: 'o', labels: [] }] })
+    const action = splitOf('a', { blockedBy: [57] })
+    expect(await act(open).run(action)).toEqual({ status: 'done', outcome: { kind: 'split', child: 602 }, summary: 'made #602 under #300, blocked by #57, ready' })
+    expect(open.blockers.get(602)).toEqual([9_000_057])
+    expect(open.issues.find(i => i.number === 602)?.labels).toEqual([READY])
+    // a retry adds no second link
+    expect(await act(open).run(action)).toMatchObject({ status: 'done' })
+    expect(open.blockers.get(602)).toEqual([9_000_057])
+
+    const closed = gh({ issues: [parent, { number: 57, id: 9_000_057, title: 'old', body: 'o', labels: [], closed: true }] })
+    const skipped = await act(closed).run(action)
+    expect(skipped).toMatchObject({ status: 'done', summary: 'made #602 under #300, #57 is closed, not linked, ready' })
+    expect(closed.blockers.get(602)).toBeUndefined()
+    expect(closed.issues.find(i => i.number === 602)?.labels).toEqual([READY])
+
+    const pr = gh({ issues: [parent, { number: 57, id: 9_000_057, title: 'a pr', body: 'o', labels: [], pr: true }] })
+    expect(await act(pr).run(action)).toEqual({ status: 'failed', summary: 'refused: #57 is a pull request, not an issue', noRetry: true })
+    expect(pr.blockers.get(602)).toBeUndefined()
+    expect(pr.issues.find(i => i.number === 602)?.labels).toEqual([])
   })
 
   test('a child that waits on an owner decision is not labelled ready', async () => {

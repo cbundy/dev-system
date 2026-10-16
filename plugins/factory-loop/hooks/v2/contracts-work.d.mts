@@ -23,6 +23,7 @@ export const CHILD_KEY: RegExp
 export function rolloutOf(brief: string): string | null
 
 // The checked answers: every field present, absent texts null, lists [].
+// blockedBy: sibling keys, or "#<N>" for an existing issue of the repo
 export type DesignChild = { key: string; title: string; body: string; blockedBy: string[]; ready: boolean }
 export type DesignAnswer = { kind: (typeof DESIGN_KINDS)[number]; brief: string | null; question: string | null; children: DesignChild[] }
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }

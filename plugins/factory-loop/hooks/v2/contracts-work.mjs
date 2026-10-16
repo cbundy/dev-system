@@ -10,7 +10,8 @@
 //       "children": [{ "key": "a", "title": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
-//   A split's children are 2 to 10, each key unique, blockedBy naming siblings with no cycle.
+//   A split's children are 2 to 10, each key unique. A blockedBy entry is a sibling key or "#<N>",
+//   an existing issue of the repo (never the issue being split); the siblings have no cycle.
 // - `build`: what the PR says, or that it cannot (T6 sends that to triage).
 //     { "result": "built", "head": "<sha>", "title": "...", "summary": "...", "evidence": "..." | null }
 //     { "result": "cannot", "reason": "..." }
@@ -150,7 +151,8 @@ function cycleOf(children) {
     if (state.get(key) === 'open') return [...path.slice(path.indexOf(key)), key]
     state.set(key, 'open')
     path.push(key)
-    for (const next of by.get(key) ?? []) {
+    // an entry that is not a sibling key (an "#<N>" issue) is no part of a cycle
+    for (const next of (by.get(key) ?? []).filter(n => by.has(n))) {
       const found = visit(next)
       if (found !== null) return found
     }
@@ -165,7 +167,9 @@ function cycleOf(children) {
   return null
 }
 
-function childrenOf(v, problems) {
+const ISSUE_REF = /^#[1-9]\d*$/
+
+function childrenOf(v, problems, parent) {
   if (!Array.isArray(v)) {
     problems.push(`children must be a list of ${CHILDREN.min} to ${CHILDREN.max} children`)
     return []
@@ -188,12 +192,16 @@ function childrenOf(v, problems) {
     oneLine(title, `${where}title`, problems)
     const body = text(c, 'body', LIMITS.childBody, 'required', problems, where)
     let blockedBy = []
-    if (!Array.isArray(c.blockedBy)) problems.push(`${where}blockedBy must be a list of sibling keys ([] for none)`)
+    if (!Array.isArray(c.blockedBy)) problems.push(`${where}blockedBy must be a list of sibling keys or #<N> issues ([] for none)`)
     else {
       blockedBy = [...new Set(c.blockedBy)]
       for (const b of c.blockedBy) {
-        if (typeof b !== 'string' || !keys.includes(b)) problems.push(`${where}blockedBy ${show(b)} is not the key of another child`)
-        else if (b === key) problems.push(`${where}blockedBy names the child itself`)
+        if (typeof b === 'string' && keys.includes(b)) {
+          if (b === key) problems.push(`${where}blockedBy names the child itself`)
+        } else if (typeof b === 'string' && b.startsWith('#')) {
+          if (!ISSUE_REF.test(b)) problems.push(`${where}blockedBy ${show(b)} is not an issue reference: write #<N>, N a positive number with no leading zero`)
+          else if (Number(b.slice(1)) === parent) problems.push(`${where}blockedBy ${b} is the issue being split, which stays open, so the child would wait forever`)
+        } else problems.push(`${where}blockedBy ${show(b)} is neither the key of another child nor an existing issue #<N>`)
       }
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
@@ -206,7 +214,7 @@ function childrenOf(v, problems) {
   return out
 }
 
-function checkDesign(input) {
+function checkDesign(input, job) {
   const o = record(input)
   if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split", "brief", and "question" or "children"}'] }
   const problems = []
@@ -221,7 +229,7 @@ function checkDesign(input) {
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let children = []
-  if (kind === 'split') children = childrenOf(o.children, problems)
+  if (kind === 'split') children = childrenOf(o.children, problems, job.issue)
   else if (o.children !== undefined && o.children !== null) problems.push('children must be absent or null unless kind is split')
   return checked(problems, () => ({ kind, brief, question, children }))
 }

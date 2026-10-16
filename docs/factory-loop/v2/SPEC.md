@@ -1310,13 +1310,13 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   the foreground, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
   (10.4) and no GitHub writes. It is renamed `designer` at the delete wave, when v1's goes.
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split",
-  brief, question?, children?: [{ key, title, body, blockedBy: [key], ready: boolean }] }`.
+  brief, question?, children?: [{ key, title, body, blockedBy: [key | "#N"], ready: boolean }] }`.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
   (`i<N>/l<L>/s<seq>/child/<key>`). Each child's body carries the hidden key, so a retry finds it
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
-  links, then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
+  links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
   (`agents/designer.md:71-77`).
 
