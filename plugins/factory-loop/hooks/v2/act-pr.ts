@@ -72,6 +72,14 @@ export function bodyWork(body: string, issue: number): { summary: string; eviden
   return { summary: m?.[1]?.trim() ?? '', evidence: evidence === '' ? null : evidence }
 }
 
+// workIn: the work the loop's body states: the action's, and when the action brings no summary (no
+// build of the life described the work) the body's own summary, and its evidence unless a fix gave newer.
+function workIn(a: PrAction, body: string, n: number): { summary: string; evidence: string | null } {
+  if (a.summary.trim() !== '') return a
+  const own = bodyWork(body, n)
+  return { summary: own.summary, evidence: a.evidence ?? own.evidence }
+}
+
 const same = (a: string, b: string) => a.replace(/\r\n?/g, '\n').trim() === b.replace(/\r\n?/g, '\n').trim()
 
 // rolloutLinkage: the linkage line `callum-flow-rollout`'s answer asks for, or null when it gave no
@@ -261,7 +269,7 @@ async function ensure(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
 
 // used: an open or reopened PR made the loop's: its body written when it differs.
 async function used(ctx: ExecCtx, a: PrAction, n: number, pr: number, read: PrRead, linkage: Linkage, reopened: boolean): Promise<Exec> {
-  const work = a.summary.trim() === '' ? bodyWork(read.body, n) : a
+  const work = workIn(a, read.body, n)
   const body = prBody({ issue: n, summary: work.summary, linkage, brief: a.brief, evidence: work.evidence })
   const how = reopened ? 'reopened' : 'uses'
   if (same(read.body, body)) return done(pr, false, reopened, `${how} PR #${pr} for #${n}; its body is the loop's`)
@@ -280,7 +288,7 @@ async function rewrite(ctx: ExecCtx, a: PrAction, n: number): Promise<Exec> {
     const r = await readPr(ctx, a.pr)
     if ('exec' in r) return r.exec
     if (r.read === null) return refused(`PR #${a.pr} is by an untrusted author`)
-    work = bodyWork(r.read.body, n)
+    work = workIn(a, r.read.body, n)
   }
   const wrote = await writeBody(ctx, a.pr, prBody({ issue: n, summary: work.summary, linkage: link.linkage, brief: a.brief, evidence: work.evidence }))
   if (wrote !== null) return wrote

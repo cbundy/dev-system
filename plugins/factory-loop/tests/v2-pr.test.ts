@@ -233,6 +233,19 @@ describe('the pr executor: one PR per branch for life (3.5, 8.1)', () => {
     expect(g.prs[0]?.body).toBe(prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Refs', brief: BRIEF, evidence: 'npm test: 3 pass' }))
   })
 
+  test('an action with no summary but a fix\'s evidence (an adopted PR whose fixer answered an evidence finding) writes that evidence over the body\'s', async () => {
+    const own = prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Closes', brief: BRIEF, evidence: 'old shot' })
+    const pr = () => ({ number: 621, state: 'OPEN', ref: 'issue-300', repo: REPO, trusted: true, body: own, title: 'x' })
+    const g = gh({ prs: [pr()] })
+    const fixed = { title: 'Factory loop work for #300', summary: '', evidence: 'shot' }
+    expect(await act(g).run(ensure({ ...fixed, pr: 621 }))).toMatchObject({ status: 'done', summary: expect.stringContaining('the loop\'s body written') })
+    expect(g.prs[0]?.body).toBe(prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Closes', brief: BRIEF, evidence: 'shot' }))
+    // a linkage FAIL's rewrite takes it too
+    const h = gh({ prs: [pr()], rollout: 'ROLLOUT keep-open source=brief' })
+    expect(await act(h).run({ ...ensure({ ...fixed, op: 'body', pr: 621 }), key: prKey(REF, 'body', 1) })).toMatchObject({ status: 'done' })
+    expect(h.prs[0]?.body).toBe(prBody({ issue: 300, summary: 'It adds the thing.', linkage: 'Refs', brief: BRIEF, evidence: 'shot' }))
+  })
+
   test('a PR closed unmerged is reopened (a resume after a hand close, E4); a merged one is never reused', async () => {
     const closed = gh({ prs: [{ number: 621, state: 'CLOSED', ref: 'issue-300', repo: REPO, trusted: true, body: '', title: 'x' }] })
     const w = act(closed)

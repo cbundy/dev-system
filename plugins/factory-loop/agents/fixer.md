@@ -49,7 +49,7 @@ your turn ends only with your answer.
 - Make only the changes the findings, checks or instructions call for.
 - For a visible change, or a finding on the evidence, give the evidence a reviewer needs in your
   answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it
-  whole. An image there needs a URL: follow the repo's documented evidence route, and link a
+  whole; null keeps the PR's current evidence. An image there needs a URL: follow the repo's documented evidence route, and link a
   capture committed on the branch by its commit-pinned blob URL
   (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
 - Run the repo's own lint and test commands in the foreground and let them finish. When you end

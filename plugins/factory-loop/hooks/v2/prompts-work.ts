@@ -323,8 +323,8 @@ export function fixPrompt(i: FixInput): string {
     ...answerBlock(
       i.place,
       'Then',
-      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<what you ran and what it showed, or null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
-      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters, or null.',
+      '{"result": "fixed", "head": "<the commit you pushed>", "summary": "<what you changed>", "evidence": "<the PR\'s whole evidence when you change it, else null>", "findings": [{"id": "r1-1", "disposition": "fixed", "reason": "<what you did>"}, {"id": "r1-2", "disposition": "declined", "reason": "<why it is wrong, with the evidence>"}]}',
+      'findings: one { id, disposition, reason } per finding (a failed check by the check:... id its note gives, a conflict as conflict); disposition fixed or declined; reason at most 1000 characters. summary: at most 2000 characters. evidence: at most 4000 characters; null keeps the PR\'s current evidence, a text replaces it whole.',
     ),
     'If you judge every finding wrong and push nothing, record {"result": "declined", "summary": "...", "findings": [...]} the same way, each disposition declined with its evidence: the PR goes back to review with your reasons.',
   ]
