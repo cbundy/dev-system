@@ -105,6 +105,8 @@ command that:
 - covers the whole gate. If a gate is spread across several commands or directories, add
   a single entrypoint (an npm script, a make target or a `scripts/` file) that runs them
   all, so a new test file needs no extra wiring.
+  Have the test entrypoint also accept a subset (for example `npm test -- <path>`), so an
+  agent debugging one suite runs it through the same setup instead of a raw runner command.
 - is quiet on success: one summary line at most. No per-test pass lines, progress bars,
   banners or coverage tables, and no log lines that tests trigger on purpose.
 - on failure prints only what is needed to act: the failing test names or `file:line`, and
