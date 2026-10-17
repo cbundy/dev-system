@@ -190,6 +190,34 @@ FROM per_issue
 GROUP BY repo;
 ```
 
+## 2b. Gate waits
+
+How long the stop gate waited for a turn, and how long it ran, per gate run. The loop writes one
+`gate_run` event for each `gate-pass`, `gate-fail` and `gate-unknown` line of the workspace
+companion (`rules-gates.ts`, SPEC 10.6). `wait_ms` is the time before it got a turn (0 when it
+took one at once or there is no limit), `run_ms` the time the commands ran (0 when they never
+did), `queued_behind` how many gates held a turn or waited ahead when it asked, `concurrency` the
+limit it ran under (null: none), and `started_at` when it asked for its turn. A retried write can
+repeat an event, so each run counts once per (issue, life, seq, started_at). The query reads the
+columns migration 0002 lifted into `factory.event_log` and gives one row per run. There are no
+rows before a loop with this rule has run.
+
+Take the p50 and p95 of `wait_ms` and `run_ms` per `day` in code (docs/factory-events/README.md:
+percentiles and medians are not SQL); a count and a mean per day are safe in SQL.
+
+```sql
+SELECT repo, issue, life, seq, started_at, started_at::date AS day,
+  min(result)         AS result,
+  min(wait_ms)        AS wait_ms,
+  min(run_ms)         AS run_ms,
+  min(concurrency)    AS concurrency,
+  min(queued_behind)  AS queued_behind
+FROM factory.event_log
+WHERE type = 'gate_run'
+GROUP BY repo, issue, life, seq, started_at
+ORDER BY started_at DESC;
+```
+
 ## 3. Reviewer false-positive rate
 
 `verdict` events carry the adjudication prefix in `note` (`CORRECT:`, `WRONG:`, `NIT:`, `ENV:`,
