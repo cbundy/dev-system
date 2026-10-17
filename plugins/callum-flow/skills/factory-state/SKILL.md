@@ -2,7 +2,7 @@
 name: factory-state
 description: >-
   Say what the agent factory is doing right now: which issues are queued,
-  being designed, being implemented, in the pipeline, parked, ready to merge or
+  being designed, being implemented, in the pipeline, parked, waiting, ready to merge or
   merged, which are stuck and why, which repos have only partial data, and how
   that agrees with GitHub. Runs the read-only `callum-flow-factory-state` tool
   and adds a short narrative. Use for "what is the factory doing right now?",
@@ -38,7 +38,7 @@ the issue number in parentheses, and say who has to act on it, especially when i
 
 1. `stuck` items, each with its rule and the minutes in stage. Name the rule's meaning, for
    example S3 means a pipeline run has waited on an agent or the owner too long.
-2. Issues in `parked`, then `ready to merge`, because a person or the orchestrator can act on them.
+2. Issues in `parked`, then `ready to merge` (`waiting` is the loop's own hold on wait conditions and needs no action unless it is old), because a person or the orchestrator can act on them.
 3. `flags` on any issue (label or claim disagreeing with GitHub, GitHub state unreadable): these
    are disagreements between sources, not facts about the work.
 
