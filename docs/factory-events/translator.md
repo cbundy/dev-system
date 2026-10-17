@@ -30,6 +30,8 @@ Rules:
 - **The dual-write check** ([#649](https://github.com/cbundy/dev-system/issues/649)): every old line
   is translated or skipped by name, misses are zero, and the new events of each type equal the old
   lines of the mapped state minus the named skips.
+- **The replay check** ([`replay.md`](replay.md)): `scripts/factory-events-replay.js load` runs the same
+  rule over the stored history into a throwaway database and prints it per old state.
 - Every event it makes validates strictly against its schema; the round-trip tests check this
   ([README](README.md#keeping-the-docs-in-step)).
 
