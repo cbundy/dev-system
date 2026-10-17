@@ -150,7 +150,7 @@ of when and why the model was involved (D-13).
   result is recorded and the issue closed. A held Run it keeps
   the next `run-it` PR waiting until the issue closes, or until you call the control tool with
   `resume <N>` once its result is recorded.
-- **`release`** (`closed expected`): `Next release` has no open items. Follow the repo's
+- **`release`** (`closed expected tag oldest`): an hourly review while `Next release` has no open items and merged work is unreleased (`tag` is the last release, `oldest` the oldest merge since it, left out when unknown). Follow the repo's
   release process (its release skill or `RELEASING.md`) and tell the owner in one line what
   shipped. Stop for the owner only where that process itself requires approval: `hold` while it
   waits. `done` once released. Never report holding a
@@ -278,12 +278,14 @@ is the release. The TELL format above holds; these are v2's kinds. The `/factory
 which planner is in force.
 
 ### TASK under planner v2
-- **`release`** (`closed expected`): merged work waits in the Next milestone, with no open item.
-  Decide whether to release now, by "Release decisions under planner v2" below. To release, start
-  the release agent and answer `done` (reason: the version and why now); to wait, answer `hold`
-  with the reason, which the loop only logs. You do not do the release steps yourself. Once the
-  release agent reports the release out, do the Run its of the milestone's `run-it` issues, each
-  from the issue's `## Run it` steps, recording the result on the issue and closing it.
+- **`release`** (`closed expected tag oldest`): an hourly review while the Next milestone has no
+  open item and at least one closed (`tag` is the last release, `oldest` the oldest merge since it,
+  left out when unknown). Decide whether to release now, by "Release decisions under planner v2"
+  below. To release, start the release agent and answer `done` (reason: the version and why now);
+  to wait, answer `hold` with the reason, which the loop only logs (the next hour's review asks
+  again). You do not do the release steps yourself. Once the release agent reports the release
+  out, do the Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps,
+  recording the result on the issue and closing it.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
   still needs asking) becomes an owner item, a comment on the issue and one `[ACTION]` line to the
   owner, and the task goes on. Answer `failed` (reason) when the release cannot be cut. A merge
@@ -294,8 +296,9 @@ You decide when the repo releases; the release agent does the steps. The aim: me
 within 6 hours of its merge.
 
 Gather the facts with a few reads (never the diff):
-- what waits: `git log --first-parent --format='%h %cI %s' <last tag>..origin/main` (the oldest
-  commit's time is how long work has waited) and `callum-flow-milestone show`;
+- what waits: `git log --first-parent --format='%h %cI %s' <tag>..origin/main` and
+  `callum-flow-milestone show`; the wake's `oldest` is how long work has waited (the oldest
+  commit's time when it is left out);
 - the labels of the issues those PRs close (`callum-flow-issue-read --json <N>`);
 - live problems: `callum-flow-factory-state` (parked, stuck, failing gates, repeated fix rounds),
   here and in the consumer loops it reports;
@@ -333,7 +336,8 @@ Answer:
   (`.claude/skills/release/SKILL.md`, else `RELEASING.md`) end to end and report each step."
   Answer `done` with `reason: releasing at the next <step>: <why now>`. When the agent reports,
   tell the owner in one line what shipped, or what failed and where.
-- **wait**: `hold` with `reason: wait: <why>`. The loop only logs it; nothing else happens.
+- **wait**: `hold` with `reason: wait: <why>`. The loop only logs it; nothing else happens until
+  the next hour's review.
 - **owner**: `hold` with `reason: owner: <what you need>`, and one `[DECISION]` line to the owner.
 
 ### TELL under planner v2
