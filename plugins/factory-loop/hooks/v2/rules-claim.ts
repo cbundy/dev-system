@@ -16,7 +16,7 @@
 //   the first claim after a rejection starts the count again, its transition's via `unreject`
 //   (a person's intervention, 7.2).
 // - Capacity: records queued or in flight, plus claims in flight, stay under K
-//   (maxInFlightIssues); a parked record never counts. Slow claims once per pass and none within
+//   (maxInFlightIssues); a parked or waiting record never counts. Slow claims once per pass and none within
 //   slowGapMs of the last; merge work never holds a claim back (section 15).
 //
 // Pure: the time is state.now.
@@ -166,7 +166,7 @@ function finishClaims(ctx: V2Ctx): Set<number> {
 const sameLabel = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
 
 // The stages of another device's live work.
-const LIVE_STAGES: readonly string[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+const LIVE_STAGES: readonly string[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
 // candidateProblem: why a queue issue may not be claimed, or null (v1's D1 filters, 4.1's drop).
 function candidateProblem(ctx: V2Ctx, issue: IssueView | undefined, n: number): string | null {
@@ -224,7 +224,7 @@ function claims(ctx: V2Ctx, handled: ReadonlySet<number>): void {
   const live = ctx.v2.records.filter(r => r.state !== 'closed')
   const firsts = firstClaims(ctx)
   const inFlight = inFlightClaims(ctx)
-  const held = live.filter(r => r.state !== 'parked').length + inFlight.size
+  const held = live.filter(r => r.state !== 'parked' && r.state !== 'waiting').length + inFlight.size
   const cap = config.maxInFlightIssues
   const lastClaim = Math.max(0, ...firsts.map(e => e.startedAt))
   let started = 0

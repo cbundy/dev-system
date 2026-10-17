@@ -22,8 +22,9 @@ const lifted = new Set();
 for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
-const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind"]);
-const TIMES = new Set(["seq_at", "state_since", "started_at"]);
+const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind", "waited_ms", "cap_ms", "running_at_request", "cut_at_stop"]);
+const TIMES = new Set(["seq_at", "state_since", "started_at", "requested_at", "stopped_at"]);
+const JSONS = new Set(["cut_at_stop_keys"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
@@ -35,7 +36,7 @@ test("event_log has the envelope columns, device_seq and each x-column field", o
   assert.equal(new Set(have).size, have.length);
   const types = Object.fromEntries(db.query("SELECT column_name || ' ' || data_type FROM information_schema.columns WHERE table_schema = 'factory' AND table_name = 'event_log'").split("\n").map((l) => [l.slice(0, l.indexOf(" ")), l.slice(l.indexOf(" ") + 1)]));
   for (const col of lifted) {
-    const type = INTS.has(col) ? "integer" : TIMES.has(col) ? "timestamp with time zone" : "text";
+    const type = JSONS.has(col) ? "jsonb" : INTS.has(col) ? "integer" : TIMES.has(col) ? "timestamp with time zone" : "text";
     assert.equal(types[col], type, `event_log.${col}`);
   }
   assert.equal(types.ts, "timestamp with time zone");
@@ -79,6 +80,7 @@ test("every schema example round-trips through event_store and event_log", opts,
       const own = schema.properties[col]?.["x-column"] === true;
       const value = own ? (data[col] ?? null) : null;
       if (value !== null && TIMES.has(col)) assert.equal(Date.parse(row[col]), Date.parse(value), `${type}.${col}`);
+      else if (JSONS.has(col)) assert.deepEqual(row[col], value, `${type}.${col}`);
       else assert.equal(row[col], value, `${type}.${col}`);
     }
   }

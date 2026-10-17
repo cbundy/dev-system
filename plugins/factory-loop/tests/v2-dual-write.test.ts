@@ -103,6 +103,7 @@ describe('observeV2 dual write (2.4)', () => {
 
   function harness(probe: { exitCode: number; stdout: string } | Error, files: Record<string, string> = { [NEW_LOG]: [goodLine, otherDevice, otherRepo, notTransition, 'garbage'].join('\n') }) {
     const runs: string[][] = []
+    // the dual write's reads; the wind-down request's (every pass reads it) is no part of them
     const reads: string[] = []
     const run = async (argv: string[]) => {
       runs.push(argv)
@@ -112,7 +113,7 @@ describe('observeV2 dual write (2.4)', () => {
       }
       return { exitCode: 0, stdout: '', stderr: '' }
     }
-    const io: Io = { now: async () => NOW, run, readFile: async (p: string) => (reads.push(p), files[p] ?? null), sessionLimits: async () => [], agents: async () => [] }
+    const io: Io = { now: async () => NOW, run, readFile: async (p: string) => (p.includes('/wind-down.') || reads.push(p), files[p] ?? null), sessionLimits: async () => [], agents: async () => [] }
     const cache = emptyCache()
     const pass = (rt: Runtime) => observeV2({ io, rt, cache: cache.v2, run, state: baseState(), stored: { records: [], heads: null, error: null }, poolJson: null, github: cache.github, backoff: false, limited: () => false, readers })
     return { runs, reads, pass, cache }

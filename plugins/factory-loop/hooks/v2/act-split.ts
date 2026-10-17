@@ -201,7 +201,27 @@ const split: Executor = async (ctx, action) => {
   return { status: 'done', outcome: { kind: 'split', child: child.number }, summary: clip(`${how} #${child.number} under #${action.parent}${after}${action.child.ready ? ', ready' : ''}`) }
 }
 
-export const executors: Partial<Record<ActionKind, Executor>> = { split }
+// link: a waiting record's issue linked as blocked by one it waits on (row T16's entry action):
+// the same idempotent link as a split child's, so a retry never makes a second. A closed blocker is
+// skipped (nothing to wait for), and a pull request is no blocker, so a wait on one is no link
+// (the wait itself still holds); both end the action done.
+const link: Executor = async (ctx, action) => {
+  if (action.kind !== 'link') return refused(`the link executor got a ${action.kind} action`)
+  if (action.issue === null) return refused('the link action names no issue')
+  const repo = ctx.rt.repo
+  const blocker = await blockerIdOf(ctx, action.blocker)
+  if ('exec' in blocker) {
+    // a pull request is no blocker: the wait holds without a link
+    if (blocker.exec.noRetry === true && /pull request/.test(blocker.exec.summary ?? '')) return { status: 'done', summary: clip(`#${action.blocker} is a pull request, not linked`) }
+    return blocker.exec
+  }
+  if (blocker.id === null) return { status: 'done', summary: clip(`#${action.blocker} is closed, not linked`) }
+  const made = await linked(ctx, ARGV.blockersReadArgv(repo, action.issue), blocker.id, ARGV.blockedByArgv(repo, action.issue, blocker.id))
+  if ('exec' in made) return made.exec
+  return { status: 'done', summary: clip(`${made.added ? 'linked' : 'found linked'} #${action.issue} as blocked by #${action.blocker}`) }
+}
+
+export const executors: Partial<Record<ActionKind, Executor>> = { split, link }
 
 function clip(text: string): string {
   return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 3)}...` : text

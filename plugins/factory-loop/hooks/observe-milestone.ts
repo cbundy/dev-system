@@ -1,13 +1,15 @@
 // The milestone and release reads of one observe pass: the Next release milestone's counts, and,
 // while it qualifies for the release review (a closed item, no open one), the last release tag and
 // the oldest merge since it (O3's fields). Each is read on the milestone cadence; a failed read
-// keeps the last reading and never blocks a wake.
+// keeps the last reading and never blocks a wake. While a v2 record waits on a tag-contains
+// condition (`tagWanted`), the newest release tag is read on the same cadence even when the
+// milestone does not qualify: `gh release view` alone, into `cache.tag`.
 import { parseMilestone, parseOldestMerge, parseReleaseTag, parseTagCommit } from './parse'
 import type { Milestone, ReleaseInfo } from './types'
 
 type Timed<T> = { at: number; value: T }
 type Run = (argv: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>
-export type MilestoneCache = { milestone?: Timed<Milestone | null>; release?: Timed<ReleaseInfo> }
+export type MilestoneCache = { milestone?: Timed<Milestone | null>; release?: Timed<ReleaseInfo>; tag?: Timed<string | null> }
 
 // readRelease: gh only (a local checkout's refs may be stale). The tag commit's date, not the
 // release's publishedAt, so a PR merged between tagging and publishing counts; the release's own
@@ -32,9 +34,30 @@ async function readRelease(run: Run, repo: string, base: string | null): Promise
   return { tag, oldest: (JSON.parse(list.stdout) as unknown[]).length >= LIST_LIMIT ? null : oldest }
 }
 
+// readTag: the newest release's tag by gh alone; null when there is no release yet; undefined when
+// the read failed (the last reading stands).
+async function readTag(run: Run, repo: string): Promise<string | null | undefined> {
+  const view = await run(['gh', 'release', 'view', '--repo', repo, '--json', 'tagName'])
+  if (view.exitCode !== 0) return /release not found/i.test(view.stderr) ? null : undefined
+  return parseReleaseTag(view.stdout) ?? undefined
+}
+
+// newestTag: the newest release tag the milestone reads hold: the full release read's or the tag view's, whichever is newer.
+export function newestTag(cache: MilestoneCache): string | null {
+  const r = cache.release
+  const t = cache.tag
+  if (r !== undefined && (t === undefined || r.at >= t.at)) return r.value.tag
+  return t?.value ?? null
+}
+
+// waitsOnTag: whether a record waits on a tag-contains condition (the tag view is then wanted).
+export function waitsOnTag(records: readonly { state: string; wait: readonly { kind: string }[] | null }[]): boolean {
+  return records.some(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains'))
+}
+
 export async function readMilestone(
   cache: MilestoneCache,
-  o: { now: number; every: number; repo: string; base: string | null; run: Run },
+  o: { now: number; every: number; repo: string; base: string | null; run: Run; tagWanted?: boolean },
 ): Promise<void> {
   // nothing printed means the repo has not opted in
   if (cache.milestone === undefined || o.now - cache.milestone.at >= o.every) {
@@ -46,10 +69,26 @@ export async function readMilestone(
     }
   }
   const ms = cache.milestone?.value ?? null
+  let releaseRead = false
   if (ms !== null && ms.closed > 0 && ms.open === 0 && (cache.release === undefined || o.now - cache.release.at >= o.every)) {
     try {
       const info = await readRelease(o.run, o.repo, o.base)
-      if (info !== null) cache.release = { at: o.now, value: info }
+      if (info !== null) {
+        cache.release = { at: o.now, value: info }
+        releaseRead = true
+      }
+    } catch {
+      // leave the last reading
+    }
+  }
+  if (o.tagWanted !== true) return
+  // the full read refreshed the tag; else the tag view alone, on the cadence
+  if (releaseRead) {
+    cache.tag = { at: o.now, value: cache.release?.value.tag ?? null }
+  } else if (cache.tag === undefined || o.now - cache.tag.at >= o.every) {
+    try {
+      const tag = await readTag(o.run, o.repo)
+      if (tag !== undefined) cache.tag = { at: o.now, value: tag }
     } catch {
       // leave the last reading
     }

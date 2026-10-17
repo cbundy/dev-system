@@ -6,7 +6,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { entryFromLoop, loopNote } from '../hooks/derive'
 import { shortDuration } from '../hooks/config'
 import { start } from '../hooks/ledger'
-import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
+import { classifyFail, issueFromBranch, plan as planOf, releaseDue, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
 import {
   CLEAN,
@@ -1484,6 +1484,20 @@ describe('O: owner and report', () => {
       const next = wanted(closed({ now: Date.UTC(2026, 9, 13, 4, 0, 0) }))
       expect(end).toEqual(['task:release:unknown:2026-10-13T03'])
       expect(next).toEqual(['task:release:unknown:2026-10-13T04'])
+    })
+
+    test('waiting issues (v2): `waiting` joins the fields and the review is due with open items or none closed; one per UTC hour; none given leaves the rule and fields as they were', () => {
+      const open = state({ milestone: { open: 2, closed: 0, expected: null }, release: { tag: 'v1.0.0', oldest: null } })
+      expect(releaseDue(open, CFG)).toBeNull()
+      expect(releaseDue(open, CFG, [])).toBeNull()
+      const due = releaseDue(open, CFG, [7, 9])
+      expect(due).toMatchObject({ key: `task:release:v1.0.0:${RHOUR}`, fields: { waiting: [7, 9] } })
+      const plain = releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG)
+      expect(Object.keys(plain?.fields ?? {})).not.toContain('waiting')
+      expect(Object.keys(releaseDue(closed({ release: { tag: 'v1.0.0', oldest: null } }), CFG, [3])?.fields ?? {})).toEqual(['closed', 'expected', 'tag', 'oldest', 'cadence', 'waiting'])
+      expect(releaseDue({ ...open, ledger: [...open.ledger, done(`task:release:v1.0.0:${RHOUR}`, NOW)] }, CFG, [7])).toBeNull()
+      expect(releaseDue({ ...open, milestone: null }, CFG, [7])).toBeNull()
+      expect(releaseDue({ ...open, sources: { ...open.sources, milestone: { ok: false, at: NOW } } }, CFG, [7])).toBeNull()
     })
 
     test('no wake with an open item, nothing closed, a milestone source that is not ok, or no milestone', () => {

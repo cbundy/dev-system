@@ -30,6 +30,7 @@ const ROOT = path.join(__dirname, "..");
 const EVENTS = path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "events.ts");
 const EVENT = path.join(ROOT, "images", "base", "callum-flow-event");
 const NOW = Date.UTC(2026, 9, 15, 9, 30);
+const HEAD = "0821e6a3c0f4b1d2e5a6978877665544332211ff";
 
 let ev;
 let dir;
@@ -113,6 +114,7 @@ const record = (over) => ({
   why: null,
   notes: ["the owner: keep it small", "a, b and none"],
   prClosedAt: null,
+  wait: null,
   lives: 1,
   ...over,
 });
@@ -120,6 +122,9 @@ const record = (over) => ({
 const events = () => [
   { state: "transition", record: record(), row: "T7", from: "building", via: "not-ok" },
   { state: "transition", record: record({ state: "queued", seq: 0, pr: null, head: null, resumeTo: null, step: "lease", question: null, notes: [] }), row: "S0", from: null, via: "claim" },
+  // a waiting transition carries its wait conditions through the translator; the cleared one reads them as none
+  { state: "transition", record: record({ state: "waiting", resumeTo: "designing", pr: null, head: null, question: null, wait: [{ kind: "issue-closed", issue: 57 }, { kind: "pr-merged", pr: 812 }] }), row: "T16", from: "designing", via: "wait" },
+  { state: "transition", record: record({ state: "designing", resumeTo: null, pr: null, head: null, question: null, wait: null }), row: "C1", from: "waiting", via: "cleared" },
   { state: "transition", record: record({ state: "closed", why: "merged", step: null, question: null }), row: "T13", from: "merge-queue", via: "ok" },
   // a record at the table's bounds: a question of 2000 characters and 8 notes of 1000, each whole
   { state: "transition", record: record({ question: "which API, at 100%? ".repeat(100), notes: Array.from({ length: 8 }, (_, i) => `check-${i}, red at 100% `.repeat(50).slice(0, 1000)) }), row: "U4", from: "building", via: "unknown" },
@@ -190,6 +195,34 @@ test("a fixer's verdict is logged as the fixer; every other event as the CLI's d
     const line = log(ev.eventArgv(e));
     assert.equal(line.actor, e.state === "verdict" ? "fixer" : "agent", e.state);
   }
+});
+
+// A gate_run is written in the new format alone (rules-gates.ts): the real callum-flow-event takes
+// the argv events.ts builds in native mode, warns of nothing, and writes a line the shared reader and
+// the strict schema accept, with the issue, the payload and no old-format line.
+test("a gate_run goes through the real writer's native mode: exit 0, no warning, and a line that matches the schema", () => {
+  const data = { life: "ss1x2k", seq: 7, head: HEAD, result: "pass", wait_ms: 184000, run_ms: 412000, concurrency: 1, queued_behind: 2, started_at: "2026-10-15T09:20:06.252Z" };
+  const e = { state: "gate_run", issue: 571, data };
+  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+  const argv = ev.eventArgv(e);
+  assert.deepEqual(argv.slice(0, 4), ["callum-flow-event", "--type", "gate_run", "--data"]);
+  const r = spawnSync("sh", [EVENT, ...argv.slice(1)], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "", `gate_run warned: ${r.stderr}`);
+  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+  assert.equal(lines.length, before + 1, "one line");
+  newSeen.set(file, lines.length);
+  const got = JSON.parse(lines[lines.length - 1]);
+  assert.equal(got.type, "gate_run");
+  assert.equal(got.issue, 571);
+  assert.deepEqual(got.data, data);
+  assert.deepEqual(reader.validateStrict("envelope", 1, got), []);
+  assert.deepEqual(reader.validateStrict("gate_run", 1, got.data), []);
+  assert.deepEqual(reader.readEvent(got), { type: "gate_run", type_version: 1, data });
 });
 
 test("the operator's hand-recorded rescue, as the playbook writes it, reads as a person intervention", () => {

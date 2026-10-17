@@ -11,6 +11,7 @@ import type { Action, ActionKind, LedgerEntry } from '../types'
 import { entryDone, entryItems } from './rules-entry'
 import type { EntryItem } from './rules-entry'
 import type { V2Ctx } from './types'
+import { windDownOf } from './wind-down'
 
 // lastDone: the newest done entry of a kind.
 function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
@@ -35,7 +36,9 @@ export function fleetRules(ctx: V2Ctx): void {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
-  const due = releaseDue(state, config)
+  // an issue that waits on a release tag makes the review due too: the judge answers that wait
+  const waiting = ctx.v2.records.filter(r => r.state === 'waiting' && (r.wait ?? []).some(c => c.kind === 'tag-contains')).map(r => r.issue).sort((a, b) => a - b)
+  const due = releaseDue(state, config, waiting)
   if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
 }
 
@@ -63,6 +66,10 @@ const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 
 export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null {
   const due = ctx.state.control.updateDue
   if (due === null) return null
+  if (windDownOf(ctx.state, ctx.config).mode === 'active') {
+    skip(ctx, 'R2', null, 'wind-down')
+    return null
+  }
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
   if (holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)

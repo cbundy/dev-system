@@ -42,6 +42,11 @@ export function seqKey(r: RecordRef): string {
   return `${lifeKey(r)}/s${r.seq}`
 }
 
+// gateRunKey: one stop gate run of a seq, by when it asked for its turn (ms since the epoch, base 36).
+export function gateRunKey(r: RecordRef, startedAtMs: number): string {
+  return `${seqKey(r)}/gate/${startedAtMs.toString(36)}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`
@@ -59,10 +64,10 @@ export function transitionKey(r: RecordRef): string {
 
 // The entry actions of a seq (4.5): its label, the old steps' stops (each keyed
 // stop/<the old step's key within the life>) and the kill, the park's comment, its events by
-// state, and its tell.
+// state, and its tell. A wait's links are keyed link/<blocker> (entryKey).
 export type EntryAction = 'label' | 'stop' | 'kill' | 'comment' | 'tell' | `event/${string}`
 
-export function entryKey(r: RecordRef, action: EntryAction): string {
+export function entryKey(r: RecordRef, action: EntryAction | `link/${number}`): string {
   return `${seqKey(r)}/${action}`
 }
 

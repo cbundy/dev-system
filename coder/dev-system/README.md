@@ -53,7 +53,7 @@ privacy defaults are in
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `docker_host` | `unix:///var/run/docker.sock` | Where workspace containers run: the local socket, or `ssh://user@host`. |
+| `docker_hosts` | one entry, the local socket: `[{"value":"local","name":"Local Docker","url":"unix:///var/run/docker.sock"}]` | Where workspace containers can run: a JSON list of `{"value", "name", "url"}` objects (`url` is the local socket or `ssh://user@host`; `value` is the stable key, `name` the label in the form). The first entry is the default. A string holding JSON, not an HCL list, because `coder templates push` reads `terraform.tfvars` with a parser that accepts only strings, numbers and lists of strings. See [Docker hosts](#docker-hosts). |
 | `otlp_endpoint` | empty (off) | OTLP http/protobuf endpoint. Set, it becomes `OTEL_EXPORTER_OTLP_ENDPOINT`, with `OTEL_RESOURCE_ATTRIBUTES=host=<container>,env=coder`. |
 | `trusted_authors` | empty (unset) | Comma-separated `login:numeric_id` entries (`cbundy:13131067`), set as `CALLUM_FLOW_TRUSTED_AUTHORS` in every workspace of every template. The image bakes no list, so `callum-flow-issue-read` fails closed and `dev-doctor` FAILs while it is unset or malformed (cbundy/dev-system#307). |
 | `remote_control_default_mode` | `auto` | Default of the `remote_control_mode` parameter. Set per template by `push.sh` (`session` for `orchestrator`), not in `terraform.tfvars`. |
@@ -64,6 +64,7 @@ privacy defaults are in
 | `remote_control_name_format` | empty | `session` mode: the Remote Control session name, `{name}` being the default name (`DEV_REMOTE_CONTROL_NAME_FORMAT`). Set per template by `push.sh` (`🔄 {name} orchestrator` for `orchestrator`). |
 | `default_plugins` | empty | The Claude plugins every workspace gets (`DEV_DEFAULT_PLUGINS`, the image's `<plugin>@<marketplace>=<source>#<ref>` list). Empty keeps the image's default (callum-flow at the image's release). Set per template by `push.sh`: empty for `dev-system` and `orchestrator`; for `orchestrator-loop`, callum-flow, factory-loop and factory-loop-workspace pinned to the pushing checkout's package version. |
 | `default_plugin_refs_win` | `false` | Whether the `default_plugins` refs beat a ref the workspace repo's committed `.claude/settings.json` declares (`DEV_DEFAULT_PLUGIN_REFS_WIN=1`, sent only when true), so the template owns the plugin version, and `dev-doctor` fails (not warns) on a missing default plugin or a marketplace at another ref. Set per template by `push.sh`: `true` for `orchestrator-loop`, `false` for `dev-system` and `orchestrator`. |
+| `wind_down_minutes` | `0` (off) | A whole number of minutes a workspace stop waits for the [factory loop](../../plugins/factory-loop/README.md) to finish its running steps. Above 0 the template adds a stop script (`wind-down.sh`, a `coder_script` with `run_on_stop`) and gives the container that long plus 60 s of Docker stop grace; 0 adds neither, so the plan is as before. Set per template by `push.sh`: `10` for `orchestrator-loop`, `0` for `dev-system` and `orchestrator`. See [Loop orchestrator workspace](#loop-orchestrator-workspace). |
 | `secrets_dir` | `/etc/dev-system/secrets` | Directory on the Docker host mounted read-only at `/run/secrets/dev-system` in every workspace. Empty mounts nothing. See [Central session history](#central-session-history-agentsview). |
 | `gh_volume_name` | empty (off) | Named Docker volume behind the per-workspace **GitHub login** choice: workspaces that keep the default, *shared*, mount it at `/persist/gh` and share one gh login. Empty hides the choice, and every workspace keeps its own gh login on its own `/persist` volume. See [Sharing one gh login](#sharing-one-gh-login). |
 | `workspace_secrets_dir` | empty (off) | Directory on the Docker host with one folder per workspace, `<dir>/<lower(owner)>/<lower(workspace name)>/gh-token` (owner and workspace name lower-cased, as in the container name; the file owned 1000:1000, mode 0600). When set, every workspace mounts only its own folder, read-only, at `/run/secrets/dev-system-workspace`, whatever its GitHub login; the folder can also carry `factory-db-writer-url` and `factory-db-reader-url` to put that workspace on another factory database (see [docs/factory-db.md](../../docs/factory-db.md)). A workspace that picks **GitHub login** *This workspace's own token* also gets `DEV_GH_TOKEN_FILE`. Must not be `secrets_dir` or under it, since that one is mounted into every workspace (a validation rejects it). Docker creates a missing folder as an empty root-owned one, and `dev-init` then warns that the token is missing. Empty turns the choice off. Only the path passes through Terraform, never a token. See [Sharing one gh login](#sharing-one-gh-login). |
@@ -118,6 +119,7 @@ for repo plugins, opt-outs and recovery when an install fails.
 
 | Parameter | Default | Changeable later | Purpose |
 |---|---|---|---|
+| `docker_host` | the first `docker_hosts` entry | no | The Docker host the workspace runs on. Shown only with more than one host in `docker_hosts`. See [Docker hosts](#docker-hosts). |
 | `image` | `ghcr.io/cbundy/dev-system/base:2` | yes | The base image or a per-repo image built `FROM` it. The tag is resolved on every start, so a new `:2` release is pulled on the next start. |
 | `repo_url` | empty | no | HTTPS clone URL, passed as `DEV_REPO_URL`. Empty leaves the image's own `DEV_REPO_URL` (per-repo images) in force. See [Repo](#repo). |
 | `remote_control_mode` | `auto` (`session` in `orchestrator`) | yes | `auto`: `server` when the workspace has a repo, else `session` (see [Repo](#repo)). `session`: one interactive Claude, shown in claude.ai as one session. `server`: one Claude per session started in claude.ai, each in its own git worktree, shown as an environment; that needs a repo (without one the sessions share the directory). |
@@ -264,6 +266,24 @@ carries on by itself: there is no watcher to re-arm.
   an `orchestrator` workspace on the same repo.
 - **Stop**: create `/persist/claude/factory-loop/OFF` in the workspace; the loop stops within a
   minute.
+- **Stopping the workspace** (`wind_down_minutes`, 10 here): the stop path is Coder stop, then the
+  `Wind down` stop script (`wind-down.sh`), then the loop's wind-down mode
+  ([SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace
+  (`/persist/claude/factory-loop/<owner>__<repo>`) the script writes `wind-down.request`, so the
+  loop starts nothing new, and waits until no step runs, `/factory stop-now` is used, or the cap
+  passes (the smaller of the loop's own cap and the template's, counted from the request). It
+  records one `wind_down` event per loop (outcome `idle`, `cap`, `now` or `off`), removes the
+  request, status and stop-now files, and gives the heartbeat its `--final` beat. Docker's stop
+  grace is the cap plus 60 s (660 s), and the script's own timeout the cap plus 45 s, so a stuck
+  script never holds a stop past them; the script always exits 0.
+  - **Stop now**: `/factory stop-now`, or by hand `touch
+    /persist/claude/factory-loop/<owner>__<repo>/wind-down.stop-now`; the script ends within a
+    poll (2 s) with outcome `now`, and the running steps are cut.
+  - **Off**: a loop whose `windDownMinutes` is 0 (repo `.claude/factory-loop.json`, then the
+    user `config.json`, else 10), or with the `OFF` file present, is not waited for: outcome
+    `off`, no request written.
+  - **No status**: if the loop writes no matching `wind-down.status.json` within 3 minutes it is
+    not passing and has no steps to wait for: outcome `idle` with 0 running.
 
 ## What the template does
 
@@ -357,7 +377,8 @@ and `coder ssh <ws> -- dev-login <code>` finishes Claude's login.
 Each workspace chooses its **GitHub login** when it is created, and can change it later:
 
 - **Shared with other workspaces** (the default): the one gh login used by every workspace
-  that picks shared, so a new workspace needs no GitHub sign-in once any of them is signed
+  on the same Docker host that picks shared (the volume is per host, see
+  [Docker hosts](#docker-hosts)), so a new workspace needs no GitHub sign-in once any of them is signed
   in.
 - **Private to this workspace**: its own gh login. Each private login is its own token, and
   GitHub keeps at most 10 per user for the GitHub CLI app, revoking the least recently used
@@ -455,7 +476,8 @@ Each workspace chooses its **Claude login** when it is created, and can change i
 its settings:
 
 - **Private to this workspace** (the default): its own Claude login, exactly as before.
-- **Shared with other workspaces**: the one Claude login used by every workspace that picks
+- **Shared with other workspaces**: the one Claude login used by every workspace on the same
+  Docker host (the volume is per host, see [Docker hosts](#docker-hosts)) that picks
   shared, so it starts Remote Control with no sign-in once any of them is signed in.
 
 The choice exists when `claude_auth_volume_name` is set in `terraform.tfvars` (the
@@ -496,6 +518,34 @@ with a non-expiring token (an OAuth app, not Coder's built-in GitHub App) can ad
 `GH_TOKEN` from its `access_token` in the agent `env`, which also makes the link required
 before a workspace builds.
 
+## Docker hosts
+
+`docker_hosts` lists the hosts workspaces can run on. With one entry there is no choice and
+that host is used. With more, the **Docker host** parameter appears (first in the form,
+default the first entry) and the provider connects to the url of the chosen entry. The
+choice cannot change later: the workspace's container and volumes live on that host, and
+moving a workspace between hosts is not supported.
+
+To add a host, append an entry to `docker_hosts` in `terraform.tfvars` and push the
+templates. Only append: the first entry is the host of every workspace created before the
+choice existed (Coder gives an existing workspace a new parameter's default on its next
+update, cbundy/dev-system#268), so never reorder the list, rename a `value`, or remove an
+entry a workspace uses. Changing a host's `url` is a `terraform.tfvars` edit and touches no
+workspace's parameter.
+
+What the owner prepares on a new host before a workspace is created there:
+
+- The Coder server can `ssh` to the url's user and host without a prompt (key in its ssh
+  config, host key in its `known_hosts`).
+- The host directories the template mounts exist with the right owner and mode:
+  `secrets_dir`, `workspace_secrets_dir` and `template_tester_secrets_dir`.
+- The host can pull the images, including from ghcr (see [Private images](#private-images)).
+
+Nothing is synced between hosts. The three host directories above are per host, and so are
+the `gh_volume_name` and `claude_auth_volume_name` volumes: the first workspace on a new
+host that picks a shared login signs in once for that host, and shares it from then on with
+the workspaces there.
+
 ## Changing the template
 
 Keep it generic: no site-specific hosts or addresses in `main.tf`, only in
@@ -527,6 +577,8 @@ coder/dev-system/push-next.sh          # push as dev-system-next
 coder/dev-system/push-next.sh smoke    # push, create next-smoke-<random> with default
                                        # parameters, wait (max 10 min) until its agent is
                                        # ready, print its status and startup log, delete it
+coder/dev-system/push-next.sh smoke host-2   # the same on one docker_hosts entry, by its
+                                       # value (the docker_host parameter); try each host
 coder/dev-system/push-next.sh cleanup  # delete next-smoke-* workspaces left behind
 ```
 

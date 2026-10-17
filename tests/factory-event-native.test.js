@@ -119,6 +119,27 @@ test("every schema's own example goes through the CLI and reads back (the produc
   }
 });
 
+test("wind_down: a full event is written with no warning and validates; bad ones fail strictly or exit 2", () => {
+  const good = JSON.parse(fs.readFileSync(path.join(SCHEMAS_DIR, "wind_down.v1.json"), "utf8")).examples[0];
+  const write = (data) => native(["--type", "wind_down", "--data", JSON.stringify(data)]);
+  const { r, lines } = write(good);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, "");
+  const e = JSON.parse(lines[0]);
+  assert.equal(e.issue, null);
+  assert.deepEqual(reader.validateStrict("wind_down", 1, e.data), []);
+  assert.deepEqual(reader.readEvent(e).data, good);
+  const bad = (data) => reader.validateStrict("wind_down", 1, data);
+  assert.notDeepEqual(bad({ ...good, outcome: "drain" }), []);
+  const { cut_at_stop: _omit, ...noCut } = good;
+  assert.notDeepEqual(bad(noCut), []);
+  assert.notDeepEqual(bad({ ...good, cut_at_stop_keys: ["not-a-key"] }), []);
+  assert.deepEqual(bad({ ...good, trigger: null }), []);
+  const missing = write(noCut);
+  assert.equal(missing.r.status, 2, missing.r.stderr);
+  assert.deepEqual(missing.lines, []);
+});
+
 test("a type that is a schema file only is written and read with no warning", () => {
   const root = path.join(tmp, "probe-root");
   fs.cpSync(SCHEMAS_DIR, path.join(root, "docs", "factory-events", "schemas"), { recursive: true });

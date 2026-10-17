@@ -238,7 +238,7 @@ const notOk = (reason: string, data: unknown): StepResult => ({ event: 'not-ok',
 
 function asDesign(answer: unknown): DesignAnswer | null {
   const a = answer as Partial<DesignAnswer> | null
-  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split') ? (a as DesignAnswer) : null
+  return a !== null && typeof a === 'object' && (a.kind === 'brief' || a.kind === 'question' || a.kind === 'split' || a.kind === 'wait') ? (a as DesignAnswer) : null
 }
 
 // designResult: the checked design answer's meaning (8.7), with the answer as the data the plan
@@ -252,6 +252,7 @@ export function designResult(answer: unknown): StepResult {
     const question = renderQuestion({ ...a, question: a.question })
     return notOk(a.kind, { ...a, question, text: question })
   }
+  if (a.kind === 'wait') return notOk(a.kind, { ...a, text: a.reason ?? 'the designer waits on a condition' })
   return notOk(a.kind, { ...a, text: a.kind === 'question' ? a.question : `split into ${a.children.length} children` })
 }
 

@@ -40,7 +40,7 @@ const REASON_MAX = 200
 // The factory-state stages of a live claim, what shows as active (6.1): its holder works the
 // issue. queued is a claim that ended (ready, reclaimed) or lapsed; merged and closed without merge
 // are final.
-export const LIVE_STAGES: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+export const LIVE_STAGES: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 
 // How a release ends (6.4): back in the queue, out of the factory, or rejected at the last life
 // (the list lives in events.ts, the seam that writes and reads them).

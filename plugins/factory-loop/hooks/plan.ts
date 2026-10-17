@@ -50,7 +50,7 @@ const ANSWERED_GRACE_MS = 60_000
 // prune of its `rollout:<issue>` entry, so it can never be re-triggered.
 const ROLLOUT_WITHIN_MS = 24 * HOUR
 // the live stages; observe reads the GitHub state of every issue in one (#556)
-export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 export const ENDED: readonly Stage[] = ['merged', 'closed without merge']
 const MERGEABLE_STATES = ['merge-ready', 'head-mismatch', 'conflict']
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
@@ -478,12 +478,12 @@ function wake(
   key: string,
   rule: string,
   issue: number | null,
-  fields: Record<string, string | number | null>,
+  fields: Record<string, string | number | readonly number[] | null>,
   context: string[] = [],
   klass: ActionClass = kind === 'tell' ? 'owner' : 'drive',
 ): Action {
   const clean: Record<string, string> = {}
-  for (const [k, v] of Object.entries(fields)) if (v !== null) clean[k] = String(v)
+  for (const [k, v] of Object.entries(fields)) if (v !== null) clean[k] = String(v) // a list of numbers is comma-joined
   return { kind, wake: name, key, class: klass, rule, reason: `${kind} ${name}`, issue, fields: clean, context }
 }
 
@@ -2327,11 +2327,11 @@ function splitAfter(ctx: Ctx, issue: number, since: number) {
 
 // --- O3: the release ---------------------------------------------------------------------
 
-// releaseDue: the review's key and fields (one release task per UTC hour, whatever its key); v2 reuses it. `short` is config.ts's shortDuration (plan.ts imports types only; plan.test.ts holds them together)
-export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State, config: Config) {
+// releaseDue: the review's key and fields (one release task per UTC hour, whatever its key); v2 reuses it. `waiting`: the issues waiting on a release tag (v2 only): the review is then due while the milestone has open items or none closed, and its fields name them. `short` is config.ts's shortDuration (plan.ts imports types only; plan.test.ts holds them together)
+export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State, config: Config, waiting: readonly number[] = []) {
   const hour = (at: number) => new Date(at).toISOString().slice(0, 13), tag = r === null ? 'unknown' : (r.tag ?? 'none'), short = (ms: Ms) => ms > 0 && ms % 3_600_000 === 0 ? `${ms / 3_600_000}h` : ms > 0 && ms % 60_000 === 0 ? `${ms / 60_000}m` : ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
-  if (!sources.milestone.ok || m === null || m.open > 0 || m.closed === 0 || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
-  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : new Date(r.oldest).toISOString(), cadence: short(config.minimumReleaseCadenceMs) } }
+  if (!sources.milestone.ok || m === null || (waiting.length === 0 && (m.open > 0 || m.closed === 0)) || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
+  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : new Date(r.oldest).toISOString(), cadence: short(config.minimumReleaseCadenceMs), ...(waiting.length > 0 ? { waiting: [...waiting] } : {}) } }
 }
 
 // --- admitting actions: control, drain, tier, GitHub backoff, breakers, caps, one wake -------

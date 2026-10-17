@@ -15,7 +15,12 @@
 # <issue>: number, state, labels, author, title and body - only if the issue
 #   author is trusted. --comments adds the trusted comments (id, login,
 #   created_at, body) and a final `stripped: N` line. The content of a stripped
-#   comment is never printed.
+#   comment is never printed. In issue mode (not --pr) it also lists the issue's
+#   dependencies, `blocked by <ref> <state> [labels] <title>` lines first, then
+#   `blocks ...` lines, between the `title:` and `body:` lines. <ref> is #N for
+#   this repo, owner/name#N for another. A dependency title is kept only when its
+#   author is trusted; an untrusted, null or malformed author keeps the line (number,
+#   state, labels) without the title and counts in `stripped`. No body is carried.
 # --comment: one comment, only if its author and its issue's author are trusted.
 # --list: number and title of the issues by trusted authors (default state open),
 #   plus a stripped count. Pull requests are not listed.
@@ -24,7 +29,7 @@
 # --timeline: only events whose actor is trusted. A cross-referenced event also
 #   needs a trusted author on the source issue or PR.
 # --json: stable machine shape, always one object with a top-level `stripped`
-#   count: {issue, comments?, stripped}, {comment, stripped}, {issues, stripped},
+#   count: {issue, blocked_by, blocking, comments?, stripped}, {comment, stripped}, {issues, stripped},
 #   {pr, comments?, review_comments?, reviews?, stripped}, {events, stripped}.
 #   Items are as GitHub returns them. Text output (the default) is for agents.
 #
@@ -126,6 +131,13 @@ PRELUDE='
   def need_array: if type == "array" then . else error("not an array") end;
   def keep: need_array | map(select(trusted));
   def n_stripped: need_array | map(select(trusted | not)) | length;
+  # a dependency by a null, ghost or malformed user is kept, untitled; never an error
+  def dep_trusted: .user as $u | if ($u | type) == "object" and ($u.login | type) == "string" and ($u.id | type) == "number"
+    then trusted_user($u) else false end;
+  def dep($repo): if type == "object" and (.number | type) == "number" then . else error("bad dependency") end
+    | {number, repo: (.repository.full_name // $repo), state, labels: [.labels[]? | {name}]}
+      + (if dep_trusted then {title} else {} end);
+  def deps($repo): need_array | map(dep($repo));
 '
 
 # Fetch helpers: the whole response is captured before anything is printed.
@@ -166,7 +178,20 @@ case "$mode" in
     ok=$(printf '%s' "$obj" | jqf "$PRELUDE"' trusted') || die "cannot determine the author of #$n"
     [ "$ok" = true ] || refuse "$mode" "$n" "$logpr"
     logn=$n
-    c1='[]' c2='[]' c3='[]'
+    c1='[]' c2='[]' c3='[]' d1='[]' d2='[]'
+    if [ "$mode" = issue ]; then
+      dn=$(printf '%s' "$obj" | jq -r '
+        (.issue_dependencies_summary | if type == "object" then . else {} end) as $d
+        | [([$d.total_blocked_by, $d.blocked_by | numbers] | max // 0), ([$d.total_blocking, $d.blocking | numbers] | max // 0)] | map(tostring) | join(" ")') \
+        || die "cannot read the dependencies of #$n"
+      nb=${dn% *} nk=${dn#* }
+      if [ "$nb" -gt 0 ] 2>/dev/null; then
+        d1=$(fetch_all "repos/$repo/issues/$n/dependencies/blocked_by?per_page=100") || die "cannot read the issues blocking #$n"
+      fi
+      if [ "$nk" -gt 0 ] 2>/dev/null; then
+        d2=$(fetch_all "repos/$repo/issues/$n/dependencies/blocking?per_page=100") || die "cannot read the issues blocked by #$n"
+      fi
+    fi
     if [ "$comments" = true ]; then
       c1=$(fetch_all "repos/$repo/issues/$n/comments") || die "cannot read the comments of #$n"
       if [ "$mode" = pr ]; then
@@ -175,13 +200,14 @@ case "$mode" in
       fi
     fi
     # one jq call so that any malformed item fails the whole read
-    res=$(printf '%s\n' "$obj" "$c1" "$c2" "$c3" | jq -s -c --argjson T "$trusted" \
-      --arg mode "$mode" --argjson with "$comments" "$PRELUDE"'
-      .[0] as $o | .[1] as $c1 | .[2] as $c2 | .[3] as $c3 |
-      (($c1 | n_stripped) + ($c2 | n_stripped) + ($c3 | n_stripped)) as $s
+    res=$(printf '%s\n' "$obj" "$c1" "$c2" "$c3" "$d1" "$d2" | jq -s -c --argjson T "$trusted" \
+      --arg mode "$mode" --arg repo "$repo" --argjson with "$comments" "$PRELUDE"'
+      .[0] as $o | .[1] as $c1 | .[2] as $c2 | .[3] as $c3 | (.[4] | deps($repo)) as $d1 | (.[5] | deps($repo)) as $d2 |
+      (($c1 | n_stripped) + ($c2 | n_stripped) + ($c3 | n_stripped)
+        + ([$d1[], $d2[] | select(has("title") | not)] | length)) as $s
       | if $mode == "pr"
         then {pr: $o} + (if $with then {comments: ($c1 | keep), review_comments: ($c2 | keep), reviews: ($c3 | keep)} else {} end)
-        else {issue: $o} + (if $with then {comments: ($c1 | keep)} else {} end) end
+        else {issue: $o, blocked_by: $d1, blocking: $d2} + (if $with then {comments: ($c1 | keep)} else {} end) end
       | . + {stripped: $s}') || die "unexpected response for #$n"
     ;;
   comment)
@@ -226,7 +252,14 @@ if [ "$stripped" -gt 0 ] 2>/dev/null && [ -n "$logn" ]; then
   case "$mode" in
     list) log_stripped "$logn" "list stripped=$stripped" ;;
     timeline) log_stripped "$logn" "timeline=$stripped" ;;
-    *) log_stripped "$logn" "comments=$stripped" "$logpr" ;;
+    pr) log_stripped "$logn" "comments=$stripped" "$logpr" ;;
+    *)
+      ds=$(printf '%s' "$res" | jq -r '[.blocked_by[], .blocking[] | select(has("title") | not)] | length') || ds=0
+      note=''
+      [ $((stripped - ds)) -le 0 ] || note="comments=$((stripped - ds))"
+      [ "$ds" -le 0 ] || note="${note:+$note }dependencies=$ds"
+      log_stripped "$logn" "$note" ""
+      ;;
   esac
 fi
 
@@ -236,12 +269,15 @@ if [ "$json" = true ]; then
 fi
 
 # Text output for agents.
-out=$(printf '%s' "$res" | jq -r '
+out=$(printf '%s' "$res" | jq -r --arg repo "$repo" '
   def labels: [.labels[]? | .name] | join(", ");
-  def item($k): "\($k): #\(.number)\nstate: \(.state)\nlabels: \(labels)\nauthor: \(.user.login)\ntitle: \(.title)\nbody:\n\(.body // "")";
+  def ref: if .repo == $repo then "#\(.number)" else "\(.repo)#\(.number)" end;
+  def dline($p): "\($p) \(ref) \(.state) [\(labels)]" + (if has("title") then " \(.title // "")" else "" end) + "\n";
+  def deplines: [(.blocked_by[]? | dline("blocked by")), (.blocking[]? | dline("blocks"))] | join("");
+  def item($k; $d): "\($k): #\(.number)\nstate: \(.state)\nlabels: \(labels)\nauthor: \(.user.login)\ntitle: \(.title)\n\($d)body:\n\(.body // "")";
   def cm: "--- \(.id) \(.user.login) \(.created_at // .submitted_at // "")" + (if .state then " [\(.state)]" else "" end) + "\n\(.body // "")";
-  (if .issue then (.issue | item("issue")) else empty end),
-  (if .pr then (.pr | item("pr")) else empty end),
+  (if .issue then (. as $r | .issue | item("issue"; ($r | deplines))) else empty end),
+  (if .pr then (.pr | item("pr"; "")) else empty end),
   (if .comment then (.comment | cm) else empty end),
   (if .issues then (.issues[] | "#\(.number) \(.title)") else empty end),
   (if .events then (.events[] | "\(.created_at // "") \(.event) \((.actor // .user).login)"

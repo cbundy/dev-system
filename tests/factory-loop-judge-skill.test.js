@@ -216,3 +216,12 @@ test("under planner v2: the judge decides releases by the wake's cadence and sta
   assert.match(decisions, /None of these is a reason to ask/);
   assert.match(bullet(V2_TASK, "release"), /You do not do the release steps yourself/);
 });
+
+test("under planner v2: the release review's `waiting` field is documented, a release wait is a strong reason and the judge's to answer, never the owner's", () => {
+  const release = bullet(V2_TASK, "release");
+  assert.match(release, /`waiting`/);
+  assert.match(release, /even with open items/);
+  assert.match(release, /A release wait is the judge's to answer, never the owner's/);
+  const decisions = section(SKILL, "### Release decisions under planner v2");
+  assert.match(decisions, /strong: an issue waits on a release \(`waiting`\)/);
+});

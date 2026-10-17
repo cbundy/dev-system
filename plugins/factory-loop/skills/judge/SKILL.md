@@ -280,10 +280,13 @@ is the release. The TELL format above holds; these are v2's kinds. The `/factory
 which planner is in force.
 
 ### TASK under planner v2
-- **`release`** (`closed expected tag oldest cadence`): an hourly review while the Next milestone
-  has no open item and at least one closed (`tag` is the last release, `oldest` the oldest merge
+- **`release`** (`closed expected tag oldest cadence`, and `waiting` when some): an hourly review while the Next milestone
+  has no open item and at least one closed, or while an issue waits on a release (`tag` is the last release, `oldest` the oldest merge
   since it, left out when unknown; `cadence` is the repo's minimum release cadence: the age by
-  which the oldest unreleased merge should have shipped). Decide whether to release now, by
+  which the oldest unreleased merge should have shipped; `waiting` lists the issues whose design
+  waits until a release tag carries a commit, and then the review comes even with open items in
+  the milestone). A release wait is the judge's to answer, never the owner's: release, or `hold`
+  with a reason. Decide whether to release now, by
   "Release decisions under planner v2" below. To release, start the release agent and answer
   `done` (reason: the version and why now); to wait, answer `hold` with the reason, which the loop
   only logs (the next hour's review asks again). You do not do the release steps yourself. Once the release agent reports the release
@@ -313,6 +316,7 @@ Reasons to release now:
 - strong: a merged fix for a problem hurting work right now (an issue parked, stuck, failing its
   gates or going round fix rounds because of it, in this repo or a consumer's loop);
 - a merged item whose issue is labelled `priority`;
+- strong: an issue waits on a release (`waiting`): its design cannot go on until a tag carries its commit;
 - slight: a merged change that unblocks work in another project.
 
 Good reasons to wait:
@@ -330,7 +334,7 @@ Ask the owner rarely: you have standing release authority, so use it. Ask only w
 
 None of these is a reason to ask: a large release, many merges, an image bump, a minor version, an
 unfamiliar change, uncertain notes, or "the owner might want to know". Release, and say what
-shipped in one line.
+shipped in one line. A release wait (an issue waiting on a release) is yours to answer, never the owner's.
 
 Answer:
 - **release**: check the version is not tagged yet (`git tag -l vX.Y.Z`). Start the release agent
@@ -371,6 +375,9 @@ Owner items (the title counts them until resolved):
 Notices:
 - `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's
   head for 2 hours. Nothing is wrong; the factory is full or held.
+- `wind-down-stale` (requested_at, cap_minutes): a wind-down was requested, the stop never followed
+  within its cap plus 5 minutes, and the loop removed the request and works normally again. Say so
+  in one line; the owner checks why the stopper did not stop the loop.
 - `task-timeout` (key): the release task went unanswered and is not retried. Owner says whether to
   redo it.
 

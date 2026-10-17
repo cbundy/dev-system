@@ -11,7 +11,7 @@
 #
 # All three templates are the same Terraform. Each one's name, display name, icon, description
 # and variables live here, so a push never depends on remembering flags. The site's values
-# (docker_host, otlp_endpoint, ...) are in coder/dev-system/terraform.tfvars, which coder
+# (docker_hosts, otlp_endpoint, ...) are in coder/dev-system/terraform.tfvars, which coder
 # reads on every push. Needs the coder CLI logged in as a template admin; CODER_BIN picks
 # another binary.
 #
@@ -50,6 +50,7 @@ case "$name" in
     name_format=
     plugins=
     refs_win=false
+    wind_down_minutes=0
     ;;
   orchestrator)
     role=orchestrator
@@ -66,6 +67,7 @@ case "$name" in
     name_format='🔄 {name} orchestrator'
     plugins=
     refs_win=false
+    wind_down_minutes=0
     ;;
   orchestrator-loop)
     role=orchestrator
@@ -83,6 +85,8 @@ case "$name" in
     # (docs/factory-loop/v2/SPEC.md 10); the loop holds every agent step without it.
     plugins="callum-flow@callum=cbundy/dev-system#$plugin_ref factory-loop@callum=cbundy/dev-system#$plugin_ref factory-loop-workspace@callum=cbundy/dev-system#$plugin_ref"
     refs_win=true
+    # The loop is wound down for up to 10 minutes on a stop (coder/dev-system/wind-down.sh).
+    wind_down_minutes=10
     ;;
   *) usage ;;
 esac
@@ -108,7 +112,8 @@ set -- templates push "$name" --directory "$TEMPLATE_DIR" --yes \
   --variable "$(csv "remote_control_resume_prompt=$resume_prompt")" \
   --variable "$(csv "remote_control_name_format=$name_format")" \
   --variable "$(csv "default_plugins=$plugins")" \
-  --variable "$(csv "default_plugin_refs_win=$refs_win")"
+  --variable "$(csv "default_plugin_refs_win=$refs_win")" \
+  --variable "$(csv "wind_down_minutes=$wind_down_minutes")"
 version_name_sh="$(dirname "$0")/version-name.sh"
 version=$("$version_name_sh" "$TEMPLATE_DIR")
 message=$("$version_name_sh" --message push.sh "$TEMPLATE_DIR")

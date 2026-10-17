@@ -22,7 +22,7 @@
 // Pure: no clock, no command. The executors run eventArgv's argv through ExecCtx.cmd.
 import type { FactoryEvent } from '../derive'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from './types'
-import type { IssueRecord, IssueState } from './types'
+import type { IssueRecord, IssueState, WaitCondition } from './types'
 
 // an intervention's reason is one line of at most this many characters (7.1)
 export const REASON_MAX = 200
@@ -94,7 +94,23 @@ export type ReusedEvent = {
   note: string
 }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent
+// One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by
+// `callum-flow-event --type gate_run --data <json> --issue N`, so it has no note, no old-format
+// line and no parser. rules-gates.ts builds it from the companion's gate lines.
+export type GateRunData = {
+  life: string
+  seq: number
+  head: string | null
+  result: 'pass' | 'fail' | 'unknown'
+  wait_ms: number
+  run_ms: number
+  concurrency: number | null
+  queued_behind: number
+  started_at: string
+}
+export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -168,6 +184,30 @@ function unlist(v: string | undefined): string[] | undefined {
   return v === NONE ? [] : v.split(',').map(dec)
 }
 
+// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined; `none` outside waiting.
+function waitToken(wait: readonly WaitCondition[] | null): string {
+  if (wait == null || wait.length === 0) return NONE
+  return wait.map(c => (c.kind === 'issue-closed' ? `issue:${c.issue}` : c.kind === 'pr-merged' ? `pr:${c.pr}` : `tag:${c.sha}`)).join(',')
+}
+
+// unwait: the conditions of a wait token; null for `none` or an absent token (a note from before
+// the field); undefined when it does not read.
+function unwait(v: string | undefined): WaitCondition[] | null | undefined {
+  if (v === undefined || v === NONE) return null
+  const out: WaitCondition[] = []
+  for (const item of v.split(',')) {
+    const t = /^tag:([0-9a-f]{7,40})$/.exec(item)
+    if (t !== null) {
+      out.push({ kind: 'tag-contains', sha: t[1] as string })
+      continue
+    }
+    const m = /^(issue|pr):([1-9]\d*)$/.exec(item)
+    if (m === null) return undefined
+    out.push(m[1] === 'issue' ? { kind: 'issue-closed', issue: Number(m[2]) } : { kind: 'pr-merged', pr: Number(m[2]) })
+  }
+  return out.length > 8 ? undefined : out
+}
+
 const yn = (v: boolean) => (v ? 'yes' : 'no')
 
 // tokensOf: a note's `key=value` tokens, the first of each key; words without `=` are skipped.
@@ -200,6 +240,8 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: e.head }
     case 'intervention':
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
+    case 'gate_run':
+      return { issue: e.issue, branch: null, pr: null, head: e.data.head }
     default:
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: 'head' in e ? e.head : null }
   }
@@ -232,6 +274,7 @@ function transitionNote(e: TransitionEvent): string {
     `approvedPatch=${str(r.approvedPatch)}`,
     `prClosedAt=${str(r.prClosedAt)}`,
     `lives=${r.lives}`,
+    `wait=${waitToken(r.wait)}`,
     `via=${str(e.via)}`,
     `brief=${str(r.brief)}`,
     `question=${str(r.question)}`,
@@ -301,6 +344,9 @@ export function eventNote(e: V2Event): string {
       return interventionNote(e)
     case 'reclaimed':
       return releaseNote(e)
+    case 'gate_run':
+      // no old-format note: the payload is its own JSON (eventArgv)
+      return JSON.stringify(e.data)
     case 'abandoned':
       return 'reason' in e && e.reason === 'reconcile' ? releaseNote(e) : abandonedNote(e as ReusedEvent)
     default:
@@ -311,6 +357,8 @@ export function eventNote(e: V2Event): string {
 // eventArgv: `callum-flow-event <state>` for this event: its columns as flags, its actor when it
 // has its own, and its note.
 export function eventArgv(e: V2Event): string[] {
+  // a gate run is a new-format event: its payload is the schema's data, not an old note
+  if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]
   if (c.issue !== null) argv.push('--issue', String(c.issue))
@@ -351,6 +399,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   const approvedPatch = unstr(t.get('approvedPatch'))
   const prClosedAt = unstr(t.get('prClosedAt'))
   const notes = unlist(t.get('notes'))
+  const wait = unwait(t.get('wait'))
   // a note from before the field carries no count: its life is read as a first one
   const lives = t.get('lives') === undefined ? 1 : unnum(t.get('lives'))
   if (typeof life !== 'string' || life === '' || typeof seq !== 'number' || !Number.isInteger(seq) || seq < 0) return null
@@ -361,6 +410,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
   if (typeof rowId !== 'string' || via === undefined || brief === undefined || question === undefined) return null
   if (approvedPatch === undefined || prClosedAt === undefined || notes === undefined) return null
   if (typeof lives !== 'number' || !Number.isInteger(lives) || lives < 1) return null
+  if (wait === undefined) return null
   const record: IssueRecord = {
     issue: row.issue,
     life,
@@ -381,6 +431,7 @@ export function parseTransition(row: EventRow): TransitionEvent | null {
     fixes: fixes as number,
     round: round as number,
     question,
+    wait,
     why: why as IssueRecord['why'],
     notes,
     prClosedAt,

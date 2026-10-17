@@ -22,7 +22,7 @@ const LOOP = '/cfg/factory-loop/cbundy__dev-system'
 const BRIEF = 'https://github.com/cbundy/dev-system/issues/470#issuecomment-3301234567'
 
 // The ledger entry and spawn record each job of the table stands for, as the loop holds them.
-const AGENTS: Record<JobName, { entry: LedgerEntry; type: AgentType; info: AnswerInfo }> = {
+const AGENTS: Record<Exclude<JobName, 'designV2'>, { entry: LedgerEntry; type: AgentType; info: AnswerInfo }> = {
   gate: { entry: entry('adjudicate:R470:review:abc1234', 'spawn', { agent: 'adjudicator', issue: 470 }), type: 'adjudicator', info: { repo: 'cbundy/dev-system', branch: null, purpose: null } },
   weakening: { entry: entry('adjudicate-weakening:512:abc1234', 'spawn', { agent: 'adjudicator', issue: 470 }), type: 'adjudicator', info: { repo: 'cbundy/dev-system', branch: null, purpose: null } },
   merge: { entry: entry('adjudicate-merge:512:abc1234', 'spawn', { agent: 'adjudicator', issue: 470 }), type: 'adjudicator', info: { repo: 'cbundy/dev-system', branch: null, purpose: null } },
@@ -36,7 +36,7 @@ const fileOf = (job: Job, input: unknown) => JSON.stringify({ v: 1, contract: jo
 
 describe('one contract for the loop and the answer script (#561)', () => {
   test('the job the loop checks each answer against is the job file the spawn writes for the script', () => {
-    for (const [name, a] of Object.entries(AGENTS) as [JobName, (typeof AGENTS)[JobName]][]) {
+    for (const [name, a] of Object.entries(AGENTS) as [Exclude<JobName, 'designV2'>, (typeof AGENTS)[Exclude<JobName, 'designV2'>]][]) {
       expect(jobOf(a.entry, a.type, a.info)).toEqual(JOBS[name])
       expect(contract.parseJob(contract.jobText(JOBS[name]))).toEqual(JOBS[name])
     }
@@ -45,8 +45,16 @@ describe('one contract for the loop and the answer script (#561)', () => {
   test('every case of the shared table reads through the loop as the script names it: the same outcome as the tool, or the same problems', () => {
     expect(CASES.length).toBeGreaterThanOrEqual(10)
     for (const c of CASES) {
-      const a = AGENTS[c.job]
       const job = JOBS[c.job]
+      if (c.job === 'designV2') {
+        // a v2 answer is checked by its contract alone (the v2 steps read it, not the v1 tools)
+        const checked = contract.checkAnswer(job, c.input)
+        if (c.problems.length === 0) expect(checked.ok).toBe(true)
+        else expect(checked).toEqual({ ok: false, problems: [...c.problems] })
+        expect(contract.answerText(job, c.input).ok).toBe(c.problems.length === 0)
+        continue
+      }
+      const a = AGENTS[c.job]
       const script = readScriptAnswer(a.entry, fileOf(job, c.input), a.info)
       const tool = readToolAnswer(a.entry, TOOL_OF[a.type], c.input, a.info)
       if (c.problems.length === 0) {

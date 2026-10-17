@@ -104,11 +104,13 @@ export const DEFAULT_CONFIG: Config = {
     queued: 6 * 60 * MIN,
     queueWait: 2 * 60 * MIN,
     parked: 24 * 60 * MIN,
+    waiting: 24 * 60 * MIN,
   },
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,
   prEveryMs: 30_000,
   maxTriages: 2,
+  windDownMinutes: 10,
   minimumReleaseCadenceMs: 6 * 60 * MIN,
   maxLives: 3,
   triageModel: 'opus',
@@ -314,7 +316,7 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key.endsWith('Model')) {
         if (MODELS.some(m => m === value)) out[key] = value
         else bad(raw, value, `${MODELS.slice(0, -1).join(', ')} or ${MODELS.at(-1)}`)
-      } else if (key === 'maxTriages') {
+      } else if (key === 'maxTriages' || key === 'windDownMinutes') {
         if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value
         else bad(raw, value, 'a whole number')
       } else if (key === 'maxLives') {

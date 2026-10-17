@@ -88,6 +88,16 @@ describe('W1: lease', () => {
     expect(leased(plan(world([rec(1), queued(10), queued(11)]), { ...CFG, maxInFlightIssues: null }))).toEqual([10, 11])
   })
 
+  test('a waiting record holds no slot and is not in flight: with K records in flight and a waiting one beside them, a queued record is still leased up to K', () => {
+    const waiting = rec(4, { state: 'waiting', step: null, wait: [{ kind: 'issue-closed', issue: 57 }], resumeTo: 'designing' })
+    const p = plan(world([rec(1), waiting, queued(10), queued(11)]))
+    expect(leased(p)).toEqual([10, 11])
+    const full = plan(world([rec(1), rec(2), waiting, queued(10), queued(11)]))
+    expect(leased(full)).toEqual([10])
+    expect(said(full, 11)).toContain('W1: capacity: 3 of 3 in flight')
+    expect(full.atCap).toBe(true)
+  })
+
   test('the reserve: a queued record is leased only while the pool\'s free slots exceed worktreeReserve, each lease taking one', () => {
     const p = plan(world([queued(10), queued(11), queued(12)], { free: 3 }))
     expect(leased(p)).toEqual([10])
@@ -187,6 +197,12 @@ describe('W2: free', () => {
     // done: never again
     const done = entry(freeKey(leaseFor(parked).lease), 'slot', { issue: 80 })
     expect(freed(plan(world([parked], { leases: [leaseFor(parked)], ledger: [done] })))).toEqual([])
+  })
+
+  test('a waiting record\'s slot is freed, keeping the life\'s scratch folders as a parked one\'s: the wait ends in a resume of the same life', () => {
+    const waiting = rec(89, { state: 'waiting', step: null, wait: [{ kind: 'pr-merged', pr: 812 }], resumeTo: 'designing' })
+    const p = plan(world([waiting], { leases: [leaseFor(waiting)] }))
+    expect(slots(p, 'free')).toEqual([expect.objectContaining({ kind: 'slot', op: 'free', key: freeKey(leaseFor(waiting).lease), rule: 'W2', issue: 89, keepScratch: true })])
   })
 
   test('a free keeps the life\'s scratch folders only while a record of the life is parked; the tool gets --keep-scratch then', () => {

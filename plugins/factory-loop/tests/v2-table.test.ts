@@ -7,7 +7,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { recordOf } from '../hooks/v2/observe'
-import { LIVE_STATES, NOT_OK_REASONS, ROW_IDS, STEP_STATES, TABLE, madeRecord, nextRecord, normalize, rowFor, viaOf, waiting } from '../hooks/v2/table'
+import { LIVE_STATES, NOT_OK_REASONS, ROW_IDS, STEP_STATES, TABLE, madeRecord, nextRecord, normalize, rowFor, viaOf, tellPeriodic } from '../hooks/v2/table'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP, TRIAGE_CHOICES, labelOf } from '../hooks/v2/types'
 import type { EventKind, IssueRecord, IssueState, StepKind, TableEvent } from '../hooks/v2/types'
 import { NOW, config } from './fixtures'
@@ -28,6 +28,7 @@ const STEPS_OF: Readonly<Record<IssueState, readonly (StepKind | null)[]>> = {
   fixing: ['fix', 'triage'],
   'merge-queue': ['queue', 'triage'],
   parked: [null],
+  waiting: [null],
   closed: [null],
 }
 
@@ -43,8 +44,9 @@ function records(): IssueRecord[] {
             for (const fixes of [0, FIX_CAP - 1, FIX_CAP]) {
               for (const pr of [null, 512]) {
                 for (const head of [null, HEAD]) {
-                  const resumeTo: IssueState | null = state === 'queued' ? (pr === null ? null : 'reviewing') : state === 'parked' ? 'building' : null
-                  out.push({ ...base, state, step, attempt, cut, triages, fixes, pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null })
+                  const resumeTo: IssueState | null = state === 'queued' ? (pr === null ? null : 'reviewing') : state === 'parked' ? 'building' : state === 'waiting' ? 'designing' : null
+                  const wait = state === 'waiting' ? [{ kind: 'issue-closed' as const, issue: 57 }, { kind: 'pr-merged' as const, pr: 812 }] : null
+                  out.push({ ...base, state, step, attempt, cut, triages, fixes, pr, head, resumeTo, why: state === 'closed' ? 'merged' : null, question: state === 'parked' ? 'which API?' : null, wait })
                 }
               }
             }
@@ -60,7 +62,7 @@ function records(): IssueRecord[] {
 function eventsOf(kind: EventKind): TableEvent[] {
   switch (kind) {
     case 'not-ok':
-      return [...new Set(Object.values(NOT_OK_REASONS).flat()), 'weird', undefined].map(reason => ({ kind, reason, data: { text: 'a reason' } }))
+      return [...new Set(Object.values(NOT_OK_REASONS).flat()), 'weird', undefined].map(reason => ({ kind, reason, data: { text: 'a reason', conditions: [{ kind: 'issue-closed' as const, issue: 57 }, { kind: 'pr-merged' as const, pr: 812 }] } }))
     case 'unknown':
       return [undefined, ...OUTSIDE_CAUSES].flatMap(cause => ['timeout', 'agent-dead'].map(why => ({ kind, cause, why: why as TableEvent['why'], reason: 'no answer' })))
     case 'triage':
@@ -99,11 +101,13 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
     'pr-merged': ['E3', 'E7'],
     'pr-closed': state === 'parked' ? ['E7'] : ['E4', 'E7'],
     'claim-lost': ['E5'],
-    unpark: state === 'parked' ? ['P1'] : ['E7'],
+    unpark: state === 'parked' || state === 'waiting' ? ['P1'] : ['E7'],
+    // every condition of a waiting record holds: C1; nowhere else
+    cleared: state === 'waiting' ? ['C1'] : ['E7'],
   }
   if (state === 'closed') return ['E7']
   if (owner[kind] !== undefined) return owner[kind] ?? []
-  if (state === 'parked') return kind === 'timeout' ? ['E6'] : ['E7']
+  if (state === 'parked' || state === 'waiting') return kind === 'timeout' ? ['E6'] : ['E7']
   if (state === 'queued') return kind === 'ok' ? ['T1'] : kind === 'timeout' ? ['E6'] : ['E7']
   if (onTriage) {
     if (kind === 'triage') return ['X1', 'X2', 'X3', 'X4', 'X5']
@@ -111,7 +115,7 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
     return ['E7']
   }
   const own: Record<string, { ok: string[]; notOk: string[] }> = {
-    designing: { ok: ['T2'], notOk: ['T3', 'T4'] },
+    designing: { ok: ['T2'], notOk: ['T3', 'T4', 'T16'] },
     building: { ok: ['T5'], notOk: ['T6', 'T7'] },
     reviewing: { ok: ['T8'], notOk: ['T9', 'T10'] },
     fixing: { ok: ['T11'], notOk: ['T12'] },
@@ -130,9 +134,11 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
 }
 
 describe('the table (v2 SPEC 4.3, 4.6)', () => {
-  test('33 rows, the spec\'s, held as data; S0 makes a record and rowFor never returns it', () => {
-    expect(ROW_IDS).toEqual(['S0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E7', 'P1'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
-    expect(ROW_IDS).toHaveLength(33)
+  test('35 rows, the spec\'s, held as data; S0 makes a record and rowFor never returns it', () => {
+    expect(ROW_IDS).toEqual(['S0', 'T1', 'T2', 'T3', 'T4', 'T16', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
+    expect(ROW_IDS).toHaveLength(35)
+    // the event schema's table_row pattern (docs/factory-events/schemas/transition.v1.json)
+    for (const id of ROW_IDS) expect({ id, ok: /^([A-Z][0-9]+|recovered)$/.test(id) }).toEqual({ id, ok: true })
     // E7 has one row for each event kind: every event has a row with no meaning in every state
     expect(TABLE.filter(r => r.id === 'E7').map(r => r.on).sort()).toEqual([...EVENT_KINDS].sort())
     const made = madeRecord({ issue: 7, life: 'ss1x2k', branch: 'issue-7', pr: null, others: [] }, NOW)
@@ -181,8 +187,8 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
       for (const step of STEPS_OF[state]) {
         const r = { ...base, state, step }
         const row = rowFor(r, { kind: 'timeout' }, CFG)
-        expect({ state, step, row: row.id }).toEqual({ state, step, row: waiting(r) ? 'E6' : expect.stringMatching(/^U[124]$/) })
-        if (!waiting(r)) expect(normalize(r, { kind: 'timeout' })).toMatchObject({ kind: 'unknown', why: 'timeout' })
+        expect({ state, step, row: row.id }).toEqual({ state, step, row: tellPeriodic(r) ? 'E6' : expect.stringMatching(/^U[124]$/) })
+        if (!tellPeriodic(r)) expect(normalize(r, { kind: 'timeout' })).toMatchObject({ kind: 'unknown', why: 'timeout' })
       }
     }
   })
@@ -205,6 +211,7 @@ function wellFormed(r: IssueRecord): boolean {
     r.triages <= MAX_TRIAGES &&
     r.fixes <= FIX_CAP &&
     (r.state === 'parked') === (r.question !== null) &&
+    (r.state === 'waiting') === (r.wait !== null) &&
     (r.state === 'closed') === (r.why !== null) &&
     recordOf(JSON.parse(JSON.stringify(r))) !== null
   )
@@ -285,6 +292,30 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
+  test('T16, C1, P1: a wait enters waiting with its conditions and resumes to designing; every condition cleared leads to queued with the cleared note; an owner resume does too', () => {
+    const designing: IssueRecord = { ...base, state: 'designing', step: 'design', since: NOW - 3_600_000 }
+    const conditions = [
+      { kind: 'issue-closed' as const, issue: 57 },
+      { kind: 'pr-merged' as const, pr: 812 },
+    ]
+    const waiting = next(designing, { kind: 'not-ok', reason: 'wait', data: { text: 'blocked on #57 and PR #812', conditions } }, NOW) as IssueRecord
+    expect(rowFor(designing, { kind: 'not-ok', reason: 'wait' }, CFG).id).toBe('T16')
+    expect(waiting).toMatchObject({ state: 'waiting', step: null, resumeTo: 'designing', wait: conditions, question: null, notes: ['blocked on #57 and PR #812'], since: NOW })
+    // a triage step cannot wait: only the designer's own step gives it
+    expect(rowFor({ ...designing, step: 'triage' }, { kind: 'not-ok', reason: 'wait' }, CFG).id).toBe('E7')
+    // C1: the cleared note names each condition; the budgets are reset and the target kept
+    const cleared = next({ ...waiting, attempt: 2, triages: 1, cut: true }, { kind: 'cleared' }) as IssueRecord
+    expect(rowFor(waiting, { kind: 'cleared' }, CFG).id).toBe('C1')
+    expect(cleared).toMatchObject({ state: 'queued', step: 'lease', resumeTo: 'designing', attempt: 1, triages: 0, cut: false, wait: null, notes: ['The loop resumed this: #57 closed, PR #812 merged; every condition holds.'] })
+    // P1: the owner's resume, with the owner's note
+    expect(next(waiting, { kind: 'unpark', reason: 'op', data: { note: 'go on' } })).toMatchObject({ state: 'queued', resumeTo: 'designing', wait: null, notes: ['go on'] })
+    expect(rowFor(waiting, { kind: 'unpark', reason: 'op' }, CFG).id).toBe('P1')
+    // E4 parks a waiting record, as any live one; it keeps its target
+    expect(next({ ...waiting, pr: 512 }, { kind: 'pr-closed', data: { pr: 512, closedAt: '2026-10-15T10:00:00Z' } })).toMatchObject({ state: 'parked', resumeTo: 'designing', wait: null })
+    // E6 changes nothing: the tell
+    expect(rowFor(waiting, { kind: 'timeout' }, CFG).id).toBe('E6')
+  })
+
   test('each distinct note is kept and asked once: a conflict whose text is also its note parks with it once (drill run 3, #22)', () => {
     const note = 'PR #24 conflicts with main: merge origin/main into issue-471, resolve the conflicts and push'
     const conflict: TableEvent = { kind: 'not-ok', reason: 'conflict', data: { pr: 512, text: note, notes: [note] } }
@@ -326,7 +357,7 @@ function stepResult(r: IssueRecord, rand: () => number): TableEvent {
 const AGENT: readonly (StepKind | null)[] = ['design', 'build', 'review', 'fix', 'triage']
 
 describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
-  test('property 7: with no outside event, every life ends parked or closed, and its agent steps stay under the bound from fixCap, maxTriages and one free re-run per attempt', () => {
+  test('property 7: with no outside event, every life ends parked, waiting or closed, and its agent steps stay under the bound from fixCap, maxTriages and one free re-run per attempt', () => {
     // each entry to a step state runs its own step at most twice, each with one free re-run (4);
     // the entries: designing and building once and once per redesign (1 + M each), reviewing once
     // per build and per fix (1 + M + F), fixing once per fix (F); each triage grant runs triage at
@@ -337,7 +368,7 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
       let r: IssueRecord = seed % 2 === 0 ? base : { ...base, pr: 512, resumeTo: 'reviewing' }
       let agentSteps = 0
       let transitions = 0
-      while (r.state !== 'parked' && r.state !== 'closed') {
+      while (r.state !== 'parked' && r.state !== 'waiting' && r.state !== 'closed') {
         const e = stepResult(r, rand)
         if (AGENT.includes(r.step)) agentSteps += 1
         const n = next(r, e)

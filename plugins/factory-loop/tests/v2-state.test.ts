@@ -706,6 +706,135 @@ describe('parked and resumed (v2 SPEC 11)', () => {
   })
 })
 
+describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
+  const waitAt = NOW - 2 * HOUR
+  const WAIT = [
+    { kind: 'issue-closed' as const, issue: 57 },
+    { kind: 'pr-merged' as const, pr: 812 },
+  ]
+  const w = rec(130, { state: 'waiting', step: null, wait: WAIT, resumeTo: 'designing', notes: ['needs #57 and PR #812'], seq: 6, seqAt: waitAt, since: waitAt })
+  const settled = (r: IssueRecord) => [
+    transitioned(r, 'T16', 'designing', 'wait'),
+    done(entryKey(r, 'event/transition'), 'event', { issue: r.issue }),
+    done(entryKey(r, 'label'), 'label', { issue: r.issue, endedAt: waitAt + MIN }),
+    done(entryKey(r, 'comment'), 'comment', { issue: r.issue, endedAt: waitAt + 2 * MIN }),
+    ...(r.wait ?? []).flatMap(c => (c.kind === 'issue-closed' ? [done(entryKey(r, `link/${c.issue}`), 'link', { issue: r.issue })] : [])),
+  ]
+  const held = (...keys: string[]) => ({ waits: Object.fromEntries(keys.map(k => [k, { at: NOW - MIN, held: true }])) })
+
+  test('T16: a designer that answers wait enters waiting at once, with its conditions, no owner tell; its entry posts one comment, links each issue condition and labels factory:waiting', () => {
+    const d = rec(131, { state: 'designing', step: 'design', seq: 5, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
+    const answer = { kind: 'wait', brief: null, question: null, conditions: WAIT, reason: 'needs #57 and PR #812', reasons: null, children: [] }
+    const t = transitionOf(plan(withLedger(world([d]), [stepDone(d, 'design', { event: 'not-ok', reason: 'wait', data: { ...answer, text: answer.reason } })])), 131)
+    expect(t).toMatchObject({ row: 'T16', rule: 'S3', via: 'wait', next: { state: 'waiting', step: null, resumeTo: 'designing', wait: WAIT, notes: ['needs #57 and PR #812'], question: null } })
+    const entered = t?.next as IssueRecord
+    const r = plan(withLedger(world([entered]), [transitioned(entered, 'T16', 'designing', 'wait')]))
+    expect(kinds(r, 131)).toEqual(['event transition', 'label set', 'comment', 'link'])
+    expect(of(r, 131).find(a => a.kind === 'label')).toMatchObject({ op: 'set', label: 'factory:waiting' })
+    const comment = of(r, 131).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    expect(comment).toMatchObject({ on: 'issue', number: 131, key: entryKey(entered, 'comment') })
+    // the conditions and the reason are listed, the loop says it resumes by itself, and there is no tick and no ask
+    expect(comment?.body).toContain('issue #57 must be closed on GitHub')
+    expect(comment?.body).toContain('PR #812 must be merged on GitHub')
+    expect(comment?.body).toContain('needs #57 and PR #812')
+    expect(comment?.body).toContain('resumes this issue when it holds')
+    expect(comment?.body).not.toMatch(/\[ \]|\[x\]|resume 131|Decision needed/)
+    // one link per issue condition (a PR condition is no link), keyed per condition; no tell, no owner item
+    expect(of(r, 131).filter(a => a.kind === 'link')).toEqual([expect.objectContaining({ kind: 'link', blocker: 57, key: entryKey(entered, 'link/57'), issue: 131 })])
+    expect(of(r, 131).some(a => a.kind === 'tell')).toBe(false)
+    expect(r.owner).toBe(0)
+    expect(ivs(r, 131)).toEqual([])
+    // it holds no slot: nothing is leased or prepared for it, and it says why it waits
+    expect(of(r, 131).some(a => a.kind === 'slot' || a.kind === 'agent-step')).toBe(false)
+  })
+
+  test('the link executor: a blocked_by link from the waiting issue to the open blocker, once; a closed blocker and a pull request are skipped; a failed read is a failed attempt', async () => {
+    const link: Action = { kind: 'link', key: entryKey(w, 'link/57'), class: 'free', rule: 'S3', reason: 'x', issue: 130, blocker: 57 }
+    const read = (state: string, pull = false, held: string = '') => (argv: string[]): Reply => {
+      if (argv[0] === 'callum-flow-issue-read') return { stdout: JSON.stringify({ issue: { number: 57, id: 9057, state, ...(pull ? { pull_request: {} } : {}) } }) }
+      if (argv.includes('--paginate')) return { stdout: held }
+      return {}
+    }
+    const open = actWorld([w], read('open'))
+    expect(await open.run(link)).toMatchObject({ status: 'done', summary: 'linked #130 as blocked by #57' })
+    expect(open.argvs).toEqual([
+      ['callum-flow-issue-read', '--json', '57'],
+      ['gh', 'api', `repos/${REPO}/issues/130/dependencies/blocked_by`, '--paginate', '--jq', '.[].id'],
+      ['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/130/dependencies/blocked_by`, '-F', 'issue_id=9057'],
+    ])
+    // already linked: no second POST
+    const again = actWorld([w], read('open', false, '9057\n'))
+    expect(await again.run(link)).toMatchObject({ status: 'done', summary: 'found linked #130 as blocked by #57' })
+    expect(again.argvs.some(a => a.includes('POST'))).toBe(false)
+    // a closed blocker has nothing to wait for; a pull request cannot block
+    const closed = actWorld([w], read('closed'))
+    expect(await closed.run(link)).toMatchObject({ status: 'done', summary: '#57 is closed, not linked' })
+    expect(closed.argvs).toHaveLength(1)
+    const pull = actWorld([w], read('open', true))
+    expect(await pull.run(link)).toMatchObject({ status: 'done', summary: '#57 is a pull request, not linked' })
+    expect(pull.argvs).toHaveLength(1)
+    const bad = actWorld([w], () => ({ exitCode: 1, stderr: 'boom' }))
+    expect(await bad.run(link)).toMatchObject({ status: 'failed' })
+  })
+
+  test('C1: every condition held takes the record to queued with the cleared note; one open, a failed or an unread condition takes nothing, and the skip line names what is open', () => {
+    const s = (v2: Partial<V2State>) => plan(withLedger(world([w], {}, v2), settled(w)))
+    const both = transitionOf(s(held('issue:57', 'pr:812')), 130)
+    expect(both).toMatchObject({ row: 'C1', rule: 'S6', via: 'cleared', next: { state: 'queued', step: 'lease', resumeTo: 'designing', attempt: 1, triages: 0, cut: false, wait: null, notes: ['The loop resumed this: #57 closed, PR #812 merged; every condition holds.'] } })
+    expect(both?.trigger).toEqual({ kind: 'fact', fact: `cleared:130@${w.seq}` })
+    for (const v2 of [held('issue:57'), held('pr:812'), {}, { waits: { 'issue:57': { at: NOW - MIN, held: true }, 'pr:812': { at: NOW - MIN, held: false } } }]) {
+      const r = s(v2)
+      expect(transitionOf(r, 130)).toBeUndefined()
+      expect(said(r, 130)).toHaveLength(1)
+    }
+    expect(said(s(held('issue:57')), 130)).toEqual(['waiting: for PR #812 (not merged yet)'])
+    expect(said(s({}), 130)).toEqual(['waiting: for #57 (still open), PR #812 (not merged yet)'])
+    // the cleared note is the resumed designer's: it reaches the step T1 leads to
+    const queued = both?.next as IssueRecord
+    expect(transitionOf(plan(world([queued], {}, { leases: [leaseFor(queued)] })), 130)).toMatchObject({ row: 'T1', next: { state: 'designing', notes: ['The loop resumed this: #57 closed, PR #812 merged; every condition holds.'] } })
+  })
+
+  test('a removed factory:waiting label is not a resume; the owner\'s /factory resume N "note" is, and /factory drop N closes the record', () => {
+    const lacks = { reads: { 130: { at: NOW - 5 * MIN, open: true, labels: ['enhancement'] } }, comments: { 130: [{ body: 'ok go', at: NOW - 10 * MIN, url: null }] } }
+    const label = plan(withLedger(world([w], {}, lacks), settled(w)))
+    expect(transitionOf(label, 130)).toBeUndefined()
+    const resumed = plan(withLedger(world([w], { control: control({ resumed: [{ subject: 'issue:130', at: NOW - MIN, note: 'go on without it' }] }) }), settled(w)))
+    expect(transitionOf(resumed, 130)).toMatchObject({ row: 'P1', via: 'unpark:op', next: { state: 'queued', resumeTo: 'designing', wait: null, notes: ['go on without it'] } })
+    // a resume from before the wait began does not count
+    expect(transitionOf(plan(withLedger(world([w], { control: control({ resumed: [{ subject: 'issue:130', at: waitAt - MIN }] }) }), settled(w))), 130)).toBeUndefined()
+    const dropped = plan(withLedger(world([w], { control: control({ dropped: [{ issue: 130, at: NOW - MIN }] }) }), settled(w)))
+    expect(transitionOf(dropped, 130)).toMatchObject({ row: 'E1', next: { state: 'closed', why: 'dropped', wait: null } })
+  })
+
+  test('E2, E3 and E4 cover waiting as any live state: the issue closed by hand closes it, a merged or closed PR of its life does as for the others', () => {
+    const closedByHand = plan(withLedger(world([w], {}, { reads: { 130: { at: NOW - MIN, open: false, labels: [] } } }), settled(w)))
+    expect(transitionOf(closedByHand, 130)).toMatchObject({ row: 'E2', next: { state: 'closed', why: 'closed-on-github' } })
+    const withPr = { ...w, pr: 900 }
+    const view = (state: 'merged' | 'closed') => ({ pr: 900, issue: 130, state, head: HEAD, mergedHead: HEAD, closedAt: '2026-10-15T10:00:00Z', mergeable: null, author: 'cbundy', base: null, baseRef: 'main', checks: [], patch: null, readAt: NOW - MIN })
+    expect(transitionOf(plan(withLedger(world([withPr], {}, { prs: { prs: [view('merged')] } }), settled(withPr))), 130)).toMatchObject({ row: 'E3', next: { state: 'closed', why: 'merged-by-hand' } })
+    const parked = transitionOf(plan(withLedger(world([withPr], {}, { prs: { prs: [view('closed')] }, reads: { 130: { at: NOW, open: true, labels: ['factory:waiting'] } } }), settled(withPr))), 130)
+    expect(parked).toMatchObject({ row: 'E4', next: { state: 'parked', resumeTo: 'designing', wait: null, question: expect.stringContaining('PR #900') } })
+  })
+
+  test('E6: after 24 hours (stateTimeoutMs.waiting) it tells the owner what is still open, once per period, and not as an owner item; sooner it says nothing', () => {
+    const at = (hours: number) => ({ ...w, since: NOW - hours * HOUR, seqAt: NOW - hours * HOUR })
+    const sooner = plan(withLedger(world([at(23)]), settled(w)))
+    expect(of(sooner, 130).some(a => a.kind === 'tell')).toBe(false)
+    const day = plan(withLedger(world([at(26)], {}, held('issue:57')), settled(w)))
+    expect(of(day, 130).filter(a => a.kind === 'tell')).toEqual([
+      expect.objectContaining({ kind: 'tell', wake: 'waiting', rule: 'S6', fields: { issue: '130', state: 'waiting', hours: '26' }, context: ['waiting for PR #812 (not merged yet)'] }),
+    ])
+    expect(day.owner).toBe(0)
+    // a second period is a second tell; the same period is told once
+    const tells = (hours: number) => of(plan(withLedger(world([at(hours)]), settled(w))), 130).flatMap(a => (a.kind === 'tell' ? [a.key] : []))
+    expect(new Set([...tells(26), ...tells(50)]).size).toBe(2)
+    expect(tells(26)).toEqual(tells(30))
+    // the period is a setting
+    const short = plan(withLedger(world([at(2)]), settled(w)), { ...CFG, stateTimeoutMs: { ...CFG.stateTimeoutMs, waiting: HOUR } })
+    expect(of(short, 130).some(a => a.kind === 'tell' && a.wake === 'waiting')).toBe(true)
+  })
+})
+
 // --- H1: the heartbeat and re-claims (4.1) -----------------------------------------------------------------------
 
 describe('H1: claims renewed and claimed again', () => {
@@ -1008,7 +1137,7 @@ describe('the record\'s executors (act-state.ts)', () => {
     const reject: Action = { ...set, op: 'reject', label: null }
     expect(labelArgvs(reject as Extract<Action, { kind: 'label' }>, REPO)).toEqual([['gh', 'issue', 'edit', '502', '--repo', REPO, '--add-label', 'factory:rejected', '--remove-label', seven]])
     const w = actWorld([])
-    expect(await w.run({ ...set, issue: null, op: 'ensure', label: null })).toMatchObject({ status: 'done', summary: 'the 8 factory labels made' })
+    expect(await w.run({ ...set, issue: null, op: 'ensure', label: null })).toMatchObject({ status: 'done', summary: 'the 9 factory labels made' })
     expect(w.argvs.map(a => a.slice(0, 4))).toEqual([...Object.values(FACTORY_LABELS).map(l => l.name), 'factory:rejected'].map(name => ['gh', 'label', 'create', name]))
     expect(await actWorld([]).run(requeue)).toMatchObject({ status: 'done', summary: '#502 back in the queue: ready on, factory labels off' })
     expect(await actWorld([]).run(reject)).toMatchObject({ status: 'done', summary: '#502 rejected: factory:rejected on, factory labels off' })

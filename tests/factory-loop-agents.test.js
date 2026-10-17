@@ -188,6 +188,17 @@ test("the v2 designer asks for a split's four reasons and each child's why, and 
   assert.match(body, /Each child's `why`/);
 });
 
+test("the v2 designer has a section on waiting between its question and split sections, and never offers the owner a release", () => {
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  const at = (h) => raw.indexOf(h);
+  assert.ok(at("## A question") !== -1 && at("## A question") < at("## A wait") && at("## A wait") < at("## A split"), "## A wait sits between ## A question and ## A split");
+  const body = raw.replace(/\s+/g, " ");
+  assert.match(body, /\{"kind": "wait", "conditions"/);
+  assert.match(body, /`issue-closed`|"kind": "issue-closed"/);
+  assert.match(body, /Never offer the owner a release/);
+  assert.match(body, /answers with a fixed-shape design brief, a question for the owner, a wait on a condition the loop checks, or a split/);
+});
+
 test("the v2 designer makes every new decision observable, and the reviewer holds the change to it", () => {
   const raw = read("plugins/factory-loop/agents/designer-v2.md");
   assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Sequencing/);
