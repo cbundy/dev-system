@@ -43,6 +43,13 @@ for _ in $(seq 1 60); do
   docker exec "$RUN_ID-pg" pg_isready -U av -d agentsview -h 127.0.0.1 >/dev/null 2>&1 && break
   sleep 1
 done
+# The default-user bootstrap path (cbundy/dev-system#797): no --user, no FACTORY_DB_MIGRATIONS_DIR.
+expected_schema=$(in_image '. /usr/local/share/dev-system/factory-db.sh; factory_db_expected_version' --entrypoint "")
+check "factory-db-bootstrap runs as the default user against the baked migrations" bash -c '
+  out=$(docker run --rm --network "$1" --entrypoint factory-db-bootstrap \
+    -e FACTORY_DB_ADMIN_URL="postgres://av:$2@$3-pg:5432/postgres?sslmode=require" "$4" --db factory_image_check 2>&1) || exit 1
+  echo "$out" | grep -q " ready " && echo "$out" | grep -q "schema version $5\$" &&
+  ! echo "$out" | grep -qF "$2"' _ "$net" "$SECRET" "$RUN_ID" "$IMAGE" "$expected_schema"
 avdata=$(docker volume create --label "$RUN_ID")
 avclaude=$(docker volume create --label "$RUN_ID")
 # write_session <volume> <session id>: a minimal Claude Code transcript
