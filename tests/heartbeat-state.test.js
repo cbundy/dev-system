@@ -211,7 +211,7 @@ test("missing files give idle and no throw", () => {
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.mkdirSync(tmp);
   const { out } = run();
-  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 } });
+  assert.deepEqual(out, { state: "idle", in_flight: [], chat_active_at: null, sessions: [] });
 });
 
 test("an unreadable state.sqlite degrades to the other sources and reports on stderr", () => {
@@ -273,11 +273,11 @@ for (const idle of ["ready", "reclaimed", "owner_wait"]) {
 
 // A sessions/<pid>.json registration as Claude Code writes it. This test process is
 // the live pid; procStart is its real start time unless given.
-function registerSession(id, { pid = process.pid, procStart, entrypoint } = {}) {
+function registerSession(id, { pid = process.pid, procStart } = {}) {
   const stat = () => fs.readFileSync(`/proc/${pid}/stat`, "utf8");
   const start = procStart ?? stat().slice(stat().lastIndexOf(")") + 2).split(" ")[19];
   fs.mkdirSync(path.join(tmp, "claude", "sessions"), { recursive: true });
-  fs.writeFileSync(path.join(tmp, "claude", "sessions", `${pid}.json`), JSON.stringify({ pid, sessionId: id, procStart: start, ...(entrypoint ? { entrypoint } : {}) }));
+  fs.writeFileSync(path.join(tmp, "claude", "sessions", `${pid}.json`), JSON.stringify({ pid, sessionId: id, procStart: start }));
 }
 function writeSubagent(parent, agent, last) {
   const dir = path.join(tmp, "claude", "projects", "p", parent, "subagents");
@@ -307,21 +307,4 @@ test("sessions: a registration whose pid was reused by another process, or whose
   fs.rmSync(path.join(tmp, "claude", "sessions"), { recursive: true });
   registerSession("s2", { pid: 2 ** 22 + 7, procStart: "1" });
   assert.deepEqual(run().out.sessions, []);
-});
-
-test("claude_sessions: top-level sessions split by entrypoint (sdk- is headless), a dead pid and sub-agents count in neither", () => {
-  const child = require("node:child_process").spawn("sleep", ["30"], { stdio: "ignore" });
-  try {
-    registerSession("s-tui", { entrypoint: "cli" });
-    registerSession("s-print", { pid: child.pid, entrypoint: "sdk-cli" });
-    registerSession("s-dead", { pid: 2 ** 22 + 9, procStart: "1", entrypoint: "cli" });
-    writeSubagent("s-tui", "a1", { type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [] } });
-    assert.deepEqual(run().out.claude_sessions, { interactive: 1, headless: 1 });
-  } finally { child.kill(); }
-});
-
-test("claude_sessions: an entry with no entrypoint is interactive, and no registry gives zeros", () => {
-  assert.deepEqual(run().out.claude_sessions, { interactive: 0, headless: 0 });
-  registerSession("s1");
-  assert.deepEqual(run().out.claude_sessions, { interactive: 1, headless: 0 });
 });
