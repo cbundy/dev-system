@@ -52,6 +52,8 @@ export type IssueView = {
   trusted: boolean | null
   labels: string[] | null
   blockedBy: number | null
+  // the open issues waiting on this one, or null if unread
+  blocking: number | null
   subIssues: number | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null

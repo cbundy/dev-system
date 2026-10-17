@@ -10,7 +10,9 @@
 //       "children": [{ "key": "a", "title": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
-//   A split's children are 2 to 10, each key unique. A blockedBy entry is a sibling key or "#<N>",
+//   A keep-open whose reason says the issue is part of something larger is refused: a split child
+//   is done when its PR merges. A split's children are 2 to 10, each key unique, each body with a
+//   valid `## Rollout`. A blockedBy entry is a sibling key or "#<N>",
 //   an existing issue of the repo (never the issue being split); the siblings have no cycle.
 // - `build`: what the PR says, or that it cannot (T6 sends that to triage).
 //     { "result": "built", "head": "<sha>", "title": "...", "summary": "...", "evidence": "..." | null }
@@ -123,6 +125,12 @@ function checked(problems, outcome) {
 // heading, lower case, leading non-letters dropped. null when the brief has no such section or
 // line.
 export function rolloutOf(brief) {
+  const line = rolloutLineOf(brief)
+  return line === null ? null : line.toLowerCase().replace(/^[^a-z]*/, '').replace(/[^a-z-].*$/, '')
+}
+
+// rolloutLineOf: the line rolloutOf reads, as written, or null.
+function rolloutLineOf(brief) {
   let fence = false
   let on = false
   for (const line of brief.split(/\r?\n/)) {
@@ -136,9 +144,36 @@ export function rolloutOf(brief) {
       if (/^#{1,6}[ \t]+rollout[ \t]*$/.test(line.toLowerCase())) on = true
       continue
     }
-    if (on && line.trim() !== '') return line.toLowerCase().replace(/^[^a-z]*/, '').replace(/[^a-z-].*$/, '')
+    if (on && line.trim() !== '') return line
   }
   return null
+}
+
+// rolloutReasonOf: the reason text on the Rollout line, after the value and its dash; '' when the
+// line has none, null when there is no Rollout line.
+export function rolloutReasonOf(brief) {
+  const line = rolloutLineOf(brief)
+  if (line === null) return null
+  const m = /^[^A-Za-z]*[A-Za-z-]+[^A-Za-z0-9]*(.*)$/.exec(line)
+  return m === null ? '' : m[1].trim()
+}
+
+// A keep-open reason that says the issue is part of something larger: a split child is done when
+// its PR merges, so its Rollout is merge (or run-it with its own Run it).
+const PART_OF = /\b(part of|one part|epic|sub-issue|child of|split)\b/i
+
+// rolloutProblems: what is wrong with the Rollout of a brief or a child body, as strings (where
+// names it); [] when it is a merge, run-it, or a keep-open for another reason.
+function rolloutProblems(text, where) {
+  const rollout = rolloutOf(text)
+  if (rollout === null || !ROLLOUTS.includes(rollout)) {
+    return [`${where}'s ## Rollout must start with one of ${ROLLOUTS.join(', ')}${rollout === null ? '' : `, not ${show(rollout)}`}`]
+  }
+  const reason = rolloutReasonOf(text) ?? ''
+  if (rollout === 'keep-open' && PART_OF.test(reason)) {
+    return [`${where}'s ## Rollout is keep-open because it is part of something larger (${show(reason)}); a split child is done when its PR merges, so its Rollout is merge (or run-it with its own ## Run it). Use keep-open only for research, a proposal, or a Done-when that needs a person`]
+  }
+  return []
 }
 
 // cycleOf: the keys of a blockedBy cycle among the children, or null when there is none.
@@ -205,6 +240,7 @@ function childrenOf(v, problems, parent) {
       }
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
+    if (body !== null) problems.push(...rolloutProblems(body, `children[${i}]${key === null ? '' : ` (${key})`} body`))
     if (key !== null && title !== null && body !== null) out.push({ key, title, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true })
   })
   if (out.length === v.length) {
@@ -224,8 +260,7 @@ function checkDesign(input, job) {
   const brief = text(o, 'brief', LIMITS.brief, kind === 'question' ? 'optional' : 'required', problems)
   if (kind === 'brief' && brief !== null) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
-    const rollout = rolloutOf(brief)
-    if (rollout === null || !ROLLOUTS.includes(rollout)) problems.push(`brief's ## Rollout must start with one of ${ROLLOUTS.join(', ')}${rollout === null ? '' : `, not ${show(rollout)}`}`)
+    problems.push(...rolloutProblems(brief, 'brief'))
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let children = []
