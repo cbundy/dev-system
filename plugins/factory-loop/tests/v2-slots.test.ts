@@ -13,7 +13,7 @@ import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, Config, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { SLOT_MARGIN_MS, SLOT_SCRIPT, SLOT_TIMEOUT_MS, readSlot, slotArgv } from '../hooks/v2/act-slots'
-import { freeKey, leaseKey, lifeOf, prepareKey, stepKey, transitionKey } from '../hooks/v2/keys'
+import { freeKey, leaseKey, lifeOf, prepareKey, scratchOf, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State, holderOf } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
 import { leftoversOf } from '../hooks/v2/rules-agent'
@@ -187,6 +187,20 @@ describe('W2: free', () => {
     // done: never again
     const done = entry(freeKey(leaseFor(parked).lease), 'slot', { issue: 80 })
     expect(freed(plan(world([parked], { leases: [leaseFor(parked)], ledger: [done] })))).toEqual([])
+  })
+
+  test('a free keeps the life\'s scratch folders only while a record of the life is parked; the tool gets --keep-scratch then', () => {
+    const parked = rec(86, { state: 'parked', step: null })
+    const dropped = rec(87, { state: 'closed', step: null, why: 'dropped' })
+    const merged = rec(88, { state: 'closed', step: null, why: 'merged' })
+    const p = plan(world([parked, dropped, merged], { leases: [parked, dropped, merged].map(leaseFor) }))
+    expect(slots(p, 'free').map(a => [a.issue, a.keepScratch])).toEqual([[86, true], [87, false], [88, false]])
+    // a resume continues the life; a free after it (no parked record) removes the folders
+    const resumed = rec(86, { state: 'queued', step: 'lease', seq: 4 })
+    expect(slots(plan(world([resumed], { leases: [leaseFor(resumed), { ...leaseFor(resumed), lease: 'second' }] })), 'free').map(a => a.keepScratch)).toEqual([false])
+    const argv = (keepScratch: boolean) => slotArgv(act('free', { key: freeKey('L5'), rule: 'W2', keepScratch }), runtime()) as string[]
+    expect(argv(true).slice(-5)).toEqual(['free', SLOT, 'L5', LOOP_DIR, '--keep-scratch'])
+    expect(argv(false).slice(-4)).toEqual(['free', SLOT, 'L5', LOOP_DIR])
   })
 
   test('a slot is freed only once nothing of its life runs in it; a person\'s lease and v1\'s are never touched', () => {
@@ -507,10 +521,10 @@ const BIN = `${PLUGIN_ROOT}/${SLOT_SCRIPT}`
 const SLOT = '/workspaces/dev-system/.treehouse/dev-system-22f535/4/dev-system'
 const HEAD = '9e01b77c0ffee000000000000000000000000001'
 const r5 = rec(5)
-const MARKER: StepMarker = { v: 1, repo: REPO, issue: 5, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-5', pr: null, gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '' }
+const MARKER: StepMarker = { v: 1, repo: REPO, issue: 5, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-5', pr: null, gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: '', scratch: '' }
 // budget: what the executor gives the tool of its op's timeout, so the tool ends its own commands first
 const budget = (op: Slot['op']) => ['--budget-ms', String(SLOT_TIMEOUT_MS[op] - SLOT_MARGIN_MS)]
-const act = (op: Slot['op'], over: Partial<Slot> = {}): Slot => ({ kind: 'slot', op, key: `${op}-key`, class: 'free', rule: 'W1', reason: 'x', issue: 5, life: LIFE, path: SLOT, lease: 'L5', branch: null, marker: null, ...over })
+const act = (op: Slot['op'], over: Partial<Slot> = {}): Slot => ({ kind: 'slot', op, key: `${op}-key`, class: 'free', rule: 'W1', reason: 'x', issue: 5, life: LIFE, path: SLOT, lease: 'L5', branch: null, marker: null, keepScratch: false, ...over })
 
 describe('the slot executor (act-slots.ts)', () => {
   test('lease: the plugin\'s tool, from the main checkout, its slot and lease read from LEASED', async () => {
@@ -525,7 +539,8 @@ describe('the slot executor (act-slots.ts)', () => {
     const w = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 1\nLEFTOVERS file=${leftovers}\n` }))
     const a = act('prepare', { key: prepareKey(r5, 1), rule: 'S2', branch: 'issue-5', marker: MARKER })
     expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'prepare', path: SLOT, lease: 'L5', head: HEAD, killed: 1, leftovers }, summary: `prepared at 9e01b77; 1 process(es) ended; leftovers saved to ${leftovers}` })
-    expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR })]])
+    expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR, scratch: scratchOf(LOOP_DIR, 5, LIFE, 3) })]])
+    expect(scratchOf(LOOP_DIR, 5, LIFE, 3)).toBe(`${LOOP_DIR}/scratch/5-${LIFE}-s3`)
     const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 0\n` }))
     expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, killed: 0, leftovers: null }, summary: 'prepared at 9e01b77' })
     // the action must name its slot, lease, branch and marker: a loop bug, never retried

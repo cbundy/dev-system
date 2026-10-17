@@ -184,9 +184,10 @@ describe('the build and fix contracts (8.1, 9.7)', () => {
 
 // --- the prompts (5.1, 8.7, 9.7, 10.3 to 10.5) -------------------------------------------------------------------
 
+const SCRATCH = `${LOOP_DIR}/scratch/300-${LIFE}-s2`
 const PLACE = { bin: BIN, file: `${LOOP_DIR}/answers/x.answer.json` }
 function input(over: Partial<WorkInput> = {}): WorkInput {
-  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], place: PLACE, ...over }
+  return { repo: REPO, issue: 300, slot: SLOT(300), branch: 'issue-300', base: 'main', head: null, pr: null, brief: BRIEF_URL(300), attempt: 1, notes: [], prior: null, leftovers: null, gateCommands: ['npm run lint', 'npm test'], scratch: SCRATCH, place: PLACE, ...over }
 }
 const fixInput = (over: Partial<FixInput> = {}): FixInput => ({ ...input(), round: 2, why: 'review', reviewAnswer: `${LOOP_DIR}/answers/r.answer.json`, findings: ['r2-1'], ...over })
 
@@ -202,6 +203,14 @@ describe('the work prompts (prompts-work.ts)', () => {
     }
     // no slot, no slot line
     expect(buildPrompt(input({ slot: null })).startsWith('You are the factory loop\'s builder')).toBe(true)
+  })
+
+  test('each names the step\'s scratch folder once as $TMPDIR, and none sends the agent to /tmp', () => {
+    for (const p of all()) {
+      expect(p.split(`Your scratch folder is ${SCRATCH}.`)).toHaveLength(2)
+      expect(p).toContain('It is $TMPDIR in every Bash call. Write scratch files only there: not in the system temp folder and not in the session scratchpad.')
+      expect(p).not.toContain('/tmp')
+    }
   })
 
   test('no prompt names the pipeline the loop no longer runs, or asks for what the write guard refuses', () => {
@@ -227,7 +236,8 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(design).not.toContain('git push origin')
     expect(design).toContain('  issue-301, for issue #301')
     expect(design).not.toContain('issue-300, for issue #300')
-    expect(design).toContain(`jq -n --rawfile brief /tmp/factory-design-300.md '{"kind": "brief", "brief": $brief}' | ${BIN} --to ${PLACE.file}`)
+    expect(design).toContain(`write it to ${SCRATCH}/factory-design-300.md with Bash`)
+    expect(design).toContain(`jq -n --rawfile brief ${SCRATCH}/factory-design-300.md '{"kind": "brief", "brief": $brief}' | ${BIN} --to ${PLACE.file}`)
   })
 
   test('writers are told how an image reaches the PR body the loop writes: by a URL, the repo\'s route, a commit-pinned blob URL', () => {
@@ -408,6 +418,7 @@ describe('the build step (4.2, 7.1, 10.8)', () => {
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:builder', model: 'opus', name: 'build-300-s3-a1' })
     expect(h.spawns[0]?.prompt.split('\n')[0]).toBe(`factory-slot: ${SLOT(300)}`)
     expect(h.spawns[0]?.prompt).toContain('owner: keep it small')
+    expect(h.spawns[0]?.prompt).toContain(`Your scratch folder is ${LOOP_DIR}/scratch/300-${LIFE}-s3.`)
     const job = [...h.files.keys()].find(k => k.endsWith('.job.json')) ?? ''
     expect(jobPathOf(stepAnswerPath(LOOP_DIR, stepKey(r, 'build', 1)))).toBe(job)
     expect(parseJob(h.files.get(job) ?? '')).toEqual({ contract: 'build', purpose: null, repo: REPO, issue: 300, branch: 'issue-300' })

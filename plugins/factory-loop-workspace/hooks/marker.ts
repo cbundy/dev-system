@@ -5,6 +5,7 @@
 // agent's name carries (`<step>-<N>-s<seq>-a<attempt>`, D-11), and its type is the loop's.
 import { normalize } from './guard'
 import type { Role } from './guard'
+import { scratchOk } from './scratch'
 
 export const MARKER_FILE = 'factory-step.json'
 const STEPS = ['design', 'build', 'review', 'fix', 'triage'] as const
@@ -25,6 +26,9 @@ export type Marker = {
   gateCommands: string[]
   gateTimeoutMs: number
   loopDir: string
+  // the step attempt's scratch folder, under <loopDir>/scratch/; absent in an older marker, or when
+  // the one it names is not a usable path
+  scratch?: string
 }
 
 // slotLine: the slot the prompt's first line names, or null when it names none. The path must be
@@ -55,6 +59,7 @@ export function parseMarker(text: string | null): Marker | null {
   if (!STEPS.includes(o.step as Step) || (o.role !== 'writer' && o.role !== 'reader') || !str(o.branch)) return null
   if (!Array.isArray(o.gateCommands) || !o.gateCommands.every(c => typeof c === 'string')) return null
   if (!int(o.gateTimeoutMs, 1) || !str(o.loopDir) || !o.loopDir.startsWith('/')) return null
+  const loopDir = o.loopDir.replace(/\/+$/, '')
   return {
     v: 1,
     repo: o.repo,
@@ -67,7 +72,8 @@ export function parseMarker(text: string | null): Marker | null {
     pr: int(o.pr, 1) ? o.pr : null,
     gateCommands: (o.gateCommands as string[]).map(c => c.trim()).filter(c => c !== ''),
     gateTimeoutMs: o.gateTimeoutMs,
-    loopDir: o.loopDir.replace(/\/+$/, ''),
+    loopDir,
+    ...(scratchOk(o.scratch, loopDir) ? { scratch: o.scratch } : {}),
   }
 }
 

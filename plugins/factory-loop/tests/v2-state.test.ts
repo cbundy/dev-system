@@ -1091,6 +1091,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     repo: REPO,
     issue: 150,
     slot: '/slots/150',
+    scratch: `${LOOP_DIR}/scratch/150-lx-s6`,
     state: 'building',
     step: 'build',
     attempt: 2,
@@ -1118,6 +1119,10 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     const p = triagePrompt(input())
     expect(p.split('\n')[0]).toBe('factory-slot: /slots/150')
     expect(p).toContain(COMMAND_RULE)
+    expect(p).toContain(`Your scratch folder is ${LOOP_DIR}/scratch/150-lx-s6. It is $TMPDIR in every Bash call.`)
+    expect(p).not.toContain('/tmp')
+    // with no slot there is no marker and no scratch folder to name
+    expect(triagePrompt(input({ slot: null, scratch: null }))).not.toContain('scratch folder')
     expect(p).toContain('1 of 2 triage calls, 0 of 3 fix rounds')
     expect(p).toContain('file: /l/spawns/x.json')
     expect(p).toContain('- fix: not valid here (the branch has no commits beyond the base)')

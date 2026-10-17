@@ -321,7 +321,7 @@ describe('v2 actions in the foundation\'s filters', () => {
 
   test('a key\'s own attempt cap, from its action or its entry, decides when it is used up', () => {
     const failed = (attempts: number) => withLedger(state(), [entry('slot/l1/free', 'slot', { status: 'failed', attempts, endedAt: NOW - HOUR, maxAttempts: 2 })])
-    const free: Action = { kind: 'slot', key: 'slot/l1/free', class: 'free', rule: 'W2', reason: 'free', issue: 1, op: 'free', life: 'x', path: '/p', lease: 'l1', branch: null, marker: null, maxAttempts: 2 }
+    const free: Action = { kind: 'slot', key: 'slot/l1/free', class: 'free', rule: 'W2', reason: 'free', issue: 1, op: 'free', life: 'x', path: '/p', lease: 'l1', branch: null, marker: null, keepScratch: false, maxAttempts: 2 }
     expect(gate(ctxOf(failed(1)), free.key, 'slot', free.maxAttempts)).toBe('go')
     expect(gate(ctxOf(failed(2)), free.key, 'slot', free.maxAttempts)).toBe('exhausted')
     // the entry's own cap stands when the action names none, and the kind's default (3) when neither does
