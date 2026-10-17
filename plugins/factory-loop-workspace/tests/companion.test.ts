@@ -371,8 +371,8 @@ describe('the stop gate', () => {
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, command: 'npm test', exitCode: 1 },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0, command: 'npm test', exitCode: 1 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0 },
     ])
   })
 
@@ -428,9 +428,11 @@ describe('the stop gate', () => {
       expect(w.gateRuns.map(g => g.command)).toEqual(['npm run lint', 'npm test', 'npm run lint', 'npm test'])
       const lines = companionLines(w)
       expect(lines.map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-pass'])
-      expect(lines[0]).toMatchObject({ waitMs: 0, concurrency: 1 })
+      // startedAt is the clock before the turn was asked for, so the queued gate's is not its start after the wait
+      const asked = new Date(NOW).toISOString()
+      expect(lines[0]).toMatchObject({ waitMs: 0, concurrency: 1, startedAt: asked, queuedBehind: 0 })
       expect(lines[1]).toMatchObject({ waitMs: 7_000, queuedBehind: 1, concurrency: 1 })
-      expect(lines[2]).toMatchObject({ waitMs: 7_000, concurrency: 1 })
+      expect(lines[2]).toMatchObject({ waitMs: 7_000, concurrency: 1, startedAt: asked, queuedBehind: 1 })
       expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass', waitMs: 7_000 })
     })
 
@@ -446,7 +448,7 @@ describe('the stop gate', () => {
       first.go()
       await Promise.all([p1, p2])
       expect(companionLines(w).map(l => l.cause)).toEqual(['gate-pass', 'gate-pass'])
-      expect(companionLines(w)[0]).toMatchObject({ concurrency: null })
+      expect(companionLines(w)[0]).toMatchObject({ concurrency: null, startedAt: new Date(NOW).toISOString(), queuedBehind: 0 })
     })
 
     test('a failing first gate gives its turn back', async ($, on) => {
@@ -477,6 +479,9 @@ describe('the stop gate', () => {
       expect(r2.block).toBeUndefined()
       expect(companionLines(w).map(l => l.cause)).toEqual(['gate-unknown', 'gate-wait', 'gate-pass'])
       expect(companionLines(w)[0]).toMatchObject({ reason: 'the stop gate hook failed' })
+      // the catch path's bare line is unchanged: it has no waitMs, startedAt or queuedBehind
+      expect(companionLines(w)[0]).not.toHaveProperty('startedAt')
+      expect(companionLines(w)[0]).not.toHaveProperty('waitMs')
     })
 
     test('a wait past gateWaitTimeoutMs is gate-unknown with the wait\'s why, and the gate never runs; the holder is unaffected', async ($, on) => {
@@ -494,7 +499,7 @@ describe('the stop gate', () => {
       await p1
       const lines = companionLines(w)
       expect(lines.map(l => l.cause)).toEqual(['gate-unknown', 'gate-pass'])
-      expect(lines[0]).toMatchObject({ waitMs: 60_000, concurrency: 1 })
+      expect(lines[0]).toMatchObject({ waitMs: 60_000, concurrency: 1, startedAt: new Date(NOW).toISOString(), queuedBehind: 1 })
       expect(String(lines[0]?.reason)).toContain('waited 60 s for a turn')
       // the turn the timed-out waiter never took is free: a third gate runs at once
       await $.agent.spawn(spawn(BUILD))

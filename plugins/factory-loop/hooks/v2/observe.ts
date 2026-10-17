@@ -434,7 +434,7 @@ export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
     comments: {},
     prs: { prs: [] },
     changed: {},
-    interventions: { companion: [], controlDigest: null, configDigest: null },
+    interventions: { companion: [], gates: [], controlDigest: null, configDigest: null },
     logged: [],
     checkoutBase: null,
     dualWrite: null,
