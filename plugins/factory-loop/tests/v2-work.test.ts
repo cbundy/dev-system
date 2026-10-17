@@ -144,13 +144,24 @@ describe('the design-v2 contract (8.7)', () => {
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 300 }] })).toEqual(['conditions[0].issue 300 is the issue itself, which stays open until its work is done, so the wait would never end'])
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'pr-merged', pr: 300 }] })).toEqual([])
     expect(problems('design-v2', { ...wait, conditions: [conditions[0], conditions[1], conditions[0]] })).toEqual(['conditions[2] repeats issue-closed:57'])
-    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35bb655' }] })).toEqual(['conditions[0]: tag-contains is not yet supported; wait on issue-closed or pr-merged, or ask the owner'])
+    // tag-contains: 7 to 40 hex, stored lower-case, no stray field, none twice
+    const sha40 = 'a'.repeat(40)
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35bb655' }, { kind: 'tag-contains', sha: sha40 }] })).toEqual([])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35BB655' }] })).toEqual([])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: 'xyz1234' }, { kind: 'tag-contains', sha: '35bb65' }, { kind: 'tag-contains', sha: `${sha40}b` }, { kind: 'tag-contains' }] })).toEqual([
+      'conditions[0].sha "xyz1234" must be 7 to 40 hex characters (a commit sha)',
+      'conditions[1].sha "35bb65" must be 7 to 40 hex characters (a commit sha)',
+      `conditions[2].sha "${sha40}b" must be 7 to 40 hex characters (a commit sha)`,
+      'conditions[3].sha undefined must be 7 to 40 hex characters (a commit sha)',
+    ])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35bb655', issue: 5 }] })).toHaveLength(1)
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35bb655' }, { kind: 'tag-contains', sha: '35BB655' }] })).toEqual(['conditions[1] repeats tag-contains:35bb655'])
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 0 }, { kind: 'pr-merged', pr: 1.5 }, { kind: 'pr-merged' }, { kind: 'branch-pushed' }, 'x'] })).toEqual([
       'conditions[0].issue 0 must be a whole number of at least 1',
       'conditions[1].pr 1.5 must be a whole number of at least 1',
       'conditions[2].pr undefined must be a whole number of at least 1',
-      'conditions[3].kind "branch-pushed" is not one of issue-closed, pr-merged',
-      'conditions[4] must be an object { kind, issue } or { kind, pr }',
+      'conditions[3].kind "branch-pushed" is not one of issue-closed, pr-merged, tag-contains',
+      'conditions[4] must be an object { kind, issue }, { kind, pr } or { kind, sha }',
     ])
     // stray fields: a PR number on an issue condition, a field of another kind of answer
     expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue)'])
@@ -160,7 +171,7 @@ describe('the design-v2 contract (8.7)', () => {
     expect(problems('design-v2', { kind: 'wait', conditions })).toEqual(['reason is required'])
     expect(problems('design-v2', { ...wait, reason: 'two\nlines' })).toEqual(['reason must be one line'])
     expect(problems('design-v2', { ...wait, reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
-    expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged, issue | pr }'])
+    expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
   })
@@ -340,10 +351,11 @@ describe('the work prompts (prompts-work.ts)', () => {
     for (const k of ['why_split', 'why_count', 'why_parts', 'why_order']) expect(design).toContain(`"${k}"`)
     expect(design).toContain('"title": "<one line>", "why": "<one line>"')
     // the wait shape: its kinds, the limits, the issue itself excluded, and the release never offered
-    expect(design).toContain('{"kind": "wait", "conditions": [{"kind": "issue-closed", "issue": 57}, {"kind": "pr-merged", "pr": 812}], "reason": "<one line: what you wait for and why>", "brief": null}')
+    expect(design).toContain('{"kind": "wait", "conditions": [{"kind": "issue-closed", "issue": 57}, {"kind": "pr-merged", "pr": 812}, {"kind": "tag-contains", "sha": "35bb655"}], "reason": "<one line: what you wait for and why>", "brief": null}')
     expect(design).toContain('conditions: 1 to 8')
     expect(design).toContain('never #300 itself')
-    expect(design).toContain('No other kind is supported')
+    expect(design).toContain('a release tag that carries a commit')
+    expect(design).not.toContain('No other kind is supported')
     expect(design).toContain('never ask the owner to cut a release')
     expect(design).toContain('you change nothing in the repository')
     expect(design).not.toContain('git push origin')

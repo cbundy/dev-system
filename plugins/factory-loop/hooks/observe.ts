@@ -11,7 +11,7 @@ import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
-import { readMilestone } from './observe-milestone'
+import { newestTag, readMilestone, waitsOnTag } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
@@ -537,7 +537,7 @@ export async function observe(
   }
 
   // milestone and, while it qualifies, the last release (observe-milestone.ts)
-  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run })
+  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run, tagWanted: waitsOnTag(v2Stored?.records ?? []) })
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
 
   // act mode holds GitHub writes and waits while the backoff lasts, and from the pass that met a
@@ -569,7 +569,7 @@ export async function observe(
     checkout,
   })
   if (!v2On) return { state, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: null }
-  const read = await observeV2({ io, rt, cache: cache.v2, run, state, stored: v2Stored, poolJson, github: cache.github, events: week ?? events, backoff: backoffUntil !== null, limited: () => limited })
+  const read = await observeV2({ io, rt, cache: cache.v2, run, state, tag: newestTag(cache), stored: v2Stored, poolJson, github: cache.github, events: week ?? events, backoff: backoffUntil !== null, limited: () => limited })
   return { state: { ...state, githubBackoffUntil: backoffOf(), v2: read.v2 }, commands, queueKnown, ledgerSource: chosen.source, rateLimited: limited, v2Heads: read.heads }
 }
 

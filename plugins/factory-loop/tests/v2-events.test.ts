@@ -190,20 +190,23 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
     },
   })
 
-  test('issue:<n> and pr:<n>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {
+  test('issue:<n>, pr:<n> and tag:<sha>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {
     const wait: WaitCondition[] = [
       { kind: 'issue-closed', issue: 57 },
       { kind: 'pr-merged', pr: 812 },
+      { kind: 'tag-contains', sha: '35bb655' },
     ]
-    expect(tokensOf(eventNote(waiting(wait))).get('wait')).toBe('issue:57,pr:812')
+    expect(tokensOf(eventNote(waiting(wait))).get('wait')).toBe('issue:57,pr:812,tag:35bb655')
     expect(tokensOf(eventNote(waiting(null))).get('wait')).toBe('none')
     expect(roundTrip(waiting(wait))).toEqual(waiting(wait))
-    const note = eventNote(waiting(wait)).replace(' wait=issue:57,pr:812', '')
+    const note = eventNote(waiting(wait)).replace(' wait=issue:57,pr:812,tag:35bb655', '')
     const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note }
     expect(parseTransition(row)?.record.wait).toBeNull()
     // a token that does not read is no transition
     expect(parseTransition({ ...row, note: `${note} wait=issue:0` })).toBeNull()
-    expect(parseTransition({ ...row, note: `${note} wait=tag:35bb655` })).toBeNull()
+    expect(parseTransition({ ...row, note: `${note} wait=tag:35bb655` })?.record.wait).toEqual([{ kind: 'tag-contains', sha: '35bb655' }])
+    expect(parseTransition({ ...row, note: `${note} wait=tag:35BB655` })).toBeNull()
+    expect(parseTransition({ ...row, note: `${note} wait=tag:35bb65` })).toBeNull()
   })
 })
 

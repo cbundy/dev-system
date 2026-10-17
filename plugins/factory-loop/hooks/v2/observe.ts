@@ -52,6 +52,8 @@ export type SourceCtx = {
   limited: () => boolean
   unread: readonly PrUnread[]
   kept: readonly PrView[]
+  // the newest release tag observe read (observe-milestone.ts); null when none is known
+  tag: string | null
 }
 
 // What the store holds for v2, as register.ts passes it (v2/store.ts): records null when the key
@@ -165,6 +167,7 @@ function waitOf(raw: unknown): IssueRecord['wait'] | undefined {
     const o = c !== null && typeof c === 'object' ? (c as Record<string, unknown>) : {}
     if (o.kind === 'issue-closed' && isInt(o.issue, 1)) out.push({ kind: 'issue-closed', issue: o.issue })
     else if (o.kind === 'pr-merged' && isInt(o.pr, 1)) out.push({ kind: 'pr-merged', pr: o.pr })
+    else if (o.kind === 'tag-contains' && typeof o.sha === 'string' && /^[0-9a-f]{7,40}$/.test(o.sha)) out.push({ kind: 'tag-contains', sha: o.sha })
     else return undefined
   }
   return out
@@ -264,6 +267,8 @@ export type ObserveV2Input = {
   // observe's own run, which logs each command and runs it with the environment it is given
   run: (argv: string[], stdin?: string, timeoutMs?: number, env?: Record<string, string>) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   state: State
+  // the newest release tag (observe-milestone.ts); none or null when unknown
+  tag?: string | null
   // the store's, as register.ts read it; undefined when it read none
   stored: V2Stored | undefined
   // `treehouse status --json` as observe read it this pass; null when it did not
@@ -350,6 +355,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     limited: input.limited,
     unread: cache.prs.unread ?? [],
     kept,
+    tag: input.tag ?? null,
   }
   const prs = await readers.prs(ctx)
   sources.prs = prs.source

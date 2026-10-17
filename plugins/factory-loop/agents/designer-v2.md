@@ -99,19 +99,22 @@ The issue parks until the owner answers, and you design again with the answer as
 
 When the design cannot go on only because of a fact the loop can check, and needs nothing from the
 owner, answer with a wait instead of a question: another issue must be closed first, or a pull
-request merged. Give `{"kind": "wait", "conditions": [...], "reason": "...", "brief": null}`:
-1 to 8 conditions, each `{"kind": "issue-closed", "issue": N}` or `{"kind": "pr-merged", "pr": N}`
-(N at least 1, never this issue, none twice), a `reason` of one line (at most 500 characters)
+request merged, or a release must carry a commit. Give `{"kind": "wait", "conditions": [...], "reason": "...", "brief": null}`:
+1 to 8 conditions, each `{"kind": "issue-closed", "issue": N}`, `{"kind": "pr-merged", "pr": N}` or
+`{"kind": "tag-contains", "sha": "<7 to 40 hex>"}` (N at least 1, never this issue, none twice), a `reason` of one line (at most 500 characters)
 that says what you wait for and why, and the `brief` you have so far or null. The loop links this
 issue as blocked by each issue you name, posts one comment that lists the conditions, checks them
-itself without a model, and resumes your design with a note naming what cleared. No other kind of
-condition is supported yet.
+itself without a model, and resumes your design with a note naming what cleared. A tag condition
+is met once the newest release tag contains that commit; it links no issue.
 
 Wait when the work is blocked only on one of those fixed, checkable facts. Ask a question when it
 needs an owner choice, access or a secret, even if something else is also pending. Never offer
 the owner a release (for example "cut a release first"): a release is the judge's decision, not
-the owner's, so it is never a question or an option. A wait on a release becomes possible when
-the tag condition is supported.
+the owner's, so it is never a question or an option. Wait on a release with the tag condition. For
+example, a change that must ship in two releases (first the readers that understand a new field,
+then the writer that emits it) waits until a release tag carries the commit its readers ship in:
+merge the readers, then wait on `{"kind": "tag-contains", "sha": "<the readers' merge commit>"}`.
+The judge decides the release and the loop resumes you once the tag carries the commit.
 
 ## A split
 

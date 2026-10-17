@@ -24,7 +24,7 @@ export const LIMITS: Readonly<{
 }>
 export const REASON_KEYS: readonly ['why_split', 'why_count', 'why_parts', 'why_order']
 export const WAIT_CONDITIONS: Readonly<{ min: number; max: number }>
-export const WAIT_KINDS: readonly ['issue-closed', 'pr-merged']
+export const WAIT_KINDS: readonly ['issue-closed', 'pr-merged', 'tag-contains']
 export const CHILDREN: Readonly<{ min: number; max: number }>
 export const CHILD_KEY: RegExp
 export function rolloutOf(brief: string): string | null

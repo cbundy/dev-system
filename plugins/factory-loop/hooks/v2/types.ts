@@ -64,9 +64,9 @@ export const STEP_AGENT: Readonly<Record<AgentStep, `factory-loop:${string}`>> =
   triage: 'factory-loop:triage',
 }
 
-// One condition a waiting record waits on (3.2, 8.7): an issue closed or a PR merged. A record
-// waits until every one holds. `tag-contains` joins them with #838.
-export type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number }
+// One condition a waiting record waits on (3.2, 8.7): an issue closed, a PR merged or a release
+// tag that carries a commit. A record waits until every one holds.
+export type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number } | { kind: 'tag-contains'; sha: string }
 
 // The record (3.2). The slot is not a field: a record holds the slot whose lease holder is
 // `factory-loop:<N>:<life>` (10.1).
@@ -402,7 +402,8 @@ export type Lease = { path: string; lease: string; holder: string; issue: number
 export type IssueRead = { at: Ms; open: boolean | null; labels: string[] | null }
 
 // One wait condition as the last successful read showed it, and when that read was taken (4.4).
-export type WaitRead = { at: Ms; held: boolean }
+// `tag`: the release tag a tag-contains read compared against, so it is read again only when the tag changes.
+export type WaitRead = { at: Ms; held: boolean; tag?: string }
 
 // A trusted comment on an issue (callum-flow-issue-read --comments), for a resume's note (11).
 export type IssueComment = { body: string; at: Ms; url: string | null }
@@ -432,7 +433,7 @@ export type V2State = {
   // trusted comments of parked records whose label a person removed, by issue number
   comments: Record<number, IssueComment[]>
   prs: PrsRead
-  // the conditions waiting records wait on, by key (`issue:57`, `pr:812`): the last read that
+  // the conditions waiting records wait on, by key (`issue:57`, `pr:812`, `tag:35bb655`): the last read that
   // showed one; a condition with no entry was not read, or its read failed, and stays open
   waits?: Record<string, WaitRead>
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:

@@ -41,6 +41,8 @@ export type EventData = {
   // a step's result in words: the builder's reason, the findings, the failed checks, the conflict,
   // the guard's FAIL lines
   text?: string
+  // C1: the release tag the tag-contains reads compared against
+  tag?: string
   // a designer's or the triage's question for the owner (T3, X4)
   question?: string
   // T2: the brief comment's URL, once the loop posted it
@@ -163,8 +165,10 @@ function lastTwo(r: IssueRecord, e: TableEvent): string {
 const none = () => ({})
 
 // clearedNote: the line a resumed designer reads in its notes, naming each condition that held.
-function clearedNote(wait: readonly WaitCondition[]): string {
-  const held = wait.map(c => (c.kind === 'issue-closed' ? `#${c.issue} closed` : `PR #${c.pr} merged`))
+function clearedNote(wait: readonly WaitCondition[], tag: string | undefined): string {
+  const held = wait.map(c =>
+    c.kind === 'issue-closed' ? `#${c.issue} closed` : c.kind === 'pr-merged' ? `PR #${c.pr} merged` : `release ${tag ?? 'tag'} contains ${c.sha}`,
+  )
   // not ending on "closed": a prompt rewrites a closing keyword at a line's end (prompts.ts neutral)
   return `The loop resumed this: ${held.join(', ')}; every condition holds.`
 }
@@ -363,7 +367,7 @@ const ROWS: readonly Row[] = [
     states: ['waiting'],
     on: 'cleared',
     next: 'queued',
-    change: r => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [])) }),
+    change: (r, e) => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [], dataOf(e).tag)) }),
     via: 'cleared',
   },
   // the parked state (S6)

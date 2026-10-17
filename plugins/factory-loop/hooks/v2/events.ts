@@ -184,10 +184,10 @@ function unlist(v: string | undefined): string[] | undefined {
   return v === NONE ? [] : v.split(',').map(dec)
 }
 
-// The wait conditions (3.2): `issue:<n>` and `pr:<n>`, comma-joined; `none` outside waiting.
+// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined; `none` outside waiting.
 function waitToken(wait: readonly WaitCondition[] | null): string {
   if (wait == null || wait.length === 0) return NONE
-  return wait.map(c => (c.kind === 'issue-closed' ? `issue:${c.issue}` : `pr:${c.pr}`)).join(',')
+  return wait.map(c => (c.kind === 'issue-closed' ? `issue:${c.issue}` : c.kind === 'pr-merged' ? `pr:${c.pr}` : `tag:${c.sha}`)).join(',')
 }
 
 // unwait: the conditions of a wait token; null for `none` or an absent token (a note from before
@@ -196,6 +196,11 @@ function unwait(v: string | undefined): WaitCondition[] | null | undefined {
   if (v === undefined || v === NONE) return null
   const out: WaitCondition[] = []
   for (const item of v.split(',')) {
+    const t = /^tag:([0-9a-f]{7,40})$/.exec(item)
+    if (t !== null) {
+      out.push({ kind: 'tag-contains', sha: t[1] as string })
+      continue
+    }
     const m = /^(issue|pr):([1-9]\d*)$/.exec(item)
     if (m === null) return undefined
     out.push(m[1] === 'issue' ? { kind: 'issue-closed', issue: Number(m[2]) } : { kind: 'pr-merged', pr: Number(m[2]) })

@@ -145,10 +145,10 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `usage` | `usage-check.sh` + `$.session.usage()` | as v1 | kept |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | v1's `pool` without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
-| `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
+| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify) | as v1 (`milestoneEveryMs`) | kept (the release task); the tag view is new (8.7) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
-| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`; no model call | `githubEveryMs` per condition, oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | new; a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
+| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | new; a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
 | `dualWrite` | act mode with the v2 planner only: `callum-flow-event --new-path --repo R` (exit 0: dual write is on and stdout is the new log's path; any other exit, an older image: off), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | new; its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
@@ -671,7 +671,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
-| waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none. The link stays after the resume |
+| waiting | `comment` on the issue, once (`park-text.ts` `waitText`): `### Waiting on a condition`, the conditions one per line (`issue #57 must be closed on GitHub`, `PR #812 must be merged on GitHub`, `release tag must contain commit <sha>`), `Why:` the designer's reason, and that the loop checks the conditions itself and resumes the issue when they hold; no tick boxes and no question, and no owner tell. For each `issue-closed` condition, action `link` (key `.../link/<blocker>`): the issue is linked as `blocked_by` that issue, reusing the split's idempotent link (8.7); a closed blocker is skipped, and a pull request is no blocker (a wait on one is no link), so a PR condition makes none, and neither does a tag condition. The link stays after the resume |
 | closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
@@ -1382,7 +1382,7 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
-  conditions?: [{ kind: "issue-closed", issue: N } | { kind: "pr-merged", pr: N }], reason? }`.
+  conditions?: [{ kind: "issue-closed", issue: N } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha }], reason? }`.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
@@ -1400,19 +1400,30 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 - **A wait** (`kind: "wait"`, the designer's choice when the work is blocked only on a fact the loop
   can check; an owner choice is a `question`). `conditions` are 1 to 8 of `issue-closed` (the
-  issue is closed) or `pr-merged` (the PR is merged), N at least 1, never the issue itself and
-  none twice; `reason` is one line of at most 500 characters; `brief` is an optional draft, as a
-  question's. `tag-contains` is refused ("not yet supported"; #838 adds it). Stray fields are
+  issue is closed), `pr-merged` (the PR is merged) or `tag-contains` (`{ kind: "tag-contains",
+  sha }`: the newest release tag carries that commit; `sha` is 7 to 40 hex digits, stored
+  lower-case), N at least 1, never the issue itself and none twice (a sha twice, in any case, is
+  twice); `reason` is one line of at most 500 characters; `brief` is an optional draft, as a
+  question's. Stray fields are
   refused as for the other kinds, and `bin/factory-answer` reports "a wait on <n> conditions". The
   step is not-ok(wait) at once, with nothing posted (T16); the entry actions (4.5) then label the
   issue, post the one comment and make the `blocked_by` links. The designer never offers the owner
   a release: whether to cut one is the judge's decision (11), so a release wait is a `tag-contains`
-  wait once #838 lands.
+  wait: for example a change that ships in two releases waits until a release tag carries the
+  commit its readers ship in. The transition note's `wait` token writes it as `tag:<sha>`.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
   `callum-flow-issue-read --json N` shows it closed, a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
-  pass) keeps the condition open and never clears it. When every condition holds the record takes
-  `cleared` (C1), and the cleared note is the resumed designer's.
+  pass) keeps the condition open and never clears it. A tag condition is read by the compare of
+  the commit with the newest release tag, `gh api repos/R/compare/<tag>...<sha> --jq .status`:
+  `behind` or `identical` holds, `ahead` or `diverged` does not, and a failed read, no release yet
+  or any other output keeps it open. A sha read for the current tag is read again only when the tag
+  changes, and a held one stays held. The newest tag is read with gh only (`gh release view --repo R
+  --json tagName`) on the milestone cadence whenever a stored record waits on a `tag-contains`
+  condition, whether or not the Next milestone qualifies (the full release read, when it qualifies,
+  refreshes it too). When every condition holds the record takes `cleared` (C1), and the cleared
+  note is the resumed designer's; for a tag condition it names the tag the read saw: "release
+  v0.51.0 contains 35bb655".
 
 ## 9. The merge queue
 
@@ -1915,9 +1926,9 @@ still running is `stale`: the loop plans normally again from that pass, removes 
   deleted (13).
 - **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
-  clock hour, whatever its key), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
+  clock hour, whatever its key; also while a record waits on a `tag-contains` condition, even with open items or none closed, a readable milestone source still required), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
   tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
-  `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form); the judge
+  `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form), and `waiting` (the issues of the records that wait on a release tag, comma-joined; omitted when none); a release wait is the judge's to answer, never the owner's; the judge
   decides whether to cut the release now or `hold` until the next hour, and cuts the release with its standing
   authority (OB:89-90; PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues, which v1 did
