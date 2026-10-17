@@ -4,7 +4,7 @@
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode', 'trace', 'planner',
+  'update', 'drop', 'note', 'mode', 'trace', 'planner', 'config',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -12,6 +12,7 @@ export type OpName = (typeof OPS)[number]
 // and `override off` are the only way to lift those two, as `only off` and `update off` are.
 export const USAGE: Record<OpName, string> = {
   status: 'status',
+  config: 'config',
   pause: 'pause <N>',
   unpause: 'unpause <N>',
   skip: 'skip <N>',
@@ -55,6 +56,7 @@ export function hintText(): string {
 // What each op does, one line each, for `/factory help` (SPEC 4.3).
 export const MEANING: Record<OpName, string> = {
   status: "show the loop's last pass and the owner directives in force",
+  config: 'show the settings the loop runs with, each with its source',
   pause: 'take no action on issue N (its claim still renews)',
   unpause: 'undo pause',
   skip: 'never claim issue N',
