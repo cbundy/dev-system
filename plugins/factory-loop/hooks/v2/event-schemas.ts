@@ -206,8 +206,11 @@ export const SCHEMAS: Record<string, Shape> = {
     "type": "object",
     "x-issue": "optional",
     "properties": {
+      "additions": {"minimum":0,"type":["integer","null"]},
       "branch": {"type":["null","string"]},
       "by": {"enum":["factory","hand"]},
+      "deletions": {"minimum":0,"type":["integer","null"]},
+      "files": {"items":{"minLength":1,"type":"string"},"type":["array","null"]},
       "head": {"pattern":"^[0-9a-f]{7,40}$","type":["null","string"]},
       "pr": {"minimum":1,"type":["integer","null"]},
       "recovered": {"type":"boolean"},

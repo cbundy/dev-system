@@ -440,6 +440,9 @@ A pull request for the issue was merged. Written by callum-flow-merge on the dev
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The commit that was merged, when known. |
 | `by` | enum | required | no | one of "factory", "hand" |  | factory: the factory merged it; hand: a person merged it outside the factory. |
 | `recovered` | boolean | required | no |  |  | true when the loop logged it afterwards because no merged event was recorded at the merge. |
+| `files` | array of string | optional | yes | items: minLength 1 |  | The repo-relative paths the merged pull request changed, taken from GitHub's pull request files at merge time. Complete up to GitHub's own cap on that list. null when unknown, for example on a recovered merge or a pr of null. |
+| `additions` | integer | optional | yes | minimum 0 |  | The pull request's total lines added, as GitHub reports them at merge time. null when unknown. |
+| `deletions` | integer | optional | yes | minimum 0 |  | The pull request's total lines deleted, as GitHub reports them at merge time. null when unknown. |
 
 Example:
 
