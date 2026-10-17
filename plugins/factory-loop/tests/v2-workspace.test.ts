@@ -37,7 +37,7 @@ const leaseFor = (r: Pick<IssueRecord, 'issue' | 'life'>): Lease => ({ path: `/s
 // world: these records, each in a slot state holding its slot, every v2 source read, and the rail
 // as given (absent: not read).
 function world(records: IssueRecord[], workspace: WorkspaceRead | undefined, over: Partial<State> = {}): State {
-  const v2: V2State = { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK }, leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor) }
+  const v2: V2State = { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK }, leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor) }
   if (workspace !== undefined) v2.workspace = workspace
   return { ...baseState(over), v2 }
 }

@@ -27,6 +27,7 @@ import { entryKey, lifeAt, transitionKey } from './keys'
 import { agentPlan, causeOf, leaseOf, leaseStep, lifeEntries, notBuiltStep, triggerOf } from './rules-agent'
 import type { StepPlan, StepRead } from './rules-agent'
 import { claimRules, heartbeatRules, reclaimLost } from './rules-claim'
+import { dualWriteRules } from './rules-dualwrite'
 import { ensureActions, entryDone, entryItems, parkedTell, stalledOf, stalledTell, transitionLogged } from './rules-entry'
 import type { EntryItem } from './rules-entry'
 import { PLANS as QUEUE } from './rules-queue'
@@ -280,6 +281,7 @@ function recordRules(ctx: V2Ctx, r: IssueRecord, items: readonly EntryItem[]): v
 // pass that writes one (3.4).
 export function stateRules(ctx: V2Ctx): void {
   heartbeatRules(ctx)
+  dualWriteRules(ctx)
   const records = [...ctx.v2.records].sort((a, b) => a.issue - b.issue || (lifeAt(a.life) ?? 0) - (lifeAt(b.life) ?? 0))
   const items = records.map(r => entryItems(ctx, r, leaseOf(ctx, r)))
   const labels = items.some(list => list.some(i => i.action.kind === 'label' && ctx.byKey.get(i.action.key)?.status !== 'done'))

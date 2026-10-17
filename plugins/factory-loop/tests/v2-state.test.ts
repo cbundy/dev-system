@@ -52,7 +52,7 @@ function world(records: IssueRecord[], over: Partial<State> = {}, v2: Partial<V2
     ...s,
     v2: {
       ...base,
-      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK },
+      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK },
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
       ...v2,
     },

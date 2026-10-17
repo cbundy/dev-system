@@ -149,6 +149,21 @@ test("every event v2 builds is one callum-flow-event takes, and reads back from 
   }
 });
 
+test("a via=dual-write transition goes through the real writer: the old line reads back, and the new log's line carries the same life, seq and via", () => {
+  const e = { state: "transition", record: record(), row: "T7", from: "building", via: "dual-write" };
+  const line = log(ev.eventArgv(e));
+  const back = ev.parseEvent({ state: line.state, issue: line.issue, branch: line.branch, pr: line.pr, head: line.head, note: line.note });
+  assert.deepEqual(back, e);
+  const newLines = fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+  const got = JSON.parse(newLines[newLines.length - 1]);
+  const read = reader.readEvent(got);
+  assert.equal(got.issue, 571);
+  assert.equal(read.type, "transition");
+  assert.equal(read.data.via, "dual-write");
+  assert.equal(read.data.life, "ss1x2k");
+  assert.equal(read.data.seq, 7);
+});
+
 test("a fixer's verdict is logged as the fixer; every other event as the CLI's default actor", () => {
   for (const e of events()) {
     const line = log(ev.eventArgv(e));

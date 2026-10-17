@@ -48,7 +48,7 @@ function world(records: IssueRecord[], over: { free?: number; leases?: Lease[]; 
   return {
     ...s,
     ledger: [...s.ledger, ...ledger],
-    v2: { ...base, sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK }, leases: leases ?? records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor), ...v2 },
+    v2: { ...base, sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK }, leases: leases ?? records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor), ...v2 },
   }
 }
 
@@ -228,7 +228,7 @@ describe('W2: free', () => {
 
   test('nothing is leased or freed while the pool\'s leases were not read: every slot would look gone', () => {
     const r = queued(95)
-    const p = plan(world([r, rec(96, { state: 'parked', step: null })], {}, { sources: { store: OK, leases: { ok: false, at: null, error: 'treehouse status did not read' }, prs: OK, interventions: OK, comments: OK } }))
+    const p = plan(world([r, rec(96, { state: 'parked', step: null })], {}, { sources: { store: OK, leases: { ok: false, at: null, error: 'treehouse status did not read' }, prs: OK, interventions: OK, comments: OK, dualWrite: OK } }))
     expect(slots(p)).toEqual([])
     expect(said(p, null)).toContain('W1, W2: the pool\'s leases were not read (treehouse status did not read); no slot is leased or freed')
   })
@@ -239,7 +239,7 @@ describe('W2: free', () => {
 const SHA = '9e01b77c0ffee000000000000000000000000002'
 const transitions = (p: PlanResult, n: number) => p.actions.filter(a => a.kind === 'transition' && a.issue === n)
 const agentSteps = (p: PlanResult, n: number) => p.actions.filter(a => a.kind === 'agent-step' && a.issue === n)
-const UNREAD = { store: OK, leases: { ok: false, at: null, error: 'treehouse status did not read' }, prs: OK, interventions: OK, comments: OK }
+const UNREAD = { store: OK, leases: { ok: false, at: null, error: 'treehouse status did not read' }, prs: OK, interventions: OK, comments: OK, dualWrite: OK }
 
 // prepared: the attempt's prepare, done in this lease.
 function prepared(r: IssueRecord, l: Lease, attempt = 1): LedgerEntry {

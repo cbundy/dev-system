@@ -16,6 +16,8 @@ import { onceKey } from './events'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
+import { readDualWrite } from './sources-dualwrite'
+import type { DualWriteRead } from './sources-dualwrite'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
@@ -67,10 +69,12 @@ export type V2Cache = {
   // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
   changed: Record<number, Ms>
   prs: PrsRead
+  // the dual-write probe and the new log's read, once per load; null: not yet read
+  dualWrite: { at: Ms; read: DualWriteRead } | null
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -364,6 +368,17 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   const facts = await readers.interventions({ ...ctx, heads: prs.heads })
   sources.interventions = facts.source
 
+  // dual write (4.1): act mode with the v2 planner only, once per load; a failed read retries when due
+  let dualWrite: V2State['dualWrite'] = null
+  sources.dualWrite = { ok: true, at: now }
+  if (rt.mode === 'act' && rt.config.planner === 'v2') {
+    if (cache.dualWrite === null || (cache.dualWrite.read.error !== null && now - cache.dualWrite.at >= rt.config.githubEveryMs)) {
+      cache.dualWrite = { at: now, read: await readDualWrite(ctx) }
+    }
+    dualWrite = cache.dualWrite.read.dualWrite
+    if (cache.dualWrite.read.error !== null) sources.dualWrite = { ok: false, at: null, error: cache.dualWrite.read.error }
+  }
+
   // the tripwire's base moves only past a read with nothing left untold (10.7)
   cache.checkoutBase = checkoutBaseOf(cache.checkoutBase, state.checkout, state.ledger, now)
   // the workspace rail: does the companion run in this session and process (10.9)
@@ -381,6 +396,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
     checkoutBase: cache.checkoutBase,
+    dualWrite,
   }
   if (workspace !== undefined) v2.workspace = workspace
   return { v2, heads: prs.heads }
@@ -409,7 +425,7 @@ export function commentsOf(json: string): IssueComment[] | null {
 export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
   const off: Source = { ok: false, at: null, error: 'not read' }
   return {
-    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off },
+    sources: { store: { ok: true, at: now }, leases: off, prs: off, interventions: off, comments: off, dualWrite: { ok: true, at: now } },
     records,
     recordsFrom: records.length > 0 ? 'store' : 'none',
     heads: {},
@@ -421,5 +437,6 @@ export function emptyV2State(now: Ms, records: IssueRecord[] = []): V2State {
     interventions: { companion: [], controlDigest: null, configDigest: null },
     logged: [],
     checkoutBase: null,
+    dualWrite: null,
   }
 }

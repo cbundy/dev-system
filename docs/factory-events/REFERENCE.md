@@ -113,7 +113,7 @@ Example:
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
-| `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry or unreject. An open list: handle a code you do not know. |
+| `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover. |
 | `why` | enum | `transition` | closed: why the life ended; null otherwise. |
 
@@ -604,7 +604,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `table_row` | string | required | no | pattern `^([A-Z][0-9]+\|recovered)$` | yes | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `from_state` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed", null | yes | The state before; null for a life's first transition. |
 | `to_state` | enum | required | no | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed" | yes | The state after: the issue's state from now on. |
-| `via` | string | required | no | pattern `^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$` | yes | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry or unreject. An open list: handle a code you do not know. |
+| `via` | string | required | no | pattern `^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$` | yes | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `seq_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `state_since` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `resume_to` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed", null |  | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; null otherwise. |

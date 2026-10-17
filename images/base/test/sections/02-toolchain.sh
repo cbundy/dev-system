@@ -18,7 +18,8 @@ check "no-mistakes is the pinned version from the image stamp, with update check
 check "callum-flow-event writes a line, rejects an unknown state, and event-push-loop is installed" in_image '
   d=$(mktemp -d) && CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event ready --issue 1 && [ "$(wc -l < "$d"/*.jsonl)" = 1 ] &&
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && [ -r /usr/local/share/dev-system/factory-event-translate.js ] &&
-  ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ]'
+  ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ] &&
+  [ -x /usr/local/share/dev-system/factory-event-push-loop ]'
 check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
   [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
   ! /usr/local/share/dev-system/nm-export 2>/dev/null'

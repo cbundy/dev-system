@@ -56,6 +56,8 @@ AGENTSVIEW_PUSH_LOCK=/tmp/dev-agentsview-push.lock
 AGENTSVIEW_PUSH_LOG=/tmp/dev-agentsview-push.log
 EVENT_PUSH_LOCK=/tmp/dev-event-push.lock
 EVENT_PUSH_LOG=/tmp/dev-event-push.log
+FACTORY_EVENT_PUSH_LOCK=/tmp/dev-factory-event-push.lock
+FACTORY_EVENT_PUSH_LOG=/tmp/dev-factory-event-push.log
 NM_PUSH_LOCK=/tmp/dev-nm-push.lock
 NM_PUSH_LOG=/tmp/dev-nm-push.log
 HEARTBEAT_LOCK=/tmp/dev-heartbeat.lock
@@ -630,6 +632,29 @@ start_event_push() {
   log "started factory event push (log: $EVENT_PUSH_LOG)"
 }
 
+# 8b2. The new factory event log push (cbundy/dev-system#740): with the writer
+#      secret of the factory database, keep factory-event-push-loop running so
+#      the lines callum-flow-event appends to <events dir>/factory reach
+#      factory.event_store. start_event_push is separate and unchanged.
+start_factory_event_push() {
+  local rc=0
+  # shellcheck source=factory-db.sh
+  . /usr/local/share/dev-system/factory-db.sh
+  factory_db_url writer >/dev/null || rc=$?
+  case "$rc" in
+    0) ;;
+    1) return 0 ;;
+    *) log "WARNING: $(factory_db_url_file writer) is empty or not readable - factory event push (new log) not started."; return 0 ;;
+  esac
+  command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - factory event push (new log) not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
+  [ -w "${CALLUM_EVENTS_DIR:-/persist/events}" ] || { log "WARNING: ${CALLUM_EVENTS_DIR:-/persist/events} is not writable - factory event push (new log) not started."; return 0; }
+  flock -n "$FACTORY_EVENT_PUSH_LOCK" true 2>/dev/null || return 0
+  : > "$FACTORY_EVENT_PUSH_LOG"
+  setsid nohup flock -n "$FACTORY_EVENT_PUSH_LOCK" /usr/local/share/dev-system/factory-event-push-loop \
+    >> "$FACTORY_EVENT_PUSH_LOG" 2>&1 < /dev/null &
+  log "started factory event push (new log) (log: $FACTORY_EVENT_PUSH_LOG)"
+}
+
 # 8c. The no-mistakes pipeline data push (cbundy/dev-system#273): with the same
 #     PostgreSQL URL, keep nm-push-loop running so state.sqlite is mirrored into
 #     the nomistakes schema.
@@ -751,6 +776,7 @@ recover_no_mistakes
 write_versions
 start_agentsview_push
 start_event_push
+start_factory_event_push
 start_nm_push
 start_heartbeat
 check_shared_dir
