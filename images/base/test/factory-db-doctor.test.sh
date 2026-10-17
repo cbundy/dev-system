@@ -63,6 +63,7 @@ ADMIN_PW=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^[^:@/?]*:\([^@/?]*\)@.*/\1/p
 
 # Reads no ambient config.
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL FACTORY_DB_MIGRATIONS_DIR
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/ws-secrets"  # never the ambient workspace folder
 export DEV_SECRETS_DIR="$tmpdir/secrets"
 mkdir -p "$DEV_SECRETS_DIR"
 
@@ -137,6 +138,49 @@ rc=0
 out=$(FACTORY_DB_WRITER_URL="$WURL" DEV_SECRETS_DIR="$tmpdir/none" bash -c '. "$1"; factory_db_check writer' _ "$ROOT/images/base/factory-db.sh" 2>&1) || rc=$?
 expect 0 "OK" "FACTORY_DB_WRITER_URL"
 echo "ok: the environment wins over the file"
+
+# -- 4b. a workspace on another database: its own files win over the shared ones
+db2="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')_ws"
+names="$names $db2"
+FACTORY_DB_ADMIN_URL=$ADMIN FACTORY_DB_WRITER_PASSWORD=$WPW FACTORY_DB_READER_PASSWORD=$RPW \
+  bash "$BOOTSTRAP" --db "$db2" > "$tmpdir/boot2.out" 2>&1 || fail "bootstrap 2: $(cat "$tmpdir/boot2.out")"
+WURL2=$(url_for "$db2" "${db2}_writer" "$WPW")
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/ws-secrets"
+WSFILE="$DEV_WORKSPACE_SECRETS_DIR/factory-db-writer-url"
+check writer
+expect 0 "OK" "database $db " "$DEV_SECRETS_DIR/factory-db-writer-url"
+absent "$DEV_WORKSPACE_SECRETS_DIR"
+[ "$(factory_db_url_file writer)" = "$DEV_SECRETS_DIR/factory-db-writer-url" ] || fail "url_file should be the shared file"
+echo "ok: with no workspace folder the shared file is used and named"
+mkdir -p "$DEV_WORKSPACE_SECRETS_DIR"
+printf '%s\n' "$WURL2" > "$WSFILE"
+check writer
+expect 0 "OK" "database $db2 " "$WSFILE"
+absent "$WPW"
+[ "$(factory_db_url_file writer)" = "$WSFILE" ] || fail "url_file should be the workspace file"
+[ "$(factory_db_url writer)" = "$WURL2" ] || fail "factory_db_url should return the workspace URL"
+[ "$(factory_db_url reader)" = "$RURL" ] || fail "the reader should still use the shared file"
+check reader
+expect 0 "OK" "database $db " "$DEV_SECRETS_DIR/factory-db-reader-url"
+echo "ok: the workspace file wins, per role, and the shared database is untouched"
+rc=0
+out=$(FACTORY_DB_WRITER_URL="$WURL" bash -c '. "$1"; factory_db_check writer' _ "$ROOT/images/base/factory-db.sh" 2>&1) || rc=$?
+expect 0 "OK" "database $db " "FACTORY_DB_WRITER_URL"
+echo "ok: the environment wins over the workspace file"
+: > "$WSFILE"
+check writer
+expect 2 "FAIL" "$WSFILE" "empty or not readable"
+rc=0
+factory_db_url writer > /dev/null || rc=$?
+[ "$rc" = 2 ] || fail "an empty workspace file must return 2, got $rc"
+echo "ok: an empty workspace file fails, with no fallback to the shared one"
+rm -f "$WSFILE"
+mv "$DEV_SECRETS_DIR/factory-db-writer-url" "$tmpdir/keep-writer"
+check writer
+expect 1 "WARN" "$DEV_WORKSPACE_SECRETS_DIR/factory-db-writer-url" "$DEV_SECRETS_DIR/factory-db-writer-url" "docs/factory-db.md"
+echo "ok: not configured names both folders"
+mv "$tmpdir/keep-writer" "$DEV_SECRETS_DIR/factory-db-writer-url"
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
 
 # -- 5. wrong role
 cp "$DEV_SECRETS_DIR/factory-db-reader-url" "$DEV_SECRETS_DIR/factory-db-writer-url"

@@ -97,3 +97,21 @@ awk -v a="${first#*|}" -v b="${second#*|}" 'BEGIN { exit !(b > a) }' || fail "la
 [ "$(q "$db" "SELECT stale FROM factory.workers_status WHERE device = 'dev-box'")" = f ] || fail "the worker should not be stale"
 grep -q 'permission denied\|ERROR' "$tmpdir/beat.out" && fail "the writer beat logged an error: $(cat "$tmpdir/beat.out")"
 echo "heartbeat-loop factory-db: ok"
+
+# a workspace on another database: the writer file in its own folder (no env var) takes the beat
+db2="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')_ws"
+names="$names $db2"
+FACTORY_DB_ADMIN_URL=$ADMIN FACTORY_DB_WRITER_PASSWORD=$WPW \
+  bash "$BOOTSTRAP" --db "$db2" > "$tmpdir/boot2.out" 2>&1 || fail "bootstrap 2: $(cat "$tmpdir/boot2.out")"
+mkdir -p "$tmpdir/ws-secrets"
+printf '%s\n' "$(url_for "$db2" "${db2}_writer" "$WPW")" > "$tmpdir/ws-secrets/factory-db-writer-url"
+printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url"
+q "$db" "DELETE FROM factory.workers" > /dev/null
+echo idle > "$tmpdir/state"
+DEV_SYSTEM_SHARE="$tmpdir/share" DEV_HEARTBEAT_DIR="$tmpdir/hb" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
+  DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" \
+  DEV_WORKSPACE_SECRETS_DIR="$tmpdir/ws-secrets" timeout 120 bash "$LOOP" --once > "$tmpdir/beat.out" 2>&1 \
+  || fail "workspace-override beat should succeed: $(cat "$tmpdir/beat.out")"
+[ "$(q "$db2" "SELECT count(*) FROM factory.workers")" = 1 ] || fail "the beat should land in the workspace database"
+[ "$(q "$db" "SELECT count(*) FROM factory.workers")" = 0 ] || fail "the shared database must stay untouched"
+echo "heartbeat-loop workspace override: ok"

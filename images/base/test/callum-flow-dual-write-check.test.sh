@@ -62,6 +62,7 @@ q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "$ADMIN_USER" "$ADMIN_PW
 
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL
 export DEV_SECRETS_DIR="$tmpdir/secrets"
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
 mkdir -p "$DEV_SECRETS_DIR"
 export DEV_SYSTEM_SHARE="$ROOT/images/base"
 
