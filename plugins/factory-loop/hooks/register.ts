@@ -108,6 +108,7 @@ import { stateCounts } from './v2/rules-state'
 import { newSettingsCache, repoLoaded } from './v2/settings'
 import type { SettingsIo } from './v2/settings'
 import { keepV2, loadV2, newV2Live, noteIdle, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
+import { keepTitles } from './report'
 import type { V2StoreIo } from './v2/store'
 import { STEP_AGENT } from './v2/types'
 import type { V2Io } from './v2/types'
@@ -466,6 +467,7 @@ const keysOf = (repo: string) => ({
   known: `queue-known:${repo}`,
   rails: `rails:${repo}`,
   notices: `notices:${repo}`,
+  titles: `titles:${repo}`,
 })
 
 // mayLoad: no other session holds a live act lease, so this one may load the store's ledger, which
@@ -1007,9 +1009,9 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
   // what act mode keeps for the next pass: the queue's known list and the GitHub backoff
   if (act) {
     if (observed.queueKnown !== null) await keepInStore(keys.known, observed.queueKnown)
-    const limited = report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0
-    const until = Math.max(state.githubBackoffUntil ?? 0, limited)
+    const until = Math.max(state.githubBackoffUntil ?? 0, report?.rateLimited === true ? state.now + GITHUB_BACKOFF_MS : 0)
     if (until > state.now) await keepInStore(keys.backoff, until)
+    await keepTitles(storeIo($), keys.titles, state.github, state.v2?.records ?? [], problems)
   }
 
   if (act && saveProblem !== null) problems.push(`ledger: not saved, so nothing starts until a save succeeds: ${saveProblem}`)
@@ -1090,17 +1092,14 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
     for (const argv of pruneArgvs(rt.loopDir, LOOP_FILES_KEEP_DAYS)) await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
   }
   await $.state.set(lastPassRef, {
-    pass: passNo,
-    at: state.now,
-    mode: rt.mode,
-    executed: act,
+    pass: passNo, at: state.now,
+    mode: rt.mode, executed: act,
     rails: railReasons,
     tier: result.tier,
     title: result.title,
     actions: line.actions.length,
     owner: result.owner,
-    planner: rt.config.planner,
-    shadow: rt.config.shadow,
+    planner: rt.config.planner, shadow: rt.config.shadow,
   })
   const ledger = act ? live.ledger : state.ledger
   if (tr !== null) {
