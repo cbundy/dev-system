@@ -1387,6 +1387,12 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
   conditions?: [{ kind: "issue-closed", issue: N } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha }], reason? }`.
+- **Observable by default.** A brief has an `## Observability` section, and the contract refuses
+  one without it: each decision the change adds (a point where an agent or a rule chooses), where
+  it is recorded with the facts weighed and the reason, and the `docs/metrics.md` query it
+  answers, or "none - no new decision". Optional fields on an existing event type come before a
+  new type; a new type ships schema, view fields and migration in one release before any
+  producer. The reviewer holds the change to the section like an acceptance criterion.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
