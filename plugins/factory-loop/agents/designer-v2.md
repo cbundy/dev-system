@@ -85,7 +85,14 @@ The answer script checks the heading and the Rollout before it records the brief
 ## A question
 
 When the design needs a decision only the owner can make (a product choice, access, a secret, a
-repo setting), answer with the question instead of a brief: one clear question with its options.
+repo setting), answer with the question instead of a brief. `question` is the one decision, in a
+single short sentence. When the choice is between a few ways forward, add them as `options`
+(2 to 6, each `{"key": "A", "title": "<one line>", "detail": "<optional, short>"}`, keys A to F),
+a `context` of a few sentences when the owner needs it, and a `recommendation`
+(`{"key": "B", "reason": "<one line>"}`) when you have one. Do not put the options or the context
+into `question`: the loop renders them as a template with a checkbox for each option, which the
+owner ticks. Leave them out when the question has no fixed options. The rendered text, with all of
+it, is at most 2000 characters.
 The issue parks until the owner answers, and you design again with the answer as a note.
 
 ## A split

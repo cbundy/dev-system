@@ -23,7 +23,8 @@
 // Pure: the time is state.now.
 import { skip, wake, want } from '../foundation'
 import type { Ms } from '../types'
-import { entryKey, lifeAt, transitionKey } from './keys'
+import { entryKey, hiddenKey, lifeAt, transitionKey } from './keys'
+import { ticksOf, tickNote } from './park-text'
 import { agentPlan, causeOf, leaseOf, leaseStep, lifeEntries, notBuiltStep, triggerOf } from './rules-agent'
 import type { StepPlan, StepRead } from './rules-agent'
 import { claimRules, heartbeatRules, reclaimLost } from './rules-claim'
@@ -119,7 +120,8 @@ function earlyEvents(ctx: V2Ctx, r: IssueRecord): Present[] {
 
 // unparkOf: a parked record's unpark (4.1, 11): a `/factory resume N` newer than the park, with
 // its note; or a read of the issue made after the park's label write that lacks `factory:parked`,
-// with the trusted comments posted after the park's comment as the note. 'wait': the label is
+// with the owner's tick in the park's comment (the one of this seq) and the trusted comments
+// posted after it as the note. 'wait': the label is
 // gone, but those comments are not read yet.
 function unparkOf(ctx: V2Ctx, r: IssueRecord): Present | 'wait' | null {
   const n = r.issue
@@ -138,10 +140,12 @@ function unparkOf(ctx: V2Ctx, r: IssueRecord): Present | 'wait' | null {
   const comments = ctx.v2.comments[n]
   if (comments === undefined) return 'wait'
   const after = ctx.byKey.get(entryKey(r, 'comment'))?.endedAt ?? r.since
-  const note = comments
-    .filter(c => c.at > after && !c.body.includes('<!-- factory-loop:'))
-    .map(c => c.body.trim())
-    .join('\n\n')
+  // the owner's tick in this seq's park comment, current body, comes first; the factory's other
+  // comments never become notes
+  const marker = hiddenKey(entryKey(r, 'comment'))
+  const parkComment = comments.find(c => c.body.includes(marker))
+  const tick = parkComment === undefined ? null : tickNote(ticksOf(parkComment.body))
+  const note = [...(tick === null ? [] : [tick]), ...comments.filter(c => c.at > after && !c.body.includes('<!-- factory-loop:')).map(c => c.body.trim())].join('\n\n')
   return { event: { kind: 'unpark', reason: 'label', data: { ...closedAt, ...(note === '' ? {} : { note: clip(note) }) } }, trigger: fact(`unpark-label:${n}@${read.at}`) }
 }
 

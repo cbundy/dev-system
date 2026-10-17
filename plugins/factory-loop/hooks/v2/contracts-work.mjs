@@ -6,6 +6,9 @@
 //   loop posts the brief and makes the children.
 //     { "kind": "brief", "brief": "## Design brief (designer, <date>) ..." }
 //     { "kind": "question", "question": "...", "brief": "<a draft, or null>" }
+//       and, optionally, "context", "options" (2 to 6 of { key: A to F, title, detail? }) and
+//       "recommendation" ({ key, reason }), checked by question.mjs; the question once rendered
+//       with them must fit its 2 000 characters; the outcome carries them only when given
 //     { "kind": "split", "brief": "<the epic's plan>",
 //       "reasons": { "why_split": "...", "why_count": "...", "why_parts": "...", "why_order": "..." },
 //       "children": [{ "key": "a", "title": "...", "why": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
@@ -34,6 +37,8 @@
 // every problem at once, as contract.mjs's checks do; summary is the answer script's few words on
 // what it recorded. contract.mjs imports this module, so the loop and bin/factory-answer check
 // alike. ES2023 alone, nothing of Node or the engine. Its types are contracts-work.d.mts's.
+
+import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
 
 export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
@@ -275,11 +280,20 @@ function reasonsOf(v, problems) {
   return REASON_KEYS.every(k => out[k] !== null) ? out : null
 }
 
+// partsOf: the optional question fields a checked answer gave, none that it did not.
+function partsOf(p) {
+  const out = {}
+  if (p.context !== null) out.context = p.context
+  if (p.options !== null) out.options = p.options
+  if (p.recommendation !== null) out.recommendation = p.recommendation
+  return out
+}
+
 function checkDesign(input, job) {
   const o = record(input)
   if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split", "brief", and "question" or "children"}'] }
   const problems = []
-  strays(o, ['kind', 'brief', 'question', 'reasons', 'children'], 'a design answer', problems)
+  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children'], 'a design answer', problems)
   const kind = DESIGN_KINDS.find(k => k === o.kind)
   if (kind === undefined) problems.push(`kind ${show(o.kind)} is not one of ${DESIGN_KINDS.join(', ')}`)
   const brief = text(o, 'brief', LIMITS.brief, kind === 'question' ? 'optional' : 'required', problems)
@@ -288,6 +302,9 @@ function checkDesign(input, job) {
     problems.push(...rolloutProblems(brief, 'brief'))
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
+  let parts = {}
+  if (kind === 'question') parts = partsOf(checkQuestionParts(o, question, problems))
+  else for (const k of QUESTION_FIELDS) if (o[k] !== undefined && o[k] !== null) problems.push(`${k} must be absent or null unless kind is question`)
   let children = []
   let reasons = null
   if (kind === 'split') {
@@ -297,7 +314,7 @@ function checkDesign(input, job) {
     if (o.children !== undefined && o.children !== null) problems.push('children must be absent or null unless kind is split')
     if (o.reasons !== undefined && o.reasons !== null) problems.push('reasons must be absent or null unless kind is split')
   }
-  return checked(problems, () => ({ kind, brief, question, reasons, children }))
+  return checked(problems, () => ({ kind, brief, question, ...parts, reasons, children }))
 }
 
 function summaryOfDesign(input) {
