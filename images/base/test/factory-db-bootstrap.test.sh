@@ -146,6 +146,26 @@ chmod 600 "$tmpdir/url"
 env -u FACTORY_DB_ADMIN_URL bash "$BOOTSTRAP" --db "$db" --admin-url-file "$tmpdir/url" > "$tmpdir/out" 2>&1 \
   || fail "--admin-url-file run failed: $(cat "$tmpdir/out")"
 
+# --- a pre-existing database owned by the admin is taken over ---------------------
+main_db=$db   # snapshot() reassigns db; restored below for the sections that follow
+new_name
+pre_db=$new_db
+q postgres "CREATE DATABASE \"$pre_db\"" > /dev/null || fail "cannot create the pre-existing database"
+[ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$pre_db'")" != "${pre_db}_owner" ] \
+  || fail "the pre-existing database is already owned by the factory owner"
+boot --db "$pre_db" || fail "taking over an existing database failed: $(cat "$tmpdir/out")"
+[ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "takeover: expected one summary line: $(cat "$tmpdir/out")"
+grep -q 'schema version 1$' "$tmpdir/out" || fail "takeover: unexpected summary: $(cat "$tmpdir/out")"
+[ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$pre_db'")" = "${pre_db}_owner" ] \
+  || fail "the taken-over database is not owned by ${pre_db}_owner"
+[ "$(q "$pre_db" "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'factory'")" = "${pre_db}_owner" ] \
+  || fail "the factory schema in the taken-over database is not owned by ${pre_db}_owner"
+snapshot "$pre_db" > "$tmpdir/psnap1" || fail "takeover snapshot 1 failed"
+boot --db "$pre_db" || fail "second run on the taken-over database failed"
+snapshot "$pre_db" > "$tmpdir/psnap2" || fail "takeover snapshot 2 failed"
+cmp -s "$tmpdir/psnap1" "$tmpdir/psnap2" || fail "run 2 changed the taken-over database: $(diff "$tmpdir/psnap1" "$tmpdir/psnap2")"
+db=$main_db
+
 # --- the schemas ------------------------------------------------------------------
 [ "$(q "$db" "SELECT string_agg(nspname, ',' ORDER BY nspname) FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema'")" = "factory,public" ] \
   || fail "unexpected schemas (nomistakes must not exist)"
