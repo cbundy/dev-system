@@ -296,11 +296,11 @@ which planner is in force.
 
 ### Release decisions under planner v2
 You decide when the repo releases; the release agent does the steps. The aim: merged work ships
-within 6 hours of its merge.
+within the wake's `cadence` of its merge, the repo's minimum release cadence.
 
 Gather the facts with a few reads (never the diff):
 - what waits: `git log --first-parent --format='%h %cI %s' <tag>..origin/main` and
-  `callum-flow-milestone show`; the wake's `oldest` is how long work has waited (the oldest
+  `callum-flow-milestone show`; the wake's `oldest` is how long work has waited, measured against `cadence` (the oldest
   commit's time when it is left out);
 - the labels of the issues those PRs close (`callum-flow-issue-read --json <N>`);
 - live problems: `callum-flow-factory-state` (parked, stuck, failing gates, repeated fix rounds),
@@ -320,8 +320,8 @@ Good reasons to wait:
 - CI on main is failing;
 - a release went out less than 30 minutes ago and no reason above applies.
 
-With no reason either way, waiting is fine until the oldest unreleased merge is 6 hours old. From
-then on, release unless a reason to ask the owner (below) holds.
+With no reason either way, waiting is fine until the oldest unreleased merge (`oldest`) is `cadence`
+old. From then on, release unless a reason to ask the owner (below) holds.
 
 Ask the owner rarely: you have standing release authority, so use it. Ask only when:
 - the release would be a major version (a breaking change to something consumers rely on);
