@@ -36,6 +36,13 @@ test('an unknown id exits 2 with one error line, before any setup', () => {
   }
 })
 
+test('an inherited TMPDIR under /persist is never written to and the sandbox stays outside it', () => {
+  const tmp = `/persist/npm-test-826-${process.pid}-${Date.now()}`
+  const r = spawnSync('sh', ['scripts/test.sh', 'features/test/callum-tools/test-sandbox.test.sh'], { cwd: root, encoding: 'utf8', env: cleanEnv({ TMPDIR: `${tmp}/tmp` }) })
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr)
+  assert.ok(!fs.existsSync(tmp), 'the inherited TMPDIR was created')
+})
+
 test('named node files run as one subset job and the last line says it is not the gate', () => {
   const r = spawnSync('sh', ['scripts/test.sh', 'tests/forbid-git-stash.test.js'], { cwd: root, encoding: 'utf8', env: cleanEnv() })
   assert.strictEqual(r.status, 0, r.stdout + r.stderr)

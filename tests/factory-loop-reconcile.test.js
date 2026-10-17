@@ -468,7 +468,7 @@ test("an event the CLI did not write fails its issue with exit 1, and is kept to
   const r = w.run(["--act", "10", "11"]);
   assert.equal(r.status, 1, r.stderr + r.stdout);
   const kept = path.join(w.loopDir, "unlogged-events.jsonl");
-  assert.match(r.stdout, new RegExp(`^- #10: FAILED: abandoned not logged: not in the log \\(callum-flow-event: warning: cannot write .* - event not recorded\\); kept in ${kept} to log again \\(done before it: .*slot 1 returned.*\\)\\.$`, "m"));
+  assert.match(r.stdout, new RegExp(`^- #10: FAILED: abandoned not logged: not in the log \\(callum-flow-event: warning: cannot write [^)]*\\); kept in ${kept} to log again \\(done before it: .*slot 1 returned.*\\)\\.$`, "m"));
   assert.match(r.stdout, new RegExp(`^- #11: FAILED: the intervention not logged: not in the log .*; kept in ${kept} to log again \\(done before it: removed In development; logged abandoned\\)\\.$`, "m"));
   // #10's intervention is not logged before its event; both are kept, then #11's intervention
   assert.ok(!w.calls().some((c) => c.name === "callum-flow-event" && !probe(c) && c.argv[0] === "intervention" && names(c, 10)));
