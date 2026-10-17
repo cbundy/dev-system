@@ -106,7 +106,8 @@ type Row = { label: string; value: string; source?: Source | 'mixed'; note?: str
 const clip = (line: string) => (line.length <= WIDTH ? line : `${line.slice(0, WIDTH - 3)}...`)
 
 function render(row: Row): string[] {
-  const head = `  ${row.label.padEnd(LABEL)}`
+  // a label past the column still keeps a space before its value
+  const head = `  ${row.label.padEnd(LABEL)}${row.label.length >= LABEL ? ' ' : ''}`
   const room = WIDTH - head.length - (row.source === undefined ? 0 : row.source.length + 1)
   const value = row.value.length > room ? `${row.value.slice(0, Math.max(0, room - 3))}...` : row.value
   const line = row.source === undefined ? `${head}${value}` : `${head}${value.padEnd(Math.min(VALUE, room))} ${row.source}`
@@ -169,6 +170,7 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render(row('reviewFixCap', 'reviewFixCap', String(c.reviewFixCap))),
         ...render(row('maxLives', 'maxLives', String(c.maxLives))),
         ...render(row('maxTriages', 'maxTriages', String(c.maxTriages))),
+        ...render(ms('minimumReleaseCadenceMs')),
         ...render({ label: 'stateTimeout', value: '', source: from, ...(from === 'mixed' && changed.length > 0 ? { note: changed.join('; ') } : {}) }),
         clip(`    ${compact.slice(0, half).join(' ')}`),
         clip(`    ${compact.slice(half).join(' ')}`),

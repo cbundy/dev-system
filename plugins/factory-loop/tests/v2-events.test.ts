@@ -19,6 +19,7 @@ import {
   parseEvent,
   parseIntervention,
   parseTransition,
+  splitNote,
   tokensOf,
 } from '../hooks/v2/events'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
@@ -243,6 +244,17 @@ describe('columns and notes per state', () => {
     expect(noteToken(note('something else'), 'reason')).toBe('other')
     expect(noteToken(eventNote({ state: 'abandoned', issue: 5, branch: null, pr: 7, stage: 'implementing', checked: 'no run, no PR', reason: 'reconcile', outcome: 'leave', lives: null }), 'reason')).toBe('reconcile')
     for (const r of ABANDON_REASONS) expect(abandonReason(`reason=${r}`)).toBe(r)
+  })
+
+  test('a split note with the designer\'s reasons still reads: its reason is split and its note the words', () => {
+    const reasons = { why_split: 'Two areas', why_count: 'Two', why_parts: 'Apart', why_order: 'Independent' }
+    const note = splitNote([12, 13], reasons, ['One', 'Two'])
+    expect(note).toBe('reason=split note=split%20into%2012,13 why_split=Two%20areas why_count=Two why_parts=Apart why_order=Independent child_whys=One,Two')
+    expect(abandonReason(note)).toBe('split')
+    expect(noteToken(note, 'why_split')).toBe('Two areas')
+    expect(parseEvent({ state: 'abandoned', issue: 5, branch: null, pr: null, head: null, note })).toMatchObject({ state: 'abandoned', note: 'split into 12,13' })
+    expect(splitNote([12, 13], null, null)).toBe('split into 12,13')
+    expect(splitNote([12, 13], reasons, null)).toEndWith('child_whys=none')
   })
 
   test('a release says reconcile, how it ended, the life it released, its stage, its PR and what was checked', () => {

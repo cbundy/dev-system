@@ -17,14 +17,25 @@
 import { want } from '../foundation'
 import type { LedgerEntry } from '../types'
 import { childKey, entryKey } from './keys'
-import { agentStep, unknownOf } from './rules-agent'
+import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
-import type { IssueRecord, SplitChild, StepKind, TableEvent, Trigger } from './types'
+import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger } from './types'
 
 const RULE = 'S2'
 
 // The design answer as the step's result carries it (contracts-work.mjs DesignAnswer).
-type Design = { kind: 'brief' | 'question' | 'split'; brief: string | null; question: string | null; children: SplitChild[] }
+type Design = { kind: 'brief' | 'question' | 'split'; brief: string | null; question: string | null; reasons: SplitReasons | null; children: SplitChild[] }
+
+const REASON_KEYS = ['why_split', 'why_count', 'why_parts', 'why_order'] as const
+
+// reasonsOf: a split's four reasons as the checked answer carries them, or null when any is not text
+// (an answer from before the contract asked for them).
+function reasonsOf(v: unknown): SplitReasons | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  if (!REASON_KEYS.every(k => typeof o[k] === 'string')) return null
+  return { why_split: o.why_split as string, why_count: o.why_count as string, why_parts: o.why_parts as string, why_order: o.why_order as string }
+}
 
 // designOf: the checked design answer an ended step's entry holds, or null.
 export function designOf(e: LedgerEntry | undefined): Design | null {
@@ -33,7 +44,20 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
   const d = data as Partial<Design>
   if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split') return null
   const children = Array.isArray(d.children) ? d.children : []
-  return { kind: d.kind, brief: typeof d.brief === 'string' ? d.brief : null, question: typeof d.question === 'string' ? d.question : null, children }
+  return { kind: d.kind, brief: typeof d.brief === 'string' ? d.brief : null, question: typeof d.question === 'string' ? d.question : null, reasons: reasonsOf(d.reasons), children }
+}
+
+// splitDesignOf: the split a life's designer answered (its newest done design step that split), or null
+// when no entry of the life still holds it.
+export function splitDesignOf(ctx: StepEnv['ctx'], r: Pick<IssueRecord, 'issue' | 'life'>): Design | null {
+  const steps = lifeEntries(ctx, r, 'agent-step')
+    .filter(e => e.status === 'done' && e.outcome?.kind === 'step' && e.outcome.step === 'design')
+    .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt))
+  for (const e of steps) {
+    const d = designOf(e)
+    if (d !== null && d.kind === 'split') return d
+  }
+  return null
 }
 
 // childOf: the issue a done split action made or found.
@@ -103,8 +127,9 @@ function splitPlan(env: StepEnv, d: Design, trigger: Trigger): StepRead {
   }
   // a pass that planned a child says nothing more; else the first wait names why
   if (made.size < d.children.length) return waits.find(w => w.kind === 'held' && w.why === '') ?? waits[0] ?? { kind: 'held', why: 'split: its children are being made' }
-  const list = d.children.map(c => `- #${made.get(c.key)}: ${c.title}${c.ready ? '' : ' (waits on an owner decision)'}`)
-  const body = [d.brief ?? `The designer split #${r.issue} into ${d.children.length} issues.`, '', 'Split by the factory loop into:', ...list].join('\n')
+  const list = d.children.map(c => `- #${made.get(c.key)}: ${c.title}${typeof c.why === 'string' && c.why !== '' ? ` - ${c.why}` : ''}${c.ready ? '' : ' (waits on an owner decision)'}`)
+  const why = d.reasons === null ? [] : ['', 'Why this split:', `- Why split: ${d.reasons.why_split}`, `- Why this many parts: ${d.reasons.why_count}`, `- Why these parts: ${d.reasons.why_parts}`, `- Why this order: ${d.reasons.why_order}`]
+  const body = [d.brief ?? `The designer split #${r.issue} into ${d.children.length} issues.`, ...why, '', 'Split by the factory loop into:', ...list].join('\n')
   const posted = effect(env, briefComment(r, body), 'split: the plan on the issue')
   if ('read' in posted) return posted.read
   const text = `split into ${d.children.map(c => `#${made.get(c.key)}`).join(', ')}`

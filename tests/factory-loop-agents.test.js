@@ -181,3 +181,9 @@ test("the v2 designer's rollout rules: part of an epic or a split is never a rea
   assert.match(body, /a split child is a whole issue/);
   assert.doesNotMatch(body, /one part of several/);
 });
+
+test("the v2 designer asks for a split's four reasons and each child's why, and the prompt shows the shape", () => {
+  const body = read("plugins/factory-loop/agents/designer-v2.md").replace(/\s+/g, " ");
+  for (const k of ["reasons", "why_split", "why_count", "why_parts", "why_order"]) assert.match(body, new RegExp(`\`${k}\``), k);
+  assert.match(body, /Each child's `why`/);
+});

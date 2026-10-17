@@ -150,7 +150,7 @@ of when and why the model was involved (D-13).
   result is recorded and the issue closed. A held Run it keeps
   the next `run-it` PR waiting until the issue closes, or until you call the control tool with
   `resume <N>` once its result is recorded.
-- **`release`** (`closed expected tag oldest`): an hourly review while `Next release` has no open items and merged work is unreleased (`tag` is the last release, `oldest` the oldest merge since it, left out when unknown). Follow the repo's
+- **`release`** (`closed expected tag oldest cadence`): an hourly review while `Next release` has no open items and merged work is unreleased (`tag` is the last release, `oldest` the oldest merge since it, left out when unknown; `cadence` is the repo's minimum release cadence: the age by which the oldest unreleased merge should have shipped). Follow the repo's
   release process (its release skill or `RELEASING.md`) and tell the owner in one line what
   shipped. Stop for the owner only where that process itself requires approval: `hold` while it
   waits. `done` once released. Never report holding a
@@ -247,6 +247,8 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `status`: what the loop is doing (for detail, the `factory-state` skill).
 - `config`: the settings the loop runs with, each with its source; read-only. Use it to answer "what is
   this factory's config?".
+- `config set <key> <value>` / `config unset <key>`: save or remove one setting in the workspace
+  config file, checked as the loader reads it. Only when the owner asks for that change.
 - `pause <N>` / `unpause <N>`: no action at all on N; its claim still renews.
 - `skip <N>` / `noskip <N>`: never claim N.
 - `priority <N...>`: claim these first, in this order.
@@ -278,12 +280,13 @@ is the release. The TELL format above holds; these are v2's kinds. The `/factory
 which planner is in force.
 
 ### TASK under planner v2
-- **`release`** (`closed expected tag oldest`): an hourly review while the Next milestone has no
-  open item and at least one closed (`tag` is the last release, `oldest` the oldest merge since it,
-  left out when unknown). Decide whether to release now, by "Release decisions under planner v2"
-  below. To release, start the release agent and answer `done` (reason: the version and why now);
-  to wait, answer `hold` with the reason, which the loop only logs (the next hour's review asks
-  again). You do not do the release steps yourself. Once the release agent reports the release
+- **`release`** (`closed expected tag oldest cadence`): an hourly review while the Next milestone
+  has no open item and at least one closed (`tag` is the last release, `oldest` the oldest merge
+  since it, left out when unknown; `cadence` is the repo's minimum release cadence: the age by
+  which the oldest unreleased merge should have shipped). Decide whether to release now, by
+  "Release decisions under planner v2" below. To release, start the release agent and answer
+  `done` (reason: the version and why now); to wait, answer `hold` with the reason, which the loop
+  only logs (the next hour's review asks again). You do not do the release steps yourself. Once the release agent reports the release
   out, do the Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps,
   recording the result on the issue and closing it.
   Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart

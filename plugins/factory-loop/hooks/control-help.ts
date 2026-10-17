@@ -12,7 +12,7 @@ export type OpName = (typeof OPS)[number]
 // and `override off` are the only way to lift those two, as `only off` and `update off` are.
 export const USAGE: Record<OpName, string> = {
   status: 'status',
-  config: 'config',
+  config: 'config [set <key> <value>|unset <key>]',
   pause: 'pause <N>',
   unpause: 'unpause <N>',
   skip: 'skip <N>',
@@ -40,12 +40,12 @@ export const HINT_OPS: readonly [OpName, string][] = [
   ['priority', 'priority <N...>|off'],
   ['pause', 'pause <N>'],
   ['resume', 'resume <N...>'],
-  ['retry', 'retry <N>'],
   ['drop', 'drop <N>'],
   ['note', 'note [<N>] <text>'],
   ['new', 'new on|off'],
   ['mode', 'mode off|observe|act'],
-  ['update', 'update|off'],
+  ['config', 'config set <key> <value>'],
+  ['config', 'config unset <key>'],
 ]
 
 // hintText: the placeholder `/factory` shows in the typeahead, one bracketed line like `/plan`'s.
@@ -56,7 +56,9 @@ export function hintText(): string {
 // What each op does, one line each, for `/factory help` (SPEC 4.3).
 export const MEANING: Record<OpName, string> = {
   status: "show the loop's last pass and the owner directives in force",
-  config: 'show the settings the loop runs with, each with its source',
+  config:
+    'show the settings the loop runs with, each with its source; config set <key> <value> saves one in the workspace config file (a value is JSON when it parses, else text; ' +
+    'checked as the loader reads it, refused if bad); config unset <key> removes it, so the repo file or the default applies again',
   pause: 'take no action on issue N (its claim still renews)',
   unpause: 'undo pause',
   skip: 'never claim issue N',

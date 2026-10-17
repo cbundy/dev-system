@@ -435,6 +435,9 @@ describe('person interventions', () => {
     ])
     expect(resume[0]?.fact).toBe(factKey('op:resume', 'i571', NOW.toString(36)))
     expect(opInterventions({ text: 'mode act', name: 'mode', issues: [], at: NOW }).map(e => [e.cause, e.issue])).toEqual([['op:mode', null]])
+    // a landed `config set|unset` is the settings file changed through the loop
+    const cfg = opInterventions({ text: 'config set maxInFlightIssues 3', name: 'config', issues: [], at: NOW })
+    expect(cfg.map(e => [e.who, e.cause, e.issue, e.reason])).toEqual([['person', 'config-file', null, 'config set maxInFlightIssues 3']])
     for (const name of ['status', 'help']) expect(opInterventions({ text: name, name, issues: [], at: NOW })).toEqual([])
     // two ops a millisecond apart are two facts
     expect(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW + 1 })[0]?.fact).not.toBe(opInterventions({ text: 'pause', name: 'pause', issues: [], at: NOW })[0]?.fact)

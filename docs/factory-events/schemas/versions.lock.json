@@ -9,6 +9,15 @@
           "string"
         ]
       },
+      "child_whys": {
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      },
       "detail": {
         "type": [
           "null",
@@ -47,6 +56,30 @@
         "type": "array"
       },
       "stage": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "why_count": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "why_order": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "why_parts": {
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "why_split": {
         "type": [
           "null",
           "string"

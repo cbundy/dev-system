@@ -408,6 +408,25 @@ describe('release-parent and abandon: the label, then the event, stopping at the
     expect(result).toEqual({ status: 'done', outcome: { kind: 'cli', exit: 0 }, summary: 'released #470, split into 471,472' })
   })
 
+  test('release-parent with the designer\'s reasons: the note is the token shape the translator reads', async () => {
+    const reasons = { why_split: 'It spans two areas', why_count: 'Two: one per area', why_parts: '100% apart', why_order: 'Independent' }
+    const action = { ...A.releaseParent(), reasons, childWhys: ['The loop side', 'The image, side'] } as Action
+    const { events, result } = await exec(action)
+    expect(events).toEqual([
+      {
+        state: 'abandoned',
+        fields: {
+          issue: 470,
+          note: 'reason=split note=split%20into%20471,472 why_split=It%20spans%20two%20areas why_count=Two:%20one%20per%20area why_parts=100%25%20apart why_order=Independent child_whys=The%20loop%20side,The%20image%2C%20side',
+        },
+      },
+    ])
+    expect(result.status).toBe('done')
+    // reasons that could not be read keep the old words
+    const unread = await exec({ ...A.releaseParent(), reasons: null, childWhys: null } as Action)
+    expect(unread.events).toEqual([{ state: 'abandoned', fields: { issue: 470, note: 'split into 471,472' } }])
+  })
+
   test('abandon: the event carries the run and branch when known, and leaves out what is not', async () => {
     const known = await exec(A.abandon())
     expect(known.calls.map(c => c.init)).toEqual([{ timeoutMs: 60_000 }])

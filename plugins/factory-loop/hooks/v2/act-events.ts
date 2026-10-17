@@ -30,7 +30,8 @@ const NOT_INTERVENTIONS = ['status', 'help']
 export function opInterventions(op: OpLanded): InterventionEvent[] {
   if (op.name === '' || NOT_INTERVENTIONS.includes(op.name)) return []
   const at = Math.trunc(op.at).toString(36)
-  const cause = `op:${op.name}`
+  // a landed `config set|unset` is the settings file changed by the owner through the loop
+  const cause = op.name === 'config' ? 'config-file' : `op:${op.name}`
   const issues: (number | null)[] = op.issues.length === 0 ? [null] : [...new Set(op.issues)]
   return issues.map(issue => intervention('person', cause, factKey(cause, issue === null ? 'fleet' : `i${issue}`, at), op.text, { issue, life: null, pr: null }))
 }
