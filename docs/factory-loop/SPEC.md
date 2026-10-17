@@ -291,6 +291,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
 | `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (6.3, 7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. The text contract stays the fallback of the other two, and the tools stay registered and served whatever it says. `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13, DECISIONS D-73, D-74). It goes back to `tool` once the timer-spawn probe passes (13). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
+| `minimumReleaseCadenceMs` | `6h` | the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake carries it as `cadence` |
 | `titleEveryMs` | `5m` | the session title is renamed at most this often (section 9.1) |
 | `reportEveryMs` | `10m` | the factory report is built at most this often; delivery comes in a later child of #684 |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
@@ -548,7 +549,7 @@ GitHub or the harness is `M6`.
 |---|---|---|---|
 | O1 | always, last (before a `restart-self`) | `title` when `titleOf(state, tier)` differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or `lastTitleAt` is null) (section 9.1) | none (compared, not keyed) |
 | O2 | any wake (`judge`, `task`, `tell`) is planned | keep at most one wake per pass and none while another wake is `running`, picked in order: `tell` of an owner decision or action, `judge`, `task`, other `tell`. Notices from outside plan (a rail, the ping breaker, failing passes: section 9.2) go out through the same executor once no wake is open | the wake's own key |
-| O3 | opted in, the milestone has no open items and at least one closed | `task(release)`, at most one per UTC hour (an hourly review); fields `closed expected tag oldest` | `task:release:<tag>:<YYYY-MM-DDTHH>` |
+| O3 | opted in, the milestone has no open items and at least one closed | `task(release)`, at most one per UTC hour (an hourly review); fields `closed expected tag oldest cadence` | `task:release:<tag>:<YYYY-MM-DDTHH>` |
 
 ### 5.9 Properties every plan must keep
 

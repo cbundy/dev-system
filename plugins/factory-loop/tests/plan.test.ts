@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { entryFromLoop, loopNote } from '../hooks/derive'
+import { shortDuration } from '../hooks/config'
 import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
@@ -1444,16 +1445,24 @@ describe('O: owner and report', () => {
       entry(key, 'task', { wake: 'release', class: 'drive', status: 'done', startedAt: at, endedAt: at + MIN, outcome: wakeAnswer(decision) })
     const wanted = (s: State) => keys(plan(s, CFG)).filter(k => k.startsWith('task:release:'))
 
-    test('the key names the last tag and the UTC hour; the fields are closed, expected, tag, oldest in order', () => {
+    test('the key names the last tag and the UTC hour; the fields are closed, expected, tag, oldest, cadence in order', () => {
       const oldest = Date.UTC(2026, 9, 12, 8, 30)
       const s = closed({ release: { tag: 'v1.0.0', oldest } })
       expect(wanted(s)).toEqual([`task:release:v1.0.0:${RHOUR}`])
       const a = plan(s, CFG).actions.find(x => x.kind === 'task')
-      expect(Object.entries(a && 'fields' in a ? a.fields : {})).toEqual([['closed', '5'], ['expected', 'minor'], ['tag', 'v1.0.0'], ['oldest', '2026-10-12T08:30:00.000Z']])
+      expect(Object.entries(a && 'fields' in a ? a.fields : {})).toEqual([['closed', '5'], ['expected', 'minor'], ['tag', 'v1.0.0'], ['oldest', '2026-10-12T08:30:00.000Z'], ['cadence', '6h']])
+      // plan.ts writes shortDuration out (it imports types only): the wake's text matches it
+      for (const ms of [3_600_000, 90 * 60_000, 2 * 3_600_000, 21_600_000, 3_661_000, 3_600_500]) {
+        const w = plan(s, { ...CFG, minimumReleaseCadenceMs: ms }).actions.find(x => x.kind === 'task')
+        expect(w && 'fields' in w ? w.fields.cadence : null).toBe(shortDuration(ms))
+      }
+      // the cadence is the configured minimum release cadence, in short form
+      const three = plan(s, { ...CFG, minimumReleaseCadenceMs: 3 * 3_600_000 }).actions.find(x => x.kind === 'task')
+      expect(three && 'fields' in three ? three.fields.cadence : null).toBe('3h')
       // no release yet: none; an unknown oldest is dropped
       const none = plan(closed({ release: { tag: null, oldest: null } }), CFG).actions.find(x => x.kind === 'task')
       expect(none).toMatchObject({ key: `task:release:none:${RHOUR}`, fields: { closed: '5', expected: 'minor', tag: 'none' } })
-      expect(none && 'fields' in none ? Object.keys(none.fields) : []).toEqual(['closed', 'expected', 'tag'])
+      expect(none && 'fields' in none ? Object.keys(none.fields) : []).toEqual(['closed', 'expected', 'tag', 'cadence'])
     })
 
     test('two milestones at the same count each wake: a new tag, or a later hour', () => {
