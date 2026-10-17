@@ -103,7 +103,7 @@ function world(records: IssueRecord[], prs: PrView[] = [], v2: Partial<V2State> 
     ...s,
     v2: {
       ...emptyV2State(NOW, records),
-      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK },
+      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK },
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
       prs: { prs },
       ...v2,
@@ -213,7 +213,7 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
       expect(of(p, 603).filter(a => a.kind !== 'event')).toEqual([])
       return said(p, 603)
     }
-    expect(hold([view(603)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'not built yet (U7)' }, interventions: OK, comments: OK } })).toEqual(['review: the PRs were not read (not built yet (U7))'])
+    expect(hold([view(603)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'not built yet (U7)' }, interventions: OK, comments: OK, dualWrite: OK } })).toEqual(['review: the PRs were not read (not built yet (U7))'])
     expect(hold([])).toEqual([`review: PR #${PR} was not read this pass`])
     // its own read failed: only this record waits, and says why (drill run 3, R3-F3)
     expect(hold([], { prs: { prs: [], unread: [{ pr: PR, issue: 603, why: 'gh pr checks exit 1: HTTP 502', untrusted: false, since: NOW - MIN }] } })).toEqual([`review: PR #${PR} did not read: gh pr checks exit 1: HTTP 502`])
@@ -238,7 +238,7 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     expect(transitionOf(blip, 604)).toBeUndefined()
     expect(said(blip, 604)).toEqual([`review: PR #${PR} did not read: the patch id of 9e01b77 did not compute: exit 1`])
     // the source not read is an admission hold: no clock
-    const unread = old([view(604)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'gh failed' }, interventions: OK, comments: OK } })
+    const unread = old([view(604)], { sources: { store: OK, leases: OK, prs: { ok: false, at: null, error: 'gh failed' }, interventions: OK, comments: OK, dualWrite: OK } })
     expect(transitionOf(unread, 604)).toBeUndefined()
     expect(said(unread, 604)).toEqual(['review: the PRs were not read (gh failed)'])
     // a GitHub backoff holds it too

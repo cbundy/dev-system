@@ -81,7 +81,7 @@ function world(records: IssueRecord[], prs: PrView[] = records.map(r => view(r))
     ...s,
     v2: {
       ...emptyV2State(NOW, records),
-      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK },
+      sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK },
       leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor),
       prs: { prs, main: { branch: 'main', sha: MAIN } },
       heads,

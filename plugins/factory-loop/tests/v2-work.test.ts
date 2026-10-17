@@ -50,7 +50,7 @@ const OK = { ok: true, at: NOW }
 
 function world(records: IssueRecord[], over: Partial<State> = {}, v2: Partial<V2State> = {}): State {
   const s = baseState(over)
-  return { ...s, v2: { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK }, leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor), ...v2 } }
+  return { ...s, v2: { ...emptyV2State(NOW, records), sources: { store: OK, leases: OK, prs: OK, interventions: OK, comments: OK, dualWrite: OK }, leases: records.filter(r => SLOT_STATES.includes(r.state)).map(leaseFor), ...v2 } }
 }
 
 const withLedger = (s: State, extra: LedgerEntry[]): State => ({ ...s, ledger: [...s.ledger, ...extra] })

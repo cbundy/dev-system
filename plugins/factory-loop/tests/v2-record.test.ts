@@ -68,6 +68,14 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
     expect(recordsFromEvents([...list, eventOf(t(newer), NOW - DAY)], DEVICE, parse)).toEqual([newer, b])
   })
 
+  test('a same-seq `dual-write` re-log appended to an old store\'s events rebuilds the same records', () => {
+    const a = record(7, { seq: 3, state: 'building', step: 'build' })
+    const closed = record(8, { seq: 5, state: 'closed', step: null, why: 'merged', since: NOW - DAY })
+    const list = [eventOf(t(a), NOW - 2 * DAY), eventOf(t(closed), NOW - DAY)]
+    const relog = [eventOf({ ...t(a), via: 'dual-write' }, NOW - MIN), eventOf({ ...t(closed), via: 'dual-write' }, NOW - MIN)]
+    expect(recordsFromEvents([...list, ...relog], DEVICE, parse)).toEqual(recordsFromEvents(list, DEVICE, parse))
+  })
+
   test('another device\'s events, other states and notes that do not parse are left out; a record closed past the keep time goes', () => {
     const mine = record(9, { seq: 2 })
     const theirs = record(10, { seq: 5 })

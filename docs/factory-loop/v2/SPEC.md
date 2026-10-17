@@ -148,6 +148,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | `milestone` | `callum-flow-milestone show next` | as v1 | kept (the release task) |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
+| `dualWrite` | act mode with the v2 planner only: `callum-flow-event --new-path --repo R` (exit 0: dual write is on and stdout is the new log's path; any other exit, an older image: off), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | new; its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -454,6 +455,12 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
   `callum-flow-claim N`. That keeps the record and its state; exit 3 is `claim-lost`. The re-claim
   logs the record's current `transition` event again, so readers see the stage at once
   (`failures/F16`, `totality/T-14`).
+- **Dual write.** While the image writes the new event log (the `dualWrite` source, 2.4; act mode
+  only), H1 logs a `transition` event with `via=dual-write` for every record, open or closed, whose
+  current `<issue>:<life>:<seq>` the log lacks. Its key is `dual-write:<issue>:<life>:<seq>`, so
+  each stage is logged once. Only a record with `seqAt` before the read counts: the log is read once
+  per load, and a later transition was written to both logs by the dual-writing image. The event
+  keeps the record's own seq, so a rebuild picks the same record from either log.
 - **Pushes by a person.** A head on the record's branch that no loop step produced is a person
   intervention (`push`, 7.2). The loop's own heads are known: the heads that writer steps confirmed,
   and those that `queue-update` produced (9.2). The state's own keys handle the new head: review is
@@ -988,7 +995,7 @@ Three new states in `callum-flow-event`, whose vocabulary is closed
 
 | State | When | Columns | Note fields |
 |---|---|---|---|
-| `transition` | every record change (4.6), and again after a re-claim (4.1) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
+| `transition` | every record change (4.6), again after a re-claim (4.1), and once more for a record the new log lacks when dual write starts (4.1, via=dual-write) | issue, branch, pr, head | the row id, `from`, `to`, `via`, and every record field (3.2), so a record can be rebuilt from it (3.3) |
 | `reviewed` | each review result (8.3) | issue, branch, pr, head | `verdict` (`approve`, `changes` or `unknown`), `round`, `patch`, the counts of error, warning and info findings, the reviewer's id, the answer's path |
 | `intervention` | each intervention (7.2) | issue (when there is one), pr | `who` (`person` or `loop`), `cause` (a code of 7.2), `reason` (one line, at most 200 characters), the life when there is one, and the key of the fact it records |
 

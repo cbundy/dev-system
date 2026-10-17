@@ -316,7 +316,8 @@ describe('what observe reads for v2 (v2 SPEC 2.4)', () => {
     const log: string[] = []
     const budgets: number[] = []
     const run = async (argv: string[]) => {
-      log.push(argv.join(' '))
+      // the dual-write probe is not a GitHub read (v2-dual-write.test.ts), so this order leaves it out
+      if (argv[0] !== 'callum-flow-event') log.push(argv.join(' '))
       return { exitCode: 0, stdout: JSON.stringify({ comments: [] }), stderr: '' }
     }
     const readers: V2Readers = {
