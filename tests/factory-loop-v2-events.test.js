@@ -164,6 +164,27 @@ test("a via=dual-write transition goes through the real writer: the old line rea
   assert.equal(read.data.seq, 7);
 });
 
+test("a v2 split's token note goes through the real writer: the loop reads it back, and the new log's abandoned carries the reasons", () => {
+  const reasons = { why_split: "Spans the loop, 100% of the image", why_count: "Two: one per side", why_parts: "The image ships on its own", why_order: "none" };
+  const note = ev.splitNote([601, 602], reasons, ["The loop side, with a comma", "The image side"]);
+  assert.ok(!note.includes("\n") && note.startsWith("reason=split note=split%20into%20601,602 why_split="));
+  const line = log(["callum-flow-event", "abandoned", "--issue", "600", "--branch", "issue-600", "--note", note]);
+  const back = ev.parseEvent({ state: line.state, issue: line.issue, branch: line.branch, pr: line.pr, head: line.head, note: line.note });
+  assert.deepEqual(back, { state: "abandoned", issue: 600, branch: "issue-600", pr: null, head: null, note: "split into 601,602" });
+  const newLines = fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+  const read = reader.readEvent(JSON.parse(newLines[newLines.length - 1]));
+  assert.equal(read.type, "abandoned");
+  assert.deepEqual(read.data.split_into, [601, 602]);
+  assert.deepEqual({ ...reasons }, { why_split: read.data.why_split, why_count: read.data.why_count, why_parts: read.data.why_parts, why_order: read.data.why_order });
+  assert.deepEqual(read.data.child_whys, ["The loop side, with a comma", "The image side"]);
+  // without reasons the old words are kept, and the new fields read as null
+  assert.equal(ev.splitNote([601, 602], null, null), "split into 601,602");
+  const old = log(["callum-flow-event", "abandoned", "--issue", "603", "--note", ev.splitNote([604, 605], null, null)]);
+  const oldRead = reader.readEvent(JSON.parse(fs.readFileSync(path.join(dir, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean).pop()));
+  assert.equal(old.note, "split into 604,605");
+  assert.deepEqual([oldRead.data.split_into, oldRead.data.why_split, oldRead.data.child_whys], [[604, 605], null, null]);
+});
+
 test("a fixer's verdict is logged as the fixer; every other event as the CLI's default actor", () => {
   for (const e of events()) {
     const line = log(ev.eventArgv(e));

@@ -170,6 +170,12 @@ test("coverage: every row of translator.md has a corpus line, and each shape is 
   has("requeued", (d) => d.reason === "reconcile" && d.lives === null && d.pr !== null, "reconcile with the pr token");
   for (const reason of ["rejected", "reconcile", "dropped", "split", "triage", "other"]) has("abandoned", (d) => d.reason === reason, `abandoned ${reason}`);
   has("abandoned", (d) => d.reason === "split" && d.split_into.length === 2, "split into a list");
+  has("abandoned", (d) => d.reason === "split" && d.why_split !== null && d.child_whys.length === d.split_into.length, "a split with its reasons");
+  for (const d of data("abandoned")) {
+    // only a v2 split in the new token shape carries the reasons; every other line gives null
+    if (d.why_split === null) assert.deepEqual([d.why_count, d.why_parts, d.why_order, d.child_whys], [null, null, null, null]);
+    else assert.equal(d.reason, "split");
+  }
   for (const by of ["factory", "hand"]) for (const recovered of [true, false]) if (!(by === "hand" && !recovered)) has("merged", (d) => d.by === by && d.recovered === recovered, `merged ${by} ${recovered}`);
   for (const source of ["issue", "pr", "comment", "comments", "timeline", "list"]) has("untrusted_stripped", (d) => d.source === source, `stripped ${source}`);
   has("usage", (d) => d.available === true, "a usage reading");
@@ -245,6 +251,24 @@ test("passes: an extra token, a missing token, a status other than done and a ke
   assert.match(missOf(withNote(base, note.replace(/mode=\w+/, "mode=turbo"))), /mode is not valid/);
   assert.match(missOf(withNote(base, note.replace(/passes=(\d+) /, "passes=many "))), /bad number passes=many/);
   assert.match(missOf(withNote(base, note.replace(/from=\S+/, "from=yesterday"))), /bad time from=yesterday/);
+});
+
+test("abandoned shape 3: a split's reason tokens give the new fields, a missing one gives null, and a stray token is still a miss", () => {
+  const base = oldLines.find((l) => l.state === "abandoned" && /^reason=split note=/.test(l.note ?? ""));
+  const note = "reason=split note=split%20into%207,8 why_split=a%20b why_count=none why_parts=c%25d why_order=e child_whys=x%2Cy,none";
+  const r = translate(withNote(base, note));
+  assert.deepEqual(reader.validateStrict("abandoned", 1, r.event.data), []);
+  // why_count=none is the text "none", not a null; the list items are encoded one by one
+  assert.deepEqual(
+    [r.event.data.split_into, r.event.data.why_split, r.event.data.why_count, r.event.data.why_parts, r.event.data.why_order, r.event.data.child_whys],
+    [[7, 8], "a b", "none", "c%d", "e", ["x,y", "none"]],
+  );
+  const some = translate(withNote(base, "reason=split note=split%20into%207,8 why_split=a")).event.data;
+  assert.deepEqual([some.why_split, some.why_count, some.child_whys], ["a", null, null]);
+  // a reason other than split never takes them
+  const dropped = translate(withNote(base, "reason=dropped note=x why_split=a")).event.data;
+  assert.deepEqual([dropped.why_split, dropped.child_whys], [null, null]);
+  assert.match(missOf(withNote(base, `${note} surprise=1`)), /^abandoned: unexpected token surprise=/);
 });
 
 test("misses name their cause and give no event", () => {

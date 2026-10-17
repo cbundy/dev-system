@@ -310,3 +310,25 @@ test("the answer block a rendered prompt shows runs as copied: bash records the 
     assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).answer, JSON.parse(lines[at + 1].trim()), purpose);
   }
 });
+
+// A v2 split is held to the same contract the loop checks: four reasons and a why for each child.
+test("a v2 split without reasons is refused and records nothing; a full split is recorded", () => {
+  const job = { contract: "design-v2", purpose: null, repo: "cbundy/dev-system", issue: 470, branch: null };
+  const body = "## Design brief (designer, 2026-10-17)\n\nDo it.\n\n## Rollout\n\nmerge - a self-contained change\n";
+  const child = (key) => ({ key, title: `Part ${key}`, why: `Why ${key} stands alone`, body, blockedBy: [], ready: true });
+  const reasons = { why_split: "It spans two areas", why_count: "Two: one per area", why_parts: "The areas ship apart", why_order: "The parts are independent" };
+  const split = { kind: "split", brief: "the plan", children: [child("a"), child("b")] };
+  const refused = issue(job);
+  const bad = run(["--to", refused.file], { input: JSON.stringify(split) });
+  assert.equal(bad.code, 1, bad.out);
+  assert.deepEqual(problemsOf(bad.err), ["reasons is required for a split: { why_split, why_count, why_parts, why_order }"]);
+  assert.equal(fs.existsSync(refused.file), false);
+  const { why: _why, ...noWhy } = child("a");
+  const bad2 = run(["--to", refused.file], { input: JSON.stringify({ ...split, reasons, children: [noWhy, child("b")] }) });
+  assert.deepEqual(problemsOf(bad2.err), ["children[0] (a).why is required"]);
+  assert.equal(fs.existsSync(refused.file), false);
+  const ok = issue(job);
+  const good = run(["--to", ok.file], { input: JSON.stringify({ ...split, reasons }) });
+  assert.equal(good.code, 0, good.err);
+  assert.match(good.out, /^factory-answer: recorded your design-v2 answer \(a split into 2 children\)/);
+});

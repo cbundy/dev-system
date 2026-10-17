@@ -4,7 +4,7 @@
 // vocabulary (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions,
 // outcomes and State fields join the unions here, so the dispatcher, the ledger and the store
 // carry them as they carry v1's.
-import type { AgentStep, Model, Planner, Shadow, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, Model, Planner, Shadow, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -456,7 +456,9 @@ export type Action =
   | (Base & { kind: 'update-checkout'; branch: string; head: string | null })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
-  | (Base & { kind: 'release-parent'; created: number[] })
+  | // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
+  // null (or absent, for v1's plan) when the life's design answer can no longer be read
+  | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
   | (Base & { kind: 'abandon'; run: string | null; branch: string | null; note: string })
   | (Base & { kind: 'milestone-expect'; bump: Bump; why: string })
   | (Base & { kind: 'pr-comment'; pr: number; body: string })
