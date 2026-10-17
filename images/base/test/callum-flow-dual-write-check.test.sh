@@ -62,6 +62,7 @@ q() { psql -X -q -At -v ON_ERROR_STOP=1 "$(url_for "$1" "$ADMIN_USER" "$ADMIN_PW
 
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL
 export DEV_SECRETS_DIR="$tmpdir/secrets"
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
 mkdir -p "$DEV_SECRETS_DIR"
 export DEV_SYSTEM_SHARE="$ROOT/images/base"
 
@@ -184,6 +185,21 @@ grep -q '^extra ready: 1$' "$tmpdir/chk.out" || fail "extra count: $(cat "$tmpdi
 grep -q '^  extra ready 11111111-1111-4111-8111-111111111111$' "$tmpdir/chk.out" || fail "extra id: $(cat "$tmpdir/chk.out")"
 [ "$(newrows)" = $((shipped + 2)) ] || fail "check changed the store"
 echo "ok: an extra new row"
+
+# -- 8b. an event written natively (callum-flow-event --type) has no old row, so it is an extra under
+# its type and the check exits 1. This pins the current behavior (cbundy/dev-system#743): the check
+# proves dual write only where no producer writes natively.
+ev --type claim_renewed --issue 7 --data '{"lease_minutes":30}'
+ship
+native=$(q "$db" "SELECT event_id FROM factory.event_store WHERE type = 'claim_renewed'")
+[ -n "$native" ] || fail "the native event was not shipped to the new store"
+[ "$(q "$olddb" "SELECT count(*) FROM factory.events WHERE event_id = '$native'")" = 0 ] || fail "a native event should have no old row"
+check
+[ "$rc" = 1 ] || fail "a native event should exit 1, got $rc: $(cat "$tmpdir/chk.out")"
+grep -q '^extra claim_renewed: 1$' "$tmpdir/chk.out" || fail "native extra count: $(cat "$tmpdir/chk.out")"
+grep -q "^  extra claim_renewed $native\$" "$tmpdir/chk.out" || fail "native extra id: $(cat "$tmpdir/chk.out")"
+q "$db" "DELETE FROM factory.event_store WHERE event_id = '$native'" > /dev/null
+echo "ok: a native event is an extra"
 
 # -- 9. an old row the translator misses is reported as a miss
 q "$olddb" "INSERT INTO factory.events (device, repo, seq, ts, state, issue, raw, event_id) VALUES ('dev-box', 'acme/widgets', 900, now(), 'claimed', 77, '{\"state\":\"claimed\",\"repo\":\"acme/widgets\",\"device\":\"dev-box\",\"issue\":77,\"event_id\":\"22222222-2222-4222-8222-222222222222\",\"ts\":\"bad\"}', '22222222-2222-4222-8222-222222222222')" > /dev/null

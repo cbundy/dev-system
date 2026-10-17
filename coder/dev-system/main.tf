@@ -194,6 +194,22 @@ variable "gh_volume_name" {
   }
 }
 
+# Per-workspace gh tokens (the gh_login parameter's "token" choice). Each
+# workspace's host directory <dir>/<lower(owner)>/<lower(workspace name)> holds
+# a gh-token file and is bind-mounted alone at /run/secrets/dev-system-workspace.
+# It must not sit under secrets_dir, which is mounted into every workspace: a
+# token under it would reach all of them. Only the path passes through
+# Terraform, never a token value.
+variable "workspace_secrets_dir" {
+  default     = ""
+  description = "Directory on the Docker host holding one folder per workspace, <dir>/<lower(owner)>/<lower(workspace name)>/ (files owned 1000:1000, mode 0600: gh-token, factory-db-writer-url, factory-db-reader-url), whose folder is mounted read-only at /run/secrets/dev-system-workspace in every workspace when this is set; gh-token is used only when the workspace picks gh_login=token. Must not be equal to or under secrets_dir, which every workspace mounts. Empty turns the token choice off."
+  type        = string
+  validation {
+    condition     = var.workspace_secrets_dir == "" || var.secrets_dir == "" || (var.workspace_secrets_dir != var.secrets_dir && !startswith(var.workspace_secrets_dir, "${var.secrets_dir}/"))
+    error_message = "workspace_secrets_dir must not be secrets_dir or under it: secrets_dir is mounted into every workspace."
+  }
+}
+
 # The volume behind the claude_login parameter's "shared" choice: a named
 # Docker volume mounted at /persist/claude-auth, with
 # CLAUDE_SECURESTORAGE_CONFIG_DIR pointing Claude's login (and only its
@@ -380,27 +396,62 @@ data "coder_parameter" "claude_login" {
   }
 }
 
-# Shared or private gh login (variable gh_volume_name). The default is shared,
-# which is what every workspace got before the choice existed, and Coder gives
-# an existing workspace the default on its next update (#268), so nothing
-# changes for it. A private login is a token of its own, one of GitHub's 10
-# per user for the GitHub CLI app (docs/spikes/gh-auth/).
+# Shared, private or own-token gh login. With a volume (variable gh_volume_name)
+# the default is shared, which is what every workspace got before the choice
+# existed, and Coder gives an existing workspace the default on its next update
+# (#268), so nothing changes for it; without one the default is private. A
+# private login is a token of its own, one of GitHub's 10 per user for the
+# GitHub CLI app (docs/spikes/gh-auth/). The token choice needs
+# workspace_secrets_dir: the workspace logs in with the token file there.
 data "coder_parameter" "gh_login" {
-  count        = var.gh_volume_name == "" ? 0 : 1
+  count        = (var.gh_volume_name != "" || var.workspace_secrets_dir != "") ? 1 : 0
   name         = "gh_login"
   display_name = "GitHub login"
-  description  = "shared: this workspace uses the one GitHub CLI login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in. private: it has its own GitHub CLI login, which uses one of GitHub's 10 tokens per user for the GitHub CLI; past that, GitHub revokes the least recently used one. Anyone who can open a shared workspace holds that login. Takes effect on the next workspace start."
+  description  = "shared: this workspace uses the one GitHub CLI login shared by every workspace that picks shared, so it needs no sign-in once any of them is signed in. Anyone who can open a shared workspace holds that login. private: it has its own GitHub CLI login, which uses one of GitHub's 10 tokens per user for the GitHub CLI; past that, GitHub revokes the least recently used one. token: it logs in with its own token file from the Docker host, so it uses no GitHub CLI login slot and shares nothing. Takes effect on the next workspace start."
   type         = "string"
-  default      = "shared"
+  default      = var.gh_volume_name != "" ? "shared" : "private"
   mutable      = true
   order        = 11
-  option {
-    name  = "Shared with other workspaces"
-    value = "shared"
+  dynamic "option" {
+    for_each = local.gh_login_options
+    content {
+      name  = option.value.name
+      value = option.value.value
+    }
   }
-  option {
-    name  = "Private to this workspace"
-    value = "private"
+}
+
+# Only with workspace_secrets_dir: extra trusted authors for a workspace whose
+# own token acts as another account (appended to the template's list).
+data "coder_parameter" "extra_trusted_authors" {
+  count        = var.workspace_secrets_dir == "" ? 0 : 1
+  name         = "extra_trusted_authors"
+  display_name = "Extra trusted authors"
+  description  = "Comma-separated login:numeric_id entries appended to the template's trusted authors in CALLUM_FLOW_TRUSTED_AUTHORS, e.g. someone:12345. Takes effect on the next workspace start."
+  type         = "string"
+  default      = ""
+  mutable      = true
+  order        = 12
+  validation {
+    regex = "^([A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?:[1-9][0-9]*(,[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?:[1-9][0-9]*)*)?$"
+    error = "Use comma-separated login:numeric_id entries with no spaces, e.g. someone:12345."
+  }
+}
+
+# Only with workspace_secrets_dir: the git email for a workspace whose own token
+# replaces the owner's identity (passed as DEV_GIT_EMAIL when set).
+data "coder_parameter" "git_email" {
+  count        = var.workspace_secrets_dir == "" ? 0 : 1
+  name         = "git_email"
+  display_name = "Git email"
+  description  = "The email address for commits in this workspace, passed as DEV_GIT_EMAIL. Empty leaves it to the image. Takes effect on the next workspace start."
+  type         = "string"
+  default      = ""
+  mutable      = true
+  order        = 13
+  validation {
+    regex = "^([^@\\s]+@[^@\\s]+\\.[^@\\s]+)?$"
+    error = "Enter an email address such as name@example.com, or leave it empty."
   }
 }
 
@@ -447,9 +498,11 @@ locals {
     "OTEL_RESOURCE_ATTRIBUTES=host=${local.container_name},env=coder",
   ]
 
-  # Set for every workspace, so agents and dev-doctor read the same list.
-  trusted_env = var.trusted_authors == "" ? [] : [
-    "CALLUM_FLOW_TRUSTED_AUTHORS=${var.trusted_authors}",
+  # Set for every workspace, so agents and dev-doctor read the same list; the
+  # extra_trusted_authors parameter appends to the template's.
+  trusted_authors_effective = join(",", compact([var.trusted_authors, try(data.coder_parameter.extra_trusted_authors[0].value, "")]))
+  trusted_env = local.trusted_authors_effective == "" ? [] : [
+    "CALLUM_FLOW_TRUSTED_AUTHORS=${local.trusted_authors_effective}",
   ]
 
   # The shared Claude login (parameter claude_login): Claude keeps its login,
@@ -457,8 +510,36 @@ locals {
   claude_login_shared = try(data.coder_parameter.claude_login[0].value, "private") == "shared"
   claude_auth_env     = local.claude_login_shared ? ["CLAUDE_SECURESTORAGE_CONFIG_DIR=/persist/claude-auth"] : []
 
-  # The shared gh login (parameter gh_login, default shared).
-  gh_login_shared = try(data.coder_parameter.gh_login[0].value, "private") == "shared"
+  # The gh login (parameter gh_login): shared, private or token.
+  gh_login        = try(data.coder_parameter.gh_login[0].value, "private")
+  gh_login_shared = local.gh_login == "shared"
+  gh_login_token  = local.gh_login == "token"
+  gh_login_options = concat(
+    var.gh_volume_name != "" ? [{ name = "Shared with other workspaces", value = "shared" }] : [],
+    [{ name = "Private to this workspace", value = "private" }],
+    var.workspace_secrets_dir != "" ? [{ name = "This workspace's own token", value = "token" }] : [],
+  )
+
+  # The workspace's own folder on the Docker host. Lower case for the owner
+  # and workspace name, as container_name does: the host folder is created in
+  # lower case.
+  workspace_secrets_host_dir = "${var.workspace_secrets_dir}/${lower(data.coder_workspace_owner.me.name)}/${lower(data.coder_workspace.me.name)}"
+
+  # Token mode: dev-init logs gh in with the token file (only the path is set
+  # here, never the token). DEV_GIT_EMAIL only when the parameter is set.
+  git_email = try(data.coder_parameter.git_email[0].value, "")
+  gh_token_env = concat(
+    local.gh_login_token ? ["DEV_GH_TOKEN_FILE=/run/secrets/dev-system-workspace/gh-token"] : [],
+    local.git_email != "" ? ["DEV_GIT_EMAIL=${local.git_email}"] : [],
+  )
+
+  # The owner's git identity; a token workspace acts as the token's account.
+  git_identity_env = local.gh_login_token ? {} : {
+    GIT_AUTHOR_NAME     = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    GIT_AUTHOR_EMAIL    = data.coder_workspace_owner.me.email
+    GIT_COMMITTER_NAME  = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
+    GIT_COMMITTER_EMAIL = data.coder_workspace_owner.me.email
+  }
 
   # Docker labels, to trace orphaned resources back to their workspace.
   labels = {
@@ -530,11 +611,6 @@ resource "coder_agent" "main" {
 
   env = merge(
     {
-      # Commits work straight away; these take precedence over ~/.gitconfig.
-      GIT_AUTHOR_NAME         = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-      GIT_AUTHOR_EMAIL        = data.coder_workspace_owner.me.email
-      GIT_COMMITTER_NAME      = coalesce(data.coder_workspace_owner.me.full_name, data.coder_workspace_owner.me.name)
-      GIT_COMMITTER_EMAIL     = data.coder_workspace_owner.me.email
       DEV_REMOTE_CONTROL      = "1"
       DEV_REMOTE_CONTROL_MODE = data.coder_parameter.remote_control_mode.value
       # The parameter's value is the string "true" or "false".
@@ -554,6 +630,9 @@ resource "coder_agent" "main" {
       DEV_CODER_WORKSPACE        = data.coder_workspace.me.name
       DEV_CODER_TEMPLATE_VERSION = data.coder_workspace.me.template_version
     },
+    # Commits work straight away; these take precedence over ~/.gitconfig.
+    # Left out in token mode (local.git_identity_env).
+    local.git_identity_env,
     # Only when set, so a per-repo image's own DEV_REPO_URL applies otherwise.
     data.coder_parameter.repo_url.value != "" ? { DEV_REPO_URL = data.coder_parameter.repo_url.value } : {},
     # The conversation settings only when on or non-empty, so the image's
@@ -699,7 +778,7 @@ resource "docker_container" "workspace" {
   # own init is PID 1: it reaps the orphans tmux and Claude leave behind.
   init       = true
   entrypoint = ["sh", "-c", coder_agent.main.init_script]
-  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env)
+  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)
@@ -715,8 +794,8 @@ resource "docker_container" "workspace" {
     container_path = "/workspaces"
     volume_name    = docker_volume.workspace.name
   }
-  # The shared gh login, for a workspace that keeps it (parameter gh_login),
-  # over the persist volume's gh directory. Not managed here: see
+  # The shared gh login, for a workspace that keeps it (parameter gh_login;
+  # not in token mode), over the persist volume's gh directory. Not managed here: see
   # gh_volume_name.
   dynamic "volumes" {
     for_each = local.gh_login_shared ? [var.gh_volume_name] : []
@@ -739,6 +818,17 @@ resource "docker_container" "workspace" {
     for_each = var.secrets_dir == "" ? [] : [var.secrets_dir]
     content {
       container_path = "/run/secrets/dev-system"
+      host_path      = volumes.value
+      read_only      = true
+    }
+  }
+  # This workspace's own folder only (variable workspace_secrets_dir), for the
+  # gh token and factory-db-*-url overrides: no other workspace's files are
+  # visible. A missing host folder is created empty by Docker and changes nothing.
+  dynamic "volumes" {
+    for_each = var.workspace_secrets_dir != "" ? [local.workspace_secrets_host_dir] : []
+    content {
+      container_path = "/run/secrets/dev-system-workspace"
       host_path      = volumes.value
       read_only      = true
     }

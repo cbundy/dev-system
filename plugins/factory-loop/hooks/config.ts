@@ -109,6 +109,7 @@ export const DEFAULT_CONFIG: Config = {
   ciRunMs: 30 * MIN,
   prEveryMs: 30_000,
   maxTriages: 2,
+  minimumReleaseCadenceMs: 6 * 60 * MIN,
   maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
@@ -164,9 +165,9 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   ...V2_ACTION_KINDS,
 ]
 // maxAttempts may name any action kind or agent type.
-const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
-const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
-const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
+export const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
+export const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
+export const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 
 // v2: the settings v2 runs with, from the same layers: config itself under planner v2; under v1,
 // V2_DEFAULTS on every key no layer set, which the v2 shadow plans with (v2 SPEC 2.3).
@@ -246,6 +247,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
             bad(name, v, key === 'maxAttempts' ? 'a whole number of at least 1' : 'a whole number')
           }
         }
+      } else if (key === 'minimumReleaseCadenceMs') {
+        const n = typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' ? parseDuration(value) : null
+        if (n !== null && n >= 60 * MIN) out[key] = n
+        else bad(raw, value, 'a duration of at least 1h (like 6h, 90m)')
       } else if (key.endsWith('Ms') && typeof base === 'number') {
         const n = ms(raw, value, short)
         if (n !== null) out[key] = n

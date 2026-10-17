@@ -218,7 +218,7 @@ export function plan(state: State, config: Config): PlanResult {
     drops(ctx)
     claims(ctx)
     agents(ctx)
-    release(ctx)
+    const due = releaseDue(ctx.state, ctx.config); if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
   }
 
   const actions = admit(ctx)
@@ -2327,11 +2327,11 @@ function splitAfter(ctx: Ctx, issue: number, since: number) {
 
 // --- O3: the release ---------------------------------------------------------------------
 
-function release(ctx: Ctx) {
-  const { state } = ctx
-  const m = state.milestone
-  if (!state.sources.milestone.ok || m === null || m.open > 0 || m.closed === 0) return
-  want(ctx, wake('task', 'release', `task:release:${m.closed}:${m.expected ?? 'none'}`, 'O3', null, { closed: m.closed, expected: m.expected }))
+// releaseDue: the review's key and fields (one release task per UTC hour, whatever its key); v2 reuses it. `short` is config.ts's shortDuration (plan.ts imports types only; plan.test.ts holds them together)
+export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State, config: Config) {
+  const hour = (at: number) => new Date(at).toISOString().slice(0, 13), tag = r === null ? 'unknown' : (r.tag ?? 'none'), short = (ms: Ms) => ms > 0 && ms % 3_600_000 === 0 ? `${ms / 3_600_000}h` : ms > 0 && ms % 60_000 === 0 ? `${ms / 60_000}m` : ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
+  if (!sources.milestone.ok || m === null || m.open > 0 || m.closed === 0 || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
+  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : new Date(r.oldest).toISOString(), cadence: short(config.minimumReleaseCadenceMs) } }
 }
 
 // --- admitting actions: control, drain, tier, GitHub backoff, breakers, caps, one wake -------

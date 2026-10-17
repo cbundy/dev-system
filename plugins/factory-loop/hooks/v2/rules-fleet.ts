@@ -5,7 +5,7 @@
 // v1's drain gone: R2 waits only for a queue action or the release task to finish, and for a pass
 // with nothing else to start (section 15, "Restart without a drain"); a running step it cuts
 // re-runs free (row U1). Pure.
-import { gate, skip, wake, want } from '../foundation'
+import { gate, releaseDue, skip, wake, want } from '../foundation'
 import type { PlanCtx } from '../foundation'
 import type { Action, ActionKind, LedgerEntry } from '../types'
 import { entryDone, entryItems } from './rules-entry'
@@ -35,10 +35,8 @@ export function fleetRules(ctx: V2Ctx): void {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
-  const m = state.milestone
-  if (state.sources.milestone.ok && m !== null && m.open === 0 && m.closed > 0) {
-    want(ctx, wake('task', 'release', `task:release:${m.closed}:${m.expected ?? 'none'}`, 'O3', null, { closed: m.closed, expected: m.expected }))
-  }
+  const due = releaseDue(state, config)
+  if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
 }
 
 // fleetTells: what used up its attempts with no record to hold (a record's own exhausted effects

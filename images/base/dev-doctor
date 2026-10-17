@@ -130,7 +130,7 @@ check_login gh "gh auth login, then dev-init" gh auth status
 # token) are only information.
 # shellcheck source=gh.sh
 . /usr/local/share/dev-system/gh.sh
-if command -v gh >/dev/null 2>&1; then
+if command -v gh >/dev/null 2>&1 && ! gh_token_mode; then
   case "$(gh_workflow_scope)" in
     yes) ok "gh's token has the workflow scope" ;;
     no)
@@ -533,6 +533,7 @@ fi
 unset ta_msg
 if gh_token_mode; then
   gh_token_doctor
+  gh_token_access_doctor "${DEV_REPO_URL:-$(git -C "$workspace" remote get-url origin 2>/dev/null || true)}"
 fi
 
 # Telemetry export (cbundy/dev-system#68) is opt-in, so this line is only

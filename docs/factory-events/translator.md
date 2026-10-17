@@ -78,6 +78,9 @@ The `abandoned` shapes, tried in order:
 2. `reason=reconcile ...`, with `outcome=leave` or no outcome (early release rows), gives
    `reason` reconcile and the same fields.
 3. `reason=<r> note=<text>` gives `reason` r (dropped, split, triage or other) and `detail` text.
+   A v2 split also carries `why_split`, `why_count`, `why_parts`, `why_order` and `child_whys` (a
+   list in the order of `split_into`), which give the fields of the same names; each is null when
+   its token is absent. Every other shape gives them null.
 4. `split into <n>,<m>` gives `reason` split and `split_into` [n, m]. This is a v2 split logged
    through the v1 executor, `plugins/factory-loop/hooks/act-cli.ts:89`.
 5. Any other text gives the `reason` its first word says (drop or dropped, split, triage, else

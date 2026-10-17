@@ -1,14 +1,31 @@
 ---
 name: release
-description: Cut a dev-system release - pick the semver bump, draft the curated release notes (release-notes/vX.Y.Z.md) from the merged PRs since the last tag, then run the bump PR and the Release workflow and report the result to the owner. Use when asked to release, cut a release, or write release notes for dev-system.
+description: Cut a dev-system release end to end - draft the curated release notes (release-notes/vX.Y.Z.md) from the merged PRs since the last tag, open and merge the bump PR, run the Release workflow and the image publish, and report each step. The guide the loop judge's release agent follows once the judge has decided to release; also for a person asked to release, cut a release, or write release notes for dev-system.
 ---
 
 # Release dev-system
 
-Repo-local skill (not shipped in `plugins/`). RELEASING.md has the mechanics; this is the
-judgement part: the version and the notes. The owner has given standing release authority: pick
-the version and the image level yourself, validate the notes, ship, then report the tag, the release
-URL and the workflow results to the owner afterwards.
+Repo-local skill (not shipped in `plugins/`), the guide for the **release agent**. The loop's
+judge decides *when* to release and the version step (patch or minor); it then starts you with
+that step. You do the release, every step below, and report back. You decide nothing about
+whether to release. RELEASING.md has the full mechanics. The owner has given standing release
+authority: ship without asking, then report.
+
+When a person runs this skill with no step given, pick the step yourself in step 1.
+
+## Rules for the release agent
+- Work in a leased worktree (`treehouse get --lease -b chore/release-vX.Y.Z`), never in the main
+  checkout: a tracked change there holds every claim and agent of the loop. Add files by name,
+  never `git add -u` or `-A` in a shared checkout. Return the worktree when done.
+- Check first that `vX.Y.Z` is not already tagged (`git tag -l vX.Y.Z` after `git fetch --tags`).
+  If it is, stop and report `already released`.
+- Wait on checks and runs with a 60 s interval (see the end of this guide), never the defaults.
+- Never push Coder templates, restart or upgrade a workspace, or change the loop's settings: an
+  outside foreman session moves the loops onto a new release.
+- Report back in one line per step (notes, bump PR, merge, CI on main, Release, image publish,
+  milestone) and finish with the version, the image version when it changed, and the release URL.
+  If a step fails, stop there and report which step and why; do not retry by force-pushing,
+  re-tagging or skipping a check.
 
 ## 1. Prepare
 - `git fetch --tags`; confirm main is up to date and `ci` is green on its HEAD
@@ -19,14 +36,17 @@ URL and the workflow results to the owner afterwards.
 - Milestone: `node scripts/release-milestone.js --plan X.Y.Z --to origin/main` (read-only; X.Y.Z is
   your chosen version). It lists the `Next release` milestone's items, its expected-bump line,
   the PRs in the git range that are missing from it, and the items in it that are not in the range.
-  - If it says `Next release` still has open items, STOP and name them to the owner. Do not
-    release past them; the owner moves them to `Later` (or finishes them). Never move them yourself.
+  - If it says `Next release` still has open items, stop and report them as the reason (the judge
+    passes it on). Do not release past them; the owner moves them to `Later` (or finishes them).
+    Never move them yourself.
   - Draft the notes from the milestone's items and flag every difference from the `git log`
     range in your report to the owner. The release workflow reconciles the milestone itself.
   - With no `Next release` milestone, ignore this and work from `git log` as before.
-- Pick the bump per RELEASING.md: patch for wording fixes, minor for a new
-  skill/template/capability, major for a breaking change to an existing contract. Give reasons in your report. When the milestone has an
-  `expected:` line, show it next to your choice and say why you agree or differ.
+- The version: the next version at the step the judge gave you. With no step given, pick it per
+  RELEASING.md: patch for wording fixes, minor for a new skill/template/capability, major for a
+  breaking change to an existing contract. Never release a major version unless the owner has
+  agreed to it. Give reasons in your report. When the milestone has an `expected:` line, show it
+  next to the version and say why you agree or differ.
 
 ## 2. Changed layers (from paths)
 `git diff --name-only <prev>..origin/main`:
@@ -74,15 +94,17 @@ fix the notes until the validator passes and the preview reads well. Do not wait
 1. On a branch from main: `node scripts/release-bump.js X.Y.Z` (add `--image A.B.C` when image
    inputs changed, at the level you picked); add `release-notes/vX.Y.Z.md`
    to the same bump PR (`npm run lint` fails without it).
-2. Merge when `ci` is green.
+2. Merge when `ci` is green, then wait for `ci` to pass on the merge commit on main: the
+   Release workflow refuses while that run is in progress.
 3. `gh workflow run release.yml -f version=X.Y.Z`, wait for it, then confirm the published
    body with `gh release view vX.Y.Z` (curated groups, Upgrade, collapsed technical list). The
    workflow's last step rolls the milestone over; check `vX.Y.Z` is closed and a fresh
    `Next release` exists (when the repo had one).
 4. If the release bumped the image: `gh workflow run publish-base-image.yml` on main to publish the
    new tags, then confirm the run is green.
-5. Report to the owner: the version and image level with the reasons in one line each, the tag,
-   the release URL (`gh release view vX.Y.Z --json url`), and the result of each workflow run.
+5. Report (to the judge that started you, or to the owner when a person ran this skill): the
+   version and image level with the reasons in one line each, the tag, the release URL
+   (`gh release view vX.Y.Z --json url`), and the result of each workflow run.
 
 Waiting on a check or a run: the whole fleet (every loop and session) shares one GitHub rate limit,
 and the image publish alone takes about 15 minutes. Always wait with a slow interval:

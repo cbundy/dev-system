@@ -7,6 +7,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
 import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
+import { readMilestone } from '../hooks/observe-milestone'
+import type { MilestoneCache } from '../hooks/observe-milestone'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
 import {
@@ -16,7 +18,11 @@ import {
   parseDirty,
   parseFactoryState,
   parseIssueRead,
+  parseCommitDate,
   parseMilestone,
+  parseOldestMerge,
+  parseReleaseTag,
+  parseTagCommit,
   parsePipelineLine,
   parsePipelineOnce,
   parsePool,
@@ -119,7 +125,10 @@ describe('parse', () => {
       },
       stripped: 0,
     })
-    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, subIssues: 0, title: 'Escalate by opening an issue' })
+    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue' })
+    const two = JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0, blocking: 2 } } })
+    expect(parseIssueRead(two)?.blocking).toBe(2)
+    expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
     expect(parseIssueRead('{}')).toBeNull()
   })
 
@@ -260,6 +269,122 @@ describe('parse', () => {
     })
     expect(parseMilestone('== Next release\nExpected: (not set)\n')).toEqual({ open: 0, closed: 0, expected: null })
     expect(parseMilestone('')).toBeNull()
+  })
+
+  test('release reads: the tag, the tag commit date, the oldest merge since it', () => {
+    expect(parseReleaseTag('{"tagName":"v1.2.3"}\n')).toBe('v1.2.3')
+    for (const bad of ['', 'nope', '{}', '{"tagName":""}', '{"tagName":5}']) expect(parseReleaseTag(bad)).toBeNull()
+    expect(parseCommitDate('2026-10-12T08:30:00Z\n')).toBe(Date.UTC(2026, 9, 12, 8, 30))
+    for (const bad of ['', 'nope', 'null']) expect(parseCommitDate(bad)).toBeNull()
+    const list = '[{"mergedAt":"2026-10-12T10:00:00Z"},{"mergedAt":"2026-10-12T08:45:00Z"}]'
+    expect(parseOldestMerge(list)).toBe(Date.UTC(2026, 9, 12, 8, 45))
+    expect(parseOldestMerge('[]')).toBeNull()
+    for (const bad of ['', 'nope', '{}', '[{"mergedAt":null}]', '[{}]']) expect(parseOldestMerge(bad)).toBeUndefined()
+  })
+
+  test('the release bump PR (the tag commit) is not an unreleased merge', () => {
+    const sha = '892e4f6e0000000000000000000000000000abcd'
+    expect(parseTagCommit(`${sha}\n2026-10-17T03:26:31Z\n`)).toEqual({ sha, at: Date.UTC(2026, 9, 17, 3, 26, 31) })
+    for (const bad of ['', 'nope', `${sha}\n`, `${sha}\nnope`, `${sha}\n2026-10-17T03:26:31Z\nx`]) expect(parseTagCommit(bad)).toBeNull()
+    const list = JSON.stringify([
+      { mergedAt: '2026-10-17T03:26:32Z', mergeCommit: { oid: sha } },
+      { mergedAt: '2026-10-17T03:31:56Z', mergeCommit: { oid: 'bbbb' } },
+    ])
+    expect(parseOldestMerge(list, sha)).toBe(Date.UTC(2026, 9, 17, 3, 31, 56))
+    expect(parseOldestMerge(list)).toBe(Date.UTC(2026, 9, 17, 3, 26, 32))
+    expect(parseOldestMerge(JSON.stringify([{ mergedAt: '2026-10-17T03:26:32Z', mergeCommit: { oid: sha } }]), sha)).toBeNull()
+  })
+
+  describe('readMilestone: the milestone and release reads', () => {
+    const SHA_T = '892e4f6e0000000000000000000000000000abcd'
+    const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
+    const fail = (stderr = 'boom') => ({ exitCode: 1, stdout: '', stderr })
+    const QUAL = '== Next release\nExpected: minor - x\n#1 closed issue a\n'
+    const OPEN = '== Next release\nExpected: minor - x\n#1 closed issue a\n#2 open issue b\n'
+    type Reply = { exitCode: number; stdout: string; stderr: string }
+    const setup = (replies: Record<string, Reply | (() => Reply)>) => {
+      const calls: string[][] = []
+      const run = async (argv: string[]) => {
+        calls.push(argv)
+        const key = argv[0] === 'callum-flow-milestone' ? 'ms' : argv[1] === 'release' ? 'view' : argv[1] === 'api' ? 'api' : 'list'
+        const r = replies[key]
+        return typeof r === 'function' ? r() : r ?? fail()
+      }
+      return { calls, run }
+    }
+    const o = (run: ReturnType<typeof setup>['run'], now: number, every = 1000) => ({ now, every, repo: REPO, base: 'main', run })
+    const listOf = JSON.stringify([
+      { mergedAt: '2026-10-17T03:26:32Z', mergeCommit: { oid: SHA_T } },
+      { mergedAt: '2026-10-17T03:31:56Z', mergeCommit: { oid: 'bbbb' } },
+    ])
+    const all = { ms: ok(QUAL), view: ok('{"tagName":"v0.48.0"}'), api: ok(`${SHA_T}\n2026-10-17T03:26:31Z\n`), list: ok(listOf) }
+
+    test('reads the tag and the oldest merge since it, leaving out the release PR', async () => {
+      const cache: MilestoneCache = {}
+      const { calls, run } = setup(all)
+      await readMilestone(cache, o(run, 5000))
+      expect(cache.release).toEqual({ at: 5000, value: { tag: 'v0.48.0', oldest: Date.UTC(2026, 9, 17, 3, 31, 56) } })
+      expect(calls.find((c) => c[1] === 'pr')?.join(' ')).toContain('merged:>=2026-10-17T03:26:31.000Z')
+    })
+
+    test('no release yet: tag null and oldest unknown, without a list read', async () => {
+      const cache: MilestoneCache = {}
+      const { calls, run } = setup({ ...all, view: fail('release not found') })
+      await readMilestone(cache, o(run, 5000))
+      expect(cache.release?.value).toEqual({ tag: null, oldest: null })
+      expect(calls.some((c) => c[1] === 'pr')).toBe(false)
+    })
+
+    test('a failed or malformed read keeps the last reading', async () => {
+      const prior = { at: 1, value: { tag: 'v0.47.0', oldest: 7 } }
+      for (const bad of [
+        { view: fail() },
+        { view: ok('nope') },
+        { api: fail() },
+        { api: ok('nope') },
+        { list: fail() },
+        { list: ok('nope') },
+      ]) {
+        const cache: MilestoneCache = { release: prior }
+        await readMilestone(cache, o(setup({ ...all, ...bad }).run, 5000))
+        expect(cache.release).toBe(prior)
+      }
+      const thrown: MilestoneCache = { release: prior }
+      await readMilestone(thrown, o(async () => { throw new Error('x') }, 5000))
+      expect(thrown.release).toBe(prior)
+    })
+
+    test('no release read while the milestone does not qualify; none opted in leaves no milestone', async () => {
+      for (const ms of [ok(OPEN), ok('== Next release\nExpected: (not set)\n'), ok('')]) {
+        const cache: MilestoneCache = {}
+        const { calls, run } = setup({ ...all, ms })
+        await readMilestone(cache, o(run, 5000))
+        expect(cache.release).toBeUndefined()
+        expect(calls.every((c) => c[0] === 'callum-flow-milestone')).toBe(true)
+      }
+      const cache: MilestoneCache = {}
+      await readMilestone(cache, o(setup({ ...all, ms: fail() }).run, 5000))
+      expect(cache.milestone).toBeUndefined()
+    })
+
+    test('the cadence: reads again only once every has passed', async () => {
+      const cache: MilestoneCache = {}
+      const { calls, run } = setup(all)
+      await readMilestone(cache, o(run, 5000))
+      const n = calls.length
+      await readMilestone(cache, o(run, 5500))
+      expect(calls.length).toBe(n)
+      await readMilestone(cache, o(run, 6000))
+      expect(calls.length).toBe(n * 2)
+      expect(cache.release?.at).toBe(6000)
+    })
+
+    test('a full list is no reading of the oldest', async () => {
+      const full = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ mergedAt: `2026-10-17T04:${String(i % 60).padStart(2, '0')}:00Z`, mergeCommit: { oid: `c${i}` } })))
+      const cache: MilestoneCache = {}
+      await readMilestone(cache, o(setup({ ...all, list: ok(full) }).run, 5000))
+      expect(cache.release?.value).toEqual({ tag: 'v0.48.0', oldest: null })
+    })
   })
 
   test('queue-watch.sh --once: its one line, ascending; anything else is no reading', () => {

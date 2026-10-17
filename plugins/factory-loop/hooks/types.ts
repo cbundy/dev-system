@@ -4,7 +4,7 @@
 // vocabulary (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions,
 // outcomes and State fields join the unions here, so the dispatcher, the ledger and the store
 // carry them as they carry v1's.
-import type { AgentStep, Model, Planner, Shadow, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
+import type { AgentStep, Model, Planner, Shadow, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
 
 export type Ms = number
 
@@ -52,6 +52,8 @@ export type IssueView = {
   trusted: boolean | null
   labels: string[] | null
   blockedBy: number | null
+  // the open issues waiting on this one, or null if unread
+  blocking: number | null
   subIssues: number | null
   // the title marks it a tracker (config trackerTitle, e.g. 'Epic: ...'), or null if unread
   epic: boolean | null
@@ -120,6 +122,9 @@ export type AgentView = { id: string; type: string; status: AgentStatus }
 
 export type Bump = 'patch' | 'minor' | 'major'
 export type Milestone = { open: number; closed: number; expected: Bump | null }
+// ReleaseInfo: the last release tag (null: the repo has no release yet) and when the oldest merge
+// into the default branch since that tag happened (null: unknown or none)
+export type ReleaseInfo = { tag: string | null; oldest: Ms | null }
 
 export type Control = {
   paused: number[]
@@ -277,6 +282,8 @@ export type State = {
   pool: Pool | null
   agents: AgentView[]
   milestone: Milestone | null
+  // null until the first successful read, which happens only while the milestone qualifies
+  release: ReleaseInfo | null
   ledger: LedgerEntry[]
   control: Control
   lastTitle: string | null
@@ -304,6 +311,8 @@ export type Config = {
   usageStopNewPct: number
   usageStopAllPct: number
   passEveryMs: Ms
+  // the repo expects a release at least this often; the release wake names it (#772)
+  minimumReleaseCadenceMs: Ms
   // the title is renamed at most this often (O1 is a throttle)
   titleEveryMs: Ms
   // the factory report is built at most this often (#684)
@@ -449,7 +458,9 @@ export type Action =
   | (Base & { kind: 'update-checkout'; branch: string; head: string | null })
   | (Base & { kind: 'fix-linkage' | 'pr-reopen'; pr: number })
   | (Base & { kind: 'merge'; pr: number; run: string; head: string; bump: Bump | null; bumpReason: string | null })
-  | (Base & { kind: 'release-parent'; created: number[] })
+  | // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
+  // null (or absent, for v1's plan) when the life's design answer can no longer be read
+  | (Base & { kind: 'release-parent'; created: number[]; reasons?: SplitReasons | null; childWhys?: string[] | null })
   | (Base & { kind: 'abandon'; run: string | null; branch: string | null; note: string })
   | (Base & { kind: 'milestone-expect'; bump: Bump; why: string })
   | (Base & { kind: 'pr-comment'; pr: number; body: string })

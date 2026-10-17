@@ -52,12 +52,17 @@ export const SCHEMAS: Record<string, Shape> = {
     "x-issue": "required",
     "properties": {
       "branch": {"type":["null","string"]},
+      "child_whys": {"items":{"type":"string"},"type":["array","null"]},
       "detail": {"type":["null","string"]},
       "lives": {"minimum":1,"type":["integer","null"]},
       "pr": {"minimum":1,"type":["integer","null"]},
       "reason": {"enum":["dropped","other","reconcile","rejected","split","triage"]},
       "split_into": {"items":{"minimum":1,"type":"integer"},"type":"array"},
       "stage": {"type":["null","string"]},
+      "why_count": {"type":["null","string"]},
+      "why_order": {"type":["null","string"]},
+      "why_parts": {"type":["null","string"]},
+      "why_split": {"type":["null","string"]},
     },
   },
   "claim_lost.v1": {

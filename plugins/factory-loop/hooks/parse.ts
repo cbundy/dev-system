@@ -134,6 +134,8 @@ export type IssueFacts = {
   open: boolean
   labels: string[]
   blockedBy: number | null
+  // the open issues waiting on this one (issue_dependencies_summary.blocking)
+  blocking: number | null
   subIssues: number | null
   title: string
 }
@@ -148,6 +150,7 @@ export function parseIssueRead(json: string): IssueFacts | null {
       open: issue.state === 'open',
       labels: Array.isArray(issue.labels) ? issue.labels.map((l: { name?: unknown }) => String(l?.name ?? '')).filter(Boolean) : [],
       blockedBy: typeof deps?.blocked_by === 'number' ? deps.blocked_by : null,
+      blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
       subIssues: typeof subs?.total === 'number' ? subs.total : null,
       title: typeof issue.title === 'string' ? issue.title : '',
     }
@@ -470,4 +473,55 @@ export function parseMilestone(text: string): Milestone | null {
   }
   const bump = text.match(/Expected:\s*(patch|minor|major)\b/)?.[1] as Bump | undefined
   return { open, closed, expected: bump ?? null }
+}
+
+// --- the last release and the oldest merge since it --------------------------------------------
+
+// parseReleaseTag: the tag of `gh release view --json tagName`; null when it is not that shape.
+export function parseReleaseTag(text: string): string | null {
+  try {
+    const tag: unknown = JSON.parse(text)?.tagName
+    return typeof tag === 'string' && tag.trim() !== '' ? tag.trim() : null
+  } catch {
+    return null
+  }
+}
+
+// parseCommitDate: the one ISO date line `gh api .../commits/<tag> --jq .commit.committer.date`
+// prints, as epoch ms; null when it is not a date.
+export function parseCommitDate(text: string): number | null {
+  const t = text.trim()
+  if (!/^\d{4}-\d\d-\d\dT/.test(t)) return null
+  const ms = Date.parse(t)
+  return Number.isNaN(ms) ? null : ms
+}
+
+// parseTagCommit: the two lines `gh api .../commits/<tag> --jq '.sha,.commit.committer.date'`
+// prints: the commit sha, then its date as epoch ms; null when it is not that.
+export function parseTagCommit(text: string): { sha: string; at: number } | null {
+  const [sha, date, ...rest] = text.trim().split('\n').map((l) => l.trim())
+  if (rest.length > 0 || !/^[0-9a-f]{7,64}$/.test(sha ?? '')) return null
+  const at = parseCommitDate(date ?? '')
+  return at === null ? null : { sha, at }
+}
+
+// parseOldestMerge: the earliest mergedAt of `gh pr list --state merged --json mergedAt,mergeCommit`,
+// as epoch ms, leaving out the PR whose merge commit is `skipSha` (the release's own bump PR);
+// undefined when the output is not a list of that shape, null when no PR is left.
+export function parseOldestMerge(text: string, skipSha?: string): number | null | undefined {
+  let list: unknown
+  try {
+    list = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(list)) return undefined
+  let oldest: number | null = null
+  for (const p of list) {
+    const ms = typeof p?.mergedAt === 'string' ? Date.parse(p.mergedAt) : Number.NaN
+    if (Number.isNaN(ms)) return undefined
+    if (skipSha !== undefined && p?.mergeCommit?.oid === skipSha) continue
+    if (oldest === null || ms < oldest) oldest = ms
+  }
+  return oldest
 }

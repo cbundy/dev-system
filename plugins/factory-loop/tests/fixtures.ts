@@ -59,6 +59,7 @@ export function state(over: Partial<State> = {}): State {
     pool: { free: 10, total: 16, slots: [] },
     agents: [],
     milestone: null,
+    release: null,
     ledger: [
       // a recent heartbeat, sweep and checkout update, so housekeeping stays quiet unless a test
       // says otherwise
@@ -97,6 +98,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     trusted: true,
     labels: ['enhancement', 'ready'],
     blockedBy: 0,
+    blocking: 0,
     subIssues: 0,
     epic: false,
     subIssueList: null,

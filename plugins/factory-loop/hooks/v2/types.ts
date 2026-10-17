@@ -251,8 +251,11 @@ export type StepMarker = {
   scratch: string
 }
 
+// The four reasons of a designer's split (8.7; contracts-work.mjs REASON_KEYS).
+export type SplitReasons = { why_split: string; why_count: string; why_parts: string; why_order: string }
+
 // A child a designer's split asks for (8.7).
-export type SplitChild = { key: string; title: string; body: string; blockedBy: string[]; ready: boolean }
+export type SplitChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
 
 export type V2Action =
   // cause: the outside cause of an unknown (5.1), which the breaker reads; via: the note's code;
@@ -342,9 +345,9 @@ export function labelOf(state: IssueState): FactoryLabel | null {
   return state === 'closed' ? null : FACTORY_LABELS[state].name
 }
 
-// The notice (TELL) kinds v2 adds; the first six are owner items, which go out before any other
+// The notice (TELL) kinds v2 adds; the first seven are owner items, which go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 

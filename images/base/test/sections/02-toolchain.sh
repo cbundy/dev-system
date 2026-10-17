@@ -20,6 +20,12 @@ check "callum-flow-event writes a line, rejects an unknown state, and event-push
   [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && [ -r /usr/local/share/dev-system/factory-event-translate.js ] &&
   ! CALLUM_EVENTS_DIR=$d callum-flow-event bogus --issue 1 2>/dev/null && [ -x /usr/local/share/dev-system/event-push-loop ] &&
   [ -x /usr/local/share/dev-system/factory-event-push-loop ]'
+check "callum-flow-event --type writes a checked new-format event only to the new log and refuses a missing required field" in_image '
+  d=$(mktemp -d) && [ -r /usr/local/share/dev-system/factory-event-shapes.json ] && [ -r /usr/local/share/dev-system/factory-event-write.js ] &&
+  CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event --type claimed --issue 1 --data "{\"lease_minutes\":30}" &&
+  [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ] && ! ls "$d"/*.jsonl >/dev/null 2>&1 &&
+  ! CALLUM_FLOW_REPO=o/r CALLUM_EVENTS_DIR=$d callum-flow-event --type claimed --issue 1 --data "{}" 2>/dev/null &&
+  [ "$(cat "$d"/factory/*.jsonl | wc -l)" = 1 ]'
 check "nm-push-loop and nm-export are installed and executable, and nm-export rejects bad usage" in_image '
   [ -x /usr/local/share/dev-system/nm-push-loop ] && [ -x /usr/local/share/dev-system/nm-export ] &&
   ! /usr/local/share/dev-system/nm-export 2>/dev/null'

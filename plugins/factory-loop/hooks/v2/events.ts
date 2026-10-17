@@ -159,7 +159,7 @@ function unnum(v: string | undefined): number | null | undefined {
 }
 
 // A list: its items comma-joined, each encoded (a `,` in an item too); `none` when empty.
-function list(v: readonly string[]): string {
+export function list(v: readonly string[]): string {
   return v.length === 0 ? NONE : v.map(i => str(i).replace(/,/g, '%2C')).join(',')
 }
 
@@ -270,6 +270,24 @@ function releaseNote(e: ReleaseEvent): string {
 function abandonedNote(e: ReusedEvent): string {
   const reason = abandonReason(e.note)
   return [`reason=${reason === 'reconcile' ? 'other' : reason}`, `note=${str(e.note)}`].join(' ')
+}
+
+// splitNote: the note of a v2 split's `abandoned` event, in the token shape the translator reads
+// (factory-event-translate.js shape 3), with the designer's four reasons and each child's why
+// (aligned with the children listed). The old `split into ..` words when the reasons can no longer
+// be read.
+export function splitNote(created: readonly number[], reasons: { why_split: string; why_count: string; why_parts: string; why_order: string } | null, childWhys: readonly string[] | null): string {
+  const words = `split into ${created.join(',')}`
+  if (reasons === null) return words
+  return [
+    'reason=split',
+    `note=${enc(words)}`,
+    `why_split=${enc(reasons.why_split)}`,
+    `why_count=${enc(reasons.why_count)}`,
+    `why_parts=${enc(reasons.why_parts)}`,
+    `why_order=${enc(reasons.why_order)}`,
+    `child_whys=${list(childWhys ?? [])}`,
+  ].join(' ')
 }
 
 // eventNote: the note an event carries.

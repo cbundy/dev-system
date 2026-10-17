@@ -16,6 +16,8 @@
 #   --repo defaults to every repo; --since defaults to the device's earliest ts in event_store.
 # Exit: 0 only when missing, misses and extras are all zero; 1 when any is not; 2 on a usage
 #   error, an unconfigured or unreachable store, or no new rows for the device and no --since.
+# An event written natively (callum-flow-event --type) has no old row, so it shows as an extra under
+# its type: the check proves dual write only on a device where no producer writes natively yet.
 # Writes nothing: every psql run is read-only, bounded by timeout (DUAL_WRITE_CHECK_TIMEOUT seconds,
 # default 60) and masked.
 set -u

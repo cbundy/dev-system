@@ -89,6 +89,11 @@ const SPECS = {
   abandoned: {
     reason: E("dropped", "split", "triage", "reconcile", "rejected", "other"),
     split_into: L(Number.isInteger),
+    why_split: nul(S),
+    why_count: nul(S),
+    why_parts: nul(S),
+    why_order: nul(S),
+    child_whys: nul(L(S)),
     stage: nul(S),
     lives: nul(I(1)),
     branch: nul(S),
@@ -305,6 +310,7 @@ function reclaimed(line) {
   return { reason: "reconcile", stage: r.stage, lives: r.lives, branch, pr: pr ?? r.pr, detail: r.detail };
 }
 
+const WHY_TOKENS = ["why_split", "why_count", "why_parts", "why_order"];
 const ABANDON_REASONS = ["dropped", "split", "triage", "other"];
 
 function splitList(text) {
@@ -316,7 +322,7 @@ function abandoned(line) {
   const note = line.note ?? null;
   const branch = colStr(line, "branch");
   const pr = colInt(line, "pr");
-  const base = { split_into: [], stage: null, lives: null, branch, pr, detail: null };
+  const base = { split_into: [], why_split: null, why_count: null, why_parts: null, why_order: null, child_whys: null, stage: null, lives: null, branch, pr, detail: null };
   if (note !== null && note.startsWith("reason=")) {
     const first = /^reason=(\S*)/.exec(note)[1];
     if (first === "reconcile") {
@@ -329,11 +335,18 @@ function abandoned(line) {
       return { ...base, reason, stage: r.stage, lives: r.lives, pr: pr ?? r.pr, detail: r.detail };
     }
     // shape 3
-    const t = strictTokens(note, { keep: ["reason", "note"], need: ["reason", "note"] });
+    const t = strictTokens(note, { keep: ["reason", "note", ...WHY_TOKENS, "child_whys"], need: ["reason", "note"] });
     const reason = tStr(t, "reason");
     if (!ABANDON_REASONS.includes(reason)) miss(`abandoned reason=${reason} is none of ${ABANDON_REASONS.join(", ")}`);
     const detail = tStrN(t, "note");
-    return { ...base, reason, split_into: reason === "split" ? splitList(detail) : [], detail };
+    const out = { ...base, reason, split_into: reason === "split" ? splitList(detail) : [], detail };
+    if (reason === "split") {
+      // a v2 split's reasons: plain encoded text, so a reason that reads "none" stays text
+      for (const k of WHY_TOKENS) if (t.has(k)) out[k] = dec(t.get(k));
+      const kids = t.get("child_whys");
+      if (kids !== undefined && kids !== "none") out.child_whys = tList(t, "child_whys");
+    }
+    return out;
   }
   // shapes 4 and 5: the first word says the reason, as abandonReason does (v2/events.ts)
   if (note === null || note === "") return { ...base, reason: "other" };

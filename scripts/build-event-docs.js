@@ -6,7 +6,9 @@
 //   - docs/factory-events/REFERENCE.md: the readable reference,
 //   - docs/factory-events/schemas/versions.lock.json: each version's shape without annotations,
 //   - plugins/factory-loop/hooks/v2/event-schemas.ts: the same shapes as a typed constant, which the
-//     shared reader (event-reader.ts) reads. The plugin cannot read docs/ at run time.
+//     shared reader (event-reader.ts) reads. The plugin cannot read docs/ at run time,
+//   - images/base/factory-event-shapes.json: the same data as JSON for the image's native event writer
+//     (images/base/factory-event-write.js), which checks an event's required fields at run time.
 // `--check` fails (exit 1, one line per problem) when an output is stale, when a schema breaks the
 // authoring rules, or when an existing version changed in a way the bump rule does not allow.
 // Same shape as scripts/build-skills.js: pure builders, run({root, check, log}), a CLI.
@@ -20,6 +22,7 @@ const SCHEMAS_DIR = "docs/factory-events/schemas";
 const OUT_REFERENCE = "docs/factory-events/REFERENCE.md";
 const OUT_LOCK = `${SCHEMAS_DIR}/versions.lock.json`;
 const OUT_TS = "plugins/factory-loop/hooks/v2/event-schemas.ts";
+const OUT_SHAPES = "images/base/factory-event-shapes.json";
 const READER = "plugins/factory-loop/hooks/v2/event-reader.ts";
 const LOCK_NAME = "versions.lock.json";
 
@@ -432,15 +435,23 @@ function buildReference(byType) {
   return out.join("\n") + "\n";
 }
 
+// The same model as buildTs, as JSON for the image's native event writer.
+function buildShapesJson(newLock, byType) {
+  const schemas = {};
+  for (const key of Object.keys(newLock).sort()) schemas[key] = newLock[key];
+  return JSON.stringify({ _generated: HEADER_TEXT, current: currentVersions(byType), schemas }, null, 2) + "\n";
+}
+
 // ---- run ----
 
-// Writes (or, with check, compares) the three outputs. Returns the list of problems, one line each.
+// Writes (or, with check, compares) the four outputs. Returns the list of problems, one line each.
 function run({ root = REPO_ROOT, check = false, log = console.log } = {}) {
   const a = analyse(root);
   const outputs = [
     [OUT_REFERENCE, buildReference(a.byType)],
     [OUT_LOCK, buildLock(a.newLock)],
     [OUT_TS, buildTs(a.newLock, a.byType)],
+    [OUT_SHAPES, buildShapesJson(a.newLock, a.byType)],
   ];
   const problems = [...a.blocking, ...a.problems];
   if (a.blocking.length > 0) return problems;

@@ -7,16 +7,30 @@
 # Each role has its own secret, separate from agentsview-pg-url: the writer URL arrives as
 # FACTORY_DB_WRITER_URL in the environment (wins) or the file factory-db-writer-url in
 # DEV_SECRETS_DIR (/run/secrets/dev-system), the reader URL likewise as FACTORY_DB_READER_URL or
-# factory-db-reader-url. Neither ever falls back to AGENTSVIEW_PG_URL, and a file's value is never
+# factory-db-reader-url. A workspace can use another database: a file of the same name in
+# DEV_WORKSPACE_SECRETS_DIR (/run/secrets/dev-system-workspace) wins over the shared one, even when
+# it is empty or unreadable. Neither ever falls back to AGENTSVIEW_PG_URL, and a file's value is never
 # exported. The procedure is in docs/factory-db.md.
 
 _FACTORY_DB_SELF_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=agentsview.sh
 . "$_FACTORY_DB_SELF_DIR/agentsview.sh"
 
-# factory_db_url_file ROLE: the secret file's path (ROLE is writer or reader).
-factory_db_url_file() {
+# factory_db_url_shared_file ROLE / factory_db_url_workspace_file ROLE: the file's path in the
+# shared folder and in the workspace's own folder (ROLE is writer or reader).
+factory_db_url_shared_file() {
   echo "${DEV_SECRETS_DIR:-/run/secrets/dev-system}/factory-db-$1-url"
+}
+factory_db_url_workspace_file() {
+  echo "${DEV_WORKSPACE_SECRETS_DIR:-/run/secrets/dev-system-workspace}/factory-db-$1-url"
+}
+
+# factory_db_url_file ROLE: the secret file in use: the workspace file when it exists, otherwise
+# the shared one.
+factory_db_url_file() {
+  local ws
+  ws=$(factory_db_url_workspace_file "$1")
+  if [ -e "$ws" ]; then echo "$ws"; else factory_db_url_shared_file "$1"; fi
 }
 
 # factory_db_url_var ROLE: the environment variable's name.
@@ -104,8 +118,8 @@ factory_db_check() {
   var=$(factory_db_url_var "$role") || { echo "FAIL $label: unknown role"; echo "fix: use writer or reader"; return 2; }
   url=$(factory_db_url "$role") || rc=$?
   if [ "$rc" -eq 1 ]; then
-    echo "WARN $label is not configured: no $file and no $var (nothing uses the factory database yet)"
-    echo "fix: put the writer URL in $(factory_db_url_file writer) and the reader URL in $(factory_db_url_file reader) (docs/factory-db.md)"
+    echo "WARN $label is not configured: no $(factory_db_url_workspace_file "$role"), no $(factory_db_url_shared_file "$role") and no $var (nothing uses the factory database yet)"
+    echo "fix: put the writer URL in $(factory_db_url_shared_file writer) and the reader URL in $(factory_db_url_shared_file reader), or in $(factory_db_url_workspace_file writer) / $(factory_db_url_workspace_file reader) for this workspace only (docs/factory-db.md)"
     return 1
   elif [ "$rc" -ne 0 ]; then
     echo "FAIL $label: $file is empty or not readable by $(id -un) ($(id -u):$(id -g))"

@@ -15,7 +15,7 @@ import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { commentBody } from '../hooks/v2/act-state'
-import { CONTRACTS, rolloutOf } from '../hooks/v2/contracts-work.mjs'
+import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-work.mjs'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -36,7 +36,7 @@ const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
 const BIN = `${PLUGIN_ROOT}/bin/factory-answer`
-const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Rollout', 'keep-open - one part of several', ''].join('\n')
+const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
 
 // --- worlds, as v2-state.test.ts builds them ------------------------------------------------------------
 
@@ -77,21 +77,26 @@ const problems = (name: 'design-v2' | 'build' | 'fix', input: unknown, data?: Re
   return c.ok ? [] : c.problems
 }
 
+const REASONS = { why_split: 'It spans the loop and the image', why_count: 'Two: one per side', why_parts: 'The image ships on its own', why_order: 'The image waits on the loop' }
+
 describe('the design-v2 contract (8.7)', () => {
   test('a brief with its heading and a Rollout callum-flow-rollout reads is taken whole; a question and a split too', () => {
-    expect(check('design-v2', { kind: 'brief', brief: BRIEF })).toEqual({ ok: true, outcome: { kind: 'brief', brief: BRIEF.trim(), question: null, children: [] } })
-    expect(check('design-v2', { kind: 'question', question: 'Which API?', brief: null })).toEqual({ ok: true, outcome: { kind: 'question', brief: null, question: 'Which API?', children: [] } })
+    expect(check('design-v2', { kind: 'brief', brief: BRIEF })).toEqual({ ok: true, outcome: { kind: 'brief', brief: BRIEF.trim(), question: null, reasons: null, children: [] } })
+    expect(check('design-v2', { kind: 'question', question: 'Which API?', brief: null })).toEqual({ ok: true, outcome: { kind: 'question', brief: null, question: 'Which API?', reasons: null, children: [] } })
     const children = [
-      { key: 'a', title: 'Part one', body: BRIEF, blockedBy: [], ready: true },
-      { key: 'b', title: 'Part two', body: BRIEF, blockedBy: ['a'], ready: false },
+      { key: 'a', title: 'Part one', why: 'The loop side', body: BRIEF, blockedBy: [], ready: true },
+      { key: 'b', title: 'Part two', why: 'The image side', body: BRIEF, blockedBy: ['a'], ready: false },
     ]
     // texts are kept trimmed
-    expect(check('design-v2', { kind: 'split', brief: 'the plan', children })).toEqual({ ok: true, outcome: { kind: 'split', brief: 'the plan', question: null, children: children.map(c => ({ ...c, body: c.body.trim() })) } })
+    expect(check('design-v2', { kind: 'split', brief: 'the plan', reasons: { ...REASONS, why_count: '  Two: one per side  ' }, children })).toEqual({
+      ok: true,
+      outcome: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children: children.map(c => ({ ...c, body: c.body.trim() })) },
+    })
   })
 
   test('a blockedBy entry may be #<N>, an existing issue; the issue being split, a malformed reference and a stranger are each refused', () => {
-    const child = (key: string, blockedBy: unknown[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
-    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', children })
+    const child = (key: string, blockedBy: unknown[] = []) => ({ key, title: `Part ${key}`, why: `why ${key}`, body: BRIEF, blockedBy, ready: true })
+    const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', reasons: REASONS, children })
     const out = check('design-v2', split(child('a'), child('b', ['a', '#57'])))
     expect(out).toMatchObject({ ok: true })
     if (out.ok) expect(out.outcome.children[1]?.blockedBy).toEqual(['a', '#57'])
@@ -111,7 +116,7 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, children)',
+      'extra is not a field of a design answer (only kind, brief, question, reasons, children)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
     ])
@@ -122,11 +127,11 @@ describe('the design-v2 contract (8.7)', () => {
   })
 
   test('a split has 2 to 10 children with unique keys, siblings it is blocked by, and no cycle', () => {
-    const child = (key: string, blockedBy: string[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
-    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a')] })).toEqual(['children has 1; a split has 2 to 10'])
-    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['c']), child('a')] })).toEqual(['children[0].blockedBy "c" is neither the key of another child nor an existing issue #<N>', 'children[1].key a is used twice'])
-    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['b']), child('b', ['a'])] })).toEqual(["children's blockedBy make a cycle: a -> b -> a"])
-    expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('A b'), { ...child('c'), title: 'two\nlines', ready: 'yes' }] })).toEqual([
+    const child = (key: string, blockedBy: string[] = []) => ({ key, title: `Part ${key}`, why: `why ${key}`, body: BRIEF, blockedBy, ready: true })
+    expect(problems('design-v2', { kind: 'split', brief: 'p', reasons: REASONS, children: [child('a')] })).toEqual(['children has 1; a split has 2 to 10'])
+    expect(problems('design-v2', { kind: 'split', brief: 'p', reasons: REASONS, children: [child('a', ['c']), child('a')] })).toEqual(['children[0].blockedBy "c" is neither the key of another child nor an existing issue #<N>', 'children[1].key a is used twice'])
+    expect(problems('design-v2', { kind: 'split', brief: 'p', reasons: REASONS, children: [child('a', ['b']), child('b', ['a'])] })).toEqual(["children's blockedBy make a cycle: a -> b -> a"])
+    expect(problems('design-v2', { kind: 'split', brief: 'p', reasons: REASONS, children: [child('A b'), { ...child('c'), title: 'two\nlines', ready: 'yes' }] })).toEqual([
       'children[0].key "A b" must be a short lower-case key: letters, digits and dashes, at most 24',
       'children[1].title must be one line',
       'children[1].ready must be true or false',
@@ -138,6 +143,62 @@ describe('the design-v2 contract (8.7)', () => {
     expect(rolloutOf('```\n## Rollout\nmerge\n```\n## rollout\nkeep-open - x')).toBe('keep-open')
     expect(rolloutOf('## Rollout\n## Next\nmerge')).toBeNull()
     expect(rolloutOf('no section')).toBeNull()
+  })
+
+  test('rolloutReasonOf reads the reason after the value and its dash, ignoring fenced code', () => {
+    expect(rolloutReasonOf('## Rollout\nkeep-open - research spike, no code\n')).toBe('research spike, no code')
+    expect(rolloutReasonOf('```\n## Rollout\nmerge - no\n```\n## Rollout\n**run-it** \u2014 its own Run it')).toBe('its own Run it')
+    expect(rolloutReasonOf('## Rollout\nmerge')).toBe('')
+    expect(rolloutReasonOf('no section')).toBeNull()
+  })
+
+  test('a split must give four reasons and a why for each child, each short text; every problem is named at once', () => {
+    const child = (key: string) => ({ key, title: `Part ${key}`, why: `why ${key}`, body: BRIEF, blockedBy: [], ready: true })
+    const split = (extra: Record<string, unknown>) => ({ kind: 'split', brief: 'p', children: [child('a'), child('b')], ...extra })
+    expect(problems('design-v2', split({}))).toEqual(['reasons is required for a split: { why_split, why_count, why_parts, why_order }'])
+    expect(problems('design-v2', split({ reasons: null }))).toEqual(['reasons is required for a split: { why_split, why_count, why_parts, why_order }'])
+    expect(problems('design-v2', split({ reasons: 'because' }))).toEqual(['reasons must be an object { why_split, why_count, why_parts, why_order }, not "because"'])
+    expect(problems('design-v2', split({ reasons: ['x'] }))).toHaveLength(1)
+    for (const key of Object.keys(REASONS)) {
+      const { [key]: _gone, ...without } = REASONS as Record<string, string>
+      expect(problems('design-v2', split({ reasons: without }))).toEqual([`reasons.${key} is required`])
+      expect(problems('design-v2', split({ reasons: { ...REASONS, [key]: '   ' } }))).toEqual([`reasons.${key} must be text, not "   "`])
+      expect(problems('design-v2', split({ reasons: { ...REASONS, [key]: 'x'.repeat(501) } }))).toEqual([`reasons.${key} is 501 characters; at most 500`])
+      expect(problems('design-v2', split({ reasons: { ...REASONS, [key]: 'x'.repeat(500) } }))).toEqual([])
+    }
+    expect(problems('design-v2', split({ reasons: { ...REASONS, why_extra: 'x' } }))).toEqual(['why_extra is not a field of reasons (only why_split, why_count, why_parts, why_order)'])
+    const kids = (c: Record<string, unknown>) => split({ reasons: REASONS, children: [c, child('b')] })
+    const { why: _why, ...noWhy } = child('a')
+    expect(problems('design-v2', kids(noWhy))).toEqual(['children[0] (a).why is required'])
+    expect(problems('design-v2', kids({ ...child('a'), why: ' ' }))).toEqual(['children[0] (a).why must be text, not " "'])
+    expect(problems('design-v2', kids({ ...child('a'), why: 'two\nlines' }))).toEqual(['children[0] (a).why must be one line'])
+    expect(problems('design-v2', kids({ ...child('a'), why: 'x'.repeat(201) }))).toEqual(['children[0] (a).why is 201 characters; at most 200'])
+    expect(problems('design-v2', kids({ ...child('a'), why: 'x'.repeat(200) }))).toEqual([])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, reasons: REASONS })).toEqual(['reasons must be absent or null unless kind is split'])
+    expect(problems('design-v2', { kind: 'question', question: 'q?', reasons: REASONS })).toEqual(['reasons must be absent or null unless kind is split'])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, reasons: null })).toEqual([])
+  })
+
+  test('a keep-open that says the issue is part of something larger is refused, in a brief and in a split child; other reasons are taken', () => {
+    const rollout = (line: string) => BRIEF.replace('merge - a self-contained change', line)
+    const split = (body: string) => ({ kind: 'split', brief: 'p', reasons: REASONS, children: [{ key: 'a', title: 'A', why: 'a', body, blockedBy: [], ready: true }, { key: 'b', title: 'B', why: 'b', body: BRIEF, blockedBy: [], ready: true }] })
+    for (const reason of ['one part of epic #724', 'part of epic #724', 'Part of #724, split by the factory loop', 'a sub-issue of the plan', 'child of #5', 'the EPIC']) {
+      const line = `keep-open - ${reason}`
+      expect(problems('design-v2', { kind: 'brief', brief: rollout(line) })[0]).toMatch(/a split child is done when its PR merges, so its Rollout is merge/)
+      const out = problems('design-v2', split(rollout(line)))
+      expect(out).toHaveLength(1)
+      expect(out[0]).toMatch(/^children\[0\] \(a\) body's ## Rollout is keep-open because it is part of something larger/)
+    }
+    for (const line of ['keep-open - research spike, no code to ship', 'keep-open - a proposal', 'run-it - its own ## Run it', 'merge - part of an epic, done when merged', 'keep-open - the Done-when needs a person (departure)']) {
+      expect(problems('design-v2', { kind: 'brief', brief: rollout(line) })).toEqual([])
+      expect(problems('design-v2', split(rollout(line)))).toEqual([])
+    }
+  })
+
+  test('a split child body with no Rollout, or a Rollout that is not merge, run-it or keep-open, is refused naming the child', () => {
+    const split = (body: string) => ({ kind: 'split', brief: 'p', reasons: REASONS, children: [{ key: 'a', title: 'A', why: 'a', body: BRIEF, blockedBy: [], ready: true }, { key: 'b', title: 'B', why: 'b', body, blockedBy: [], ready: true }] })
+    expect(problems('design-v2', split('just a body'))).toEqual(["children[1] (b) body's ## Rollout must start with one of merge, run-it, keep-open"])
+    expect(problems('design-v2', split(BRIEF.replace('merge - a self-contained change', 'ship - now')))).toEqual(['children[1] (b) body\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"'])
   })
 })
 
@@ -233,6 +294,12 @@ describe('the work prompts (prompts-work.ts)', () => {
       expect(p).not.toContain('When you end your turn the loop runs')
     }
     const design = designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }, { issue: 300, branch: 'issue-300' }] })
+    expect(design).toContain('A split child is a whole issue')
+    expect(design).toContain('never because it is part of an epic or a split')
+    // the split shape names the reasons, their four keys and each child's why
+    expect(design).toContain('"reasons": {"why_split"')
+    for (const k of ['why_split', 'why_count', 'why_parts', 'why_order']) expect(design).toContain(`"${k}"`)
+    expect(design).toContain('"title": "<one line>", "why": "<one line>"')
     expect(design).toContain('you change nothing in the repository')
     expect(design).not.toContain('git push origin')
     expect(design).toContain('  issue-301, for issue #301')
@@ -307,7 +374,7 @@ describe('the work prompts (prompts-work.ts)', () => {
     const long = [BRIEF, ...Array.from({ length: 400 }, (_, i) => `  - line ${i}: fixes #${i}`)].join('\n')
     const out = neutralBody(long)
     expect(out.length).toBeGreaterThan(8000)
-    expect(out).toContain('## Rollout\nkeep-open - one part of several')
+    expect(out).toContain('## Rollout\nmerge - a self-contained change')
     expect(out).toContain('  - line 399: fixing #399')
     expect(out).not.toMatch(/\bfixes #/)
     expect(neutralBody('x'.repeat(100), 50)).toHaveLength(50)
@@ -647,11 +714,11 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
 
   test('a split makes each child once the siblings it waits on exist, then posts the plan, then closes the record (T4); the parent\'s release lists the children', () => {
     const children = [
-      { key: 'b', title: 'Part two', body: 'two', blockedBy: ['a'], ready: false },
-      { key: 'a', title: 'Part one', body: 'one', blockedBy: [], ready: true },
-      { key: 'c', title: 'Part three', body: 'three', blockedBy: [], ready: true },
+      { key: 'b', title: 'Part two', why: 'Waits on the owner', body: 'two', blockedBy: ['a'], ready: false },
+      { key: 'a', title: 'Part one', why: 'The loop side', body: 'one', blockedBy: [], ready: true },
+      { key: 'c', title: 'Part three', why: 'The image side', body: 'three', blockedBy: [], ready: true },
     ]
-    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, children } })
+    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, reasons: REASONS, children } })
     const first = plan(withLedger(world([r]), [split]))
     const made = (a: Action) => (a.kind === 'split' ? [a.child.key, a.blockedBy] : [])
     expect(of(first, 330).map(made)).toEqual([['a', []], ['c', []]])
@@ -661,13 +728,42 @@ describe('the designer\'s plan (8.7, T2 to T4)', () => {
     expect(transitionOf(second, 330)).toBeUndefined()
     const third = plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602)]))
     const post = of(third, 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
-    expect(post?.body).toBe('the plan\n\nSplit by the factory loop into:\n- #602: Part two (waits on an owner decision)\n- #601: Part one\n- #603: Part three')
+    expect(post?.body).toBe(
+      [
+        'the plan',
+        '',
+        'Why this split:',
+        `- Why split: ${REASONS.why_split}`,
+        `- Why this many parts: ${REASONS.why_count}`,
+        `- Why these parts: ${REASONS.why_parts}`,
+        `- Why this order: ${REASONS.why_order}`,
+        '',
+        'Split by the factory loop into:',
+        '- #602: Part two - Waits on the owner (waits on an owner decision)',
+        '- #601: Part one - The loop side',
+        '- #603: Part three - The image side',
+      ].join('\n'),
+    )
     const posted = done(entryKey(r, 'comment'), 'comment', { issue: 330, outcome: { kind: 'cli', exit: 0, detail: BRIEF_URL(330) } })
     const t = transitionOf(plan(withLedger(world([r]), [split, child('a', 601), child('c', 603), child('b', 602), posted])), 330)
     expect(t).toMatchObject({ row: 'T4', next: { state: 'closed', why: 'split', notes: ['split into #602, #601, #603'] } })
     if (t === undefined) return
     const after = plan(withLedger(world([t.next]), [split, child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
-    expect(of(after, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603] })
+    expect(of(after, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: REASONS, childWhys: ['The loop side', 'Waits on the owner', 'The image side'] })
+    // the design entry gone from the ledger: the release still happens, with null reasons
+    const gone = plan(withLedger(world([t.next]), [child('a', 601), child('c', 603), child('b', 602), posted, done(t.key, 'transition', { issue: 330, outcome: { kind: 'transition', row: 'T4', event: 'not-ok', cause: null, from: 'designing', to: 'closed', step: 'design', stored: true, via: 'split' } })]))
+    expect(of(gone, 330).find(a => a.kind === 'release-parent')).toMatchObject({ created: [601, 602, 603], reasons: null, childWhys: null })
+  })
+
+  test('an older design answer with no reasons or whys still plans: the comment lists the children as before, the release carries null', () => {
+    const children = [
+      { key: 'a', title: 'Part one', body: 'one', blockedBy: [], ready: true },
+      { key: 'b', title: 'Part two', body: 'two', blockedBy: [], ready: true },
+    ]
+    const split = stepDone(r, 'design', { event: 'not-ok', reason: 'split', data: { kind: 'split', brief: 'the plan', question: null, children } })
+    const child = (key: string, n: number) => done(childKey(r, key), 'split', { issue: 330, outcome: { kind: 'split', child: n } })
+    const post = of(plan(withLedger(world([r]), [split, child('a', 601), child('b', 602)])), 330).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    expect(post?.body).toBe('the plan\n\nSplit by the factory loop into:\n- #601: Part one\n- #602: Part two')
   })
 
   test('a child blocked by an existing issue is made in the first pass with it, and its sibling follows with both', () => {
