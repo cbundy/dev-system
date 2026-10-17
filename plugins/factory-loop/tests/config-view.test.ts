@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'planner', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout',
+  'reviewFixCap', 'maxLives', 'maxTriages', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -84,6 +84,16 @@ describe('configText', () => {
     expect(line(fallback, 'passEvery')).toEndWith(' default')
     expect(fallback.split('Config problems\n')[1]).toContain('passEvery: "soon" is not a duration')
     expect(configText(view({}), control(), NOW).split('Config problems\n')[1]).toBe('  none')
+  })
+
+  test('minimumReleaseCadence shows short form with its source, and a rejected value shows the fallback (#772)', () => {
+    expect(line(configText(view({}), control(), NOW), 'minimumReleaseCadence')).toContain('6h')
+    expect(line(configText(view({}), control(), NOW), 'minimumReleaseCadence')).toEndWith(' default')
+    expect(line(configText(view({ minimumReleaseCadence: '3h' }), control(), NOW), 'minimumReleaseCadence')).toEndWith(' repo')
+    expect(line(configText(view({}, { minimumReleaseCadence: '90m' }), control(), NOW), 'minimumReleaseCadence')).toContain('90m')
+    const rejected = configText(view({}, { minimumReleaseCadence: '30m' }), control(), NOW)
+    expect(line(rejected, 'minimumReleaseCadence')).toEndWith(' default')
+    expect(rejected).toContain('minimumReleaseCadence: "30m" is not a duration of at le')
   })
 
   test('stateTimeoutMs entries are checked one by one, on a compact line', () => {

@@ -109,6 +109,7 @@ export const DEFAULT_CONFIG: Config = {
   ciRunMs: 30 * MIN,
   prEveryMs: 30_000,
   maxTriages: 2,
+  minimumReleaseCadenceMs: 6 * 60 * MIN,
   maxLives: 3,
   triageModel: 'opus',
   reviewer: 'adjudicator',
@@ -246,6 +247,10 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
             bad(name, v, key === 'maxAttempts' ? 'a whole number of at least 1' : 'a whole number')
           }
         }
+      } else if (key === 'minimumReleaseCadenceMs') {
+        const n = typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' ? parseDuration(value) : null
+        if (n !== null && n >= 60 * MIN) out[key] = n
+        else bad(raw, value, 'a duration of at least 1h (like 6h, 90m)')
       } else if (key.endsWith('Ms') && typeof base === 'number') {
         const n = ms(raw, value, short)
         if (n !== null) out[key] = n

@@ -311,6 +311,8 @@ export type Config = {
   usageStopNewPct: number
   usageStopAllPct: number
   passEveryMs: Ms
+  // the repo expects a release at least this often; the release wake names it (#772)
+  minimumReleaseCadenceMs: Ms
   // the title is renamed at most this often (O1 is a throttle)
   titleEveryMs: Ms
   // the factory report is built at most this often (#684)

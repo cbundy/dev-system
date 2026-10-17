@@ -120,6 +120,18 @@ describe('the settings (v2 SPEC appendix A)', () => {
     expect(bad.config).toMatchObject({ planner: 'v1', shadow: 'off', maxTriages: 2, maxLives: 3, gateCommands: [], stateTimeoutMs: DEFAULT_CONFIG.stateTimeoutMs })
   })
 
+  test('minimumReleaseCadence: 6h by default, a duration or ms of at least 1h, the workspace wins, anything else is one problem (#772)', () => {
+    expect(loadConfig({}).config.minimumReleaseCadenceMs).toBe(21_600_000)
+    expect(loadConfig({ minimumReleaseCadence: '3h' }).config.minimumReleaseCadenceMs).toBe(10_800_000)
+    expect(loadConfig({ minimumReleaseCadence: '3h' }, { minimumReleaseCadence: '90m' })).toMatchObject({ problems: [], config: { minimumReleaseCadenceMs: 5_400_000 } })
+    expect(loadConfig({ minimumReleaseCadence: 7_200_000 })).toMatchObject({ problems: [], config: { minimumReleaseCadenceMs: 7_200_000 } })
+    for (const value of [0, '30m', 'soon', -1]) {
+      const r = loadConfig({ minimumReleaseCadence: value })
+      expect(r.problems).toEqual([`minimumReleaseCadence: ${JSON.stringify(value)} is not a duration of at least 1h (like 6h, 90m)`])
+      expect(r.config.minimumReleaseCadenceMs).toBe(21_600_000)
+    }
+  })
+
   test('a model setting takes only an alias the agent tool accepts; any other is named and left out (R2-F8)', () => {
     expect(loadConfig({ reviewerModel: 'haiku', triageModel: 'sonnet' })).toMatchObject({ problems: [], config: { reviewerModel: 'haiku', triageModel: 'sonnet' } })
     const bad = loadConfig({ reviewerModel: 'claude-nonexistent-9', triageModel: 'Opus' })
@@ -180,7 +192,7 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     const cfg = config({ planner: 'v2' })
     const base: State = { ...state({ milestone: { open: 0, closed: 5, expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } }), v2: emptyV2State(NOW) }
     const tasks = (s: State) => planV2(s, cfg).actions.filter(x => x.kind === 'task')
-    expect(tasks(base)).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { closed: '5', expected: 'minor', tag: 'v1.0.0' } }])
+    expect(tasks(base)).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { closed: '5', expected: 'minor', tag: 'v1.0.0', cadence: '6h' } }])
     const held = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
     const after: State = { ...base, ledger: [...base.ledger, held] }
     expect(tasks(after)).toEqual([])

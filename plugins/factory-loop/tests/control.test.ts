@@ -722,6 +722,18 @@ describe('config set and unset', () => {
     }
   })
 
+  test('minimumReleaseCadence: 3h is saved and 30m is refused with the file untouched (#772)', async () => {
+    const f = files()
+    const ok = await run(f.io, 'config set minimumReleaseCadence 3h', { view: view() })
+    expect(ok).toMatchObject({ ok: true })
+    expect(file(f)).toEqual({ minimumReleaseCadence: '3h' })
+    const before = f.map.get(CONFIG_FILE)
+    const refused = await run(f.io, 'config set minimumReleaseCadence 30m', { view: view() })
+    expect(refused.ok).toBe(false)
+    expect(refused.text).toContain('minimumReleaseCadence: "30m" is not a duration of at least 1h (like 6h, 90m)')
+    expect(f.map.get(CONFIG_FILE)).toBe(before)
+  })
+
   test('the loader\'s text and the own-op pointers', async () => {
     const f = files()
     expect((await run(f.io, 'config set maxInFlightIssues lots')).text).toBe('maxInFlightIssues: "lots" is not a whole number or null. Not changed.')

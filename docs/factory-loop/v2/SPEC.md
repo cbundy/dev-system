@@ -1767,7 +1767,7 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
   clock hour, whatever its key), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
   tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
-  `expected`, `tag` and `oldest` (the oldest merge since that tag, omitted when unknown); the judge
+  `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form); the judge
   decides whether to cut the release now or `hold` until the next hour, and cuts the release with its standing
   authority (OB:89-90; PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues, which v1 did
@@ -2066,7 +2066,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
-| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest` |
+| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest cadence` |
 
 ### 14.2 Like for like against C3's estimates
 
@@ -2726,6 +2726,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `ciRunMs` | `30m` | 4.4 |
 | `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
 | `maxTriages` | 2 | 5.1 |
+| `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `reviewer` | `adjudicator` | 8.2 |
