@@ -291,6 +291,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (12.1) |
 | `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (6.3, 7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. The text contract stays the fallback of the other two, and the tools stay registered and served whatever it says. `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13, DECISIONS D-73, D-74). It goes back to `tool` once the timer-spawn probe passes (13). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
+| `minimumReleaseCadenceMs` | `6h` | the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake carries it as `cadence` |
 | `titleEveryMs` | `5m` | the session title is renamed at most this often (section 9.1) |
 | `reportEveryMs` | `10m` | the factory report is built at most this often; delivery comes in a later child of #684 |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
@@ -345,10 +346,23 @@ in chat, and the owner can type `/factory <op>` from any client (named so to sta
 Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`,
 `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`, `priority <N...>|off`, `only <N...>|off`,
 `serial on|off`, `new on|off`, `override <pct> <hours>|off`, `resume <N|run id>`, `retry <N>`,
-`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`, `trace on|off`. Each change
+`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`. Each change
 pings the loop and gets its own decision-log line (`control`). Today these directives are free
 text in the memory file (I-90).
 
+- `config set <key> <value>` saves one setting in the workspace file and `config unset <key>` removes
+  it, so the repo's value or the default applies again. A key is any setting under its file name
+  (`passEvery` or `passEveryMs`, `stateTimeout.design` for a map entry) or `poolSize`; `mode`,
+  `planner`, `trace` and the runtime keys are refused with a pointer to their own op. The value is
+  read as JSON when it parses (`3`, `true`, `null`, `["npm test"]`), else as text (`6h`). It is
+  checked by `loadConfig` alone before anything is written: a problem, an unknown key or entry
+  refuses the op with the loader's text and `Not changed.`, and the file is left as it was (as it is
+  when it is not a JSON object). The answer names the old value in force, the new one and when it
+  applies, from `SETTING_EFFECT` (`hooks/config-keys.ts`): `from the next pass` (runtime() reads
+  both files every pass; a timeout is for new work) or `after the loop's process restarts` (a
+  value captured once at load; no key is today). It is logged as a person intervention with cause
+  `config-file`, and its write is the loop's own, never a hand edit. An agent may read `config`,
+  never set or unset.
 - An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
   answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` also reads `issue:<N>` and
@@ -535,7 +549,7 @@ GitHub or the harness is `M6`.
 |---|---|---|---|
 | O1 | always, last (before a `restart-self`) | `title` when `titleOf(state, tier)` differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or `lastTitleAt` is null) (section 9.1) | none (compared, not keyed) |
 | O2 | any wake (`judge`, `task`, `tell`) is planned | keep at most one wake per pass and none while another wake is `running`, picked in order: `tell` of an owner decision or action, `judge`, `task`, other `tell`. Notices from outside plan (a rail, the ping breaker, failing passes: section 9.2) go out through the same executor once no wake is open | the wake's own key |
-| O3 | opted in, the milestone has no open items and at least one closed | `task(release)`, at most one per UTC hour (an hourly review); fields `closed expected tag oldest` | `task:release:<tag>:<YYYY-MM-DDTHH>` |
+| O3 | opted in, the milestone has no open items and at least one closed | `task(release)`, at most one per UTC hour (an hourly review); fields `closed expected tag oldest cadence` | `task:release:<tag>:<YYYY-MM-DDTHH>` |
 
 ### 5.9 Properties every plan must keep
 

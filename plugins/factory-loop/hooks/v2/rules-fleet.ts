@@ -35,7 +35,7 @@ export function fleetRules(ctx: V2Ctx): void {
     want(ctx, { kind: 'sweep', key: `sweep:${sweep?.endedAt ?? 0}`, class: 'free', rule: 'H2', reason: closed === undefined ? 'sweep due' : `#${closed.issue} closed`, issue: null })
   }
   // O3: the Next milestone has no open item and at least one closed: the judge cuts the release
-  const due = releaseDue(state)
+  const due = releaseDue(state, config)
   if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
 }
 
