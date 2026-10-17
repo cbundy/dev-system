@@ -104,6 +104,7 @@ export const DEFAULT_CONFIG: Config = {
     queued: 6 * 60 * MIN,
     queueWait: 2 * 60 * MIN,
     parked: 24 * 60 * MIN,
+    waiting: 24 * 60 * MIN,
   },
   ciStartMs: 10 * MIN,
   ciRunMs: 30 * MIN,

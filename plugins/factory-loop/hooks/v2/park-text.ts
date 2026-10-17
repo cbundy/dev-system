@@ -11,7 +11,7 @@
 //
 // Pure.
 import { resumeAction } from './types'
-import type { IssueRecord } from './types'
+import type { IssueRecord, WaitCondition } from './types'
 
 const OPTIONS_HEADING = /^#### Options[ \t]*$/m
 // a heading line of the comment's template: the end of the Options section
@@ -43,6 +43,30 @@ export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via:
     `2. Then ${resumeAction(r.issue)}. A comment or a tick alone does not resume.`,
     '',
     `${where}${resumes}.`,
+  ].join('\n')
+}
+
+// waitWords: one wait condition in words.
+export function waitWords(c: WaitCondition): string {
+  // a line must not end on a closing keyword before a reference's number (prompts.ts neutral rewrites it)
+  return c.kind === 'issue-closed' ? `issue #${c.issue} must be closed on GitHub` : `PR #${c.pr} must be merged on GitHub`
+}
+
+// waitText: the comment a record posts on the issue when it begins to wait: the conditions, why, and
+// that the loop resumes by itself. No tick boxes and no question: the owner has nothing to answer.
+export function waitText(r: IssueRecord): string {
+  const list = (r.wait ?? []).map(c => `- ${waitWords(c)}`)
+  const why = r.notes[0] ?? 'the designer waits on a condition'
+  return [
+    '### Waiting on a condition',
+    '',
+    `The designer paused this issue until ${list.length === 1 ? 'one condition holds' : 'every one of these holds'}:`,
+    '',
+    ...list,
+    '',
+    `Why: ${why}`,
+    '',
+    'The factory loop checks the condition itself and resumes this issue when it holds. There is nothing to answer.',
   ].join('\n')
 }
 

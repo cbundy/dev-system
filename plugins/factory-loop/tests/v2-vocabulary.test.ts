@@ -88,6 +88,7 @@ function record(over: Partial<IssueRecord> = {}): IssueRecord {
     why: null,
     notes: ['the owner: keep it small'],
     prClosedAt: null,
+    wait: null,
     lives: 1,
     ...over,
   }
@@ -152,7 +153,7 @@ describe('the key families (v2 SPEC appendix C)', () => {
 
 describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
   test('every state has its step, every agent step its role, class and loop-owned agent; slot states hold slots', () => {
-    expect(ISSUE_STATES).toEqual(['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'closed'])
+    expect(ISSUE_STATES).toEqual(['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting', 'closed'])
     expect(SLOT_STATES).toEqual(['designing', 'building', 'reviewing', 'fixing', 'merge-queue'])
     for (const s of ISSUE_STATES) expect(s in STATE_STEP).toBe(true)
     for (const step of AGENT_STEPS) {
@@ -162,12 +163,12 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
         true,
       ])
     }
-    expect(V2_ACTION_KINDS).toHaveLength(11)
+    expect(V2_ACTION_KINDS).toHaveLength(12)
     expect(V2_RULES).toHaveLength(21)
     expect(V2_OWNER_TELLS).toEqual(['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks'])
   })
 
-  test('the seven labels, one per state but closed, with appendix D\'s colours', () => {
+  test('the eight labels, one per state but closed, with appendix D\'s colours', () => {
     expect(Object.values(FACTORY_LABELS).map(l => [l.name, l.color])).toEqual([
       ['factory:queued', 'c5def5'],
       ['factory:designing', 'bfd4f2'],
@@ -176,12 +177,14 @@ describe('the closed lists (v2 SPEC 3.1, 4.2, appendices B, D, 14.1)', () => {
       ['factory:fixing', 'd93f0b'],
       ['factory:merge-queue', '5319e7'],
       ['factory:parked', 'b60205'],
+      ['factory:waiting', 'fef2c0'],
     ])
     for (const s of ISSUE_STATES) expect(labelOf(s)).toBe(s === 'closed' ? null : `factory:${s}`)
     expect(FACTORY_LABELS.parked.description).toBe('Factory loop: waits on the owner; remove this label to resume')
+    expect(FACTORY_LABELS.waiting.description).toBe('Factory loop: waits on a condition the loop checks; it resumes by itself')
   })
 
-  test('factory:rejected is an eighth label the loop makes, and no state\'s (6.4, appendix D)', () => {
+  test('factory:rejected is a ninth label the loop makes, and no state\'s (6.4, appendix D)', () => {
     expect([REJECTED_LABEL.name, REJECTED_LABEL.color]).toEqual(['factory:rejected', '6a737d'])
     expect(ALL_FACTORY_LABELS.map(l => l.name)).toEqual([...Object.values(FACTORY_LABELS).map(l => l.name), 'factory:rejected'])
     for (const s of ISSUE_STATES) expect(labelOf(s)).not.toBe(REJECTED_LABEL.name)

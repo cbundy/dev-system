@@ -114,6 +114,7 @@ const record = (over) => ({
   why: null,
   notes: ["the owner: keep it small", "a, b and none"],
   prClosedAt: null,
+  wait: null,
   lives: 1,
   ...over,
 });

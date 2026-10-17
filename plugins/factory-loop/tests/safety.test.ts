@@ -99,11 +99,11 @@ function reply(argv: readonly string[]): { exitCode?: number; stdout?: string; s
       return {}
     // a trusted read: the issue's or PR's comments, none of them the loop's (v2's comment executor);
     // a PR alone, its head moved by the update (v2's queue-update); the open issues, none of them a
-    // split's child yet; one issue, with its REST id (v2's split)
+    // split's child yet; one issue, with its REST id and state (v2's split and link)
     case 'callum-flow-issue-read':
       if (args.includes('--pr') && !args.includes('--comments')) return { stdout: JSON.stringify({ pr: { state: 'open', merged: false, head: { sha: 'def5678' }, user: { login: 'cbundy' } }, stripped: 0 }) }
       if (args.includes('--list')) return { stdout: JSON.stringify({ issues: [], stripped: 0 }) }
-      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]) }, stripped: 0 }) }
+      if (!args.includes('--comments') && !args.includes('--pr')) return { stdout: JSON.stringify({ issue: { number: Number(args[1]), id: 3_100_000 + Number(args[1]), state: 'open' }, stripped: 0 }) }
       return { stdout: JSON.stringify({ comments: [], stripped: 0 }) }
     case 'gh':
       if (args[1] === 'view') return { stdout: JSON.stringify({ headRefName: 'issue-470-x', state: 'OPEN' }) }
@@ -274,6 +274,7 @@ const RECORD: IssueRecord = {
   why: null,
   notes: ['use --yes nowhere'],
   prClosedAt: null,
+  wait: null,
   lives: 1,
 }
 // the record's PR as the prs source reads it: the review step reads its head and patch
@@ -295,6 +296,7 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'split', key: `${at}/child/a`, class: 'free', rule: 'S3', parent: 470, child: { key: 'a', title: 'Part one', body: 'Do it', blockedBy: [], ready: true }, blockedBy: [] },
   // a review is keyed by patch and round (v2 SPEC 8.4), the patch of PR_VIEW's head
   ...AGENT_STEPS.map((step): Action => ({ ...base, kind: 'agent-step', key: step === 'review' ? `i470/l${LIFE}/review/f00dfee/r1/a1` : `${at}/${step}/a1`, class: step === 'design' || step === 'build' ? 'develop' : 'drive', rule: 'S2', step, life: LIFE, seq: 3, attempt: 1, branch: 'issue-470', slot: SLOT, notes: ['--yes'] })),
+  { ...base, kind: 'link', key: `${at}/link/471`, class: 'free', rule: 'S3', blocker: 471 },
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
   { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed' },
@@ -332,6 +334,13 @@ function v2Shape(argv: readonly string[], action: Action | undefined): { labels?
       // the links, and the reads of the links already there (GET, ids only)
       return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '-F', f => /^(sub_issue_id|issue_id)=[1-9]\d*$/.test(f)) ||
         is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/(sub_issues|dependencies/blocked_by)$`).test(p), '--paginate', '--jq', '.[].id')
+        ? { api: true }
+        : {}
+    case 'link':
+      // the blocker's id is read through the reader, the links already there are read (GET, ids
+      // only), and one blocked_by link is made
+      return is('gh', 'api', '--method', 'POST', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/dependencies/blocked_by$`).test(p), '-F', f => /^issue_id=[1-9]\d*$/.test(f)) ||
+        is('gh', 'api', p => new RegExp(`^repos/${REPO}/issues/[1-9]\\d*/dependencies/blocked_by$`).test(p), '--paginate', '--jq', '.[].id')
         ? { api: true }
         : {}
     case 'ci-rerun':
@@ -476,6 +485,9 @@ const V2_ARGVS: [Action['kind'] | Action, string[]][] = [
   ['split', ARGV.issueReadArgv(471)],
   ['split', ARGV.subIssuesReadArgv(REPO, 470)],
   ['split', ARGV.blockersReadArgv(REPO, 471)],
+  ['link', ARGV.issueReadArgv(471)],
+  ['link', ARGV.blockersReadArgv(REPO, 470)],
+  ['link', ARGV.blockedByArgv(REPO, 470, 3_100_201)],
   ['ci-rerun', ARGV.prChecksArgv(REPO, 512)],
   ['ci-rerun', ARGV.runRerunArgv(REPO, '18342299123')],
   ['queue-update', ARGV.updateBranchArgv(REPO, 512)],
@@ -536,6 +548,8 @@ describe('the v2 kinds and their argvs (v2 SPEC appendix B)', () => {
       [['gh', 'api', '--method', 'DELETE', `repos/${REPO}/issues/470/sub_issues`, '-F', 'sub_issue_id=1'], split],
       [['gh', 'api', '--method', 'POST', 'repos/other/repo/issues/470/sub_issues', '-F', 'sub_issue_id=1'], split],
       [['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/470/labels`, '-F', 'labels=ready'], split],
+      [['gh', 'api', '--method', 'POST', `repos/${REPO}/issues/470/sub_issues`, '-F', 'sub_issue_id=1'], kindAction('link')],
+      [['gh', 'api', '--method', 'DELETE', `repos/${REPO}/issues/470/dependencies/blocked_by`, '-F', 'issue_id=1'], kindAction('link')],
       [['gh', 'issue', 'edit', '471', '--repo', REPO, '--add-label', 'ready'], label],
       [['gh', 'run', 'rerun', '183', '--repo', REPO], kindAction('ci-rerun')],
       [['gh', 'run', 'rerun', '183', '--failed', '--repo', REPO], label],

@@ -132,7 +132,7 @@ function gateConcurrencyText(value: 'auto' | number, cpus: number | undefined, s
 }
 
 const MODE_NOTE = { off: 'runs nothing', observe: 'plans and logs only', act: 'does the work' }
-const STATES = ['design', 'build', 'review', 'fix', 'queued', 'parked'] as const
+const STATES = ['design', 'build', 'review', 'fix', 'queued', 'parked', 'waiting'] as const
 
 // configText: the answer to `/factory config`. A null view is a loop that has not run a pass.
 export function configText(view: ConfigView | null, control: Control, now: Ms): string {

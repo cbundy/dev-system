@@ -116,14 +116,53 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
-    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split', 'brief is required'])
+    expect(problems('design-v2', { kind: 'nope' })).toEqual(['kind "nope" is not one of brief, question, split, wait', 'brief is required'])
     expect(problems('design-v2', 'a brief')).toHaveLength(1)
+  })
+
+  test('a wait names 1 to 8 conditions (an issue closed or a PR merged), one line of reason and optionally a draft; the outcome carries them for a wait alone', () => {
+    const conditions = [
+      { kind: 'issue-closed', issue: 57 },
+      { kind: 'pr-merged', pr: 812 },
+    ]
+    const wait = { kind: 'wait', conditions, reason: '  Needs the new reader from #57, then PR #812  ', brief: null }
+    expect(check('design-v2', wait)).toEqual({ ok: true, outcome: { kind: 'wait', brief: null, question: null, conditions, reason: 'Needs the new reader from #57, then PR #812', reasons: null, children: [] } })
+    // a draft brief may ride along, unchecked as a question's is
+    expect(check('design-v2', { ...wait, brief: 'a draft' })).toMatchObject({ ok: true, outcome: { kind: 'wait', brief: 'a draft' } })
+    expect(CONTRACTS['design-v2'].summary(wait)).toBe('a wait on 2 conditions')
+    expect(CONTRACTS['design-v2'].summary({ ...wait, conditions: conditions.slice(0, 1) })).toBe('a wait on 1 conditions')
+    const eight = Array.from({ length: 8 }, (_, i) => ({ kind: 'issue-closed', issue: 60 + i }))
+    expect(problems('design-v2', { ...wait, conditions: eight })).toEqual([])
+    expect(problems('design-v2', { ...wait, conditions: [] })).toEqual(['conditions has 0; a wait has 1 to 8'])
+    expect(problems('design-v2', { ...wait, conditions: [...eight, { kind: 'pr-merged', pr: 9 }] })).toEqual(['conditions has 9; a wait has 1 to 8'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 300 }] })).toEqual(['conditions[0].issue 300 is the issue itself, which stays open until its work is done, so the wait would never end'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'pr-merged', pr: 300 }] })).toEqual([])
+    expect(problems('design-v2', { ...wait, conditions: [conditions[0], conditions[1], conditions[0]] })).toEqual(['conditions[2] repeats issue-closed:57'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'tag-contains', sha: '35bb655' }] })).toEqual(['conditions[0]: tag-contains is not yet supported; wait on issue-closed or pr-merged, or ask the owner'])
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 0 }, { kind: 'pr-merged', pr: 1.5 }, { kind: 'pr-merged' }, { kind: 'branch-pushed' }, 'x'] })).toEqual([
+      'conditions[0].issue 0 must be a whole number of at least 1',
+      'conditions[1].pr 1.5 must be a whole number of at least 1',
+      'conditions[2].pr undefined must be a whole number of at least 1',
+      'conditions[3].kind "branch-pushed" is not one of issue-closed, pr-merged',
+      'conditions[4] must be an object { kind, issue } or { kind, pr }',
+    ])
+    // stray fields: a PR number on an issue condition, a field of another kind of answer
+    expect(problems('design-v2', { ...wait, conditions: [{ kind: 'issue-closed', issue: 57, pr: 4 }] })).toEqual(['pr is not a field of conditions[0] (only kind, issue)'])
+    expect(problems('design-v2', { ...wait, children: [] })).toEqual(['children must be absent or null unless kind is split'])
+    expect(problems('design-v2', { ...wait, extra: 1 })).toEqual(['extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)'])
+    // the reason is required, one line, and at most 500 characters
+    expect(problems('design-v2', { kind: 'wait', conditions })).toEqual(['reason is required'])
+    expect(problems('design-v2', { ...wait, reason: 'two\nlines' })).toEqual(['reason must be one line'])
+    expect(problems('design-v2', { ...wait, reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
+    expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged, issue | pr }'])
+    // the wait's fields belong to a wait alone
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
   })
 
   test('a split has 2 to 10 children with unique keys, siblings it is blocked by, and no cycle', () => {
@@ -300,6 +339,12 @@ describe('the work prompts (prompts-work.ts)', () => {
     expect(design).toContain('"reasons": {"why_split"')
     for (const k of ['why_split', 'why_count', 'why_parts', 'why_order']) expect(design).toContain(`"${k}"`)
     expect(design).toContain('"title": "<one line>", "why": "<one line>"')
+    // the wait shape: its kinds, the limits, the issue itself excluded, and the release never offered
+    expect(design).toContain('{"kind": "wait", "conditions": [{"kind": "issue-closed", "issue": 57}, {"kind": "pr-merged", "pr": 812}], "reason": "<one line: what you wait for and why>", "brief": null}')
+    expect(design).toContain('conditions: 1 to 8')
+    expect(design).toContain('never #300 itself')
+    expect(design).toContain('No other kind is supported')
+    expect(design).toContain('never ask the owner to cut a release')
     expect(design).toContain('you change nothing in the repository')
     expect(design).not.toContain('git push origin')
     expect(design).toContain('  issue-301, for issue #301')
