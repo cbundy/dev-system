@@ -40,15 +40,31 @@ ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
+# The stats call (its SQL starts with the line "-- heartbeat stats") is recorded as stats-N, apart
+# from the UPSERT and DDL calls (psql-N), so a test counts each kind on its own. psql-fail-stats
+# fails only the stats call.
 d=$(dirname "$0")
+in="$d/psql-in.$$"
+cat > "$in"
+if head -n 1 "$in" | grep -qx -- '-- heartbeat stats'; then
+  kind=stats
+  n=$(($(if [ -f "$d/stats-calls" ]; then wc -l < "$d/stats-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/stats-sql-$n"
+  printf '%s\n' "$@" > "$d/stats-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/stats-db-$n"
+  echo x >> "$d/stats-calls"
+else
+  kind=main
+  n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/psql-sql-$n"
+  printf '%s\n' "$@" > "$d/psql-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/psql-db-$n"
+  echo x >> "$d/psql-calls"
+fi
 fail=0
 [ -e "$d/psql-fail" ] && fail=1
 [ -e "$d/psql-fail-${PGDATABASE:-}" ] && fail=1
-n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
-printf '%s\n' "$@" > "$d/psql-args-$n"
-printf '%s\n' "${PGDATABASE:-}" > "$d/psql-db-$n"
-cat > "$d/psql-sql-$n"
-echo x >> "$d/psql-calls"
+[ "$kind" = stats ] && [ -e "$d/psql-fail-stats" ] && fail=1
 [ ! -e "$d/psql-hang" ] || exec sleep 60
 if [ "$fail" = 1 ]; then
   # Recording a call does not mean its error response has reached the loop.
@@ -79,12 +95,12 @@ cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
 [ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 60
-echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}]}'
+echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2}}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
@@ -475,5 +491,132 @@ once > /dev/null 2>&1
 [ "$(pushof .factory_events)" = '{"last_write":"2024-01-02T03:04:05Z","last_push":"2024-02-03T04:05:06Z"}' ] || fail "factory_events mtimes: $(pushof .factory_events)"
 [ "$(pushof .events)" = '{"last_write":null,"last_push":null}' ] || fail "the existing events key is unchanged: $(pushof .events)"
 rm -rf "$tmpdir/events/factory"
+
+# --- machine stats: a second, separate call per target -------------------------------
+cg="$tmpdir/cgroup"
+pd="$tmpdir/proc"
+mkdir -p "$cg" "$pd"
+stats_once() { hb env HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$pd" "$BASH" "$LOOP" --once; }
+sarg() { sed -n "s/^$2=//p" "$fakebin/stats-args-$1"; } # CALL name
+fake_cg() { # QUOTA PERIOD USAGE MEM LIMIT
+  rm -f "$cg"/*
+  printf '%s %s\n' "$1" "$2" > "$cg/cpu.max"
+  printf 'usage_usec %s\nuser_usec 1\nsystem_usec 2\n' "$3" > "$cg/cpu.stat"
+  printf '%s\n' "$4" > "$cg/memory.current"
+  printf '%s\n' "$5" > "$cg/memory.max"
+}
+rm -rf "${pd:?}"/*
+for pid in 1 20 300 4000 55000; do
+  mkdir "$pd/$pid"
+  case "$pid" in 20 | 4000) echo claude > "$pd/$pid/comm" ;; *) echo bash > "$pd/$pid/comm" ;; esac
+done
+mkdir "$pd/self" "$pd/sys"   # not pids: never counted
+echo claude > "$pd/self/comm"
+now_us() { echo $(($(date +%s%N) / 1000)); }
+
+reset
+fake_cg 200000 100000 5000000 123456 1000000
+stats_once > "$tmpdir/s.out" 2>&1 || fail "--once with stats: $(cat "$tmpdir/s.out")"
+[ "$(calls)" = 1 ] && [ "$(wc -l < "$fakebin/stats-calls" | tr -d ' ')" = 1 ] || fail "one UPSERT call and one stats call expected"
+head -n 1 "$fakebin/stats-sql-1" | grep -qx -- '-- heartbeat stats' || fail "the stats SQL is marked"
+grep -q 'UPDATE factory.workers SET' "$fakebin/stats-sql-1" && grep -q 'INSERT INTO factory.worker_samples' "$fakebin/stats-sql-1" || fail "the stats call updates workers and inserts a sample"
+grep -q 'stats_at = now()' "$fakebin/stats-sql-1" || fail "stats_at must be the database's now()"
+sed -n '/^INSERT INTO factory.workers (/,$p' "$fakebin/psql-sql-1" | grep -qi 'worker_samples\|cpu_pct\|stats_at' && fail "the UPSERT must not touch the stats or worker_samples"
+[ "$(sarg 1 device)" = dev-box ] && [ "$(sarg 1 state)" = busy ] || fail "device/state: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 cpu_limit_cores)" = 2 ] && [ "$(sarg 1 cpu_quota_set)" = true ] || fail "cpu.max 200000/100000: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 mem_used_bytes)" = 123456 ] && [ "$(sarg 1 mem_limit_bytes)" = 1000000 ] || fail "memory: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 claude_interactive)" = 1 ] && [ "$(sarg 1 claude_headless)" = 2 ] || fail "the session split comes from heartbeat-state"
+[ "$(sarg 1 claude_procs)" = 2 ] && [ "$(sarg 1 procs)" = 5 ] || fail "proc counts by comm: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ -z "$(sarg 1 cpu_pct)" ] || fail "cpu_pct must be NULL (empty) on the first beat"
+[ "$(cut -d' ' -f1 "$hbdir/dev-heartbeat.cpu")" = 5000000 ] || fail "the first reading is saved: $(cat "$hbdir/dev-heartbeat.cpu")"
+# the second beat: 10 s of wall clock and 5 s of cpu on 2 cores is 25 %
+printf '%s %s\n' 0 $(($(now_us) - 10000000)) > "$hbdir/dev-heartbeat.cpu"
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "second stats beat"
+pct=$(sarg 1 cpu_pct)
+[ -n "$pct" ] && jq -ne --argjson p "$pct" '$p > 24 and $p < 25.1' > /dev/null || fail "cpu_pct should be about 25, got '$pct'"
+# a counter reset (usage below the previous reading) is NULL again
+printf '%s %s\n' 999999999 $(($(now_us) - 10000000)) > "$hbdir/dev-heartbeat.cpu"
+rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
+stats_once > /dev/null 2>&1 || fail "reset stats beat"
+[ -z "$(sarg 1 cpu_pct)" ] || fail "cpu_pct must be NULL after a counter reset"
+
+# no quota: the online CPU count and cpu_quota_set false; memory.max max is NULL
+reset
+fake_cg max 100000 5000000 777 max
+stats_once > /dev/null 2>&1 || fail "stats beat with max limits"
+cores=$(getconf _NPROCESSORS_ONLN)
+[ "$(sarg 1 cpu_limit_cores)" = "$cores" ] && [ "$(sarg 1 cpu_quota_set)" = false ] || fail "cpu.max max: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+[ "$(sarg 1 mem_used_bytes)" = 777 ] && [ -z "$(sarg 1 mem_limit_bytes)" ] || fail "memory.max max is NULL: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
+
+# missing files give NULLs (cgroup v1, no /proc), the beat still succeeds
+reset
+rm -rf "${cg:?}"/*
+rc=0
+hb env HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$tmpdir/no-proc" "$BASH" "$LOOP" --once > /dev/null 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(calls)" = 1 ] || fail "missing stat files must not fail the beat"
+for k in cpu_pct cpu_limit_cores cpu_quota_set mem_used_bytes mem_limit_bytes claude_procs procs; do
+  [ -z "$(sarg 1 "$k")" ] || fail "$k must be NULL with no source file, got '$(sarg 1 "$k")'"
+done
+[ ! -e "$hbdir/dev-heartbeat.cpu" ] || fail "no cpu.stat: no state file"
+# garbage is no number either
+printf 'lots\n' > "$cg/memory.current"
+printf 'usage_usec abc\n' > "$cg/cpu.stat"
+reset
+stats_once > /dev/null 2>&1 || fail "garbage stat files"
+[ -z "$(sarg 1 mem_used_bytes)" ] && [ -z "$(sarg 1 cpu_pct)" ] || fail "garbage must be NULL"
+
+# no stats on the stopped beat, and the stopped beat does not touch the stats columns
+reset
+fake_cg 200000 100000 5000000 123456 1000000
+hb env HEARTBEAT_DDL_SENT=1 HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$pd" "$BASH" "$LOOP" --final || fail "--final"
+[ "$(calls)" = 1 ] && has_arg 1 state=stopped || fail "the stopped beat is still sent"
+[ ! -e "$fakebin/stats-calls" ] || fail "the stopped beat must send no stats"
+grep -qi 'cpu_pct\|stats_at' "$fakebin/psql-sql-1" && fail "the UPSERT never touches the stats columns"
+
+# a failing stats write: logged, masked, exit 0, the UPSERT delivered
+reset
+touch "$fakebin/psql-fail-stats"
+rc=0
+stats_once > "$tmpdir/s.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] || fail "a stats failure must not fail --once, got $rc"
+[ "$(calls)" = 1 ] && grep -q 'ON CONFLICT (device)' "$fakebin/psql-sql-1" || fail "the UPSERT must still be sent"
+[ "$(wc -l < "$fakebin/stats-calls" | tr -d ' ')" = 1 ] || fail "the stats call was tried once"
+grep -q 'heartbeat-loop: agentsview database stats write failed' "$tmpdir/s.out" || fail "the failure is logged: $(cat "$tmpdir/s.out")"
+grep -q 's3cret' "$tmpdir/s.out" && fail "the stats failure leaked the password"
+grep -q 'CREATE TABLE' "$fakebin/stats-sql-1" && fail "a stats call never carries DDL"
+# a failed UPSERT sends no stats for that target
+reset
+touch "$fakebin/psql-fail"
+rc=0
+stats_once > /dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] && [ ! -e "$fakebin/stats-calls" ] || fail "no stats after a failed UPSERT (rc=$rc)"
+
+# the DDL migrates the stat columns and makes the samples table, its prune function and trigger
+reset
+stats_once > /dev/null 2>&1
+for w in cpu_pct cpu_limit_cores cpu_quota_set mem_used_bytes mem_limit_bytes claude_interactive claude_headless claude_procs "'procs'" stats_at \
+  'CREATE TABLE IF NOT EXISTS factory.worker_samples' 'PRIMARY KEY (device, sampled_at)' 'SECURITY DEFINER SET search_path = factory, pg_temp' \
+  'CREATE TRIGGER worker_samples_prune AFTER INSERT ON factory.worker_samples'; do
+  grep -qF -- "$w" "$fakebin/psql-sql-1" || fail "the DDL lacks: $w"
+done
+
+# the counts never read a command line or an environment
+reads=$(grep -v '^ *#' "$LOOP" | grep -c 'cmdline\|environ' || :)
+[ "$reads" = 1 ] && grep -v '^ *#' "$LOOP" | grep 'cmdline\|environ' | grep -q 'kill\|heartbeat-loop' || fail "only the --final pidfile check may read a cmdline or environ ($reads lines)"
+
+# the loop: two targets each get the stats call, after their own UPSERT
+reset
+fake_cg 200000 100000 5000000 123456 1000000
+hb env FACTORY_DB_WRITER_URL="$FDB" HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$pd" "$BASH" "$LOOP" --once > "$tmpdir/s.out" 2>&1 || fail "two targets with stats"
+[ "$(calls)" = 2 ] && [ "$(wc -l < "$fakebin/stats-calls" | tr -d ' ')" = 2 ] || fail "each target gets a UPSERT and a stats call"
+[ "$(cat "$fakebin/stats-db-1")" = x ] && [ "$(cat "$fakebin/stats-db-2")" = fdb ] || fail "stats go to each target in order"
+cmp -s "$fakebin/stats-args-1" "$fakebin/stats-args-2" || fail "both targets get the same stats values"
+grep -q 'CREATE TABLE' "$fakebin/stats-sql-2" && fail "the factory database never gets DDL"
+# a stats failure on one target never skips the other
+reset
+touch "$fakebin/psql-fail-x"
+hb env FACTORY_DB_WRITER_URL="$FDB" HEARTBEAT_CGROUP_DIR="$cg" HEARTBEAT_PROC_DIR="$pd" "$BASH" "$LOOP" --once > /dev/null 2>&1 && fail "old target failing fails --once"
+[ "$(wc -l < "$fakebin/stats-calls" | tr -d ' ')" = 1 ] && [ "$(cat "$fakebin/stats-db-1")" = fdb ] || fail "only the target whose UPSERT landed gets stats"
 
 echo "heartbeat-loop: ok"
