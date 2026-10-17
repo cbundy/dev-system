@@ -200,3 +200,15 @@ test("under planner v2: the release task does the Run its and never waits on the
   for (const op of ["resume", "drop", "retry", "planner"]) assert.match(V2_OWNER, new RegExp(`\`${op}[ \`]`), `the v2 owner chat does not name ${op}`);
   assert.match(V2, /factory:\*/);
 });
+
+test("under planner v2: the judge decides releases by the 6-hour aim and starts the release agent, and asks the owner only for the listed cases", () => {
+  const decisions = section(SKILL, "### Release decisions under planner v2");
+  assert.match(decisions, /within 6 hours of its merge/);
+  assert.match(decisions, /`priority`/);
+  assert.match(decisions, /\.claude\/skills\/release\/SKILL\.md/);
+  assert.match(decisions, /`hold` with `reason: wait:/);
+  assert.match(decisions, /The loop only logs it/);
+  assert.match(decisions, /major version/);
+  assert.match(decisions, /None of these is a reason to ask/);
+  assert.match(bullet(V2_TASK, "release"), /You do not do the release steps yourself/);
+});
