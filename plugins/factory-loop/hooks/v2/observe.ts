@@ -24,6 +24,9 @@ import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
 import type { PrView, PrsRead, PrUnread } from './sources-prs'
 import { readWorkspace } from './sources-workspace'
+import { windDownPaths } from './wind-down'
+import type { WindDownRead } from './wind-down'
+import { previousOf, requestOf } from './wind-down-files'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
 import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead } from './types'
 
@@ -425,7 +428,30 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     dualWrite,
   }
   if (workspace !== undefined) v2.workspace = workspace
+  v2.windDown = await readWindDown(input.io, rt, now)
   return { v2, heads: prs.heads }
+}
+
+// readWindDown: the request, the stop-now file and last pass's status (wind-down.ts). A missing
+// request is none; one that is there but unreadable or malformed is a request at the file's
+// mtime (now when that does not read), so a bad write never leaves the loop starting work.
+async function readWindDown(io: Io, rt: Runtime, now: Ms): Promise<WindDownRead> {
+  const paths = windDownPaths(rt.loopDir)
+  const text = async (path: string) => io.readFile(path).catch(() => null)
+  const requestText = await text(paths.request)
+  // stat reads the modification time and, when the request did not read, tells a missing file (no
+  // request) from one there but unreadable (a mode 000 file, a directory): that one is a request too
+  let mtime: Ms | null = null
+  try {
+    const r = await io.run(['stat', '-c', '%Y', paths.request], { cwd: rt.cwd, env: rt.env, timeoutMs: 10_000 })
+    const secs = Number(r.stdout.trim())
+    if (r.exitCode === 0 && r.stdout.trim() !== '' && Number.isFinite(secs)) mtime = secs * 1000
+  } catch {
+    // now stands
+  }
+  const request: WindDownRead['request'] = requestText !== null ? requestOf(requestText, mtime ?? now) : mtime !== null ? requestOf('', mtime) : null
+  if (request === null) return { request, stopNow: false, previous: null }
+  return { request, stopNow: (await text(paths.stopNow)) !== null, previous: previousOf(await text(paths.status)) }
 }
 
 // commentsOf: the trusted comments of `callum-flow-issue-read --json N --comments`, oldest first;

@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'planner', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
+  'reviewFixCap', 'maxLives', 'maxTriages', 'windDown', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -94,6 +94,19 @@ describe('configText', () => {
     const rejected = configText(view({}, { minimumReleaseCadence: '30m' }), control(), NOW)
     expect(line(rejected, 'minimumReleaseCadence')).toEndWith(' default')
     expect(rejected).toContain('minimumReleaseCadence: "30m" is not a duration of at le')
+  })
+
+  test('windDown shows minutes with its source, off for 0, and a rejected value shows the fallback', () => {
+    expect(line(configText(view({}), control(), NOW), 'windDown')).toContain('10m')
+    expect(line(configText(view({}), control(), NOW), 'windDown')).toEndWith(' default')
+    expect(line(configText(view({ windDownMinutes: 3 }), control(), NOW), 'windDown')).toContain('3m')
+    expect(line(configText(view({ windDownMinutes: 3 }), control(), NOW), 'windDown')).toEndWith(' repo')
+    expect(line(configText(view({ windDownMinutes: 3 }, { windDownMinutes: 0 }), control(), NOW), 'windDown')).toContain('off')
+    expect(line(configText(view({ windDownMinutes: 3 }, { windDownMinutes: 0 }), control(), NOW), 'windDown')).toEndWith(' workspace')
+    const rejected = configText(view({}, { windDownMinutes: 1.5 }), control(), NOW)
+    expect(line(rejected, 'windDown')).toEndWith(' default')
+    expect(rejected).toContain('windDownMinutes: 1.5 is not a whole number')
+    expect(loadConfig({ windDownMinutes: -1 }).config.windDownMinutes).toBe(DEFAULT_CONFIG.windDownMinutes)
   })
 
   test('stateTimeoutMs entries are checked one by one, on a compact line', () => {

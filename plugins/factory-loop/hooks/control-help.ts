@@ -4,7 +4,7 @@
 
 export const OPS = [
   'status', 'pause', 'unpause', 'skip', 'noskip', 'priority', 'only', 'serial', 'new', 'override', 'resume', 'retry',
-  'update', 'drop', 'note', 'mode', 'trace', 'planner', 'config',
+  'update', 'drop', 'note', 'mode', 'trace', 'planner', 'config', 'stop-now',
 ] as const
 export type OpName = (typeof OPS)[number]
 
@@ -30,6 +30,7 @@ export const USAGE: Record<OpName, string> = {
   mode: 'mode off|observe|act',
   trace: 'trace on|off',
   planner: 'planner v1|v2',
+  'stop-now': 'stop-now',
 }
 
 // The short form of each op in the typeahead placeholder, in the order it shows them. It drops
@@ -76,6 +77,7 @@ export const MEANING: Record<OpName, string> = {
   mode: 'off runs nothing, observe plans and logs only, act does the work',
   trace: "on: each pass's timing goes to trace-YYYY-MM-DD.jsonl beside the decision log",
   planner: 'the layer that plans and acts, in the workspace config file; v1 may run the v2 shadow beside it',
+  'stop-now': 'during a wind-down: tell the stopper not to wait for what still runs (writes wind-down.stop-now)',
 }
 
 // helpText: `/factory help`, in the shape of a command's --help, built from the same table the

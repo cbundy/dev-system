@@ -11,6 +11,7 @@ import type { V2Event } from './events'
 import type { CheckoutBase } from './reconcile'
 import type { InterventionFacts } from './sources-interventions'
 import type { PrsRead } from './sources-prs'
+import type { WindDownRead } from './wind-down'
 import type { WorkspaceRead } from './workspace'
 
 // --- states, steps and the record (SPEC 3.1, 3.2) ------------------------------------------------
@@ -370,7 +371,7 @@ export function labelOf(state: IssueState): FactoryLabel | null {
 // The notice (TELL) kinds v2 adds; the first seven are owner items, which go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
 export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks'] as const
-export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout'] as const
+export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
 // --- rule ids (SPEC 14.1) -------------------------------------------------------------------------
@@ -450,6 +451,8 @@ export type V2State = {
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead
+  // the wind-down request, stop-now file and last status (10.11; wind-down.ts); absent when not read
+  windDown?: WindDownRead
 }
 
 // The pure planner's context: the foundation's, with the v2 fields every rule reads.

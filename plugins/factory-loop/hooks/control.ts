@@ -19,7 +19,7 @@ import { OPS, USAGE, helpText, hintText } from './control-help'
 import type { OpName } from './control-help'
 import type { ActIo } from './exec'
 import type { Control, Mode, Ms } from './types'
-import { applyDrop, applyUnpark, onlyParked, parseUnpark } from './v2/ops'
+import { applyDrop, applyUnpark, onlyParked, parseUnpark, stopNow } from './v2/ops'
 import type { Unpark } from './v2/ops'
 import type { Planner } from './v2/types'
 
@@ -37,7 +37,7 @@ export type { OpName } from './control-help'
 
 // One op, parsed. An empty priority or only list clears it.
 export type Op =
-  | { op: 'status' }
+  | { op: 'status' | 'stop-now' }
   // no change: the read-only view; a change sets a key in the workspace config file, or removes it
   // (no value). The key is as typed (`passEvery`, `stateTimeout.design`)
   | { op: 'config'; change?: { key: string; value?: unknown } }
@@ -108,6 +108,7 @@ export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
 
   switch (name) {
     case 'status':
+    case 'stop-now':
       return args.length === 0 ? { ok: true, op: { op: name } } : bad(name)
     case 'config': {
       if (args.length === 0) return { ok: true, op: { op: 'config' } }
@@ -197,6 +198,7 @@ export function issuesOf(op: Op): number[] {
 export function formatOp(op: Op): string {
   switch (op.op) {
     case 'status':
+    case 'stop-now':
       return op.op
     case 'config':
       if (op.change === undefined) return 'config'
@@ -359,6 +361,7 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
       return keep(`Mode ${op.mode} set in the workspace config file; it applies from the next pass.`, { mode: op.mode })
     case 'planner':
       return keep(`Planner ${op.planner} set in the workspace config file; it plans and acts from the next pass.`, { planner: op.planner })
+    case 'stop-now': return keep('Stop-now is written by runOp.')
     case 'unpark': {
       const v2 = applyUnpark(control, op, now)
       return set(v2.patch, v2.text)
@@ -561,6 +564,7 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   }
   const viewOnly = op.op === 'status' || (op.op === 'config' && op.change === undefined)
   if (from.agentId !== undefined && !viewOnly) return refused('Not changed: only the main conversation sets owner directives.', op)
+  if (op.op === 'stop-now') return stopNow(io, paths.loopDir, op, now)
   let loaded: LoadedControl
   try {
     loaded = await readControl(io, paths.loopDir)
@@ -643,7 +647,7 @@ export const CONTROL_TOOL: ToolSpec = {
     "retry <N> (clear N's exhausted actions); update [<reason>]|off (drain, then restart this workspace for an " +
     'update); drop <N> (abandon N); note [<N>] <text> (an instruction the next agent prompts carry); ' +
     "mode off|observe|act (only when the owner asks for that mode); trace on|off (each pass's timing to a local " +
-    'trace file, for troubleshooting); planner v1|v2 (the layer that plans and acts, only when the owner asks).',
+    'trace file, for troubleshooting); planner v1|v2 (the layer that plans and acts, only when the owner asks); stop-now (during a wind-down, stop at once without waiting for what runs, only when the owner asks).',
   inputSchema: {
     type: 'object',
     properties: {

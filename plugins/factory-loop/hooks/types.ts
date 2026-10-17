@@ -375,6 +375,8 @@ export type Config = {
   prEveryMs: Ms
   // triage calls per life (v2 SPEC 5.1); its agent's model (5.2)
   maxTriages: number
+  // minutes a requested wind-down may take before the stop (0: wind-down off; v2 SPEC 10.11)
+  windDownMinutes: number
   // the lives an issue gets: a release at the last one rejects it instead of putting it back in the
   // queue (v2 SPEC 6.4)
   maxLives: number
