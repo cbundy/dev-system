@@ -1,7 +1,7 @@
 // `/factory config` (#698): the settings the loop runs with, grouped, each with where its value
 // came from. Pure: it renders the Runtime the last pass used (viewOf) and the control state, and
 // reads no file, so it shows what the pass runs with, not what the files say now.
-import { shortDuration } from './config'
+import { GATE_CPUS, resolveGateConcurrency, shortDuration } from './config'
 import type { Runtime } from './observe'
 import type { Config, Control, Ms } from './types'
 
@@ -17,6 +17,8 @@ export type ConfigView = {
   config: Config
   device: string
   poolSize: number
+  // the container's CPU count the loop read; undefined: not read (a test's, an older pass)
+  cpus: number | undefined
   repoRaw: Record<string, unknown>
   workspaceRaw: Record<string, unknown>
   problems: readonly string[]
@@ -92,6 +94,7 @@ export function viewOf(rt: Runtime & Partial<ViewInputs>): ConfigView {
     config: rt.config,
     device: rt.device,
     poolSize: rt.poolSize,
+    cpus: rt.cpus,
     repoRaw: rt.repoSettings ?? {},
     workspaceRaw: file,
     problems: rt.configProblems,
@@ -118,6 +121,14 @@ function render(row: Row): string[] {
 function together(sources: Source[]): Source | 'mixed' {
   const first = sources[0] ?? 'default'
   return sources.every(s => s === first) ? first : 'mixed'
+}
+
+// gateConcurrencyText: the gates that run at once and where that came from: `1 (auto: 8 CPUs / 8)`
+// for `auto`, `3 (repo)` for a number a file sets.
+function gateConcurrencyText(value: 'auto' | number, cpus: number | undefined, source: Source): string {
+  if (value !== 'auto') return `${value} (${source})`
+  const n = cpus ?? 1
+  return `${resolveGateConcurrency(value, n)} (auto: ${n} CPUs / ${GATE_CPUS})`
 }
 
 const MODE_NOTE = { off: 'runs nothing', observe: 'plans and logs only', act: 'does the work' }
@@ -185,6 +196,11 @@ export function configText(view: ConfigView | null, control: Control, now: Ms): 
         ...render({ label: 'gateCommands', value: c.gateCommands.length === 0 ? 'none' : '', source: src('gateCommands') }),
         ...c.gateCommands.map(cmd => clip(`    ${cmd}`)),
         ...render(ms('gateTimeoutMs')),
+        ...render({
+          label: 'gateConcurrency',
+          value: gateConcurrencyText(c.gateConcurrency, view.cpus, src('gateConcurrency')),
+        }),
+        ...render(ms('gateWaitTimeoutMs')),
       ],
     ],
     [

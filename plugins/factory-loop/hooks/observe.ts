@@ -69,6 +69,10 @@ export type Runtime = {
   // the plugin's own directory ($.plugin.root), where the answer script lives (#561)
   pluginRoot: string
   config: Config
+  // the container's CPU count (read once per process) and the stop gates the companion may run at once,
+  // resolved from config.gateConcurrency; absent in a test's Runtime: no limit
+  cpus?: number
+  gateConcurrency?: number
   // the settings v2 runs with (config.ts LoadedConfig.v2), the v2 shadow's; absent: config's
   v2Config?: Config
   // what loadConfig left out of the repo-local settings, for the decision log

@@ -1,7 +1,7 @@
 // `/factory config` (#698): the grouped settings view, its sources, and its read-only op.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { shortDuration } from '../hooks/config'
+import { GATE_CPUS, resolveGateConcurrency, shortDuration } from '../hooks/config'
 import { configText, sourceOf, viewOf } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
@@ -30,7 +30,7 @@ function view(repo: Record<string, unknown>, workspace: Record<string, unknown> 
 const GROUPS = ['Loop', 'Capacity', 'Limits', 'Agents and gates', 'Usage', 'Config problems']
 const KEYS = [
   'mode', 'planner', 'passEvery', 'plugin', 'device', 'maxInFlight', 'poolSize', 'worktreeReserve', 'maxStarts', 'serial', 'new work',
-  'reviewFixCap', 'maxLives', 'maxTriages', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout',
+  'reviewFixCap', 'maxLives', 'maxTriages', 'minimumReleaseCadence', 'stateTimeout', 'reviewer', 'reviewerModel', 'triageModel', 'gateCommands', 'gateTimeout', 'gateConcurrency', 'gateWaitTimeout',
   'slow/new/all %', 'override',
 ]
 const line = (text: string, label: string) => text.split('\n').find(l => l.startsWith(`  ${label} `)) ?? ''
@@ -202,5 +202,36 @@ describe('SETTING_EFFECT', () => {
     configText({ ...view({}), config: spy }, control(), NOW)
     expect(read.size).toBeGreaterThan(10)
     for (const key of read) expect(key in SETTING_EFFECT).toBe(true)
+  })
+})
+
+describe('gate concurrency', () => {
+  test('auto is max(1, floor(cpus / GATE_CPUS)); a number stays; a CPU count that is no positive integer is 1', () => {
+    expect(GATE_CPUS).toBe(8)
+    expect([1, 7, 8, 16, 17].map(cpus => resolveGateConcurrency('auto', cpus))).toEqual([1, 1, 1, 2, 2])
+    expect([0, -4, 2.5, Number.NaN].map(cpus => resolveGateConcurrency('auto', cpus))).toEqual([1, 1, 1, 1])
+    expect(resolveGateConcurrency(3, 64)).toBe(3)
+  })
+
+  test('the defaults are auto and 30 minutes; whole numbers of at least 1 and auto are kept, anything else is a problem', () => {
+    const none = loadConfig({}, {})
+    expect(none.config.gateConcurrency).toBe('auto')
+    expect(none.config.gateWaitTimeoutMs).toBe(30 * MIN)
+    expect(loadConfig({ gateConcurrency: 3, gateWaitTimeout: '5m' }, {}).config).toMatchObject({ gateConcurrency: 3, gateWaitTimeoutMs: 5 * MIN })
+    expect(loadConfig({ gateConcurrency: 'auto' }, {}).problems).toEqual([])
+    for (const bad of [0, -1, 'many', 2.5]) {
+      const loaded = loadConfig({ gateConcurrency: bad }, {})
+      expect(loaded.config.gateConcurrency).toBe('auto')
+      expect(loaded.problems.some(p => p.startsWith(`gateConcurrency: ${JSON.stringify(bad)} is not `))).toBe(true)
+    }
+  })
+
+  test('the view shows the number with where it came from, and the wait cap', () => {
+    const auto = (cpus: number) => configText(view({}, {}, { cpus }), control(), NOW)
+    expect(line(auto(8), 'gateConcurrency')).toContain('1 (auto: 8 CPUs / 8)')
+    expect(line(auto(16), 'gateConcurrency')).toContain('2 (auto: 16 CPUs / 8)')
+    expect(line(configText(view({ gateConcurrency: 3 }, {}, { cpus: 16 }), control(), NOW), 'gateConcurrency')).toContain('3 (repo)')
+    expect(line(configText(view({ gateConcurrency: 3 }, { gateConcurrency: 4 }, { cpus: 16 }), control(), NOW), 'gateConcurrency')).toContain('4 (workspace)')
+    expect(line(auto(8), 'gateWaitTimeout')).toContain('30m')
   })
 })

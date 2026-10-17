@@ -25,6 +25,10 @@ export type WorkspaceAgent = {
   // from the step marker: the step attempt's scratch folder, exported as TMPDIR into the agent's
   // Bash calls; absent for an older marker
   scratch?: string
+  // from the step marker: the stop gates that run at once (absent: no limit) and the longest a
+  // finished writer waits for its turn (absent: the default)
+  gateConcurrency?: number
+  gateWaitTimeoutMs?: number
   // from the step marker; an older marker has none
   pr?: number | null
   // the spawn's subagentType, per agent (a child has its own)

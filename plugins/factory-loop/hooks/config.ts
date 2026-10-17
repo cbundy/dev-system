@@ -117,6 +117,37 @@ export const DEFAULT_CONFIG: Config = {
   // the plugin ships no repo's commands: a repo sets its own (dev-system: npm run lint, npm test)
   gateCommands: [],
   gateTimeoutMs: 10 * MIN,
+  gateConcurrency: 'auto',
+  gateWaitTimeoutMs: 30 * MIN,
+}
+
+// The CPUs one full stop gate is assumed to use: scripts/test.sh sizes its pool to the whole
+// container, so `auto` lets one gate per GATE_CPUS CPUs run at once.
+export const GATE_CPUS = 8
+
+// The container's CPU count, read once per loop process: Node's os.availableParallelism() honours the
+// cgroup CPU quota, as scripts/test-pool.sh does, and the hooks have no node:os import, so a command
+// reads it. Anything but a positive integer counts as 1.
+let cpusRead: Promise<number> | undefined
+
+// gateLimits: what the Runtime carries for the stop gate: the CPU count and the resolved concurrency.
+export async function gateLimits(
+  run: (argv: string[]) => Promise<{ exitCode: number; stdout: string }>,
+  config: Pick<Config, 'gateConcurrency'>,
+): Promise<{ cpus: number; gateConcurrency: number }> {
+  cpusRead ??= run(['node', '-e', 'console.log(os.availableParallelism())'])
+    .then(r => (r.exitCode === 0 && /^[1-9][0-9]*$/.test(r.stdout.trim()) ? Number(r.stdout.trim()) : 1))
+    .catch(() => 1)
+  const cpus = await cpusRead
+  return { cpus, gateConcurrency: resolveGateConcurrency(config.gateConcurrency, cpus) }
+}
+
+// resolveGateConcurrency: the whole number of gates that may run at once; `auto` is
+// max(1, floor(cpus / GATE_CPUS)). A cpus that is not a positive integer counts as 1.
+export function resolveGateConcurrency(value: 'auto' | number, cpus: number): number {
+  if (value !== 'auto') return value
+  const n = Number.isInteger(cpus) && cpus > 0 ? cpus : 1
+  return Math.max(1, Math.floor(n / GATE_CPUS))
 }
 
 // The defaults that differ under planner v2, for a key no settings file sets: K is 3 (v2 SPEC
@@ -271,6 +302,9 @@ export function loadConfig(...layers: unknown[]): LoadedConfig {
       } else if (key === 'gateCommands') {
         if (Array.isArray(value) && value.every(v => typeof v === 'string' && v.trim() !== '')) out[key] = [...value]
         else bad(raw, value, 'a list of commands')
+      } else if (key === 'gateConcurrency') {
+        if (value === 'auto' || (typeof value === 'number' && Number.isInteger(value) && value >= 1)) out[key] = value
+        else bad(raw, value, 'auto or a whole number of at least 1')
       } else if (key === 'planner') {
         if (PLANNERS.some(p => p === value)) out[key] = value
         else bad(raw, value, PLANNERS.join(' or '))

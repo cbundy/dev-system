@@ -53,14 +53,14 @@ function refused(why: string): Exec {
 
 // slotArgv: argv.ts's command for the op, with the plugin's tool as its program; or why it cannot
 // be built from the action.
-export function slotArgv(a: SlotAction, rt: Pick<ExecCtx['rt'], 'pluginRoot' | 'loopDir'>): string[] | string {
+export function slotArgv(a: SlotAction, rt: Pick<ExecCtx['rt'], 'pluginRoot' | 'loopDir'> & Partial<Pick<ExecCtx['rt'], 'gateConcurrency' | 'config'>>): string[] | string {
   let argv: string[]
   if (a.op === 'lease') {
     if (a.issue === null) return 'a lease names no issue'
     argv = ARGV.slotLeaseArgv(a.issue, a.life)
   } else if (a.op === 'prepare') {
     if (a.path === null || a.lease === null || a.branch === null || a.marker === null) return 'a prepare needs its slot, lease, branch and marker'
-    argv = ARGV.slotPrepareArgv(a.path, a.lease, a.branch, JSON.stringify({ ...a.marker, loopDir: rt.loopDir, scratch: scratchOf(rt.loopDir, a.marker.issue, a.marker.life, a.marker.seq) }))
+    argv = ARGV.slotPrepareArgv(a.path, a.lease, a.branch, JSON.stringify({ ...a.marker, loopDir: rt.loopDir, scratch: scratchOf(rt.loopDir, a.marker.issue, a.marker.life, a.marker.seq), gateConcurrency: rt.gateConcurrency, gateWaitTimeoutMs: rt.config?.gateWaitTimeoutMs }))
   } else if (a.op === 'free') {
     if (a.path === null || a.lease === null) return 'a free needs its slot and lease'
     argv = ARGV.slotFreeArgv(a.path, a.lease, rt.loopDir, a.keepScratch)

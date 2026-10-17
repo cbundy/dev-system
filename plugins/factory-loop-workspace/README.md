@@ -19,7 +19,7 @@ is left alone.
 |---|---|
 | `agent.spawn` | Reads the slot line and the step marker `factory-step.json` that `factory-slot prepare` wrote into the slot's git dir. Starts the agent in the slot when the marker is the loop's agent's (its name `<step>-<N>-s<seq>-a<k>` and its type `factory-loop:*`); refuses the spawn when the marker is missing or names another step. Keeps the agent's id, and its children's, in `$.state`. |
 | `tool.call` | The write guard. A writer writes only inside its slot (or outside the repository, such as its scratch folder); a reader writes nowhere in the repository. Every loop agent is refused GitHub writes (PRs, issues, labels, re-runs), `no-mistakes`, `axi`, a push to any remote but `origin`, any call in the background (Bash or `Agent`), and an isolated `Agent` call. A writer pushes only its branch, never by force, and creates no branch or worktree. A reader neither commits nor pushes. A Bash call with no timeout gets 10 minutes. A Bash call also runs with `TMPDIR`, `TMP` and `TEMP` set to the step marker's `scratch` folder (`<loop dir>/scratch/<N>-<life>-s<seq>`, made by `factory-slot prepare`), by an `export` line before the agent's own command; the guard judges the original command. A marker with no usable `scratch`, or a caller outside the map, leaves the command as it is. |
-| `classic.SubagentStop` | The stop gate. When a writer finishes, it runs the repo's `gateCommands` in the slot, one after another, within `gateTimeoutMs`. While one fails, the finish is refused with the command, its exit code and the last 150 lines of its output. A gate that cannot run lets the agent finish and is logged. |
+| `classic.SubagentStop` | The stop gate. When a writer finishes, it runs the repo's `gateCommands` in the slot, one after another, within `gateTimeoutMs`, after taking a turn: at most the marker's `gateConcurrency` gates run at once in the process, the rest wait in order (up to the marker's `gateWaitTimeoutMs`, then `gate-unknown`). While one fails, the finish is refused with the command, its exit code and the last 150 lines of its output. A gate that cannot run lets the agent finish and is logged. |
 | `tool.check` | Prompts nobody answers (SPEC 10.10). Calls `next(e)` once; when the call is from a mapped loop agent (or its child) and Claude Code answered `ask`, it returns a deny instead, saying the call would wait on a person nobody watches, quoting Claude Code's reason, and telling the agent to find another way or end its step saying what it needed. Any other result, and any caller not in the map (the owner's own session), is returned unchanged. |
 | `classic.Notification` | A `permission_prompt` (or `worker_permission_prompt`) notification from a mapped agent is logged as a `prompt_waiting` event. Returns `next(e)` always. |
 | `classic.SubagentStart` | Learns each agent's transcript path for the notes above. |
@@ -29,15 +29,15 @@ is left alone.
 
 - `<loop dir>/companion.jsonl`: one line per refusal (`guard:write`, `guard:push`,
   `guard:command`), per refused prompt (`prompt-denied`) and per gate run (`gate-pass`, `gate-fail`, `gate-unknown`, with the head, the
-  duration and a failing command), with the issue, life and seq. The loop logs each refusal, each `prompt-denied` and
-  each `gate-unknown` as an intervention; a gate that passed or failed is not one.
+  duration, `waitMs`, `concurrency` and a failing command; `gate-wait` when a gate waited for its turn), with the issue, life and seq. The loop logs each refusal, each `prompt-denied` and
+  each `gate-unknown` as an intervention; a gate that passed, failed or waited is not one.
 - `callum-flow-event prompt_denied` (one per refused prompt) and `prompt_waiting` (one per prompt a
   mapped agent waits on), with the issue, branch and pr, and a note of `key=value` tokens (`life`,
   `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`, `input`, `why`, `slot`, `session`,
   `transcript`; `none` when unknown). An image whose `callum-flow-event` lacks the states still gets
   the deny and its `companion.jsonl` line. There is no `prompt_answered`: no hook shows the answer.
 - `factory-gate.json` in the slot's git dir: the last gate result (pass, fail or unknown) with the
-  slot's HEAD.
+  slot's HEAD and `waitMs`.
 - The handshake file above. Files older than 7 days are pruned at session start.
 
 The guard matches commands, not effects. A Bash write into another slot is not refused; each
@@ -57,7 +57,7 @@ From a shell instead: `claude plugin install factory-loop-workspace@callum --sco
 a new session.
 
 Gate commands are repo settings: `gateCommands` (for example `["npm run lint", "npm test"]`) and
-`gateTimeoutMs` in the repo's `.claude/factory-loop.json` or the workspace config. Empty means no
+`gateTimeoutMs`, `gateConcurrency` (a whole number or `auto`, one gate per 8 CPUs) and `gateWaitTimeoutMs` in the repo's `.claude/factory-loop.json` or the workspace config. Empty means no
 gate.
 
 ## Develop it

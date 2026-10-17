@@ -25,7 +25,7 @@
 // pass untouched.
 import type { EngineInterface, Register } from 'claude-code'
 import type { WorkspaceAgent } from '../types'
-import { blockText, gateLine, gateRecord, oneLine, runGates } from './gate'
+import { blockText, gateLine, gateRecord, oneLine, runGates, waitedOut } from './gate'
 import type { Ran } from './gate'
 import { FILE_TOOLS, agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize, within } from './guard'
 import type { Guarded, Refusal } from './guard'
@@ -33,6 +33,8 @@ import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marke
 import { PROMPT_NOTIFICATIONS, inputOf, promptNote, promptReason, transcriptOf, whyOf } from './prompt'
 import type { Decided, NoteFields } from './prompt'
 import { withScratch } from './scratch'
+import { createTurns } from './turns'
+import type { Turn } from './turns'
 
 const ME = 'factory-loop-workspace'
 const AGENTS = { plugin: 'factory-loop-workspace', key: 'agents' } as const
@@ -44,6 +46,11 @@ const QUICK_MS = 15_000
 // takes a handshake a few beats old as missing (factory-loop hooks/v2/sources-workspace.ts)
 export const HANDSHAKE_EVERY_MS = 60_000
 const HANDSHAKE_PRUNE_DAYS = 7
+// the longest a finished writer waits for its gate's turn when its marker does not say (config.ts
+// gateWaitTimeoutMs)
+const GATE_WAIT_TIMEOUT_MS = 30 * 60_000
+// the stop gates' turns, one set for the whole process: every slot's writer shares it
+const turns = createTurns()
 
 // --- small helpers over $ ---------------------------------------------------------------------------
 
@@ -393,14 +400,39 @@ export const register: Register = on => {
   on('classic.SubagentStop', async ($, e, next) => {
     const a = await agentOf($, e.agent_id)
     if (a === null || a.root !== e.agent_id || a.role !== 'writer' || a.gateCommands.length === 0) return next(e)
-    const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
-    const head = await headSha($, a.slot)
-    const record = gateRecord(result, head, await $.clock.now(), a.gateCommands)
-    await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-    const line = gateLine(result, head)
-    await logLine($, a, line.cause, line.reason, line.fields)
-    if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
-    return next(e)
+    // a turn first (10.6): at most gateConcurrency gates run at once in this process; a marker with no
+    // limit takes none
+    const limit = a.gateConcurrency
+    let turn: Extract<Turn, { ok: true }> | null = null
+    let waitMs = 0
+    if (limit !== undefined) {
+      const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
+      const got = await turns.acquire(limit, { now: () => $.clock.now(), after: (ms, fn) => $.clock.after(ms, fn), maxWaitMs: cap })
+      waitMs = got.waitMs
+      if (!got.ok) {
+        const result = waitedOut(got.waitMs, cap, limit)
+        const head = await headSha($, a.slot)
+        await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs), null, 2)}\n`).catch(() => undefined)
+        const line = gateLine(result, head, waitMs, limit)
+        await logLine($, a, line.cause, line.reason, line.fields)
+        return next(e)
+      }
+      turn = got
+    }
+    // whatever happens from here, the turn goes back, so a stuck or crashed gate never blocks the others
+    try {
+      if (turn !== null && turn.queuedBehind > 0) await logLine($, a, 'gate-wait', `the stop gate waited ${Math.round(waitMs / 1000)} s for a turn`, { waitMs, queuedBehind: turn.queuedBehind, concurrency: limit })
+      const result = await runGates({ run: (command, budgetMs) => runIn($, a.slot, command, budgetMs), now: () => $.clock.now() }, a.gateCommands, a.gateTimeoutMs)
+      const head = await headSha($, a.slot)
+      const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs)
+      await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
+      const line = gateLine(result, head, waitMs, limit ?? null)
+      await logLine($, a, line.cause, line.reason, line.fields)
+      if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
+      return next(e)
+    } finally {
+      turn?.release()
+    }
   }).catch(async ($, e, next) => {
     // a gate that could not run is never passed silently
     try {

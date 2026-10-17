@@ -384,6 +384,11 @@ export type Config = {
   // the stop gate's commands in the slot, joined with &&, and their one budget (v2 SPEC 10.6)
   gateCommands: string[]
   gateTimeoutMs: Ms
+  // how many stop gates run at once across the companion's process: a whole number of at least 1, or
+  // 'auto' (cpus / GATE_CPUS, config.ts resolveGateConcurrency); the longest a finished writer waits
+  // for its turn (v2 SPEC 10.6)
+  gateConcurrency: 'auto' | number
+  gateWaitTimeoutMs: Ms
 }
 
 export type AnswerChannel = 'script' | 'tool' | 'text'

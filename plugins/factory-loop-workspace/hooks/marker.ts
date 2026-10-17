@@ -29,6 +29,11 @@ export type Marker = {
   // the step attempt's scratch folder, under <loopDir>/scratch/; absent in an older marker, or when
   // the one it names is not a usable path
   scratch?: string
+  // the stop gates the companion runs at once, and the longest a finished writer waits for its turn;
+  // absent in an older marker, or when the value is not a whole number of at least 1: no limit, and
+  // the default wait
+  gateConcurrency?: number
+  gateWaitTimeoutMs?: number
 }
 
 // slotLine: the slot the prompt's first line names, or null when it names none. The path must be
@@ -74,6 +79,8 @@ export function parseMarker(text: string | null): Marker | null {
     gateTimeoutMs: o.gateTimeoutMs,
     loopDir,
     ...(scratchOk(o.scratch, loopDir) ? { scratch: o.scratch } : {}),
+    ...(int(o.gateConcurrency, 1) ? { gateConcurrency: o.gateConcurrency } : {}),
+    ...(int(o.gateWaitTimeoutMs, 1) ? { gateWaitTimeoutMs: o.gateWaitTimeoutMs } : {}),
   }
 }
 

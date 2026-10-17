@@ -1101,7 +1101,8 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
 - **The companion's log.** The companion appends one JSON line per refusal and per stop gate run
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
-  (`gate-pass`, `gate-fail`, 10.6) is not. It writes no event itself.
+  (`gate-pass`, `gate-fail`, 10.6) is not, and neither is `gate-wait` (a gate that waited for its turn).
+  It writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
   `callum-flow-event`.
 
@@ -1542,7 +1543,9 @@ Before every agent step (each attempt and each triage included), action `slot` o
    "is already used by worktree", exit 128 (`totality/T-19`);
 5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
-   step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir, scratch }`;
+   step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir, scratch, gateConcurrency?, gateWaitTimeoutMs? }`
+   (the last two are filled by the slot executor, which knows the CPU count; a marker without
+   `gateConcurrency` means no limit);
 6. make the step's scratch folder, `<loop dir>/scratch/<N>-<life>-s<seq>` (mode 0700, outside every
    repository), the `scratch` of the marker. The tool refuses (exit 3) a marker whose `scratch` is
    not exactly that path. It is the step's `$TMPDIR` (10.5): the loop's prompts name it, and
@@ -1657,6 +1660,21 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   `gate-fail` or `gate-unknown`. Only `gate-unknown` is an intervention; the loop skips the other
   two, so the log is the audit of every run. The last result is also written to
   `<slot git dir>/factory-gate.json`, which the next run overwrites.
+- **Turns.** The companion runs at most `gateConcurrency` stop gates at once across every slot in
+  its process, because `scripts/test.sh` sizes its pool to the whole container and several full
+  gates at once would starve each other into timeouts. `gateConcurrency` is a whole number of at
+  least 1 or `auto`, which is `max(1, floor(cpus / GATE_CPUS))` with `GATE_CPUS = 8`, the CPUs one
+  full gate is assumed to use; `cpus` is `os.availableParallelism()` (cgroup-aware), read once
+  per loop process through `node -e`. The slot executor writes the resolved number into the step
+  marker as `gateConcurrency` (with `gateWaitTimeoutMs`); a marker without it takes no turn.
+  A writer that finishes while every turn is taken waits in FIFO order. The `gateTimeoutMs`
+  budget starts when the gate holds its turn. The turn is given back in a `finally`, whether the
+  gate passes, fails, is unknown or the hook throws. A wait past `gateWaitTimeoutMs` (30 minutes)
+  leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;
+  the agent may finish, as with any unknown gate. A gate that waited writes a `gate-wait` line
+  when it gets its turn (`waitMs`, `queuedBehind`; not an intervention). Every gate line carries
+  `waitMs` and `concurrency` (null: no limit), and `factory-gate.json` carries `waitMs`. The
+  `gate_run` event schema is ready for these runs; nothing writes it yet.
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").
@@ -2738,6 +2756,8 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `reviewerModel` | `opus` | 8.3 |
 | `gateCommands` | `[]` | 10.6 |
 | `gateTimeoutMs` | `10m` in all | 10.6 |
+| `gateConcurrency` | `auto` (`max(1, floor(cpus / 8))`) | 10.6 |
+| `gateWaitTimeoutMs` | `30m` in all | 10.6 |
 
 Reused with their v1 meaning: `maxInFlightIssues` (K; default 3, and 2 for the first 5 claims at cutover, section 15), `worktreeReserve`,
 `poolSize`, `reviewFixCap` (`fixCap`), `retryBackoffMs` and `maxAttempts` (for effects),

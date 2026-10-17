@@ -309,6 +309,69 @@
     "type": "object",
     "x-issue": "required"
   },
+  "gate_run.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "concurrency": {
+        "minimum": 1,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "head": {
+        "pattern": "^[0-9a-f]{7,40}$",
+        "type": [
+          "null",
+          "string"
+        ]
+      },
+      "life": {
+        "pattern": "^[0-9a-z]+$",
+        "type": "string"
+      },
+      "queued_behind": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "result": {
+        "enum": [
+          "fail",
+          "pass",
+          "unknown"
+        ]
+      },
+      "run_ms": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "seq": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "started_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "wait_ms": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "concurrency",
+      "head",
+      "life",
+      "queued_behind",
+      "result",
+      "run_ms",
+      "seq",
+      "started_at",
+      "wait_ms"
+    ],
+    "type": "object",
+    "x-issue": "required"
+  },
   "implementer_routed.v1": {
     "additionalProperties": false,
     "properties": {

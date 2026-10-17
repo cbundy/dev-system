@@ -74,6 +74,8 @@ export const SETTING_EFFECT: Record<keyof Config | 'poolSize', Effect> = {
   reviewerModel: 'next-pass',
   gateCommands: 'next-pass',
   gateTimeoutMs: 'next-pass',
+  gateConcurrency: 'next-pass',
+  gateWaitTimeoutMs: 'next-pass',
   // runtime() reads it from the workspace file every pass
   poolSize: 'next-pass',
 }
