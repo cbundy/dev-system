@@ -81,6 +81,24 @@ chown 1000:1000 factory-db-writer-url factory-db-reader-url
 
 A workspace never falls back to `agentsview-pg-url` for these.
 
+### A workspace on another database
+
+A workspace can use its own factory database (for example the dev server's `factory_testbed`)
+while the others keep the shared one. On Coder, with `workspace_secrets_dir` set, put the
+same two file names in that workspace's folder on the host,
+`<workspace_secrets_dir>/<lower(owner)>/<lower(workspace)>/` (owned 1000:1000, mode 0600). Every
+workspace mounts its own folder read-only at `/run/secrets/dev-system-workspace`
+(`DEV_WORKSPACE_SECRETS_DIR`). The lookup, per role, is:
+
+1. `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL` in the environment;
+2. `factory-db-<role>-url` in the workspace folder;
+3. the same file in the shared folder.
+
+A workspace file that exists wins even when it is empty or unreadable: `dev-doctor` then fails
+naming that file, and the workspace never falls back to the shared database unseen. A missing
+folder is empty and changes nothing. Check it with `dev-doctor`, which names the file the URL
+came from.
+
 ## 6. Check
 
 Restart the workspace or run `dev-doctor`. Expect, for each role:

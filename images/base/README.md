@@ -707,7 +707,7 @@ on every failure:
   (in this container or another one sharing the volume). A secret file that exists but
   cannot be read fails. Anything agentsview prints there is masked (`postgres://***@...`).
 - the factory database, for each of the writer and reader URLs (`factory-db-writer-url`,
-  `factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`; never the
+  `factory-db-reader-url` in `DEV_WORKSPACE_SECRETS_DIR` (`/run/secrets/dev-system-workspace`, this workspace only) first, then `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`; never the
   agentsview URL): a `WARN` naming both files when none is configured; a `FAIL` when a file is empty or
   unreadable, the server cannot be reached (psql's last line, masked), the role is not the `_writer` /
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
@@ -1869,7 +1869,7 @@ queries are in [docs/metrics.md](../../docs/metrics.md).
 
 `factory-event-push-loop` ships the new log (`/persist/events/factory/*.jsonl`, see
 [docs/factory-events](../../docs/factory-events/README.md)) to `factory.event_store` as the writer role of the
-factory database. It reads only the writer URL (`FACTORY_DB_WRITER_URL` or the `factory-db-writer-url` secret, never
+factory database. It reads only the writer URL (`FACTORY_DB_WRITER_URL`, else the `factory-db-writer-url` secret in the workspace folder, else the shared one, never
 `AGENTSVIEW_PG_URL`), runs no DDL, and sends each line as one `INSERT ... ON CONFLICT (event_id) DO NOTHING` whose
 columns the database casts from the line itself, so the database judges every line. Its cursor is
 `factory/.pushed/<file>` (a line count; a shorter file restarts at 0). A line the database refuses while it is
@@ -1920,7 +1920,7 @@ without emitting SQL. Export selection rules are in the linked metrics reference
 
 `heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat) in two databases, each
 resolved again on every beat: the agentsview database (the same URL rules as `event-push-loop`) and the factory
-database as its writer role (`FACTORY_DB_WRITER_URL` or `factory-db-writer-url`). It builds the row once per beat
+database as its writer role (`FACTORY_DB_WRITER_URL` or `factory-db-writer-url`, workspace folder first). It builds the row once per beat
 and sends the same values to every configured target, the agentsview database first. The targets are
 independent: a failure on one is logged, masked, naming `agentsview database` or `factory database`, and never
 skips the other. The loop runs while either URL is configured and stops when neither is. Between beats it waits `DEV_HEARTBEAT_INTERVAL` seconds (see the
@@ -1978,7 +1978,7 @@ database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or 
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in
 the agentsview database by accident. Running it again changes nothing. The full procedure (provision
 the server, run the bootstrap, place each role's URL as the secret `factory-db-writer-url` or
-`factory-db-reader-url` in `DEV_SECRETS_DIR`, or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
+`factory-db-reader-url` in `DEV_SECRETS_DIR` (or a workspace's own `DEV_WORKSPACE_SECRETS_DIR`), or `FACTORY_DB_WRITER_URL` / `FACTORY_DB_READER_URL`, rotate a
 password, upgrade the schema) is in [docs/factory-db.md](../../docs/factory-db.md); `dev-doctor` checks
 both URLs (see [`dev-doctor`](#dev-doctor)).
 
