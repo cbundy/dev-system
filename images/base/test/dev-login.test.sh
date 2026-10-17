@@ -79,7 +79,12 @@ while [ $# -gt 0 ]; do
   shift
 done
 case $cmd in
-  new-session) echo "$name" >> "$FIX/tmux.started"; : > "$FIX/session.$name" ;;
+  new-session)
+    echo "$name" >> "$FIX/tmux.started"
+    : > "$FIX/session.$name"
+    # a tmux server keeps the environment it starts with, for every shell it runs
+    env | grep '^DL_' >> "$FIX/../tmux.env"
+    ;;
   has-session) [ -f "$FIX/session.$name" ]; exit $? ;;
   kill-session) rm -f "$FIX/session.$name" ;;
 esac
@@ -275,6 +280,13 @@ timeout 20 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
 [ ! -f "$FIX/tmux.started" ] || fail "watch must not start codex"
 [ ! -f "$FIX/sleeps" ] || fail "watch should not have slept"
 [ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
+# the script's own DL_ variables are never taken from the environment: a stale DL_STATES
+# inherited from a shell of a login's tmux server started logins that were done
+reset tok1 "$ok_json"
+: > "$FIX/codex-in"
+DL_STATES=$(printf 'out\nout\nout') DL_WATCH=1 DL_CACHED=1 dl start >/dev/null 2>&1
+[ ! -f "$FIX/tmux.started" ] || fail "start must ignore an inherited DL_STATES: $(cat "$FIX/tmux.started")"
+reset tok1 "$ok_json"
 # an empty DEV_LOGIN_OPTIONAL makes codex required again
 DEV_LOGIN_OPTIONAL="" dl status --json 2>/dev/null | jq -e '.codex | has("optional") | not' >/dev/null \
   || fail "DEV_LOGIN_OPTIONAL= should make codex required"
@@ -350,5 +362,9 @@ dl status 2>/dev/null | grep -q 'docker exec -it testbox' || fail "no Coder: hin
 out=$(DEV_CODER_WORKSPACE=ws1 dl status 2>/dev/null)
 echo "$out" | grep -q 'coder ssh ws1 -- tmux attach -t login-gh' || fail "Coder hint missing: $out"
 echo "$out" | grep -q 'docker exec' && fail "Coder hint must not say docker exec"
+
+# nothing dev-login started (a login's tmux server, from `start` or the watcher) got its DL_
+# variables
+[ ! -s "$tmp/tmux.env" ] || fail "a login's tmux server must not inherit DL_ variables: $(sort -u "$tmp/tmux.env" | tr '\n' ' ')"
 
 echo "dev-login: ok"
