@@ -381,7 +381,11 @@ export type IssueComment = { body: string; at: Ms; url: string | null }
 // When observe first saw a PR head (2.4): it bounds the waits on GitHub (4.4).
 export type HeadSeen = { pr: number; at: Ms }
 
-export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments'] as const
+export const V2_SOURCES = ['store', 'leases', 'prs', 'interventions', 'comments', 'dualWrite'] as const
+// What the new event log holds, read once per load when dual write is on (sources-dualwrite.ts): when it
+// was read and the "<issue>:<life>:<seq>" of this device's transitions it holds.
+export type DualWrite = { readAt: Ms; seen: ReadonlySet<string> }
+
 export type V2SourceName = (typeof V2_SOURCES)[number]
 
 // The State fields v2 adds (2.4), as State.v2: observeV2 reads them when the planner is v2 or the
@@ -410,6 +414,8 @@ export type V2State = {
   // the main checkout the tripwire last settled on, which R1 compares this pass's read with
   // (10.7; reconcile.ts checkoutBaseOf); null before the first read that did not fail
   checkoutBase: CheckoutBase | null
+  // the new log's transitions; null when dual write is off or not read (act mode, planner v2 only)
+  dualWrite: DualWrite | null
   // the workspace rail: the companion's handshake for this session (10.9; workspace.ts); absent
   // when not read, which holds nothing
   workspace?: WorkspaceRead
