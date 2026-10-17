@@ -106,6 +106,22 @@ variable "role" {
   }
 }
 
+# How long a workspace stop waits for the factory loop to finish its running steps (the loop's
+# wind-down mode, docs/factory-loop/v2/SPEC.md 10.11; cbundy/dev-system#842). Above 0 the template
+# adds a stop script (wind-down.sh) that asks each loop to wind down and waits up to this many
+# minutes, and the container gets that long plus a minute of Docker stop grace. 0 adds neither, so
+# the stop is as before. coder/push.sh sets it per template: 10 for orchestrator-loop, 0 for the rest.
+variable "wind_down_minutes" {
+  default     = 0
+  description = "Minutes a workspace stop waits for the factory loop to wind down. 0 (the default) adds no stop script and no extra container stop grace."
+  type        = number
+
+  validation {
+    condition     = var.wind_down_minutes >= 0 && var.wind_down_minutes == floor(var.wind_down_minutes)
+    error_message = "wind_down_minutes must be a whole number of at least 0."
+  }
+}
+
 # The image turns Claude Code and codex telemetry export on when
 # OTEL_EXPORTER_OTLP_ENDPOINT is set (cbundy/dev-system#68).
 variable "otlp_endpoint" {
@@ -831,6 +847,18 @@ resource "docker_image" "workspace" {
   keep_locally  = true
 }
 
+# The stop script of the loop template: asks each factory loop on the workspace to wind down and
+# waits for it (wind-down.sh). The cap reaches the script as an environment variable, so the script
+# can be tested on its own. The timeout is the cap plus 45 s, inside the container's stop grace.
+resource "coder_script" "wind_down" {
+  count        = var.wind_down_minutes > 0 ? 1 : 0
+  agent_id     = coder_agent.main.id
+  display_name = "Wind down"
+  run_on_stop  = true
+  timeout      = var.wind_down_minutes * 60 + 45
+  script       = "WIND_DOWN_CAP_MS=${var.wind_down_minutes * 60000}\n${file("${path.module}/wind-down.sh")}"
+}
+
 resource "docker_container" "workspace" {
   count    = data.coder_workspace.me.start_count
   image    = docker_image.workspace.image_id
@@ -838,9 +866,12 @@ resource "docker_container" "workspace" {
   hostname = lower(data.coder_workspace.me.name)
   # The agent replaces the image entrypoint (and with it tini), so Docker's
   # own init is PID 1: it reaps the orphans tmux and Claude leave behind.
-  init       = true
-  entrypoint = ["sh", "-c", coder_agent.main.init_script]
-  env        = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env)
+  init = true
+  # Docker's stop signal waits this long before killing the container: the wind-down cap plus a
+  # minute. null (Docker's default) when there is no wind-down.
+  destroy_grace_seconds = var.wind_down_minutes > 0 ? var.wind_down_minutes * 60 + 60 : null
+  entrypoint            = ["sh", "-c", coder_agent.main.init_script]
+  env                   = concat(["CODER_AGENT_TOKEN=${coder_agent.main.token}"], local.otel_env, local.trusted_env, local.claude_auth_env, local.gh_token_env)
 
   memory = data.coder_parameter.memory_gb.value * 1024
   cpus   = tostring(data.coder_parameter.cpus.value)
