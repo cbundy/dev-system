@@ -189,8 +189,12 @@ gh_token_access_doctor() {
       fail "the token is rejected by GitHub" "replace the token file with a valid token, then run: dev-init"
       return 0
       ;;
-    offline | limited)
+    offline)
       info "GitHub unreachable, token access unchecked"
+      return 0
+      ;;
+    limited)
+      info "GitHub rate limit reached, token access unchecked"
       return 0
       ;;
     denied) body="" ;; # some App tokens cannot read /user; the repo probes still tell

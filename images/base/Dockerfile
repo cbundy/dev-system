@@ -259,6 +259,8 @@ COPY --chmod=0755 \
 COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
 # The migrations factory-db-bootstrap applies (cbundy/dev-system#646); it finds them here.
 COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-system/factory-db/migrations/
+# COPY --chmod gives the directories it creates the files' mode, so node could not traverse them (cbundy/dev-system#797).
+RUN chmod 0755 /usr/local/share/dev-system/factory-db /usr/local/share/dev-system/factory-db/migrations
 # The claim rule callum-flow-claim and callum-flow-sweep share (cbundy/dev-system#660).
 COPY --chmod=0644 images/base/claim-events.sh /usr/local/share/dev-system/
 # models.env is the baked copy of the no-mistakes models: dev-init pins from
