@@ -95,11 +95,6 @@ second=$(q "$db" "SELECT state || '|' || extract(epoch FROM last_seen) FROM fact
 [ "${second%%|*}" = busy ] || fail "the second beat should update state, got $second"
 awk -v a="${first#*|}" -v b="${second#*|}" 'BEGIN { exit !(b > a) }' || fail "last_seen should advance: $first -> $second"
 [ "$(q "$db" "SELECT stale FROM factory.workers_status WHERE device = 'dev-box'")" = f ] || fail "the worker should not be stale"
-# the stats call: the writer role updates the stats columns and inserts a sample, with no DDL
-[ "$(q "$db" "SELECT procs > 0 AND stats_at IS NOT NULL FROM factory.workers_status WHERE device = 'dev-box'")" = t ] || fail "the worker row should carry the stats"
-[ "$(q "$db" "SELECT count(*) FROM factory.worker_samples WHERE device = 'dev-box'")" = 2 ] || fail "one sample per running beat expected"
-[ "$(q "$db" "SELECT string_agg(state, ',' ORDER BY sampled_at) FROM factory.worker_samples")" = idle,busy ] || fail "samples keep the beat's state"
-grep -q 'stats write failed' "$tmpdir/beat.out" && fail "the stats write failed: $(cat "$tmpdir/beat.out")"
 grep -q 'permission denied\|ERROR' "$tmpdir/beat.out" && fail "the writer beat logged an error: $(cat "$tmpdir/beat.out")"
 echo "heartbeat-loop factory-db: ok"
 
@@ -120,32 +115,3 @@ DEV_SYSTEM_SHARE="$tmpdir/share" DEV_HEARTBEAT_DIR="$tmpdir/hb" DEV_VERSIONS_FIL
 [ "$(q "$db2" "SELECT count(*) FROM factory.workers")" = 1 ] || fail "the beat should land in the workspace database"
 [ "$(q "$db" "SELECT count(*) FROM factory.workers")" = 0 ] || fail "the shared database must stay untouched"
 echo "heartbeat-loop workspace override: ok"
-
-# the agentsview database (old target): a worker table from before the stats columns is migrated by
-# the loop's own DDL (columns, the view, worker_samples with its prune trigger), and then takes stats
-db3="factory_test_$$_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')_av"
-names="$names $db3"
-psql -X -q -At -v ON_ERROR_STOP=1 "$ADMIN" -c "CREATE DATABASE \"$db3\"" > /dev/null
-q "$db3" "CREATE SCHEMA factory; CREATE TABLE factory.workers (device text PRIMARY KEY, repo text, role text, ring text, runtime text,
-  coder_workspace text, base_image text, dev_image text, template_version text, plugin_version text, versions jsonb, state text,
-  in_flight jsonb NOT NULL DEFAULT '[]'::jsonb, chat_active_at timestamptz, sessions jsonb NOT NULL DEFAULT '[]'::jsonb,
-  critical_failures jsonb NOT NULL DEFAULT '[]'::jsonb, push jsonb, interval_s int, started_at timestamptz, last_seen timestamptz);
-  CREATE VIEW factory.workers_status AS SELECT w.*, now() - w.last_seen AS age,
-  (now() - w.last_seen) > make_interval(secs => 3 * coalesce(w.interval_s, 60)) AS stale FROM factory.workers w" > /dev/null
-rm -f "$DEV_SECRETS_DIR/factory-db-writer-url"
-av_beat() {
-  DEV_SYSTEM_SHARE="$tmpdir/share" DEV_HEARTBEAT_DIR="$tmpdir/hb" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
-    DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" \
-    AGENTSVIEW_PG_URL="$(url_for "$db3" "$ADMIN_USER" "$ADMIN_PW")" timeout 120 bash "$LOOP" --once > "$tmpdir/beat.out" 2>&1
-}
-echo busy > "$tmpdir/state"
-av_beat || fail "agentsview beat 1: $(cat "$tmpdir/beat.out")"
-av_beat || fail "agentsview beat 2 (DDL again, no change): $(cat "$tmpdir/beat.out")"
-grep -q 'stats write failed' "$tmpdir/beat.out" && fail "the agentsview stats write failed: $(cat "$tmpdir/beat.out")"
-[ "$(q "$db3" "SELECT procs > 0 AND stats_at IS NOT NULL FROM factory.workers_status WHERE device = 'dev-box'")" = t ] || fail "the rebuilt view should show the stats"
-[ "$(q "$db3" "SELECT count(*) FROM factory.worker_samples")" = 2 ] || fail "two samples expected on the agentsview database"
-[ "$(q "$db3" "SELECT count(*) FROM pg_trigger WHERE tgname = 'worker_samples_prune' AND NOT tgisinternal")" = 1 ] || fail "one prune trigger expected"
-q "$db3" "INSERT INTO factory.worker_samples (device, sampled_at) VALUES ('dev-box', now() - interval '40 days')" > /dev/null
-av_beat || fail "agentsview beat 3"
-[ "$(q "$db3" "SELECT count(*) FROM factory.worker_samples WHERE sampled_at < now() - interval '30 days'")" = 0 ] || fail "the old sample should be pruned"
-echo "heartbeat-loop agentsview stats DDL: ok"

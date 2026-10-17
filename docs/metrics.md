@@ -798,29 +798,6 @@ FROM factory.workers_status w, jsonb_array_elements(w.sessions) s
 WHERE NOT w.stale AND w.state <> 'stopped';
 ```
 
-Latest machine load per worker (the stats columns are NULL until a worker's first beat after the
-[migration](../images/base/README.md#machine-stats)):
-
-```sql
-SELECT device, state, stale, cpu_pct, cpu_limit_cores, cpu_quota_set,
-       round(mem_used_bytes / 1048576.0) AS mem_used_mib, round(mem_limit_bytes / 1048576.0) AS mem_limit_mib,
-       claude_interactive, claude_headless, claude_procs, procs, stats_at
-FROM factory.workers_status
-ORDER BY stale, device;
-```
-
-Load trend per device, hourly over the last day (samples are kept 30 days):
-
-```sql
-SELECT device, date_trunc('hour', sampled_at) AS hour,
-       round(avg(cpu_pct)::numeric, 1) AS cpu_avg, max(cpu_pct) AS cpu_max,
-       round(avg(mem_used_bytes) / 1048576.0) AS mem_avg_mib, round(max(mem_used_bytes) / 1048576.0) AS mem_max_mib
-FROM factory.worker_samples
-WHERE sampled_at > now() - interval '1 day'
-GROUP BY device, hour
-ORDER BY device, hour;
-```
-
 ## Linking pipeline runs to issues
 
 `run_started` is logged only when an agent remembers to, so 13 of the first 37 merged issues have
