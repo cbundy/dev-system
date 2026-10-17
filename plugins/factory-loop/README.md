@@ -90,6 +90,8 @@ wake turn; in chat, the model does the same through `mcp__factory-loop__control`
 Each change is logged and asks for a pass at once. The ops:
 
 - `status` (or no op): the last pass and the directives in force; `help` lists the ops;
+- `config`: the settings the loop runs with, grouped, each with its source (default, repo, workspace,
+  plugin or directive), read-only; "what is this factory's config?" is answered with it;
 - `pause <N>` / `unpause <N>`: no action at all on N, though its claim still renews;
 - `skip <N>` / `noskip <N>`: never claim N;
 - `priority <N...>|off`: claim these first, in order;
