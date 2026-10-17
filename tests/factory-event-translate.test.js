@@ -405,3 +405,25 @@ test("CLI: --quiet drops the per-state summary, keeps the miss line and the exit
   assert.equal(r.err, "line 1: miss: frobnicated: unknown state\n");
   assert.equal(cli(["--quiet", "--nope"], "").code, 2);
 });
+
+test("transition wait=: the waiting state and its condition list (dev-system#836)", () => {
+  const base = sample("transition");
+  const note = (over) => base.note.replace("to=queued", over);
+  const data = (n) => {
+    const r = translate(withNote(base, n));
+    assert.ok(r.event, JSON.stringify(r));
+    assert.deepEqual(reader.validateStrict("transition", 1, r.event.data), []);
+    return r.event.data;
+  };
+  const d = data(`${note("to=waiting").replace("resumeTo=none", "resumeTo=building")} wait=issue:57,pr:812,tag:35bb655`);
+  assert.equal(d.to_state, "waiting");
+  assert.equal(d.resume_to, "building");
+  assert.deepEqual(d.wait, [{ kind: "issue-closed", issue: 57 }, { kind: "pr-merged", pr: 812 }, { kind: "tag-contains", sha: "35bb655" }]);
+  assert.equal(data(`${base.note.replace("to=queued", "to=building")} wait=none`).wait, null);
+  assert.equal(data(base.note.replace("from=none", "from=waiting")).from_state, "waiting");
+  assert.equal(data(note("to=waiting")).to_state, "waiting");
+  assert.equal("wait" in data(note("to=waiting")), false, "a note without wait= leaves the key out");
+  assert.equal("wait" in data(base.note), false, "a non-waiting note is as before");
+  const bad = ["foo:1", "issue:x", "issue:0", "tag:XYZ", "tag:abc", "issue:1,,pr:2", "", "issue", ...[Array.from({ length: 9 }, (_, i) => `issue:${i + 1}`).join(",")]];
+  for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
+});

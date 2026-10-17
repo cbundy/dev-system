@@ -350,6 +350,131 @@ rc_of "$READ" --timeline 7
 [ "$rc" != 0 ] || fail "timeline with a malformed trusted event must fail"
 no_out "timeline with a malformed trusted event"
 
+# --- dependencies (blocked by / blocks) in issue mode -------------------------------
+DB=repos_o_r_issues_30_dependencies_blocked_by_per_page_100
+DK=repos_o_r_issues_30_dependencies_blocking_per_page_100
+# dep <n> <state> <user-json> <title> [repo]
+dep() {
+  jq -n --argjson n "$1" --arg s "$2" --argjson u "$3" --arg t "$4" --arg r "${5-}" \
+    '{number: $n, state: $s, title: $t, body: "DEP-BODY", user: $u, labels: [{name: "enhancement", color: "fff"}]}
+     + (if $r != "" then {repository: {full_name: $r}} else {} end)'
+}
+# with_summary <n> <summary-json>
+with_summary() {
+  jq --argjson s "$2" '. + {issue_dependencies_summary: $s}' "$d/repos_o_r_issues_$1.json" > "$tmpdir/x" && mv "$tmpdir/x" "$d/repos_o_r_issues_$1.json"
+}
+no_dep_calls() { ! grep -q dependencies "$d/calls" || fail "$1: dependencies fetched: $(cat "$d/calls")"; }
+
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"blocked_by":1,"total_blocked_by":2,"blocking":0,"total_blocking":0}'
+{ dep 31 open "$OWNER" "Open blocker"; dep 32 closed "$OWNER" "Closed blocker"; } | arr > "$d/$DB.json"
+rc_of "$READ" 30
+expect_rc 0 "dependencies text"
+present "blocked by #31 open [enhancement] Open blocker" "open blocker"
+present "blocked by #32 closed [enhancement] Closed blocker" "closed blocker"
+absent DEP-BODY "dependency body"
+awk '/^title:/{t=NR} /^blocked by/{b=NR} /^body:/{o=NR} END{exit !(t<b && b<o)}' "$tmpdir/out" || fail "dependency lines not between title and body"
+present "stripped: 0" "deps stripped"
+rc_of "$READ" --json 30
+expect_rc 0 "dependencies json"
+jq -e '(.blocked_by | length) == 2 and .blocking == [] and .stripped == 0 and .blocked_by[0] == {number: 31, repo: "o/r", state: "open", labels: [{name: "enhancement"}], title: "Open blocker"}' "$tmpdir/out" > /dev/null || fail "dependencies json: $(cat "$tmpdir/out")"
+! grep -q 'dependencies/blocking' "$d/calls" || fail "blocking fetched with a zero count"
+rc_of "$READ" 30 --comments
+echo '[]' > "$d/repos_o_r_issues_30_comments.json"
+rc_of "$READ" --json 30 --comments
+jq -e 'has("comments") and (.blocked_by | length) == 2' "$tmpdir/out" > /dev/null || fail "deps with comments"
+
+# only closed blockers still listed; blocks lines; cross repo
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"blocked_by":0,"total_blocked_by":1,"blocking":0,"total_blocking":2}'
+dep 31 closed "$OWNER" "Done blocker" other/repo | arr > "$d/$DB.json"
+{ dep 40 open "$OWNER" "Later A"; dep 41 open "$OWNER" "Later B"; } | arr > "$d/$DK.json"
+rc_of "$READ" 30
+expect_rc 0 "closed only, blocks"
+present "blocked by other/repo#31 closed [enhancement] Done blocker" "cross repo"
+present "blocks #40 open [enhancement] Later A" "blocks A"
+present "blocks #41 open [enhancement] Later B" "blocks B"
+awk '/^blocked by/{b=NR} /^blocks/{k=NR; if (!b || k<b) exit 1}' "$tmpdir/out" || fail "blocks before blocked by"
+rc_of "$READ" --json 30
+jq -e '(.blocking | length) == 2 and .blocked_by[0].repo == "other/repo"' "$tmpdir/out" > /dev/null || fail "blocks json"
+
+# untrusted dependencies keep the line, lose the title
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"total_blocked_by":3}'
+{ dep 31 open "$(user stranger 99)" "EVIL-DEP-TITLE"; dep 32 open null "EVIL-DEP-TITLE"; dep 33 open "$(user cbundy 5)" "EVIL-DEP-TITLE"; } | arr > "$d/$DB.json"
+rc_of "$READ" 30
+expect_rc 0 "untrusted deps"
+absent EVIL-DEP-TITLE "untrusted deps"
+grep -qx 'blocked by #31 open \[enhancement\]' "$tmpdir/out" || fail "untrusted line: $(cat "$tmpdir/out")"
+present "blocked by #33 open [enhancement]" "wrong id"
+present "stripped: 3" "untrusted deps count"
+events | jq -e -s 'length == 1 and .[0].note == "dependencies=3"' > /dev/null || fail "deps event: $(events)"
+rc_of "$READ" --json 30
+jq -e '.stripped == 3 and all(.blocked_by[]; has("title") | not)' "$tmpdir/out" > /dev/null || fail "untrusted deps json"
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"total_blocked_by":3}'
+{ dep 31 open "$(user stranger 99)" "EVIL-DEP-TITLE"; dep 32 open null "EVIL-DEP-TITLE"; dep 33 open "$(user cbundy 5)" "EVIL-DEP-TITLE"; } | arr > "$d/$DB.json"
+{ comment 1 "$OWNER" ok; comment 2 "$(user stranger 99)" EVIL; } | arr > "$d/repos_o_r_issues_30_comments.json"
+rc_of "$READ" 30 --comments
+events | jq -e -s 'length == 1 and .[0].note == "comments=1 dependencies=3"' > /dev/null || fail "mixed event: $(events)"
+
+# zero counts and no summary: no call
+reset
+issue 30 "$OWNER" "T30" "B30"
+rc_of "$READ" --json 30
+expect_rc 0 "no summary"
+no_dep_calls "no summary"
+jq -e '.blocked_by == [] and .blocking == []' "$tmpdir/out" > /dev/null || fail "no summary json"
+with_summary 30 '{"blocked_by":0,"total_blocked_by":0,"blocking":0,"total_blocking":0}'
+rc_of "$READ" 30
+no_dep_calls "zero summary"
+! grep -q '^blocked by\|^blocks' "$tmpdir/out" || fail "lines with no deps"
+
+# fail closed
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"total_blocked_by":1}'
+dep 31 open "$OWNER" "x" | arr > "$d/$DB.json"
+touch "$d/$DB.fail"
+rc_of "$READ" 30; expect_rc 1 "dep fail"; no_out "dep fail"
+rm "$d/$DB.fail"; touch "$d/$DB.page2fail"
+rc_of "$READ" 30; expect_rc 1 "dep page2fail"; no_out "dep page2fail"
+rm "$d/$DB.page2fail"
+echo '{"a":1}' > "$d/$DB.json"
+rc_of "$READ" 30; expect_rc 1 "dep non-array"; no_out "dep non-array"
+echo '["x"]' > "$d/$DB.json"
+rc_of "$READ" 30; expect_rc 1 "dep non-object item"; no_out "dep non-object item"
+echo '[{"state":"open"}]' > "$d/$DB.json"
+rc_of "$READ" 30; expect_rc 1 "dep no number"; no_out "dep no number"
+
+# untrusted issue with a summary: refused before any dependency call
+reset
+issue 30 "$(user stranger 99)" "EVIL" "EVIL"
+with_summary 30 '{"total_blocked_by":1,"total_blocking":1}'
+rc_of "$READ" 30; expect_rc 3 "untrusted issue with deps"
+no_dep_calls "untrusted issue"
+
+# pagination
+reset
+issue 30 "$OWNER" "T30" "B30"
+with_summary 30 '{"total_blocked_by":2}'
+{ dep 31 open "$OWNER" "Page one" | arr; dep 32 open "$OWNER" "Page two" | arr; } > "$d/$DB.json"
+rc_of "$READ" 30
+expect_rc 0 "dep pagination"
+present "Page one" "page one"
+present "Page two" "page two"
+
+# --pr makes no dependency call
+reset
+jq -n --argjson u "$OWNER" '{number: 30, state: "open", title: "P", body: "b", user: $u, labels: [], issue_dependencies_summary: {total_blocked_by: 1}}' > "$d/repos_o_r_pulls_30.json"
+rc_of "$READ" --pr 30
+expect_rc 0 "pr with summary"
+no_dep_calls "pr"
+
 # --- token mode: the token account's identity file joins the trusted list (#728) ---
 reset
 unset DEV_GH_TOKEN_FILE GH_CONFIG_DIR
