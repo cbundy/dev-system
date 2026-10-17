@@ -95,6 +95,8 @@ check "callum-tools scripts staged where the callum-flow skills call them" in_im
   for s in check-pr-linkage.sh orchestrator-watch.sh pipeline-watch.sh queue-watch.sh usage-check.sh recover-no-mistakes.sh pin-codex-model.sh; do
     test -x /usr/local/share/callum-tools/$s || { echo "missing $s"; exit 1; }
   done'
+check "dev-statusline is on PATH and draws the time from status line JSON" in_image '
+  jq -nc "{context_window: {used_percentage: 12}}" | dev-statusline | head -n 1 | grep -Eq "^[0-9]{2}:[0-9]{2}  ctx .*12%"'
 check "models.env and models.sh are baked in, and the old codex-model.default is gone" in_image '
   . /usr/local/share/dev-system/models.sh &&
   models_value /usr/local/share/dev-system/models.env CODEX_MODEL &&

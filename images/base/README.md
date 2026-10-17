@@ -814,6 +814,42 @@ A per-repo image built `FROM` the base stamps itself by writing the same `KEY=VA
 the major of `VERSION`) to `/usr/local/share/dev-system/image-release.d/<name>`, from its
 own build args.
 
+## `dev-statusline`
+
+`/usr/local/bin/dev-statusline` is a Claude Code status line: Claude Code runs it and draws
+what it prints under the prompt. Nothing it prints reaches the model or the conversation,
+and it spends no tokens. Turn it on in a Claude settings file (the user one,
+`$CLAUDE_CONFIG_DIR/settings.json`, for every session in the workspace):
+
+```json
+"statusLine": { "type": "command", "command": "dev-statusline", "refreshInterval": 30 }
+```
+
+It draws two rows:
+
+```text
+20:41  ctx 41%  5h 23%  7d 53%  Opus
+factory 6 live: design 2  dev 1  pipe 2  merge 1 | queued 3   cc 2.1.296  flow 0.27.0  img 2.27.0  nm 1.84.0
+```
+
+- Row 1, the session: the time (in `TZ`), the context window fill and the plan's 5-hour and
+  7-day usage, then the model. Percentages turn yellow at 70 and red at 90. Claude Code
+  sends the usage only on a claude.ai login, and only after the session's first response.
+- Row 2, the factory: counts for the session's repo by
+  [`callum-flow-factory-state`](../../docs/factory-state.md) stage. `live` is every active
+  stage, `design` is designing, `dev` is implementing, `pipe` is in pipeline plus parked,
+  `merge` is ready to merge. The counts come from a cache under
+  `${DEV_STATUSLINE_STATE:-~/.local/state/dev-statusline}` that a background job refreshes
+  at most every `DEV_STATUSLINE_TTL` seconds (default 60, read with `--github off`), so a
+  draw never waits on the database. A cache older than five minutes shows its age. The
+  counts show when `DEV_ROLE` is `orchestrator`; `DEV_STATUSLINE_FACTORY=on` or `off`
+  overrides that.
+- Then the versions: Claude Code, callum-flow, the base image and no-mistakes, from the
+  [version snapshot](#machine-readable-output-and-the-version-snapshot).
+
+It also records the plan usage for `usage-check.sh`, as `usage-check.sh --record` does, so
+the orchestrator's usage gate keeps its fallback source. It always exits 0.
+
 ## `dev-restart-self`
 
 Upgrades the Coder workspace your session runs in (a moved `base:2`/`dev:latest` image tag

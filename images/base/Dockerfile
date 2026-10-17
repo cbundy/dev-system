@@ -234,6 +234,7 @@ COPY --chmod=0755 \
   images/base/dev-restart-self \
   images/base/dev-remote-sessions \
   images/base/dev-version \
+  images/base/dev-statusline \
   images/base/dev-query \
   images/base/dev-login \
   images/base/callum-flow-event \
