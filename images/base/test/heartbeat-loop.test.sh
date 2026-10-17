@@ -40,15 +40,31 @@ ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
+# The stats call (its SQL starts with the line "-- heartbeat stats") is recorded as stats-N, apart
+# from the UPSERT and DDL calls (psql-N), so a test counts each kind on its own. psql-fail-stats
+# fails only the stats call.
 d=$(dirname "$0")
+in="$d/psql-in.$$"
+cat > "$in"
+if head -n 1 "$in" | grep -qx -- '-- heartbeat stats'; then
+  kind=stats
+  n=$(($(if [ -f "$d/stats-calls" ]; then wc -l < "$d/stats-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/stats-sql-$n"
+  printf '%s\n' "$@" > "$d/stats-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/stats-db-$n"
+  echo x >> "$d/stats-calls"
+else
+  kind=main
+  n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
+  mv "$in" "$d/psql-sql-$n"
+  printf '%s\n' "$@" > "$d/psql-args-$n"
+  printf '%s\n' "${PGDATABASE:-}" > "$d/psql-db-$n"
+  echo x >> "$d/psql-calls"
+fi
 fail=0
 [ -e "$d/psql-fail" ] && fail=1
 [ -e "$d/psql-fail-${PGDATABASE:-}" ] && fail=1
-n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
-printf '%s\n' "$@" > "$d/psql-args-$n"
-printf '%s\n' "${PGDATABASE:-}" > "$d/psql-db-$n"
-cat > "$d/psql-sql-$n"
-echo x >> "$d/psql-calls"
+[ "$kind" = stats ] && [ -e "$d/psql-fail-stats" ] && fail=1
 [ ! -e "$d/psql-hang" ] || exec sleep 60
 if [ "$fail" = 1 ]; then
   # Recording a call does not mean its error response has reached the loop.
@@ -79,12 +95,12 @@ cat > "$share/heartbeat-state" <<'STUB'
 #!/bin/sh
 echo x >> "$(dirname "$0")/state-calls"
 [ ! -e "$(dirname "$0")/state-hang" ] || exec sleep 60
-echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}]}'
+echo '{"state":"busy","in_flight":[{"issue":1,"run_id":null,"branch":null,"state":"claimed"}],"chat_active_at":null,"sessions":[{"session_id":"s1","parent_session_id":null,"context_window":1000000}],"claude_sessions":{"interactive":1,"headless":2}}'
 STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/stats-* "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
