@@ -1752,7 +1752,10 @@ image bakes no list: the variable is the only source. The Coder template sets it
 `dev-doctor` FAILs when it is unset or malformed. Unset or malformed, the reader refuses every
 read with an error naming the variable. Modes: `<issue> [--comments]` (title and body only if the
 author is trusted, else exit 3 with `untrusted author`; comments are filtered and end with
-`stripped: N`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
+`stripped: N`; it also lists the issue's `blocked by` and `blocks` dependencies between `title:` and
+`body:`, and `--json` adds `blocked_by` and `blocking` arrays, each entry `{number, repo, state,
+labels, title?}` with the title kept only for a trusted author, an untrusted one counted in
+`stripped`), `--comment <id|url>`, `--list [--label L] [--state S]`, `--pr <N> [--comments]`
 (conversation comments, review comments and reviews), `--timeline <issue>`, and `--json` for a
 stable object with a `stripped` count. It fails closed on any API, pagination or JSON problem
 (non-zero, nothing on stdout) and logs an `untrusted_stripped` event with the count, never the
