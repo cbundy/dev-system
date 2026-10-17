@@ -22,7 +22,7 @@ import type { ExecCtx } from '../exec'
 import type { LedgerEntry, State } from '../types'
 import * as ARGV from './argv'
 import type { BuildAnswer, DesignAnswer, FixAnswer } from './contracts-work.mjs'
-import { keyParts, prepareKey } from './keys'
+import { keyParts, prepareKey, scratchOf } from './keys'
 import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
 import { fixWhyOf, leftoversOf } from './rules-agent'
@@ -114,6 +114,7 @@ function workInput(ctx: ExecCtx, action: AgentStepAction, r: IssueRecord, place:
     leftovers: leftoversOf(ctx.state.ledger, r)[0] ?? null,
     // the config the plan ran with, which the slot's marker copied (planPass: v2 plans with rt.config)
     gateCommands: [...ctx.rt.config.gateCommands],
+    scratch: scratchOf(ctx.rt.loopDir, r.issue, r.life, action.seq),
     place,
   }
 }

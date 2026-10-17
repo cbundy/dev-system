@@ -246,6 +246,7 @@ export function markerOf(ctx: V2Ctx, r: IssueRecord, step: AgentStep): StepMarke
     gateCommands: [...ctx.config.gateCommands],
     gateTimeoutMs: ctx.config.gateTimeoutMs,
     loopDir: '',
+    scratch: '',
   }
 }
 
@@ -324,6 +325,7 @@ export function agentStep(env: StepEnv, opts: AgentOpts): StepRead {
       lease: slot.lease,
       branch: r.branch,
       marker: markerOf(ctx, r, step),
+      keepScratch: false,
       maxAttempts: 1,
     })
     return { kind: 'held', why: '' }

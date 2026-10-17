@@ -3,7 +3,7 @@
 // hook to the agents the loop started in a slot, and to their children.
 //
 // - File tools: a writer writes inside its slot or outside the repository (a scratch file in
-//   /tmp); a reader writes nowhere in the repository. The repository is the slot and the main
+//   the step's scratch folder); a reader writes nowhere in the repository. The repository is the slot and the main
 //   checkout, whose tree holds the pool's other slots.
 // - Every loop agent: no GitHub writes (the loop owns PRs, issues, labels and re-runs), no
 //   no-mistakes, no axi, no push to a remote but origin, no call in the background (Bash or

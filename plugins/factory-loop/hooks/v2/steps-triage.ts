@@ -7,7 +7,7 @@
 import { answerPath } from '../exec'
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry } from '../types'
-import { keyParts } from './keys'
+import { keyParts, scratchOf } from './keys'
 import { triagePrompt } from './prompts-triage'
 import type { TriageInput, TriageResult } from './prompts-triage'
 import { lifePr } from './rules-review'
@@ -86,6 +86,7 @@ export function triageInput(ctx: ExecCtx, action: AgentStepAction, place: Triage
     repo: ctx.rt.repo,
     issue: r.issue,
     slot: action.slot,
+    scratch: action.slot === null ? null : scratchOf(ctx.rt.loopDir, r.issue, r.life, action.seq),
     state: r.state,
     step: STATE_STEP[r.state],
     attempt: r.attempt,

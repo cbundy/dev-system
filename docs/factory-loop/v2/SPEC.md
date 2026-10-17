@@ -1486,13 +1486,17 @@ agents from its timer (`spikes/agent-folder.md`; `spikes/hooks.md`, run-settings
   prints `LEASED path=<p> lease=<id>`. The branch is checked out by `prepare` (10.2).
 - **W2, free.** A slot with a `factory-loop:<N>:<life>` holder is freed when no record of that
   issue and life is in a slot state and no step entry of it runs. Action `slot` op `free`:
-  `factory-slot free <path> <lease>` kills the slot's processes (10.8), saves leftovers (10.2)
-  and prints their file, runs `git reset --hard` and `git clean -fd`, then `treehouse return
+  `factory-slot free <path> <lease> <loop dir> [--keep-scratch]` kills the slot's processes (10.8),
+  saves leftovers (10.2) and prints their file, removes the life's scratch folders (10.2) unless
+  W2 passes `--keep-scratch`, runs `git reset --hard` and `git clean -fd`, then `treehouse return
   <path> --if-lease-id <lease>`, which also ends lingering processes. It is done when the slot
   shows available. From the free's start the lease counts as gone, so a record resumed meanwhile
   waits for it to go back rather than step onto it. A second lease of a live life (a lease whose
   answer was lost, taken again) is freed the same way once nothing of the life runs. For one
-  issue, W2 runs before W1 (`totality/T-19`).
+  issue, W2 runs before W1 (`totality/T-19`). Parking frees the slot, so W2 passes `--keep-scratch`
+  when a record of that issue and life is `parked`: a resume continues the life and its scratch
+  folders. A free of the life after the resume removes them; the tool also prunes any older than
+  7 days, which bounds the folders of a parked issue never resumed.
 - **Budgets.** The executor gives the tool its op's timeout less a margin (`--budget-ms`), and
   the tool ends its own commands inside it, so no `treehouse get` it started can finish later and
   take a second slot.
@@ -1518,8 +1522,12 @@ Before every agent step (each attempt and each triage included), action `slot` o
    "is already used by worktree", exit 128 (`totality/T-19`);
 5. write the step marker `factory-step.json` into the slot's own git dir (`git rev-parse
    --git-dir`), never into the tree, so it cannot be committed: `{ v: 1, repo, issue, life, seq,
-   step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir }`;
-6. print `PREPARED head=<sha>`, `KILLED <n>` (step 1's count), and `LEFTOVERS file=<f>` when it
+   step, role: 'writer' | 'reader', branch, gateCommands, gateTimeoutMs, loopDir, scratch }`;
+6. make the step's scratch folder, `<loop dir>/scratch/<N>-<life>-s<seq>` (mode 0700, outside every
+   repository), the `scratch` of the marker. The tool refuses (exit 3) a marker whose `scratch` is
+   not exactly that path. It is the step's `$TMPDIR` (10.5): the loop's prompts name it, and
+   `free` removes it (10.1). Folders older than 7 days are pruned at every prepare and free (D-46);
+7. print `PREPARED head=<sha>`, `KILLED <n>` (step 1's count), and `LEFTOVERS file=<f>` when it
    saved any.
 
 The builder and fixer start from origin's branch head. Committed and pushed work always survives a
@@ -1551,7 +1559,7 @@ hooks fire and block for timer-spawned agents (`spikes/hooks.md`, run-guard):
 - **File tools** (Edit, Write, MultiEdit, NotebookEdit): the path, resolved against the slot
   because Write's `file_path` can arrive relative, must be inside the slot for a writer. A reader
   may not write anywhere in the repository. Both may write outside the repository (for example a
-  scratch file in `/tmp`). The deny reason names the slot.
+  scratch file in the step's scratch folder, 10.5). The deny reason names the slot.
 - **Refused for every loop agent:**
   - in Bash, `gh pr create|edit|merge|close|reopen|review|update-branch`,
     `gh issue create|edit|close|comment`, `gh label` and `gh api` with a write method or field
@@ -1593,6 +1601,15 @@ ways inside the plugins. No image or template change is needed (`simplicity/F11`
   `$.env.set('BASH_MAX_TIMEOUT_MS', '600000')` (spike run A3);
 - the companion's `tool.call` hook gives a loop agent's Bash call with no `timeout` the value
   `600000` (spike run A4's rewrite, moved into the companion, whose hooks reach these agents).
+
+- the companion's `tool.call` hook gives a mapped agent's Bash call (the agent and its children)
+  the marker's `scratch` as `TMPDIR`, `TMP` and `TEMP`: the command becomes `export TMPDIR='<s>'
+  TMP='<s>' TEMP='<s>'`, a newline, then the agent's own command, unchanged. The session-wide
+  `$.env.set` cannot give an agent a folder of its own, and `> $TMPDIR/x` with `TMPDIR` empty
+  writes `/x`. The write guard judges the agent's original command, before the rewrite. The
+  companion uses `scratch` only when it is absolute, normalized and under `<marker loopDir>/scratch/`;
+  a marker with no usable `scratch` (an older loop), and a caller it does not map, leave the
+  command as it is.
 
 A foreground test run then finishes instead of being moved to the background after 120 seconds,
 which is what led agents to write polling loops that matched themselves (G4:222; V E15). The

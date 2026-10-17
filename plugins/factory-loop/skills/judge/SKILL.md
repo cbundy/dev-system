@@ -245,6 +245,8 @@ with `mcp__factory-loop__control` and `{ "op": "<op>" }`, then confirm in one li
 may type `/factory <op>` directly. When no op fits, say so; never do the loop's work by hand.
 
 - `status`: what the loop is doing (for detail, the `factory-state` skill).
+- `config`: the settings the loop runs with, each with its source; read-only. Use it to answer "what is
+  this factory's config?".
 - `pause <N>` / `unpause <N>`: no action at all on N; its claim still renews.
 - `skip <N>` / `noskip <N>`: never claim N.
 - `priority <N...>`: claim these first, in this order.

@@ -19,6 +19,12 @@ export function lifeAt(life: string): Ms | null {
   return Number.isSafeInteger(s) ? s * 1000 : null
 }
 
+// scratchOf: a step attempt's scratch folder, <loop dir>/scratch/<N>-<life>-s<seq>. The only TS source
+// of the name; bin/factory-slot derives the same one and refuses a marker that names another.
+export function scratchOf(loopDir: string, issue: number, life: string, seq: number): string {
+  return `${loopDir}/scratch/${issue}-${life}-s${seq}`
+}
+
 // short: a hash as keys carry it.
 export function short(sha: string): string {
   return sha.slice(0, 7)

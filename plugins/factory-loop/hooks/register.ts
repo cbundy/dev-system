@@ -43,6 +43,8 @@ import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject } from './config'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
+import { viewOf } from './config-view'
+import type { ViewInputs } from './config-view'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
 import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
@@ -176,7 +178,7 @@ const live: Live & { loaded: boolean; repo: string; basis: string | null } = { l
 const liveV2 = newV2Live()
 const settingsCache = newSettingsCache()
 // the last pass's runtime and state, for the hooks between passes
-let lastRt: Runtime | null = null
+let lastRt: (Runtime & ViewInputs) | null = null
 let lastState: State | null = null
 // this session held the act lock at some pass, so session.end releases it
 let heldLock = false
@@ -249,7 +251,7 @@ async function configDir($: EngineInterface) {
 // env is every command's base environment: the repo, the configured labels (callum-flow-claim
 // and callum-flow-sweep read them), binDir ahead of PATH when the workspace file names one (a
 // testbed runs the branch's own CLIs), and the event sink when the mode is not act.
-async function runtime($: EngineInterface): Promise<Runtime> {
+async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const dir = await configDir($)
   const base = loopBaseOf(dir)
   const file = jsonObject(await text($, `${base}/config.json`))
@@ -262,7 +264,11 @@ async function runtime($: EngineInterface): Promise<Runtime> {
   const shadow = typeof pick('shadowDevice') === 'string' ? String(pick('shadowDevice')) : ''
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
-  const device = shadow !== '' && mode !== 'act' ? shadow : host
+  const shadowing = shadow !== '' && mode !== 'act'
+  const device = shadowing ? shadow : host
+  // where the device came from, for `/factory config`: the workspace file or the plugin option
+  // when the shadow stands in, else the machine name's environment variable
+  const deviceFrom: ViewInputs['deviceFrom'] = shadowing ? (typeof file.shadowDevice === 'string' && file.shadowDevice !== '' ? 'workspace' : 'plugin') : device === '' ? 'default' : 'env'
   // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
   // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
@@ -296,6 +302,9 @@ async function runtime($: EngineInterface): Promise<Runtime> {
     v2Config: { ...loaded.v2, mode: config.mode },
     configProblems: loaded.problems,
     repoSettings: loaded.raw,
+    workspaceRaw: file,
+    deviceFrom,
+    pluginVersion: str(jsonObject(await text($, `${$.plugin.root}/.claude-plugin/plugin.json`)).version) || 'unknown',
   }
 }
 
@@ -1460,7 +1469,8 @@ function ownerOp($: EngineInterface, input: string | Record<string, unknown>, ag
       const last = (await $.state.get(lastPassRef)).value ?? null
       const planner = rt.config.planner
       const parked = parkedOf(planner, lastState?.v2?.records)
-      const from = agentId === undefined ? { last, planner, parked } : { last, agentId, planner, parked }
+      const view = viewOf(rt)
+      const from = agentId === undefined ? { last, planner, parked, view } : { last, agentId, planner, parked, view }
       const fio = notingIo(claimedIo(fileIo($), claim), noteWritten(liveV2, v2StoreIo($), rt))
       const reply = typeof input === 'string' ? await runOp(fio, paths, input, now, from) : await controlTool(fio, paths, input, now, from)
       let said = reply.text

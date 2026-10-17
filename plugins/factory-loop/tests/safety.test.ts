@@ -298,10 +298,10 @@ const V2_ACTIONS: Action[] = [
   { ...base, kind: 'ci-rerun', key: `i470/l${LIFE}/rerun/r1/18342299123`, class: 'free', rule: 'S2', pr: 512, runId: '18342299123', round: 1 },
   { ...base, kind: 'queue-update', key: `i470/l${LIFE}/queue/update/9e01b77`, class: 'free', rule: 'Q1', pr: 512, base: '9e01b77', head: HEAD },
   { ...base, kind: 'queue-merge', key: `i470/l${LIFE}/queue/merge/abc1234`, class: 'free', rule: 'Q2', pr: 512, head: HEAD, patch: 'f00dfeed' },
-  { ...base, kind: 'slot', key: `i470/l${LIFE}/lease/1`, class: 'free', rule: 'W1', op: 'lease', life: LIFE, path: null, lease: null, branch: null, marker: null, maxAttempts: 3 },
-  { ...base, kind: 'slot', key: `${at}/prepare/a1`, class: 'free', rule: 'S2', op: 'prepare', life: LIFE, path: SLOT, lease: 'lease-2', branch: 'issue-470', marker: { v: 1, repo: REPO, issue: 470, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-470', gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: LOOP_DIR }, maxAttempts: 1 },
-  { ...base, kind: 'slot', key: `${at}/kill`, class: 'free', rule: 'S3', op: 'kill', life: LIFE, path: SLOT, lease: 'lease-2', branch: null, marker: null, maxAttempts: 1 },
-  { ...base, kind: 'slot', key: 'slot/lease-2/free', class: 'free', rule: 'W2', op: 'free', life: LIFE, path: SLOT, lease: 'lease-2', branch: null, marker: null, maxAttempts: 2 },
+  { ...base, kind: 'slot', key: `i470/l${LIFE}/lease/1`, class: 'free', rule: 'W1', op: 'lease', life: LIFE, path: null, lease: null, branch: null, marker: null, keepScratch: false, maxAttempts: 3 },
+  { ...base, kind: 'slot', key: `${at}/prepare/a1`, class: 'free', rule: 'S2', op: 'prepare', life: LIFE, path: SLOT, lease: 'lease-2', branch: 'issue-470', marker: { v: 1, repo: REPO, issue: 470, life: LIFE, seq: 3, step: 'build', role: 'writer', branch: 'issue-470', gateCommands: ['npm test'], gateTimeoutMs: 600_000, loopDir: LOOP_DIR, scratch: '' }, keepScratch: false, maxAttempts: 1 },
+  { ...base, kind: 'slot', key: `${at}/kill`, class: 'free', rule: 'S3', op: 'kill', life: LIFE, path: SLOT, lease: 'lease-2', branch: null, marker: null, keepScratch: false, maxAttempts: 1 },
+  { ...base, kind: 'slot', key: 'slot/lease-2/free', class: 'free', rule: 'W2', op: 'free', life: LIFE, path: SLOT, lease: 'lease-2', branch: null, marker: null, keepScratch: false, maxAttempts: 2 },
 ]
 
 // v2Shape: the argv is one of v2's widened writes, exactly, for its own action's kind (appendix B):

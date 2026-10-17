@@ -148,6 +148,13 @@ export function parseDuration(text: string): Ms | null {
   return m?.[1] === undefined || unit === undefined ? null : Math.round(Number(m[1]) * unit)
 }
 
+// shortDuration: milliseconds as the shortest exact "2h", "5m" or "60s" parseDuration reads back.
+export function shortDuration(ms: Ms): string {
+  if (ms > 0 && ms % (60 * MIN) === 0) return `${ms / (60 * MIN)}h`
+  if (ms > 0 && ms % MIN === 0) return `${ms / MIN}m`
+  return ms % 1000 === 0 ? `${ms / 1000}s` : `${ms}ms`
+}
+
 // Every action kind, for the loaders that read one from text (SPEC 6.1).
 export const ACTION_KINDS: readonly ActionKind[] = [
   'heartbeat', 'sweep', 'claim', 'spawn', 'delegate', 'respond', 'env-retry', 'guard', 'update-behind', 'fast-forward',
