@@ -264,7 +264,11 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
   const shadow = typeof pick('shadowDevice') === 'string' ? String(pick('shadowDevice')) : ''
   const host = (await $.env.get('DEV_MACHINE_NAME')) || ''
   // the shadow device stands in only while nothing can be executed
-  const device = shadow !== '' && mode !== 'act' ? shadow : host
+  const shadowing = shadow !== '' && mode !== 'act'
+  const device = shadowing ? shadow : host
+  // where the device came from, for `/factory config`: the workspace file or the plugin option
+  // when the shadow stands in, else the machine name's environment variable
+  const deviceFrom: ViewInputs['deviceFrom'] = shadowing ? (typeof file.shadowDevice === 'string' && file.shadowDevice !== '' ? 'workspace' : 'plugin') : device === '' ? 'default' : 'env'
   // the repo-local settings, durations and all (SPEC 4.2), then the workspace file's over them.
   // Under planner v2 the repo's are origin's default branch's. What either gets wrong is logged.
   const over = Object.fromEntries(Object.entries(file).filter(([key]) => !RUNTIME_KEYS.includes(key)))
@@ -299,6 +303,7 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
     configProblems: loaded.problems,
     repoSettings: loaded.raw,
     workspaceRaw: file,
+    deviceFrom,
     pluginVersion: str(jsonObject(await text($, `${$.plugin.root}/.claude-plugin/plugin.json`)).version) || 'unknown',
   }
 }

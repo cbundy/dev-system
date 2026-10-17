@@ -10,7 +10,7 @@ import type { Config, Control, Ms } from './types'
 export type Source = 'default' | 'repo' | 'workspace' | 'plugin' | 'env' | 'directive'
 
 // What runtime() adds to the Runtime for the view: the workspace file as read, the plugin's version.
-export type ViewInputs = { workspaceRaw: Record<string, unknown>; pluginVersion: string }
+export type ViewInputs = { workspaceRaw: Record<string, unknown>; pluginVersion: string; deviceFrom: Source }
 
 // What the view needs of a pass's Runtime, with the parts a Runtime may lack filled in.
 export type ConfigView = {
@@ -53,28 +53,30 @@ function sets(layer: Record<string, unknown>, key: string): boolean {
   })
 }
 
-// rejected: whether a config problem names the key (or its parent object)
-function rejected(problems: readonly string[], key: string): boolean {
+// layerRejected: whether a config problem rejected the value this layer holds for the key (or for
+// its parent object). A problem reads `name: <JSON of the value> is not ...`, so the rejected layer
+// is the one whose value, written as JSON, is the one the problem quotes.
+function layerRejected(problems: readonly string[], layer: Record<string, unknown>, key: string): boolean {
   const [parent = '', sub] = key.split('.')
-  const names = spellings(parent).flatMap(name => (sub === undefined ? [name] : [name, `${name}.${sub}`]))
-  return problems.some(p => names.some(name => p.startsWith(`${name}:`)))
+  return spellings(parent).some(name => {
+    const mine = layer[name]
+    if (mine === undefined) return false
+    const held = sub === undefined ? [[name, mine]] : [[name, mine], ...(isObject(mine) && sub in mine ? [[`${name}.${sub}`, mine[sub]]] : [])]
+    return held.some(([label, value]) => problems.some(p => p.startsWith(`${label}: ${JSON.stringify(value) ?? String(value)} is not `)))
+  })
 }
 
 // sourceOf: the layer a key's value in force came from: the workspace file if it set the key and
-// no problem names it, else the repo's file likewise, else the default. A key a layer set but the
-// loader rejected shows the layer it fell back to.
+// the loader kept its value, else the repo's file likewise, else the default. A value the loader
+// rejected is skipped, so the key shows the lower layer whose value is in force.
 export function sourceOf(
   key: string,
   repoRaw: Record<string, unknown> | null,
   workspaceRaw: Record<string, unknown> | null,
   problems: readonly string[] = [],
 ): Source {
-  if (rejected(problems, key)) {
-    // the loader left a rejected value out; a lower layer may have set the key validly
-    return workspaceRaw !== null && repoRaw !== null && sets(workspaceRaw, key) && sets(repoRaw, key) ? 'repo' : 'default'
-  }
-  if (workspaceRaw !== null && sets(workspaceRaw, key)) return 'workspace'
-  if (repoRaw !== null && sets(repoRaw, key)) return 'repo'
+  if (workspaceRaw !== null && sets(workspaceRaw, key) && !layerRejected(problems, workspaceRaw, key)) return 'workspace'
+  if (repoRaw !== null && sets(repoRaw, key) && !layerRejected(problems, repoRaw, key)) return 'repo'
   return 'default'
 }
 
@@ -86,7 +88,6 @@ function originOf(file: Record<string, unknown>, key: string): Source {
 // (a test's, an older pass) reads as every value from its default.
 export function viewOf(rt: Runtime & Partial<ViewInputs>): ConfigView {
   const file = rt.workspaceRaw ?? {}
-  const shadow = typeof file.shadowDevice === 'string' && file.shadowDevice !== '' ? 'workspace' : 'plugin'
   return {
     config: rt.config,
     device: rt.device,
@@ -95,7 +96,7 @@ export function viewOf(rt: Runtime & Partial<ViewInputs>): ConfigView {
     workspaceRaw: file,
     problems: rt.configProblems,
     modeFrom: originOf(file, 'mode'),
-    deviceFrom: rt.config.shadowDevice !== null && rt.device === rt.config.shadowDevice ? shadow : rt.device === '' ? 'default' : 'env',
+    deviceFrom: rt.deviceFrom ?? (rt.device === '' ? 'default' : 'env'),
     pluginVersion: rt.pluginVersion ?? 'unknown',
   }
 }

@@ -124,12 +124,30 @@ describe('sourceOf', () => {
     expect(sourceOf('stateTimeoutMs.design', { stateTimeout: { fix: '1m' } }, {})).toBe('default')
     expect(sourceOf('passEveryMs', null, null)).toBe('default')
   })
+
+  test('a rejected value is skipped for the lower layer whose value is in force', () => {
+    const problems = ['maxLives: 0 is not a whole number of at least 1']
+    expect(sourceOf('maxLives', { maxLives: 5 }, { maxLives: 0 }, problems)).toBe('repo')
+    expect(sourceOf('maxLives', { maxLives: 0 }, { maxLives: 5 }, problems)).toBe('workspace')
+    expect(sourceOf('maxLives', { maxLives: 0 }, { maxLives: 0 }, problems)).toBe('default')
+    expect(sourceOf('maxLives', {}, { maxLives: 0 }, problems)).toBe('default')
+  })
 })
 
 describe('shortDuration', () => {
   test('reads back through parseDuration', () => {
     expect([60_000, 5 * MIN, 120 * MIN, 30_000, 1500, 0].map(shortDuration)).toEqual(['1m', '5m', '2h', '30s', '1500ms', '0s'])
     expect(shortDuration(DEFAULT_CONFIG.passEveryMs)).toBe('1m')
+  })
+})
+
+describe('viewOf deviceFrom', () => {
+  test('is the Runtime\'s own, else env or default', () => {
+    const base = { config: DEFAULT_CONFIG, poolSize: 16, configProblems: [], repoSettings: null }
+    const of = (rt: object) => viewOf({ ...base, ...rt } as unknown as Parameters<typeof viewOf>[0]).deviceFrom
+    expect(of({ device: 'coder-shadowed', deviceFrom: 'workspace' })).toBe('workspace')
+    expect(of({ device: 'box' })).toBe('env')
+    expect(of({ device: '' })).toBe('default')
   })
 })
 
