@@ -240,6 +240,18 @@ fx _user 1 "gh: Bad credentials (HTTP 401)"
 out=$(access "$REPO")
 expect "FAIL the token is rejected by GitHub" rejected
 expect "fix: replace the token file" rejected
+reset_fx; fine
+fx _user 1 "gh: API rate limit exceeded for user (HTTP 403)"
+out=$(access "$REPO")
+expect "INFO GitHub rate limit reached, token access unchecked" user-rate-limit
+refuse unreachable user-rate-limit
+refuse FAIL user-rate-limit
+[ "$(calls)" = /user ] || fail "repo probes ran after the rate-limited /user: $(calls)"
+reset_fx; fine
+fx _user 1 "error connecting to api.github.com"
+out=$(access "$REPO")
+expect "INFO GitHub unreachable, token access unchecked" user-offline
+refuse FAIL user-offline
 reset_fx; fine; meta
 fx repos_o_r_actions_runs_per_page_1 1 "gh: API rate limit exceeded for user (HTTP 403)"
 out=$(access "$REPO")
