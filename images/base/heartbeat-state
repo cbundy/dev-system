@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// heartbeat-state: prints {state, in_flight, chat_active_at, sessions, claude_sessions} as JSON
+// heartbeat-state: prints {state, in_flight, chat_active_at, sessions} as JSON
 // for heartbeat-loop (cbundy/dev-system#339). One call per beat.
 //
 // busy when any of these holds, otherwise idle:
@@ -33,10 +33,6 @@
 //     parent_session_id the top-level session
 //   - context_window is the window size the session's status line last wrote
 //     to $DEV_CONTEXT_WINDOW_DIR/<session_id> (the factory-hud mod), else null
-// claude_sessions is {interactive, headless}: the count of those top-level sessions by the entrypoint
-// the registry file names (headless when it starts with sdk-, as `claude -p` writes sdk-cli; any
-// other is interactive). Sub-agents are not counted. This is read from the registry, never from a
-// process's command line or environment.
 // Any read error degrades to the remaining sources and goes to stderr; this
 // never fails the beat.
 //
@@ -208,7 +204,7 @@ function contextWindow(dir, id) {
   } catch { return null; }
 }
 
-function liveSessions(claudeDir, windowDir, counts) {
+function liveSessions(claudeDir, windowDir) {
   const sessions = [];
   let names = [];
   try { names = fs.readdirSync(path.join(claudeDir, 'sessions')).filter((n) => /^[0-9]+\.json$/.test(n)); } catch { return sessions; }
@@ -220,7 +216,6 @@ function liveSessions(claudeDir, windowDir, counts) {
     if (!s || typeof s.sessionId !== 'string' || !/^[\w-]+$/.test(s.sessionId)) continue;
     const started = procStart(s.pid);
     if (started === null || (s.procStart !== undefined && String(s.procStart) !== started)) continue;
-    if (typeof s.entrypoint === 'string' && s.entrypoint.startsWith('sdk-')) counts.headless++; else counts.interactive++;
     sessions.push({ session_id: s.sessionId, parent_session_id: null, context_window: contextWindow(windowDir, s.sessionId) });
     for (const p of projects) {
       const dir = path.join(claudeDir, 'projects', p, s.sessionId, 'subagents');
@@ -277,15 +272,14 @@ function main() {
   const chatBusy = chat !== null && now - Date.parse(chat) <= CHAT_WINDOW_MS;
   const state = inFlight.length > 0 || chatBusy ? 'busy' : 'idle';
   let sessions = [];
-  const counts = { interactive: 0, headless: 0 };
   try {
     sessions = liveSessions(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
-      process.env.DEV_CONTEXT_WINDOW_DIR || '/tmp/dev-context-window', counts);
+      process.env.DEV_CONTEXT_WINDOW_DIR || '/tmp/dev-context-window');
   } catch (e) { warn(`sessions: ${e.message}`); }
-  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions, claude_sessions: counts })}\n`);
+  process.stdout.write(`${JSON.stringify({ state, in_flight: inFlight, chat_active_at: chat, sessions })}\n`);
 }
 
 try { main(); } catch (e) {
   warn(e.message);
-  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [], claude_sessions: { interactive: 0, headless: 0 } })}\n`);
+  process.stdout.write(`${JSON.stringify({ state: 'idle', in_flight: [], chat_active_at: null, sessions: [] })}\n`);
 }
