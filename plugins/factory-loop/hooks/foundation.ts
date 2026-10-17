@@ -11,7 +11,7 @@
 //
 // Pure: no clock (state.now), no I/O, and nothing imported but types and plan.ts's exported pure
 // helpers.
-import { listedLive } from './plan'
+import { listedLive, releaseDue } from './plan'
 import type { Action, ActionClass, ActionKind, AgentType, Config, LedgerEntry, Ms, Skip, State, Tier } from './types'
 import { AGENT_STEPS } from './v2/types'
 
@@ -429,3 +429,5 @@ export function titleOf(f: TitleFrame): string {
   if (f.owner > 0) words.push(`owner ${f.owner}`)
   return [head, ...words].join(' · ')
 }
+
+export { releaseDue }

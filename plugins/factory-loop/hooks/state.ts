@@ -12,6 +12,7 @@ import type {
   IssueView,
   LedgerEntry,
   Milestone,
+  ReleaseInfo,
   Pool,
   RunView,
   Source,
@@ -42,6 +43,7 @@ export type Observed = {
   pool: Pool | null
   agents: AgentView[]
   milestone: Milestone | null
+  release?: ReleaseInfo | null
   ledger: LedgerEntry[]
   control: Control
   lastTitle: string | null
@@ -174,6 +176,7 @@ export function buildState(o: Observed): State {
     pool: o.pool,
     agents: o.agents,
     milestone: o.milestone,
+    release: o.release ?? null,
     ledger: o.ledger,
     control: o.control,
     lastTitle: o.lastTitle,
