@@ -90,7 +90,7 @@ hb_setup() {
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
     NM_PUSH_STATE_DIR="$tmpdir/nm" DEV_REPO_URL=https://github.com/Acme/Widgets.git \
     HEARTBEAT_EVENT_LOCK="$tmpdir/ev.lock" HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
-    AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" \
+    AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets" \
     HEARTBEAT_FACTORY_EVENT_LOCK="$tmpdir/fev.lock"
   unset FACTORY_DB_WRITER_URL
 }

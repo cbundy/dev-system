@@ -63,6 +63,7 @@ ADMIN_PW=$(printf '%s' "${ADMIN#*://}" | sed -n 's/^[^:@/?]*:\([^@/?]*\)@.*/\1/p
 
 # Reads no ambient config.
 unset AGENTSVIEW_PG_URL FACTORY_DB_WRITER_URL FACTORY_DB_READER_URL FACTORY_DB_MIGRATIONS_DIR
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/ws-secrets"  # never the ambient workspace folder
 export DEV_SECRETS_DIR="$tmpdir/secrets"
 mkdir -p "$DEV_SECRETS_DIR"
 
@@ -179,7 +180,7 @@ check writer
 expect 1 "WARN" "$DEV_WORKSPACE_SECRETS_DIR/factory-db-writer-url" "$DEV_SECRETS_DIR/factory-db-writer-url" "docs/factory-db.md"
 echo "ok: not configured names both folders"
 mv "$tmpdir/keep-writer" "$DEV_SECRETS_DIR/factory-db-writer-url"
-unset DEV_WORKSPACE_SECRETS_DIR
+export DEV_WORKSPACE_SECRETS_DIR="$tmpdir/no-ws-secrets"
 
 # -- 5. wrong role
 cp "$DEV_SECRETS_DIR/factory-db-reader-url" "$DEV_SECRETS_DIR/factory-db-writer-url"
