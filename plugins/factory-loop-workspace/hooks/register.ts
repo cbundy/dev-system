@@ -32,6 +32,7 @@ import type { Guarded, Refusal } from './guard'
 import { MARKER_FILE, mismatch, nameParts, parseMarker, slotLine } from './marker'
 import { PROMPT_NOTIFICATIONS, inputOf, promptNote, promptReason, transcriptOf, whyOf } from './prompt'
 import type { Decided, NoteFields } from './prompt'
+import { withScratch } from './scratch'
 
 const ME = 'factory-loop-workspace'
 const AGENTS = { plugin: 'factory-loop-workspace', key: 'agents' } as const
@@ -338,7 +339,13 @@ export const register: Register = on => {
       await logLine($, a, refused.cause, `${e.tool}: ${refused.reason}`)
       return { deny: `${ME}: ${refused.reason}` }
     }
-    if (e.tool === 'Bash' && e.timeout === undefined) return next({ ...e, timeout: BASH_TIMEOUT_MS })
+    if (e.tool === 'Bash') {
+      // the guard judged the agent's own command; what runs has the scratch folder exported first
+      const command = a.scratch !== undefined && typeof input.command === 'string' ? withScratch(input.command, a.scratch) : undefined
+      if (command !== undefined || e.timeout === undefined) {
+        return next({ ...input, ...(command === undefined ? {} : { command }), ...(e.timeout === undefined ? { timeout: BASH_TIMEOUT_MS } : {}) } as unknown as typeof e)
+      }
+    }
     return next(e)
   }).catch(($, e, next) => (next.called || e.agentId === undefined ? next(e) : { deny: `${ME}: its guard failed, so the call is refused` }))
 

@@ -9,6 +9,7 @@ import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, n
 import type { Guarded } from '../hooks/guard'
 import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
 import { INPUT_CLIP, clip, enc, inputOf, promptNote, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
+import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
 
 const MAIN = '/w/dev-system'
@@ -210,6 +211,28 @@ describe('the spawn and its marker', () => {
     expect(parseMarker(JSON.stringify({ ...MARKER, pr: null }))?.pr).toBeNull()
     expect(parseMarker(JSON.stringify({ ...MARKER, pr: 612 }))?.pr).toBe(612)
     expect(parseMarker(JSON.stringify({ ...MARKER, pr: 'x' }))?.pr).toBeNull()
+  })
+
+  test('a marker\'s scratch is kept when absolute, plain and under <loopDir>/scratch/, and ignored otherwise', () => {
+    const scratch = '/c/factory-loop/o__r/scratch/571-ss1x2k-s7'
+    expect(parseMarker(JSON.stringify({ ...MARKER, scratch }))?.scratch).toBe(scratch)
+    // an older loop's marker has none
+    expect(parseMarker(JSON.stringify(MARKER))).not.toHaveProperty('scratch')
+    for (const bad of ['scratch/571-ss1x2k-s7', '/c/factory-loop/o__r/scratch/../../x', '/c/factory-loop/o__r/scratch/571//x', '/c/factory-loop/o__r/scratch/', '/c/factory-loop/o__r/scratch', '/c/factory-loop/other/scratch/571-ss1x2k-s7', '/tmp/571-ss1x2k-s7', '/c/factory-loop/o__r/scratchy/x', 7, null]) {
+      const m = parseMarker(JSON.stringify({ ...MARKER, scratch: bad }))
+      expect(m).not.toBeNull()
+      expect(m).not.toHaveProperty('scratch')
+    }
+    expect(scratchOk(scratch, '/c/factory-loop/o__r')).toBe(true)
+    expect(scratchOk(scratch, '/c/factory-loop/o__r/')).toBe(true)
+  })
+
+  test('the Bash prefix quotes the path, ends in a newline before the command, and leaves the command whole', () => {
+    const s = '/c/o__r/scratch/571-ss1x2k-s7'
+    expect(withScratch('echo hi', s)).toBe(`export TMPDIR='${s}' TMP='${s}' TEMP='${s}'\necho hi`)
+    expect(withScratch('x', "/c/it's/scratch/a")).toBe("export TMPDIR='/c/it'\\''s/scratch/a' TMP='/c/it'\\''s/scratch/a' TEMP='/c/it'\\''s/scratch/a'\nx")
+    const doc = "cat <<'EOF' > f\nline $TMPDIR\nEOF\nls\n"
+    expect(withScratch(doc, s).endsWith(`\n${doc}`)).toBe(true)
   })
 
   test('the name says the step, issue, seq and attempt', () => {

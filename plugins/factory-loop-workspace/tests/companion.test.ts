@@ -255,6 +255,67 @@ describe('the guard', () => {
     expect(w.calls.map(c => c.timeout)).toEqual([600_000, 5000])
   })
 
+  test('a mapped agent\'s Bash call runs with TMPDIR, TMP and TEMP set to the marker\'s scratch; the timeout default still applies', async ($, on) => {
+    const scratch = `${LOOP_DIR}/scratch/571-ss1x2k-s7`
+    const w = world(on, { marker: { ...MARKER, scratch } })
+    await $.agent.spawn(spawn(BUILD))
+    await call($, { tool: 'Bash', command: 'echo "$TMPDIR"', agentId: 'agent-1' })
+    await call($, { tool: 'Bash', command: 'cat <<EOF\nx\nEOF', timeout: 5000, agentId: 'agent-1' })
+    const exported = `export TMPDIR='${scratch}' TMP='${scratch}' TEMP='${scratch}'\n`
+    expect(w.calls.map(c => [c.command, c.timeout])).toEqual([
+      [`${exported}echo "$TMPDIR"`, 600_000],
+      [`${exported}cat <<EOF\nx\nEOF`, 5000],
+    ])
+    // other tools are untouched
+    await call($, { tool: 'Read', file_path: `${SLOT}/a.ts`, agentId: 'agent-1' })
+    expect(w.calls[2]).not.toHaveProperty('command')
+  })
+
+  test('two agents of different seqs get different folders, and a child gets its parent\'s', async ($, on) => {
+    const a = `${LOOP_DIR}/scratch/571-ss1x2k-s7`
+    const w = world(on, { marker: { ...MARKER, scratch: a } })
+    await $.agent.spawn(spawn(BUILD))
+    await $.agent.spawn(spawn({ subagentType: 'Explore', description: 'look', prompt: 'look around', parentAgentId: 'agent-1' }))
+    await call($, { tool: 'Bash', command: 'pwd', agentId: 'agent-2' })
+    expect(w.calls[0]?.command).toContain(`TMPDIR='${a}'`)
+    expect(w.calls[0]?.command).not.toContain('s8')
+  })
+
+  test('an agent of another seq gets that seq\'s folder', async ($, on) => {
+    const b = `${LOOP_DIR}/scratch/571-ss1x2k-s8`
+    const w = world(on, { marker: { ...MARKER, seq: 8, scratch: b } })
+    await $.agent.spawn(spawn({ ...BUILD, name: 'build-571-s8-a1' }))
+    await call($, { tool: 'Bash', command: 'pwd', agentId: 'agent-1' })
+    expect(w.calls[0]?.command).toContain(`TMPDIR='${b}'`)
+    expect(w.calls[0]?.command).not.toContain('s7')
+  })
+
+  test('the guard still judges the original command: a refused call is refused, logged with that command, and never rewritten', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, scratch: `${LOOP_DIR}/scratch/571-ss1x2k-s7` } })
+    await $.agent.spawn(spawn(BUILD))
+    const r = await call($, { tool: 'Bash', command: 'git push --force origin issue-571', agentId: 'agent-1' })
+    expect(r.deny).toBeDefined()
+    expect(w.calls).toEqual([])
+    expect(companionLines(w)).toEqual([expect.objectContaining({ cause: 'guard:push', reason: 'Bash: a force push (--force) is refused: push your branch issue-571 without force' })])
+    expect(JSON.stringify(companionLines(w))).not.toContain('TMPDIR')
+  })
+
+  test('a marker with no scratch, an unmapped caller and the session leave the command as it was', async ($, on) => {
+    const w = world(on)
+    await $.agent.spawn(spawn(BUILD))
+    await call($, { tool: 'Bash', command: 'echo "$TMPDIR"', agentId: 'agent-1' })
+    await call($, { tool: 'Bash', command: 'echo "$TMPDIR"', agentId: 'someone-else' })
+    await call($, { tool: 'Bash', command: 'echo "$TMPDIR"' })
+    expect(w.calls.map(c => c.command)).toEqual(['echo "$TMPDIR"', 'echo "$TMPDIR"', 'echo "$TMPDIR"'])
+  })
+
+  test('a marker whose scratch is outside <loopDir>/scratch/ reads as having none', async ($, on) => {
+    const w = world(on, { marker: { ...MARKER, scratch: '/tmp/x' } })
+    await $.agent.spawn(spawn(BUILD))
+    await call($, { tool: 'Bash', command: 'echo hi', agentId: 'agent-1' })
+    expect(w.calls[0]?.command).toBe('echo hi')
+  })
+
   test('a background call is refused, Bash and Agent alike, and logged', async ($, on) => {
     const w = world(on)
     await $.agent.spawn(spawn(BUILD))

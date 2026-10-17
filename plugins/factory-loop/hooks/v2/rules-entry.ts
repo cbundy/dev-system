@@ -137,7 +137,7 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   const stopping = stops(ctx, r)
   for (const a of stopping) add(a, true)
   if (stopping.length > 0 && (slot !== null || ctx.byKey.has(kill))) {
-    add({ ...base(r, kill, 'end the processes the old step left in the slot'), kind: 'slot', op: KILL, life: r.life, path: slot?.path ?? null, lease: slot?.lease ?? null, branch: null, marker: null, maxAttempts: 1 }, true)
+    add({ ...base(r, kill, 'end the processes the old step left in the slot'), kind: 'slot', op: KILL, life: r.life, path: slot?.path ?? null, lease: slot?.lease ?? null, branch: null, marker: null, keepScratch: false, maxAttempts: 1 }, true)
   }
   // a change of state: its label, or every factory label off a closed record, unless another
   // device holds a live claim on the issue: its labels are the winner's (3.4)

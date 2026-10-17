@@ -16,7 +16,7 @@
 //   reviewer cannot read is unknown (bad-answer).
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry } from '../types'
-import { keyParts, short } from './keys'
+import { keyParts, scratchOf, short } from './keys'
 import { REVIEW_PROMPTS } from './prompts-review'
 import { reviewerOf } from './reviewer'
 import type { PriorRound, ReviewInput } from './reviewer'
@@ -134,7 +134,7 @@ const review: StepModule = {
     const prompt = Object.hasOwn(REVIEW_PROMPTS, spec.prompt) ? REVIEW_PROMPTS[spec.prompt] : undefined
     if (prompt === undefined) return `no review prompt is named ${spec.prompt}`
     return {
-      prompt: prompt(spec.input, { repo: ctx.rt.repo, branch: action.branch, slot: action.slot, place }),
+      prompt: prompt(spec.input, { repo: ctx.rt.repo, branch: action.branch, slot: action.slot, scratch: scratchOf(ctx.rt.loopDir, action.issue, action.life, action.seq), place }),
       model: spec.model,
       data: { round: input.round, patch: input.patch, head: input.head, pr: input.pr, reviewer: reviewer.id },
     }

@@ -138,8 +138,11 @@ function leased(w, issue = 5) {
 }
 
 function marker(w, over = {}) {
-  return JSON.stringify({ v: 1, repo: "acme/widgets", issue: 5, life: LIFE, seq: 4, step: "build", role: "writer", branch: "issue-5", gateCommands: ["npm test"], gateTimeoutMs: 600_000, loopDir: w.loopDir, ...over });
+  const m = { v: 1, repo: "acme/widgets", issue: 5, life: LIFE, seq: 4, step: "build", role: "writer", branch: "issue-5", gateCommands: ["npm test"], gateTimeoutMs: 600_000, loopDir: w.loopDir, ...over };
+  // the loop's own name for the folder: <loop dir>/scratch/<N>-<life>-s<seq>
+  return JSON.stringify({ scratch: `${m.loopDir}/scratch/${m.issue}-${m.life}-s${m.seq}`, ...m, ...over });
 }
+const scratchDir = (w, issue = 5, life = LIFE, seq = 4) => path.join(w.loopDir, "scratch", `${issue}-${life}-s${seq}`);
 
 // sleeper: a process whose working directory is the slot; with `stubborn` it ignores SIGTERM.
 function sleeper(cwd, stubborn = false) {
@@ -410,4 +413,104 @@ test("a failed pool read fails the op, worth a retry; an unknown op is a usage e
   assert.match(r.stderr, /^factory-slot: /);
   assert.equal(w.run("wipe", w.slots[0]).status, 2);
   assert.equal(w.run().status, 2);
+});
+
+test("scratch: prepare makes the step's folder with mode 0700 and records its path in the marker; another seq gets its own", () => {
+  const w = world();
+  const s = leased(w);
+  assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w)).status, 0);
+  const dir = scratchDir(w);
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  assert.ok(!dir.startsWith(w.checkout) && !dir.startsWith(s.path), "outside every repository root");
+  const gitDir = git(s.path, "rev-parse", "--absolute-git-dir");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(gitDir, "factory-step.json"), "utf8")).scratch, dir);
+  assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w, { seq: 5 })).status, 0);
+  assert.equal(fs.statSync(scratchDir(w, 5, LIFE, 5)).mode & 0o777, 0o700);
+  assert.ok(fs.existsSync(dir), "an earlier seq's folder stays until the free");
+});
+
+test("scratch: prepare refuses a marker whose scratch is not exactly <loop dir>/scratch/<N>-<life>-s<seq>, exit 3, and makes nothing", () => {
+  const w = world();
+  const s = leased(w);
+  fs.writeFileSync(path.join(s.path, "work.txt"), "keep me\n");
+  const good = scratchDir(w);
+  const bad = [undefined, null, "", "relative/dir", path.join(w.dir, "elsewhere"), path.join(w.loopDir, "scratch", `5-${LIFE}-s9`), path.join(w.loopDir, "scratch", `6-${LIFE}-s4`), `${good}/..`, `${good}/x`, path.join(w.dir, "tmp-x"), w.loopDir + "/scratch", s.path];
+  for (const scratch of bad) {
+    const r = w.run("prepare", s.path, s.lease, "issue-5", JSON.stringify({ ...JSON.parse(marker(w)), scratch }));
+    assert.equal(r.status, 3, `${scratch}: ${r.stderr}`);
+  }
+  assert.ok(!fs.existsSync(path.join(w.loopDir, "scratch")), "nothing was created");
+  assert.equal(fs.readFileSync(path.join(s.path, "work.txt"), "utf8"), "keep me\n", "the slot was left as it was");
+  assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w)).status, 0);
+});
+
+test("scratch: free removes every folder of the lease's life and no other life's; --keep-scratch keeps them, and a later free removes them", () => {
+  const w = world();
+  const s = leased(w);
+  for (const seq of [4, 5]) assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w, { seq })).status, 0);
+  const other = [scratchDir(w, 5, "zzz9", 4), scratchDir(w, 55, LIFE, 4), scratchDir(w, 6, LIFE, 1)];
+  for (const d of other) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(scratchDir(w, 5, LIFE, 4), "t.out"), "x\n");
+  const kept = w.run("free", s.path, s.lease, w.loopDir, "--keep-scratch");
+  assert.equal(kept.status, 0, kept.stderr);
+  assert.equal(field(kept.stdout, "FREED", "path"), s.path);
+  for (const seq of [4, 5]) assert.ok(fs.existsSync(scratchDir(w, 5, LIFE, seq)), "kept for a parked life");
+  // the life resumes: leased again, prepared, then freed without the flag
+  const again = leased(w);
+  assert.equal(w.run("prepare", again.path, again.lease, "issue-5", marker(w, { seq: 6 })).status, 0);
+  assert.equal(w.run("free", again.path, again.lease, w.loopDir).status, 0);
+  for (const seq of [4, 5, 6]) assert.ok(!fs.existsSync(scratchDir(w, 5, LIFE, seq)), `seq ${seq} removed`);
+  for (const d of other) assert.ok(fs.existsSync(d), `${d} is another life's or issue's`);
+  // a free of a lease that is gone touches no folder
+  assert.equal(w.run("free", s.path, s.lease, w.loopDir).stdout.trim(), `GONE path=${s.path}`);
+  for (const d of other) assert.ok(fs.existsSync(d));
+});
+
+test("scratch: folders older than 7 days are pruned by prepare and by free, recent ones stay", () => {
+  const w = world();
+  const s = leased(w);
+  const make = (name, ageDays) => {
+    const d = path.join(w.loopDir, "scratch", name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "f"), "x\n");
+    const t = (Date.now() - ageDays * DAY) / 1000;
+    fs.utimesSync(d, t, t);
+    return d;
+  };
+  const oldOne = make("8-aaa-s1", 8);
+  const recent = make("9-aaa-s1", 2);
+  assert.equal(w.run("prepare", s.path, s.lease, "issue-5", marker(w)).status, 0);
+  assert.ok(!fs.existsSync(oldOne), "pruned at prepare");
+  assert.ok(fs.existsSync(recent));
+  const oldTwo = make("8-bbb-s1", 9);
+  assert.equal(w.run("free", s.path, s.lease, w.loopDir, "--keep-scratch").status, 0);
+  assert.ok(!fs.existsSync(oldTwo), "pruned at free, though it kept the life's folders");
+  assert.ok(fs.existsSync(recent));
+  assert.ok(fs.existsSync(scratchDir(w)), "the life's own, recent folder is kept");
+});
+
+test("scratch: the rewrite the companion hands the shell (plugins/factory-loop-workspace/hooks/scratch.ts) puts $TMPDIR, $TMP and $TEMP in the folder; without it a write to $TMPDIR/x lands in /x", () => {
+  // the plugin sandbox cannot run a shell, so the format is held here and in the companion's tests
+  const src = fs.readFileSync(path.join(__dirname, "..", "plugins", "factory-loop-workspace", "hooks", "scratch.ts"), "utf8");
+  assert.ok(src.includes("`export TMPDIR=${s} TMP=${s} TEMP=${s}\\n${command}`"), "the prefix format this test runs is the companion's");
+  const dir = fs.mkdtempSync(path.join(tmp, "rewrite-"));
+  const folder = path.join(dir, "scratch", "5-t2k1x0-s4");
+  fs.mkdirSync(folder, { recursive: true });
+  const env = { PATH: process.env.PATH, TMPDIR: "", TMP: "", TEMP: "" };
+  const run = (script) => spawnSync("sh", ["-c", script], { encoding: "utf8", env });
+  const rewrite = (command) => `export TMPDIR='${folder}' TMP='${folder}' TEMP='${folder}'\n${command}`;
+  const command = 'echo "$TMPDIR"; echo x > "$TMPDIR/t.out"';
+  const broken = run(command);
+  assert.equal(broken.stdout, "\n");
+  assert.notEqual(broken.status, 0);
+  assert.match(broken.stderr, /\/t\.out/);
+  const ok = run(rewrite(`${command}; echo "$TMP $TEMP"; t=$(mktemp); echo "$t"`));
+  assert.equal(ok.status, 0, ok.stderr);
+  const lines = ok.stdout.trim().split("\n");
+  assert.deepEqual(lines.slice(0, 2), [folder, `${folder} ${folder}`]);
+  assert.ok(lines[2].startsWith(`${folder}/`), "mktemp writes inside it");
+  assert.equal(fs.readFileSync(path.join(folder, "t.out"), "utf8"), "x\n");
+  // a here-document and a multi-line command run unchanged after the export
+  const doc = run(rewrite("cat <<EOF\nin $TMPDIR\nEOF\nprintf '%s\\n' done"));
+  assert.equal(doc.stdout, `in ${folder}\ndone\n`);
 });

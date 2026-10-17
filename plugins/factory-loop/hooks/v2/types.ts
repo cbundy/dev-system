@@ -246,6 +246,9 @@ export type StepMarker = {
   gateCommands: string[]
   gateTimeoutMs: Ms
   loopDir: string
+  // the step attempt's scratch folder (keys.ts scratchOf), which the companion exports as TMPDIR; the
+  // slot executor fills it, like loopDir
+  scratch: string
 }
 
 // A child a designer's split asks for (8.7).
@@ -294,7 +297,7 @@ export type V2Action =
   // base: main's head at plan time (the key's); head: the PR's head as observe read it
   | (ActionBase & { kind: 'queue-update'; pr: number; base: string; head: string })
   | (ActionBase & { kind: 'queue-merge'; issue: number; pr: number; head: string; patch: string })
-  | (ActionBase & { kind: 'slot'; op: SlotOp; life: string; path: string | null; lease: string | null; branch: string | null; marker: StepMarker | null })
+  | (ActionBase & { kind: 'slot'; op: SlotOp; life: string; path: string | null; lease: string | null; branch: string | null; marker: StepMarker | null; keepScratch: boolean })
 
 // --- labels and notices (appendix D) ---------------------------------------------------------------
 

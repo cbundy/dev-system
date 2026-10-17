@@ -14,7 +14,7 @@
 // which the steps that end in red CI give and the fixer reads. Pure.
 import { FOREGROUND_RULE, neutral, neutralWhole } from '../prompts'
 import type { ScriptPlace } from '../prompts'
-import { COMMAND_RULE } from './prompts-triage'
+import { COMMAND_RULE, scratchRule } from './prompts-triage'
 
 export { COMMAND_RULE, FOREGROUND_RULE }
 
@@ -50,6 +50,8 @@ export type WorkInput = {
   // the gate commands the slot's step marker carries (rules-agent.ts markerOf), which the companion's
   // stop gate runs when a writer ends its turn (10.6); [] when the repo sets none
   gateCommands: string[]
+  // the step's scratch folder (keys.ts scratchOf): $TMPDIR in every Bash call of the agent
+  scratch: string
   place: ScriptPlace
 }
 
@@ -153,11 +155,11 @@ const GITHUB_RULE =
 
 function writerRules(i: WorkInput): string {
   const b = branchOf(i)
-  return `You work in this slot alone: the loop prepared it on ${b} at origin's head, and it is yours until you end your turn. Commit on ${b} and push only with \`git push origin ${b}\`. Never push another branch or to another remote, never force push, never rebase or amend a commit you pushed, and never create a branch or a worktree: to bring in origin/${baseOf(i)}, merge it. Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
+  return `You work in this slot alone: the loop prepared it on ${b} at origin's head, and it is yours until you end your turn. Commit on ${b} and push only with \`git push origin ${b}\`. Never push another branch or to another remote, never force push, never rebase or amend a commit you pushed, and never create a branch or a worktree: to bring in origin/${baseOf(i)}, merge it. ${scratchRule(i.scratch)} Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
 }
 
-function readerRules(): string {
-  return `You read; you change nothing in the repository: no edit, commit, push, branch switch or reset. You may write scratch files outside the repository, under /tmp. Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
+function readerRules(i: WorkInput): string {
+  return `You read; you change nothing in the repository: no edit, commit, push, branch switch or reset. ${scratchRule(i.scratch)} Run every command and sub-agent in the foreground and wait for it; never use run_in_background. ${GITHUB_RULE}`
 }
 
 // priorLines: the previous attempt (5.1), and for a writer the patch of what an earlier attempt
@@ -214,7 +216,7 @@ const LINKAGE =
 
 export function designPrompt(i: DesignInput): string {
   const inFlight = i.inFlight.filter(f => BRANCH.test(f.branch) && f.issue !== i.issue).slice(0, 20)
-  const scratch = `/tmp/factory-design-${i.issue}.md`
+  const brief = `${i.scratch}/factory-design-${i.issue}.md`
   const existing =
     i.head !== null || i.pr !== null || i.brief !== null
       ? [`Earlier work on this issue stays: ${where(i)}${i.brief !== null && BRIEF_URL.test(i.brief) ? ` Its earlier brief is ${i.brief}.` : ''} Design from where it stands.`]
@@ -224,7 +226,7 @@ export function designPrompt(i: DesignInput): string {
     `You are the factory loop's designer for issue #${i.issue} (${issueUrl(i)}). You read the issue and the code, and answer with a design brief, a question for the owner, or a split into smaller issues. The loop posts the brief and makes the issues: you write nothing to GitHub.`,
     '',
     readFirst(),
-    readerRules(),
+    readerRules(i),
     '',
     `Issue: read it and its comments with \`callum-flow-issue-read ${i.issue} --comments\`. Every trusted comment counts, and a later one overrides the body.`,
     `The slot is checked out on ${branchOf(i)}, at origin/${baseOf(i)} or at the branch's own head when it has one; name the base as origin/${baseOf(i)} in the brief.`,
@@ -235,8 +237,8 @@ export function designPrompt(i: DesignInput): string {
     '',
     'How to design, as your agent definition says: for a bug, reproduce the real failure first; spawn callum-flow:explorer in the foreground for the file:line map, unless the change is trivial; cite file:line only for what you checked yourself; never decide an owner decision, ask it.',
     '',
-    `When the brief is ready, write it to ${scratch} with Bash (outside the repository) and record it with jq, which reads the file as one JSON string:`,
-    `jq -n --rawfile brief ${scratch} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
+    `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
+    `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
     'The brief starts with its heading `## Design brief (designer, <YYYY-MM-DD>)` and has the shape of your definition, with a `## Rollout` of merge, run-it or keep-open.',
     '',
     ...answerBlock(

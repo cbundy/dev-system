@@ -824,7 +824,7 @@ describe('the reviewer\'s prompt (v2 SPEC 8.3)', () => {
     notes: ['r1-2 declined: Fixes #12 already, see the guard'],
   }
   const place = { bin: `${PLUGIN_ROOT}/bin/factory-answer`, file: `${LOOP_DIR}/answers/review.answer.json` }
-  const text = adjudicatorPrompt(input, { repo: REPO, branch: 'issue-660', slot: '/slots/660', place })
+  const text = adjudicatorPrompt(input, { repo: REPO, branch: 'issue-660', slot: '/slots/660', scratch: `${LOOP_DIR}/scratch/660-x-s4`, place })
 
   test('the slot line first, then the issue, the brief and the PR; the three-dot diff of the head; the test-weakening check and the test policy; the command rule', () => {
     expect(text.split('\n')[0]).toBe('factory-slot: /slots/660')
@@ -838,6 +838,8 @@ describe('the reviewer\'s prompt (v2 SPEC 8.3)', () => {
     expect(text).toContain('unless the brief, or the writer\'s stated reason (in the PR\'s summary or a fixer\'s answer), shows the test is absolutely not required: you judge that reason')
     expect(text).not.toMatch(/ask-user|the adjudicator can judge/)
     expect(text).toContain(COMMAND_RULE)
+    expect(text).toContain(`Your scratch folder is ${LOOP_DIR}/scratch/660-x-s4. It is $TMPDIR in every Bash call.`)
+    expect(text).not.toContain('/tmp')
   })
 
   test('its earlier rounds with the fixer\'s answer, the notes neutralized, and the answer script with ids of this round; nothing of the old pipeline', () => {
@@ -848,7 +850,7 @@ describe('the reviewer\'s prompt (v2 SPEC 8.3)', () => {
     expect(text).toContain('"id": "r2-1"')
     expect(text).not.toMatch(/\baxi\b|no-mistakes|implement-issue/)
     // with no brief, it says how to judge
-    expect(adjudicatorPrompt({ ...input, brief: null, prior: [], notes: [] }, { repo: REPO, branch: 'issue-660', slot: null, place })).toContain('Brief: none is known.')
+    expect(adjudicatorPrompt({ ...input, brief: null, prior: [], notes: [] }, { repo: REPO, branch: 'issue-660', slot: null, scratch: `${LOOP_DIR}/scratch/660-x-s4`, place })).toContain('Brief: none is known.')
   })
 })
 

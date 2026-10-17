@@ -229,6 +229,7 @@ export function slotKillArgv(path: string): string[] {
 }
 
 // The loop dir is where the slot's leftovers are saved before it goes back (10.1, 10.2).
-export function slotFreeArgv(path: string, lease: string, loopDir: string): string[] {
-  return ['factory-slot', 'free', path, lease, loopDir]
+// keepScratch: the life's scratch folders stay (a parked issue's life, which a resume continues).
+export function slotFreeArgv(path: string, lease: string, loopDir: string, keepScratch = false): string[] {
+  return ['factory-slot', 'free', path, lease, loopDir, ...(keepScratch ? ['--keep-scratch'] : [])]
 }
