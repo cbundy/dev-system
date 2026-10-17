@@ -1380,9 +1380,11 @@ is a new `Reviewer` implementation and a setting, nothing more.
 The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
 
 - **Agent.** `factory-loop:designer-v2` (`agents/designer-v2.md`): the v1 designer's method (read
-  the issue with `callum-flow-issue-read`, reproduce a bug first, spawn `callum-flow:explorer` in
-  the foreground, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
-  (10.4) and no GitHub writes. It is renamed `designer` at the delete wave, when v1's goes.
+  the issue with `callum-flow-issue-read`, reproduce a bug first, explore with its own reads, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
+  (10.4) and no GitHub writes. It has no Agent tool: a sub-agent's call always runs in the
+  background and a v2 turn end is final (10.8), so an explorer's report would arrive after the
+  answer and never be recorded; the definition carries an exploration checklist instead
+  ([#851](https://github.com/cbundy/dev-system/issues/851)). It is renamed `designer` at the delete wave, when v1's goes.
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
@@ -1639,7 +1641,7 @@ its leftovers file, which the retry's prompt names (5.1). A `prepare` that fails
   `next({ ...e, cwd: slot })`, and records `agentId -> marker` from the result. It refuses the
   spawn (`deny`) when the marker is missing or does not match, and the refused spawn is the step's
   `unknown`.
-- Children the agent starts (the designer's explorer) inherit the folder, and the companion maps
+- Children the agent starts (a builder's sub-agent) inherit the folder, and the companion maps
   them through `parentAgentId` (`spikes/agent-folder.md`, run 8).
 - Proven on Claude Code 2.1.300 for a spawn from a frameless timer, headless and interactive:
   `pwd`, relative Bash and Write paths, Read, `git` and the agent's system prompt all resolve to
@@ -2017,7 +2019,8 @@ with no rule of its own. "Environment": a one-time fix outside the loop's rules.
 C3's other overnight failures (C3:196-208) are generic too:
 
 - A designer that ended its turn with an async explorer running gave no answer. That is the U
-  rows, and the guard now refuses background agents (10.4).
+  rows, and the guard now refuses background agents (10.4). The designer has no Agent tool at all
+  now ([#851](https://github.com/cbundy/dev-system/issues/851)).
 - `abandon` removing `ready` gives way to one owner interface: drop, then `ready` to bring it back
   (11).
 - A misleading update failure is unknown, then triage, never a new branch.
