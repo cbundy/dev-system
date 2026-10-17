@@ -634,7 +634,9 @@ container never fails to start because of it.
    [Central session history](#central-session-history-agentsview)). A secret file it
    cannot read gets a `WARNING`. With `psql` on `PATH`, also starts the event and
    no-mistakes push loops (see [Factory event log](#factory-event-log)) and the
-   [worker heartbeat](#worker-heartbeat).
+   [worker heartbeat](#worker-heartbeat). Separately, with the factory database's writer secret
+   (`factory-db-writer-url` or `FACTORY_DB_WRITER_URL`) and `psql`, starts `factory-event-push-loop`
+   (log: `/tmp/dev-factory-event-push.log`); an unreadable secret gets a `WARNING`.
 9. If `$DEV_SHARED_DIR` is mounted but not writable by `node`, warns with the fix. Not
    mounted is fine; it is optional.
 10. If `DEV_LOGIN_PORT` is set, starts the login page in the background (see
@@ -707,7 +709,8 @@ on every failure:
   `_reader` role or can create in schema `factory`, `factory.schema_migrations` is missing, or the schema
   version is behind (run `factory-db-bootstrap`) or ahead of the image's; otherwise `OK` with the database,
   role and version. See [docs/factory-db.md](../../docs/factory-db.md);
-- event and no-mistakes push status (see [Factory event log](#factory-event-log)), and
+- event and no-mistakes push status (see [Factory event log](#factory-event-log)), the new event log's
+  counts, set-aside lines and push loop, and
   [worker heartbeat status](#worker-heartbeat);
 - stale bridge worktrees (see [`dev-prune-worktrees`](#dev-prune-worktrees)): a `WARN`
   with the count when some would be removed, `OK` when there are none, nothing when the
@@ -763,11 +766,11 @@ unknown count) for plugin and tool drift, and a `WARN` for a stale image or imag
 
 **A missing base-image tool means the container is stale.** If `dev-query`, `psql`,
 `dev-version` or another tool this README documents is "command not found" (or
-`/usr/local/share/dev-system/image-release`, `event-push-loop` or `nm-push-loop` is missing),
+`/usr/local/share/dev-system/image-release`, `event-push-loop`, `factory-event-push-loop` or `nm-push-loop` is missing),
 the container's image is older than the base image that ships it. Rebuild the container
 (`dev-restart-self`, or Rebuild Container in a desktop dev container); do not install the
 tool by hand, because the install is lost on the next rebuild and hides the real problem.
-(`event-push-loop`, `nm-push-loop`, `nm-export`, `heartbeat-loop` and `heartbeat-state` are deliberately not on PATH; run them by
+(`event-push-loop`, `factory-event-push-loop`, `nm-push-loop`, `nm-export`, `heartbeat-loop` and `heartbeat-state` are deliberately not on PATH; run them by
 their path under `/usr/local/share/dev-system/`.)
 
 The callum-flow plugin reaches containers whose image is too old to warn about itself, so it
@@ -1789,7 +1792,7 @@ and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assi
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder, or, when that tool fails, those this device's own event log shows it claimed and has not released (as the sweep falls back to that log). The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in `factory.events`. An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -1797,10 +1800,12 @@ whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim
-already ended (its last claim event, of `claimed`, `ready`, `reclaimed`, `merged`, `closed` and `abandoned`, is one that ends it;
-no other event revives an ended claim), when it has no claim comment, when its newest claim is live,
-or when a PR merged after the claim on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`); otherwise its
-expired lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
+already ended (the shared rule above, over both logs: its last claim event is one that ends it, whichever device logged it, even
+when this device's own log still shows `claimed`; no other event revives an ended claim), or when it has no claim comment.
+A PR merged after the newest claim comment on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`) is a merge
+made outside the factory: the sweep logs `merged --pr <P> [--head <sha>] --actor sweep` whoever holds the claim and however live it is
+(checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
+expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
 any other label: the factory loop is the only writer of its `factory:*` labels. It has no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
 latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed
@@ -1857,6 +1862,19 @@ version columns (older rows stay null) and an `AFTER INSERT` trigger on `factory
 can `LISTEN factory_events` instead of polling; the role in the URL must be able to create the function and trigger.
 Rows from older images (no version columns) still insert and fire it. The
 queries are in [docs/metrics.md](../../docs/metrics.md).
+
+`factory-event-push-loop` ships the new log (`/persist/events/factory/*.jsonl`, see
+[docs/factory-events](../../docs/factory-events/README.md)) to `factory.event_store` as the writer role of the
+factory database. It reads only the writer URL (`FACTORY_DB_WRITER_URL` or the `factory-db-writer-url` secret, never
+`AGENTSVIEW_PG_URL`), runs no DDL, and sends each line as one `INSERT ... ON CONFLICT (event_id) DO NOTHING` whose
+columns the database casts from the line itself, so the database judges every line. Its cursor is
+`factory/.pushed/<file>` (a line count; a shorter file restarts at 0). A line the database refuses while it is
+reachable is appended to `factory/.refused/<file>` as `{"line","error","text"}` with a warning, and the cursor moves
+past it; when the database is unreachable (or the writer is denied) nothing is set aside and the pass is retried.
+Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is bounded by
+`FACTORY_EVENT_PUSH_TIMEOUT` seconds (default 60), and `.wake` or `DEV_FACTORY_EVENT_PUSH_INTERVAL` (default 30 s)
+starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
+`dev-doctor` reports its counts and fails when it is not running. The old `event-push-loop` is unchanged.
 
 `nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with
 the same URL rules as `event-push-loop`. The source is `state.sqlite` under
@@ -1933,7 +1951,7 @@ the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metr
 ### factory-db-bootstrap
 
 `factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
-server. Nothing calls it yet: the push loops, the heartbeat and `dev-query` still use the agentsview
+server. Only `factory-event-push-loop` uses it so far: the other push loops, the heartbeat and `dev-query` still use the agentsview
 database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in

@@ -425,7 +425,7 @@ Example:
 
 ## merged
 
-A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, or by the loop when it finds a merge that no merged event recorded. Ends the claim; the end point of lead time and throughput. Count one per pr and head.
+A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge on the issue's branch that no event recorded. Ends the claim; the end point of lead time and throughput. Count one per pr and head.
 
 - Issue field (`x-issue`): optional
 - Versions: v1 (current)

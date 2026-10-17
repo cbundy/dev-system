@@ -1,0 +1,198 @@
+#!/bin/bash
+#
+# factory-event-push-loop: ships the new factory event log
+# (<events dir>/factory/*.jsonl, one envelope per line, written by
+# callum-flow-event's dual write) to factory.event_store as the writer role
+# (cbundy/dev-system#740, part of #649). The old event-push-loop and its
+# factory.events table are untouched.
+#
+# It runs no DDL. Every statement is an INSERT whose only literal is the raw
+# line, cast to jsonb inside the database; each column is read from the
+# envelope field of the same name with a SQL cast. So the database parses and
+# checks every line, and a truncated line, a non-UUID event_id or a missing NOT
+# NULL field are all the same thing: a refusal. event_id is the primary key, so
+# a repeated push inserts nothing twice (ON CONFLICT DO NOTHING). device_seq is
+# the line's 1-based number in its file.
+#
+# A file's progress is the number of its lines already handled, kept in
+# <events dir>/factory/.pushed/<file> (a non-numeric value counts as 0). A file
+# with fewer lines than its marker was replaced: the marker restarts at 0 and
+# the file's .refused record is cleared, because its lines are judged again.
+#
+# A batch (FACTORY_EVENT_PUSH_BATCH lines, one transaction) that fails is
+# followed by a probe (SELECT 1 FROM factory.event_store LIMIT 0). When the probe
+# fails (unreachable, auth, permission, timeout) nothing is set aside, the cursor
+# stays and the next pass retries. When it succeeds the batch is pushed one line
+# per run; a line that fails is probed once more, and then it is either refused
+# (appended to <events dir>/factory/.refused/<file> as one JSON object, the cursor
+# moves past it) or, when the probe fails, the file stops at the last good line.
+#
+# The writer URL (factory_db_url writer, never AGENTSVIEW_PG_URL) is read again
+# on every pass and reaches only psql's environment, never its argv; all psql
+# output is masked. Every psql run is bounded by timeout; a timeout counts as
+# unreachable, not as a refusal.
+#
+# callum-flow-event touches <events dir>/.wake after every append. Between
+# passes the loop polls that file about once a second.
+#
+# Usage: factory-event-push-loop [--once]   --once makes one pass and exits (tests)
+# Environment: CALLUM_EVENTS_DIR (default /persist/events),
+#   DEV_FACTORY_EVENT_PUSH_INTERVAL seconds between passes (default 30),
+#   FACTORY_EVENT_PUSH_BATCH lines per transaction (default 500),
+#   FACTORY_EVENT_PUSH_TIMEOUT seconds a psql run may take (default 60).
+set -u
+
+# shellcheck source=factory-db.sh
+. "${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-db.sh"
+
+DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
+FDIR="$DIR/factory"
+INTERVAL="${DEV_FACTORY_EVENT_PUSH_INTERVAL:-30}"
+BATCH="${FACTORY_EVENT_PUSH_BATCH:-500}"
+case "$BATCH" in '' | *[!0-9]* | 0) BATCH=500 ;; esac
+TIMEOUT="${FACTORY_EVENT_PUSH_TIMEOUT:-60}"
+case "$TIMEOUT" in '' | *[!0-9]* | 0) TIMEOUT=60 ;; esac
+
+# The statement for each line of the input, numbered from $off + 1. The raw line
+# is the only literal; jq doubles its single quotes.
+read -r -d '' SQL_ROWS <<'JQ'
+[inputs] | to_entries[] | (.value | gsub("'"; "''")) as $l | (.key + $off + 1) as $n |
+"INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, session_id, issue, base_image, dev_image, template_version, plugin_version, device_seq, data) SELECT (j->>'envelope')::int, (j->>'event_id')::uuid, (j->>'ts')::timestamptz, j->>'type', (j->>'type_version')::int, j->>'repo', j->>'device', j->>'actor', j->>'session_id', (j->>'issue')::int, j->>'base_image', j->>'dev_image', j->>'template_version', j->>'plugin_version', \($n), j->'data' FROM (SELECT '\($l)'::jsonb AS j) s ON CONFLICT (event_id) DO NOTHING;"
+JQ
+
+mask() { sed -E "$MASK_SECRETS_SED"; }
+
+# fe_psql URL: runs the SQL on stdin in one transaction, bounded by timeout. The URL travels in the
+# environment. Output (stdout and stderr) is not masked here; callers mask what they print.
+fe_psql() {
+  (
+    export -f run_psql
+    # shellcheck disable=SC2016,SC2031 # the inner shell expands the variable
+    FEP_URL=$1 PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}" \
+      timeout "$TIMEOUT" bash -c 'run_psql "$FEP_URL"' 2>&1
+  )
+}
+
+# probe URL: succeeds when the writer can reach and read factory.event_store.
+probe() {
+  printf 'SELECT 1 FROM factory.event_store LIMIT 0;\n' | fe_psql "$1" > "$PROBE_OUT"
+}
+
+first_error() {
+  local e
+  e=$(printf '%s\n' "$1" | grep -m1 -i 'error' | mask)
+  [ -n "$e" ] || e=$(printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | sed -n 1p | mask)
+  printf '%s\n' "${e:-unknown error}"
+}
+
+set_cursor() { # NAME N
+  printf '%s\n' "$2" > "$FDIR/.pushed/$1.tmp" && mv "$FDIR/.pushed/$1.tmp" "$FDIR/.pushed/$1"
+}
+
+# refuse NAME N TEXT ERROR: sets the line aside unless it is already there.
+refuse() {
+  local name=$1 n=$2 text=$3 err=$4
+  mkdir -p "$FDIR/.refused" 2>/dev/null || return 0
+  if ! grep -q "^{\"line\":$n," "$FDIR/.refused/$name" 2>/dev/null; then
+    jq -nc --argjson line "$n" --arg error "$err" --arg text "$text" '{line: $line, error: $error, text: $text}' >> "$FDIR/.refused/$name"
+  fi
+  echo "factory-event-push-loop: $name line $n refused ($err) - set aside in $FDIR/.refused/$name" >&2
+}
+
+# push_file FILE URL: handles the file's lines not yet handled. Returns 1 when the push has to be
+# retried next pass.
+push_file() {
+  local f=$1 url=$2 name pushed total n sql out rc i text
+  name=$(basename "$f")
+  mkdir -p "$FDIR/.pushed" 2>/dev/null || return 0
+  total=$(wc -l < "$f" | tr -d ' ')
+  pushed=$(cat "$FDIR/.pushed/$name" 2>/dev/null || echo 0)
+  case "$pushed" in '' | *[!0-9]*) pushed=0 ;; esac
+  if [ "$pushed" -gt "$total" ]; then
+    echo "factory-event-push-loop: $name has $total lines but $pushed were pushed (file replaced) - pushing it again from the start" >&2
+    pushed=0
+    rm -f "$FDIR/.refused/$name"
+    set_cursor "$name" 0
+  fi
+  while [ "$pushed" -lt "$total" ]; do
+    n=$((total - pushed))
+    [ "$n" -le "$BATCH" ] || n=$BATCH
+    sql=$(sed -n "$((pushed + 1)),$((pushed + n))p" "$f" | jq -nrR --argjson off "$pushed" "$SQL_ROWS") || return 0
+    rc=0
+    out=$(printf '%s\n' "$sql" | fe_psql "$url") || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      pushed=$((pushed + n))
+      set_cursor "$name" "$pushed"
+      continue
+    fi
+    printf '%s\n' "$out" | mask >&2
+    if [ "$rc" -eq 124 ] || ! probe "$url"; then
+      [ "$rc" -eq 124 ] && echo "factory-event-push-loop: push of $name timed out" >&2
+      mask < "$PROBE_OUT" >&2
+      echo "factory-event-push-loop: push of $name failed, retrying next pass" >&2
+      return 1
+    fi
+    # The database is reachable and the writer can read the table: find the lines it refuses.
+    for ((i = pushed + 1; i <= pushed + n; i++)); do
+      text=$(sed -n "${i}p" "$f")
+      sql=$(printf '%s\n' "$text" | jq -nrR --argjson off $((i - 1)) "$SQL_ROWS") || return 0
+      rc=0
+      out=$(printf '%s\n' "$sql" | fe_psql "$url") || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 124 ] || ! probe "$url"; then
+          printf '%s\n' "$out" | mask >&2
+          echo "factory-event-push-loop: push of $name failed at line $i, retrying next pass" >&2
+          return 1
+        fi
+        refuse "$name" "$i" "$text" "$(first_error "$out")"
+      fi
+      set_cursor "$name" "$i"
+    done
+    pushed=$((pushed + n))
+  done
+}
+
+PROBE_OUT=$(mktemp) || exit 1
+trap 'rm -f "$PROBE_OUT"' EXIT
+
+pass() {
+  local url f rc=0 urc=0
+  url=$(factory_db_url writer) || urc=$?
+  if [ "$urc" -ne 0 ]; then
+    echo "factory-event-push-loop: no readable writer URL any more (FACTORY_DB_WRITER_URL or $(factory_db_url_file writer)) - stopping" >&2
+    return 2
+  fi
+  for f in "$FDIR"/*.jsonl; do
+    [ -f "$f" ] || continue
+    push_file "$f" "$url" || rc=1
+  done
+  return "$rc"
+}
+
+if [ "${1-}" = --once ]; then
+  pass
+  rc=$?
+  [ "$rc" -ne 2 ] || rc=1
+  exit "$rc"
+fi
+
+wake_stamp() { stat -c %y "$DIR/.wake" 2>/dev/null || echo none; }
+
+# wait_for_wake STAMP: returns after INTERVAL seconds, or as soon as the wake file differs from the
+# STAMP taken before the pass.
+wait_for_wake() {
+  local waited=0
+  case "$INTERVAL" in '' | *[!0-9]*) INTERVAL=30 ;; esac
+  while [ "$waited" -lt "$INTERVAL" ]; do
+    sleep 1
+    [ "$(wake_stamp)" = "$1" ] || return 0
+    waited=$((waited + 1))
+  done
+}
+
+while :; do
+  stamp=$(wake_stamp)
+  pass
+  [ $? -ne 2 ] || exit 0
+  wait_for_wake "$stamp"
+done
