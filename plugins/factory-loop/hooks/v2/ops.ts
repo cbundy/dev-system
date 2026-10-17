@@ -4,10 +4,11 @@
 // and an op that landed with v2 acting before or after it is a person intervention. control.ts delegates to these when
 // planner v2 is in force, and register.ts asks parkedOf and opLanded; v1's meanings stay in
 // control.ts until the delete wave. Pure.
-import type { Op } from '../control'
+import type { FileIo, Op, OpReply } from '../control'
 import type { Control, Mode, Ms } from '../types'
 import type { OpLanded } from './act-events'
 import type { IssueRecord, Planner } from './types'
+import { windDownPaths } from './wind-down'
 
 // v2's resume: unpark these issues, with the note for their next step (11, P1).
 export type Unpark = { op: 'unpark'; issues: number[]; note: string | null }
@@ -76,4 +77,20 @@ export function opLanded(before: InForce, op: Op, logged: string | null, issues:
 
 function tagsOf(issues: readonly number[]): string {
   return issues.map(n => `#${n}`).join(' ')
+}
+
+// stopNow: `/factory stop-now` (SPEC 10.11): during a wind-down, tell the stopper not to wait for what
+// still runs. It writes wind-down.stop-now (one shot) and answers whether a wind-down is requested.
+export async function stopNow(io: FileIo, loopDir: string, op: Op, now: Ms): Promise<OpReply> {
+  const files = windDownPaths(loopDir)
+  try {
+    const active = (await io.readFile(files.request).catch(() => null)) !== null
+    await io.writeFile(files.stopNow, JSON.stringify({ at: new Date(now).toISOString() }) + '\n')
+    const text = active
+      ? 'Stop-now written: the stopper will not wait for the wind-down to finish.'
+      : "Stop-now written, but no wind-down is requested now; the next wind-down's stopper will find it and stop at once. Remove wind-down.stop-now to undo."
+    return { ok: true, text, op, control: null, ping: true, retryIssue: null, mode: null, logged: 'stop-now' }
+  } catch (err) {
+    return { ok: false, text: `Not changed: the write failed (${String(err).slice(0, 200)}).`, op, control: null, ping: false, retryIssue: null, mode: null, logged: null }
+  }
 }
