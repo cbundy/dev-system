@@ -278,14 +278,63 @@ is the release. The TELL format above holds; these are v2's kinds. The `/factory
 which planner is in force.
 
 ### TASK under planner v2
-- **`release`** (`closed expected`): the Next milestone has no open item and at least one closed.
-  Cut the release by the repo's release process with its standing release authority, then do the
-  Run its of the milestone's `run-it` issues, each from the issue's `## Run it` steps, recording
-  the result on the issue and closing it. Never wait on the owner inside this turn: a Run it that
-  needs the owner (a workspace restart still needs asking) becomes an owner item, a comment on the
-  issue and one `[ACTION]` line to the owner, and the task goes on. Answer `done` once the release
-  is out and every Run it is done or handed to the owner, `failed` (reason) when the release
-  cannot be cut. A merge never waits for a release.
+- **`release`** (`closed expected`): merged work waits in the Next milestone, with no open item.
+  Decide whether to release now, by "Release decisions under planner v2" below. To release, start
+  the release agent and answer `done` (reason: the version and why now); to wait, answer `hold`
+  with the reason, which the loop only logs. You do not do the release steps yourself. Once the
+  release agent reports the release out, do the Run its of the milestone's `run-it` issues, each
+  from the issue's `## Run it` steps, recording the result on the issue and closing it.
+  Never wait on the owner inside this turn: a Run it that needs the owner (a workspace restart
+  still needs asking) becomes an owner item, a comment on the issue and one `[ACTION]` line to the
+  owner, and the task goes on. Answer `failed` (reason) when the release cannot be cut. A merge
+  never waits for a release.
+
+### Release decisions under planner v2
+You decide when the repo releases; the release agent does the steps. The aim: merged work ships
+within 6 hours of its merge.
+
+Gather the facts with a few reads (never the diff):
+- what waits: `git log --first-parent --format='%h %cI %s' <last tag>..origin/main` (the oldest
+  commit's time is how long work has waited) and `callum-flow-milestone show`;
+- the labels of the issues those PRs close (`callum-flow-issue-read --json <N>`);
+- live problems: `callum-flow-factory-state` (parked, stuck, failing gates, repeated fix rounds),
+  here and in the consumer loops it reports;
+- what is about to land: issues in `factory:reviewing` or `factory:merge-queue`;
+- CI on main (`gh run list --branch main --workflow ci.yml --limit 1`) and the last release
+  (`gh release list --limit 1`).
+
+Reasons to release now:
+- strong: a merged fix for a problem hurting work right now (an issue parked, stuck, failing its
+  gates or going round fix rounds because of it, in this repo or a consumer's loop);
+- a merged item whose issue is labelled `priority`;
+- slight: a merged change that unblocks work in another project.
+
+Good reasons to wait:
+- something likely to merge within about 15 minutes should go out in the same release;
+- CI on main is failing;
+- a release went out less than 30 minutes ago and no reason above applies.
+
+With no reason either way, waiting is fine until the oldest unreleased merge is 6 hours old. From
+then on, release unless a reason to ask the owner (below) holds.
+
+Ask the owner rarely: you have standing release authority, so use it. Ask only when:
+- the release would be a major version (a breaking change to something consumers rely on);
+- it would ship something the owner said to hold;
+- the last release broke a consumer, and releasing again would build on that breakage.
+
+None of these is a reason to ask: a large release, many merges, an image bump, a minor version, an
+unfamiliar change, uncertain notes, or "the owner might want to know". Release, and say what
+shipped in one line.
+
+Answer:
+- **release**: check the version is not tagged yet (`git tag -l vX.Y.Z`). Start the release agent
+  in the background with the Agent tool: its prompt names the repo, the step (patch or minor; major
+  only after the owner agreed) and says "Follow the repo's release skill
+  (`.claude/skills/release/SKILL.md`, else `RELEASING.md`) end to end and report each step."
+  Answer `done` with `reason: releasing at the next <step>: <why now>`. When the agent reports,
+  tell the owner in one line what shipped, or what failed and where.
+- **wait**: `hold` with `reason: wait: <why>`. The loop only logs it; nothing else happens.
+- **owner**: `hold` with `reason: owner: <what you need>`, and one `[DECISION]` line to the owner.
 
 ### TELL under planner v2
 Owner items (the title counts them until resolved):
