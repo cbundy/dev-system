@@ -122,6 +122,9 @@ export type AgentView = { id: string; type: string; status: AgentStatus }
 
 export type Bump = 'patch' | 'minor' | 'major'
 export type Milestone = { open: number; closed: number; expected: Bump | null }
+// ReleaseInfo: the last release tag (null: the repo has no release yet) and when the oldest merge
+// into the default branch since that tag happened (null: unknown or none)
+export type ReleaseInfo = { tag: string | null; oldest: Ms | null }
 
 export type Control = {
   paused: number[]
@@ -279,6 +282,8 @@ export type State = {
   pool: Pool | null
   agents: AgentView[]
   milestone: Milestone | null
+  // null until the first successful read, which happens only while the milestone qualifies
+  release: ReleaseInfo | null
   ledger: LedgerEntry[]
   control: Control
   lastTitle: string | null

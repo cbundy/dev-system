@@ -474,3 +474,43 @@ export function parseMilestone(text: string): Milestone | null {
   const bump = text.match(/Expected:\s*(patch|minor|major)\b/)?.[1] as Bump | undefined
   return { open, closed, expected: bump ?? null }
 }
+
+// --- the last release and the oldest merge since it --------------------------------------------
+
+// parseReleaseTag: the tag of `gh release view --json tagName`; null when it is not that shape.
+export function parseReleaseTag(text: string): string | null {
+  try {
+    const tag: unknown = JSON.parse(text)?.tagName
+    return typeof tag === 'string' && tag.trim() !== '' ? tag.trim() : null
+  } catch {
+    return null
+  }
+}
+
+// parseCommitDate: the one ISO date line `gh api .../commits/<tag> --jq .commit.committer.date`
+// prints, as epoch ms; null when it is not a date.
+export function parseCommitDate(text: string): number | null {
+  const t = text.trim()
+  if (!/^\d{4}-\d\d-\d\dT/.test(t)) return null
+  const ms = Date.parse(t)
+  return Number.isNaN(ms) ? null : ms
+}
+
+// parseOldestMerge: the earliest mergedAt of `gh pr list --state merged --json mergedAt`, as epoch
+// ms; undefined when the output is not a list of that shape, null when the list is empty.
+export function parseOldestMerge(text: string): number | null | undefined {
+  let list: unknown
+  try {
+    list = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(list)) return undefined
+  let oldest: number | null = null
+  for (const p of list) {
+    const ms = typeof p?.mergedAt === 'string' ? Date.parse(p.mergedAt) : Number.NaN
+    if (Number.isNaN(ms)) return undefined
+    if (oldest === null || ms < oldest) oldest = ms
+  }
+  return oldest
+}

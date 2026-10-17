@@ -16,7 +16,10 @@ import {
   parseDirty,
   parseFactoryState,
   parseIssueRead,
+  parseCommitDate,
   parseMilestone,
+  parseOldestMerge,
+  parseReleaseTag,
   parsePipelineLine,
   parsePipelineOnce,
   parsePool,
@@ -263,6 +266,17 @@ describe('parse', () => {
     })
     expect(parseMilestone('== Next release\nExpected: (not set)\n')).toEqual({ open: 0, closed: 0, expected: null })
     expect(parseMilestone('')).toBeNull()
+  })
+
+  test('release reads: the tag, the tag commit date, the oldest merge since it', () => {
+    expect(parseReleaseTag('{"tagName":"v1.2.3"}\n')).toBe('v1.2.3')
+    for (const bad of ['', 'nope', '{}', '{"tagName":""}', '{"tagName":5}']) expect(parseReleaseTag(bad)).toBeNull()
+    expect(parseCommitDate('2026-10-12T08:30:00Z\n')).toBe(Date.UTC(2026, 9, 12, 8, 30))
+    for (const bad of ['', 'nope', 'null']) expect(parseCommitDate(bad)).toBeNull()
+    const list = '[{"mergedAt":"2026-10-12T10:00:00Z"},{"mergedAt":"2026-10-12T08:45:00Z"}]'
+    expect(parseOldestMerge(list)).toBe(Date.UTC(2026, 9, 12, 8, 45))
+    expect(parseOldestMerge('[]')).toBeNull()
+    for (const bad of ['', 'nope', '{}', '[{"mergedAt":null}]', '[{}]']) expect(parseOldestMerge(bad)).toBeUndefined()
   })
 
   test('queue-watch.sh --once: its one line, ascending; anything else is no reading', () => {

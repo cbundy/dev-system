@@ -189,7 +189,7 @@ how stale it is. `pipeline-watch.sh`, `queue-watch.sh` and `usage-check.sh` run 
 | `pool` | `treehouse status --json` from the main checkout. An implementer detaches its slot once the pipeline holds the branch, so the listing shows `branch: ""` (#563): for a leased slot on no branch, not busy, `git -C <slot> --no-optional-locks reflog show --date=unix --format=%gd%x09%gs -n 500 HEAD` gives its `leaseBranch`, the newest issue branch a checkout moved to since `leased_at` less 2 s (`treehouse get --lease -b` checks out before it records the lease; one it only moved from may be an earlier lease's), kept per lease once found. A slot whose `leaseBranch` names a finished issue gets `git -C <slot> --no-optional-locks status --porcelain=v2 --untracked-files=normal` for `dirty`: a tracked change or an untracked file, as `treehouse return` keeps the slot for either; ignored files do not count. A git read that fails leaves the field null | every pass | rule `D1` capacity, rule `H3` |
 | `checkout` | `git symbolic-ref --quiet --short refs/remotes/origin/HEAD`, then `git --no-optional-locks status --porcelain=v2 --branch --untracked-files=no`, from the main checkout (it takes no index lock and ignores untracked files). A missing origin/HEAD or a failed status is `{ error }`, whose text points at `git remote set-head origin --auto` | every pass | rules `G5`, `H5` |
 | `agents` | `$.agent.list()`, read once per pass, filtered to the ids in the ledger | every pass | lost-agent detection (7.5) |
-| `milestone` | `callum-flow-milestone show next` | every `milestoneEveryMs` (10 min) | rules `M7`, `O3`; absent means not opted in |
+| `milestone` | `callum-flow-milestone show next` | every `milestoneEveryMs` (10 min) | rules `M7`, `O3`; absent means not opted in; while it qualifies, `gh` also reads the last release tag and the oldest merge since it (O3 fields) |
 | ledger | act mode: the ledger the module keeps (7.1), from `$.store`; when the store holds none, rebuilt from 7 days of events (7.5). Observe mode: derived from the device's own events in the `facts` window | every pass | everything |
 | control | `<loop dir>/control.json`, field by field (4.3) | every pass | rule `G4` |
 | GitHub backoff | act mode: `$.store` (`backoff:<repo>`) | every pass | section 10.2 |
@@ -535,7 +535,7 @@ GitHub or the harness is `M6`.
 |---|---|---|---|
 | O1 | always, last (before a `restart-self`) | `title` when `titleOf(state, tier)` differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or `lastTitleAt` is null) (section 9.1) | none (compared, not keyed) |
 | O2 | any wake (`judge`, `task`, `tell`) is planned | keep at most one wake per pass and none while another wake is `running`, picked in order: `tell` of an owner decision or action, `judge`, `task`, other `tell`. Notices from outside plan (a rail, the ping breaker, failing passes: section 9.2) go out through the same executor once no wake is open | the wake's own key |
-| O3 | opted in, the milestone has no open items and at least one closed | `task(release)` once per milestone state | `task:release:<closed>:<expected>` |
+| O3 | opted in, the milestone has no open items and at least one closed | `task(release)`, at most one per UTC hour (an hourly review); fields `closed expected tag oldest` | `task:release:<tag>:<YYYY-MM-DDTHH>` |
 
 ### 5.9 Properties every plan must keep
 
