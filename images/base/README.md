@@ -1551,14 +1551,19 @@ the factory loop companion's (a loop agent's call refused, or waiting, on a prom
 recorded by hand: `callum-flow-event intervention --issue N --note 'who=person cause=rescue
 reason=what%20was%20done'`. See [docs/metrics.md](../../docs/metrics.md) for `rebased_behind`,
 `loop` and v2 semantics; `callum-flow-event` with no arguments lists the vocabulary) to
-`/persist/events/<owner>__<repo>.jsonl`. It needs no network, takes about 15 ms and never
-fails its caller. The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
+`/persist/events/<owner>__<repo>.jsonl`. In the same call it also writes the translated new event (dual write, #649) to
+`/persist/events/factory/<owner>__<repo>.jsonl`; the `factory/` dir is invisible to everything that
+reads the old file. It needs no network and never fails its caller: a miss, a missing `node` or
+translator, or a crashing translator keeps the old line and prints one `callum-flow-event: warning:`
+line. Starting `node` makes a write take about 45 ms measured (about 10 ms before). The watchers (`queue-watch.sh`, `pipeline-watch.sh`, `usage-check.sh`)
 and the callum-flow skills call it; the device is `DEV_MACHINE_NAME`, else the hostname.
 A re-armed watcher's first sight of a run or queued issue (one it did not see change) is logged with
 `--if-changed`, which skips a line identical in state, head and note to the subject's newest one (`loop` lines skipped), so a
 restart never replays old events; transitions a watcher observes are always logged.
 `callum-flow-event --path [--repo O/N]` prints the log file's path (same naming and
-`CALLUM_EVENTS_DIR` default as a write) and writes nothing.
+`CALLUM_EVENTS_DIR` default as a write) and writes nothing; `--new-path` does the same for the new
+log (an older image answers it with exit 2, which makes it the capability probe). The translator is
+found next to the script, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`.
 
 Every line also says which versions produced it: `base_image`, `dev_image`, `template_version` and
 `plugin_version` (meanings as in `dev-version --json`), read from the snapshot `dev-init` keeps at
