@@ -82,7 +82,11 @@ function checkNew(oldText, argv) {
   assert.deepEqual(e, want.event, `${argv[1]}: the new event is the translator's`);
   assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
   assert.deepEqual(reader.validateStrict(e.type, 1, e.data), []);
-  assert.deepEqual(reader.readEvent(e), { type: e.type, type_version: 1, data: e.data });
+  // An optional field the translator leaves out comes back from the reader as null; nothing else changes.
+  const back = reader.readEvent(e);
+  const added = Object.keys(back.data).filter((k) => !(k in e.data));
+  for (const k of added) assert.equal(back.data[k], null, `${e.type} ${k}`);
+  assert.deepEqual({ ...back, data: Object.fromEntries(Object.entries(back.data).filter(([k]) => !added.includes(k))) }, { type: e.type, type_version: 1, data: e.data });
 }
 const newSeen = new Map();
 
