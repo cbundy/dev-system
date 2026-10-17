@@ -218,6 +218,90 @@ GROUP BY repo, issue, life, seq, started_at
 ORDER BY started_at DESC;
 ```
 
+## 2c. Wind-downs
+
+How long a stop of the loop waited for running steps, and what the cap cost. The loop writes one
+`wind_down` event per stop, not per issue (`wind_down.v1.json`). `requested_at` is when the stop
+was asked for, `stopped_at` when the loop stopped, `waited_ms` the wait against `cap_ms`, and
+`outcome` how it ended (`idle`, `cap`, `now`, `off`; with `off` the stop is at once and `waited_ms`
+is 0). `cut_at_stop` counts the steps still running that were cut, and `cut_at_stop_keys` lists
+their loop keys. A retried write can repeat an event, so each stop counts once per (repo, device,
+requested_at). The queries read the columns migration 0004 lifted into `factory.event_log` and
+take `-v repo=... -v since=...`. There are no rows until the producer (#842) ships.
+
+The median and p90 of `waited_ms` come from (a) in code (nearest rank), not from SQL.
+
+(a) One row per stop:
+
+```sql
+SELECT repo, device, requested_at,
+  min(stopped_at)    AS stopped_at,
+  min(outcome)       AS outcome,
+  min(waited_ms)     AS waited_ms,
+  min(cap_ms)        AS cap_ms,
+  min(cut_at_stop)   AS cut_at_stop,
+  min(trigger)       AS trigger
+FROM factory.event_log
+WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+GROUP BY repo, device, requested_at
+ORDER BY requested_at DESC;
+```
+
+(b) A summary per repo: stops, the share that hit the cap, and the mean steps cut per stop:
+
+```sql
+WITH stops AS (
+  SELECT repo, device, requested_at,
+    min(outcome) AS outcome, min(cut_at_stop) AS cut_at_stop
+  FROM factory.event_log
+  WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+  GROUP BY repo, device, requested_at
+)
+SELECT repo,
+  count(*)                                                        AS stops,
+  round(count(*) FILTER (WHERE outcome = 'cap')::numeric / count(*), 3) AS cap_share,
+  round(avg(cut_at_stop), 2)                                      AS mean_cut_per_stop
+FROM stops
+GROUP BY repo;
+```
+
+(c) Each cut step and its re-run: the first `transition` after `stopped_at` with the same repo,
+issue, life and step. `rerun_via` `free:load` with table row `U1` is the free re-run (SPEC 5.1,
+docs/factory-loop/v2/SPEC.md:528, 731-733). Any other via is the cost of the cap: the attempt's
+free re-run was already spent. Null means no re-run yet. A seq key
+(`i<N>/l<life>/s<seq>/<step>/a<n>`) and a review key (`i<N>/l<life>/review/<patch7>/r<round>/a<n>`)
+both parse; a review key's step is `review`.
+
+```sql
+WITH stops AS (
+  SELECT repo, device, requested_at,
+    min(stopped_at) AS stopped_at, min(cut_at_stop_keys::text)::jsonb AS keys
+  FROM factory.event_log
+  WHERE type = 'wind_down' AND repo = :'repo' AND requested_at >= :'since'::timestamptz
+  GROUP BY repo, device, requested_at
+), cuts AS (
+  SELECT s.repo, s.device, s.requested_at, s.stopped_at, k.key,
+    substr(split_part(k.key, '/', 1), 2)::int AS issue,
+    substr(split_part(k.key, '/', 2), 2)      AS life,
+    CASE WHEN split_part(k.key, '/', 3) = 'review' THEN 'review'
+         ELSE split_part(k.key, '/', 4) END   AS step
+  FROM stops s, jsonb_array_elements_text(s.keys) AS k(key)
+), first_after AS (
+  SELECT c.*, (SELECT min(t.seq_at) FROM factory.event_log t
+               WHERE t.type = 'transition' AND t.repo = c.repo AND t.issue = c.issue
+                 AND t.life = c.life AND t.step = c.step AND t.seq_at > c.stopped_at) AS rerun_at
+  FROM cuts c
+)
+SELECT f.repo, f.requested_at, f.key, f.issue, f.life, f.step, f.rerun_at,
+  min(t.via) AS rerun_via, min(t.table_row) AS table_row
+FROM first_after f
+LEFT JOIN factory.event_log t
+  ON t.type = 'transition' AND t.repo = f.repo AND t.issue = f.issue
+ AND t.life = f.life AND t.step = f.step AND t.seq_at = f.rerun_at
+GROUP BY f.repo, f.device, f.requested_at, f.key, f.issue, f.life, f.step, f.rerun_at
+ORDER BY f.requested_at DESC, f.key;
+```
+
 ## 3. Reviewer false-positive rate
 
 `verdict` events carry the adjudication prefix in `note` (`CORRECT:`, `WRONG:`, `NIT:`, `ENV:`,

@@ -42,6 +42,7 @@ export const CURRENT: Record<string, number> = {
   "transition": 1,
   "untrusted_stripped": 1,
   "usage": 1,
+  "wind_down": 1,
 }
 
 // Every shape of every version, keyed <type>.v<N>.
@@ -353,6 +354,24 @@ export const SCHEMAS: Record<string, Shape> = {
       "seven_day_pct": {"minimum":0,"type":["integer","null"]},
       "seven_day_resets_at": {"format":"date-time","type":["null","string"]},
       "source": {"enum":["oauth","statusline",null]},
+    },
+  },
+  "wind_down.v1": {
+    "additionalProperties": false,
+    "required": ["cap_ms","cut_at_stop","cut_at_stop_keys","outcome","requested_at","running_at_request","running_at_request_keys","stopped_at","trigger","waited_ms"],
+    "type": "object",
+    "x-issue": "none",
+    "properties": {
+      "cap_ms": {"minimum":0,"type":"integer"},
+      "cut_at_stop": {"minimum":0,"type":"integer"},
+      "cut_at_stop_keys": {"items":{"pattern":"^i[1-9][0-9]*/l[0-9a-z]+/.+$","type":"string"},"type":"array"},
+      "outcome": {"enum":["cap","idle","now","off"]},
+      "requested_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
+      "running_at_request": {"minimum":0,"type":"integer"},
+      "running_at_request_keys": {"items":{"pattern":"^i[1-9][0-9]*/l[0-9a-z]+/.+$","type":"string"},"type":"array"},
+      "stopped_at": {"pattern":"^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$","type":"string"},
+      "trigger": {"enum":["coder-stop","restart-self",null],"type":["null","string"]},
+      "waited_ms": {"minimum":0,"type":"integer"},
     },
   },
 }
