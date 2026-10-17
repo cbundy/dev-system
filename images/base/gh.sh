@@ -124,3 +124,142 @@ gh_token_doctor() {
     fi
   done
 }
+
+# --- token access check (cbundy/dev-system#729) -------------------------------
+# Read-only probes of what the token can reach, so dev-doctor names a missing scope
+# or permission before a loop run hits it. Nothing here writes, and the token is
+# never printed.
+
+# gh_repo_slug <url>: owner/repo from a github.com https or ssh URL (a trailing
+# .git and / removed); empty for anything else.
+gh_repo_slug() {
+  local u="${1:-}" slug
+  u="${u%/}"
+  u="${u%.git}"
+  u="${u%/}"
+  case "$u" in
+    https://github.com/* | http://github.com/*) slug="${u#*://github.com/}" ;;
+    https://*@github.com/*) slug="${u#*@github.com/}" ;;
+    git@github.com:*) slug="${u#git@github.com:}" ;;
+    ssh://git@github.com/*) slug="${u#ssh://git@github.com/}" ;;
+    *) return 0 ;;
+  esac
+  printf '%s' "$slug" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' && printf '%s\n' "$slug"
+  return 0
+}
+
+# gh_probe_class <exit status> <stderr text>: ok, denied, bad, limited or offline.
+# A pure function of what gh_probe saw, so it can be tested.
+gh_probe_class() {
+  local status="${1:-1}" err="${2:-}"
+  if [ "$status" = 0 ]; then
+    echo ok
+  elif printf '%s' "$err" | grep -qiE 'HTTP 401\b|Bad credentials'; then
+    echo bad
+  elif printf '%s' "$err" | grep -qiE 'rate limit|HTTP 429'; then
+    echo limited
+  elif printf '%s' "$err" | grep -qE 'HTTP (403|404)\b'; then
+    echo denied
+  else
+    echo offline
+  fi
+}
+
+# gh_probe [-i] <api path>: one bounded read-only gh api call. Prints the class on
+# the first line, then (for ok) the response body, with the headers first for -i.
+gh_probe() {
+  local errf out status
+  errf=$(mktemp)
+  out=$(timeout "${GH_PROBE_TIMEOUT:-10}" gh api "$@" 2>"$errf") && status=0 || status=$?
+  gh_probe_class "$status" "$(cat "$errf")"
+  rm -f "$errf"
+  [ "$status" != 0 ] || printf '%s\n' "$out"
+}
+
+# gh_token_access_doctor [repo url]: dev-doctor's token access check. The caller
+# defines ok, info and fail (fail <message> <fix>).
+gh_token_access_doctor() {
+  local url="${1:-}" slug reply cls body scopes branch name path perm need missing
+  local pat_url="github.com/settings/personal-access-tokens"
+  reply=$(gh_probe -i /user)
+  cls=$(printf '%s\n' "$reply" | head -n 1)
+  body=$(printf '%s\n' "$reply" | tail -n +2)
+  case "$cls" in
+    bad)
+      fail "the token is rejected by GitHub" "replace the token file with a valid token, then run: dev-init"
+      return 0
+      ;;
+    offline | limited)
+      info "GitHub unreachable, token access unchecked"
+      return 0
+      ;;
+    denied) body="" ;; # some App tokens cannot read /user; the repo probes still tell
+  esac
+  if printf '%s\n' "$body" | tr -d '\r' | grep -qi '^x-oauth-scopes:'; then
+    scopes=$(printf '%s\n' "$body" | tr -d '\r' | grep -i '^x-oauth-scopes:' | head -n 1 | cut -d: -f2- | tr -d ' ')
+    missing=0
+    for need in repo workflow; do
+      if ! printf '%s' "$scopes" | tr ',' '\n' | grep -qx "$need"; then
+        missing=1
+        fail "the classic token lacks the $need scope" \
+          "edit the token at github.com/settings/tokens and tick the $need scope (public_repo does not count as repo)"
+      fi
+    done
+    [ "$missing" = 1 ] || ok "the classic token has the repo and workflow scopes (scopes: ${scopes:-none})"
+    return 0
+  fi
+
+  slug=$(gh_repo_slug "$url")
+  if [ -z "$slug" ]; then
+    info "no github.com repo known (DEV_REPO_URL or the workspace origin), so the token's repo access is unchecked"
+    return 0
+  fi
+  reply=$(gh_probe "repos/$slug")
+  cls=$(printf '%s\n' "$reply" | head -n 1)
+  case "$cls" in
+    ok) ok "the token can read $slug (metadata)" ;;
+    bad)
+      fail "the token is rejected by GitHub" "replace the token file with a valid token, then run: dev-init"
+      return 0
+      ;;
+    offline)
+      info "GitHub unreachable, token access unchecked"
+      return 0
+      ;;
+    limited)
+      info "GitHub rate limit reached, token access unchecked"
+      return 0
+      ;;
+    *)
+      fail "the token has no access to $slug" "edit the token at $pat_url: add $slug to its repository access"
+      return 0
+      ;;
+  esac
+  branch=$(printf '%s\n' "$reply" | tail -n +2 | jq -r '.default_branch // empty' 2>/dev/null)
+  branch=${branch:-main}
+
+  for name in contents issues "pull requests" actions checks; do
+    case "$name" in
+      contents) path="repos/$slug/contents/?ref=$branch"; perm="Contents: read" ;;
+      issues) path="repos/$slug/issues?per_page=1"; perm="Issues: read" ;;
+      "pull requests") path="repos/$slug/pulls?per_page=1"; perm="Pull requests: read" ;;
+      actions) path="repos/$slug/actions/runs?per_page=1"; perm="Actions: read" ;;
+      checks) path="repos/$slug/commits/$branch/check-runs?per_page=1"; perm="Checks: read" ;;
+    esac
+    cls=$(gh_probe "$path" | head -n 1)
+    case "$cls" in
+      ok) ok "the token can read $name on $slug" ;;
+      denied) fail "the token cannot read $name on $slug" "edit the token at $pat_url: give it $perm" ;;
+      bad)
+        fail "the token is rejected by GitHub" "replace the token file with a valid token, then run: dev-init"
+        return 0
+        ;;
+      limited) info "GitHub rate limit reached, so $name access is unchecked" ;;
+      *)
+        info "GitHub unreachable, token access unchecked"
+        return 0
+        ;;
+    esac
+  done
+  info "write access unchecked: give the token read and write on contents, issues, pull requests and workflows"
+}
