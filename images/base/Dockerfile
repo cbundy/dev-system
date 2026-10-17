@@ -255,7 +255,7 @@ COPY --chmod=0755 \
   images/base/factory-db-bootstrap \
   images/base/systemctl \
   /usr/local/bin/
-COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
+COPY --chmod=0755 images/base/agentsview-push-loop images/base/event-push-loop images/base/factory-event-push-loop images/base/nm-push-loop images/base/nm-export images/base/heartbeat-loop images/base/heartbeat-state /usr/local/share/dev-system/
 # The migrations factory-db-bootstrap applies (cbundy/dev-system#646); it finds them here.
 COPY --chmod=0644 images/base/factory-db/migrations/*.sql /usr/local/share/dev-system/factory-db/migrations/
 # The claim rule callum-flow-claim and callum-flow-sweep share (cbundy/dev-system#660).

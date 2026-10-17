@@ -293,6 +293,8 @@ dual_write() {
 if printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
   touch "$dir/.wake" 2>/dev/null || :
   dual_write
+  # again after the new line exists, so factory-event-push-loop wakes for it
+  touch "$dir/.wake" 2>/dev/null || :
 else
   warn "cannot write $dir/$file - event not recorded"
 fi

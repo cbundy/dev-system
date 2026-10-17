@@ -112,8 +112,9 @@ SQL
   0700). The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
   `callum-flow-sweep`, `--if-changed` (which keeps comparing old lines only) or the old shipper's
   `$DIR/*.jsonl` glob (`images/base/event-push-loop:202`).
-- **Shipping.** The new push loop keeps its own cursor and stores each line's number in the file
-  as `device_seq`. A line the database refuses is set aside with a warning naming it and its
+- **Shipping.** `factory-event-push-loop` (as the writer role, with `FACTORY_DB_WRITER_URL` or the
+  `factory-db-writer-url` secret) keeps its own cursor in `factory/.pushed/` and stores each line's number in the file
+  as `device_seq`. Set-aside lines go to `factory/.refused/<file>`. A line the database refuses is set aside with a warning naming it and its
   error, and the cursor moves on: one bad line never holds back the lines after it.
 - **Store.** `factory.event_store`: the envelope fields and `device_seq` as columns, `data` as
   JSON, primary key `event_id`, so a re-push never makes a second row. It accepts any type and
