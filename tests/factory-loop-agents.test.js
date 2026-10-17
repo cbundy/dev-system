@@ -198,3 +198,17 @@ test("the v2 designer has a section on waiting between its question and split se
   assert.match(body, /Never offer the owner a release/);
   assert.match(body, /answers with a fixed-shape design brief, a question for the owner, a wait on a condition the loop checks, or a split/);
 });
+
+test("the v2 designer explores with its own reads: no Agent tool, no explorer, a checklist and an Exploration line (#851)", () => {
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  assert.ok(!toolsOf(raw).includes("Agent"), "tools: does not list Agent");
+  const dis = raw.match(/^disallowedTools:(.*)$/m);
+  assert.ok(dis && dis[1].split(",").map((t) => t.trim()).includes("Agent"), "disallowedTools lists Agent");
+  const body = raw.replace(/\s+/g, " ");
+  assert.doesNotMatch(body, /callum-flow:explorer|explorer agent/);
+  assert.match(body, /size limits/);
+  assert.match(body, /tests that pin the text or behavior/);
+  assert.match(body, /every path and line range the brief cites exists at `origin\/<base>`/);
+  const shape = raw.slice(raw.indexOf("## Design brief (designer,"));
+  assert.ok(shape.indexOf("Exploration: <") !== -1 && shape.indexOf("Exploration: <") < shape.indexOf("## Acceptance criteria"));
+});
