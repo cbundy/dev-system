@@ -12,7 +12,7 @@ import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from './config'
-import { DEFAULT_POOL_SIZE, checkKey, checkSetting, editSetting, effectText, shown, valueIn, valueOfText } from './config-keys'
+import { DEFAULT_POOL_SIZE, checkKey, checkSetting, editSetting, effectText, withoutSetting, shown, valueIn, valueOfText } from './config-keys'
 import { clock, configText } from './config-view'
 import type { ConfigView } from './config-view'
 import { OPS, USAGE, helpText, hintText } from './control-help'
@@ -250,7 +250,7 @@ function applyChange(control: Control, change: { key: string; value?: unknown },
   const now = (config: Parameters<typeof valueIn>[0] | undefined) => (config === undefined ? undefined : valueIn(config, key, sub))
   // the value in force, and what an unset leaves in force: the repo's, else the default
   const was = key === 'poolSize' ? view?.poolSize : now(view?.config)
-  const after = set ? change.value : key === 'poolSize' ? DEFAULT_POOL_SIZE : now(loadConfig(view?.repoRaw ?? {}).config)
+  const after = set ? change.value : key === 'poolSize' ? DEFAULT_POOL_SIZE : now(loadConfig(view?.repoRaw ?? {}, withoutSetting(view?.workspaceRaw ?? {}, checked)).config)
   const name = sub === null ? change.key : `${checked.fileKey}.${sub}`
   const text = `${set ? 'Set' : 'Unset'} ${name}: was ${was === undefined ? 'unknown' : shown(key, was)}, now ${shown(key, after)}; ${effectText(key)}.`
   const setting = { k: { key, fileKey: checked.fileKey, sub }, ...(set ? { value: change.value } : {}) }

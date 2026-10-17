@@ -2,7 +2,7 @@
 // keys the file may hold, how a typed key and value are checked (by loadConfig itself, so the op
 // accepts exactly what the loader would), when a change applies, and the edit of the file's text.
 // Pure: control.ts runs it over the file's read and write.
-import { ATTEMPT_KEYS, COUNT_MAPS, DEFAULT_CONFIG, TIME_MAPS, loadConfig, shortDuration } from './config'
+import { ATTEMPT_KEYS, COUNT_MAPS, DEFAULT_CONFIG, TIME_MAPS, loadConfig, parseDuration, shortDuration } from './config'
 import type { Config } from './types'
 
 // The workspace file's keys that are not settings: the plugin's options and the runtime's own.
@@ -212,7 +212,21 @@ export function editSetting(text: string | null, k: { key: string; fileKey: stri
       changed = JSON.stringify(raw[k.fileKey] !== undefined && isObject(raw[k.fileKey]) ? (raw[k.fileKey] as Record<string, unknown>)[sub] : undefined) !== JSON.stringify(value)
       merged[sub] = value
     }
+    // the Ms spelling takes numbers only: an entry moved there from the short spelling keeps its meaning in ms
+    if (k.fileKey === k.key) {
+      for (const [name, v] of Object.entries(merged)) {
+        const ms = typeof v === 'string' ? parseDuration(v) : null
+        if (ms !== null) merged[name] = ms
+      }
+    }
     if (Object.keys(merged).length > 0) out[k.fileKey] = merged
   }
   return { ok: true, text: JSON.stringify(out, null, 2) + '\n', changed }
+}
+
+// withoutSetting: the workspace file's settings with the key (both spellings) or entry removed, as an
+// unset leaves them: what the loader then reads, planner included.
+export function withoutSetting(workspaceRaw: Record<string, unknown>, k: { key: string; fileKey: string; sub: string | null }): Record<string, unknown> {
+  const edited = editSetting(JSON.stringify(workspaceRaw), k, undefined)
+  return edited.ok ? (JSON.parse(edited.text) as Record<string, unknown>) : workspaceRaw
 }

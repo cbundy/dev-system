@@ -7,6 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { PassSummary } from '../types'
 import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
 import { effectText } from '../hooks/config-keys'
+import { sourceOf } from '../hooks/config-view'
 import {
   CONTROL_TOOL,
   FACTORY_COMMAND,
@@ -745,9 +746,27 @@ describe('config set and unset', () => {
     expect(reply.text).toBe('Unset maxLives: was 2, now 4; from the next pass.')
     expect(loadConfig(repo, file(f)).config.maxLives).toBe(4)
     expect(loadConfig({}, file(f)).config.maxLives).toBe(3)
+    const src = (r: Record<string, unknown>, w: Record<string, unknown>) => sourceOf('maxLives', r, w)
+    expect(src(repo, { maxLives: 2 })).toBe('workspace')
+    expect(src(repo, file(f) as Record<string, unknown>)).toBe('repo')
+    expect(src({}, file(f) as Record<string, unknown>)).toBe('default')
     await run(f.io, 'config unset passEvery')
     await run(f.io, 'config unset stateTimeout.design')
     expect(file(f)).toEqual({})
+  })
+
+  test('unset under planner v2 names the v2 default now in force', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ planner: 'v2', maxInFlightIssues: 5 }) })
+    const reply = await run(f.io, 'config unset maxInFlightIssues', { view: view({}, file(f) as Record<string, unknown>) })
+    expect(reply.text).toBe('Unset maxInFlightIssues: was 5, now 3; from the next pass.')
+    expect(file(f)).toEqual({ planner: 'v2' })
+  })
+
+  test('a set that moves a short-spelling map to Ms turns its durations into numbers', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ stateTimeout: { design: '2h' } }) })
+    expect((await run(f.io, 'config set stateTimeoutMs.build 100', { view: view() })).ok).toBe(true)
+    expect(file(f)).toEqual({ stateTimeoutMs: { design: 2 * HOUR, build: 100 } })
+    expect(loadConfig(file(f)).problems).toEqual([])
   })
 
   test('unset of a key the file does not set changes nothing', async () => {
