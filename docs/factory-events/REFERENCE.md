@@ -27,6 +27,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`transition`](#transition) | v1 | required | The loop's record of the issue changed: it moved to a new state, or its step, attempt or notes changed. |
 | [`untrusted_stripped`](#untrusted_stripped) | v1 | required | A read of GitHub content dropped text by untrusted authors, or refused an untrusted issue, pull request or comment outright. |
 | [`usage`](#usage) | v1 | none | A reading of the Claude subscription's usage windows. |
+| [`wind_down`](#wind_down) | v1 | none | One stop of a workspace's loop finished winding down: the loop stopped taking new work, waited for the steps that were running (up to a cap), then stopped. |
 
 ## Envelope
 
@@ -98,29 +99,37 @@ Example:
 | `answer_path` | string | `reviewed` | The reviewer's answer file on the loop's device. Identifies the review: one event per answer. |
 | `attempt` | integer | `transition` | The attempt of that step, from 1. |
 | `branch` | string | `abandoned`, `finding_handled`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
+| `cap_ms` | integer | `wind_down` | The longest the stop was allowed to wait, in milliseconds. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
+| `cut_at_stop` | integer | `wind_down` | How many steps were still running, and cut, when the loop stopped. |
+| `cut_at_stop_keys` | array of string | `wind_down` | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
-| `outcome` | enum | `finding_handled` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
+| `outcome` | enum | `finding_handled`, `wind_down` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `requested_at` | string | `wind_down` | When the stop was asked for. With outcome off it equals stopped_at. |
 | `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
 | `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
+| `running_at_request` | integer | `wind_down` | How many steps were running when the stop was asked for. |
 | `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
+| `stopped_at` | string | `wind_down` | When the loop stopped. With outcome off it equals requested_at. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
+| `trigger` | string | `wind_down` | What asked for the stop: restart-self, coder-stop, or null when not known. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
+| `waited_ms` | integer | `wind_down` | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover. |
 | `why` | enum | `transition` | closed: why the life ended; null otherwise. |
 
@@ -771,5 +780,48 @@ Example:
   "seven_day_resets_at": "2026-10-23T11:00:00.000Z",
   "source": "oauth",
   "reasons": []
+}
+```
+
+## wind_down
+
+One stop of a workspace's loop finished winding down: the loop stopped taking new work, waited for the steps that were running (up to a cap), then stopped. Written once per stop, not for an issue. A retried write can repeat it: count one per (repo, device, requested_at).
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: (repo, device, requested_at)
+
+### wind_down v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `requested_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the stop was asked for. With outcome off it equals stopped_at. |
+| `stopped_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the loop stopped. With outcome off it equals requested_at. |
+| `waited_ms` | integer | required | no | minimum 0 | yes | How long the stop waited for running steps, in milliseconds; 0 with outcome off. |
+| `cap_ms` | integer | required | no | minimum 0 | yes | The longest the stop was allowed to wait, in milliseconds. |
+| `outcome` | enum | required | no | one of "idle", "cap", "now", "off" | yes | How the wait ended: idle (no step was left running), cap (the wait cap ran out and the rest were cut), now (stopped at once, running steps cut), or off (wind-down is off: no wait). |
+| `running_at_request` | integer | required | no | minimum 0 | yes | How many steps were running when the stop was asked for. |
+| `running_at_request_keys` | array of string | required | no |  |  | The loop keys of those steps (stepKey i<N>/l<life>/s<seq>/<step>/a<n>, or reviewKey i<N>/l<life>/review/<patch7>/r<round>/a<n>). |
+| `cut_at_stop` | integer | required | no | minimum 0 | yes | How many steps were still running, and cut, when the loop stopped. |
+| `cut_at_stop_keys` | array of string | required | no |  | yes | The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run. |
+| `trigger` | string | required | yes | one of "restart-self", "coder-stop", null | yes | What asked for the stop: restart-self, coder-stop, or null when not known. |
+
+Example:
+
+```json
+{
+  "requested_at": "2026-10-17T10:00:00.000Z",
+  "stopped_at": "2026-10-17T10:04:10.500Z",
+  "waited_ms": 250500,
+  "cap_ms": 300000,
+  "outcome": "idle",
+  "running_at_request": 2,
+  "running_at_request_keys": [
+    "i840/ltn0brb/s6/build/a1",
+    "i841/ltn0brc/review/0821e6a/r2/a1"
+  ],
+  "cut_at_stop": 0,
+  "cut_at_stop_keys": [],
+  "trigger": "restart-self"
 }
 ```

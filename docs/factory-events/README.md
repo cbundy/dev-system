@@ -137,7 +137,7 @@ SQL
 - **View.** `factory.event_log`: one row per event, the envelope columns and `device_seq`, plus
   one column for each payload field marked `"x-column": true` in the schemas (what today's tools
   and saved queries read, and each type's counting key). Each lifted column is read from `data` by
-  name whatever the version; a version that renames or retypes a lifted field ships its view
+  name whatever the version (an array field is lifted as `jsonb`); a version that renames or retypes a lifted field ships its view
   change with its schema. A column is null when the type lacks the field. Rows order by `ts`,
   `device`, `device_seq`. `ts` is `timestamptz` in Postgres and ISO text in SQLite. Shared queries
   read only the view and keep the [#644](https://github.com/cbundy/dev-system/issues/644) rules: no
