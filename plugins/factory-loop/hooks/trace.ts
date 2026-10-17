@@ -45,7 +45,7 @@ export type Tracer = {
 const CMD_MAX = 160
 const ERROR_MAX = 200
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
-const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 const encoder = new TextEncoder()
 
 // to a tenth of a millisecond: plan takes a few

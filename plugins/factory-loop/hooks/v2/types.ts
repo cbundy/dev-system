@@ -16,7 +16,7 @@ import type { WorkspaceRead } from './workspace'
 
 // --- states, steps and the record (SPEC 3.1, 3.2) ------------------------------------------------
 
-export const ISSUE_STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'closed'] as const
+export const ISSUE_STATES = ['queued', 'designing', 'building', 'reviewing', 'fixing', 'merge-queue', 'parked', 'waiting', 'closed'] as const
 export type IssueState = (typeof ISSUE_STATES)[number]
 
 export const STEP_KINDS = ['lease', 'design', 'build', 'review', 'fix', 'queue', 'triage'] as const
@@ -28,7 +28,7 @@ export type ClosedWhy = (typeof CLOSED_WHYS)[number]
 // The states that hold a slot and count in flight (3.1): designing to merge-queue.
 export const SLOT_STATES: readonly IssueState[] = ['designing', 'building', 'reviewing', 'fixing', 'merge-queue']
 
-// The step each state runs (4.2). Parked and closed run none; a merge-queue record runs `queue`
+// The step each state runs (4.2). Parked, waiting and closed run none; a merge-queue record runs `queue`
 // only while it is the queue's head (9.1).
 export const STATE_STEP: Readonly<Record<IssueState, StepKind | null>> = {
   queued: 'lease',
@@ -38,6 +38,7 @@ export const STATE_STEP: Readonly<Record<IssueState, StepKind | null>> = {
   fixing: 'fix',
   'merge-queue': 'queue',
   parked: null,
+  waiting: null,
   closed: null,
 }
 
@@ -63,6 +64,10 @@ export const STEP_AGENT: Readonly<Record<AgentStep, `factory-loop:${string}`>> =
   triage: 'factory-loop:triage',
 }
 
+// One condition a waiting record waits on (3.2, 8.7): an issue closed or a PR merged. A record
+// waits until every one holds. `tag-contains` joins them with #838.
+export type WaitCondition = { kind: 'issue-closed'; issue: number } | { kind: 'pr-merged'; pr: number }
+
 // The record (3.2). The slot is not a field: a record holds the slot whose lease holder is
 // `factory-loop:<N>:<life>` (10.1).
 export type IssueRecord = {
@@ -76,7 +81,7 @@ export type IssueRecord = {
   state: IssueState
   // when it entered this state
   since: Ms
-  // queued: where a lease leads (default designing); parked: where an unpark leads
+  // queued: where a lease leads (default designing); parked and waiting: where a resume leads
   resumeTo: IssueState | null
   // fixed for the life (3.5)
   branch: string
@@ -102,6 +107,8 @@ export type IssueRecord = {
   round: number
   // parked: the question for the owner
   question: string | null
+  // waiting: the conditions it waits on, every one of which must hold; null in any other state
+  wait: WaitCondition[] | null
   // closed: why
   why: ClosedWhy | null
   // owner, triage and decline notes for the step of this seq
@@ -118,7 +125,7 @@ export type RecordRef = { issue: number; life: string; seq: number }
 
 // --- the table's input and rows (SPEC 4.1, 4.6, 5) -------------------------------------------------
 
-export const EVENT_KINDS = ['ok', 'not-ok', 'unknown', 'triage', 'drop', 'unpark', 'issue-closed', 'pr-merged', 'pr-closed', 'claim-lost', 'timeout'] as const
+export const EVENT_KINDS = ['ok', 'not-ok', 'unknown', 'triage', 'drop', 'cleared', 'unpark', 'issue-closed', 'pr-merged', 'pr-closed', 'claim-lost', 'timeout'] as const
 export type EventKind = (typeof EVENT_KINDS)[number]
 
 // The causes outside the issue that earn one free re-run per attempt (5.1, row U1).
@@ -221,7 +228,7 @@ export type V2Outcome =
 
 // --- the action kinds (appendix B) ----------------------------------------------------------------
 
-export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot'] as const
+export const V2_ACTION_KINDS = ['transition', 'label', 'comment', 'event', 'pr', 'split', 'agent-step', 'ci-rerun', 'queue-update', 'queue-merge', 'slot', 'link'] as const
 export type V2ActionKind = (typeof V2_ACTION_KINDS)[number]
 
 // What the transition executor re-checks against the live ledger and records before it stores
@@ -299,6 +306,9 @@ export type V2Action =
       evidence: string | null
       brief: string | null
     })
+  // a waiting record's issue linked as blocked by an issue it waits on (blocker): the GitHub dependency
+  // link, once per condition; a closed blocker is skipped, a pull request is no blocker (act-split.ts)
+  | (ActionBase & { kind: 'link'; blocker: number })
   // one child per action; blockedBy: the issue numbers it waits on: siblings made, or existing issues
   | (ActionBase & { kind: 'split'; parent: number; child: SplitChild; blockedBy: number[] })
   | (ActionBase & { kind: 'agent-step'; step: AgentStep; life: string; seq: number; attempt: number; branch: string; slot: string | null; notes: string[] })
@@ -326,6 +336,7 @@ export const FACTORY_LABELS: Readonly<Record<Exclude<IssueState, 'closed'>, { na
   fixing: { name: 'factory:fixing', color: 'd93f0b', description: 'Factory loop: a fixer is at work' },
   'merge-queue': { name: 'factory:merge-queue', color: '5319e7', description: 'Factory loop: approved and green, waiting to merge' },
   parked: { name: 'factory:parked', color: 'b60205', description: 'Factory loop: waits on the owner; remove this label to resume' },
+  waiting: { name: 'factory:waiting', color: 'fef2c0', description: 'Factory loop: waits on a condition the loop checks; it resumes by itself' },
 }
 
 // resumeStep: how the owner resumes a parked issue (11), one text for every message that says so:
@@ -390,6 +401,9 @@ export type Lease = { path: string; lease: string; holder: string; issue: number
 // read newer than the park is the unpark signal (3.4).
 export type IssueRead = { at: Ms; open: boolean | null; labels: string[] | null }
 
+// One wait condition as the last successful read showed it, and when that read was taken (4.4).
+export type WaitRead = { at: Ms; held: boolean }
+
 // A trusted comment on an issue (callum-flow-issue-read --comments), for a resume's note (11).
 export type IssueComment = { body: string; at: Ms; url: string | null }
 
@@ -418,6 +432,9 @@ export type V2State = {
   // trusted comments of parked records whose label a person removed, by issue number
   comments: Record<number, IssueComment[]>
   prs: PrsRead
+  // the conditions waiting records wait on, by key (`issue:57`, `pr:812`): the last read that
+  // showed one; a condition with no entry was not read, or its read failed, and stays open
+  waits?: Record<string, WaitRead>
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:
   // an older read of the issue is due at once, and pr-closed waits for it (4.1)
   changed: Record<number, Ms>
@@ -466,4 +483,4 @@ export const MODELS = ['sonnet', 'opus', 'haiku', 'fable'] as const
 export type Model = (typeof MODELS)[number]
 
 // The timeouts and tell periods of 4.4, by step and waiting state.
-export type StateTimeouts = { design: Ms; build: Ms; review: Ms; fix: Ms; triage: Ms; queued: Ms; queueWait: Ms; parked: Ms }
+export type StateTimeouts = { design: Ms; build: Ms; review: Ms; fix: Ms; triage: Ms; queued: Ms; queueWait: Ms; parked: Ms; waiting: Ms }

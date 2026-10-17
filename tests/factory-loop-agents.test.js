@@ -187,3 +187,14 @@ test("the v2 designer asks for a split's four reasons and each child's why, and 
   for (const k of ["reasons", "why_split", "why_count", "why_parts", "why_order"]) assert.match(body, new RegExp(`\`${k}\``), k);
   assert.match(body, /Each child's `why`/);
 });
+
+test("the v2 designer has a section on waiting between its question and split sections, and never offers the owner a release", () => {
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  const at = (h) => raw.indexOf(h);
+  assert.ok(at("## A question") !== -1 && at("## A question") < at("## A wait") && at("## A wait") < at("## A split"), "## A wait sits between ## A question and ## A split");
+  const body = raw.replace(/\s+/g, " ");
+  assert.match(body, /\{"kind": "wait", "conditions"/);
+  assert.match(body, /`issue-closed`|"kind": "issue-closed"/);
+  assert.match(body, /Never offer the owner a release/);
+  assert.match(body, /answers with a fixed-shape design brief, a question for the owner, a wait on a condition the loop checks, or a split/);
+});

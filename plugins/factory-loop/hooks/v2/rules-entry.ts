@@ -17,7 +17,7 @@
 import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
-import { decisionOf, parkText } from './park-text'
+import { decisionOf, parkText, waitText } from './park-text'
 import { fixWhyOf, lifeEntries } from './rules-agent'
 import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
@@ -155,6 +155,12 @@ export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): Entr
   if (changed && r.state === 'parked') {
     add({ ...base(r, entryKey(r, 'comment'), 'the park\'s question on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: parkText(r, t.from, t.via) })
     add(parkedTell(r, 0), false, true)
+  }
+  // a wait: one comment that lists the conditions, and a blocked_by link for each issue condition (no
+  // owner tell: the owner has nothing to answer)
+  if (changed && r.state === 'waiting') {
+    add({ ...base(r, entryKey(r, 'comment'), 'the wait\'s conditions on the issue'), kind: 'comment', on: 'issue', number: r.issue, body: waitText(r) })
+    for (const c of r.wait ?? []) if (c.kind === 'issue-closed') add({ ...base(r, entryKey(r, `link/${c.issue}`), `link #${r.issue} as blocked by #${c.issue}`), kind: 'link', blocker: c.issue })
   }
   if (changed && r.state === 'closed') items.push(...closedItems(ctx, r))
   return items

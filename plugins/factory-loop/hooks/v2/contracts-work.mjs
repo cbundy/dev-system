@@ -12,6 +12,11 @@
 //     { "kind": "split", "brief": "<the epic's plan>",
 //       "reasons": { "why_split": "...", "why_count": "...", "why_parts": "...", "why_order": "..." },
 //       "children": [{ "key": "a", "title": "...", "why": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
+//     { "kind": "wait", "conditions": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "pr-merged", "pr": 812 }],
+//       "reason": "<one line, at most 500>", "brief": "<a draft, or null>" }
+//       1 to 8 conditions of issue-closed or pr-merged, each number at least 1, never the issue itself,
+//       none twice; the loop re-checks them and resumes the designer once every one holds (#838 adds
+//       tag-contains); the outcome carries conditions and reason only for a wait
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
@@ -40,7 +45,7 @@
 
 import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
 
-export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split'])
+export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
 export const FIX_RESULTS = Object.freeze(['fixed', 'declined'])
 export const DISPOSITIONS = Object.freeze(['fixed', 'declined'])
@@ -55,6 +60,7 @@ export const LIMITS = Object.freeze({
   childBody: 20000,
   childWhy: 200,
   splitReason: 500,
+  waitReason: 500,
   title: 72,
   summary: 4000,
   evidence: 4000,
@@ -64,6 +70,9 @@ export const LIMITS = Object.freeze({
 })
 export const REASON_KEYS = Object.freeze(['why_split', 'why_count', 'why_parts', 'why_order'])
 export const CHILDREN = Object.freeze({ min: 2, max: 10 })
+export const WAIT_CONDITIONS = Object.freeze({ min: 1, max: 8 })
+// The conditions a wait may name: the loop checks each from GitHub with no model call.
+export const WAIT_KINDS = Object.freeze(['issue-closed', 'pr-merged'])
 // A child's key goes into its ledger key (keys.ts childKey) and its hidden marker.
 export const CHILD_KEY = /^[a-z0-9][a-z0-9-]{0,23}$/
 const SHA = /^[0-9a-f]{7,40}$/i
@@ -289,14 +298,61 @@ function partsOf(p) {
   return out
 }
 
+// conditionsOf: a wait's conditions, as the loop stores them; every problem at once.
+function conditionsOf(v, problems, self) {
+  if (!Array.isArray(v)) {
+    problems.push(`conditions must be a list of ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max} conditions { kind: ${WAIT_KINDS.join(' | ')}, issue | pr }`)
+    return []
+  }
+  if (v.length < WAIT_CONDITIONS.min || v.length > WAIT_CONDITIONS.max) problems.push(`conditions has ${v.length}; a wait has ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max}`)
+  const out = []
+  const seen = new Set()
+  v.forEach((raw, i) => {
+    const where = `conditions[${i}]`
+    const c = record(raw)
+    if (c === null) {
+      problems.push(`${where} must be an object { kind, issue } or { kind, pr }`)
+      return
+    }
+    if (c.kind === 'tag-contains') {
+      problems.push(`${where}: tag-contains is not yet supported; wait on ${WAIT_KINDS.join(' or ')}, or ask the owner`)
+      return
+    }
+    const kind = WAIT_KINDS.find(k => k === c.kind)
+    if (kind === undefined) {
+      problems.push(`${where}.kind ${show(c.kind)} is not one of ${WAIT_KINDS.join(', ')}`)
+      return
+    }
+    const field = kind === 'issue-closed' ? 'issue' : 'pr'
+    strays(c, ['kind', field], where, problems)
+    const n = c[field]
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      problems.push(`${where}.${field} ${show(n)} must be a whole number of at least 1`)
+      return
+    }
+    if (kind === 'issue-closed' && n === self) {
+      problems.push(`${where}.issue ${n} is the issue itself, which stays open until its work is done, so the wait would never end`)
+      return
+    }
+    const id = `${kind}:${n}`
+    if (seen.has(id)) {
+      problems.push(`${where} repeats ${id}`)
+      return
+    }
+    seen.add(id)
+    out.push(kind === 'issue-closed' ? { kind, issue: n } : { kind, pr: n })
+  })
+  return out
+}
+
 function checkDesign(input, job) {
   const o = record(input)
-  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split", "brief", and "question" or "children"}'] }
+  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split" | "wait", "brief", and "question", "children" or "conditions" and "reason"}'] }
   const problems = []
-  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children'], 'a design answer', problems)
+  strays(o, ['kind', 'brief', 'question', ...QUESTION_FIELDS, 'reasons', 'children', 'conditions', 'reason'], 'a design answer', problems)
   const kind = DESIGN_KINDS.find(k => k === o.kind)
   if (kind === undefined) problems.push(`kind ${show(o.kind)} is not one of ${DESIGN_KINDS.join(', ')}`)
-  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' ? 'optional' : 'required', problems)
+  const brief = text(o, 'brief', LIMITS.brief, kind === 'question' || kind === 'wait' ? 'optional' : 'required', problems)
   if (kind === 'brief' && brief !== null) {
     if (!BRIEF_HEADING.test(brief)) problems.push('brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)')
     problems.push(...rolloutProblems(brief, 'brief'))
@@ -314,13 +370,24 @@ function checkDesign(input, job) {
     if (o.children !== undefined && o.children !== null) problems.push('children must be absent or null unless kind is split')
     if (o.reasons !== undefined && o.reasons !== null) problems.push('reasons must be absent or null unless kind is split')
   }
-  return checked(problems, () => ({ kind, brief, question, ...parts, reasons, children }))
+  let wait = {}
+  if (kind === 'wait') {
+    const conditions = conditionsOf(o.conditions, problems, job.issue)
+    const reason = text(o, 'reason', LIMITS.waitReason, 'required', problems)
+    oneLine(reason, 'reason', problems)
+    wait = { conditions, reason }
+  } else {
+    if (o.conditions !== undefined && o.conditions !== null) problems.push('conditions must be absent or null unless kind is wait')
+    if (o.reason !== undefined && o.reason !== null) problems.push('reason must be absent or null unless kind is wait')
+  }
+  return checked(problems, () => ({ kind, brief, question, ...parts, ...wait, reasons, children }))
 }
 
 function summaryOfDesign(input) {
   const o = record(input) ?? {}
   if (o.kind === 'split') return `a split into ${Array.isArray(o.children) ? o.children.length : 0} children`
   if (o.kind === 'question') return 'a question for the owner'
+  if (o.kind === 'wait') return `a wait on ${Array.isArray(o.conditions) ? o.conditions.length : 0} conditions`
   return o.kind === 'brief' ? 'a design brief' : 'no kind'
 }
 

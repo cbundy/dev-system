@@ -24,7 +24,7 @@ import {
 } from '../hooks/v2/events'
 import type { EventRow, InterventionEvent, ReleaseEvent, ReusedEvent, ReviewedEvent, TransitionEvent, V2Event } from '../hooks/v2/events'
 import { CLOSED_WHYS, ISSUE_STATES, STEP_KINDS } from '../hooks/v2/types'
-import type { IssueRecord, IssueState } from '../hooks/v2/types'
+import type { IssueRecord, IssueState, WaitCondition } from '../hooks/v2/types'
 import { NOW } from './fixtures'
 
 // --- a seeded generator, so a failure is reproducible ------------------------------------------------
@@ -82,6 +82,7 @@ function record(g: Rng, small: boolean): IssueRecord {
     why: state === 'closed' ? g.pick(CLOSED_WHYS) : null,
     notes: Array.from({ length: g.int(small ? 3 : 8) }, () => text(g, free)),
     prClosedAt: maybe(g, '2026-10-15T09:30:00Z'),
+    wait: state === 'waiting' ? Array.from({ length: 1 + g.int(8) }, (): WaitCondition => (g.next() < 0.5 ? { kind: 'issue-closed', issue: 1 + g.int(9999) } : { kind: 'pr-merged', pr: 1 + g.int(9999) })) : null,
     lives: 1 + g.int(3),
   }
 }
@@ -144,13 +145,65 @@ describe('the note format (v2 SPEC 7.1)', () => {
         why: null,
         notes: ['check ci', 'a,b'],
         prClosedAt: null,
+        wait: null,
         lives: 1,
       },
     }
     expect(eventNote(e)).toBe(
       'row=T9 life=ss1x2k seq=8 from=reviewing to=fixing seqAt=1000 since=1000 resumeTo=none step=fix attempt=1 cut=no triages=0 fixes=1 round=1 why=none ' +
-        'approvedPatch=none prClosedAt=none lives=1 via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
+        'approvedPatch=none prClosedAt=none lives=1 wait=none via=ci-red brief=https://x/1#c question=none notes=check%20ci,a%2Cb',
     )
+  })
+})
+
+describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
+  const waiting = (wait: WaitCondition[] | null): TransitionEvent => ({
+    state: 'transition',
+    row: 'T16',
+    from: 'designing',
+    via: 'wait',
+    record: {
+      issue: 571,
+      life: 'ss1x2k',
+      seq: 3,
+      seqAt: 1_000,
+      state: 'waiting',
+      since: 1_000,
+      resumeTo: 'designing',
+      branch: 'issue-571',
+      pr: null,
+      head: null,
+      approvedPatch: null,
+      brief: null,
+      step: null,
+      attempt: 1,
+      cut: false,
+      triages: 0,
+      fixes: 0,
+      round: 0,
+      question: null,
+      why: null,
+      notes: [],
+      prClosedAt: null,
+      wait,
+      lives: 1,
+    },
+  })
+
+  test('issue:<n> and pr:<n>, comma-joined, as the image translator reads them; none outside waiting; a note without the token reads null', () => {
+    const wait: WaitCondition[] = [
+      { kind: 'issue-closed', issue: 57 },
+      { kind: 'pr-merged', pr: 812 },
+    ]
+    expect(tokensOf(eventNote(waiting(wait))).get('wait')).toBe('issue:57,pr:812')
+    expect(tokensOf(eventNote(waiting(null))).get('wait')).toBe('none')
+    expect(roundTrip(waiting(wait))).toEqual(waiting(wait))
+    const note = eventNote(waiting(wait)).replace(' wait=issue:57,pr:812', '')
+    const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note }
+    expect(parseTransition(row)?.record.wait).toBeNull()
+    // a token that does not read is no transition
+    expect(parseTransition({ ...row, note: `${note} wait=issue:0` })).toBeNull()
+    expect(parseTransition({ ...row, note: `${note} wait=tag:35bb655` })).toBeNull()
   })
 })
 

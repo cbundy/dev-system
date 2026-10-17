@@ -92,14 +92,14 @@ function runningIn(ctx: V2Ctx, life: Pick<IssueRecord, 'issue' | 'life'>): Ledge
   return lifeEntries(ctx, life).find(e => e.status === 'running' && IN_SLOT.includes(e.kind)) ?? null
 }
 
-// parkedAt: when a resumed record parked: the newest transition of its life into parked, before
+// parkedAt: when a resumed record parked or began to wait: the newest transition of its life into either, before
 // its current seq; else when it entered queued.
 function parkedAt(ctx: V2Ctx, r: IssueRecord): Ms {
   let at: Ms | null = null
   let seq = -1
   for (const e of lifeEntries(ctx, r, 'transition')) {
     const s = keyParts(e.key)?.seq ?? null
-    if (s === null || s >= r.seq || s <= seq || e.outcome?.kind !== 'transition' || e.outcome.to !== 'parked') continue
+    if (s === null || s >= r.seq || s <= seq || e.outcome?.kind !== 'transition' || (e.outcome.to !== 'parked' && e.outcome.to !== 'waiting')) continue
     seq = s
     at = e.startedAt
   }
@@ -113,10 +113,10 @@ function holds(ctx: V2Ctx, l: Lease): boolean {
   return ctx.v2.records.some(r => r.issue === l.issue && r.life === l.life && (r.state === 'queued' || SLOT_STATES.includes(r.state)))
 }
 
-// parked: a record of the lease's life is parked, so a resume continues the life and its scratch
-// folders stay (free --keep-scratch); a later free of the life, after the resume, removes them.
+// parked: a record of the lease's life is parked or waiting, so a resume continues the life and its
+// scratch folders stay (free --keep-scratch); a later free of the life, after the resume, removes them.
 function parked(ctx: V2Ctx, l: Lease): boolean {
-  return ctx.v2.records.some(r => r.issue === l.issue && r.life === l.life && r.state === 'parked')
+  return ctx.v2.records.some(r => r.issue === l.issue && r.life === l.life && (r.state === 'parked' || r.state === 'waiting'))
 }
 
 function frees(ctx: V2Ctx): void {

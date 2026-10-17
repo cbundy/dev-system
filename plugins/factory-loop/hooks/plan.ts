@@ -50,7 +50,7 @@ const ANSWERED_GRACE_MS = 60_000
 // prune of its `rollout:<issue>` entry, so it can never be re-triggered.
 const ROLLOUT_WITHIN_MS = 24 * HOUR
 // the live stages; observe reads the GitHub state of every issue in one (#556)
-export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']
+export const LIVE: readonly Stage[] = ['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']
 export const ENDED: readonly Stage[] = ['merged', 'closed without merge']
 const MERGEABLE_STATES = ['merge-ready', 'head-mismatch', 'conflict']
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']

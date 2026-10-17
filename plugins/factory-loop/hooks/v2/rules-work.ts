@@ -9,7 +9,9 @@
 // - a split: one `split` action per child (keys.ts childKey), each once the siblings it is blocked
 //   by exist, so its blocked_by links name issue numbers; then the plan of the whole posted on the
 //   parent with the children listed; the step is not-ok (split) once that is done (T4), and the
-//   parent's release follows as a closed record's follow-up (rules-entry.ts).
+//   parent's release follows as a closed record's follow-up (rules-entry.ts);
+// - a wait: not-ok at once, its conditions and reason as data (T16); the record's entry actions
+//   (rules-entry.ts) link, comment and label.
 // The builder's and the fixer's steps are the generic agent step: their modules read origin
 // (steps-work.ts) and their results carry what the rows read (table.ts EventData).
 //
@@ -19,12 +21,21 @@ import type { LedgerEntry } from '../types'
 import { childKey, entryKey } from './keys'
 import { agentStep, lifeEntries, unknownOf } from './rules-agent'
 import type { StepEnv, StepPlan, StepRead } from './rules-agent'
-import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger } from './types'
+import type { IssueRecord, SplitChild, SplitReasons, StepKind, TableEvent, Trigger, WaitCondition } from './types'
 
 const RULE = 'S2'
 
 // The design answer as the step's result carries it (contracts-work.mjs DesignAnswer).
-type Design = { kind: 'brief' | 'question' | 'split'; brief: string | null; question: string | null; reasons: SplitReasons | null; children: SplitChild[] }
+type Design = {
+  kind: 'brief' | 'question' | 'split' | 'wait'
+  brief: string | null
+  question: string | null
+  reasons: SplitReasons | null
+  children: SplitChild[]
+  // a wait: what it waits on and why
+  conditions: WaitCondition[]
+  reason: string | null
+}
 
 const REASON_KEYS = ['why_split', 'why_count', 'why_parts', 'why_order'] as const
 
@@ -42,9 +53,18 @@ export function designOf(e: LedgerEntry | undefined): Design | null {
   const data = e?.outcome?.kind === 'step' ? e.outcome.result.data : null
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return null
   const d = data as Partial<Design>
-  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split') return null
+  if (d.kind !== 'brief' && d.kind !== 'question' && d.kind !== 'split' && d.kind !== 'wait') return null
   const children = Array.isArray(d.children) ? d.children : []
-  return { kind: d.kind, brief: typeof d.brief === 'string' ? d.brief : null, question: typeof d.question === 'string' ? d.question : null, reasons: reasonsOf(d.reasons), children }
+  const conditions = Array.isArray(d.conditions) ? d.conditions : []
+  return {
+    kind: d.kind,
+    brief: typeof d.brief === 'string' ? d.brief : null,
+    question: typeof d.question === 'string' ? d.question : null,
+    reasons: reasonsOf(d.reasons),
+    children,
+    conditions,
+    reason: typeof d.reason === 'string' ? d.reason : null,
+  }
 }
 
 // splitDesignOf: the split a life's designer answered (its newest done design step that split), or null
@@ -149,6 +169,11 @@ export const designPlan: StepPlan = env => {
     return { kind: 'result', event, trigger: read.trigger }
   }
   if (d.kind === 'split') return splitPlan(env, d, read.trigger)
+  if (d.kind === 'wait') {
+    if (d.conditions.length === 0) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer waits on no condition'), trigger: read.trigger }
+    const text = d.reason ?? 'the designer waits on a condition'
+    return { kind: 'result', event: { kind: 'not-ok', reason: 'wait', data: { text, conditions: d.conditions } }, trigger: read.trigger }
+  }
   if (d.brief === null) return { kind: 'result', event: unknownOf(ctx, r, entry ?? null, 'bad-answer', 'the design answer holds no brief'), trigger: read.trigger }
   const posted = effect(env, briefComment(r, d.brief), 'the brief on the issue')
   if ('read' in posted) return posted.read

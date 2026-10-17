@@ -55,10 +55,10 @@ export function applyDrop(control: Control, issue: number, now: Ms): V2Applied {
   }
 }
 
-// parkedOf: the issues parked now, as the last pass's records say, under planner v2; null otherwise
+// parkedOf: the issues parked or waiting now, as the last pass's records say, under planner v2; null otherwise
 // or when no pass read them.
 export function parkedOf(planner: Planner, records: readonly IssueRecord[] | undefined): number[] | null {
-  return planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked').map(r => r.issue) : null
+  return planner === 'v2' && records !== undefined ? records.filter(r => r.state === 'parked' || r.state === 'waiting').map(r => r.issue) : null
 }
 
 // The planner and the mode in force.

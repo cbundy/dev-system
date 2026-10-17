@@ -119,6 +119,13 @@ describe('configText', () => {
     expect(line(configText(view({}), control(), NOW), 'stateTimeout')).toEndWith(' default')
   })
 
+  test('stateTimeoutMs lists the waiting period (24h by default) and takes a repo\'s value for it', () => {
+    expect(configText(view({}), control(), NOW)).toContain('waiting 24h')
+    const text = configText(view({ stateTimeout: { waiting: '6h' } }), control(), NOW)
+    expect(text).toContain('repo: waiting')
+    expect(text).toContain('waiting 6h')
+  })
+
   test('the origin-unreadable problem is listed', () => {
     const problem = "settings: origin's default branch not read (origin/main: bad ref); the main checkout's file is used"
     const text = configText(view({}, {}, { problems: [problem] }), control(), NOW)

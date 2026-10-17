@@ -19,6 +19,7 @@ export type Stage =
   | 'implementing'
   | 'in pipeline'
   | 'parked'
+  | 'waiting'
   | 'ready to merge'
   | 'merged'
   | 'closed without merge'

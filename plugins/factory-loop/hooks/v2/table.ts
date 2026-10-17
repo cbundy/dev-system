@@ -1,4 +1,4 @@
-// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 33 rows, each
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 35 rows, each
 // naming the states it applies to, the event it takes, a pure guard, the next state and the pure
 // change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
@@ -9,7 +9,7 @@
 // Pure: the time is the caller's `now`, the settings the caller's Config.
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
-import type { EmitState, IssueRecord, IssueState, Row, TableEvent } from './types'
+import type { EmitState, IssueRecord, IssueState, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
 
@@ -22,12 +22,13 @@ export const LIVE_STATES: readonly IssueState[] = ISSUE_STATES.filter(s => s !==
 // and T15. A step module that gives another one is read as unknown (normalize).
 export const NOT_OK_REASONS: Readonly<Record<IssueState, readonly string[]>> = {
   queued: [],
-  designing: ['question', 'split'],
+  designing: ['question', 'split', 'wait'],
   building: ['cannot', 'no-commit'],
   reviewing: ['changes', 'ci-red', 'conflict'],
   fixing: ['declined'],
   'merge-queue': ['changes', 'ci-red', 'conflict', 'patch', 'policy'],
   parked: [],
+  waiting: [],
   closed: [],
 }
 
@@ -60,6 +61,8 @@ export type EventData = {
   commits?: boolean
   // E4, P1: GitHub's closedAt of the PR's hand close
   closedAt?: string
+  // T16: the conditions the designer waits on, and why
+  conditions?: WaitCondition[]
   // P1: the owner's note, or the trusted comments posted after the park
   note?: string
 }
@@ -77,18 +80,18 @@ export function ownStep(r: IssueRecord): boolean {
 
 const onTriage = (r: IssueRecord) => r.step === 'triage'
 
-// waiting: the records whose `timeout` event is a tell period (E6, 4.4): queued for its slot,
-// parked, and a merge-queue record on its queue step, which waits when it is behind the head. The
+// tellPeriodic: the records whose `timeout` event is a tell period (E6, 4.4): queued for its slot,
+// parked, waiting on a condition, and a merge-queue record on its queue step, which waits when it is behind the head. The
 // head's step runs: rules-state.ts sends a running step's timeout as its unknown (why timeout),
 // so a hung head takes U1 to U4, never E6. Anywhere else a timeout is the running step's unknown.
-export function waiting(r: IssueRecord): boolean {
-  return r.state === 'queued' || r.state === 'parked' || (r.state === 'merge-queue' && r.step === 'queue')
+export function tellPeriodic(r: IssueRecord): boolean {
+  return r.state === 'queued' || r.state === 'parked' || r.state === 'waiting' || (r.state === 'merge-queue' && r.step === 'queue')
 }
 
-// sameTarget: where "resumeTo same state" leads (3.2): a record parked from queued keeps queued's
-// own target, never queued itself.
+// sameTarget: where "resumeTo same state" leads (3.2): a record parked from queued or waiting keeps
+// that state's own target, never queued or waiting itself.
 export function sameTarget(r: IssueRecord): IssueState {
-  return r.state === 'queued' ? (r.resumeTo ?? 'designing') : r.state
+  return r.state === 'queued' || r.state === 'waiting' ? (r.resumeTo ?? 'designing') : r.state
 }
 
 // commits: the branch has commits beyond the base (X2): the event's word, else a head a writer
@@ -159,6 +162,13 @@ function lastTwo(r: IssueRecord, e: TableEvent): string {
 
 const none = () => ({})
 
+// clearedNote: the line a resumed designer reads in its notes, naming each condition that held.
+function clearedNote(wait: readonly WaitCondition[]): string {
+  const held = wait.map(c => (c.kind === 'issue-closed' ? `#${c.issue} closed` : `PR #${c.pr} merged`))
+  // not ending on "closed": a prompt rewrites a closing keyword at a line's end (prompts.ts neutral)
+  return `The loop resumed this: ${held.join(', ')}; every condition holds.`
+}
+
 // lifePrOf: the life's PR (E3, E4): the record's, else the one GitHub's event names, which the
 // review step's ensure opened before reviewing ended and set the record's (8.1).
 const lifePrOf = (r: IssueRecord, e: TableEvent): number | null => r.pr ?? dataOf(e).pr ?? null
@@ -195,6 +205,15 @@ const ROWS: readonly Row[] = [
     via: 'question',
   },
   { id: 'T4', states: ['designing'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'split', next: 'closed', change: (_r, e) => ({ why: 'split', notes: own(textOf(e, 'split')) }), via: 'split' },
+  {
+    id: 'T16',
+    states: ['designing'],
+    on: 'not-ok',
+    when: (r, e) => ownStep(r) && e.reason === 'wait',
+    next: 'waiting',
+    change: (_r, e) => ({ wait: dataOf(e).conditions ?? null, resumeTo: 'designing', notes: own(textOf(e, 'the designer waits on a condition')) }),
+    via: 'wait',
+  },
   { id: 'T5', states: ['building'], on: 'ok', when: r => ownStep(r), next: 'reviewing', change: (r, e) => ({ head: dataOf(e).head ?? r.head, round: r.round + 1 }), via: 'build' },
   {
     id: 'T6',
@@ -337,11 +356,20 @@ const ROWS: readonly Row[] = [
     via: 'pr-closed',
   },
   { id: 'E5', states: LIVE_STATES, on: 'claim-lost', next: 'closed', change: () => ({ why: 'claim-lost' }), via: 'claim-lost' },
-  { id: 'E6', states: ['queued', 'merge-queue', 'parked'], on: 'timeout', when: r => waiting(r), next: 'same', change: none, via: 'timeout' },
+  { id: 'E6', states: ['queued', 'merge-queue', 'parked', 'waiting'], on: 'timeout', when: r => tellPeriodic(r), next: 'same', change: none, via: 'timeout' },
+  // the waiting state: every condition holds (S6)
+  {
+    id: 'C1',
+    states: ['waiting'],
+    on: 'cleared',
+    next: 'queued',
+    change: r => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [])) }),
+    via: 'cleared',
+  },
   // the parked state (S6)
   {
     id: 'P1',
-    states: ['parked'],
+    states: ['parked', 'waiting'],
     on: 'unpark',
     next: 'queued',
     change: (r, e) => ({ resumeTo: r.resumeTo, attempt: 1, triages: 0, fixes: 0, cut: false, prClosedAt: laterOf(r.prClosedAt, dataOf(e).closedAt ?? null), notes: own(dataOf(e).note) }),
@@ -356,7 +384,7 @@ const E7_ROWS: readonly Row[] = EVENT_KINDS.map(on => ({ id: 'E7', states: ISSUE
 
 export const TABLE: readonly Row[] = [...ROWS, ...E7_ROWS]
 
-// The 33 row ids, in the table's order.
+// The 35 row ids, in the table's order.
 export const ROW_IDS: readonly string[] = [...new Set(TABLE.map(r => r.id))]
 
 // laterOf: the later of two GitHub timestamps (ISO strings compare in time order).
@@ -372,7 +400,7 @@ function laterOf(a: string | null, b: string | null): string | null {
 // step's unknown (why timeout); a waiting record's stays a timeout (E6). A not-ok whose reason the state's own step
 // cannot give is an outcome outside the step's known outcomes, so it is unknown (5.1).
 export function normalize(r: IssueRecord, e: TableEvent): TableEvent {
-  if (e.kind === 'timeout' && !waiting(r)) return { ...e, kind: 'unknown', why: e.why ?? 'timeout', reason: e.reason ?? 'the step ran past its timeout' }
+  if (e.kind === 'timeout' && !tellPeriodic(r)) return { ...e, kind: 'unknown', why: e.why ?? 'timeout', reason: e.reason ?? 'the step ran past its timeout' }
   if (e.kind === 'not-ok' && ownStep(r) && !NOT_OK_REASONS[r.state].includes(e.reason ?? '')) {
     return { ...e, kind: 'unknown', why: 'bad-answer', reason: `an outcome the table does not know: not-ok ${e.reason ?? 'with no reason'}` }
   }
@@ -429,8 +457,9 @@ export function nextRecord(r: IssueRecord, row: Row, e: TableEvent, now: Ms): Is
     cut: entered ? false : r.cut,
     notes: entered ? [] : r.notes,
     question: state === 'parked' ? r.question : null,
+    wait: state === 'waiting' ? r.wait : null,
     why: state === 'closed' ? r.why : null,
-    resumeTo: state === 'parked' || state === 'queued' ? r.resumeTo : null,
+    resumeTo: state === 'parked' || state === 'queued' || state === 'waiting' ? r.resumeTo : null,
   }
   return { ...base, ...row.change(r, ev, now) }
 }
@@ -464,6 +493,7 @@ export function madeRecord(claim: Claimed, now: Ms, lives = 1): IssueRecord {
     fixes: 0,
     round: 0,
     question: null,
+    wait: null,
     why: null,
     notes: others,
     prClosedAt: null,
