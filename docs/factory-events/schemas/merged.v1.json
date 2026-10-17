@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "merged.v1.json",
   "title": "merged",
-  "description": "A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, or by the loop when it finds a merge that no merged event recorded. Ends the claim; the end point of lead time and throughput. Count one per pr and head.",
+  "description": "A pull request for the issue was merged. Written by callum-flow-merge on the device that merged it, by the loop when it finds a merge that no merged event recorded, or by callum-flow-sweep (actor sweep) when it finds a merge on the issue's branch that no event recorded. Ends the claim; the end point of lead time and throughput. Count one per pr and head.",
   "x-issue": "optional",
   "type": "object",
   "additionalProperties": false,

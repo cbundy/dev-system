@@ -365,14 +365,20 @@ tool the loop calls writes or reads the label:
   interrupted before its event, or left behind by `ready`, `reclaimed`, `merged`, `closed` or
   `abandoned`) is deleted and the claim made fresh, so every life starts with one `claimed` event.
 - **`callum-flow-claim --heartbeat`** with no numbers renews this device's live claims on the open
-  issues that `callum-flow-factory-state --github off` lists live with this device as the holder,
-  not the label list. v2's H1 passes numbers, as now (14.1).
+  issues this device holds, not the label list and not `callum-flow-factory-state` (a `merged` issue
+  stays in its list with this device as holder). "Holds" is one rule, shared by the heartbeat, the
+  sweep and `callum-flow-claim <N>` (`images/base/claim-events.sh`): this device's event log plus the
+  newest claim event per issue in `factory.events`, ordered by ts; the issue is held when its last
+  claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`) is a `claimed` by this
+  device. A failed or unconfigured central read falls back to this device's log. v2's H1 passes
+  numbers, as now (14.1).
 - **`callum-flow-sweep`.** Its candidates are the issues the event log and factory-state list as
   live, the list its closed-issue pass already reads (`callum-flow-sweep:224-236`), not the label
   list. Rules: a closed issue logs `closed` when its latest event is not final; an open issue with
-  a PR merged on its branch after the newest claim is left alone; an open issue whose last claim
-  event (`claimed`, `ready`, `reclaimed`, `merged`, `closed` or `abandoned`) is not `claimed` is
-  left alone, and no other event revives an ended claim; an open issue whose newest claim expired
+  a PR merged on its branch after the newest claim (checked before the lease, whoever holds the
+  claim) logs `merged --actor sweep` and the issue is left alone; an open issue whose last claim
+  event (`claimed`, `ready`, `reclaimed`, `merged`, `closed` or `abandoned`, over this device's log and
+  `factory.events`) is not `claimed` is left alone, and no other event revives an ended claim; an open issue whose newest claim expired
   gets `ready` back, is unassigned, gets a comment and logs `reclaimed`; an open issue with no
   claim comment is left alone. It never touches `factory:*` labels: the loop is their only
   writer, and a record whose claim lapsed is claimed again onto itself (4.1).

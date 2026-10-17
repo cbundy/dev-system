@@ -22,17 +22,18 @@
 # with the note `lease: <minutes>`. It adds no label: the claim is the comment
 # and its events, and the factory loop's `factory:*` labels show the state
 # (docs/factory-loop/v2/SPEC.md 3.6).
-# --heartbeat: edits this device's live claim comment in place (a `renewed:`
-# line, through the comment API, never a new comment). With no issue numbers it
-# renews every live claim this device holds on the open issues that
-# `callum-flow-factory-state --github off` lists live with this device as the
-# holder. When that tool fails (factory.events unreachable, dev-query not
-# configured), it renews those this device's own event log (`callum-flow-event
-# --path`) shows it claimed and has not released, as callum-flow-sweep falls
-# back to that log too, so the sweep never releases a claim this device still
-# holds. It fails only when neither can be read. Nothing to renew is still exit 0. Each claim comment actually PATCHed logs one
-# `renewed` event (note `lease: <minutes>`) - none when the PATCH fails - so the
-# event log, which callum-flow-factory-state reads, can see the lease is live.
+# --heartbeat: edits this device's live claim comment in place (a `renewed:` line,
+# through the comment API, never a new comment). With no issue numbers it renews every
+# live claim this device holds on the open issues it holds. "Holds" is one rule, shared
+# with callum-flow-sweep (claim-events.sh): the last claim event (claimed, ready,
+# reclaimed, merged, closed, abandoned) of the issue is a `claimed` by this device, taken
+# from this device's event log (`callum-flow-event --path`) plus, when dev-query is
+# configured, the newest claim event per issue in factory.events, so an end another device
+# logged stops the heartbeat and a claim whose push has not arrived yet is still renewed.
+# A failed central read warns and falls back to this device's log. It fails only when this
+# device's log cannot be located. Nothing to renew is still exit 0. Each claim comment
+# actually PATCHed logs one `renewed` event (note `lease: <minutes>`) - none when the PATCH
+# fails - so the event log, which callum-flow-factory-state reads, can see the lease is live.
 #
 # A claim is live while the comment's server updated_at + its own lease is in
 # the future. "Now" is the server's Date header (the device clock only if that
@@ -51,13 +52,15 @@
 # device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
 # CALLUM_FLOW_READY_LABEL (default `ready`); for tests CALLUM_FLOW_GH_BIN,
 # CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read),
-# CALLUM_FLOW_FACTORY_STATE_BIN (callum-flow-factory-state).
+# CALLUM_FLOW_DEV_QUERY_BIN (dev-query), CALLUM_FLOW_SHARE_DIR (where claim-events.sh
+# is installed, default /usr/local/share/dev-system).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
 EVENT=${CALLUM_FLOW_EVENT_BIN:-callum-flow-event}
 READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
-FSTATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
+DEVQ=${CALLUM_FLOW_DEV_QUERY_BIN:-dev-query}
+SHARE=${CALLUM_FLOW_SHARE_DIR:-/usr/local/share/dev-system}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
 LEASE=${CALLUM_FLOW_LEASE_MINUTES:-120}
 MARKER='<!-- callum-flow-claim -->'
@@ -86,10 +89,12 @@ if [ "$mode" = claim ]; then
   [ $# -eq 1 ] || usage
 fi
 command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
-
-device=${DEV_MACHINE_NAME:-}
-[ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
-[ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+# shellcheck source=claim-events.sh
+. "$SHARE/claim-events.sh" 2>/dev/null || { err "cannot read $SHARE/claim-events.sh"; exit 1; }
+CE_TOOL=callum-flow-claim
+device=$(ce_device)
+tmp=$(mktemp -d 2>/dev/null) || { err "cannot create a temporary directory"; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
 
 repo=${CALLUM_FLOW_REPO-}
 [ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
@@ -126,35 +131,14 @@ CLAIMS_JQ='
        exp: (($c.updated_at | fromdateiso8601) + ($p.lease | tonumber) * 60)} ]
   | sort_by([.created, .id])'
 
-# local_claims: the issues this device's own event log shows it claimed and has
-# not released: a `claimed` event, and a latest lifecycle event (judged as
-# callum-flow-sweep judges it, housekeeping left out) that is not ready,
-# reclaimed, merged, closed or abandoned. A device with no log has none.
-local_claims() {
-  _lf=$("$EVENT" --path --repo "$repo" 2>/dev/null) || return 1
-  [ -f "$_lf" ] || return 0
-  jq -R -s -r '[split("\n")[] | fromjson? | select(type == "object" and (.issue | type) == "number"
-      and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention", "prompt_denied", "prompt_waiting") | not))]
-    | group_by(.issue) | map(select(any(.[]; .state == "claimed")) | last)
-    | .[] | select(.state | IN("ready", "reclaimed", "merged", "closed", "abandoned") | not) | .issue' "$_lf"
-}
-
 if [ "$mode" = heartbeat ]; then
   rc=0
   issues="$*"
   listed=
   if [ -z "$issues" ]; then
-    # this device's live claims, as the event log shows them: factory-state's view
-    # of it, else this device's own log
-    if fs=$("$FSTATE" --repo "$repo" --github off --format json </dev/null) &&
-      issues=$(printf '%s' "$fs" | jq -r --arg dev "$device" '.repos[]? | .issues[]? | select(.holder == $dev) | .issue'); then
-      :
-    elif issues=$(local_claims); then
-      err "warning: callum-flow-factory-state failed; renewing the claims in this device's event log"
-    else
-      err "cannot list this device's live claims (callum-flow-factory-state, or this device's event log)"
-      exit 1
-    fi
+    # the issues this device holds, by the shared rule (claim-events.sh)
+    ce_load "$tmp" "$device" || { err "cannot list this device's live claims (this device's event log cannot be located)"; exit 1; }
+    issues=$(ce_held "$tmp/latest" "$device")
     listed=1
   fi
   now=$(server_now)
@@ -208,8 +192,8 @@ if [ -n "$foreign" ]; then
   exit 3
 fi
 # A live claim of our own is kept (`ready` off, assigned, nothing new posted)
-# only while this device's event log shows it held, its last claim event being
-# `claimed` (a restarted orchestrator, a retry after the claim was logged). In
+# only while the shared held rule says so (claim-events.sh): the last claim event, in
+# this device's log and the central one, is a `claimed` by this device (a restarted orchestrator, a retry after the claim was logged). In
 # every other case - an end, `ready`, no event, no log; a claim interrupted
 # before its event, or a comment and lease left behind by a release, a drop, a
 # rejection or a merge - the comment is deleted and the claim made fresh, so a
@@ -221,12 +205,13 @@ set_labels() {
   "$GH" issue edit "$n" --remove-label "$READY" --add-assignee @me >/dev/null
 }
 
-# held_in_log: of this device's claim events for #$n, the last is `claimed`
-# (ready, reclaimed, merged, closed and abandoned end it, whatever follows them).
+# held_in_log: the shared rule says this device holds #$n: its last claim event, in
+# this device's log and the central one, is a `claimed` by this device (ready, reclaimed,
+# merged, closed and abandoned end it, whatever follows them, and so does one logged by
+# another device).
 held_in_log() {
-  _lf=$("$EVENT" --path --repo "$repo" 2>/dev/null) && [ -f "$_lf" ] || return 1
-  jq -R -s -e --argjson n "$n" '[split("\n")[] | fromjson? | select(type == "object" and .issue == $n)
-    | .state | select(IN("claimed", "ready", "reclaimed", "merged", "closed", "abandoned"))] | last == "claimed"' "$_lf" >/dev/null
+  ce_load "$tmp" "$device" || return 1
+  ce_held "$tmp/latest" "$device" "$n"
 }
 
 if [ -n "$ownlive" ] && held_in_log; then
