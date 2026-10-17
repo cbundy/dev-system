@@ -364,6 +364,21 @@ describe('a seq\'s entry actions (v2 SPEC 4.5)', () => {
     expect(kinds(plan(read), 76)).toEqual(['event transition', 'label clear', 'milestone-later'])
   })
 
+  test('a merged issue whose rollout read keep-open while open issues wait on it tells the owner once; nothing else does', () => {
+    const merged = rec(76, { state: 'closed', step: null, why: 'merged', pr: 776, seq: 8, seqAt: NOW - MIN, since: NOW - MIN })
+    const read = (rollout: 'merge' | 'run-it' | 'keep-open') => done(followKey(merged, 'rollout'), 'rollout', { issue: 76, outcome: { kind: 'rollout', rollout, closeIssue: null } })
+    const at = (rollout: 'merge' | 'run-it' | 'keep-open', blocking: number | null, extra: LedgerEntry[] = []) =>
+      withLedger({ ...world([merged]), issues: [issue(76, { stage: 'merged', stageSince: NOW - 2 * MIN, blocking })], milestone: { open: 1, closed: 0, expected: null } }, [transitioned(merged, 'T13', 'merge-queue', 'merged'), read(rollout), ...extra])
+    const tells = (s: State) => of(plan(s), 76).filter(a => a.kind === 'tell')
+    const out = tells(at('keep-open', 2))
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'tell', wake: 'keep-open-blocks', key: followKey(merged, 'blocked-tell'), fields: { issue: '76', blocking: '2' } })
+    expect(JSON.stringify(out[0])).toContain(`issues/76`)
+    // told once: with the tell done, none is planned, even when the view still shows the blockers
+    expect(tells(at('keep-open', 2, [done(followKey(merged, 'blocked-tell'), 'tell', { issue: 76 })]))).toEqual([])
+    for (const [rollout, blocking] of [['keep-open', 0], ['keep-open', null], ['merge', 2], ['run-it', 2]] as const) expect(tells(at(rollout, blocking))).toEqual([])
+  })
+
   test('a merge is logged as merged once: the factory view at the close decides, so the sweep\'s later `closed` and the view\'s window never log it again; a lost log is logged until done (R3-F1)', () => {
     const r = rec(79, { state: 'closed', step: null, why: 'merged', pr: 779, seq: 9, seqAt: NOW - MIN, since: NOW - MIN })
     const closed = transitioned(r, 'T13', 'merge-queue', 'merged')

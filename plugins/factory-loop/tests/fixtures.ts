@@ -97,6 +97,7 @@ export function issue(n: number, over: Partial<IssueView> = {}): IssueView {
     trusted: true,
     labels: ['enhancement', 'ready'],
     blockedBy: 0,
+    blocking: 0,
     subIssues: 0,
     epic: false,
     subIssueList: null,

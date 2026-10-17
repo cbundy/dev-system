@@ -73,8 +73,12 @@ guard parse it to decide whether the PR closes the issue. Pick it:
 - `run-it` when the issue, or the epic it belongs to, requires a release plus a Run it; the
   reason names where it is defined (the issue's own `## Run it` heading, or the epic). Then
   `## Sequencing` says dependents wait for the recorded Run it, not for the merge.
-- `keep-open` for research, a proposal, or a change that is one part of several.
-- `merge` otherwise.
+- `keep-open` only for research, a proposal, or an issue whose own Done-when needs a person.
+  Being part of an epic or a split is never a reason for keep-open: a split child is a whole
+  issue, done when its PR merges.
+- `merge` otherwise. A split child is `merge`, unless the child itself has a `## Run it` (then
+  `run-it`), or it is research or a proposal, or its own Done-when needs a person (then
+  `keep-open`). The epic's Run it lives on the child that runs it.
 
 The answer script checks the heading and the Rollout before it records the brief.
 
@@ -88,7 +92,8 @@ The issue parks until the owner answers, and you design again with the answer as
 
 For a large or high-risk issue, do not design it as one unit. Answer with a split: the plan of
 the whole, and 2 to 10 children, each with a short key, a one-line title, a body in the brief's
-shape (without the date heading, with a `## Rollout` each), the keys of the siblings it is
+shape (without the date heading, with a `## Rollout` each that follows the rule above: `merge`
+unless the child has its own `## Run it`, is research or a proposal, or needs a person), the keys of the siblings it is
 blocked by (or `#<N>` for an existing open issue in this repo it waits on, never this issue),
 and whether it is ready. A child is not ready only when it carries an open owner
 decision. The loop makes each child an issue under this one, links its `blocked_by`, labels the
