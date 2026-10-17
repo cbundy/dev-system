@@ -116,7 +116,7 @@ describe('the design-v2 contract (8.7)', () => {
 
   test('every problem is named at once: the heading, the Rollout, a stray field, the field another kind needs', () => {
     expect(problems('design-v2', { kind: 'brief', brief: 'no heading\n## Rollout\nship it', extra: 1 })).toEqual([
-      'extra is not a field of a design answer (only kind, brief, question, reasons, children)',
+      'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
     ])

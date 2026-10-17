@@ -330,7 +330,13 @@ export const FACTORY_LABELS: Readonly<Record<Exclude<IssueState, 'closed'>, { na
 // resumeStep: how the owner resumes a parked issue (11), one text for every message that says so:
 // the park comment, its tell and reminders, and the triage prompt's park choice.
 export function resumeStep(issue: number): string {
-  return `answer on the issue and remove the \`factory:parked\` label, or run \`/factory resume ${issue} "your answer"\`; a comment alone does not resume`
+  return `answer on the issue and ${resumeAction(issue)}; a comment alone does not resume`
+}
+
+// resumeAction: the two things that resume, which the park comment's numbered list (park-text.ts)
+// says after its first step.
+export function resumeAction(issue: number): string {
+  return `remove the \`factory:parked\` label, or run \`/factory resume ${issue} "your answer"\``
 }
 
 // The label of an issue R1 released at its last life (6.4): not a state, since the issue is out of

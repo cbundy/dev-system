@@ -564,7 +564,7 @@ E7 covers, for example: a late result of a step whose seq has ended; `pr-closed`
 
 | Id | Event | Next | Record change | Events |
 |---|---|---|---|---|
-| P1 | unpark | queued | resumeTo kept; attempt 1, triages 0, fixes 0, cut cleared; prClosedAt set to the PR's `closedAt` when it is closed, so the resumed step reopens it (8.1); notes += the op's note, or the trusted comments posted after the park comment | transition |
+| P1 | unpark | queued | resumeTo kept; attempt 1, triages 0, fixes 0, cut cleared; prClosedAt set to the PR's `closedAt` when it is closed, so the resumed step reopens it (8.1); notes += the op's note, or (label route) the owner's tick in the park comment (`Owner chose option A: <title>`, 11) followed by the trusted comments posted after the park comment | transition |
 
 Interventions (7.2) are not listed per row. `rules-interventions.ts` derives them from each done
 `transition` entry (its row and event) and other facts, so the rows above stay as they are.
@@ -642,10 +642,19 @@ S3 plans these for the record's current seq until each is done. Keys are
 | building | event `delegated --note "brief <url>"` |
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
-| parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
+| parked | `comment` on the issue through one template (`park-text.ts` `parkText`): `### Waiting on the owner`; `**Decision needed:**` and the record's `question`; `#### How to resume` (a numbered list: tick one option or write an answer as a comment, then remove the label or `/factory resume N "answer"`; a comment or a tick alone does not resume); one closing line with where it parked from and what a resume goes on with. An agent's structured question (a designer's `question` answer or a triage `park`: `question` the one-sentence decision, optional `context`, 2 to 6 `options` keyed A to F with a title and optional detail, optional `recommendation`) is rendered by `question.mjs` `renderQuestion` into the record's `question`, which adds `#### Context`, `#### Options` (one `- [ ] **A** - title` line each, its detail indented) and `#### Recommendation` between the decision and the resume list, each only when given; the rendered text must fit the question's 2000 characters, which the contract checks. A machine-written park reason has no options and keeps its paragraph breaks. `tell(parked)` gives the decision sentence only |
 | closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
+- **The owner's tick** (`park-text.ts` `ticksOf`). On the label route of an unpark, the loop reads
+  the current body of this seq's park comment (the one carrying the hidden key of the seq's
+  `comment` entry; an earlier seq's is ignored) from the comments it already reads for the note.
+  Exactly one ticked option (`- [x] **A**`, either case of x) in its Options section makes the
+  note's first line `Owner chose option A: <title>`; several ticks, or a tick on a line naming no
+  option, make a note that says so and lists them, and choose none; no tick changes nothing. The
+  trusted comments after the park follow, as before. The `/factory resume N "note"` route does not
+  read the comments: its note is the answer. A tick alone does not resume (it would take a poll of
+  every parked issue's comment).
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
   reads the issue's or PR's comments for that key before posting, so a retry never posts twice
   (`totality/T-05`).

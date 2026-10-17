@@ -5,7 +5,13 @@
 //   { "choice": "retry | fix | redesign | park | drop",
 //     "reason": "one line, at most 500 characters",
 //     "instructions": "required for retry, fix and redesign; at most 4 000 characters",
-//     "question": "required for park; at most 2 000 characters" }
+//     "question": "required for park: the one-sentence decision; at most 2 000 characters",
+//     "context": "park only, optional: a few sentences",
+//     "options": "park only, optional: 2 to 6 of { key: A to F, title, detail? }",
+//     "recommendation": "park only, optional: { key, reason }" }
+//
+// The optional fields are checked as the designer's are (question.mjs), and the question once
+// rendered with them must fit its 2 000 characters; the outcome carries them only when given.
 //
 // A fix that is not valid in the record's state is still a valid answer: the table parks the issue
 // with the triage's reason (row X4). The outcome is { choice, reason, instructions, question },
@@ -16,8 +22,10 @@
 // what it recorded. contract.mjs imports this module, so the loop and bin/factory-answer check
 // alike. ES2023 alone, nothing of Node or the engine. Its types are contracts-triage.d.mts's.
 
+import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
+
 export const CHOICES = Object.freeze(['retry', 'fix', 'redesign', 'park', 'drop'])
-export const FIELDS = Object.freeze(['choice', 'reason', 'instructions', 'question'])
+export const FIELDS = Object.freeze(['choice', 'reason', 'instructions', 'question', ...QUESTION_FIELDS])
 export const LIMITS = Object.freeze({ reason: 500, instructions: 4000, question: 2000 })
 // the text each choice needs beside its reason
 const NEEDS = Object.freeze({ retry: 'instructions', fix: 'instructions', redesign: 'instructions', park: 'question', drop: null })
@@ -57,8 +65,15 @@ function check(input) {
   if (reason !== null && /[\r\n]/.test(reason)) problems.push('reason must be one line')
   const instructions = text('instructions', need === 'instructions')
   const question = text('question', need === 'question')
+  const parts = {}
+  if (choice === 'park') {
+    const p = checkQuestionParts(o, question, problems)
+    if (p.context !== null) parts.context = p.context
+    if (p.options !== null) parts.options = p.options
+    if (p.recommendation !== null) parts.recommendation = p.recommendation
+  } else for (const k of QUESTION_FIELDS) if (o[k] !== undefined && o[k] !== null) problems.push(`${k} must be absent or null unless the choice is park`)
   if (problems.length > 0) return { ok: false, problems }
-  return { ok: true, outcome: { choice, reason, instructions, question } }
+  return { ok: true, outcome: { choice, reason, instructions, question, ...parts } }
 }
 
 function summary(input) {

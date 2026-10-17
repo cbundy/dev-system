@@ -8,6 +8,8 @@ import { answerPath } from '../exec'
 import type { ExecCtx } from '../exec'
 import type { LedgerEntry } from '../types'
 import { keyParts, scratchOf } from './keys'
+import { renderQuestion } from './question.mjs'
+import type { QuestionParts } from './question.mjs'
 import { triagePrompt } from './prompts-triage'
 import type { TriageInput, TriageResult } from './prompts-triage'
 import { lifePr } from './rules-review'
@@ -116,7 +118,9 @@ export function triageResult(answer: unknown): StepResult {
   const a = answer !== null && typeof answer === 'object' ? (answer as Record<string, unknown>) : {}
   const choice = TRIAGE_CHOICES.find(c => c === a.choice) ?? null
   const reason = typeof a.reason === 'string' ? a.reason : null
-  const data = { text: reason ?? undefined, instructions: typeof a.instructions === 'string' ? a.instructions : undefined, question: typeof a.question === 'string' ? a.question : undefined }
+  // a park's structured parts become the one canonical text the record stores as its question
+  const question = typeof a.question === 'string' ? renderQuestion({ ...(a as Partial<QuestionParts>), question: a.question }) : undefined
+  const data = { text: reason ?? undefined, instructions: typeof a.instructions === 'string' ? a.instructions : undefined, question }
   if (choice === null) return { event: 'unknown', reason: 'the triage answer has no choice', why: 'bad-answer', head: null, choice: null, data: null }
   return { event: 'ok', reason, why: null, head: null, choice, data }
 }

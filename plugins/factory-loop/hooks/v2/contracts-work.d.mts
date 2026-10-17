@@ -1,5 +1,6 @@
 // The types of contracts-work.mjs. contract.mjs imports its CONTRACTS.
 import type { V2Contract } from '../contract.mjs'
+import type { QuestionParts } from './question.mjs'
 
 export const DESIGN_KINDS: readonly ['brief', 'question', 'split']
 export const BUILD_RESULTS: readonly ['built', 'cannot']
@@ -30,7 +31,7 @@ export function rolloutReasonOf(brief: string): string | null
 // blockedBy: sibling keys, or "#<N>" for an existing issue of the repo
 export type DesignChild = { key: string; title: string; why: string; body: string; blockedBy: string[]; ready: boolean }
 export type SplitReasons = Record<(typeof REASON_KEYS)[number], string>
-export type DesignAnswer = { kind: (typeof DESIGN_KINDS)[number]; brief: string | null; question: string | null; reasons: SplitReasons | null; children: DesignChild[] }
+export type DesignAnswer = { kind: (typeof DESIGN_KINDS)[number]; brief: string | null; question: string | null; reasons: SplitReasons | null; children: DesignChild[] } & QuestionParts
 export type BuildAnswer = { result: (typeof BUILD_RESULTS)[number]; head: string | null; title: string | null; summary: string | null; evidence: string | null; reason: string | null }
 export type FixFinding = { id: string; disposition: (typeof DISPOSITIONS)[number]; reason: string }
 export type FixAnswer = { result: (typeof FIX_RESULTS)[number]; head: string | null; summary: string; evidence: string | null; findings: FixFinding[] }

@@ -143,7 +143,8 @@ export function triagePrompt(i: TriageInput): string {
     `${i.place.bin} --to ${i.place.file} <<'JSON'`,
     '{"choice": "retry", "reason": "<one line: why>", "instructions": "<what the next attempt must do differently>"}',
     'JSON',
-    `choice: one of ${CHOICES.join(', ')}. reason: one line, at most 500 characters. instructions: required for retry, fix and redesign, at most 4000 characters: what the next agent must do. question: required for park, at most 2000 characters: what the owner must decide. No other field. The script records your answer for the factory loop and changes nothing else. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.`,
+    'Example answer JSON for park, with the question structured: {"choice": "park", "reason": "<one line: why>", "question": "<the one decision, one short sentence>", "context": "<a few sentences, optional>", "options": [{"key": "A", "title": "<one line>", "detail": "<optional>"}, {"key": "B", "title": "<one line>"}], "recommendation": {"key": "A", "reason": "<one line>"}}',
+    `choice: one of ${CHOICES.join(', ')}. reason: one line, at most 500 characters. instructions: required for retry, fix and redesign, at most 4000 characters: what the next agent must do. question: required for park: the one decision the owner must make, in one short sentence (the question once rendered with its context, options and recommendation is at most 2000 characters). context, options (2 to 6, keys A to F, each with a one-line title; the loop shows each as a checkbox) and recommendation (naming one option) are optional and for park only; do not list the options in question. No other field. The script records your answer for the factory loop and changes nothing else. If it prints problems, correct the JSON and run it again; once it says your answer is recorded, end your turn.`,
   ]
   return lines.join('\n')
 }

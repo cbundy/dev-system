@@ -327,7 +327,8 @@ coder create <name> --template dev-system --parameter repo_url=<https clone url>
 - Remote Control mode `auto` (the default) becomes `server` when there is a repo: each
   session started in claude.ai gets its own worktree.
 - A private repo needs a GitHub credential before the clone works: Coder external auth, or
-  the gh login on the Log in page.
+  the gh login on the Log in page. To run the workspace as another GitHub account (a loop
+  for someone else's repo), see the README section "Working a repo as another GitHub account".
 - A repo with a per-repo image (step 3e) must have that image built and pushed to a
   registry, then passed with `--parameter image=<image>`. A private image needs registry
   credentials on the template (README, "Private images").
