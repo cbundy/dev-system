@@ -134,7 +134,7 @@ bespoke CI step.
 ## Dev environment image
 
 This repo's dev environment is `ghcr.io/cbundy/dev-system/dev`: the base image plus
-terraform and a PostgreSQL 17 server, built from `.devcontainer/Dockerfile` (the per-repo image pattern every
+terraform, a PostgreSQL 17 server and TypeScript, built from `.devcontainer/Dockerfile` (the per-repo image pattern every
 consumer uses). The desktop dev container builds it locally; `publish-dev-image.yml`
 publishes it on changes to `.devcontainer/`, on main, and weekly. Tools only this repo
 needs go there, never into `images/base/`.
