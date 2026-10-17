@@ -529,12 +529,18 @@ sed -n '/^INSERT INTO factory.workers (/,$p' "$fakebin/psql-sql-1" | grep -qi 'w
 [ "$(sarg 1 claude_procs)" = 2 ] && [ "$(sarg 1 procs)" = 5 ] || fail "proc counts by comm: $(tr '\n' ' ' < "$fakebin/stats-args-1")"
 [ -z "$(sarg 1 cpu_pct)" ] || fail "cpu_pct must be NULL (empty) on the first beat"
 [ "$(cut -d' ' -f1 "$hbdir/dev-heartbeat.cpu")" = 5000000 ] || fail "the first reading is saved: $(cat "$hbdir/dev-heartbeat.cpu")"
-# the second beat: 10 s of wall clock and 5 s of cpu on 2 cores is 25 %
-printf '%s %s\n' 0 $(($(now_us) - 10000000)) > "$hbdir/dev-heartbeat.cpu"
+# the second beat: 5 s of cpu on 2 cores over the wall time since the seeded reading. The
+# expectation comes from the wall the loop itself saved, so it holds however long the loop took to start.
+prev_wall=$(($(now_us) - 10000000))
+printf '%s %s\n' 0 "$prev_wall" > "$hbdir/dev-heartbeat.cpu"
 rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
 stats_once > /dev/null 2>&1 || fail "second stats beat"
 pct=$(sarg 1 cpu_pct)
-[ -n "$pct" ] && jq -ne --argjson p "$pct" '$p > 24 and $p < 25.1' > /dev/null || fail "cpu_pct should be about 25, got '$pct'"
+saved_wall=$(cut -d' ' -f2 "$hbdir/dev-heartbeat.cpu")
+dw=$((saved_wall - prev_wall))
+[ "$dw" -ge 10000000 ] || fail "the saved wall should be at least 10 s past the seeded one, got dw=$dw"
+[ -n "$pct" ] && jq -ne --argjson p "$pct" --argjson du 5000000 --argjson dw "$dw" --argjson c 2 \
+  '$p == ($du / ($dw * $c) * 100 * 100 | round / 100)' > /dev/null || fail "cpu_pct should be 5 s of cpu over $dw us on 2 cores, got '$pct'"
 # a counter reset (usage below the previous reading) is NULL again
 printf '%s %s\n' 999999999 $(($(now_us) - 10000000)) > "$hbdir/dev-heartbeat.cpu"
 rm -f "$fakebin"/stats-* "$fakebin"/psql-calls
