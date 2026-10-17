@@ -42,6 +42,11 @@ export function seqKey(r: RecordRef): string {
   return `${lifeKey(r)}/s${r.seq}`
 }
 
+// gateRunKey: one stop gate run of a seq, by when it asked for its turn (ms since the epoch, base 36).
+export function gateRunKey(r: RecordRef, startedAtMs: number): string {
+  return `${seqKey(r)}/gate/${startedAtMs.toString(36)}`
+}
+
 // claimKey: a life's claim, i<N>/claim/<life>; the life is the claim's own time.
 export function claimKey(issue: number, life: string): string {
   return `i${issue}/claim/${life}`

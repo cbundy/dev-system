@@ -405,15 +405,19 @@ export const register: Register = on => {
     const limit = a.gateConcurrency
     let turn: Extract<Turn, { ok: true }> | null = null
     let waitMs = 0
+    let queuedBehind = 0
+    // when the gate asked for its turn, before any wait, with or without a limit
+    const startedAt = new Date(await $.clock.now()).toISOString()
     if (limit !== undefined) {
       const cap = a.gateWaitTimeoutMs ?? GATE_WAIT_TIMEOUT_MS
       const got = await turns.acquire(limit, { now: () => $.clock.now(), after: (ms, fn) => $.clock.after(ms, fn), maxWaitMs: cap })
       waitMs = got.waitMs
+      queuedBehind = got.queuedBehind
       if (!got.ok) {
         const result = waitedOut(got.waitMs, cap, limit)
         const head = await headSha($, a.slot)
         await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs), null, 2)}\n`).catch(() => undefined)
-        const line = gateLine(result, head, waitMs, limit)
+        const line = gateLine(result, head, waitMs, limit, startedAt, queuedBehind)
         await logLine($, a, line.cause, line.reason, line.fields)
         return next(e)
       }
@@ -426,7 +430,7 @@ export const register: Register = on => {
       const head = await headSha($, a.slot)
       const record = gateRecord(result, head, await $.clock.now(), a.gateCommands, waitMs)
       await writeFile($, `${a.gitDir}/factory-gate.json`, `${JSON.stringify(record, null, 2)}\n`).catch(() => undefined)
-      const line = gateLine(result, head, waitMs, limit ?? null)
+      const line = gateLine(result, head, waitMs, limit ?? null, startedAt, queuedBehind)
       await logLine($, a, line.cause, line.reason, line.fields)
       if (result.result === 'fail') return { block: blockText(result, a.slot, a.gateCommands) }
       return next(e)

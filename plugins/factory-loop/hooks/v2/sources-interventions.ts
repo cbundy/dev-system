@@ -17,6 +17,8 @@
 import type { Ms, Source } from '../types'
 import { interventionKey } from './keys'
 import type { SourceCtx } from './observe'
+import { GATE_RUN_CAUSES } from './rules-gates'
+import type { GateRunCause } from './rules-gates'
 import { FACT_WINDOW_MS, digest, editFacts, editsOf } from './rules-interventions'
 
 // the companion's lines older than this are left alone (rules-interventions.ts FACT_WINDOW_MS)
@@ -45,8 +47,33 @@ export type FileEdit = { what: 'control' | 'config'; at: Ms; issues: number[]; d
 // v 2: settings is the repo-local file as written (v 1 kept it resolved, and reads as none).
 export type FilesSeen = { v: 2; control: FileSeen | null; workspace: FileSeen | null; settings: FileSeen | null; edits: FileEdit[]; off: boolean }
 
+// One gate line of the companion's log, its fields as written and checked for their type only
+// (null: absent or not of the type); rules-gates.ts checks them against the `gate_run` schema.
+// head: undefined when it is neither a string nor null; concurrency likewise (null is no limit).
+// startedAt and queuedBehind are the companion's own (a companion from before them writes none).
+export type GateLine = {
+  at: number
+  issue: number
+  life: string
+  seq: number
+  cause: GateRunCause | 'gate-wait'
+  head: string | null | undefined
+  ms: number | null
+  waitMs: number | null
+  concurrency: number | null | undefined
+  startedAt: string | null
+  // startedAt as a time (null: absent, or not a time), and the start a line without startedAt implies:
+  // its time less its run and its wait, as an ISO string and a time (null: the line holds no such
+  // time). Read here because the planner reads no clock, nor parses a date (rules-gates.ts).
+  startedMs: number | null
+  derived: { iso: string; ms: number } | null
+  queuedBehind: number | null
+}
+
 export type InterventionFacts = {
   companion: CompanionLine[]
+  // the gate lines of the same window, for `gate_run` (rules-gates.ts); absent: none
+  gates?: GateLine[]
   // the digests of this pass's control.json and settings, for the decision log
   controlDigest: string | null
   configDigest: string | null
@@ -59,7 +86,7 @@ export type InterventionFacts = {
   seen?: FilesSeen | null
 }
 
-export const EMPTY_INTERVENTIONS: InterventionFacts = { companion: [], controlDigest: null, configDigest: null }
+export const EMPTY_INTERVENTIONS: InterventionFacts = { companion: [], gates: [], controlDigest: null, configDigest: null }
 
 export const EMPTY_FILES: FilesSeen = { v: 2, control: null, workspace: null, settings: null, edits: [], off: false }
 
@@ -114,11 +141,11 @@ export function keepFiles(kept: FilesSeen | null, facts: InterventionFacts, at: 
 
 // --- the companion's log ------------------------------------------------------------------------------
 
-// companionLines: the companion's log, one JSON object per line; a line that does not read, or
-// names a cause it does not log, is skipped. Only lines within the window.
-export function companionLines(text: string | null, now: Ms): CompanionLine[] {
+// windowed: the companion's log, one JSON object per line, as the objects of the lines that read and
+// are within the window, with their time; the newest COMPANION_MAX_LINES lines only.
+function windowed(text: string | null, now: Ms): { o: Record<string, unknown>; at: number }[] {
   if (text === null) return []
-  const out: CompanionLine[] = []
+  const out: { o: Record<string, unknown>; at: number }[] = []
   for (const raw of text.split('\n').slice(-COMPANION_MAX_LINES)) {
     if (raw.trim() === '') continue
     let o: Record<string, unknown>
@@ -130,16 +157,63 @@ export function companionLines(text: string | null, now: Ms): CompanionLine[] {
       continue
     }
     const at = typeof o.at === 'number' ? o.at : typeof o.at === 'string' ? Date.parse(o.at) : Number.NaN
+    if (!Number.isFinite(at) || now - at > COMPANION_WINDOW_MS) continue
+    out.push({ o, at })
+  }
+  return out
+}
+
+const natural = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null)
+
+// companionLines: the companion's log; a line that does not read, or names a cause it does not log, is
+// skipped. Only lines within the window.
+export function companionLines(text: string | null, now: Ms): CompanionLine[] {
+  const out: CompanionLine[] = []
+  for (const { o, at } of windowed(text, now)) {
     const cause = COMPANION_CAUSES.find(c => c === o.cause)
-    if (!Number.isFinite(at) || cause === undefined || now - at > COMPANION_WINDOW_MS) continue
-    const int = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null)
+    if (cause === undefined) continue
     out.push({
       at,
-      issue: int(o.issue) === 0 ? null : int(o.issue),
+      issue: natural(o.issue) === 0 ? null : natural(o.issue),
       life: typeof o.life === 'string' && /^[0-9a-z]+$/.test(o.life) ? o.life : null,
-      seq: int(o.seq),
+      seq: natural(o.seq),
       cause,
       reason: typeof o.reason === 'string' ? o.reason : '',
+    })
+  }
+  return out
+}
+
+// gateLines: the companion's gate lines (`gate-pass`, `gate-fail`, `gate-unknown`, `gate-wait`) that
+// name an issue, a life and a seq, within the window. Their values are kept as written, for
+// rules-gates.ts to check against the schema.
+export function gateLines(text: string | null, now: Ms): GateLine[] {
+  const out: GateLine[] = []
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  for (const { o, at } of windowed(text, now)) {
+    const cause = [...GATE_RUN_CAUSES, 'gate-wait' as const].find(c => c === o.cause)
+    const issue = natural(o.issue)
+    const seq = natural(o.seq)
+    if (cause === undefined || issue === null || issue === 0 || seq === null || typeof o.life !== 'string' || !/^[0-9a-z]+$/.test(o.life)) continue
+    const ms = num(o.ms)
+    const waitMs = num(o.waitMs)
+    const startedAt = typeof o.startedAt === 'string' ? o.startedAt : null
+    const parsed = startedAt === null ? Number.NaN : Date.parse(startedAt)
+    const start = ms === null || waitMs === null ? Number.NaN : at - ms - waitMs
+    out.push({
+      at,
+      issue,
+      life: o.life,
+      seq,
+      cause,
+      head: o.head === null || typeof o.head === 'string' ? o.head : undefined,
+      ms,
+      waitMs,
+      concurrency: o.concurrency === null ? null : (num(o.concurrency) ?? undefined),
+      startedAt,
+      startedMs: Number.isFinite(parsed) ? parsed : null,
+      derived: Number.isFinite(start) && Math.abs(start) <= 8.64e15 ? { iso: new Date(start).toISOString(), ms: Math.trunc(start) } : null,
+      queuedBehind: num(o.queuedBehind),
     })
   }
   return out
@@ -179,6 +253,7 @@ export async function readInterventions(ctx: SourceCtx): Promise<{ read: Interve
   const settingsSeen = ctx.rt.repoSettings == null ? null : seenOf(JSON.stringify(ctx.rt.repoSettings))
   const facts: InterventionFacts = {
     companion: companionLines(companion ?? null, now),
+    gates: gateLines(companion ?? null, now),
     controlDigest: controlSeen?.digest ?? null,
     configDigest: workspaceSeen === null || settingsSeen === null ? null : digest(`${workspaceSeen.text}\n${settingsSeen.text}`),
     control: controlSeen,

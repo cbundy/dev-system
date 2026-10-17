@@ -12,8 +12,9 @@ export type TurnIo = {
 }
 
 // A turn taken (release gives it back, once: a second call does nothing), or the wait ran past its
-// cap and the waiter left the queue for good.
-export type Turn = { ok: true; waitMs: number; queuedBehind: number; release: () => void } | { ok: false; waitMs: number }
+// cap and the waiter left the queue for good. queuedBehind: how many held a turn or waited ahead when it
+// asked, in both cases.
+export type Turn = { ok: true; waitMs: number; queuedBehind: number; release: () => void } | { ok: false; waitMs: number; queuedBehind: number }
 
 type Waiter = { capacity: number; grant: () => void }
 
@@ -75,7 +76,7 @@ export function createTurns(): Turns {
       const release = granted ? releaser() : () => undefined
       try {
         const waitMs = Math.max(0, (await io.now()) - (await t0))
-        return granted ? { ok: true, waitMs, queuedBehind, release } : { ok: false, waitMs }
+        return granted ? { ok: true, waitMs, queuedBehind, release } : { ok: false, waitMs, queuedBehind }
       } catch (err) {
         release()
         throw err

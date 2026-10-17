@@ -94,7 +94,23 @@ export type ReusedEvent = {
   note: string
 }
 
-export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent
+// One stop gate run (gate_run.v1, docs/factory-events/schemas): written in the new format alone, by
+// `callum-flow-event --type gate_run --data <json> --issue N`, so it has no note, no old-format
+// line and no parser. rules-gates.ts builds it from the companion's gate lines.
+export type GateRunData = {
+  life: string
+  seq: number
+  head: string | null
+  result: 'pass' | 'fail' | 'unknown'
+  wait_ms: number
+  run_ms: number
+  concurrency: number | null
+  queued_behind: number
+  started_at: string
+}
+export type GateRunEvent = { state: 'gate_run'; issue: number; data: GateRunData }
+
+export type V2Event = TransitionEvent | ReviewedEvent | InterventionEvent | ReleaseEvent | ReusedEvent | GateRunEvent
 
 export const REUSED_STATES = ['delegated', 'fix_requested', 'merge_ready', 'abandoned', 'merged', 'verdict'] as const
 // The states v2 writes, each through this module; the first three are new in callum-flow-event.
@@ -200,6 +216,8 @@ export function eventColumns(e: V2Event): EventColumns {
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: e.head }
     case 'intervention':
       return { issue: e.issue, branch: null, pr: e.pr, head: null }
+    case 'gate_run':
+      return { issue: e.issue, branch: null, pr: null, head: e.data.head }
     default:
       return { issue: e.issue, branch: e.branch, pr: e.pr, head: 'head' in e ? e.head : null }
   }
@@ -301,6 +319,9 @@ export function eventNote(e: V2Event): string {
       return interventionNote(e)
     case 'reclaimed':
       return releaseNote(e)
+    case 'gate_run':
+      // no old-format note: the payload is its own JSON (eventArgv)
+      return JSON.stringify(e.data)
     case 'abandoned':
       return 'reason' in e && e.reason === 'reconcile' ? releaseNote(e) : abandonedNote(e as ReusedEvent)
     default:
@@ -311,6 +332,8 @@ export function eventNote(e: V2Event): string {
 // eventArgv: `callum-flow-event <state>` for this event: its columns as flags, its actor when it
 // has its own, and its note.
 export function eventArgv(e: V2Event): string[] {
+  // a gate run is a new-format event: its payload is the schema's data, not an old note
+  if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
   const argv = ['callum-flow-event', e.state]
   if (c.issue !== null) argv.push('--issue', String(c.issue))

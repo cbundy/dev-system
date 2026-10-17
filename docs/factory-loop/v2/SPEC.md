@@ -167,7 +167,8 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
   keep v1's 12 per pass (`observe.ts:35`). All are skipped during a GitHub backoff, as v1's are
   (v1 SPEC 10.2) (`totality/T-26`).
 - **The companion's log** (`<loop dir>/companion.jsonl`, 7.2) is read each pass with the loop
-  dir's answer files (10.8), not as a source of its own.
+  dir's answer files (10.8), not as a source of its own. Its gate lines also give the `gate_run`
+  events (10.6).
 - **Not read** (each was in the draft): a mirror of every `factory:*` label, a 5-minute scan of
   open PRs, main's check runs and the session environment. Their rules are gone (3.4, 3.5, 9.5,
   10.5).
@@ -1111,7 +1112,8 @@ another device's work; `status` and `help`. Each owner item (`parked`, `breaker`
   to `<loop dir>/companion.jsonl` (`loopDir` is in the step marker, 10.2), with the issue, life,
   seq, cause and reason. Its causes of this table are interventions; a gate that passed or failed
   (`gate-pass`, `gate-fail`, 10.6) is not, and neither is `gate-wait` (a gate that waited for its turn).
-  It writes no event itself.
+  The loop reads those gate lines for `gate_run` events (10.6, `rules-gates.ts`), not as interventions.
+  The companion writes no event itself.
 - Ops are logged by `ownerOp` through `act-events.ts`; hand-recorded rescues through
   `callum-flow-event`.
 
@@ -1682,8 +1684,15 @@ The companion's `classic.SubagentStop` hook, for a writer whose marker lists `ga
   leaves the queue and is recorded as `gate-unknown` whose reason names the wait, never as a pass;
   the agent may finish, as with any unknown gate. A gate that waited writes a `gate-wait` line
   when it gets its turn (`waitMs`, `queuedBehind`; not an intervention). Every gate line carries
-  `waitMs` and `concurrency` (null: no limit), and `factory-gate.json` carries `waitMs`. The
-  `gate_run` event schema is ready for these runs; nothing writes it yet.
+  `waitMs`, `concurrency` (null: no limit), `startedAt` (an ISO string read before the turn was
+  asked for, with or without a limit) and `queuedBehind` (0 when the turn came at once), and
+  `factory-gate.json` carries `waitMs`. The loop writes one free `gate_run` event for each such line
+  of `gate-pass`, `gate-fail` and `gate-unknown` (`gateRunRules`, `rules-gates.ts`), keyed
+  `i<N>/l<life>/s<seq>/gate/<started_at ms, base 36>`. A line from the companion of v0.51.0, with
+  `waitMs` but no `startedAt`, gets `started_at` = its time less `ms` and `waitMs`, and
+  `queued_behind` from the `gate-wait` line of the same seq inside the run (0 when `waitMs` is 0,
+  else skipped); a line with no numeric `waitMs`, and any line whose values the schema refuses,
+  gives no event. The companion writes no event itself.
 - **Gate commands** are repo settings: `gateCommands` in `.claude/factory-loop.json`. dev-system
   sets `["npm run lint", "npm test"]` (CLAUDE.md, "Canonical commands"). Empty means no gate. The
   plugin ships no repo-specific values (CLAUDE.md, "This repo").
