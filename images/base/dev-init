@@ -16,7 +16,7 @@
 # devcontainer metadata, or the runtime's own start hook).
 #
 # Usage: dev-init [--repo | --plugins]
-#   --repo runs only the repo steps (5, 6, 11, 7, in that order): git
+#   --repo runs only the repo steps (5a, 5, 6, 11, 7, in that order): the token login, git
 #   credentials, the clone or fetch, the Claude plugins and the no-mistakes
 #   recovery. dev-login runs it once gh's login is done, for a clone that was
 #   waiting for one.
@@ -34,6 +34,8 @@ set -u
 . /usr/local/share/dev-system/plugins.sh
 # shellcheck source=persist.sh
 . /usr/local/share/dev-system/persist.sh
+# shellcheck source=gh.sh
+. /usr/local/share/dev-system/gh.sh
 
 log() {
   echo "dev-init: $*" >&2
@@ -291,6 +293,84 @@ seed_no_mistakes_model() {
   [ -z "$MODELS_URL_USED" ] || log "models read from $MODELS_URL_USED, with the image's baked models as the fallback"
 }
 
+# 5a. Token mode (cbundy/dev-system#728): with DEV_GH_TOKEN_FILE set, gh holds
+#    exactly one account, the token file's, and nothing else (not a browser login,
+#    not Coder's GitHub external auth) is ever used for GitHub. Runs before step 5
+#    and the clone. Every account is removed first; then the token is read from the
+#    file on stdin only (never argv, a log or an exported variable), gh's account
+#    is resolved, its identity is written to gh_identity_file (login, id, name,
+#    email; mode 0600; no token) and git's user.name and user.email are set from
+#    it. A missing, empty, unreadable or rejected token logs one line (the path and
+#    the cause, never the token), removes any identity file, leaves gh with no
+#    account and carries on. Without DEV_GH_TOKEN_FILE this does nothing.
+gh_remove_accounts() {
+  local user cfg="${GH_CONFIG_DIR:-$HOME/.config/gh}" hosts tmp
+  while IFS= read -r user; do
+    [ -z "$user" ] || gh auth logout --hostname github.com --user "$user" >/dev/null 2>&1
+  done < <(gh auth status --json hosts --hostname github.com 2>/dev/null \
+    | jq -r '.hosts["github.com"][]?.login // empty' 2>/dev/null)
+  # What logout leaves behind: an entry for github.com in hosts.yml.
+  hosts="$cfg/hosts.yml"
+  if [ -f "$hosts" ] && grep -q '^github\.com:' "$hosts"; then
+    tmp=$(mktemp "$cfg/.hosts.XXXXXX") || return 0
+    if awk '/^github\.com:/ { skip = 1; next } skip && /^[^[:space:]]/ { skip = 0 } !skip' "$hosts" > "$tmp"; then
+      chmod 600 "$tmp"
+      mv -f "$tmp" "$hosts"
+    else
+      rm -f "$tmp"
+    fi
+  fi
+}
+
+setup_gh_token() {
+  gh_token_mode || return 0
+  local tf="$DEV_GH_TOKEN_FILE" idf cause="" user login id name email tmp
+  idf=$(gh_identity_file)
+  rm -f "$idf"
+  if ! command -v gh >/dev/null 2>&1; then
+    log "WARNING: DEV_GH_TOKEN_FILE ($tf) is set but gh is not on PATH - no GitHub login"
+    return 0
+  fi
+  gh_remove_accounts
+  if [ ! -e "$tf" ]; then
+    cause="the file does not exist"
+  elif [ ! -r "$tf" ]; then
+    cause="the file is not readable"
+  elif ! grep -q '[^[:space:]]' "$tf" 2>/dev/null; then
+    cause="the file is empty"
+  elif ! gh auth login --hostname github.com --with-token < "$tf" >/dev/null 2>&1; then
+    cause="GitHub rejected the token"
+  else
+    user=$(gh api user 2>/dev/null) || user=""
+    login=$(printf '%s' "$user" | jq -r '.login // empty' 2>/dev/null)
+    id=$(printf '%s' "$user" | jq -r '.id // empty' 2>/dev/null)
+    name=$(printf '%s' "$user" | jq -r '.name // empty' 2>/dev/null)
+    if [ -z "$login" ] || [ -z "$id" ]; then
+      cause="GitHub rejected the token (gh api user failed)"
+      gh_remove_accounts
+    fi
+  fi
+  if [ -n "$cause" ]; then
+    log "WARNING: DEV_GH_TOKEN_FILE ($tf): $cause - gh has no GitHub account (no fallback login)"
+    return 0
+  fi
+  [ -n "$name" ] || name="$login"
+  email="${DEV_GIT_EMAIL:-$(gh_noreply_email "$id" "$login")}"
+  mkdir -p "$(dirname "$idf")" 2>/dev/null
+  tmp=$(mktemp "$(dirname "$idf")/.identity.XXXXXX") || { log "WARNING: cannot write $idf"; return 0; }
+  chmod 600 "$tmp"
+  if jq -n --arg login "$login" --argjson id "$id" --arg name "$name" --arg email "$email" \
+    '{login: $login, id: $id, name: $name, email: $email}' > "$tmp" && mv -f "$tmp" "$idf"; then
+    git config --global user.name "$name"
+    git config --global user.email "$email"
+    gh auth setup-git >/dev/null 2>&1 || log "WARNING: gh auth setup-git failed - git may not authenticate to GitHub over HTTPS"
+    log "gh is logged in as $login from DEV_GH_TOKEN_FILE ($tf)"
+  else
+    rm -f "$tmp"
+    log "WARNING: could not write $idf"
+  fi
+}
+
 # 5. ~/.gitconfig is not persisted, so git's link to gh's credential helper
 #    is redone on every start.
 setup_git_credentials() {
@@ -302,7 +382,7 @@ setup_git_credentials() {
 # Can git authenticate for this URL? Coder's agent sets GIT_ASKPASS (GitHub
 # external auth); `gh auth setup-git` (step 5) configures a credential helper.
 has_git_credential() {
-  [ -n "${GIT_ASKPASS:-}" ] || [ -n "$(git config --get-urlmatch credential.helper "$1" 2>/dev/null)" ]
+  { [ -n "${GIT_ASKPASS:-}" ] && ! gh_token_mode; } || [ -n "$(git config --get-urlmatch credential.helper "$1" 2>/dev/null)" ]
 }
 
 # Why git failed, from its output: the first error line (the cause; the
@@ -330,7 +410,9 @@ git_reason() {
 #    each git call is limited to 120s, so a start never hangs here.
 sync_repo() {
   local url="${DEV_REPO_URL:-}" ws="${DEV_WORKSPACE:-}" out rc reason ssh
-  local -a clone=(clone --quiet)
+  local -a clone=(clone --quiet) gitx=(git)
+  # Token mode: Coder's GIT_ASKPASS (external auth) is never used; gh's credential helper answers.
+  ! gh_token_mode || gitx=(env -u GIT_ASKPASS git)
   [ -n "$url" ] || return 0
   if [ -z "$ws" ]; then
     log "WARNING: no directory name in DEV_REPO_URL ($url) - nothing cloned."
@@ -343,7 +425,7 @@ sync_repo() {
   if [ -e "$ws/.git" ]; then
     # No remote (or a repo git refuses to read, which step 7 reports): nothing to fetch.
     [ -n "$(git -C "$ws" remote 2>/dev/null)" ] || return 0
-    out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 git -C "$ws" fetch --prune --quiet 2>&1) \
+    out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 "${gitx[@]}" -C "$ws" fetch --prune --quiet 2>&1) \
       || log "WARNING: git fetch in $ws failed ($(git_reason "$out")) - carrying on with the refs already there"
     return 0
   fi
@@ -364,7 +446,7 @@ sync_repo() {
   [ "$ssh" = false ] || log "WARNING: DEV_REPO_URL is an SSH URL ($url), which needs SSH keys in this container (only HTTPS works with GIT_ASKPASS or gh's login). Trying anyway."
 
   [ -z "${DEV_REPO_BRANCH:-}" ] || clone+=(--branch "$DEV_REPO_BRANCH")
-  out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 git "${clone[@]}" -- "$url" "$ws" 2>&1)
+  out=$(GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="$ssh_cmd" timeout -k 10 120 "${gitx[@]}" "${clone[@]}" -- "$url" "$ws" 2>&1)
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log "cloned $url${DEV_REPO_BRANCH:+ (branch $DEV_REPO_BRANCH)} into $ws"
@@ -641,6 +723,7 @@ write_versions() {
 }
 
 if [ "${1:-}" = --repo ]; then
+  setup_gh_token
   setup_git_credentials
   sync_repo
   install_plugins
@@ -661,6 +744,7 @@ adopt_claude_login
 seed_codex_config
 configure_codex_otel
 seed_no_mistakes_model
+setup_gh_token
 setup_git_credentials
 sync_repo
 recover_no_mistakes

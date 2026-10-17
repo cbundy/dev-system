@@ -179,3 +179,32 @@ check "after the clone, Claude's next start is in the repo" bash -c "
   docker exec '$c' cat /tmp/claude-starts
   [ \"\$(docker exec '$c' sed -n 2p /tmp/claude-starts)\" = '/workspaces/my-repo --remote-control my-repo' ]"
 docker rm -f "$c" >/dev/null
+
+# Token mode (cbundy/dev-system#728): DEV_GH_TOKEN_FILE makes the file's token gh's only login,
+# before the clone, and dev-init writes the identity file and git's user from it. The stub gh
+# records its argv and keeps its accounts in a file; the clone runs with Coder's GIT_ASKPASS set
+# to a script that would fail it, which token mode must not call.
+TOKEN_GH='#!/bin/sh
+echo "$*" >> /tmp/gh.calls
+case "$1 ${2:-}" in
+  "auth status") if [ -s /tmp/gh.accounts ]; then printf "{\"hosts\":{\"github.com\":[{\"login\":\"%s\",\"active\":true,\"state\":\"success\"}]}}\n" "$(cat /tmp/gh.accounts)"; else echo "{\"hosts\":{}}"; fi ;;
+  "auth logout") : > /tmp/gh.accounts ;;
+  "auth login") cat > /tmp/gh.stdin; echo tokenbot > /tmp/gh.accounts ;;
+  "auth setup-git") : ;;
+  "api user") echo "{\"login\":\"tokenbot\",\"id\":777,\"name\":null}" ;;
+  *) exit 1 ;;
+esac'
+check "token mode: gh is logged in from DEV_GH_TOKEN_FILE only, the identity file and git user are written, the clone never calls GIT_ASKPASS" in_image '
+  mkdir -p /tmp/bin && printf "%s\n" "$TOKEN_GH" > /tmp/bin/gh && chmod +x /tmp/bin/gh
+  printf "ghp_SECRET\n" > /tmp/token && echo olduser > /tmp/gh.accounts
+  printf "#!/bin/sh\ntouch /tmp/askpass-called\nexit 1\n" > /tmp/askpass && chmod +x /tmp/askpass
+  out=$(PATH=/tmp/bin:$PATH GIT_ASKPASS=/tmp/askpass dev-init --repo 2>&1); echo "$out" | grep "dev-init: "
+  echo "$out" | grep -qxF "dev-init: cloned $DEV_REPO_URL into /workspaces/my-repo" &&
+  ! test -e /tmp/askpass-called && ! grep -q ghp_SECRET /tmp/gh.calls && [ "$(cat /tmp/gh.stdin)" = ghp_SECRET ] &&
+  grep -qxF "auth logout --hostname github.com --user olduser" /tmp/gh.calls &&
+  [ "$(cat /tmp/gh.accounts)" = tokenbot ] &&
+  [ "$(stat -c %a $GH_CONFIG_DIR/dev-system-identity.json)" = 600 ] &&
+  [ "$(jq -r ".email + \" \" + .name" $GH_CONFIG_DIR/dev-system-identity.json)" = "777+tokenbot@users.noreply.github.com tokenbot" ] &&
+  ! grep -q ghp_SECRET $GH_CONFIG_DIR/dev-system-identity.json &&
+  [ "$(git config --global user.email)" = 777+tokenbot@users.noreply.github.com ]' \
+  -e DEV_GH_TOKEN_FILE=/tmp/token -e TOKEN_GH="$TOKEN_GH" -e DEV_REPO_URL="$REPO_URL" -v "$remote:/srv" --entrypoint ""
