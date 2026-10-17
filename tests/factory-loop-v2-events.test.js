@@ -33,9 +33,12 @@ const NOW = Date.UTC(2026, 9, 15, 9, 30);
 
 let ev;
 let dir;
+let reader;
+const { translate } = require(path.join(ROOT, "images", "base", "factory-event-translate.js"));
 
 before(async () => {
   ev = await import(EVENTS);
+  reader = await import(path.join(ROOT, "plugins", "factory-loop", "hooks", "v2", "event-reader.ts"));
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "factory-loop-v2-events-"));
 });
 
@@ -53,10 +56,35 @@ function log(argv) {
     env: { PATH: process.env.PATH, CALLUM_EVENTS_DIR: dir, CALLUM_FLOW_REPO: "cbundy/dev-system", DEV_MACHINE_NAME: "box", CLAUDE_SESSION_ID: "s", DEV_VERSIONS_FILE: path.join(dir, "none.json") },
   });
   assert.equal(r.status, 0, `${argv.slice(0, 2).join(" ")} was refused: ${r.stderr}`);
+  assert.equal(r.stderr, "", `${argv.slice(0, 2).join(" ")} warned`);
   const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
   assert.equal(lines.length, before + 1, "one line per event");
+  checkNew(lines[lines.length - 1], argv);
   return JSON.parse(lines[lines.length - 1]);
 }
+
+// checkNew: the new event the real writer put beside the old line, when the translator maps the line:
+// valid strictly, read back by the shared reader, and equal to the translator's own output for it.
+// A skipped state wrote none. A miss would have warned, and the caller fails on that.
+function checkNew(oldText, argv) {
+  const file = path.join(dir, "factory", "cbundy__dev-system.jsonl");
+  const got = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+  const seen = newSeen.get(file) ?? 0;
+  const r = translate(oldText, { ts: "", sessionId: "s" });
+  if (r.skip !== undefined) {
+    assert.equal(got.length, seen, `${argv[1]} is skipped by name and writes no new event`);
+    return;
+  }
+  assert.equal(got.length, seen + 1, `${argv[1]} writes one new event`);
+  newSeen.set(file, got.length);
+  const e = JSON.parse(got[got.length - 1]);
+  const want = translate(oldText, { ts: e.ts, sessionId: "s" });
+  assert.deepEqual(e, want.event, `${argv[1]}: the new event is the translator's`);
+  assert.deepEqual(reader.validateStrict("envelope", 1, e), []);
+  assert.deepEqual(reader.validateStrict(e.type, 1, e.data), []);
+  assert.deepEqual(reader.readEvent(e), { type: e.type, type_version: 1, data: e.data });
+}
+const newSeen = new Map();
 
 const record = (over) => ({
   issue: 571,
@@ -136,4 +164,45 @@ test("the operator's hand-recorded rescue, as the playbook writes it, reads as a
     pr: null,
     fact: "",
   });
+});
+
+// The dual-write check (docs/factory-events/translator.md): every line of the corpus rebuilt as
+// callum-flow-event arguments and run through the real writer makes no miss, and the new events per
+// type are the mapped old lines minus the named skips.
+test("the corpus through the real writer: zero misses, and the events are the corpus's", () => {
+  const corpus = path.join(ROOT, "tests", "fixtures", "factory-events");
+  const read = (f) => fs.readFileSync(path.join(corpus, f), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "factory-dual-write-"));
+  try {
+    const made = [];
+    for (const old of read("old-lines.jsonl")) {
+      const uuid = path.join(root, "uuid");
+      fs.writeFileSync(uuid, `${old.event_id}\n`);
+      const args = ["--actor", old.actor, "--repo", old.repo];
+      for (const [flag, v] of [["--issue", old.issue], ["--run", old.run_id], ["--branch", old.branch], ["--pr", old.pr], ["--head", old.head], ["--note", old.note]]) {
+        if (v !== null && v !== undefined) args.push(flag, String(v));
+      }
+      const r = spawnSync("sh", [EVENT, old.state, ...args], {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, HOME: root, CALLUM_EVENTS_DIR: root, CALLUM_EVENT_UUID_SOURCE: uuid, DEV_MACHINE_NAME: old.device, DEV_VERSIONS_FILE: path.join(root, "none.json") },
+      });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stderr, "", `${old.state} ${old.event_id} warned: ${r.stderr}`);
+      made.push(old.state);
+    }
+    const olds = fs.readFileSync(path.join(root, "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean);
+    const news = fs.readFileSync(path.join(root, "factory", "cbundy__dev-system.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    assert.equal(olds.length, made.length);
+    const byId = new Map(news.map((e) => [e.event_id, e]));
+    for (const text of olds) {
+      const o = JSON.parse(text);
+      const r = translate(text, { ts: byId.get(o.event_id)?.ts });
+      if (r.skip !== undefined) assert.equal(byId.has(o.event_id), false, `${o.state} is skipped`);
+      else assert.deepEqual(byId.get(o.event_id), r.event, o.event_id);
+    }
+    const count = (events) => Object.fromEntries([...events.reduce((m, e) => m.set(e.type, (m.get(e.type) ?? 0) + 1), new Map())].sort());
+    assert.deepEqual(count(news), count(read("expected.jsonl")));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
