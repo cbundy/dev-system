@@ -479,12 +479,22 @@ unset ev_dir ev_lines ev_pushed ev_last_written ev_last_pushed ev_f ev_m
 # shellcheck source=trusted-authors.sh
 . /usr/local/share/dev-system/trusted-authors.sh
 if ta_msg=$(trusted_authors_check); then
-  ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '%s\n' "$CALLUM_FLOW_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
+  if gh_token_mode; then
+    # Token mode (cbundy/dev-system#728): the token account joins the variable's entries.
+    ta_list=$(trusted_authors_effective)
+    ok "trusted authors (token mode): $ta_list ($(printf '%s\n' "$ta_list" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
+    unset ta_list
+  else
+    ok "CALLUM_FLOW_TRUSTED_AUTHORS is set ($(printf '%s\n' "$CALLUM_FLOW_TRUSTED_AUTHORS" | tr ',' '\n' | wc -l | tr -d ' ') trusted author(s))"
+  fi
 else
   fail "$ta_msg" \
     "Coder: set trusted_authors = \"<login>:<numeric id>\" (e.g. cbundy:13131067) in coder/dev-system/terraform.tfvars and push both templates, then restart the workspace; desktop: export CALLUM_FLOW_TRUSTED_AUTHORS=<login>:<numeric id> on the host (the synced devcontainer.json forwards it) and rebuild the container; look an id up with: gh api users/<login> --jq .id"
 fi
 unset ta_msg
+if gh_token_mode; then
+  gh_token_doctor
+fi
 
 # Telemetry export (cbundy/dev-system#68) is opt-in, so this line is only
 # information, never a failure: off without OTEL_EXPORTER_OTLP_ENDPOINT, else

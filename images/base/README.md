@@ -1757,6 +1757,26 @@ read, so it routes to a sub-agent) and `queue-watch.sh` (an untrusted `ready` is
 the queue). Each resolves the reader as `CALLUM_FLOW_ISSUE_READ_BIN` (tests) and fails closed on
 a reader failure: it never treats it as "no comments". Write calls are unchanged.
 
+Token mode (cbundy/dev-system#728). When `DEV_GH_TOKEN_FILE` is set and non-empty in the
+container environment, `dev-init` makes the file's token the workspace's only GitHub identity.
+Before the git credentials and the clone it removes every account from gh (`gh auth logout`, then
+any leftover `github.com` entry in `hosts.yml`), logs gh in with the token read on stdin only
+(never argv, a log or an exported variable), runs `gh auth setup-git`, and runs its own clone and
+fetch with `GIT_ASKPASS` unset, so Coder's external auth is never used while the token is valid.
+It then resolves the account with `gh api user` and writes `$GH_CONFIG_DIR/dev-system-identity.json`
+(atomically, owned by node, mode `0600`) holding `{login, id, name, email}` and no token. The email
+is `<id>+<login>@users.noreply.github.com` unless `DEV_GIT_EMAIL` is set; the name falls back to
+the login. `git config --global user.name` and `user.email` are set from it. If the file is
+missing, empty, unreadable or rejected, `dev-init` logs one line naming the path and the cause
+(never the token), deletes any identity file, leaves gh with no account and carries on. In token
+mode the effective trusted list is the `CALLUM_FLOW_TRUSTED_AUTHORS` entries plus `<login>:<id>`
+from the identity file (deduplicated; a stale identity file is ignored outside token mode), so
+`callum-flow-issue-read` and `callum-flow-milestone` trust the token account, and an empty variable
+with an identity entry is enough. `dev-doctor` prints the effective list and FAILs, with a fix,
+when the token file or identity file is missing, gh's active login is not the identity's, the
+token account is not trusted, or a `GIT_AUTHOR_*` / `GIT_COMMITTER_*` name or email variable
+overrides the identity. Without `DEV_GH_TOKEN_FILE` nothing changes.
+
 `callum-flow-claim <issue>` claims an issue for this device: it posts a lease comment
 (`claimed-by: <device> at <time> lease: <minutes>` plus a hidden marker), re-reads the comments
 and keeps the claim only if it is the earliest live one (otherwise it deletes its own comment

@@ -350,4 +350,73 @@ rc_of "$READ" --timeline 7
 [ "$rc" != 0 ] || fail "timeline with a malformed trusted event must fail"
 no_out "timeline with a malformed trusted event"
 
+# --- token mode: the token account's identity file joins the trusted list (#728) ---
+reset
+unset DEV_GH_TOKEN_FILE GH_CONFIG_DIR
+GH_CONFIG_DIR="$tmpdir/ghcfg"
+mkdir -p "$GH_CONFIG_DIR"
+IDENTITY="$GH_CONFIG_DIR/dev-system-identity.json"
+printf '%s\n' '{"login":"TokenBot","id":777,"name":"Token Bot","email":"777+TokenBot@users.noreply.github.com"}' > "$IDENTITY"
+TOKENU=$(user tokenbot 777)
+issue 7 "$TOKENU" "T7" "TOKEN-BODY"
+{ comment 1 "$TOKENU" "BY-TOKEN"; comment 2 "$(user stranger 5)" "BY-STRANGER"; } | arr > "$d/repos_o_r_issues_7_comments.json"
+token_run() {
+  tm=$1
+  shift
+  if [ -n "$tm" ]; then DEV_GH_TOKEN_FILE=$tm; export DEV_GH_TOKEN_FILE; else unset DEV_GH_TOKEN_FILE; fi
+  export GH_CONFIG_DIR
+  rc_of "$READ" "$@"
+  unset DEV_GH_TOKEN_FILE
+}
+
+# only the identity entry (empty variable): the token account is trusted
+TRUSTED=''
+token_run "$tmpdir/token" 7 --comments
+expect_rc 0 "identity entry alone"
+present "BY-TOKEN" "identity entry alone"
+present "TOKEN-BODY" "identity entry alone"
+absent BY-STRANGER "identity entry alone"
+
+# merged and deduplicated: the same id twice and a login in another case
+TRUSTED='cbundy:13131067,tokenbot:777'
+token_run "$tmpdir/token" 7 --comments
+expect_rc 0 "merged"
+present "BY-TOKEN" "merged"
+TRUSTED='cbundy:13131067'
+issue 8 "$OWNER" "T8" "OWNER-BODY"
+echo '[]' > "$d/repos_o_r_issues_8_comments.json"
+token_run "$tmpdir/token" 8
+expect_rc 0 "merged keeps the env entries"
+present "OWNER-BODY" "merged keeps the env entries"
+token_run "$tmpdir/token" 7
+expect_rc 0 "merged keeps the identity entry"
+present "TOKEN-BODY" "merged keeps the identity entry"
+
+# token mode off: the stale identity file is ignored
+TRUSTED='cbundy:13131067'
+token_run "" 7
+expect_rc 3 "stale identity file, token mode off"
+no_out "stale identity file, token mode off"
+TRUSTED=''
+token_run "" 7
+expect_rc 1 "stale identity file, token mode off, empty variable"
+grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is not set' "$tmpdir/err" || fail "stale identity: unclear error: $(cat "$tmpdir/err")"
+
+# a malformed identity file fails closed, naming the file
+for bad in 'not json' '{"login":"x"}' '{"login":"x","id":"7"}' '{"login":"bad login","id":7}' '[]'; do
+  printf '%s\n' "$bad" > "$IDENTITY"
+  TRUSTED='cbundy:13131067'
+  token_run "$tmpdir/token" 8
+  expect_rc 1 "malformed identity '$bad'"
+  no_out "malformed identity '$bad'"
+  grep -qF "$IDENTITY is malformed" "$tmpdir/err" || fail "malformed identity '$bad': error does not name the file: $(cat "$tmpdir/err")"
+done
+# a malformed variable is still reported as such
+printf '%s\n' '{"login":"TokenBot","id":777}' > "$IDENTITY"
+TRUSTED='bad'
+token_run "$tmpdir/token" 8
+expect_rc 1 "malformed variable in token mode"
+grep -q 'CALLUM_FLOW_TRUSTED_AUTHORS is malformed' "$tmpdir/err" || fail "malformed variable: $(cat "$tmpdir/err")"
+unset GH_CONFIG_DIR
+
 echo "issue-read tests passed"
