@@ -218,7 +218,7 @@ export function plan(state: State, config: Config): PlanResult {
     drops(ctx)
     claims(ctx)
     agents(ctx)
-    release(ctx)
+    const due = releaseDue(ctx.state); if (due !== null) want(ctx, wake('task', 'release', due.key, 'O3', null, due.fields))
   }
 
   const actions = admit(ctx)
@@ -2327,11 +2327,11 @@ function splitAfter(ctx: Ctx, issue: number, since: number) {
 
 // --- O3: the release ---------------------------------------------------------------------
 
-function release(ctx: Ctx) {
-  const { state } = ctx
-  const m = state.milestone
-  if (!state.sources.milestone.ok || m === null || m.open > 0 || m.closed === 0) return
-  want(ctx, wake('task', 'release', `task:release:${m.closed}:${m.expected ?? 'none'}`, 'O3', null, { closed: m.closed, expected: m.expected }))
+// releaseDue: the review's key and fields (at most one release task per UTC hour, whatever its key); v2 reuses it
+export function releaseDue({ milestone: m, release: r = null, sources, ledger, now }: State) {
+  const hour = (at: number) => new Date(at).toISOString().slice(0, 13), tag = r === null ? 'unknown' : (r.tag ?? 'none')
+  if (!sources.milestone.ok || m === null || m.open > 0 || m.closed === 0 || ledger.some(e => e.kind === 'task' && e.wake === 'release' && hour(e.startedAt) === hour(now))) return null
+  return { key: `task:release:${tag}:${hour(now)}`, fields: { closed: m.closed, expected: m.expected, tag, oldest: r === null || r.oldest === null ? null : new Date(r.oldest).toISOString() } }
 }
 
 // --- admitting actions: control, drain, tier, GitHub backoff, breakers, caps, one wake -------

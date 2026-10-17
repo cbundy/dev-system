@@ -162,6 +162,7 @@ describe('the prompt (SPEC 8.1)', () => {
     [w('tell', 'task-timeout', { key: 'task:run-it:60', kind: 'task' }), `TELL task-timeout id=w1 ${R} key=task:run-it:60 kind=task`],
     [w('task', 'release', { closed: 4, expected: 'minor' }), `TASK release id=w1 ${R} closed=4 expected=minor`],
     [w('task', 'release', { closed: 4, expected: null }), `TASK release id=w1 ${R} closed=4`],
+    [w('task', 'release', { closed: 4, expected: 'minor', tag: 'v1.2.3', oldest: '2026-10-12T08:30:00.000Z' }), `TASK release id=w1 ${R} closed=4 expected=minor tag=v1.2.3 oldest=2026-10-12T08:30:00.000Z`],
     [w('tell', 'runaway', { cap: 'start' }), `TELL runaway id=w1 ${R} cap=start`],
     [w('tell', 'breaker', { kind: 'guard' }), `TELL breaker id=w1 ${R} kind=guard`],
     [w('tell', 'breaker', { kind: 'ping' }), `TELL breaker id=w1 ${R} kind=ping`],

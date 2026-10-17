@@ -11,6 +11,7 @@ import { EVENTS_SQL, deriveLedger, eventsFromRows, factsOf } from './derive'
 import type { FactoryEvent } from './derive'
 import { rateLimited } from './exec'
 import { choose } from './ledger'
+import { readMilestone } from './observe-milestone'
 import type { LedgerSource } from './ledger'
 import {
   parseBrief,
@@ -19,7 +20,6 @@ import {
   parseDirty,
   parseFactoryState,
   parseIssueRead,
-  parseMilestone,
   parsePipelineOnce,
   parsePool,
   parseQueue,
@@ -32,7 +32,7 @@ import type { Factory } from './parse'
 import { ENDED, LIVE, issueFromBranch, listedLive } from './plan'
 import { TRACKER_DEPTH, buildState, runsFromWatch, seenRuns } from './state'
 import type { GithubIssue, SeenRun } from './state'
-import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, Source, SourceName, State, Usage } from './types'
+import type { Checkout, Config, Control, LedgerEntry, Milestone, Pool, ReleaseInfo, Source, SourceName, State, Usage } from './types'
 import { emptyV2Cache, lastEnded, observeV2, readDue, readOrder } from './v2/observe'
 import type { V2Cache, V2Stored } from './v2/observe'
 import type { HeadSeen } from './v2/types'
@@ -101,6 +101,7 @@ export type Cache = {
   timelines: Map<number, Timed<number[]>>
   usage?: Timed<Usage>
   milestone?: Timed<Milestone | null>
+  release?: Timed<ReleaseInfo>
   factory?: Timed<Factory>
   events?: Timed<FactoryEvent[]>
   pool?: Timed<Pool>
@@ -126,6 +127,7 @@ function resetFor(cache: Cache, repo: string) {
   delete cache.queue
   delete cache.usage
   delete cache.milestone
+  delete cache.release
   delete cache.factory
   delete cache.events
   delete cache.pool
@@ -530,15 +532,8 @@ export async function observe(
     checkout = { error: String(err) }
   }
 
-  // milestone: every milestoneEveryMs; nothing printed means the repo has not opted in
-  if (cache.milestone === undefined || now - cache.milestone.at >= cfg.milestoneEveryMs) {
-    try {
-      const r = await run(['callum-flow-milestone', 'show', 'next'])
-      if (r.exitCode === 0) cache.milestone = { at: now, value: parseMilestone(r.stdout) }
-    } catch {
-      // leave the last reading
-    }
-  }
+  // milestone and, while it qualifies, the last release (observe-milestone.ts)
+  await readMilestone(cache, { now, every: cfg.milestoneEveryMs, repo: rt.repo, base: 'defaultBranch' in checkout ? checkout.defaultBranch : null, run })
   mark('milestone', cache.milestone !== undefined, cache.milestone?.at ?? null)
 
   // act mode holds GitHub writes and waits while the backoff lasts, and from the pass that met a
@@ -561,6 +556,7 @@ export async function observe(
     pool,
     agents,
     milestone: cache.milestone?.value ?? null,
+    release: cache.release?.value ?? null,
     ledger,
     control,
     lastTitle, lastTitleAt,

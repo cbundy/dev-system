@@ -1763,8 +1763,12 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
   Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold (D-52) are
   deleted (13).
-- **Releases** are cut by the release task (O3, kept). When the Next milestone has no open item and
-  at least one closed, `task(release)` wakes the judge, which cuts the release with its standing
+- **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
+  at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
+  clock hour, whatever its key), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
+  tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
+  `expected`, `tag` and `oldest` (the oldest merge since that tag, omitted when unknown); the judge
+  decides whether to cut the release now or `hold` until the next hour, and cuts the release with its standing
   authority (OB:89-90; PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues, which v1 did
   one `task(run-it)` at a time (M7).
@@ -1882,7 +1886,7 @@ At the delete wave (workflow 4), after cutover. Until then everything here stays
 | A2 | deleted | stopping agents past their answer or of ended issues: every new seq stops the old step (4.5) |
 | O1 | kept | title |
 | O2 | kept | one wake |
-| O3 | kept | the release task, now with the Run its (11) |
+| O3 | kept | the release task, now with the Run its (11), an hourly review keyed by tag and hour |
 
 ### 13.2 Mechanisms
 
@@ -2062,7 +2066,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
-| O3 | release | the Next milestone has no open item and one closed | `task(release)` |
+| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest` |
 
 ### 14.2 Like for like against C3's estimates
 
@@ -2189,6 +2193,11 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** O3 is kept; `task(run-it)` goes into it, and it never waits on the owner inside its
   wake (11).
 - **Why:** the judge has standing release authority (OB:89), and a merge never waits on it.
+- **Hourly review (#761):** the wake was keyed by the milestone's counts and ran once per key, so a
+  later milestone reaching a used count never woke the judge, and a `hold` was final. It is now
+  keyed by the last release tag and the UTC hour, at most one release task starts per hour, so a
+  `hold` is asked again the next hour while unreleased merged work remains. The loop reads the tag
+  and the oldest merge since it (`gh`, on the milestone cadence, only while the milestone qualifies).
 
 ### `fixCap` 3 and `maxTriages` 2 per life (owner)
 
@@ -2771,7 +2780,7 @@ as one argv.
 | follow-up | `i571/lss1x2k/follow/rollout` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
-| heartbeat, sweep, tell, restart, release task | as v1 |
+| heartbeat, sweep, tell, restart, release task | as v1 (the release task: hourly review, 11) |
 
 13 new families, plus the foundation's 5, against about 62 (G2 section 1).
 
