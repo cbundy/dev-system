@@ -27,7 +27,7 @@ toolbin="$tmpdir/tools"
 fakebin="$tmpdir/bin"
 share="$tmpdir/share"
 hbdir="$tmpdir/hb"
-mkdir -p "$toolbin" "$fakebin" "$share" "$hbdir" "$tmpdir/home" "$tmpdir/events"
+mkdir -p "$toolbin" "$fakebin" "$share" "$hbdir" "$tmpdir/default-secrets" "$tmpdir/home" "$tmpdir/events"
 for t in jq sed tr cat mkdir mv dirname basename date sleep rm touch chmod stat flock timeout readlink getconf hostname grep head tail mktemp git wc node setsid nohup kill env true; do
   p=$(command -v "$t") || fail "$t not found"
   case "$p" in /*) ;; *) p=/usr/bin/$t ;; esac
@@ -36,14 +36,17 @@ done
 BASH=$(command -v bash)
 ln -s "$ROOT/images/base/agentsview.sh" "$share/agentsview.sh"
 ln -s "$ROOT/images/base/workspace.sh" "$share/workspace.sh"
+ln -s "$ROOT/images/base/factory-db.sh" "$share/factory-db.sh"
 
 cat > "$fakebin/psql" <<'STUB'
 #!/bin/sh
 d=$(dirname "$0")
 fail=0
 [ -e "$d/psql-fail" ] && fail=1
+[ -e "$d/psql-fail-${PGDATABASE:-}" ] && fail=1
 n=$(($(if [ -f "$d/psql-calls" ]; then wc -l < "$d/psql-calls"; else echo 0; fi) + 1))
 printf '%s\n' "$@" > "$d/psql-args-$n"
+printf '%s\n' "${PGDATABASE:-}" > "$d/psql-db-$n"
 cat > "$d/psql-sql-$n"
 echo x >> "$d/psql-calls"
 [ ! -e "$d/psql-hang" ] || exec sleep 60
@@ -81,13 +84,15 @@ STUB
 chmod +x "$fakebin/psql" "$fakebin/dev-version" "$share/heartbeat-state"
 
 calls() { if [ -f "$fakebin/psql-calls" ]; then wc -l < "$fakebin/psql-calls" | tr -d ' '; else echo 0; fi; }
-reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
+reset() { rm -f "$fakebin"/psql-calls "$fakebin"/psql-args-* "$fakebin"/psql-sql-* "$fakebin"/psql-db-* "$fakebin"/psql-fail-* "$fakebin/psql-fail" "$fakebin/psql-hang" "$fakebin/dver-local-calls" "$share/state-calls" "$hbdir"/dev-heartbeat*; }
 hb_setup() {
   export PATH="$fakebin:$toolbin" DEV_SYSTEM_SHARE="$share" DEV_HEARTBEAT_DIR="$hbdir" DEV_VERSIONS_FILE="$tmpdir/versions.json" \
     DEV_MACHINE_NAME=dev-box CALLUM_EVENTS_DIR="$tmpdir/events" AGENTSVIEW_DATA_DIR="$tmpdir/av" HOME="$tmpdir/home" \
     NM_PUSH_STATE_DIR="$tmpdir/nm" DEV_REPO_URL=https://github.com/Acme/Widgets.git \
     HEARTBEAT_EVENT_LOCK="$tmpdir/ev.lock" HEARTBEAT_NM_LOCK="$tmpdir/nm.lock" HEARTBEAT_AV_LOCK="$tmpdir/av.lock" \
-    AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}"
+    AGENTSVIEW_PG_URL="${HB_URL-postgres://app:s3cret@db/x}" DEV_SECRETS_DIR="$tmpdir/default-secrets" \
+    HEARTBEAT_FACTORY_EVENT_LOCK="$tmpdir/fev.lock"
+  unset FACTORY_DB_WRITER_URL
 }
 hb() ( hb_setup; exec "$@" )
 once() { hb env "$BASH" "$LOOP" --once; }
@@ -318,5 +323,157 @@ wait "$loop_pid" || rc=$?
 [ "$rc" = 0 ] || fail "stopping on a missing URL exits 0"
 loop_pid=''
 grep -q 'stopping' "$tmpdir/loop.out" || fail "stopping should be logged"
+
+# --- two targets: the agentsview database (old) and the factory database (new) --
+FDB=postgres://w:s3cret@db/fdb
+both() { hb env FACTORY_DB_WRITER_URL="$FDB" "$@"; }
+dbof() { cat "$fakebin/psql-db-$1"; }
+has_ddl() { grep -q 'CREATE TABLE\|DO \$' "$fakebin/psql-sql-$1"; }
+
+reset
+both "$BASH" "$LOOP" --once > "$tmpdir/b.out" 2>&1 || fail "--once with both URLs: $(cat "$tmpdir/b.out")"
+[ "$(calls)" = 2 ] || fail "two psql calls expected, got $(calls)"
+[ "$(dbof 1)" = x ] && [ "$(dbof 2)" = fdb ] || fail "old target first, then new: $(dbof 1) $(dbof 2)"
+has_ddl 1 || fail "the old target carries the DDL on the first beat"
+has_ddl 2 && fail "the factory database never gets DDL"
+grep -q 'ON CONFLICT (device) DO UPDATE' "$fakebin/psql-sql-2" || fail "the factory database gets the UPSERT"
+cmp -s "$fakebin/psql-args-1" "$fakebin/psql-args-2" || fail "both targets must get identical -v values"
+[ "$(wc -l < "$fakebin/dver-local-calls" | tr -d ' ')" = 1 ] || fail "dev-version --local runs once per beat"
+[ "$(wc -l < "$share/state-calls" | tr -d ' ')" = 1 ] || fail "heartbeat-state runs once per beat"
+if grep -q 's3cret' "$tmpdir/b.out"; then fail "secret leaked"; fi
+
+# one target failing never skips the other, names the target and fails --once
+reset
+touch "$fakebin/psql-fail-x"
+rc=0
+both "$BASH" "$LOOP" --once > "$tmpdir/b.out" 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "old target failing: exit 1 expected, got $rc"
+[ "$(calls)" = 2 ] && [ "$(dbof 2)" = fdb ] || fail "the new upsert is still sent after the old one failed"
+grep -q 'agentsview database beat failed' "$tmpdir/b.out" || fail "the failure names the old target"
+if grep -q 's3cret' "$tmpdir/b.out"; then fail "secret leaked: $(cat "$tmpdir/b.out")"; fi
+[ -e "$hbdir/dev-heartbeat.state" ] || fail "the state file is written when one target succeeded"
+reset
+touch "$fakebin/psql-fail-fdb"
+rc=0
+both "$BASH" "$LOOP" --once > "$tmpdir/b.out" 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "new target failing: exit 1 expected, got $rc"
+[ "$(calls)" = 2 ] && [ "$(dbof 1)" = x ] || fail "the old upsert is still sent"
+grep -q 'factory database beat failed' "$tmpdir/b.out" || fail "the failure names the new target"
+if grep -q 's3cret' "$tmpdir/b.out"; then fail "secret leaked"; fi
+reset
+touch "$fakebin/psql-fail"
+both "$BASH" "$LOOP" --once > /dev/null 2>&1 && fail "both failing must fail --once"
+[ ! -e "$hbdir/dev-heartbeat.state" ] || fail "no state file when every target failed"
+
+# only the writer URL: one call, no DDL, exit 0
+reset
+rc=0
+HB_URL='' both env AGENTSVIEW_PG_URL= "$BASH" "$LOOP" --once > "$tmpdir/b.out" 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ "$(calls)" = 1 ] && [ "$(dbof 1)" = fdb ] || fail "writer only: one call to fdb, exit 0 (rc=$rc calls=$(calls))"
+has_ddl 1 && fail "writer only: no DDL"
+# neither URL
+reset
+rc=0
+HB_URL='' hb env AGENTSVIEW_PG_URL= "$BASH" "$LOOP" --once > /dev/null 2>&1 || rc=$?
+[ "$rc" = 1 ] && [ "$(calls)" = 0 ] || fail "neither URL: exit 1, no call"
+
+# an unreadable writer secret counts as not configured
+reset
+mkdir -p "$tmpdir/badsec"
+: > "$tmpdir/badsec/factory-db-writer-url"
+hb env DEV_SECRETS_DIR="$tmpdir/badsec" "$BASH" "$LOOP" --once > /dev/null 2>&1 || fail "an empty writer secret is not configured: the old target alone succeeds"
+[ "$(calls)" = 1 ] && [ "$(dbof 1)" = x ] || fail "empty writer secret: old target only"
+
+# the loop: DDL resend is the old target's only; the new one never has DDL
+reset
+start_loop DEV_HEARTBEAT_INTERVAL=60 FACTORY_DB_WRITER_URL="$FDB"
+wait_for 5 calls_ge 2 || fail "the loop should beat both targets at once: $(cat "$tmpdir/loop.out")"
+has_ddl 1 && ! has_ddl 2 || fail "first loop beat: DDL to old only"
+kick() { # N: SIGUSR1 and wait until N calls were made and the loop sleeps again
+  s=$(sleeps_of "$loop_pid" | tr -d ' ')
+  kill -USR1 "$loop_pid"
+  wait_for 5 calls_ge "$1" || fail "SIGUSR1 beat expected ($1 calls)"
+  wait_for 5 new_sleep "$s" || fail "the loop should sleep again"
+}
+wait_for 5 one_sleep || fail "sleep after first beat"
+kick 4
+has_ddl 3 || has_ddl 4 && fail "no DDL on the second beat"
+touch "$fakebin/psql-fail-x"
+kick 6
+[ "$(dbof 6)" = fdb ] || fail "the new target is still sent when the old fails"
+rm "$fakebin/psql-fail-x"
+kick 8
+has_ddl 7 && [ "$(dbof 7)" = x ] || fail "the old target resends its DDL after a failed beat"
+has_ddl 8 && fail "the new target never gets DDL"
+# SIGTERM: the stopped beat goes to both
+kill -TERM "$loop_pid"
+wait_for 8 gone "$loop_pid" || fail "the loop should exit on TERM"
+wait "$loop_pid" || fail "TERM exits 0"
+loop_pid=''
+[ "$(calls)" = 10 ] || fail "two stopped beats expected, got $(calls) calls"
+has_arg 9 state=stopped && has_arg 10 state=stopped && [ "$(dbof 9)" = x ] && [ "$(dbof 10)" = fdb ] || fail "stopped beat to both targets"
+has_ddl 9 && fail "the stopped beat must not resend DDL the loop already sent"
+
+# writer only loop keeps beating; removing URLs one at a time
+reset
+mkdir -p "$tmpdir/secrets2"
+echo 'postgres://app:s3cret@db/x' > "$tmpdir/secrets2/agentsview-pg-url"
+echo "$FDB" > "$tmpdir/secrets2/factory-db-writer-url"
+HB_URL='' start_loop AGENTSVIEW_PG_URL= DEV_SECRETS_DIR="$tmpdir/secrets2"
+wait_for 5 calls_ge 2 || fail "loop with both secret files"
+wait_for 5 one_sleep || fail "sleep"
+rm "$tmpdir/secrets2/factory-db-writer-url"
+kick 3
+[ "$(dbof 3)" = x ] || fail "writer URL removed: the loop keeps beating the old target"
+echo "$FDB" > "$tmpdir/secrets2/factory-db-writer-url"
+rm "$tmpdir/secrets2/agentsview-pg-url"
+kick 4
+[ "$(dbof 4)" = fdb ] && ! has_ddl 4 || fail "agentsview URL removed: the loop keeps beating the new target"
+rm "$tmpdir/secrets2/factory-db-writer-url"
+kill -USR1 "$loop_pid"
+wait_for 8 gone "$loop_pid" || fail "the loop should stop when neither URL is left"
+rc=0
+wait "$loop_pid" || rc=$?
+[ "$rc" = 0 ] || fail "stopping exits 0"
+loop_pid=''
+grep -q 'stopping' "$tmpdir/loop.out" && grep -q 'FACTORY_DB_WRITER_URL' "$tmpdir/loop.out" && grep -q 'AGENTSVIEW_PG_URL' "$tmpdir/loop.out" || fail "stopping names both sources"
+
+# --final with no loop: both targets, and with only the writer URL
+reset
+both "$BASH" "$LOOP" --final || fail "--final"
+[ "$(calls)" = 2 ] && has_arg 1 state=stopped && has_arg 2 state=stopped && [ "$(dbof 2)" = fdb ] || fail "--final with no loop sends to both"
+reset
+HB_URL='' both env AGENTSVIEW_PG_URL= "$BASH" "$LOOP" --final || fail "--final writer only"
+[ "$(calls)" = 1 ] && has_arg 1 state=stopped && [ "$(dbof 1)" = fdb ] || fail "--final with only the writer URL still sends"
+
+# critical_failures: factory_events_push_not_running only with the writer URL
+reset
+both "$BASH" "$LOOP" --once > /dev/null 2>&1
+cf 1 | grep -q factory_events_push_not_running || fail "writer URL and a free lock: code expected: $(cf 1)"
+reset
+: > "$tmpdir/fev.lock"
+flock -n "$tmpdir/fev.lock" sleep 20 &
+holder=$!
+sleep 0.3
+both "$BASH" "$LOOP" --once > /dev/null 2>&1
+kill "$holder" 2> /dev/null || :
+cf 1 | grep -q factory_events_push_not_running && fail "a held lock must not report the code: $(cf 1)"
+reset
+once > /dev/null 2>&1
+cf 1 | grep -q factory_events_push_not_running && fail "no writer URL: no code"
+
+# push.factory_events
+reset
+pushof() { sed -n 's/^push=//p' "$fakebin/psql-args-1" | jq -c "$1"; }
+once > /dev/null 2>&1
+[ "$(pushof .factory_events)" = '{"last_write":null,"last_push":null}' ] || fail "no files: nulls: $(pushof .factory_events)"
+mkdir -p "$tmpdir/events/factory/.pushed"
+touch -d '2024-01-02 03:04:05 UTC' "$tmpdir/events/factory/x.jsonl"
+touch -d '2024-02-03 04:05:06 UTC' "$tmpdir/events/factory/.pushed/x.jsonl"
+reset
+once > /dev/null 2>&1
+[ "$(pushof .factory_events)" = '{"last_write":"2024-01-02T03:04:05Z","last_push":"2024-02-03T04:05:06Z"}' ] || fail "factory_events mtimes: $(pushof .factory_events)"
+[ "$(pushof .events)" = '{"last_write":null,"last_push":null}' ] || fail "the existing events key is unchanged: $(pushof .events)"
+rm -rf "$tmpdir/events/factory"
 
 echo "heartbeat-loop: ok"

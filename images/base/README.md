@@ -1906,8 +1906,12 @@ without emitting SQL. Export selection rules are in the linked metrics reference
 
 ### Worker heartbeat
 
-`heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat), with the same URL rules
-as `event-push-loop`. Between beats it waits `DEV_HEARTBEAT_INTERVAL` seconds (see the
+`heartbeat-loop` keeps one row per device in `factory.workers` (the worker heartbeat) in two databases, each
+resolved again on every beat: the agentsview database (the same URL rules as `event-push-loop`) and the factory
+database as its writer role (`FACTORY_DB_WRITER_URL` or `factory-db-writer-url`). It builds the row once per beat
+and sends the same values to every configured target, the agentsview database first. The targets are
+independent: a failure on one is logged, masked, naming `agentsview database` or `factory database`, and never
+skips the other. The loop runs while either URL is configured and stops when neither is. Between beats it waits `DEV_HEARTBEAT_INTERVAL` seconds (see the
 [configuration table](#central-session-history-agentsview)); an invalid value falls back to the default
 with a log line. It upserts: identity and the four versions from `dev-version --local --snapshot`, the full version
 document (`versions`, with the `latest` lookup cached in `/tmp/dev-heartbeat-latest.json`, refreshed in the
@@ -1916,11 +1920,13 @@ background at most every 15 minutes, never waited for), `repo`, `started_at` (th
 agentsview's watcher-log modification time), `critical_failures` and the busy state.
 `last_seen` is the database's `now()`. The view `factory.workers_status` adds `age` and `stale` (`age` over three
 intervals); readers use the view and never their own rule. An `AFTER INSERT OR UPDATE` trigger runs
-`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL is sent with the
-first beat of the process and after a failed beat. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
-(log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) and `dev-doctor` prints the last beat and state, and
-fails when a configured URL has no running loop.
-`/usr/local/share/dev-system/heartbeat-loop --once` makes one beat.
+`pg_notify('factory_workers', device)`, so readers can `LISTEN factory_workers`. The guarded DDL goes to the agentsview database
+only, with the first beat of the process and after a failed beat of that target; the writer role cannot run DDL, so
+the factory database gets the UPSERT alone. `dev-init` starts the loop under `/tmp/dev-heartbeat.lock`
+(log: `/tmp/dev-heartbeat.log`, pid: `/tmp/dev-heartbeat.pid`) when either URL is configured, and `dev-doctor` prints
+the last beat and state, and fails when either URL is configured and no loop runs.
+`/usr/local/share/dev-system/heartbeat-loop --once` makes one beat and exits 0 only when every configured target
+succeeded.
 
 `in_flight` lists the issues and runs that make the worker busy, with `repo`, `issue`, `run_id`,
 `branch` and `state` for each entry; unavailable identifiers are null.
@@ -1941,17 +1947,20 @@ run facts `failed`, `head_mismatch`, `conflict` and `ci_stalled` never reopen it
 that failed on this beat, `[]` when none: `events_push_not_running`, `nm_push_not_running`
 (the respective container-local lock is free), `agentsview_push_not_running` (the container-local
 push lock is free and the shared data directory's `pg-watch.lock` is absent or free), `versions_snapshot_missing`, and
-`latest_lookup_failing` (the background lookup has failed for over an hour). On TERM, INT or HUP the loop writes one
+`latest_lookup_failing` (the background lookup has failed for over an hour), and
+`factory_events_push_not_running` (the writer URL is configured and the `factory-event-push-loop` lock is free; never
+present without the writer URL). `push` also carries `factory_events: {last_write, last_push}`, the newest modification
+times of `factory/*.jsonl` and `factory/.pushed/*` under the events directory. On TERM, INT or HUP the loop writes one
 last beat with `state = 'stopped'` on a best-effort basis, bounded to 5 seconds, and exits 0;
 `/usr/local/share/dev-system/heartbeat-loop --final` signals the running loop through its
 pidfile (waiting up to 8 s) and, if none is running or it has not exited after the wait,
-writes that beat itself when a URL is configured. A desktop stop has no hook, so readers use
+writes that beat itself, to every configured target, when either URL is configured. A desktop stop has no hook, so readers use
 the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
 ### factory-db-bootstrap
 
 `factory-db-bootstrap --db NAME` (on PATH) sets up a factory database from nothing on any PostgreSQL
-server. Only `factory-event-push-loop` uses it so far: the other push loops, the heartbeat and `dev-query` still use the agentsview
+server. Only `factory-event-push-loop` and the heartbeat (which writes to both databases) use it so far: the other push loops and `dev-query` still use the agentsview
 database. It reads an admin connection (a role with CREATEDB and CREATEROLE, or a superuser) from
 `FACTORY_DB_ADMIN_URL` or `--admin-url-file PATH`, never from argv, and never prints the URL or a
 password. `NAME` must match `^[a-z][a-z0-9_]{0,47}$`; there is no default, so the factory never lands in

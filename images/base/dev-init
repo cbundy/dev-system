@@ -672,15 +672,15 @@ start_nm_push() {
   log "started no-mistakes push (log: $NM_PUSH_LOG)"
 }
 
-# 8d. The worker heartbeat (cbundy/dev-system#339): with the same PostgreSQL
-#     URL, keep heartbeat-loop running so this device's factory.workers row
+# 8d. The worker heartbeat (cbundy/dev-system#339): with either the agentsview
+#     PostgreSQL URL or the factory database writer URL, keep heartbeat-loop
+#     running so this device's factory.workers row (in each configured database)
 #     says it is alive, what it runs and whether it is busy.
 start_heartbeat() {
-  local rc=0
-  # shellcheck source=agentsview.sh
-  . /usr/local/share/dev-system/agentsview.sh
-  agentsview_pg_url >/dev/null || rc=$?
-  [ "$rc" -eq 0 ] || return 0 # off, or unreadable (step 8 already warned)
+  # shellcheck source=factory-db.sh
+  . /usr/local/share/dev-system/factory-db.sh
+  # off, or unreadable counts as not configured (steps 8 and 8c already warned)
+  if ! agentsview_pg_url >/dev/null 2>&1 && ! factory_db_url writer >/dev/null 2>&1; then return 0; fi
   command -v psql >/dev/null 2>&1 || { log "WARNING: psql is not on PATH - worker heartbeat not started. This image is older than the base image that ships postgresql-client: rebuild the container (dev-restart-self, or Rebuild Container); do not install it by hand."; return 0; }
   flock -n "$HEARTBEAT_LOCK" true 2>/dev/null || return 0
   : > "$HEARTBEAT_LOG"
