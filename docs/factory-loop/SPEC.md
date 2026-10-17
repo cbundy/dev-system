@@ -292,6 +292,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (section 11.1)
 | `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (6.3, 7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. The text contract stays the fallback of the other two, and the tools stay registered and served whatever it says. `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13, DECISIONS D-73, D-74). It goes back to `tool` once the timer-spawn probe passes (13). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
 | `titleEveryMs` | `5m` | the session title is renamed at most this often (section 9.1) |
+| `reportEveryMs` | `10m` | the factory report is built at most this often; delivery comes in a later child of #684 |
 | `queueEveryMs`, `githubEveryMs`, `usageEveryMs`, `milestoneEveryMs` | `2m`, `5m`, `5m`, `10m` | observe cadences |
 | `usageStaleMs` | `15m` | an older reading counts as unavailable |
 | `heartbeatEveryMs`, `sweepEveryMs` | `20m`, `30m` | rules `H1`, `H2`; `heartbeatEveryMs` is also how long `D1` trusts a done claim the factory state has not shown yet (#538) |
@@ -1453,6 +1454,16 @@ jq -sc '[.[] | .pass as $p | .commands[]? | {pass: $p, phase, source, cmd, ms}] 
 # the longest waits at the last pass
 jq -sc 'map(select(.waiting)) | last | .waiting | sort_by(.forMs) | reverse | .[] | {issue, rule, on, since, forMs}' trace-*.jsonl
 ```
+
+### 12.2 The factory report
+
+`hooks/report.ts` is a pure module: `reportOf(records, titles, now, repo)` returns `{ text, digest }`
+(`text` is null when nothing is in flight and nothing has merged). `text` holds an "In flight (N)"
+table and a "Merged" table of the five newest merges; `digest` changes with a stage change or a new
+merge and not with time alone. `register.ts` keeps `titles:<repo>` in the store, a map from issue
+number to title filled from the issue reads observe already makes (no extra GitHub call) and pruned
+to the issues with a v2 record. Nothing is sent yet: delivery, paced by `reportEveryMs`, comes in a
+later child of #684.
 
 ## 13. Known gaps and risks
 
