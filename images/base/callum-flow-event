@@ -10,6 +10,21 @@
 #          [--if-changed]
 #        callum-flow-event --path [--repo O/N]
 #        callum-flow-event --new-path [--repo O/N]
+#        callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N]
+#          [--actor NAME]
+#
+# Native mode (cbundy/dev-system#792): --type writes one new-format event (envelope v1,
+# docs/factory-events/README.md) straight from its type and payload to <events dir>/factory/<file>
+# only, never to the old log, then touches <events dir>/.wake. factory-event-write.js (found as the
+# translator is) builds the envelope and checks the payload against factory-event-shapes.json: for a
+# known type and version every required field must be present and every field the schema has must
+# carry its JSON type, and a type with x-issue required needs --issue. Enum values, bounds and extra
+# fields are not checked at run time. A type or version not in the shapes is written with one
+# warning. type_version is --type-version, else the type's current version, else 1. Exit 2 and
+# nothing written on: --data missing, not JSON or not an object; --issue or --type-version not a
+# positive integer; --type not matching ^[a-z][a-z_]*$; an unknown option; a refused payload. A
+# missing node, writer or log that cannot be written warns and exits 0. CALLUM_EVENT_SHAPES
+# overrides the shapes file (tests).
 #
 # Dual write (cbundy/dev-system#649): right after the old line is appended, the same call
 # translates it with factory-event-translate.js (found next to this script, else in
@@ -72,7 +87,7 @@
 # Exit codes:
 #   0  the line was written, or writing failed (a warning on stderr: the
 #      caller is never failed by logging)
-#   2  usage error: unknown state, missing or non-numeric --issue, a loop,
+#   2  usage error (native mode: see above): unknown state, missing or non-numeric --issue, a loop,
 #      transition, reviewed or intervention note without its required tokens
 #      (nothing written). --issue may be left out for watcher_error, usage, loop
 #      and intervention, and is taken from an issue-<N> branch name when
@@ -108,7 +123,14 @@ usage() {
   echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed]" >&2
   echo "       callum-flow-event --path [--repo O/N]" >&2
   echo "       callum-flow-event --new-path [--repo O/N]" >&2
+  echo "       callum-flow-event --type TYPE --data JSON [--type-version N] [--issue N] [--repo O/N] [--actor NAME]" >&2
   echo "states: $STATES" >&2
+  exit 2
+}
+
+# native_usage: a one-line usage error for the --type mode.
+native_usage() {
+  echo "callum-flow-event: $1" >&2
   exit 2
 }
 
@@ -122,6 +144,29 @@ repo_file() {
     [ -n "$repo" ] || repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
   fi
   file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
+}
+
+warn() { echo "callum-flow-event: warning: $*" >&2; }
+
+# read_device: sets $device (DEV_MACHINE_NAME, else the hostname, else /etc/hostname, else unknown).
+read_device() {
+  device=${DEV_MACHINE_NAME:-}
+  [ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
+  [ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+}
+
+# read_event_id: sets $event_id to a lower-case UUID from the kernel (or CALLUM_EVENT_UUID_SOURCE), else empty.
+read_event_id() {
+  event_id=$({ tr 'A-F' 'a-f' < "${CALLUM_EVENT_UUID_SOURCE:-/proc/sys/kernel/random/uuid}"; } 2>/dev/null) || event_id=
+  case "$event_id" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) event_id= ;;
+  esac
+}
+
+# read_snap: sets $snap to the dev-init version snapshot (empty when unreadable).
+read_snap() {
+  snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
 }
 
 if [ "$1" = --path ] || [ "$1" = --new-path ]; then
@@ -138,6 +183,51 @@ if [ "$1" = --path ] || [ "$1" = --new-path ]; then
   case "$dir" in /*) ;; *) dir=$(pwd)/$dir ;; esac
   if [ "$mode" = --new-path ]; then dir=$dir/factory; fi
   printf '%s/%s\n' "$dir" "$file"
+  exit 0
+fi
+if [ "$1" = --type ]; then
+  n_type='' n_ver='' n_data='' n_issue='' n_repo=${CALLUM_FLOW_REPO-} n_actor=${CALLUM_FLOW_ACTOR:-agent}
+  n_has_ver='' n_has_data='' n_has_issue=''
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || native_usage "$1 needs a value"
+    case "$1" in
+      --type) n_type=$2 ;;
+      --type-version) n_ver=$2 n_has_ver=1 ;;
+      --data) n_data=$2 n_has_data=1 ;;
+      --issue) n_issue=$2 n_has_issue=1 ;;
+      --repo) n_repo=$2 ;;
+      --actor) n_actor=$2 ;;
+      *) native_usage "unknown option '$1'" ;;
+    esac
+    shift 2
+  done
+  [ -n "$n_has_data" ] || native_usage "--data is required"
+  repo=$n_repo
+  repo_file
+  dir=${CALLUM_EVENTS_DIR:-/persist/events}
+  command -v node >/dev/null 2>&1 || { warn "node not found - event not recorded"; exit 0; }
+  wr_js=$(dirname "$0")/factory-event-write.js
+  [ -r "$wr_js" ] || wr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-write.js
+  [ -r "$wr_js" ] || { warn "factory-event-write.js not found - event not recorded"; exit 0; }
+  read_device
+  read_event_id
+  read_snap
+  set -- --type "$n_type" --data "$n_data" --repo "$repo" --device "$device" --actor "$n_actor" --event-id "$event_id" --snapshot "$snap"
+  [ -z "$n_has_ver" ] || set -- "$@" --type-version "$n_ver"
+  [ -z "$n_has_issue" ] || set -- "$@" --issue "$n_issue"
+  [ -z "${CLAUDE_SESSION_ID:-}" ] || set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+  wr_rc=0
+  new=$(node "$wr_js" "$@") || wr_rc=$?
+  [ "$wr_rc" -ne 2 ] || exit 2
+  if [ "$wr_rc" -ne 0 ] || [ -z "$new" ]; then warn "event writer failed (exit $wr_rc) - event not recorded"; exit 0; fi
+  if [ ! -d "$dir/factory" ]; then
+    mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
+  fi
+  if printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null; then
+    touch "$dir/.wake" 2>/dev/null || :
+  else
+    warn "cannot write $dir/factory/$file - event not recorded"
+  fi
   exit 0
 fi
 state=$1
@@ -210,15 +300,11 @@ esac
 case "$issue" in '' | *[!0-9]*) [ -z "$issue" ] || usage "--issue must be a number" ;; esac
 case "$pr" in '' | *[!0-9]*) [ -z "$pr" ] || usage "--pr must be a number" ;; esac
 
-warn() { echo "callum-flow-event: warning: $*" >&2; }
-
 command -v jq >/dev/null 2>&1 || { warn "jq not found - event not recorded"; exit 0; }
 
 repo_file
 
-device=${DEV_MACHINE_NAME:-}
-[ -n "$device" ] || device=$(hostname 2>/dev/null) || device=
-[ -n "$device" ] || device=$(cat /etc/hostname 2>/dev/null) || device=unknown
+read_device
 
 session=${CLAUDE_SESSION_ID:-}
 if [ -z "$session" ]; then
@@ -229,13 +315,10 @@ if [ -z "$session" ]; then
   fi
 fi
 
-event_id=$({ tr 'A-F' 'a-f' < "${CALLUM_EVENT_UUID_SOURCE:-/proc/sys/kernel/random/uuid}"; } 2>/dev/null) || event_id=
-case "$event_id" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-  *) warn "no event_id available - event recorded without one"; event_id= ;;
-esac
+read_event_id
+[ -n "$event_id" ] || warn "no event_id available - event recorded without one"
 
-snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
+read_snap
 
 ts_ms=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
 ts=${ts_ms%.*}Z
