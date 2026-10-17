@@ -546,6 +546,13 @@
   "merged.v1": {
     "additionalProperties": false,
     "properties": {
+      "additions": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "branch": {
         "type": [
           "null",
@@ -556,6 +563,23 @@
         "enum": [
           "factory",
           "hand"
+        ]
+      },
+      "deletions": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "files": {
+        "items": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
         ]
       },
       "head": {

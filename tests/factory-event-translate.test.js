@@ -105,7 +105,11 @@ test("every event is valid strictly (envelope and payload) and readEvent returns
     assert.equal(e.envelope, 1);
     assert.equal(e.type_version, 1);
     assert.deepEqual(reader.validateStrict(e.type, 1, e.data), [], `${e.type} ${e.event_id}`);
-    assert.deepEqual(reader.readEvent(e), { type: e.type, type_version: 1, data: e.data }, e.event_id);
+    // An optional field the translator leaves out comes back from the reader as null.
+    const got = reader.readEvent(e);
+    const added = Object.keys(got.data).filter((k) => !(k in e.data));
+    for (const k of added) assert.equal(got.data[k], null, `${e.type} ${k}`);
+    assert.deepEqual({ ...got, data: Object.fromEntries(Object.entries(got.data).filter(([k]) => !added.includes(k))) }, { type: e.type, type_version: 1, data: e.data }, e.event_id);
   }
 });
 

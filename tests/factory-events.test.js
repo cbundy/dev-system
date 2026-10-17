@@ -52,7 +52,9 @@ test("every event example comes back from readEvent valid against its type's cur
       assert.equal(got.type, type);
       assert.equal(got.type_version, Number(version));
       assert.deepEqual(reader.validateStrict(type, got.type_version, got.data), [], f);
-      assert.deepEqual(got.data, ex, `${f}: an example gives every field, so nothing changes`);
+      // An optional field an example leaves out comes back as null; every other field is unchanged.
+      const optional = Object.keys(load(f).properties).filter((k) => !load(f).required.includes(k) && !(k in ex));
+      assert.deepEqual(got.data, { ...ex, ...Object.fromEntries(optional.map((k) => [k, null])) }, `${f}: nothing else changes`);
     }
   }
 });
@@ -76,6 +78,24 @@ test("readEvent names the type, version and field of a missing or mistyped requi
   assert.throws(() => reader.readEvent({ type: "claimed", type_version: 1, data: {} }), /claimed v1: field lease_minutes is missing/);
   assert.throws(() => reader.readEvent({ type: "claimed", type_version: 1, data: { lease_minutes: "2" } }), /claimed v1: field lease_minutes must be integer, got string/);
   assert.throws(() => reader.readEvent({ type: "claimed", type_version: 1, data: { lease_minutes: 1.5 } }), /field lease_minutes must be integer/);
+});
+
+test("readEvent gives the optional merged size fields as null for a payload without them", () => {
+  const old = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "docs/factory-events/schemas/merged.v1.json"), "utf8")).examples[0];
+  const got = reader.readEvent({ type: "merged", type_version: 1, data: old });
+  assert.equal(got.data.files, null);
+  assert.equal(got.data.additions, null);
+  assert.equal(got.data.deletions, null);
+});
+
+test("validateStrict rejects a bad merged files, additions or deletions", () => {
+  const base = { pr: 1, branch: "b", head: "f94eb46", by: "factory", recovered: false };
+  const strict = (extra) => reader.validateStrict("merged", 1, { ...base, ...extra });
+  assert.deepEqual(strict({ files: null, additions: null, deletions: null }), []);
+  assert.deepEqual(strict({}), []);
+  for (const extra of [{ additions: -1 }, { deletions: 1.5 }, { files: [1] }, { files: [""] }, { files: "a.js" }]) {
+    assert.notDeepEqual(strict(extra), [], JSON.stringify(extra));
+  }
 });
 
 const shape2 = {
