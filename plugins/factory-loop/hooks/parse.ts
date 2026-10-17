@@ -496,9 +496,19 @@ export function parseCommitDate(text: string): number | null {
   return Number.isNaN(ms) ? null : ms
 }
 
-// parseOldestMerge: the earliest mergedAt of `gh pr list --state merged --json mergedAt`, as epoch
-// ms; undefined when the output is not a list of that shape, null when the list is empty.
-export function parseOldestMerge(text: string): number | null | undefined {
+// parseTagCommit: the two lines `gh api .../commits/<tag> --jq '.sha,.commit.committer.date'`
+// prints: the commit sha, then its date as epoch ms; null when it is not that.
+export function parseTagCommit(text: string): { sha: string; at: number } | null {
+  const [sha, date, ...rest] = text.trim().split('\n').map((l) => l.trim())
+  if (rest.length > 0 || !/^[0-9a-f]{7,64}$/.test(sha ?? '')) return null
+  const at = parseCommitDate(date ?? '')
+  return at === null ? null : { sha, at }
+}
+
+// parseOldestMerge: the earliest mergedAt of `gh pr list --state merged --json mergedAt,mergeCommit`,
+// as epoch ms, leaving out the PR whose merge commit is `skipSha` (the release's own bump PR);
+// undefined when the output is not a list of that shape, null when no PR is left.
+export function parseOldestMerge(text: string, skipSha?: string): number | null | undefined {
   let list: unknown
   try {
     list = JSON.parse(text)
@@ -510,6 +520,7 @@ export function parseOldestMerge(text: string): number | null | undefined {
   for (const p of list) {
     const ms = typeof p?.mergedAt === 'string' ? Date.parse(p.mergedAt) : Number.NaN
     if (Number.isNaN(ms)) return undefined
+    if (skipSha !== undefined && p?.mergeCommit?.oid === skipSha) continue
     if (oldest === null || ms < oldest) oldest = ms
   }
   return oldest
