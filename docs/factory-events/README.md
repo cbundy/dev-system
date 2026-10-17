@@ -107,8 +107,9 @@ SQL
 ## Where events live
 
 - **Local log.** Each device appends one line per event to
-  `/persist/events/factory/<owner>__<repo>.jsonl`. During dual write the old line still goes to
-  today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
+  `/persist/events/factory/<owner>__<repo>.jsonl`. Dual write is live in `callum-flow-event`, which appends the translated
+  event right after the old line (`callum-flow-event --new-path` prints the path; `factory/` is made
+  0700). The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
   `callum-flow-sweep`, `--if-changed` (which keeps comparing old lines only) or the old shipper's
   `$DIR/*.jsonl` glob (`images/base/event-push-loop:202`).
 - **Shipping.** The new push loop keeps its own cursor and stores each line's number in the file
