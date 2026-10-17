@@ -119,7 +119,10 @@ describe('parse', () => {
       },
       stripped: 0,
     })
-    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, subIssues: 0, title: 'Escalate by opening an issue' })
+    expect(parseIssueRead(json)).toEqual({ open: true, labels: ['enhancement', 'ready'], blockedBy: 1, blocking: 0, subIssues: 0, title: 'Escalate by opening an issue' })
+    const two = JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0, blocking: 2 } } })
+    expect(parseIssueRead(two)?.blocking).toBe(2)
+    expect(parseIssueRead(JSON.stringify({ issue: { state: 'open', title: 't', issue_dependencies_summary: { blocked_by: 0 } } }))?.blocking).toBeNull()
     expect(parseIssueRead('{}')).toBeNull()
   })
 

@@ -15,7 +15,7 @@ import { start } from '../hooks/ledger'
 import type { Runtime } from '../hooks/observe'
 import type { Action, LedgerEntry, PlanResult, State } from '../hooks/types'
 import { commentBody } from '../hooks/v2/act-state'
-import { CONTRACTS, rolloutOf } from '../hooks/v2/contracts-work.mjs'
+import { CONTRACTS, rolloutOf, rolloutReasonOf } from '../hooks/v2/contracts-work.mjs'
 import { childKey, entryKey, lifeOf, prepareKey, reviewKey, stepKey, transitionKey } from '../hooks/v2/keys'
 import { emptyV2State } from '../hooks/v2/observe'
 import { planV2 } from '../hooks/v2/plan'
@@ -36,7 +36,7 @@ const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
 const BIN = `${PLUGIN_ROOT}/bin/factory-answer`
-const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Rollout', 'keep-open - one part of several', ''].join('\n')
+const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
 
 // --- worlds, as v2-state.test.ts builds them ------------------------------------------------------------
 
@@ -90,7 +90,7 @@ describe('the design-v2 contract (8.7)', () => {
   })
 
   test('a blockedBy entry may be #<N>, an existing issue; the issue being split, a malformed reference and a stranger are each refused', () => {
-    const child = (key: string, blockedBy: unknown[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
+    const child = (key: string, blockedBy: unknown[] = []) => ({ key, title: `Part ${key}`, body: BRIEF, blockedBy, ready: true })
     const split = (...children: unknown[]) => ({ kind: 'split', brief: 'p', children })
     const out = check('design-v2', split(child('a'), child('b', ['a', '#57'])))
     expect(out).toMatchObject({ ok: true })
@@ -122,7 +122,7 @@ describe('the design-v2 contract (8.7)', () => {
   })
 
   test('a split has 2 to 10 children with unique keys, siblings it is blocked by, and no cycle', () => {
-    const child = (key: string, blockedBy: string[] = []) => ({ key, title: `Part ${key}`, body: 'b', blockedBy, ready: true })
+    const child = (key: string, blockedBy: string[] = []) => ({ key, title: `Part ${key}`, body: BRIEF, blockedBy, ready: true })
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a')] })).toEqual(['children has 1; a split has 2 to 10'])
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['c']), child('a')] })).toEqual(['children[0].blockedBy "c" is neither the key of another child nor an existing issue #<N>', 'children[1].key a is used twice'])
     expect(problems('design-v2', { kind: 'split', brief: 'p', children: [child('a', ['b']), child('b', ['a'])] })).toEqual(["children's blockedBy make a cycle: a -> b -> a"])
@@ -138,6 +138,35 @@ describe('the design-v2 contract (8.7)', () => {
     expect(rolloutOf('```\n## Rollout\nmerge\n```\n## rollout\nkeep-open - x')).toBe('keep-open')
     expect(rolloutOf('## Rollout\n## Next\nmerge')).toBeNull()
     expect(rolloutOf('no section')).toBeNull()
+  })
+
+  test('rolloutReasonOf reads the reason after the value and its dash, ignoring fenced code', () => {
+    expect(rolloutReasonOf('## Rollout\nkeep-open - research spike, no code\n')).toBe('research spike, no code')
+    expect(rolloutReasonOf('```\n## Rollout\nmerge - no\n```\n## Rollout\n**run-it** \u2014 its own Run it')).toBe('its own Run it')
+    expect(rolloutReasonOf('## Rollout\nmerge')).toBe('')
+    expect(rolloutReasonOf('no section')).toBeNull()
+  })
+
+  test('a keep-open that says the issue is part of something larger is refused, in a brief and in a split child; other reasons are taken', () => {
+    const rollout = (line: string) => BRIEF.replace('merge - a self-contained change', line)
+    const split = (body: string) => ({ kind: 'split', brief: 'p', children: [{ key: 'a', title: 'A', body, blockedBy: [], ready: true }, { key: 'b', title: 'B', body: BRIEF, blockedBy: [], ready: true }] })
+    for (const reason of ['one part of epic #724', 'part of epic #724', 'Part of #724, split by the factory loop', 'a sub-issue of the plan', 'child of #5', 'the EPIC']) {
+      const line = `keep-open - ${reason}`
+      expect(problems('design-v2', { kind: 'brief', brief: rollout(line) })[0]).toMatch(/a split child is done when its PR merges, so its Rollout is merge/)
+      const out = problems('design-v2', split(rollout(line)))
+      expect(out).toHaveLength(1)
+      expect(out[0]).toMatch(/^children\[0\] \(a\) body's ## Rollout is keep-open because it is part of something larger/)
+    }
+    for (const line of ['keep-open - research spike, no code to ship', 'keep-open - a proposal', 'run-it - its own ## Run it', 'merge - part of an epic, done when merged', 'keep-open - the Done-when needs a person (departure)']) {
+      expect(problems('design-v2', { kind: 'brief', brief: rollout(line) })).toEqual([])
+      expect(problems('design-v2', split(rollout(line)))).toEqual([])
+    }
+  })
+
+  test('a split child body with no Rollout, or a Rollout that is not merge, run-it or keep-open, is refused naming the child', () => {
+    const split = (body: string) => ({ kind: 'split', brief: 'p', children: [{ key: 'a', title: 'A', body: BRIEF, blockedBy: [], ready: true }, { key: 'b', title: 'B', body, blockedBy: [], ready: true }] })
+    expect(problems('design-v2', split('just a body'))).toEqual(["children[1] (b) body's ## Rollout must start with one of merge, run-it, keep-open"])
+    expect(problems('design-v2', split(BRIEF.replace('merge - a self-contained change', 'ship - now')))).toEqual(['children[1] (b) body\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"'])
   })
 })
 
@@ -233,6 +262,8 @@ describe('the work prompts (prompts-work.ts)', () => {
       expect(p).not.toContain('When you end your turn the loop runs')
     }
     const design = designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }, { issue: 300, branch: 'issue-300' }] })
+    expect(design).toContain('A split child is a whole issue')
+    expect(design).toContain('never because it is part of an epic or a split')
     expect(design).toContain('you change nothing in the repository')
     expect(design).not.toContain('git push origin')
     expect(design).toContain('  issue-301, for issue #301')
@@ -307,7 +338,7 @@ describe('the work prompts (prompts-work.ts)', () => {
     const long = [BRIEF, ...Array.from({ length: 400 }, (_, i) => `  - line ${i}: fixes #${i}`)].join('\n')
     const out = neutralBody(long)
     expect(out.length).toBeGreaterThan(8000)
-    expect(out).toContain('## Rollout\nkeep-open - one part of several')
+    expect(out).toContain('## Rollout\nmerge - a self-contained change')
     expect(out).toContain('  - line 399: fixing #399')
     expect(out).not.toMatch(/\bfixes #/)
     expect(neutralBody('x'.repeat(100), 50)).toHaveLength(50)

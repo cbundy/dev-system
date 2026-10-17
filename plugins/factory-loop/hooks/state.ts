@@ -149,6 +149,7 @@ export function buildState(o: Observed): State {
         trusted: g === undefined ? null : g.trusted,
         labels: g?.facts?.labels ?? f?.github?.labels ?? null,
         blockedBy: g?.facts?.blockedBy ?? null,
+        blocking: g?.facts?.blocking ?? null,
         subIssues: g?.facts?.subIssues ?? null,
         epic: g?.facts ? tracker.test(g.facts.title) : null,
         subIssueList: subIssuesOf(n, timelines),

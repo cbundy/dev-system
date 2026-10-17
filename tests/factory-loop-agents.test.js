@@ -174,3 +174,10 @@ test("the model is never offered the loop's own agent types, but while the loop'
     );
   }
 });
+
+test("the v2 designer's rollout rules: part of an epic or a split is never a reason for keep-open, and a split child is a whole issue", () => {
+  const body = read("plugins/factory-loop/agents/designer-v2.md").replace(/\s+/g, " ");
+  assert.match(body, /Being part of an epic or a split is never a reason for keep-open/);
+  assert.match(body, /a split child is a whole issue/);
+  assert.doesNotMatch(body, /one part of several/);
+});

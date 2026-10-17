@@ -118,6 +118,18 @@ export function parkedTell(r: IssueRecord, k: number): Action {
   return wake('tell', 'parked', key, k === 0 ? RULE : 'S6', r.issue, { issue: r.issue, from: r.resumeTo ?? 'none', days: k }, lines)
 }
 
+// keepOpenTell: the owner tell for a merged issue whose rollout is keep-open while open issues
+// still wait on it: they stay unclaimable until it is closed. Planned while its view shows
+// issues blocked on it; the ledger makes it once. The blocked issues' numbers are
+// not read, so it gives the count and the link.
+function keepOpenTell(ctx: V2Ctx, r: IssueRecord): Action | null {
+  const key = followKey(r, 'blocked-tell')
+  const count = ctx.state.issues.find(i => i.number === r.issue)?.blocking ?? null
+  if (count === null || count <= 0) return null
+  const lines = [`issue: https://github.com/${ctx.state.repo}/issues/${r.issue}`, `waiting: ${count} open issue${count === 1 ? ' is' : 's are'} blocked by it and stay unclaimable until it is closed`]
+  return wake('tell', 'keep-open-blocks', key, RULE, r.issue, { issue: r.issue, blocking: count }, lines)
+}
+
 // entryItems: the entry actions of the record's current seq, in their order (4.5).
 export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): EntryItem[] {
   const t = transitionOf(ctx, r)
@@ -183,6 +195,10 @@ function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
     if (o !== null && o.closeIssue !== null) add({ ...base(r, followKey(r, 'close-issue'), 'its PR targets an epic base'), issue: o.closeIssue, kind: 'close-issue' })
     if (o !== null && (o.rollout === 'run-it' || o.rollout === 'keep-open') && ctx.state.sources.milestone.ok && ctx.state.milestone !== null) {
       add({ ...base(r, followKey(r, 'milestone-later'), `${o.rollout} leaves the issue open`), kind: 'milestone-later' })
+    }
+    if (o !== null && o.rollout === 'keep-open') {
+      const tell = keepOpenTell(ctx, r)
+      if (tell !== null) items.push({ action: tell, soft: false, tell: true })
     }
   }
   if (r.why === 'split') {

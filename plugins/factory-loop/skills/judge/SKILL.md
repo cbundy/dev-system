@@ -356,6 +356,10 @@ Owner items (the title counts them until resolved):
   a merge, so the loop labelled it `factory:rejected` instead of putting it back in the queue, and
   said why on the issue. Lead with `[DECISION]`. To try again the owner removes
   `factory:rejected` and adds `ready`; its life count starts again.
+- `keep-open-blocks` (issue, blocking; detail: the issue link, how many wait): a merged issue's
+  rollout is keep-open, so it stays open, and `blocking` open issues wait on it and stay
+  unclaimable until it is closed. Lead with `[DECISION]`: name the issue and the count and ask
+  the owner to close it, or to say what it still needs.
 
 Notices:
 - `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's

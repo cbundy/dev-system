@@ -643,7 +643,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
@@ -1348,7 +1348,9 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
   links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
-  (`agents/designer.md:71-77`).
+  (`agents/designer.md:71-77`). A split child is a whole issue: its `## Rollout` defaults to
+  `merge`, and the contract refuses a child body without one, or a `keep-open` whose reason says
+  the child is part of an epic or a split.
 
 ## 9. The merge queue
 

@@ -21,6 +21,7 @@ export const LIMITS: Readonly<{
 export const CHILDREN: Readonly<{ min: number; max: number }>
 export const CHILD_KEY: RegExp
 export function rolloutOf(brief: string): string | null
+export function rolloutReasonOf(brief: string): string | null
 
 // The checked answers: every field present, absent texts null, lists [].
 // blockedBy: sibling keys, or "#<N>" for an existing issue of the repo

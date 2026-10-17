@@ -134,6 +134,8 @@ export type IssueFacts = {
   open: boolean
   labels: string[]
   blockedBy: number | null
+  // the open issues waiting on this one (issue_dependencies_summary.blocking)
+  blocking: number | null
   subIssues: number | null
   title: string
 }
@@ -148,6 +150,7 @@ export function parseIssueRead(json: string): IssueFacts | null {
       open: issue.state === 'open',
       labels: Array.isArray(issue.labels) ? issue.labels.map((l: { name?: unknown }) => String(l?.name ?? '')).filter(Boolean) : [],
       blockedBy: typeof deps?.blocked_by === 'number' ? deps.blocked_by : null,
+      blocking: typeof deps?.blocking === 'number' ? deps.blocking : null,
       subIssues: typeof subs?.total === 'number' ? subs.total : null,
       title: typeof issue.title === 'string' ? issue.title : '',
     }

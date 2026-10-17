@@ -682,7 +682,11 @@ on every failure:
   needs: a `WARN` when it lacks it (fix: `dev-login start`, or
   `gh auth refresh -h github.com -s workflow`; for `GH_TOKEN`, give that token the scope).
   When the scopes cannot be read (offline, or a fine-grained token, which has none), an
-  `INFO` line says so and nothing is prompted;
+  `INFO` line says so and nothing is prompted. In token mode (`DEV_GH_TOKEN_FILE`) this check
+  is replaced by a read-only token access check: a classic token needs `repo` and `workflow`,
+  a fine-grained one is probed for metadata, contents, issues, pull requests, actions and
+  checks on the workspace repo, each missing piece a `FAIL` with the permission to grant
+  (write access cannot be probed without writing, so it is an `INFO` line);
 - no-mistakes is installed and, inside a repo with `.no-mistakes.yaml`, registered and
   working (any `no-mistakes status` error fails the check);
 - git can read the workspace repo (not blocked by "dubious ownership");
