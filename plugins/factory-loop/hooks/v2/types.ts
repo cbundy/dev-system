@@ -249,6 +249,11 @@ export type StepMarker = {
   // the step attempt's scratch folder (keys.ts scratchOf), which the companion exports as TMPDIR; the
   // slot executor fills it, like loopDir
   scratch: string
+  // the stop gates the companion runs at once, resolved from the config and the CPU count by the slot
+  // executor (the planner does not know the CPUs); absent: no limit, as an older loop wrote it
+  gateConcurrency?: number
+  // the longest a finished writer waits for its gate's turn, set by the slot executor
+  gateWaitTimeoutMs?: Ms
 }
 
 // The four reasons of a designer's split (8.7; contracts-work.mjs REASON_KEYS).

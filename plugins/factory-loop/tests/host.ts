@@ -212,6 +212,11 @@ export function host(on: On, opts: HostOptions = {}) {
   on('store.keys', async () => ({ value: [...store.keys()] }))
   on('process.run', async ($, e) => {
     const argv = [...e.argv]
+    // the container's CPU count, read once per loop process: part of the environment, not a command
+    // under test, so it is answered here and never seen
+    if (argv[0] === 'node' && argv[1] === '-e' && (argv[2] ?? '').includes('availableParallelism')) {
+      return { value: { exitCode: 0, stdout: '8\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const s: Seen = { argv, env: { ...(e.init?.env ?? {}) }, stdin: e.init?.stdin, cwd: e.init?.cwd }
     seen.push(s)
     const done = (r: Reply) => ({

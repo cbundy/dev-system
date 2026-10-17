@@ -539,7 +539,10 @@ describe('the slot executor (act-slots.ts)', () => {
     const w = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 1\nLEFTOVERS file=${leftovers}\n` }))
     const a = act('prepare', { key: prepareKey(r5, 1), rule: 'S2', branch: 'issue-5', marker: MARKER })
     expect(await w.run(a)).toEqual({ status: 'done', outcome: { kind: 'slot', op: 'prepare', path: SLOT, lease: 'L5', head: HEAD, killed: 1, leftovers }, summary: `prepared at 9e01b77; 1 process(es) ended; leftovers saved to ${leftovers}` })
-    expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR, scratch: scratchOf(LOOP_DIR, 5, LIFE, 3) })]])
+    expect(w.argvs).toEqual([[BIN, ...budget('prepare'), 'prepare', SLOT, 'L5', 'issue-5', JSON.stringify({ ...MARKER, loopDir: LOOP_DIR, scratch: scratchOf(LOOP_DIR, 5, LIFE, 3), gateWaitTimeoutMs: CFG.gateWaitTimeoutMs })]])
+    // the resolved gate concurrency comes from the runtime, not the planner's marker; none resolved: no field
+    expect(JSON.parse((slotArgv(a, { ...runtime(), gateConcurrency: 3 }) as string[]).at(-1) ?? '{}')).toMatchObject({ gateConcurrency: 3, gateWaitTimeoutMs: CFG.gateWaitTimeoutMs })
+    expect(JSON.parse((slotArgv(a, runtime()) as string[]).at(-1) ?? '{}')).not.toHaveProperty('gateConcurrency')
     expect(scratchOf(LOOP_DIR, 5, LIFE, 3)).toBe(`${LOOP_DIR}/scratch/5-${LIFE}-s3`)
     const clean = actWorld(() => ({ stdout: `PREPARED head=${HEAD}\nKILLED 0\n` }))
     expect(await clean.run(a)).toMatchObject({ status: 'done', outcome: { head: HEAD, killed: 0, leftovers: null }, summary: 'prepared at 9e01b77' })

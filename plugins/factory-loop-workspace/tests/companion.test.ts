@@ -44,7 +44,7 @@ type GateRun = { exitCode: number; output: string } | 'timeout'
 
 // world: the engine beneath the plugin. What it was asked is kept to look at; gates answers the
 // stop gate's commands in turn.
-function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number } = {}) {
+function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[]; eventExit?: number; hold?: (n: number, command: string) => Promise<void> | undefined } = {}) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { CLAUDE_CONFIG_DIR: CONFIG, HOME: '/home/node' })
   const w = {
@@ -79,7 +79,7 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     if (e.path === `${SLOT}/link`) return { value: { kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: true, realPath: `${MAIN}/elsewhere` } }
     throw new Error(`ENOENT ${e.path}`)
   })
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     const [cmd, a1, a2] = e.argv
     if (cmd === 'git' && e.argv.includes('--show-toplevel')) return ran(`${SLOT}\n${GIT_DIR}\n${MAIN}/.git\n`)
     if (cmd === 'git' && e.argv.includes('symbolic-ref')) return ran(`${opts.head ?? 'issue-571'}\n`)
@@ -91,6 +91,8 @@ function world(on: On, opts: { marker?: unknown; head?: string; gates?: GateRun[
     }
     if (cmd === 'sh' && a1 === '-c' && a2?.startsWith('exec 2>&1\n')) {
       w.gateRuns.push({ command: a2.slice('exec 2>&1\n'.length), cwd: e.init?.cwd, timeoutMs: e.init?.timeoutMs })
+      // a gate command that stays pending until the test lets it go
+      await opts.hold?.(w.gateRuns.length, a2.slice('exec 2>&1\n'.length))
       const g = gates.shift() ?? { exitCode: 0, output: 'ok\n' }
       if (g === 'timeout') throw new Error('the child ran past its timeout and was killed')
       return ran(g.output, g.exitCode)
@@ -369,8 +371,8 @@ describe('the stop gate', () => {
     expect((await $.classic.SubagentStop({ ...stop, stop_hook_active: true })).block).toBeUndefined()
     const head = '4c2d8aa0000000000000000000000000000000ff'
     expect(companionLines(w).map(({ at: _at, reason: _r, ...l }) => l)).toEqual([
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, command: 'npm test', exitCode: 1 },
-      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-fail', head, ms: 0, waitMs: 0, concurrency: null, command: 'npm test', exitCode: 1 },
+      { issue: 571, life: 'ss1x2k', seq: 7, cause: 'gate-pass', head, ms: 0, waitMs: 0, concurrency: null },
     ])
   })
 
@@ -389,6 +391,116 @@ describe('the stop gate', () => {
     expect(r.block).toBeUndefined()
     expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'unknown' })
     expect(companionLines(w).map(l => [l.cause, l.issue])).toEqual([['gate-unknown', 571]])
+  })
+
+  describe('turns: at most gateConcurrency gates at once (10.6)', () => {
+    const STOP = { agent_type: 'factory-loop:builder', agent_transcript_path: '', stop_hook_active: false }
+    const withLimit = { ...MARKER, gateConcurrency: 1 }
+    // deferred: a promise the test settles by hand
+    const deferred = () => {
+      let go: () => void = () => undefined
+      const promise = new Promise<void>(resolve => {
+        go = resolve
+      })
+      return { promise, go }
+    }
+    const settle = async () => {
+      for (let i = 0; i < 300; i++) await Promise.resolve()
+    }
+    // two writers in one slot's marker: agent-1 and agent-2 both finish
+    async function two($: Engine) {
+      await $.agent.spawn(spawn(BUILD))
+      await $.agent.spawn(spawn(BUILD))
+    }
+    const stop = ($: Engine, id: string) => $.classic.SubagentStop({ agent_id: id, ...STOP })
+
+    test('the second gate\'s command does not start until the first ends; it logs gate-wait and its wait', async ($, on) => {
+      const first = deferred()
+      const w = world(on, { marker: withLimit, hold: n => (n === 1 ? first.promise : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      expect(w.gateRuns.map(g => g.command)).toEqual(['npm run lint'])
+      await w.clock.advance(7_000)
+      first.go()
+      await Promise.all([p1, p2])
+      expect(w.gateRuns.map(g => g.command)).toEqual(['npm run lint', 'npm test', 'npm run lint', 'npm test'])
+      const lines = companionLines(w)
+      expect(lines.map(l => l.cause)).toEqual(['gate-pass', 'gate-wait', 'gate-pass'])
+      expect(lines[0]).toMatchObject({ waitMs: 0, concurrency: 1 })
+      expect(lines[1]).toMatchObject({ waitMs: 7_000, queuedBehind: 1, concurrency: 1 })
+      expect(lines[2]).toMatchObject({ waitMs: 7_000, concurrency: 1 })
+      expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'pass', waitMs: 7_000 })
+    })
+
+    test('a marker with no limit runs both gates at once', async ($, on) => {
+      const first = deferred()
+      const w = world(on, { hold: n => (n === 1 ? first.promise : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      // the second writer's gate ran to its end while the first's lint is still pending
+      expect(w.gateRuns.map(g => g.command)).toEqual(['npm run lint', 'npm run lint', 'npm test'])
+      first.go()
+      await Promise.all([p1, p2])
+      expect(companionLines(w).map(l => l.cause)).toEqual(['gate-pass', 'gate-pass'])
+      expect(companionLines(w)[0]).toMatchObject({ concurrency: null })
+    })
+
+    test('a failing first gate gives its turn back', async ($, on) => {
+      const first = deferred()
+      const w = world(on, { marker: withLimit, gates: [{ exitCode: 1, output: 'not ok\n' }], hold: n => (n === 1 ? first.promise : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      first.go()
+      const [r1, r2] = await Promise.all([p1, p2])
+      expect(r1.block).toContain('exited 1')
+      expect(r2.block).toBeUndefined()
+      expect(companionLines(w).map(l => l.cause)).toEqual(['gate-fail', 'gate-wait', 'gate-pass'])
+    })
+
+    test('a first gate whose hook throws gives its turn back', async ($, on) => {
+      const first = deferred()
+      // an output that is no text makes the hook itself throw while the turn is held
+      const w = world(on, { marker: withLimit, gates: [{ exitCode: 1, output: undefined as unknown as string }], hold: n => (n === 1 ? first.promise : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      first.go()
+      const [r1, r2] = await Promise.all([p1, p2])
+      expect(r1.block).toBeUndefined()
+      expect(r2.block).toBeUndefined()
+      expect(companionLines(w).map(l => l.cause)).toEqual(['gate-unknown', 'gate-wait', 'gate-pass'])
+      expect(companionLines(w)[0]).toMatchObject({ reason: 'the stop gate hook failed' })
+    })
+
+    test('a wait past gateWaitTimeoutMs is gate-unknown with the wait\'s why, and the gate never runs; the holder is unaffected', async ($, on) => {
+      const first = deferred()
+      const w = world(on, { marker: { ...withLimit, gateWaitTimeoutMs: 60_000 }, hold: n => (n === 1 ? first.promise : undefined) })
+      await two($)
+      const p1 = stop($, 'agent-1')
+      const p2 = stop($, 'agent-2')
+      await settle()
+      await w.clock.advance(60_000)
+      expect((await p2).block).toBeUndefined()
+      expect(w.gateRuns.map(g => g.command)).toEqual(['npm run lint'])
+      expect(JSON.parse(w.written.get(`${GIT_DIR}/factory-gate.json`) ?? '{}')).toMatchObject({ result: 'unknown', waitMs: 60_000 })
+      first.go()
+      await p1
+      const lines = companionLines(w)
+      expect(lines.map(l => l.cause)).toEqual(['gate-unknown', 'gate-pass'])
+      expect(lines[0]).toMatchObject({ waitMs: 60_000, concurrency: 1 })
+      expect(String(lines[0]?.reason)).toContain('waited 60 s for a turn')
+      // the turn the timed-out waiter never took is free: a third gate runs at once
+      await $.agent.spawn(spawn(BUILD))
+      await stop($, 'agent-3')
+      expect(companionLines(w).at(-1)).toMatchObject({ cause: 'gate-pass', waitMs: 0 })
+    })
   })
 
   test('readers, children and agents with no gate commands are not gated', async ($, on) => {

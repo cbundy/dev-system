@@ -41,7 +41,7 @@ import {
 import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowed, ToolAnswered } from './act'
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
-import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject } from './config'
+import { DEFAULT_CONFIG, EMPTY_CONTROL, gateLimits, jsonObject } from './config'
 import { DEFAULT_POOL_SIZE, RUNTIME_KEYS } from './config-keys'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
 import { viewOf } from './config-view'
@@ -300,6 +300,7 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
     // where the answer script lives (#561): the plugin's own directory, wherever it was loaded from
     pluginRoot: $.plugin.root,
     config,
+    ...(await gateLimits(argv => $.process.run(argv, { timeoutMs: 15_000 }), loaded.v2)),
     v2Config: { ...loaded.v2, mode: config.mode },
     configProblems: loaded.problems,
     repoSettings: loaded.raw,

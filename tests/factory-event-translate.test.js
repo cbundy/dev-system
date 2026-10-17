@@ -124,7 +124,11 @@ test("each event shares its old line's event_id, and the old line is left untouc
 
 test("coverage: the corpus produces every current type, and every writer state is mapped or skipped by name", () => {
   const made = new Set(expected.map((e) => e.type));
-  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type), `no corpus line produces ${type}`);
+  // Types no old line ever had a writer for: the loop writes them straight to the new log, so the
+  // translator makes none. Each is named here with its issue, and the list may only hold such types.
+  const NEW_ONLY = ["gate_run"]; // the stop gate's runs (#811): written by the loop once a writer exists
+  for (const type of NEW_ONLY) assert.ok(!made.has(type), `${type} is named new-only but the corpus produces it`);
+  for (const type of Object.keys(schemaCurrent())) assert.ok(made.has(type) || NEW_ONLY.includes(type), `no corpus line produces ${type}`);
   const states = writerStates();
   assert.ok(states.length > 20);
   for (const s of states) assert.ok(MAPPED_STATES.includes(s) || SKIPPED_STATES.includes(s), `callum-flow-event writes ${s}, which the translator neither maps nor skips`);

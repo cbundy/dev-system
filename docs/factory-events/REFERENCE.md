@@ -14,6 +14,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`claimed`](#claimed) | v1 | required | This device took the claim on the issue: no other device works on it while the lease holds. |
 | [`closed`](#closed) | v1 | required | GitHub shows the issue closed, outside the factory's own merge. |
 | [`finding_handled`](#finding_handled) | v1 | required | The fixer fixed or declined one review finding. |
+| [`gate_run`](#gate_run) | v1 | required | One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. |
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
 | [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
@@ -100,13 +101,13 @@ Example:
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
-| `head` | string | `finding_handled`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
-| `life` | string | `intervention`, `transition` | The issue's life it happened in, as in transition; null when none applies. |
+| `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `outcome` | enum | `finding_handled` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
-| `seq` | integer | `transition` | The record's sequence in this life: one more on every transition. |
+| `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
@@ -282,6 +283,44 @@ Example:
   "finding": "r1-2",
   "outcome": "declined",
   "detail": "Info, not blocking: the secrets are hex, so quotes or backslashes cannot occur; no change made."
+}
+```
+
+## gate_run
+
+One run of the stop gate in a writer's slot finished: the repo's gate commands ran, or the gate never got a turn. Written by the loop from the companion's gate lines. Not a stage and not progress. A retried write can repeat it: count one per (issue, life, seq, started_at).
+
+- Issue field (`x-issue`): required
+- Versions: v1 (current)
+- Counting key: (issue, life, seq, started_at)
+
+### gate_run v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `life` | string | required | no | pattern `^[0-9a-z]+$` | yes | Which life of the issue the gate ran in. |
+| `seq` | integer | required | no | minimum 0 | yes | The record's sequence in this life whose writer step ran the gate. |
+| `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The slot's HEAD commit when the gate ran; null when it could not be read. |
+| `result` | enum | required | no | one of "pass", "fail", "unknown" |  | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
+| `wait_ms` | integer | required | no | minimum 0 |  | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
+| `run_ms` | integer | required | no | minimum 0 |  | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
+| `concurrency` | integer | required | yes | minimum 1 |  | How many gates could run at once when this one asked for a turn; null when there was no limit. |
+| `queued_behind` | integer | required | no | minimum 0 |  | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
+| `started_at` | string | required | no | format date-time |  | When the gate asked for its turn (before any wait). |
+
+Example:
+
+```json
+{
+  "life": "tn0brb",
+  "seq": 6,
+  "head": "0821e6a3c0f4b1d2e5a6978877665544332211ff",
+  "result": "pass",
+  "wait_ms": 184000,
+  "run_ms": 412000,
+  "concurrency": 1,
+  "queued_behind": 2,
+  "started_at": "2026-10-16T15:49:06.252Z"
 }
 ```
 

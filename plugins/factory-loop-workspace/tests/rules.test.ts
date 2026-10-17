@@ -3,7 +3,7 @@
 // stop gate's results.
 import { describe, expect, test } from 'claude-code/testing'
 
-import { blockText, gateRecord, runGates, tail } from '../hooks/gate'
+import { blockText, gateLine, gateRecord, runGates, tail, waitedOut } from '../hooks/gate'
 import type { Ran } from '../hooks/gate'
 import { agentRefusal, backgroundRefusal, bashRefusal, fileRefusal, needsHead, normalize } from '../hooks/guard'
 import type { Guarded } from '../hooks/guard'
@@ -11,6 +11,8 @@ import { mismatch, nameParts, parseMarker, slotLine } from '../hooks/marker'
 import { INPUT_CLIP, clip, enc, inputOf, promptNote, promptReason, transcriptOf, unguardedGlob, whyOf } from '../hooks/prompt'
 import { scratchOk, withScratch } from '../hooks/scratch'
 import { simpleCommands } from '../hooks/shell'
+import { createTurns } from '../hooks/turns'
+import type { Turn, TurnIo } from '../hooks/turns'
 
 const MAIN = '/w/dev-system'
 const SLOT = '/w/dev-system/.treehouse/p/3/dev-system'
@@ -227,6 +229,18 @@ describe('the spawn and its marker', () => {
     expect(scratchOk(scratch, '/c/factory-loop/o__r/')).toBe(true)
   })
 
+  test('a marker\'s gateConcurrency and wait cap are whole numbers of at least 1; any other value is left out, which means no limit', () => {
+    expect(parseMarker(JSON.stringify({ ...MARKER, gateConcurrency: 3, gateWaitTimeoutMs: 60_000 }))).toMatchObject({ gateConcurrency: 3, gateWaitTimeoutMs: 60_000 })
+    expect(parseMarker(JSON.stringify(MARKER))).not.toHaveProperty('gateConcurrency')
+    expect(parseMarker(JSON.stringify(MARKER))).not.toHaveProperty('gateWaitTimeoutMs')
+    for (const bad of [0, 1.5, '2', null, -1]) {
+      const m = parseMarker(JSON.stringify({ ...MARKER, gateConcurrency: bad, gateWaitTimeoutMs: bad }))
+      expect(m).not.toBeNull()
+      expect(m).not.toHaveProperty('gateConcurrency')
+      expect(m).not.toHaveProperty('gateWaitTimeoutMs')
+    }
+  })
+
   test('the Bash prefix quotes the path, ends in a newline before the command, and leaves the command whole', () => {
     const s = '/c/o__r/scratch/571-ss1x2k-s7'
     expect(withScratch('echo hi', s)).toBe(`export TMPDIR='${s}' TMP='${s}' TEMP='${s}'\necho hi`)
@@ -303,9 +317,144 @@ describe('the stop gate', () => {
   })
 
   test('its record carries the result and the head', () => {
-    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5 })
+    expect(gateRecord({ result: 'pass', ms: 5 }, 'abc', 0, ['npm test'])).toEqual({ v: 1, at: '1970-01-01T00:00:00.000Z', head: 'abc', commands: ['npm test'], result: 'pass', ms: 5, waitMs: 0 })
     expect(gateRecord({ result: 'unknown', ms: 5, why: 'x' }, null, 0, [])).toMatchObject({ result: 'unknown', why: 'x', head: null })
     expect(tail('a\nb\nc\n\n', 2)).toBe('b\nc')
+  })
+})
+
+describe('the stop gate\'s waiting', () => {
+  test('a wait that hit the cap is unknown with a why that names the wait, and the wait is in the record and the line', () => {
+    const r = waitedOut(1_800_000, 1_800_000, 2)
+    expect(r).toMatchObject({ result: 'unknown', ms: 0 })
+    if (r.result !== 'unknown') throw new Error('expected unknown')
+    expect(r.why).toContain('waited 1800 s for a turn')
+    expect(gateRecord(r, null, 0, ['npm test'], 1_800_000)).toMatchObject({ result: 'unknown', waitMs: 1_800_000 })
+    expect(gateLine(r, null, 1_800_000, 2)).toMatchObject({ cause: 'gate-unknown', fields: { waitMs: 1_800_000, concurrency: 2 } })
+    expect(gateLine({ result: 'pass', ms: 1 }, 'abc').fields).toEqual({ head: 'abc', ms: 1, waitMs: 0, concurrency: null })
+  })
+})
+
+// a clock and timers the test moves by hand
+function manual() {
+  let now = 0
+  const timers: { at: number; fn: () => void; live: boolean }[] = []
+  const io = (maxWaitMs: number): TurnIo => ({
+    now: () => now,
+    after: (ms, fn) => {
+      const t = { at: now + ms, fn, live: true }
+      timers.push(t)
+      return { cancel: () => void (t.live = false) }
+    },
+    maxWaitMs,
+  })
+  return {
+    io,
+    advance: (ms: number) => {
+      now += ms
+      for (const t of timers) if (t.live && t.at <= now) { t.live = false; t.fn() }
+    },
+    live: () => timers.filter(t => t.live).length,
+  }
+}
+const tick = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+const held = (t: Turn) => { if (!t.ok) throw new Error('expected a turn'); return t }
+
+describe('the stop gate\'s turns', () => {
+  test('with capacity 2 a third waits and is admitted in FIFO order as turns free up', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(2, c.io(1_000_000)))
+    const b = held(await turns.acquire(2, c.io(1_000_000)))
+    expect([a.queuedBehind, b.queuedBehind, a.waitMs]).toEqual([0, 0, 0])
+    const order: string[] = []
+    const third = turns.acquire(2, c.io(1_000_000)).then(t => (order.push('third'), t))
+    const fourth = turns.acquire(2, c.io(1_000_000)).then(t => (order.push('fourth'), t))
+    await tick()
+    expect(turns.state()).toEqual({ held: 2, waiting: 2 })
+    c.advance(5_000)
+    a.release()
+    await tick()
+    expect(order).toEqual(['third'])
+    c.advance(2_000)
+    b.release()
+    const [t3, t4] = [held(await third), held(await fourth)]
+    expect(order).toEqual(['third', 'fourth'])
+    expect([t3.waitMs, t3.queuedBehind, t4.waitMs, t4.queuedBehind]).toEqual([5_000, 2, 7_000, 3])
+    expect(turns.state()).toEqual({ held: 2, waiting: 0 })
+    t3.release()
+    t4.release()
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+    expect(c.live()).toBe(0)
+  })
+
+  test('a release is given back once: a second call frees nothing more', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000)))
+    const waiting = turns.acquire(1, c.io(1_000_000))
+    await tick()
+    a.release()
+    a.release()
+    const b = held(await waiting)
+    // a double release must not let a third in beside b
+    const third = turns.acquire(1, c.io(1_000_000))
+    await tick()
+    expect(turns.state()).toEqual({ held: 1, waiting: 1 })
+    b.release()
+    held(await third).release()
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+  })
+
+  test('a turn given back in a finally after a throw frees the next waiter', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const gate = async () => {
+      const t = held(await turns.acquire(1, c.io(1_000_000)))
+      try {
+        throw new Error('the hook threw')
+      } finally {
+        t.release()
+      }
+    }
+    const first = gate()
+    const second = turns.acquire(1, c.io(1_000_000))
+    await expect(first).rejects.toThrow('the hook threw')
+    held(await second).release()
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+  })
+
+  test('a wait past the cap times out, leaves the queue and never takes a turn later', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    const late = turns.acquire(1, c.io(30_000))
+    const next = turns.acquire(1, c.io(1_000_000))
+    await tick()
+    c.advance(30_000)
+    expect(await late).toEqual({ ok: false, waitMs: 30_000 })
+    expect(turns.state()).toEqual({ held: 1, waiting: 1 })
+    a.release()
+    const b = held(await next)
+    // the timed-out waiter took nothing: one turn held, and the one freed is the next waiter's
+    expect(turns.state()).toEqual({ held: 1, waiting: 0 })
+    b.release()
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+    c.advance(10_000_000)
+    expect(turns.state()).toEqual({ held: 0, waiting: 0 })
+  })
+
+  test('a turn granted before the cap is not taken back by the timer', async () => {
+    const c = manual()
+    const turns = createTurns()
+    const a = held(await turns.acquire(1, c.io(1_000_000)))
+    const w = turns.acquire(1, c.io(30_000))
+    await tick()
+    a.release()
+    const b = held(await w)
+    c.advance(60_000)
+    expect(turns.state()).toEqual({ held: 1, waiting: 0 })
+    b.release()
   })
 })
 

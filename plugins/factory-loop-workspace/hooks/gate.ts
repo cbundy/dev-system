@@ -67,8 +67,8 @@ export function blockText(r: Extract<GateResult, { result: 'fail' }>, slot: stri
 
 // gateRecord: the result as factory-gate.json holds it in the slot's git dir, with the slot's HEAD
 // (null: not read), for the decision log and the triage's inputs.
-export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[]): Record<string, unknown> {
-  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms }
+export function gateRecord(r: GateResult, head: string | null, at: number, commands: readonly string[], waitMs = 0): Record<string, unknown> {
+  const base = { v: 1, at: new Date(at).toISOString(), head, commands: [...commands], result: r.result, ms: r.ms, waitMs }
   if (r.result === 'fail') return { ...base, command: r.command, exitCode: r.exitCode, tail: r.tail }
   if (r.result === 'unknown') return { ...base, why: r.why }
   return base
@@ -77,9 +77,15 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 // gateLine: every run as one line of the companion's log, which outlives factory-gate.json (the
 // next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
 // intervention (SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
-export function gateLine(r: GateResult, head: string | null): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms }
+// waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
+export function gateLine(r: GateResult, head: string | null, waitMs = 0, concurrency: number | null = null): { cause: string; reason: string; fields: Record<string, unknown> } {
+  const fields = { head, ms: r.ms, waitMs, concurrency }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
   if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }
+}
+
+// waitedOut: the result of a gate that never got a turn within the wait cap: unknown, never a pass.
+export function waitedOut(waitMs: number, capMs: number, concurrency: number): GateResult {
+  return { result: 'unknown', ms: 0, why: `it waited ${Math.round(waitMs / 1000)} s for a turn (the cap is ${Math.round(capMs / 1000)} s, ${concurrency} gate${concurrency === 1 ? '' : 's'} at once) and the gate never ran` }
 }
