@@ -360,3 +360,16 @@ test("CLI: --ts and --session-id make it dual write", () => {
   assert.equal(e.session_id, "abc");
   assert.equal(cli(["--nope"], "").code, 2);
 });
+
+test("CLI: --quiet drops the per-state summary, keeps the miss line and the exit codes", () => {
+  const input = fs.readFileSync(path.join(FIXTURES, "old-lines.jsonl"), "utf8");
+  const ok = cli(["--quiet"], input);
+  assert.equal(ok.code, 0, ok.err);
+  assert.equal(ok.err, "");
+  assert.equal(ok.out, fs.readFileSync(path.join(FIXTURES, "expected.jsonl"), "utf8"));
+  const bad = JSON.stringify({ ...sample("ready"), state: "frobnicated" });
+  const r = cli(["--quiet"], `${bad}\n`);
+  assert.equal(r.code, 1);
+  assert.equal(r.err, "line 1: miss: frobnicated: unknown state\n");
+  assert.equal(cli(["--quiet", "--nope"], "").code, 2);
+});

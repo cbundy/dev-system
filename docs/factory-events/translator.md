@@ -131,8 +131,9 @@ outcome tokens (`out`, `decision`), `resets_in`, and `test_weakened.step`.
 `translate(line, opts)` returns exactly one of `{ event }`, `{ skip: "<name>" }` or
 `{ miss: "<state>: <reason>" }`, never a partial event. It is pure: no clock, environment, file or
 network reads. With no `opts` it is the replay; with `{ ts, sessionId }` it is dual write.
-`node factory-event-translate.js [--ts T --session-id S]` reads old lines as JSONL on stdin and writes
-new events as JSONL on stdout; it prints one stderr line per miss and a count per state, and exits 1
-on any miss. The tests (`tests/factory-event-translate.test.js`, corpus in
+`node factory-event-translate.js [--ts T --session-id S] [--quiet]` reads old lines as JSONL on stdin and writes
+new events as JSONL on stdout; it prints one stderr line per miss and a count per state (`--quiet` drops the counts and keeps the
+miss lines, which the writer relays as its warning), and exits 1 on any miss. The writer finds it
+next to itself, else in `${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}`. The tests (`tests/factory-event-translate.test.js`, corpus in
 `tests/fixtures/factory-events/`) prove it against the schemas and against the plugin's own token
 parse.

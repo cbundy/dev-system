@@ -9,6 +9,20 @@
 #          [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N]
 #          [--if-changed]
 #        callum-flow-event --path [--repo O/N]
+#        callum-flow-event --new-path [--repo O/N]
+#
+# Dual write (cbundy/dev-system#649): right after the old line is appended, the same call
+# translates it with factory-event-translate.js (found next to this script, else in
+# ${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}) and appends the new event as one JSON line to
+# <events dir>/factory/<same file name>. The factory/ dir is made 0700. The clock is read once, with
+# milliseconds: the old ts is that value cut to the second. session_id of the new event is
+# CLAUDE_SESSION_ID or null (never the transcript guess). A line the translator skips by name writes
+# nothing. A miss, a missing node or translator, or a crashing translator keeps the old line, writes
+# no new event, prints one `callum-flow-event: warning:` line and still exits 0. --if-changed
+# suppression writes neither line.
+#
+# --new-path prints the absolute path of the new log like --path, and writes nothing. An older
+# image answers it with a usage error (exit 2): that is the capability probe.
 #
 # --if-changed (cbundy/dev-system#344) writes nothing, and exits 0, when the
 # newest line already in the log for the same subject (the same branch when
@@ -93,6 +107,7 @@ usage() {
   [ -z "${1-}" ] || echo "callum-flow-event: $1" >&2
   echo "usage: callum-flow-event <state> [--issue N] [--run ID] [--branch B] [--pr P] [--head SHA] [--note TEXT] [--actor NAME] [--repo O/N] [--if-changed]" >&2
   echo "       callum-flow-event --path [--repo O/N]" >&2
+  echo "       callum-flow-event --new-path [--repo O/N]" >&2
   echo "states: $STATES" >&2
   exit 2
 }
@@ -109,17 +124,19 @@ repo_file() {
   file=$(printf '%s' "$repo" | tr '/' '_' | sed 's/_/__/; s/[^A-Za-z0-9._-]/-/g').jsonl
 }
 
-if [ "$1" = --path ]; then
+if [ "$1" = --path ] || [ "$1" = --new-path ]; then
+  mode=$1
   shift
   repo=${CALLUM_FLOW_REPO-}
   while [ $# -gt 0 ]; do
-    if [ "$1" != --repo ] || [ $# -lt 2 ]; then usage "--path takes only --repo O/N"; fi
+    if [ "$1" != --repo ] || [ $# -lt 2 ]; then usage "$mode takes only --repo O/N"; fi
     repo=$2
     shift 2
   done
   repo_file
   dir=${CALLUM_EVENTS_DIR:-/persist/events}
   case "$dir" in /*) ;; *) dir=$(pwd)/$dir ;; esac
+  if [ "$mode" = --new-path ]; then dir=$dir/factory; fi
   printf '%s/%s\n' "$dir" "$file"
   exit 0
 fi
@@ -220,8 +237,10 @@ esac
 
 snap=$(head -c 65536 "${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}" 2>/dev/null) || snap=
 
+ts_ms=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+ts=${ts_ms%.*}Z
 line=$(jq -nc --arg snap "$snap" \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg repo "$repo" --arg device "$device" \
+  --arg ts "$ts" --arg repo "$repo" --arg device "$device" \
   --arg session "$session" --arg actor "$actor" --arg state "$state" --arg issue "$issue" \
   --arg run "$run" --arg branch "$branch" --arg pr "$pr" --arg head "$head" --arg note "$note" --arg event_id "$event_id" '
   def s: if . == "" then null else . end;
@@ -247,8 +266,33 @@ if [ -n "$if_changed" ] && [ -r "$dir/$file" ]; then
     | . != null and .state == $new.state and .head == $new.head and .note == $new.note' "$dir/$file" 2>/dev/null) || same=
   [ "$same" != true ] || exit 0
 fi
+# dual_write: translate $line and append the new event to $dir/factory/$file. Never fails the caller.
+dual_write() {
+  command -v node >/dev/null 2>&1 || { warn "node not found - new event not recorded"; return 0; }
+  tr_js=$(dirname "$0")/factory-event-translate.js
+  [ -r "$tr_js" ] || tr_js=${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}/factory-event-translate.js
+  [ -r "$tr_js" ] || { warn "factory-event-translate.js not found - new event not recorded"; return 0; }
+  set -- --quiet --ts "$ts_ms"
+  [ -z "${CLAUDE_SESSION_ID:-}" ] || set -- "$@" --session-id "$CLAUDE_SESSION_ID"
+  tr_err=$(mktemp 2>/dev/null) || { warn "cannot make a temp file - new event not recorded"; return 0; }
+  tr_rc=0
+  new=$(printf '%s\n' "$line" | node "$tr_js" "$@" 2>"$tr_err") || tr_rc=$?
+  tr_msg=$(sed -n 's/^.*miss: //p' "$tr_err" | sed -n 1p)
+  tr_all=$(sed -n 1p "$tr_err")
+  rm -f "$tr_err"
+  if [ "$tr_rc" -ne 0 ]; then
+    if [ -n "$tr_msg" ]; then warn "$tr_msg - new event not recorded"; else warn "translator failed (exit $tr_rc)${tr_all:+: $tr_all} - new event not recorded"; fi
+    return 0
+  fi
+  [ -n "$new" ] || return 0
+  if [ ! -d "$dir/factory" ]; then
+    mkdir -p "$dir/factory" 2>/dev/null && chmod 0700 "$dir/factory" 2>/dev/null
+  fi
+  printf '%s\n' "$new" >> "$dir/factory/$file" 2>/dev/null || warn "cannot write $dir/factory/$file - new event not recorded"
+}
 if printf '%s\n' "$line" >> "$dir/$file" 2>/dev/null; then
   touch "$dir/.wake" 2>/dev/null || :
+  dual_write
 else
   warn "cannot write $dir/$file - event not recorded"
 fi

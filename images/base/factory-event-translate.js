@@ -17,8 +17,8 @@
 // CommonJS with no dependencies: callum-flow-event (dual write) and the replay script both use it.
 // Temporary: deleted with the old event path (dev-system#656).
 //
-// CLI: node factory-event-translate.js [--ts T --session-id S] < old.jsonl > new.jsonl
-//   One stderr line per miss and a summary of counts per state; exit 1 on any miss, else 0.
+// CLI: node factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl
+//   One stderr line per miss and a summary of counts per state (--quiet drops the summary); exit 1 on any miss, else 0.
 
 // --- the token codec (plugins/factory-loop/hooks/v2/events.ts: dec, tokensOf, noteToken) ---------
 // The image cannot import the plugin, so this is a copy; tests/factory-event-translate.test.js
@@ -661,6 +661,7 @@ function main(argv) {
   let ts;
   let sessionId;
   let dual = false;
+  let quiet = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--ts" && i + 1 < argv.length) {
       ts = argv[++i];
@@ -668,8 +669,10 @@ function main(argv) {
     } else if (argv[i] === "--session-id" && i + 1 < argv.length) {
       sessionId = argv[++i];
       dual = true;
+    } else if (argv[i] === "--quiet") {
+      quiet = true;
     } else {
-      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] < old.jsonl > new.jsonl\n");
+      process.stderr.write("usage: factory-event-translate.js [--ts T --session-id S] [--quiet] < old.jsonl > new.jsonl\n");
       return 2;
     }
   }
@@ -703,7 +706,7 @@ function main(argv) {
     }
   });
   if (out.length > 0) process.stdout.write(`${out.join("\n")}\n`);
-  for (const state of [...counts.keys()].sort()) {
+  for (const state of quiet ? [] : [...counts.keys()].sort()) {
     const c = counts.get(state);
     process.stderr.write(`summary: ${state} translated=${c.translated} skipped=${c.skipped} missed=${c.missed}\n`);
   }

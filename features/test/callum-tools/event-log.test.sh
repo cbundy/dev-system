@@ -23,7 +23,7 @@ trap 'rm -rf "$tmpdir"' EXIT
 toolbin="$tmpdir/tools"
 fakebin="$tmpdir/bin"
 mkdir -p "$toolbin" "$fakebin"
-for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod paste stat; do
+for t in jq sed tr cat mkdir mv dirname basename date find sort cut head tail wc git awk grep sleep rm touch chmod paste stat mktemp node; do
   p=$(command -v "$t") || fail "$t not found"
   ln -s "$p" "$toolbin/$t"
 done
@@ -155,11 +155,115 @@ before=$(find "$events" -type f | sort | tr '\n' ' ')
 [ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --path)" = "/persist/events/o__r.jsonl" ] || fail "--path default dir"
 ev closed --issue 31 --repo acme/widgets --note completed
 [ "$(tail -n 1 "$events/acme__widgets.jsonl" | jq -r .state)" = closed ] || fail "closed write should land where --path says"
-rm -f "$events/acme__widgets.jsonl"
+rm -f "$events/acme__widgets.jsonl" "$events/factory/acme__widgets.jsonl"
 [ "$(find "$events" -type f | sort | tr '\n' ' ')" = "$before" ] || fail "--path must not write"
 rc=0
 ev --path --bogus 2> /dev/null || rc=$?
 [ "$rc" = 2 ] || fail "--path with a bad option should exit 2, got $rc"
+
+# --new-path prints the new log's path like --path, and writes nothing
+before=$(find "$events" | sort | tr '\n' ' ')
+[ "$(ev --new-path)" = "$events/factory/o__r.jsonl" ] || fail "--new-path should print the new log: $(ev --new-path)"
+[ "$(ev --new-path --repo a/b)" = "$events/factory/a__b.jsonl" ] || fail "--new-path --repo wrong"
+[ "$(env -u CALLUM_EVENTS_DIR PATH="$toolbin" CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --new-path)" = "/persist/events/factory/o__r.jsonl" ] || fail "--new-path default dir"
+[ "$(cd "$tmpdir" && PATH="$toolbin" CALLUM_EVENTS_DIR=rel CALLUM_FLOW_REPO=o/r "$SH" "$EVENT" --new-path)" = "$tmpdir/rel/factory/o__r.jsonl" ] || fail "--new-path relative dir"
+[ "$(find "$events" | sort | tr '\n' ' ')" = "$before" ] || fail "--new-path must not write"
+[ ! -e "$tmpdir/rel" ] || fail "--new-path must not create the dir"
+rc=0
+ev --new-path --bogus 2> /dev/null || rc=$?
+[ "$rc" = 2 ] || fail "--new-path with a bad option should exit 2, got $rc"
+
+# dual write: the new event lands in factory/<file> beside the old line
+dw() { # dw DIR ARGS...: run the writer into DIR, hermetic, stderr to $tmpdir/dw.err
+  d=$1
+  shift
+  PATH="$toolbin" CLAUDE_CONFIG_DIR="${DW_CLAUDE:-$tmpdir/no-claude}" CALLUM_EVENTS_DIR="$d" CALLUM_FLOW_REPO=cbundy/dev-system DEV_MACHINE_NAME=dev-box \
+    DEV_VERSIONS_FILE="$tmpdir/no-versions.json" DEV_SYSTEM_SHARE="${DW_SHARE:-/nonexistent}" "$SH" "${DW_EVENT:-$EVENT}" "$@" 2> "$tmpdir/dw.err"
+}
+d1="$tmpdir/dw1"
+dw "$d1" claimed --issue 7 --branch issue-7 || fail "dual write must exit 0"
+[ ! -s "$tmpdir/dw.err" ] || fail "a good dual write must be silent: $(cat "$tmpdir/dw.err")"
+old="$d1/cbundy__dev-system.jsonl"
+new="$d1/factory/cbundy__dev-system.jsonl"
+[ "$(wc -l < "$old" | tr -d ' ')" = 1 ] || fail "one old and one new line expected"
+[ "$(wc -l < "$new" | tr -d ' ')" = 1 ] || fail "one old and one new line expected"
+[ "$(jq -c 'keys' "$old")" = '["actor","base_image","branch","dev_image","device","event_id","head","issue","note","plugin_version","pr","repo","run_id","session_id","state","template_version","ts","v"]' ] || fail "old key set changed: $(cat "$old")"
+jq -e '.ts | test("^....-..-..T..:..:..Z$")' "$old" > /dev/null || fail "old ts must stay second precision"
+[ "$(stat -c %a "$d1/factory")" = 700 ] || fail "factory/ must be 0700"
+[ "$(jq -r .event_id "$new")" = "$(jq -r .event_id "$old")" ] || fail "event_id must match"
+[ "$(jq -r '.ts | sub("\\.[0-9]{3}Z$"; "Z")' "$new")" = "$(jq -r .ts "$old")" ] || fail "new ts must be the old ts with ms: $(cat "$new")"
+jq -e '.ts | test("\\.[0-9]{3}Z$")' "$new" > /dev/null || fail "new ts needs milliseconds"
+[ "$(jq -r .session_id "$new")" = null ] || fail "session_id must be null without CLAUDE_SESSION_ID: $(cat "$new")"
+
+# the transcript guess feeds the old line only
+guess="$tmpdir/guess"
+gp="$guess/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')"
+mkdir -p "$gp"
+: > "$gp/guessed.jsonl"
+d2="$tmpdir/dw2"
+DW_CLAUDE="$guess" dw "$d2" claimed --issue 7
+[ "$(jq -r .session_id "$d2/cbundy__dev-system.jsonl")" = guessed ] || fail "old line should keep the transcript guess"
+[ "$(jq -r .session_id "$d2/factory/cbundy__dev-system.jsonl")" = null ] || fail "new event must not copy the guess"
+d3="$tmpdir/dw3"
+CLAUDE_SESSION_ID=sess-9 dw "$d3" claimed --issue 7
+[ "$(jq -r .session_id "$d3/factory/cbundy__dev-system.jsonl")" = sess-9 ] || fail "new event should take CLAUDE_SESSION_ID"
+
+# a skipped state writes no new event and says nothing
+d4="$tmpdir/dw4"
+dw "$d4" delegated --issue 7
+[ "$(wc -l < "$d4/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "delegated must write the old line"
+[ ! -e "$d4/factory/cbundy__dev-system.jsonl" ] || fail "delegated must write no new event"
+[ ! -s "$tmpdir/dw.err" ] || fail "a skip must be silent: $(cat "$tmpdir/dw.err")"
+
+# a miss keeps the old line, writes no new one, and warns once
+d5="$tmpdir/dw5"
+rc=0
+dw "$d5" transition --issue 7 --note 'life=a seq=1 from=bogus to=building' || rc=$?
+[ "$rc" = 0 ] || fail "a miss must exit 0"
+[ "$(wc -l < "$d5/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "a miss keeps the old line"
+[ ! -e "$d5/factory/cbundy__dev-system.jsonl" ] || fail "a miss writes no new event"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "a miss warns once: $(cat "$tmpdir/dw.err")"
+case "$(cat "$tmpdir/dw.err")" in "callum-flow-event: warning: transition: "*) ;; *) fail "miss warning should name the state: $(cat "$tmpdir/dw.err")" ;; esac
+
+# no translator, no node, a crashing translator: one warning each, old line kept, exit 0
+mkdir -p "$tmpdir/copy"
+cp "$EVENT" "$tmpdir/copy/callum-flow-event"
+d6="$tmpdir/dw6"
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d6" claimed --issue 7 || fail "missing translator must exit 0"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "missing translator warns once: $(cat "$tmpdir/dw.err")"
+[ "$(wc -l < "$d6/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "missing translator: old line only"
+[ ! -e "$d6/factory" ] || fail "missing translator: old line only"
+printf 'process.exit(3);\n' > "$tmpdir/copy/factory-event-translate.js"
+d7="$tmpdir/dw7"
+DW_EVENT="$tmpdir/copy/callum-flow-event" dw "$d7" claimed --issue 7 || fail "crashing translator must exit 0"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "crashing translator warns once: $(cat "$tmpdir/dw.err")"
+[ "$(wc -l < "$d7/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "crashing translator: old line only"
+[ ! -e "$d7/factory" ] || fail "crashing translator: old line only"
+mkdir -p "$tmpdir/share"
+cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/share/"
+d8="$tmpdir/dw8"
+DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7
+rm -f "$tmpdir/copy/factory-event-translate.js"
+DW_EVENT="$tmpdir/copy/callum-flow-event" DW_SHARE="$tmpdir/share" dw "$d8" claimed --issue 7
+[ "$(wc -l < "$d8/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "DEV_SYSTEM_SHARE lookup should find the translator"
+nonode="$tmpdir/nonode"
+mkdir -p "$nonode"
+for t in "$toolbin"/*; do [ "$(basename "$t")" = node ] || ln -s "$(readlink "$t")" "$nonode/$(basename "$t")"; done
+d9="$tmpdir/dw9"
+PATH="$nonode" CALLUM_EVENTS_DIR="$d9" CALLUM_FLOW_REPO=cbundy/dev-system DEV_VERSIONS_FILE="$tmpdir/no-versions.json" "$SH" "$EVENT" claimed --issue 7 2> "$tmpdir/dw.err" || fail "no node must exit 0"
+[ "$(wc -l < "$tmpdir/dw.err" | tr -d ' ')" = 1 ] || fail "no node warns once: $(cat "$tmpdir/dw.err")"
+[ "$(wc -l < "$d9/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "no node: old line only"
+[ ! -e "$d9/factory" ] || fail "no node: old line only"
+
+# --if-changed suppression writes neither line
+d10="$tmpdir/dw10"
+dw "$d10" ready --issue 7 --branch issue-7
+dw "$d10" ready --issue 7 --branch issue-7 --if-changed
+[ "$(wc -l < "$d10/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed suppression must write neither line"
+[ "$(wc -l < "$d10/factory/cbundy__dev-system.jsonl" | tr -d ' ')" = 1 ] || fail "--if-changed suppression must write neither line"
+
+# event-push-loop pushes only the top-level file, never factory/
+cp "$ROOT/images/base/factory-event-translate.js" "$tmpdir/copy/" 2> /dev/null || :
 
 # session id: CLAUDE_SESSION_ID, else the newest transcript of the working directory
 CLAUDE_SESSION_ID=sess-1 ev ready --issue 3
@@ -259,6 +363,9 @@ mkdir -p "$pushdir"
 printf '%s\n' '{"v":1,"ts":"2026-10-08T10:00:00Z","repo":"o/r","device":"d1","state":"ready","issue":5,"note":"it'"'"'s"}' \
   '{"v":1,"ts":"2026-10-08T10:01:00Z","repo":"o/r","device":"d1","state":"claimed","issue":5}' \
   'not json' > "$pushdir/o__r.jsonl"
+# the new log lives in factory/: the push loop must never see it (dual write, #649)
+mkdir -p "$pushdir/factory"
+printf '%s\n' '{"v":1,"ts":"2026-10-08T10:00:00.000Z","type":"x"}' > "$pushdir/factory/o__r.jsonl"
 push() {
   PATH="$fakebin:$toolbin" CALLUM_EVENTS_DIR="$pushdir" DEV_SYSTEM_SHARE="$ROOT/images/base" \
     AGENTSVIEW_PG_URL="${PUSH_URL:-postgres://app:s3cret@db/x}" HOME="${PUSH_HOME:-$tmpdir/home}" "$BASH" "$PUSH" --once
@@ -282,6 +389,7 @@ grep -q "'d1', 'o/r', '2'," "$sql" || fail "row 2 (seq 2) missing"
 grep -q ' ON CONFLICT DO NOTHING;' "$sql" || fail "idempotency clause missing"
 [ "$(grep -c '^INSERT' "$sql")" = 2 ] || fail "the unparseable line must be skipped, not pushed"
 [ "$(cat "$pushdir/.pushed/o__r.jsonl")" = 3 ] || fail "progress should count all 3 lines"
+[ "$(find "$pushdir/.pushed" -type f | wc -l | tr -d ' ')" = 1 ] || fail "factory/ must not be pushed"
 
 push > /dev/null 2>&1 || fail "second push should succeed"
 [ "$(calls)" = 1 ] || fail "nothing new, nothing sent"
