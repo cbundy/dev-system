@@ -18,6 +18,7 @@ import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { fixWhyOf, lifeEntries } from './rules-agent'
+import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
 import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
@@ -203,7 +204,24 @@ function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
   }
   if (r.why === 'split') {
     const created = lifeEntries(ctx, r, 'split').flatMap(e => (e.status === 'done' && e.outcome?.kind === 'split' ? [e.outcome.child] : []))
-    add({ ...base(r, followKey(r, 'release-parent'), 'the parent is the split\'s tracker'), kind: 'release-parent', created: [...new Set(created)].sort((a, b) => a - b) })
+    const sorted = [...new Set(created)].sort((a, b) => a - b)
+    // the reasons and each child's why come from the life's design answer; null when it can no longer be read
+    const design = splitDesignOf(ctx, r)
+    const whyOf = new Map<number, string>()
+    const made = lifeEntries(ctx, r, 'split')
+    for (const c of design?.children ?? []) {
+      // the child's entry sits under the seq that made it, an earlier one than this closed record's
+      const e = made.find(m => m.status === 'done' && m.outcome?.kind === 'split' && m.key.endsWith(`/child/${c.key}`))
+      if (e?.outcome?.kind === 'split' && typeof c.why === 'string' && c.why !== '') whyOf.set(e.outcome.child, c.why)
+    }
+    const childWhys = sorted.map(n => whyOf.get(n))
+    add({
+      ...base(r, followKey(r, 'release-parent'), 'the parent is the split\'s tracker'),
+      kind: 'release-parent',
+      created: sorted,
+      reasons: design?.reasons ?? null,
+      childWhys: design !== null && childWhys.every((w): w is string => w !== undefined) ? childWhys : null,
+    })
   }
   return items
 }

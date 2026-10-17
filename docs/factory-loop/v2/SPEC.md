@@ -507,7 +507,7 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | T1 | queued | ok | - | `resumeTo` (default designing) | round +1 when it leads to reviewing; queued's notes (S0's, P1's) kept: the lease reads none, so they are for the step T1 leads to | transition |
 | T2 | designing | ok | - | building | brief set | transition, `delegated` |
 | T3 | designing | not-ok | a question | parked | question; resumeTo designing | transition |
-| T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ...) |
+| T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ..., with the designer's reasons) |
 | T5 | building | ok | - | reviewing | head set; round +1 | transition |
 | T6 | building | not-ok | triages < max | building, step triage | attempt 1; triages +1; cut cleared | transition |
 | T7 | building | not-ok | triages = max | parked | question (the builder's reason); resumeTo building | transition |
@@ -643,7 +643,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
@@ -1340,7 +1340,8 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   the foreground, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
   (10.4) and no GitHub writes. It is renamed `designer` at the delete wave, when v1's goes.
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split",
-  brief, question?, children?: [{ key, title, body, blockedBy: [key | "#N"], ready: boolean }] }`.
+  brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
+  children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }] }`.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
@@ -1350,7 +1351,11 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
   (`agents/designer.md:71-77`). A split child is a whole issue: its `## Rollout` defaults to
   `merge`, and the contract refuses a child body without one, or a `keep-open` whose reason says
-  the child is part of an epic or a split.
+  the child is part of an epic or a split. The plan comment on the parent shows the four reasons
+  under "Why this split", and each child line its `why`. `release-parent` carries `reasons` and
+  `childWhys` (aligned with `created`; both null when the design answer can no longer be read), and
+  the `abandoned` event's note carries them as tokens (`why_split`, `why_count`, `why_parts`,
+  `why_order`, `child_whys`), which the translator lifts into optional fields of `abandoned.v1`.
 
 ## 9. The merge queue
 

@@ -7,7 +7,10 @@
 //     { "kind": "brief", "brief": "## Design brief (designer, <date>) ..." }
 //     { "kind": "question", "question": "...", "brief": "<a draft, or null>" }
 //     { "kind": "split", "brief": "<the epic's plan>",
-//       "children": [{ "key": "a", "title": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
+//       "reasons": { "why_split": "...", "why_count": "...", "why_parts": "...", "why_order": "..." },
+//       "children": [{ "key": "a", "title": "...", "why": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
+//   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
+//   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
 //   keep-open, read as callum-flow-rollout reads it, so the merge guard can derive its linkage.
 //   A keep-open whose reason says the issue is part of something larger is refused: a split child
@@ -45,6 +48,8 @@ export const LIMITS = Object.freeze({
   question: 2000,
   childTitle: 120,
   childBody: 20000,
+  childWhy: 200,
+  splitReason: 500,
   title: 72,
   summary: 4000,
   evidence: 4000,
@@ -52,6 +57,7 @@ export const LIMITS = Object.freeze({
   findingReason: 1000,
   fixSummary: 2000,
 })
+export const REASON_KEYS = Object.freeze(['why_split', 'why_count', 'why_parts', 'why_order'])
 export const CHILDREN = Object.freeze({ min: 2, max: 10 })
 // A child's key goes into its ledger key (keys.ts childKey) and its hidden marker.
 export const CHILD_KEY = /^[a-z0-9][a-z0-9-]{0,23}$/
@@ -216,15 +222,17 @@ function childrenOf(v, problems, parent) {
     const where = `children[${i}].`
     const c = record(raw)
     if (c === null) {
-      problems.push(`children[${i}] must be an object { key, title, body, blockedBy, ready }`)
+      problems.push(`children[${i}] must be an object { key, title, why, body, blockedBy, ready }`)
       return
     }
-    strays(c, ['key', 'title', 'body', 'blockedBy', 'ready'], `children[${i}]`, problems)
+    strays(c, ['key', 'title', 'why', 'body', 'blockedBy', 'ready'], `children[${i}]`, problems)
     const key = typeof c.key === 'string' && CHILD_KEY.test(c.key) ? c.key : null
     if (key === null) problems.push(`${where}key ${show(c.key)} must be a short lower-case key: letters, digits and dashes, at most 24`)
     else if (keys.indexOf(key) !== i) problems.push(`${where}key ${key} is used twice`)
     const title = text(c, 'title', LIMITS.childTitle, 'required', problems, where)
     oneLine(title, `${where}title`, problems)
+    const why = text(c, 'why', LIMITS.childWhy, 'required', problems, `children[${i}]${key === null ? '' : ` (${key})`}.`)
+    oneLine(why, `children[${i}]${key === null ? '' : ` (${key})`}.why`, problems)
     const body = text(c, 'body', LIMITS.childBody, 'required', problems, where)
     let blockedBy = []
     if (!Array.isArray(c.blockedBy)) problems.push(`${where}blockedBy must be a list of sibling keys or #<N> issues ([] for none)`)
@@ -241,7 +249,7 @@ function childrenOf(v, problems, parent) {
     }
     if (typeof c.ready !== 'boolean') problems.push(`${where}ready must be true or false`)
     if (body !== null) problems.push(...rolloutProblems(body, `children[${i}]${key === null ? '' : ` (${key})`} body`))
-    if (key !== null && title !== null && body !== null) out.push({ key, title, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true })
+    if (key !== null && title !== null && why !== null && body !== null) out.push({ key, title, why, body, blockedBy: blockedBy.filter(b => typeof b === 'string'), ready: c.ready === true })
   })
   if (out.length === v.length) {
     const cycle = cycleOf(out)
@@ -250,11 +258,28 @@ function childrenOf(v, problems, parent) {
   return out
 }
 
+// reasonsOf: a split's four reasons, each short text; every problem at once.
+function reasonsOf(v, problems) {
+  if (v === undefined || v === null) {
+    problems.push(`reasons is required for a split: { ${REASON_KEYS.join(', ')} }`)
+    return null
+  }
+  const r = record(v)
+  if (r === null) {
+    problems.push(`reasons must be an object { ${REASON_KEYS.join(', ')} }, not ${show(v)}`)
+    return null
+  }
+  strays(r, REASON_KEYS, 'reasons', problems)
+  const out = {}
+  for (const k of REASON_KEYS) out[k] = text(r, k, LIMITS.splitReason, 'required', problems, 'reasons.')
+  return REASON_KEYS.every(k => out[k] !== null) ? out : null
+}
+
 function checkDesign(input, job) {
   const o = record(input)
   if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"kind": "brief" | "question" | "split", "brief", and "question" or "children"}'] }
   const problems = []
-  strays(o, ['kind', 'brief', 'question', 'children'], 'a design answer', problems)
+  strays(o, ['kind', 'brief', 'question', 'reasons', 'children'], 'a design answer', problems)
   const kind = DESIGN_KINDS.find(k => k === o.kind)
   if (kind === undefined) problems.push(`kind ${show(o.kind)} is not one of ${DESIGN_KINDS.join(', ')}`)
   const brief = text(o, 'brief', LIMITS.brief, kind === 'question' ? 'optional' : 'required', problems)
@@ -264,9 +289,15 @@ function checkDesign(input, job) {
   }
   const question = text(o, 'question', LIMITS.question, kind === 'question' ? 'required' : 'none', problems)
   let children = []
-  if (kind === 'split') children = childrenOf(o.children, problems, job.issue)
-  else if (o.children !== undefined && o.children !== null) problems.push('children must be absent or null unless kind is split')
-  return checked(problems, () => ({ kind, brief, question, children }))
+  let reasons = null
+  if (kind === 'split') {
+    reasons = reasonsOf(o.reasons, problems)
+    children = childrenOf(o.children, problems, job.issue)
+  } else {
+    if (o.children !== undefined && o.children !== null) problems.push('children must be absent or null unless kind is split')
+    if (o.reasons !== undefined && o.reasons !== null) problems.push('reasons must be absent or null unless kind is split')
+  }
+  return checked(problems, () => ({ kind, brief, question, reasons, children }))
 }
 
 function summaryOfDesign(input) {
