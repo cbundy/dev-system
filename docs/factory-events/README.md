@@ -11,6 +11,8 @@ versioned payload, stored in the factory database and read through one view. Des
   [`REFERENCE.md`](REFERENCE.md) beside this file is generated from them; read that.
 - [`translator.md`](translator.md): how today's `callum-flow-event` lines map onto these, during
   the switch only.
+- [`replay.md`](replay.md): the replay of the old history into a throwaway database, its translation
+  check and the compare harness every reader issue passes, during the switch only.
 
 ## Reading events
 

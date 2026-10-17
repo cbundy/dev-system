@@ -2,7 +2,8 @@
 #
 # factory-db-bootstrap: sets up a factory database from nothing on any PostgreSQL server
 # (cbundy/dev-system#646). It creates three roles named after the database, creates the
-# database when it is missing, applies the numbered SQL migrations shipped beside it and
+# database when it is missing, or takes over one that exists by making NAME_owner its owner,
+# applies the numbered SQL migrations shipped beside it and
 # records each in factory.schema_migrations. Running it again changes nothing.
 #
 # The whole procedure, from a fresh server to a healthy dev-doctor, is in docs/factory-db.md.
@@ -184,6 +185,9 @@ SELECT format('GRANT %I TO CURRENT_USER', :'owner')
 SELECT pg_advisory_lock(hashtext('factory-db-bootstrap:create-database'));
 SELECT format('CREATE DATABASE %I OWNER %I', :'db', :'owner')
   WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db') \gexec
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db', :'owner')
+  FROM pg_database
+  WHERE datname = :'db' AND datdba <> (SELECT oid FROM pg_roles WHERE rolname = :'owner') \gexec
 SELECT pg_advisory_unlock(hashtext('factory-db-bootstrap:create-database'));
 @PASSWORDS@
 BEGIN;
