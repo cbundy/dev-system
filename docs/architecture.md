@@ -16,7 +16,7 @@ dev-system has three layers. Each one is distributed and pinned on its own.
 Two more surfaces build on the layers:
 
 - `.devcontainer/`: dev-system's own dev environment, a per-repo image like any
-  consumer's. `.devcontainer/Dockerfile` adds terraform and a PostgreSQL 17 server to the base image;
+  consumer's. `.devcontainer/Dockerfile` adds terraform, a PostgreSQL 17 server and TypeScript to the base image;
   `publish-dev-image.yml` publishes it as `ghcr.io/cbundy/dev-system/dev` (`latest` and
   `sha-<short>`) on every change on main and weekly, after the base image's rebuild. No
   consumer pulls it.
@@ -46,7 +46,7 @@ plugins/callum-flow/              skills (issue-orchestrator, implement-issue, u
 plugins/factory-hud/              opt-in mod; reference and setup in its README.md
 images/base/                      base image: Dockerfile, dev-* scripts, tests, VERSION
 coder/dev-system/                 Coder template (Terraform) on the base image
-.devcontainer/                    this repo's dev container and dev image (base + terraform + PostgreSQL 17 server)
+.devcontainer/                    this repo's dev container and dev image (base + terraform + PostgreSQL 17 server + TypeScript)
 templates/                        repo config templates synced by callum-dev
 bin/callum-dev.js                 CLI: init, update, check. Node built-ins and git only.
 features/src/callum-tools/        deprecated feature; its scripts feed images/base

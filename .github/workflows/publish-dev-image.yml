@@ -1,7 +1,7 @@
 name: Publish dev image
 
 # Builds and smoke-tests ghcr.io/cbundy/dev-system/dev, dev-system's own dev
-# environment (.devcontainer/Dockerfile: the base image plus terraform and a PostgreSQL 17 server,
+# environment (.devcontainer/Dockerfile: the base image plus terraform, a PostgreSQL 17 server and TypeScript,
 # cbundy/dev-system#117), and pushes it like any consumer's per-repo image:
 #
 # - pull_request: build + smoke test only, never pushes.
@@ -128,6 +128,11 @@ jobs:
           WANT_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           docker run --rm --entrypoint "" "$IMAGE:latest" terraform version
+          # TypeScript: on PATH for the default user, at the version the Dockerfile pins.
+          want_ts=$(sed -n 's/^ARG TYPESCRIPT_VERSION=//p' .devcontainer/Dockerfile)
+          test -n "$want_ts"
+          got_ts=$(docker run --rm --entrypoint "" "$IMAGE:latest" tsc --version)
+          test "$got_ts" = "Version $want_ts" || { echo "tsc: got '$got_ts', want 'Version $want_ts'" >&2; exit 1; }
           # PostgreSQL: no system cluster, and a throwaway server works as the default user.
           docker run --rm --entrypoint "" "$IMAGE:latest" bash -euc '
             test ! -e /var/lib/postgresql/17/main
