@@ -33,6 +33,7 @@ const STAGE_WORDS: Readonly<Record<IssueState, string>> = {
   fixing: 'fixing',
   'merge-queue': 'merge queue',
   parked: 'parked',
+  waiting: 'waiting',
   closed: 'closed',
 }
 
@@ -58,7 +59,7 @@ export function whatOf(title: string | undefined): string {
 }
 
 const isMerged = (r: IssueRecord) => r.state === 'closed' && (r.why === 'merged' || r.why === 'merged-by-hand')
-const isInFlight = (r: IssueRecord) => SLOT_STATES.includes(r.state) || r.state === 'parked'
+const isInFlight = (r: IssueRecord) => SLOT_STATES.includes(r.state) || r.state === 'parked' || r.state === 'waiting'
 
 const claimAt = (r: IssueRecord): Ms | null => lifeAt(r.life)
 

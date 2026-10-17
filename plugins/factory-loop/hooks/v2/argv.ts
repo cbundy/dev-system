@@ -76,6 +76,11 @@ export function prBodyArgv(repo: string, pr: number): string[] {
   return ['gh', 'pr', 'edit', String(pr), '--repo', repo, '--body-file', '-']
 }
 
+// A PR's state and merge time, for a wait on its merge (sources-waits.ts): no model, no reader.
+export function prWaitArgv(repo: string, pr: number): string[] {
+  return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'state,mergedAt']
+}
+
 // A PR's state, merge, closedAt, head, mergeable state and author, through the reader.
 export function prReadArgv(pr: number): string[] {
   return ['callum-flow-issue-read', '--json', '--pr', String(pr)]

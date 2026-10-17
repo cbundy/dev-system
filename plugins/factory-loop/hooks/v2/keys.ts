@@ -64,10 +64,10 @@ export function transitionKey(r: RecordRef): string {
 
 // The entry actions of a seq (4.5): its label, the old steps' stops (each keyed
 // stop/<the old step's key within the life>) and the kill, the park's comment, its events by
-// state, and its tell.
+// state, and its tell. A wait's links are keyed link/<blocker> (entryKey).
 export type EntryAction = 'label' | 'stop' | 'kill' | 'comment' | 'tell' | `event/${string}`
 
-export function entryKey(r: RecordRef, action: EntryAction): string {
+export function entryKey(r: RecordRef, action: EntryAction | `link/${number}`): string {
   return `${seqKey(r)}/${action}`
 }
 

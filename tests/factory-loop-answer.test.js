@@ -332,3 +332,19 @@ test("a v2 split without reasons is refused and records nothing; a full split is
   assert.equal(good.code, 0, good.err);
   assert.match(good.out, /^factory-answer: recorded your design-v2 answer \(a split into 2 children\)/);
 });
+
+// A v2 wait is held to the same contract the loop checks: 1 to 8 checkable conditions and a reason.
+test("a v2 wait is recorded with its conditions; a tag-contains wait is refused as not yet supported", () => {
+  const job = { contract: "design-v2", purpose: null, repo: "cbundy/dev-system", issue: 837, branch: null };
+  const conditions = [{ kind: "issue-closed", issue: 57 }, { kind: "pr-merged", pr: 812 }];
+  const wait = { kind: "wait", conditions, reason: "Needs #57 closed and PR #812 merged first", brief: null };
+  const ok = issue(job);
+  const good = run(["--to", ok.file], { input: JSON.stringify(wait) });
+  assert.equal(good.code, 0, good.err);
+  assert.match(good.out, /^factory-answer: recorded your design-v2 answer \(a wait on 2 conditions\)/);
+  const refused = issue(job);
+  const bad = run(["--to", refused.file], { input: JSON.stringify({ ...wait, conditions: [{ kind: "tag-contains", sha: "35bb655" }] }) });
+  assert.equal(bad.code, 1, bad.out);
+  assert.match(problemsOf(bad.err).join("\n"), /tag-contains is not yet supported/);
+  assert.equal(fs.existsSync(refused.file), false);
+});

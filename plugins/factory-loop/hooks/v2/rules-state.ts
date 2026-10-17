@@ -34,11 +34,12 @@ import type { EntryItem } from './rules-entry'
 import { PLANS as QUEUE } from './rules-queue'
 import { PLANS as REVIEW, lifePr } from './rules-review'
 import { PLANS as WORK } from './rules-work'
+import { waitKey } from './sources-waits'
 import { mayHaveMerged } from './steps-queue'
 import { nextRecord, normalize, rowFor, viaOf } from './table'
 import { FACTORY_LABELS } from './types'
 import { workspaceHold } from './workspace'
-import type { IssueRecord, Row, StepKind, TableEvent, Trigger, V2Ctx } from './types'
+import type { IssueRecord, Row, StepKind, TableEvent, Trigger, V2Ctx, WaitCondition } from './types'
 
 const HOUR = 3_600_000
 // The title's M: issues merged in this window (D-23).
@@ -118,7 +119,7 @@ function earlyEvents(ctx: V2Ctx, r: IssueRecord): Present[] {
   return out
 }
 
-// unparkOf: a parked record's unpark (4.1, 11): a `/factory resume N` newer than the park, with
+// unparkOf: a parked or waiting record's unpark (4.1, 11): a `/factory resume N` newer than the park, with
 // its note; or a read of the issue made after the park's label write that lacks `factory:parked`,
 // with the owner's tick in the park's comment (the one of this seq) and the trusted comments
 // posted after it as the note. 'wait': the label is
@@ -133,6 +134,8 @@ function unparkOf(ctx: V2Ctx, r: IssueRecord): Present | 'wait' | null {
     const note = ops.flatMap(x => (x.note === undefined ? [] : [x.note])).join('\n')
     return { event: { kind: 'unpark', reason: 'op', data: { ...closedAt, ...(note === '' ? {} : { note: clip(note) }) } }, trigger: fact(`unpark:${n}@${op.at}`) }
   }
+  // a waiting record is resumed by the owner's op alone: a removed factory:waiting label is not one (11)
+  if (r.state === 'waiting') return null
   const label = ctx.byKey.get(entryKey(r, 'label'))
   const read = ctx.v2.reads[n]
   if (label?.status !== 'done' || label.endedAt === null || read === undefined || read.at <= label.endedAt || read.labels === null) return null
@@ -155,10 +158,35 @@ function clip(text: string): string {
 
 // --- E6: the waiting states' tells (4.4) ---------------------------------------------------------------
 
-// periodOf: a waiting state's tell period: queued, the merge queue behind its head, parked.
+// periodOf: a waiting state's tell period: queued, the merge queue behind its head, parked, waiting.
 function periodOf(ctx: V2Ctx, r: IssueRecord): Ms {
   const t = ctx.config.stateTimeoutMs
-  return r.state === 'parked' ? t.parked : r.state === 'queued' ? t.queued : t.queueWait
+  return r.state === 'parked' ? t.parked : r.state === 'waiting' ? t.waiting : r.state === 'queued' ? t.queued : t.queueWait
+}
+
+// openOf: the conditions of a waiting record no read has shown to hold (4.4): a condition not read,
+// or whose read failed or was skipped, is open.
+function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
+  return (r.wait ?? []).filter(c => ctx.v2.waits?.[waitKey(c)]?.held !== true)
+}
+
+// openText: the open conditions in words, for the skip line and E6's tell.
+function openText(open: readonly WaitCondition[]): string {
+  return open.map(c => (c.kind === 'issue-closed' ? `#${c.issue} (still open)` : `PR #${c.pr} (not merged yet)`)).join(', ')
+}
+
+// waitingRules: a waiting record's events after the early ones (4.1): C1 when every condition
+// holds, else E6's tell once a period has passed, and the owner's resume (P1).
+function waitingRules(ctx: V2Ctx, r: IssueRecord, logged: boolean): void {
+  const n = r.issue
+  const open = openOf(ctx, r)
+  if (open.length === 0 && (r.wait ?? []).length > 0) {
+    if (take(ctx, r, { event: { kind: 'cleared' }, trigger: fact(`cleared:${n}@${r.seq}`) }, logged, '')) return
+  }
+  if (ctx.state.now - r.since >= periodOf(ctx, r)) take(ctx, r, { event: { kind: 'timeout' }, trigger: fact(`waiting:${n}`) }, logged, `waiting for ${openText(open)}`)
+  const u = unparkOf(ctx, r)
+  if (u === null || u === 'wait') skip(ctx, 'S6', n, `waiting: for ${open.length === 0 ? 'its clear' : openText(open)}`)
+  else take(ctx, r, u, logged, '')
 }
 
 // waitTell: E6, once per period: tell(waiting), or tell(parked) as the daily reminder (an owner
@@ -247,7 +275,9 @@ function recordRules(ctx: V2Ctx, r: IssueRecord, items: readonly EntryItem[]): v
   const logged = transitionLogged(ctx, r)
   for (const p of earlyEvents(ctx, r)) if (take(ctx, r, p, logged, '')) return
   let running = false
-  if (r.state === 'parked') {
+  if (r.state === 'waiting') {
+    waitingRules(ctx, r, logged)
+  } else if (r.state === 'parked') {
     if (state.now - r.since >= periodOf(ctx, r)) take(ctx, r, { event: { kind: 'timeout' }, trigger: fact(`parked:${n}`) }, logged, 'parked')
     const u = unparkOf(ctx, r)
     if (u === 'wait') skip(ctx, 'S6', n, 'unpark: the label is off; waits for the trusted comments to be read')
@@ -295,22 +325,23 @@ export function stateRules(ctx: V2Ctx): void {
 }
 
 // The records by where they are: queued, in flight (designing to merge-queue) and parked.
-export type StateCounts = { queued: number; flight: number; parked: number }
+export type StateCounts = { queued: number; flight: number; parked: number; waiting: number }
 
 export function stateCounts(records: readonly IssueRecord[]): StateCounts {
-  const out: StateCounts = { queued: 0, flight: 0, parked: 0 }
+  const out: StateCounts = { queued: 0, flight: 0, parked: 0, waiting: 0 }
   for (const r of records) {
     if (r.state === 'queued') out.queued += 1
     else if (r.state === 'parked') out.parked += 1
+    else if (r.state === 'waiting') out.waiting += 1
     else if (r.state !== 'closed') out.flight += 1
   }
   return out
 }
 
 // stateTitle: the title's counts, Q (the ready queue and the queued records), D (in flight) and M
-// (merged in the last 6 hours), and its words of the layer's own: parked <n>.
+// (merged in the last 6 hours), and its words of the layer's own: parked <n>, waiting <n>.
 export function stateTitle(ctx: V2Ctx): { counts: string; after: string[] } {
   const c = stateCounts(ctx.v2.records)
   const merged = ctx.v2.records.filter(r => r.state === 'closed' && (r.why === 'merged' || r.why === 'merged-by-hand') && ctx.state.now - r.since <= MERGED_WINDOW_MS).length
-  return { counts: `Q:${ctx.state.queue.length + c.queued} - D:${c.flight} - M:${merged}`, after: c.parked > 0 ? [`parked ${c.parked}`] : [] }
+  return { counts: `Q:${ctx.state.queue.length + c.queued} - D:${c.flight} - M:${merged}`, after: [...(c.parked > 0 ? [`parked ${c.parked}`] : []), ...(c.waiting > 0 ? [`waiting ${c.waiting}`] : [])] }
 }

@@ -18,6 +18,7 @@ import type { CheckoutBase } from './reconcile'
 import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
+import { readWaits } from './sources-waits'
 import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
@@ -27,7 +28,7 @@ import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
 import { previousOf, requestOf } from './wind-down-files'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
-import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State } from './types'
+import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead } from './types'
 
 const DAY = 86_400_000
 // a closed record goes this long after it closed, as ledger entries do (3.3, v1 SPEC 7.1)
@@ -72,12 +73,14 @@ export type V2Cache = {
   // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
   changed: Record<number, Ms>
   prs: PrsRead
+  // the wait conditions' last reads (sources-waits.ts)
+  waits: Record<string, WaitRead>
   // the dual-write probe and the new log's read, once per load; null: not yet read
   dualWrite: { at: Ms; read: DualWriteRead } | null
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, dualWrite: null }
+  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -118,6 +121,8 @@ export function recordOf(raw: unknown): IssueRecord | null {
   if (!isInt(o.issue, 1) || !isStr(o.life) || o.life === '' || !isInt(o.seq, 0) || !isNum(o.seqAt) || !isNum(o.since)) return null
   if (!isStr(o.branch) || o.branch === '' || !(o.pr === null || isInt(o.pr, 1)) || !strOrNull(o.head) || !strOrNull(o.approvedPatch) || !strOrNull(o.brief)) return null
   if (!isInt(o.attempt, 0) || typeof o.cut !== 'boolean' || !isInt(o.triages, 0) || !isInt(o.fixes, 0) || !isInt(o.round, 0)) return null
+  const wait = waitOf(o.wait)
+  if (wait === undefined) return null
   if (!strOrNull(o.question) || !Array.isArray(o.notes) || !o.notes.every(isStr) || !strOrNull(o.prClosedAt)) return null
   // a record stored before the field carries no count: its life is read as a first one
   const lives = o.lives === undefined ? 1 : o.lives
@@ -142,11 +147,27 @@ export function recordOf(raw: unknown): IssueRecord | null {
     fixes: o.fixes,
     round: o.round,
     question: o.question,
+    wait,
     why,
     notes: [...o.notes],
     prClosedAt: o.prClosedAt,
     lives,
   }
+}
+
+// waitOf: a stored record's wait conditions; null when absent or null (a record stored before the
+// field); undefined when it does not read.
+function waitOf(raw: unknown): IssueRecord['wait'] | undefined {
+  if (raw === undefined || raw === null) return null
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 8) return undefined
+  const out: NonNullable<IssueRecord['wait']> = []
+  for (const c of raw) {
+    const o = c !== null && typeof c === 'object' ? (c as Record<string, unknown>) : {}
+    if (o.kind === 'issue-closed' && isInt(o.issue, 1)) out.push({ kind: 'issue-closed', issue: o.issue })
+    else if (o.kind === 'pr-merged' && isInt(o.pr, 1)) out.push({ kind: 'pr-merged', pr: o.pr })
+    else return undefined
+  }
+  return out
 }
 
 // headsToStore and headsFromStore: the heads first seen, { v: 1, heads: { <sha>: { pr, at } } }.
@@ -226,7 +247,7 @@ export function readOrder(records: readonly IssueRecord[]): number[] {
   const live = records.filter(r => r.state !== 'closed')
   const byAge = (a: IssueRecord, b: IssueRecord) => a.seqAt - b.seqAt || a.issue - b.issue
   const head = live.filter(r => r.state === 'merge-queue' && r.step === 'queue').sort(byAge)[0]
-  const rank = (r: IssueRecord) => (r === head ? 0 : r.state === 'reviewing' || r.state === 'merge-queue' ? 1 : r.state === 'parked' ? 2 : 3)
+  const rank = (r: IssueRecord) => (r === head ? 0 : r.state === 'reviewing' || r.state === 'merge-queue' ? 1 : r.state === 'parked' || r.state === 'waiting' ? 2 : 3)
   return [...new Set([...live].sort((a, b) => rank(a) - rank(b) || byAge(a, b)).map(r => r.issue))]
 }
 
@@ -337,6 +358,10 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   cache.changed = {}
   for (const p of prs.read.prs) if (p.state !== 'open' && p.closedAt !== null) cache.changed[p.issue] = Date.parse(p.closedAt)
 
+  // the wait conditions of waiting records (sources-waits.ts): none read during a GitHub backoff
+  const waited = await readWaits(ctx, cache.waits, rt.config.githubEveryMs)
+  cache.waits = waited.waits
+
   // then parked records whose label a read newer than their park lacks: their trusted comments,
   // once per read, for the resume's note (11)
   const comments: Record<number, IssueComment[]> = {}
@@ -395,6 +420,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     reads,
     comments,
     prs: prs.read,
+    waits: cache.waits,
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
