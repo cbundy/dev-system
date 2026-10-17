@@ -365,4 +365,18 @@ describe('a pass in the test host', () => {
     expect(status(h)).toMatchObject({ requested_at: new Date(NOW - MIN).toISOString(), idle: true })
     expect(JSON.stringify(h.passes().at(-1))).toContain('treated as a request at its modification time')
   })
+
+  test('a request that is there but does not read is a request at the file\'s mtime, so work stays held', async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    const h = host(on, {
+      config: settings({ windDownMinutes: 3 }),
+      run: (argv, s) => (argv[0] === 'stat' ? { stdout: `${Math.floor((NOW - MIN) / 1000)}\n` } : quiet(argv, s)),
+      hold: async (path: string) => {
+        if (path === FILES.request) throw new Error('EACCES')
+      },
+    })
+    await $.session.start(START)
+    await clock.advance(6_000)
+    expect(status(h)).toMatchObject({ requested_at: new Date(NOW - MIN).toISOString(), idle: true })
+  })
 })

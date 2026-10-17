@@ -413,18 +413,17 @@ async function readWindDown(io: Io, rt: Runtime, now: Ms): Promise<WindDownRead>
   const paths = windDownPaths(rt.loopDir)
   const text = async (path: string) => io.readFile(path).catch(() => null)
   const requestText = await text(paths.request)
-  let request: WindDownRead['request'] = null
-  if (requestText !== null) {
-    let mtime = now
-    try {
-      const r = await io.run(['stat', '-c', '%Y', paths.request], { cwd: rt.cwd, env: rt.env, timeoutMs: 10_000 })
-      const secs = Number(r.stdout.trim())
-      if (r.exitCode === 0 && r.stdout.trim() !== '' && Number.isFinite(secs)) mtime = secs * 1000
-    } catch {
-      // now stands
-    }
-    request = requestOf(requestText, mtime)
+  // stat reads the modification time and, when the request did not read, tells a missing file (no
+  // request) from one there but unreadable (a mode 000 file, a directory): that one is a request too
+  let mtime: Ms | null = null
+  try {
+    const r = await io.run(['stat', '-c', '%Y', paths.request], { cwd: rt.cwd, env: rt.env, timeoutMs: 10_000 })
+    const secs = Number(r.stdout.trim())
+    if (r.exitCode === 0 && r.stdout.trim() !== '' && Number.isFinite(secs)) mtime = secs * 1000
+  } catch {
+    // now stands
   }
+  const request: WindDownRead['request'] = requestText !== null ? requestOf(requestText, mtime ?? now) : mtime !== null ? requestOf('', mtime) : null
   if (request === null) return { request, stopNow: false, previous: null }
   return { request, stopNow: (await text(paths.stopNow)) !== null, previous: previousOf(await text(paths.status)) }
 }
