@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wind_down.v1.json",
+  "title": "wind_down",
+  "description": "One stop of a workspace's loop finished winding down: the loop stopped taking new work, waited for the steps that were running (up to a cap), then stopped. Written once per stop, not for an issue. A retried write can repeat it: count one per (repo, device, requested_at).",
+  "x-issue": "none",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["requested_at", "stopped_at", "waited_ms", "cap_ms", "outcome", "running_at_request", "running_at_request_keys", "cut_at_stop", "cut_at_stop_keys", "trigger"],
+  "properties": {
+    "requested_at": { "type": "string", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "description": "When the stop was asked for. With outcome off it equals stopped_at.", "x-column": true },
+    "stopped_at": { "type": "string", "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$", "description": "When the loop stopped. With outcome off it equals requested_at.", "x-column": true },
+    "waited_ms": { "type": "integer", "minimum": 0, "description": "How long the stop waited for running steps, in milliseconds; 0 with outcome off.", "x-column": true },
+    "cap_ms": { "type": "integer", "minimum": 0, "description": "The longest the stop was allowed to wait, in milliseconds.", "x-column": true },
+    "outcome": { "enum": ["idle", "cap", "now", "off"], "description": "How the wait ended: idle (no step was left running), cap (the wait cap ran out and the rest were cut), now (stopped at once, running steps cut), or off (wind-down is off: no wait).", "x-column": true },
+    "running_at_request": { "type": "integer", "minimum": 0, "description": "How many steps were running when the stop was asked for.", "x-column": true },
+    "running_at_request_keys": { "type": "array", "items": { "type": "string", "pattern": "^i[1-9][0-9]*/l[0-9a-z]+/.+$" }, "description": "The loop keys of those steps (stepKey i<N>/l<life>/s<seq>/<step>/a<n>, or reviewKey i<N>/l<life>/review/<patch7>/r<round>/a<n>)." },
+    "cut_at_stop": { "type": "integer", "minimum": 0, "description": "How many steps were still running, and cut, when the loop stopped.", "x-column": true },
+    "cut_at_stop_keys": { "type": "array", "items": { "type": "string", "pattern": "^i[1-9][0-9]*/l[0-9a-z]+/.+$" }, "description": "The loop keys of the cut steps, in the same form as running_at_request_keys. Lifted as a jsonb column so a cut step can be joined to its re-run.", "x-column": true },
+    "trigger": { "type": ["string", "null"], "enum": ["restart-self", "coder-stop", null], "description": "What asked for the stop: restart-self, coder-stop, or null when not known.", "x-column": true }
+  },
+  "examples": [
+    { "requested_at": "2026-10-17T10:00:00.000Z", "stopped_at": "2026-10-17T10:04:10.500Z", "waited_ms": 250500, "cap_ms": 300000, "outcome": "idle", "running_at_request": 2, "running_at_request_keys": ["i840/ltn0brb/s6/build/a1", "i841/ltn0brc/review/0821e6a/r2/a1"], "cut_at_stop": 0, "cut_at_stop_keys": [], "trigger": "restart-self" }
+  ]
+}
