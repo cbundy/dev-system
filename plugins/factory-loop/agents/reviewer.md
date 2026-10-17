@@ -49,6 +49,9 @@ Run only commands known to exit. Read source, docs and `--help` output only from
 - A visible (UI) change needs screenshot or video evidence in the PR body.
 - Style, preference and anything outside the brief are at most warnings or infos: they never hold
   a merge.
+- The brief's `## Observability` section is a requirement like its acceptance criteria: a decision
+  it names that the change does not record, or a query it promised that `docs/metrics.md` lacks,
+  is an error finding.
 - Do not repeat yourself: what the fixer fixed in an earlier round is done, and a finding it
   declined comes back only when you show its reason wrong.
 

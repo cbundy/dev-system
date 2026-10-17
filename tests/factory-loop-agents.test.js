@@ -187,3 +187,14 @@ test("the v2 designer asks for a split's four reasons and each child's why, and 
   for (const k of ["reasons", "why_split", "why_count", "why_parts", "why_order"]) assert.match(body, new RegExp(`\`${k}\``), k);
   assert.match(body, /Each child's `why`/);
 });
+
+test("the v2 designer makes every new decision observable, and the reviewer holds the change to it", () => {
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  assert.match(raw, /## Test plan\n[^\n]*\n\n## Observability\n[^\n]*\n\n## Sequencing/);
+  const body = raw.replace(/\s+/g, " ");
+  assert.match(body, /prefer optional fields on an existing event type/);
+  assert.match(body, /add its query to `docs\/metrics\.md`/);
+  assert.match(body, /ships whole in its first release/);
+  const review = read("plugins/factory-loop/agents/reviewer.md").replace(/\s+/g, " ");
+  assert.match(review, /`## Observability` section is a requirement like its acceptance criteria/);
+});
