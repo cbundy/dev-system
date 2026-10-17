@@ -38,3 +38,9 @@ gh_volume_name = "dev-system-gh"
 # login" in README.md). Each workspace picks shared or private (the default); shared
 # ones use one Claude login and keep their own history and settings.
 claude_auth_volume_name = "dev-system-claude-auth"
+
+# The per-workspace token folders for the "GitHub login: This workspace's own token"
+# choice (see "Sharing one gh login" in README.md): <dir>/<owner>/<workspace>/gh-token,
+# for a workspace that works as another GitHub account. Kept out of secrets_dir, which
+# every workspace mounts.
+workspace_secrets_dir = "/etc/dev-system/workspace-secrets"
