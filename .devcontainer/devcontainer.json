@@ -10,7 +10,7 @@
   // --- repo-owned: edit freely ---
   "name": "dev-system",
 
-  // The base image plus terraform and a PostgreSQL 17 server (Dockerfile beside this file, cbundy/dev-system#117):
+  // The base image plus terraform, a PostgreSQL 17 server and TypeScript (Dockerfile beside this file, cbundy/dev-system#117):
   // the same image CI publishes as ghcr.io/cbundy/dev-system/dev.
   "build": { "dockerfile": "Dockerfile" },
 

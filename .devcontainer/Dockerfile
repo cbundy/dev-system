@@ -4,7 +4,8 @@
 #
 # The base image plus the tools only this repo needs (cbundy/dev-system#117):
 # terraform, for `npm run lint`'s fmt and validate checks on coder/dev-system,
-# and a PostgreSQL 17 server (cbundy/dev-system#507).
+# a PostgreSQL 17 server (cbundy/dev-system#507), and TypeScript, for
+# type-checking the TypeScript mods in plugins/ (cbundy/dev-system#525).
 # It is a per-repo image like any consumer's (docs/onboarding.md, step 3e;
 # images/base/README.md, "Extending the image"): no ENTRYPOINT, VOLUME,
 # /persist or devcontainer.metadata changes, so the base image's contract and
@@ -55,6 +56,13 @@ RUN apt-get update \
 
 USER node
 
+# TypeScript compiler, for type-checking the TypeScript mods in plugins/ against
+# the engine's declarations (cbundy/dev-system#525). Installed as node into the
+# base image's node-owned npm prefix, like codex. A version bump is deliberate.
+ARG TYPESCRIPT_VERSION=5.6.3
+RUN npm install -g "typescript@${TYPESCRIPT_VERSION}" \
+  && test "$(tsc --version)" = "Version ${TYPESCRIPT_VERSION}"
+
 # The repo a headless container clones on its first start (images/base/README.md,
 # "Workspace and repo"). CI passes this repo's clone URL, so a Coder workspace
 # on the published image needs no repo_url parameter. A local build (the
@@ -90,4 +98,4 @@ LABEL org.opencontainers.image.source="https://github.com/cbundy/dev-system" \
   org.opencontainers.image.created="${CREATED}" \
   org.opencontainers.image.base.name="ghcr.io/cbundy/dev-system/base:2" \
   org.opencontainers.image.title="dev-system dev" \
-  org.opencontainers.image.description="dev-system's own dev environment: the dev-system base image plus terraform and a PostgreSQL 17 server. Rebuilt on every change and weekly; tags are mutable."
+  org.opencontainers.image.description="dev-system's own dev environment: the dev-system base image plus terraform, a PostgreSQL 17 server and TypeScript. Rebuilt on every change and weekly; tags are mutable."
