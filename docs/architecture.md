@@ -97,6 +97,18 @@ removes it on exit. Each test makes its own `factory_test_*` database with the r
 drops it afterwards; a leftover database or role prints `FAIL test isolation: database|role <name>` and fails
 the run. With no server and no binaries the database tests skip and the summary line says so, unless
 `TEST_REQUIRE_POSTGRES=1` (CI), where the run fails.
+
+Subset mode, for debugging: `npm test -- <id>...` (that is, `sh scripts/test.sh <id>...`) runs only
+the named jobs, with the same sandbox, PostgreSQL setup, `TEST_JOBS` pool, failure output and
+isolation checks. An id is `node` (the whole node step), a `tests/<name>.test.js` file (all named
+files run together as one node job, through the same reporter), a discovered `*.test.sh` suite
+path, or a discovered mod directory such as `plugins/factory-loop`. An id that matches no
+discovered job prints one error line naming these forms and exits 2 before any setup, so no
+PostgreSQL is started and no sandbox is made. A passing subset run prints
+`test: subset of N jobs ok (M node tests) - not the gate; run npm test`. `npm test` with no
+arguments is unchanged and is the only gate; the raw `node --test`, `claude plugin test` and
+`sh <suite>` commands skip the sandbox and the database tests, so do not use them.
+
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
 Standing up a factory database for real (provision, `factory-db-bootstrap`, the per-role secrets

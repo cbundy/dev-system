@@ -225,10 +225,11 @@ describe('the work prompts (prompts-work.ts)', () => {
       expect(p).toContain('push only with `git push origin issue-300`')
       expect(p).toContain(TEST_POLICY)
       expect(p).toContain('When you end your turn the loop runs `npm run lint`, then `npm test` in this slot')
+      expect(p).toContain("While debugging, run only the suite you are changing, as the repo's CLAUDE.md names, then the full commands once.")
     }
     // a repo that sets no gate commands has no stop gate: the writer is not told one backs it
     for (const p of [buildPrompt(input({ gateCommands: [] })), fixPrompt({ ...fixInput(), gateCommands: [' ', ''] })]) {
-      expect(p).toContain('in the foreground and let them finish: they must pass before you answer. CI on the PR is the final gate.')
+      expect(p).toContain('in the foreground and let them finish: they must pass before you answer. While debugging, run only the suite you are changing, as the repo\'s CLAUDE.md names, then the full commands once. CI on the PR is the final gate.')
       expect(p).not.toContain('When you end your turn the loop runs')
     }
     const design = designPrompt({ ...input(), inFlight: [{ issue: 301, branch: 'issue-301' }, { issue: 300, branch: 'issue-300' }] })

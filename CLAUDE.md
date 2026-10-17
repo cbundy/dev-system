@@ -99,6 +99,13 @@ success and on failure prints only the failing tests or `file:line` errors: run 
 and act on that output. Do not re-run a gate to grep or filter its output, or after it
 has passed.
 
+While debugging, run only what you are changing with `npm test -- <id>...`, where an id is
+`node`, a `tests/<name>.test.js` file, a `*.test.sh` suite path or a mod directory (for example
+`npm test -- plugins/factory-loop` or `npm test -- tests/cli.test.js`); it keeps the sandbox,
+PostgreSQL and isolation checks and says it is a subset, not the gate. Then run the gates once at
+the end. Do not run `node --test`, `claude plugin test` or a suite's `sh` directly: they skip the
+sandbox and the database tests. `TEST_JOBS` sizes a run.
+
 - `npm run lint` - runs shellcheck (config: root `.shellcheckrc`) on every shell script
   under `images/base/`, `features/src/callum-tools/`, `features/test/`,
   `plugins/callum-flow/hooks/`, `coder/` and `scripts/`, runs `node --check` on the
