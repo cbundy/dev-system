@@ -14,6 +14,7 @@ export const JOBS = Object.freeze({
   weakening: { contract: 'verdict', purpose: 'weakening', repo: REPO, issue: 470, branch: null },
   merge: { contract: 'verdict', purpose: 'merge', repo: REPO, issue: 470, branch: null },
   designer: { contract: 'design', purpose: null, repo: REPO, issue: 470, branch: null },
+  designV2: { contract: 'design-v2', purpose: null, repo: REPO, issue: 470, branch: null },
   implementer: { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: null },
   fixer: { contract: 'handoff', purpose: null, repo: REPO, issue: 470, branch: 'feat/issue-470-x' },
 })
@@ -98,6 +99,33 @@ export const CASES = Object.freeze([
     job: 'designer',
     input: { brief: null, created: [], pendingDecision: false },
     problems: ['with no brief, no created issues and no decision pending, the loop has nothing to hand on: give the brief URL'],
+  },
+  {
+    name: 'a v2 wait on a closed issue and a merged PR',
+    job: 'designV2',
+    input: { kind: 'wait', conditions: [{ kind: 'issue-closed', issue: 57 }, { kind: 'pr-merged', pr: 812 }], reason: 'Needs #57 closed and PR #812 merged first', brief: null },
+    problems: [],
+  },
+  {
+    name: 'a v2 wait on a release tag that holds a 7-hex and a 40-hex commit',
+    job: 'designV2',
+    input: { kind: 'wait', conditions: [{ kind: 'tag-contains', sha: '35bb655' }, { kind: 'tag-contains', sha: '35bb655a1b2c3d4e5f60718293a4b5c6d7e8f901' }], reason: 'Waits on the release that carries both commits', brief: null },
+    problems: [],
+  },
+  {
+    name: 'a v2 wait on a release tag with a bad sha, a stray field and a repeated sha',
+    job: 'designV2',
+    input: {
+      kind: 'wait',
+      conditions: [{ kind: 'tag-contains', sha: 'xyz' }, { kind: 'tag-contains', sha: '35bb655', extra: 1 }, { kind: 'tag-contains', sha: '35BB655' }],
+      reason: 'Waits on a release',
+      brief: null,
+    },
+    problems: [
+      'conditions[0].sha "xyz" must be 7 to 40 hex characters (a commit sha)',
+      'extra is not a field of conditions[1] (only kind, sha)',
+      'conditions[2] repeats tag-contains:35bb655',
+    ],
   },
   {
     name: "an implementer's gated handoff",

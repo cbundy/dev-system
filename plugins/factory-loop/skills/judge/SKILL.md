@@ -334,7 +334,7 @@ Ask the owner rarely: you have standing release authority, so use it. Ask only w
 
 None of these is a reason to ask: a large release, many merges, an image bump, a minor version, an
 unfamiliar change, uncertain notes, or "the owner might want to know". Release, and say what
-shipped in one line.
+shipped in one line. A release wait (an issue waiting on a release) is yours to answer, never the owner's.
 
 Answer:
 - **release**: check the version is not tagged yet (`git tag -l vX.Y.Z`). Start the release agent
