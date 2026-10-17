@@ -237,6 +237,7 @@ COPY --chmod=0755 \
   images/base/dev-query \
   images/base/dev-login \
   images/base/callum-flow-event \
+  images/base/callum-flow-dual-write-check \
   images/base/callum-flow-merge-guard \
   images/base/callum-flow-patch-id \
   images/base/callum-flow-regate \

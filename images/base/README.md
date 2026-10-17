@@ -1876,6 +1876,14 @@ Batches are `FACTORY_EVENT_PUSH_BATCH` lines (default 500), every `psql` run is 
 starts the next pass. `--once` makes one pass. `dev-init` starts it (log: `/tmp/dev-factory-event-push.log`);
 `dev-doctor` reports its counts and fails when it is not running. The old `event-push-loop` is unchanged.
 
+`callum-flow-dual-write-check [--repo OWNER/NAME] [--device D] [--since T]` is the read-only check that dual write
+holds (see [docs/factory-events](../../docs/factory-events/README.md)). It reads `factory.events` with the agentsview
+URL and `factory.event_store` with the factory reader URL only, in read-only transactions bounded by timeout, passes
+each old row through the translator and matches by `event_id`. Per old state it prints old lines, skipped, expected,
+found, missing and translator misses, then the extra new events per type. `--device` defaults to this device, `--repo`
+to every repo, and `--since` to the device's earliest new event. It exits 0 only when missing, misses and extras are all
+zero, 1 otherwise, and 2 on a usage error, an unreachable or unconfigured store, or no new rows to start from.
+
 `nm-push-loop` mirrors the no-mistakes pipeline database into the same PostgreSQL, with
 the same URL rules as `event-push-loop`. The source is `state.sqlite` under
 `NO_MISTAKES_HOME`, else `NM_HOME`, else `/persist/no-mistakes`. See
