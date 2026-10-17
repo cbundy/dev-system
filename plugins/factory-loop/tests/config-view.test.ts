@@ -5,6 +5,7 @@ import { shortDuration } from '../hooks/config'
 import { configText, sourceOf, viewOf } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
+import { SETTING_EFFECT } from '../hooks/config-keys'
 import { helpText, parseOp, runOp } from '../hooks/control'
 import type { FileIo } from '../hooks/control'
 import { MIN, NOW, control } from './fixtures'
@@ -165,7 +166,7 @@ describe('the config op', () => {
 
   test('parses with no argument only, and help lists it', () => {
     expect(parseOp('config')).toEqual({ ok: true, op: { op: 'config' } })
-    expect(parseOp('config x')).toEqual({ ok: false, error: 'Usage: config' })
+    expect(parseOp('config x')).toEqual({ ok: false, error: 'Usage: config [set <key> <value>|unset <key>]' })
     expect(helpText()).toContain('config')
   })
 
@@ -173,5 +174,23 @@ describe('the config op', () => {
     const v = view({})
     const reply = await runOp(io, paths, 'config', NOW, { agentId: 'a1', view: v })
     expect(reply).toMatchObject({ ok: true, ping: false, logged: null, text: configText(v, control(), NOW) })
+  })
+})
+
+describe('SETTING_EFFECT', () => {
+  test('names when every setting applies: each DEFAULT_CONFIG key, poolSize, and each key the view reads', () => {
+    const table = Object.keys(SETTING_EFFECT).sort()
+    expect(table).toEqual([...Object.keys(DEFAULT_CONFIG), 'poolSize'].sort())
+    // every key configText reads from the config (a Proxy records them), and the view's poolSize
+    const read = new Set<string>(['poolSize'])
+    const spy = new Proxy(DEFAULT_CONFIG, {
+      get: (target, prop, receiver) => {
+        if (typeof prop === 'string') read.add(prop)
+        return Reflect.get(target, prop, receiver) as unknown
+      },
+    })
+    configText({ ...view({}), config: spy }, control(), NOW)
+    expect(read.size).toBeGreaterThan(10)
+    for (const key of read) expect(key in SETTING_EFFECT).toBe(true)
   })
 })

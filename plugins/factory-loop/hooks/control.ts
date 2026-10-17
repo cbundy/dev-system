@@ -11,7 +11,8 @@
 import type { CommandSpec, ToolSpec } from 'claude-code'
 
 import type { PassSummary } from '../types'
-import { EMPTY_CONTROL, controlFrom } from './config'
+import { EMPTY_CONTROL, controlFrom, loadConfig } from './config'
+import { DEFAULT_POOL_SIZE, checkKey, checkSetting, editSetting, effectText, shown, valueIn, valueOfText } from './config-keys'
 import { clock, configText } from './config-view'
 import type { ConfigView } from './config-view'
 import { OPS, USAGE, helpText, hintText } from './control-help'
@@ -37,7 +38,9 @@ export type { OpName } from './control-help'
 // One op, parsed. An empty priority or only list clears it.
 export type Op =
   | { op: 'status' }
-  | { op: 'config' }
+  // no change: the read-only view; a change sets a key in the workspace config file, or removes it
+  // (no value). The key is as typed (`passEvery`, `stateTimeout.design`)
+  | { op: 'config'; change?: { key: string; value?: unknown } }
   | { op: 'help' }
   | { op: 'pause' | 'unpause' | 'skip' | 'noskip' | 'retry' | 'drop'; issue: number }
   | { op: 'priority' | 'only'; issues: number[] }
@@ -58,7 +61,8 @@ export type Parsed = { ok: true; op: Op } | { ok: false; error: string }
 
 // What the driver carries out besides writing control.json: retryIssue through the ledger's
 // retryIssue (D-38), mode, trace and planner into the workspace config file (runOp does those).
-export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean; planner?: Planner }
+export type Setting = { key: string; fileKey: string; sub: string | null }
+export type Effects = { retryIssue?: number; mode?: Mode; trace?: boolean; planner?: Planner; setting?: { k: Setting; value?: unknown } }
 
 export type Applied = { control: Control; effects: Effects; changed: boolean; text: string }
 
@@ -104,8 +108,15 @@ export function parseOp(text: string, planner: Planner = 'v1'): Parsed {
 
   switch (name) {
     case 'status':
-    case 'config':
       return args.length === 0 ? { ok: true, op: { op: name } } : bad(name)
+    case 'config': {
+      if (args.length === 0) return { ok: true, op: { op: 'config' } }
+      const verb = args[0]?.toLowerCase()
+      const key = args[1]
+      if (verb === 'unset' && key !== undefined && args.length === 2) return { ok: true, op: { op: 'config', change: { key } } }
+      if (verb === 'set' && key !== undefined && args.length > 2) return { ok: true, op: { op: 'config', change: { key, value: valueOfText(args.slice(2).join(' ')) } } }
+      return bad(name)
+    }
     case 'pause':
     case 'unpause':
     case 'skip':
@@ -186,8 +197,10 @@ export function issuesOf(op: Op): number[] {
 export function formatOp(op: Op): string {
   switch (op.op) {
     case 'status':
-    case 'config':
       return op.op
+    case 'config':
+      if (op.change === undefined) return 'config'
+      return 'value' in op.change ? `config set ${op.change.key} ${JSON.stringify(op.change.value)}` : `config unset ${op.change.key}`
     case 'help':
       return 'help'
     case 'pause':
@@ -226,6 +239,24 @@ export function formatOp(op: Op): string {
 const tags = (issues: readonly number[]) => issues.map(n => `#${n}`).join(' ')
 const same = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((n, i) => n === b[i])
 
+// applyChange: `config set|unset`: the key and value checked as loadConfig reads them, then the
+// answer (the old value in force, the new one, when it applies) and the effect runOp writes. A
+// refusal answers why and has no effect.
+function applyChange(control: Control, change: { key: string; value?: unknown }, view: ConfigView | null): Applied {
+  const set = 'value' in change
+  const checked = set ? checkSetting(change.key, change.value) : checkKey(change.key)
+  if (!checked.ok) return { control, effects: {}, changed: false, text: checked.error }
+  const { key, sub } = checked
+  const now = (config: Parameters<typeof valueIn>[0] | undefined) => (config === undefined ? undefined : valueIn(config, key, sub))
+  // the value in force, and what an unset leaves in force: the repo's, else the default
+  const was = key === 'poolSize' ? view?.poolSize : now(view?.config)
+  const after = set ? change.value : key === 'poolSize' ? DEFAULT_POOL_SIZE : now(loadConfig(view?.repoRaw ?? {}).config)
+  const name = sub === null ? change.key : `${checked.fileKey}.${sub}`
+  const text = `${set ? 'Set' : 'Unset'} ${name}: was ${was === undefined ? 'unknown' : shown(key, was)}, now ${shown(key, after)}; ${effectText(key)}.`
+  const setting = { k: { key, fileKey: checked.fileKey, sub }, ...(set ? { value: change.value } : {}) }
+  return { control, effects: { setting }, changed: false, text }
+}
+
 // applyOp: the op against the control state as it stands. The input is never changed: a change
 // returns a new Control with new arrays for what changed. `changed` says whether control.json
 // needs writing; an op that changes nothing (pausing a paused issue) answers so and writes
@@ -239,7 +270,7 @@ export function applyOp(control: Control, op: Op, now: Ms, last: PassSummary | n
     case 'status':
       return keep(statusText(last, control, now))
     case 'config':
-      return keep(configText(view, control, now))
+      return op.change === undefined ? keep(configText(view, control, now)) : applyChange(control, op.change, view)
     case 'help':
       return keep(helpText())
     case 'pause':
@@ -460,6 +491,15 @@ export async function writeControl(io: FileIo, loopDir: string, control: Control
   await io.writeFile(controlPath(loopDir), controlText(control))
 }
 
+// writeKey: `config set|unset` into the workspace file; changed says whether the file was written
+export async function writeKey(io: FileIo, configDir: string, k: Setting, value: unknown): Promise<{ error: string | null; changed: boolean }> {
+  const path = configFilePath(configDir)
+  const next = editSetting(await io.readFile(path), k, value)
+  if (!next.ok) return { error: next.error, changed: false }
+  if (next.changed) await io.writeFile(path, next.text)
+  return { error: null, changed: next.changed }
+}
+
 export async function writeSetting(io: FileIo, configDir: string, key: SettingKey, value: Mode | Planner | boolean): Promise<string | null> {
   const path = configFilePath(configDir)
   const next = withSetting(await io.readFile(path), key, value)
@@ -519,21 +559,34 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
     op = only.op
     aside = only.aside
   }
-  if (from.agentId !== undefined && op.op !== 'status' && op.op !== 'config') return refused('Not changed: only the main conversation sets owner directives.', op)
+  const viewOnly = op.op === 'status' || (op.op === 'config' && op.change === undefined)
+  if (from.agentId !== undefined && !viewOnly) return refused('Not changed: only the main conversation sets owner directives.', op)
   let loaded: LoadedControl
   try {
     loaded = await readControl(io, paths.loopDir)
   } catch (err) {
     loaded = { control: EMPTY_CONTROL, error: `control.json could not be read (${String(err).slice(0, 200)})` }
   }
-  if (op.op === 'status' || op.op === 'config') {
+  if (viewOnly) {
     const text = op.op === 'status' ? statusText(from.last ?? null, loaded.control, now) : configText(from.view ?? null, loaded.control, now)
     const warning = loaded.error === null ? '' : `\n${loaded.error}: fix or remove it.`
     return { ok: true, text: text + warning, op, control: loaded.control, ping: false, retryIssue: null, mode: null, logged: null }
   }
   if (loaded.error !== null) return refused(`Not changed: ${loaded.error}; fix or remove it.`, op)
-  const applied = applyOp(loaded.control, op, now, null, planner)
+  const applied = applyOp(loaded.control, op, now, null, planner, from.view ?? null)
+  if (op.op === 'config' && applied.effects.setting === undefined) return refused(applied.text, op)
+  let text = applied.text
+  let nothing = false
   try {
+    const setting = applied.effects.setting
+    if (setting !== undefined) {
+      const wrote = await writeKey(io, paths.configDir, setting.k, setting.value)
+      if (wrote.error !== null) return refused(`Not changed: ${wrote.error}.`, op)
+      if (!wrote.changed) {
+        text = `${op.change?.key ?? ''} ${op.change !== undefined && 'value' in op.change ? 'already has that value in the workspace config file' : 'is not set in the workspace config file'}: nothing changed.`
+        nothing = true
+      }
+    }
     if (applied.changed) await writeControl(io, paths.loopDir, applied.control)
     for (const key of ['mode', 'trace', 'planner'] as const) {
       const value = applied.effects[key]
@@ -543,10 +596,10 @@ export async function runOp(io: FileIo, paths: ControlPaths, input: string, now:
   } catch (err) {
     return refused(`Not changed: the write failed (${String(err).slice(0, 200)}).`, op)
   }
-  const ping = applied.changed || Object.keys(applied.effects).length > 0
+  const ping = !nothing && (applied.changed || Object.keys(applied.effects).length > 0)
   return {
     ok: true,
-    text: `${applied.text}${aside}`,
+    text: `${text}${aside}`,
     op,
     control: applied.control,
     ping,
@@ -581,7 +634,7 @@ export const CONTROL_TOOL: ToolSpec = {
   description:
     "Set the factory loop's owner directives (control.json) when the owner asks, as `/factory <op>` does; " +
     'one op per call, answered in one line, and a malformed op changes nothing. Ops: ' +
-    'status (what the loop is doing); config (the settings it runs with, each with its source; read-only); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
+    'status (what the loop is doing); config [set <key> <value>|unset <key>] (no argument: the settings it runs with, each with its source; config set <key> <value> saves one setting in the workspace config file and config unset <key> removes it, checked as the loader reads it, only when the owner asks); pause <N> / unpause <N> (no action at all on N; its claim still renews); ' +
     'skip <N> / noskip <N> (never claim N); priority <N...>|off (claim these first, in order); ' +
     'only <N...>|off (claim only these; a tracker stands for its open sub-issues); serial on|off (one issue in ' +
     'flight at a time); new on|off (off: no new claims, designs or implementations); override <pct> <hours>|off ' +

@@ -5,7 +5,8 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PassSummary } from '../types'
-import { EMPTY_CONTROL, controlFrom } from '../hooks/config'
+import { EMPTY_CONTROL, controlFrom, loadConfig } from '../hooks/config'
+import { effectText } from '../hooks/config-keys'
 import {
   CONTROL_TOOL,
   FACTORY_COMMAND,
@@ -647,5 +648,144 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
     expect(line({ planner: 'v1', shadow: 'v2' })).toBe('Pass 184, 1m ago: act, planner v1 with the v2 shadow, tier slow, 3 actions, 1 for the owner.')
     expect(line({ planner: 'v1', shadow: 'off' })).toBe('Pass 184, 1m ago: act, planner v1, tier slow, 3 actions, 1 for the owner.')
     expect(line({})).toBe('Pass 184, 1m ago: act, tier slow, 3 actions, 1 for the owner.')
+  })
+})
+
+describe('config set and unset', () => {
+  const view = (repo: Record<string, unknown> = {}, workspace: Record<string, unknown> = {}) => {
+    const loaded = loadConfig(repo, workspace)
+    return { config: loaded.config, device: 'd', poolSize: 16, repoRaw: repo, workspaceRaw: workspace, problems: loaded.problems, modeFrom: 'plugin' as const, deviceFrom: 'env' as const, pluginVersion: '1' }
+  }
+  const run = (io: FileIo, text: string, from: Parameters<typeof runOp>[4] = {}) => runOp(io, PATHS, text, NOW, from)
+  const file = (f: ReturnType<typeof files>) => JSON.parse(f.map.get(CONFIG_FILE) ?? 'null') as unknown
+
+  test('set keeps the other keys, names old, new and when it applies', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ binDir: '/x', trace: true }) })
+    const reply = await run(f.io, 'config set maxInFlightIssues 3', { view: view({ maxInFlightIssues: 5 }) })
+    expect(reply).toMatchObject({ ok: true, ping: true, logged: 'config set maxInFlightIssues 3' })
+    expect(reply.text).toBe('Set maxInFlightIssues: was 5, now 3; from the next pass.')
+    expect(file(f)).toEqual({ binDir: '/x', trace: true, maxInFlightIssues: 3 })
+  })
+
+  test('an Ms key writes the spelling typed and drops the other', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ passEveryMs: 30000, mode: 'act' }) })
+    const reply = await run(f.io, 'config set passEvery 90s', { view: view() })
+    expect(reply.text).toBe('Set passEvery: was 1m, now 90s; from the next pass.')
+    expect(file(f)).toEqual({ mode: 'act', passEvery: '90s' })
+  })
+
+  test('a map entry merges into the object, and a list round-trips', async () => {
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ stateTimeout: { build: '2h' } }) })
+    expect((await run(f.io, 'config set stateTimeout.design 2h', { view: view() })).ok).toBe(true)
+    expect((await run(f.io, 'config set gateCommands ["npm test", "npm run lint"]')).ok).toBe(true)
+    expect(file(f)).toEqual({ stateTimeout: { build: '2h', design: '2h' }, gateCommands: ['npm test', 'npm run lint'] })
+    expect((await run(f.io, 'config set poolSize 4')).ok).toBe(true)
+    expect(loadConfig(file(f)).config.gateCommands).toEqual(['npm test', 'npm run lint'])
+    expect(loadConfig(file(f)).config.stateTimeoutMs.design).toBe(2 * HOUR)
+  })
+
+  test('a timeout says it applies to new work, and a restart key says so', async () => {
+    const f = files()
+    expect((await run(f.io, 'config set agentTimeout.designer 2h', { view: view() })).text).toContain('from the next pass, to new work')
+    expect(effectText('maxLives', { maxLives: 'restart' })).toBe("after the loop's process restarts")
+    expect(effectText('maxLives', { maxLives: 'next-pass' })).toBe('from the next pass')
+  })
+
+  test('every bad set or unset is refused and the file is untouched', async () => {
+    for (const text of [
+    'config set maxInFlightIssues lots',
+    'config set maxInFlightIssues -1',
+    'config set passEvery 6x',
+    'config set reviewFixCap "three"',
+    'config set nosuchKey 1',
+    'config set stateTimeout.nosuch 1h',
+    'config set stateTimeout 1h',
+    'config set poolSize 0',
+    'config set mode act',
+    'config set planner v2',
+    'config set trace true',
+    'config set binDir /x',
+    'config unset nosuchKey',
+    'config unset mode',
+    ]) {
+    const body = JSON.stringify({ maxLives: 2 }, null, 1)
+    const f = files({ [CONFIG_FILE]: body })
+    const reply = await run(f.io, text, { view: view() })
+    expect(reply).toMatchObject({ ok: false, ping: false, logged: null })
+    expect(reply.text).toContain('Not changed.')
+    expect(f.map.get(CONFIG_FILE)).toBe(body)
+    expect(f.writes).toEqual([])
+    const none = files()
+    expect((await run(none.io, text)).ok).toBe(false)
+    expect(none.map.has(CONFIG_FILE)).toBe(false)
+    }
+  })
+
+  test('the loader\'s text and the own-op pointers', async () => {
+    const f = files()
+    expect((await run(f.io, 'config set maxInFlightIssues lots')).text).toBe('maxInFlightIssues: "lots" is not a whole number or null. Not changed.')
+    expect((await run(f.io, 'config set mode act')).text).toContain('/factory mode off|observe|act')
+    expect((await run(f.io, 'config set planner v2')).text).toContain('/factory planner v1|v2')
+  })
+
+  test('an invalid or non-object workspace file is refused and left alone', async () => {
+    for (const body of ['{not json', '[1]']) {
+      const f = files({ [CONFIG_FILE]: body })
+      const reply = await run(f.io, 'config set maxLives 2')
+      expect(reply.ok).toBe(false)
+      expect(f.map.get(CONFIG_FILE)).toBe(body)
+    }
+  })
+
+  test('unset removes both spellings or one entry, and the lower layer applies again', async () => {
+    const repo = { maxLives: 4 }
+    const f = files({ [CONFIG_FILE]: JSON.stringify({ maxLives: 2, passEveryMs: 1000, passEvery: '5m', stateTimeout: { design: '2h' } }) })
+    expect(loadConfig(repo, file(f)).config.maxLives).toBe(2)
+    const reply = await run(f.io, 'config unset maxLives', { view: view(repo, file(f) as Record<string, unknown>) })
+    expect(reply.text).toBe('Unset maxLives: was 2, now 4; from the next pass.')
+    expect(loadConfig(repo, file(f)).config.maxLives).toBe(4)
+    expect(loadConfig({}, file(f)).config.maxLives).toBe(3)
+    await run(f.io, 'config unset passEvery')
+    await run(f.io, 'config unset stateTimeout.design')
+    expect(file(f)).toEqual({})
+  })
+
+  test('unset of a key the file does not set changes nothing', async () => {
+    const f = files({ [CONFIG_FILE]: '{"maxLives":2}' })
+    const reply = await run(f.io, 'config unset maxTriages')
+    expect(reply).toMatchObject({ ok: true, ping: false, logged: null })
+    expect(reply.text).toContain('nothing changed')
+    expect(f.writes).toEqual([])
+    expect((await run(f.io, 'config unset stateTimeout.design')).text).toContain('nothing changed')
+  })
+
+  test('an agent may read config but not set or unset it', async () => {
+    const f = files()
+    const v = view()
+    expect((await run(f.io, 'config', { agentId: 'a1', view: v })).ok).toBe(true)
+    for (const text of ['config set maxLives 2', 'config unset maxLives']) {
+      expect(await run(f.io, text, { agentId: 'a1', view: v })).toMatchObject({ ok: false, ping: false })
+    }
+    expect(f.writes).toEqual([])
+  })
+
+  test('forms parse, format and parse back; any other word is the usage', () => {
+    for (const text of ['config set maxInFlightIssues 3', 'config set gateCommands ["npm test"]', 'config set passEvery "6h"', 'config set maxInFlightIssues null', 'config unset stateTimeout.design']) {
+      const parsed = op(text)
+      expect(formatOp(parsed)).toBe(text)
+      expect(op(formatOp(parsed))).toEqual(parsed)
+    }
+    expect(op('config set reviewer adjudicator')).toEqual({ op: 'config', change: { key: 'reviewer', value: 'adjudicator' } })
+    expect(op('config set passEvery 6h')).toEqual({ op: 'config', change: { key: 'passEvery', value: '6h' } })
+    for (const text of ['config foo', 'config set', 'config set key', 'config unset', 'config unset a b']) {
+      expect(parseOp(text)).toEqual({ ok: false, error: 'Usage: config [set <key> <value>|unset <key>]' })
+    }
+  })
+
+  test('help, hint and the tool name both forms', () => {
+    for (const text of [helpText(), hintText(), CONTROL_TOOL.description ?? '']) {
+      expect(text).toContain('config set')
+      expect(text).toContain('config unset')
+    }
   })
 })

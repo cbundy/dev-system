@@ -345,10 +345,23 @@ in chat, and the owner can type `/factory <op>` from any client (named so to sta
 Code's built-in `/loop`, which the released orchestrator uses as a cron for its ticks): `status`,
 `pause <N>`, `unpause <N>`, `skip <N>`, `noskip <N>`, `priority <N...>|off`, `only <N...>|off`,
 `serial on|off`, `new on|off`, `override <pct> <hours>|off`, `resume <N|run id>`, `retry <N>`,
-`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`, `trace on|off`. Each change
+`update [<reason>]|off`, `drop <N>`, `note [<N>] <text>`, `mode off|observe|act`, `trace on|off`, `config [set <key> <value>|unset <key>]`. Each change
 pings the loop and gets its own decision-log line (`control`). Today these directives are free
 text in the memory file (I-90).
 
+- `config set <key> <value>` saves one setting in the workspace file and `config unset <key>` removes
+  it, so the repo's value or the default applies again. A key is any setting under its file name
+  (`passEvery` or `passEveryMs`, `stateTimeout.design` for a map entry) or `poolSize`; `mode`,
+  `planner`, `trace` and the runtime keys are refused with a pointer to their own op. The value is
+  read as JSON when it parses (`3`, `true`, `null`, `["npm test"]`), else as text (`6h`). It is
+  checked by `loadConfig` alone before anything is written: a problem, an unknown key or entry
+  refuses the op with the loader's text and `Not changed.`, and the file is left as it was (as it is
+  when it is not a JSON object). The answer names the old value in force, the new one and when it
+  applies, from `SETTING_EFFECT` (`hooks/config-keys.ts`): `from the next pass` (runtime() reads
+  both files every pass; a timeout is for new work) or `after the loop's process restarts` (a
+  value captured once at load; no key is today). It is logged as a person intervention with cause
+  `config-file`, and its write is the loop's own, never a hand edit. An agent may read `config`,
+  never set or unset.
 - An empty op is `status`: the last pass and the directives in force. `help` (also `--help`, `-h`) lists the ops as a normal
   answer and changes nothing; the typeahead hint is a `/plan` style bracketed list built from the ops.
 - Issue numbers may take a `#`, and a list may use commas. `resume` also reads `issue:<N>` and

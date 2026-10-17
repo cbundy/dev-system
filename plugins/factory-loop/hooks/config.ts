@@ -164,9 +164,9 @@ export const ACTION_KINDS: readonly ActionKind[] = [
   ...V2_ACTION_KINDS,
 ]
 // maxAttempts may name any action kind or agent type.
-const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
-const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
-const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
+export const ATTEMPT_KEYS: readonly (ActionKind | AgentType)[] = [...ACTION_KINDS, 'designer', 'implementer', 'adjudicator', 'fixer']
+export const TIME_MAPS = ['agentTimeoutMs', 'wakeTimeoutMs', 'stateTimeoutMs'] as const
+export const COUNT_MAPS = ['maxAttempts', 'rateCaps'] as const
 
 // v2: the settings v2 runs with, from the same layers: config itself under planner v2; under v1,
 // V2_DEFAULTS on every key no layer set, which the v2 shadow plans with (v2 SPEC 2.3).
