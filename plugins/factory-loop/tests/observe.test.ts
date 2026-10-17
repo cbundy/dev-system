@@ -506,6 +506,12 @@ describe('config (SPEC 4.2)', () => {
     expect(loadConfig({}).config.titleEveryMs).toBe(300_000)
   })
 
+  test('reportEvery takes a duration and defaults to ten minutes', () => {
+    expect(loadConfig({ reportEvery: '10m' }).config.reportEveryMs).toBe(600_000)
+    expect(loadConfig({ reportEvery: '2m' }).config.reportEveryMs).toBe(120_000)
+    expect(loadConfig({}).config.reportEveryMs).toBe(600_000)
+  })
+
   test('a time setting takes a duration under its short key, or milliseconds under either key', () => {
     const { config: c, problems } = loadConfig({ passEvery: '90s', queueEveryMs: 60_000, githubEvery: 120_000, heartbeatEvery: '30m' })
     expect([c.passEveryMs, c.queueEveryMs, c.githubEveryMs, c.heartbeatEveryMs]).toEqual([90_000, 60_000, 120_000, 1_800_000])
