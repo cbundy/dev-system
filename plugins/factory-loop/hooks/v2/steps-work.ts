@@ -22,6 +22,7 @@ import type { ExecCtx } from '../exec'
 import type { LedgerEntry, State } from '../types'
 import * as ARGV from './argv'
 import type { BuildAnswer, DesignAnswer, FixAnswer } from './contracts-work.mjs'
+import { renderQuestion } from './question.mjs'
 import { keyParts, prepareKey, scratchOf } from './keys'
 import { buildPrompt, checkIdsOf, designPrompt, fixPrompt } from './prompts-work'
 import type { FixInput, FixWhy, Prior, WorkInput } from './prompts-work'
@@ -246,6 +247,11 @@ export function designResult(answer: unknown): StepResult {
   const a = asDesign(answer)
   if (a === null) return unknownResult('bad-answer', 'the design answer has no kind')
   if (a.kind === 'brief') return { event: 'ok', reason: null, why: null, head: null, choice: null, data: a }
+  // a question's structured parts become the one canonical text the record stores as its question
+  if (a.kind === 'question' && a.question !== null) {
+    const question = renderQuestion({ ...a, question: a.question })
+    return notOk(a.kind, { ...a, question, text: question })
+  }
   return notOk(a.kind, { ...a, text: a.kind === 'question' ? a.question : `split into ${a.children.length} children` })
 }
 

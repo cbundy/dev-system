@@ -17,6 +17,7 @@
 import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
+import { decisionOf, parkText } from './park-text'
 import { fixWhyOf, lifeEntries } from './rules-agent'
 import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
@@ -99,23 +100,12 @@ function emitted(ctx: V2Ctx, r: IssueRecord, state: EmitState): Action {
   return { ...base(r, entryKey(r, `event/${state}`), `log ${state}`), kind: 'event', event: { state, issue: r.issue, branch: r.branch, pr: r.pr, head: r.head, note } }
 }
 
-// parkText: the park's comment: the question, what parked it and how to resume (4.5, 11).
-export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via: string | null): string {
-  const where = from === null ? '' : ` from ${from}${via === null ? '' : ` (${via})`}`
-  const resumes = r.resumeTo === null ? '' : ` A resume goes on with ${r.resumeTo}.`
-  return [
-    'The factory loop parked this issue: it waits on the owner.',
-    '',
-    `**Question:** ${r.question ?? 'none given'}`,
-    '',
-    `It parked${where}. To resume, ${resumeStep(r.issue)}.${resumes}`,
-  ].join('\n')
-}
+export { parkText }
 
 // parkedTell: the park's tell, and each daily reminder (k >= 1, E6), an owner item.
 export function parkedTell(r: IssueRecord, k: number): Action {
   const key = k === 0 ? entryKey(r, 'tell') : `${entryKey(r, 'tell')}/${k}`
-  const lines = [`question: ${r.question ?? 'none given'}`, `resume: ${resumeStep(r.issue)}`]
+  const lines = [`question: ${decisionOf(r.question ?? 'none given')}`, `resume: ${resumeStep(r.issue)}`]
   return wake('tell', 'parked', key, k === 0 ? RULE : 'S6', r.issue, { issue: r.issue, from: r.resumeTo ?? 'none', days: k }, lines)
 }
 

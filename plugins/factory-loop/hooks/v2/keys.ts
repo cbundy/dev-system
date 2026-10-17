@@ -144,3 +144,9 @@ export function keyParts(key: string): { issue: number; life: string; seq: numbe
   if (m === null || m[1] === undefined || m[2] === undefined) return null
   return { issue: Number(m[1]), life: m[2], seq: m[3] === undefined ? null : Number(m[3]), rest: m[4] ?? '' }
 }
+
+// hiddenKey: the marker a comment carries, by which a retry finds it, and by which the unpark
+// finds the park's comment (park-text.ts).
+export function hiddenKey(key: string): string {
+  return `<!-- factory-loop:${key} -->`
+}

@@ -652,6 +652,27 @@ describe('parked and resumed (v2 SPEC 11)', () => {
     expect(said(unread, 110)).toEqual(['unpark: the label is off; waits for the trusted comments to be read'])
   })
 
+  test('the label off reads the owner\'s tick in this seq\'s park comment: one tick is the note\'s first line, several or an unknown one choose nothing, none and an older seq\'s park comment change nothing', () => {
+    const lacks = { reads: { 110: { at: NOW - 5 * MIN, open: true, labels: ['enhancement'] } } }
+    const park = (ticks: string[], q = p) => {
+      const options = ['A', 'B'].map(k => `- [${ticks.includes(k) ? (k === 'B' ? 'X' : 'x') : ' '}] **${k}** - option ${k}`).join('\n')
+      return { body: `### Waiting on the owner\n\n**Decision needed:** which?\n\n#### Options\n\n${options}\n\n#### How to resume\n\n${hiddenKey(entryKey(q, 'comment'))}`, at: parkAt + 2 * MIN, url: null }
+    }
+    const answer = { body: 'Go with it.', at: NOW - 10 * MIN, url: null }
+    const noteOf = (comments: { body: string; at: number; url: string | null }[]) => {
+      const t = transitionOf(plan(withLedger(world([p], {}, { ...lacks, comments: { 110: comments } }), settledPark)), 110)
+      return (t?.next as IssueRecord | undefined)?.notes
+    }
+    expect(noteOf([park(['A']), answer])).toEqual(['Owner chose option A: option A Go with it.'])
+    expect(noteOf([park(['B'])])).toEqual(['Owner chose option B: option B'])
+    expect(noteOf([park(['A', 'B']), answer])).toEqual(['Owner ticked 2 options, so none is chosen: A: option A; B: option B Go with it.'])
+    expect(noteOf([park([]), answer])).toEqual(['Go with it.'])
+    // the park comment of an earlier seq is not this park's
+    expect(noteOf([park(['A'], { ...p, seq: p.seq - 1 }), answer])).toEqual(['Go with it.'])
+    // a comment of the owner quoting the template is no park comment
+    expect(noteOf([{ body: '- [x] **A** - option A', at: NOW - 20 * MIN, url: null }, answer])).toEqual(['- [x] **A** - option A Go with it.'])
+  })
+
   test('the resume note reaches the step the resume leads to: P1 puts it on queued, T1 carries it into designing, fixing or reviewing, and that step\'s prompt says it (R5-F2)', async () => {
     const note = 'The earlier drill note no longer applies: review the PR on its merits.'
     const PATCH = 'f00dfeed00000000000000000000000000000001'
@@ -1092,7 +1113,7 @@ describe('the triage step (v2 SPEC 5.2)', () => {
     expect(problems({ choice: 'fix', reason: 'r' })).toEqual(['instructions is required for the choice fix'])
     expect(problems({ choice: 'redesign', reason: 'r' })).toEqual(['instructions is required for the choice redesign'])
     expect(problems({ choice: 'park', reason: 'r' })).toEqual(['question is required for the choice park'])
-    expect(problems({ choice: 'merge', reason: 'r', extra: 1 })).toEqual(['extra is not a field of a triage answer (only choice, reason, instructions, question)', 'choice "merge" is not one of retry, fix, redesign, park, drop'])
+    expect(problems({ choice: 'merge', reason: 'r', extra: 1 })).toEqual(['extra is not a field of a triage answer (only choice, reason, instructions, question, context, options, recommendation)', 'choice "merge" is not one of retry, fix, redesign, park, drop'])
     expect(problems({ choice: 'drop', reason: 'line one\nline two' })).toEqual(['reason must be one line'])
     expect(problems({ choice: 'drop', reason: 'x'.repeat(501) })).toEqual(['reason is 501 characters; at most 500'])
     expect(problems({ choice: 'retry', reason: 'r', instructions: 'x'.repeat(4001) })).toEqual(['instructions is 4001 characters; at most 4000'])

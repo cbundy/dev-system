@@ -20,6 +20,7 @@ import type { Exec, ExecCtx, Executor, RunResult } from '../exec'
 import type { ActionKind, Action, LedgerEntry } from '../types'
 import * as ARGV from './argv'
 import { eventArgv } from './events'
+import { hiddenKey } from './keys'
 import { neutralBody } from './prompts-work'
 import { ALL_FACTORY_LABELS, FACTORY_LABELS, REJECTED_LABEL } from './types'
 import type { FactoryLabel, IssueRecord, RecordRef, Trigger } from './types'
@@ -149,10 +150,8 @@ const label: Executor = async (ctx, action) => {
 
 // --- comment (4.5) -----------------------------------------------------------------------------------------
 
-// hiddenKey: the marker a comment carries, by which a retry finds it.
-export function hiddenKey(key: string): string {
-  return `<!-- factory-loop:${key} -->`
-}
+// hiddenKey (keys.ts, which the plan side reads too): the marker a comment carries, by which a retry finds it.
+export { hiddenKey }
 
 // commentBody: the posted text: the body neutralized (no closing keyword before a reference, D-56)
 // in blocks of lines, so a long one (a design brief) is not cut at neutral()'s 4 000 characters,

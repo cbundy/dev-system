@@ -245,8 +245,8 @@ export function designPrompt(i: DesignInput): string {
     ...answerBlock(
       i.place,
       'When only the owner can decide something the design needs (a product choice, access, a secret, a repo setting)',
-      '{"kind": "question", "question": "<the one decision the owner must make, with the options>", "brief": null}',
-      'question: at most 2000 characters. brief: a draft written so far, or null.',
+      '{"kind": "question", "question": "<the one decision the owner must make, in one short sentence>", "context": "<a few sentences, optional>", "options": [{"key": "A", "title": "<one line>", "detail": "<short, optional>"}, {"key": "B", "title": "<one line>"}], "recommendation": {"key": "A", "reason": "<one line>"}, "brief": null}',
+      'question: the decision alone, one short sentence; do not list the options in it. options (optional): 2 to 6, keys A to F, each with a one-line title: the loop shows each as a checkbox the owner ticks. context and recommendation are optional; a recommendation names one of the options. The question once rendered with them is at most 2000 characters. brief: a draft written so far, or null.',
     ),
     '',
     `When the issue is too large or risky for one change, split it: the loop makes each child an issue under #${i.issue}, links each to what it waits on, and labels ready the children you mark ready. Record the split the same way, with jq --rawfile for each long text when that is easier:`,
