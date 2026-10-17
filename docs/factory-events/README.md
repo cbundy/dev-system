@@ -129,6 +129,8 @@ SQL
   device (`DEV_MACHINE_NAME`, `hostname`, `/etc/hostname`), `--repo` to every repo, and `--since` to the device's earliest new
   event; both sides cut at the second. Exit 0 only when missing, misses and extras are all zero, 1 when any is not, and 2 on a
   usage error, an unconfigured or unreachable store, or no new rows for the device and no `--since`.
+  Events written by the native mode (`callum-flow-event --type`) have no old row and show as extras under their
+  type, so the check proves dual write only on a device where no producer writes natively yet.
 - **Store.** `factory.event_store`: the envelope fields and `device_seq` as columns, `data` as
   JSON, primary key `event_id`, so a re-push never makes a second row. It accepts any type and
   version; the writer and the readers are what check them.
