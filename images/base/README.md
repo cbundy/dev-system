@@ -1792,7 +1792,7 @@ and exits 3; every exit 3 logs a `claim_lost` event), then removes `ready`, assi
 It adds no label: the claim is the comment and its events (`In development` is gone,
 [v2 SPEC 3.6](../../docs/factory-loop/v2/SPEC.md#36-the-claim-tools-without-in-development)). `--heartbeat
 [issue...]` renews this device's claim comments in place and logs one `renewed` event (same note) per comment it actually extended;
-with no numbers it renews the open issues `callum-flow-factory-state --github off` lists live with this device as the holder, or, when that tool fails, those this device's own event log shows it claimed and has not released (as the sweep falls back to that log). The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses these events.
+with no numbers it renews the open issues this device holds. "Holds" is one rule shared with the sweep and with `callum-flow-claim <issue>`'s check for keeping its own live claim (`claim-events.sh`, installed beside `trusted-authors.sh`): the issue's last claim event (`claimed`, `ready`, `reclaimed`, `merged`, `closed`, `abandoned`; no other state counts) is a `claimed` by this device, taken from this device's event log plus, when `dev-query` is configured, the newest claim event per issue in `factory.events`. An end another device logged stops the renewal, and a claim whose push has not arrived yet is still renewed. A failed central read warns once and falls back to this device's log; the heartbeat fails only when that log cannot be located. It never reads `callum-flow-factory-state`. The factory-state [claim-lapse rule](../../docs/factory-state.md#stages) uses the `renewed` events.
 `callum-flow-sweep` releases lapsed claims and records issues closed outside the factory. Its
 candidates are every issue in the event log (this device's file, plus the latest lifecycle and claim events per issue in the
 central `factory.events` when `dev-query` is configured; a failed central read warns and falls back)
@@ -1800,10 +1800,12 @@ whose latest lifecycle event (not `untrusted_stripped`, `usage`, `watcher_error`
 factory-state read adds no candidates, issues already logged as `closed` are excluded, and a
 listed `abandoned` issue has a new life and remains a candidate. A candidate GitHub reports closed gets a `closed`
 event, with GitHub's close reason (`completed`, `not_planned`, `duplicate`) as the note. An open one is left alone when its claim
-already ended (its last claim event, of `claimed`, `ready`, `reclaimed`, `merged`, `closed` and `abandoned`, is one that ends it;
-no other event revives an ended claim), when it has no claim comment, when its newest claim is live,
-or when a PR merged after the claim on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`); otherwise its
-expired lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
+already ended (the shared rule above, over both logs: its last claim event is one that ends it, whichever device logged it, even
+when this device's own log still shows `claimed`; no other event revives an ended claim), or when it has no claim comment.
+A PR merged after the newest claim comment on its own branch (`issue-<N>` or `issue-<N>-...`, after any `<prefix>/`) is a merge
+made outside the factory: the sweep logs `merged --pr <P> [--head <sha>] --actor sweep` whoever holds the claim and however live it is
+(checked before the lease), and the issue then reads as released. Otherwise, when its newest claim is live it is left alone, and when it
+expired its lease goes back to `ready` (the claimant unassigned) with a comment and a `reclaimed` event. The sweep never touches
 any other label: the factory loop is the only writer of its `factory:*` labels. It has no
 time limit, so the first run after an upgrade is the backfill, and a second run writes nothing. A
 latest event of `superseded` is never final and never releases a claim or ends an issue. Issues from untrusted authors are skipped; a failed

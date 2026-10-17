@@ -27,21 +27,27 @@
 #      backfill. Two devices sweeping before either has pushed can both log
 #      `closed`; consumers count identical consecutive rows once.
 #   2. Open, its claim already ended (the last of its claim events - claimed,
-#      ready, reclaimed, merged, closed, abandoned - is one that ends it; no
-#      other event, such as a watcher's head_mismatch after a drop, revives an
-#      ended claim, as in callum-flow-claim's held_in_log): left alone.
+#      ready, reclaimed, merged, closed, abandoned - is one that ends it, whichever
+#      device logged it; no other event, such as a watcher's head_mismatch after a
+#      drop, revives an ended claim; the rule is shared with callum-flow-claim in
+#      claim-events.sh): left alone, even when this device's own log still shows
+#      `claimed`.
 #   3. Open with no claim comment (legacy or hand claims): left alone, one
 #      stderr note. Never flipped to `ready`.
-#   4. Open, newest claim comment live (server updated_at + the comment's own
-#      `lease:`): left alone.
-#   5. Open, with a PR merged after the newest claim comment was created (a
+#   4. Open, with a PR merged after the newest claim comment was created (a
 #      merged PR that closes or just references the issue shows up as a
 #      `cross-referenced` timeline event) whose head branch is this issue's
 #      (`issue-<N>`, or `issue-<N>-...`, after any `<prefix>/`; matching is by
 #      branch name, so release or other PRs that merely mention the issue do
-#      not count): left alone (`merged` is logged elsewhere).
+#      not count): log `callum-flow-event merged --pr <P> [--head <sha>] --actor
+#      sweep` and leave it alone. This runs before the lease check, so a claim
+#      kept live by renewals still ends; whoever holds the claim. Afterwards the
+#      issue reads as released, so a second run writes nothing.
+#   5. Open, newest claim comment live (server updated_at + the comment's own
+#      `lease:`): left alone.
 #   6. Open, newest claim expired: add `ready`, unassign the claimant, comment
-#      why, and log `callum-flow-event reclaimed`.
+#      why, and log `callum-flow-event reclaimed`. Across devices a lapsed claim
+#      is reclaimed once: the first reclaim ends the claim for every other device.
 # The sweep never adds or removes any other label: the factory loop is the only
 # writer of the `factory:*` labels, and a loop record whose claim lapsed is
 # claimed again onto itself. A second run right after the first writes nothing:
@@ -59,7 +65,8 @@
 # Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL; for tests
 # CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN
 # (callum-flow-issue-read), CALLUM_FLOW_DEV_QUERY_BIN,
-# CALLUM_FLOW_FACTORY_STATE_BIN (callum-flow-factory-state).
+# CALLUM_FLOW_FACTORY_STATE_BIN (callum-flow-factory-state), CALLUM_FLOW_SHARE_DIR
+# (where claim-events.sh is installed, default /usr/local/share/dev-system).
 set -u
 
 GH=${CALLUM_FLOW_GH_BIN:-gh}
@@ -68,11 +75,7 @@ READ=${CALLUM_FLOW_ISSUE_READ_BIN:-callum-flow-issue-read}
 DEVQ=${CALLUM_FLOW_DEV_QUERY_BIN:-dev-query}
 FSTATE=${CALLUM_FLOW_FACTORY_STATE_BIN:-callum-flow-factory-state}
 READY=${CALLUM_FLOW_READY_LABEL:-ready}
-# the states that are no lifecycle event of an issue: housekeeping, the factory
-# loop's bookkeeping, and its review results and interventions
-NOISE="'untrusted_stripped', 'usage', 'watcher_error', 'test_weakened', 'claim_lost', 'renewed', 'loop', 'reviewed', 'intervention', 'prompt_denied', 'prompt_waiting'"
-# the claim's own events: the last of them says whether a claim holds
-CLAIMEV="'claimed', 'ready', 'reclaimed', 'merged', 'closed', 'abandoned'"
+SHARE=${CALLUM_FLOW_SHARE_DIR:-/usr/local/share/dev-system}
 
 err() { echo "callum-flow-sweep: $*" >&2; }
 if [ $# -ne 0 ]; then
@@ -81,6 +84,9 @@ if [ $# -ne 0 ]; then
   exit 2
 fi
 command -v jq >/dev/null 2>&1 || { err "jq not found"; exit 1; }
+# shellcheck source=claim-events.sh
+. "$SHARE/claim-events.sh" 2>/dev/null || { err "cannot read $SHARE/claim-events.sh"; exit 1; }
+CE_TOOL=callum-flow-sweep
 
 repo=${CALLUM_FLOW_REPO-}
 [ -n "$repo" ] || repo=$("$GH" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || repo=
@@ -95,36 +101,12 @@ now=''
 tmp=$(mktemp -d 2>/dev/null) || { err "cannot create a temporary directory"; exit 1; }
 trap 'rm -rf "$tmp"' EXIT
 
-# latest_open_issues: the issues whose latest event is not final, from this
-# device's log and (best effort) the central factory.events (per issue its
-# latest event and its latest claim event).
-: > "$tmp/central"
-if command -v "$DEVQ" >/dev/null 2>&1; then
-  crc=0
-  "$DEVQ" -At -v "repo=$repo" -c "SELECT DISTINCT ON (issue, state IN ($CLAIMEV)) to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') || '|' || issue || '|' || state
-    FROM factory.events WHERE repo = :'repo' AND issue IS NOT NULL
-      AND state NOT IN ($NOISE) ORDER BY issue, state IN ($CLAIMEV), ts DESC, seq DESC" \
-    > "$tmp/central.raw" 2> "$tmp/central.err" < /dev/null || crc=$?
-  if [ "$crc" -eq 0 ]; then
-    jq -R -c 'split("|") | select(length == 3) | {ts: .[0], issue: (.[1] | tonumber), state: .[2]}' "$tmp/central.raw" > "$tmp/central" 2>/dev/null || : > "$tmp/central"
-  elif [ "$crc" -ne 78 ]; then
-    err "warning: cannot read the central event log (dev-query exit $crc), using this device's log only"
-  fi
-fi
-: > "$tmp/local"
-logfile=$("$EVENT" --path --repo "$repo" 2>/dev/null) || logfile=
-if [ -n "$logfile" ] && [ -f "$logfile" ]; then
-  jq -R -c 'fromjson? | select(type == "object" and (.issue | type) == "number"
-    and (.state | IN("untrusted_stripped", "usage", "watcher_error", "test_weakened", "claim_lost", "renewed", "loop", "reviewed", "intervention", "prompt_denied", "prompt_waiting") | not)) | {ts: .ts, issue: .issue, state: .state}' "$logfile" > "$tmp/local" 2>/dev/null || : > "$tmp/local"
-fi
-# Latest lifecycle event per issue: housekeeping events (untrusted_stripped, usage,
-# watcher_error, test_weakened, claim_lost, renewed, the factory loop's loop, reviewed,
-# intervention, prompt_denied and prompt_waiting) never decide whether an issue is final, or a recurring one would hide a closed
-# issue for good. By ts; jq sorts stably, so equal timestamps keep file order
-# (central first, then this device's log). A third column is the latest claim
-# event, or none.
-cat "$tmp/central" "$tmp/local" | jq -s -r 'sort_by(.ts) | group_by(.issue) | .[]
-  | "\(last | .issue) \(last | .state) \(map(select(.state | IN("claimed", "ready", "reclaimed", "merged", "closed", "abandoned"))) | last | .state // "none")"' > "$tmp/latest" 2>/dev/null || : > "$tmp/latest"
+# The issues' latest events, from this device's log and (best effort) the central
+# factory.events, through the shared rule (claim-events.sh): per issue its latest
+# lifecycle event and its latest claim event. Housekeeping events (the noise list there)
+# never decide whether an issue is final, or a recurring one would hide a closed issue for
+# good. A log whose path cannot be located adds nothing.
+ce_load "$tmp" "$(ce_device)" || :
 # is_final N: the issue's latest event is closed or abandoned
 is_final() { awk -v n="$1" '$1 == n && ($2 == "closed" || $2 == "abandoned") { f = 1 } END { exit !f }' "$tmp/latest"; }
 # released N: the issue's latest claim event ended its claim: back in the queue
@@ -190,11 +172,9 @@ for n in $cands; do
     err "note: #$n is live in the event log with no claim comment (legacy or hand claim) - left alone"
     continue
   fi
-  if printf '%s' "$claim" | jq -e --argjson now "$now" '.exp > $now' >/dev/null; then
-    continue
-  fi
   created=$(printf '%s' "$claim" | jq -r .created)
 
+  # A merge made outside the factory ends the claim, kept live by renewals or not.
   if ! tj=$("$READ" --json --timeline "$n") ||
     ! tl=$(printf '%s' "$tj" | jq -ce 'if (.events | type) == "array" then .events else error("shape") end'); then
     err "cannot read the timeline of #$n"
@@ -203,6 +183,7 @@ for n in $cands; do
   fi
   merged=0
   failed=0
+  mhead=
   for pr in $(printf '%s' "$tl" | jq -r --arg c "$created" '
       .[] | select(.event == "cross-referenced" and (.source.issue.pull_request.merged_at // "") > $c)
       | .source.issue.number'); do
@@ -216,7 +197,9 @@ for n in $cands; do
       break
     fi
     if printf '%s\n' "$ref" | grep -Eq "(^|/)issue-$n(-|\$)"; then
-      merged=1
+      merged=$pr
+      mhead=$(printf '%s' "$pj" | jq -r '.pr.head.sha // empty')
+      printf '%s\n' "$mhead" | grep -Eq '^[0-9a-f]{7,40}$' || mhead=
       break
     fi
   done
@@ -224,7 +207,18 @@ for n in $cands; do
     rc=1
     continue
   fi
-  [ "$merged" = 0 ] || continue
+  if [ "$merged" != 0 ]; then
+    if [ -n "$mhead" ]; then
+      "$EVENT" merged --issue "$n" --pr "$merged" --head "$mhead" --actor sweep >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
+    else
+      "$EVENT" merged --issue "$n" --pr "$merged" --actor sweep >/dev/null 2>&1 || err "warning: could not log the merged event for #$n"
+    fi
+    continue
+  fi
+
+  if printf '%s' "$claim" | jq -e --argjson now "$now" '.exp > $now' >/dev/null; then
+    continue
+  fi
 
   user=$(printf '%s' "$claim" | jq -r .user)
   set -- --add-label "$READY"
