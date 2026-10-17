@@ -13,6 +13,9 @@
 //   record holds the one rules-agent.ts leaseOf names. Keyed by the lease (keys.ts freeKey), so one
 //   lease is freed once; from the free's start the lease counts as gone (rules-agent.ts freeing),
 //   so a record resumed meanwhile never steps onto a slot being reset and returned.
+//   A free of a life with a parked record keeps the life's scratch folders (keepScratch, the
+//   tool's --keep-scratch): a resume continues the life; a later free removes them, and the tool
+//   prunes any older than 7 days.
 // - W1, lease: first each record in a slot state whose lease vanished (it already counts in
 //   flight; its running step ends unknown with the cause `slot` at once, rules-agent.ts agentStep,
 //   and the lease waits until the stopped step no longer runs), then each queued record with no
@@ -110,6 +113,12 @@ function holds(ctx: V2Ctx, l: Lease): boolean {
   return ctx.v2.records.some(r => r.issue === l.issue && r.life === l.life && (r.state === 'queued' || SLOT_STATES.includes(r.state)))
 }
 
+// parked: a record of the lease's life is parked, so a resume continues the life and its scratch
+// folders stay (free --keep-scratch); a later free of the life, after the resume, removes them.
+function parked(ctx: V2Ctx, l: Lease): boolean {
+  return ctx.v2.records.some(r => r.issue === l.issue && r.life === l.life && r.state === 'parked')
+}
+
 function frees(ctx: V2Ctx): void {
   for (const l of [...ctx.v2.leases].sort((a, b) => a.path.localeCompare(b.path))) {
     if (l.issue === null || l.life === null) continue
@@ -136,6 +145,7 @@ function frees(ctx: V2Ctx): void {
       lease: l.lease,
       branch: null,
       marker: null,
+      keepScratch: parked(ctx, l),
       maxAttempts: FREE_ATTEMPTS,
     })
   }
@@ -206,6 +216,7 @@ function leases(ctx: V2Ctx): void {
       lease: null,
       branch: null,
       marker: null,
+      keepScratch: false,
       maxAttempts: LEASE_ATTEMPTS,
     })
     // planned, or waiting out its backoff: either way it takes its place and its slot

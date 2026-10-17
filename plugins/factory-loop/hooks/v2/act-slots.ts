@@ -8,14 +8,15 @@
 //
 // - lease: `LEASED path=<p> lease=<id>`; the tool keeps a lease the holder already has, so a
 //   retry after a lost answer takes no second slot.
-// - prepare: the step marker gets the loop dir (plan leaves it empty, rules-agent.ts markerOf);
+// - prepare: the step marker gets the loop dir and the scratch folder's path (plan leaves both empty,
+//   rules-agent.ts markerOf; the tool makes the folder);
 //   `PREPARED head=<sha>`, and `LEFTOVERS file=<f>` when the slot held uncommitted work.
 // - Every op that ends the slot's processes (prepare, the old step's processes, free) prints
 //   `KILLED <n>`; the outcome keeps n, and the summary names it when any were ended.
 // - the old step's processes (entry action, 4.5): `KILLED <n>`; with no slot known there is nothing
 //   to end.
 // - free: `FREED path=<p>` once the pool shows the slot back, and `LEFTOVERS file=<f>` when the slot
-//   held work a reset would lose; or `GONE path=<p>` when the lease is no longer on it; either is
+//   held work a reset would lose (it removes the life's scratch folders unless the action keeps them); or `GONE path=<p>` when the lease is no longer on it; either is
 //   done.
 //
 // The tool's exit 2 (usage) and 3 (it refused: not the loop's lease, a path outside the pool, a
@@ -24,6 +25,7 @@ import { commandFailure, NO_EXIT } from '../act-cli'
 import type { Exec, ExecCtx, Executor } from '../exec'
 import type { Action, ActionKind } from '../types'
 import * as ARGV from './argv'
+import { scratchOf } from './keys'
 import type { SlotOp, V2Outcome } from './types'
 
 // The tool under the plugin's root.
@@ -58,10 +60,10 @@ export function slotArgv(a: SlotAction, rt: Pick<ExecCtx['rt'], 'pluginRoot' | '
     argv = ARGV.slotLeaseArgv(a.issue, a.life)
   } else if (a.op === 'prepare') {
     if (a.path === null || a.lease === null || a.branch === null || a.marker === null) return 'a prepare needs its slot, lease, branch and marker'
-    argv = ARGV.slotPrepareArgv(a.path, a.lease, a.branch, JSON.stringify({ ...a.marker, loopDir: rt.loopDir }))
+    argv = ARGV.slotPrepareArgv(a.path, a.lease, a.branch, JSON.stringify({ ...a.marker, loopDir: rt.loopDir, scratch: scratchOf(rt.loopDir, a.marker.issue, a.marker.life, a.marker.seq) }))
   } else if (a.op === 'free') {
     if (a.path === null || a.lease === null) return 'a free needs its slot and lease'
-    argv = ARGV.slotFreeArgv(a.path, a.lease, rt.loopDir)
+    argv = ARGV.slotFreeArgv(a.path, a.lease, rt.loopDir, a.keepScratch)
   } else {
     if (a.path === null) return 'no slot'
     argv = ARGV.slotKillArgv(a.path)

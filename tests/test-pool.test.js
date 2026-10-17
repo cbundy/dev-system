@@ -109,6 +109,44 @@ test("TEST_JOBS bounds how many jobs are live at once", () => {
   }
 });
 
+// Runs 8 lingering jobs with TEST_JOBS unset and fake node/getconf first on PATH; returns the peak.
+function peakWithFakes(fakes) {
+  const f = fixture();
+  try {
+    const bin = path.join(f.dir, "bin");
+    fs.mkdirSync(bin);
+    for (const [name, body] of Object.entries(fakes)) {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    }
+    const live = path.join(f.dir, "live");
+    const peak = path.join(f.dir, "peak");
+    fs.mkdirSync(live);
+    const jobs = Array.from(
+      { length: 8 },
+      (_, i) => `mkdir ${live}/${i}; ls ${live} | wc -l >> ${peak}; sleep 0.3; rmdir ${live}/${i}`,
+    );
+    fs.writeFileSync(path.join(f.dir, "jobs"), jobs.join("\n") + "\n");
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    delete env.TEST_JOBS;
+    const r = spawnSync("sh", [POOL, f.results, path.join(f.dir, "jobs")], { encoding: "utf8", env });
+    assert.strictEqual(r.status, 0, r.stderr);
+    return Math.max(...fs.readFileSync(peak, "utf8").trim().split("\n").map(Number));
+  } finally {
+    f.cleanup();
+  }
+}
+
+test("default pool size comes from node availableParallelism", () => {
+  assert.strictEqual(peakWithFakes({ node: "echo 2", getconf: "echo 5" }), 2);
+});
+
+test("default pool size falls back to getconf when node is missing or prints nonsense", () => {
+  assert.strictEqual(peakWithFakes({ node: "exit 127", getconf: "echo 3" }), 3);
+  assert.strictEqual(peakWithFakes({ node: "echo 0", getconf: "echo 3" }), 3);
+  assert.strictEqual(peakWithFakes({ node: "echo many", getconf: "echo 3" }), 3);
+  assert.strictEqual(peakWithFakes({ node: "exit 1", getconf: "exit 0", nproc: "echo 3" }), 3);
+});
+
 test("TEST_JOBS that is not a positive integer fails fast", () => {
   for (const bad of ["0", "abc", "", "-1", "2.5"]) {
     const x = run(["true"], { env: { TEST_JOBS: bad } });

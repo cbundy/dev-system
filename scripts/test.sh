@@ -7,7 +7,7 @@
 # test file needs no wiring here.
 #
 # Every node step, shell suite and mod is an independent job, run in a pool of at most
-# $TEST_JOBS at once (default: the CPU count; scripts/test-pool.sh, scripts/test-job.sh).
+# $TEST_JOBS at once (default: the container-aware CPU count; scripts/test-pool.sh, scripts/test-job.sh).
 #
 # Quiet on success: one summary line. On failure, once every job has finished, it prints only
 # the failing node tests (name, file:line, assertion - see scripts/test-reporter.js) and the

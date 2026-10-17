@@ -5,7 +5,8 @@
 #        test-pool.sh --check-jobs (validate TEST_JOBS without starting jobs)
 #
 # Each line of <jobs-file> is a shell command: one job. At most $TEST_JOBS run at once
-# (default: the CPU count). Jobs in <serial-file> run one at a time, alone, after the pool has
+# (default: the container-aware CPU count from
+# Node's os.availableParallelism(), else getconf, nproc, sysctl, else 1). Jobs in <serial-file> run one at a time, alone, after the pool has
 # drained. Every job's combined stdout and stderr is buffered in <results-dir>/<n>.out and its
 # exit status in <n>.status (n = line number, serial jobs numbered after the pool's). A job
 # fails when it exits non-zero; it counts 1 unless it wrote its own failure count to the file
@@ -21,8 +22,22 @@
 # so a parent that backgrounds it (scripts/test.sh) forwards Ctrl-C as SIGTERM.
 set -u
 
+# Node's os.availableParallelism() honours the cgroup CPU quota; getconf and nproc do not, so
+# they only back it up. Each step counts only if it prints a positive decimal integer.
 cpu_count() {
-  getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1
+  for cmd in \
+    "node -e 'console.log(require(\"os\").availableParallelism())'" \
+    'getconf _NPROCESSORS_ONLN' 'nproc' 'sysctl -n hw.ncpu'; do
+    n=$(eval "$cmd" 2>/dev/null) || continue
+    case $n in
+      '' | *[!0-9]* | 0*) ;;
+      *)
+        echo "$n"
+        return
+        ;;
+    esac
+  done
+  echo 1
 }
 
 if [ "${TEST_JOBS+set}" = set ]; then

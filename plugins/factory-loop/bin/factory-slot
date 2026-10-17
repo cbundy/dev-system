@@ -21,12 +21,20 @@
 //   factory-slot kill <path>
 //     SIGTERM to every process whose working directory is the slot or inside it (but this tool and
 //     its ancestors), SIGKILL to survivors after 5 seconds (10.8). Prints `KILLED <n>`.
-//   factory-slot free <path> <lease> <loop dir>
+//   factory-slot free <path> <lease> <loop dir> [--keep-scratch]
 //     W2 (10.1): ends its processes, saves its leftovers (<N>-<life>-free-<ms>.patch), resets and
 //     cleans it, detaches it at the branch's start, then `treehouse return <path> --if-lease-id
 //     <lease> --force`, and checks the pool shows it back. Prints `FREED path=<p>`, `KILLED <n>` as
 //     kill does, and `LEFTOVERS file=<f>` when it saved any; or `GONE path=<p>` when the lease is no longer on the
-//     slot (it was returned already, or the slot went): nothing is touched then.
+//     slot (it was returned already, or the slot went): nothing is touched then. It also removes
+//     every <loop dir>/scratch/<N>-<life>-* folder of the lease's holder, unless it got
+//     `--keep-scratch` (W2 passes it for a parked issue's life, which a resume continues).
+//
+// Scratch: prepare makes the step attempt's scratch folder, <loop dir>/scratch/<N>-<life>-s<seq>
+// (mode 0700, outside every repository), and the marker's `scratch` names it; the companion exports
+// it as TMPDIR, TMP and TEMP into the agent's Bash calls. prepare refuses (exit 3) a marker whose
+// `scratch` is not exactly that path. Scratch folders older than 7 days are pruned whenever one is
+// made or a slot is freed, which bounds the ones kept for a parked issue never resumed (D-46).
 //
 // Leftovers: what a reset would lose, as one binary patch that applies onto the commit the next
 // step starts from (origin's branch, else origin's default branch): the tracked changes and the
@@ -58,13 +66,14 @@ const ME = 'factory-slot'
 const USAGE = `usage: ${ME} [--budget-ms <n>] lease <N> <life>
        ${ME} [--budget-ms <n>] prepare <path> <lease> <branch> <marker json>
        ${ME} [--budget-ms <n>] kill <path>
-       ${ME} [--budget-ms <n>] free <path> <lease> <loop dir>`
+       ${ME} [--budget-ms <n>] free <path> <lease> <loop dir> [--keep-scratch]`
 
 const HOLDER_PREFIX = 'factory-loop:'
 const HOLDER = /^factory-loop:([1-9]\d*):([0-9a-z]+)$/
 const MARKER = 'factory-step.json'
 const DAY = 86_400_000
 const LEFTOVERS_KEEP_MS = 7 * DAY
+const SCRATCH_KEEP_MS = 7 * DAY
 const KILL_GRACE_MS = 5_000
 const CMD_TIMEOUT_MS = 240_000
 const HOOKS_OFF = ['-c', 'core.hooksPath=/dev/null']
@@ -280,6 +289,46 @@ function pruneLeftovers(dir) {
   }
 }
 
+// --- scratch folders ---------------------------------------------------------------------------------
+
+// scratchOf: the step attempt's scratch folder, the one name hooks/v2/keys.ts scratchOf builds too.
+const scratchOf = (loopDir, issue, life, seq) => path.join(loopDir, 'scratch', `${issue}-${life}-s${seq}`)
+
+// pruneScratch: scratch folders older than 7 days go, as leftovers do (D-46); this bounds the ones
+// kept for a parked issue that is never resumed.
+function pruneScratch(loopDir) {
+  const dir = path.join(loopDir, 'scratch')
+  const cut = Date.now() - SCRATCH_KEEP_MS
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const file = path.join(dir, name)
+    try {
+      if (fs.statSync(file).mtimeMs < cut) fs.rmSync(file, { recursive: true, force: true })
+    } catch {
+      // gone already
+    }
+  }
+}
+
+// removeScratch: every scratch folder of one issue's life.
+function removeScratch(loopDir, issue, life) {
+  const dir = path.join(loopDir, 'scratch')
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (name.startsWith(`${issue}-${life}-`)) fs.rmSync(path.join(dir, name), { recursive: true, force: true })
+  }
+}
+
 function cleanTree(io, dir) {
   const r = git(io, dir, ['--no-optional-locks', 'status', '--porcelain=v1', '--untracked-files=all'])
   return r.code === 0 && r.stdout.trim() === ''
@@ -345,6 +394,7 @@ function markerOf(text, branch) {
     typeof m.loopDir === 'string' &&
     path.isAbsolute(m.loopDir)
   if (!ok) throw usage('the marker does not read: it needs v 1, repo, issue, life, seq, step, role, the branch, gateCommands, gateTimeoutMs and an absolute loopDir')
+  if (m.scratch !== scratchOf(m.loopDir, m.issue, m.life, m.seq)) throw refuse(`the marker's scratch ${JSON.stringify(m.scratch)} is not ${scratchOf(m.loopDir, m.issue, m.life, m.seq)}`)
   return m
 }
 
@@ -370,6 +420,9 @@ async function prepare(io, args, cwd, graceMs) {
   }
   const head = must(git(io, dir, ['rev-parse', 'HEAD']), 'git rev-parse HEAD').stdout.trim()
   const gitDir = must(git(io, dir, ['rev-parse', '--absolute-git-dir']), 'git rev-parse --absolute-git-dir').stdout.trim()
+  fs.mkdirSync(marker.scratch, { recursive: true, mode: 0o700 })
+  fs.chmodSync(marker.scratch, 0o700)
+  pruneScratch(marker.loopDir)
   const tmp = path.join(gitDir, `${MARKER}.${process.pid}.tmp`)
   fs.writeFileSync(tmp, `${JSON.stringify(marker, null, 2)}\n`)
   fs.renameSync(tmp, path.join(gitDir, MARKER))
@@ -383,8 +436,9 @@ async function end(io, args, graceMs) {
 }
 
 async function free(io, args, cwd, graceMs) {
+  const keep = args[3] === '--keep-scratch'
   const [p, id, loopDir] = args
-  if (args.length !== 3 || !p || !id || !loopDir || !path.isAbsolute(loopDir)) throw usage('free takes a slot, its lease and the absolute loop dir')
+  if (args.length !== (keep ? 4 : 3) || !p || !id || !loopDir || !path.isAbsolute(loopDir)) throw usage('free takes a slot, its lease, the absolute loop dir and optionally --keep-scratch')
   const w = slotAt(poolOf(io), p)
   if (w === null || leaseOf(w) !== id) return [`GONE path=${p}`]
   const m = HOLDER.exec(holderOf(w))
@@ -399,6 +453,8 @@ async function free(io, args, cwd, graceMs) {
   // the slot goes back detached at the start, so its next holder does not inherit the branch and its
   // unpushed commits (they are saved, and the branch keeps them); best effort, the tree is clean
   if (start !== null) git(io, w.path, ['switch', '-q', '--detach', start])
+  if (!keep) removeScratch(loopDir, m[1], m[2])
+  pruneScratch(loopDir)
   const r = io.run('treehouse', ['return', w.path, '--if-lease-id', id, '--force'], { cwd })
   const after = slotAt(poolOf(io), w.path)
   if (after === null || leaseOf(after) !== id) return [`FREED path=${w.path}`, killed, ...(file === null ? [] : [`LEFTOVERS file=${file}`])]

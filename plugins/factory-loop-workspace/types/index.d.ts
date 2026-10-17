@@ -22,6 +22,9 @@ export type WorkspaceAgent = {
   gateCommands: string[]
   gateTimeoutMs: number
   loopDir: string
+  // from the step marker: the step attempt's scratch folder, exported as TMPDIR into the agent's
+  // Bash calls; absent for an older marker
+  scratch?: string
   // from the step marker; an older marker has none
   pr?: number | null
   // the spawn's subagentType, per agent (a child has its own)
