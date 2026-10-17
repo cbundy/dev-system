@@ -306,6 +306,8 @@ export type Config = {
   passEveryMs: Ms
   // the title is renamed at most this often (O1 is a throttle)
   titleEveryMs: Ms
+  // the factory report is built at most this often (#684)
+  reportEveryMs: Ms
   queueEveryMs: Ms
   githubEveryMs: Ms
   usageEveryMs: Ms

@@ -20,6 +20,7 @@ export const DEFAULT_CONFIG: Config = {
   usageStopAllPct: 95,
   passEveryMs: 60_000,
   titleEveryMs: 5 * MIN,
+  reportEveryMs: 10 * MIN,
   queueEveryMs: 2 * MIN,
   githubEveryMs: 5 * MIN,
   usageEveryMs: 5 * MIN,
