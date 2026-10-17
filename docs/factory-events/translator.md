@@ -6,9 +6,11 @@ Temporary: this mapping and its code are deleted with the old event path
 One function turns one line of today's event log into at most one new event. It runs in two
 places: inside `callum-flow-event` during dual write, on the line the writer has just built
 ([#649](https://github.com/cbundy/dev-system/issues/649)), and over the stored history for the
-replay ([#650](https://github.com/cbundy/dev-system/issues/650)). It is built in
-[#648](https://github.com/cbundy/dev-system/issues/648). Inputs are today's line keys
-(`images/base/callum-flow-event:226-230`); outputs follow [`schemas/`](schemas/) and go to the
+replay ([#650](https://github.com/cbundy/dev-system/issues/650)). It is
+[`images/base/factory-event-translate.js`](../../images/base/factory-event-translate.js)
+(built in [#648](https://github.com/cbundy/dev-system/issues/648)): plain CommonJS with no
+dependencies, so the image carries it and the replay script requires the same file. Inputs are
+today's line keys (the jq object in `images/base/callum-flow-event`, about lines 229-236); outputs follow [`schemas/`](schemas/) and go to the
 new log ([README](README.md#where-events-live)).
 
 Rules:
@@ -100,10 +102,13 @@ text. Otherwise it is `[]`. `stage` and `lives` are null outside reconcile and r
 | `implementer_routed` | same | `model`, `reason`, `bucket` (`-` becomes null), and `pct` becomes `opus_pct`. |
 | `test_weakened` | same | `branch`, `pr` and `head` from the columns. `commit`, `restored` (yes/no), `kinds` and `files` (comma lists). `step` is dropped: it names a no-mistakes step and is always `none` under v2. |
 | `untrusted_stripped` | same | `pr` from the column. `list stripped=N` gives `source` list and `count` N; `timeline=N` and `comments=N` likewise, with `refused` false. A bare `issue`, `pr` or `comment` gives that `source`, `refused` true and `count` null. |
-| `loop` | `loop_entry` | `kind`, `key`, `status`, `attempts`, `class`, `rule` and `wake` keep their names; `started` becomes `started_at` and `ended` becomes `ended_at` (milliseconds to ISO); `agentId` becomes `agent_id`. The `agent=` token and the `run`, `pr` and `head` columns (which v2 never sets) are dropped. |
+| `loop` (not `kind=passes`) | `loop_entry` | `kind`, `key`, `status`, `attempts`, `class`, `rule` and `wake` keep their names; `started` becomes `started_at` and `ended` becomes `ended_at` (milliseconds to ISO); `agentId` becomes `agent_id`. The `agent=` token, the v1 outcome tokens `out` and `decision` (which `kind=task` lines carry today) and the `run`, `pr` and `head` columns (which v2 never sets) are dropped. |
+| `loop` with `kind=passes` | `loop_passes` | The loop's per-minute summary of its passes (`passesNote`, `plugins/factory-loop/hooks/passes.ts`). `from` and `to` become `from_at` and `to_at` (verbatim: already ISO with milliseconds); `passes`, `mean_ms`, `p50_ms`, `p90_ms`, `max_ms`, `acting`, `acting_mean_ms`, `idle_mean_ms`, `errors`, `mode`, `planner` and `pass_every_ms` keep their names, and `none` becomes null. `key` and `status` are checked, not carried: the line is a miss unless `status=done` and `key` is `passes:<epoch ms of from>`. Any other or missing token is a miss. It is never a `loop_entry`. |
 | `usage` | same | `five_hour` becomes `five_hour_pct`, `resets_at` becomes `five_hour_resets_at`, `seven_day` becomes `seven_day_pct`; `seven_day_resets_at` and `source` keep their names. `resets_in` and `seven_day_resets_in` are dropped, since each is the reset time minus `ts`. `usage=unavailable reason=a,b` gives `available` false, `reasons` [a, b] and null readings. |
 
-Renamed where the old name misled: `renewed` to `claim_renewed`; `loop` to `loop_entry`;
+New with no old name: `loop_passes`, from the `loop` lines with `kind=passes` (one new type, so the
+summary is not a `loop_entry`, which is a ledger entry). Renamed where the old name misled:
+`renewed` to `claim_renewed`; `loop` to `loop_entry`;
 `reclaimed` to `requeued` (under v2, "reclaim" means the loop taking a lapsed claim back);
 `verdict` to `finding_handled` (the review's verdict is `reviewed.verdict`).
 
@@ -119,4 +124,15 @@ Renamed where the old name misled: `renewed` to `claim_renewed`; `loop` to `loop
 | `briefed`, `design_routed`, `run_started`, `parked`, `failed`, `head_mismatch`, `conflict`, `ci_stalled`, `rebased_behind`, `superseded`, `watcher_error` | Dead or v1-only, last written by 2026-10-15. |
 
 Not carried over, since only v1 code reads them or they can be derived: `run_id`, the v1 `loop`
-outcome tokens, `resets_in`, and `test_weakened.step`.
+outcome tokens (`out`, `decision`), `resets_in`, and `test_weakened.step`.
+
+## The module
+
+`translate(line, opts)` returns exactly one of `{ event }`, `{ skip: "<name>" }` or
+`{ miss: "<state>: <reason>" }`, never a partial event. It is pure: no clock, environment, file or
+network reads. With no `opts` it is the replay; with `{ ts, sessionId }` it is dual write.
+`node factory-event-translate.js [--ts T --session-id S]` reads old lines as JSONL on stdin and writes
+new events as JSONL on stdout; it prints one stderr line per miss and a count per state, and exits 1
+on any miss. The tests (`tests/factory-event-translate.test.js`, corpus in
+`tests/fixtures/factory-events/`) prove it against the schemas and against the plugin's own token
+parse.

@@ -441,6 +441,108 @@
     "type": "object",
     "x-issue": "optional"
   },
+  "loop_passes.v1": {
+    "additionalProperties": false,
+    "properties": {
+      "acting": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "acting_mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "errors": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "from_at": {
+        "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+        "type": "string"
+      },
+      "idle_mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "max_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "mean_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "mode": {
+        "enum": [
+          "act",
+          "observe",
+          "off"
+        ]
+      },
+      "p50_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "p90_ms": {
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "pass_every_ms": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "passes": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "planner": {
+        "enum": [
+          "v1",
+          "v2"
+        ]
+      },
+      "to_at": {
+        "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "acting",
+      "acting_mean_ms",
+      "errors",
+      "from_at",
+      "idle_mean_ms",
+      "max_ms",
+      "mean_ms",
+      "mode",
+      "p50_ms",
+      "p90_ms",
+      "pass_every_ms",
+      "passes",
+      "planner",
+      "to_at"
+    ],
+    "type": "object",
+    "x-issue": "none"
+  },
   "merged.v1": {
     "additionalProperties": false,
     "properties": {

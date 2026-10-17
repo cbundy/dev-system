@@ -17,6 +17,7 @@ Generated from [`schemas/`](schemas/); the decisions are in [`README.md`](README
 | [`implementer_routed`](#implementer_routed) | v1 | required | The model for the issue's build step was chosen. |
 | [`intervention`](#intervention) | v1 | optional | Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). |
 | [`loop_entry`](#loop_entry) | v1 | optional | Loop bookkeeping that most consumers can ignore: one piece of the loop's own work (an agent step, a tell to the owner, or a task) changed status. |
+| [`loop_passes`](#loop_passes) | v1 | none | Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. |
 | [`merged`](#merged) | v1 | optional | A pull request for the issue was merged. |
 | [`ready`](#ready) | v1 | required | The issue was seen with the ready label: it is in the factory's queue. |
 | [`requeued`](#requeued) | v1 | required | The issue's claim was given back and the issue is in the queue again (ready label on), for any device to take. |
@@ -371,6 +372,54 @@ Example:
   "ended_at": "2026-10-16T16:00:11.254Z",
   "agent_id": "a20142b8cd21d3b2b",
   "wake": null
+}
+```
+
+## loop_passes
+
+Loop bookkeeping that most consumers can ignore: a summary of one UTC minute of the loop's passes (how many ended, how long they took, how many acted or threw), written once a minute while the loop runs. It shows the loop's pace and settings, never a stage or progress. Written by the loop's pass book.
+
+- Issue field (`x-issue`): none
+- Versions: v1 (current)
+- Counting key: not stated
+
+### loop_passes v1
+
+| Field | Type | Required | Nullable | Bounds or values | Column | Description |
+| --- | --- | --- | --- | --- | --- | --- |
+| `from_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | The start of the UTC minute summed up, inclusive. |
+| `to_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | The end of that minute, exclusive: one minute after from_at. |
+| `passes` | integer | required | no | minimum 0 |  | Passes that ended in the minute. 0 when none did; then every duration below is null. |
+| `acting` | integer | required | no | minimum 0 |  | Of those passes, how many acted (did something rather than finding nothing to do). |
+| `errors` | integer | required | no | minimum 0 |  | Of those passes, how many threw. |
+| `mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the passes, in milliseconds, rounded; null when there was none. |
+| `p50_ms` | integer | required | yes | minimum 0 |  | The median duration (nearest rank), in milliseconds; null when there was no pass. |
+| `p90_ms` | integer | required | yes | minimum 0 |  | The 90th percentile duration (nearest rank), in milliseconds; null when there was no pass. |
+| `max_ms` | integer | required | yes | minimum 0 |  | The longest duration, in milliseconds; null when there was no pass. |
+| `acting_mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the acting passes, in milliseconds, rounded; null when none acted. |
+| `idle_mean_ms` | integer | required | yes | minimum 0 |  | The mean duration of the passes that did not act, in milliseconds, rounded; null when every pass acted or there was none. |
+| `mode` | enum | required | no | one of "off", "observe", "act" |  | The loop's mode: off, observe (plans, does not act) or act. |
+| `planner` | enum | required | no | one of "v1", "v2" |  | Which planner the loop ran. |
+| `pass_every_ms` | integer | required | no | minimum 1 |  | The loop's configured time between passes, in milliseconds. |
+
+Example:
+
+```json
+{
+  "from_at": "2026-10-17T00:46:00.000Z",
+  "to_at": "2026-10-17T00:47:00.000Z",
+  "passes": 5,
+  "acting": 5,
+  "errors": 0,
+  "mean_ms": 9457,
+  "p50_ms": 6384,
+  "p90_ms": 24804,
+  "max_ms": 24804,
+  "acting_mean_ms": 9457,
+  "idle_mean_ms": null,
+  "mode": "act",
+  "planner": "v2",
+  "pass_every_ms": 10000
 }
 ```
 
