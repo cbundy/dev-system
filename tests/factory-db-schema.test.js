@@ -22,8 +22,8 @@ const lifted = new Set();
 for (const f of schemaFiles) {
   for (const [field, def] of Object.entries(load(f).properties)) if (def["x-column"] === true) lifted.add(field);
 }
-const INTS = new Set(["pr", "seq", "round", "attempt"]);
-const TIMES = new Set(["seq_at", "state_since"]);
+const INTS = new Set(["pr", "seq", "round", "attempt", "wait_ms", "run_ms", "concurrency", "queued_behind"]);
+const TIMES = new Set(["seq_at", "state_since", "started_at"]);
 
 const opts = { skip: available() ? false : "no PostgreSQL server (FACTORY_TEST_PG_ADMIN_URL)" };
 
