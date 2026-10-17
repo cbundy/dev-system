@@ -83,3 +83,9 @@ fix the notes until the validator passes and the preview reads well. Do not wait
    new tags, then confirm the run is green.
 5. Report to the owner: the version and image level with the reasons in one line each, the tag,
    the release URL (`gh release view vX.Y.Z --json url`), and the result of each workflow run.
+
+Waiting on a check or a run: the whole fleet (every loop and session) shares one GitHub rate limit,
+and the image publish alone takes about 15 minutes. Always wait with a slow interval:
+`gh pr checks <pr> --watch --interval 60` and `gh run watch <id> --exit-status --interval 60`.
+Never use their defaults (10 s and 3 s): one release with the image publish then costs about a
+thousand requests, enough to starve the loops.
