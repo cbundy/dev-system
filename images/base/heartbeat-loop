@@ -40,6 +40,26 @@
 # push also carries factory_events: {last_write, last_push}, the newest mtimes of
 # $CALLUM_EVENTS_DIR/factory/*.jsonl and factory/.pushed/*.
 #
+# Machine stats (cbundy/dev-system#543): each running beat also sends a second, separate psql call
+# per target, after that target's UPSERT succeeded: an UPDATE of the stats columns of the worker's
+# row (and stats_at = the database's now()) plus one INSERT into factory.worker_samples (30 days
+# are kept per device by a trigger). It is separate because run_psql is one ON_ERROR_STOP
+# transaction: a database not yet migrated (factory-db-bootstrap) would otherwise reject every
+# beat. A stats failure is logged, masked, as "<target> stats write failed" and never changes the
+# exit code or skips the other target. The stopped beat sends none. Sources, each NULL when its
+# file is missing or unreadable (never a guess):
+#   cpu_limit_cores, cpu_quota_set   cgroup cpu.max (quota / period); "max" gives the online CPU
+#                                    count (getconf _NPROCESSORS_ONLN) and false
+#   cpu_pct                          delta(cpu.stat usage_usec) / (delta wall usec * cores) * 100,
+#                                    against the previous reading in $DEV_HEARTBEAT_DIR/dev-heartbeat.cpu
+#                                    (NULL on the first beat and after a counter reset)
+#   mem_used_bytes, mem_limit_bytes  memory.current, memory.max (NULL when "max")
+#   claude_interactive, claude_headless  from heartbeat-state's claude_sessions (the session
+#                                    registry; NULL when it does not say)
+#   claude_procs, procs              processes whose /proc/<pid>/comm is claude, and all of them.
+#                                    Never /proc/<pid>/cmdline or environ.
+# HEARTBEAT_CGROUP_DIR (default /sys/fs/cgroup) and HEARTBEAT_PROC_DIR (default /proc) are test hooks.
+#
 # The DDL (old target only; guarded by catalog checks, so a repeat takes no exclusive lock) is
 # sent with the first beat of each process and again after a failed beat of that target.
 # SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' to every configured target
@@ -74,6 +94,9 @@ LATEST="$HB_DIR/dev-heartbeat-latest.json"
 LATEST_LOCK="$HB_DIR/dev-heartbeat-latest.lock"
 LATEST_TRY="$HB_DIR/dev-heartbeat-latest.attempt"
 LATEST_FAIL="$HB_DIR/dev-heartbeat-latest.failing"
+CPUFILE="$HB_DIR/dev-heartbeat.cpu"
+CGROUP_DIR="${HEARTBEAT_CGROUP_DIR:-/sys/fs/cgroup}"
+PROC_DIR="${HEARTBEAT_PROC_DIR:-/proc}"
 LATEST_EVERY=900
 LATEST_FAIL_AFTER=3600
 EVENT_LOCK="${HEARTBEAT_EVENT_LOCK:-/tmp/dev-event-push.lock}"
@@ -129,7 +152,10 @@ BEGIN
     ('base_image', 'text'), ('dev_image', 'text'), ('template_version', 'text'), ('plugin_version', 'text'),
     ('versions', 'jsonb'), ('state', 'text'), ('in_flight', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
     ('chat_active_at', 'timestamptz'), ('sessions', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'), ('critical_failures', 'jsonb NOT NULL DEFAULT ''[]''::jsonb'),
-    ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz')
+    ('push', 'jsonb'), ('interval_s', 'int'), ('started_at', 'timestamptz'), ('last_seen', 'timestamptz'),
+    ('cpu_pct', 'real'), ('cpu_limit_cores', 'numeric'), ('cpu_quota_set', 'boolean'),
+    ('mem_used_bytes', 'bigint'), ('mem_limit_bytes', 'bigint'), ('claude_interactive', 'int'),
+    ('claude_headless', 'int'), ('claude_procs', 'int'), ('procs', 'int'), ('stats_at', 'timestamptz')
   ) AS v(name, type) LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'factory.workers'::regclass
                    AND attname = c.name AND NOT attisdropped) THEN
@@ -182,6 +208,56 @@ BEGIN
   END IF;
 END
 $notify$;
+DO $samples$
+BEGIN
+  IF to_regclass('factory.worker_samples') IS NULL THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples'));
+    EXECUTE $t$
+      CREATE TABLE IF NOT EXISTS factory.worker_samples (
+        device text NOT NULL,
+        sampled_at timestamptz NOT NULL,
+        state text,
+        cpu_pct real,
+        cpu_limit_cores numeric,
+        cpu_quota_set boolean,
+        mem_used_bytes bigint,
+        mem_limit_bytes bigint,
+        claude_interactive int,
+        claude_headless int,
+        claude_procs int,
+        procs int,
+        PRIMARY KEY (device, sampled_at)
+      )
+    $t$;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'worker_samples_prune'
+                 AND pronamespace = 'factory'::regnamespace) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples prune'));
+    IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'worker_samples_prune'
+                   AND pronamespace = 'factory'::regnamespace) THEN
+      EXECUTE $fn$
+        CREATE FUNCTION factory.worker_samples_prune() RETURNS trigger LANGUAGE plpgsql
+          SECURITY DEFINER SET search_path = factory, pg_temp AS $body$
+        BEGIN
+          DELETE FROM factory.worker_samples
+            WHERE device = NEW.device AND sampled_at < NEW.sampled_at - interval '30 days';
+          RETURN NULL;
+        END
+        $body$
+      $fn$;
+    END IF;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'worker_samples_prune'
+                 AND tgrelid = 'factory.worker_samples'::regclass AND NOT tgisinternal) THEN
+    PERFORM pg_advisory_xact_lock(hashtext('factory.worker_samples prune'));
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'worker_samples_prune'
+                   AND tgrelid = 'factory.worker_samples'::regclass AND NOT tgisinternal) THEN
+      CREATE TRIGGER worker_samples_prune AFTER INSERT ON factory.worker_samples
+        FOR EACH ROW EXECUTE FUNCTION factory.worker_samples_prune();
+    END IF;
+  END IF;
+END
+$samples$;
 SQL
 
 read -r -d '' UPSERT <<'SQL'
@@ -203,7 +279,27 @@ ON CONFLICT (device) DO UPDATE SET
   last_seen = now();
 SQL
 
+# The first line marks the stats call (the tests key their psql stub on it).
+read -r -d '' STATS <<'SQL'
+-- heartbeat stats
+UPDATE factory.workers SET
+  cpu_pct = NULLIF(:'cpu_pct', '')::real, cpu_limit_cores = NULLIF(:'cpu_limit_cores', '')::numeric,
+  cpu_quota_set = NULLIF(:'cpu_quota_set', '')::boolean, mem_used_bytes = NULLIF(:'mem_used_bytes', '')::bigint,
+  mem_limit_bytes = NULLIF(:'mem_limit_bytes', '')::bigint, claude_interactive = NULLIF(:'claude_interactive', '')::int,
+  claude_headless = NULLIF(:'claude_headless', '')::int, claude_procs = NULLIF(:'claude_procs', '')::int,
+  procs = NULLIF(:'procs', '')::int, stats_at = now()
+WHERE device = :'device';
+INSERT INTO factory.worker_samples (device, sampled_at, state, cpu_pct, cpu_limit_cores, cpu_quota_set,
+  mem_used_bytes, mem_limit_bytes, claude_interactive, claude_headless, claude_procs, procs)
+VALUES (:'device', now(), :'state', NULLIF(:'cpu_pct', '')::real, NULLIF(:'cpu_limit_cores', '')::numeric,
+  NULLIF(:'cpu_quota_set', '')::boolean, NULLIF(:'mem_used_bytes', '')::bigint, NULLIF(:'mem_limit_bytes', '')::bigint,
+  NULLIF(:'claude_interactive', '')::int, NULLIF(:'claude_headless', '')::int, NULLIF(:'claude_procs', '')::int,
+  NULLIF(:'procs', '')::int)
+ON CONFLICT (device, sampled_at) DO NOTHING;
+SQL
+
 DDL_SENT=${HEARTBEAT_DDL_SENT:-0}
+STATS_ARGS=()
 
 # mtime FILE...: the newest mtime in epoch seconds, empty when none exists.
 newest_mtime() {
@@ -310,6 +406,75 @@ push_json() {
      factory_events: {last_write: ($fw | t), last_push: ($fp | t)}}'
 }
 
+# num FILE: the first word of FILE when it is a non-negative integer, else nothing.
+num() {
+  local v=''
+  { read -r v _ < "$1"; } 2> /dev/null || return 0
+  case "$v" in '' | *[!0-9]*) ;; *) printf '%s' "$v" ;; esac
+}
+
+# machine_stats SESSIONS_JSON: sets the stats_* variables (empty when unknown) from the cgroup and
+# proc directories. Bash builtins and read only: no ps, no pgrep, and never a command line.
+machine_stats() {
+  local state_json=$1 q p k v d c usage='' prev_usage prev_wall wall_us
+  stats_cpu_pct='' stats_cores='' stats_quota_set='' stats_mem_used='' stats_mem_limit=''
+  stats_procs='' stats_claude_procs=''
+  stats_interactive=$(jq -r '.claude_sessions.interactive // "" | tostring' <<< "$state_json" 2> /dev/null)
+  stats_headless=$(jq -r '.claude_sessions.headless // "" | tostring' <<< "$state_json" 2> /dev/null)
+  case "$stats_interactive" in *[!0-9]*) stats_interactive='' ;; esac
+  case "$stats_headless" in *[!0-9]*) stats_headless='' ;; esac
+
+  if { read -r q p < "$CGROUP_DIR/cpu.max"; } 2> /dev/null; then
+    if [ "$q" = max ]; then
+      stats_quota_set=false
+      stats_cores=$(getconf _NPROCESSORS_ONLN 2> /dev/null)
+      case "$stats_cores" in '' | *[!0-9]* | 0) stats_cores='' ;; esac
+    else
+      case "$q$p" in
+        '' | *[!0-9]*) ;;
+        *) if [ "$q" -gt 0 ] && [ "$p" -gt 0 ]; then
+             stats_quota_set=true
+             stats_cores=$(jq -nr --argjson q "$q" --argjson p "$p" '$q / $p')
+           fi ;;
+      esac
+    fi
+  fi
+
+  stats_mem_used=$(num "$CGROUP_DIR/memory.current")
+  stats_mem_limit=$(num "$CGROUP_DIR/memory.max")
+
+  if { while read -r k v; do
+         if [ "$k" = usage_usec ]; then usage=$v; break; fi
+       done < "$CGROUP_DIR/cpu.stat"; } 2> /dev/null; then
+    case "$usage" in '' | *[!0-9]*) usage='' ;; esac
+  fi
+  if [ -n "$usage" ]; then
+    wall_us=$(($(date +%s%N) / 1000))
+    prev_usage='' prev_wall=''
+    { read -r prev_usage prev_wall < "$CPUFILE"; } 2> /dev/null || :
+    case "$prev_usage$prev_wall" in *[!0-9]*) prev_usage='' prev_wall='' ;; esac
+    if [ -n "$prev_usage" ] && [ -n "$prev_wall" ] && [ -n "$stats_cores" ] \
+       && [ "$usage" -ge "$prev_usage" ] && [ "$wall_us" -gt "$prev_wall" ]; then
+      stats_cpu_pct=$(jq -nr --argjson du "$((usage - prev_usage))" --argjson dw "$((wall_us - prev_wall))" \
+        --argjson c "$stats_cores" '$du / ($dw * $c) * 100 * 100 | round / 100')
+    fi
+    printf '%s %s\n' "$usage" "$wall_us" > "$CPUFILE.tmp" 2> /dev/null && mv -f "$CPUFILE.tmp" "$CPUFILE" 2> /dev/null
+  fi
+
+  if [ -d "$PROC_DIR" ]; then
+    stats_procs=0 stats_claude_procs=0
+    for d in "$PROC_DIR"/[0-9]*; do
+      [ -e "$d" ] || continue
+      stats_procs=$((stats_procs + 1))
+      c=''
+      { read -r c < "$d/comm"; } 2> /dev/null || :
+      [ "$c" != claude ] || stats_claude_procs=$((stats_claude_procs + 1))
+    done
+  fi
+  # mem.max "max" is not a number, so num left it empty: NULL
+  return 0
+}
+
 # any_target: 0 when at least one database URL is configured.
 any_target() {
   agentsview_pg_url > /dev/null 2>&1 || factory_db_url writer > /dev/null 2>&1
@@ -323,6 +488,20 @@ upsert_to() {
     printf '%s\n' "$out" | mask_secrets >&2
     echo "heartbeat-loop: $label beat failed, retrying next pass" >&2
     return 1
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
+  return 0
+}
+
+# stats_to LABEL URL: sends the machine stats (the psql -v arguments in STATS_ARGS) to one database,
+# after its UPSERT succeeded. A failure is logged, masked, and never fails the beat. Always returns 0.
+stats_to() {
+  local label=$1 url=$2 out
+  [ "${#STATS_ARGS[@]}" -gt 0 ] || return 0
+  if ! out=$(printf '%s\n' "$STATS" | run_psql "$url" "${STATS_ARGS[@]}" 2>&1); then
+    printf '%s\n' "$out" | mask_secrets >&2
+    echo "heartbeat-loop: $label stats write failed" >&2
+    return 0
   fi
   [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
   return 0
@@ -351,7 +530,7 @@ beat() {
   state_wait=20
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state_wait=2
   state_json=$(timeout "$state_wait" "$SHARE/heartbeat-state" 2>/dev/null) || state_json=''
-  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null,"sessions":[]}'
+  jq -e 'type == "object"' <<< "$state_json" >/dev/null 2>&1 || state_json='{"state":"idle","in_flight":[],"chat_active_at":null,"sessions":[],"claude_sessions":null}'
   state=$(jq -r '.state // "idle"' <<< "$state_json")
   [ -z "${HEARTBEAT_STOPPING:-}" ] || state=stopped
   in_flight=$(jq -c '.in_flight // []' <<< "$state_json")
@@ -367,6 +546,14 @@ beat() {
     -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state"
     -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "sessions=$sessions" -v "critical_failures=$(critical_failures)"
     -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)")
+  STATS_ARGS=()
+  if [ -z "${HEARTBEAT_STOPPING:-}" ]; then
+    machine_stats "$state_json"
+    STATS_ARGS=(-v "device=$device" -v "state=$state" -v "cpu_pct=$stats_cpu_pct" -v "cpu_limit_cores=$stats_cores"
+      -v "cpu_quota_set=$stats_quota_set" -v "mem_used_bytes=$stats_mem_used" -v "mem_limit_bytes=$stats_mem_limit"
+      -v "claude_interactive=$stats_interactive" -v "claude_headless=$stats_headless"
+      -v "claude_procs=$stats_claude_procs" -v "procs=$stats_procs")
+  fi
 
   # the targets are independent: a failure on one never skips or delays the other
   if [ "$av_ok" = 1 ]; then
@@ -374,6 +561,7 @@ beat() {
     if upsert_to "agentsview database" "$av_url" "$([ "$DDL_SENT" = 1 ] && echo 0 || echo 1)"; then
       DDL_SENT=1
       ok=1
+      stats_to "agentsview database" "$av_url"
     else
       DDL_SENT=0
       failed=1
@@ -382,7 +570,12 @@ beat() {
   if [ "$fdb_ok" = 1 ]; then
     fdb_url=$(factory_db_url writer)
     # the writer role cannot run DDL; the database is migrated by factory-db-bootstrap
-    if upsert_to "factory database" "$fdb_url" 0; then ok=1; else failed=1; fi
+    if upsert_to "factory database" "$fdb_url" 0; then
+      ok=1
+      stats_to "factory database" "$fdb_url"
+    else
+      failed=1
+    fi
   fi
   if [ "$ok" = 1 ]; then
     printf 'last_beat=%s\nstate=%s\n' "$(date +%s)" "$state" > "$STATEFILE.tmp" 2>/dev/null \
