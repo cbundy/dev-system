@@ -228,25 +228,39 @@ new_name
 sdb=$new_db
 WPW=wsecret-$$-pw
 RPW=rsecret-$$-pw
+# Marks the bootstrap's own process tree (it runs no `env -i`, so every child inherits it).
+# Never exported in this shell: only the bootstrap and the decoy carry it.
+PROBE=argv-$$-$(date +%s%N)
 (
-  FACTORY_DB_WRITER_PASSWORD=$WPW FACTORY_DB_READER_PASSWORD=$RPW FACTORY_DB_ADMIN_URL=$ADMIN \
+  FACTORY_ARGV_PROBE=$PROBE FACTORY_DB_WRITER_PASSWORD=$WPW FACTORY_DB_READER_PASSWORD=$RPW FACTORY_DB_ADMIN_URL=$ADMIN \
     bash "$BOOTSTRAP" --db "$sdb" > "$tmpdir/sout" 2>&1
 ) &
 bpid=$!
-# sample_argv PID FILE: every process's command line, until PID exits.
+# sample_argv PID FILE: the command line of every process marked with $PROBE, until PID
+# exits. Other suites run at the same time and put the same admin URL on their own psql
+# command lines, so unmarked processes must not be sampled. A process that exits between
+# listing and reading is ignored.
 sample_argv() {
   : > "$2"
   while kill -0 "$1" 2> /dev/null; do
-    { cat /proc/[0-9]*/cmdline 2> /dev/null || :; } | tr '\0' ' ' >> "$2"
+    grep -lzF -- "FACTORY_ARGV_PROBE=$PROBE" /proc/[0-9]*/environ 2> /dev/null \
+      | sed 's#environ$#cmdline#' \
+      | while IFS= read -r f; do cat "$f" 2> /dev/null || :; done \
+      | tr '\0' ' ' >> "$2"
   done
 }
 sample_argv "$bpid" "$tmpdir/argv"
 wait "$bpid" || fail "run with passwords failed: $(cat "$tmpdir/sout")"
 # The sampler really sees an argv: a decoy process carrying a secret is found.
-sh -c 'sleep 2; :' "decoy-$WPW" &
+# An unmarked outsider, like another suite's psql, carries the admin URL meanwhile.
+FACTORY_ARGV_PROBE=$PROBE sh -c 'sleep 2; :' "decoy-$WPW" &
 dpid=$!
+sh -c 'sleep 3; :' "outsider-$WPW" "$ADMIN" &
+opid=$!
 sample_argv "$dpid" "$tmpdir/decoy"
 grep -qF -- "decoy-$WPW" "$tmpdir/decoy" || fail "the argv sampler does not see a process's arguments"
+grep -qF -- "outsider-$WPW" "$tmpdir/decoy" && fail "the argv sampler sees processes outside the bootstrap"
+wait "$opid" || :
 pass_part=$(printf '%s' "$ADMIN" | sed -n 's#^[a-z]*://[^:@/]*:\([^@/]*\)@.*#\1#p')
 # The bare admin password may be a common word (CI uses "postgres", also a database
 # name in argv), so it is matched in the credential position ":pw@" only.
