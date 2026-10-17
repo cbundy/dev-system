@@ -1,0 +1,6 @@
+{
+  "name": "loop-report-probe",
+  "version": "0.1.0",
+  "author": { "name": "Callum Bundy" },
+  "description": "Throwaway spike: which quiet routes put a loop report on the phone, and what does each cost the model's context?"
+}

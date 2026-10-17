@@ -2,7 +2,7 @@
 # One job of the parallel test run (scripts/test.sh, via scripts/test-pool.sh).
 #
 # Usage: test-job.sh <id>, where <id> is
-#   node           the node test step (tests/*.test.js)
+#   node           the node test step (tests/*.test.js, or $TEST_NODE_FILES when set: a subset run)
 #   <path>.test.sh a plain-shell suite
 #   <plugin dir>   a mod: `claude plugin validate` then `claude plugin test`
 #
@@ -22,7 +22,8 @@ trap 'rm -f "$out"' EXIT
 case $id in
   node)
     # The reporter's last line is `node-tests: <total> total, <failed> failed`.
-    node --test --test-reporter=./scripts/test-reporter.js tests/*.test.js > "$out" 2>&1
+    # shellcheck disable=SC2086 # word splitting is the point: test file names have no spaces
+    node --test --test-reporter=./scripts/test-reporter.js ${TEST_NODE_FILES:-tests/*.test.js} > "$out" 2>&1
     node_status=$?
     summary=$(tail -n 1 "$out")
     node_total=$(printf '%s\n' "$summary" | sed -n 's/^node-tests: \([0-9][0-9]*\) total, \([0-9][0-9]*\) failed$/\1/p')

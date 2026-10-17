@@ -98,7 +98,8 @@ test suites file-by-file - use a single entrypoint per gate so nothing is ever s
 and adding a new test file should require no extra wiring. Each command is quiet on
 success and on failure prints only the failing tests or `file:line` errors: run it once
 and act on that output. Do not re-run a gate to grep or filter its output, or after it
-has passed.
+has passed. The single-entrypoint rule is for the gate: below, also name how to run one
+suite while debugging (ideally the gate entrypoint with a filter), then run the gate once at the end.
 
 <REPLACE: list this repo's canonical commands, one per gate, e.g. lint / typecheck / test /
 e2e / a combined check command. Use exactly the commands in `.no-mistakes.yaml` `commands`,
