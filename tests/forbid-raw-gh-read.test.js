@@ -238,7 +238,7 @@ test("reason: names the variable when the reader exists and it is unset", () => 
   try {
     const stub = path.join(bin, "callum-flow-issue-read");
     fs.writeFileSync(stub, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    const env = { PATH: `${bin}:${process.env.PATH}`, CALLUM_FLOW_TRUSTED_AUTHORS: "" };
+    const env = { PATH: `${bin}:${process.env.PATH}`, CALLUM_FLOW_TRUSTED_AUTHORS: "", DEV_GH_TOKEN_FILE: "" };
     const unset = assertDenied("gh issue view 5", { env });
     assert.match(unset, /CALLUM_FLOW_TRUSTED_AUTHORS/);
     assert.match(unset, /dev-doctor/);
@@ -248,6 +248,29 @@ test("reason: names the variable when the reader exists and it is unset", () => 
     assert.doesNotMatch(set, /Rebuild Container/);
   } finally {
     fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("reason: no fail-closed text when token mode has an identity entry; still there when both are empty", () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "reader-"));
+  const cfg = fs.mkdtempSync(path.join(os.tmpdir(), "ghcfg-"));
+  try {
+    fs.writeFileSync(path.join(bin, "callum-flow-issue-read"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const base = { PATH: `${bin}:${process.env.PATH}`, CALLUM_FLOW_TRUSTED_AUTHORS: "", DEV_GH_TOKEN_FILE: "", GH_CONFIG_DIR: cfg };
+    const idf = path.join(cfg, "dev-system-identity.json");
+    fs.writeFileSync(idf, JSON.stringify({ login: "tokenbot", id: 777, name: "T", email: "e" }));
+    const token = { ...base, DEV_GH_TOKEN_FILE: "/run/token" };
+    assert.doesNotMatch(assertDenied("gh issue view 5", { env: token }), /CALLUM_FLOW_TRUSTED_AUTHORS/);
+    // token mode off: the stale identity file does not count
+    assert.match(assertDenied("gh issue view 5", { env: base }), /CALLUM_FLOW_TRUSTED_AUTHORS/);
+    // token mode on, but no identity entry
+    fs.writeFileSync(idf, "{}");
+    assert.match(assertDenied("gh issue view 5", { env: token }), /CALLUM_FLOW_TRUSTED_AUTHORS/);
+    fs.rmSync(idf);
+    assert.match(assertDenied("gh issue view 5", { env: token }), /CALLUM_FLOW_TRUSTED_AUTHORS/);
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+    fs.rmSync(cfg, { recursive: true, force: true });
   }
 });
 
