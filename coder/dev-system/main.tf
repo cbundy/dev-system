@@ -1,6 +1,9 @@
 # Coder workspace template "dev-system": one container per workspace from the
 # dev-system base image (images/base), on a Docker host reached locally or
-# over ssh:// (variable docker_host). See README.md next to this file. The
+# over ssh://. The host is picked per workspace from variable docker_hosts
+# (parameter docker_host, immutable: the volumes live on it), and the host-side
+# pieces (secrets directories, the shared gh and Claude login volumes) are per
+# host. See README.md next to this file. The
 # same Terraform is also pushed as the "orchestrator" template, which only
 # changes variables: the Remote Control mode default and the long-lived
 # session's settings (variables remote_control_*); coder/push.sh holds each
@@ -55,10 +58,38 @@ terraform {
   }
 }
 
-variable "docker_host" {
-  default     = "unix:///var/run/docker.sock"
-  description = "Docker host for workspaces: the local socket, or ssh://user@host for a remote one (the Coder server's ssh config supplies the key)."
+# The Docker hosts a workspace can be created on, as a JSON list in a string: Coder's
+# tfvars parser (used by `coder templates push`) accepts only strings, numbers and
+# tuples of strings, so a list of objects would fail the push. Each entry has a stable
+# `value` (the docker_host parameter's value; never rename or remove one a workspace
+# uses), a display `name` and the `url` (unix:///... or ssh://user@host; the Coder
+# server's ssh config supplies the key). The first entry is the default, so append only.
+variable "docker_hosts" {
+  default     = "[{\"value\":\"local\",\"name\":\"Local Docker\",\"url\":\"unix:///var/run/docker.sock\"}]"
+  description = "Docker hosts for workspaces: a JSON list of {\"value\", \"name\", \"url\"} objects (url: the local socket, or ssh://user@host). The first is the default; with more than one, a workspace picks its host at creation (parameter docker_host). A string because Coder's tfvars parser cannot read a list of objects."
   type        = string
+  validation {
+    condition     = can(tolist(jsondecode(var.docker_hosts)))
+    error_message = "docker_hosts must be valid JSON that decodes to a list of {\"value\", \"name\", \"url\"} objects."
+  }
+  validation {
+    condition     = try(length(jsondecode(var.docker_hosts)) >= 1, true)
+    error_message = "docker_hosts must have at least one entry."
+  }
+  validation {
+    condition = try(alltrue([
+      for h in jsondecode(var.docker_hosts) :
+      try(h.value != "" && h.name != "" && h.url != "", false)
+    ]), true)
+    error_message = "Every docker_hosts entry needs a non-empty value, name and url."
+  }
+  validation {
+    condition = try(
+      length(distinct([for h in jsondecode(var.docker_hosts) : h.value])) == length(jsondecode(var.docker_hosts)),
+      true
+    )
+    error_message = "The value of every docker_hosts entry must be unique."
+  }
 }
 
 # What kind of workspace this template makes; coder/push.sh sets it per template.
@@ -178,8 +209,9 @@ variable "secrets_dir" {
 # so every workspace needs its own gh login. A named Docker volume mounted over
 # it instead shares one login between every workspace that keeps the gh_login
 # parameter's default, shared, as the desktop devcontainer's dev-system-gh
-# volume does per Docker host. Empty offers no choice: every workspace keeps
-# its own gh login. It is
+# volume does. The volume is per Docker host (see docker_hosts): each host has
+# its own, so the first shared workspace on a host signs in once for it. Empty
+# offers no choice: every workspace keeps its own gh login. It is
 # deliberately not a docker_volume resource: one tied to a workspace would be
 # deleted, login and all, with that workspace. Docker creates it on first use
 # and copies the image's node-owned /persist/gh into it.
@@ -215,7 +247,8 @@ variable "workspace_secrets_dir" {
 # CLAUDE_SECURESTORAGE_CONFIG_DIR pointing Claude's login (and only its
 # login) there, in every workspace that picks shared. A "private" workspace
 # gets neither and keeps its login in CLAUDE_CONFIG_DIR, as before. Not a
-# docker_volume resource, for the reason given for gh_volume_name. Empty
+# docker_volume resource, for the reason given for gh_volume_name. Like it,
+# the volume is per Docker host (see docker_hosts). Empty
 # offers no choice: every workspace is private.
 variable "claude_auth_volume_name" {
   default     = ""
@@ -256,7 +289,7 @@ variable "registry_auth_address" {
 }
 
 provider "docker" {
-  host = var.docker_host
+  host = local.docker_host_url
 
   dynamic "registry_auth" {
     for_each = var.registry_auth_config == "" ? [] : [var.registry_auth_config]
@@ -270,6 +303,27 @@ provider "docker" {
 data "coder_provisioner" "me" {}
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
+
+# Shown only when there is a real choice. Immutable: the workspace's volumes live on
+# the host, and the shared GitHub and Claude logins are per host, not synced.
+data "coder_parameter" "docker_host" {
+  count        = length(local.docker_hosts) > 1 ? 1 : 0
+  name         = "docker_host"
+  display_name = "Docker host"
+  description  = "The Docker host the workspace runs on. It cannot change later, because the workspace's volumes live on it. The shared GitHub and Claude logins are shared per host."
+  type         = "string"
+  default      = local.docker_hosts[0].value
+  mutable      = false
+  order        = 0
+
+  dynamic "option" {
+    for_each = local.docker_hosts
+    content {
+      name  = option.value.name
+      value = option.value.value
+    }
+  }
+}
 
 data "coder_parameter" "image" {
   name         = "image"
@@ -479,6 +533,14 @@ data "coder_parameter" "ring" {
     name  = "consumer"
     value = "consumer"
   }
+}
+
+locals {
+  # The Docker hosts (variable docker_hosts), decoded once. The parameter exists only
+  # with more than one host; with one, that host is used.
+  docker_hosts      = jsondecode(var.docker_hosts)
+  docker_host_value = try(data.coder_parameter.docker_host[0].value, local.docker_hosts[0].value)
+  docker_host_url   = one([for h in local.docker_hosts : h.url if h.value == local.docker_host_value])
 }
 
 locals {

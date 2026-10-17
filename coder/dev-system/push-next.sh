@@ -2,9 +2,13 @@
 # Test a change to this Coder template from inside a workspace (cbundy/dev-system#118).
 #
 #   coder/dev-system/push-next.sh [push]   push this directory as the template dev-system-next
-#   coder/dev-system/push-next.sh smoke    push, then create a throwaway workspace from it,
+#   coder/dev-system/push-next.sh smoke [<host>]
+#                                          push, then create a throwaway workspace from it,
 #                                          wait until its agent is ready, show its status and
-#                                          startup log, and delete it again
+#                                          startup log, and delete it again. <host> is a
+#                                          docker_hosts value from terraform.tfvars (e.g.
+#                                          host-1): it sets the docker_host parameter; without
+#                                          it the template's default host is used
 #   coder/dev-system/push-next.sh cleanup  delete leftover next-smoke-* workspaces
 #
 # The template name is fixed: this script only ever pushes dev-system-next and only ever
@@ -50,17 +54,23 @@ die() {
 }
 
 usage() {
-  echo "usage: $0 [push|smoke|cleanup]" >&2
+  echo "usage: $0 [push|smoke [<host value>]|cleanup]" >&2
   echo "The template name is always $TEMPLATE and cannot be changed." >&2
   exit 2
 }
 
 cmd=${1:-push}
-[ $# -le 1 ] || usage
 case "$cmd" in
-  push | smoke | cleanup) ;;
+  push | cleanup) [ $# -le 1 ] || usage ;;
+  smoke) [ $# -le 2 ] || usage ;;
   *) usage ;;
 esac
+host=${2:-}
+if [ -n "$host" ]; then
+  # A docker_hosts value (main.tf); checked before anything is pushed.
+  printf '%s\n' "$host" | grep -Eq '^[a-z0-9][a-z0-9-]*$' \
+    || die "host '$host' is not a docker_hosts value (lower case letters, digits and '-', e.g. host-1)"
+fi
 # coder create reads the template name from this variable: refuse rather than let it
 # point a smoke test anywhere else.
 [ -z "${CODER_TEMPLATE_NAME:-}" ] || die "CODER_TEMPLATE_NAME is set; this script only uses $TEMPLATE - unset it"
@@ -147,7 +157,11 @@ smoke() {
   # Set before create, so an interrupted or failed create is still cleaned up.
   smoke_ws=$ws
   echo "push-next: creating $ws from $TEMPLATE" >&2
-  coder_run create "$ws" --template "$TEMPLATE" --use-parameter-defaults --yes
+  if [ -n "$host" ]; then
+    coder_run create "$ws" --template "$TEMPLATE" --parameter "docker_host=$host" --use-parameter-defaults --yes
+  else
+    coder_run create "$ws" --template "$TEMPLATE" --use-parameter-defaults --yes
+  fi
 
   deadline=$(($(date +%s) + TIMEOUT))
   while :; do

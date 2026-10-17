@@ -7,8 +7,17 @@
 # template_tester_secrets_dir, so dev-system-next workspaces never get the
 # Template Admin token.
 
-# The workspace LXC (cbundy/network#141); the Coder server's ssh config supplies the key.
-docker_host = "ssh://coder@192.168.1.245"
+# The Docker hosts a workspace can be created on (a JSON list in a string, because
+# Coder's tfvars parser cannot read a list of objects). Order matters: the first is the
+# default and the host of every workspace from before the choice, so only append; never
+# reorder, rename a value or remove an entry a workspace uses. The Coder server's ssh
+# config supplies the key. Host 1 is the workspace LXC (cbundy/network#141).
+docker_hosts = <<-EOT
+[
+  {"value": "host-1", "name": "Coder host 1", "url": "ssh://coder@192.168.1.245"},
+  {"value": "host-2", "name": "Coder host 2", "url": "ssh://coder@192.168.1.246"}
+]
+EOT
 
 # The OTLP collector: Claude Code and codex telemetry from every workspace.
 otlp_endpoint = "http://192.168.1.10:4318"
