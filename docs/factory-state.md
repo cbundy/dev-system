@@ -29,6 +29,7 @@ An issue is in exactly one stage. `stuck` is a flag on a stage, not a stage.
 | `implementing` | `implementer_routed` or `delegated` with no run yet, or the latest run ended without a PR to merge (failed, cancelled, completed with no PR, PR closed) |
 | `in pipeline` | the latest run is running and not waiting on anyone |
 | `parked` | the latest run is running and waiting on an agent or the owner (`awaiting_agent_since` set) |
+| `waiting` | the factory loop v2 holds the claim and re-checks the record's wait conditions each pass, with no slot. The loop owns it: only a v2 record in `waiting` or a `factory:waiting` label gives it |
 | `ready to merge` | the latest run completed and its PR is open |
 | `merged` | a `merged` event, or the run's `pr_state` is `merged`. Not final: it stays visible until GitHub closes the issue |
 | `closed without merge` | `closed` or `abandoned` (with no new life after it) and no merge |
@@ -70,6 +71,7 @@ newest one:
 | `reviewing`, `fixing` | `in pipeline` |
 | `merge-queue` | `ready to merge` |
 | `parked` | `parked` |
+| `waiting` | `waiting` |
 | `closed` | `merged` when its `why` is `merged` or `merged-by-hand`, else `closed without merge` |
 
 The detail shows the v2 state, the step and the attempt, and time in stage runs from the record's
@@ -136,6 +138,8 @@ Inputs, not judgement. Defaults come from the factory's own data and can be set 
 | S4 | `ready to merge` for more than the threshold | 30 min |
 | S5 | `in pipeline` with no run `updated_at` for more than the threshold | 30 min |
 | S6 | the holder's worker is `stale` or `stopped` while the issue is live | `n/a`; see [Source precedence](#source-precedence) |
+
+`waiting` has no stuck rule of its own: the loop tells the owner after 24 h.
 
 This replaces the hardcoded 4 hour stuck query that `metrics.md` used to carry.
 
@@ -219,3 +223,7 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
   new life), #106's record closed as `claim-lost` while another device holds it (`designing`, held by
   `dev-b`), #107 is `queued` and #109 `designing`, both with a lapsed lease, and #108 is labelled
   `factory:fixing` with no events (`in pipeline` from GitHub).
+- `v2-waiting`: the `waiting` stage. #200 is `waiting` for 30 hours with no stuck rule, #201 is
+  `waiting` but labelled `factory:parked` (flagged), #202 is `parked` and #203 `queued` (they sort
+  before the waiting ones), #204 is labelled `factory:waiting` with no events (`waiting` from GitHub)
+  and #205 is `waiting` while another device's claim comment holds it (flagged).

@@ -922,6 +922,7 @@
           "parked",
           "queued",
           "reviewing",
+          "waiting",
           null
         ]
       },
@@ -979,6 +980,7 @@
           "parked",
           "queued",
           "reviewing",
+          "waiting",
           null
         ]
       },
@@ -1023,7 +1025,8 @@
           "merge-queue",
           "parked",
           "queued",
-          "reviewing"
+          "reviewing",
+          "waiting"
         ]
       },
       "triages": {
@@ -1033,6 +1036,51 @@
       "via": {
         "pattern": "^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$",
         "type": "string"
+      },
+      "wait": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "issue": {
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "enum": [
+                "issue-closed",
+                "pr-merged",
+                "tag-contains"
+              ]
+            },
+            "pr": {
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "sha": {
+              "pattern": "^[0-9a-f]{7,40}$",
+              "type": [
+                "null",
+                "string"
+              ]
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": [
+          "array",
+          "null"
+        ]
       },
       "why": {
         "enum": [
