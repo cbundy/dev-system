@@ -507,7 +507,7 @@ column names what a row's seq logs; a state's own entry event (`delegated`, `fix
 | T1 | queued | ok | - | `resumeTo` (default designing) | round +1 when it leads to reviewing; queued's notes (S0's, P1's) kept: the lease reads none, so they are for the step T1 leads to | transition |
 | T2 | designing | ok | - | building | brief set | transition, `delegated` |
 | T3 | designing | not-ok | a question | parked | question; resumeTo designing | transition |
-| T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ...) |
+| T4 | designing | not-ok | a split | closed | why split | transition, `abandoned` (split into ..., with the designer's reasons) |
 | T5 | building | ok | - | reviewing | head set; round +1 | transition |
 | T6 | building | not-ok | triages < max | building, step triage | attempt 1; triages +1; cut cleared | transition |
 | T7 | building | not-ok | triages = max | parked | question (the builder's reason); resumeTo building | transition |
@@ -643,7 +643,7 @@ S3 plans these for the record's current seq until each is done. Keys are
 | fixing | event `fix_requested --note review\|ci\|conflict\|triage`: the life's last fix reason (a resume's is the one it parked with) |
 | merge-queue | event `merge_ready --pr <p> --head <h>` |
 | parked | `comment` on the issue: the question, what parked it, and how to resume (remove the label, or `/factory resume N "note"`); `tell(parked)` |
-| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29). split: `release-parent` |
+| closed | `label` op `clear` (3.4); then by why. dropped: event `abandoned`. merged and merged-by-hand: event `merged` when the factory view at the close has none for the life (a merge whose log was lost, `totality/T-05`), planned before the seq's `event transition`: read only while that transition is not yet planned, so a later `closed` never logs the merge again, and once planned it is kept until done; then `rollout`, then `close-issue` when the rollout says `close_issue`, and `milestone-later` for a `run-it` or `keep-open` rollout (D-29); a `keep-open` rollout of an issue the factory view shows blocking open issues also gets `tell(keep-open-blocks)`, once, since those issues stay unclaimable until it is closed. split: `release-parent` (with the design's `reasons` and each child's `why`, for the `abandoned` note) |
 
 - A seq's step starts only after its entry actions are done, `tell` excepted.
 - **Comments carry a hidden key**, `<!-- factory-loop:<ledger key> -->`. The `comment` executor
@@ -1048,7 +1048,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 | `pr-closed` | E4 | the issue |
 | `issue-closed` | E2 | the issue |
 | `control-file` | `control.json` or the `OFF` file changed with no op (against the last version the loop read or wrote, kept as `files:<repo>` beside the records; each change found, by an acting pass or by an op that finds its file already changed, is kept there as an edit to log, keyed by when it was found, so a change back to an earlier version is logged too; the loop never writes `OFF`, so the pass that finds it keeps its use as an edit) | the issues whose entries changed, else none |
-| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op: capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
+| `config-file` | the workspace `config.json` or the repo-local `.claude/factory-loop.json` changed other than by an op (a landed `config set` or `config unset` is also logged with this cause, its detail the op text): capacity (K) and every other setting. While the loop does not act under v2 (mode off or observe, or planner v1), the workspace file it reads each tick is kept in memory, and the first tick that acts makes it the version compared against, so a hand edit that turns the loop on (`mode`, `planner`) is one too | none |
 | `restart` | a module load after an earlier run of the loop (its ledger holds an entry from before the load) with no `restart-self` in flight. The first start of a loop with no ledger restarts nothing | none |
 | `reconcile` | the migration's releases, approved by the owner (6.4) | the issue |
 | `unreject` | the first claim after a rejection: the owner removed `factory:rejected` and added `ready` (S0's via `unreject`, 6.4) | the issue |
@@ -1340,7 +1340,8 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   the foreground, the brief's fixed shape with its `## Rollout` line), with the v2 command rule
   (10.4) and no GitHub writes. It is renamed `designer` at the delete wave, when v1's goes.
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split",
-  brief, question?, children?: [{ key, title, body, blockedBy: [key | "#N"], ready: boolean }] }`.
+  brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
+  children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }] }`.
 - **The loop posts** the brief as an issue comment with a hidden key (4.5), and the step is ok
   once it is posted. Its URL is the record's `brief`.
 - **A split.** The loop creates the children with action `split`, one keyed effect per child
@@ -1348,7 +1349,13 @@ The designer is a reader: it writes nothing to GitHub (`totality/T-18`).
   instead of making a second one. The effect links the child as a sub-issue, adds its `blocked_by`
   links (to a sibling, or to an existing open issue of the repo named as `#N`; a closed one is skipped, a pull request refused), then labels `ready` the children whose `ready` is true. The step is not-ok(split) once
   every child exists, and T4 closes the record, keeping the parent open as the tracking epic
-  (`agents/designer.md:71-77`).
+  (`agents/designer.md:71-77`). A split child is a whole issue: its `## Rollout` defaults to
+  `merge`, and the contract refuses a child body without one, or a `keep-open` whose reason says
+  the child is part of an epic or a split. The plan comment on the parent shows the four reasons
+  under "Why this split", and each child line its `why`. `release-parent` carries `reasons` and
+  `childWhys` (aligned with `created`; both null when the design answer can no longer be read), and
+  the `abandoned` event's note carries them as tokens (`why_split`, `why_count`, `why_parts`,
+  `why_order`, `child_whys`), which the translator lifts into optional fields of `abandoned.v1`.
 
 ## 9. The merge queue
 
@@ -1761,8 +1768,12 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
   Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold (D-52) are
   deleted (13).
-- **Releases** are cut by the release task (O3, kept). When the Next milestone has no open item and
-  at least one closed, `task(release)` wakes the judge, which cuts the release with its standing
+- **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
+  at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
+  clock hour, whatever its key), keyed `task:release:<tag>:<YYYY-MM-DDTHH>` with the last release
+  tag (`unknown` before the first read, `none` before the first release) and carrying `closed`,
+  `expected`, `tag`, `oldest` (the oldest merge since that tag, omitted when unknown) and `cadence` (`minimumReleaseCadence`, always present, in short form); the judge
+  decides whether to cut the release now or `hold` until the next hour, and cuts the release with its standing
   authority (OB:89-90; PR #634, `27a13ce`). "A Run it change ships alone" belongs to that task: it
   chooses the commit to tag, then does the Run its of the milestone's run-it issues, which v1 did
   one `task(run-it)` at a time (M7).
@@ -1880,7 +1891,7 @@ At the delete wave (workflow 4), after cutover. Until then everything here stays
 | A2 | deleted | stopping agents past their answer or of ended issues: every new seq stops the old step (4.5) |
 | O1 | kept | title |
 | O2 | kept | one wake |
-| O3 | kept | the release task, now with the Run its (11) |
+| O3 | kept | the release task, now with the Run its (11), an hourly review keyed by tag and hour |
 
 ### 13.2 Mechanisms
 
@@ -2060,7 +2071,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | W2 | free | a loop slot whose record holds none | `slot` op `free` |
 | O1 | title | last; the text differs from `lastTitle` and `titleEveryMs` has passed since `lastTitleAt` (or it is null) | `title` |
 | O2 | one wake | wakes are planned | at most one, owner items first |
-| O3 | release | the Next milestone has no open item and one closed | `task(release)` |
+| O3 | release | the Next milestone has no open item and one closed, and no release task started this UTC hour | `task(release)`, key `task:release:<tag>:<hour>`, fields `closed expected tag oldest cadence` |
 
 ### 14.2 Like for like against C3's estimates
 
@@ -2187,6 +2198,11 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** O3 is kept; `task(run-it)` goes into it, and it never waits on the owner inside its
   wake (11).
 - **Why:** the judge has standing release authority (OB:89), and a merge never waits on it.
+- **Hourly review (#761):** the wake was keyed by the milestone's counts and ran once per key, so a
+  later milestone reaching a used count never woke the judge, and a `hold` was final. It is now
+  keyed by the last release tag and the UTC hour, at most one release task starts per hour, so a
+  `hold` is asked again the next hour while unreleased merged work remains. The loop reads the tag
+  and the oldest merge since it (`gh`, on the milestone cadence, only while the milestone qualifies).
 
 ### `fixCap` 3 and `maxTriages` 2 per life (owner)
 
@@ -2715,6 +2731,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `ciRunMs` | `30m` | 4.4 |
 | `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
 | `maxTriages` | 2 | 5.1 |
+| `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
 | `reviewer` | `adjudicator` | 8.2 |
@@ -2769,7 +2786,7 @@ as one argv.
 | follow-up | `i571/lss1x2k/follow/rollout` |
 | reconcile | `i571/reconcile/ss1x2k/requeue` (the label op is the outcome: `requeue`, `leave` or `reject`), `.../comment`, `.../stop/<agent>`, `.../event`; a rejection's tell `tell:rejected:i571/reconcile/ss1x2k/reject` |
 | intervention | `iv/` plus the key of the fact it records: `iv/i571/lss1x2k/s7/t`, `iv/i571/lss1x2k/rerun/r2/18342299123`; for a fact with no key of its own, `iv/<cause>/<subject>/<at>`, as in `iv/push/i571/ss3b0c` |
-| heartbeat, sweep, tell, restart, release task | as v1 |
+| heartbeat, sweep, tell, restart, release task | as v1 (the release task: hourly review, 11) |
 
 13 new families, plus the foundation's 5, against about 62 (G2 section 1).
 

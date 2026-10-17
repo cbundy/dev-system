@@ -131,6 +131,11 @@ The factory stopped work on the issue and it left the factory without a merge: i
 | --- | --- | --- | --- | --- | --- | --- |
 | `reason` | enum | required | no | one of "dropped", "split", "triage", "reconcile", "rejected", "other" | yes | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
 | `split_into` | array of integer | required | no |  |  | split: the new issues it was split into; empty otherwise. |
+| `why_split` | string | optional | yes |  |  | split: why the designer split the issue (size, areas touched, an owner decision or spike inside it, risk); null for any other abandon and for a split logged before the designer gave reasons. |
+| `why_count` | string | optional | yes |  |  | split: why this many parts, not fewer or more; null otherwise. |
+| `why_parts` | string | optional | yes |  |  | split: why the boundaries between the parts fall where they do; null otherwise. |
+| `why_order` | string | optional | yes |  |  | split: why the blockedBy order is what it is, or that the parts are independent; null otherwise. |
+| `child_whys` | array of string | optional | yes |  |  | split: what makes each new issue a part of its own, in the order of split_into; null otherwise. |
 | `stage` | string | required | yes |  |  | reconcile and rejected: the stage callum-flow-factory-state showed the issue in, in its words, not a transition state; null otherwise. |
 | `lives` | integer | required | yes | minimum 1 |  | reconcile and rejected: the released life's number among the issue's lives, when known; null otherwise. |
 | `branch` | string | required | yes |  | yes | The abandoned work's branch, when known. |
@@ -143,6 +148,11 @@ Example:
 {
   "reason": "dropped",
   "split_into": [],
+  "why_split": null,
+  "why_count": null,
+  "why_parts": null,
+  "why_order": null,
+  "child_whys": null,
   "stage": null,
   "lives": null,
   "branch": null,

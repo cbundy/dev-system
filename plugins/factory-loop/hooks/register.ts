@@ -42,6 +42,7 @@ import type { ActEnv, ActReport, Answered, Between, Claim, Live, Repair, Shadowe
 import { SUBAGENT_OF, stillAtWork } from './act-agents'
 import { AGENT_TOOLS, DESIGN, HANDOFF, VERDICT } from './agent-tools'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, jsonObject } from './config'
+import { DEFAULT_POOL_SIZE, RUNTIME_KEYS } from './config-keys'
 import { loopBaseOf, loopDirOf } from './contract.mjs'
 import { viewOf } from './config-view'
 import type { ViewInputs } from './config-view'
@@ -228,7 +229,6 @@ let options: Options = {}
 // Every other key there is a setting, over the repo's file (v2 SPEC section 15: the workspace
 // file may set any key and wins); answerTools, which answerChannel replaced (#561), is passed on
 // only to be named as replaced.
-const RUNTIME_KEYS: readonly string[] = ['mode', 'repo', 'shadowDevice', 'runSource', 'checkout', 'poolSize', 'toolsDir', 'binDir']
 
 async function text($: EngineInterface, path: string): Promise<string | null> {
   try {
@@ -290,7 +290,7 @@ async function runtime($: EngineInterface): Promise<Runtime & ViewInputs> {
     repo,
     device,
     runSource: pick('runSource') === 'events' ? 'events' : 'local',
-    poolSize: typeof file.poolSize === 'number' ? file.poolSize : 16,
+    poolSize: typeof file.poolSize === 'number' ? file.poolSize : DEFAULT_POOL_SIZE,
     cwd: checkout,
     loopDir,
     workspace: { session: await $.session.id(), process: processIdOf(await text($, '/proc/self/stat')) },

@@ -8,6 +8,7 @@ import { detailOf, rateLimited } from './exec'
 import type { EventFields, Exec, ExecCtx, Executor, RunInit, RunResult } from './exec'
 import { parsePool } from './parse'
 import { issueFromBranch, listedLive } from './plan'
+import { splitNote } from './v2/events'
 import type { Action, ActionKind, AgentView, LedgerEntry } from './types'
 
 const SEC = 1000
@@ -86,7 +87,7 @@ export function stepsOf(action: Action, repo: string, inDevLabel: string): Step[
       // that happened, and a retry after a failed event repeats only the label edit.
       return n === null
         ? noIssue
-        : [unlabel(n, 'release-parent'), { event: 'abandoned', fields: { issue: action.issue, note: `split into ${action.created.join(',')}` } }]
+        : [unlabel(n, 'release-parent'), { event: 'abandoned', fields: { issue: action.issue, note: splitNote(action.created, action.reasons ?? null, action.childWhys ?? null) } }]
     case 'abandon': {
       if (n === null) return noIssue
       const fields: EventFields = { issue: action.issue, note: action.note }

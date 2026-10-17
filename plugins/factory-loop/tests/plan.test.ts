@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { entryFromLoop, loopNote } from '../hooks/derive'
+import { shortDuration } from '../hooks/config'
 import { start } from '../hooks/ledger'
 import { classifyFail, issueFromBranch, plan as planOf, sameLabel, tierOf, worktreeLag } from '../hooks/plan'
 import type { Action, ActionKind, AdjudicatorAction, Config, IssueView, LedgerEntry, MergeReport, PlanResult, Slot, State } from '../hooks/types'
@@ -37,6 +38,7 @@ const CFG = config()
 // --- the properties every plan keeps (SPEC 5.9), checked on every plan this file makes ----------
 
 const HOUR = 60 * MIN
+const RHOUR = new Date(NOW).toISOString().slice(0, 13)
 const TIER_READINGS = [
   { fiveHour: 10, sevenDay: 10 },
   { fiveHour: 10, sevenDay: 86 },
@@ -1433,8 +1435,64 @@ describe('O: owner and report', () => {
 
   test('Next release with no open items: the model runs the release (SKILL:166-167)', () => {
     const s = state({ milestone: { open: 0, closed: 2, expected: 'minor' } })
-    expect(keys(plan(s, CFG))).toEqual(['task:release:2:minor'])
+    expect(keys(plan(s, CFG))).toEqual([`task:release:unknown:${RHOUR}`])
     expect(keys(plan(state({ milestone: { open: 1, closed: 2, expected: 'minor' } }), CFG))).toEqual([])
+  })
+
+  describe('O3: the hourly release review (shared with v2 through releaseDue)', () => {
+    const closed = (over: Partial<State> = {}) => state({ milestone: { open: 0, closed: 5, expected: 'minor' }, ...over })
+    const done = (key: string, at: number, decision = 'hold') =>
+      entry(key, 'task', { wake: 'release', class: 'drive', status: 'done', startedAt: at, endedAt: at + MIN, outcome: wakeAnswer(decision) })
+    const wanted = (s: State) => keys(plan(s, CFG)).filter(k => k.startsWith('task:release:'))
+
+    test('the key names the last tag and the UTC hour; the fields are closed, expected, tag, oldest, cadence in order', () => {
+      const oldest = Date.UTC(2026, 9, 12, 8, 30)
+      const s = closed({ release: { tag: 'v1.0.0', oldest } })
+      expect(wanted(s)).toEqual([`task:release:v1.0.0:${RHOUR}`])
+      const a = plan(s, CFG).actions.find(x => x.kind === 'task')
+      expect(Object.entries(a && 'fields' in a ? a.fields : {})).toEqual([['closed', '5'], ['expected', 'minor'], ['tag', 'v1.0.0'], ['oldest', '2026-10-12T08:30:00.000Z'], ['cadence', '6h']])
+      // plan.ts writes shortDuration out (it imports types only): the wake's text matches it
+      for (const ms of [3_600_000, 90 * 60_000, 2 * 3_600_000, 21_600_000, 3_661_000, 3_600_500]) {
+        const w = plan(s, { ...CFG, minimumReleaseCadenceMs: ms }).actions.find(x => x.kind === 'task')
+        expect(w && 'fields' in w ? w.fields.cadence : null).toBe(shortDuration(ms))
+      }
+      // the cadence is the configured minimum release cadence, in short form
+      const three = plan(s, { ...CFG, minimumReleaseCadenceMs: 3 * 3_600_000 }).actions.find(x => x.kind === 'task')
+      expect(three && 'fields' in three ? three.fields.cadence : null).toBe('3h')
+      // no release yet: none; an unknown oldest is dropped
+      const none = plan(closed({ release: { tag: null, oldest: null } }), CFG).actions.find(x => x.kind === 'task')
+      expect(none).toMatchObject({ key: `task:release:none:${RHOUR}`, fields: { closed: '5', expected: 'minor', tag: 'none' } })
+      expect(none && 'fields' in none ? Object.keys(none.fields) : []).toEqual(['closed', 'expected', 'tag', 'cadence'])
+    })
+
+    test('two milestones at the same count each wake: a new tag, or a later hour', () => {
+      const first = done(`task:release:v1.0.0:${RHOUR}`, NOW)
+      expect(wanted(closed({ release: { tag: 'v1.1.0', oldest: null }, ledger: [...state().ledger, { ...first, startedAt: NOW - 2 * 3_600_000 }] }))).toEqual([`task:release:v1.1.0:${RHOUR}`])
+      expect(wanted(closed({ now: NOW + 3_600_000, release: { tag: 'v1.0.0', oldest: null }, ledger: [...state().ledger, first] }))).toEqual(['task:release:v1.0.0:2026-10-13T04'])
+    })
+
+    test('at most one release task per UTC hour, whatever its key; a hold waits for the next hour', () => {
+      const held = done(`task:release:v1.0.0:${RHOUR}`, NOW)
+      const ledger = [...state().ledger, held]
+      expect(wanted(closed({ release: { tag: 'v1.0.0', oldest: null }, ledger }))).toEqual([])
+      expect(wanted(closed({ release: { tag: 'v1.1.0', oldest: null }, ledger }))).toEqual([])
+      expect(wanted(closed({ now: NOW + 60 * MIN, release: { tag: 'v1.0.0', oldest: null }, ledger }))).toEqual(['task:release:v1.0.0:2026-10-13T04'])
+    })
+
+    test('the hour boundary: HH:59:59.999 and the next HH:00:00 differ, and the key has no colon', () => {
+      const end = wanted(closed({ now: Date.UTC(2026, 9, 13, 3, 59, 59, 999) }))
+      const next = wanted(closed({ now: Date.UTC(2026, 9, 13, 4, 0, 0) }))
+      expect(end).toEqual(['task:release:unknown:2026-10-13T03'])
+      expect(next).toEqual(['task:release:unknown:2026-10-13T04'])
+    })
+
+    test('no wake with an open item, nothing closed, a milestone source that is not ok, or no milestone', () => {
+      expect(wanted(state({ milestone: { open: 1, closed: 5, expected: null } }))).toEqual([])
+      expect(wanted(state({ milestone: { open: 0, closed: 0, expected: null } }))).toEqual([])
+      expect(wanted(state({ milestone: null }))).toEqual([])
+      const s = closed()
+      expect(wanted({ ...s, sources: { ...s.sources, milestone: { ok: false, at: NOW } } })).toEqual([])
+    })
   })
 
   test('the title: counts of queue, in progress and merged in 6 hours, no usage (D-23, SPEC 9.1)', () => {
@@ -2124,13 +2182,13 @@ describe('H5: the main checkout kept up to date with origin (#555)', () => {
     for (const kind of ['designer', 'adjudicator', 'task']) expect(why).toContain(`waits for the main checkout's update (${kind})`)
     // with no update due, they start beside the reader as before
     const quiet = keys(plan(withLedger(s, [reading]), ACT))
-    expect(quiet).toEqual(expect.arrayContaining([`design:61:${LIFE}`, 'task:release:2:none']))
+    expect(quiet).toEqual(expect.arrayContaining([`design:61:${LIFE}`, `task:release:unknown:${RHOUR}`]))
     expect(quiet.some(k => k.startsWith('adjudicate:'))).toBe(true)
     // the reader is done: the update goes first, and the held readers start after it in the same
     // pass (plan's order is the order they run in)
     const drained = keys(plan(withLedger(busy([], []), [merged(NOW - MIN)]), ACT))
     expect(drained[0]).toBe(`update-checkout:${LAST}`)
-    expect(drained).toEqual(expect.arrayContaining([`design:61:${LIFE}`, 'task:release:2:none']))
+    expect(drained).toEqual(expect.arrayContaining([`design:61:${LIFE}`, `task:release:unknown:${RHOUR}`]))
     // an update that cannot run when they drain (its retry backoff) holds nothing
     const backingOff = withLedger(s, [merged(NOW - MIN), reading, entry(`update-checkout:${LAST}`, 'update-checkout', { status: 'failed', attempts: 1, startedAt: NOW - MIN, endedAt: NOW - MIN })])
     expect(keys(plan(backingOff, ACT))).toEqual(quiet)

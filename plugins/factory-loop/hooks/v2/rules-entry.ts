@@ -18,6 +18,7 @@ import { gate, wake } from '../foundation'
 import type { Action, LedgerEntry } from '../types'
 import { entryKey, followKey, keyParts, lifeAt, lifeKey, lifeOf, seqKey, transitionKey } from './keys'
 import { fixWhyOf, lifeEntries } from './rules-agent'
+import { splitDesignOf } from './rules-work'
 import { ENTRY_EVENTS, TABLE } from './table'
 import { ALL_FACTORY_LABELS, labelOf, resumeStep } from './types'
 import type { EmitState, IssueRecord, Lease, V2Ctx } from './types'
@@ -118,6 +119,18 @@ export function parkedTell(r: IssueRecord, k: number): Action {
   return wake('tell', 'parked', key, k === 0 ? RULE : 'S6', r.issue, { issue: r.issue, from: r.resumeTo ?? 'none', days: k }, lines)
 }
 
+// keepOpenTell: the owner tell for a merged issue whose rollout is keep-open while open issues
+// still wait on it: they stay unclaimable until it is closed. Planned while its view shows
+// issues blocked on it; the ledger makes it once. The blocked issues' numbers are
+// not read, so it gives the count and the link.
+function keepOpenTell(ctx: V2Ctx, r: IssueRecord): Action | null {
+  const key = followKey(r, 'blocked-tell')
+  const count = ctx.state.issues.find(i => i.number === r.issue)?.blocking ?? null
+  if (count === null || count <= 0) return null
+  const lines = [`issue: https://github.com/${ctx.state.repo}/issues/${r.issue}`, `waiting: ${count} open issue${count === 1 ? ' is' : 's are'} blocked by it and stay unclaimable until it is closed`]
+  return wake('tell', 'keep-open-blocks', key, RULE, r.issue, { issue: r.issue, blocking: count }, lines)
+}
+
 // entryItems: the entry actions of the record's current seq, in their order (4.5).
 export function entryItems(ctx: V2Ctx, r: IssueRecord, slot: Lease | null): EntryItem[] {
   const t = transitionOf(ctx, r)
@@ -184,10 +197,31 @@ function closedItems(ctx: V2Ctx, r: IssueRecord): EntryItem[] {
     if (o !== null && (o.rollout === 'run-it' || o.rollout === 'keep-open') && ctx.state.sources.milestone.ok && ctx.state.milestone !== null) {
       add({ ...base(r, followKey(r, 'milestone-later'), `${o.rollout} leaves the issue open`), kind: 'milestone-later' })
     }
+    if (o !== null && o.rollout === 'keep-open') {
+      const tell = keepOpenTell(ctx, r)
+      if (tell !== null) items.push({ action: tell, soft: false, tell: true })
+    }
   }
   if (r.why === 'split') {
     const created = lifeEntries(ctx, r, 'split').flatMap(e => (e.status === 'done' && e.outcome?.kind === 'split' ? [e.outcome.child] : []))
-    add({ ...base(r, followKey(r, 'release-parent'), 'the parent is the split\'s tracker'), kind: 'release-parent', created: [...new Set(created)].sort((a, b) => a - b) })
+    const sorted = [...new Set(created)].sort((a, b) => a - b)
+    // the reasons and each child's why come from the life's design answer; null when it can no longer be read
+    const design = splitDesignOf(ctx, r)
+    const whyOf = new Map<number, string>()
+    const made = lifeEntries(ctx, r, 'split')
+    for (const c of design?.children ?? []) {
+      // the child's entry sits under the seq that made it, an earlier one than this closed record's
+      const e = made.find(m => m.status === 'done' && m.outcome?.kind === 'split' && m.key.endsWith(`/child/${c.key}`))
+      if (e?.outcome?.kind === 'split' && typeof c.why === 'string' && c.why !== '') whyOf.set(e.outcome.child, c.why)
+    }
+    const childWhys = sorted.map(n => whyOf.get(n))
+    add({
+      ...base(r, followKey(r, 'release-parent'), 'the parent is the split\'s tracker'),
+      kind: 'release-parent',
+      created: sorted,
+      reasons: design?.reasons ?? null,
+      childWhys: design !== null && childWhys.every((w): w is string => w !== undefined) ? childWhys : null,
+    })
   }
   return items
 }

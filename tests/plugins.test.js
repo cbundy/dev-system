@@ -138,6 +138,7 @@ function run(ctx, script, env = {}) {
         DEV_WORKSPACE: ctx.ws,
         DEV_REPO_URL: "",
         DEV_DEFAULT_PLUGINS: DEFAULT,
+        DEV_DEFAULT_PLUGIN_REFS_WIN: "", // never the ambient switch
         ...env,
       },
     },
@@ -919,6 +920,7 @@ function doctorLines(ctx, env) {
       AGENTSVIEW_DATA_DIR: path.join(ctx.dir, "agentsview"),
       NO_MISTAKES_HOME: path.join(ctx.dir, "no-mistakes"),
       DEV_DEFAULT_PLUGINS: `${DEFAULT}#v0.41.0`,
+      DEV_DEFAULT_PLUGIN_REFS_WIN: "", // never the ambient switch
       ...env,
     },
   });

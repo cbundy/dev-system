@@ -77,11 +77,12 @@ SQL
   older record. [#654](https://github.com/cbundy/dev-system/issues/654) changes
   `plugins/factory-loop/hooks/v2/record.ts:46-51`, which skips today. Shell tools read only
   envelope fields or the view.
-- **The writer never refuses what a newer caller may know.** `callum-flow-event` ships in the
-  image and its callers in the plugin, and the two roll out separately. So at run time it checks
+- **The writer never refuses what a newer caller may know.** `callum-flow-event` (its native mode,
+  `--type`) ships in the image and its callers in the plugin, and the two roll out separately. So at run time it checks
   the envelope and, for a type and version it knows, that every required field is present with
   its JSON type; it exits 2 only on those. A type or version it does not know is written with a
   warning naming it. Enum values, bounds and unknown fields are checked strictly only in `npm test`.
+  The check reads the image's shapes file, `factory-event-shapes.json`, generated from the schemas.
 - **Bumps roll out in two releases.** The new schema file, the shared reader's upgrade step and
   any view change ship one release before any producer writes the new version. The same holds for
   a new type, so every reader knows it before it appears.
@@ -109,7 +110,9 @@ SQL
 - **Local log.** Each device appends one line per event to
   `/persist/events/factory/<owner>__<repo>.jsonl`. Dual write is live in `callum-flow-event`, which appends the translated
   event right after the old line (`callum-flow-event --new-path` prints the path; `factory/` is made
-  0700). The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
+  0700). The native mode, `callum-flow-event --type <type> --data '<json>' [--type-version N]
+  [--issue N] [--repo O/N] [--actor NAME]`, writes a new event straight to that file and nothing to
+  the old log. The old line still goes to today's file, and nothing that reads today's file sees the new one: not `callum-flow-claim`,
   `callum-flow-sweep`, `--if-changed` (which keeps comparing old lines only) or the old shipper's
   `$DIR/*.jsonl` glob (`images/base/event-push-loop:202`).
 - **Shipping.** `factory-event-push-loop` (as the writer role, with `FACTORY_DB_WRITER_URL` or the
@@ -136,6 +139,18 @@ SQL
   read only the view and keep the [#644](https://github.com/cbundy/dev-system/issues/644) rules: no
   `@>`, no `DISTINCT ON`, percentiles in code.
 
+## Adding an event
+
+1. Add `<type>.v1.json` to `schemas/` with descriptions, an example and `x-issue`.
+2. Run `npm run build:events`. It rewrites the reference, the lock, `event-schemas.ts` and
+   `images/base/factory-event-shapes.json`.
+3. Ship the schema one release before any producer writes it (the two-release rule above), so every
+   reader and the image's writer know the type first.
+4. Write the event with `callum-flow-event --type <type> --data '<json object>' [--issue N]`. The
+   writer exits 2 on a missing required field, a wrong JSON type, a missing `--issue` for an
+   `x-issue: required` type or a bad option, and writes nothing.
+5. Add a producer fixture to `tests/factory-event-native.test.js`.
+
 ## Keeping the docs in step
 
 Checks fail whenever code and docs disagree, so nobody has to remember a process step.
@@ -156,7 +171,9 @@ Checks fail whenever code and docs disagree, so nobody has to remember a process
   `plugins/factory-loop/hooks/v2/event-schemas.ts`, the same shapes as a typed constant plus each
   type's current version. The shared reader is `plugins/factory-loop/hooks/v2/event-reader.ts`: it
   reads only that file and exports `readEvent`, `UPGRADES` (one step per `<type>.v<N>`) and
-  `validateStrict`.
+  `validateStrict`. The script also writes `images/base/factory-event-shapes.json` (`_generated`,
+  `current` and `schemas`, the same data as JSON), which the image installs beside
+  `factory-event-write.js` in `/usr/local/share/dev-system/` for the native writer.
 - **Supported keywords.** The generator and the reader's validator know only these. Checked:
   `type` (a string or an array, including `"null"`), `enum`, `const`, `properties`, `required`,
   `additionalProperties: false`, `items`, `pattern`, `minimum`, `maximum`, `minLength`,
@@ -165,7 +182,7 @@ Checks fail whenever code and docs disagree, so nobody has to remember a process
   Lint fails on any other keyword.
 - **Tests (`npm test`).** Every example validates strictly against its own schema and, through the
   shared reader's upgrade, against the type's current version. Every event fixture of a producer
-  (`tests/factory-loop-v2-events.test.js` for the loop, and the shell producers' own tests) goes
+  (`tests/factory-loop-v2-events.test.js` for the loop, `tests/factory-event-native.test.js` for the native mode, and the shell producers' own tests) goes
   through the real `callum-flow-event`, the translator during dual write, strict validation and the
   shared reader, and must come back equal to what went in. The view's lifted columns must match
   the `x-column` fields.

@@ -164,12 +164,57 @@ run "secrets_dir_only" {
     error_message = "gh_login options must be private and token"
   }
   assert {
-    condition     = length([for v in docker_container.workspace[0].volumes : v if v.container_path == "/persist/gh" || v.container_path == "/run/secrets/dev-system-workspace"]) == 0
-    error_message = "private mode mounts neither the gh volume nor a workspace folder"
+    condition     = length([for v in docker_container.workspace[0].volumes : v if v.container_path == "/persist/gh"]) == 0
+    error_message = "private mode does not mount the gh volume"
+  }
+  assert {
+    condition     = length([for v in docker_container.workspace[0].volumes : v if v.container_path == "/run/secrets/dev-system-workspace" && v.read_only && startswith(v.host_path, "/srv/ws-secrets/") && v.host_path != "/srv/ws-secrets"]) == 1
+    error_message = "with workspace_secrets_dir set, the workspace's own folder (never the whole directory) is mounted read-only even outside token mode"
+  }
+  assert {
+    condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "DEV_GH_TOKEN_FILE=")]) == 0
+    error_message = "DEV_GH_TOKEN_FILE is set only for gh_login=token"
   }
   assert {
     condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "CALLUM_FLOW_TRUSTED_AUTHORS=")]) == 0
     error_message = "trusted authors stay unset when both are empty"
+  }
+}
+
+# 2b. A shared gh login with workspace_secrets_dir set: the shared volume is
+# mounted and so is the workspace's own folder (it may hold factory-db-*-url).
+run "shared_login_with_secrets_dir" {
+  command = plan
+
+  variables {
+    gh_volume_name        = "dev-system-gh"
+    workspace_secrets_dir = "/srv/ws-secrets"
+  }
+
+  override_data {
+    target = data.coder_parameter.gh_login
+    values = { value = "shared" }
+  }
+  override_data {
+    target = data.coder_parameter.extra_trusted_authors
+    values = { value = "" }
+  }
+  override_data {
+    target = data.coder_parameter.git_email
+    values = { value = "" }
+  }
+
+  assert {
+    condition     = length([for v in docker_container.workspace[0].volumes : v if v.container_path == "/persist/gh" && v.volume_name == "dev-system-gh"]) == 1
+    error_message = "the shared gh volume must still be mounted"
+  }
+  assert {
+    condition     = length([for v in docker_container.workspace[0].volumes : v if v.container_path == "/run/secrets/dev-system-workspace" && v.read_only && startswith(v.host_path, "/srv/ws-secrets/")]) == 1
+    error_message = "the workspace's own folder must be mounted with a shared login too"
+  }
+  assert {
+    condition     = length([for e in docker_container.workspace[0].env : e if startswith(e, "DEV_GH_TOKEN_FILE=")]) == 0
+    error_message = "DEV_GH_TOKEN_FILE is set only for gh_login=token"
   }
 }
 
