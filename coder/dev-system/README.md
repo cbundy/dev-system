@@ -140,7 +140,7 @@ restart.
 
 For a workspace that works on dev-system itself, set `image` to
 `ghcr.io/cbundy/dev-system/dev:latest`: this repo's own per-repo image (the base image plus
-terraform and a PostgreSQL 17 server, from `.devcontainer/Dockerfile`), which also carries this repo's
+terraform, a PostgreSQL 17 server and TypeScript, from `.devcontainer/Dockerfile`), which also carries this repo's
 `DEV_REPO_URL`, so `repo_url` can stay empty. It is public, so it needs no registry
 credentials.
 
