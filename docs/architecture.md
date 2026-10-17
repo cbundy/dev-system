@@ -109,6 +109,8 @@ PostgreSQL is started and no sandbox is made. A passing subset run prints
 arguments is unchanged and is the only gate; the raw `node --test`, `claude plugin test` and
 `sh <suite>` commands skip the sandbox and the database tests, so do not use them.
 
+The per-run results dir, and the `TMPDIR` the jobs see inside it, are made under `/tmp`, never under the inherited `TMPDIR`, so the sandbox is never under `/persist`.
+
 SIGTERM or Ctrl-C stops the pool and removes its per-run results and `TMPDIR`.
 
 Standing up a factory database for real (provision, `factory-db-bootstrap`, the per-role secrets
