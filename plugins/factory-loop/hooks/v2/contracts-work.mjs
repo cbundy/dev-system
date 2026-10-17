@@ -12,11 +12,12 @@
 //     { "kind": "split", "brief": "<the epic's plan>",
 //       "reasons": { "why_split": "...", "why_count": "...", "why_parts": "...", "why_order": "..." },
 //       "children": [{ "key": "a", "title": "...", "why": "...", "body": "...", "blockedBy": ["b"], "ready": true }] }
-//     { "kind": "wait", "conditions": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "pr-merged", "pr": 812 }],
+//     { "kind": "wait", "conditions": [{ "kind": "issue-closed", "issue": 57 }, { "kind": "pr-merged", "pr": 812 }, { "kind": "tag-contains", "sha": "35bb655" }],
 //       "reason": "<one line, at most 500>", "brief": "<a draft, or null>" }
-//       1 to 8 conditions of issue-closed or pr-merged, each number at least 1, never the issue itself,
-//       none twice; the loop re-checks them and resumes the designer once every one holds (#838 adds
-//       tag-contains); the outcome carries conditions and reason only for a wait
+//       1 to 8 conditions of issue-closed, pr-merged or tag-contains (a release tag carries the commit
+//       `sha`, 7 to 40 hex, stored lower-case), each number at least 1, never the issue itself, none
+//       twice; the loop re-checks them and resumes the designer once every one holds; the outcome
+//       carries conditions and reason only for a wait
 //   A split gives four short reasons (each at most 500 characters) and a one-line `why` for each
 //   child (at most 200): why split, why this many parts, why these boundaries, why this order.
 //   A brief starts with its `## Design brief` heading and has a `## Rollout` of merge, run-it or
@@ -72,7 +73,7 @@ export const REASON_KEYS = Object.freeze(['why_split', 'why_count', 'why_parts',
 export const CHILDREN = Object.freeze({ min: 2, max: 10 })
 export const WAIT_CONDITIONS = Object.freeze({ min: 1, max: 8 })
 // The conditions a wait may name: the loop checks each from GitHub with no model call.
-export const WAIT_KINDS = Object.freeze(['issue-closed', 'pr-merged'])
+export const WAIT_KINDS = Object.freeze(['issue-closed', 'pr-merged', 'tag-contains'])
 // A child's key goes into its ledger key (keys.ts childKey) and its hidden marker.
 export const CHILD_KEY = /^[a-z0-9][a-z0-9-]{0,23}$/
 const SHA = /^[0-9a-f]{7,40}$/i
@@ -301,7 +302,7 @@ function partsOf(p) {
 // conditionsOf: a wait's conditions, as the loop stores them; every problem at once.
 function conditionsOf(v, problems, self) {
   if (!Array.isArray(v)) {
-    problems.push(`conditions must be a list of ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max} conditions { kind: ${WAIT_KINDS.join(' | ')}, issue | pr }`)
+    problems.push(`conditions must be a list of ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max} conditions { kind: ${WAIT_KINDS.join(' | ')}, issue | pr | sha }`)
     return []
   }
   if (v.length < WAIT_CONDITIONS.min || v.length > WAIT_CONDITIONS.max) problems.push(`conditions has ${v.length}; a wait has ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max}`)
@@ -311,16 +312,27 @@ function conditionsOf(v, problems, self) {
     const where = `conditions[${i}]`
     const c = record(raw)
     if (c === null) {
-      problems.push(`${where} must be an object { kind, issue } or { kind, pr }`)
-      return
-    }
-    if (c.kind === 'tag-contains') {
-      problems.push(`${where}: tag-contains is not yet supported; wait on ${WAIT_KINDS.join(' or ')}, or ask the owner`)
+      problems.push(`${where} must be an object { kind, issue }, { kind, pr } or { kind, sha }`)
       return
     }
     const kind = WAIT_KINDS.find(k => k === c.kind)
     if (kind === undefined) {
       problems.push(`${where}.kind ${show(c.kind)} is not one of ${WAIT_KINDS.join(', ')}`)
+      return
+    }
+    if (kind === 'tag-contains') {
+      strays(c, ['kind', 'sha'], where, problems)
+      if (typeof c.sha !== 'string' || !SHA.test(c.sha)) {
+        problems.push(`${where}.sha ${show(c.sha)} must be 7 to 40 hex characters (a commit sha)`)
+        return
+      }
+      const sha = c.sha.toLowerCase()
+      if (seen.has(`${kind}:${sha}`)) {
+        problems.push(`${where} repeats ${kind}:${sha}`)
+        return
+      }
+      seen.add(`${kind}:${sha}`)
+      out.push({ kind, sha })
       return
     }
     const field = kind === 'issue-closed' ? 'issue' : 'pr'

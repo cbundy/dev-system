@@ -170,9 +170,18 @@ function openOf(ctx: V2Ctx, r: IssueRecord): WaitCondition[] {
   return (r.wait ?? []).filter(c => ctx.v2.waits?.[waitKey(c)]?.held !== true)
 }
 
+// clearedData: the tag the record's tag-contains reads compared against, for the cleared note.
+function clearedData(ctx: V2Ctx, r: IssueRecord): { tag: string } | undefined {
+  for (const c of r.wait ?? []) {
+    const tag = c.kind === 'tag-contains' ? ctx.v2.waits?.[waitKey(c)]?.tag : undefined
+    if (tag !== undefined) return { tag }
+  }
+  return undefined
+}
+
 // openText: the open conditions in words, for the skip line and E6's tell.
 function openText(open: readonly WaitCondition[]): string {
-  return open.map(c => (c.kind === 'issue-closed' ? `#${c.issue} (still open)` : `PR #${c.pr} (not merged yet)`)).join(', ')
+  return open.map(c => (c.kind === 'issue-closed' ? `#${c.issue} (still open)` : c.kind === 'pr-merged' ? `PR #${c.pr} (not merged yet)` : `no release tag contains ${c.sha} yet`)).join(', ')
 }
 
 // waitingRules: a waiting record's events after the early ones (4.1): C1 when every condition
@@ -181,7 +190,7 @@ function waitingRules(ctx: V2Ctx, r: IssueRecord, logged: boolean): void {
   const n = r.issue
   const open = openOf(ctx, r)
   if (open.length === 0 && (r.wait ?? []).length > 0) {
-    if (take(ctx, r, { event: { kind: 'cleared' }, trigger: fact(`cleared:${n}@${r.seq}`) }, logged, '')) return
+    if (take(ctx, r, { event: { kind: 'cleared', data: clearedData(ctx, r) }, trigger: fact(`cleared:${n}@${r.seq}`) }, logged, '')) return
   }
   if (ctx.state.now - r.since >= periodOf(ctx, r)) take(ctx, r, { event: { kind: 'timeout' }, trigger: fact(`waiting:${n}`) }, logged, `waiting for ${openText(open)}`)
   const u = unparkOf(ctx, r)

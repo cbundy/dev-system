@@ -334,7 +334,7 @@ test("a v2 split without reasons is refused and records nothing; a full split is
 });
 
 // A v2 wait is held to the same contract the loop checks: 1 to 8 checkable conditions and a reason.
-test("a v2 wait is recorded with its conditions; a tag-contains wait is refused as not yet supported", () => {
+test("a v2 wait is recorded with its conditions; a tag-contains wait is accepted, a bad sha refused", () => {
   const job = { contract: "design-v2", purpose: null, repo: "cbundy/dev-system", issue: 837, branch: null };
   const conditions = [{ kind: "issue-closed", issue: 57 }, { kind: "pr-merged", pr: 812 }];
   const wait = { kind: "wait", conditions, reason: "Needs #57 closed and PR #812 merged first", brief: null };
@@ -342,9 +342,12 @@ test("a v2 wait is recorded with its conditions; a tag-contains wait is refused 
   const good = run(["--to", ok.file], { input: JSON.stringify(wait) });
   assert.equal(good.code, 0, good.err);
   assert.match(good.out, /^factory-answer: recorded your design-v2 answer \(a wait on 2 conditions\)/);
+  const tag = issue(job);
+  const tagged = run(["--to", tag.file], { input: JSON.stringify({ ...wait, conditions: [{ kind: "tag-contains", sha: "35BB655" }] }) });
+  assert.equal(tagged.code, 0, tagged.err);
   const refused = issue(job);
-  const bad = run(["--to", refused.file], { input: JSON.stringify({ ...wait, conditions: [{ kind: "tag-contains", sha: "35bb655" }] }) });
+  const bad = run(["--to", refused.file], { input: JSON.stringify({ ...wait, conditions: [{ kind: "tag-contains", sha: "xyz" }] }) });
   assert.equal(bad.code, 1, bad.out);
-  assert.match(problemsOf(bad.err).join("\n"), /tag-contains is not yet supported/);
+  assert.match(problemsOf(bad.err).join("\n"), /conditions\[0\]\.sha "xyz" must be 7 to 40 hex/);
   assert.equal(fs.existsSync(refused.file), false);
 });

@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
 import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
-import { readMilestone } from '../hooks/observe-milestone'
+import { newestTag, readMilestone, waitsOnTag } from '../hooks/observe-milestone'
 import type { MilestoneCache } from '../hooks/observe-milestone'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
@@ -34,6 +34,7 @@ import {
 } from '../hooks/parse'
 import type { PipelineRun } from '../hooks/parse'
 import { plan } from '../hooks/plan'
+import { parseCompareStatus } from '../hooks/v2/sources-waits'
 import { buildState, runsFromWatch, seenRuns, subIssuesOf } from '../hooks/state'
 import type { Observed } from '../hooks/state'
 import type { LedgerEntry, Outcome, RunState } from '../hooks/types'
@@ -295,6 +296,14 @@ describe('parse', () => {
     expect(parseOldestMerge(JSON.stringify([{ mergedAt: '2026-10-17T03:26:32Z', mergeCommit: { oid: sha } }]), sha)).toBeNull()
   })
 
+  test('parseCompareStatus: behind and identical hold, ahead and diverged do not, anything else says nothing', () => {
+    expect(parseCompareStatus('behind\n')).toBe(true)
+    expect(parseCompareStatus('identical')).toBe(true)
+    expect(parseCompareStatus('ahead\n')).toBe(false)
+    expect(parseCompareStatus(' diverged ')).toBe(false)
+    for (const other of ['', '\n', 'Behind', 'behind ahead', '{"status":"behind"}', 'null']) expect({ other, got: parseCompareStatus(other) }).toEqual({ other, got: null })
+  })
+
   describe('readMilestone: the milestone and release reads', () => {
     const SHA_T = '892e4f6e0000000000000000000000000000abcd'
     const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '' })
@@ -365,6 +374,67 @@ describe('parse', () => {
       const cache: MilestoneCache = {}
       await readMilestone(cache, o(setup({ ...all, ms: fail() }).run, 5000))
       expect(cache.milestone).toBeUndefined()
+    })
+
+    describe('the tag view, wanted by a record that waits on a tag-contains condition', () => {
+      const wanted = (run: ReturnType<typeof setup>['run'], now: number) => ({ ...o(run, now), tagWanted: true })
+
+      test('with open items only gh release view runs, and cache.tag fills; with it unwanted nothing runs', async () => {
+        const cache: MilestoneCache = {}
+        const { calls, run } = setup({ ...all, ms: ok(OPEN) })
+        await readMilestone(cache, wanted(run, 5000))
+        expect(calls.map((c) => c.slice(0, 3).join(' '))).toEqual(['callum-flow-milestone show next', 'gh release view'])
+        expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
+        expect(cache.release).toBeUndefined()
+        const none: MilestoneCache = {}
+        const quiet = setup({ ...all, ms: ok(OPEN) })
+        await readMilestone(none, o(quiet.run, 5000))
+        expect(quiet.calls.map((c) => c[0])).toEqual(['callum-flow-milestone'])
+        expect(none.tag).toBeUndefined()
+      })
+
+      test('no release yet reads as no tag; a failed or malformed view keeps the last reading; it is read on the cadence only', async () => {
+        const cache: MilestoneCache = {}
+        await readMilestone(cache, wanted(setup({ ...all, ms: ok(OPEN), view: fail('release not found') }).run, 5000))
+        expect(cache.tag).toEqual({ at: 5000, value: null })
+        const prior = { at: 1, value: 'v0.47.0' }
+        for (const view of [fail(), ok('nope')]) {
+          const kept: MilestoneCache = { tag: prior }
+          await readMilestone(kept, wanted(setup({ ...all, ms: ok(OPEN), view }).run, 5000))
+          expect(kept.tag).toBe(prior)
+        }
+        const thrown: MilestoneCache = { tag: prior }
+        await readMilestone(thrown, wanted(async () => { throw new Error('x') }, 5000))
+        expect(thrown.tag).toBe(prior)
+        const again: MilestoneCache = {}
+        const { calls, run } = setup({ ...all, ms: ok(OPEN) })
+        await readMilestone(again, wanted(run, 5000))
+        const n = calls.length
+        await readMilestone(again, wanted(run, 5500))
+        expect(calls.length).toBe(n)
+        await readMilestone(again, wanted(run, 6000))
+        expect(calls.filter((c) => c[1] === 'release')).toHaveLength(2)
+      })
+
+      test('a qualifying milestone keeps the full release read and refreshes the tag with it, with no second view', async () => {
+        const cache: MilestoneCache = {}
+        const { calls, run } = setup(all)
+        await readMilestone(cache, wanted(run, 5000))
+        expect(cache.release?.value.tag).toBe('v0.48.0')
+        expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
+        expect(calls.filter((c) => c[1] === 'release')).toHaveLength(1)
+      })
+
+      test('newestTag: the newer of the release read and the tag view; waitsOnTag: waiting records with a tag-contains condition', () => {
+        expect(newestTag({})).toBeNull()
+        expect(newestTag({ tag: { at: 1, value: 'v1' } })).toBe('v1')
+        expect(newestTag({ release: { at: 5, value: { tag: 'v2', oldest: null } }, tag: { at: 1, value: 'v1' } })).toBe('v2')
+        expect(newestTag({ release: { at: 1, value: { tag: 'v2', oldest: null } }, tag: { at: 5, value: 'v3' } })).toBe('v3')
+        expect(newestTag({ release: { at: 1, value: { tag: null, oldest: null } } })).toBeNull()
+        const tag = { kind: 'tag-contains', sha: '35bb655' }
+        expect(waitsOnTag([{ state: 'waiting', wait: [{ kind: 'issue-closed' }, tag] }])).toBe(true)
+        expect(waitsOnTag([{ state: 'designing', wait: [tag] }, { state: 'waiting', wait: [{ kind: 'pr-merged' }] }, { state: 'waiting', wait: null }])).toBe(false)
+      })
     })
 
     test('the cadence: reads again only once every has passed', async () => {

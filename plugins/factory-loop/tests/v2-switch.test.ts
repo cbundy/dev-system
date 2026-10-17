@@ -201,6 +201,26 @@ describe('planPass: only the planner acts; the shadow is planned and logged', ()
     expect(tasks({ ...after, now: NOW + 60 * MIN }).map(x => x.key)).toEqual(['task:release:v1.0.0:2026-10-13T04'])
   })
 
+  test('O3 (v2) with records waiting on a release tag: the review is due while the milestone has open items, its fields list the issues, once per UTC hour', () => {
+    const cfg = config({ planner: 'v2' })
+    const waitingOn = (issue: number, kind: 'tag-contains' | 'issue-closed') =>
+      record({ issue, state: 'waiting', step: null, resumeTo: 'designing', wait: [kind === 'tag-contains' ? { kind, sha: '35bb655' } : { kind, issue: 99 }] })
+    const open = state({ milestone: { open: 2, closed: 5, expected: 'minor' }, release: { tag: 'v1.0.0', oldest: null } })
+    const withRecords = (records: IssueRecord[], s: State = open): State => ({ ...s, v2: { ...emptyV2State(NOW), records } })
+    const tasks = (s: State) => planV2(s, cfg).actions.filter(x => x.kind === 'task')
+    // an issue condition or no waiting record leaves the due rule and fields as they were
+    expect(tasks(withRecords([waitingOn(7, 'issue-closed')]))).toEqual([])
+    const due = tasks(withRecords([waitingOn(9, 'tag-contains'), waitingOn(7, 'tag-contains'), waitingOn(8, 'issue-closed')]))
+    expect(due).toMatchObject([{ key: 'task:release:v1.0.0:2026-10-13T03', fields: { tag: 'v1.0.0', waiting: '7,9' } }])
+    // a milestone with none closed is due too
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], state({ milestone: { open: 0, closed: 0, expected: null } })))).toHaveLength(1)
+    // at most one release task per UTC hour
+    const held = entry('task:release:v1.0.0:2026-10-13T03', 'task', { class: 'drive', wake: 'release', status: 'done', startedAt: NOW, endedAt: NOW + MIN })
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, ledger: [...open.ledger, held] }))).toEqual([])
+    // a milestone source that is not readable stays no review
+    expect(tasks(withRecords([waitingOn(7, 'tag-contains')], { ...open, milestone: null }))).toEqual([])
+  })
+
   test('R2 restarts only on a pass that starts nothing else: a release task due in the same pass holds it, and the task\'s run holds it after (v2 SPEC 14.1)', () => {
     const cfg = config({ planner: 'v2' })
     const quiet: State = { ...state({ control: control({ updateDue: { reason: 'image', at: NOW - MIN } }) }), v2: emptyV2State(NOW) }

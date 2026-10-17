@@ -50,7 +50,8 @@ function designing(over: Partial<IssueRecord> = {}): IssueRecord {
 }
 
 // the CLIs a pass reads, quiet; the loop's slot for #470 is leased; the conditions' states are the test's
-function world(github: { issue57: 'open' | 'closed'; pr812: 'OPEN' | 'MERGED' }, extra: (argv: string[], s: Seen) => { exitCode?: number; stdout?: string; stderr?: string } | undefined = () => undefined) {
+type Github = { issue57: 'open' | 'closed'; pr812: 'OPEN' | 'MERGED'; tag?: string; compare?: string }
+function world(github: Github, extra: (argv: string[], s: Seen) => { exitCode?: number; stdout?: string; stderr?: string } | undefined = () => undefined) {
   const slots = [{ name: '1', path: '/slots/1', status: 'leased', branch: 'issue-470', lease_id: 'L1', lease_holder: 'factory-loop:470:tbq3k0', leased_at: iso(NOW - HOUR), processes: [] }]
   return (argv: string[], s: Seen) => {
     const own = extra(argv, s)
@@ -74,6 +75,8 @@ function world(github: { issue57: 'open' | 'closed'; pr812: 'OPEN' | 'MERGED' },
         return { stdout: JSON.stringify({ issue: { number: n, id: 9000 + n, state: 'open', labels: ['factory:waiting'], issue_dependencies_summary: { blocked_by: 0 }, sub_issues_summary: { total: 0 } }, stripped: 0 }) }
       }
       case 'gh':
+        if (args[0] === 'release' && args[1] === 'view') return github.tag === undefined ? { exitCode: 1, stderr: 'release not found' } : { stdout: JSON.stringify({ tagName: github.tag }) }
+        if (args[0] === 'api' && args[1]?.startsWith(`repos/${REPO}/compare/`)) return { stdout: `${github.compare ?? 'ahead'}\n` }
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ state: github.pr812, mergedAt: github.pr812 === 'MERGED' ? iso(NOW - MIN) : null }) }
         return undefined
       case 'treehouse':
@@ -102,6 +105,15 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
       read: `gh pr view 812 --repo ${REPO} --json state,mergedAt`,
       cleared: 'The loop resumed this: PR #812 merged; every condition holds.',
     },
+    {
+      // the newest tag lacks the commit (compare says ahead) until a newer tag carries it (behind)
+      name: 'a release tag containing a commit',
+      conditions: [{ kind: 'tag-contains', sha: '35bb655' }],
+      first: { tag: 'v0.50.0', compare: 'ahead' },
+      later: { issue57: 'open', pr812: 'OPEN', tag: 'v0.51.0', compare: 'behind' },
+      read: `gh api repos/${REPO}/compare/v0.51.0...35bb655 --jq .status`,
+      cleared: 'The loop resumed this: release v0.51.0 contains 35bb655; every condition holds.',
+    },
   ] as const
   for (const c of CASES) {
     test(`waiting on ${c.name}: the first pass enters waiting and writes its link and label; a later pass whose read shows it held resumes the record to designing, and the next design prompt carries the cleared note`, SLOW, async ($, on) => {
@@ -120,7 +132,7 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
         outcome: { kind: 'step', step: 'design', result: { event: 'not-ok', reason: 'wait', why: null, head: null, choice: null, data: answer } },
       })
       // GitHub as the pass reads it: both conditions open until the test closes one
-      const github: { issue57: 'open' | 'closed'; pr812: 'OPEN' | 'MERGED' } = { issue57: 'open', pr812: 'OPEN' }
+      const github: Github = { issue57: 'open', pr812: 'OPEN', ...('first' in c ? c.first : {}) }
       const h = host(on, {
         config: { repo: REPO, mode: 'act', checkout: '/work', planner: 'v2' },
         store: { [`records:${REPO}`]: recordsToStore([r], NOW - MIN), [`ledger:${REPO}`]: { v: 1, savedAt: NOW - MIN, entries: [design] } },
@@ -149,7 +161,8 @@ describe('a designer that waits, end to end (v2 SPEC 8.7, 4.3)', () => {
       expect(h.spawns).toEqual([])
       // the condition still open: passes read it and change nothing
       for (let i = 0; i < 2; i++) await pass(6 * 60_000)
-      expect(ran()).toContain(c.read)
+      expect(ran()).toContain('first' in c ? `gh api repos/${REPO}/compare/v0.50.0...35bb655 --jq .status` : c.read)
+      expect(ran().filter(l => l.includes('/compare/')).length).toBe('first' in c ? 1 : 0)
       expect(stored()).toMatchObject({ state: 'waiting', seq: 4 })
       // the condition holds: the read shows it, and the record goes on by itself
       Object.assign(github, c.later)
@@ -269,5 +282,75 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     }
     await readWaits(limit.c, kept, EVERY)
     expect(limit.ran).toHaveLength(1)
+  })
+
+  describe('a tag-contains condition: the compare of the commit with the newest release tag', () => {
+    const tagOf = (sha: string): WaitCondition => ({ kind: 'tag-contains', sha })
+    const cmp = (tag: string, sha: string) => `gh api repos/${REPO}/compare/${tag}...${sha} --jq .status`
+    const SHA = '35bb655'
+
+    test('heldOf: behind and identical hold, ahead and diverged do not, anything else keeps it open', () => {
+      expect(heldOf(tagOf(SHA), 'behind\n')).toBe(true)
+      expect(heldOf(tagOf(SHA), 'identical\n')).toBe(true)
+      expect(heldOf(tagOf(SHA), 'ahead\n')).toBe(false)
+      expect(heldOf(tagOf(SHA), 'diverged\n')).toBe(false)
+      for (const other of ['', 'null', '{"status":"behind"}', 'weird']) expect(heldOf(tagOf(SHA), other)).toBeNull()
+    })
+
+    test('read once per tag with the compare, keyed tag:<sha>; held for behind; open for ahead, a failed read and no tag', async () => {
+      const records = [designing({ issue: 1, state: 'waiting', step: null, wait: [tagOf(SHA)], resumeTo: 'designing' })]
+      // ahead: not held, and the tag it was read for is kept
+      const a = ctx(records, { [cmp('v0.50.0', SHA)]: 'ahead\n' }, { tag: 'v0.50.0' } as Partial<SourceCtx>)
+      const first = await readWaits(a.c, {}, EVERY)
+      expect(first).toEqual({ waits: { [`tag:${SHA}`]: { at: NOW, held: false, tag: 'v0.50.0' } }, failed: [] })
+      expect(a.ran).toEqual([cmp('v0.50.0', SHA)])
+      // the same tag, any time later: not read again
+      const same = ctx(records, {}, { tag: 'v0.50.0', now: NOW + HOUR } as Partial<SourceCtx>)
+      expect((await readWaits(same.c, first.waits, EVERY)).waits).toEqual(first.waits)
+      expect(same.ran).toEqual([])
+      // a new tag: read again, and behind holds
+      const next = ctx(records, { [cmp('v0.51.0', SHA)]: 'behind\n' }, { tag: 'v0.51.0', now: NOW + MIN } as Partial<SourceCtx>)
+      const held = await readWaits(next.c, first.waits, EVERY)
+      expect(held.waits).toEqual({ [`tag:${SHA}`]: { at: NOW + MIN, held: true, tag: 'v0.51.0' } })
+      // a held result stays held, whatever the tag does
+      const later = ctx(records, {}, { tag: 'v0.52.0', now: NOW + HOUR } as Partial<SourceCtx>)
+      expect((await readWaits(later.c, held.waits, EVERY)).waits).toEqual(held.waits)
+      expect(later.ran).toEqual([])
+      // diverged and identical
+      const div = ctx(records, { [cmp('v1', SHA)]: 'diverged\n' }, { tag: 'v1' } as Partial<SourceCtx>)
+      expect((await readWaits(div.c, {}, EVERY)).waits[`tag:${SHA}`]?.held).toBe(false)
+      const same2 = ctx(records, { [cmp('v1', SHA)]: 'identical\n' }, { tag: 'v1' } as Partial<SourceCtx>)
+      expect((await readWaits(same2.c, {}, EVERY)).waits[`tag:${SHA}`]?.held).toBe(true)
+      // a failed read and an unreadable output stay open and are named failed
+      const failed = ctx(records, {}, { tag: 'v1' } as Partial<SourceCtx>)
+      expect(await readWaits(failed.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`] })
+      const odd = ctx(records, { [cmp('v1', SHA)]: 'weird' }, { tag: 'v1' } as Partial<SourceCtx>)
+      expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`] })
+      // no tag known (no release yet, or its read failed): nothing is read, the condition stays open
+      const none = ctx(records, {}, { tag: null } as Partial<SourceCtx>)
+      expect(await readWaits(none.c, {}, EVERY)).toEqual({ waits: {}, failed: [] })
+      expect(none.ran).toEqual([])
+    })
+
+    test('the compares count against the budget and stop after a rate limit, with the other waits', async () => {
+      const shas = ['aaaaaaa', 'bbbbbbb', 'ccccccc']
+      const records = [designing({ issue: 1, state: 'waiting', step: null, wait: shas.map(tagOf), resumeTo: 'designing' })]
+      const answers = Object.fromEntries(shas.map(x => [cmp('v1', x), 'ahead\n']))
+      const two = ctx(records, answers, { prBudget: 2, tag: 'v1' } as Partial<SourceCtx>)
+      await readWaits(two.c, {}, EVERY)
+      expect(two.ran).toHaveLength(2)
+      const backoff = ctx(records, answers, { prBudget: 0, tag: 'v1' } as Partial<SourceCtx>)
+      await readWaits(backoff.c, {}, EVERY)
+      expect(backoff.ran).toEqual([])
+      let limited = false
+      const limit = ctx(records, answers, { limited: () => limited, tag: 'v1' } as Partial<SourceCtx>)
+      const run = limit.c.run
+      limit.c.run = async argv => {
+        limited = true
+        return run(argv)
+      }
+      await readWaits(limit.c, {}, EVERY)
+      expect(limit.ran).toHaveLength(1)
+    })
   })
 })

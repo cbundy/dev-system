@@ -49,6 +49,7 @@ export function parkText(r: IssueRecord, from: IssueRecord['state'] | null, via:
 // waitWords: one wait condition in words.
 export function waitWords(c: WaitCondition): string {
   // a line must not end on a closing keyword before a reference's number (prompts.ts neutral rewrites it)
+  if (c.kind === 'tag-contains') return `release tag must contain commit ${c.sha}`
   return c.kind === 'issue-closed' ? `issue #${c.issue} must be closed on GitHub` : `PR #${c.pr} must be merged on GitHub`
 }
 

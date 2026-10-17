@@ -81,6 +81,12 @@ export function prWaitArgv(repo: string, pr: number): string[] {
   return ['gh', 'pr', 'view', String(pr), '--repo', repo, '--json', 'state,mergedAt']
 }
 
+// Whether a release tag contains a commit: the compare status of the sha against the tag
+// (behind or identical: the tag carries it).
+export function compareArgv(repo: string, tag: string, sha: string): string[] {
+  return ['gh', 'api', `repos/${repo}/compare/${tag}...${sha}`, '--jq', '.status']
+}
+
 // A PR's state, merge, closedAt, head, mergeable state and author, through the reader.
 export function prReadArgv(pr: number): string[] {
   return ['callum-flow-issue-read', '--json', '--pr', String(pr)]
