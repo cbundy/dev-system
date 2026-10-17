@@ -138,6 +138,10 @@ check "dev-doctor prints the heartbeat line, and fails when a configured URL has
   echo "$out" | grep -q "FAIL heartbeat is not running" &&
   echo "$out" | grep -qF "fix: run: dev-init (log: /tmp/dev-heartbeat.log)"' \
   -e AGENTSVIEW_PG_URL=postgres://u:p@no-such-host.invalid/db --entrypoint ""
+check "dev-doctor fails a heartbeat that is not running when only the factory database writer URL is configured" in_image '
+  out=$(dev-doctor --warn-only 2>&1); echo "$out"
+  echo "$out" | grep -q "FAIL heartbeat is not running"' \
+  -e FACTORY_DB_WRITER_URL=postgres://u:p@no-such-host.invalid/db --entrypoint ""
 check "dev-doctor reports no heartbeat failure without a URL" in_image '
   out=$(dev-doctor --warn-only 2>&1); echo "$out"
   echo "$out" | grep -q "INFO worker heartbeat: last beat never" && ! echo "$out" | grep -q "FAIL heartbeat"' --entrypoint ""

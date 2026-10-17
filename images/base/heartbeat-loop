@@ -1,15 +1,23 @@
 #!/bin/bash
 #
 # heartbeat-loop: every DEV_HEARTBEAT_INTERVAL seconds, upserts this device's
-# row in factory.workers in the agentsview PostgreSQL (cbundy/dev-system#339),
-# so the fleet can see which workers are alive, what they run, whether they
-# are busy, and whether their push loops work.
+# row in factory.workers (cbundy/dev-system#339), so the fleet can see which workers
+# are alive, what they run, whether they are busy, and whether their push loops work.
 #
-# dev-init starts this in the background, under a container-local flock, when a
-# PostgreSQL URL is configured (agentsview.sh: the same secret and rules as
-# event-push-loop). The URL is read again on every pass and reaches only psql
-# (split into PG* variables in its environment, never its argv); all psql output
-# is masked. When the URL goes away the loop stops.
+# Two targets, each resolved again on every beat:
+#   old  the agentsview PostgreSQL (agentsview.sh: the same secret and rules as
+#        event-push-loop). It gets the guarded DDL plus the UPSERT.
+#   new  the factory database as its writer role (factory-db.sh: FACTORY_DB_WRITER_URL or
+#        factory-db-writer-url). It gets the same UPSERT and never any DDL (the writer role
+#        cannot run it; factory-db-bootstrap made the tables), and has no DDL state.
+# The row is built once per beat and the same psql -v values go to every target. The targets are
+# independent: a failure on one is logged (masked, naming "agentsview database" or "factory
+# database") and never skips or delays the other. The old target goes first.
+#
+# dev-init starts this in the background, under a container-local flock, when either URL is
+# configured. Each URL reaches only psql (split into PG* variables in its environment, never its
+# argv); all psql output is masked. A target whose URL goes away is skipped; when neither is
+# left the loop stops. An unreadable secret counts as not configured.
 #
 # Row: identity and versions come from `dev-version --local --snapshot`
 # ($DEV_VERSIONS_FILE); `versions` is that document plus the cached `latest`
@@ -25,22 +33,26 @@
 #   events_push_not_running, nm_push_not_running, agentsview_push_not_running
 #       (a push loop whose lock is free; the loop is configured because this
 #       loop runs only with a URL)
+#   factory_events_push_not_running   (the writer URL is configured and the
+#       factory-event-push-loop lock is free; never present without the writer URL)
 #   versions_snapshot_missing   (no readable snapshot after dev-version)
 #   latest_lookup_failing       (the background lookup has failed for over an hour)
+# push also carries factory_events: {last_write, last_push}, the newest mtimes of
+# $CALLUM_EVENTS_DIR/factory/*.jsonl and factory/.pushed/*.
 #
-# The DDL (guarded by catalog checks, so a repeat takes no exclusive lock) is
-# sent with the first beat of each process and again after a failed beat.
-# SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' (bounded
-# by `timeout 5`; it reuses the snapshot and the latest cache with no
-# dev-version call, sends the DDL only when this loop has not, and gives
+# The DDL (old target only; guarded by catalog checks, so a repeat takes no exclusive lock) is
+# sent with the first beat of each process and again after a failed beat of that target.
+# SIGTERM, SIGINT and SIGHUP write one last beat with state 'stopped' to every configured target
+# (bounded by `timeout 5`; it reuses the snapshot and the latest cache with no
+# dev-version call, sends the old target's DDL only when this loop has not, and gives
 # heartbeat-state 2 s, else an empty in_flight) and exit 0.
 # SIGUSR1 beats at once: a test hook, the only way to exercise the in-process
 # DDL resend without waiting out the 10 s minimum interval.
 #
 # Usage: heartbeat-loop [--once | --final]
-#   --once   one beat, exit 0 on success and 1 on failure (tests)
+#   --once   one beat, exit 0 only when every configured target succeeded, else 1 (tests)
 #   --final  signal the running loop (pidfile) and wait up to 8 s for it to
-#            exit; with no loop running but a URL configured, write the
+#            exit; with no loop running but either URL configured, write the
 #            'stopped' beat itself. Always exits 0.
 # Environment: DEV_HEARTBEAT_INTERVAL seconds (default 60; an integer of at
 #   least 10), DEV_VERSIONS_FILE, DEV_HEARTBEAT_DIR (pid, state and latest
@@ -50,6 +62,8 @@ set -u
 SHARE="${DEV_SYSTEM_SHARE:-/usr/local/share/dev-system}"
 # shellcheck source=agentsview.sh
 . "$SHARE/agentsview.sh"
+# shellcheck source=factory-db.sh
+. "$SHARE/factory-db.sh"
 # shellcheck source=workspace.sh
 . "$SHARE/workspace.sh"
 
@@ -65,7 +79,9 @@ LATEST_FAIL_AFTER=3600
 EVENT_LOCK="${HEARTBEAT_EVENT_LOCK:-/tmp/dev-event-push.lock}"
 NM_LOCK="${HEARTBEAT_NM_LOCK:-/tmp/dev-nm-push.lock}"
 AV_LOCK="${HEARTBEAT_AV_LOCK:-/tmp/dev-agentsview-push.lock}"
+FACTORY_EVENT_LOCK="${HEARTBEAT_FACTORY_EVENT_LOCK:-/tmp/dev-factory-event-push.lock}"
 EVENTS_DIR="${CALLUM_EVENTS_DIR:-/persist/events}"
+FACTORY_DIR="$EVENTS_DIR/factory"
 AV_DIR="${AGENTSVIEW_DATA_DIR:-/persist/agentsview}"
 VERSIONS_FILE="${DEV_VERSIONS_FILE:-/tmp/dev-versions.json}"
 SELF=$(readlink -f -- "$0" 2>/dev/null || echo "$0")
@@ -265,6 +281,9 @@ critical_failures() { # prints a JSON array
       out="$out agentsview_push_not_running"
     fi
   fi
+  if factory_db_url writer > /dev/null 2>&1; then
+    is_running "$FACTORY_EVENT_LOCK" || out="$out factory_events_push_not_running"
+  fi
   jq -e 'type == "object"' "$VERSIONS_FILE" >/dev/null 2>&1 || out="$out versions_snapshot_missing"
   if [ -e "$LATEST_FAIL" ]; then
     now=$(date +%s)
@@ -276,23 +295,49 @@ critical_failures() { # prints a JSON array
 }
 
 push_json() {
-  local ev_w ev_p nm av nmstate
+  local ev_w ev_p nm av nmstate fe_w fe_p
   ev_w=$(newest_mtime "$EVENTS_DIR"/*.jsonl)
   ev_p=$(newest_mtime "$EVENTS_DIR"/.pushed/*)
   nmstate="$(nm_push_state_dir 2>/dev/null)/state"
   nm=$(sed -n 's/^last_push=//p' "$nmstate" 2>/dev/null | sed -n 1p)
   case "$nm" in '' | *[!0-9]*) nm='' ;; esac
   av=$(newest_mtime "$AV_DIR/pg-watch.log")
-  jq -nc --arg ew "$ev_w" --arg ep "$ev_p" --arg nm "$nm" --arg av "$av" '
+  fe_w=$(newest_mtime "$FACTORY_DIR"/*.jsonl)
+  fe_p=$(newest_mtime "$FACTORY_DIR"/.pushed/*)
+  jq -nc --arg ew "$ev_w" --arg ep "$ev_p" --arg nm "$nm" --arg av "$av" --arg fw "$fe_w" --arg fp "$fe_p" '
     def t: if . == "" then null else (tonumber | todate) end;
-    {events: {last_write: ($ew | t), last_push: ($ep | t)}, nm: {last_push: ($nm | t)}, agentsview: {last_push: ($av | t)}}'
+    {events: {last_write: ($ew | t), last_push: ($ep | t)}, nm: {last_push: ($nm | t)}, agentsview: {last_push: ($av | t)},
+     factory_events: {last_write: ($fw | t), last_push: ($fp | t)}}'
 }
 
-# beat: one upsert. Returns 0 on success, 1 when psql failed, 2 when the URL is gone.
+# any_target: 0 when at least one database URL is configured.
+any_target() {
+  agentsview_pg_url > /dev/null 2>&1 || factory_db_url writer > /dev/null 2>&1
+}
+
+# upsert_to LABEL URL WITH_DDL: sends the row (the psql -v arguments in ARGS) to one database,
+# the DDL first when WITH_DDL is 1. Logs a failure, masked, naming LABEL. Returns psql's verdict.
+upsert_to() {
+  local label=$1 url=$2 with_ddl=$3 out
+  if ! out=$({ [ "$with_ddl" != 1 ] || printf '%s\n' "$DDL"; printf '%s\n' "$UPSERT"; } | run_psql "$url" "${ARGS[@]}" 2>&1); then
+    printf '%s\n' "$out" | mask_secrets >&2
+    echo "heartbeat-loop: $label beat failed, retrying next pass" >&2
+    return 1
+  fi
+  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
+  return 0
+}
+
+# beat: one upsert per configured target, the agentsview database first, then the factory
+# database. Returns 0 when every configured target succeeded, 1 when any failed and 2 when
+# neither URL is configured.
 beat() {
-  local url snap latest_json versions state_wait state_json state in_flight chat_at sessions out device
-  if ! url=$(agentsview_pg_url); then
-    echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file)) - stopping" >&2
+  local av_url='' fdb_url='' av_ok=0 fdb_ok=0 snap latest_json versions state_wait state_json state in_flight chat_at sessions device
+  local ok=0 failed=0
+  agentsview_pg_url > /dev/null 2>&1 && av_ok=1
+  factory_db_url writer > /dev/null 2>&1 && fdb_ok=1
+  if [ "$av_ok" = 0 ] && [ "$fdb_ok" = 0 ]; then
+    echo "heartbeat-loop: no readable PostgreSQL URL any more (AGENTSVIEW_PG_URL or $(agentsview_pg_url_file); FACTORY_DB_WRITER_URL or $(factory_db_url_file writer)) - stopping" >&2
     return 2
   fi
   [ -n "${HEARTBEAT_STOPPING:-}" ] || timeout 60 dev-version --local --snapshot > /dev/null 2>&1 || true
@@ -316,23 +361,34 @@ beat() {
   device=$(jq -r '.device // empty' <<< "$snap")
   [ -n "$device" ] || device=${DEV_MACHINE_NAME:-$(hostname)}
   g() { jq -r --arg k "$1" '.[$k] // ""' <<< "$snap"; }
-  if ! out=$({ [ "$DDL_SENT" = 1 ] || printf '%s\n' "$DDL"; printf '%s\n' "$UPSERT"; } | run_psql "$url" \
-    -v "device=$device" -v "repo=$(workers_repo)" -v "role=$(g role)" -v "ring=$(g ring)" \
-    -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)" \
-    -v "dev_image=$(g dev_image)" -v "template_version=$(g template_version)" \
-    -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state" \
-    -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "sessions=$sessions" -v "critical_failures=$(critical_failures)" \
-    -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)" 2>&1); then
-    DDL_SENT=0
-    printf '%s\n' "$out" | mask_secrets >&2
-    echo "heartbeat-loop: beat failed, retrying next pass" >&2
-    return 1
+  ARGS=(-v "device=$device" -v "repo=$(workers_repo)" -v "role=$(g role)" -v "ring=$(g ring)"
+    -v "runtime=$(g runtime)" -v "coder_workspace=$(g coder_workspace)" -v "base_image=$(g base_image)"
+    -v "dev_image=$(g dev_image)" -v "template_version=$(g template_version)"
+    -v "plugin_version=$(g plugin_version)" -v "versions=$versions" -v "state=$state"
+    -v "in_flight=$in_flight" -v "chat_active_at=$chat_at" -v "sessions=$sessions" -v "critical_failures=$(critical_failures)"
+    -v "push=$(push_json)" -v "interval_s=$INTERVAL" -v "started_at=$(container_start)")
+
+  # the targets are independent: a failure on one never skips or delays the other
+  if [ "$av_ok" = 1 ]; then
+    av_url=$(agentsview_pg_url)
+    if upsert_to "agentsview database" "$av_url" "$([ "$DDL_SENT" = 1 ] && echo 0 || echo 1)"; then
+      DDL_SENT=1
+      ok=1
+    else
+      DDL_SENT=0
+      failed=1
+    fi
   fi
-  [ -z "$out" ] || printf '%s\n' "$out" | mask_secrets >&2
-  DDL_SENT=1
-  printf 'last_beat=%s\nstate=%s\n' "$(date +%s)" "$state" > "$STATEFILE.tmp" 2>/dev/null \
-    && mv -f "$STATEFILE.tmp" "$STATEFILE" 2>/dev/null
-  return 0
+  if [ "$fdb_ok" = 1 ]; then
+    fdb_url=$(factory_db_url writer)
+    # the writer role cannot run DDL; the database is migrated by factory-db-bootstrap
+    if upsert_to "factory database" "$fdb_url" 0; then ok=1; else failed=1; fi
+  fi
+  if [ "$ok" = 1 ]; then
+    printf 'last_beat=%s\nstate=%s\n' "$(date +%s)" "$state" > "$STATEFILE.tmp" 2>/dev/null \
+      && mv -f "$STATEFILE.tmp" "$STATEFILE" 2>/dev/null
+  fi
+  return "$failed"
 }
 
 stopped_beat() { HEARTBEAT_STOPPING=1 HEARTBEAT_DDL_SENT=$DDL_SENT timeout 5 "$SELF" --once; }
@@ -357,7 +413,7 @@ case "${1-}" in
       kill -0 "$pid" 2>/dev/null || exit 0
       echo "heartbeat-loop: the loop did not exit in 8 s - writing the stopped beat here" >&2
     fi
-    if agentsview_pg_url > /dev/null 2>&1; then stopped_beat || true; fi
+    if any_target; then stopped_beat || true; fi
     exit 0
     ;;
   '') ;;
@@ -373,7 +429,7 @@ trap cleanup EXIT
 on_stop() {
   trap '' TERM INT HUP
   [ -z "${sleeper:-}" ] || kill "$sleeper" 2>/dev/null
-  if agentsview_pg_url > /dev/null 2>&1; then stopped_beat || true; fi
+  if any_target; then stopped_beat || true; fi
   exit 0
 }
 trap on_stop TERM INT HUP
