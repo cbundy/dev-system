@@ -39,7 +39,8 @@ features/test/callum-tools/orchestrator-watch.test.sh
 # instead of listing it, and say in the PR why if one must be listed.
 SERIAL=""
 
-results=$(mktemp -d) || exit 1
+# Under /tmp, never the inherited TMPDIR: the sandbox must sit outside /persist, and that TMPDIR may be a loop scratch folder under it.
+results=$(mktemp -d /tmp/npm-test.XXXXXX) || exit 1
 . ./scripts/test-sandbox.sh
 . ./scripts/test-pg.sh
 trap 'test_pg_clean; test_sandbox_clean; rm -rf "$results"' EXIT
@@ -123,7 +124,7 @@ fi
 
 # Shared per-run environment: anything exported here reaches every job. This is the one place
 # for it, including the per-run sandbox for the jobs' event and state dirs
-# (scripts/test-sandbox.sh). TMPDIR points inside the results dir, so temp files created there
+# (scripts/test-sandbox.sh). TMPDIR points inside the results dir (made under /tmp, whatever TMPDIR was inherited), so temp files created there
 # by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
 # with it.
 mkdir "$results/tmp" || exit 1
