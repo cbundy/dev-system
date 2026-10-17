@@ -7,6 +7,7 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { LOCK_CAS_SCRIPT } from '../hooks/rails'
+import { WIND_DOWN_WRITE_SCRIPT } from '../hooks/v2/wind-down-files'
 import { DEVICE, NOW } from './fixtures'
 
 export const REPO = 'cbundy/dev-system'
@@ -222,6 +223,11 @@ export function host(on: On, opts: HostOptions = {}) {
     const done = (r: Reply) => ({
       value: { exitCode: r.exitCode ?? 0, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false },
     })
+    // the wind-down status file's write: temp file beside it, then a rename over it (wind-down.ts)
+    if (argv[0] === 'sh' && argv[2] === WIND_DOWN_WRITE_SCRIPT) {
+      files.set(argv[4] ?? '', e.init?.stdin ?? '')
+      return done({})
+    }
     // the decision log's append: sh -c 'mkdir -p ... && cat >> "$1"' sh <path>
     if (argv[0] === 'sh' && (argv[2] ?? '').startsWith('mkdir -p') && argv[2] !== LOCK_CAS_SCRIPT) {
       if (h.failAppends) return { deny: 'cat: write error: No space left on device' }

@@ -1051,7 +1051,7 @@ Each gets one `intervention` event, keyed by the fact it records, so it is logge
 
 | Cause | When | Issue |
 |---|---|---|
-| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `planner` and `update`. `ownerOp` (`register.ts:1389`) logs it after the op lands, when planner v2 in act mode is in force before or after the op, so the ops that turn the loop on (`mode act`, `planner v2`) and off are logged too | the issues the op names, else none |
+| `op:<name>` | every `/factory` op but `status` and `help`: the work ops (`resume`, `drop`, `note`, `skip`, `noskip`, `priority`, `only`, `pause`, `unpause`, `serial`, `new`, `override`, `retry`), and `mode`, `trace`, `planner`, `stop-now` and `update`. `ownerOp` (`register.ts:1389`) logs it after the op lands, when planner v2 in act mode is in force before or after the op, so the ops that turn the loop on (`mode act`, `planner v2`) and off are logged too | the issues the op names, else none |
 | `unpark` | `factory:parked` removed by hand (P1 by label) | the issue |
 | `push` | a head on the record's branch that no loop step produced (4.1) | the issue |
 | `hand-merge` | E3 | the issue |
@@ -1799,6 +1799,70 @@ gets `next(e)`'s result unchanged. The engine ignores a plugin's allow but alway
 - **The rule.** The v2 command rule gains: "Never `rm` a glob under an unguarded variable: use
   `"${VAR:?}"/*` or a literal path.", in every v2 prompt and agent definition.
 
+### 10.11 Wind-down
+
+A stop (a restart for an update, or the Coder workspace stopping) cuts every running agent step. A
+wind-down lets the loop finish what runs and start nothing, so a stopper can wait for it
+(`windDownMinutes`, Appendix A). It is a mode of the loop, not a state of an issue: it holds no
+record and no ledger entry.
+
+**The files** are three fixed names in the loop's directory (`<loop dir>/`):
+
+| File | Written by | Contents |
+|---|---|---|
+| `wind-down.request` | the stopper (the stop script, or a person by hand) | JSON `{ "requested_at": ISO, "trigger": "restart-self" \| "coder-stop" \| null }` |
+| `wind-down.status.json` | the loop, each pass in wind-down | below |
+| `wind-down.stop-now` | `/factory stop-now`, or by hand | one shot: JSON `{ "at": ISO }`; any content counts |
+
+Observe reads the request and the stop-now file each pass into `V2State.windDown` (`request`,
+`stopNow`, and `previous`: the last status file's `requested_at` and `started_at`). A missing request
+is no request. A request that is not a JSON object with a `requested_at` time, or has a `trigger`
+that is neither name nor null, is a request at the file's modification time (`stat`), with a
+decision-log problem line (`wind-down: ...`), so a bad write never leaves the loop starting work
+during a stop. With `windDownMinutes` 0 the request is ignored.
+
+**The guard.** `windDownOf` gives `off`, `active` or `stale` (below). In an active wind-down
+`windDownGuard` runs once in `planV2`, after every rule ran and before admission, and drops each
+start action with the skip line `wind-down: no new start (<kind>)`:
+
+- `claim` (S1 and H1), `agent-step` (every step and attempt, re-runs included), `slot` with `op: lease`
+  (W1), `queue-update` (Q1), `queue-merge` (Q2), `ci-rerun`, and the `judge` and `task` wakes (the O3
+  release task included);
+- `restart-self`: R2's `restartOf` returns null with the skip line `R2: wind-down` (the rule itself
+  is unchanged; see "Restart without a drain", section 15).
+
+It keeps everything that finishes work: a running step's answer is read and its `transition`, `pr`,
+`label`, `comment`, `event` and `split` effects run; `slot` prepare, kill and free (W2), `stop-agent`,
+R1's releases, `heartbeat`, `sweep`, and every `tell` (owner tells included) still run. A running stop
+gate, and a queue action or release task the ledger holds as running, are left to end and their
+results are read by the next passes. The next step after a finished one is an `agent-step`, so it is
+dropped.
+
+**The status file.** Each pass in an active wind-down writes `wind-down.status.json` atomically (a
+temp file beside it, then `mv` over it: `WIND_DOWN_WRITE_SCRIPT`), and a pass outside wind-down
+writes none and removes no request:
+
+```
+{ "requested_at": ISO, "started_at": ISO, "cap_ms": windDownMinutes * 60000, "running": {
+    "steps": [ledger keys of running agent-step entries], "gate": bool, "queue": bool, "release": bool },
+  "idle": bool, "stop_now": bool, "at": ISO }
+```
+
+`started_at` is the first pass that saw this request (read back from the previous status file while
+its `requested_at` matches). `gate` is true when a build or fix step runs: the loop cannot see a
+stop gate apart from its step, whose hook runs it, so a running writer step may be in its gate.
+`queue` is a running `queue-update` or `queue-merge`, `release` a running release task. `idle` is
+true when no step, gate, queue action or release task runs. `stop_now` is true when the stop-now
+file exists. The stopper (#842) waits for `idle` or `stop_now` or its own timeout.
+
+**The title** carries it as its first word after the counts: `winding down <m>m · <n> running`
+(m: whole minutes since `started_at`; n: running agent steps), through the title's `before` words.
+
+**A request the stop never followed.** A request older than `cap_ms` plus 5 minutes while the loop is
+still running is `stale`: the loop plans normally again from that pass, removes the file
+(`rm -f`, in the same pass) and tells the owner once (`tell(wind-down-stale)`, keyed
+`tell:wind-down-stale:<requested_at ms>`, so a file that could not be removed is not told again).
+
 ## 11. Releases and parking
 
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
@@ -2094,7 +2158,7 @@ Totals: 32 kept, 22 changed, 22 retired.
 | H1 | heartbeat | a record not closed, and a lease due; or a record's claim lapsed | `callum-flow-claim --heartbeat <N...>`; a lapsed claim is claimed again onto the same record (4.1) |
 | H2 | sweep | every `sweepEveryMs`, and once a close's entry actions are done and the last of them ended after the last sweep began | `callum-flow-sweep`, which ends a closed record's claim (3.6) |
 | R1 | reconcile | every pass | a live claim of this device with no record is released (6.2): back to the queue, unless the owner dropped it (it leaves) or it was its `maxLives`-th life (rejected, 6.4); the main-checkout tripwire (10.7) |
-| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1) |
+| R2 | restart | `updateDue` is set, no `queue-update`, `queue-merge` or release task runs, and the pass admitted no other action | `restart-self`, last in the pass; a failed restart is told once and not retried until the update is set again, as v1's H4 did. Cut agent steps re-run free (U1). See wind-down (10.11) |
 | S1 | claim | a queue issue passes the claim filters (v1 D1's: open, trusted, `ready`, no skip label, not blocked, not a tracker, not skipped or paused, `only` and `priority` order; and no `factory:rejected`, 3.4), has no non-closed record, queued plus in-flight records are fewer than K, the tier allows `start`, and Slow's gap holds; or the life's claim is done and no record exists | `claim` (which also lists open PRs for adoption, 3.5); then row S0 |
 | S2 | step | a record in designing, building, reviewing or fixing, or with a triage due, whose step is not running, whose entry actions are done and which holds its slot; or a failed check on a head in reviewing or at the queue's head | `slot` op `prepare`, then `agent-step`; in reviewing `pr` ensure first; `ci-rerun` for a failed check (8.5) |
 | S3 | transition | a step result, or an owner or GitHub event, for a record | the table row: `transition`, then the entry actions |
@@ -2767,6 +2831,7 @@ New keys, in the repo-local file or the workspace file (which wins). Durations t
 | `ciRunMs` | `30m` | 4.4 |
 | `prEveryMs` | `30s` | 2.4: how long a PR's read stands before it is read again, unless the loop's own doings make it due sooner |
 | `maxTriages` | 2 | 5.1 |
+| `windDownMinutes` | 10 | 10.11: the minutes a requested wind-down may take, a whole number of at least 0; 0 turns wind-down off (a request is ignored). Read every pass from both settings files; `/factory config` shows it as `windDown`, with its source |
 | `minimumReleaseCadenceMs` (written `minimumReleaseCadence`) | `6h` | 2.4: the repo's minimum release cadence, at least `1h`; the O3 wake names it as `cadence` |
 | `maxLives` | 3 | 6.4: a release at this life rejects the issue instead of putting it back in the queue |
 | `triageModel` | `opus` | 5.2 |
@@ -2865,6 +2930,7 @@ Notices (TELL kinds), owner items first:
 | `drop <N>` | E1, for the current life only (4.1) |
 | `note [N] <text>` | a note for the issue's next step (or every issue's) |
 | `planner v1\|v2` | writes the workspace file, as `mode` does |
+| `stop-now` | writes `wind-down.stop-now` (`{ "at": ISO }`), which tells the stopper of a wind-down not to wait for what still runs (10.11); answers whether a wind-down is requested. Only the main conversation may set it |
 | `retry <N>` | clears the issue's exhausted effects (4.5) |
 | `status`, `pause`, `unpause`, `skip`, `noskip`, `priority`, `only`, `serial`, `new`, `override`, `update`, `mode`, `trace`, `help` | unchanged (v1 SPEC 4.3) |
 

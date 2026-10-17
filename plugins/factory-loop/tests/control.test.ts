@@ -571,6 +571,29 @@ describe('the v2 ops (v2 SPEC appendix E)', () => {
     expect(formatOp(op('planner v2'))).toBe('planner v2')
   })
 
+  test('stop-now writes wind-down.stop-now with the time and says whether a wind-down is requested; it takes no argument and an agent may not set it', async () => {
+    expect(op('stop-now')).toEqual({ op: 'stop-now' })
+    expect(parseOp('stop-now now')).toEqual({ ok: false, error: 'Usage: stop-now' })
+    expect(formatOp(op('stop-now'))).toBe('stop-now')
+    const stopFile = `${LOOP_DIR}/wind-down.stop-now`
+    const idle = files()
+    const none = await runOp(idle.io, PATHS, 'stop-now', NOW)
+    expect(none).toMatchObject({ ok: true, ping: true, logged: 'stop-now', text: expect.stringContaining('no wind-down is requested') })
+    expect(idle.writes).toEqual([stopFile])
+    expect(JSON.parse(idle.map.get(stopFile) ?? '')).toEqual({ at: new Date(NOW).toISOString() })
+    const winding = files({ [`${LOOP_DIR}/wind-down.request`]: '{}' })
+    const reply = await runOp(winding.io, PATHS, 'stop-now', NOW)
+    expect(reply).toMatchObject({ ok: true, text: expect.stringContaining('will not wait') })
+    expect(winding.writes).toEqual([stopFile])
+    // control.json is not touched
+    expect(winding.map.has(CONTROL_FILE)).toBe(false)
+    const agent = files()
+    expect(await runOp(agent.io, PATHS, 'stop-now', NOW, { agentId: 'a1' })).toMatchObject({ ok: false })
+    expect(agent.writes).toEqual([])
+    const failing = files({}, true)
+    expect(await runOp(failing.io, PATHS, 'stop-now', NOW)).toMatchObject({ ok: false, text: expect.stringContaining('write failed') })
+  })
+
   test('under planner v2, resume takes issue numbers and an optional note in double quotes, and no run id', () => {
     expect(opV2('resume 60')).toEqual({ op: 'unpark', issues: [60], note: null })
     expect(opV2('resume #60 61,62 60')).toEqual({ op: 'unpark', issues: [60, 61, 62], note: null })

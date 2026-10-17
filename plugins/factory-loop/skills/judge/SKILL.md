@@ -371,6 +371,9 @@ Owner items (the title counts them until resolved):
 Notices:
 - `waiting` (issue, state, hours): queued for a slot for 6 hours, or behind the merge queue's
   head for 2 hours. Nothing is wrong; the factory is full or held.
+- `wind-down-stale` (requested_at, cap_minutes): a wind-down was requested, the stop never followed
+  within its cap plus 5 minutes, and the loop removed the request and works normally again. Say so
+  in one line; the owner checks why the stopper did not stop the loop.
 - `task-timeout` (key): the release task went unanswered and is not retried. Owner says whether to
   redo it.
 

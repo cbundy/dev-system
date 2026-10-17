@@ -19,6 +19,7 @@ import { queueRules } from './rules-queue'
 import { slotRules } from './rules-slots'
 import { stateRules, stateTitle } from './rules-state'
 import { V2_OWNER_TELLS } from './types'
+import { windDownGuard, windDownOf, windDownTells, windDownTitle } from './wind-down'
 import type { V2Ctx } from './types'
 import { workspaceTell } from './workspace'
 
@@ -26,6 +27,7 @@ export function planV2(state: State, config: Config): PlanResult {
   const tier = tierOf(state.usage, config, state.control.usageOverride, state.now)
   const base = newCtx(state, config, tier, V2_OWNER_TELLS, GITHUB_V2)
   const blind = !state.sources.factory.ok
+  const wd = windDownOf(state, config)
   let counts: { counts: string; after: string[] } | null = null
   if (blind) {
     blindPass(base)
@@ -50,8 +52,11 @@ export function planV2(state: State, config: Config): PlanResult {
     restartTells(ctx)
     fleetTells(ctx)
     workspaceTell(ctx)
+    windDownTells(ctx, wd)
     counts = stateTitle(ctx)
   }
+  // wind-down (10.11): after every rule ran, one guard drops every start before admission
+  windDownGuard(base, wd)
   const actions = admit(base)
   const restart = blind ? null : restartOf(base, actions)
   const title = titleOf({
@@ -59,7 +64,7 @@ export function planV2(state: State, config: Config): PlanResult {
     counts: counts?.counts ?? null,
     observe: config.mode !== 'act',
     blind,
-    before: [],
+    before: windDownTitle(state, wd),
     tier: base.tier,
     after: counts?.after ?? [],
     atCap: base.atCap,

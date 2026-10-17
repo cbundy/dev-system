@@ -48,12 +48,9 @@ import { viewOf } from './config-view'
 import type { ViewInputs } from './config-view'
 import { CONTROL_TOOL, FACTORY_COMMAND, controlTool, issuesOf, readControl, retryText, runOp, writeControl } from './control'
 import type { FileIo } from './control'
-import { LOOP_FILES_KEEP_DAYS, pruneArgvs } from './exec'
-import type { ActIo } from './exec'
-import { finish, load, onLoad, save } from './ledger'
-import type { StoreIo } from './ledger'
-import { GITHUB_BACKOFF_MS, emptyCache, observe } from './observe'
-import type { Io, Runtime, Stored } from './observe'
+import { LOOP_FILES_KEEP_DAYS, pruneArgvs, type ActIo } from './exec'
+import { finish, load, onLoad, save, type StoreIo } from './ledger'
+import { GITHUB_BACKOFF_MS, emptyCache, observe, type Io, type Runtime, type Stored } from './observe'
 import { issueFromBranch } from './plan'
 import {
   EMPTY_RAIL_MEMORY,
@@ -106,6 +103,7 @@ import type { V2Stored } from './v2/observe'
 import { opLanded, parkedOf } from './v2/ops'
 import { transitionsOf } from './v2/plan'
 import { stateCounts } from './v2/rules-state'
+import { windDownFiles } from './v2/wind-down-files'
 import { newSettingsCache, repoLoaded } from './v2/settings'
 import type { SettingsIo } from './v2/settings'
 import { keepV2, loadV2, newV2Live, noteIdle, noteKillSwitch, noteWritten, notingIo, readStoredV2, storedV2, v2IoOf } from './v2/store'
@@ -948,6 +946,8 @@ async function pass($: EngineInterface, rt: Runtime, breaker: BreakerNotice | nu
       if (updateDone(live.ledger, state.control, loadedAt) && (await clearUpdate($, rt, state.control.updateDue?.at ?? null))) {
         state = { ...state, control: { ...state.control, updateDue: null } }
       }
+      // wind-down (v2 SPEC 10.11): the status file of an active one, or a stale request removed
+      if (rt.config.planner === 'v2') problems.push(...(await windDownFiles({ run: (argv, init) => $.process.run(argv, init) }, rt.loopDir, state, rt.config)))
       const acted = await actPass(env, state, listed, between)
       carve(tr, 'plan', acted.planned.ms)
       queuedAt = acted.planned.at

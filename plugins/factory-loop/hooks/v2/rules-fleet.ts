@@ -11,6 +11,7 @@ import type { Action, ActionKind, LedgerEntry } from '../types'
 import { entryDone, entryItems } from './rules-entry'
 import type { EntryItem } from './rules-entry'
 import type { V2Ctx } from './types'
+import { windDownOf } from './wind-down'
 
 // lastDone: the newest done entry of a kind.
 function lastDone(ctx: PlanCtx, kind: ActionKind): LedgerEntry | undefined {
@@ -63,6 +64,10 @@ const HOLDS_RESTART = (e: LedgerEntry) => e.status === 'running' && (e.kind === 
 export function restartOf(ctx: PlanCtx, kept: readonly Action[]): Action | null {
   const due = ctx.state.control.updateDue
   if (due === null) return null
+  if (windDownOf(ctx.state, ctx.config).mode === 'active') {
+    skip(ctx, 'R2', null, 'wind-down')
+    return null
+  }
   const holding = ctx.state.ledger.filter(HOLDS_RESTART).map(e => e.key)
   if (holding.length > 0) {
     skip(ctx, 'R2', null, `update due: waiting on ${holding.join(', ')}`)
