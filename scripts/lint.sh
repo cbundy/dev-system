@@ -13,7 +13,9 @@
 # a node shebang under the directories above (images/base/callum-flow-evaluate,
 # plugins/factory-loop/bin/factory-answer).
 #
-# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when a
+# It also fails when a generated skill is stale (`node scripts/build-skills.js --check`), when the
+# factory event docs, version lock or shapes are stale or a schema breaks the authoring or bump
+# rules (`node scripts/build-event-docs.js --check`), when a
 # file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
 # with its allowlist below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
@@ -112,6 +114,13 @@ checked=$((checked + 1))
 # Its success line goes nowhere; a stale skill is reported on stderr.
 if ! node scripts/build-skills.js --check > /dev/null; then
   fail "generated skills out of date (run npm run build:skills)"
+fi
+
+# Factory event docs, version lock and shapes (scripts/build-event-docs.js) must match their
+# schemas, and the schemas must keep the authoring and bump rules. It prints one line per problem.
+checked=$((checked + 1))
+if ! node scripts/build-event-docs.js --check > /dev/null; then
+  fail "factory event docs out of date or schemas invalid (see above; run npm run build:events)"
 fi
 
 # The factory loop's size guard (docs/factory-loop/v2/SPEC.md 2.5): no file under its hooks over

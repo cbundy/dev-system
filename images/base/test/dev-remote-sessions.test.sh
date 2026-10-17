@@ -309,7 +309,7 @@ got=$("$HELPER" pending 2>/dev/null | ids)
 [ "$got" = "$C $G2 " ] || fail "server-spawned: pending '$got', want $C and $G2 (one per claude.ai session, none live)"
 : > "$TMUX_LOG"
 rm -f "$TMUX_LOG.session"
-DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 "$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
+DEV_REMOTE_CONTROL_MODE=session DEV_REMOTE_CONTROL_SKIP_PERMISSIONS=1 "$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
 lg=$(grep -F -- "-c $cwd_a " "$TMUX_LOG") || fail "the server-spawned session was not restored: $(cat "$TMUX_LOG")"
 [ "$(printf '%s\n' "$lg" | wc -l)" = 1 ] || fail "one claude.ai session was reattached more than once: $lg"
 printf '%s\n' "$lg" | grep -qF -- "remote-control --session-id cse_01Gee --permission-mode bypassPermissions" ||
@@ -326,9 +326,67 @@ rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
 rm -f "$tmp/cfg/sessions/"*.json
 rec 711 $G1 "$cwd_a" "claude:@0.%0" session_01Gee interactive 1 "$dead_pid" 9011 bridge-g sdk-cli
 : > "$TMUX_LOG"
-"$HELPER" restore 2>/dev/null
+DEV_REMOTE_CONTROL_MODE=session "$HELPER" restore 2>/dev/null
 grep -qF -- "remote-control --session-id cse_01Gee" "$TMUX_LOG" || fail "not reattached without skip permissions: $(cat "$TMUX_LOG")"
 grep -qF -- "--permission-mode" "$TMUX_LOG" && fail "a permission mode was passed without skip permissions: $(cat "$TMUX_LOG")"
+
+# --- server mode: the supervisor's server takes its own sessions back (#695) ---------------------------
+# A --session-id reattach registers on the server's environment from the session's worktree, where its
+# own-cwd guard never fires, so it would steal work from the server. Server mode leaves server-spawned
+# sessions to the server (ledger + log line), still resumes interactive ones, and keeps the worktrees.
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+rec 721 $G1 "$cwd_a" "claude:@0.%0" session_01Gee interactive 1 "$dead_pid" 9101 bridge-g sdk-cli
+rec 722 $H1 "$cwd_b" "claude:@0.%0" session_01Aitch interactive 1 "$dead_pid" 9102 bridge-h sdk-cli
+rec 723 $C "$cwd_c" "dev:@1.%1" session_C interactive 1 "$dead_pid" 9103 "C name" cli
+transcript $C "$cwd_c" plan high m
+export DEV_REMOTE_CONTROL_MODE=server
+"$HELPER" plan 2>/dev/null
+: > "$TMUX_LOG"
+"$HELPER" restore 2>"$tmp/err" || fail "server mode restore failed: $(cat "$tmp/err")"
+grep -qF -- "--session-id" "$TMUX_LOG" && fail "server mode reattached a server-spawned session: $(cat "$TMUX_LOG")"
+grep -F -- "-c $cwd_c " "$TMUX_LOG" | grep -qF -- "--resume $C --remote-control C name --permission-mode plan --effort high --model m" ||
+  fail "server mode: the interactive session was not resumed as before: $(cat "$TMUX_LOG")"
+for k in 9101 9102 9103; do
+  [ -e "$tmp/state/remote-sessions/ledger/$dead_pid-$k" ] || fail "server mode: no ledger entry for $k"
+done
+[ "$(grep -c 'left to the Remote Control server, which serves its environment' "$tmp/err")" = 2 ] ||
+  fail "server mode: want one 'left to the Remote Control server' line per server-spawned session: $(cat "$tmp/err")"
+grep -F "$G1" "$tmp/err" | grep -qF "session_01Gee" || fail "the left-to-server line does not name both sessions: $(cat "$tmp/err")"
+cut -d' ' -f1 "$tmp/state/remote-sessions/ledger/$dead_pid-9101" | grep -qxF "$G1" || fail "ledger field 1 is not the session id"
+got=$("$HELPER" taken 2>/dev/null | sort -u | tr '\n' ' ')
+[ "$got" = "$(printf '%s\n' $C $G1 $H1 | sort -u | tr '\n' ' ')" ] || fail "server mode taken: '$got'"
+cw=$("$HELPER" cwds 2>/dev/null)
+printf '%s\n' "$cw" | grep -qxF "$(printf 'pending\t%s' "$cwd_a")" || fail "server-left session's cwd not held: $cw"
+printf '%s\n' "$cw" | grep -qxF "$(printf 'pending\t%s' "$cwd_b")" || fail "server-left session's cwd not held: $cw"
+# Past the window the hold ends, and `taken` still lists the sessions.
+for k in 9101 9102; do
+  f="$tmp/state/remote-sessions/ledger/$dead_pid-$k"
+  { read -r s1 _ rest < "$f"; echo "$s1 $(($(date +%s) - 25 * 3600)) $rest" > "$f"; }
+done
+cw=$("$HELPER" cwds 2>/dev/null)
+printf '%s\n' "$cw" | grep -qF "$cwd_a" && fail "an expired server-left hold still keeps the cwd: $cw"
+"$HELPER" taken 2>/dev/null | grep -qxF "$G1" || fail "taken lost a server-left session"
+unset DEV_REMOTE_CONTROL_MODE
+
+# --- already-running wording names the identity that matched ------------------------------------------
+rm -rf "$tmp/state/remote-sessions" "$tmp/mark"/*
+rm -f "$tmp/cfg/sessions/"*.json
+rec 731 $G1 "$cwd_a" "dev:@5.%5" session_01Gee interactive 1 "$dead_pid" 9201 bridge-g sdk-cli
+rec 732 $H1 "$cwd_b" "dev:@5.%5" session_01Aitch interactive 1 "$dead_pid" 9202 bridge-h sdk-cli
+"$HELPER" plan 2>/dev/null
+# live: an interactive session with G1's local id (different claude.ai session), and another local
+# session on H1's claude.ai session
+rec 733 $G1 "$cwd_c" "dev:@1.%1" session_Z interactive 0 "$live_pid" "$live_start"
+rec 734 $A "$cwd_c" "dev:@1.%1" session_01Aitch interactive 0 "$live_pid" "$live_start"
+: > "$TMUX_LOG"
+DEV_REMOTE_CONTROL_MODE=session "$HELPER" restore 2>"$tmp/err" || fail "restore failed: $(cat "$tmp/err")"
+! grep -qF -- "--session-id" "$TMUX_LOG" 2>/dev/null || fail "an already-running session was started: $(cat "$TMUX_LOG")"
+grep -qF "its local conversation $G1 is open in live session pid $live_pid (claude.ai session_Z)" "$tmp/err" ||
+  fail "no local-conversation line: $(cat "$tmp/err")"
+grep -qF "claude.ai session session_01Aitch is already online (pid $live_pid)" "$tmp/err" ||
+  fail "no claude.ai-session line: $(cat "$tmp/err")"
+rm -f "$tmp/cfg/sessions/733.json" "$tmp/cfg/sessions/734.json"
 
 # --- the window counts from when a session was last seen live, not its last status change -----------
 # A, idle for 30h but live at the snapshot, comes back after its process dies; B, a stale record 30h
