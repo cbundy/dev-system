@@ -446,7 +446,7 @@ needs `workspace_secrets_dir` set (see [Template variables](#template-variables)
 
 Every GitHub call from the workspace, the loop included, counts against that account's own
 API rate limit, not the owner's. The details are in the image README: the
-[token mode](../../images/base/README.md#dev-init) paragraph and the
+[token mode](../../images/base/README.md#factory-event-log) paragraph (the "Token mode" paragraph under "Factory event log") and the
 [dev-doctor access check](../../images/base/README.md#dev-doctor).
 
 ### Sharing one Claude login
