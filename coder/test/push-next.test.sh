@@ -165,6 +165,29 @@ expect_call "ssh $ws -- tail -n 40 /tmp/coder-startup-script.log"
 expect_call "delete $ws --yes"
 [ "$(tail -n 1 "$case/calls")" = "delete $ws --yes" ] || fail "delete was not the last call: $(cat "$case/calls")"
 
+# 6b. smoke with a host value: the docker_host parameter is set, the rest keep defaults.
+run_case 6b "$PUSH_NEXT" smoke host-2
+expect_rc -eq
+check_invariants
+ws=$(cat "$case/created")
+expect_call "create $ws --template dev-system-next --parameter docker_host=host-2 --use-parameter-defaults --yes"
+expect_call "delete $ws --yes"
+
+# 6c. a bad host value, and a host with a command that takes none, fail before any call.
+run_case 6c "$PUSH_NEXT" smoke 'Bad Value'
+expect_rc -ne
+check_invariants
+[ ! -s "$case/calls" ] || fail "called coder with a bad host value: $(cat "$case/calls")"
+grep -q 'not a docker_hosts value' "$case/out" || fail "no host message: $(cat "$case/out")"
+run_case 6d "$PUSH_NEXT" push host-1
+expect_rc -ne
+[ ! -s "$case/calls" ] || fail "push took a host argument: $(cat "$case/calls")"
+grep -q 'usage:' "$case/out" || fail "no usage: $(cat "$case/out")"
+grep -q 'smoke \[<host value>\]' "$case/out" || fail "usage lacks the host argument: $(cat "$case/out")"
+run_case 6e "$PUSH_NEXT" cleanup host-1
+expect_rc -ne
+[ ! -s "$case/calls" ] || fail "cleanup took a host argument: $(cat "$case/calls")"
+
 # 7. smoke, agent fails to start: non-zero, workspace still deleted.
 run_case 7 env FAKE_LIFECYCLE=start_error PUSH_NEXT_TIMEOUT=3 "$PUSH_NEXT" smoke
 expect_rc -ne

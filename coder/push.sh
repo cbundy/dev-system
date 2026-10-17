@@ -11,7 +11,7 @@
 #
 # All three templates are the same Terraform. Each one's name, display name, icon, description
 # and variables live here, so a push never depends on remembering flags. The site's values
-# (docker_host, otlp_endpoint, ...) are in coder/dev-system/terraform.tfvars, which coder
+# (docker_hosts, otlp_endpoint, ...) are in coder/dev-system/terraform.tfvars, which coder
 # reads on every push. Needs the coder CLI logged in as a template admin; CODER_BIN picks
 # another binary.
 #
