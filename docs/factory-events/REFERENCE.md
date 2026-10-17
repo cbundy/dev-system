@@ -99,22 +99,28 @@ Example:
 | `attempt` | integer | `transition` | The attempt of that step, from 1. |
 | `branch` | string | `abandoned`, `finding_handled`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition` | The abandoned work's branch, when known. |
 | `cause` | string | `intervention` | What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know. |
+| `concurrency` | integer | `gate_run` | How many gates could run at once when this one asked for a turn; null when there was no limit. |
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `outcome` | enum | `finding_handled` | fixed: the fixer changed the code for it; declined: the fixer judged it wrong or not worth a change. |
 | `pr` | integer | `abandoned`, `finding_handled`, `intervention`, `merged`, `requeued`, `reviewed`, `test_weakened`, `transition`, `untrusted_stripped` | The abandoned work's pull request, when there is one. |
+| `queued_behind` | integer | `gate_run` | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
 | `reason` | enum or string | `abandoned`, `closed`, `implementer_routed`, `requeued` | Why: dropped (by the owner), split (the designer split it into new issues), triage (the triage agent dropped it), reconcile (reconcile found no live work behind the claim and took the issue out of the factory), rejected (released at its last allowed life and labelled factory:rejected), other. |
+| `result` | enum | `gate_run` | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
 | `round` | integer | `reviewed`, `transition` | The review round in this life, from 1. |
+| `run_ms` | integer | `gate_run` | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
 | `seq` | integer | `gate_run`, `transition` | The record's sequence in this life whose writer step ran the gate. |
 | `seq_at` | string | `transition` | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
+| `started_at` | string | `gate_run`, `loop_entry` | When the gate asked for its turn (before any wait). |
 | `state_since` | string | `transition` | When the issue entered to_state; earlier than seq_at when the state did not change. |
 | `step` | enum | `transition` | The step this seq runs: the state's own step, or triage; null while waiting. |
 | `table_row` | string | `transition` | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
 | `to_state` | enum | `transition` | The state after: the issue's state from now on. |
 | `verdict` | enum | `reviewed` | approve, changes (findings to fix), or unknown (no valid answer). |
 | `via` | string | `transition` | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
+| `wait_ms` | integer | `gate_run` | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
 | `who` | enum | `intervention` | person: a person did something; loop: the loop had to judge or recover. |
 | `why` | enum | `transition` | closed: why the life ended; null otherwise. |
 
@@ -301,12 +307,12 @@ One run of the stop gate in a writer's slot finished: the repo's gate commands r
 | `life` | string | required | no | pattern `^[0-9a-z]+$` | yes | Which life of the issue the gate ran in. |
 | `seq` | integer | required | no | minimum 0 | yes | The record's sequence in this life whose writer step ran the gate. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The slot's HEAD commit when the gate ran; null when it could not be read. |
-| `result` | enum | required | no | one of "pass", "fail", "unknown" |  | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
-| `wait_ms` | integer | required | no | minimum 0 |  | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
-| `run_ms` | integer | required | no | minimum 0 |  | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
-| `concurrency` | integer | required | yes | minimum 1 |  | How many gates could run at once when this one asked for a turn; null when there was no limit. |
-| `queued_behind` | integer | required | no | minimum 0 |  | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
-| `started_at` | string | required | no | format date-time |  | When the gate asked for its turn (before any wait). |
+| `result` | enum | required | no | one of "pass", "fail", "unknown" | yes | pass, fail (a command exited non-zero), or unknown (the gate could not run: its budget ran out, a command did not start, or it never got a turn within the wait cap). |
+| `wait_ms` | integer | required | no | minimum 0 | yes | How long the gate waited for a turn, in milliseconds; 0 when it took a turn at once or there is no limit. |
+| `run_ms` | integer | required | no | minimum 0 | yes | How long the gate ran once it held a turn, in milliseconds; 0 when it never ran. |
+| `concurrency` | integer | required | yes | minimum 1 | yes | How many gates could run at once when this one asked for a turn; null when there was no limit. |
+| `queued_behind` | integer | required | no | minimum 0 | yes | How many gates held a turn or waited ahead of this one when it asked; 0 when it took a turn at once. |
+| `started_at` | string | required | no | format date-time | yes | When the gate asked for its turn (before any wait). |
 
 Example:
 
@@ -402,7 +408,7 @@ Loop bookkeeping that most consumers can ignore: one piece of the loop's own wor
 | `attempts` | integer | required | no | minimum 0 |  | Attempts of this key so far. |
 | `class` | enum | required | no | one of "free", "owner", "drive", "develop", "start" |  | The planner's class for the work. |
 | `rule` | string | required | no | minLength 1 |  | The planner rule that planned it, for example S2 or S3. |
-| `started_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | When this attempt started. |
+| `started_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this attempt started. |
 | `ended_at` | string | required | yes | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` |  | When it ended; null while running. |
 | `agent_id` | string | required | yes |  |  | The agent's id, for an agent step; null otherwise. |
 | `wake` | string | required | yes |  |  | The wake's name, for a tell or task, for example parked; null otherwise. |

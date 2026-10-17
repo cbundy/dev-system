@@ -107,8 +107,8 @@ came from.
 Restart the workspace or run `dev-doctor`. Expect, for each role:
 
 ```
-dev-doctor: OK   factory database (writer): database factory as factory_writer, schema version 1 (URL from /run/secrets/dev-system/factory-db-writer-url)
-dev-doctor: OK   factory database (reader): database factory as factory_reader, schema version 1 (URL from /run/secrets/dev-system/factory-db-reader-url)
+dev-doctor: OK   factory database (writer): database factory as factory_writer, schema version 2 (URL from /run/secrets/dev-system/factory-db-writer-url)
+dev-doctor: OK   factory database (reader): database factory as factory_reader, schema version 2 (URL from /run/secrets/dev-system/factory-db-reader-url)
 ```
 
 It never prints a URL or password. Each failure names its fix:

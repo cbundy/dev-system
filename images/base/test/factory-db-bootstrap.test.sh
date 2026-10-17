@@ -111,23 +111,34 @@ grep -q 'no admin URL' "$tmpdir/out" || fail "no admin URL: unhelpful error: $(c
 bash "$BOOTSTRAP" --help | grep -q -- '--admin-url-file' || fail "--help does not describe --admin-url-file"
 export FACTORY_DB_ADMIN_URL="$ADMIN"
 
+# The version the shipped migrations reach, and the numbers the scratch migrations below take.
+EXPECTED=$(bash -c ". '$ROOT/images/base/factory-db.sh'; factory_db_expected_version")
+[ "$EXPECTED" -ge 2 ] || fail "expected version should be at least 2, got '$EXPECTED'"
+PROBE_VER=$((EXPECTED + 1))
+BROKEN=$((EXPECTED + 2))
+ALL_VERSIONS=$(seq -s, 1 "$EXPECTED")
+PROBE_VERSIONS=$(seq -s, 1 "$PROBE_VER")
+PROBE_FILE=$(printf '%04d_probe.sql' "$PROBE_VER")
+BROKEN_FILE=$(printf '%04d_broken.sql' "$BROKEN")
+
 # --- creates the database, is idempotent -------------------------------------------
 new_name
 db=$new_db
 [ "$(q postgres "SELECT count(*) FROM pg_database WHERE datname = '$db'")" = 0 ] || fail "$db exists before the run"
 boot --db "$db" || fail "first run failed: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "expected one summary line, got: $(cat "$tmpdir/out")"
-grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader), schema version 1\$" "$tmpdir/out" \
+grep -q "database $db ready (roles ${db}_owner, ${db}_writer, ${db}_reader), schema version $EXPECTED\$" "$tmpdir/out" \
   || fail "unexpected summary: $(cat "$tmpdir/out")"
 [ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$db'")" = "${db}_owner" ] \
   || fail "the database is not owned by ${db}_owner"
 snapshot "$db" > "$tmpdir/snap1" || fail "snapshot 1 failed"
 [ -s "$tmpdir/snap1" ] || fail "empty snapshot"
 boot --db "$db" || fail "second run failed: $(cat "$tmpdir/out")"
-grep -q 'schema version 1$' "$tmpdir/out" || fail "second run: unexpected summary: $(cat "$tmpdir/out")"
+grep -q "schema version $EXPECTED\$" "$tmpdir/out" || fail "second run: unexpected summary: $(cat "$tmpdir/out")"
 snapshot "$db" > "$tmpdir/snap2" || fail "snapshot 2 failed"
 cmp -s "$tmpdir/snap1" "$tmpdir/snap2" || fail "run 2 changed the database: $(diff "$tmpdir/snap1" "$tmpdir/snap2")"
-[ "$(q "$db" "SELECT count(*) FROM factory.schema_migrations")" = 1 ] || fail "schema_migrations does not have one row"
+[ "$(q "$db" "SELECT string_agg(version::text, ',' ORDER BY version) FROM factory.schema_migrations")" = "$ALL_VERSIONS" ] \
+  || fail "schema_migrations does not hold versions $ALL_VERSIONS"
 # pg_dump too, when its version can read the server.
 server_major=$(q postgres "SHOW server_version_num")
 server_major=$((server_major / 10000))
@@ -155,7 +166,7 @@ q postgres "CREATE DATABASE \"$pre_db\"" > /dev/null || fail "cannot create the 
   || fail "the pre-existing database is already owned by the factory owner"
 boot --db "$pre_db" || fail "taking over an existing database failed: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "takeover: expected one summary line: $(cat "$tmpdir/out")"
-grep -q 'schema version 1$' "$tmpdir/out" || fail "takeover: unexpected summary: $(cat "$tmpdir/out")"
+grep -q "schema version $EXPECTED\$" "$tmpdir/out" || fail "takeover: unexpected summary: $(cat "$tmpdir/out")"
 [ "$(q postgres "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$pre_db'")" = "${pre_db}_owner" ] \
   || fail "the taken-over database is not owned by ${pre_db}_owner"
 [ "$(q "$pre_db" "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'factory'")" = "${pre_db}_owner" ] \
@@ -211,37 +222,61 @@ denied "$db" "${db}_reader" "CREATE TABLE factory.t (a int)"
 migs="$tmpdir/migs"
 mkdir "$migs"
 cp "$ROOT"/images/base/factory-db/migrations/*.sql "$migs/"
-cat > "$migs/0002_probe.sql" << 'SQL'
+cat > "$migs/$PROBE_FILE" << 'SQL'
 CREATE TABLE factory.probe (id int PRIMARY KEY, note text);
 SQL
-FACTORY_DB_MIGRATIONS_DIR=$migs boot --db "$db" || fail "run with 0002 failed: $(cat "$tmpdir/out")"
-grep -q 'schema version 2$' "$tmpdir/out" || fail "version is not 2: $(cat "$tmpdir/out")"
-[ "$(q "$db" "SELECT string_agg(version::text, ',' ORDER BY version) FROM factory.schema_migrations")" = "1,2" ] || fail "only 0002 should have been added"
+FACTORY_DB_MIGRATIONS_DIR=$migs boot --db "$db" || fail "run with $PROBE_FILE failed: $(cat "$tmpdir/out")"
+grep -q "schema version $PROBE_VER\$" "$tmpdir/out" || fail "version is not $PROBE_VER: $(cat "$tmpdir/out")"
+[ "$(q "$db" "SELECT string_agg(version::text, ',' ORDER BY version) FROM factory.schema_migrations")" = "$PROBE_VERSIONS" ] || fail "only the probe should have been added"
 as "$db" "${db}_writer" "INSERT INTO factory.probe VALUES (1, 'a'); UPDATE factory.probe SET note = 'b'" > /dev/null || fail "the writer has no grants on the probe table"
 as "$db" "${db}_reader" "SELECT * FROM factory.probe" > /dev/null || fail "the reader has no grants on the probe table"
 denied "$db" "${db}_writer" "DELETE FROM factory.probe"
 denied "$db" "${db}_reader" "INSERT INTO factory.probe VALUES (2, 'c')"
 [ "$(q "$db" "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'factory.probe'::regclass")" = "${db}_owner" ] || fail "the probe table is not owned by the owner"
 # An edited applied migration.
-echo "-- edited" >> "$migs/0002_probe.sql"
+echo "-- edited" >> "$migs/$PROBE_FILE"
 if FACTORY_DB_MIGRATIONS_DIR=$migs boot --db "$db"; then fail "an edited migration was accepted"; fi
-grep -q '0002_probe.sql (version 2)' "$tmpdir/out" || fail "the edit refusal does not name the migration: $(cat "$tmpdir/out")"
+grep -q "$PROBE_FILE (version $PROBE_VER)" "$tmpdir/out" || fail "the edit refusal does not name the migration: $(cat "$tmpdir/out")"
 [ "$(wc -l < "$tmpdir/out")" = 1 ] || fail "the refusal is not one line"
 # A recorded version with no file.
 if boot --db "$db"; then fail "a recorded version with no file was accepted"; fi
-grep -q 'version 2 ' "$tmpdir/out" || fail "the missing-file refusal does not name the version: $(cat "$tmpdir/out")"
+grep -q "version $PROBE_VER " "$tmpdir/out" || fail "the missing-file refusal does not name the version: $(cat "$tmpdir/out")"
 # A failing migration names its file and rolls back.
-cat > "$migs/0002_probe.sql" << 'SQL'
+cat > "$migs/$PROBE_FILE" << 'SQL'
 CREATE TABLE factory.probe (id int PRIMARY KEY, note text);
 SQL
-printf 'CREATE TABLE factory.half (a int);\nSELECT * FROM factory.nope;\n' > "$migs/0003_broken.sql"
+printf 'CREATE TABLE factory.half (a int);\nSELECT * FROM factory.nope;\n' > "$migs/$BROKEN_FILE"
 if FACTORY_DB_MIGRATIONS_DIR=$migs boot --db "$db"; then fail "a broken migration was accepted"; fi
-grep -q '0003_broken.sql' "$tmpdir/out" || fail "the broken migration is not named: $(cat "$tmpdir/out")"
+grep -q "$BROKEN_FILE" "$tmpdir/out" || fail "the broken migration is not named: $(cat "$tmpdir/out")"
 [ "$(q "$db" "SELECT count(*) FROM pg_class WHERE relname = 'half'")" = 0 ] || fail "a failed migration was not rolled back"
 # A mistyped migration file name.
 echo 'SELECT 1;' > "$migs/oops.sql"
 if FACTORY_DB_MIGRATIONS_DIR=$migs boot --db "$db"; then fail "a badly named migration was accepted"; fi
 grep -q 'oops.sql' "$tmpdir/out" || fail "the bad file name is not reported"
+
+# --- an upgrade: a database at 0001 gets 0002 and keeps its rows ---------------------
+old_migs="$tmpdir/old-migs"
+mkdir "$old_migs"
+cp "$ROOT"/images/base/factory-db/migrations/0001_*.sql "$old_migs/"
+new_name
+udb=$new_db
+FACTORY_DB_MIGRATIONS_DIR=$old_migs boot --db "$udb" || fail "upgrade: run with only 0001 failed: $(cat "$tmpdir/out")"
+grep -q 'schema version 1$' "$tmpdir/out" || fail "upgrade: not at version 1 first: $(cat "$tmpdir/out")"
+as "$udb" "${udb}_writer" "INSERT INTO factory.event_store (envelope, event_id, ts, type, type_version, repo, device, actor, issue, device_seq, data)
+    VALUES (1, gen_random_uuid(), now(), 'gate_run', 1, 'o/r', 'd', 'loop', 815, 1,
+    '{\"life\": \"tn0brb\", \"seq\": 6, \"head\": null, \"result\": \"pass\", \"wait_ms\": 184000, \"run_ms\": 412000, \"concurrency\": 1, \"queued_behind\": 2, \"started_at\": \"2026-10-16T15:49:06.252Z\"}')" > /dev/null \
+  || fail "upgrade: cannot insert the gate_run event"
+boot --db "$udb" || fail "upgrade: run with the shipped migrations failed: $(cat "$tmpdir/out")"
+grep -q "schema version $EXPECTED\$" "$tmpdir/out" || fail "upgrade: unexpected summary: $(cat "$tmpdir/out")"
+[ "$(q "$udb" "SELECT string_agg(version::text, ',' ORDER BY version) FROM factory.schema_migrations")" = "$ALL_VERSIONS" ] \
+  || fail "upgrade: schema_migrations does not hold versions $ALL_VERSIONS"
+[ "$(as "$udb" "${udb}_reader" "SELECT result, wait_ms, run_ms, concurrency, queued_behind, to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS') FROM factory.event_log WHERE type = 'gate_run'")" \
+  = "pass|184000|412000|1|2|2026-10-16T15:49:06.252" ] || fail "upgrade: the reader does not see the gate_run columns"
+snapshot "$udb" > "$tmpdir/usnap1" || fail "upgrade snapshot 1 failed"
+boot --db "$udb" || fail "upgrade: third run failed"
+snapshot "$udb" > "$tmpdir/usnap2" || fail "upgrade snapshot 2 failed"
+cmp -s "$tmpdir/usnap1" "$tmpdir/usnap2" || fail "upgrade: a further run changed the database: $(diff "$tmpdir/usnap1" "$tmpdir/usnap2")"
+db=$main_db
 
 # --- secrets: not in output, not in argv ------------------------------------------
 new_name
@@ -313,7 +348,7 @@ boot_to "$tmpdir/c2" &
 p2=$!
 wait "$p1" || fail "concurrent run 1 failed: $(cat "$tmpdir/c1")"
 wait "$p2" || fail "concurrent run 2 failed: $(cat "$tmpdir/c2")"
-[ "$(q "$cdb" "SELECT count(*) || '/' || count(DISTINCT version) FROM factory.schema_migrations")" = "1/1" ] || fail "concurrent runs recorded a version twice"
+[ "$(q "$cdb" "SELECT count(*) || '/' || count(DISTINCT version) FROM factory.schema_migrations")" = "$EXPECTED/$EXPECTED" ] || fail "concurrent runs recorded a version twice"
 
 # --- the test helpers --------------------------------------------------------------
 # A leftover database is reported, with its roles, and a clean one is not.
