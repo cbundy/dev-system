@@ -402,3 +402,15 @@ test("factory loop v2 (SPEC 3.6, 7.3): the newest transition of the current life
   assert.equal(st(113), undefined, "factory:rejected names no stage: a rejected issue is out of the factory");
   assert.deepEqual(st(100).lease, { until: "2026-10-10T13:50:00.000Z", lapsed: false }, "the lease runs from the newest renewal");
 });
+
+test("waiting (the loop's hold on wait conditions): a v2 record or a factory:waiting label gives the waiting stage", () => {
+  const r = derive(input("v2-waiting"));
+  const st = (n) => issue(r, A, n);
+  assert.deepEqual([st(200).stage, st(200).source, st(200).flags], ["waiting", "event", []], "a waiting record with factory:waiting has no label problem");
+  assert.equal(st(200).stuck, null, "waiting has no stuck rule, even after more than 24 h");
+  assert.deepEqual(r.repos[0].issues.map((i) => i.stage).filter((s) => ["queued", "parked", "waiting"].includes(s)),
+    ["queued", "parked", "waiting", "waiting", "waiting", "waiting"], "waiting sorts right after parked");
+  assert.match(st(201).flags.join(";"), /label: .*waiting/, "a waiting record that carries factory:parked is a label problem");
+  assert.deepEqual([st(204).stage, st(204).source], ["waiting", "github"], "an issue with only a factory:waiting label is waiting from github");
+  assert.ok(st(205).flags.some((f) => f.startsWith("claim:")), "another device's claim on a waiting issue trips the claim check");
+});

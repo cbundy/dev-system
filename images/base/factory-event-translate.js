@@ -75,9 +75,17 @@ const B = (v) => typeof v === "boolean";
 const RX = (re) => (v) => typeof v === "string" && re.test(v);
 const L = (k) => (v) => Array.isArray(v) && v.every(k);
 const L1 = (k) => (v) => L(k)(v) && v.length > 0;
+const opt = (k) => Object.assign((v) => k(v), { optional: true });
+const COND = (v) =>
+  v !== null &&
+  typeof v === "object" &&
+  ((Object.keys(v).length === 2 && v.kind === "issue-closed" && I(1)(v.issue)) ||
+    (Object.keys(v).length === 2 && v.kind === "pr-merged" && I(1)(v.pr)) ||
+    (Object.keys(v).length === 2 && v.kind === "tag-contains" && HEX(v.sha)));
+const WAIT = (v) => Array.isArray(v) && v.length >= 1 && v.length <= 8 && v.every(COND);
 const HEX = RX(/^[0-9a-f]{7,40}$/);
 const ISO = RX(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
-const STATES = ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed"];
+const STATES = ["queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed"];
 
 const SPECS = {
   ready: {},
@@ -123,6 +131,7 @@ const SPECS = {
     fixes: I(0),
     round: I(0),
     question: nul(S),
+    wait: opt(nul(WAIT)),
     why: nul(E("merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost")),
     notes: L(S),
     pr_closed_at: nul(S),
@@ -180,7 +189,10 @@ function checkData(type, data) {
   const spec = SPECS[type];
   for (const k of Object.keys(data)) if (!(k in spec)) miss(`internal: unexpected field ${k}`);
   for (const [k, fits] of Object.entries(spec)) {
-    if (!(k in data)) miss(`internal: field ${k} not set`);
+    if (!(k in data) || (fits.optional && data[k] === undefined)) {
+      if (fits.optional) continue;
+      miss(`internal: field ${k} not set`);
+    }
     if (!fits(data[k])) miss(`${k} is not valid: ${JSON.stringify(data[k])}`);
   }
 }
@@ -248,6 +260,29 @@ function tList(t, k) {
   const v = t.get(k);
   if (v === undefined) return undefined;
   return v === "none" || v === "" ? [] : v.split(",").map(dec);
+}
+
+// The wait list: `issue:<n>`, `pr:<n>`, `tag:<sha>`, comma-joined; `none` is null; absent is undefined.
+function tWait(t) {
+  const v = t.get("wait");
+  if (v === undefined) return undefined;
+  if (v === "none") return null;
+  const items = v.split(",");
+  if (items.length > 8) miss(`bad wait=: more than 8 items`);
+  return items.map((item) => {
+    const i = item.indexOf(":");
+    const prefix = i < 0 ? item : item.slice(0, i);
+    const arg = i < 0 ? "" : item.slice(i + 1);
+    if (prefix === "issue" || prefix === "pr") {
+      if (!/^[1-9][0-9]*$/.test(arg)) miss(`bad wait=: ${JSON.stringify(item)}`);
+      return prefix === "issue" ? { kind: "issue-closed", issue: Number(arg) } : { kind: "pr-merged", pr: Number(arg) };
+    }
+    if (prefix === "tag") {
+      if (!/^[0-9a-f]{7,40}$/.test(arg)) miss(`bad wait=: ${JSON.stringify(item)}`);
+      return { kind: "tag-contains", sha: arg };
+    }
+    return miss(`bad wait=: ${JSON.stringify(item)}`);
+  });
 }
 
 // --- the columns ----------------------------------------------------------------------------------
@@ -369,12 +404,13 @@ function merged(line) {
   return { pr: colInt(line, "pr"), branch: colStr(line, "branch"), head: colStr(line, "head"), by, recovered };
 }
 
-const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes"];
+const TRANSITION_KEEP = ["row", "life", "seq", "from", "to", "seqAt", "since", "resumeTo", "step", "attempt", "cut", "triages", "fixes", "round", "why", "approvedPatch", "prClosedAt", "lives", "via", "brief", "question", "notes", "wait"];
 
 function transition(line) {
-  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => k !== "lives") });
+  const t = strictTokens(line.note ?? null, { keep: TRANSITION_KEEP, need: TRANSITION_KEEP.filter((k) => k !== "lives" && k !== "wait") });
   const lives = t.has("lives") ? tInt(t, "lives") : 1;
-  return {
+  const wait = tWait(t);
+  const ev = {
     life: tStr(t, "life"),
     seq: tInt(t, "seq"),
     table_row: tStr(t, "row"),
@@ -401,6 +437,8 @@ function transition(line) {
     pr_closed_at: tStr(t, "prClosedAt"),
     lives,
   };
+  if (wait !== undefined) ev.wait = wait;
+  return ev;
 }
 
 function reviewed(line) {
