@@ -34,7 +34,7 @@ const DEV_QUERY = process.env.CALLUM_FLOW_DEV_QUERY_BIN || 'dev-query';
 const ISSUE_READ = process.env.CALLUM_FLOW_ISSUE_READ_BIN || 'callum-flow-issue-read';
 
 // Stage order is the sort order of the output.
-const STAGES = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'ready to merge', 'merged', 'closed without merge'];
+const STAGES = ['queued', 'designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge', 'merged', 'closed without merge'];
 const FINAL_RECENT_MS = 24 * 3600 * 1000;
 const DEFAULT_LEASE_MINUTES = 120; // callum-flow-claim's default lease, for claimed events with no lease note
 const DEFAULT_RULES = { S1: 240, S2: 60, S3: 30, S4: 30, S5: 30 };
@@ -66,17 +66,17 @@ const NEW_LIFE_DECISIONS = new Set(['ready', 'reclaimed', 'claimed', 'briefed', 
 const NEW_LIFE_RUN_EVENTS = new Set(['run_started', 'parked', 'verdict', 'fix_requested', 'merge_ready']);
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 const LABEL_QUEUED = 'ready';
-// The factory loop v2's states (SPEC 3.1), each with the stage it shows as; closed shows as merged
+// The factory loop v2's states (SPEC 3.1; waiting is the loop's hold on wait conditions), each with the stage it shows as; closed shows as merged
 // or closed without merge, by why. Its labels are `factory:<state>` (SPEC 3.4), closed has none.
 const V2_STAGE = {
   queued: 'queued', designing: 'designing', building: 'implementing', reviewing: 'in pipeline', fixing: 'in pipeline',
-  'merge-queue': 'ready to merge', parked: 'parked',
+  'merge-queue': 'ready to merge', parked: 'parked', waiting: 'waiting',
 };
 const V2_MERGED = new Set(['merged', 'merged-by-hand']);
 const FACTORY_LABEL = 'factory:';
 // an issue the loop rejected at its last life (SPEC 6.4): out of the factory, so not a state
 const LABEL_REJECTED = 'factory:rejected';
-const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'ready to merge']);
+const ACTIVE_STAGES = new Set(['designing', 'implementing', 'in pipeline', 'parked', 'waiting', 'ready to merge']);
 
 class UsageError extends Error {}
 class InputError extends Error {}

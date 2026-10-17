@@ -1,0 +1,257 @@
+{
+  "at": "2026-10-10T12:00:00.000Z",
+  "at_source": "--at",
+  "rules": {
+    "S1": 240,
+    "S2": 60,
+    "S3": 30,
+    "S4": 30,
+    "S5": 30,
+    "S6": "n/a"
+  },
+  "github": {
+    "read": "live",
+    "note": "GitHub labels, state and claim comments are read now, not as of --at"
+  },
+  "approximate": null,
+  "workers": {
+    "n/a": "factory.workers_status does not exist (the worker heartbeat table, #339, is not deployed)"
+  },
+  "runs": "read",
+  "stuck": [
+    {
+      "repo": "acme/widgets",
+      "issue": 202,
+      "stage": "parked",
+      "rule": "S3",
+      "minutes_in_stage": 60,
+      "detail": "parked for more than 30 minutes"
+    }
+  ],
+  "repos": [
+    {
+      "repo": "acme/widgets",
+      "coverage": {
+        "class": "events only",
+        "events": 6,
+        "runs": 0,
+        "last_event_at": "2026-10-10T11:00:00.000Z",
+        "last_run_update_at": null,
+        "heartbeat": "n/a (see workers)",
+        "devices": [
+          {
+            "device": "dev-a",
+            "events": 6,
+            "last_event_at": "2026-10-10T11:00:00.000Z"
+          }
+        ],
+        "live_issue_sources": {
+          "mirror": 0,
+          "event": 5,
+          "github": 1
+        },
+        "notes": [
+          "the repo has factory events but no mirrored runs: pipeline stages come from agent-logged events only"
+        ]
+      },
+      "issues": [
+        {
+          "issue": 203,
+          "stage": "queued",
+          "detail": "v2 queued, attempt 1",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:queued"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": null,
+          "v2": {
+            "state": "queued",
+            "step": null,
+            "attempt": 1,
+            "life": "w1",
+            "seq": 0,
+            "why": null
+          }
+        },
+        {
+          "issue": 202,
+          "stage": "parked",
+          "detail": "v2 parked, attempt 1",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": {
+            "rule": "S3",
+            "text": "parked for more than 30 minutes"
+          },
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:parked"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": null,
+          "v2": {
+            "state": "parked",
+            "step": null,
+            "attempt": 1,
+            "life": "w1",
+            "seq": 0,
+            "why": null
+          }
+        },
+        {
+          "issue": 200,
+          "stage": "waiting",
+          "detail": "v2 waiting, attempt 1",
+          "entered_at": "2026-10-09T06:00:00.000Z",
+          "minutes_in_stage": 1800,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:waiting"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": null,
+          "v2": {
+            "state": "waiting",
+            "step": null,
+            "attempt": 1,
+            "life": "w1",
+            "seq": 0,
+            "why": null
+          }
+        },
+        {
+          "issue": 201,
+          "stage": "waiting",
+          "detail": "v2 waiting, attempt 1",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:parked"
+            ],
+            "claim": null
+          },
+          "flags": [
+            "label: v2 waiting, but the issue lacks 'factory:waiting'"
+          ],
+          "lease": null,
+          "v2": {
+            "state": "waiting",
+            "step": null,
+            "attempt": 1,
+            "life": "w1",
+            "seq": 0,
+            "why": null
+          }
+        },
+        {
+          "issue": 204,
+          "stage": "waiting",
+          "detail": "GitHub label only, no events or runs",
+          "entered_at": null,
+          "minutes_in_stage": null,
+          "holder": null,
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "github",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:waiting"
+            ],
+            "claim": null
+          },
+          "flags": [],
+          "lease": null,
+          "v2": null
+        },
+        {
+          "issue": 205,
+          "stage": "waiting",
+          "detail": "v2 waiting, attempt 1",
+          "entered_at": "2026-10-10T11:00:00.000Z",
+          "minutes_in_stage": 60,
+          "holder": "dev-a",
+          "run": null,
+          "pr": null,
+          "stuck": null,
+          "source": "event",
+          "approximate": false,
+          "hint": null,
+          "github": {
+            "state": "open",
+            "labels": [
+              "factory:waiting"
+            ],
+            "claim": {
+              "device": "dev-b",
+              "at": "2026-10-10T10:20:00Z",
+              "lease_minutes": 120,
+              "renewed_at": null
+            }
+          },
+          "flags": [
+            "claim: GitHub comment says dev-b, events say dev-a"
+          ],
+          "lease": {
+            "until": "2026-10-10T11:00:00.000Z",
+            "lapsed": true
+          },
+          "v2": {
+            "state": "waiting",
+            "step": null,
+            "attempt": 1,
+            "life": "w1",
+            "seq": 0,
+            "why": null
+          }
+        }
+      ],
+      "recent": [],
+      "other_runs": []
+    }
+  ]
+}

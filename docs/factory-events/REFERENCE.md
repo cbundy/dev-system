@@ -657,12 +657,12 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `life` | string | required | no | pattern `^[0-9a-z]+$` | yes | Which life of the issue: one per pass through the factory, named by when its claim started (seconds, base 36). |
 | `seq` | integer | required | no | minimum 0 | yes | The record's sequence in this life: one more on every transition. |
 | `table_row` | string | required | no | pattern `^([A-Z][0-9]+\|recovered)$` | yes | The row of the loop's transition table that fired, for example T9 or U1 (v2 SPEC 4.3); recovered when the loop rebuilt the record after losing the step's outcome, and then via is recovered too. |
-| `from_state` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed", null | yes | The state before; null for a life's first transition. |
-| `to_state` | enum | required | no | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed" | yes | The state after: the issue's state from now on. |
+| `from_state` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed", null | yes | The state before; null for a life's first transition. |
+| `to_state` | enum | required | no | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed" | yes | The state after: the issue's state from now on. |
 | `via` | string | required | no | pattern `^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$` | yes | A short code for what moved it, for example approve, fix:review, free:load, unknown:timeout, triage:retry, unreject, reclaim (logged again after a re-claim) or dual-write (logged again when the new log lacked it). An open list: handle a code you do not know. |
 | `seq_at` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When this transition happened. Time transitions by this, not by the envelope ts: a transition logged again after a re-claim keeps its seq_at. |
 | `state_since` | string | required | no | pattern `^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$` | yes | When the issue entered to_state; earlier than seq_at when the state did not change. |
-| `resume_to` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "closed", null |  | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; null otherwise. |
+| `resume_to` | enum | required | yes | one of "queued", "designing", "building", "reviewing", "fixing", "merge-queue", "parked", "waiting", "closed", null |  | Loop state, for the record rebuild: when to_state is queued, the state a new claim leads to; when parked, the state unparking leads to; when waiting, the state the loop resumes to once every condition in wait holds; null otherwise. |
 | `branch` | string | required | no | minLength 1 | yes | The life's branch, fixed for the life. |
 | `pr` | integer | required | yes | minimum 1 | yes | The life's pull request; null until there is one. |
 | `head` | string | required | yes | pattern `^[0-9a-f]{7,40}$` | yes | The head commit a step last confirmed on origin; null before the first push. |
@@ -675,6 +675,7 @@ The loop's record of the issue changed: it moved to a new state, or its step, at
 | `fixes` | integer | required | no | minimum 0 |  | Loop state, for the record rebuild: entries to fixing so far in this life. |
 | `round` | integer | required | no | minimum 0 | yes | Entries to reviewing so far in this life: the review round. |
 | `question` | string | required | yes | maxLength 2000 |  | parked: the question for the owner; null otherwise. For people; never parse it. |
+| `wait` | array of object | optional | yes | minItems 1; maxItems 8 |  | waiting: the conditions the loop re-checks each pass; null otherwise |
 | `why` | enum | required | yes | one of "merged", "merged-by-hand", "dropped", "split", "closed-on-github", "claim-lost", null | yes | closed: why the life ended; null otherwise. |
 | `notes` | array of string | required | no | maxItems 8; items: maxLength 1000 |  | Loop state, for the record rebuild: owner, triage and decline notes for this seq's step, oldest first. For people and the step's agent; never parse them. |
 | `pr_closed_at` | string | required | yes | format date-time |  | Loop state, for the record rebuild: GitHub's closedAt of the newest hand-closed pull request the loop has handled, exactly as GitHub gave it (the loop compares it as text, so it is never reformatted); null when none. |
