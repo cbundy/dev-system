@@ -186,8 +186,8 @@ run "committed_tfvars" {
   variables {
     docker_hosts = <<-EOT
 [
-  {"value": "host-1", "name": "Host 1 (192.168.1.245)", "url": "ssh://coder@192.168.1.245"},
-  {"value": "host-2", "name": "Host 2 (192.168.1.246)", "url": "ssh://coder@192.168.1.246"}
+  {"value": "host-1", "name": "Coder host 1", "url": "ssh://coder@192.168.1.245"},
+  {"value": "host-2", "name": "Coder host 2", "url": "ssh://coder@192.168.1.246"}
 ]
 EOT
   }
@@ -204,6 +204,10 @@ EOT
   assert {
     condition     = local.docker_host_url == "ssh://coder@192.168.1.245"
     error_message = "the committed list's host-1 must resolve to its url"
+  }
+  assert {
+    condition     = [for o in data.coder_parameter.docker_host[0].option : o.name] == ["Coder host 1", "Coder host 2"]
+    error_message = "the committed list must name the hosts Coder host 1 and Coder host 2"
   }
 }
 

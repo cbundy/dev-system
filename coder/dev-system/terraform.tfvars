@@ -14,8 +14,8 @@
 # config supplies the key. Host 1 is the workspace LXC (cbundy/network#141).
 docker_hosts = <<-EOT
 [
-  {"value": "host-1", "name": "Host 1 (192.168.1.245)", "url": "ssh://coder@192.168.1.245"},
-  {"value": "host-2", "name": "Host 2 (192.168.1.246)", "url": "ssh://coder@192.168.1.246"}
+  {"value": "host-1", "name": "Coder host 1", "url": "ssh://coder@192.168.1.245"},
+  {"value": "host-2", "name": "Coder host 2", "url": "ssh://coder@192.168.1.246"}
 ]
 EOT
 
