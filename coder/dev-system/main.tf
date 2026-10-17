@@ -202,7 +202,7 @@ variable "gh_volume_name" {
 # Terraform, never a token value.
 variable "workspace_secrets_dir" {
   default     = ""
-  description = "Directory on the Docker host holding one folder per workspace, <dir>/<lower(owner)>/<lower(workspace name)>/gh-token (owned 1000:1000, mode 0600), whose folder is mounted read-only at /run/secrets/dev-system-workspace in a workspace that picks gh_login=token. Must not be equal to or under secrets_dir, which every workspace mounts. Empty turns the token choice off."
+  description = "Directory on the Docker host holding one folder per workspace, <dir>/<lower(owner)>/<lower(workspace name)>/ (files owned 1000:1000, mode 0600: gh-token, factory-db-writer-url, factory-db-reader-url), whose folder is mounted read-only at /run/secrets/dev-system-workspace in every workspace when this is set; gh-token is used only when the workspace picks gh_login=token. Must not be equal to or under secrets_dir, which every workspace mounts. Empty turns the token choice off."
   type        = string
   validation {
     condition     = var.workspace_secrets_dir == "" || var.secrets_dir == "" || (var.workspace_secrets_dir != var.secrets_dir && !startswith(var.workspace_secrets_dir, "${var.secrets_dir}/"))
@@ -822,10 +822,11 @@ resource "docker_container" "workspace" {
       read_only      = true
     }
   }
-  # This workspace's own folder only, for gh_login=token (variable
-  # workspace_secrets_dir): no other workspace's token is visible.
+  # This workspace's own folder only (variable workspace_secrets_dir), for the
+  # gh token and factory-db-*-url overrides: no other workspace's files are
+  # visible. A missing host folder is created empty by Docker and changes nothing.
   dynamic "volumes" {
-    for_each = local.gh_login_token ? [local.workspace_secrets_host_dir] : []
+    for_each = var.workspace_secrets_dir != "" ? [local.workspace_secrets_host_dir] : []
     content {
       container_path = "/run/secrets/dev-system-workspace"
       host_path      = volumes.value
