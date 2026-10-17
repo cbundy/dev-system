@@ -203,6 +203,17 @@ as "$db" "${db}_writer" "INSERT INTO factory.workers (device, state, last_seen) 
 denied "$db" "${db}_writer" "DELETE FROM factory.event_store"
 denied "$db" "${db}_writer" "TRUNCATE factory.event_store"
 denied "$db" "${db}_writer" "DELETE FROM factory.workers"
+as "$db" "${db}_writer" "UPDATE factory.workers SET cpu_pct = 12.5, procs = 40, stats_at = now() WHERE device = 'd1'" > /dev/null || fail "the writer cannot update the stats columns"
+as "$db" "${db}_writer" "INSERT INTO factory.worker_samples (device, sampled_at, state, cpu_pct, procs)
+    VALUES ('d1', now() - interval '31 days', 'busy', 1, 1), ('d2', now() - interval '31 days', 'busy', 1, 1)" > /dev/null || fail "the writer cannot insert old samples"
+[ "$(q "$db" "SELECT count(*) FROM factory.worker_samples")" = 2 ] || fail "an insert prunes only samples more than 30 days older than itself"
+as "$db" "${db}_writer" "INSERT INTO factory.worker_samples (device, sampled_at, state, cpu_pct, procs) VALUES ('d1', now(), 'idle', 2, 2)" > /dev/null \
+  || fail "the writer cannot insert a sample"
+[ "$(q "$db" "SELECT string_agg(device || '/' || state, ',' ORDER BY device, state) FROM factory.worker_samples")" = "d1/idle,d2/busy" ] \
+  || fail "the next insert should prune only that device's old sample: $(q "$db" "SELECT device, state FROM factory.worker_samples")"
+denied "$db" "${db}_writer" "DELETE FROM factory.worker_samples"
+[ "$(q "$db" "SELECT pg_get_userbyid(proowner) || '|' || prosecdef || '|' || proconfig[1] FROM pg_proc WHERE proname = 'worker_samples_prune'")" = "${db}_owner|true|search_path=factory, pg_temp" ] \
+  || fail "the prune function is not a SECURITY DEFINER owned by the owner with a pinned search_path: $(q "$db" "SELECT pg_get_userbyid(proowner), prosecdef, proconfig FROM pg_proc WHERE proname = 'worker_samples_prune'")"
 denied "$db" "${db}_writer" "CREATE TABLE factory.t (a int)"
 denied "$db" "${db}_writer" "CREATE TABLE public.t (a int)"
 denied "$db" "${db}_writer" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (99, 'x', 'y')"
@@ -210,6 +221,9 @@ denied "$db" "${db}_writer" "UPDATE factory.schema_migrations SET name = 'x'"
 denied "$db" "${db}_writer" "INSERT INTO factory.event_log (event_id) VALUES (gen_random_uuid())"
 as "$db" "${db}_reader" "SELECT count(*) FROM factory.event_log" > /dev/null || fail "the reader cannot read event_log"
 as "$db" "${db}_reader" "SELECT count(*) FROM factory.workers_status" > /dev/null || fail "the reader cannot read workers_status"
+as "$db" "${db}_reader" "SELECT cpu_pct FROM factory.workers_status" > /dev/null || fail "the reader cannot read workers_status.cpu_pct"
+as "$db" "${db}_reader" "SELECT count(*) FROM factory.worker_samples" > /dev/null || fail "the reader cannot read worker_samples"
+denied "$db" "${db}_reader" "INSERT INTO factory.worker_samples (device, sampled_at) VALUES ('x', now())"
 as "$db" "${db}_reader" "SELECT count(*) FROM factory.schema_migrations" > /dev/null || fail "the reader cannot read schema_migrations"
 denied "$db" "${db}_reader" "$ev"
 denied "$db" "${db}_reader" "UPDATE factory.workers SET state = 'x'"

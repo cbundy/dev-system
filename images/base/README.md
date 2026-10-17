@@ -1943,6 +1943,34 @@ the last beat and state, and fails when either URL is configured and no loop run
 `/usr/local/share/dev-system/heartbeat-loop --once` makes one beat and exits 0 only when every configured target
 succeeded.
 
+#### Machine stats
+
+Each running beat also sends a second, separate psql call to every target whose UPSERT succeeded: an UPDATE of
+the stats columns of the worker's row (`stats_at` is the database's `now()`) and one INSERT into
+`factory.worker_samples(device, sampled_at, state, <the same columns>)`. It is separate because `run_psql` runs one
+`ON_ERROR_STOP` transaction: with the stats in the UPSERT, a factory database not yet migrated (run
+`factory-db-bootstrap`, migration 0003) would reject every beat and every worker would go `stale`. A stats failure
+is logged, masked, as `heartbeat-loop: <target> stats write failed`; it never changes the exit code, resends DDL
+or skips the other target. The stopped beat sends none and leaves the stats columns as they were.
+
+| Column | Source |
+|---|---|
+| `cpu_limit_cores`, `cpu_quota_set` | cgroup `cpu.max`: quota over period. `max` gives the online CPU count (`getconf _NPROCESSORS_ONLN`) and `false`. |
+| `cpu_pct` | CPU used since the previous beat as a percent of the limit: delta of `cpu.stat` `usage_usec` over (delta wall microseconds times `cpu_limit_cores`) times 100. The previous reading is in `$DEV_HEARTBEAT_DIR/dev-heartbeat.cpu`, so it survives `--once` runs. NULL on a process's first beat and after a counter reset. |
+| `mem_used_bytes`, `mem_limit_bytes` | cgroup `memory.current`, `memory.max` (NULL when `max`). |
+| `claude_interactive`, `claude_headless` | `heartbeat-state`'s `claude_sessions`: live top-level sessions in the registry whose `entrypoint` starts with `sdk-` (`claude -p`) are headless, any other is interactive. |
+| `claude_procs`, `procs` | processes whose `/proc/<pid>/comm` is `claude`, and every pid in `/proc`. |
+
+A value whose source file is missing or unreadable (cgroup v1, no `/proc`) is NULL, never a guess, and never fails
+the beat. The counts never read `/proc/<pid>/cmdline` or `environ`, which can hold secrets and prompts: the
+headless/interactive split comes from the session registry and the process count from `comm` alone.
+`HEARTBEAT_CGROUP_DIR` (default `/sys/fs/cgroup`) and `HEARTBEAT_PROC_DIR` (default `/proc`) are test hooks.
+`worker_samples` has the primary key `(device, sampled_at)`, which also serves the per-device time index. The
+trigger function `factory.worker_samples_prune()` (`SECURITY DEFINER`, owned by the database owner, pinned
+`search_path`) deletes that device's samples more than 30 days older than the new one, so the writer role needs no
+`DELETE` grant. The period is a constant in migration 0003; a different one is a new migration. Queries are in
+[docs/metrics.md](../../docs/metrics.md#workers).
+
 `in_flight` lists the issues and runs that make the worker busy, with `repo`, `issue`, `run_id`,
 `branch` and `state` for each entry; unavailable identifiers are null.
 `sessions` lists the Claude sessions live on the device at this beat, each with `session_id` (as in

@@ -29,8 +29,10 @@ is left alone.
 
 - `<loop dir>/companion.jsonl`: one line per refusal (`guard:write`, `guard:push`,
   `guard:command`), per refused prompt (`prompt-denied`) and per gate run (`gate-pass`, `gate-fail`, `gate-unknown`, with the head, the
-  duration, `waitMs`, `concurrency` and a failing command; `gate-wait` when a gate waited for its turn), with the issue, life and seq. The loop logs each refusal, each `prompt-denied` and
-  each `gate-unknown` as an intervention; a gate that passed, failed or waited is not one.
+  duration, `waitMs`, `concurrency`, `startedAt` (when the gate asked for its turn, an ISO string),
+  `queuedBehind` (how many held a turn or waited ahead of it; 0 when none) and a failing command; `gate-wait` when a gate waited for its turn), with the issue, life and seq. The loop logs each refusal, each `prompt-denied` and
+  each `gate-unknown` as an intervention; a gate that passed, failed or waited is not one. It also
+  reads every gate line to write one `gate_run` event per run; the companion writes no event itself.
 - `callum-flow-event prompt_denied` (one per refused prompt) and `prompt_waiting` (one per prompt a
   mapped agent waits on), with the issue, branch and pr, and a note of `key=value` tokens (`life`,
   `seq`, `step`, `attempt`, `agent`, `agent_type`, `tool`, `input`, `why`, `slot`, `session`,

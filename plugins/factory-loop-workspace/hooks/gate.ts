@@ -78,8 +78,17 @@ export function gateRecord(r: GateResult, head: string | null, at: number, comma
 // next run overwrites it), so a step's gate runs can be audited. Only `gate-unknown` is an
 // intervention (SPEC 7.2); the loop skips `gate-pass` and `gate-fail`, the gate doing its work.
 // waitMs is the time the gate waited for its turn and concurrency the limit it ran under (null: none).
-export function gateLine(r: GateResult, head: string | null, waitMs = 0, concurrency: number | null = null): { cause: string; reason: string; fields: Record<string, unknown> } {
-  const fields = { head, ms: r.ms, waitMs, concurrency }
+// startedAt (ISO, 3 ms digits) is when it asked for its turn, before any wait, and queuedBehind how
+// many held a turn or waited ahead of it then (0: none); the loop writes `gate_run` from these.
+export function gateLine(
+  r: GateResult,
+  head: string | null,
+  waitMs: number,
+  concurrency: number | null,
+  startedAt: string,
+  queuedBehind: number,
+): { cause: string; reason: string; fields: Record<string, unknown> } {
+  const fields = { head, ms: r.ms, waitMs, concurrency, startedAt, queuedBehind }
   if (r.result === 'pass') return { cause: 'gate-pass', reason: 'the stop gate passed', fields }
   if (r.result === 'fail') return { cause: 'gate-fail', reason: `the stop gate refused the finish: \`${r.command}\` exited ${r.exitCode}`, fields: { ...fields, command: r.command, exitCode: r.exitCode } }
   return { cause: 'gate-unknown', reason: `the stop gate could not run: ${r.why}`, fields }

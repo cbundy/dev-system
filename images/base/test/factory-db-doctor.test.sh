@@ -123,7 +123,7 @@ RURL=$(url_for "$db" "${db}_reader" "$RPW")
 (umask 077 && printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url" \
   && printf '%s\n' "$RURL" > "$DEV_SECRETS_DIR/factory-db-reader-url")
 EXPECTED=$(factory_db_expected_version)
-[ "$EXPECTED" = 2 ] || fail "expected version should be 2 for the shipped migrations, got $EXPECTED"
+[ "$EXPECTED" = 3 ] || fail "expected version should be 3 for the shipped migrations, got $EXPECTED"
 for role in writer reader; do
   check $role
   expect 0 "OK" "database $db" "${db}_$role" "schema version $EXPECTED"
@@ -229,10 +229,10 @@ printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url"
 # -- 7. schema behind, ahead, and missing
 mkdir "$tmpdir/mig-behind" "$tmpdir/mig-ahead"
 cp "$ROOT"/images/base/factory-db/migrations/*.sql "$tmpdir/mig-behind/"
-echo "SELECT 1;" > "$tmpdir/mig-behind/0003_extra.sql"
+echo "SELECT 1;" > "$tmpdir/mig-behind/0004_extra.sql"
 rc=0
 out=$(FACTORY_DB_MIGRATIONS_DIR="$tmpdir/mig-behind" bash -c '. "$1"; factory_db_check writer' _ "$ROOT/images/base/factory-db.sh" 2>&1) || rc=$?
-expect 2 "FAIL" "behind" "factory-db-bootstrap --db $db" "migrations 3..3"
+expect 2 "FAIL" "behind" "factory-db-bootstrap --db $db" "migrations 4..4"
 echo "ok: schema behind fails with the bootstrap fix"
 q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (7, 'future', 'x')" > /dev/null
 check writer
