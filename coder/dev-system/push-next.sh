@@ -60,9 +60,9 @@ usage() {
 }
 
 cmd=${1:-push}
-[ $# -le 1 ] || [ "$cmd" = smoke ] && [ $# -le 2 ] || usage
 case "$cmd" in
-  push | smoke | cleanup) ;;
+  push | cleanup) [ $# -le 1 ] || usage ;;
+  smoke) [ $# -le 2 ] || usage ;;
   *) usage ;;
 esac
 host=${2:-}
