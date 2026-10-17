@@ -1065,6 +1065,10 @@ the note today's queries read:
 | `implementer_routed` | `callum-flow-implementer-route` before a build | unchanged (`docs/metrics.md` section 8) |
 | `loop` | agent and wake entries, rate caps, breakers, owner operations; a `kind=passes` pass summary once a minute while the loop acts (#680) | unchanged (D-09). The summary is bookkeeping, never a stage or progress; the reader does any weighting |
 
+- The Coder stop script (`wind-down.sh`, 10.11) writes the native `wind_down` event, one per loop dir
+  per stop, through `callum-flow-event --type wind_down` (`docs/factory-events/schemas/wind_down.v1.json`);
+  the loop itself does not write or read it.
+
 The loop no longer logs `superseded`, `rebased_behind` or `run_started`, and no watcher states
 (there are no pipeline runs).
 
@@ -1918,6 +1922,26 @@ file exists. The stopper (#842) waits for `idle` or `stop_now` or its own timeou
 still running is `stale`: the loop plans normally again from that pass, removes the file
 (`rm -f`, in the same pass) and tells the owner once (`tell(wind-down-stale)`, keyed
 `tell:wind-down-stale:<requested_at ms>`, so a file that could not be removed is not told again).
+
+**The stopper** is the Coder stop script of the loop template (`coder/dev-system/wind-down.sh`, a
+`coder_script` with `run_on_stop` when the template variable `wind_down_minutes` is above 0, 10 for
+`orchestrator-loop`; the container gets that cap plus 60 s of stop grace). It runs for every loop dir
+`<config dir>/factory-loop/<owner>__<repo>` at once, against one deadline, and for each:
+
+- **Off.** If the repo's effective `windDownMinutes` is 0 (repo `.claude/factory-loop.json`, then the
+  user `config.json`, else 10), or the `OFF` file exists, it writes no request and records outcome
+  `off` (`waited_ms` 0, `stopped_at` = `requested_at`).
+- **The request.** It keeps a `restart-self` request no older than the cap plus 5 minutes; otherwise
+  it writes `{ "requested_at", "trigger": "coder-stop" }` atomically (temp file, then `mv`).
+- **The poll.** Every 2 s it reads the status, counting only one whose `requested_at` equals the
+  request's. It ends at the first of: the stop-now file or a status with `stop_now` (outcome `now`);
+  a status with `idle` (`idle`); the cap, the smaller of the status `cap_ms` and the template's,
+  counted from `requested_at` (`cap`); no matching status within 3 minutes, meaning the loop is not
+  passing (`idle`, 0 running).
+- **The event.** One `wind_down` event per loop dir, with `running_at_request` from the first matching
+  status and `cut_at_stop` from the last (for `cap` and `now`; 0 otherwise).
+- **Cleanup.** It removes the stop-now, request and status files, so the next start does not wind
+  down again, then gives the heartbeat its `--final` beat. It always exits 0.
 
 ## 11. Releases and parking
 
