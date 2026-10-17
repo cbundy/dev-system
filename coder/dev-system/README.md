@@ -368,7 +368,8 @@ Each workspace chooses its **GitHub login** when it is created, and can change i
   mounted read-only with nothing else from the directory (the folder is mounted in every workspace when `workspace_secrets_dir` is set, not only in token mode). It mounts no shared gh volume, and
   leaves out the owner's `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, so commits use the token's account
   (set `git_email` if needed). The choice also appears when only `workspace_secrets_dir` is
-  set, with private as the default. Changes take effect on the next start.
+  set, with private as the default. Changes take effect on the next start. The walkthrough is
+  [Working a repo as another GitHub account](#working-a-repo-as-another-github-account).
 
 The choice exists when `gh_volume_name` is set in `terraform.tfvars` (the homelab's is
 `dev-system-gh`). Shared is what every workspace got before the choice existed, and a
@@ -404,6 +405,49 @@ the Docker host (`docker volume rm <name>`) if you ever want to.
   (cbundy/dev-system#182) has no `workflow` scope, so it cannot push workflow changes.
   Log in fresh on the shared volume, or run `gh auth refresh --scopes workflow` once in
   any workspace.
+
+### Working a repo as another GitHub account
+
+Use this to run a loop workspace (`orchestrator-loop`, or `dev-system`) acting only as
+another person's GitHub account, with none of the owner's GitHub credentials. The template
+needs `workspace_secrets_dir` set (see [Template variables](#template-variables)).
+
+1. **Create the token** on the other account. Fine-grained, scoped to the repo: Contents,
+   Issues, Pull requests and Workflows read and write; Actions, Checks and Metadata read.
+   Or classic: `repo` and `workflow`.
+2. **Place it on the Docker host** at
+   `<workspace_secrets_dir>/<lower(owner)>/<lower(workspace name)>/gh-token`, owned
+   1000:1000, mode 0600. The token never goes into Terraform, a parameter or the template.
+   This writes it without the token landing in shell history or argv:
+
+   ```bash
+   dir=<workspace_secrets_dir>/<lower(owner)>/<lower(workspace name)>
+   sudo install -d -o 1000 -g 1000 -m 0700 "$dir"
+   read -rs -p 'Token: ' t; echo
+   printf '%s\n' "$t" | sudo install -m 0600 -o 1000 -g 1000 /dev/stdin "$dir/gh-token"
+   unset t
+   ```
+
+3. **Create the workspace** with `gh_login=token`, `repo_url` set to the other account's
+   repo, and `extra_trusted_authors` holding the repo owner and collaborators as `login:id`
+   (look an id up with `gh api users/<login> --jq .id`; the token's own account is trusted
+   automatically). `git_email` is optional: by default the commit email is
+   `<id>+<login>@users.noreply.github.com`. For an existing workspace, change the
+   parameters in the dashboard or run `dev-restart-self --parameter gh_login=token`
+   (repeatable), never `coder restart --parameter`. All of these take effect on the next
+   start.
+4. **Check it**: `coder ssh <workspace> -- dev-doctor` shows the effective trusted list and
+   the token access check, and `gh auth status` lists only the token's account.
+5. **Rotate** by replacing the file in place (same owner and mode), then restarting the
+   workspace: dev-init logs gh in from the file on every start.
+6. **Remove** by switching `gh_login` back to private or shared and deleting the file (until
+   then dev-init warns that the token is missing and gh has no account), then revoke the
+   token on GitHub.
+
+Every GitHub call from the workspace, the loop included, counts against that account's own
+API rate limit, not the owner's. The details are in the image README: the
+[token mode](../../images/base/README.md#factory-event-log) paragraph (the "Token mode" paragraph under "Factory event log") and the
+[dev-doctor access check](../../images/base/README.md#dev-doctor).
 
 ### Sharing one Claude login
 

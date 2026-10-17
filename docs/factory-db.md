@@ -47,6 +47,9 @@ factory-db-bootstrap --db factory
 `--admin-url-file PATH` reads the admin URL from a file instead of `FACTORY_DB_ADMIN_URL`. The
 command creates `factory_owner` (no login), `factory_writer` and `factory_reader`, the database,
 the `factory` schema and the tables, and prints one summary line. Running it again changes nothing.
+A database of that name that already exists, such as a server's default `POSTGRES_DB` database, is
+taken over: its owner becomes `factory_owner`. For that the admin must be a superuser or the
+database's current owner.
 The roles are named after the database, so several databases share one server.
 
 ## 4. Build each role's URL
