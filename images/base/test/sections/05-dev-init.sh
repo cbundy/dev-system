@@ -342,3 +342,13 @@ check "dev-init starts the heartbeat loop when a URL is configured: its lock is 
   -e AGENTSVIEW_PG_URL=postgres://u:p@no-such-host.invalid/db --entrypoint ""
 check "dev-init starts no heartbeat loop without a URL" in_image '
   dev-init >/dev/null 2>&1; flock -n /tmp/dev-heartbeat.lock true && [ ! -e /tmp/dev-heartbeat.pid ]' --entrypoint ""
+
+# The new factory event log push (#740): a writer URL (a closed port is enough) starts factory-event-push-loop.
+check "dev-init starts the factory event push loop when FACTORY_DB_WRITER_URL is set: its lock is held" in_image '
+  out=$(dev-init 2>&1); echo "$out"
+  echo "$out" | grep -qF "dev-init: started factory event push (new log) (log: /tmp/dev-factory-event-push.log)" || exit 1
+  ! flock -n /tmp/dev-factory-event-push.lock true' \
+  -e FACTORY_DB_WRITER_URL=postgres://w:p@127.0.0.1:1/db --entrypoint ""
+check "dev-init starts no factory event push loop without a writer URL" in_image '
+  out=$(env -u FACTORY_DB_WRITER_URL dev-init 2>&1); echo "$out"
+  ! echo "$out" | grep -q "factory event push (new log)" && flock -n /tmp/dev-factory-event-push.lock true' --entrypoint ""

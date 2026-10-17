@@ -439,6 +439,45 @@ if [ "$av_rc" -eq 0 ]; then
   fi
 fi
 
+# Factory event log, new format (cbundy/dev-system#740): the same counts over
+# factory/*.jsonl, with the lines the database refused (factory/.refused/) set aside.
+nl_dir="$ev_dir/factory"
+nl_lines=0
+nl_pushed=0
+nl_waiting=0
+nl_refused=0
+nl_last_written=0
+nl_last_pushed=0
+for nl_f in "$nl_dir"/*.jsonl; do
+  [ -f "$nl_f" ] || continue
+  nl_b=$(basename "$nl_f")
+  nl_n=$(wc -l < "$nl_f" | tr -d ' ')
+  nl_p=$(cat "$nl_dir/.pushed/$nl_b" 2>/dev/null || echo 0)
+  case "$nl_p" in '' | *[!0-9]*) nl_p=0 ;; esac
+  nl_lines=$((nl_lines + nl_n))
+  nl_pushed=$((nl_pushed + nl_p))
+  if [ "$nl_p" -gt "$nl_n" ]; then
+    warn "event log $nl_f has $nl_n lines but $nl_p were pushed - the file was replaced under the push loop" \
+      "nothing to do: factory-event-push-loop pushes it again from the start (rows with an event_id dedup)"
+  else
+    nl_waiting=$((nl_waiting + nl_n - nl_p))
+  fi
+  if [ -s "$nl_dir/.refused/$nl_b" ]; then
+    nl_r=$(wc -l < "$nl_dir/.refused/$nl_b" | tr -d ' ')
+    nl_refused=$((nl_refused + nl_r))
+    warn "$nl_r line(s) of $nl_f were refused by the database and set aside in $nl_dir/.refused/$nl_b" \
+      "read $nl_dir/.refused/$nl_b (line, error, text); the lines stay set aside"
+  fi
+  nl_m=$(stat -c %Y "$nl_f" 2>/dev/null || echo 0)
+  [ "$nl_m" -le "$nl_last_written" ] || nl_last_written=$nl_m
+  nl_m=$(stat -c %Y "$nl_dir/.pushed/$nl_b" 2>/dev/null || echo 0)
+  [ "$nl_m" -le "$nl_last_pushed" ] || nl_last_pushed=$nl_m
+done
+info "factory events (new log): $nl_lines recorded (last written $(ev_when "$nl_last_written")), $nl_pushed pushed (last pushed $(ev_when "$nl_last_pushed")), $nl_waiting waiting, $nl_refused set aside"
+if factory_db_url writer >/dev/null 2>&1 && flock -n /tmp/dev-factory-event-push.lock true 2>/dev/null; then
+  fail "factory event push (new log) is not running" "run: dev-init (log: /tmp/dev-factory-event-push.log)"
+fi
+
 # Worker heartbeat (cbundy/dev-system#339): when the last beat was written and
 # the state it reported. A configured URL whose loop is not running is a failure.
 hb_state=/tmp/dev-heartbeat.state
