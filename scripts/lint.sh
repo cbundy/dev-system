@@ -163,7 +163,7 @@ if command -v terraform >/dev/null 2>&1; then
   checked=$((checked + 1))
   tf_tmp=$(mktemp -d) || exit 1
   trap 'rm -f "$list"; rm -rf "$tf_tmp"' EXIT
-  cp "$TF_DIR"/*.tf "$TF_DIR"/.terraform.lock.hcl "$tf_tmp"/
+  cp "$TF_DIR"/*.tf "$TF_DIR"/*.tftest.hcl "$TF_DIR"/.terraform.lock.hcl "$tf_tmp"/
   TF_PLUGIN_CACHE_DIR=${TF_PLUGIN_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/terraform/plugin-cache}
   export TF_PLUGIN_CACHE_DIR
   mkdir -p "$TF_PLUGIN_CACHE_DIR"
@@ -172,6 +172,9 @@ if command -v terraform >/dev/null 2>&1; then
     printf '%s\n' "$out" >&2
   elif ! out=$(terraform -chdir="$tf_tmp" validate -no-color 2>&1); then
     fail "$TF_DIR (terraform validate)"
+    printf '%s\n' "$out" >&2
+  elif ! out=$(terraform -chdir="$tf_tmp" test -no-color 2>&1); then
+    fail "$TF_DIR (terraform test)"
     printf '%s\n' "$out" >&2
   fi
 elif [ "${LINT_REQUIRE_TERRAFORM:-0}" = 1 ]; then
