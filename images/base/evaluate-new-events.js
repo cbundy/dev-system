@@ -144,4 +144,4 @@ function normalize(report) {
   return out;
 }
 
-module.exports = { mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };
+module.exports = { SYNTHESIZED, mapEvent, loadNewEvents, localLog, normalize, NA_METRICS, NOTES };

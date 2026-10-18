@@ -371,6 +371,47 @@ for (const flat of [false, true]) {
   }
 }
 
+// A transition into building, fixing or merge-queue is the old delegated, fix_requested or merge_ready line.
+for (const flat of [false, true]) {
+  const shape = flat ? "event_log row" : "local log";
+  const n = (type, issue, extra, o) => nev(type, issue, extra, { flat, ...o });
+  const at = (m) => ({ ts: `2026-10-12T10:${String(m).padStart(2, "0")}:00Z` });
+  const tr = (from, to, m, branch = "issue-7") => n("transition", 7, { from_state: from, to_state: to, branch }, at(m));
+  const branchOf = (lines) => {
+    writeNew(lines);
+    const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
+    return out.in_flight.length ? out.in_flight[0].branch : out.state;
+  };
+
+  test(`new (${shape}): a transition into building carries the branch, like old delegated`, () => {
+    const lines = [n("claimed", 7, {}, at(0)), tr("queued", "designing", 1), tr("designing", "building", 2)];
+    assert.equal(branchOf(lines), "issue-7");
+    writeEvents([ev("claimed", 7), ev("delegated", 7, { branch: "issue-7", ts: "2026-10-12T10:02:00Z" })]);
+    assert.equal(run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "old" }).out.in_flight[0].branch, "issue-7");
+  });
+  test(`new (${shape}): implementer_routed after the entry reads null, nothing is carried`, () => {
+    assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("designing", "building", 2), n("implementer_routed", 7, {}, at(3))]), null);
+  });
+  test(`new (${shape}): merge-queue and fixing entries give the branch, merged gives idle`, () => {
+    assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("building", "merge-queue", 2)]), "issue-7");
+    assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("reviewing", "fixing", 2, "issue-8")]), "issue-8");
+    assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("building", "merge-queue", 2), n("merged", 7, {}, at(3))]), "idle");
+  });
+  test(`new (${shape}): after merged only a transition into building reopens`, () => {
+    const merged = n("merged", 7, {}, at(0));
+    assert.equal(branchOf([merged, tr("building", "merge-queue", 2)]), "idle");
+    assert.equal(branchOf([merged, tr("reviewing", "fixing", 2)]), "idle");
+    assert.equal(branchOf([merged, tr("designing", "building", 2)]), "issue-7");
+  });
+  test(`new (${shape}): same-state transitions and other targets change nothing`, () => {
+    const merged = n("merged", 7, {}, at(0));
+    for (const [f, t] of [["building", "building"], ["queued", "reviewing"], ["queued", "designing"], ["building", "parked"]]) {
+      assert.equal(branchOf([merged, tr(f, t, 2)]), "idle", `${f}->${t}`);
+    }
+    assert.equal(branchOf([n("claimed", 7, {}, at(0)), tr("building", "building", 2, "other")]), null);
+  });
+}
+
 test("new: an in_flight entry has the new type as state, a null run_id and the payload branch", () => {
   writeNew([nev("claimed", 7, { branch: "issue-7" })]);
   const { out } = run({ CALLUM_FLOW_HEARTBEAT_STATE_SOURCE: "new" });
