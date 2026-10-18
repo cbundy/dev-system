@@ -21,10 +21,46 @@
 # `tests/<name>.test.js` file (all named files run together as one node job), a discovered
 # `*.test.sh` suite path, or a discovered mod directory (`plugins/<p>`). An unknown id prints one
 # error line and exits 2 before any setup. A subset run's success line says it is not the gate.
+#
+# Shard mode, for CI: TEST_SHARD=K/N (1 <= K <= N) runs only shard K of N. The full ordered job
+# list is built as usual (slow-first jobs, discovery order, serial jobs), numbered from 0, and job i
+# belongs to shard (i mod N) + 1. A shard runs its jobs through the same pool, with the same sandbox,
+# PostgreSQL and isolation checks, and its success line says it is one part of the gate. An invalid
+# TEST_SHARD, or TEST_SHARD together with ids, prints one error line and exits 2 before any setup.
+#
+# List mode: `npm test -- --list` prints the ids the run would schedule (after the subset or shard
+# filter), one per line in scheduled order, and exits 0 before any setup.
 set -u
 
 cd "$(dirname "$0")/.." || exit 1
 sh scripts/test-pool.sh --check-jobs || exit $?
+
+list=0
+if [ "${1:-}" = --list ]; then
+  list=1
+  shift
+fi
+
+shard=""
+shard_k=""
+shard_n=""
+if [ -n "${TEST_SHARD:-}" ]; then
+  if ! printf '%s\n' "$TEST_SHARD" | grep -Eq '^[1-9][0-9]{0,5}/[1-9][0-9]{0,5}$'; then
+    echo "test: invalid TEST_SHARD '$TEST_SHARD'; use K/N with positive integers and 1 <= K <= N (for example 2/3)" >&2
+    exit 2
+  fi
+  shard_k=${TEST_SHARD%/*}
+  shard_n=${TEST_SHARD#*/}
+  if [ "$shard_k" -gt "$shard_n" ]; then
+    echo "test: invalid TEST_SHARD '$TEST_SHARD'; use K/N with positive integers and 1 <= K <= N (for example 2/3)" >&2
+    exit 2
+  fi
+  if [ "$#" -gt 0 ]; then
+    echo "test: TEST_SHARD cannot be combined with ids; use one or the other" >&2
+    exit 2
+  fi
+  shard=$TEST_SHARD
+fi
 
 # Jobs that run first, in this order, so the longest ones start at once and set the wall time.
 # An entry that no longer exists is ignored; a suite not listed still runs.
@@ -122,23 +158,6 @@ if [ "$#" -gt 0 ]; then
   fi
 fi
 
-# Shared per-run environment: anything exported here reaches every job. This is the one place
-# for it, including the per-run sandbox for the jobs' event and state dirs
-# (scripts/test-sandbox.sh). TMPDIR points inside the results dir (made under /tmp, whatever TMPDIR was inherited), so temp files created there
-# by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
-# with it.
-mkdir "$results/tmp" || exit 1
-TEST_RESULTS_DIR=$results
-TMPDIR=$results/tmp
-export TEST_RESULTS_DIR TMPDIR
-test_sandbox_setup || exit 1
-# A real PostgreSQL for the database tests: FACTORY_TEST_PG_ADMIN_URL when it is set (CI), else
-# a private cluster (scripts/test-pg.sh). Each test makes and drops its own database.
-TEST_REPO_ROOT=$(pwd)
-export TEST_REPO_ROOT
-test_pg_setup || exit 1
-
-
 # Order: slow-first jobs, then the rest in discovery order; serial jobs go to their own list.
 in_list() { # in_list <id> <list>
   for item in $2; do [ "$item" = "$1" ] && return 0; done
@@ -156,6 +175,46 @@ while IFS= read -r id; do
     echo "sh scripts/test-job.sh $id" >> "$results/jobs"
   fi
 done < "$all"
+
+# Shard mode: keep job i (one numbering across the pool jobs, then the serial ones) when
+# (i mod N) + 1 is K. A serial job stays in the serial list of its shard.
+if [ -n "$shard" ]; then
+  for f in jobs serial; do
+    : > "$results/$f.shard"
+  done
+  cat "$results/jobs" "$results/serial" | awk -v n="$shard_n" -v k="$shard_k" '(NR - 1) % n == k - 1 { print NR }' > "$results/keep"
+  njobs_all=$(wc -l < "$results/jobs" | tr -d ' ')
+  while IFS= read -r i; do
+    if [ "$i" -le "$njobs_all" ]; then
+      sed -n "${i}p" "$results/jobs" >> "$results/jobs.shard"
+    else
+      sed -n "$((i - njobs_all))p" "$results/serial" >> "$results/serial.shard"
+    fi
+  done < "$results/keep"
+  mv "$results/jobs.shard" "$results/jobs"
+  mv "$results/serial.shard" "$results/serial"
+fi
+
+if [ "$list" -eq 1 ]; then
+  cat "$results/jobs" "$results/serial" | sed 's/^sh scripts\/test-job\.sh //'
+  exit 0
+fi
+
+# Shared per-run environment: anything exported here reaches every job. This is the one place
+# for it, including the per-run sandbox for the jobs' event and state dirs
+# (scripts/test-sandbox.sh). TMPDIR points inside the results dir (made under /tmp, whatever TMPDIR was inherited), so temp files created there
+# by jobs that honour TMPDIR (even ones an interrupted job never got to clean up) are removed
+# with it.
+mkdir "$results/tmp" || exit 1
+TEST_RESULTS_DIR=$results
+TMPDIR=$results/tmp
+export TEST_RESULTS_DIR TMPDIR
+test_sandbox_setup || exit 1
+# A real PostgreSQL for the database tests: FACTORY_TEST_PG_ADMIN_URL when it is set (CI), else
+# a private cluster (scripts/test-pg.sh). Each test makes and drops its own database.
+TEST_REPO_ROOT=$(pwd)
+export TEST_REPO_ROOT
+test_pg_setup || exit 1
 
 # Run the pool in the background so a signal reaches it while we wait. A backgrounded pool
 # ignores SIGINT, so Ctrl-C is forwarded as SIGTERM.
@@ -186,6 +245,13 @@ if [ "$subset" -eq 1 ]; then
   node_part=""
   grep -qxF node "$all" && node_part=" (${node_total} node tests)"
   echo "test: subset of $njobs jobs ok${node_part} - not the gate; run npm test$TEST_PG_NOTE"
+  exit 0
+fi
+if [ -n "$shard" ]; then
+  ids=$(cat "$results/jobs" "$results/serial" | sed 's/^sh scripts\/test-job\.sh //')
+  s_suites=$(printf '%s\n' "$ids" | grep -c '\.test\.sh$')
+  s_mods=$(printf '%s\n' "$ids" | grep -c '^plugins/')
+  echo "test: shard $shard ok: ${node_total} node tests, $s_suites shell suites, $s_mods mods$mod_note$TEST_PG_NOTE - one shard of the gate; run npm test for the whole gate"
   exit 0
 fi
 echo "test: ${node_total} node tests, $suites shell suites, $mods mods ok$mod_note$TEST_PG_NOTE"
