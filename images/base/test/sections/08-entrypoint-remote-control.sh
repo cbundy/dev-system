@@ -52,6 +52,7 @@ check "piped stdin reaches the command" bash -c "
   echo \"stdout=\$out\"
   [ \"\$out\" = hi ]"
 # A --final that hangs is cut off after 10s, and its stdout never reaches the container's stdout.
+WORKDIR=${WORKDIR:-$(mktemp -d)} # section 7 sets it only when it runs; lib.sh's cleanup removes it
 printf '#!/bin/sh\necho STUB-FINAL-OUTPUT\nsleep 60\n' > "$WORKDIR/hang-final"
 chmod 755 "$WORKDIR/hang-final"
 c=$(run_bg -v "$WORKDIR/hang-final:/usr/local/share/dev-system/heartbeat-loop:ro" "$IMAGE" bash -c 'sleep infinity')
