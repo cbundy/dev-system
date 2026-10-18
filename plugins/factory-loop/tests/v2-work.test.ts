@@ -737,6 +737,8 @@ describe('the design step (8.7)', () => {
     const h = harness(r, () => ({}), [], { issues: [issue(320, { labels: ['model:sonnet', 'ready'] })] })
     await h.spawn('design')
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:designer-v2', model: 'sonnet' })
+    expect(h.spawns[0]?.prompt).not.toContain('callum-flow:explorer')
+    expect(h.spawns[0]?.prompt).toContain('explore with your own reads')
     expect(h.runs).toEqual([])
     const { entry: e } = await h.spawn('design')
     h.answer('design', 'design-v2', { kind: 'question', question: 'Which API?' })

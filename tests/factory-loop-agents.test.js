@@ -209,3 +209,17 @@ test("the v2 designer makes every new decision observable, and the reviewer hold
   const review = read("plugins/factory-loop/agents/reviewer.md").replace(/\s+/g, " ");
   assert.match(review, /`## Observability` section is a requirement like its acceptance criteria/);
 });
+
+test("the v2 designer explores with its own reads: no Agent tool, no explorer, a checklist and an Exploration line (#851)", () => {
+  const raw = read("plugins/factory-loop/agents/designer-v2.md");
+  assert.ok(!toolsOf(raw).includes("Agent"), "tools: does not list Agent");
+  const dis = raw.match(/^disallowedTools:(.*)$/m);
+  assert.ok(dis && dis[1].split(",").map((t) => t.trim()).includes("Agent"), "disallowedTools lists Agent");
+  const body = raw.replace(/\s+/g, " ");
+  assert.doesNotMatch(body, /callum-flow:explorer|explorer agent/);
+  assert.match(body, /size limits/);
+  assert.match(body, /tests that pin the text or behavior/);
+  assert.match(body, /every path and line range the brief cites exists at `origin\/<base>`/);
+  const shape = raw.slice(raw.indexOf("## Design brief (designer,"));
+  assert.ok(shape.indexOf("Exploration: <") !== -1 && shape.indexOf("Exploration: <") < shape.indexOf("## Acceptance criteria"));
+});

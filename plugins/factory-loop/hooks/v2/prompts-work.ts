@@ -236,7 +236,7 @@ export function designPrompt(i: DesignInput): string {
     ...notesLines(i),
     ...priorLines(i, 'reader'),
     '',
-    'How to design, as your agent definition says: for a bug, reproduce the real failure first; spawn callum-flow:explorer in the foreground for the file:line map, unless the change is trivial; cite file:line only for what you checked yourself; never decide an owner decision, ask it.',
+    'How to design, as your agent definition says: for a bug, reproduce the real failure first; explore with your own reads and work through your definition\'s exploration checklist (you have no Agent tool); cite file:line only for what you checked yourself; never decide an owner decision, ask it.',
     '',
     `When the brief is ready, write it to ${brief} with Bash (in your scratch folder) and record it with jq, which reads the file as one JSON string:`,
     `jq -n --rawfile brief ${brief} '{"kind": "brief", "brief": $brief}' | ${i.place.bin} --to ${i.place.file}`,
