@@ -134,7 +134,7 @@ function expected(state: IssueState, onTriage: boolean, kind: EventKind): string
 }
 
 describe('the table (v2 SPEC 4.3, 4.6)', () => {
-  test('35 rows, the spec\'s, held as data; S0 makes a record and rowFor never returns it', () => {
+  test('35 rows, the spec\'s, held as data; S0 makes a record and rowFor never returns it', SWEEP, () => {
     expect(ROW_IDS).toEqual(['S0', 'T1', 'T2', 'T3', 'T4', 'T16', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13', 'T14', 'T15', 'U1', 'U2', 'U3', 'U4', 'X1', 'X2', 'X3', 'X4', 'X5', 'E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'C1', 'P1', 'E7'].sort((a, b) => ROW_IDS.indexOf(a) - ROW_IDS.indexOf(b)))
     expect(ROW_IDS).toHaveLength(35)
     // the event schema's table_row pattern (docs/factory-events/schemas/transition.v1.json)
@@ -171,7 +171,7 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     }
   })
 
-  test('a hung merge-queue head is the unknown path, never a tell: its running step\'s timeout comes as unknown (why timeout) and takes U1 to U4', () => {
+  test('a hung merge-queue head is the unknown path, never a tell: its running step\'s timeout comes as unknown (why timeout) and takes U1 to U4', SWEEP, () => {
     const head = { ...base, state: 'merge-queue' as const, step: 'queue' as const, pr: 512 }
     const timedOut: TableEvent = { kind: 'unknown', why: 'timeout', reason: 'queue ran past its 30 min' }
     expect(rowFor(head, timedOut, CFG).id).toBe('U2')
@@ -182,7 +182,7 @@ describe('the table (v2 SPEC 4.3, 4.6)', () => {
     expect(rowFor(head, { kind: 'timeout' }, CFG).id).toBe('E6')
   })
 
-  test('every state but closed has a timeout or a tell period: a running step\'s timeout is unknown, a waiting state\'s is E6', () => {
+  test('every state but closed has a timeout or a tell period: a running step\'s timeout is unknown, a waiting state\'s is E6', SWEEP, () => {
     for (const state of LIVE_STATES) {
       for (const step of STEPS_OF[state]) {
         const r = { ...base, state, step }
@@ -240,12 +240,12 @@ function reachable(): IssueRecord[] {
 describe('properties over the reachable records (v2 SPEC 17.1)', () => {
   const REACHED = reachable()
 
-  test('property 2, reachability: every state from queued, and closed from every state', () => {
+  test('property 2, reachability: every state from queued, and closed from every state', SWEEP, () => {
     expect(new Set(REACHED.map(r => r.state))).toEqual(new Set(ISSUE_STATES))
     for (const r of REACHED.filter(x => x.state !== 'closed')) expect(next(r, { kind: 'drop' })?.state).toBe('closed')
   })
 
-  test('property 4, one label: every reachable record but a closed one has exactly its state\'s factory label', () => {
+  test('property 4, one label: every reachable record but a closed one has exactly its state\'s factory label', SWEEP, () => {
     for (const r of REACHED) {
       const label = labelOf(r.state)
       if (r.state === 'closed') expect(label).toBeNull()
@@ -267,7 +267,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
-  test('a triage answer other than park or drop starts a step that is not triage: the state\'s own, at attempt 1 (retry: 2), with no cut, even when the answer leads to the state the record is in', () => {
+  test('a triage answer other than park or drop starts a step that is not triage: the state\'s own, at attempt 1 (retry: 2), with no cut, even when the answer leads to the state the record is in', SWEEP, () => {
     const onTriage = REACHED.filter(r => r.step === 'triage')
     expect(new Set(onTriage.map(r => r.state))).toEqual(new Set(STEP_STATES))
     for (const r of onTriage) {
@@ -280,7 +280,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
-  test('property 12, edges: from every reachable parked record an unpark reaches queued, its target kept and its budgets reset; a resumed record is not parked again for the same hand close', () => {
+  test('property 12, edges: from every reachable parked record an unpark reaches queued, its target kept and its budgets reset; a resumed record is not parked again for the same hand close', SWEEP, () => {
     const parked = REACHED.filter(r => r.state === 'parked')
     expect(parked.length).toBeGreaterThan(0)
     for (const r of parked) {
@@ -292,7 +292,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     }
   })
 
-  test('T16, C1, P1: a wait enters waiting with its conditions and resumes to designing; every condition cleared leads to queued with the cleared note; an owner resume does too', () => {
+  test('T16, C1, P1: a wait enters waiting with its conditions and resumes to designing; every condition cleared leads to queued with the cleared note; an owner resume does too', SWEEP, () => {
     const designing: IssueRecord = { ...base, state: 'designing', step: 'design', since: NOW - 3_600_000 }
     const conditions = [
       { kind: 'issue-closed' as const, issue: 57 },
@@ -316,7 +316,7 @@ describe('properties over the reachable records (v2 SPEC 17.1)', () => {
     expect(rowFor(waiting, { kind: 'timeout' }, CFG).id).toBe('E6')
   })
 
-  test('each distinct note is kept and asked once: a conflict whose text is also its note parks with it once (drill run 3, #22)', () => {
+  test('each distinct note is kept and asked once: a conflict whose text is also its note parks with it once (drill run 3, #22)', SWEEP, () => {
     const note = 'PR #24 conflicts with main: merge origin/main into issue-471, resolve the conflicts and push'
     const conflict: TableEvent = { kind: 'not-ok', reason: 'conflict', data: { pr: 512, text: note, notes: [note] } }
     const queue: IssueRecord = { ...base, state: 'merge-queue', step: 'queue', pr: 512, head: HEAD, notes: [note] }
@@ -357,7 +357,7 @@ function stepResult(r: IssueRecord, rand: () => number): TableEvent {
 const AGENT: readonly (StepKind | null)[] = ['design', 'build', 'review', 'fix', 'triage']
 
 describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
-  test('property 7: with no outside event, every life ends parked, waiting or closed, and its agent steps stay under the bound from fixCap, maxTriages and one free re-run per attempt', () => {
+  test('property 7: with no outside event, every life ends parked, waiting or closed, and its agent steps stay under the bound from fixCap, maxTriages and one free re-run per attempt', SWEEP, () => {
     // each entry to a step state runs its own step at most twice, each with one free re-run (4);
     // the entries: designing and building once and once per redesign (1 + M each), reviewing once
     // per build and per fix (1 + M + F), fixing once per fix (F); each triage grant runs triage at
@@ -381,7 +381,7 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     }
   })
 
-  test('property 10: from any unknown, a free re-run at most once per attempt, then a retry, then triage, then a park, in that order', () => {
+  test('property 10: from any unknown, a free re-run at most once per attempt, then a retry, then triage, then a park, in that order', SWEEP, () => {
     const rows = (start: IssueRecord, outside: boolean) => {
       const out: string[] = []
       let r = start
@@ -407,7 +407,7 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     expect(parked).toMatchObject({ state: 'parked', resumeTo: 'building', question: expect.stringContaining('the triage of building') })
   })
 
-  test('a triage retry gives exactly one more attempt; a fix with no commits or at the cap parks with the triage\'s reason; a drop closes the life', () => {
+  test('a triage retry gives exactly one more attempt; a fix with no commits or at the cap parks with the triage\'s reason; a drop closes the life', SWEEP, () => {
     const triage = { ...base, state: 'building' as const, step: 'triage' as const, triages: 1 }
     const retry = next(triage, { kind: 'triage', choice: 'retry', reason: 'flaky', data: { instructions: 'run the tests in the foreground' } }) as IssueRecord
     expect(retry).toMatchObject({ state: 'building', step: 'build', attempt: 2, notes: ['run the tests in the foreground'] })
@@ -419,7 +419,7 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     expect(next(triage, { kind: 'triage', choice: 'redesign', reason: 'wrong brief', data: { instructions: 'design the v2 API' } })).toMatchObject({ state: 'designing', step: 'design', notes: ['design the v2 API'] })
   })
 
-  test('a triage answer that leads to the state the record is in starts that state\'s own step: redesign from designing runs the designer, fix from fixing runs the fixer', () => {
+  test('a triage answer that leads to the state the record is in starts that state\'s own step: redesign from designing runs the designer, fix from fixing runs the fixer', SWEEP, () => {
     const designing = { ...base, state: 'designing' as const, step: 'triage' as const, attempt: 2, cut: true, triages: 1, since: NOW - 3_600_000, notes: ['attempt 2 of design ended unknown (timeout): no answer'] }
     const redesign = next(designing, { kind: 'triage', choice: 'redesign', reason: 'wrong brief', data: { instructions: 'design the v2 API' } }, NOW + 1000)
     expect(rowFor(designing, { kind: 'triage', choice: 'redesign' }, CFG).id).toBe('X3')
@@ -437,7 +437,7 @@ describe('bounded work and the unknown path (v2 SPEC 5.1, 17.1)', () => {
     }
   })
 
-  test('the fix cap: a fixer per round until fixCap, then the next not-ok parks and resumes fixing; a decline costs a round, not a fix', () => {
+  test('the fix cap: a fixer per round until fixCap, then the next not-ok parks and resumes fixing; a decline costs a round, not a fix', SWEEP, () => {
     let r: IssueRecord = { ...base, state: 'reviewing', step: 'review', round: 1, pr: 512 }
     for (let i = 1; i <= FIX_CAP; i++) {
       r = next(r, { kind: 'not-ok', reason: 'changes', data: { notes: ['r1-1 a defect'] } }) as IssueRecord
