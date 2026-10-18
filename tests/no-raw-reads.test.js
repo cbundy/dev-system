@@ -17,6 +17,8 @@ const RAW_READS = [
   { name: 'gh pr view --comments', re: /\bgh\s+pr\s+view\b[^\n]*--comments\b/ },
   { name: 'gh api on a text path', re: /\bgh\s+api\b[^\n]*(issues\/|pulls\/|comments|timeline|reviews)/ },
 ];
+// A gh api call with an explicit write method is a write, as the hook treats it.
+const API_WRITE = /\bgh\s+api\b[^\n]*(-X|--method)\s*(POST|PUT|PATCH|DELETE)\b/;
 
 // Lines that mention a raw read without telling an agent to run it. Keyed by file, matched
 // by substring so a line move does not break the entry. Keep this list short and justified.
@@ -46,6 +48,7 @@ function findings(file, text) {
   text.split('\n').forEach((line, i) => {
     for (const r of RAW_READS) {
       if (!r.re.test(line)) continue;
+      if (r.name === 'gh api on a text path' && API_WRITE.test(line)) continue;
       if (ALLOW.some((a) => a.file === rel && line.includes(a.includes))) continue;
       hits.push(`${rel}:${i + 1}: ${r.name}: ${line.trim()}`);
     }
@@ -75,5 +78,6 @@ test('the scanner flags raw reads and ignores writes', () => {
     'gh pr view 7 --json closingIssuesReferences',
     'callum-flow-issue-read 5 --comments',
     'gh pr edit 7 --body-file x',
+    'gh api -X DELETE repos/o/r/issues/5/sub_issue -F sub_issue_id=9',
   ]) assert.deepStrictEqual(findings(f, ok), [], ok);
 });
