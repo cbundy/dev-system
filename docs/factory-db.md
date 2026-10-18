@@ -2,7 +2,7 @@
 
 The factory database is a PostgreSQL database that holds the factory event store and the worker
 heartbeats. This page takes a fresh server to a healthy `dev-doctor`. Nothing reads or writes the
-database yet (the push loops, the heartbeat and `dev-query` still use the agentsview database), so
+database yet (the push loops and the heartbeat still use the agentsview database; `dev-query --factory` is the reader path), so
 until a reader or writer switches over, `dev-doctor` only reports on it.
 
 You need PostgreSQL 17 or later, the `psql` client, and the base image (it ships

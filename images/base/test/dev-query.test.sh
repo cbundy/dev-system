@@ -109,6 +109,40 @@ grep -q s3cret "$tmpdir/err" "$tmpdir/out" && fail "secret leaked on failure"
 [ ! -s "$tmpdir/out" ] || fail "error text on stdout"
 rm "$fakebin/psql-fail"
 
+# --factory: the reader URL from factory_db_url, never the agentsview one
+FURL='postgres://f_reader:fpw-s3cret@fdb:5432/factory'
+unset FACTORY_DB_READER_URL || true
+rm -f "$secrets/factory-db-reader-url"
+AGENTSVIEW_PG_URL='postgres://u:other@h/d' run --factory -c 'select 1'
+expect_rc 78 "factory: no url, agentsview url set"
+expect_err "$secrets/factory-db-reader-url" "factory 78"
+expect_err FACTORY_DB_READER_URL "factory 78"
+grep -qi agentsview "$tmpdir/err" && fail "factory 78 mentions agentsview"
+: > "$secrets/factory-db-reader-url"
+run -c 'select 1' --factory
+expect_rc 77 "factory: empty file"
+expect_err "$secrets/factory-db-reader-url" "factory 77"
+expect_err FACTORY_DB_READER_URL "factory 77"
+grep -qi agentsview "$tmpdir/err" && fail "factory 77 mentions agentsview"
+rm -f "$fakebin/psql-args"
+FACTORY_DB_READER_URL=$FURL AGENTSVIEW_PG_URL='postgres://u:other@h/d' run --factory -At -c 'select 1'
+expect_rc 0 "factory: env url"
+grep -qx 'PGPASSWORD=fpw-s3cret' "$fakebin/psql-env" || fail "factory: reader password not used: $(cat "$fakebin/psql-env")"
+grep -q '^PGOPTIONS=.*-c default_transaction_read_only=on$' "$fakebin/psql-env" || fail "factory: read-only must be last"
+! grep -q 'other' "$fakebin/psql-env" || fail "factory: agentsview url used"
+case $(cat "$fakebin/psql-args") in *postgres://* | *fpw-s3cret*) fail "factory: url in argv" ;; esac
+printf '%s\n' "$FURL" > "$secrets/factory-db-reader-url"
+run --factory -c 'select 1'
+expect_rc 0 "factory: file url"
+grep -qx 'PGPASSWORD=fpw-s3cret' "$fakebin/psql-env" || fail "factory: file url not used"
+: > "$fakebin/psql-fail"
+run --factory -c 'select 1'
+expect_rc 2 "factory: psql status"
+rm "$fakebin/psql-fail"
+rm -f "$secrets/factory-db-reader-url"
+run --help
+grep -q -- '--factory' "$tmpdir/out" || fail "--help lacks --factory"
+
 # psql missing: 69
 rm "$fakebin/psql"
 run -c 'select 1'
