@@ -57,7 +57,10 @@ fi
 # Run the command as a child, not exec'd, so that on a stop this shell outlives
 # it and can send the heartbeat's final (stopped) beat. stdin is passed through
 # explicitly: a background job in a non-interactive shell would get /dev/null.
-"$@" <&0 &
+# That job would also start with INT and QUIT ignored (so a forwarded INT would
+# do nothing); perl (perl-base, always in the image) restores their defaults
+# and execs the command, so it behaves as it did under exec.
+perl -e '$SIG{INT} = "DEFAULT"; $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or do { warn "dev-entrypoint: cannot run $ARGV[0]: $!\n"; exit($!{ENOENT} ? 127 : 126) }' "$@" <&0 &
 child=$!
 
 # tini forwards the stop signal to this shell; hand it on, as the same signal.
@@ -79,7 +82,8 @@ while :; do
 done
 # A child that exited in the instant between the cut-short wait and the check
 # still has its real status: take it. When the wait above already collected it,
-# this wait fails with 127 and keeps that status.
+# bash returns the saved status again (127 if it no longer knows the job, which
+# keeps the status already taken).
 wait "$child" 2>/dev/null
 rc=$?
 [ "$rc" = 127 ] || status=$rc
