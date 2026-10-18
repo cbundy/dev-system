@@ -232,6 +232,26 @@ test("compare: the heartbeat-state reader matches on the corpus, and is not vacu
   assert.ok(Object.values(reader.old(ctx)).some((a) => a.state === "busy" && a.in_flight.length > 0));
   const mid = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE, "--until", until], dest, old);
   assert.equal(mid.status, 0, mid.out + mid.err);
+  // and at every window end just after an old delegated, fix_requested or merge_ready line, where new
+  // sees only the transition into building, fixing or merge-queue. A window that ends between a
+  // transition and its v1 line is the documented gap (replay.md), so those ends are left out.
+  const V1 = ["delegated", "fix_requested", "merge_ready"];
+  const entries = corpus.filter((r) => r.raw && r.raw.state === "transition" && /to=(building|fixing|merge-queue)\b/.test(r.raw.note || ""));
+  const lines = corpus.filter((r) => r.raw && V1.includes(r.raw.state));
+  const inGap = (end) =>
+    entries.some((tr) => Date.parse(tr.ts) < end && lines.some((l) => l.raw.issue === tr.raw.issue && Date.parse(l.ts) >= Date.parse(tr.ts) && Date.parse(l.ts) >= end));
+  const ends = new Set();
+  for (const row of lines) {
+    for (const plus of [1000, 5000]) {
+      const ms = Date.parse(row.ts) + plus;
+      if (!inGap(ms)) ends.add(new Date(ms).toISOString().replace(/\.\d+Z$/, "Z"));
+    }
+  }
+  assert.ok(ends.size >= 2);
+  for (const e of ends) {
+    const w = cli(["compare", "--reader", HEARTBEAT_READER, "--db", dest.name, "--since", SINCE, "--until", e], dest, old);
+    assert.equal(w.status, 0, `until ${e}: ${w.out}${w.err}`);
+  }
 });
 
 test("compare: the heartbeat-state reader reports a missing merged row under its device", opts, (t) => {

@@ -48,7 +48,10 @@
 //           in flight unless its latest lifecycle event (ready, claimed, requeued, claim_lost, closed,
 //           abandoned, merged, implementer_routed, finding_handled) is merged, abandoned, claim_lost,
 //           closed, ready or requeued; after merged, abandoned, closed or claim_lost only a later ready,
-//           requeued, claimed or implementer_routed counts. Every other type is noise. The no-mistakes
+//           requeued, claimed or implementer_routed counts. A transition into building, fixing or merge-queue
+//           (from another state) also counts, as the old delegated, fix_requested or merge_ready line the loop
+//           writes there, with the transition's branch; it is never done, and only one into building
+//           starts a new life after a terminal state. Every other transition and type is noise. The no-mistakes
 //           run join uses the branch rule only: run_started and superseded are v1-only.
 //   shadow  prints old's answer, runs new too and records how it differs in
 //           factory/.shadow/heartbeat-state.jsonl (an agreeing run at most once per quiet period).
@@ -65,6 +68,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { resolveSource, runShadow } = require(path.join(__dirname, 'factory-source.js'));
+const { SYNTHESIZED } = require(path.join(__dirname, 'evaluate-new-events.js'));
 
 // transition, reviewed, intervention, prompt_denied and prompt_waiting are the v2 loop's bookkeeping: a claim and its release
 // (claimed, merged, abandoned, closed, reclaimed) already say whether an issue is in flight, and an
@@ -136,17 +140,24 @@ function deriveOld(events, dev) {
 function deriveNew(events, dev) {
   const byIssue = new Map();
   for (const ev of events) {
-    if (!ev || typeof ev !== 'object' || ev.device !== dev || !EV_LIFECYCLE.has(ev.type) || !Number.isInteger(ev.issue)) continue;
+    if (!ev || typeof ev !== 'object' || ev.device !== dev || !Number.isInteger(ev.issue)) continue;
     const payload = ev.data && typeof ev.data === 'object' ? ev.data : ev;
+    let state = ev.type;
+    if (ev.type === 'transition') {
+      // A transition into building, fixing or merge-queue is the old delegated, fix_requested or
+      // merge_ready line (the SYNTHESIZED rule of evaluate-new-events.js); any other never counts.
+      if (!Object.hasOwn(SYNTHESIZED, payload.to_state) || payload.from_state === payload.to_state) continue;
+      state = SYNTHESIZED[payload.to_state];
+    } else if (!EV_LIFECYCLE.has(ev.type)) continue;
     const key = issueKey(lowerRepo(ev.repo), ev.issue);
     if (!byIssue.has(key)) byIssue.set(key, []);
-    byIssue.get(key).push({ ts: Date.parse(ev.ts) || 0, ev: { repo: lowerRepo(ev.repo), issue: ev.issue, branch: payload.branch || null, state: ev.type } });
+    byIssue.get(key).push({ ts: Date.parse(ev.ts) || 0, ev: { repo: lowerRepo(ev.repo), issue: ev.issue, branch: payload.branch || null, state } });
   }
   const issues = [];
   for (const evs of byIssue.values()) {
     let cur = null;
     for (const { ev } of evs.sort((a, b) => a.ts - b.ts)) { // stable: equal times keep file or row order
-      if (cur && EV_TERMINAL.has(cur.state) && !EV_LIFE.has(ev.state)) continue;
+      if (cur && EV_TERMINAL.has(cur.state) && !EV_LIFE.has(ev.state) && ev.state !== 'delegated') continue;
       cur = ev;
     }
     if (!EV_DONE.has(cur.state)) issues.push(cur);
