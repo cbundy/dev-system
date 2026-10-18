@@ -11,12 +11,12 @@ import { eventArgv, parseTransition } from '../hooks/v2/events'
 import type { TransitionEvent } from '../hooks/v2/events'
 import { lifeOf } from '../hooks/v2/keys'
 import { checkIdsOf, checkNote } from '../hooks/v2/prompts-work'
-import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from '../hooks/v2/record'
+import { NEW_REBUILD_SQL, REBUILD_DAYS, REBUILD_SQL, recordsFromEvents, recordsFromNewRows } from '../hooks/v2/record'
 import type { TransitionParser } from '../hooks/v2/record'
 import { parkedTell } from '../hooks/v2/rules-entry'
 import { madeRecord, nextRecord, normalize, rowFor, viaOf } from '../hooks/v2/table'
 import type { IssueRecord, TableEvent } from '../hooks/v2/types'
-import { DEVICE, MIN, NOW, OTHER, config } from './fixtures'
+import { DEVICE, MIN, NOW, OTHER, config, transitionRow } from './fixtures'
 
 const DAY = 24 * 60 * MIN
 const CFG = config()
@@ -134,6 +134,59 @@ describe('recordsFromEvents (v2 SPEC 3.3)', () => {
     expect(checkIdsOf(rebuilt[0]?.notes ?? [])).toEqual(['check:41-1', 'check:41-2'])
     const tell = parkedTell(rebuilt[1] as IssueRecord, 2)
     expect(tell.kind === 'tell' ? tell.context[0] : '').toBe(`question: ${question}`)
+  })
+})
+
+describe('the rebuild from the new store (recordsFromNewRows, source new)', () => {
+  const A = record(7, { seq: 3, state: 'building', step: 'build', head: 'abc1234', notes: ['one', 'two'], wait: [{ kind: 'issue-closed', issue: 5 }, { kind: 'pr-merged', pr: 9 }, { kind: 'tag-contains', sha: 'abc1234' }] })
+  const B = record(8, { seq: 4, state: 'parked', step: null, resumeTo: 'designing', question: 'q?', approvedPatch: 'p1', cut: true, prClosedAt: '2026-10-12T00:00:00Z', brief: 'https://example.test/b' })
+  const C = record(9, { seq: 5, state: 'closed', step: null, why: 'merged', since: NOW - DAY, pr: 12, lives: 2 })
+
+  test('the query reads this device\'s transition events of the repo from event_store, with the envelope columns and data, in ts, device, device_seq order', () => {
+    expect(NEW_REBUILD_SQL).toContain('from factory.event_store')
+    expect(NEW_REBUILD_SQL).toContain("repo = :'repo'")
+    expect(NEW_REBUILD_SQL).toContain("device = :'device'")
+    expect(NEW_REBUILD_SQL).toContain("type = 'transition'")
+    expect(NEW_REBUILD_SQL).toContain("make_interval(days => :'days'::int)")
+    expect(NEW_REBUILD_SQL).toMatch(/order by ts, device, device_seq/)
+    for (const column of ['envelope', 'event_id', 'type_version', 'repo', 'device', 'actor', 'session_id', 'issue', 'device_seq', 'data']) expect(NEW_REBUILD_SQL).toContain(column)
+  })
+
+  test('the translated rows give the same records as the old rows of the same transitions', () => {
+    const list = [A, B, C].map(r => eventOf(t(r), NOW - 2 * DAY, DEVICE, noteOf(t(r))))
+    const rows = [A, B, C].map(r => transitionRow(r, NOW - 2 * DAY))
+    expect(recordsFromNewRows(rows)).toEqual(recordsFromEvents(list, DEVICE))
+    expect(recordsFromNewRows(rows)).toEqual([A, B, C])
+  })
+
+  test('the newest life, then the highest seq wins; a record closed past the keep time goes', () => {
+    const older = { ...A, seq: 2 }
+    const newerLife = record(7, { life: lifeOf(NOW - DAY), seq: 1 })
+    const gone = record(11, { seq: 6, state: 'closed', step: null, why: 'merged', since: NOW - 9 * DAY })
+    const rows = [transitionRow(A, NOW - DAY), transitionRow(older, NOW - 2 * DAY), transitionRow(B, NOW - DAY), transitionRow(gone, NOW - 9 * DAY), transitionRow(newerLife, NOW - DAY + MIN), transitionRow(C, NOW - DAY)]
+    expect(recordsFromNewRows(rows)).toEqual([newerLife, B, C])
+  })
+
+  test('a row of an unknown version fails the whole read, naming its event_id and the source, and none is skipped', () => {
+    const rows = [transitionRow(A, NOW - DAY), transitionRow(B, NOW - DAY, { type_version: '9' }, 'ev-bad-version'), transitionRow(C, NOW - DAY)]
+    expect(() => recordsFromNewRows(rows)).toThrow(/source new: event ev-bad-version: .*unknown factory event: transition v9/)
+  })
+
+  test('an unknown type, a payload the shared reader refuses and a payload the loop cannot read each fail the read with their event_id', () => {
+    const good = transitionRow(A, NOW - DAY)
+    const data = JSON.parse(good.data as string) as Record<string, unknown>
+    const without = { ...data }
+    delete without.attempt
+    const cases: [Record<string, string>, RegExp][] = [
+      [{ ...good, event_id: 'e-type', type: 'claimed' }, /e-type: unknown type claimed/],
+      [{ ...good, event_id: 'e-missing', data: JSON.stringify(without) }, /e-missing: .*field attempt is missing/],
+      [{ ...good, event_id: 'e-type-of', data: JSON.stringify({ ...data, seq: 'x' }) }, /e-type-of: .*field seq must be integer/],
+      [{ ...good, event_id: 'e-json', data: '{nope' }, /e-json: data is not JSON/],
+      [{ ...good, event_id: 'e-state', data: JSON.stringify({ ...data, to_state: 'sleeping' }) }, /e-state: state is not one the loop knows/],
+      [{ ...good, event_id: 'e-ts', data: JSON.stringify({ ...data, seq_at: 'yesterday' }) }, /e-ts: seq_at or state_since does not read/],
+      [{ ...good, event_id: 'e-issue', issue: '' }, /e-issue: issue is missing/],
+    ]
+    for (const [row, message] of cases) expect(() => recordsFromNewRows([transitionRow(B, NOW - DAY), row])).toThrow(message)
   })
 })
 

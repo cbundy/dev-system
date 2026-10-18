@@ -176,6 +176,11 @@ Owner items (the title counts them until resolved):
   loop moved it to the Later milestone; it is open with no `ready` label, so the loop will not
   rebuild it, and it rejoins Next when it merges again. Lead with `[DECISION]`: name the issue and
   the PR and ask the owner to re-`ready` it, or to close it if the revert is final.
+- `records-shadow` (issues, differences; detail: the issues, the first difference and the way back):
+  the loop rebuilt its records from the old and the new event store and they differ for those
+  issues, so the new store is not yet safe to read. Nothing is blocked: the loop still uses the old
+  one. Lead with the issues and the first difference, and say that the owner may set
+  `/factory config set eventsSource old` to stop the compare reading the new store.
 
 Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop

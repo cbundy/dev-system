@@ -8,14 +8,11 @@
 // records:<repo> and heads:<repo> with the codecs here. Commands run through observe's own `run`,
 // so they join the pass's command list and, outside act mode, send their events to the sink.
 import type { FactoryEvent } from '../derive'
-import { eventsFromRows } from '../derive'
 import type { Cache, Io, Runtime } from '../observe'
-import { parseCsv } from '../parse'
 import type { LedgerEntry, Ms, Source, State } from '../types'
 import { onceKey } from './events'
 import { checkoutBaseOf } from './reconcile'
 import type { CheckoutBase } from './reconcile'
-import { REBUILD_DAYS, REBUILD_SQL, recordsFromEvents } from './record'
 import { readDualWrite } from './sources-dualwrite'
 import type { DualWriteRead } from './sources-dualwrite'
 import { EMPTY_RELEASE, readReleasePrs } from './sources-release'
@@ -25,6 +22,8 @@ import { readInterventions } from './sources-interventions'
 import type { FilesSeen } from './sources-interventions'
 import { EMPTY_PRS, readPrs } from './sources-prs'
 import type { PrView, PrsRead, PrUnread } from './sources-prs'
+import { readRecords } from './sources-records'
+import type { RecordsShadow } from './sources-records'
 import { readWorkspace } from './sources-workspace'
 import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
@@ -74,6 +73,8 @@ export type V2Stored = { records: IssueRecord[] | null; heads: Record<string, He
 export type V2Cache = {
   heads: Record<string, HeadSeen>
   rebuilt: { at: Ms; records: IssueRecord[] } | null
+  // the last compare of the record rebuild's two stores (sources-records.ts); null: none this load
+  shadow: RecordsShadow | null
   comments: Map<number, { readAt: Ms; comments: IssueComment[] }>
   checkoutBase: CheckoutBase | null
   // the last pass's V2State.changed: a read of an issue older than its entry is due (observe.ts)
@@ -88,7 +89,7 @@ export type V2Cache = {
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, release: EMPTY_RELEASE, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, release: EMPTY_RELEASE, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -310,25 +311,13 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   let records: IssueRecord[] = stored?.records ?? []
   let recordsFrom: V2State['recordsFrom'] = stored?.records !== null && stored?.records !== undefined ? 'store' : 'none'
   sources.store = stored?.error ? NOT_READ(stored.error) : { ok: true, at: now }
-  if (recordsFrom === 'none' && !stored?.error && REBUILD_SQL !== null) {
-    if (cache.rebuilt === null || now - cache.rebuilt.at >= rt.config.githubEveryMs) {
-      try {
-        const argv = ['dev-query', '--csv', '-v', `repo=${rt.repo}`, '-v', `device=${rt.device}`, '-v', `at=${new Date(now).toISOString()}`, '-v', `days=${REBUILD_DAYS}`]
-        const r = await run(argv, REBUILD_SQL)
-        if (r.exitCode === 0) {
-          const events: FactoryEvent[] = eventsFromRows(parseCsv(r.stdout))
-          cache.rebuilt = { at: now, records: recordsFromEvents(events, rt.device) }
-        } else {
-          sources.store = { ok: false, at: cache.rebuilt?.at ?? null, error: `the rebuild's read failed: exit ${r.exitCode}` }
-        }
-      } catch (err) {
-        sources.store = { ok: false, at: cache.rebuilt?.at ?? null, error: `the rebuild's read failed: ${String(err).slice(0, 200)}` }
-      }
-    }
-    if (cache.rebuilt !== null && cache.rebuilt.records.length > 0) {
-      records = cache.rebuilt.records
-      recordsFrom = 'events'
-    }
+  // the rebuild (when the store holds none) and the shadow compare of the two stores (sources-records.ts)
+  const storeEmpty = recordsFrom === 'none' && !stored?.error
+  const rebuildError = await readRecords({ now, rt, run }, cache, storeEmpty)
+  if (rebuildError !== null) sources.store = { ok: false, at: cache.rebuilt?.at ?? null, error: rebuildError }
+  if (storeEmpty && cache.rebuilt !== null && cache.rebuilt.records.length > 0) {
+    records = cache.rebuilt.records
+    recordsFrom = 'events'
   }
 
   // the newest read of each issue observe holds
@@ -443,6 +432,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     logged: [...new Set((input.events ?? []).flatMap(e => (e.device === null || e.device === rt.device ? (onceKey(e) ?? []) : [])))],
     checkoutBase: cache.checkoutBase,
     dualWrite,
+    ...(cache.shadow === null ? {} : { recordsShadow: cache.shadow }),
   }
   if (workspace !== undefined) v2.workspace = workspace
   v2.windDown = await readWindDown(input.io, rt, now)

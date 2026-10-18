@@ -875,8 +875,8 @@ describe('the owner\'s files in the pass driver', () => {
     await $.session.start(START)
     await clock.advance(6_000)
     expect(h.titles).toEqual(['🔄 dev-system · off'])
-    // by hand: mode off -> act
-    h.files.set(path, JSON.stringify(ACT_V2))
+    // by hand: mode off -> act (the host's file also holds eventsSource: old)
+    h.files.set(path, JSON.stringify({ ...ACT_V2, eventsSource: 'old' }))
     await clock.advance(60_000)
     expect(h.last()).toMatchObject({ executed: true })
     expect(fileIvs(h.last())).toEqual([])

@@ -5,7 +5,7 @@ import { GATE_CPUS, resolveGateConcurrency, shortDuration } from '../hooks/confi
 import { configText, sourceOf, viewOf } from '../hooks/config-view'
 import type { ConfigView } from '../hooks/config-view'
 import { DEFAULT_CONFIG, loadConfig } from '../hooks/config'
-import { SETTING_EFFECT } from '../hooks/config-keys'
+import { SETTING_EFFECT, checkSetting } from '../hooks/config-keys'
 import { helpText, parseOp, runOp } from '../hooks/control'
 import type { FileIo } from '../hooks/control'
 import { MIN, NOW, control } from './fixtures'
@@ -287,5 +287,27 @@ describe('gate concurrency', () => {
     expect(line(configText(view({ gateConcurrency: 3 }, {}, { cpus: 16 }), control(), NOW), 'gateConcurrency')).toContain('3 (repo)')
     expect(line(configText(view({ gateConcurrency: 3 }, { gateConcurrency: 4 }, { cpus: 16 }), control(), NOW), 'gateConcurrency')).toContain('4 (workspace)')
     expect(line(auto(8), 'gateWaitTimeout')).toContain('30m')
+  })
+})
+
+describe('eventsSource (the record rebuild\'s source, v2 SPEC 3.3)', () => {
+  test('shadow by default; old, new and shadow validate in either file; the key applies on the next pass', () => {
+    expect(DEFAULT_CONFIG.eventsSource).toBe('shadow')
+    expect(SETTING_EFFECT.eventsSource).toBe('next-pass')
+    for (const source of ['old', 'new', 'shadow'] as const) expect(loadConfig({ eventsSource: source })).toMatchObject({ config: { eventsSource: source }, problems: [] })
+    expect(loadConfig({ eventsSource: 'new' }, { eventsSource: 'old' }).config.eventsSource).toBe('old')
+  })
+
+  test('an invalid value is a config problem and reads as old, the way back', () => {
+    for (const bad of ['newest', 'OLD', true, 1, null]) {
+      const loaded = loadConfig({ eventsSource: bad })
+      expect(loaded.config.eventsSource).toBe('old')
+      expect(loaded.problems).toEqual([`eventsSource: ${JSON.stringify(bad)} is not old, new or shadow (read as old)`])
+    }
+  })
+
+  test('/factory config set takes a valid value and refuses an invalid one', () => {
+    expect(checkSetting('eventsSource', 'old')).toMatchObject({ ok: true, key: 'eventsSource' })
+    expect(checkSetting('eventsSource', 'sideways')).toMatchObject({ ok: false })
   })
 })

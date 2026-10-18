@@ -74,11 +74,12 @@ SQL
   and version are known and the required fields are present, ignores fields it does not know,
   gives absent optional fields as null, and upgrades older versions to the current one. On an
   unknown type or version it fails with an error naming both (`unknown factory event:
-  transition v3`), never guessing. The loop's record rebuild fails its whole read on that error
-  (store source not ok) and never skips the row, since a skipped transition quietly rebuilds an
-  older record. [#654](https://github.com/cbundy/dev-system/issues/654) changes
-  `plugins/factory-loop/hooks/v2/record.ts:46-51`, which skips today. Shell tools read only
-  envelope fields or the view.
+  transition v3`), never guessing. The loop's record rebuild from the new store (`eventsSource` `new`,
+  `recordsFromNewRows` in `plugins/factory-loop/hooks/v2/record.ts`) fails its whole read on that
+  error, or on a payload the reader refuses (store source not ok, its error names the event_id and
+  the source `new`) and never skips the row, since a skipped transition quietly rebuilds an
+  older record. Its old-store rebuild (`recordsFromEvents`) still skips a note it cannot parse.
+  Shell tools read only envelope fields or the view.
 - **The writer never refuses what a newer caller may know.** `callum-flow-event` (its native mode,
   `--type`) ships in the image and its callers in the plugin, and the two roll out separately. So at run time it checks
   the envelope and, for a type and version it knows, that every required field is present with

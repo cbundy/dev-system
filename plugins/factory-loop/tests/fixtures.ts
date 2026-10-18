@@ -19,6 +19,7 @@ import type {
   Stage,
   State,
 } from '../hooks/types'
+import type { IssueRecord } from '../hooks/v2/types'
 
 // 2026-10-13T03:00:00Z
 export const NOW = Date.UTC(2026, 9, 13, 3, 0)
@@ -33,8 +34,10 @@ export const CLEAN = { branch: 'main', head: '5251b75ef45eef8d6c31556c1b5ac3d5dd
 
 const SOURCES: SourceName[] = ['factory', 'facts', 'runs', 'queue', 'github', 'usage', 'pool', 'milestone']
 
+// eventsSource is old: the tests exercise the old rebuild, and the shadow compare has its own tests
+// (v2-sources-records.test.ts), which set it
 export function config(over: Partial<Config> = {}): Config {
-  return { ...DEFAULT_CONFIG, ...over }
+  return { ...DEFAULT_CONFIG, eventsSource: 'old', ...over }
 }
 
 export function control(over: Partial<Control> = {}): Control {
@@ -212,4 +215,56 @@ export function running(s: State, result: PlanResult): State {
       endedAt: null,
     }))
   return { ...s, ledger: [...s.ledger.filter(e => !started.some(n => n.key === e.key)), ...started], ...titled(s, result) }
+}
+
+// transitionRow: the row NEW_REBUILD_SQL returns (as dev-query --csv prints it) for a transition of the record
+// at `ts`: the envelope columns and the payload as transition.v1 JSON.
+export function transitionRow(r: IssueRecord, ts: number, over: Record<string, string> = {}, id = `ev-${r.issue}-${r.life}-${r.seq}`): Record<string, string> {
+  const data = {
+    life: r.life,
+    seq: r.seq,
+    table_row: 'T1',
+    from_state: null,
+    to_state: r.state,
+    via: 't1',
+    seq_at: new Date(r.seqAt).toISOString(),
+    state_since: new Date(r.since).toISOString(),
+    resume_to: r.resumeTo,
+    branch: r.branch,
+    pr: r.pr,
+    head: r.head,
+    approved_patch: r.approvedPatch,
+    brief_url: r.brief,
+    step: r.step,
+    attempt: r.attempt,
+    cut: r.cut,
+    triages: r.triages,
+    fixes: r.fixes,
+    round: r.round,
+    question: r.question,
+    ...(r.wait === null ? {} : { wait: r.wait }),
+    why: r.why,
+    notes: r.notes,
+    pr_closed_at: r.prClosedAt,
+    lives: r.lives,
+  }
+  return {
+    envelope: '1',
+    event_id: id,
+    ts: new Date(ts).toISOString(),
+    type: 'transition',
+    type_version: '1',
+    repo: 'cbundy/dev-system',
+    device: DEVICE,
+    actor: 'factory-loop',
+    session_id: '',
+    issue: String(r.issue),
+    base_image: '',
+    dev_image: '',
+    template_version: '',
+    plugin_version: '',
+    device_seq: String(r.seq),
+    data: JSON.stringify(data),
+    ...over,
+  }
 }
