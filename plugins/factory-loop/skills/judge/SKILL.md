@@ -187,6 +187,12 @@ Owner items (the title counts them until resolved):
   `once:<key>`), so the new store is not yet safe to read. Nothing is blocked: the loop still uses
   the old one. Lead with the first difference, and say that the owner may set
   `/factory config set eventsSource old` to stop the compare reading the new store.
+- `wait-unreadable` (issue, hours, conditions; detail: one line per condition and why): a waiting
+  issue has a condition the loop cannot read, for a whole waiting period, so it may never clear.
+  The record stays waiting and still clears by itself or by `resume <N>`. Lead with `[DECISION]`:
+  name the issue and why it waits. For a "no release tag of <repo>" line, that repo must cut a
+  release, or the owner resumes or drops the issue; for "its read has failed", the owner checks
+  access to the repo or the number of the issue or PR the condition names.
 
 Notices:
 - `heartbeat-other` (device): another orchestrator workspace on this repo is up, so the loop

@@ -988,6 +988,55 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
     const short = plan(withLedger(world([at(2)]), settled(w)), { ...CFG, stateTimeoutMs: { ...CFG.stateTimeoutMs, waiting: HOUR } })
     expect(of(short, 130).some(a => a.kind === 'tell' && a.wake === 'waiting')).toBe(true)
   })
+
+  describe('a condition the loop cannot read (wait-unreadable)', () => {
+    const at = (hours: number, over: Partial<IssueRecord> = {}) => ({ ...w, ...over, since: NOW - hours * HOUR, seqAt: NOW - hours * HOUR })
+    const unread = (key: string, hours: number, why: 'read-failed' | 'no-release') => ({ waitsUnread: { [key]: { since: NOW - hours * HOUR, why } } })
+    const run = (r: IssueRecord, extra: object) => plan(withLedger(world([r], {}, extra), settled(w)))
+    const tells = (p: PlanResult) => of(p, 130).filter(a => a.kind === 'tell')
+
+    test('a PR condition unread a whole period: one owner tell with the reason, no tell(waiting); the record stays waiting', () => {
+      const p = run(at(26), { ...held('issue:57'), ...unread('pr:812', 26, 'read-failed') })
+      expect(tells(p)).toEqual([
+        expect.objectContaining({
+          wake: 'wait-unreadable',
+          rule: 'S6',
+          key: `${entryKey(at(26), 'tell')}/wait-unreadable/1`,
+          fields: { issue: '130', hours: '26', conditions: 'pr:812' },
+          context: [`pr:812: its read has failed since ${new Date(NOW - 26 * HOUR).toISOString()}`],
+        }),
+      ])
+      expect(p.owner).toBe(1)
+      expect(of(p, 130).some(a => a.kind === 'transition')).toBe(false)
+    })
+
+    test('a tag condition on a repo with no release (plant-console#209): the same, naming the repo', () => {
+      const wait = [{ kind: 'tag-contains' as const, sha: '35bb655', repo: 'o/n' }]
+      const p = run(at(26, { wait }), unread('tag:o/n@35bb655', 26, 'no-release'))
+      expect(tells(p)).toEqual([expect.objectContaining({ wake: 'wait-unreadable', fields: expect.objectContaining({ conditions: 'tag:o/n@35bb655' }), context: [expect.stringContaining('no release tag of o/n is known since')] })])
+      expect(p.owner).toBe(1)
+    })
+
+    test('unread for less than the period gives the plain tell(waiting), owner 0; a read condition does too', () => {
+      const p = run(at(26), { ...held('issue:57'), ...unread('pr:812', 10, 'read-failed') })
+      expect(tells(p)).toEqual([expect.objectContaining({ wake: 'waiting', context: ['waiting for PR #812 (not merged yet) (unread: read failing)'] })])
+      expect(p.owner).toBe(0)
+      const read = run(at(26), held('issue:57'))
+      expect(tells(read)).toEqual([expect.objectContaining({ wake: 'waiting' })])
+      expect(read.owner).toBe(0)
+    })
+
+    test('the next period is a new tell; the skip line says why the condition is still open; a held read still clears', () => {
+      const keys = (h: number) => tells(run(at(h), unread('pr:812', h, 'no-release'))).map(a => a.key)
+      expect(new Set([...keys(26), ...keys(50)]).size).toBe(2)
+      expect(keys(26)).toEqual(keys(30))
+      const p = run(at(1), unread('pr:812', 1, 'no-release'))
+      expect(JSON.stringify(p.skipped)).toContain('PR #812 (not merged yet) (unread: no release)')
+      const cleared = run(at(26), { ...held('issue:57', 'pr:812'), ...unread('pr:812', 26, 'read-failed') })
+      expect(of(cleared, 130).some(a => a.kind === 'transition')).toBe(true)
+      expect(tells(cleared)).toEqual([])
+    })
+  })
 })
 
 // --- H1: the heartbeat and re-claims (4.1) -----------------------------------------------------------------------

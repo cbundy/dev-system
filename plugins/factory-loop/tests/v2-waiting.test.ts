@@ -304,7 +304,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     const c = ctx([waiting(1, [ft, issue(57)])], { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
     const out = await readWaits(c.c, {}, EVERY)
     expect(c.ran).toEqual(['callum-flow-issue-read --json 57'])
-    expect(out).toEqual({ waits: { 'issue:57': { at: NOW, held: true } }, failed: [] })
+    expect(out).toEqual({ waits: { 'issue:57': { at: NOW, held: true } }, failed: [], unread: { 'tag:o/n@35bb655': { since: NOW, why: 'no-release' } } })
     expect(c.envs).toEqual([undefined])
   })
 
@@ -318,7 +318,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       const a = ctx(records, { [cmpOn('v1.1.0', '35bb655')]: 'ahead\n' }, { tag: 'v0.9.0', tags: { 'o/n': 'v1.1.0' } } as Partial<SourceCtx>)
       const first = await readWaits(a.c, {}, EVERY)
       expect(a.ran).toEqual([cmpOn('v1.1.0', '35bb655')])
-      expect(first).toEqual({ waits: { [KEY]: { at: NOW, held: false, tag: 'v1.1.0' } }, failed: [] })
+      expect(first).toEqual({ waits: { [KEY]: { at: NOW, held: false, tag: 'v1.1.0' } }, failed: [], unread: {} })
       // the loop's own tag moves: nothing is read
       const own = ctx(records, {}, { tag: 'v0.10.0', tags: { 'o/n': 'v1.1.0' }, now: NOW + HOUR } as Partial<SourceCtx>)
       expect((await readWaits(own.c, first.waits, EVERY)).waits).toEqual(first.waits)
@@ -331,7 +331,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     test('a repo with no release (tag null) or no tag read yet keeps the condition open and is not read', async () => {
       for (const tags of [{ 'o/n': null }, {}]) {
         const c = ctx([waiting(1, [ft()])], {}, { tag: 'v0.9.0', tags } as Partial<SourceCtx>)
-        expect(await readWaits(c.c, {}, EVERY)).toEqual({ waits: {}, failed: [] })
+        expect(await readWaits(c.c, {}, EVERY)).toEqual({ waits: {}, failed: [], unread: { [KEY]: { since: NOW, why: 'no-release' } } })
         expect(c.ran).toEqual([])
       }
     })
@@ -340,12 +340,12 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       const fi: WaitCondition = { kind: 'issue-closed', issue: 57, repo: 'o/n' }
       const read = 'callum-flow-issue-read --json 57'
       const closed = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'closed') }, { rt: { repo: REPO, env: { A: '1' } } } as unknown as Partial<SourceCtx>)
-      expect(await readWaits(closed.c, {}, EVERY)).toEqual({ waits: { 'issue:o/n#57': { at: NOW, held: true } }, failed: [] })
+      expect(await readWaits(closed.c, {}, EVERY)).toEqual({ waits: { 'issue:o/n#57': { at: NOW, held: true } }, failed: [], unread: {} })
       expect(closed.envs).toEqual([{ A: '1', CALLUM_FLOW_REPO: 'o/n' }])
       const open = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'open') })
       expect((await readWaits(open.c, {}, EVERY)).waits['issue:o/n#57']?.held).toBe(false)
       const nostate = ctx([waiting(1, [fi])], { [read]: JSON.stringify({ issue: {}, stripped: 0 }) })
-      expect(await readWaits(nostate.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:o/n#57'] })
+      expect(await readWaits(nostate.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:o/n#57'], unread: { 'issue:o/n#57': { since: NOW, why: 'read-failed' } } })
     })
   })
 
@@ -354,7 +354,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     const first = ctx(records, { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed'), [PR(812)]: JSON.stringify({ state: 'OPEN', mergedAt: null }) })
     const a = await readWaits(first.c, {}, EVERY)
     expect(first.ran.sort()).toEqual(['callum-flow-issue-read --json 57', PR(812)].sort())
-    expect(a).toEqual({ waits: { 'issue:57': { at: NOW, held: true }, 'pr:812': { at: NOW, held: false } }, failed: [] })
+    expect(a).toEqual({ waits: { 'issue:57': { at: NOW, held: true }, 'pr:812': { at: NOW, held: false } }, failed: [], unread: {} })
     // later: the held one is kept; the open one is read once its period passes, not before
     const soon = ctx(records, { [PR(812)]: JSON.stringify({ state: 'MERGED', mergedAt: null }) }, { now: NOW + MIN })
     expect((await readWaits(soon.c, a.waits, EVERY)).waits).toEqual(a.waits)
@@ -375,13 +375,63 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     expect(out.waits).toEqual({ 'issue:57': { at: NOW - 10 * MIN, held: false }, 'issue:58': { at: NOW, held: true } })
     // a reader that exits 0 with something that is not an issue is a failed read too
     const odd = ctx(records, { 'callum-flow-issue-read --json 57': '{"issue": {}}', 'callum-flow-issue-read --json 58': '<html>' })
-    expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:57', 'issue:58'] })
+    expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:57', 'issue:58'], unread: { 'issue:57': { since: NOW, why: 'read-failed' }, 'issue:58': { since: NOW, why: 'read-failed' } } })
     // a command that throws is a failed read
     const throwing = ctx(records, {})
     throwing.c.run = async () => {
       throw new Error('spawn failed')
     }
-    expect(await readWaits(throwing.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:57', 'issue:58'] })
+    expect(await readWaits(throwing.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:57', 'issue:58'], unread: { 'issue:57': { since: NOW, why: 'read-failed' }, 'issue:58': { since: NOW, why: 'read-failed' } } })
+  })
+
+  describe('the unread time of a condition', () => {
+    const records = [waiting(1, [issue(57)])]
+    const READ = 'callum-flow-issue-read --json 57'
+
+    test('a failing read starts it, a second failing pass keeps the first since; a read that says anything clears it', async () => {
+      const first = await readWaits(ctx(records, {}).c, {}, EVERY)
+      expect(first.unread).toEqual({ 'issue:57': { since: NOW, why: 'read-failed' } })
+      const second = await readWaits(ctx(records, {}, { now: NOW + 2 * EVERY }).c, first.waits, EVERY, first.unread)
+      expect(second.unread).toEqual({ 'issue:57': { since: NOW, why: 'read-failed' } })
+      const open = await readWaits(ctx(records, { [READ]: ISSUE(57, 'open') }, { now: NOW + 3 * EVERY }).c, second.waits, EVERY, second.unread)
+      expect(open.unread).toEqual({})
+      const closed = await readWaits(ctx(records, { [READ]: ISSUE(57, 'closed') }, { now: NOW + 3 * EVERY }).c, second.waits, EVERY, second.unread)
+      expect(closed.unread).toEqual({})
+      // an output that says nothing is a failed read too
+      const odd = await readWaits(ctx(records, { [READ]: '<html>' }).c, {}, EVERY)
+      expect(odd.unread).toEqual({ 'issue:57': { since: NOW, why: 'read-failed' } })
+    })
+
+    test('a read skipped for the budget or a rate limit leaves it as it was', async () => {
+      const kept = { 'issue:57': { since: NOW - HOUR, why: 'read-failed' as const } }
+      const skipped = await readWaits(ctx(records, {}, { prBudget: 0 }).c, {}, EVERY, kept)
+      expect(skipped.unread).toEqual(kept)
+      const limited = await readWaits(ctx(records, {}, { limited: () => true }).c, {}, EVERY, kept)
+      expect(limited.unread).toEqual(kept)
+    })
+
+    test('an entry no record waits on any more is dropped', async () => {
+      const kept = { 'issue:57': { since: NOW - HOUR, why: 'read-failed' as const } }
+      expect((await readWaits(ctx([], {}).c, {}, EVERY, kept)).unread).toEqual({})
+    })
+
+    test('a tag condition: no release starts it; a change of why restarts it; a known tag and a stored read clear it', async () => {
+      const ft: WaitCondition = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
+      const recs = [waiting(1, [ft])]
+      const key = 'tag:o/n@35bb655'
+      const none = await readWaits(ctx(recs, {}, { tags: {} } as Partial<SourceCtx>).c, {}, EVERY)
+      expect(none.unread).toEqual({ [key]: { since: NOW, why: 'no-release' } })
+      // the tag appears but its compare fails: the reason changes and the time restarts
+      const failing = await readWaits(ctx(recs, {}, { tags: { 'o/n': 'v1' }, now: NOW + HOUR } as Partial<SourceCtx>).c, none.waits, EVERY, none.unread)
+      expect(failing.unread).toEqual({ [key]: { since: NOW + HOUR, why: 'read-failed' } })
+      // the compare says ahead: cleared
+      const ahead = await readWaits(ctx(recs, { 'gh api repos/o/n/compare/v1...35bb655 --jq .status': 'ahead\n' }, { tags: { 'o/n': 'v1' }, now: NOW + 2 * HOUR } as Partial<SourceCtx>).c, failing.waits, EVERY, failing.unread)
+      expect(ahead.unread).toEqual({})
+      // a stored read for the known tag clears an entry that is left over
+      const stored = { [key]: { at: NOW, held: false, tag: 'v1' } }
+      const left = await readWaits(ctx(recs, {}, { tags: { 'o/n': 'v1' } } as Partial<SourceCtx>).c, stored, EVERY, { [key]: { since: NOW, why: 'no-release' as const } })
+      expect(left.unread).toEqual({})
+    })
   })
 
   test('the reads have a budget, oldest-checked first; none during a GitHub backoff (budget 0), and none after a rate limit met this pass', async () => {
@@ -424,7 +474,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       // ahead: not held, and the tag it was read for is kept
       const a = ctx(records, { [cmp('v0.50.0', SHA)]: 'ahead\n' }, { tag: 'v0.50.0' } as Partial<SourceCtx>)
       const first = await readWaits(a.c, {}, EVERY)
-      expect(first).toEqual({ waits: { [`tag:${SHA}`]: { at: NOW, held: false, tag: 'v0.50.0' } }, failed: [] })
+      expect(first).toEqual({ waits: { [`tag:${SHA}`]: { at: NOW, held: false, tag: 'v0.50.0' } }, failed: [], unread: {} })
       expect(a.ran).toEqual([cmp('v0.50.0', SHA)])
       // the same tag, any time later: not read again
       const same = ctx(records, {}, { tag: 'v0.50.0', now: NOW + HOUR } as Partial<SourceCtx>)
@@ -445,12 +495,12 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       expect((await readWaits(same2.c, {}, EVERY)).waits[`tag:${SHA}`]?.held).toBe(true)
       // a failed read and an unreadable output stay open and are named failed
       const failed = ctx(records, {}, { tag: 'v1' } as Partial<SourceCtx>)
-      expect(await readWaits(failed.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`] })
+      expect(await readWaits(failed.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`], unread: { [`tag:${SHA}`]: { since: NOW, why: 'read-failed' } } })
       const odd = ctx(records, { [cmp('v1', SHA)]: 'weird' }, { tag: 'v1' } as Partial<SourceCtx>)
-      expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`] })
+      expect(await readWaits(odd.c, {}, EVERY)).toEqual({ waits: {}, failed: [`tag:${SHA}`], unread: { [`tag:${SHA}`]: { since: NOW, why: 'read-failed' } } })
       // no tag known (no release yet, or its read failed): nothing is read, the condition stays open
       const none = ctx(records, {}, { tag: null } as Partial<SourceCtx>)
-      expect(await readWaits(none.c, {}, EVERY)).toEqual({ waits: {}, failed: [] })
+      expect(await readWaits(none.c, {}, EVERY)).toEqual({ waits: {}, failed: [], unread: { [`tag:${SHA}`]: { since: NOW, why: 'no-release' } } })
       expect(none.ran).toEqual([])
     })
 
