@@ -1,4 +1,4 @@
--- 0005: lift the fields the rewritten saved queries read into factory.event_log.
+-- 0006: lift the fields the rewritten saved queries read into factory.event_log.
 --
 -- Run by factory-db-bootstrap in one transaction, as the database's NAME_owner role. The grants
 -- for NAME_writer and NAME_reader come from the bootstrap (a re-apply on every run), so this file
@@ -7,7 +7,7 @@
 -- Adds model (implementer_routed), restored (test_weakened, boolean) and patch (reviewed), the
 -- fields marked "x-column": true in those schemas. docs/metrics.md query 8 (the implementer
 -- model), 5b (tests weakened) and 9 (a review counts once per (issue, round, patch)) read them.
--- Postgres only adds columns at the end on OR REPLACE, so they come last and every earlier column
+-- Migration 0005_shadow_read_columns lifted the shadow_read columns, which stay before these. Postgres only adds columns at the end on OR REPLACE, so they come last and every earlier column
 -- keeps its name, type and order. No @> and no DISTINCT ON.
 
 CREATE OR REPLACE VIEW factory.event_log AS
@@ -50,6 +50,14 @@ SELECT
   (e.data ->> 'cut_at_stop')::int AS cut_at_stop,
   e.data -> 'cut_at_stop_keys' AS cut_at_stop_keys,
   e.data ->> 'trigger' AS trigger,
+  e.data ->> 'reader' AS reader,
+  e.data ->> 'tool' AS tool,
+  (e.data ->> 'compared')::int AS compared,
+  (e.data ->> 'differences')::int AS differences,
+  (e.data ->> 'live_differences')::int AS live_differences,
+  (e.data ->> 'settle_seconds')::int AS settle_seconds,
+  (e.data ->> 'old_ok')::boolean AS old_ok,
+  (e.data ->> 'new_ok')::boolean AS new_ok,
   e.data ->> 'model' AS model,
   (e.data ->> 'restored')::boolean AS restored,
   e.data ->> 'patch' AS patch
