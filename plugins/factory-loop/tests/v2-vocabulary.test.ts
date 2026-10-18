@@ -207,6 +207,18 @@ describe('the store\'s records and heads (v2 SPEC 3.3, 2.4)', () => {
     expect(recordOf({ ...record(), lives: 0 })).toBeNull()
   })
 
+  test('a stored wait reads back with its repo on issue-closed and tag-contains; without it as before; a repo on pr-merged or a bad repo makes the record unreadable', () => {
+    const w = (wait: unknown[]) => ({ ...record({ state: 'waiting', step: null, resumeTo: 'designing' }), wait })
+    const withRepo = [{ kind: 'issue-closed', issue: 5, repo: 'o/n' }, { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }]
+    expect(recordOf(w(withRepo))?.wait).toEqual(withRepo)
+    const plain = [{ kind: 'issue-closed', issue: 5 }, { kind: 'pr-merged', pr: 6 }]
+    expect(recordOf(w(plain))?.wait).toEqual(plain)
+    expect(recordOf(w([{ kind: 'issue-closed', issue: 5, repo: null }]))?.wait).toEqual([{ kind: 'issue-closed', issue: 5 }])
+    for (const bad of [{ kind: 'pr-merged', pr: 6, repo: 'o/n' }, { kind: 'issue-closed', issue: 5, repo: 'Owner/n' }, { kind: 'issue-closed', issue: 5, repo: 'x' }, { kind: 'tag-contains', sha: '35bb655', repo: 3 }]) {
+      expect(recordOf(w([bad]))).toBeNull()
+    }
+  })
+
   test('a closed record goes from the store 7 days after it closed; an open one stays, whatever its age', () => {
     const old = record({ issue: 1, state: 'closed', why: 'merged', since: NOW - 8 * DAY })
     const recent = record({ issue: 2, state: 'closed', why: 'dropped', since: NOW - 6 * DAY })

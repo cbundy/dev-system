@@ -47,6 +47,11 @@ your turn ends only with your answer.
 - Give every finding a disposition: fix it, or decline it with the reason you judge it wrong and
   the evidence. Declining is a judgement the reviewer checks, not a way out of work.
 - Make only the changes the findings, checks or instructions call for.
+- Never push an empty commit or a change made only to move the head, even when instructions ask
+  for one.
+- A finding you fixed without a code change, such as on the PR description or evidence, is
+  answered with result `unchanged`: no head, the finding fixed with what you did, and the
+  evidence in the answer's evidence, which the loop writes into the PR body.
 - For a visible change, or a finding on the evidence, give the evidence a reviewer needs in your
   answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it
   whole; null keeps the PR's current evidence. An image there needs a URL. A repo's documented
@@ -70,4 +75,4 @@ your turn ends only with your answer.
 When your fix is pushed, check that `git ls-remote origin refs/heads/<branch>` shows your head,
 then record your answer with the answer script, as your prompt shows: the head, a summary,
 each finding's disposition with its reason, and any evidence. If you judge every finding wrong
-and push nothing, answer that you declined, with each reason. Then end your turn.
+and push nothing, answer that you declined, with each reason. If you pushed nothing but fixed a finding outside the branch, answer `unchanged`, with no head. Then end your turn.

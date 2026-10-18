@@ -63,7 +63,7 @@ export function adjudicatorPrompt(i: ReviewInput, env: ReviewPromptEnv): string 
     `The change: head ${head} of ${branch}, patch ${short(i.patch)}. Your folder is a checkout of the repository for this review. First run \`git fetch origin ${base} ${branch}\`, then read the PR's own change with \`git diff origin/${base}...${head}\` (three dots) and \`git log origin/${base}..${head}\`. Review that head, even if the branch has moved on since.`,
     `Tests: run \`callum-flow-test-weakening --base origin/${base} --head ${head}\` and judge every line it prints. ${TEST_POLICY} For you, a test deleted, skipped or weakened is an error finding, unless the brief, or the writer's stated reason (in the PR's summary or a fixer's answer), shows the test is absolutely not required: you judge that reason.`,
     ...priorLines(i),
-    ...lines('Notes for this round (the owner\'s, and a fixer\'s reasons for what it declined):', i.notes),
+    ...lines('Notes for this round (the owner\'s, and a fixer\'s reasons for what it declined or fixed without a code change):', i.notes),
     '',
     'Check that:',
     '  1. every acceptance criterion and owner requirement in the brief is met;',

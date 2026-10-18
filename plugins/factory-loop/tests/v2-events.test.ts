@@ -208,6 +208,25 @@ describe('the wait token (v2 SPEC 3.2, 7.1)', () => {
     expect(parseTransition({ ...row, note: `${note} wait=tag:35BB655` })).toBeNull()
     expect(parseTransition({ ...row, note: `${note} wait=tag:35bb65` })).toBeNull()
   })
+
+  test('the long forms issue:<owner>/<name>#<n> and tag:<owner>/<name>@<sha> round-trip beside the short ones; bad repo forms do not read', () => {
+    const wait: WaitCondition[] = [
+      { kind: 'issue-closed', issue: 57 },
+      { kind: 'issue-closed', issue: 57, repo: 'cbundy/dev-system' },
+      { kind: 'pr-merged', pr: 812 },
+      { kind: 'tag-contains', sha: '35bb655' },
+      { kind: 'tag-contains', sha: '35bb655', repo: 'cbundy/dev-system' },
+    ]
+    expect(tokensOf(eventNote(waiting(wait))).get('wait')).toBe('issue:57,issue:cbundy/dev-system#57,pr:812,tag:35bb655,tag:cbundy/dev-system@35bb655')
+    expect(roundTrip(waiting(wait))).toEqual(waiting(wait))
+    const short: WaitCondition[] = [{ kind: 'issue-closed', issue: 57 }, { kind: 'pr-merged', pr: 812 }, { kind: 'tag-contains', sha: '35bb655' }]
+    expect(tokensOf(eventNote(waiting(short))).get('wait')).toBe('issue:57,pr:812,tag:35bb655')
+    const note = eventNote(waiting(wait)).replace(/ wait=\S+/, '')
+    const row: EventRow = { state: 'transition', issue: 571, branch: 'issue-571', pr: null, head: null, note }
+    for (const bad of ['tag:Owner/Name@35bb655', 'tag:a@35bb655', 'issue:a/b#0', 'pr:a/b#1', 'tag:a/b@', 'issue:A/b#1', 'issue:a/b#']) {
+      expect({ bad, read: parseTransition({ ...row, note: `${note} wait=${bad}` }) }).toEqual({ bad, read: null })
+    }
+  })
 })
 
 // --- property 18: every note parses back, and fits ----------------------------------------------------

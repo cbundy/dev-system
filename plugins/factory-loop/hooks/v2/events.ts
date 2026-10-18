@@ -200,10 +200,15 @@ function unlist(v: string | undefined): string[] | undefined {
   return v === NONE ? [] : v.split(',').map(dec)
 }
 
-// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined; `none` outside waiting.
+// The wait conditions (3.2): `issue:<n>`, `pr:<n>` and `tag:<sha>`, comma-joined, with the long forms
+// `issue:<owner>/<name>#<n>` and `tag:<owner>/<name>@<sha>` for a condition on another repo; `none` outside waiting.
 function waitToken(wait: readonly WaitCondition[] | null): string {
   if (wait == null || wait.length === 0) return NONE
-  return wait.map(c => (c.kind === 'issue-closed' ? `issue:${c.issue}` : c.kind === 'pr-merged' ? `pr:${c.pr}` : `tag:${c.sha}`)).join(',')
+  return wait
+    .map(c =>
+      c.kind === 'issue-closed' ? (c.repo === undefined ? `issue:${c.issue}` : `issue:${c.repo}#${c.issue}`) : c.kind === 'pr-merged' ? `pr:${c.pr}` : c.repo === undefined ? `tag:${c.sha}` : `tag:${c.repo}@${c.sha}`,
+    )
+    .join(',')
 }
 
 // unwait: the conditions of a wait token; null for `none` or an absent token (a note from before
@@ -212,9 +217,15 @@ function unwait(v: string | undefined): WaitCondition[] | null | undefined {
   if (v === undefined || v === NONE) return null
   const out: WaitCondition[] = []
   for (const item of v.split(',')) {
-    const t = /^tag:([0-9a-f]{7,40})$/.exec(item)
+    const t = /^tag:(?:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)@)?([0-9a-f]{7,40})$/.exec(item)
     if (t !== null) {
-      out.push({ kind: 'tag-contains', sha: t[1] as string })
+      if (t[1] !== undefined && t[1] !== t[1].toLowerCase()) return undefined
+      out.push(t[1] === undefined ? { kind: 'tag-contains', sha: t[2] as string } : { kind: 'tag-contains', sha: t[2] as string, repo: t[1] })
+      continue
+    }
+    const l = /^issue:([a-z0-9._-]+\/[a-z0-9._-]+)#([1-9]\d*)$/.exec(item)
+    if (l !== null) {
+      out.push({ kind: 'issue-closed', issue: Number(l[2]), repo: l[1] as string })
       continue
     }
     const m = /^(issue|pr):([1-9]\d*)$/.exec(item)

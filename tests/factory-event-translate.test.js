@@ -424,6 +424,12 @@ test("transition wait=: the waiting state and its condition list (dev-system#836
   assert.equal(data(note("to=waiting")).to_state, "waiting");
   assert.equal("wait" in data(note("to=waiting")), false, "a note without wait= leaves the key out");
   assert.equal("wait" in data(base.note), false, "a non-waiting note is as before");
+  const long = data(`${note("to=waiting")} wait=issue:cbundy/dev-system#57,tag:cbundy/dev-system@35bb655,issue:5`).wait;
+  assert.deepEqual(long, [{ kind: "issue-closed", issue: 57, repo: "cbundy/dev-system" }, { kind: "tag-contains", sha: "35bb655", repo: "cbundy/dev-system" }, { kind: "issue-closed", issue: 5 }]);
+  assert.equal("repo" in long[2], false, "a short form carries no repo key");
+  for (const w of ["tag:Owner/Name@35bb655", "tag:a@35bb655", "issue:a/b#0", "pr:a/b#1", "tag:a/b@", "issue:A/b#1"]) {
+    assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
+  }
   const bad = ["foo:1", "issue:x", "issue:0", "tag:XYZ", "tag:abc", "issue:1,,pr:2", "", "issue", ...[Array.from({ length: 9 }, (_, i) => `issue:${i + 1}`).join(",")]];
   for (const w of bad) assert.match(missOf(withNote(base, `${note("to=waiting")} wait=${w}`)), /^transition: bad wait=/, w);
 });

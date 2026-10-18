@@ -4,7 +4,7 @@ import type { QuestionParts } from './question.mjs'
 
 export const DESIGN_KINDS: readonly ['brief', 'question', 'split', 'wait']
 export const BUILD_RESULTS: readonly ['built', 'cannot']
-export const FIX_RESULTS: readonly ['fixed', 'declined']
+export const FIX_RESULTS: readonly ['fixed', 'declined', 'unchanged']
 export const DISPOSITIONS: readonly ['fixed', 'declined']
 export const ROLLOUTS: readonly ['merge', 'run-it', 'keep-open']
 export const LIMITS: Readonly<{
