@@ -36,7 +36,7 @@ const LIFE = lifeOf(NOW - 2 * HOUR)
 const SHA = (c: string) => c.repeat(40).slice(0, 40)
 const BRIEF_URL = (n: number) => `https://github.com/${REPO}/issues/${n}#issuecomment-${1000 + n}`
 const BIN = `${PLUGIN_ROOT}/bin/factory-answer`
-const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
+const BRIEF = ['## Design brief (designer, 2026-10-13)', '', '## Acceptance criteria', '- it works', '', '## Observability', 'none - no new decision', '', '## Rollout', 'merge - a self-contained change', ''].join('\n')
 
 // --- worlds, as v2-state.test.ts builds them ------------------------------------------------------------
 
@@ -119,6 +119,7 @@ describe('the design-v2 contract (8.7)', () => {
       'extra is not a field of a design answer (only kind, brief, question, context, options, recommendation, reasons, children, conditions, reason)',
       'brief must start with its heading: ## Design brief (designer, <YYYY-MM-DD>)',
       'brief\'s ## Rollout must start with one of merge, run-it, keep-open, not "ship"',
+      'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
     ])
     expect(problems('design-v2', { kind: 'question' })).toEqual(['question is required'])
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, question: 'why?' })).toEqual(['question must be absent or null here'])
@@ -174,6 +175,15 @@ describe('the design-v2 contract (8.7)', () => {
     expect(problems('design-v2', { kind: 'wait', reason: 'why' })).toEqual(['conditions must be a list of 1 to 8 conditions { kind: issue-closed | pr-merged | tag-contains, issue | pr | sha }'])
     // the wait's fields belong to a wait alone
     expect(problems('design-v2', { kind: 'brief', brief: BRIEF, conditions, reason: 'why' })).toEqual(['conditions must be absent or null unless kind is wait', 'reason must be absent or null unless kind is wait'])
+  })
+
+  test('a brief must say what it makes observable: an empty or missing ## Observability is refused', () => {
+    const OBS = '## Observability\nnone - no new decision\n\n'
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(OBS, '') })).toEqual([
+      'brief must have an ## Observability section: each decision the change adds and where it is recorded, or "none - no new decision"',
+    ])
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace(OBS, '## Observability\n\n') })).toHaveLength(1)
+    expect(problems('design-v2', { kind: 'brief', brief: BRIEF.replace('none - no new decision', '- the split choice - abandoned.reasons - why issues split') })).toEqual([])
   })
 
   test('a split has 2 to 10 children with unique keys, siblings it is blocked by, and no cycle', () => {
@@ -727,6 +737,8 @@ describe('the design step (8.7)', () => {
     const h = harness(r, () => ({}), [], { issues: [issue(320, { labels: ['model:sonnet', 'ready'] })] })
     await h.spawn('design')
     expect(h.spawns[0]).toMatchObject({ subagentType: 'factory-loop:designer-v2', model: 'sonnet' })
+    expect(h.spawns[0]?.prompt).not.toContain('callum-flow:explorer')
+    expect(h.spawns[0]?.prompt).toContain('explore with your own reads')
     expect(h.runs).toEqual([])
     const { entry: e } = await h.spawn('design')
     h.answer('design', 'design-v2', { kind: 'question', question: 'Which API?' })
