@@ -258,7 +258,7 @@ describe('every event events.ts builds parses back to the same fields (property 
         reviewer: g.pick(['adjudicator', 'no-mistakes']),
         answer: `/loop dir/answers/${text(g, 40)}.json`,
       }
-      const iv: InterventionEvent = intervention(g.pick(['person', 'loop'] as const), g.pick(['op:resume', 'unknown:timeout', 'free:load', 'push']), `i5/l${g.int(99)}/s3/t`, text(g, 120), {
+      const iv: InterventionEvent = intervention(g.pick(['person', 'loop', 'judge'] as const), g.pick(['op:resume', 'unknown:timeout', 'free:load', 'push']), `i5/l${g.int(99)}/s3/t`, text(g, 120), {
         issue: maybe(g, 1 + g.int(99)),
         life: maybe(g, 'ss1x2k'),
         pr: maybe(g, 1 + g.int(99)),
@@ -378,6 +378,7 @@ describe('the parser', () => {
       fact: '',
     })
     expect(parseIntervention({ state: 'intervention', issue: null, branch: null, pr: null, head: null, note: 'who=robot cause=x' })).toBeNull()
+    expect(parseIntervention({ state: 'intervention', issue: 7, branch: null, pr: null, head: null, note: 'who=judge cause=op:pause' })?.who).toBe('judge')
   })
 
   test('other states, and the sweep\'s own reclaimed, are not v2 events', () => {

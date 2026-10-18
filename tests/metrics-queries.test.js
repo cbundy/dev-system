@@ -238,6 +238,7 @@ const SPECS = [
   {
     id: "9. Interventions, judgement calls and claim completion #1", old: "09b-interventions-per-issue.sql", key: ["repo", "issue"],
     expect: (rs) => assert.ok(rs.some((r) => r.untouched) && rs.some((r) => !r.untouched && r.person > 0) && rs.some((r) => r.loop > 0), "untouched and touched merges"),
+    onlyNew: { judge: "interventions by the loop's judge (who=judge), which the old query does not count" },
   },
   {
     id: "9. Interventions, judgement calls and claim completion #2", old: "09c-judgement-calls.sql", key: ["repo", "kind", "outcome"],

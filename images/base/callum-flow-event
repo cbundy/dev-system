@@ -84,7 +84,7 @@
 #   (`reviewed`: one review result; the note must carry verdict= (approve, changes or unknown) and
 #   round=; never a stage, never progress)
 #   (`intervention`: someone had to step in that the plan did not foresee; the note must carry
-#   who= (person or loop) and cause=, and may carry reason=, life= and fact=; --issue is optional
+#   who= (person, loop or judge) and cause=, and may carry reason=, life= and fact=; --issue is optional
 #   (a fleet-level one names none); never a stage, never progress. A rescue the loop cannot see
 #   is recorded by hand: callum-flow-event intervention --issue N --note
 #   'who=person cause=rescue reason=what%20was%20done')
@@ -315,8 +315,8 @@ case "$state" in
   intervention)
     needs who cause
     case " $note " in
-      *" who=person "* | *" who=loop "*) ;;
-      *) usage "--note for intervention needs who=person or who=loop" ;;
+      *" who=person "* | *" who=loop "* | *" who=judge "*) ;;
+      *) usage "--note for intervention needs who=person, who=loop or who=judge" ;;
     esac
     ;;
 esac

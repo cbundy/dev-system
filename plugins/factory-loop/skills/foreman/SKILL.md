@@ -28,7 +28,7 @@ make sure the right fix gets made, and keep the owner told.
    lock held by another session.
 2. Every live issue: is its state moving? A record with no step, and the same skip line pass after pass, is
    the thing to explain.
-3. New outcomes since the last check: merges, parks, triage, unknowns, breaker trips, interventions. Read a
+3. New outcomes since the last check: merges, parks, triage, unknowns, breaker trips, interventions (a `who=judge` intervention is the judge's own control op, not the owner's). Read a
    park's question, and look at a merged PR's evidence.
 4. Cost: GitHub API use (`gh api rate_limit`) and pass time.
 

@@ -193,6 +193,7 @@ test("coverage: every row of translator.md has a corpus line, and each shape is 
   has("closed", (d) => d.reason !== null, "a closed reason");
   has("transition", (d) => d.lives === 1, "the lives default");
   has("intervention", (d) => d.life === null && d.fact === null, "a hand rescue");
+  has("intervention", (d) => d.who === "judge", "a judge op");
   has("implementer_routed", (d) => d.bucket === null, "bucket -");
   has("implementer_routed", (d) => d.bucket !== null, "a bucket");
   has("test_weakened", (d) => d.kinds.length > 0, "kinds");

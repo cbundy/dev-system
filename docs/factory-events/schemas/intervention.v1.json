@@ -2,13 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "intervention.v1.json",
   "title": "intervention",
-  "description": "Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.",
+  "description": "Someone had to step in where the plan did not foresee it: a person (an owner op, a push, a hand merge, a rescue), the loop's judge (the main conversation, running a control op through the control tool) or the loop with unplanned judgement or recovery (a triage, an unknown step, a park, a guard refusal). Written by the loop, and by hand for a rescue the loop cannot see. Not a stage and not progress. The issue is null for a fleet-level one (a restart, a settings edit). Count one per (issue, cause, fact); each row with a null fact counts.",
   "x-issue": "optional",
   "type": "object",
   "additionalProperties": false,
   "required": ["who", "cause", "life", "fact", "pr", "detail"],
   "properties": {
-    "who": { "enum": ["person", "loop"], "description": "person: a person did something; loop: the loop had to judge or recover.", "x-column": true },
+    "who": { "enum": ["person", "loop", "judge"], "description": "person: a person did something; loop: the loop had to judge or recover; judge: the loop's judge (the main conversation) ran a control op through the control tool.", "x-column": true },
     "cause": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$", "description": "What happened, as a code of v2 SPEC 7.2: for example op:resume, push, hand-merge, rescue, restart, config-file, triage, park, unknown:timeout, free:load, fix:ci or guard:write. An open list: handle a code you do not know.", "x-column": true },
     "life": { "type": ["string", "null"], "pattern": "^[0-9a-z]+$", "description": "The issue's life it happened in, as in transition; null when none applies.", "x-column": true },
     "fact": { "type": ["string", "null"], "description": "The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue.", "x-column": true },
@@ -17,6 +17,7 @@
   },
   "examples": [
     { "who": "person", "cause": "op:drop", "life": null, "fact": "op:drop/i91/mvb4ci14", "pr": null, "detail": "drop 91" },
+    { "who": "judge", "cause": "op:pause", "life": null, "fact": "op:pause/i91/mvb4ci15", "pr": null, "detail": "pause 91" },
     { "who": "loop", "cause": "fix:conflict", "life": "tn075p", "fact": "i73/ltn075p/s7/t", "pr": 83, "detail": "a fixer for a merge conflict on PR #83, from reviewing" }
   ]
 }
