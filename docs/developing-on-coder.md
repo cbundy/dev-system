@@ -24,6 +24,9 @@ coder create dev-system-orchestrator --template orchestrator \
 
 - Bypass permissions (`remote_control_skip_permissions`) lets Claude work unattended.
   Only turn it on for a workspace you are happy to let act on its own.
+- Add `--parameter coder_login=true` for a workspace that drives other workspaces (e.g. the
+  factory loop's shadow and testbed runs): it logs the `coder` CLI in from a host token
+  that reaches every workspace its user can reach.
 - Add `--parameter template_testing=true` only if agents there will try Coder template
   changes (see below).
 
@@ -36,7 +39,7 @@ including its gh sharing option and the `workflow` scope requirement for pushing
 to `.github/workflows/`.
 
 The workspace image includes the `coder` CLI, pinned to the server version. To use it from
-the workspace, see [Coder CLI](../images/base/README.md#coder-cli) for the recommended auth.
+the workspace, see [Coder CLI](../images/base/README.md#coder-cli) for the recommended auth, or the opt-in `coder_login` parameter for a login on every start.
 
 ## What the workspace cannot verify
 
