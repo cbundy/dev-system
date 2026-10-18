@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for queue-watch.sh --once (docs/factory-loop/v2/SPEC.md 13.3.4, DECISIONS D-20):
+# Plain-shell tests for queue-watch.sh --once (docs/factory-loop/v2/SPEC.md 13.3.4):
 # one read, no debounce, the same trust filtering, one line and exit 0; ready events for new
 # members as a first sight; a failed read exits 1, never an empty queue.
 # Shared setup, stubs and wait helpers: watchers-lib.sh (read its header for the
