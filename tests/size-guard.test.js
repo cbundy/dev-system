@@ -3,8 +3,9 @@
 // The size guard (scripts/size-guard.sh; docs/factory-loop/v2/SPEC.md 2.5, property 19): no file
 // under a directory over its limit but those the allowlist names, each capped at its size when
 // listed, and both only shrink: a listed file over its cap, at or under the limit, or gone, fails.
-// Run on fixtures, then on the factory loop's hooks with lint.sh's own allowlist, which names only
-// today's oversized v1 files, at caps no higher than U1 set.
+// Run on fixtures, then on the factory loop's hooks with lint.sh's own allowlist, which is empty now:
+// no hooks file is over the limit. Were an entry ever listed, it could name only one of the files
+// that were over it when the guard was built, at a cap no higher than U1 set.
 const { after, test } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
@@ -78,7 +79,7 @@ test("bad usage is exit 2: a bad limit, or an entry with no whole-number cap", (
   for (const entry of ["big.ts", "big.ts:", "big.ts:many", ":20"]) assert.equal(guard(fixture({ "big.ts": 20 }), 10, [entry]).code, 2, entry);
 });
 
-test("the factory loop's hooks pass with lint.sh's allowlist, which names only files from the original six", () => {
+test("the factory loop's hooks pass with lint.sh's allowlist, which is empty and could name only files from the original six", () => {
   const lint = fs.readFileSync(path.join(ROOT, "scripts", "lint.sh"), "utf8");
   const m = /^HOOKS_OVERSIZED="([^"]*)"$/m.exec(lint);
   assert.ok(m, "lint.sh: HOOKS_OVERSIZED");

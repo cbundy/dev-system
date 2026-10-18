@@ -8,7 +8,7 @@
 //
 // The v2 planner is held to the same: v2/plan.ts's imports, followed to the end, reach hooks/v2/
 // and hooks/foundation.ts alone, every module they reach reads no clock and calls nothing outside
-// itself, and no v2 module at all holds the engine (register.ts alone does).
+// itself, and no v2 module at all holds the engine (the driver modules do).
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -145,7 +145,7 @@ test("the v2 planner imports hooks/v2/ and foundation.ts alone, and every module
   assert.deepEqual(valueImports("v2/plan.ts").filter((f) => f === "foundation.ts"), ["foundation.ts"]);
 });
 
-test("no v2 module holds the engine or the process: register.ts alone does", () => {
+test("no v2 module holds the engine or the process: the driver modules do", () => {
   const v2 = fs.readdirSync(path.join(HOOKS, "v2")).filter((f) => /\.(ts|mjs)$/.test(f));
   assert.ok(v2.length >= 30, v2.join(", "));
   for (const f of v2) {
