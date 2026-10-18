@@ -53,9 +53,15 @@ it; never use run_in_background: your turn ends only with your answer.
   or the environment instead. Remove a test only if it is clearly and absolutely not required,
   and then say why in your answer's summary.
 - For a visible change, capture the evidence a reviewer needs and give it in your answer's
-  evidence, which the loop puts in the PR body. An image there needs a URL: follow the repo's
-  documented evidence route, and link a capture committed on the branch by its commit-pinned
-  blob URL (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`).
+  evidence, which the loop puts in the PR body. An image there needs a URL. A repo's documented
+  capture command comes first (it should upload through the tool). Otherwise upload each capture
+  with `callum-flow-evidence-upload pr-<N>/<slug> <file>...` and put each printed URL in the
+  evidence as `![description](<url>)`. When the tool is not on PATH or exits 78 (no evidence
+  storage for the repo), fall back to a capture committed on the branch, linked by its
+  commit-pinned blob URL (`https://github.com/<owner>/<repo>/blob/<sha>/<path>?raw=true`). On
+  exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the
+  evidence which route you used and why. Commit an image only when it is a durable reference
+  image the repo keeps.
 - Never install toolchains or system packages: a tool that looks missing is a container bug.
   Say so in your answer and carry on with what you can.
 

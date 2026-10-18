@@ -265,7 +265,7 @@ export function designPrompt(i: DesignInput): string {
 // evidenceRule: how a writer's evidence reaches the PR body the loop writes, where the reviewer
 // looks for it (8.1): the newest a build or a fix gives is the PR's, and an image needs a URL.
 function evidenceRule(i: WorkInput): string {
-  return `For a visible change, give the evidence a reviewer needs in your answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it whole. An image there needs a URL: follow the repo's documented evidence route (its CLAUDE.md), and link a capture committed on the branch by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true.`
+  return `For a visible change, give the evidence a reviewer needs in your answer's evidence: the loop puts the newest a build or a fix gave in the PR body, so give it whole. An image there needs a URL. A repo's own documented capture command (its CLAUDE.md) comes first, since it is expected to upload through the tool. Otherwise upload each capture with \`callum-flow-evidence-upload pr-${i.issue}/<slug> <file>...\` and put each printed URL in the evidence as ![description](<url>). When the tool is not on PATH or exits 78 (no evidence storage for the repo), fall back to a capture committed on the branch, linked by its commit-pinned blob URL, https://github.com/${i.repo}/blob/<sha>/<path>?raw=true. On exit 1, say so in the evidence and fall back the same way, never retrying in a loop. Say in the evidence which route you used and why. Commit an image only when it is a durable reference image the repo keeps.`
 }
 
 // --- the builder (4.2, 8.1) ------------------------------------------------------------------------------------

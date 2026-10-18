@@ -50,7 +50,10 @@
 #
 # Environment: CALLUM_FLOW_LEASE_MINUTES (default 120), DEV_MACHINE_NAME (the
 # device, else the hostname), CALLUM_FLOW_REPO (owner/name, default from gh),
-# CALLUM_FLOW_READY_LABEL (default `ready`); for tests CALLUM_FLOW_GH_BIN,
+# CALLUM_FLOW_READY_LABEL (default `ready`); CALLUM_FLOW_CLAIM_EVENTS_SOURCE (old, new or
+# shadow, the default: which event store the held rule reads, claim-events.sh),
+# CALLUM_FLOW_SHADOW_WINDOW_SECONDS (default 604800) and CALLUM_FLOW_SHADOW_SETTLE_SECONDS
+# (default 600), the shadow compare's window and settle time; for tests CALLUM_FLOW_GH_BIN,
 # CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN (callum-flow-issue-read),
 # CALLUM_FLOW_DEV_QUERY_BIN (dev-query), CALLUM_FLOW_SHARE_DIR (where claim-events.sh
 # is installed, default /usr/local/share/dev-system).

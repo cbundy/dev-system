@@ -62,7 +62,10 @@
 # event by an untrusted actor or from an untrusted PR never counts as a merge.
 # A reader failure is an error for that issue, never "no comments".
 #
-# Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL; for tests
+# Environment: CALLUM_FLOW_REPO, CALLUM_FLOW_READY_LABEL; CALLUM_FLOW_CLAIM_EVENTS_SOURCE (old,
+# new or shadow, the default: which event store the rule reads, claim-events.sh),
+# CALLUM_FLOW_SHADOW_WINDOW_SECONDS (default 604800) and CALLUM_FLOW_SHADOW_SETTLE_SECONDS
+# (default 600), the shadow compare's window and settle time; for tests
 # CALLUM_FLOW_GH_BIN, CALLUM_FLOW_EVENT_BIN, CALLUM_FLOW_ISSUE_READ_BIN
 # (callum-flow-issue-read), CALLUM_FLOW_DEV_QUERY_BIN,
 # CALLUM_FLOW_FACTORY_STATE_BIN (callum-flow-factory-state), CALLUM_FLOW_SHARE_DIR

@@ -45,7 +45,11 @@ times (`until` may be null) and `psql(url, sql)`, a read-only psql returning the
 functions may be async. The harness normalises both outputs, deep-compares them and reports each
 difference by path (`$.a.b[2]`) with the old and new value; exit 0 only on no difference.
 [`self-test-reader.js`](../../scripts/factory-events-replay/self-test-reader.js) (events per type and issue,
-`factory.events` against `factory.event_log`) is the only reader the harness ships.
+`factory.events` against `factory.event_log`) is the harness's self-test. The first real reader is
+[`readers/claim-events.js`](../../scripts/factory-events-replay/readers/claim-events.js) (the claim tools' held
+rule, per `repo#issue`): it runs the shipped `images/base/claim-events.sh` functions against a dev-query
+stand-in ([`devq-standin.js`](../../scripts/factory-events-replay/devq-standin.js)) that reads `ctx.oldUrl`, or
+with `--factory` `ctx.newUrl`, read-only.
 
 ## What a reader issue passes
 
@@ -91,6 +95,18 @@ these records stay on the device. Fields:
 | `new_error` | null, or the new read's error message (clipped to 200 characters) |
 
 A run with differences also prints `<tool>: shadow: N difference(s), first at <path> (see <file>)` on stderr.
+
+The claim tools (`callum-flow-claim`, `callum-flow-sweep`) are the exception
+([#905](https://github.com/cbundy/dev-system/issues/905)): their rule is a shell file sourced inside the heartbeat
+and the sweep (`images/base/claim-events.sh`), so the switch is shell too. It uses the same names and values
+(`CALLUM_FLOW_CLAIM_EVENTS_SOURCE`, `old|new|shadow`, default `shadow`; an invalid value warns once and reads old,
+because the rule must never fail its callers) and records each shadow compare as a `shadow_read` event
+(`reader` `claim-events`, `tool` the calling command), not as a line in `factory/.shadow/<tool>.jsonl`. The reason is
+that a sourced shell rule cannot call `runShadow`, and the event is a record the metrics query already reads
+([6b](../metrics.md#6b-reader-shadow-compares)). The compared value per `repo#issue` is what the rule decides on (the
+lifecycle class, the latest claim type and its device); `CALLUM_FLOW_SHADOW_WINDOW_SECONDS` (default 604800) bounds
+both reads and `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) cuts `differences`, while `live_differences`
+counts the whole window.
 
 Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
 default `shadow`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its

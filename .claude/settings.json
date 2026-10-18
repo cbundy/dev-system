@@ -40,6 +40,7 @@
       "Bash(callum-flow-sweep)",
       "Bash(callum-flow-sweep *)",
       "Bash(callum-flow-evaluate *)",
+      "Bash(callum-flow-evidence-upload *)",
       "Bash(callum-flow-factory-state)",
       "Bash(callum-flow-factory-state *)",
       "Bash(callum-flow-issue-read *)",
