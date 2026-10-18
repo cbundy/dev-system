@@ -385,9 +385,9 @@ export function labelOf(state: IssueState): FactoryLabel | null {
   return state === 'closed' ? null : FACTORY_LABELS[state].name
 }
 
-// The notice (TELL) kinds v2 adds; the first seven are owner items, which go out before any other
+// The notice (TELL) kinds v2 adds; the owner items (V2_OWNER_TELLS) go out before any other
 // wake (O2). The foundation's own (runaway, blind, heartbeat-other, old-watcher, pass-error) stay.
-export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow'] as const
+export const V2_OWNER_TELLS = ['parked', 'breaker', 'stalled', 'checkout', 'workspace', 'rejected', 'keep-open-blocks', 'reopened', 'records-shadow', 'wait-unreadable'] as const
 export const V2_TELLS = [...V2_OWNER_TELLS, 'waiting', 'task-timeout', 'wind-down-stale'] as const
 export type V2Tell = (typeof V2_TELLS)[number]
 
@@ -421,6 +421,9 @@ export type IssueRead = { at: Ms; open: boolean | null; labels: string[] | null 
 // One wait condition as the last successful read showed it, and when that read was taken (4.4).
 // `tag`: the release tag a tag-contains read compared against, so it is read again only when the tag changes.
 export type WaitRead = { at: Ms; held: boolean; tag?: string }
+
+// A condition the loop cannot read, since when: its read failed, or (tag-contains) its repo has no release tag.
+export type WaitUnread = { since: Ms; why: 'read-failed' | 'no-release' }
 
 // An open release bump PR (sources-release.ts): its branch and GitHub's creation time, which the
 // merge queue's hold window runs from (9.1).
@@ -460,6 +463,8 @@ export type V2State = {
   // the conditions waiting records wait on, by key (`issue:57`, `pr:812`, `tag:35bb655`): the last read that
   // showed one; a condition with no entry was not read, or its read failed, and stays open
   waits?: Record<string, WaitRead>
+  // the conditions that cannot be read, by key, and since when; absent: none
+  waitsUnread?: Record<string, WaitUnread>
   // the open release bump PRs (sources-release.ts) the merge queue holds for; absent: none read
   releasePrs?: ReleasePrsRead
   // when the PR reads showed each issue's PR closed or merged (GitHub's closedAt), by issue number:

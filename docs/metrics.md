@@ -631,6 +631,16 @@ ORDER BY seq_at DESC;
 Group by `foreign` and `ended_via` for how waits end (`foreign` is true when a condition names another repo, so waits on another repo's release or issue compare with those on the loop's own), and count the rows with a null `ended_at` older than a day for
 waits that look stuck.
 
+A wait the loop cannot read (a failing read, or a tag condition on a repo with no release) raises the owner item
+`wait-unreadable` once per 24 h period, keyed `.../wait-unreadable/<k>`. How many periods each issue hung for, from the decision log
+(the planned action carries the key and the issue; the conditions are in the tell's fields in the ledger):
+
+```sh
+jq -rs '[.[] | . as $d | ($d.actions // [])[] | select(.kind == "tell" and (.key | test("/wait-unreadable/")))
+  | {day: ($d.at | tostring | .[0:10]), issue, key}] | unique_by(.key) | group_by(.issue)[]
+  | "\(.[0].issue): \(length) periods"' /persist/claude/factory-loop/*/decisions-*.jsonl
+```
+
 ## 8. Implementer model comparison
 
 Sonnet against Opus as the implementer, from the split `callum-flow-implementer-route` makes (see the

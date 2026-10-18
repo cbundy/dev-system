@@ -21,7 +21,7 @@
 //   line naming why it waits (property 3).
 //
 // Pure: the time is state.now.
-import { skip, wake, want } from '../foundation'
+import { isoOf, skip, wake, want } from '../foundation'
 import type { Ms } from '../types'
 import { entryKey, hiddenKey, lifeAt, transitionKey } from './keys'
 import { ticksOf, tickNote } from './park-text'
@@ -182,17 +182,37 @@ function clearedData(ctx: V2Ctx, r: IssueRecord): { tags: Record<string, string>
   return Object.keys(tags).length === 0 ? undefined : { tags }
 }
 
-// openText: the open conditions in words, for the skip line and E6's tell.
-function openText(open: readonly WaitCondition[]): string {
+// openText: the open conditions in words, for the skip line and E6's tell; a condition the loop
+// cannot read says so.
+function openText(ctx: V2Ctx, open: readonly WaitCondition[]): string {
   return open
-    .map(c =>
-      c.kind === 'issue-closed'
-        ? `${c.repo ?? ''}#${c.issue} (still open)`
-        : c.kind === 'pr-merged'
-          ? `PR #${c.pr} (not merged yet)`
-          : `no release tag${c.repo === undefined ? '' : ` of ${c.repo}`} contains ${c.sha} yet`,
-    )
+    .map(c => {
+      const text =
+        c.kind === 'issue-closed'
+          ? `${c.repo ?? ''}#${c.issue} (still open)`
+          : c.kind === 'pr-merged'
+            ? `PR #${c.pr} (not merged yet)`
+            : `no release tag${c.repo === undefined ? '' : ` of ${c.repo}`} contains ${c.sha} yet`
+      const u = ctx.v2.waitsUnread?.[waitKey(c)]
+      return u === undefined ? text : `${text} (unread: ${u.why === 'read-failed' ? 'read failing' : 'no release'})`
+    })
     .join(', ')
+}
+
+// unreadOf: the open conditions of a waiting record unread for at least the waiting period, with
+// the line that says why each is.
+function unreadOf(ctx: V2Ctx, r: IssueRecord): { key: string; line: string }[] {
+  if (r.state !== 'waiting') return []
+  const out: { key: string; line: string }[] = []
+  for (const c of openOf(ctx, r)) {
+    const key = waitKey(c)
+    const u = ctx.v2.waitsUnread?.[key]
+    if (u === undefined || ctx.state.now - u.since < periodOf(ctx, r)) continue
+    const since = isoOf(u.since)
+    const repo = c.kind === 'tag-contains' && c.repo !== undefined ? c.repo : 'this repo'
+    out.push({ key, line: u.why === 'read-failed' ? `${key}: its read has failed since ${since}` : `${key}: no release tag of ${repo} is known since ${since}` })
+  }
+  return out
 }
 
 // waitingRules: a waiting record's events after the early ones (4.1): C1 when every condition
@@ -203,13 +223,14 @@ function waitingRules(ctx: V2Ctx, r: IssueRecord, logged: boolean): void {
   if (open.length === 0 && (r.wait ?? []).length > 0) {
     if (take(ctx, r, { event: { kind: 'cleared', data: clearedData(ctx, r) }, trigger: fact(`cleared:${n}@${r.seq}`) }, logged, '')) return
   }
-  if (ctx.state.now - r.since >= periodOf(ctx, r)) take(ctx, r, { event: { kind: 'timeout' }, trigger: fact(`waiting:${n}`) }, logged, `waiting for ${openText(open)}`)
+  if (ctx.state.now - r.since >= periodOf(ctx, r)) take(ctx, r, { event: { kind: 'timeout' }, trigger: fact(`waiting:${n}`) }, logged, `waiting for ${openText(ctx, open)}`)
   const u = unparkOf(ctx, r)
-  if (u === null || u === 'wait') skip(ctx, 'S6', n, `waiting: for ${open.length === 0 ? 'its clear' : openText(open)}`)
+  if (u === null || u === 'wait') skip(ctx, 'S6', n, `waiting: for ${open.length === 0 ? 'its clear' : openText(ctx, open)}`)
   else take(ctx, r, u, logged, '')
 }
 
-// waitTell: E6, once per period: tell(waiting), or tell(parked) as the daily reminder (an owner
+// waitTell: E6, once per period: tell(waiting), tell(wait-unreadable) (an owner item) when a condition
+// has been unread a whole period, or tell(parked) as the daily reminder (an owner
 // item, counted once per record).
 function waitTell(ctx: V2Ctx, r: IssueRecord, why: string): void {
   const k = Math.floor((ctx.state.now - r.since) / periodOf(ctx, r))
@@ -220,6 +241,11 @@ function waitTell(ctx: V2Ctx, r: IssueRecord, why: string): void {
     return
   }
   const hours = Math.floor((ctx.state.now - r.since) / HOUR)
+  const unread = unreadOf(ctx, r)
+  if (unread.length > 0) {
+    want(ctx, wake('tell', 'wait-unreadable', `${entryKey(r, 'tell')}/wait-unreadable/${k}`, 'S6', r.issue, { issue: r.issue, hours, conditions: unread.map(u => u.key).join(',') }, unread.map(u => u.line)))
+    return
+  }
   want(ctx, wake('tell', 'waiting', `${entryKey(r, 'tell')}/waiting/${k}`, 'S6', r.issue, { issue: r.issue, state: r.state, hours }, [why]))
 }
 

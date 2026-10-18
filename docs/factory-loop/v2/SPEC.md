@@ -120,7 +120,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify), and the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | the records are in 3.3 |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records |
-| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
+| `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4). A failed read, or a tag condition whose repo has no release tag, starts that condition's unread time (`V2State.waitsUnread`, why `read-failed` or `no-release`); a read that says held or not held, or a stored read against a known tag, clears it, and a read skipped for the budget, a rate limit or a backoff leaves it as it was |
 | `releasePrs` | `gh pr list --repo R --state open --limit 1000 --json number,headRefName,createdAt,isCrossRepository`, kept to the PRs whose `headRefName` starts with `releaseBranchPrefix` and which are not from a fork; a PR that left the list is read once with `gh pr view N --repo R --json state,mergedAt` for how its hold ended | `prEveryMs`; only while `releaseBranchPrefix` is set, `releaseHold` is above 0 and some record is in merge-queue; none during a GitHub backoff or after a rate limit met this pass | the release hold of the merge queue (9.1). A failed read keeps the last reading, which the window still bounds, and shows in `sources` |
 | `dualWrite` | act mode only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | its failure blocks nothing (4.1) |
 
@@ -573,7 +573,7 @@ time.
 | E3 | pr-merged | the life has a PR | closed | why merged-by-hand | transition |
 | E4 | pr-closed | the life has a PR; not parked | parked | question ("PR #p was closed by hand; a resume reopens it"); resumeTo same state; prClosedAt set | transition |
 | E5 | claim-lost | - | closed | why claim-lost | transition |
-| E6 | timeout | a waiting state: queued (6 h), the merge queue behind its head (2 h), parked (24 h), waiting (24 h) | same state | - | `tell(waiting)` (for a waiting record, naming the conditions still open), or `tell(parked)` as the daily reminder; once per period |
+| E6 | timeout | a waiting state: queued (6 h), the merge queue behind its head (2 h), parked (24 h), waiting (24 h) | same state | - | `tell(waiting)` (for a waiting record, naming the conditions still open), `tell(wait-unreadable)` (an owner item) instead of it when an open condition has been unread a whole period, or `tell(parked)` as the daily reminder; once per period |
 | E7 | any event with no meaning in the state | - | same state | - | logged in the decision log |
 
 E7 covers, for example: a late result of a step whose seq has ended; `pr-closed` while parked;
@@ -632,7 +632,7 @@ running entry, so it cannot time out and spends no attempt. Its skip line names 
 | a step state, triage | 15 min | step start | unknown | one bounded call |
 | merge-queue (behind the head) | 2 h | entry | `tell(waiting)`; stays | a PR waits behind at most K - 1 heads |
 | parked | 24 h | entry, then each reminder | `tell(parked)` reminder; stays | one reminder a day |
-| waiting | 24 h (`stateTimeoutMs.waiting`) | entry, then each tell | `tell(waiting)`, naming the conditions still open; stays | the conditions are checked every pass, so 24 h without them holding is long enough for the owner to look; one tell a day, not an owner item |
+| waiting | 24 h (`stateTimeoutMs.waiting`) | entry, then each tell | `tell(waiting)`, naming the conditions still open; stays | the conditions are checked every pass, so 24 h without them holding is long enough for the owner to look; one tell a day, not an owner item - except `tell(wait-unreadable)`, which is one when a condition could not be read for the whole period |
 | closed | none | - | - | terminal |
 
 **Waits on GitHub** have their own bound, the same in reviewing and at the merge queue's head. A
@@ -2931,7 +2931,7 @@ shows, in the tick report's format: who acts first, what happens next, each issu
 its work with a markdown link (I-88, I-89). The foundation's kinds are `blind`, `runaway`,
 `breaker`, `heartbeat-other`, `old-watcher`, `pass-error` and `task-timeout`; v2 adds its own
 (appendix D). Each is sent once per key. The owner items (`parked`, `breaker`, `stalled`,
-`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened` and `records-shadow`) go out before any other
+`checkout`, `workspace`, `rejected`, `keep-open-blocks`, `reopened`, `records-shadow` and `wait-unreadable`) go out before any other
 wake, and the title counts the open ones.
 
 Four notices come from outside plan: `heartbeat-other` and `old-watcher` (a rail holding act
@@ -3939,11 +3939,12 @@ Notices (TELL kinds), owner items first:
 | `checkout` | yes | the main-checkout tripwire (10.7) |
 | `workspace` | yes | the companion plugin is not loaded (10.9) |
 | `rejected` | yes | R1 rejected an issue at its `maxLives`-th life, with why each life ended (6.4) |
+| `wait-unreadable` | yes | E6: a waiting record has an open condition unread (its read failing, or no release tag known) for a whole period; it replaces that period's `waiting` tell |
 | `waiting` | no | E6: queued 6 h, behind the queue's head 2 h, or waiting on conditions 24 h |
 | `task-timeout` | no | the release task timed out |
 | `runaway`, `blind`, `heartbeat-other`, `old-watcher`, `pass-error` | no | foundation, unchanged |
 
-7 kinds of the loop's own, 6 of them owner items, plus the foundation's.
+8 kinds of the loop's own, 7 of them owner items, plus the foundation's.
 
 ## Appendix E. Owner ops
 

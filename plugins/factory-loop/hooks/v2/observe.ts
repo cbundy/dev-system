@@ -29,7 +29,7 @@ import { windDownPaths } from './wind-down'
 import type { WindDownRead } from './wind-down'
 import { previousOf, requestOf } from './wind-down-files'
 import { CLOSED_WHYS, FACTORY_LABELS, ISSUE_STATES, STEP_KINDS } from './types'
-import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead } from './types'
+import type { HeadSeen, IssueComment, IssueRead, IssueRecord, Lease, V2SourceName, V2State, WaitRead, WaitUnread } from './types'
 
 const DAY = 86_400_000
 // a closed record goes this long after it closed, as ledger entries do (3.3, v2 SPEC 13.7.1)
@@ -84,6 +84,8 @@ export type V2Cache = {
   prs: PrsRead
   // the wait conditions' last reads (sources-waits.ts)
   waits: Record<string, WaitRead>
+  // the conditions that cannot be read (sources-waits.ts)
+  waitsUnread: Record<string, WaitUnread>
   // the release bump PRs the merge queue holds for (sources-release.ts)
   release: ReleaseCache
   // the dual-write probe and the new log's read, once per load; null: not yet read
@@ -91,7 +93,7 @@ export type V2Cache = {
 }
 
 export function emptyV2Cache(): V2Cache {
-  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, release: EMPTY_RELEASE, dualWrite: null }
+  return { heads: {}, rebuilt: null, shadow: null, comments: new Map(), checkoutBase: null, changed: {}, prs: EMPTY_PRS, waits: {}, waitsUnread: {}, release: EMPTY_RELEASE, dualWrite: null }
 }
 
 // --- the store's records and heads (3.3, 2.4) -------------------------------------------------------
@@ -366,8 +368,9 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
   for (const p of prs.read.prs) if (p.state !== 'open' && p.closedAt !== null) cache.changed[p.issue] = Date.parse(p.closedAt)
 
   // the wait conditions of waiting records (sources-waits.ts): none read during a GitHub backoff
-  const waited = await readWaits(ctx, cache.waits, rt.config.githubEveryMs)
+  const waited = await readWaits(ctx, cache.waits, rt.config.githubEveryMs, cache.waitsUnread)
   cache.waits = waited.waits
+  cache.waitsUnread = waited.unread
 
   // the release bump PRs the merge queue holds for (sources-release.ts)
   const release = await readReleasePrs(ctx, cache.release)
@@ -433,6 +436,7 @@ export async function observeV2(input: ObserveV2Input): Promise<{ v2: V2State; h
     comments,
     prs: prs.read,
     waits: cache.waits,
+    waitsUnread: cache.waitsUnread,
     releasePrs: { prs: cache.release.prs, left: cache.release.left },
     changed: cache.changed,
     interventions: { ...facts.read, seen: stored?.files ?? null },

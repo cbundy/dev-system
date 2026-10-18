@@ -9,13 +9,15 @@
 // read again only when that tag changes. An issue-closed condition naming a repo is read with the
 // reader's CALLUM_FLOW_REPO set to it. A read that
 // failed or was skipped leaves the condition open, never held: only a read that
-// shows the fact clears it.
+// shows the fact clears it. A failed read, or a tag condition whose repo has no release tag, starts
+// the condition's unread time (V2State.waitsUnread); a read that says held or not held, or a stored
+// read against a known tag, clears it, and a skipped read leaves it as it was.
 //
 // Pure parsing and one loop of reads; the cache lives in observe.ts's V2Cache.
 import type { Ms } from '../types'
 import { compareArgv, issueReadArgv, prWaitArgv } from './argv'
 import type { SourceCtx } from './observe'
-import type { IssueRecord, WaitCondition, WaitRead } from './types'
+import type { IssueRecord, WaitCondition, WaitRead, WaitUnread } from './types'
 
 // waitKey: a condition's key in V2State.waits: `issue:<n>`, `pr:<n>` or `tag:<sha>`; with a `repo`,
 // `issue:<repo>#<n>` or `tag:<repo>@<sha>`, so a foreign and a local condition never share an entry.
@@ -66,14 +68,35 @@ export function heldOf(c: WaitCondition, stdout: string): boolean | null {
   }
 }
 
-// readWaits: the new cache of reads for the conditions in use, and the reads that failed. `kept` is
-// the cache of earlier passes; an entry of a condition no record waits on any more is dropped.
-export async function readWaits(ctx: SourceCtx, kept: Readonly<Record<string, WaitRead>>, everyMs: Ms): Promise<{ waits: Record<string, WaitRead>; failed: string[] }> {
+// readWaits: the new cache of reads for the conditions in use, the reads that failed, and the
+// conditions that cannot be read (`unread`). `kept` and `keptUnread` are the caches of earlier
+// passes; an entry of a condition no record waits on any more is dropped.
+export async function readWaits(
+  ctx: SourceCtx,
+  kept: Readonly<Record<string, WaitRead>>,
+  everyMs: Ms,
+  keptUnread: Readonly<Record<string, WaitUnread>> = {},
+): Promise<{ waits: Record<string, WaitRead>; failed: string[]; unread: Record<string, WaitUnread> }> {
   const wanted = conditionsOf(ctx.records)
   const waits: Record<string, WaitRead> = {}
+  const unread: Record<string, WaitUnread> = {}
   for (const key of wanted.keys()) {
     const k = kept[key]
     if (k !== undefined) waits[key] = k
+    const u = keptUnread[key]
+    if (u !== undefined) unread[key] = u
+  }
+  // markUnread: the unread time starts at the first pass of a kind and a change of why restarts it
+  const markUnread = (key: string, why: WaitUnread['why']): void => {
+    if (unread[key]?.why !== why) unread[key] = { since: ctx.now, why }
+  }
+  for (const [key, c] of wanted) {
+    if (waits[key]?.held === true) delete unread[key]
+    else if (c.kind === 'tag-contains') {
+      const tag = tagOf(ctx, c)
+      if (tag === null) markUnread(key, 'no-release')
+      else if (waits[key]?.tag === tag) delete unread[key]
+    }
   }
   const due = [...wanted.entries()]
     .filter(([key, c]) => {
@@ -99,11 +122,17 @@ export async function readWaits(ctx: SourceCtx, kept: Readonly<Record<string, Wa
     try {
       const r = await ctx.run(argv, undefined, undefined, env)
       const held = r.exitCode === 0 ? heldOf(c, r.stdout) : null
-      if (held === null) failed.push(key)
-      else waits[key] = c.kind === 'tag-contains' ? { at: ctx.now, held, tag: tag ?? undefined } : { at: ctx.now, held }
+      if (held === null) {
+        failed.push(key)
+        markUnread(key, 'read-failed')
+      } else {
+        waits[key] = c.kind === 'tag-contains' ? { at: ctx.now, held, tag: tag ?? undefined } : { at: ctx.now, held }
+        delete unread[key]
+      }
     } catch {
       failed.push(key)
+      markUnread(key, 'read-failed')
     }
   }
-  return { waits, failed }
+  return { waits, failed, unread }
 }
