@@ -459,10 +459,13 @@ describe('the driver (v2 SPEC 2.3)', () => {
     })
     await $.session.start(START)
     await clock.advance(6_000)
-    const issueReads = h.commands().filter(c => c.argv[0] === 'callum-flow-issue-read' && !c.argv.includes('--list') && !c.argv.includes('--comments'))
-    expect(issueReads).toHaveLength(12)
-    // the parked record's issue went first, and its comments still came after the 12
-    expect(issueReads[0]?.argv).toEqual(['callum-flow-issue-read', '--json', '80'])
+    const issueReads = h.commands().filter(c => c.argv[0] === 'callum-flow-issue-read' && c.argv.includes('--issues'))
+    // one batched call for the pass's 12 due issues (the cap), the parked record's issue first
+    expect(issueReads).toHaveLength(1)
+    const asked = (issueReads[0]?.argv[3] ?? '').split(',')
+    expect(asked).toHaveLength(12)
+    expect(asked[0]).toBe('80')
+    // and its comments still came after the 12
     expect(h.commands().filter(c => c.argv.join(' ') === 'callum-flow-issue-read --json 80 --comments')).toHaveLength(1)
   })
 
