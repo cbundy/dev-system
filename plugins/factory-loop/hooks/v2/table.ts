@@ -1,4 +1,4 @@
-// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 35 rows, each
+// The transition table (docs/factory-loop/v2/SPEC.md 4.3, 4.6), held as data: 36 rows, each
 // naming the states it applies to, the event it takes, a pure guard, the next state and the pure
 // change to the record; and the event each state logs on entry. rowFor is the only lookup:
 // plan calls it and the tests enumerate it. The guards on one (state, step, event, guard input)
@@ -25,7 +25,7 @@ export const NOT_OK_REASONS: Readonly<Record<IssueState, readonly string[]>> = {
   designing: ['question', 'split', 'wait'],
   building: ['cannot', 'no-commit'],
   reviewing: ['changes', 'ci-red', 'conflict'],
-  fixing: ['declined'],
+  fixing: ['declined', 'unchanged'],
   'merge-queue': ['changes', 'ci-red', 'conflict', 'patch', 'policy'],
   parked: [],
   waiting: [],
@@ -288,10 +288,19 @@ const ROWS: readonly Row[] = [
     id: 'T12',
     states: ['fixing'],
     on: 'not-ok',
-    when: r => ownStep(r),
+    when: (r, e) => ownStep(r) && e.reason === 'declined',
     next: 'reviewing',
     change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'every finding declined')])) }),
     via: 'declined',
+  },
+  {
+    id: 'T17',
+    states: ['fixing'],
+    on: 'not-ok',
+    when: (r, e) => ownStep(r) && e.reason === 'unchanged',
+    next: 'reviewing',
+    change: (r, e) => ({ round: r.round + 1, notes: own(...(dataOf(e).notes ?? [textOf(e, 'a finding fixed without a code change')])) }),
+    via: 'unchanged',
   },
   { id: 'T13', states: ['merge-queue'], on: 'ok', when: r => ownStep(r), next: 'closed', change: () => ({ why: 'merged' }), via: 'merged' },
   { id: 'T14', states: ['merge-queue'], on: 'not-ok', when: (r, e) => ownStep(r) && e.reason === 'patch', next: 'reviewing', change: r => ({ approvedPatch: null, round: r.round + 1 }), via: 'patch' },

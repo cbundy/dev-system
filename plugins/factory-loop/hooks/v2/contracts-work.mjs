@@ -39,6 +39,10 @@
 //       "findings": [{ "id": "r2-1", "disposition": "fixed", "reason": "..." }] }
 //     { "result": "declined", "summary": "...",
 //       "findings": [{ "id": "r2-1", "disposition": "declined", "reason": "..." }] }
+//     { "result": "unchanged", "summary": "...", "evidence": "..." | null,
+//       "findings": [{ "id": "r2-1", "disposition": "fixed", "reason": "..." }] }
+//   unchanged: nothing pushed, at least one finding fixed outside the branch (the PR's description
+//   or evidence), the rest declined. A conflict is fixed only by a pushed merge, so never here.
 //
 // Each outcome is the answer with every field present (absent texts null, lists []), heads lower
 // case. Each contract is { check(input, job), summary(input) }: check gives { ok: true, outcome } or
@@ -50,7 +54,7 @@ import { QUESTION_FIELDS, checkQuestionParts } from './question.mjs'
 
 export const DESIGN_KINDS = Object.freeze(['brief', 'question', 'split', 'wait'])
 export const BUILD_RESULTS = Object.freeze(['built', 'cannot'])
-export const FIX_RESULTS = Object.freeze(['fixed', 'declined'])
+export const FIX_RESULTS = Object.freeze(['fixed', 'declined', 'unchanged'])
 export const DISPOSITIONS = Object.freeze(['fixed', 'declined'])
 export const ROLLOUTS = Object.freeze(['merge', 'run-it', 'keep-open'])
 // A brief and a child's body may be long: GitHub takes 65 536 characters in a comment or a body.
@@ -474,7 +478,7 @@ function findingsOf(v, problems) {
 
 function checkFix(input, job) {
   const o = record(input)
-  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"result": "fixed" | "declined", "head", "summary", "evidence", "findings"}'] }
+  if (o === null) return { ok: false, problems: ['the answer must be one JSON object: {"result": "fixed" | "declined" | "unchanged", "head", "summary", "evidence", "findings"}'] }
   const problems = []
   strays(o, ['result', 'head', 'summary', 'evidence', 'findings'], 'a fix answer', problems)
   const result = FIX_RESULTS.find(r => r === o.result)
@@ -485,7 +489,12 @@ function checkFix(input, job) {
   const findings = findingsOf(o.findings, problems)
   if (result === 'declined') {
     if (Array.isArray(o.findings) && o.findings.length === 0) problems.push('a declined fix names each finding it declines, with its reason')
-    for (const f of findings) if (f.disposition !== 'declined') problems.push(`findings: ${f.id} is fixed, so the result is fixed, with the head you pushed`)
+    for (const f of findings) if (f.disposition !== 'declined') problems.push(`findings: ${f.id} is fixed, so the result is fixed, with the head you pushed, or unchanged when you pushed nothing`)
+  }
+  if (result === 'unchanged') {
+    if (Array.isArray(o.findings) && o.findings.length === 0) problems.push('an unchanged fix names each finding, with its reason')
+    else if (findings.length > 0 && findings.every(f => f.disposition === 'declined')) problems.push('findings: every finding is declined, so the result is declined')
+    for (const f of findings) if (f.id === 'conflict' && f.disposition === 'fixed') problems.push('findings: a conflict is fixed only by a pushed merge, so the result is fixed, with the head you pushed')
   }
   const given = new Set(findings.map(f => f.id))
   for (const id of expectedIds(job)) if (!given.has(id)) problems.push(`finding ${id} has no disposition: fix it, or decline it with a reason`)
@@ -495,7 +504,7 @@ function checkFix(input, job) {
 function summaryOfFix(input) {
   const o = record(input) ?? {}
   const n = Array.isArray(o.findings) ? o.findings.length : 0
-  const what = o.result === 'fixed' ? `fixed at ${typeof o.head === 'string' ? o.head.slice(0, 7) : 'no head'}` : o.result === 'declined' ? 'declined' : 'no result'
+  const what = o.result === 'fixed' ? `fixed at ${typeof o.head === 'string' ? o.head.slice(0, 7) : 'no head'}` : o.result === 'declined' ? 'declined' : o.result === 'unchanged' ? 'unchanged' : 'no result'
   return `${what}, ${n} finding${n === 1 ? '' : 's'}`
 }
 

@@ -193,6 +193,8 @@ describe('the review step: the PR first (v2 SPEC 8.1)', () => {
     ])
     // a declined fix may answer a finding with the evidence too
     expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'declined', summary: 'It was there.', evidence: shot }, 'not-ok')])).toEqual([expect.objectContaining({ op: 'ensure', evidence: shot })])
+    // an unchanged fix (nothing pushed) gives the evidence too
+    expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'unchanged', summary: 'Edited the PR.', evidence: shot }, 'not-ok')])).toEqual([expect.objectContaining({ op: 'ensure', evidence: shot })])
     expect(ensureOf([build, step(3, 'fix', NOW - 30 * MIN, { result: 'fixed', summary: 'Fixed the parser.', evidence: null })])).toEqual([expect.objectContaining({ op: 'ensure', evidence: 'npm test: ok' })])
   })
 
