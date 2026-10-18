@@ -110,6 +110,7 @@ Example:
 | `fact` | string | `intervention` | The key of the fact it records, so it is logged and counted once; null for a hand-recorded rescue. |
 | `from_state` | enum | `transition` | The state before; null for a life's first transition. |
 | `head` | string | `finding_handled`, `gate_run`, `merged`, `reviewed`, `test_weakened`, `transition` | The head after the fix step, when known. |
+| `lease_minutes` | integer | `claim_renewed`, `claimed` | How long the claim now holds from this event, in minutes. |
 | `life` | string | `gate_run`, `intervention`, `transition` | Which life of the issue the gate ran in. |
 | `live_differences` | integer | `shadow_read` | How many keys whose answers differ on everything read, push lag included. |
 | `model` | string | `implementer_routed` | The model alias chosen, for example sonnet or opus. |
@@ -227,7 +228,7 @@ A heartbeat extended this device's claim on the issue. Written by callum-flow-cl
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `lease_minutes` | integer | required | no | minimum 1 |  | How long the claim now holds from this event, in minutes. |
+| `lease_minutes` | integer | required | no | minimum 1 | yes | How long the claim now holds from this event, in minutes. |
 
 Example:
 
@@ -249,7 +250,7 @@ This device took the claim on the issue: no other device works on it while the l
 
 | Field | Type | Required | Nullable | Bounds or values | Column | Description |
 | --- | --- | --- | --- | --- | --- | --- |
-| `lease_minutes` | integer | required | no | minimum 1 |  | How long the claim holds without a renewal, in minutes. |
+| `lease_minutes` | integer | required | no | minimum 1 | yes | How long the claim holds without a renewal, in minutes. |
 
 Example:
 

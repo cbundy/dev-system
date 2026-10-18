@@ -123,7 +123,7 @@ RURL=$(url_for "$db" "${db}_reader" "$RPW")
 (umask 077 && printf '%s\n' "$WURL" > "$DEV_SECRETS_DIR/factory-db-writer-url" \
   && printf '%s\n' "$RURL" > "$DEV_SECRETS_DIR/factory-db-reader-url")
 EXPECTED=$(factory_db_expected_version)
-[ "$EXPECTED" = 6 ] || fail "expected version should be 6 for the shipped migrations, got $EXPECTED"
+[ "$EXPECTED" = 7 ] || fail "expected version should be 7 for the shipped migrations, got $EXPECTED"
 for role in writer reader; do
   check $role
   expect 0 "OK" "database $db" "${db}_$role" "schema version $EXPECTED"
@@ -235,10 +235,10 @@ rc=0
 out=$(FACTORY_DB_MIGRATIONS_DIR="$tmpdir/mig-behind" bash -c '. "$1"; factory_db_check writer' _ "$ROOT/images/base/factory-db.sh" 2>&1) || rc=$?
 expect 2 "FAIL" "behind" "factory-db-bootstrap --db $db" "migrations $next..$next"
 echo "ok: schema behind fails with the bootstrap fix"
-q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (7, 'future', 'x')" > /dev/null
+q "$db" "INSERT INTO factory.schema_migrations (version, name, sha256) VALUES (8, 'future', 'x')" > /dev/null
 check writer
 expect 2 "FAIL" "ahead" "pull a newer image"
-q "$db" "DELETE FROM factory.schema_migrations WHERE version = 7" > /dev/null
+q "$db" "DELETE FROM factory.schema_migrations WHERE version = 8" > /dev/null
 echo "ok: schema ahead fails"
 echo "-- only a lower version" > "$tmpdir/mig-ahead/0000_none.sql"
 rc=0

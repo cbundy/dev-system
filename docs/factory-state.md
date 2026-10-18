@@ -10,10 +10,13 @@ and adds a short narrative.
 
 ```
 callum-flow-factory-state [--repo <owner/name>]... [--at <ISO time>] [--format text|json]
-                          [--rule S1..S5=<minutes>]... [--github on|off]
+                          [--rule S1..S5=<minutes>]... [--github on|off] [--source old|new|shadow]
 ```
 
-Exit 0 ok, 2 bad arguments, 1 the required source (`factory.events`) that cannot be read. An optional
+Exit 0 ok, 2 bad arguments (a bad `--source` or `CALLUM_FLOW_FACTORY_STATE_SOURCE` included), 1 the required
+source that cannot be read: `factory.events` for `old` and `shadow`, `factory.event_log` (through
+`dev-query --factory`) for `new`, which also fails with `unknown factory event: <type> v<N>` on an event
+type or version `factory-event-shapes.json` does not list as current. An optional
 source (`nomistakes.runs`, `factory.workers_status`, GitHub) that is missing shows as `n/a: <reason>`
 (`runs` and `workers` in the JSON), so no-mistakes data can never blind a reader of the factory. With
 no `nomistakes.runs`, no run places an issue.
@@ -267,3 +270,27 @@ One per fixture; the exact output is the fixture's `.expected.json`. Times are m
   `waiting` but labelled `factory:parked` (flagged), #202 is `parked` and #203 `queued` (they sort
   before the waiting ones), #204 is labelled `factory:waiting` with no events (`waiting` from GitHub)
   and #205 is `waiting` while another device's claim comment holds it (flagged).
+
+## Sources (old|new|shadow)
+
+The events come from one of two stores ([source switch](factory-events/replay.md#source-switch)): `old`,
+`factory.events` through plain `dev-query`, or `new`, the `factory.event_log` view through
+`dev-query --factory` (named columns only, never the `data` jsonb). `--source` beats
+`CALLUM_FLOW_FACTORY_STATE_SOURCE`; the default is `shadow`, which prints the old answer, exits as the old read
+does and records how the new read differed in `factory/.shadow/factory-state.jsonl` under the events folder. A
+failing or refused new read is only a record (`new_error`). `nomistakes.runs` and `factory.workers_status` come
+from the same place whichever store is chosen, with the same `n/a` handling.
+
+Both reads fill one event shape (type, issue, device, time, PR, branch, the transition's state fields, the
+claim's lease, the closing reason) and one derivation runs over it. On the new side `requeued` is
+`reclaimed`, `claim_renewed` is `renewed`, `finding_handled` is `verdict`, `loop_entry` and `loop_passes` are the
+loop's bookkeeping; `gate_run`, `wind_down`, `reviewed`, `intervention`, `usage`, `untrusted_stripped`,
+`test_weakened`, `claim_lost` and `shadow_read` are ignored by name.
+
+What the shadow comparison leaves out, because the two reports differ there by construction and nowhere else:
+
+- coverage event counts and times (`coverage.events`, `coverage.last_event_at`, `devices[].events`,
+  `devices[].last_event_at`): the new store holds no line of the skipped old states and holds new-only types;
+- the v1 `run` id of an issue: no new event carries a `run_id`;
+- an abandoned final's free-text detail: the old note is free text and the new `reason` an enum, so
+  `abandoned (...)` is compared as `abandoned`.

@@ -108,6 +108,10 @@ lifecycle class, the latest claim type and its device); `CALLUM_FLOW_SHADOW_WIND
 both reads and `CALLUM_FLOW_SHADOW_SETTLE_SECONDS` (default 600) cuts `differences`, while `live_differences`
 counts the whole window.
 
+Tools behind the switch: `callum-flow-factory-state` ([#898](https://github.com/cbundy/dev-system/issues/898),
+default `shadow`; its replay reader is `scripts/factory-events-replay/readers/factory-state.js`, and what its
+shadow comparison leaves out is listed in [factory-state.md](../factory-state.md#sources-oldnewshadow)).
+
 Switched readers and their known differences from `old` (dropped before comparing, in `normalize`):
 
 | Tool | Reader | Known differences |

@@ -217,7 +217,7 @@ variable "remote_control_name_format" {
 # a missing directory (empty, so the push stays off).
 variable "secrets_dir" {
   default     = "/etc/dev-system/secrets"
-  description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url, factory-db-writer-url and factory-db-reader-url (owned 1000:1000, mode 0600). Empty mounts nothing."
+  description = "Directory on the Docker host mounted read-only at /run/secrets/dev-system in every workspace, e.g. holding agentsview-pg-url, factory-db-writer-url and factory-db-reader-url, and per-repo evidence storage under evidence/<owner>/<repo>/ (container-url, write-sas, read-sas; see docs/evidence-storage.md), all owned 1000:1000, mode 0600. Empty mounts nothing."
   type        = string
 }
 
