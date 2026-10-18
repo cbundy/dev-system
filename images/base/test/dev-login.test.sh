@@ -79,7 +79,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case $cmd in
-  new-session) echo "$name" >> "$FIX/tmux.started"; : > "$FIX/session.$name" ;;
+  new-session) echo "$name" >> "$FIX/tmux.started"; env | grep '^DL_' >> "$FIX/tmux.env"; : > "$FIX/session.$name" ;;
   has-session) [ -f "$FIX/session.$name" ]; exit $? ;;
   kill-session) rm -f "$FIX/session.$name" ;;
 esac
@@ -294,6 +294,18 @@ done
 expect_calls 1 "completed attempts cleanup"
 [ ! -f "$FIX/dev-init.args" ] || fail "plain watch must not invoke dev-init"
 
+# --- DL_* hand-offs are never inherited nor leaked (#607) --------------------------------
+reset tok1 "$ok_json"
+rm -f "$FIX/claude-in"
+env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tmp/run" HOSTNAME=testbox \
+  DL_STATES="in in in" DL_WATCH=1 bash "$CMD" start >/dev/null 2>&1
+grep -qx login-claude "$FIX/tmux.started" 2>/dev/null || fail "a stale DL_STATES must not stand in for the real states"
+[ ! -s "$FIX/tmux.env" ] || fail "start leaked into tmux: $(cat "$FIX/tmux.env")"
+reset tok1 "$ok_json"
+rm -f "$FIX/claude-in"
+DL_CACHED=1 dl status --json >/dev/null 2>&1
+expect_calls 1 "an inherited DL_CACHED must not skip the real gh check"
+
 # --- watch backs off, and gives up on gh's scope -----------------------------------------
 reset tok1 "$noscope_json"
 rm -f "$FIX/claude-in"
@@ -311,6 +323,7 @@ timeout 60 env PATH="$bin:$PATH" DEV_SYSTEM_SHARE="$BASE" DEV_LOGIN_RUN_DIR="$tm
 { [ "$(grep -c . "$FIX/tmux.started")" = 1 ] && grep -qx login-claude "$FIX/tmux.started"; } \
   || fail "only one claude attempt, no gh refresh and no codex: $(cat "$FIX/tmux.started")"
 expect_calls 1 "a whole watch"
+[ ! -s "$FIX/tmux.env" ] || fail "watch leaked into tmux: $(cat "$FIX/tmux.env")"
 [ ! -f "$FIX/session.login-claude" ] || fail "watch must clean up Claude's attempt after an external login"
 [ ! -f "$FIX/gh.unexpected" ] || fail "unexpected gh calls: $(cat "$FIX/gh.unexpected")"
 
