@@ -4,8 +4,10 @@
 // reads the conditions that are not known to hold and are due on the GitHub cadence (githubEveryMs),
 // the oldest-checked first, for at most ctx.prBudget reads (none during a GitHub backoff) and none
 // after a rate limit met this pass. A condition read as held stays held while a record waits on
-// it. A tag-contains condition is read with the compare API against the newest release tag
-// (ctx.tag), once per tag: a not-held result is read again only when the tag changes. A read that
+// it. A tag-contains condition is read with the compare API against the newest release tag of its
+// repo (ctx.tag for the loop's own, ctx.tags[repo] for another), once per tag: a not-held result is
+// read again only when that tag changes. An issue-closed condition naming a repo is read with the
+// reader's CALLUM_FLOW_REPO set to it. A read that
 // failed or was skipped leaves the condition open, never held: only a read that
 // shows the fact clears it.
 //
@@ -21,6 +23,12 @@ export function waitKey(c: WaitCondition): string {
   if (c.kind === 'pr-merged') return `pr:${c.pr}`
   if (c.kind === 'issue-closed') return c.repo === undefined ? `issue:${c.issue}` : `issue:${c.repo}#${c.issue}`
   return c.repo === undefined ? `tag:${c.sha}` : `tag:${c.repo}@${c.sha}`
+}
+
+// tagOf: the newest release tag a tag-contains condition is compared against: the loop's own
+// (ctx.tag), or its repo's (ctx.tags); null when none is known.
+function tagOf(ctx: SourceCtx, c: Extract<WaitCondition, { kind: 'tag-contains' }>): string | null {
+  return c.repo === undefined ? ctx.tag : ctx.tags[c.repo] ?? null
 }
 
 // conditionsOf: the distinct conditions the waiting records wait on, by key.
@@ -71,10 +79,11 @@ export async function readWaits(ctx: SourceCtx, kept: Readonly<Record<string, Wa
     .filter(([key, c]) => {
       const w = waits[key]
       if (w?.held === true) return false
-      // a condition on another repo is never read against the loop's own: it stays open until the reads learn it
-      if ('repo' in c && c.repo !== undefined) return false
-      // a tag condition is read once per tag; with no tag known (none released yet, or its read failed) it stays open
-      if (c.kind === 'tag-contains') return ctx.tag !== null && w?.tag !== ctx.tag
+      // a tag condition is read once per tag of its repo; with no tag known (none released yet, or its read failed) it stays open
+      if (c.kind === 'tag-contains') {
+        const tag = tagOf(ctx, c)
+        return tag !== null && w?.tag !== tag
+      }
       return w === undefined || ctx.now - w.at >= everyMs
     })
     .sort(([ka], [kb]) => (waits[ka]?.at ?? -Infinity) - (waits[kb]?.at ?? -Infinity) || ka.localeCompare(kb))
@@ -83,12 +92,15 @@ export async function readWaits(ctx: SourceCtx, kept: Readonly<Record<string, Wa
   for (const [key, c] of due) {
     if (budget <= 0 || ctx.limited()) break
     budget -= 1
-    const argv = c.kind === 'issue-closed' ? issueReadArgv(c.issue) : c.kind === 'pr-merged' ? prWaitArgv(ctx.rt.repo, c.pr) : compareArgv(ctx.rt.repo, ctx.tag ?? '', c.sha)
+    const tag = c.kind === 'tag-contains' ? tagOf(ctx, c) : null
+    const argv = c.kind === 'issue-closed' ? issueReadArgv(c.issue) : c.kind === 'pr-merged' ? prWaitArgv(ctx.rt.repo, c.pr) : compareArgv(c.repo ?? ctx.rt.repo, tag ?? '', c.sha)
+    // an issue of another repo is read through the reader pointed at that repo
+    const env = c.kind === 'issue-closed' && c.repo !== undefined ? { ...ctx.rt.env, CALLUM_FLOW_REPO: c.repo } : undefined
     try {
-      const r = await ctx.run(argv)
+      const r = await ctx.run(argv, undefined, undefined, env)
       const held = r.exitCode === 0 ? heldOf(c, r.stdout) : null
       if (held === null) failed.push(key)
-      else waits[key] = c.kind === 'tag-contains' ? { at: ctx.now, held, tag: ctx.tag ?? undefined } : { at: ctx.now, held }
+      else waits[key] = c.kind === 'tag-contains' ? { at: ctx.now, held, tag: tag ?? undefined } : { at: ctx.now, held }
     } catch {
       failed.push(key)
     }

@@ -80,7 +80,8 @@ const BANNED = [
 // Problems of one block, as readable strings (empty when it is clean).
 // 6b reads `detail`, and the split query `split_into`, fields no event_log column lifts, from factory.event_store; 6b has its own test
 // (tests/metrics-shadow-read.test.js) runs it as the reader role.
-const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0"]);
+// 7a reads the transition's `wait` list (its conditions' repos) from event_store the same way.
+const READS_EVENT_STORE = new Set(["6b. Reader shadow compares #0", "Split trackers closed by the loop #0", "7a. How waits end #0"]);
 
 function problems(sql, id) {
   const text = strip(sql);

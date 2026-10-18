@@ -117,7 +117,7 @@ The loop reads these sources each pass, and no `runs` source (no-mistakes run da
 | `usage` | `usage-check.sh` + `$.session.usage()` | `usageEveryMs` | usage tiers (13.5.2) |
 | `leases` | `treehouse status --json`, holders only; no reflog reads | every pass | the slot pool's holders, read without inference |
 | `checkout` | `git status --porcelain=v2 --branch --untracked-files=no` of the main checkout, and HEAD | `checkoutEveryMs` | a tripwire only (10.7) |
-| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
+| `milestone` | `callum-flow-milestone show next`; `gh release view --repo R --json tagName` for the newest release tag while a stored record waits on a `tag-contains` condition (even when the milestone does not qualify), and the same for each other repo a waiting record's `tag-contains` condition names (kept per repo, dropped once no record names it) | `milestoneEveryMs` | the release task; also yields the numbers of the open issue lines (`openIssues`, PR lines not included), for the reopen case of O3; the tag view is in 8.7 |
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | the records are in 3.3 |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | the PR view of the records |
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
@@ -1385,7 +1385,7 @@ The designer is a reader: it writes nothing to GitHub.
 - **Contract** `design`, through the answer script: `{ kind: "brief" | "question" | "split" | "wait",
   brief, question?, reasons?: { why_split, why_count, why_parts, why_order } (required for a split),
   children?: [{ key, title, body, why, blockedBy: [key | "#N"], ready: boolean }],
-  conditions?: [{ kind: "issue-closed", issue: N } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha }], reason? }`.
+  conditions?: [{ kind: "issue-closed", issue: N, repo? } | { kind: "pr-merged", pr: N } | { kind: "tag-contains", sha, repo? }], reason? }`.
 - **Observable by default.** A brief has an `## Observability` section, and the contract refuses
   one without it: each decision the change adds (a point where an agent or a rule chooses), where
   it is recorded with the facts weighed and the reason, and the `docs/metrics.md` query it
@@ -1417,15 +1417,18 @@ The designer is a reader: it writes nothing to GitHub.
   issue is closed), `pr-merged` (the PR is merged) or `tag-contains` (`{ kind: "tag-contains",
   sha }`: the newest release tag carries that commit; `sha` is 7 to 40 hex digits, stored
   lower-case), N at least 1, never the issue itself and none twice (a sha twice, in any case, is
-  twice); `reason` is one line of at most 500 characters; `brief` is an optional draft, as a
+  twice). `issue-closed` and `tag-contains` take an optional `repo` (`owner/name`, stored
+  lower-case, dropped when it is the job's own repo; refused on `pr-merged` and when malformed): the
+  condition is then about that repo, so an issue naming itself is refused only in the own repo, and
+  the same sha in two repos is not twice. `reason` is one line of at most 500 characters; `brief` is an optional draft, as a
   question's. Stray fields are
   refused as for the other kinds, and `bin/factory-answer` reports "a wait on <n> conditions". The
   step is not-ok(wait) at once, with nothing posted (T16); the entry actions (4.5) then label the
   issue, post the one comment and make the `blocked_by` links. The designer never offers the owner
   a release: whether to cut one is the judge's decision (11), so a release wait is a `tag-contains`
   wait: for example a change that ships in two releases waits until a release tag carries the
-  commit its readers ship in. The transition note's `wait` token writes it as `tag:<sha>`.
-  `bin/factory-answer` also reads each condition on GitHub for the job's repo before it records the
+  commit its readers ship in. The transition note's `wait` token writes it as `tag:<sha>` (`tag:<repo>@<sha>` with a repo; an issue is `issue:<repo>#<n>`). No `blocked_by` link is made for another repo's issue, and the waiting comment names it as `owner/name#N`.
+  `bin/factory-answer` also reads each condition on GitHub, for its own `repo` or else the job's repo, before it records the
   wait (`hooks/v2/wait-check.mjs`, #980; all conditions at once, each `gh` call limited to 15 s): a
   `tag-contains` sha must be a commit of the repo and the repo must have a release, an `issue-closed`
   issue must exist, a `pr-merged` PR must exist and not be closed unmerged. A definite negative (HTTP
@@ -1433,18 +1436,18 @@ The designer is a reader: it writes nothing to GitHub.
   condition; an indeterminate read (no `gh`, network, rate limit, auth, timeout) records the wait and
   names the unchecked conditions on stderr. The loop's turn-end re-check stays shape-only.
 - **The loop checks, with no model call** (2.4, `sources-waits.ts`): an issue condition holds when
-  `callum-flow-issue-read --json N` shows it closed, a PR condition when `gh pr view N --json
+  `callum-flow-issue-read --json N` shows it closed (for an issue of another repo, run with `CALLUM_FLOW_REPO` set to that repo), a PR condition when `gh pr view N --json
   state,mergedAt` shows it merged. A failed or skipped read (a GitHub backoff, a rate limit met this
   pass) keeps the condition open and never clears it. A tag condition is read by the compare of
-  the commit with the newest release tag, `gh api repos/R/compare/<tag>...<sha> --jq .status`:
+  the commit with the newest release tag of its repo, `gh api repos/R/compare/<tag>...<sha> --jq .status`:
   `behind` or `identical` holds, `ahead` or `diverged` does not, and a failed read, no release yet
   or any other output keeps it open. A sha read for the current tag is read again only when the tag
   changes, and a held one stays held. The newest tag is read with gh only (`gh release view --repo R
   --json tagName`) on the milestone cadence whenever a stored record waits on a `tag-contains`
-  condition, whether or not the Next milestone qualifies (the full release read, when it qualifies,
+  condition of the loop's own repo (for another repo's condition, that repo's newest tag, per repo, on the same cadence; its sha is read again only when that repo's tag changes), whether or not the Next milestone qualifies (the full release read, when it qualifies,
   refreshes it too). When every condition holds the record takes `cleared` (C1), and the cleared
   note is the resumed designer's; for a tag condition it names the tag the read saw: "release
-  v0.51.0 contains 35bb655".
+  v0.51.0 contains 35bb655", and "release v1.2.0 of o/n contains 35bb655" or "o/n#57 closed" for another repo. Rule O3 (11) counts only own-repo tag waits.
 
 ## 9. The merge queue
 

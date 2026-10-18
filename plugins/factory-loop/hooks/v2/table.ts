@@ -9,6 +9,7 @@
 // Pure: the time is the caller's `now`, the settings the caller's Config.
 import type { Config, Ms } from '../types'
 import { EVENT_KINDS, ISSUE_STATES, OUTSIDE_CAUSES, STATE_STEP } from './types'
+import { waitKey } from './sources-waits'
 import type { EmitState, IssueRecord, IssueState, Row, TableEvent, WaitCondition } from './types'
 
 // --- the states the rows name ------------------------------------------------------------------------
@@ -41,8 +42,8 @@ export type EventData = {
   // a step's result in words: the builder's reason, the findings, the failed checks, the conflict,
   // the guard's FAIL lines
   text?: string
-  // C1: the release tag the tag-contains reads compared against
-  tag?: string
+  // C1: the release tag each tag-contains read compared against, by the condition's waitKey
+  tags?: Record<string, string>
   // a designer's or the triage's question for the owner (T3, X4)
   question?: string
   // T2: the brief comment's URL, once the loop posted it
@@ -180,9 +181,13 @@ function lastTwo(r: IssueRecord, e: TableEvent): string {
 const none = () => ({})
 
 // clearedNote: the line a resumed designer reads in its notes, naming each condition that held.
-function clearedNote(wait: readonly WaitCondition[], tag: string | undefined): string {
+function clearedNote(wait: readonly WaitCondition[], tags: Record<string, string> | undefined): string {
   const held = wait.map(c =>
-    c.kind === 'issue-closed' ? `#${c.issue} closed` : c.kind === 'pr-merged' ? `PR #${c.pr} merged` : `release ${tag ?? 'tag'} contains ${c.sha}`,
+    c.kind === 'issue-closed'
+      ? `${c.repo ?? ''}#${c.issue} closed`
+      : c.kind === 'pr-merged'
+        ? `PR #${c.pr} merged`
+        : `release ${tags?.[waitKey(c)] ?? 'tag'}${c.repo === undefined ? '' : ` of ${c.repo}`} contains ${c.sha}`,
   )
   // not ending on "closed": a prompt rewrites a closing keyword at a line's end (prompts.ts neutral)
   return `The loop resumed this: ${held.join(', ')}; every condition holds.`
@@ -391,7 +396,7 @@ const ROWS: readonly Row[] = [
     states: ['waiting'],
     on: 'cleared',
     next: 'queued',
-    change: (r, e) => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [], dataOf(e).tag)) }),
+    change: (r, e) => ({ resumeTo: r.resumeTo ?? 'designing', attempt: 1, triages: 0, cut: false, notes: own(clearedNote(r.wait ?? [], dataOf(e).tags)) }),
     via: 'cleared',
   },
   // the parked state (S6)

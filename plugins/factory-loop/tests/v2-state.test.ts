@@ -857,6 +857,26 @@ describe('waiting (v2 SPEC 3.1, 4.3, 4.4, 11)', () => {
     expect(of(r, 133).filter(a => a.kind === 'link')).toEqual([expect.objectContaining({ kind: 'link', blocker: 58, key: entryKey(entered, 'link/58') })])
   })
 
+  test('another repo\'s conditions: the texts name the repo, the cleared note names each repo\'s tag, and the own repo\'s texts do not change', () => {
+    const wait = [
+      { kind: 'issue-closed' as const, issue: 57, repo: 'o/n' },
+      { kind: 'tag-contains' as const, sha: '35bb655', repo: 'o/n' },
+      { kind: 'tag-contains' as const, sha: '35bb655' },
+    ]
+    const f = rec(134, { state: 'waiting', step: null, wait, resumeTo: 'designing', notes: ['x'], seq: 6, seqAt: waitAt, since: waitAt })
+    const s = (v2: Partial<V2State>) => plan(withLedger(world([f], {}, v2), settled(f)))
+    const all = { waits: { 'issue:o/n#57': { at: NOW - MIN, held: true }, 'tag:o/n@35bb655': { at: NOW - MIN, held: true, tag: 'v1.2.0' }, 'tag:35bb655': { at: NOW - MIN, held: true, tag: 'v0.51.0' } } }
+    expect(transitionOf(s(all), 134)).toMatchObject({ row: 'C1', next: { notes: ['The loop resumed this: o/n#57 closed, release v1.2.0 of o/n contains 35bb655, release v0.51.0 contains 35bb655; every condition holds.'] } })
+    expect(said(s({}), 134)).toEqual(['waiting: for o/n#57 (still open), no release tag of o/n contains 35bb655 yet, no release tag contains 35bb655 yet'])
+    const entered = rec(134, { state: 'waiting', step: null, wait, resumeTo: 'designing', notes: ['x'], seq: 6, seqAt: waitAt, since: waitAt })
+    const r = plan(withLedger(world([entered]), [transitioned(entered, 'T16', 'designing', 'wait')]))
+    const comment = of(r, 134).find((a): a is Extract<Action, { kind: 'comment' }> => a.kind === 'comment')
+    expect(comment?.body).toContain('issue o/n#57 must be closed on GitHub')
+    expect(comment?.body).toContain('release tag of o/n must contain commit 35bb655')
+    expect(comment?.body).toContain('release tag must contain commit 35bb655')
+    expect(of(r, 134).filter(a => a.kind === 'link')).toEqual([])
+  })
+
   test('T16: a designer that answers wait enters waiting at once, with its conditions, no owner tell; its entry posts one comment, links each issue condition and labels factory:waiting', () => {
     const d = rec(131, { state: 'designing', step: 'design', seq: 5, seqAt: NOW - 5 * MIN, since: NOW - 5 * MIN })
     const answer = { kind: 'wait', brief: null, question: null, conditions: WAIT, reason: 'needs #57 and PR #812', reasons: null, children: [] }

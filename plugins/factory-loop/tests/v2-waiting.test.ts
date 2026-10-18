@@ -261,12 +261,15 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
   // unlisted one fails), counting what ran
   function ctx(records: IssueRecord[], answers: Record<string, string | null>, over: Partial<SourceCtx> = {}) {
     const ran: string[] = []
+    const envs: (Record<string, string> | undefined)[] = []
     const c = {
       now: NOW,
       rt: { repo: REPO },
-      run: async (argv: string[]) => {
+      tags: {},
+      run: async (argv: string[], _stdin?: string, _t?: number, env?: Record<string, string>) => {
         const line = argv.join(' ')
         ran.push(line)
+        envs.push(env)
         const out = answers[line]
         return out === undefined || out === null ? { exitCode: 1, stdout: '', stderr: 'HTTP 502' } : { exitCode: 0, stdout: out, stderr: '' }
       },
@@ -275,7 +278,7 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
       limited: () => false,
       ...over,
     } as unknown as SourceCtx
-    return { c, ran }
+    return { c, ran, envs }
   }
   const ISSUE = (n: number, state: string) => JSON.stringify({ issue: { number: n, id: 9000 + n, state }, stripped: 0 })
   const PR = (n: number) => `gh pr view ${n} --repo ${REPO} --json state,mergedAt`
@@ -293,14 +296,57 @@ describe('the conditions\' reads (v2 SPEC 2.4, 4.4)', () => {
     expect(heldOf(pr(812), JSON.stringify({ state: 'weird' }))).toBeNull()
   })
 
-  test('waitKey: the long forms carry the repo; a condition with repo is never read against the loop\'s own repo and stays open, while a sibling without repo is read', async () => {
+  test('waitKey: the long forms carry the repo; a sibling without repo is read against the loop\'s own repo', async () => {
     const fi: WaitCondition = { kind: 'issue-closed', issue: 57, repo: 'o/n' }
     const ft: WaitCondition = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
     expect([waitKey(issue(57)), waitKey(fi), waitKey(pr(8)), waitKey({ kind: 'tag-contains', sha: '35bb655' }), waitKey(ft)]).toEqual(['issue:57', 'issue:o/n#57', 'pr:8', 'tag:35bb655', 'tag:o/n@35bb655'])
-    const c = ctx([waiting(1, [fi, ft, issue(57)])], { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
+    // no tag of o/n is known: its two conditions are not read; the own issue is
+    const c = ctx([waiting(1, [ft, issue(57)])], { 'callum-flow-issue-read --json 57': ISSUE(57, 'closed') }, { tag: 'v1' } as Partial<SourceCtx>)
     const out = await readWaits(c.c, {}, EVERY)
     expect(c.ran).toEqual(['callum-flow-issue-read --json 57'])
     expect(out).toEqual({ waits: { 'issue:57': { at: NOW, held: true } }, failed: [] })
+    expect(c.envs).toEqual([undefined])
+  })
+
+  describe('a condition on another repo (#981)', () => {
+    const ft = (sha = '35bb655'): WaitCondition => ({ kind: 'tag-contains', sha, repo: 'o/n' })
+    const cmpOn = (tag: string, sha: string) => `gh api repos/o/n/compare/${tag}...${sha} --jq .status`
+    const KEY = 'tag:o/n@35bb655'
+
+    test('a foreign tag is compared in its own repo against its own tag; ahead waits, behind holds; the loop\'s own tag changing does not read it again', async () => {
+      const records = [waiting(1, [ft()])]
+      const a = ctx(records, { [cmpOn('v1.1.0', '35bb655')]: 'ahead\n' }, { tag: 'v0.9.0', tags: { 'o/n': 'v1.1.0' } } as Partial<SourceCtx>)
+      const first = await readWaits(a.c, {}, EVERY)
+      expect(a.ran).toEqual([cmpOn('v1.1.0', '35bb655')])
+      expect(first).toEqual({ waits: { [KEY]: { at: NOW, held: false, tag: 'v1.1.0' } }, failed: [] })
+      // the loop's own tag moves: nothing is read
+      const own = ctx(records, {}, { tag: 'v0.10.0', tags: { 'o/n': 'v1.1.0' }, now: NOW + HOUR } as Partial<SourceCtx>)
+      expect((await readWaits(own.c, first.waits, EVERY)).waits).toEqual(first.waits)
+      expect(own.ran).toEqual([])
+      // o/n's tag moves and carries the commit
+      const next = ctx(records, { [cmpOn('v1.2.0', '35bb655')]: 'behind\n' }, { tag: 'v0.9.0', tags: { 'o/n': 'v1.2.0' }, now: NOW + MIN } as Partial<SourceCtx>)
+      expect((await readWaits(next.c, first.waits, EVERY)).waits).toEqual({ [KEY]: { at: NOW + MIN, held: true, tag: 'v1.2.0' } })
+    })
+
+    test('a repo with no release (tag null) or no tag read yet keeps the condition open and is not read', async () => {
+      for (const tags of [{ 'o/n': null }, {}]) {
+        const c = ctx([waiting(1, [ft()])], {}, { tag: 'v0.9.0', tags } as Partial<SourceCtx>)
+        expect(await readWaits(c.c, {}, EVERY)).toEqual({ waits: {}, failed: [] })
+        expect(c.ran).toEqual([])
+      }
+    })
+
+    test('a foreign issue is read through the reader with CALLUM_FLOW_REPO set; closed holds, open and no state stay open', async () => {
+      const fi: WaitCondition = { kind: 'issue-closed', issue: 57, repo: 'o/n' }
+      const read = 'callum-flow-issue-read --json 57'
+      const closed = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'closed') }, { rt: { repo: REPO, env: { A: '1' } } } as unknown as Partial<SourceCtx>)
+      expect(await readWaits(closed.c, {}, EVERY)).toEqual({ waits: { 'issue:o/n#57': { at: NOW, held: true } }, failed: [] })
+      expect(closed.envs).toEqual([{ A: '1', CALLUM_FLOW_REPO: 'o/n' }])
+      const open = ctx([waiting(1, [fi])], { [read]: ISSUE(57, 'open') })
+      expect((await readWaits(open.c, {}, EVERY)).waits['issue:o/n#57']?.held).toBe(false)
+      const nostate = ctx([waiting(1, [fi])], { [read]: JSON.stringify({ issue: {}, stripped: 0 }) })
+      expect(await readWaits(nostate.c, {}, EVERY)).toEqual({ waits: {}, failed: ['issue:o/n#57'] })
+    })
   })
 
   test('each distinct condition of the waiting records is read once with no model call; other states\' records are not read; a read that shows it held is kept and not read again', async () => {
