@@ -123,7 +123,7 @@ export const CASES = Object.freeze([
     },
     problems: [
       'conditions[0].sha "xyz" must be 7 to 40 hex characters (a commit sha)',
-      'extra is not a field of conditions[1] (only kind, sha)',
+      'extra is not a field of conditions[1] (only kind, sha, repo)',
       'conditions[2] repeats tag-contains:35bb655',
     ],
   },

@@ -452,6 +452,19 @@ test("a wait whose facts hold is recorded; the release is read once for several 
   assert.equal(merged.code, 0, merged.err);
 });
 
+test("a wait condition that names a repo is read in that repo, and is recorded with the repo (#981)", () => {
+  const r = answerWait(waitOf({ kind: "tag-contains", sha: "bd2fee14", repo: "o/n" }, { kind: "issue-closed", issue: 57, repo: "o/n" }));
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(JSON.parse(fs.readFileSync(r.file, "utf8")).answer.conditions, [
+    { kind: "tag-contains", sha: "bd2fee14", repo: "o/n" },
+    { kind: "issue-closed", issue: 57, repo: "o/n" },
+  ]);
+  assert.ok(r.calls.includes("api repos/o/n/commits/bd2fee14 --jq .sha"), r.calls.join("|"));
+  assert.ok(r.calls.includes("release view --repo o/n --json tagName"), r.calls.join("|"));
+  assert.ok(r.calls.some((c) => c.startsWith("api repos/o/n/issues/57")), r.calls.join("|"));
+  assert.ok(!r.calls.some((c) => c.includes("cbundy/dev-system")), r.calls.join("|"));
+});
+
 test("a gh that cannot decide records the wait and names the unchecked conditions on stderr", () => {
   for (const env of [{ STUB_ISSUE: "neterr" }, { STUB_ISSUE: "ratelimit" }, { STUB_ISSUE: "404x" }]) {
     const r = answerWait(waitOf(ISSUE), env);

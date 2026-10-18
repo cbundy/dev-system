@@ -7,7 +7,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { DEFAULT_CONFIG, EMPTY_CONTROL, controlFrom, loadConfig, parseDuration } from '../hooks/config'
 import { EVENTS_SQL, LOOP_NOTE_MAX, deriveLedger, entryFromLoop, eventsFromRows, factsOf, loopEventArgs, loopNote, runsFromEvents } from '../hooks/derive'
 import type { FactoryEvent } from '../hooks/derive'
-import { newestTag, readMilestone, waitsOnTag } from '../hooks/observe-milestone'
+import { newestTag, readMilestone, repoTags, tagRepos, waitsOnTag } from '../hooks/observe-milestone'
 import type { MilestoneCache } from '../hooks/observe-milestone'
 import { GITHUB_BACKOFF_MS, emptyCache, observe } from '../hooks/observe'
 import type { Cache, Io, Observation, Runtime, Stored } from '../hooks/observe'
@@ -406,6 +406,43 @@ describe('parse', () => {
         expect(cache.release?.value.tag).toBe('v0.48.0')
         expect(cache.tag).toEqual({ at: 5000, value: 'v0.48.0' })
         expect(calls.filter((c) => c[1] === 'release')).toHaveLength(1)
+      })
+
+      test('another repo\'s tag: read per repo on the cadence while a record names it, dropped when none does; the loop\'s own tag is not read for it', async () => {
+        const cache: MilestoneCache = {}
+        const calls: string[][] = []
+        const run = async (argv: string[]) => {
+          calls.push(argv)
+          if (argv[0] === 'callum-flow-milestone') return ok(OPEN)
+          const repo = argv[argv.indexOf('--repo') + 1]
+          return repo === 'o/none' ? fail('release not found') : repo === 'o/down' ? fail() : ok(`{"tagName":"tag-of-${repo}"}`)
+        }
+        const at = (now: number, repos: string[]) => readMilestone(cache, { ...o(run, now), tagRepos: repos })
+        await at(5000, ['o/n', 'o/none'])
+        expect(calls.filter(c => c[1] === 'release').map(c => c[c.indexOf('--repo') + 1])).toEqual(['o/n', 'o/none'])
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n', 'o/none': null })
+        expect(cache.tag).toBeUndefined()
+        // inside the cadence nothing is read again; after it, each is
+        calls.length = 0
+        await at(5500, ['o/n', 'o/none'])
+        expect(calls.filter(c => c[1] === 'release')).toHaveLength(0)
+        await at(6000, ['o/n', 'o/none', 'o/down'])
+        expect(calls.filter(c => c[1] === 'release')).toHaveLength(3)
+        // a failed read keeps the last value (here none yet), and a repo no record names is dropped
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n', 'o/none': null })
+        await at(6100, ['o/n'])
+        expect(repoTags(cache)).toEqual({ 'o/n': 'tag-of-o/n' })
+        const kept: MilestoneCache = { tags: { 'o/down': { at: 1, value: 'v9' } } }
+        await readMilestone(kept, { ...o(run, 5000), tagRepos: ['o/down'] })
+        expect(repoTags(kept)).toEqual({ 'o/down': 'v9' })
+      })
+
+      test('tagRepos lists the distinct other repos of waiting records; waitsOnTag ignores a condition that names a repo', () => {
+        const foreign = { kind: 'tag-contains', sha: '35bb655', repo: 'o/n' }
+        const records = [{ state: 'waiting', wait: [foreign, { kind: 'issue-closed', repo: 'x/y' }] }, { state: 'waiting', wait: [foreign, { ...foreign, repo: 'a/b' }] }, { state: 'designing', wait: [{ ...foreign, repo: 'z/z' }] }]
+        expect(tagRepos(records)).toEqual(['a/b', 'o/n'])
+        expect(waitsOnTag(records)).toBe(false)
+        expect(waitsOnTag([...records, { state: 'waiting', wait: [{ kind: 'tag-contains', sha: '35bb655' }] }])).toBe(true)
       })
 
       test('newestTag: the newer of the release read and the tag view; waitsOnTag: waiting records with a tag-contains condition', () => {

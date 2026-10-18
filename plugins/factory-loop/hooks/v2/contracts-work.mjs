@@ -83,6 +83,7 @@ export const WAIT_KINDS = Object.freeze(['issue-closed', 'pr-merged', 'tag-conta
 // A child's key goes into its ledger key (keys.ts childKey) and its hidden marker.
 export const CHILD_KEY = /^[a-z0-9][a-z0-9-]{0,23}$/
 const SHA = /^[0-9a-f]{7,40}$/i
+const REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
 const FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/
 const BRIEF_HEADING = /^\s*##\s+Design brief/
 
@@ -312,7 +313,7 @@ function partsOf(p) {
 }
 
 // conditionsOf: a wait's conditions, as the loop stores them; every problem at once.
-function conditionsOf(v, problems, self) {
+function conditionsOf(v, problems, self, ownRepo) {
   if (!Array.isArray(v)) {
     problems.push(`conditions must be a list of ${WAIT_CONDITIONS.min} to ${WAIT_CONDITIONS.max} conditions { kind: ${WAIT_KINDS.join(' | ')}, issue | pr | sha }`)
     return []
@@ -332,39 +333,50 @@ function conditionsOf(v, problems, self) {
       problems.push(`${where}.kind ${show(c.kind)} is not one of ${WAIT_KINDS.join(', ')}`)
       return
     }
+    const withRepo = kind !== 'pr-merged'
+    let repo
+    if (withRepo && c.repo !== undefined && c.repo !== null) {
+      if (typeof c.repo !== 'string' || !REPO.test(c.repo)) {
+        problems.push(`${where}.repo ${show(c.repo)} must be owner/name (letters, digits, . _ -)`)
+        return
+      }
+      const lower = c.repo.toLowerCase()
+      if (lower !== String(ownRepo).toLowerCase()) repo = lower
+    }
     if (kind === 'tag-contains') {
-      strays(c, ['kind', 'sha'], where, problems)
+      strays(c, ['kind', 'sha', 'repo'], where, problems)
       if (typeof c.sha !== 'string' || !SHA.test(c.sha)) {
         problems.push(`${where}.sha ${show(c.sha)} must be 7 to 40 hex characters (a commit sha)`)
         return
       }
       const sha = c.sha.toLowerCase()
-      if (seen.has(`${kind}:${sha}`)) {
-        problems.push(`${where} repeats ${kind}:${sha}`)
+      const id = repo === undefined ? `${kind}:${sha}` : `${kind}:${repo}@${sha}`
+      if (seen.has(id)) {
+        problems.push(`${where} repeats ${id}`)
         return
       }
-      seen.add(`${kind}:${sha}`)
-      out.push({ kind, sha })
+      seen.add(id)
+      out.push(repo === undefined ? { kind, sha } : { kind, sha, repo })
       return
     }
     const field = kind === 'issue-closed' ? 'issue' : 'pr'
-    strays(c, ['kind', field], where, problems)
+    strays(c, withRepo ? ['kind', field, 'repo'] : ['kind', field], where, problems)
     const n = c[field]
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
       problems.push(`${where}.${field} ${show(n)} must be a whole number of at least 1`)
       return
     }
-    if (kind === 'issue-closed' && n === self) {
+    if (kind === 'issue-closed' && n === self && repo === undefined) {
       problems.push(`${where}.issue ${n} is the issue itself, which stays open until its work is done, so the wait would never end`)
       return
     }
-    const id = `${kind}:${n}`
+    const id = kind === 'issue-closed' && repo !== undefined ? `${kind}:${repo}#${n}` : `${kind}:${n}`
     if (seen.has(id)) {
       problems.push(`${where} repeats ${id}`)
       return
     }
     seen.add(id)
-    out.push(kind === 'issue-closed' ? { kind, issue: n } : { kind, pr: n })
+    out.push(kind === 'issue-closed' ? (repo === undefined ? { kind, issue: n } : { kind, issue: n, repo }) : { kind, pr: n })
   })
   return out
 }
@@ -397,7 +409,7 @@ function checkDesign(input, job) {
   }
   let wait = {}
   if (kind === 'wait') {
-    const conditions = conditionsOf(o.conditions, problems, job.issue)
+    const conditions = conditionsOf(o.conditions, problems, job.issue, job.repo)
     const reason = text(o, 'reason', LIMITS.waitReason, 'required', problems)
     oneLine(reason, 'reason', problems)
     wait = { conditions, reason }
