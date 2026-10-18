@@ -219,7 +219,7 @@ check "the export query in docs/metrics.md runs and callum-flow-evaluate reads i
 # with GitHub off the tool must place each on its run, lower-casing the repo.
 factory_state_query() {
   local out
-  out=$(docker exec "$RUN_ID-b" callum-flow-factory-state --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
+  out=$(docker exec "$RUN_ID-b" callum-flow-factory-state --source old --repo acme/widgets --at 2023-11-16T00:00:00Z --github off --format json) || return 1
   printf '%s' "$out" | node -e '
     const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
     if (r.repos.length !== 1 || r.repos[0].repo !== "acme/widgets" || r.at_source !== "--at") process.exit(1);

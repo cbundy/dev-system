@@ -155,7 +155,7 @@
 # --worktree. This is the one place the branch-to-run lookup lives:
 # callum-flow-merge-guard asks the watcher instead of parsing anything itself.
 #
-# --once (docs/factory-loop/v2/SPEC.md 13.3.4, DECISIONS D-20) is one poll for the
+# --once (docs/factory-loop/v2/SPEC.md 13.3.4) is one poll for the
 # factory loop, not a watch: it classifies every watched branch's newest run as
 # above, prints one line per branch whose newest run is not completed, in the
 # line format above, and exits 0. Besides the actionable states it prints

@@ -67,7 +67,7 @@ it too. (`/plugin` does not work inside the desktop app.)
 - `FACTORY_HUD_SOURCE` picks the store the counts read: `old`, `new` or `shadow`. The HUD
   reads it once at session start and sets `CALLUM_FLOW_FACTORY_STATE_SOURCE` to it for each
   `callum-flow-factory-state` run. Unset or empty leaves factory-state's own default
-  (`shadow`). Any other value is ignored, with one log line at session start.
+  (`new`); `FACTORY_HUD_SOURCE=old` switches back. Any other value is ignored, with one log line at session start.
 - Uninstall with `claude plugin uninstall factory-hud@callum`.
 
 ## How it works

@@ -12,7 +12,7 @@
 //          [--source old|new|shadow] [--new-events <file>]
 //
 // --source picks the event store (cbundy/dev-system#899; docs/factory-events/replay.md, "Source switch"),
-// else CALLUM_FLOW_EVALUATE_SOURCE, else shadow. old reads the old log (--events, or the default
+// else CALLUM_FLOW_EVALUATE_SOURCE, else new (the default; old is the way back). old reads the old log (--events, or the default
 // file); new reads the new events: the local log ${CALLUM_EVENTS_DIR}/factory/<owner>__<name>.jsonl,
 // or with --new-events a file of factory.event_log rows (docs/metrics.md has the export). shadow
 // prints the old report and records how the new one differed in factory/.shadow/evaluate.jsonl.
@@ -1649,7 +1649,7 @@ function toMarkdown(r) {
 async function main(argv, env = process.env) {
   let opts;
   try {
-    const rs = loadShared('factory-source.js', env).resolveSource('evaluate', argv, env, 'shadow');
+    const rs = loadShared('factory-source.js', env).resolveSource('evaluate', argv, env, 'new');
     opts = parseArgs(rs.argv);
     opts.source = rs.source;
   } catch (e) {

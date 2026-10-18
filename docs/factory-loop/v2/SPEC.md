@@ -1818,8 +1818,7 @@ safeguards remain:
   read makes the result unknown, never not-ok (`totality/T-20`).
 - **Stopping.** At the next seq the entry actions stop the old step: TaskStop for its agent when
   it is still listed at work (13.6.1, `stop-agent`), then `factory-slot kill <path>`, both best
-  effort (4.5). There is no grace period and no inference from a listed status (D-71 and D-75
-  are retired).
+  effort (4.5). There is no grace period and no inference from a listed status.
 - **`factory-slot kill`** sends SIGTERM to every process whose working directory is the slot or
   inside it, and SIGKILL to survivors after 5 seconds. It prints `KILLED <n>`, as `prepare` and
   `free` do when they end a slot's processes; the slot action's outcome keeps n and its summary
@@ -1978,7 +1977,7 @@ still running is `stale`: the loop plans normally again from that pass, removes 
 ## 11. Releases and parking
 
 - **Merges never wait for releases.** No rule holds a green, reviewed PR for a release, a bump, a
-  Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold (D-52) are
+  Run it or a template change (OB:89-91). v1's sequencing call (M5) and run-it hold are
   gone (14.1).
 - **Releases** are cut by the release task (O3, kept). While the Next milestone has no open item and
   at least one closed, `task(release)` wakes the judge as an hourly review (at most one per UTC
@@ -2305,7 +2304,7 @@ the labels), and, when the pass does not act, `CALLUM_EVENTS_DIR` (13.11.1).
 | `allowActOutsideOrchestrator` | `false` | act mode without `DEV_ROLE=orchestrator`, for a testbed (13.11.2) |
 | `trace` | `false` | trace mode (13.12.1): one timing record per pass. The workspace file's `trace`, which `/factory trace on\|off` writes, overrides it |
 | `traceMaxBytes` | 104857600 (100 MiB) | the trace files' total size: the oldest go first, and today's is cut short rather than pass it (13.12.1) |
-| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-73, D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
+| `answerChannel` | `script` | how the spawn prompts and the repair message ask agents to answer (13.6.3, 13.7.3a): `script`, through the checked answer script `bin/factory-answer`; `tool`, through their answer tools; `text`, with the text contract alone. v2's contracts use the script only (10.8). `script` is a temporary workaround and the default: `tool` is the intended design, but on Claude Code 2.1.296 and 2.1.299 an agent the loop spawns from its timer never reaches the loop's tool hook, while its Bash works (13.13, DECISIONS D-74). It replaced `answerTools` (#560), which is named as replaced and not read. The workspace file's `answerChannel` overrides it |
 | `passEveryMs` | `60s` | the timer |
 | `minimumReleaseCadenceMs` | `6h` | the repo's minimum release cadence, at least `1h`: the age by which the oldest unreleased merge should have shipped; the O3 wake carries it as `cadence` |
 | `titleEveryMs` | `5m` | the session title is renamed at most this often (13.9.1) |
@@ -3233,8 +3232,7 @@ later child of #684.
 - **The mod API is early access**: the plugin pins Claude Code 2.1.296 in its README, and the
   spike's checks are re-run before each upgrade.
 - **GitHub reads in the shadow workspace**: since the owner approved a login on 2026-10-12, the
-  shadow reads labels, blockers and sub-issues live, so it can judge claims (DECISIONS D-32 is
-  superseded).
+  shadow reads labels, blockers and sub-issues live, so it can judge claims.
 - **Agents' tools**: the loop spawns its own agent types (13.6.1), which list their answer tool
   and ToolSearch. Only the testbed can prove three things: that a mod-registered tool
   named in a plugin agent's `tools:` line is reachable through ToolSearch; that the call carries
@@ -3757,7 +3755,7 @@ and the owner's two structural decisions. They are settled.
 - **Decision:** R2 restarts at once except during a queue action or the release task, on a pass
   that admits nothing else (what it would start would only be cut); a running step it cuts
   re-runs free (U1).
-- **Alternatives:** v1's drain (D-15, D-53); waiting for agent steps.
+- **Alternatives:** v1's drain (D-15); waiting for agent steps.
 - **Why:** steps are re-runnable and pushed work survives; the drain held the factory for hours.
 
 ### Foundation helpers are copied, not moved, until the delete wave
@@ -3910,8 +3908,8 @@ limbo map as G1 records them. Checks:
 - #467's and #571's merge holds do not happen;
 - triage calls and parks are counted against v1's 13 judge wakes and its escalations.
 
-The existing replay harness also runs with `--planner v2` on the recorded windows in
-`docs/factory-loop/replay/`, for claims and titles.
+The existing replay harness also runs with `--planner v2` on a recorded window, for claims and titles.
+Its results are not kept in the repo: the harness writes only to the `--out` folder it is given.
 
 ### 17.3 Fault drills on cbundy/dev-system-scratch
 

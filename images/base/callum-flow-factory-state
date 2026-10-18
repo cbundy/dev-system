@@ -12,8 +12,8 @@
 //          [--rule S1..S5=<minutes>]... [--github on|off] [--source old|new|shadow]
 //
 // Source switch (cbundy/dev-system#898, docs/factory-events/replay.md): `old` reads the events from
-// factory.events, `new` from the factory.event_log view through `dev-query --factory`, `shadow` (the
-// default) prints the old answer and records in factory/.shadow/factory-state.jsonl how the new
+// factory.events, `new` (the default) from the factory.event_log view through `dev-query --factory`, `shadow`
+// prints the old answer and records in factory/.shadow/factory-state.jsonl how the new
 // read differed. --source beats CALLUM_FLOW_FACTORY_STATE_SOURCE. Both reads fill one common event
 // shape (mapOldRow, mapEventLogRow) and one derivation runs over it.
 //
@@ -167,7 +167,7 @@ WHERE r.repo IS NOT NULL AND r.created_at <= :'at'::timestamptz AND ${REPO_FILTE
 function parseArgs(argv, env = process.env) {
   let resolved;
   try {
-    resolved = factorySource().resolveSource('factory-state', argv, env, 'shadow');
+    resolved = factorySource().resolveSource('factory-state', argv, env, 'new');
   } catch (e) {
     if (e && e.code === 'USAGE') throw new UsageError(e.message);
     throw e;

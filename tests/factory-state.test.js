@@ -478,7 +478,7 @@ const shadowRecords = () => {
 };
 const AT = ["--at", "2026-10-10T12:00:00Z", "--github", "off", "--format", "json"];
 
-test("source: a bad --source or variable exits 2 with the usage; the flag beats the variable; shadow is the default", () => {
+test("source: a bad --source or variable exits 2 with the usage; the flag beats the variable; new is the default, old the way back", () => {
   const bad = cli([...AT, "--source", "bad"]);
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /invalid source 'bad' from the --source flag: use one of old, new, shadow/);
@@ -494,7 +494,15 @@ test("source: a bad --source or variable exits 2 with the usage; the flag beats 
   assert.equal(viaEnv.calls.some((c) => c.marker === "-- fs:events"), false, "the variable chose new");
   const dflt = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "", FS_FIXTURE: withNew("v2-waiting") });
   assert.equal(dflt.status, 0, dflt.stderr);
-  assert.ok(dflt.calls.some((c) => c.marker === "-- fs:events") && dflt.calls.some((c) => c.marker === "-- fs:event_log"), "the default reads both");
+  assert.ok(dflt.calls.some((c) => c.marker === "-- fs:event_log"), "the default reads the new store");
+  assert.equal(dflt.calls.some((c) => c.marker === "-- fs:events"), false, "the default does not read old");
+  const before = shadowRecords().length;
+  cli(AT, { FS_FIXTURE: withNew("v2-waiting") });
+  assert.equal(shadowRecords().length, before, "the default writes no shadow record");
+  const oldVar = cli(AT, { CALLUM_FLOW_FACTORY_STATE_SOURCE: "old", FS_FIXTURE: withNew("v2-waiting") });
+  assert.equal(oldVar.status, 0, oldVar.stderr);
+  assert.ok(oldVar.calls.some((c) => c.marker === "-- fs:events"), "the old variable reads old");
+  assert.equal(oldVar.calls.some((c) => c.marker === "-- fs:event_log"), false, "the old variable does not read new");
 });
 
 test("SQL_EVENT_LOG: named view columns only, never the data jsonb, read-only and bounded by --at", () => {
