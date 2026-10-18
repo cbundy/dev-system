@@ -12,7 +12,7 @@ sections "Run 4 ..." and "Run 4 part B ...". Snapshots: `verify/drills/run4-*.tx
 behaviour but not on its expected evidence. Drill 7 failed: when the companion plugin is missing after a restart,
 the workspace rail lets agent steps start for up to 3 minutes (R4-F3, high). The store wipe rebuilt every record,
 but it dropped the builder's evidence from two PR bodies (R4-F4) and logged some facts twice (R4-F5). Every finding
-is a seam bug or a by-design observation. None needs a special case. The loop made 16 merges in the run.
+is a bug or a by-design observation. None needs a special case. The loop made 16 merges in the run.
 
 ## Summary
 
@@ -93,7 +93,7 @@ Not merged, as their drills meant: #61 and #66 closed by hand, #73 parked at the
 
 ## Findings, most severe first
 
-1. **R4-F3 (seam bug, high): the workspace rail passes for up to 3 minutes after a restart without the companion.**
+1. **R4-F3 (bug, high): the workspace rail passes for up to 3 minutes after a restart without the companion.**
    The rail takes the handshake as live when it is under 3 minutes old and written no more than 90 s before the
    module loaded (sources-workspace.ts:14, :19, :39-40; SPEC.md:1624). The companion writes every 60 s
    (factory-loop-workspace/hooks/register.ts:37). So at a restart the old process's file is at most 60 s old, and
@@ -106,7 +106,7 @@ Not merged, as their drills meant: #61 and #66 closed by hand, #73 parked at the
    process". The handshake names its writer's process (pid or a per-process start id; both plugins live in the
    same Claude Code process), and the rail accepts only this process's handshake. That replaces the load grace. No
    new rule.
-2. **R4-F4 (seam bug, medium-low): after a store rebuild, the PR body loses the builder's evidence.** The first act
+2. **R4-F4 (bug, medium-low): after a store rebuild, the PR body loses the builder's evidence.** The first act
    pass after the wipe re-ran the reviewing seq's `pr ensure` and rewrote PRs #83 and #84 without "## Evidence".
    PR #81, which was not rewritten, still has it, and the build answers hold it
    (answers/i80_ltmznh1_s3_build_a1.answer.json). `workOf` reads the title, summary and evidence only from the
@@ -114,31 +114,31 @@ Not merged, as their drills meant: #61 and #66 closed by hand, #73 parked at the
    PR's body for the summary but not for the evidence, so the body differs and is written (act-pr.ts:261-269).
    **Root fix:** one durable source for the builder's work text: the recorded build answer (as agent steps already
    look up their answers, SPEC 10.8), or the PR's own body for every part. No new rule.
-3. **R4-F1 (seam bug, low): a resume into fixing logs no `fix_requested`.** SPEC 4.5 (SPEC.md:614) and 7.1
+3. **R4-F1 (bug, low): a resume into fixing logs no `fix_requested`.** SPEC 4.5 (SPEC.md:614) and 7.1
    (SPEC.md:988) log it on every entry to fixing. The T1 row (SPEC.md:481) logs only `transition`, and the code
    follows the rows (table.ts:162-163). #22 entered fixing through T1 at 04:41:27 with no `fix_requested`. Readers
    that count fix rounds from it (SPEC.md:1104) miss that round. **Root fix:** emit it on entering the state,
    with the record's last fix reason, or change the spec to say "per row". No new rule.
-4. **R4-F2 (seam bug, low): a leftover process of a finished step is ended silently.** SPEC 17.3 expects `KILLED
+4. **R4-F2 (bug, low): a leftover process of a finished step is ended silently.** SPEC 17.3 expects `KILLED
    1` at the next seq (SPEC.md:2542). But the `slot kill` entry action runs only while an old step still runs
    (SPEC.md:611; rules-entry.ts:148). The leftover is then ended by the next prepare (SPEC.md:1464;
    factory-slot:358), which prints only `PREPARED head=` (factory-slot:374), as W2's free does. In drill 4,
    `sleep 3600` (pid 1334572, cwd the slot, ppid 1) was gone within 25 s, but nothing in the decision log, the
    events or the trace shows that an agent left a process behind. **Root fix:** the one "end the slot's processes"
    reports its count wherever it runs (prepare and free too), or the test plan changes. No new rule.
-5. **R4-F5 (seam bug, low): "logged once" lives only in the ledger.** Intervention and review events are deduped
+5. **R4-F5 (bug, low): "logged once" lives only in the ledger.** Intervention and review events are deduped
    by their ledger keys (`iv/<fact>`, `.../reviewed`), but their sources (companion.jsonl, answers/) outlive the
    store. After the wipe, #38's four guard interventions from runs 2 and 4 were logged again, and so was each
    recorded review of #80 and #82. Per-issue intervention counts and review rounds (SPEC 7.3) double for those
    facts. **Root fix:** take "already logged" from the event log the rebuild already reads (factory.events), as the
    R3-F1 fix did for `merged`. No new rule.
-6. **R4-O5 (seam, low): a rebuilt record keeps only what fits a transition note.** SPEC 3.3 says the note "carries
+6. **R4-O5 (low): a rebuilt record keeps only what fits a transition note.** SPEC 3.3 says the note "carries
    every record field" (SPEC.md:284-285), but 7.1 clips the question and notes to NOTE_MAX 500 (SPEC.md:953;
    events.ts:15-16, :27). #73's question went from 873 to 113 characters. A daily park reminder, or a record rebuilt
    in fixing with findings in its notes, gets the clipped text. The park comment on GitHub keeps it whole. **Root
    fix:** the spec says which fields are clipped, and anything that needs the whole text reads it from its durable
    home (the park comment, the answers). No new rule.
-7. **R4-O1 (seam, low, by design today): a closed record's claim stays live until the next sweep** (up to 30 min).
+7. **R4-O1 (low, by design today): a closed record's claim stays live until the next sweep** (up to 30 min).
    factory-state counts it as live (#60 and #82 here). **Optional root fix:** the loop's close ends its own claim.
    No new rule.
 8. **R4-O3 (latency, by design): an issue closed by hand mid-step is seen only at the 5-min issue read**

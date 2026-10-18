@@ -17,7 +17,7 @@
 # factory event docs, version lock or shapes are stale or a schema breaks the authoring or bump
 # rules (`node scripts/build-event-docs.js --check`), when a
 # file under plugins/factory-loop/hooks/ is over 600 lines (the size guard, scripts/size-guard.sh,
-# with its allowlist below), and runs terraform fmt and validate on coder/dev-system when
+# with its allowlist below), when a tracked file uses a banned term (the list below), and runs terraform fmt and validate on coder/dev-system when
 # terraform is on PATH.
 #
 # Quiet on success: one summary line, which also names any check skipped on this host.
@@ -144,6 +144,15 @@ checked=$((checked + 1))
 if ! out=$(node scripts/release-notes.js --lint 2>&1); then
   fail "release notes invalid (run the release skill)"
   printf '%s\n' "$out" >&2
+fi
+
+# Banned words (owner, 2026-10-18): one label for findings is never used, in any tracked file.
+# The pattern is split so this file does not match itself.
+checked=$((checked + 1))
+banned="sea""m[ -]bugs?"
+if hits=$(git grep -n -i -E "$banned" -- . 2>/dev/null) && [ -n "$hits" ]; then
+  fail "banned term \"sea""m bug\" (describe the finding in plain words instead):"
+  printf '%s\n' "$hits" >&2
 fi
 
 # The Coder template (cbundy/dev-system#117): terraform fmt and validate. terraform is in
