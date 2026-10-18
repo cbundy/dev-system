@@ -952,13 +952,15 @@ What starts where:
 | `docker run IMAGE <command>`, a pod with `args:` | `dev-init`, then the command | - |
 
 **`dev-entrypoint`** runs `dev-init` (best-effort, limited to 300s, which leaves room for a first clone, report on stderr) in
-the workspace, then `exec`s the command. With a command, that command runs instead of
+the workspace, then runs the command as a child. With a command, that command runs instead of
 Claude, in its own working directory, with its stdout untouched and its exit status
 passed through, so `docker run --rm IMAGE dev-doctor` and CI steps work as before. Run as
 root (`--user root`), it skips `dev-init`, so nothing root-owned lands in `/persist`.
-`tini` as PID 1 forwards `docker stop` / pod deletion to the command at once and reaps
-orphaned processes, so containers stop in well under a second instead of hitting the
-10s kill timeout.
+`tini` as PID 1 forwards `docker stop` / pod deletion to `dev-entrypoint` at once and reaps
+orphaned processes. `dev-entrypoint` forwards TERM, INT and HUP to the command, waits for it to exit,
+sends the heartbeat's final beat (`heartbeat-loop --final`, bounded by 10s, output on stderr; skipped as root) and
+passes the command's exit status through (128+N when a signal killed it), so containers stop in
+well under a second instead of hitting the 10s kill timeout.
 
 **`dev-remote-control`** is the supervisor:
 
@@ -2060,7 +2062,9 @@ times of `factory/*.jsonl` and `factory/.pushed/*` under the events directory. O
 last beat with `state = 'stopped'` on a best-effort basis, bounded to 5 seconds, and exits 0;
 `/usr/local/share/dev-system/heartbeat-loop --final` signals the running loop through its
 pidfile (waiting up to 8 s) and, if none is running or it has not exited after the wait,
-writes that beat itself, to every configured target, when either URL is configured. A desktop stop has no hook, so readers use
+writes that beat itself, to every configured target, when either URL is configured. What triggers `--final` depends on the path: on the image path
+(`docker stop`, pod deletion) it is `dev-entrypoint`, once the command has exited; on Coder it is the workspace stop
+script (cbundy/dev-system#832). A desktop stop has no hook, so readers use
 the view's `stale` flag. The fleet query is in [docs/metrics.md](../../docs/metrics.md#workers).
 
 ### factory-db-bootstrap

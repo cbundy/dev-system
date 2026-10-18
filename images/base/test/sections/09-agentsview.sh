@@ -70,12 +70,12 @@ wait_for_session() {
   return 1
 }
 write_session "$avclaude" 11111111-1111-4111-8111-111111111111
-# pusher <name>: a headless container (image ENTRYPOINT, so dev-init runs at
+# pusher <name> [machine name]: a headless container (image ENTRYPOINT, so dev-init runs at
 # start) with the push configured
 pusher() {
   docker run -d --label "$RUN_ID" --name "$RUN_ID-$1" --network "$net" \
     -e "AGENTSVIEW_PG_URL=postgres://av:$SECRET@$RUN_ID-pg:5432/agentsview?sslmode=require" \
-    -e DEV_MACHINE_NAME='test "host"' -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
+    -e DEV_MACHINE_NAME="${2:-test \"host\"}" -e DEV_AGENTSVIEW_RETRY_SECONDS=2 \
     -v "$avdata:/persist/agentsview" -v "$avclaude:/persist/claude" \
     "$IMAGE" sleep infinity >/dev/null
 }
@@ -411,3 +411,28 @@ ver_workers() {
   [ "$(psql_av "select count(*) from factory.workers where device = 'hb-beat'")" = 1 ] || { echo "a second beat must update, not insert"; return 1; }
 }
 check "factory.workers: the DDL is idempotent, the view marks stale, LISTEN hears insert and update, a real beat lands" ver_workers
+
+# A clean docker stop leaves the stopped row (dev-entrypoint runs heartbeat-loop --final once the command exits),
+# and no later beat overwrites it.
+ver_stopped_row() {
+  local t
+  pusher hb-stop hb-stop >/dev/null || return 1
+  local n=90
+  until [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop' and state in ('idle','busy')")" = 1 ]; do
+    n=$((n - 1)); [ "$n" -gt 0 ] || { echo "no beat from hb-stop"; return 1; }
+    sleep 1
+  done
+  # the first beat lands while dev-init is still running, before dev-entrypoint has started the command and
+  # installed its stop handling: wait for the command itself (the exact command line `sleep infinity`; heartbeat-loop runs its own sleep) so the stop reaches a running entrypoint
+  n=60
+  until docker exec "$RUN_ID-hb-stop" pgrep -fx 'sleep infinity' >/dev/null 2>&1; do
+    n=$((n - 1)); [ "$n" -gt 0 ] || { echo "the command never started"; return 1; }
+    sleep 1
+  done
+  t=$(psql_av "select clock_timestamp()")
+  docker stop -t 30 "$RUN_ID-hb-stop" >/dev/null || return 1
+  [ "$(psql_av "select count(*) from factory.workers where device = 'hb-stop' and state = 'stopped' and last_seen >= '$t'")" = 1 ] || { psql_av "select device, state, last_seen from factory.workers where device = 'hb-stop'"; echo "no stopped row after the stop"; return 1; }
+  sleep 3
+  [ "$(psql_av "select state from factory.workers where device = 'hb-stop'")" = stopped ] || { echo "a later beat overwrote the stopped row"; return 1; }
+}
+check "factory.workers: a clean docker stop leaves state stopped, and no later beat follows it" ver_stopped_row

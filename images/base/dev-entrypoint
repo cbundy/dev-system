@@ -7,6 +7,12 @@
 # Remote Control; any other command (`docker run IMAGE bash`, a k8s `args:`, a
 # CI step) runs instead, with its exit status passed through.
 #
+# The command runs as a child. On a stop (tini forwards TERM here) the
+# entrypoint forwards TERM, INT and HUP to it, waits for it to exit, sends the
+# heartbeat's final beat (heartbeat-loop --final, state stopped, bounded by
+# 10s, output to stderr) and exits with the command's status (128+N when a
+# signal killed it).
+#
 # dev-init runs in the workspace (see workspace.sh): $DEV_WORKSPACE once it
 # exists, else the start directory (the image WORKDIR or the runtime's working
 # directory) unless that is /, else $HOME. On a first start with DEV_REPO_URL,
@@ -47,4 +53,45 @@ fi
 
 # An empty command (a runtime that clears the image CMD) means the default.
 [ "$#" -gt 0 ] || set -- dev-remote-control
-exec "$@"
+
+# Run the command as a child, not exec'd, so that on a stop this shell outlives
+# it and can send the heartbeat's final (stopped) beat. stdin is passed through
+# explicitly: a background job in a non-interactive shell would get /dev/null.
+# That job would also start with INT and QUIT ignored (so a forwarded INT would
+# do nothing); perl (perl-base, always in the image) restores their defaults
+# and execs the command, so it behaves as it did under exec.
+perl -e '$SIG{INT} = "DEFAULT"; $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or do { warn "dev-entrypoint: cannot run $ARGV[0]: $!\n"; exit($!{ENOENT} ? 127 : 126) }' "$@" <&0 &
+child=$!
+
+# tini forwards the stop signal to this shell; hand it on, as the same signal.
+# shellcheck disable=SC2317 # invoked by the traps
+forward() {
+  kill -s "$1" "$child" 2>/dev/null
+}
+trap 'forward TERM' TERM
+trap 'forward INT' INT
+trap 'forward HUP' HUP
+
+# `wait` returns as soon as a trapped signal arrives, so loop until the child
+# has really exited.
+status=0
+while :; do
+  wait "$child"
+  status=$?
+  kill -0 "$child" 2>/dev/null || break
+done
+# A child that exited in the instant between the cut-short wait and the check
+# still has its real status: take it. When the wait above already collected it,
+# bash returns the saved status again (127 if it no longer knows the job, which
+# keeps the status already taken).
+wait "$child" 2>/dev/null
+rc=$?
+[ "$rc" = 127 ] || status=$rc
+
+# The final beat (state stopped), bounded; stdout stays the command's alone.
+final=/usr/local/share/dev-system/heartbeat-loop
+if [ "$(id -u)" != 0 ] && [ -x "$final" ]; then
+  timeout 10 "$final" --final >&2
+fi
+
+exit "$status"
