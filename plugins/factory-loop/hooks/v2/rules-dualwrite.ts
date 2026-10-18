@@ -22,6 +22,7 @@ export function dualWriteRules(ctx: V2Ctx): void {
       rule: 'H1',
       reason: 'dual write: its stage logged to the new log',
       issue: r.issue,
+      target: 'new',
       event: { state: 'transition', record: r, row: o?.row ?? 'H1', from: o?.from ?? null, via: 'dual-write' },
     })
   }

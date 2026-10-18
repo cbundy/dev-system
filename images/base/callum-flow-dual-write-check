@@ -16,6 +16,8 @@
 #   --repo defaults to every repo; --since defaults to the device's earliest ts in event_store.
 # Exit: 0 only when missing, misses and extras are all zero; 1 when any is not; 2 on a usage
 #   error, an unconfigured or unreachable store, or no new rows for the device and no --since.
+# A transition with via=dual-write and no old row is not an extra: the factory loop's backfill (H1)
+# writes it with callum-flow-event --new-only, to the new log only, so the old log never holds it.
 # An event written natively (callum-flow-event --type) has no old row, so it shows as an extra under
 # its type: the check proves dual write only on a device where no producer writes natively yet.
 # Writes nothing: every psql run is read-only, bounded by timeout (DUAL_WRITE_CHECK_TIMEOUT seconds,
@@ -107,7 +109,7 @@ if [ -z "$since" ]; then
   export CHK_SINCE=$since
 fi
 
-new_sql="SELECT event_id || E'\\t' || type FROM factory.event_store WHERE device = :'dev' $repo_new AND ts >= date_trunc('second', :'since'::timestamptz) ORDER BY ts, device_seq;"
+new_sql="SELECT event_id || E'\\t' || type || E'\\t' || coalesce((data::jsonb)->>'via', '') FROM factory.event_store WHERE device = :'dev' $repo_new AND ts >= date_trunc('second', :'since'::timestamptz) ORDER BY ts, device_seq;"
 old_sql="SELECT raw::text FROM factory.events WHERE device = :'dev' $repo_new AND ts >= date_trunc('second', :'since'::timestamptz) ORDER BY ts, seq;"
 
 psql_read "$new_url" "$new_sql" > "$tmp/new.tsv" || die "cannot read factory.event_store with the reader URL"
@@ -120,6 +122,7 @@ const { translate } = require(trJs);
 const lines = fs.readFileSync(oldFile, "utf8").split("\n").filter((l) => l.trim() !== "");
 const newRows = fs.readFileSync(newFile, "utf8").split("\n").filter((l) => l !== "").map((l) => l.split("\t"));
 const newIds = new Map(newRows.map(([id, type]) => [id, type]));
+const newVia = new Map(newRows.map(([id, , via]) => [id, via ?? ""]));
 const states = new Map();
 const st = (s) => {
   if (!states.has(s)) states.set(s, { old: 0, skipped: new Map(), expected: 0, found: 0, missing: [], misses: [] });
@@ -152,6 +155,8 @@ for (const text of lines) {
 const extras = new Map();
 for (const [id, type] of newIds) {
   if (oldIds.has(id)) continue;
+  // H1's backfill (callum-flow-event --new-only) writes a transition with via=dual-write to the new log only, by design
+  if (type === "transition" && newVia.get(id) === "dual-write") continue;
   if (!extras.has(type)) extras.set(type, []);
   extras.get(type).push(id);
 }

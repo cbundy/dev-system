@@ -294,7 +294,7 @@ export type V2Action =
   | (ActionBase & { kind: 'comment'; on: 'issue' | 'pr'; number: number; body: string })
   // built only by events.ts (7.1); logged: the event log already holds it (events.ts logOnce), so
   // the executor settles it done with no second write
-  | (ActionBase & { kind: 'event'; event: V2Event; logged?: true })
+  | (ActionBase & { kind: 'event'; event: V2Event; logged?: true; target?: 'new' })
   | (ActionBase & {
       kind: 'pr'
       op: 'ensure' | 'body'

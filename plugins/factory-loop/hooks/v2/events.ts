@@ -356,7 +356,8 @@ export function eventNote(e: V2Event): string {
 
 // eventArgv: `callum-flow-event <state>` for this event: its columns as flags, its actor when it
 // has its own, and its note.
-export function eventArgv(e: V2Event): string[] {
+// With opts.target 'new' it ends with --new-only: the line goes to the new log only (H1's backfill).
+export function eventArgv(e: V2Event, opts?: { target?: 'new' }): string[] {
   // a gate run is a new-format event: its payload is the schema's data, not an old note
   if (e.state === 'gate_run') return ['callum-flow-event', '--type', 'gate_run', '--data', JSON.stringify(e.data), '--issue', String(e.issue)]
   const c = eventColumns(e)
@@ -368,6 +369,7 @@ export function eventArgv(e: V2Event): string[] {
   const actor = eventActor(e)
   if (actor !== null) argv.push('--actor', actor)
   argv.push('--note', eventNote(e))
+  if (opts?.target === 'new') argv.push('--new-only')
   return argv
 }
 

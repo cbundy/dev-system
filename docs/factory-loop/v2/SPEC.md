@@ -149,7 +149,7 @@ v2 reads the same ten kinds of source as v1, with `runs` out and `prs` in (`simp
 | store | `ledger:<repo>`, `records:<repo>`, `heads:<repo>` | every pass | records are new (3.3) |
 | `prs` | for each record in reviewing or merge-queue whose life has a PR (the record's, else the one the life's done ensure named, 8.1): `callum-flow-issue-read --json --pr <n>` (state, merged, merged head, `closedAt`, head sha, `mergeable_state`, author, base sha) and `gh pr checks <n> --repo R --json name,state,bucket,startedAt,completedAt,link` (with the run id from the link) and the head's workflow runs, `gh api repos/R/actions/runs?head_sha=<head>&per_page=100` (8.5); the head's patch id (8.4) when the head moved | `prEveryMs`, and on the next pass after its record's transition or an action of the loop's own on the PR ended; a PR whose last read failed, every pass | new |
 | `waits` | for each distinct condition of the waiting records not yet read as held: an issue by `callum-flow-issue-read --json N` (its open or closed state), a PR by `gh pr view N --repo R --json state,mergedAt`, a release tag by `gh api repos/R/compare/<tag>...<sha> --jq .status` against the newest release tag (`gh release view --repo R --json tagName`, read on `milestoneEveryMs` while a record waits on one); no model call | `githubEveryMs` per condition (a tag condition once per tag), oldest-checked first, at most K reads a pass (the PR reads' budget); none during a GitHub backoff or after a rate limit met this pass | new; a failed or skipped read keeps the condition open and never clears it; a condition once read as held stays held while a record waits on it (4.4) |
-| `dualWrite` | act mode with the v2 planner only: `callum-flow-event --new-path --repo R` (exit 0: dual write is on and stdout is the new log's path; any other exit, an older image: off), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | new; its failure blocks nothing (4.1) |
+| `dualWrite` | act mode with the v2 planner only: `callum-flow-event --new-only --new-path --repo R` (exit 0: the image dual-writes and offers `--new-only`, and stdout is the new log's path; any other exit, an older image or one that dual-writes without `--new-only`: off, so H1 plans nothing), then a read of that log | once per load; a failed probe or read retries every `githubEveryMs` | new; its failure blocks nothing (4.1) |
 
 - **Heads first seen.** Observe keeps, in the store key `heads:<repo>`, the time it first saw each
   PR head. Plan uses it to bound waits on GitHub (4.4). Entries go when their PR closes.
@@ -478,7 +478,12 @@ head. Its result arrives as that step's `ok`, `not-ok` or `unknown` (4.2, 8.5).
   current `<issue>:<life>:<seq>` the log lacks. Its key is `dual-write:<issue>:<life>:<seq>`, so
   each stage is logged once. Only a record with `seqAt` before the read counts: the log is read once
   per load, and a later transition was written to both logs by the dual-writing image. The event
-  keeps the record's own seq, so a rebuild picks the same record from either log.
+  keeps the record's own seq, so a rebuild picks the same record from either log. H1 writes the new
+  log only: its action carries `target: 'new'` and the event executor adds `--new-only` to
+  `callum-flow-event`, so the old log gets no row (a second row would reach `factory.events` as
+  `via=dual-write` and make the sweep log `closed` again for a closed issue). It runs only on an
+  image that offers `--new-only` (the probe above); on an image that dual-writes without it, nothing is
+  backfilled, which is better than a duplicate in the old log. No other rule sets a target.
 - **Pushes by a person.** A head on the record's branch that no loop step produced is a person
   intervention (`push`, 7.2). The loop's own heads are known: the heads that writer steps confirmed,
   and those that `queue-update` produced (9.2). The state's own keys handle the new head: review is
