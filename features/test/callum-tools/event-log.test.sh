@@ -599,7 +599,7 @@ out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/cal
 [ "$out" = "queue-changed known=4 now=4,9" ] || fail "queue-watch stdout changed: $out"
 [ "$(cat "$fakebin/event-calls")" = "ready --issue 9 --if-changed --actor watcher" ] || fail "queue-watch should record only the new issue, as a first sight (--if-changed): $(cat "$fakebin/event-calls")"
 
-# queue-watch --once (factory loop, SPEC 3.4): one read, the same first-sight call
+# queue-watch --once (factory loop, v2 SPEC 13.3.4): one read, the same first-sight call
 : > "$fakebin/event-calls"
 out=$(PATH="$fakebin:$toolbin" CALLUM_FLOW_ISSUE_READ_BIN="$ROOT/images/base/callum-flow-issue-read" CALLUM_FLOW_SHARE_DIR="$ROOT/images/base" \
   CALLUM_FLOW_TRUSTED_AUTHORS=cbundy:13131067 "$SH" "$SRC/queue-watch.sh" --repo o/r --label ready --once --known 4 2> /dev/null) || fail "queue-watch --once should exit 0 (a failing event call must not matter)"

@@ -290,7 +290,7 @@ case "$state" in
 esac
 [ "$state" != superseded ] || [ -n "$run" ] || usage "--run is required for superseded (the run being replaced)"
 # needs KEYS...: the note carries each `key=value` token with a value (a loop note is the record a
-# lost store is rebuilt from, SPEC 7.5; a transition note the record v2 rebuilds, v2 SPEC 3.3)
+# lost store is rebuilt from, v2 SPEC 13.7.5; a transition note the record v2 rebuilds, v2 SPEC 3.3)
 needs() {
   for k in "$@"; do
     case " $note " in

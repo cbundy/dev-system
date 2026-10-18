@@ -1,8 +1,8 @@
-// The ledger (SPEC 7): every action the loop started, under its idempotency key, with its
+// The ledger (v2 SPEC 13.7): every action the loop started, under its idempotency key, with its
 // status, attempts and outcome, so plan sees what is running or done and re-planning an
 // unchanged state yields nothing new. Pure functions over LedgerEntry[] (no engine calls, no
 // clock: the time comes in as `now`): the driver starts and finishes an entry around each
-// executor, marks what a reload or the agent list proves (SPEC 7.5, 10.4), and keeps the ledger
+// executor, marks what a reload or the agent list proves (v2 SPEC 13.7.5, 13.10 item 4), and keeps the ledger
 // in $.store through the thin StoreIo below. The other half, the ledger rebuilt from the event
 // log after a lost store, is derive.ts's deriveLedger. Every function returns a new array and
 // replaces only the entries it changes, so changedEntries() can tell the driver what moved.
@@ -24,18 +24,18 @@ import type {
 import { AGENT_STEPS } from './v2/types'
 
 const DAY = 86_400_000
-// Entries are kept 7 days after they end; running entries are never pruned (SPEC 7.1).
+// Entries are kept 7 days after they end; running entries are never pruned (v2 SPEC 13.7.1).
 export const KEEP_MS = 7 * DAY
 // The store holds 4 MiB of JSON for all of the plugin's keys together. The ledger keeps to three
 // quarters of it, so the driver's few small keys always fit; a busy week needs about half of
-// this, and dev-system's real weeks far less (SPEC 7.1).
+// this, and dev-system's real weeks far less (v2 SPEC 13.7.1).
 export const LEDGER_MAX_BYTES = 3 * 1024 * 1024
 // An executor's summary is a few words for the decision log; a longer one is cut.
 const SUMMARY_MAX = 300
 
 const WAKES: readonly ActionKind[] = ['judge', 'task', 'tell']
 // Agents and wakes log a `loop` event (owner notices and rate-cap notices are tells); CLI work
-// logs its own events and gets none (D-09, SPEC 7.4). A v2 agent step is an agent entry: its
+// logs its own events and gets none (D-09, v2 SPEC 13.7.4). A v2 agent step is an agent entry: its
 // events are for the trail, and a lost store never rebuilds it (derive.ts entryFromLoop).
 const LOOP_KINDS: readonly ActionKind[] = ['judge', 'task', 'tell', 'agent-step']
 const STATUSES: readonly LedgerStatus[] = ['running', 'done', 'failed', 'timed-out', 'lost']
@@ -45,7 +45,7 @@ const CLASSES: readonly ActionClass[] = ['free', 'owner', 'drive', 'develop', 's
 
 export type Started = { ledger: LedgerEntry[]; entry: LedgerEntry; prev: LedgerEntry | null }
 
-// start: the entry for this attempt (SPEC 5.1: a retry keeps the key and adds an attempt). A
+// start: the entry for this attempt (v2 SPEC 13.5.1: a retry keeps the key and adds an attempt). A
 // new key starts at attempt 1; a key that failed, timed out or was lost runs again as attempt
 // n + 1, its last outcome, agent and wake cleared. A done key started again (only the title,
 // which plan compares rather than keys) starts its count over: success resets it. The subject's
@@ -119,9 +119,9 @@ export type FinishOptions = {
 // the last outcome when the result carries none.
 // - skipped: no attempt is counted: the entry goes back to prev, or is dropped when it was new.
 // - failed with noRetry (exit 2, a loop bug): the attempts are used up, so plan never retries
-//   it and tells the owner instead (SPEC 10.1).
+//   it and tells the owner instead (v2 SPEC 13.10 item 1).
 // - a stop-agent of rule A1 that ended, stopped or not, marks the agent it stopped timed-out
-//   (SPEC A1; SPEC 13: an agent TaskStop could not stop is left running, marked timed-out).
+//   (the retired v1 rule A1; v2 SPEC 13.13: an agent TaskStop could not stop is left running, marked timed-out).
 // It applies whatever the entry's status; a key the ledger no longer holds (pruned, say) is left
 // alone. An agent's answer is matched to its entry by agentId, which a retry clears, so the
 // answer of an agent a retry replaced finds no entry.
@@ -163,10 +163,10 @@ function unstart(ledger: readonly LedgerEntry[], current: LedgerEntry, prev: Led
   return put(ledger, ended({ ...current, attempts: current.attempts - 1 }, 'failed', now, `skipped: ${why}`))
 }
 
-// --- what a reload and the agent list prove (SPEC 3.3, 7.5, 10.4) -------------------------
+// --- what a reload and the agent list prove (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4) -------------------------
 
 // onLoad: on module load, every running CLI entry (no agent id, not a wake) is lost: its process
-// died with the old session or module (SPEC 7.5 step 1). Plan then re-derives what to do from
+// died with the old session or module (v2 SPEC 13.7.5 step 1). Plan then re-derives what to do from
 // the state. Agents wait for the agent list (reconcileAgents); wakes for their answer or timeout.
 export function onLoad(ledger: readonly LedgerEntry[], now: Ms): LedgerEntry[] {
   return ledger.map(e =>
@@ -175,7 +175,7 @@ export function onLoad(ledger: readonly LedgerEntry[], now: Ms): LedgerEntry[] {
 }
 
 // reconcileAgents: a running agent entry against the session's agent list. An id the list
-// lacks is lost (SPEC 3.3, 7.5); one listed failed or killed is failed (SPEC 10.4); one listed
+// lacks is lost (v2 SPEC 13.3.3, 13.7.5); one listed failed or killed is failed (v2 SPEC 13.10 item 4); one listed
 // completed or idle (its turn ended, foundation.ts turnEnded, #560) while its entry still runs ended
 // with no answer, so it is lost. The list must be a successful read: an empty list marks every
 // running agent lost.
@@ -198,7 +198,7 @@ export function reconcileAgents(
 // --- keeping it small -------------------------------------------------------------------
 
 // prune: drop entries that ended more than KEEP_MS ago; a running entry stays whatever its age
-// (SPEC 7.1). An entry with no end time ages from its start.
+// (v2 SPEC 13.7.1). An entry with no end time ages from its start.
 export function prune(ledger: readonly LedgerEntry[], now: Ms): LedgerEntry[] {
   return ledger.filter(e => e.status === 'running' || now - endOf(e) <= KEEP_MS)
 }
@@ -221,7 +221,7 @@ export function fit(ledger: readonly LedgerEntry[], maxBytes = LEDGER_MAX_BYTES)
   return ledger.filter(e => !drop.has(e))
 }
 
-// --- the store and the derived ledger (SPEC 7.1, 7.5) -------------------------------------
+// --- the store and the derived ledger (v2 SPEC 13.7.1, 13.7.5) -------------------------------------
 
 export type LedgerSource = 'store' | 'events' | 'none'
 export type Chosen = { ledger: LedgerEntry[]; source: LedgerSource }
@@ -289,7 +289,7 @@ export async function save(store: StoreIo, repo: string, ledger: readonly Ledger
 export type Retried = { ledger: LedgerEntry[]; cleared: string[]; notices: string[] }
 
 // retryIssue: `/factory retry <N>` clears the attempts of the issue's entries that ran out of
-// them, so their rules try again (D-38, SPEC 7.1). Exhausted is the planner's own rule (gate in
+// them, so their rules try again (D-38, v2 SPEC 13.7.1). Exhausted is the planner's own rule (gate in
 // foundation.ts): failed, timed-out or lost with attempts at the kind's maximum. Each such entry
 // stays with its count at 0 rather than going: a rule may need the failed entry to act at all, and
 // the next attempt counts from 1. The owner notice each one raised (agent-failed, task-timeout) goes, unless it is still
@@ -311,14 +311,14 @@ function noticesOf(entry: LedgerEntry): string[] {
 
 // exhausted: the planner's rule exactly (gate in foundation.ts): a failed, timed-out or lost
 // entry whose attempts reached its key's own cap, else the maximum for its kind. Heartbeat and
-// sweep never are: they retry at their cadence (foundation.ts cadenceOf, SPEC 6.1).
+// sweep never are: they retry at their cadence (foundation.ts cadenceOf, v2 SPEC 13.6.1).
 export function exhausted(entry: LedgerEntry, config: Config): boolean {
   if (entry.status === 'running' || entry.status === 'done') return false
   if (entry.kind === 'heartbeat' || entry.kind === 'sweep') return false
   return entry.attempts >= (entry.maxAttempts ?? maxAttemptsOf(config, entry.kind))
 }
 
-// --- the loop's own events (D-09, SPEC 7.4) -------------------------------------------------
+// --- the loop's own events (D-09, v2 SPEC 13.7.4) -------------------------------------------------
 
 // loopEvent: the callum-flow-event argv for a `loop` event about this entry, for agent and wake
 // entries (owner notices and rate-cap notices are tells) at their start and end; null for CLI

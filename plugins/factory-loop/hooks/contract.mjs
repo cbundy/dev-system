@@ -1,4 +1,4 @@
-// The agents' answer contract (SPEC 7.3a): what an adjudicator's verdict, a designer's result and
+// The agents' answer contract (v2 SPEC 13.7.3a): what an adjudicator's verdict, a designer's result and
 // an implementer's or fixer's handoff must hold, checked field by field with every problem named
 // at once, and the files of the answer script (#561). One plain-JS module with one reader of
 // each answer: the loop imports it (the TypeScript hooks the engine runs: replies.ts,
@@ -118,7 +118,7 @@ function clip(v) {
   return s.length > 124 ? `${s.slice(0, 121)}...` : s
 }
 
-// --- the adjudicator (SPEC 7.3) --------------------------------------------------------------
+// --- the adjudicator (the retired v1 adjudicator reply) --------------------------------------------------------------
 
 // The fields each action takes beside its type, as its ACTION line's grammar has them.
 const ACTION_FIELDS = Object.freeze({
@@ -286,7 +286,7 @@ function reportOf(o, problems) {
   return summary === null || level === undefined || bumpReason === null ? null : { summary, bump: level, bumpReason, flags }
 }
 
-// --- the designer (SPEC 7.2) ------------------------------------------------------------------
+// --- the designer (the retired v1 designer reply) ------------------------------------------------------------------
 
 // checkDesign: a designer's answer for this issue. A result that leaves the loop nothing to do
 // (no brief, no created issues, no decision pending) is a forgotten field.

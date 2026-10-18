@@ -1,5 +1,5 @@
-// What a pass leaves behind: its trace record (SPEC 12.1), the action summaries of its decision-log
-// line, the update drain's end (rule H4) and the owner's word that passes keep throwing (SPEC 10.9).
+// What a pass leaves behind: its trace record (v2 SPEC 13.12.1), the action summaries of its decision-log
+// line, the update drain's end (rule H4) and the owner's word that passes keep throwing (v2 SPEC 13.10 item 9).
 import type { EngineInterface } from 'claude-code'
 
 import { passErrorTell, sendNotice } from './act'
@@ -13,7 +13,7 @@ import { append, appendLine, fileIo, killed, v2StoreIo } from './driver-io'
 import { bareState, ensureLedger, hookEnv } from './driver-store'
 import { S, liveV2 } from './driver-state'
 
-// tellError: three passes in a row threw; the owner hears of it once (SPEC 10.9), from a session
+// tellError: three passes in a row threw; the owner hears of it once (v2 SPEC 13.10 item 9), from a session
 // that may act: a role the rails refuse tells nothing, as checkRails does.
 export async function tellError($: EngineInterface, rt: Runtime, now: Ms, error: string): Promise<boolean> {
   try {
@@ -31,7 +31,7 @@ export async function tellError($: EngineInterface, rt: Runtime, now: Ms, error:
 // writeTrace: the pass's trace record beside its decision log, within config traceMaxBytes
 // (trace.ts traceRoom): the oldest trace files go first, and today's is cut short rather than
 // pass the cap. A cut stays for the day across reloads: the first write of a load reads whether
-// today's file already ends with the cut line (SPEC 12.1). A trace that cannot be written never
+// today's file already ends with the cut line (v2 SPEC 13.12.1). A trace that cannot be written never
 // fails the pass.
 export async function writeTrace($: EngineInterface, rt: Runtime, record: Record<string, unknown>) {
   const at = String(record.at)

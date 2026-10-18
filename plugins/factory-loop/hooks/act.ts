@@ -1,4 +1,4 @@
-// The act step (SPEC 2, 6, 7, 8, 10): the one dispatcher from an action's kind to its executor,
+// The act step (v2 SPEC 13.2, 13.6, 13.7, 13.8, 13.10): the one dispatcher from an action's kind to its executor,
 // what an act-mode pass does once observe has read the factory (what the agent list proves,
 // wakes past their timeout, plan, then plan's actions in order: start each ledger entry,
 // pre-check usage for a token-spending class, run the executor, finish the entry with what it
@@ -28,7 +28,7 @@ const SUMMARY_MAX = 200
 // callum-flow-event is one jq call and one append; a minute is ample
 const EVENT_TIMEOUT_MS = 60_000
 
-// Every kind's executor (SPEC 6.1): the shared kinds', and v2's for its new kinds (v2/registry.ts).
+// Every kind's executor (v2 SPEC 13.6.1): the shared kinds', and v2's for its new kinds (v2/registry.ts).
 // act.test.ts checks that no ActionKind lacks one.
 export const EXECUTORS: Partial<Record<ActionKind, Executor>> = {
   ...cliExecutors,
@@ -52,7 +52,7 @@ export async function dispatch(ctx: ExecCtx, action: Action): Promise<Exec> {
   }
 }
 
-// --- commands and events (SPEC 6.1, 7.4, 11.1) ---------------------------------------------------
+// --- commands and events (v2 SPEC 13.6.1, 13.7.4, 13.11.1) ---------------------------------------------------
 
 // commandOf: ExecCtx.cmd: the argv from the main checkout (or init.cwd) with the runtime's
 // environment, which carries the repo, the configured labels and, when not acting, the event
@@ -124,7 +124,7 @@ export type ActEnv = {
   live: Live
   // the pass's command list, for the decision log
   commands: string[]
-  // a fresh wake id (SPEC 8.1 `id=`)
+  // a fresh wake id (v2 SPEC 13.8.1 `id=`)
   wakeId: () => string
   // $.session.id(): the session a wake it submits belongs to ('' when unknown)
   session: string
@@ -135,7 +135,7 @@ export type ActEnv = {
   // this session still holds the act lock, renewed now; once it does not, the pass runs nothing
   // more. Asked before every action.
   holds: () => Promise<boolean>
-  // the kill switch is set (SPEC 11.3): one stat, asked before every action but the title and
+  // the kill switch is set (v2 SPEC 13.11.3): one stat, asked before every action but the title and
   // before a notice goes out; once it is, the pass runs nothing more
   killed: () => Promise<boolean>
   // what went wrong outside any one action (a loop event not logged), for the decision log
@@ -176,13 +176,13 @@ export async function logLoop(env: Pick<ActEnv, 'io' | 'rt' | 'commands' | 'prob
 
 // --- one pass's actions ------------------------------------------------------------------------
 
-// One action's result, for the decision log (SPEC 12); at: when it started, for the trace (#552),
+// One action's result, for the decision log (v2 SPEC 13.12); at: when it started, for the trace (#552),
 // absent for an action held before it started.
 export type ActOutcome = { key: string; kind: ActionKind; status: Exec['status']; ms: Ms; summary: string; at?: Ms }
 
 export type ActReport = {
   outcomes: ActOutcome[]
-  // an executor met a GitHub rate limit: register sets the backoff (SPEC 10.2)
+  // an executor met a GitHub rate limit: register sets the backoff (v2 SPEC 13.10 item 2)
   rateLimited: boolean
   // the title the title action set, when it did
   title: string | null
@@ -217,10 +217,10 @@ export async function runActions(env: ActEnv, state: State, actions: readonly Ac
   return report
 }
 
-// actOne: one action through the ledger (SPEC 7): start (a retry keeps the key and counts an
+// actOne: one action through the ledger (v2 SPEC 13.7): start (a retry keeps the key and counts an
 // attempt), the usage pre-check for start, develop and drive (a refusal puts the entry back as
-// it stood, SPEC 10.7), the running entry saved, the executor, then finish with its Exec and
-// { config, prev }. The title is compared, not keyed (SPEC 5.8 O1), so it runs without an entry.
+// it stood, v2 SPEC 13.10 item 7), the running entry saved, the executor, then finish with its Exec and
+// { config, prev }. The title is compared, not keyed (v2 SPEC 13.5.8 O1), so it runs without an entry.
 export async function actOne(env: ActEnv, state: State, action: Action): Promise<{ outcome: ActOutcome; exec: Exec }> {
   const t0 = await env.io.now()
   const done = async (exec: Exec) => {
@@ -242,7 +242,7 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
   }
   // the entry is in the store, running, before anything happens: a reload, a crash or a restart
   // (restart-self ends the session) mid-action finds it and marks it lost, so its attempt counts
-  // and its rule re-derives what to do (SPEC 7.5). A ledger that cannot be saved starts nothing.
+  // and its rule re-derives what to do (v2 SPEC 13.7.5). A ledger that cannot be saved starts nothing.
   if (!(await env.save())) {
     const held: Exec = { status: 'skipped', summary: 'held: the ledger was not saved, so nothing starts' }
     env.live.ledger = finish(env.live.ledger, action.key, held, await env.io.now(), opts)
@@ -255,7 +255,7 @@ export async function actOne(env: ActEnv, state: State, action: Action): Promise
 
 // record: finish the attempt with the executor's Exec, saved before its loop event, unless a hook
 // already ended it: a wake answered (or a tell delivered) before its submit returned stays
-// answered, and an entry a later attempt or a hook replaced is left alone (SPEC 8.2, wake.ts
+// answered, and an entry a later attempt or a hook replaced is left alone (v2 SPEC 13.8.2, wake.ts
 // onTurnStart); the hook saved it.
 async function record(
   env: ActEnv,
@@ -273,7 +273,7 @@ async function record(
   await logLoop(env, moved)
 }
 
-// --- notices from outside plan (SPEC 9.2, 11.2, 11.4) --------------------------------------------
+// --- notices from outside plan (v2 SPEC 13.9.2, 13.11.2, 13.11.4) --------------------------------------------
 
 // openWake: a judge, task or tell that is still running. Only one wake is open at a time (O2).
 export function openWake(ledger: readonly LedgerEntry[]): LedgerEntry | undefined {
@@ -291,7 +291,7 @@ export async function sendNotice(env: ActEnv, state: State, tell: Action): Promi
   return exec.status === 'running' || exec.status === 'done' ? 'sent' : 'failed'
 }
 
-// passErrorTell: three passes in a row threw (SPEC 10.9): the owner hears of it once per spell.
+// passErrorTell: three passes in a row threw (v2 SPEC 13.10 item 9): the owner hears of it once per spell.
 export function passErrorTell(since: Ms, passes: number, error: string): Action {
   return {
     kind: 'tell',
@@ -306,7 +306,7 @@ export function passErrorTell(since: Ms, passes: number, error: string): Action 
   }
 }
 
-// --- rate-cap holds (SPEC 11.4, D-24) ---------------------------------------------------------------
+// --- rate-cap holds (v2 SPEC 13.11.4, D-24) ---------------------------------------------------------------
 
 // capKey: a rate cap plan tripped (a bucket, or '<kind>:<issue>') as its hourly loop event's key.
 export function capKey(capped: string, now: Ms): string {
@@ -323,13 +323,13 @@ export function capEventArgv(capped: string, now: Ms): string[] {
   return argv
 }
 
-// breakerEventArgv: the ping-storm breaker opened (SPEC 2, 11.4, D-39): its `loop` event, beside
+// breakerEventArgv: the ping-storm breaker opened (v2 SPEC 13.2, 13.11.4, D-39): its `loop` event, beside
 // its one tell.
 export function breakerEventArgv(b: BreakerNotice): string[] {
   return ['callum-flow-event', 'loop', '--note', `kind=breaker key=breaker:pings:${b.since} status=open passes=${b.passes} until=${b.until}`]
 }
 
-// --- what a reload and the agent list prove (SPEC 3.3, 7.5, 10.4) --------------------------------
+// --- what a reload and the agent list prove (v2 SPEC 13.3.3, 13.7.5, 13.10 item 4) --------------------------------
 
 export type ListedAgent = { id: string; status: AgentStatus }
 
@@ -382,7 +382,7 @@ export function updateDone(ledger: readonly LedgerEntry[], control: Control, loa
   return restart?.status === 'lost' || (restart?.status === 'done' && (restart.endedAt ?? loadedAt) < loadedAt)
 }
 
-// --- one act-mode pass, from what observe read (SPEC 2) --------------------------------------------
+// --- one act-mode pass, from what observe read (v2 SPEC 13.2) --------------------------------------------
 
 // What the hooks between passes share with the pass: the agents whose answer is being handled,
 // when each agent was first listed with its turn ended (idle or completed), and when each was
@@ -428,7 +428,7 @@ async function answeredBeforeLost(env: ActEnv, state: State, agents: readonly Li
 }
 
 // actPass: the act-mode pass once the rails passed and observe read the factory: what the agent
-// list proves (SPEC 3.3, 10.4) and wakes past their timeout (SPEC 8.2) go into the ledger first,
+// list proves (v2 SPEC 13.3.3, 13.10 item 4) and wakes past their timeout (v2 SPEC 13.8.2) go into the ledger first,
 // then plan reads the state with that ledger, and its actions run in plan's order.
 export async function actPass(env: ActEnv, observed: State, listed: Listed, between: Between): Promise<Acted> {
   const now = observed.now

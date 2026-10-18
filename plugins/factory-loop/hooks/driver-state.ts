@@ -21,7 +21,7 @@ export const STATE_KEEP_BYTES = 3_500_000
 // recorded states per day at most (observe mode writes one per changed digest): one every five
 // minutes on average, which the replay needs, while a churning digest cannot fill the disk
 export const STATES_PER_DAY = 288
-// SPEC 6.1: stop-agent 30 s, title 10 s; the strict lib has no setTimeout, so $.clock times them
+// v2 SPEC 13.6.1: stop-agent 30 s, title 10 s; the strict lib has no setTimeout, so $.clock times them
 export const STOP_TIMEOUT_MS = 30_000
 export const RENAME_TIMEOUT_MS = 10_000
 // $.agent.spawn resolves once the agent started; one that never does must not hold the pass
@@ -31,7 +31,7 @@ export const REPAIR_TIMEOUT_MS = 10_000
 // $.prompt.submit resolves once its turn starts, which waits for the session to be idle: a wake
 // is taken as queued after this, so a busy session never holds a pass (a late drop still counts)
 export const SUBMIT_GRACE_MS = 5_000
-// three passes in a row that throw tell the owner (SPEC 10.9)
+// three passes in a row that throw tell the owner (v2 SPEC 13.10 item 9)
 export const ERROR_PASSES = 3
 // The engine gives each hook a budget of its own time per dispatch (HookBudget, 10 s: awaiting
 // the hook queue counts, a $ call does not), and a tool call whose hook outruns it is left with
@@ -71,11 +71,11 @@ export const S = {
   statesToday: { day: '', count: 0 },
   prunedDay: '',
 
-  // The pass scheduler (SPEC 2): one pass at a time, 5 s apart, pings first, with the ping-storm
+  // The pass scheduler (v2 SPEC 13.2): one pass at a time, 5 s apart, pings first, with the ping-storm
   // breaker (D-39); the timer re-armed when config.passEveryMs changes.
   sched: newScheduler(),
   timer: null as { ms: Ms; cancel: () => void } | null,
-  // passes in a row that threw, since when, and whether the owner was told (SPEC 10.9)
+  // passes in a row that threw, since when, and whether the owner was told (v2 SPEC 13.10 item 9)
   failures: 0,
   failingSince: null as Ms | null,
   errorTold: false,
@@ -123,7 +123,7 @@ export const S = {
 
 export const cache = emptyCache()
 
-// The ledger (SPEC 7), loaded from $.store by the first act-mode pass or hook that needs it.
+// The ledger (v2 SPEC 13.7), loaded from $.store by the first act-mode pass or hook that needs it.
 // Every transition replaces live.ledger whole, synchronously (act.ts Live).
 // basis: the act lock as it stood when the store was loaded; a write goes back to the store only
 // while the lock names this session or still stands so (mayWrite)

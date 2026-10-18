@@ -1,6 +1,6 @@
 "use strict";
 
-// The factory loop's second safety net (docs/factory-loop/SPEC.md 6.1, 11): no string literal in
+// The factory loop's second safety net (docs/factory-loop/v2/SPEC.md 13.6.1, 13.11): no string literal in
 // plugins/factory-loop/hooks/*.ts, its shared answer contract (hooks/*.mjs) or its answer script
 // (bin/factory-answer, #561) may carry what no executor may ever do: pass --yes, run
 // `no-mistakes rerun` or `abort`, merge through anything but the queue's one merge, edit a PR body,
@@ -306,7 +306,7 @@ test("the answer script's only writes are its own temp file and the rename over 
   assert.ok(src.includes("await import(url.pathToFileURL(path.join(path.dirname(self), '..', 'hooks', 'contract.mjs')).href)"));
 });
 
-// The act step holds GitHub writes for the rest of a pass that met a rate limit (SPEC 10.2): the
+// The act step holds GitHub writes for the rest of a pass that met a rate limit (v2 SPEC 13.10 item 2): the
 // kinds foundation.ts GITHUB_V2 names.
 test("the act step's GitHub kinds are the shared kinds that write GitHub, and v2's", () => {
   const list = (file, name) => {

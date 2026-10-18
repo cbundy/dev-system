@@ -7,7 +7,7 @@
 // (#561, config answerChannel). Both check an answer with contract.mjs, which takes nothing on
 // trust from the engine's own schema check (the test kit makes none) and adds what a schema
 // cannot say: the action the purpose allows, the fields that action takes, the finding ids a
-// fix names, a brief on the designed issue. The text lines stay the fallback (SPEC 7.3), and the
+// fix names, a brief on the designed issue. The text lines stay the fallback (the retired v1 adjudicator reply), and the
 // tools wait behind ToolSearch, as the wake answer tool does, so they cost the main conversation
 // nothing.
 import type { ToolSpec } from 'claude-code'

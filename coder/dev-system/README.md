@@ -264,7 +264,7 @@ coder create <repo>-loop --template orchestrator-loop \
 ```
 
 The loop's agents run unattended, so a tool call that would ask for approval is refused instead
-(SPEC 10.10); every loop workspace in use runs with `remote_control_skip_permissions` on. The
+(v2 SPEC 10.10); every loop workspace in use runs with `remote_control_skip_permissions` on. The
 stop gate runs one full gate per 8 CPUs at once, beside the agents. Logins are as for any
 workspace ([First-run logins](#first-run-logins)).
 
@@ -300,7 +300,7 @@ workspace ([First-run logins](#first-run-logins)).
   within a minute, whatever its mode, until the file is deleted.
 - **Stopping the workspace** (`wind_down_minutes`, 10 here): the stop path is Coder stop, then the
   `Wind down` stop script (`wind-down.sh`), then the loop's wind-down mode
-  ([SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace
+  ([v2 SPEC 10.11](../../docs/factory-loop/v2/SPEC.md)). For each loop on the workspace
   (`/persist/claude/factory-loop/<owner>__<repo>`) the script writes `wind-down.request`, so the
   loop starts nothing new, and waits until no step runs, `/factory stop-now` is used, or the cap
   passes (the smaller of the loop's own cap and the template's, counted from the request). It

@@ -362,7 +362,7 @@ describe('the cap (default 100 MiB, traceMaxBytes)', () => {
     expect(h.passes()).toHaveLength(3)
   })
 
-  test("a reload finds today's file cut and keeps it closed, reading its tail once; a new cap opens it again (SPEC 12.1)", ENGINE_TEST, async ($, on) => {
+  test("a reload finds today's file cut and keeps it closed, reading its tail once; a new cap opens it again (v2 SPEC 13.12.1)", ENGINE_TEST, async ($, on) => {
     const clock = mock.clock(on, { now: NOW })
     // an earlier load wrote a big record, then cut the file under this cap
     const cap = 20_000

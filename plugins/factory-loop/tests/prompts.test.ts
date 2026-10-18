@@ -1,4 +1,4 @@
-// The text helpers the agent prompts share (prompts.ts, SPEC 6.3): free text made safe for a
+// The text helpers the agent prompts share (prompts.ts, v2 SPEC 13.6.3): free text made safe for a
 // prompt, so no GitHub closing keyword can come to stand before an issue reference (I-33), and the
 // shape a path must have for a prompt to carry it. The prompts themselves are v2's
 // (tests/v2-work.test.ts and the other v2 prompt suites).

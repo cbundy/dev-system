@@ -1,6 +1,6 @@
-// Waking the model and reading its answers (SPEC 8, 9.2, 10.8; DECISIONS D-04, D-25, D-26).
+// Waking the model and reading its answers (v2 SPEC 13.8, 13.9.2, 13.10 item 8; DECISIONS D-04, D-25, D-26).
 // A judge, task or tell is one prompt the loop submits: a machine-shaped first line, plain-text
-// detail lines, and the judge skill's pointer last (SPEC 8.1). The model answers a judge or a
+// detail lines, and the judge skill's pointer last (v2 SPEC 13.8.1). The model answers a judge or a
 // task with an `ANSWER <id> <decision>` block in its final message, or with the answer tool
 // (D-04); a tell is delivered when its own turn completes (D-25). Only the executor touches the
 // engine: everything else is a pure function over the ledger that returns the updates for the
@@ -18,7 +18,7 @@ const MIN = 60_000
 const HOUR = 60 * MIN
 // ledger.ts keeps this much of a summary; a wake's summary is its first line (see lineSummary)
 export const WAKE_SUMMARY_MAX = 300
-// a reason or instructions past this is cut: answers are short (SPEC 8.4)
+// a reason or instructions past this is cut: answers are short (v2 SPEC 13.8.4)
 const VALUE_MAX = 2000
 // a reminder repeats at most this many of the reasons the last answer was refused
 const REFUSALS_SHOWN = 3
@@ -52,7 +52,7 @@ function wakeKind(kind: ActionKind): WakeKind | null {
   return kind === 'judge' || kind === 'task' || kind === 'tell' ? kind : null
 }
 
-// --- the prompt (SPEC 8.1) -------------------------------------------------------------------
+// --- the prompt (v2 SPEC 13.8.1) -------------------------------------------------------------------
 
 // A first-line value holds no spaces: whitespace is percent-encoded.
 function value(v: string): string {
@@ -70,7 +70,7 @@ export function wakeLine(action: WakeAction, id: string, repo: string): string {
 }
 
 // wakePrompt: the first line, each detail as its own plain-text line (a value with line breaks
-// becomes several), then the skill pointer as the last line (SPEC 8.1).
+// becomes several), then the skill pointer as the last line (v2 SPEC 13.8.1).
 export function wakePrompt(first: string, details: readonly string[]): string {
   const lines = details.flatMap(d => d.split(/\r?\n/)).filter(l => l.trim() !== '')
   return [first, ...lines, WAKE_POINTER].join('\n')
@@ -84,7 +84,7 @@ export function lineSummary(first: string): string {
   return cut > 0 ? first.slice(0, cut) : first.slice(0, WAKE_SUMMARY_MAX)
 }
 
-// The executor for judge, task and tell (SPEC 6.1): submit the prompt and run on until the
+// The executor for judge, task and tell (v2 SPEC 13.6.1): submit the prompt and run on until the
 // answer, the delivery or the timeout. Submit starts a turn of its own once the session is idle.
 // A prompt the engine refused or dropped started no turn, so it is skipped, no attempt counted,
 // and plan asks again next pass (a wake gets one attempt, which a drop must not use up).
@@ -103,9 +103,9 @@ const wake: Executor = async (ctx, action) => {
 
 export const wakeExecutors: Partial<Record<ActionKind, Executor>> = { judge: wake, task: wake, tell: wake }
 
-// --- answers (SPEC 8.2) ----------------------------------------------------------------------
+// --- answers (v2 SPEC 13.8.2) ----------------------------------------------------------------------
 
-// What each wake may answer, and the field a decision needs (SPEC 8.2's table). A tell takes no
+// What each wake may answer, and the field a decision needs (v2 SPEC 13.8.2's table). A tell takes no
 // answer. A judge or task whose name this table lacks may only hold, with a reason (the skill:
 // `reason: unknown wake <name>`).
 export type DecisionNeed = 'reason' | 'instructions' | 'fields' | null
@@ -234,7 +234,7 @@ function fieldsOf(raw: unknown): WakeFields | null | string {
   return out
 }
 
-// A brief is a comment URL on the wake's issue of this repo (SPEC 7.2, as the designer's
+// A brief is a comment URL on the wake's issue of this repo (the retired v1 designer reply, as the designer's
 // RESULT line; replies.ts isBriefUrl is the same rule).
 function briefOk(url: string, repo: string, issue: number | null): boolean {
   const m = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/(\d+)#issuecomment-\d+$/.exec(url)
@@ -296,7 +296,7 @@ export function checkAnswer(ledger: readonly LedgerEntry[], input: AnswerInput, 
   return { ok: true, update: { key: entry.key, status: 'done', outcome, summary } }
 }
 
-// --- turns (SPEC 8.2, 10.8) ------------------------------------------------------------------
+// --- turns (v2 SPEC 13.8.2, 13.10 item 8) ------------------------------------------------------------------
 
 const HEAD_LINE = /^(JUDGE|TASK|TELL) (\S+) id=(\S+)(?: |$)/
 
@@ -337,7 +337,7 @@ export function reminderLine(entry: LedgerEntry, repo: string): string {
 // ANSWER block in its text closes its wake, whichever turn it came in. Then the open wakes this
 // turn belonged to: a tell is delivered once its turn said something (D-25); a judge or task
 // that is still open gets exactly one reminder, which repeats why its answer was refused, and
-// after that waits for its timeout (SPEC 8.2, 10.8).
+// after that waits for its timeout (v2 SPEC 13.8.2, 13.10 item 8).
 export function onTurnComplete(ledger: readonly LedgerEntry[], turn: TurnEnd, repo: string): TurnOutcome {
   const out: TurnOutcome = { updates: [], prompts: [], problems: [] }
   if (turn.agentId !== undefined) return out
@@ -376,7 +376,7 @@ export function onTurnComplete(ledger: readonly LedgerEntry[], turn: TurnEnd, re
   return out
 }
 
-// --- timeouts (SPEC 8.2, 10.8) ---------------------------------------------------------------
+// --- timeouts (v2 SPEC 13.8.2, 13.10 item 8) ---------------------------------------------------------------
 
 function duration(ms: Ms): string {
   if (ms > 0 && ms % HOUR === 0) return `${ms / HOUR}h`
@@ -411,7 +411,7 @@ export function expireWakes(ledger: readonly LedgerEntry[], now: Ms, config: Con
   return out
 }
 
-// orphanedWakes: the open wakes no one can answer any more (SPEC 7.5): one another session
+// orphanedWakes: the open wakes no one can answer any more (v2 SPEC 13.7.5): one another session
 // submitted, or one that records no session (an older build, or rebuilt from the event log) and
 // started before this load. Its prompt went with that session, so it is lost at once with its
 // attempt given back, as a late drop is (D-55): it holds no other wake (O2) until its timeout,
@@ -428,7 +428,7 @@ export function orphanedWakes(ledger: readonly LedgerEntry[], session: string, l
   return out
 }
 
-// --- the answer tool (SPEC 8.2, D-04) --------------------------------------------------------
+// --- the answer tool (v2 SPEC 13.8.2, D-04) --------------------------------------------------------
 
 // mcp__factory-loop__answer: the same answer as the block. The block is the primary channel (a
 // turn that starts during a plugin reload lacks the tool), so the tool waits behind ToolSearch

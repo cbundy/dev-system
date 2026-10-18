@@ -166,7 +166,7 @@ export function wakeAnswer(decision: string, over: Partial<Extract<Outcome, { ki
   return { kind: 'wake', decision, reason: null, instructions: null, bump: null, bumpReason: null, fields: {}, ...over }
 }
 
-// review: an adjudicator outcome; a merge review carries its report (SPEC 7.3).
+// review: an adjudicator outcome; a merge review carries its report (the retired v1 adjudicator reply).
 export function review(action: AdjudicatorAction, report: Partial<MergeReport> | null = null, verdicts: string[] = []): Outcome {
   return {
     kind: 'adjudicator',

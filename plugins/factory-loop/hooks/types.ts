@@ -1,6 +1,6 @@
 // The factory loop's data: what observe builds (State), what plan returns (Action), and
-// what the ledger keeps. docs/factory-loop/SPEC.md is the contract; section numbers below
-// point into it. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
+// what the ledger keeps. docs/factory-loop/v2/SPEC.md section 13 is the contract; the section numbers below
+// are its. Types only, so the pure planner can import it. The v2 rule layer's vocabulary
 // (docs/factory-loop/v2/SPEC.md) is v2/types.ts's; its action kinds, actions, outcomes and State
 // fields join the unions here, so the dispatcher, the ledger and the store carry them.
 import type { AgentStep, Model, SplitReasons, StateTimeouts, V2Action, V2ActionKind, V2Outcome, V2State } from './v2/types'
@@ -9,7 +9,7 @@ export type Ms = number
 
 export type Tier = 'normal' | 'slow' | 'stop-new' | 'stop-all'
 
-// Each action has one class; the tier decides which classes may run (SPEC 5.2).
+// Each action has one class; the tier decides which classes may run (v2 SPEC 13.5.2).
 export type ActionClass = 'free' | 'owner' | 'drive' | 'develop' | 'start'
 
 export type Stage =
@@ -148,7 +148,7 @@ export type AdjudicatorPurpose = 'gate' | 'weakening' | 'merge'
 export type FixerPurpose = 'gate' | 'conflict' | 'regate' | 'weakening' | 'review' | 'guard' | 'handoff' | 'resume'
 export type Rollout = 'merge' | 'run-it' | 'keep-open'
 
-// An adjudicator's one ACTION line, parsed (SPEC 7.3). `merge` and `hold` answer purpose
+// An adjudicator's one ACTION line, parsed (the retired v1 adjudicator reply). `merge` and `hold` answer purpose
 // merge only (rule M4, D-05).
 export type AdjudicatorAction =
   | { type: 'approve'; reason: string | null }
@@ -161,16 +161,16 @@ export type AdjudicatorAction =
   | { type: 'merge' }
   | { type: 'hold'; reason: string }
 
-// The merge adjudicator's report lines (SPEC 7.3): SUMMARY, BUMP and FLAGS. A flag marks what
+// The merge adjudicator's report lines (the retired v1 adjudicator reply): SUMMARY, BUMP and FLAGS. A flag marks what
 // release sequencing must know: a base image or template change, a restart, a run-it rollout.
 export type MergeFlag = 'image' | 'template' | 'restart' | 'run-it'
 export type MergeReport = { summary: string; bump: Bump; bumpReason: string; flags: MergeFlag[] }
 
-// What an executor recorded about a finished action (SPEC 7). An agent reply the parser
+// What an executor recorded about a finished action (v2 SPEC 13.7). An agent reply the parser
 // cannot read is recorded as a failed attempt, except the designer's, which goes to the
 // model as `judge(report)` and is recorded as { unparsed: true }.
 export type Outcome =
-  // a CLI's exit code; on failure the first 2 000 characters of its stderr (SPEC 10.1)
+  // a CLI's exit code; on failure the first 2 000 characters of its stderr (v2 SPEC 13.10 item 1)
   | { kind: 'cli'; exit: number; detail?: string }
   | { kind: 'claim'; result: 'claimed' | 'lost' }
   | { kind: 'designer'; brief: string | null; created: number[]; pendingDecision: boolean }
@@ -224,9 +224,9 @@ export type LedgerEntry = {
   endedAt: Ms | null
   agentId?: string
   outcome?: Outcome
-  // a wake's id (SPEC 8.1 `id=`), the turn it started, whether its reminder went out (for an
+  // a wake's id (v2 SPEC 13.8.1 `id=`), the turn it started, whether its reminder went out (for an
   // agent, its one repair message, #548), and the session that submitted it (a restart ends the
-  // wakes of the session before, SPEC 7.5)
+  // wakes of the session before, v2 SPEC 13.7.5)
   wakeId?: string
   turnId?: string
   reminded?: boolean
@@ -316,14 +316,14 @@ export type Config = {
   retryBackoffMs: Ms
   // per rolling hour; merges are never capped (D-24)
   rateCaps: { start: number; spawn: number; wake: number; perIssueKind: number }
-  // act mode without DEV_ROLE=orchestrator, for a testbed (SPEC 11.2)
+  // act mode without DEV_ROLE=orchestrator, for a testbed (v2 SPEC 13.11.2)
   allowActOutsideOrchestrator: boolean
   // one timing record per pass in trace-YYYY-MM-DD.jsonl (#552); the workspace file's own
   // `trace`, which `/factory trace` writes, overrides the repo's
   trace: boolean
   // the trace files' total size: the oldest go first, and today's is cut short past it
   traceMaxBytes: number
-  // how the prompts and the repair message ask agents to answer (SPEC 4.2): through the checked
+  // how the prompts and the repair message ask agents to answer (v2 SPEC 13.4.2): through the checked
   // answer script (script, the default: a workaround until a timer-spawned agent reaches the
   // loop's tool hook, #560, #561), through their answer tools (tool, the intended design, #548),
   // or in text alone; text stays every channel's fallback. The workspace file's own
@@ -370,7 +370,7 @@ type Base = ActionBase
 
 // What a wake asks: the line's first word is the action kind (judge, task, tell), the
 // second this wake name, then key=value fields with no spaces. Context lines follow it in
-// the visible prompt: a mod cannot attach hidden context to its own prompt (SPEC 8.1).
+// the visible prompt: a mod cannot attach hidden context to its own prompt (v2 SPEC 13.8.1).
 export type Action =
   | (Base & { kind: 'heartbeat' | 'sweep' | 'claim' | 'close-issue' | 'milestone-later' })
   // reasons and childWhys: the split's reasons and each child's why (childWhys aligned with created);
@@ -395,8 +395,8 @@ export type PlanResult = {
   title: string
   owner: number
   // each rate cap tripped this pass: a bucket (start, spawn, wake) or a per-issue key
-  // '<kind>:<issue>' (SPEC 11.4)
+  // '<kind>:<issue>' (v2 SPEC 13.11.4)
   capped: string[]
-  // a claim was held back by maxInFlightIssues this pass (SPEC 4.2)
+  // a claim was held back by maxInFlightIssues this pass (v2 SPEC 13.4.2)
   atCap: boolean
 }

@@ -18,7 +18,7 @@ and acts. Every issue has one explicit state, mirrored to one `factory:*` label,
 replaces the model's judgement calls: a step that gives no usable result twice gets one call to
 the loop's own triage agent, which retries, sends a fixer, redesigns, parks with a question or
 drops. You are woken only for what code cannot decide, and you are the owner's voice. Answer each
-wake with the least that does the job: short answers are the rule (SPEC 8.4).
+wake with the least that does the job: short answers are the rule (v2 SPEC 13.8.4).
 
 ## Never
 - Do what the loop does: claim, heartbeat, sweep, start its agents (`factory-loop:*`), review,
@@ -180,7 +180,7 @@ Notices:
   stays in observe until it is quiet for 120 s (D-28). Owner stops the other one.
 - `old-watcher` (pid, since): the released skill's `orchestrator-watch.sh` is armed for this
   repo, so the released orchestrator is still driving and the loop stays in observe until its
-  lock has been gone ten minutes (SPEC 11.2). Owner stops that watcher or the old session.
+  lock has been gone ten minutes (v2 SPEC 13.11.2). Owner stops that watcher or the old session.
 - `blind` (since): factory reads have failed for 15 minutes and nothing new is acted on. Owner
   checks the database; the loop recovers by itself.
 - `runaway` (cap): a rate cap tripped and that class waits for the hour to clear; likely a loop
@@ -225,7 +225,7 @@ may type `/factory <op>` directly. When no op fits, say so; never do the loop's 
 - `update [<reason>]` / `update off`: drain, then restart this workspace for an update once
   nothing is in flight (D-15); off cancels.
 - `mode off|observe|act`: only when the owner asks for that mode.
-- `trace on|off`: each pass's timing to a local trace file, for troubleshooting (SPEC 12.1).
+- `trace on|off`: each pass's timing to a local trace file, for troubleshooting (v2 SPEC 13.12.1).
 - `stop-now`: during a wind-down, stop at once without waiting for what still runs; only when the owner asks.
 
 Releases: to make one wait for an issue, `callum-flow-milestone plan <N> next` when the owner

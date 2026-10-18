@@ -1,6 +1,6 @@
 # Wake probe: can a mod wake the model and get an answer back?
 
-Step 1 of the go-ahead on 2026-10-12, and the first open risk in SPEC 8.4. A throwaway mod
+Step 1 of the go-ahead on 2026-10-12, and the first open risk in v2 SPEC 13.8.4. A throwaway mod
 (`hooks/register.ts`), loaded in the `spike-reconcile-mod` workspace in the orchestrators' exact
 launch mode (`claude --remote-control ... --dangerously-skip-permissions --resume ...`, Claude
 Code 2.1.296). The raw log is [`evidence/log.jsonl`](evidence/log.jsonl).
@@ -29,12 +29,12 @@ Found on the way:
 
 ## What changes in the spec
 
-- **Answers** (SPEC 8.2): the text block (`ANSWER <id> <decision>` and optional `key: value`
+- **Answers** (v2 SPEC 13.8.2): the text block (`ANSWER <id> <decision>` and optional `key: value`
   lines) is the primary channel. It survives reloads and costs least. The tool stays an accepted
   alternative.
-- **Details** (SPEC 8.1): a wake carries its details in the visible prompt text, after the
+- **Details** (v2 SPEC 13.8.1): a wake carries its details in the visible prompt text, after the
   first line, since a mod cannot attach hidden context to its own prompt. The owner sees them on
   the phone, which suits notices and judgments alike.
-- **Starting** (SPEC 2): the loop starts from `session.start` and, as a fallback, from the first
+- **Starting** (v2 SPEC 13.2): the loop starts from `session.start` and, as a fallback, from the first
   other hook that fires (`session.append` fires every minute with the title), so it never depends
   on one event.

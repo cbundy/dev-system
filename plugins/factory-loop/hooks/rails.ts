@@ -1,4 +1,4 @@
-// The safety rails (SPEC 2, 10.7, 11.2, 11.4; DECISIONS D-28, D-39): what must hold before the
+// The safety rails (v2 SPEC 13.2, 13.10 item 7, 13.11.2, 13.11.4; DECISIONS D-28, D-39): what must hold before the
 // loop acts at all, the usage pre-check before each token-spending action, and the pass
 // scheduler with its ping-storm breaker. Every decision is a pure function over a file's text, a
 // query's rows or a clock reading; the thin wrappers read files and run commands through the io
@@ -21,7 +21,7 @@ const LOCK_TIMEOUT_MS = 15_000
 export type LockIo = Pick<ActIo, 'readFile'> & { cmd: ExecCtx['cmd'] }
 export type RailIo = LockIo
 
-// --- the act lock (SPEC 11.2) ---------------------------------------------------------------
+// --- the act lock (v2 SPEC 13.11.2) ---------------------------------------------------------------
 
 // A lease lasts a few passes and never under fifteen minutes: longer than the longest single step
 // (a merge, 600 s, then its rollout read), so a step can never outlive it and let a second session
@@ -153,7 +153,7 @@ export async function releaseActLock(io: LockIo, path: string, session: string, 
   }
 }
 
-// --- the role (SPEC 11.2, D-28) ---------------------------------------------------------------
+// --- the role (v2 SPEC 13.11.2, D-28) ---------------------------------------------------------------
 
 export const ORCHESTRATOR_ROLE = 'orchestrator'
 
@@ -164,7 +164,7 @@ export function roleProblem(role: string | undefined, config: Config): string | 
   return `role: DEV_ROLE is ${role ? role : 'unset'}, act needs ${ORCHESTRATOR_ROLE}`
 }
 
-// --- the old watcher (SPEC 11.2, D-28) ----------------------------------------------------------
+// --- the old watcher (v2 SPEC 13.11.2, D-28) ----------------------------------------------------------
 
 // The session environment the rails read: the role, and what orchestrator-watch.sh places its
 // lock by.
@@ -313,7 +313,7 @@ export async function heartbeatGuard(io: RailIo, repo: string, device: string, p
   }
 }
 
-// --- the rails together (SPEC 11.2) ------------------------------------------------------------
+// --- the rails together (v2 SPEC 13.11.2) ------------------------------------------------------------
 
 // The released skill's single-shot watcher exits on every event and is armed again at the end of
 // the model's turn, so its lock comes and goes while that skill drives. The loop acts only after
@@ -392,7 +392,7 @@ export async function checkRails(io: RailIo, input: RailInput): Promise<RailResu
   }
 }
 
-// --- the usage pre-check (SPEC 10.7) -------------------------------------------------------------
+// --- the usage pre-check (v2 SPEC 13.10 item 7) -------------------------------------------------------------
 
 // The classes each tier lets run: the planner's own matrix (ALLOWED in foundation.ts), mirrored
 // here and held to its behaviour by rails.test.ts.
@@ -446,7 +446,7 @@ export async function preCheck(
   return why === null ? null : { status: 'skipped', summary: why }
 }
 
-// --- the pass scheduler and the ping-storm breaker (SPEC 2, 11.4, D-39) --------------------------
+// --- the pass scheduler and the ping-storm breaker (v2 SPEC 13.2, 13.11.4, D-39) --------------------------
 
 export const PASS_GAP_MS = 5 * SECOND
 export const STORM_PASSES = 30
@@ -527,14 +527,14 @@ export function passEnded(s: Scheduler): Scheduler {
   return { ...s, running: false }
 }
 
-// --- notices as tell wakes (SPEC 9.2) -----------------------------------------------------------
+// --- notices as tell wakes (v2 SPEC 13.9.2) -----------------------------------------------------------
 
 export type Notice = RailNotice | BreakerNotice
 
 // noticeTell: the tell wake a notice becomes, keyed by its spell so it goes out once:
 // `TELL heartbeat-other device=<d>` under tell:heartbeat-other:<since>, `TELL breaker kind=ping`
 // under tell:breaker:pings:<since> (plan's breaker keys name an action kind, never `pings`).
-// SPEC 9.2 has no kind for the old watcher yet (11.2 says the owner is told): old-watcher.
+// old-watcher is a kind of its own (v2 SPEC 13.9.2); 13.11.2 says the owner is told.
 export function noticeTell(n: Notice): Action {
   const tell = (wake: string, key: string, fields: Record<string, string>): Action => ({
     kind: 'tell',

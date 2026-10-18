@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Plain-shell tests for pipeline-watch.sh --once (docs/factory-loop/SPEC.md 3.4, DECISIONS D-20):
+# Plain-shell tests for pipeline-watch.sh --once (docs/factory-loop/v2/SPEC.md 13.3.4, DECISIONS D-20):
 # one poll, one line per branch whose newest run is not completed, step= and pr= in the detail,
 # actionable lines logged as a first sight, fatal errors as exit 1.
 # Shared setup, stubs and wait helpers: watchers-lib.sh (read its header for the

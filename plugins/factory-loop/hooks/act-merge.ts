@@ -1,4 +1,4 @@
-// The rollout executor (SPEC 6.1, D-29): the read of a hand-merged issue's rollout, which rule M7
+// The rollout executor (v2 SPEC 13.6.1, D-29): the read of a hand-merged issue's rollout, which rule M7
 // asks for when the issue's PR was merged by hand. It decides nothing (plan did): it runs
 // callum-flow-rollout through ctx.cmd and reads the CLI's own line and exit code
 // (images/base/callum-flow-rollout). The argv and the reading of the output are pure functions
@@ -10,16 +10,16 @@ import type { Action, ActionKind, Rollout } from './types'
 const SEC = 1000
 const SUMMARY_MAX = 200
 
-// The rollout read is one issue read, like close-issue (SPEC 6.1).
+// The rollout read is one issue read, like close-issue (v2 SPEC 13.6.1).
 export const MERGE_TIMEOUT_MS = {
   rollout: 60 * SEC,
 } as const
 
 // The exit recorded for a command that never exited: it could not start, or it outlived its
-// timeout and was ended. Either counts as failed (SPEC 10.1).
+// timeout and was ended. Either counts as failed (v2 SPEC 13.10 item 1).
 export const NO_EXIT = -1
 
-// --- argv (SPEC 6.1) ---------------------------------------------------------------------------
+// --- argv (v2 SPEC 13.6.1) ---------------------------------------------------------------------------
 
 export function rolloutArgv(issue: number): string[] {
   return ['callum-flow-rollout', String(issue)]
@@ -61,7 +61,7 @@ export const mergeExecutors: Partial<Record<ActionKind, Executor>> = { rollout }
 // --- helpers -----------------------------------------------------------------------------------
 
 // run: one command through ctx.cmd; a command that cannot start or outlives its timeout is a
-// failed attempt with no exit (SPEC 10.1).
+// failed attempt with no exit (v2 SPEC 13.10 item 1).
 async function run(ctx: ExecCtx, argv: string[], timeoutMs: number, stdin?: string, cwd?: string): Promise<RunResult | Exec> {
   const init: RunInit = { timeoutMs }
   if (stdin !== undefined) init.stdin = stdin
@@ -73,9 +73,9 @@ async function run(ctx: ExecCtx, argv: string[], timeoutMs: number, stdin?: stri
   }
 }
 
-// failure: a command that exited with a failure: its exit and detail in the outcome (SPEC
-// 10.1). Exit 2 from the image's own CLIs is a usage error, a loop bug never retried; a GitHub
-// rate limit in stderr is flagged for the driver's backoff (SPEC 10.2).
+// failure: a command that exited with a failure: its exit and detail in the outcome (v2 SPEC
+// 13.10 item 1). Exit 2 from the image's own CLIs is a usage error, a loop bug never retried; a GitHub
+// rate limit in stderr is flagged for the driver's backoff (v2 SPEC 13.10 item 2).
 export function failure(argv: readonly string[], r: RunResult, said?: string): Exec {
   const line = said || lines(r.stderr).pop() || lines(r.stdout).pop() || ''
   const exec: Extract<Exec, { status: 'failed' }> = {
